@@ -15,6 +15,13 @@
       "when": 1780602078535,
       "tag": "0001_rls_policies",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1780605642447,
+      "tag": "0002_harden_rls_nullif",
+      "breakpoints": true
     }
   ]
 }
