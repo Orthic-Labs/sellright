@@ -49,6 +49,8 @@ async function main() {
   const variantMap = new Map<number, string>();
   const variantProduct = new Map<number, number>(); // vendure variantId -> vendure productId
   const collectionMap = new Map<number, string>();
+  const usedSku = new Set<string>();
+  const skuCollisions: { original: string; assigned: string; vendureVariantId: number }[] = [];
 
   await withStore(storeId, async (tx) => {
     await tx.insert(s.store).values({ id: storeId, slug: STORE.slug, name: STORE.name, currency: STORE.currency });
@@ -122,8 +124,17 @@ async function main() {
       const id = randomUUID();
       variantMap.set(v.id, id);
       variantProduct.set(v.id, v.pid);
+      // DD source has duplicate SKUs (Vendure doesn't enforce uniqueness; we do).
+      // Suffix collisions so import succeeds + stays unique; report them for cleanup.
+      let sku: string = v.sku;
+      if (usedSku.has(sku)) {
+        const assigned = `${sku}__dup${v.id}`;
+        skuCollisions.push({ original: sku, assigned, vendureVariantId: v.id });
+        sku = assigned;
+      }
+      usedSku.add(sku);
       await tx.insert(s.productVariant).values({
-        id, storeId, productId, sku: v.sku, name: v.name ?? v.sku, price: v.price ?? 0,
+        id, storeId, productId, sku, name: v.name ?? v.sku, price: v.price ?? 0,
         salePrice: v.sale ?? null, preOrderPrice: v.preprice ?? null,
         isPreOrder: v.ispre ?? false, shipDate: parseDate(v.shipdate), enabled: v.enabled,
       });
@@ -184,7 +195,12 @@ async function main() {
       store: storeId,
       assets: assetMap.size, products: productMap.size, optionGroups: groupMap.size,
       options: optionMap.size, variants: variantMap.size, collections: collectionMap.size,
+      skuCollisions: skuCollisions.length,
     }, null, 2));
+    if (skuCollisions.length) {
+      // eslint-disable-next-line no-console
+      console.log('DUPLICATE SKUs in DD source (fix in Vendure; suffixed on import):\n' + JSON.stringify(skuCollisions, null, 2));
+    }
   });
 
   await src.end();
