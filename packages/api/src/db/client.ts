@@ -5,8 +5,12 @@ import { env } from '../env.js';
 
 export const pool = new Pool({ connectionString: env.DATABASE_URL });
 
+// MUST match drizzle.config.ts `casing: 'snake_case'` — otherwise runtime queries
+// emit camelCase column names the snake_case DB doesn't have.
+const drizzleOpts = { schema, casing: 'snake_case' } as const;
+
 /** Unscoped client — only for migrations, jobs that set their own store context, or admin-cross-store reads. */
-export const db = drizzle(pool, { schema });
+export const db = drizzle(pool, drizzleOpts);
 
 export type Tx = ReturnType<typeof drizzle>;
 
@@ -22,7 +26,7 @@ export async function withStore<T>(storeId: string, fn: (tx: Tx) => Promise<T>):
     await client.query('BEGIN');
     // set_config(..., is_local=true) === SET LOCAL — scoped to this transaction only.
     await client.query("SELECT set_config('app.current_store', $1, true)", [storeId]);
-    const tx = drizzle(client, { schema });
+    const tx = drizzle(client, drizzleOpts);
     const result = await fn(tx);
     await client.query('COMMIT');
     return result;
