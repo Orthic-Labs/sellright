@@ -1,6 +1,6 @@
-# RH Commerce Backend — Build Plan (Pass 2, from scratch)
+# SellRight — Build Plan (from scratch)
 
-**Decision (locked 2026-06-04):** Build the backend **from scratch**. No Medusa, no fork, no third-party base.
+**Decision (locked 2026-06-04):** Build the backend **from scratch**. No Medusa, no fork, no third-party base. Name: **SellRight** (private repo `adrdsouza/sellright`).
 
 > **This is a PRODUCT, not just a migration.** End goal: a commerce backend Adrian can **sell / open-source and self-host**. Consequences that are now requirements, not preferences:
 > - **Standard documented API** (OpenAPI) — not a TS-coupled tRPC API a buyer can't consume.
@@ -14,23 +14,13 @@
 
 This is the concrete blueprint: stack, schema, the isolated money core, the API surface, the admin surface, and the build sequence. Stack picks below are sensible defaults stated for veto — say the word on any and I'll swap before we write code.
 
-> **Dev corpus = a sanitized, isolated clone of DD's real data** (decided 2026-06-04). We build the backend, the importer, and the money core against a read-only dump of `vendure_db` (DD) loaded into a separate dev database — real catalog, real orders, real coupons/shipping/refunds. This makes the **cent-perfect parity gate available from day one** (diff our totals against DD's real stored order totals) instead of relying on synthetic cases.
+> **Dev corpus = an isolated clone of DD's real data.** We build and test against a read-only dump of `vendure_db` (DD) in a separate dev DB — real catalog, customers, orders. Note: DD migrated WordPress/Woo → Vendure last year, so historical orders carry Woo-computed totals; only **Vendure-native orders** are meaningful if we ever sanity-check totals. The dev backend points only at the clone, **never at live `vendure_db`**; sanitize on dump (scrub live payment keys; hash PII).
 >
-> **Hard guardrail:** the dev backend points only at the clone, **never at live `vendure_db`**. Dump is sanitized (live Stripe keys + PII scrubbed) so a dev box can never charge a real card or email a real customer. Live DD is untouched until a real, gated cutover.
+> **No tax/totals "spike" or parity gate** (dropped 2026-06-04). The math is trivial — `subtotal − discount + tax + shipping = total`, integer cents, rounded. It needs no upfront de-risking. The only things worth a test are *behavioral, not arithmetic*: don't double-charge on a retry, don't oversell the last unit, a client can't spoof a coupon. Those get tests at checkout (M4), nowhere else.
 >
-> **Launch order is deferred** ("we're only dating") — which store goes live on the new stack first (RH, pre-revenue and zero-risk; or DD) is decided later. RH remains the natural zero-stake first cutover, but it's not locked.
+> **Launch order is deferred** — which store goes live first (RH, pre-revenue/zero-risk; or DD) is decided later.
 
 ---
-
-## 0. Pre-M0 de-risk spike (do this FIRST, before committing the plan)
-
-A small throwaway spike to validate the single riskiest assumption — that a clean reimplementation can match Vendure's stored totals to the cent — *before* we bet the M3 gate on it.
-
-- Take the sanitized DD clone, pick ~10 real orders spanning the messy cases, reconstruct their inputs.
-- Write a minimal `calculateOrderTotals` and diff against Vendure's stored totals.
-- **Outcome A — exact parity achievable:** confirm Vendure's rounding/tax rules; keep the 0-cent hard gate.
-- **Outcome B — not exactly reproducible:** document Vendure's exact rounding (per-line vs per-doc, tax-inclusive handling) and either match it deliberately or define a tolerance + reconciliation policy. **Better to learn this in a day than at M3.**
-- Also surfaces the **legacy-input coverage** question: if some old orders can't have inputs fully reconstructed, define the exception policy (exclude from fixtures, flag for manual check). This spike *is* the rollback/parity de-risk; its result tunes §8.
 
 ## 1. Stack (defaults — veto any)
 
@@ -48,7 +38,7 @@ _Revised post `/review-self` (2026-06-04): tRPC → Hono+OpenAPI (product needs 
 | Realtime | **SSE (Hono streaming)** | Server→client push for cache-invalidation (you already built this in DD), order-status, live stock. REST stays for everything else. |
 | Payments | **`PaymentProvider` interface** — NMI (direct, **tokenized**), Sezzle (redirect→verify), Stripe (intents) | DD runs NMI+Sezzle, RH runs Stripe — payments must be pluggable, not one gateway. ⚠ **Tokenize** (NMI Collect.js/Vault) — never handle raw PAN (current DD code is SAQ-D; rebuild targets SAQ-A). |
 | Admin | **React + Vite + Tailwind/Shadcn + TanStack**, multi-store switcher, CRUD scaffolded from the Drizzle schema | Manages DD + RH from one window; schema-driven scaffolding cuts the biggest solo-build cost |
-| Money core | **pure functions, integer cents** | The only exhaustively-tested module; CRUD never touches totals |
+| Totals/money | **pure functions, integer cents** | Trivial arithmetic (`subtotal − discount + tax + shipping`), kept in pure functions so it's easy to read and reuse. Tax is a config field (rate per store, default 0). Not a hard part — the hard parts are behavioral (idempotency, oversell), tested at M4. |
 
 ---
 
@@ -102,36 +92,21 @@ Integer **cents** for every money column. UUID PKs. `created_at`/`updated_at` ev
 - `affiliate` — store_id, promotion_id (uniq), email, access_token (uniq), onboarded_at
 - `affiliate_settle` — store_id, promotion_id, amount_cents, period_start_at, period_end_at, settled_at, tx_ref, notes
 - `blog_post` — store_id, title, slug (uniq/store), excerpt, body, body_html, author_name, reading_time, featured_asset_id, tags, is_published, publish_date, seo_title, seo_description
-- FSM gains a **`Refunded`** terminal state (reached when total refunded ≥ grand_total)
+- Order/fulfillment state machines per Rulebook §11: `order.state` = payment lifecycle (PendingPayment/Paid/PartiallyRefunded/Refunded/Cancelled); `fulfillment.state` = shipping lifecycle (Pending/Shipped/Delivered); display states (Processing/Shipped/Delivered/Pre-ordered) derived.
 
 ---
 
-## 3. The money core (the only code that needs exhaustive tests)
+## 3. Commerce rules → see the Rulebook
 
-A single module of **pure functions, no I/O**, called by services. CRUD never touches totals.
+All deterministic commerce logic — price selection, cart validation, promotions, shipping, tax, totals, grand-total, inventory allocation, the order + fulfillment state machines, payments, refunds, idempotency, tenancy, customer/account, affiliate, reconciliation, and per-store config — is specified in **[`SELLRIGHT-ECOMMERCE-RULEBOOK-v1.md`](SELLRIGHT-ECOMMERCE-RULEBOOK-v1.md)** (canonical). Not duplicated here.
 
-```
-moneyCore/
-  totals.ts        calculateOrderTotals(lines, shipping, promotions, taxConfig) → totals
-  promotions.ts    applyPromotions(lines, promos) → adjusted lines  (priority + exclusion groups)
-  tax.ts           calculateTax(lines, zone) → tax lines  (per-document rounding, locked, never mixed)
-  refund.ts        computeRefund(order, requestedLines, restock) → refund ledger entries
-  fsm.ts           transition(order.state, event) → newState | error   (explicit allowed-transitions table)
-```
+Architectural placement only:
+- A pure **`money/` module** (no I/O — no DB, providers, email, queues, HTTP) holds totals/promotions/shipping/tax/refunds/rounding/FSM. The checkout service calls it.
+- **Inventory allocation is the single transactional exception** — it needs row locks (`SELECT … FOR UPDATE`), so it lives in a transactional service, not the pure module.
+- **Idempotency:** payment webhooks write the event id to `processed_event` (unique constraint) **before** any side effect → duplicate delivery is a 200 no-op.
+- The arithmetic is trivial; the tests that matter are **behavioral** (no double-charge, no oversell, no coupon spoof), written at M4 — not arithmetic unit tests.
 
-**Order FSM** (cart is client-side, never persisted as an order until checkout):
-
-```
-PendingPayment ─paid→ Paid ─fulfill→ PartiallyFulfilled ─fulfill→ Fulfilled
-      │                  │                                            │
-   cancel             refund                                       refund
-      ▼                  ▼                                            ▼
-  Cancelled        PartiallyRefunded ───────────────────────────► Refunded
-```
-
-**Inventory** is the one money-path piece that is *not* pure (needs the DB): `allocateStock(variantId, qty)` runs inside a transaction with `SELECT ... FOR UPDATE` on the `stock` row, decrements atomically, errors if `available < qty`. Optional soft-reserve + expiry for flash sales (skip for v1).
-
-**Idempotency:** the Stripe webhook handler writes the event id into `processed_event` (unique constraint) **before** any side effect; duplicate delivery → constraint violation → 200 + no-op.
+Locked rulebook decisions (DD-grounded): **line-level rounding**, **single-coupon v1** (stacking is forward-architecture, not built), **fulfillment records own the shipping state machine** with order display states derived (Shipped/Delivered preserved).
 
 ---
 
@@ -158,13 +133,13 @@ Every route is a typed Hono handler with a zod schema; the schemas generate the 
 - **M0 — Skeleton.** Repo (`api/ admin/ storefront/ shared/`), **Hono + zod-openapi + Drizzle + Postgres**, CI (lint/typecheck/build/test), env/secrets, Stripe test keys, OpenAPI served at `/v1/openapi.json`.
 - **M1 — Schema + tenancy + importer.** All migrations incl. `store` + `store_id` + **RLS policies** (§7). Build the read-only importer against the **DD clone**: stores, products, variants, options, collections, assets, customers, addresses, **orders + `stripe_customer_id`** (DD has real ones — this is also what feeds the parity fixtures). Importer is reusable for any store.
 - **M2 — Catalog (read path).** Catalog routes + rebuild Qwik catalog/PDP/collection pages on the typed client. No money yet. Proves API + tenancy end-to-end on real DD catalog.
-- **M3 — MONEY CORE + parity gate.** moneyCore pure functions + 100% unit tests. **Cent-perfect parity replay** against the DD clone's real stored order totals (§8 spec). ⛔ **Hard gate — no checkout code until synthetic suite is green AND DD replay diffs to zero cents.**
-- **M4 — Checkout + payments.** createOrderFromCart → allocateStock (atomic) → Stripe PaymentIntent → signature-verified idempotent webhook → order FSM to Paid. Risky core, now on a proven money module.
+- **M3 — Totals + order state.** The pure functions from §3 (totals, promotions, tax, refund, FSM) + straightforward unit tests on a few known carts. No parity gate, no spike — it's arithmetic.
+- **M4 — Checkout + payments.** createOrderFromCart → allocateStock (atomic) → PaymentProvider (NMI/Sezzle/Stripe) → signature-verified idempotent webhook → order FSM to Paid. **This is where the real tests live:** duplicate webhook → exactly one charge; 2 concurrent buyers, 1 unit → exactly one success; client can't spoof a coupon.
 - **M5 — Customers + auth.** Sessions, register/verify/reset, Google OAuth, addresses, account + order history.
 - **M6 — Admin (thin → full).** **Thin first:** orders (list/detail/transition/fulfill/**refund**) + products/variants/stock — the operate-the-store essentials. Then collections, customers, promotions, shipping, multi-store switcher. Scaffolded from the Drizzle schema.
 - **M7 — Jobs + observability.** BullMQ workers: order/shipping emails, listmonk sync, product/order export. Audit log + structured logging + Sentry/trace-id at the payment boundary.
 - **M8 — First store live.** Point that store's Qwik storefront at the new backend; keep its Vendure instance as instant rollback. RH (pre-revenue) is the natural zero-risk first flip, but the order is deferred.
-- **M9 — Second store live.** Same, on the proven stack. For DD specifically, re-run the cent-parity replay against current production data immediately before cutover, shadow-run, then flip with Vendure kept as rollback for a few weeks.
+- **M9 — Second store live.** Same, on the proven stack. For DD (real revenue), shadow-run against current production data, spot-check a sample of recent orders' totals match, then flip with Vendure kept as rollback for a few weeks.
 
 **Dependencies:** M1 RLS before any store-scoped route. M3 gates M4 (correctness before money moves). M4+M5+M6(thin) gate M8.
 
@@ -190,14 +165,7 @@ Not just "RLS on." The spec:
 - **Tests:** a cross-store leakage suite — seed two stores, assert every list/get/mutation with store A's context can never see or touch store B's rows, including via joins and aggregates. This suite is a CI gate.
 - Background jobs/imports run with an explicit store context too (no ambient superuser bypass in app paths).
 
-## 8. Parity gate + API versioning (the two missing specs Codex flagged)
-
-**Cent-perfect parity replay (M3 gate):**
-- **Fixtures = reconstructed inputs, not just outputs.** From each DD order, rebuild the *inputs*: order lines (variant, qty, the unit price as captured at order time), applied promotions/coupon codes, chosen shipping method, tax zone, customer group. Pair each with Vendure's stored `subtotal/discount/shipping/tax/grand_total` as the expected output. Cover the messy cases — multi-line, coupon, free-shipping, mixed tax, partial refund, sale-price variants. (Capturing historical unit prices matters: today's variant price ≠ the price at order time.)
-- **Tolerance: 0 cents** on every total field. Any nonzero diff fails the gate.
-- **Workflow:** `pnpm parity` runs all fixtures through `calculateOrderTotals`, prints a per-order diff table, exits nonzero on any mismatch. Wired into CI. Re-run against *current* DD data immediately before the DD cutover (M9).
-
-**API versioning / backward-compat (sellable + self-hosted product):**
+## 8. API versioning / backward-compat (sellable + self-hosted product)
 - Path-versioned: `/v1/...`. The OpenAPI spec at `/v1/openapi.json` is the published contract.
 - Within `/v1`: additive-only changes (new optional fields/endpoints). Breaking changes → `/v2` with `/v1` kept during a deprecation window; deprecations announced via `Deprecation`/`Sunset` headers + changelog.
 - The `hc` typed client and storefront pin a version. Self-hosters upgrade backend + storefront together within a major; the version contract is what makes the product safe to ship to others.
@@ -224,19 +192,16 @@ Not just "RLS on." The spec:
 ## 8c. Per-milestone acceptance criteria (done = …)
 
 - **M1:** importer loads the full DD clone with zero FK violations; cross-store leakage test suite passes (CI gate).
-- **M3:** synthetic money-core suite 100% green **and** DD parity replay diffs to **0 cents** on every fixture.
+- **M3:** totals/refund/FSM unit tests green on a handful of known carts (arithmetic sanity, not a gate).
 - **M4:** a test order goes cart→PaymentIntent→paid; a **duplicate webhook delivery produces exactly one** order/charge/fulfillment (idempotency test); oversell test (2 concurrent buyers, 1 unit) yields exactly one success.
 - **M6 (thin):** an order can be viewed, fulfilled, and partially refunded from the admin, with the refund reflected in Stripe + the refund ledger.
 - **M8:** store live on new backend; reconciliation jobs green for the full soak window; rollback runbook executed once in staging.
 
-## 9. Open choices before M0
+## 9. Status & next
 
-Stack + multi-store + API are locked (§1, §2). Launch order is deferred. Remaining:
+**Decided:** single pnpm-workspace repo (`api/ admin/ storefront/ shared/`), local dev on the laptop, repo stays private. License posture deferred (no public release planned for now).
 
-1. **Repo shape** — single repo with `api/ admin/ storefront/ shared/` packages (recommended) vs separate repos.
-2. **Where the dev backend lives** — local dev box against the DD clone first (recommended); promote to the VPS when there's something to host.
-3. **License posture** (can wait) — permissive (MIT/Apache) vs fair-source (BSL/Elastic-style, blocks cloud resale). Decide before any public release, not before M0.
+**M0 — DONE + pushed** (`adrdsouza/sellright` @ origin/main). Bootable Hono API serving `/v1/health` + `/v1/openapi.json`; integer-cents money primitives; Drizzle `store` table. build + typecheck green.
 
-**Then M0 starts with two concrete first actions:**
-- (a) Scaffold the repo skeleton (stack from §1).
-- (b) Take a **sanitized read-only dump of `vendure_db`** (DD) → isolated dev clone DB. ⚠ Production read on the live DD store — needs your explicit go + agreement on the sanitize step (scrub live Stripe keys/secrets; hash customer emails/phones) before I run it.
+**Next — M1: schema + tenancy + importer.** Build the full schema (§2) with RLS (§7), and the read-only importer that pulls DD's existing Vendure data into the dev clone — the same kind of catalog/data transfer Adrian already did WordPress → Vendure, so it's routine.
+- ⚠ One gating action: a **sanitized read-only dump of `vendure_db`** (DD) → isolated dev clone DB. Production read on the live store — needs explicit go + agreement on sanitize (scrub live payment keys; hash customer emails/phones). Until then, M1 schema work can proceed against synthetic seed data.
