@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: sellright_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.10.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+      - run: pnpm -r typecheck
+
+      # Migrations run as the superuser (DDL only). RLS is then exercised by a
+      # NON-superuser role — superusers and owners-with-BYPASSRLS ignore RLS, so
+      # testing isolation as one would silently pass on a broken policy.
+      - name: migrate (as superuser)
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/sellright_test
+        run: pnpm --filter @sellright/api db:migrate
+
+      - name: create non-superuser app role
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d sellright_test -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE app LOGIN PASSWORD 'app';
+          GRANT USAGE ON SCHEMA public TO app;
+          GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA public TO app;
+          GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app;
+          SQL
+
+      - name: test (RLS as non-superuser)
+        env:
+          DATABASE_URL: postgres://app:app@localhost:5432/sellright_test
+        run: pnpm --filter @sellright/api test
