@@ -22,6 +22,13 @@
       "when": 1780605642447,
       "tag": "0002_harden_rls_nullif",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1780639435852,
+      "tag": "0003_order_line_snapshot",
+      "breakpoints": true
     }
   ]
 }

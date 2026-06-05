@@ -295,7 +295,11 @@ export const orderLine = pgTable('order_line', {
   id: uuid().primaryKey().defaultRandom(),
   storeId: uuid().notNull().references(() => store.id),
   orderId: uuid().notNull().references(() => order.id),
-  variantId: uuid().notNull().references(() => productVariant.id),
+  // Nullable: a variant may be deleted later. Order history survives via the
+  // snapshot columns (rulebook §1: order snapshots are truth after checkout).
+  variantId: uuid().references(() => productVariant.id),
+  variantSku: text().notNull(), // snapshot at order time
+  variantName: text().notNull(), // snapshot at order time
   quantity: integer().notNull(),
   unitPrice: integer().notNull(), // cents, snapshot at add
   lineSubtotal: integer().notNull(),
