@@ -444,6 +444,37 @@ export const blogPost = pgTable(
   (t) => [unique('blog_store_slug').on(t.storeId, t.slug)],
 );
 
+// ── cart (SEPARATE from orders — recovery + analytics, never shown as an order) ──
+// The storefront keeps a snappy local cart and syncs it here for persistence,
+// cross-device recovery, and abandonment/funnel analytics. An order is created
+// from a cart only at checkout (cart.converted_order_id links the two).
+export const cartStatus = pgEnum('cart_status', ['active', 'abandoned', 'converted']);
+
+export const cart = pgTable('cart', {
+  id: uuid().primaryKey().defaultRandom(),
+  storeId: uuid().notNull().references(() => store.id),
+  customerId: uuid().references(() => customer.id),
+  token: text().notNull().unique(), // device/guest cart token
+  status: cartStatus().notNull().default('active'),
+  convertedOrderId: uuid().references(() => order.id),
+  createdAt: ts(),
+  updatedAt: ts(),
+});
+
+export const cartLine = pgTable(
+  'cart_line',
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    storeId: uuid().notNull().references(() => store.id),
+    cartId: uuid().notNull().references(() => cart.id),
+    variantId: uuid().references(() => productVariant.id),
+    sku: text().notNull(), // snapshot (survives variant deletion, for analytics)
+    quantity: integer().notNull(),
+    createdAt: ts(),
+  },
+  (t) => [unique('cart_line_cart_sku').on(t.cartId, t.sku)],
+);
+
 export type Store = typeof store.$inferSelect;
 export type Order = typeof order.$inferSelect;
 export type ProductVariant = typeof productVariant.$inferSelect;

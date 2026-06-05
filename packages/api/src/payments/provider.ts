@@ -34,8 +34,19 @@ export const manualProvider: PaymentProvider = {
   },
 };
 
+/** Cash on delivery — order is confirmed now, cash collected at delivery.
+ *  Settles the order so it's fulfillable; the actual cash is handled offline. */
+export const codProvider: PaymentProvider = {
+  method: 'cod',
+  requiresRedirect: false,
+  async createPayment(input) {
+    return { state: 'Settled', providerRef: `cod-${input.orderCode}`, metadata: { cod: true, collectOnDelivery: input.amount } };
+  },
+};
+
 const PROVIDERS: Record<string, PaymentProvider> = {
   manual: manualProvider,
+  cod: codProvider,
   // nmi / sezzle / stripe: implement against this interface (need credentials).
 };
 

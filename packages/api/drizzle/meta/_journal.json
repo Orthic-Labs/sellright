@@ -36,6 +36,13 @@
       "when": 1780640016828,
       "tag": "0004_store_registry_no_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1780643058826,
+      "tag": "0005_cart_tables",
+      "breakpoints": true
     }
   ]
 }
