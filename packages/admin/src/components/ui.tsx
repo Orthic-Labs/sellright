@@ -65,3 +65,17 @@ export function EmptyState({ title, hint }: { title: string; hint?: string }) {
 export function ErrorNote({ message }: { message: string }) {
   return <div className="card p-4 text-sm text-red-700 bg-red-50 border-red-200">{message}</div>;
 }
+
+export function Pagination({ page, total, pageSize, onPage }: { page: number; total: number; pageSize: number; onPage: (p: number) => void }) {
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  if (totalPages <= 1) return null;
+  return (
+    <div className="flex items-center justify-between mt-4 text-sm text-gray-500">
+      <span>Page {page} of {totalPages}</span>
+      <div className="flex gap-2">
+        <button className="btn-ghost" disabled={page <= 1} onClick={() => onPage(page - 1)}>Previous</button>
+        <button className="btn-ghost" disabled={page >= totalPages} onClick={() => onPage(page + 1)}>Next</button>
+      </div>
+    </div>
+  );
+}

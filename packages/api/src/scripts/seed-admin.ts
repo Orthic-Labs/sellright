@@ -9,9 +9,12 @@ import { eq } from 'drizzle-orm';
 import { hashPassword } from '../auth/password.js';
 
 async function main() {
-  const [email, password] = process.argv.slice(2);
+  // Password comes from ADMIN_PASSWORD env (preferred — not visible in `ps` /
+  // /proc/<pid>/cmdline / shell history). argv[2] is a legacy fallback.
+  const email = process.argv[2];
+  const password = process.env.ADMIN_PASSWORD ?? process.argv[3];
   if (!email || !password) {
-    console.error('usage: tsx src/scripts/seed-admin.ts <email> <password>');
+    console.error('usage: ADMIN_PASSWORD=<pw> tsx src/scripts/seed-admin.ts <email>');
     process.exit(1);
   }
   const passwordHash = await hashPassword(password);

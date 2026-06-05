@@ -43,12 +43,17 @@ export default function ProductDetailPage() {
         const d = draft.variants[v.id]!;
         const price = toCents(d.price);
         const salePrice = d.salePrice.trim() === '' ? null : toCents(d.salePrice);
+        const onHand = Number(d.onHand);
+        // Guard bad input so we never PATCH NaN (which serializes to null / 422).
+        if (Number.isNaN(price) || (salePrice !== null && Number.isNaN(salePrice)) || !Number.isInteger(onHand) || onHand < 0) {
+          throw new Error(`Invalid price or stock for variant ${v.sku}`);
+        }
         const vp: Record<string, unknown> = {};
         if (price !== v.price) vp.price = price;
         if (salePrice !== v.salePrice) vp.salePrice = salePrice;
         if (d.enabled !== v.enabled) vp.enabled = d.enabled;
         if (Object.keys(vp).length) await api.patch(`/variants/${v.id}`, vp);
-        if (Number(d.onHand) !== v.onHand) await api.patch(`/variants/${v.id}/stock`, { onHand: Number(d.onHand) });
+        if (onHand !== v.onHand) await api.patch(`/variants/${v.id}/stock`, { onHand });
       }
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['product', store?.slug, id] }),

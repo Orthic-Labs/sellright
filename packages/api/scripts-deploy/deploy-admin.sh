@@ -3,8 +3,10 @@
 # smoke the admin endpoints. Inherits the live API's DB/PORT env from its proc
 # so no secrets are passed on the command line.
 set -euo pipefail
+# Usage: ADMIN_PASSWORD=<pw> bash deploy-admin.sh <email>
+# Password via env (not argv) so it never lands in `ps` / /proc/<pid>/cmdline.
 ADMIN_EMAIL="${1:?email}"
-ADMIN_PW="${2:?password}"
+ADMIN_PW="${ADMIN_PASSWORD:?set ADMIN_PASSWORD env}"
 
 # pnpm is installed standalone (not on the non-interactive PATH); add it.
 export PNPM_HOME="$HOME/.local/share/pnpm"
@@ -32,7 +34,7 @@ echo "[2/6] migrate"
 pnpm db:migrate
 
 echo "[3/6] seed admin ($ADMIN_EMAIL)"
-pnpm exec tsx src/scripts/seed-admin.ts "$ADMIN_EMAIL" "$ADMIN_PW"
+ADMIN_PASSWORD="$ADMIN_PW" pnpm exec tsx src/scripts/seed-admin.ts "$ADMIN_EMAIL"
 
 echo "[4/6] restart api (pid $APIPID -> new)"
 kill "$APIPID" 2>/dev/null || true

@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { and, eq, gt, isNotNull } from 'drizzle-orm';
-import { db, pool, type Tx } from '../db/client.js';
+import { db } from '../db/client.js';
 import * as s from '../db/schema.js';
 
 const ADMIN_SESSION_TTL_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
@@ -22,8 +22,9 @@ export interface AdminPrincipal {
 
 /**
  * Create an admin session, return the raw token (only the hash is stored).
- * Admin sessions are global (no store binding) — an admin acts across all
- * stores they have access to and selects one per-request via x-store-slug.
+ * Admin sessions are global (not bound to a store). On each request the admin
+ * selects a store via x-store-slug; adminStores() enforces the ACL and returns
+ * only the stores this admin is actually enrolled in.
  */
 export async function createAdminSession(adminUserId: string): Promise<string> {
   const token = randomBytes(32).toString('hex');
@@ -74,7 +75,7 @@ export async function resolveAdmin(token: string): Promise<AdminPrincipal | null
   return { id: u.id, email: u.email, stores: await adminStores(u.id) };
 }
 
-/** Find an admin user by email (global registry lookup). Unused tx kept for symmetry. */
+/** Find an admin user by email — global registry lookup on the default db client. */
 export async function findAdminByEmail(email: string) {
   const [u] = await db
     .select({ id: s.adminUser.id, email: s.adminUser.email, passwordHash: s.adminUser.passwordHash })
@@ -83,7 +84,3 @@ export async function findAdminByEmail(email: string) {
     .limit(1);
   return u ?? null;
 }
-
-/** Direct pool handle for ad-hoc admin queries that must skip RLS context. */
-export { pool as adminPool };
-export type { Tx };

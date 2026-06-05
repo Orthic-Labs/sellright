@@ -5,7 +5,7 @@ import { Search, Package } from 'lucide-react';
 import { api, assetUrl, type Page, type ProductRow } from '../api';
 import { useAuth } from '../auth';
 import { money } from '../lib/format';
-import { Badge, Loading, ErrorNote, PageHeader, EmptyState } from '../components/ui';
+import { Badge, Loading, ErrorNote, PageHeader, EmptyState, Pagination } from '../components/ui';
 
 export default function Products() {
   const { store } = useAuth();
@@ -19,8 +19,6 @@ export default function Products() {
     queryFn: () => api.get<Page<ProductRow>>(`/products?${new URLSearchParams({ q, page: String(page), pageSize: '25' })}`),
     placeholderData: keepPreviousData,
   });
-  const totalPages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
-
   return (
     <>
       <PageHeader title="Products" subtitle={data ? `${data.total} total` : undefined} actions={
@@ -65,15 +63,7 @@ export default function Products() {
         )}
       </div>
 
-      {data && totalPages > 1 && (
-        <div className="flex items-center justify-between mt-4 text-sm text-gray-500">
-          <span>Page {page} of {totalPages}</span>
-          <div className="flex gap-2">
-            <button className="btn-ghost" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>Previous</button>
-            <button className="btn-ghost" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>Next</button>
-          </div>
-        </div>
-      )}
+      {data && <Pagination page={page} total={data.total} pageSize={data.pageSize} onPage={setPage} />}
     </>
   );
 }

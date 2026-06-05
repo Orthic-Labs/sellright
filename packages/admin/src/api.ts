@@ -65,6 +65,7 @@ export interface ProductDetail { id: string; slug: string; name: string; descrip
 export interface CustomerRow { id: string; email: string; firstName: string | null; lastName: string | null; createdAt: string; orders: number; spent: number; }
 export interface CustomerDetail {
   id: string; email: string; firstName: string | null; lastName: string | null; phone: string | null; emailVerified: boolean; createdAt: string;
+  orderCount: number; spent: number;
   addresses: { fullName: string | null; line1: string; line2: string | null; city: string; province: string | null; postalCode: string | null; country: string; phone: string | null }[];
   orders: OrderRow[];
 }

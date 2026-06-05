@@ -22,7 +22,6 @@ export default function CustomerDetailPage() {
   if (!c) return null;
 
   const name = [c.firstName, c.lastName].filter(Boolean).join(' ') || c.email;
-  const spent = c.orders.filter((o) => ['Paid', 'PartiallyRefunded', 'Refunded'].includes(o.state)).reduce((s, o) => s + o.grandTotal, 0);
 
   return (
     <>
@@ -57,8 +56,8 @@ export default function CustomerDetailPage() {
 
         <div className="space-y-5">
           <div className="card p-4 grid grid-cols-2 gap-3">
-            <div><div className="text-xs text-gray-500">Total spent</div><div className="text-lg font-semibold">{money(spent, cur)}</div></div>
-            <div><div className="text-xs text-gray-500">Orders</div><div className="text-lg font-semibold">{c.orders.length}</div></div>
+            <div><div className="text-xs text-gray-500">Total spent</div><div className="text-lg font-semibold">{money(c.spent, cur)}</div></div>
+            <div><div className="text-xs text-gray-500">Orders</div><div className="text-lg font-semibold">{c.orderCount}</div></div>
           </div>
           {c.phone && <div className="card p-4"><div className="text-sm font-semibold mb-1">Contact</div><div className="text-sm text-gray-600">{c.phone}</div></div>}
           <div className="card p-4">

@@ -44,6 +44,17 @@ function requireStore(admin: AdminPrincipal, c: ReqCtx): AdminStoreAccess {
   return st;
 }
 
+// Roles allowed to mutate. `read_only` may view but not change anything. This is
+// the minimum RBAC gate — a full per-action permission matrix is still TODO.
+const WRITE_ROLES = new Set(['owner', 'manager', 'staff']);
+function requireWrite(st: AdminStoreAccess): void {
+  if (!WRITE_ROLES.has(st.role)) throw new HttpError(403, `role '${st.role}' is read-only`);
+}
+
+// The order states that count as revenue-bearing (paid lifecycle). Reused across
+// dashboard + customer aggregates so the literal list lives in exactly one place.
+const PAID_STATES = sql`array['Paid','PartiallyRefunded','Refunded']::order_state[]`;
+
 // Generic so the happy-path return type (the typed c.json union) flows through
 // to the OpenAPIHono handler; the error branch is cast into that same union.
 async function guard<T>(c: { json: (b: unknown, status?: number) => Response }, fn: () => Promise<T>): Promise<T> {
@@ -123,17 +134,19 @@ admin.openapi(
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c);
     const out = await withStore(st.storeId, async (tx) => {
-      const paidStates = ['Paid', 'PartiallyRefunded', 'Refunded'] as const;
       const [agg] = await tx
         .select({ revenue: sql<number>`coalesce(sum(${s.order.grandTotal}),0)::int`, cnt: sql<number>`count(*)::int` })
         .from(s.order)
-        .where(sql`${s.order.state} = any(array['Paid','PartiallyRefunded','Refunded']::order_state[])`);
+        .where(sql`${s.order.state} = any(${PAID_STATES})`);
       const revenue = agg?.revenue ?? 0;
       const cnt = agg?.cnt ?? 0;
+      // To-fulfill = Paid orders with no Shipped/Delivered fulfillment record yet.
+      // (order.state stays 'Paid' after shipping — shipping state lives on the
+      // fulfillment record, so a bare state='Paid' count over-reports.)
       const [pf] = await tx
         .select({ n: sql<number>`count(*)::int` })
         .from(s.order)
-        .where(eq(s.order.state, 'Paid'));
+        .where(sql`${s.order.state} = 'Paid' and not exists (select 1 from fulfillment f where f.order_id = ${s.order.id} and f.state in ('Shipped','Delivered'))`);
       const [cu] = await tx.select({ n: sql<number>`count(*)::int` }).from(s.customer);
       const [ls] = await tx
         .select({ n: sql<number>`count(*)::int` })
@@ -145,7 +158,6 @@ admin.openapi(
         .leftJoin(s.customer, eq(s.customer.id, s.order.customerId))
         .orderBy(desc(sql`coalesce(${s.order.placedAt}, ${s.order.createdAt})`))
         .limit(8);
-      void paidStates;
       return {
         revenue, orders: cnt, aov: cnt ? Math.round(revenue / cnt) : 0,
         pendingFulfillment: pf?.n ?? 0, customers: cu?.n ?? 0, lowStock: ls?.n ?? 0,
@@ -239,6 +251,7 @@ admin.openapi(
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c);
+    requireWrite(st);
     const { code } = c.req.valid('param');
     const { state, trackingCode, carrier } = c.req.valid('json');
     const res = await withStore(st.storeId, async (tx) => {
@@ -246,6 +259,10 @@ admin.openapi(
       if (!o) return { kind: 'notfound' as const };
       if (o.state !== 'Paid' && o.state !== 'PartiallyRefunded') return { kind: 'badstate' as const, state: o.state };
       const [existing] = await tx.select().from(s.fulfillment).where(eq(s.fulfillment.orderId, o.id)).orderBy(desc(s.fulfillment.createdAt)).limit(1);
+      // Fulfillment state only advances: Pending -> Shipped -> Delivered. Block
+      // a backward move (e.g. re-shipping an already-Delivered order).
+      if (existing && existing.state === 'Delivered' && state === 'Shipped') return { kind: 'regress' as const, state: existing.state };
+      const advancingToShipped = state === 'Shipped' && (!existing || existing.state === 'Pending');
       let fid: string;
       if (existing) {
         await tx.update(s.fulfillment).set({ state, trackingCode: trackingCode ?? existing.trackingCode, carrier: carrier ?? existing.carrier, updatedAt: new Date() }).where(eq(s.fulfillment.id, existing.id));
@@ -254,10 +271,23 @@ admin.openapi(
         const [f] = await tx.insert(s.fulfillment).values({ storeId: st.storeId, orderId: o.id, state, trackingCode: trackingCode ?? null, carrier: carrier ?? null }).returning({ id: s.fulfillment.id });
         fid = f!.id;
       }
-      if (state === 'Shipped') {
+      // On the transition INTO Shipped (not on a repeat call), ship every line in
+      // full (all-or-nothing fulfillment — partial qty is a v2 feature). Shipping
+      // consumes reserved stock: decrement on_hand AND release allocated for the
+      // shipped units, and record the movement.
+      if (advancingToShipped) {
         const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
         for (const l of lines) {
-          if (l.fulfilledQty < l.quantity) await tx.update(s.orderLine).set({ fulfilledQty: l.quantity }).where(eq(s.orderLine.id, l.id));
+          const ship = l.quantity - l.fulfilledQty;
+          if (ship <= 0) continue;
+          await tx.update(s.orderLine).set({ fulfilledQty: l.quantity }).where(eq(s.orderLine.id, l.id));
+          if (l.variantId) {
+            await tx.update(s.stock).set({
+              onHand: sql`greatest(${s.stock.onHand} - ${ship}, 0)`,
+              allocated: sql`greatest(${s.stock.allocated} - ${ship}, 0)`,
+            }).where(eq(s.stock.variantId, l.variantId));
+            await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: l.variantId, delta: -ship, reason: 'fulfillment', refOrderId: o.id });
+          }
         }
       }
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: o.id, action: 'fulfill', toState: state });
@@ -265,6 +295,7 @@ admin.openapi(
     });
     if (res.kind === 'notfound') throw new HttpError(404, 'order not found');
     if (res.kind === 'badstate') throw new HttpError(409, `order not fulfillable in state ${res.state}`);
+    if (res.kind === 'regress') throw new HttpError(409, `cannot move fulfillment from ${res.state} back to Shipped`);
     return c.json({ code, fulfillment: res.state }, 200);
   }),
 );
@@ -278,17 +309,20 @@ admin.openapi(
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c);
+    requireWrite(st);
     const { code } = c.req.valid('param');
     const res = await withStore(st.storeId, async (tx) => {
       const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
       if (!o) return { kind: 'notfound' as const };
       if (!canTransition(o.state as OrderState, 'Cancelled')) return { kind: 'badstate' as const, state: o.state };
-      // release allocated stock for any unfulfilled quantity
+      // Release stock still reserved for unshipped units. Shipped units already
+      // had their allocation released (see fulfill), so release = unfulfilled qty.
       const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
       for (const l of lines) {
         const release = l.quantity - l.fulfilledQty;
         if (release > 0 && l.variantId) {
-          await tx.update(s.stock).set({ allocated: sql`greatest(${s.stock.allocated} - ${release}, 0)` }).where(eq(s.stock.variantId, l.variantId));
+          await tx.update(s.stock).set({ allocated: sql`greatest(${s.stock.allocated} - ${release}, 0)` })
+            .where(and(eq(s.stock.variantId, l.variantId), eq(s.stock.storeId, st.storeId)));
         }
       }
       await tx.update(s.order).set({ state: 'Cancelled', updatedAt: new Date() }).where(eq(s.order.id, o.id));
@@ -322,7 +356,7 @@ admin.openapi(
           id: s.product.id, slug: s.product.slug, name: s.product.name, status: s.product.status,
           assetPath: s.asset.path,
           variants: sql<number>`(select count(*) from product_variant pv where pv.product_id = ${s.product.id} and pv.deleted_at is null)::int`,
-          minPrice: sql<number>`(select min(coalesce(pv.sale_price, pv.price)) from product_variant pv where pv.product_id = ${s.product.id} and pv.deleted_at is null)::int`,
+          minPrice: sql<number | null>`(select min(coalesce(pv.sale_price, pv.price)) from product_variant pv where pv.product_id = ${s.product.id} and pv.deleted_at is null)::int`,
           stock: sql<number>`coalesce((select sum(st.on_hand - st.allocated) from product_variant pv join stock st on st.variant_id = pv.id where pv.product_id = ${s.product.id} and pv.deleted_at is null),0)::int`,
         })
         .from(s.product)
@@ -380,6 +414,7 @@ admin.openapi(
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c);
+    requireWrite(st);
     const { id } = c.req.valid('param');
     const patch = c.req.valid('json');
     const ok = await withStore(st.storeId, async (tx) => {
@@ -403,6 +438,7 @@ admin.openapi(
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c);
+    requireWrite(st);
     const { id } = c.req.valid('param');
     const patch = c.req.valid('json');
     const ok = await withStore(st.storeId, async (tx) => {
@@ -426,6 +462,7 @@ admin.openapi(
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c);
+    requireWrite(st);
     const { id } = c.req.valid('param');
     const { onHand } = c.req.valid('json');
     const ok = await withStore(st.storeId, async (tx) => {
@@ -466,8 +503,8 @@ admin.openapi(
       const rows = await tx
         .select({
           id: s.customer.id, email: s.customer.email, firstName: s.customer.firstName, lastName: s.customer.lastName, createdAt: s.customer.createdAt,
-          orders: sql<number>`(select count(*) from "order" o where o.customer_id = ${s.customer.id} and o.state = any(array['Paid','PartiallyRefunded','Refunded']::order_state[]))::int`,
-          spent: sql<number>`coalesce((select sum(o.grand_total) from "order" o where o.customer_id = ${s.customer.id} and o.state = any(array['Paid','PartiallyRefunded','Refunded']::order_state[])),0)::int`,
+          orders: sql<number>`(select count(*) from "order" o where o.customer_id = ${s.customer.id} and o.state = any(${PAID_STATES}))::int`,
+          spent: sql<number>`coalesce((select sum(o.grand_total) from "order" o where o.customer_id = ${s.customer.id} and o.state = any(${PAID_STATES})),0)::int`,
         })
         .from(s.customer)
         .where(where)
@@ -494,9 +531,18 @@ admin.openapi(
       const [cu] = await tx.select().from(s.customer).where(eq(s.customer.id, id)).limit(1);
       if (!cu) return null;
       const addresses = await tx.select().from(s.address).where(eq(s.address.customerId, id));
+      // Lifetime stats from the FULL order set (not the 50-row display window).
+      const [stats] = await tx
+        .select({
+          orderCount: sql<number>`count(*) filter (where ${s.order.state} = any(${PAID_STATES}))::int`,
+          spent: sql<number>`coalesce(sum(${s.order.grandTotal}) filter (where ${s.order.state} = any(${PAID_STATES})),0)::int`,
+        })
+        .from(s.order)
+        .where(eq(s.order.customerId, id));
       const orders = await tx.select({ code: s.order.code, state: s.order.state, grandTotal: s.order.grandTotal, currency: s.order.currency, placedAt: s.order.placedAt, createdAt: s.order.createdAt }).from(s.order).where(eq(s.order.customerId, id)).orderBy(desc(s.order.createdAt)).limit(50);
       return {
         id: cu.id, email: cu.email, firstName: cu.firstName, lastName: cu.lastName, phone: cu.phone, emailVerified: cu.emailVerified, createdAt: cu.createdAt.toISOString(),
+        orderCount: stats?.orderCount ?? 0, spent: stats?.spent ?? 0,
         addresses: addresses.map((a) => ({ fullName: a.fullName, line1: a.line1, line2: a.line2, city: a.city, province: a.province, postalCode: a.postalCode, country: a.country, phone: a.phone })),
         orders: orders.map((o) => ({ ...o, placedAt: o.placedAt ? o.placedAt.toISOString() : null, createdAt: o.createdAt.toISOString() })),
       };
