@@ -1,0 +1,23 @@
+[
+  {
+    "id": "4",
+    "code": "standard-payment",
+    "enabled": false,
+    "name": "Standard Payment",
+    "description": ""
+  },
+  {
+    "id": "7",
+    "code": "nmi",
+    "enabled": true,
+    "name": "NMI",
+    "description": ""
+  },
+  {
+    "id": "6",
+    "code": "sezzle",
+    "enabled": true,
+    "name": "Sezzle",
+    "description": ""
+  }
+]

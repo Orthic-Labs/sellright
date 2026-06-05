@@ -1,0 +1,74 @@
+query trackOrder($orderCode: String!, $email: String!) {
+  trackOrder(orderCode: $orderCode, email: $email) {
+    success
+    error
+    order {
+      id
+      code
+      state
+      customFields {
+        isPreOrder
+      }
+      orderPlacedAt
+      totalWithTax
+      subTotalWithTax
+      shippingWithTax
+      currencyCode
+      totalQuantity
+      customer {
+        id
+        firstName
+        lastName
+        emailAddress
+      }
+      shippingAddress {
+        fullName
+        streetLine1
+        streetLine2
+        city
+        province
+        postalCode
+        country
+        phoneNumber
+      }
+      lines {
+        id
+        quantity
+        unitPriceWithTax
+        linePriceWithTax
+        productVariant {
+          id
+          name
+          sku
+          customFields {
+            salePrice
+            preOrderPrice
+            shipDate
+          }
+          product {
+            name
+            slug
+          }
+        }
+        featuredAsset {
+          preview
+        }
+      }
+      fulfillments {
+        id
+        state
+        method
+        trackingCode
+        createdAt
+        updatedAt
+      }
+      payments {
+        id
+        method
+        amount
+        state
+        createdAt
+      }
+    }
+  }
+}

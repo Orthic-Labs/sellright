@@ -1,0 +1,54 @@
+mutation addPaymentToOrder($input: PaymentInput!) {
+  addPaymentToOrder(input: $input) {
+    ... on Order {
+      __typename
+      id
+      code
+      state
+      total
+      totalWithTax
+      currencyCode
+      lines {
+        id
+        quantity
+        linePrice
+        linePriceWithTax
+        productVariant {
+          id
+          name
+        }
+      }
+      payments {
+        id
+        method
+        amount
+        state
+        transactionId
+        metadata
+      }
+    }
+    ... on OrderStateTransitionError {
+      errorCode
+      message
+      transitionError
+    }
+    ... on OrderPaymentStateError {
+      errorCode
+      message
+    }
+    ... on IneligiblePaymentMethodError {
+      errorCode
+      message
+    }
+    ... on PaymentFailedError {
+      errorCode
+      message
+      paymentErrorMessage
+    }
+    ... on PaymentDeclinedError {
+      errorCode
+      message
+      paymentErrorMessage
+    }
+  }
+}

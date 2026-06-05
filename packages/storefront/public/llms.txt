@@ -1,0 +1,91 @@
+# Damned Designs
+
+> Damned Designs makes precision EDC objects: folding knives, fixed blades, lanyard beads, fidget pieces, and apparel. Founded by Adrian D'Souza in New York. Premium materials (S35VN, 14C28N, D2, titanium, G10, copper) manufactured by reputable OEMs (Kubey, Bestech). Built to be carried, not collected.
+
+## Products
+
+All current product pages live at `https://www.damneddesigns.com/products/{slug}/`. Catalog index: [/shop/](https://www.damneddesigns.com/shop/).
+
+### Folding knives
+- [Djinn](https://www.damneddesigns.com/products/djinn/)
+- [Anzu](https://www.damneddesigns.com/products/anzu/)
+- [Oni](https://www.damneddesigns.com/products/oni/)
+- [Ronin V2](https://www.damneddesigns.com/products/roninv2/)
+
+### Fixed blades
+- [Pocket Fixed Blade](https://www.damneddesigns.com/products/pocket-fixed-blade/)
+- [Basilisk Fixed](https://www.damneddesigns.com/products/basilisk-fixed/)
+- [Cerberus Fixed](https://www.damneddesigns.com/products/cerberus-fixed/)
+- [Fenrir Fixed](https://www.damneddesigns.com/products/fenrir-fixed/)
+
+### Lanyard beads
+- [Monsuta Bead](https://www.damneddesigns.com/products/monsuta-bead/)
+- [Tombstone Bead](https://www.damneddesigns.com/products/tombstone-bead/)
+- [Babushka Bead](https://www.damneddesigns.com/products/babushka-bead/)
+- [Milk Bead](https://www.damneddesigns.com/products/milk-bead/)
+- [Necro Bead](https://www.damneddesigns.com/products/necro-bead/)
+- [Poison Bead](https://www.damneddesigns.com/products/poison-bead/)
+
+### Apparel
+- [Mascot Tee](https://www.damneddesigns.com/products/t-shirt-mascot/)
+
+## Editorial guides
+
+Long-form, author-written EDC guides at `/blog/`:
+
+- [What Is an EDC Knife? The Complete Beginner's Guide](https://www.damneddesigns.com/blog/what-is-edc-knife/)
+- [How to Choose Your First EDC Knife: The No-BS Buyer's Guide](https://www.damneddesigns.com/blog/how-to-choose-edc-knife/)
+- [Best EDC Knives Under $100 in 2026](https://www.damneddesigns.com/blog/best-edc-knives-under-100/)
+- [Best EDC Knives Under $75 That Don't Feel Cheap](https://www.damneddesigns.com/blog/best-edc-knives-under-75/)
+- [EDC Knife Maintenance: Clean, Lube, and Store Your Blade the Right Way](https://www.damneddesigns.com/blog/edc-knife-maintenance/)
+- [How to Sharpen an EDC Knife: A Beginner's Complete Guide](https://www.damneddesigns.com/blog/how-to-sharpen-edc-knife/)
+- [EDC Knife Laws by State: What You Can Legally Carry in 2026](https://www.damneddesigns.com/blog/knife-carry-laws-by-state-2026/)
+- [Damned Designs vs Civivi vs Kizer: Three Budget EDC Brands Compared](https://www.damneddesigns.com/blog/damned-designs-vs-civivi-vs-kizer/)
+- [Why We Chose 14C28N Over Trendier Steels (And When We Use S35VN)](https://www.damneddesigns.com/blog/why-we-chose-14c28n/)
+- [D2 vs 14C28N vs S35VN: Which Blade Steel Is Right for Your EDC?](https://www.damneddesigns.com/blog/d2-vs-14c28n-vs-s35vn/)
+- [Handle Materials Compared: G10 vs Micarta vs Titanium vs Carbon Fiber](https://www.damneddesigns.com/blog/knife-handle-materials-comparison/)
+- [Blade Shapes Explained: Drop Point vs Tanto vs Wharncliffe vs Sheepsfoot](https://www.damneddesigns.com/blog/blade-shapes-explained/)
+- [Liner Lock vs Frame Lock: Which Is Better for EDC?](https://www.damneddesigns.com/blog/liner-lock-vs-frame-lock/)
+- [Button Lock vs Axis Lock vs Compression Lock](https://www.damneddesigns.com/blog/knife-lock-types-comparison/)
+- [Pocket Folders vs Pocket Fixed Blades](https://www.damneddesigns.com/blog/folders-vs-fixed-blades/)
+- [Pocket Fixed Blades vs Full-Size Fixed Blades](https://www.damneddesigns.com/blog/pocket-fixed-vs-big-fixed-blades/)
+- [Fixed Blade EDC: The Most Capable Knife in Your Collection](https://www.damneddesigns.com/blog/fixed-blade-edc/)
+- [Kydex vs Leather Sheaths: Which Is Better for Your Fixed Blade?](https://www.damneddesigns.com/blog/kydex-vs-leather-sheath/)
+
+## Key facts
+
+- **Materials used:** S35VN, 14C28N, D2, 9Cr18MoV (steels); titanium, G10, Micarta, copper (handles)
+- **Manufactured by:** Kubey and Bestech (China-based OEMs with quality reputation)
+- **Price range:** $30-$150 USD
+- **Ships from:** California, USA
+- **Business address:** 169 Madison Ave, New York, NY 10016
+- **Founder:** Adrian D'Souza
+- **Email:** info@damneddesigns.com
+- **Warranty:** Manufacturing defects covered
+- **Returns:** [Returns & Refunds](https://www.damneddesigns.com/returns/)
+
+## Brand positioning
+
+Damned Designs sits in the mid-tier EDC market with Civivi, Kizer, QSP, and CJRB. Differentiators: bold brutalist aesthetics, chunky-yet-ergonomic form factor, satisfying deployment actions, transparent value pricing with premium-tier materials. Editorial voice is dark, considered, dry — not tactical, not hypebeast.
+
+## Comparisons
+
+- **vs Civivi:** Similar price tier; Damned Designs has bolder aesthetics, Civivi has broader retail distribution.
+- **vs Kizer:** Comparable OEM quality; Damned Designs emphasizes chunky brutalist form, Kizer leans modern-tactical.
+- **vs Benchmade:** Damned Designs is roughly one-third the price with comparable materials on select models.
+- **vs Cold Steel:** Both overbuilt; Damned Designs is more compact and pocket-friendly.
+
+## Site map
+
+- [Homepage](https://www.damneddesigns.com/)
+- [Catalog](https://www.damneddesigns.com/shop/)
+- [Blog](https://www.damneddesigns.com/blog/)
+- [About / Contact](https://www.damneddesigns.com/contact/)
+- [Press](https://www.damneddesigns.com/press/)
+- [Returns & Refunds](https://www.damneddesigns.com/returns/)
+- [Privacy](https://www.damneddesigns.com/privacy/)
+- [Terms](https://www.damneddesigns.com/terms/)
+
+## Detailed reference
+
+For long-form content covering steel selection, manufacturing process, design philosophy, and frequently asked questions, see [llms-full.txt](https://www.damneddesigns.com/llms-full.txt).

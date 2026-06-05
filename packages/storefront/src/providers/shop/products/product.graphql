@@ -1,0 +1,150 @@
+fragment ListedProductCustom on SearchResult {
+  productId
+  productVariantId
+  productName
+  slug
+  productAsset {
+    id
+    preview
+  }
+  inStock
+  priceWithTax {
+    ... on PriceRange {
+      min
+      max
+    }
+    ... on SinglePrice {
+      value
+    }
+  }
+}
+
+fragment DetailedProductCustom on Product {
+  id
+  name
+  slug
+  description
+  facetValues {
+    facet {
+      id
+      code
+      name
+    }
+    id
+    code
+    name
+  }
+  featuredAsset {
+    id
+    preview
+    updatedAt
+  }
+  assets {
+    id
+    preview
+    updatedAt
+  }
+  variants {
+    id
+    name
+    priceWithTax
+    currencyCode
+    sku
+    stockLevel
+    featuredAsset {
+      id
+      preview
+    }
+    options {
+      id
+      code
+      name
+      group {
+        id
+        name
+      }
+    }
+    customFields {
+      salePrice
+      preOrderPrice
+      shipDate
+      isPreOrder
+    }
+  }
+}
+
+fragment VariantStockFragment on Product {
+  id
+  variants {
+    id
+    name
+    stockLevel
+    priceWithTax
+    currencyCode
+    options {
+      id
+      code
+      name
+      group {
+        id
+        name
+      }
+    }
+    customFields {
+      salePrice
+      preOrderPrice
+      shipDate
+      isPreOrder
+    }
+  }
+}
+
+query search($input: SearchInput!) {
+  search(input: $input) {
+    totalItems
+    items {
+      ...ListedProductCustom
+    }
+    facetValues {
+      count
+      facetValue {
+        id
+        name
+        facet {
+          id
+          code
+          name
+        }
+      }
+    }
+    itemCustomFields {
+      productVariantId
+      salePrice
+      preOrderPrice
+      shipDate
+      isPreOrder
+    }
+  }
+}
+
+query product($slug: String, $id: ID) {
+  product(slug: $slug, id: $id) {
+    ...DetailedProductCustom
+  }
+}
+
+query productVariants($slug: String, $id: ID) {
+  product(slug: $slug, id: $id) {
+    ...VariantStockFragment
+  }
+}
+
+query getSingleProductStockLevels($slug: String!) {
+  product(slug: $slug) {
+    id
+    variants {
+      id
+      stockLevel
+    }
+  }
+}

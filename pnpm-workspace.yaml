@@ -1,2 +1,6 @@
 packages:
   - "packages/*"
+  # storefront is a cloned Qwik app with its own lockfile/toolchain; it manages
+  # its own deps (own pnpm install) so it can't disturb the api/shared build
+  # while its data layer is rewired from Vendure GraphQL -> SellRight REST.
+  - "!packages/storefront"

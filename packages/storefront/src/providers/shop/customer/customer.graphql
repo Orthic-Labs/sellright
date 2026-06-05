@@ -1,0 +1,224 @@
+query activeCustomerAddresses {
+  activeCustomer {
+    id
+    addresses {
+      id
+      fullName
+      company
+      streetLine1
+      streetLine2
+      city
+      province
+      postalCode
+      country {
+        code
+      }
+      phoneNumber
+      defaultShippingAddress
+      defaultBillingAddress
+    }
+  }
+}
+
+query activeCustomer {
+  activeCustomer {
+    id
+    title
+    firstName
+    lastName
+    emailAddress
+    phoneNumber
+  }
+}
+
+mutation createCustomerAddress($input: CreateAddressInput!) {
+  createCustomerAddress(input: $input) {
+    ...Address
+    __typename
+  }
+}
+
+query activeCustomerOrders($options: OrderListOptions) {
+  activeCustomer {
+    id
+    orders(options: $options) {
+      items {
+        id
+        code
+        state
+        customFields {
+          isPreOrder
+        }
+        createdAt
+        orderPlacedAt
+        updatedAt
+        totalWithTax
+        subTotalWithTax
+        shippingWithTax
+        currencyCode
+        couponCodes
+        customer {
+          id
+          firstName
+          lastName
+          emailAddress
+        }
+        shippingAddress {
+          fullName
+          streetLine1
+          streetLine2
+          city
+          province
+          postalCode
+          countryCode
+          phoneNumber
+        }
+        billingAddress {
+          fullName
+          streetLine1
+          streetLine2
+          city
+          province
+          postalCode
+          countryCode
+          phoneNumber
+        }
+        shippingLines {
+          priceWithTax
+          shippingMethod {
+            id
+            name
+            description
+          }
+        }
+        fulfillments {
+          id
+          state
+          method
+          trackingCode
+          createdAt
+          updatedAt
+          lines {
+            orderLineId
+            quantity
+          }
+        }
+        payments {
+          id
+          method
+          amount
+          state
+          transactionId
+          createdAt
+          metadata
+        }
+        lines {
+          id
+          quantity
+          unitPriceWithTax
+          linePriceWithTax
+          discountedUnitPriceWithTax
+          discountedLinePriceWithTax
+          featuredAsset {
+            id
+            preview
+          }
+          productVariant {
+            id
+            name
+            sku
+            price
+            customFields {
+              salePrice
+              preOrderPrice
+              shipDate
+            }
+            options {
+              name
+            }
+            product {
+              id
+              name
+              slug
+            }
+          }
+        }
+        discounts {
+          type
+          description
+          amountWithTax
+        }
+        taxSummary {
+          description
+          taxRate
+          taxTotal
+        }
+      }
+      totalItems
+    }
+  }
+}
+
+mutation updateCustomerPasswordMutation($currentPassword: String!, $newPassword: String!) {
+  updateCustomerPassword(currentPassword: $currentPassword, newPassword: $newPassword) {
+    ... on Success {
+      success
+      __typename
+    }
+    ...ErrorResult
+    __typename
+  }
+}
+
+mutation deleteCustomerAddress($id: ID!) {
+  deleteCustomerAddress(id: $id) {
+    success
+  }
+}
+
+mutation updateCustomerAddressMutation($input: UpdateAddressInput!) {
+  updateCustomerAddress(input: $input) {
+    ...Address
+    __typename
+  }
+}
+
+mutation createCustomerAddressMutation($input: CreateAddressInput!) {
+  createCustomerAddress(input: $input) {
+    ...Address
+    __typename
+  }
+}
+
+mutation logout {
+  logout {
+    success
+  }
+}
+
+fragment Address on Address {
+  id
+  fullName
+  company
+  streetLine1
+  streetLine2
+  city
+  province
+  postalCode
+  country {
+    id
+    code
+    name
+    __typename
+  }
+  phoneNumber
+  defaultShippingAddress
+  defaultBillingAddress
+  __typename
+}
+
+fragment ErrorResult on ErrorResult {
+  errorCode
+  message
+  __typename
+}

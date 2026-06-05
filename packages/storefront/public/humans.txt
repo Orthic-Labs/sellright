@@ -1,0 +1,19 @@
+/* TEAM */
+
+Founder & Designer: Adrian D'Souza
+Site: https://www.damneddesigns.com/contact/
+Location: New York, NY, USA
+
+/* SITE */
+
+Last update: 2026-05-10
+Standards: HTML5, JSON-LD, Schema.org
+Components: Qwik, Vendure
+Address: 169 Madison Ave, New York, NY 10016
+Email: info@damneddesigns.com
+
+/* PRODUCT */
+
+Built to be carried, not collected.
+Manufactured by Kubey and Bestech.
+Ships from California, USA.
