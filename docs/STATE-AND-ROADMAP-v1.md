@@ -28,9 +28,14 @@ as "missing alternatives":
   rejected. Rationale: full control of the data model, the money path, the
   multi-tenant model, and licensing; the goal is a *product we own and can sell*,
   not a customization of someone else's. This is final.
-- **Monorepo-modular, NOT microservices.** One deployable API with clean internal
-  module boundaries. A solo operator does not pay the microservices ops tax for
-  this traffic. Revisit only if a single component needs independent scaling.
+- **Monorepo-modular, NOT microservices / NOT composable.** One deployable API
+  with clean internal module boundaries. A solo operator does not pay the
+  microservices ops tax for this traffic. *Endorsed by current research, not just
+  preference:* the 2025–2026 "composable regret" correction shows mid-market
+  composable TCO running 100–200% higher and full-microservices multiplying
+  backlogs without platform-engineering maturity (`docs/research/ecom-backend-research-2026-06.md`
+  §2). Revisit only if one component needs independent scaling — extract-on-
+  evidence, never by default.
 - **Frontend = Qwik** (best-for-ecom, locked). **API = typed REST (Hono +
   zod-openapi)**, not GraphQL/tRPC.
 
@@ -490,14 +495,48 @@ with real traffic before the full storefront cutover.
 ### Scalability / performance (not a v1 blocker, but on the radar)
 
 Deliberately *not* solved by microservices (see non-goals). Concrete items when
-traffic warrants: a single `pg.Pool` is shared (fine now); **browse load is
-already offloaded** to the static catalog manifest (no DB on home/shop/PDP);
-admin auth currently costs ~2 DB round-trips before the handler's own txn
-(collapse `resolveAdmin`+`adminStores` into one query, or cache per-token); add
-indexes on the hot filter/sort paths (`order(store_id,state,created_at)`,
-`order(customer_id)`, `product(store_id,name)`) before large admin lists get
-slow; move heavy/async work (emails, recovery, settlement) to the planned
-BullMQ/Redis layer rather than request threads.
+traffic warrants, ordered by ROI (research-backed — `docs/research/ecom-backend-research-2026-06.md`
+§7):
+- **PgBouncer in transaction-pooling mode** is the highest-ROI first lever
+  (multiplexes clients onto a small backend pool). **Compatible with our RLS**
+  because `withStore()` uses `SET LOCAL app.current_store` *inside a transaction*
+  — the GUC is txn-scoped and reset at commit. **Hard rule:** never set the store
+  GUC at session level (session `SET` breaks under transaction pooling).
+- **Browse load is already offloaded** to the static catalog manifest (no DB on
+  home/shop/PDP) — the research's "offload what you can" win, already done.
+- Admin auth costs ~2 DB round-trips before the handler txn — collapse
+  `resolveAdmin`+`adminStores` into one query, or cache per-token.
+- Add hot-path **indexes** (`order(store_id,state,created_at)`,
+  `order(customer_id)`, `product(store_id,name)`) before large admin lists slow.
+- **Partition `order`/`order_line` by time only at the 100 GB–1 TB phase**
+  (premature now at 13.5 k orders); tune **autovacuum** on the high-write tables
+  (`order`, `order_line`, `stock_movement`, `cart_line`) before real volume.
+- Move heavy/async work (emails, recovery, settlement) to the planned BullMQ/Redis
+  layer rather than request threads. Don't shard/add replicas to fix a
+  connection or write-throughput problem — match the fix to the bottleneck.
+
+### Research-informed correctness deltas (2026-06)
+
+From `docs/research/ecom-backend-research-2026-06.md` — small, mostly pre-launch,
+that confirm the model and close real gaps:
+
+- **[pre-launch] `Idempotency-Key` on `/v1/shop/checkout`.** `pay` is already
+  idempotent (claim-in-txn via `processed_event`); checkout is **not**, so a
+  double-submit can create two orders. Extend the same header + `processed_event`
+  claim to order-creation (storefront generates the key per attempt). The
+  Stripe-canonical pattern we already half-implement (§3 of the research doc).
+- **[pre-launch] Reservation-expiry job.** An abandoned `PendingPayment` order
+  holds `allocated` stock forever. The rulebook calls for "allocate at
+  order-creation + release on timeout"; the *release* arm isn't built. A
+  scheduled job (BullMQ) must release allocations for stale unpaid orders — the
+  missing half of the soft-reservation pattern (research §6).
+- **[v2] DB-backed outbox + polling relay** (NOT Kafka/Debezium) for the SSE
+  cache-invalidation channel, BullMQ events, and the Regime-B SellRight→Vendure
+  reconciliation exporter — all three are dual-writes. `processed_event` is
+  already the matching inbox/dedup table (research §4).
+- **[validated, no change]** RLS model, soft-reservation inventory, modular-monolith
+  + from-scratch, and the static-manifest browse offload are all *exactly* what
+  current research recommends — the newest data mostly confirms the architecture.
 
 ### First-launch definition of done (observable success signals)
 
@@ -588,7 +627,8 @@ cd ~/sites/sellright/packages/api && pnpm exec tsx src/index.ts   # env: DATABAS
 
 **Canonical references:** commerce rules → `SELLRIGHT-ECOMMERCE-RULEBOOK-v1.md`;
 DD plugin parity → `DD-CUSTOMIZATION-SPEC-v1.md`; original plans →
-`ARCHITECTURE-PLAN-v1.md`, `BUILD-PLAN-RH-v1.md`.
+`ARCHITECTURE-PLAN-v1.md`, `BUILD-PLAN-RH-v1.md`; external research mapped to our
+architecture → `research/ecom-backend-research-2026-06.md`.
 
 ---
 
