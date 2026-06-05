@@ -65,7 +65,7 @@ async function main() {
                 a."streetLine2" AS l2, a.city, a.province, a."postalCode" AS postal,
                 a."phoneNumber" AS phone, a."defaultShippingAddress" AS dship,
                 a."defaultBillingAddress" AS dbill, co.code AS country
-         FROM address a LEFT JOIN country co ON co.id = a."countryId"`,
+         FROM address a LEFT JOIN region co ON co.id = a."countryId"`,
       )
     )
       .map((a) => {
