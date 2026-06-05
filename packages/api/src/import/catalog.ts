@@ -66,7 +66,8 @@ async function main() {
       const id = randomUUID();
       assetMap.set(a.id, id);
       await tx.insert(s.asset).values({
-        id, storeId, type: lower(a.type), path: a.source ?? a.preview, width: a.width ?? null, height: a.height ?? null,
+        // store the PREVIEW path (what the storefront/manifest displays), not source
+        id, storeId, type: lower(a.type), path: a.preview ?? a.source, width: a.width ?? null, height: a.height ?? null,
       });
     }
 
