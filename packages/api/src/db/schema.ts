@@ -282,13 +282,19 @@ export const order = pgTable(
     taxTotal: integer().notNull().default(0),
     grandTotal: integer().notNull().default(0),
     isPreOrder: boolean().notNull().default(false),
+    // Stripe-canonical idempotency: a client-supplied key per checkout attempt.
+    // Same (store, key) -> the same order, so a double-submit can't create two.
+    idempotencyKey: text(),
     shippingAddress: jsonb(),
     billingAddress: jsonb(),
     placedAt: timestamp({ withTimezone: true }),
     createdAt: ts(),
     updatedAt: ts(),
   },
-  (t) => [unique('order_store_code').on(t.storeId, t.code)],
+  (t) => [
+    unique('order_store_code').on(t.storeId, t.code),
+    unique('order_store_idempotency').on(t.storeId, t.idempotencyKey),
+  ],
 );
 
 export const orderLine = pgTable('order_line', {

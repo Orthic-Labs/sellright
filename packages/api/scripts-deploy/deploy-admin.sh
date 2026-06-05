@@ -15,13 +15,19 @@ command -v pnpm >/dev/null || { echo "FATAL: pnpm not found at $PNPM_HOME" >&2; 
 
 cd ~/sites/sellright
 
-APIPID="$(pgrep -f 'src/index.ts' | head -1 || true)"
-if [ -z "$APIPID" ]; then echo "FATAL: api process (src/index.ts) not found" >&2; exit 1; fi
-
-# Inherit DATABASE_URL / PORT / NODE_ENV from the running API (no echo of secrets).
-set -a
-eval "$(tr '\0' '\n' < /proc/$APIPID/environ | grep -E '^(DATABASE_URL|PORT|NODE_ENV|CATALOG_DIR)=' | sed 's/^/export /')"
-set +a
+# Connection model: once ~/.sellright/env exists (after create-app-role.sh), the
+# API runs as the NON-owner app role but migrate/seed MUST run as the owner.
+# Before that, fall back to inheriting the running API's (owner) DATABASE_URL.
+OWNER_URL=""; APP_URL=""
+if [ -f "$HOME/.sellright/env" ]; then
+  source "$HOME/.sellright/env"
+  OWNER_URL="$DATABASE_URL_OWNER"; APP_URL="$DATABASE_URL_APP"
+else
+  APIPID="$(pgrep -f 'src/index.ts' | head -1 || true)"
+  [ -n "$APIPID" ] || { echo "FATAL: no api proc and no ~/.sellright/env" >&2; exit 1; }
+  set -a; eval "$(tr '\0' '\n' < /proc/$APIPID/environ | grep -E '^DATABASE_URL=' | sed 's/^/export /')"; set +a
+  OWNER_URL="$DATABASE_URL"; APP_URL="$DATABASE_URL"
+fi
 : "${PORT:=3300}"
 
 echo "[1/6] repo before: $(git rev-parse --short HEAD)"
@@ -30,18 +36,18 @@ echo "[1/6] repo after:  $(git rev-parse --short HEAD)"
 
 cd packages/api
 
-echo "[2/6] migrate"
-pnpm db:migrate
+echo "[2/6] migrate (as OWNER)"
+DATABASE_URL="$OWNER_URL" pnpm db:migrate
 
-echo "[3/6] seed admin ($ADMIN_EMAIL)"
-ADMIN_PASSWORD="$ADMIN_PW" pnpm exec tsx src/scripts/seed-admin.ts "$ADMIN_EMAIL"
+echo "[3/6] seed admin ($ADMIN_EMAIL) (as OWNER — writes admin_user_store)"
+DATABASE_URL="$OWNER_URL" ADMIN_PASSWORD="$ADMIN_PW" pnpm exec tsx src/scripts/seed-admin.ts "$ADMIN_EMAIL"
 
-echo "[4/6] restart api (pid $APIPID -> new)"
-kill "$APIPID" 2>/dev/null || true
-sleep 1
-nohup pnpm exec tsx src/index.ts > ~/sites/sellright/api.log 2>&1 &
+echo "[4/6] restart api (as APP role)"
+pkill -f 'src/index.ts' 2>/dev/null || true; sleep 2
+fuser -k "${PORT}/tcp" 2>/dev/null || true; sleep 1
+DATABASE_URL="$APP_URL" PORT="$PORT" nohup pnpm exec tsx src/index.ts > ~/sites/sellright/api.log 2>&1 &
 disown
-sleep 4
+sleep 5
 
 echo "[5/6] health"
 curl -s "http://127.0.0.1:${PORT}/v1/health"; echo

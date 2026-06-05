@@ -50,6 +50,20 @@
       "when": 1780643200000,
       "tag": "0006_admin_store_no_force",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1780650000000,
+      "tag": "0007_order_idempotency_and_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1780650100000,
+      "tag": "0008_admin_store_registry_disable_rls",
+      "breakpoints": true
     }
   ]
 }

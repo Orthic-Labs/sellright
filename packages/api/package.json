@@ -10,7 +10,8 @@
     "start": "node dist/index.js",
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate"
+    "db:migrate": "drizzle-kit migrate",
+    "db:assert-rls": "tsx src/db/assert-force-rls.ts"
   },
   "dependencies": {
     "@sellright/shared": "workspace:*",

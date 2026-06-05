@@ -23,7 +23,7 @@ export interface AdminPrincipal {
 /**
  * Create an admin session, return the raw token (only the hash is stored).
  * Admin sessions are global (not bound to a store). On each request the admin
- * selects a store via x-store-slug; adminStores() enforces the ACL and returns
+ * selects a store via x-store-slug; resolveAdmin() loads the ACL and returns
  * only the stores this admin is actually enrolled in.
  */
 export async function createAdminSession(adminUserId: string): Promise<string> {
@@ -40,39 +40,46 @@ export async function deleteAdminSession(token: string): Promise<void> {
   await db.delete(s.session).where(eq(s.session.tokenHash, hashToken(token)));
 }
 
-/** List the stores an admin can access (admin_user_store is NO FORCE — see 0006). */
-export async function adminStores(adminUserId: string): Promise<AdminStoreAccess[]> {
+/**
+ * Resolve an admin principal from a bearer token in a SINGLE query — session ⋈
+ * admin_user ⋈ admin_user_store ⋈ store — instead of two round-trips
+ * (token→user, then user→stores). One row per accessible store; aggregated in JS.
+ * An admin with no store grants still resolves (empty stores) via the left join.
+ */
+export async function resolveAdmin(token: string): Promise<AdminPrincipal | null> {
   const rows = await db
     .select({
+      id: s.adminUser.id,
+      email: s.adminUser.email,
       storeId: s.store.id,
       slug: s.store.slug,
       name: s.store.name,
       currency: s.store.currency,
       role: s.adminUserStore.role,
     })
-    .from(s.adminUserStore)
-    .innerJoin(s.store, eq(s.store.id, s.adminUserStore.storeId))
-    .where(eq(s.adminUserStore.adminUserId, adminUserId));
-  return rows.map((r) => ({ ...r, role: r.role as AdminStoreAccess['role'] }));
-}
-
-/** Resolve an admin principal from a bearer token. Null if invalid/expired. */
-export async function resolveAdmin(token: string): Promise<AdminPrincipal | null> {
-  const rows = await db
-    .select({ id: s.adminUser.id, email: s.adminUser.email })
     .from(s.session)
     .innerJoin(s.adminUser, eq(s.adminUser.id, s.session.adminUserId))
+    .leftJoin(s.adminUserStore, eq(s.adminUserStore.adminUserId, s.adminUser.id))
+    .leftJoin(s.store, eq(s.store.id, s.adminUserStore.storeId))
     .where(
       and(
         eq(s.session.tokenHash, hashToken(token)),
         isNotNull(s.session.adminUserId),
         gt(s.session.expiresAt, new Date()),
       ),
-    )
-    .limit(1);
-  const u = rows[0];
-  if (!u) return null;
-  return { id: u.id, email: u.email, stores: await adminStores(u.id) };
+    );
+  const first = rows[0];
+  if (!first) return null;
+  const stores: AdminStoreAccess[] = rows
+    .filter((r) => r.storeId && r.slug)
+    .map((r) => ({
+      storeId: r.storeId!,
+      slug: r.slug!,
+      name: r.name!,
+      currency: r.currency!,
+      role: r.role as AdminStoreAccess['role'],
+    }));
+  return { id: first.id, email: first.email, stores };
 }
 
 /** Find an admin user by email — global registry lookup on the default db client. */

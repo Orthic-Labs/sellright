@@ -32,6 +32,7 @@ checkout.openapi(
     path: '/v1/shop/checkout',
     summary: 'Create an order from a cart',
     request: {
+      headers: z.object({ 'idempotency-key': z.string().optional() }),
       body: {
         content: {
           'application/json': {
@@ -57,10 +58,23 @@ checkout.openapi(
   async (c) => {
     const st = await store(c);
     const body = c.req.valid('json');
+    const idemKey = c.req.header('idempotency-key') || null;
     const skus = [...new Set(body.items.map((i) => i.sku))];
 
-    type Result = { blocked: string[] } | { code: string; grandTotal: number };
+    type Result = { blocked: string[] } | { code: string; grandTotal: number; replay?: boolean };
     const out = await withStore(st.id, async (tx): Promise<Result> => {
+      // Idempotency: if this key already created an order, return THAT order
+      // (same key -> same response). A unique (store, key) index also guards the
+      // concurrent double-submit race below.
+      if (idemKey) {
+        const [existing] = await tx
+          .select({ code: s.order.code, grandTotal: s.order.grandTotal })
+          .from(s.order)
+          .where(eq(s.order.idempotencyKey, idemKey))
+          .limit(1);
+        if (existing) return { code: existing.code, grandTotal: existing.grandTotal, replay: true };
+      }
+
       const variants = await tx
         .select()
         .from(s.productVariant)
@@ -97,6 +111,7 @@ checkout.openapi(
       const code = orderCode();
       await tx.insert(s.order).values({
         id: orderId, storeId: st.id, code, customerId, state: 'PendingPayment', currency: st.currency,
+        idempotencyKey: idemKey,
         subtotal: totals.subtotal, discountTotal: totals.discountTotal, shippingTotal: totals.shippingTotal,
         taxTotal: totals.taxTotal, grandTotal: totals.grandTotal,
         isPreOrder: priced.some((p) => p.v.isPreOrder),
@@ -111,6 +126,22 @@ checkout.openapi(
         })),
       );
       return { code, grandTotal: totals.grandTotal };
+    }).catch(async (e: unknown): Promise<Result> => {
+      // Concurrent double-submit with the same Idempotency-Key: the unique
+      // (store, key) index rejected the loser; its txn (incl. stock allocation)
+      // rolled back. Return the winner's order in a fresh read.
+      if (idemKey && (e as { code?: string })?.code === '23505') {
+        return withStore(st.id, async (tx): Promise<Result> => {
+          const [o] = await tx
+            .select({ code: s.order.code, grandTotal: s.order.grandTotal })
+            .from(s.order)
+            .where(eq(s.order.idempotencyKey, idemKey))
+            .limit(1);
+          if (o) return { code: o.code, grandTotal: o.grandTotal, replay: true };
+          throw e;
+        });
+      }
+      throw e;
     });
 
     if ('blocked' in out) return c.json({ error: 'unavailable or out of stock', skus: out.blocked }, 409);
