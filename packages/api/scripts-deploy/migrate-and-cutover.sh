@@ -42,7 +42,7 @@ get() { node -e "let d=\"\";process.stdin.on(\"data\",c=>d+=c).on(\"end\",()=>{c
 SS=(-H 'x-store-slug: damned' -H 'content-type: application/json')
 
 echo "[5] browse (catalog via app role)"
-curl -s "http://127.0.0.1:3300/v1/shop/catalog" "${SS[@]}" -o /dev/null -w "  catalog_http=%{http_code}\n"
+curl -s "http://127.0.0.1:3300/v1/shop/catalog/products" "${SS[@]}" -o /dev/null -w "  catalog_http=%{http_code}\n"
 
 echo "[6] admin login + dashboard + orders (admin_user_store now registry)"
 T="$(curl -s -X POST http://127.0.0.1:3300/v1/admin/login "${SS[@]}" -d "{\"email\":\"$EMAIL\",\"password\":\"$PW\"}" | get 'j.token||""')"

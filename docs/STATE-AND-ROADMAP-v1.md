@@ -518,25 +518,50 @@ traffic warrants, ordered by ROI (research-backed — `docs/research/ecom-backen
 ### Research-informed correctness deltas (2026-06)
 
 From `docs/research/ecom-backend-research-2026-06.md` — small, mostly pre-launch,
-that confirm the model and close real gaps:
+that confirm the model and close real gaps. **Status as of 2026-06-05 (commits
+2fb1102/ffb6a6b):**
 
-- **[pre-launch] `Idempotency-Key` on `/v1/shop/checkout`.** `pay` is already
-  idempotent (claim-in-txn via `processed_event`); checkout is **not**, so a
-  double-submit can create two orders. Extend the same header + `processed_event`
-  claim to order-creation (storefront generates the key per attempt). The
-  Stripe-canonical pattern we already half-implement (§3 of the research doc).
-- **[pre-launch] Reservation-expiry job.** An abandoned `PendingPayment` order
-  holds `allocated` stock forever. The rulebook calls for "allocate at
-  order-creation + release on timeout"; the *release* arm isn't built. A
-  scheduled job (BullMQ) must release allocations for stale unpaid orders — the
-  missing half of the soft-reservation pattern (research §6).
-- **[v2] DB-backed outbox + polling relay** (NOT Kafka/Debezium) for the SSE
-  cache-invalidation channel, BullMQ events, and the Regime-B SellRight→Vendure
-  reconciliation exporter — all three are dual-writes. `processed_event` is
-  already the matching inbox/dedup table (research §4).
-- **[validated, no change]** RLS model, soft-reservation inventory, modular-monolith
-  + from-scratch, and the static-manifest browse offload are all *exactly* what
-  current research recommends — the newest data mostly confirms the architecture.
+- **✅ SHIPPED — `Idempotency-Key` on `/v1/shop/checkout`** (Stripe-canonical).
+  `order.idempotency_key` is unique per store (migration 0007); same key → same
+  order; the concurrent-double-submit loser's txn rolls back (releasing its
+  allocation) and re-reads the winner. **Verified live:** same key twice →
+  identical order code, no duplicate. (`pay` was already idempotent via
+  `processed_event`.)
+- **✅ SHIPPED — Reservation-expiry job** (`jobs/release-stale-allocations.ts`):
+  releases `allocated` stock on stale unpaid `PendingPayment` orders — the
+  missing "release on timeout" half of soft-reservation (research §6). DRY-RUN by
+  default (won't mass-cancel imported historical orders); `--apply` to act; needs
+  scheduling (BullMQ/cron) to run automatically.
+- **✅ SHIPPED — Hot-path indexes** (migration 0007) + **FORCE-RLS invariant
+  assertion** wired into `pnpm verify` (`db/assert-force-rls.ts`) — passes: 26
+  store-scoped tables all FORCE; `session`/`processed_event` consciously exempt
+  (auth/idempotency infra). Admin-auth collapsed from 2 DB round-trips to 1 join.
+- **🔶 STAGED, BLOCKED on a superuser — non-owner DB role** (gate item 1). The
+  enabling migration **0008 (disable RLS on `admin_user_store` registry) is
+  applied**, and `create-app-role.sh` + the owner/app env-split in the deploy
+  scripts are ready. Creating the `sellright_app` role needs `CREATEROLE`/the
+  `postgres` superuser (the `sellright` owner lacks it). Until then the app runs
+  as the owner — still fail-closed via FORCE-on-owner, just not by-default-safe
+  against a future missing-FORCE table. **One command unblocks it** (see below).
+- **[v2] DB-backed outbox + polling relay** (NOT Kafka/Debezium) for SSE
+  cache-invalidation, BullMQ events, and the Regime-B exporter — all dual-writes;
+  `processed_event` is the matching inbox (research §4).
+- **[validated, no change]** RLS model, soft-reservation inventory,
+  modular-monolith + from-scratch, and the static-manifest browse offload are all
+  *exactly* what current research recommends.
+
+> **To finish the non-owner-role cutover** (as a user with sudo, on the box):
+> ```bash
+> sudo -u postgres psql -p 5433 -d sellright_dev -c \
+>   "CREATE ROLE sellright_app LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE PASSWORD '<pw>';"
+> # then, as the vendure user:
+> APP_DB_PASSWORD='<pw>' bash ~/sites/sellright/packages/api/scripts-deploy/create-app-role.sh   # grants + ~/.sellright/env
+> ADMIN_PASSWORD='<admin-pw>' bash ~/sites/sellright/packages/api/scripts-deploy/migrate-and-cutover.sh adrdsouza@gmail.com  # cuts API to app role + verifies
+> ```
+> (`create-app-role.sh` is idempotent on the grants; if the role already exists it
+> just (re)applies grants + writes the env file. Or grant the owner CREATEROLE
+> once: `sudo -u postgres psql -p 5433 -c 'ALTER ROLE sellright CREATEROLE;'` and
+> the existing scripts handle the rest.)
 
 ### First-launch definition of done (observable success signals)
 
