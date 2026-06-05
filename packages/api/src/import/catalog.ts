@@ -142,6 +142,24 @@ async function main() {
       if (variantId && optionId) await tx.insert(s.variantOption).values({ variantId, optionId });
     }
 
+    // --- stock levels (sum across locations; fresh system starts allocated=0) ---
+    const vids = [...variantMap.keys()];
+    if (vids.length) {
+      const stockRows = (
+        await q(
+          `SELECT "productVariantId" AS vid, sum("stockOnHand")::int AS onhand
+           FROM stock_level WHERE "productVariantId" = ANY($1) GROUP BY "productVariantId"`,
+          [vids],
+        )
+      )
+        .map((sl) => {
+          const variantId = variantMap.get(sl.vid);
+          return variantId ? { variantId, storeId, onHand: sl.onhand ?? 0, allocated: 0 } : null;
+        })
+        .filter((x): x is NonNullable<typeof x> => x !== null);
+      if (stockRows.length) await tx.insert(s.stock).values(stockRows);
+    }
+
     // --- collections (skip root; parent->null if parent is root) ---
     const rootRows = await q(`SELECT id FROM collection WHERE "isRoot"=true`);
     const rootIds = new Set<number>(rootRows.map((r) => r.id));
