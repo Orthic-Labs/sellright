@@ -38,6 +38,17 @@ ALTER TABLE "payment_method" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
 CREATE POLICY "tenant_isolation" ON "payment_method" USING ("store_id" = nullif(current_setting('app.current_store', true), '')::uuid) WITH CHECK ("store_id" = nullif(current_setting('app.current_store', true), '')::uuid);--> statement-breakpoint
 
 -- ── 3) Link tables: add store_id + RLS (was parent-FK isolation only) ────────
+-- The backfill joins to the parent tables, which have FORCE RLS — so even the
+-- owner sees zero parent rows without a store context. Temporarily lift FORCE on
+-- the parents for the duration of this migration (it holds an ACCESS EXCLUSIVE
+-- lock, so concurrent requests block rather than see un-forced data), then
+-- restore FORCE at the end.
+ALTER TABLE "product_variant" NO FORCE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "collection" NO FORCE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "product" NO FORCE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "fulfillment" NO FORCE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "refund" NO FORCE ROW LEVEL SECURITY;--> statement-breakpoint
+
 -- Backfill store_id from each table's parent, then NOT NULL + FORCE RLS.
 ALTER TABLE "variant_option" ADD COLUMN IF NOT EXISTS "store_id" uuid;--> statement-breakpoint
 UPDATE "variant_option" vo SET "store_id" = pv."store_id" FROM "product_variant" pv WHERE pv."id" = vo."variant_id" AND vo."store_id" IS NULL;--> statement-breakpoint
@@ -88,6 +99,13 @@ ALTER TABLE "refund_line" ADD CONSTRAINT "refund_line_store_fk" FOREIGN KEY ("st
 ALTER TABLE "refund_line" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
 ALTER TABLE "refund_line" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
 CREATE POLICY "tenant_isolation" ON "refund_line" USING ("store_id" = nullif(current_setting('app.current_store', true), '')::uuid) WITH CHECK ("store_id" = nullif(current_setting('app.current_store', true), '')::uuid);--> statement-breakpoint
+
+-- Restore FORCE on the parent tables now that backfills are done.
+ALTER TABLE "product_variant" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "collection" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "product" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "fulfillment" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "refund" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
 
 -- ── 4) Tighten loose FKs (were bare uuids). NOT VALID so legacy rows don't ───
 -- block the migration; the constraint still enforces all NEW writes.
