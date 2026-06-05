@@ -30,6 +30,12 @@ export function createApp(): OpenAPIHono {
 
   app.openapi(healthRoute, (c) => c.json({ status: 'ok' as const, version: '0.0.0' }));
 
+  app.onError((err, c) => {
+    // eslint-disable-next-line no-console
+    console.error('[api error]', err);
+    return c.json({ error: err instanceof Error ? err.message : 'internal error' }, 500);
+  });
+
   // Shop catalog read API (store resolved per-request, RLS-scoped).
   app.route('/', catalog);
 
