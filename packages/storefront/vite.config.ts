@@ -173,7 +173,7 @@ export default defineConfig((config) => {
         ].join('; '),
       },
     },
-    server: isDev
+    server: config.command === 'serve'
       ? {
           watch: {
             ignored: ['node_modules/**', '.git/**'],
