@@ -1,5 +1,6 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { catalog } from './routes/catalog.js';
+import { cart } from './routes/cart.js';
 
 /**
  * The API is typed REST: every route declares a zod schema, which generates
@@ -38,6 +39,7 @@ export function createApp(): OpenAPIHono {
 
   // Shop catalog read API (store resolved per-request, RLS-scoped).
   app.route('/', catalog);
+  app.route('/', cart);
 
   // Published API contract — the product surface (versioned under /v1).
   app.doc('/v1/openapi.json', {
