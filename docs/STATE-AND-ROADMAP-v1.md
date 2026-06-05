@@ -374,27 +374,56 @@ cheaper and more reliable than a runner for a solo operator.
 The council's sharpest criticism: several §3 items are framed as peer "decisions"
 when they are actually **hard prerequisites** — a v2 feature wishlist must not
 start while the system is unsafe to expose. None of the v2 list (§4) begins until
-this gate is green. Ordered by dependency:
+this gate is green. Each item lists its **acceptance criterion ("done =")** so
+the gate is objectively checkable. Roughly dependency-ordered, but items 3–8 are
+**not strictly serial** — auth hardening, host, gateway, observability and
+backups can proceed in parallel once 1–2 land.
 
 1. **DB non-owner role + `FORCE` assertion** (§3.7) — fail-closed tenant
    isolation. *Foundational; do first.*
+   **Done =** app connects as a non-owner role; the cross-store RLS leakage test
+   passes under that role; `pnpm verify` fails if any `store_id` table lacks
+   `FORCE`.
 2. **Storefront auth / account / search rewired to SellRight** (§3.9) — without
-   this, customers cannot log in, view orders, or search. Core flows are broken
-   on SellRight today. Migrate one flow at a time, Vendure kept warm.
-3. **Admin auth hardening** — httpOnly cookie + CSRF + CSP (§3.3) **and** login
-   rate-limiting (§3.4). Required before the admin is reachable beyond the SSH
-   tunnel.
+   this, customers cannot log in, view orders, or search. Migrate one flow at a
+   time, Vendure kept warm.
+   **Done =** register/login/logout, account order-history + addresses, and
+   product search all run through `/v1/shop/*` with no remaining Vendure
+   `/shop-api` calls in `providers/shop/*`; browser-QA'd end to end.
+3. **Admin auth hardening** — httpOnly+Secure+SameSite cookie + CSRF + CSP
+   (§3.3) **and** login rate-limiting (§3.4).
+   **Done =** no admin token in `localStorage`; mutations require a CSRF token;
+   a brute-force loop on `/v1/admin/login` trips lockout.
 4. **Production admin host** — built `dist/` behind nginx + Cloudflare Access +
    systemd for the API (§3.12). Replaces the dev-server-on-a-tunnel.
+   **Done =** admin reachable on its subdomain through Access (no SSH tunnel);
+   API runs under systemd and restarts on reboot.
 5. **Real payment gateway** for the launching store (§3.1) — NMI-tokenized for
    DD, or Stripe for RH (RH launches first, greenfield).
-6. **Asset service** (§3.8) if the launching store must be independent of the old
-   DD asset server (RH can launch on its own assets without this; DD cutover
-   needs it).
+   **Done =** a real sandbox transaction completes through `PaymentProvider`
+   (tokenized — no raw PAN), webhook/verify idempotent, order → Paid.
+6. **Minimal observability** *(added in self-review — was deferred to "future,"
+   which is wrong for a money-taking store).*
+   **Done =** structured error logging shipped somewhere queryable, an uptime
+   check on the API + storefront, and one alert channel that pages you on
+   down/5xx-spike. Launching blind to errors is a self-inflicted outage.
+7. **Automated DB backups** *(added in self-review — the rollback story only
+   covered pre-migration snapshots, not a live store).*
+   **Done =** scheduled `pg_dump` (or PITR) of the prod DB with an offsite copy
+   and a **tested restore**, before the store takes a real order.
+8. **Secrets management** *(added in self-review).*
+   **Done =** prod secrets (DB URL, payment keys, admin bootstrap) live in a
+   restricted-perms env file or a secrets store loaded by the systemd unit —
+   not pasted on a command line or only in a process's inherited env. Payment
+   keys especially never touch argv/`/proc/cmdline` or git.
 
-**RH launches first** (zero orders → zero cutover risk) and needs items 1–5 (6
-only if it can't reuse DD assets). **DD/SS cutover is later** and additionally
-needs item 6 + the parity-replay gate below.
+**Explicitly NOT in the gate:** full RBAC (§3.2) — deferred because the first
+launch is single-operator (you are the only admin; the `read_only` block already
+exists). It becomes blocking the moment a second, lower-trust admin is added.
+
+**RH launches first** (zero orders → zero cutover risk) and needs items 1–8 (the
+asset service, §3.8, only if it can't reuse DD assets). **DD/SS cutover is later**
+and additionally needs the asset service + the parity-replay gate below.
 
 ### Cutover & rollback (the missing reversibility story)
 
@@ -427,6 +456,15 @@ indexes on the hot filter/sort paths (`order(store_id,state,created_at)`,
 `order(customer_id)`, `product(store_id,name)`) before large admin lists get
 slow; move heavy/async work (emails, recovery, settlement) to the planned
 BullMQ/Redis layer rather than request threads.
+
+### First-launch definition of done (observable success signals)
+
+"RH is live on SellRight" is true when, over a defined bake window: real orders
+flow browse → cart → checkout → **real payment** → Paid → fulfilled with a
+checkout success rate at or above the old stack; **zero cross-tenant incidents**
+(RLS); error rate and p95 latency within agreed bounds on the observability
+dashboard (gate item 6); and a **restore from backup has been tested** (gate item
+7). Until those hold, it's "deployed," not "launched."
 
 ---
 
@@ -463,7 +501,9 @@ BullMQ/Redis layer rather than request threads.
 - **BullMQ/Redis** job layer (stale-order cleanup, Sezzle recovery,
   auto-Delivered cron, email sends) — planned, not built.
 - **Asset service** as a standalone module (ties to §3.8).
-- **Observability** (structured logs, error tracking, uptime) before real traffic.
+- **Observability beyond the minimum** — tracing, dashboards, SLOs. (The *minimum*
+  — error logging + uptime + one alert — is a launch-gate item, §3A.6, not a
+  future nicety.)
 
 ---
 
@@ -536,5 +576,23 @@ DD plugin parity → `DD-CUSTOMIZATION-SPEC-v1.md`; original plans →
     "use an existing commerce framework (Medusa/Saleor/Shopify) — locked from-scratch decision, rationale documented",
     "microservices for scalability — deliberate non-goal for a solo operator"
   ]
+}
+```
+
+```json
+{
+  "artifact": "STATE-AND-ROADMAP-v1.md",
+  "review": "/review-self plan (role cards: Decision, Implementation Lead, Risk Inversion, Operator, Customer)",
+  "date": "2026-06-05",
+  "verdict": "NEEDS-REVISION",
+  "new_findings_beyond_council": [
+    "launch gate had no per-item acceptance criteria — added 'Done =' to every item",
+    "minimal observability (error logging + uptime + alert) was deferred to 'future' but is launch-blocking for a money-taking store — promoted to gate item 6",
+    "rollback covered only pre-migration snapshots, not routine backups of a live store — added gate item 7 (scheduled pg_dump/PITR + tested restore)",
+    "secrets management for prod (esp. payment keys) undocumented — added gate item 8",
+    "RBAC's absence from the gate was unstated — clarified it's deferred (single-operator) and when it becomes blocking",
+    "added a first-launch definition-of-done with observable success signals"
+  ],
+  "note": "self-review is internal critique, not an independent jury; findings labeled as such"
 }
 ```
