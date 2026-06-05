@@ -55,7 +55,9 @@ adminSettings.openapi(
     const st = requireStore(admin, c); requireManage(st);
     const b = c.req.valid('json');
     const row = await storeRow(st.storeId);
-    const payments = { ...((cfg(row).payments as object) ?? {}), ...b };
+    // Seed the credential-free defaults so toggling a gateway never silently
+    // disables cod/manual (which aren't persisted until first edited).
+    const payments = { cod: true, manual: true, ...((cfg(row).payments as object) ?? {}), ...b };
     await db.update(s.store).set({ config: { ...cfg(row), payments } }).where(eq(s.store.id, st.storeId));
     return c.json({ payments }, 200);
   }),
