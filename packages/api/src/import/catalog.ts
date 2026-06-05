@@ -29,8 +29,19 @@ const lower = (v: string | null) => (v ?? 'image').toLowerCase();
 const CATALOG_TABLES = [
   'variant_asset', 'product_asset', 'collection_product', 'variant_option',
   'collection', 'product_variant', 'product_option', 'product_option_group',
-  'product', 'asset', 'store',
+  'promotion', 'product', 'asset', 'store',
 ];
+
+/** Vendure action[] -> our promotion type+value (DD uses a single action). */
+function actionToTypeValue(actions: Array<{ code: string; args?: Array<{ name: string; value: string }> }>): { type: 'percentage' | 'fixed' | 'free_shipping'; value: number } | null {
+  const a = actions[0];
+  if (!a) return null;
+  const arg = (n: string) => a.args?.find((x) => x.name === n)?.value;
+  if (a.code === 'order_percentage_discount') return { type: 'percentage', value: Number(arg('discount') ?? 0) };
+  if (a.code === 'order_fixed_discount') return { type: 'fixed', value: Number(arg('amount') ?? 0) };
+  if (a.code === 'free_shipping') return { type: 'free_shipping', value: 0 };
+  return null;
+}
 
 async function main() {
   // Reset catalog (dev — re-runnable). TRUNCATE is table-level, not RLS-gated.
@@ -160,6 +171,26 @@ async function main() {
       if (stockRows.length) await tx.insert(s.stock).values(stockRows);
     }
 
+    // --- promotions (coupon-code based) ---
+    let promoCount = 0;
+    for (const pr of await q(
+      `SELECT "couponCode" AS code, conditions, actions, "startsAt" AS starts, "endsAt" AS ends,
+              "usageLimit" AS uselimit, "perCustomerUsageLimit" AS percust, "priorityScore" AS prio
+       FROM promotion WHERE enabled = true AND "deletedAt" IS NULL AND "couponCode" IS NOT NULL`,
+    )) {
+      const actions = typeof pr.actions === 'string' ? JSON.parse(pr.actions) : pr.actions;
+      const tv = actionToTypeValue(actions);
+      if (!tv) continue;
+      const conditions = typeof pr.conditions === 'string' ? JSON.parse(pr.conditions) : pr.conditions;
+      await tx.insert(s.promotion).values({
+        storeId, code: pr.code, type: tv.type, value: tv.value, conditions,
+        startsAt: parseDate(pr.starts), endsAt: parseDate(pr.ends),
+        usageLimit: pr.uselimit ?? null, perCustomerUsageLimit: pr.percust ?? null,
+        priority: pr.prio ?? 0, enabled: true,
+      });
+      promoCount++;
+    }
+
     // --- collections (skip root; parent->null if parent is root) ---
     const rootRows = await q(`SELECT id FROM collection WHERE "isRoot"=true`);
     const rootIds = new Set<number>(rootRows.map((r) => r.id));
@@ -208,7 +239,7 @@ async function main() {
       store: storeId,
       assets: assetMap.size, products: productMap.size, optionGroups: groupMap.size,
       options: optionMap.size, variants: variantMap.size, collections: collectionMap.size,
-      skuCollisions: skuCollisions.length,
+      promotions: promoCount, skuCollisions: skuCollisions.length,
     }, null, 2));
     if (skuCollisions.length) {
       // eslint-disable-next-line no-console

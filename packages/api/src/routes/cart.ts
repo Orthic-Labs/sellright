@@ -1,9 +1,11 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { and, eq, inArray, isNull } from 'drizzle-orm';
+import { and, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import { resolveStore, DEV_DEFAULT_STORE, type StoreCtx } from '../store-context.js';
 import * as s from '../db/schema.js';
-import { calculateOrderTotals } from '../money/totals.js';
+import { calculateOrderTotals, type Promotion } from '../money/totals.js';
+import { evaluateCoupon } from '../money/coupon.js';
+import { bearer, resolveCustomer } from '../auth/session.js';
 
 async function store(c: { req: { header: (k: string) => string | undefined } }): Promise<StoreCtx> {
   const slug = c.req.header('x-store-slug') ?? DEV_DEFAULT_STORE;
@@ -31,6 +33,7 @@ const EstimateOut = z.object({
   subtotal: z.number().int(), discountTotal: z.number().int(), shippingTotal: z.number().int(),
   taxTotal: z.number().int(), grandTotal: z.number().int(),
   unavailable: z.array(z.string()),
+  coupon: z.object({ code: z.string(), applied: z.boolean(), reason: z.string().optional() }).nullable(),
 });
 
 export const cart = new OpenAPIHono();
@@ -45,7 +48,7 @@ cart.openapi(
       body: {
         content: {
           'application/json': {
-            schema: z.object({ items: z.array(EstimateItem).min(1), shipping: z.number().int().min(0).default(0) }),
+            schema: z.object({ items: z.array(EstimateItem).min(1), shipping: z.number().int().min(0).default(0), couponCode: z.string().optional() }),
           },
         },
       },
@@ -56,7 +59,8 @@ cart.openapi(
   }),
   async (c) => {
     const st = await store(c);
-    const { items, shipping } = c.req.valid('json');
+    const { items, shipping, couponCode } = c.req.valid('json');
+    const token = bearer(c.req.header('authorization'));
     const skus = [...new Set(items.map((i) => i.sku))];
 
     const result = await withStore(st.id, async (tx) => {
@@ -79,9 +83,35 @@ cart.openapi(
         return { sku: i.sku, name: v?.name ?? '(unavailable)', unitPrice, quantity: i.quantity, available };
       });
 
+      // --- coupon (single, server-validated) ---
+      let promotion: Promotion | undefined;
+      let coupon: { code: string; applied: boolean; reason?: string } | null = null;
+      if (couponCode) {
+        const now = new Date();
+        const [promo] = await tx
+          .select()
+          .from(s.promotion)
+          .where(and(
+            eq(s.promotion.code, couponCode),
+            eq(s.promotion.enabled, true),
+            or(isNull(s.promotion.startsAt), lte(s.promotion.startsAt, now)),
+            or(isNull(s.promotion.endsAt), gte(s.promotion.endsAt, now)),
+          ))
+          .limit(1);
+        if (!promo) {
+          coupon = { code: couponCode, applied: false, reason: 'invalid or expired code' };
+        } else {
+          const presubtotal = priced.filter((p) => p.available).reduce((a, p) => a + p.unitPrice * p.quantity, 0);
+          const activeVerifications = token ? (await resolveCustomer(tx, token))?.activeVerifications ?? [] : [];
+          const ev = evaluateCoupon({ type: promo.type, value: promo.value, conditions: promo.conditions }, { subtotal: presubtotal, activeVerifications });
+          if (ev.valid && ev.promotion) { promotion = ev.promotion; coupon = { code: couponCode, applied: true }; }
+          else coupon = { code: couponCode, applied: false, reason: ev.reason };
+        }
+      }
+
       const totals = calculateOrderTotals({
         lines: priced.filter((p) => p.available).map((p) => ({ unitPrice: p.unitPrice, quantity: p.quantity })),
-        shipping, taxRate: st.taxRate,
+        shipping, taxRate: st.taxRate, promotion,
       });
 
       // Re-attach per-line breakdown (only available lines were costed).
@@ -95,7 +125,7 @@ cart.openapi(
       return {
         currency: st.currency, lines,
         subtotal: totals.subtotal, discountTotal: totals.discountTotal, shippingTotal: totals.shippingTotal,
-        taxTotal: totals.taxTotal, grandTotal: totals.grandTotal, unavailable,
+        taxTotal: totals.taxTotal, grandTotal: totals.grandTotal, unavailable, coupon,
       };
     });
 

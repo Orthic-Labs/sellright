@@ -24,6 +24,7 @@ export interface SessionCustomer {
   firstName: string | null;
   lastName: string | null;
   emailVerified: boolean;
+  activeVerifications: string[];
 }
 
 export async function resolveCustomer(tx: Tx, token: string): Promise<SessionCustomer | null> {
@@ -34,12 +35,14 @@ export async function resolveCustomer(tx: Tx, token: string): Promise<SessionCus
       firstName: s.customer.firstName,
       lastName: s.customer.lastName,
       emailVerified: s.customer.emailVerified,
+      activeVerifications: s.customer.activeVerifications,
     })
     .from(s.session)
     .innerJoin(s.customer, eq(s.customer.id, s.session.customerId))
     .where(and(eq(s.session.tokenHash, hashToken(token)), gt(s.session.expiresAt, new Date())))
     .limit(1);
-  return rows[0] ?? null;
+  const row = rows[0];
+  return row ? { ...row, activeVerifications: row.activeVerifications ?? [] } : null;
 }
 
 export async function deleteSession(tx: Tx, token: string): Promise<void> {
