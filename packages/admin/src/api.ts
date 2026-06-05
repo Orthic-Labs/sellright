@@ -1,15 +1,21 @@
 // Thin fetch client for the SellRight admin API. Token + active store live in
 // localStorage; every request carries the bearer token and x-store-slug header.
 
-const TOKEN_KEY = 'sr_admin_token';
+// The session token lives in an httpOnly cookie (set by the API on login) — JS
+// can't read it, so XSS can't steal it. We send `credentials: 'include'` so the
+// browser attaches it. Mutations echo the non-httpOnly CSRF cookie back in a
+// header (double-submit). Only the active store slug is kept in localStorage.
 const STORE_KEY = 'sr_admin_store';
 
 export const auth = {
-  get token() { return localStorage.getItem(TOKEN_KEY); },
-  set token(v: string | null) { v ? localStorage.setItem(TOKEN_KEY, v) : localStorage.removeItem(TOKEN_KEY); },
   get store() { return localStorage.getItem(STORE_KEY); },
   set store(v: string | null) { v ? localStorage.setItem(STORE_KEY, v) : localStorage.removeItem(STORE_KEY); },
 };
+
+function readCookie(name: string): string | null {
+  const m = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
+  return m ? decodeURIComponent(m[1]!) : null;
+}
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -17,13 +23,10 @@ export class ApiError extends Error {
 
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = { 'content-type': 'application/json' };
-  if (auth.token) headers.authorization = `Bearer ${auth.token}`;
   if (auth.store) headers['x-store-slug'] = auth.store;
-  const res = await fetch(`/v1/admin${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
-  if (res.status === 401 && !path.startsWith('/login')) {
-    auth.token = null;
-    if (location.pathname !== '/login') location.assign('/login');
-  }
+  if (method !== 'GET') { const csrf = readCookie('sr_csrf'); if (csrf) headers['x-csrf-token'] = csrf; }
+  const res = await fetch(`/v1/admin${path}`, { method, headers, credentials: 'include', body: body === undefined ? undefined : JSON.stringify(body) });
+  if (res.status === 401 && !path.startsWith('/login') && location.pathname !== '/login') location.assign('/login');
   const text = await res.text();
   const json = text ? JSON.parse(text) : {};
   if (!res.ok) throw new ApiError(res.status, json?.error ?? `HTTP ${res.status}`);
@@ -40,9 +43,8 @@ export const api = {
 /** Fetch a file (e.g. CSV export) with auth headers and trigger a download. */
 export async function downloadFile(path: string, filename: string): Promise<void> {
   const headers: Record<string, string> = {};
-  if (auth.token) headers.authorization = `Bearer ${auth.token}`;
   if (auth.store) headers['x-store-slug'] = auth.store;
-  const res = await fetch(`/v1/admin${path}`, { headers });
+  const res = await fetch(`/v1/admin${path}`, { headers, credentials: 'include' });
   if (!res.ok) throw new ApiError(res.status, `export failed (${res.status})`);
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
@@ -54,7 +56,7 @@ export async function downloadFile(path: string, filename: string): Promise<void
 // ── shared types ────────────────────────────────────────────────────────────
 export interface StoreAccess { storeId: string; slug: string; name: string; currency: string; role: string; }
 export interface Me { email: string; stores: StoreAccess[]; }
-export interface LoginResp { token: string; admin: { email: string }; stores: StoreAccess[]; }
+export interface LoginResp { token?: string; csrfToken?: string; twoFactorRequired?: boolean; admin?: { email: string }; stores?: StoreAccess[]; }
 export interface Page<T> { items: T[]; total: number; page: number; pageSize: number; }
 
 export interface OrderRow { code: string; state: string; isPreOrder?: boolean; grandTotal: number; currency: string; placedAt: string | null; createdAt: string; email: string | null; }

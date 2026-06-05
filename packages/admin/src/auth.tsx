@@ -19,7 +19,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [storeSlug, setStoreSlug] = useState<string | null>(auth.store);
 
   async function refresh() {
-    if (!auth.token) { setMe(null); setLoading(false); return; }
+    // Auth is the httpOnly session cookie; /me 401s if not signed in.
     try {
       const data = await api.get<Me>('/me');
       setMe(data);
@@ -38,7 +38,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function logout() {
     try { await api.post('/logout'); } catch { /* ignore */ }
-    auth.token = null; auth.store = null;
+    auth.store = null;
     setMe(null); setStoreSlug(null);
     location.assign('/login');
   }

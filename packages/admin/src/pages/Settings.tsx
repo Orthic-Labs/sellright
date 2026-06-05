@@ -24,6 +24,14 @@ export default function SettingsPage() {
   const addShip = useMutation({ mutationFn: () => api.post('/shipping-methods', { code: sm!.code, name: sm!.name, calculator: { flat: Math.round(parseFloat(sm!.rate || '0') * 100) } }), onSuccess: () => { setSm(null); ship.refetch(); } });
   const delShip = useMutation({ mutationFn: (id: string) => api.del(`/shipping-methods/${id}`), onSuccess: () => ship.refetch() });
 
+  // ── 2FA ──
+  const tfa = useQuery({ queryKey: ['2fa', me?.email], queryFn: () => api.get<{ enabled: boolean }>('/2fa') });
+  const [setup, setSetup] = useState<{ secret: string; otpauthUri: string } | null>(null);
+  const [code, setCode] = useState('');
+  const startSetup = useMutation({ mutationFn: () => api.post<{ secret: string; otpauthUri: string }>('/2fa/setup'), onSuccess: (r) => setSetup(r) });
+  const enable2fa = useMutation({ mutationFn: () => api.post('/2fa/enable', { secret: setup!.secret, code }), onSuccess: () => { setSetup(null); setCode(''); tfa.refetch(); } });
+  const disable2fa = useMutation({ mutationFn: () => api.post('/2fa/disable', { code }), onSuccess: () => { setCode(''); tfa.refetch(); } });
+
   const [inv, setInv] = useState<{ email: string; role: string; password: string } | null>(null);
   const addStaff = useMutation({ mutationFn: () => api.post('/staff', inv), onSuccess: () => { setInv(null); staff.refetch(); } });
   const setRole = useMutation({ mutationFn: (p: { id: string; role: string }) => api.patch(`/staff/${p.id}`, { role: p.role }), onSuccess: () => staff.refetch() });
@@ -128,6 +136,31 @@ export default function SettingsPage() {
                 </div>
               ) : <button className="btn-ghost" onClick={() => setInv({ email: '', role: 'staff', password: '' })}>+ Add staff</button>}
             </>
+          )}
+        </Section>
+
+        <Section title="Two-factor authentication">
+          {tfa.data?.enabled ? (
+            <div className="space-y-2">
+              <div className="text-sm text-emerald-700">✓ 2FA is on for your account.</div>
+              <input className="input tracking-widest text-center max-w-[10rem]" inputMode="numeric" maxLength={6} placeholder="code to disable" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} />
+              {disable2fa.error && <ErrorNote message={(disable2fa.error as Error).message} />}
+              <button className="btn-danger" disabled={code.length !== 6 || disable2fa.isPending} onClick={() => disable2fa.mutate()}>{disable2fa.isPending ? <Spinner /> : 'Disable 2FA'}</button>
+            </div>
+          ) : setup ? (
+            <div className="space-y-2">
+              <p className="text-sm text-gray-600">Add this secret to your authenticator app (Google Authenticator, Authy, 1Password), then enter the 6-digit code:</p>
+              <div className="font-mono text-xs bg-gray-50 border border-gray-200 rounded p-2 break-all">{setup.secret}</div>
+              <a className="text-xs text-brand hover:underline break-all" href={setup.otpauthUri}>otpauth link</a>
+              <input className="input tracking-widest text-center max-w-[10rem]" inputMode="numeric" maxLength={6} placeholder="000000" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} />
+              {enable2fa.error && <ErrorNote message={(enable2fa.error as Error).message} />}
+              <div className="flex gap-2"><button className="btn-primary" disabled={code.length !== 6 || enable2fa.isPending} onClick={() => enable2fa.mutate()}>{enable2fa.isPending ? <Spinner className="text-white" /> : 'Enable'}</button><button className="btn-ghost" onClick={() => { setSetup(null); setCode(''); }}>Cancel</button></div>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-sm text-gray-500">Protect your account with an authenticator-app code at sign-in.</p>
+              <button className="btn-ghost" disabled={startSetup.isPending} onClick={() => startSetup.mutate()}>{startSetup.isPending ? <Spinner /> : 'Enable 2FA'}</button>
+            </div>
           )}
         </Section>
 

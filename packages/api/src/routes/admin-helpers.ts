@@ -6,6 +6,7 @@
 import { z } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
 import { bearer } from '../auth/session.js';
+import { cookie, SESSION_COOKIE } from '../auth/cookies.js';
 import { resolveAdmin, type AdminPrincipal, type AdminStoreAccess } from '../auth/admin-session.js';
 
 export const J = (schema: z.ZodTypeAny) => ({ 'application/json': { schema } });
@@ -20,8 +21,9 @@ export class HttpError extends Error {
 export type ReqCtx = { req: { header: (k: string) => string | undefined } };
 
 export async function requireAdmin(c: ReqCtx): Promise<{ admin: AdminPrincipal; token: string }> {
-  const token = bearer(c.req.header('authorization'));
-  if (!token) throw new HttpError(401, 'missing bearer token');
+  // httpOnly cookie session (browser) OR Authorization bearer (API clients).
+  const token = bearer(c.req.header('authorization')) ?? cookie(c, SESSION_COOKIE);
+  if (!token) throw new HttpError(401, 'not authenticated');
   const admin = await resolveAdmin(token);
   if (!admin) throw new HttpError(401, 'invalid or expired session');
   return { admin, token };

@@ -3,6 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import { db, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { hashPassword } from '../auth/password.js';
+import { newTotpSecret, verifyTotp, otpauthUri } from '../auth/totp.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireWrite, requireManage, guard } from './admin-helpers.js';
 
 export const adminSettings = new OpenAPIHono();
@@ -12,6 +13,63 @@ async function storeRow(storeId: string) {
   return row!;
 }
 const cfg = (row: { config: unknown }) => (row.config as Record<string, unknown> | null) ?? {};
+
+// ── admin 2FA (TOTP) ─────────────────────────────────────────────────────────
+adminSettings.openapi(
+  createRoute({
+    method: 'get', path: '/v1/admin/2fa', summary: '2FA status',
+    responses: { 200: { description: 'OK', content: J(z.object({ enabled: z.boolean() })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const [u] = await db.select({ totpSecret: s.adminUser.totpSecret }).from(s.adminUser).where(eq(s.adminUser.id, admin.id)).limit(1);
+    return c.json({ enabled: !!u?.totpSecret }, 200);
+  }),
+);
+
+adminSettings.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/2fa/setup', summary: 'Start 2FA setup (returns a secret to confirm)',
+    responses: { 200: { description: 'OK', content: J(z.object({ secret: z.string(), otpauthUri: z.string() })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const secret = newTotpSecret(); // not persisted until /enable confirms a code
+    return c.json({ secret, otpauthUri: otpauthUri(secret, admin.email) }, 200);
+  }),
+);
+
+adminSettings.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/2fa/enable', summary: 'Confirm + enable 2FA',
+    request: { body: { content: J(z.object({ secret: z.string(), code: z.string() })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ enabled: z.boolean() })) }, 401: { description: 'Unauthorized', ...errBody }, 409: { description: 'Bad code', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const { secret, code } = c.req.valid('json');
+    if (!verifyTotp(secret, code)) throw new HttpError(409, 'code did not match — check your authenticator app');
+    await db.update(s.adminUser).set({ totpSecret: secret }).where(eq(s.adminUser.id, admin.id));
+    return c.json({ enabled: true }, 200);
+  }),
+);
+
+adminSettings.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/2fa/disable', summary: 'Disable 2FA',
+    request: { body: { content: J(z.object({ code: z.string() })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ enabled: z.boolean() })) }, 401: { description: 'Unauthorized', ...errBody }, 409: { description: 'Bad code', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const { code } = c.req.valid('json');
+    const [u] = await db.select({ totpSecret: s.adminUser.totpSecret }).from(s.adminUser).where(eq(s.adminUser.id, admin.id)).limit(1);
+    if (!u?.totpSecret) return c.json({ enabled: false }, 200);
+    if (!verifyTotp(u.totpSecret, code)) throw new HttpError(409, 'invalid code');
+    await db.update(s.adminUser).set({ totpSecret: null }).where(eq(s.adminUser.id, admin.id));
+    return c.json({ enabled: false }, 200);
+  }),
+);
 
 // ── store details + tax ──────────────────────────────────────────────────────
 adminSettings.openapi(

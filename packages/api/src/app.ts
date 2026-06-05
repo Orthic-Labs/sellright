@@ -15,6 +15,7 @@ import { adminReports } from './routes/admin-reports.js';
 import { adminAffiliate } from './routes/admin-affiliate.js';
 import { adminContent } from './routes/admin-content.js';
 import { shopExtra } from './routes/shop-extra.js';
+import { csrfValid } from './auth/cookies.js';
 
 /**
  * The API is typed REST: every route declares a zod schema, which generates
@@ -23,6 +24,19 @@ import { shopExtra } from './routes/shop-extra.js';
  */
 export function createApp(): OpenAPIHono {
   const app = new OpenAPIHono();
+
+  // CSRF guard for cookie-based admin mutations (bearer/API clients are exempt;
+  // login/logout don't yet have a session). Double-submit token (x-csrf-token
+  // must match the sr_csrf cookie). Registered before routes.
+  app.use('/v1/admin/*', async (c, next) => {
+    const m = c.req.method;
+    if (m === 'POST' || m === 'PUT' || m === 'PATCH' || m === 'DELETE') {
+      const p = c.req.path;
+      const exempt = p === '/v1/admin/login' || p === '/v1/admin/logout';
+      if (!exempt && !csrfValid(c)) return c.json({ error: 'CSRF token missing or invalid' }, 403);
+    }
+    await next();
+  });
 
   const healthRoute = createRoute({
     method: 'get',

@@ -8,6 +8,8 @@ import { createAdminSession, deleteAdminSession, findAdminByEmail, resolveAdmin 
 import { canTransition, type OrderState } from '../money/fsm.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireWrite, guard, money, Page, PAID_STATES } from './admin-helpers.js';
 import { clientIp, loginRetryAfter, recordLoginFailure, clearLoginAttempts } from '../auth/rate-limit.js';
+import { setAuthCookies, clearAuthCookies, newCsrf, cookie, SESSION_COOKIE } from '../auth/cookies.js';
+import { verifyTotp } from '../auth/totp.js';
 
 export const admin = new OpenAPIHono();
 
@@ -17,24 +19,31 @@ const StoreAccess = z.object({ storeId: z.string(), slug: z.string(), name: z.st
 admin.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/login', summary: 'Admin login',
-    request: { body: { content: J(z.object({ email: z.string().email(), password: z.string() })) } },
+    request: { body: { content: J(z.object({ email: z.string().email(), password: z.string(), totp: z.string().optional() })) } },
     responses: {
-      200: { description: 'OK', content: J(z.object({ token: z.string(), admin: z.object({ email: z.string() }), stores: z.array(StoreAccess) })) },
+      200: { description: 'OK or 2FA required', content: J(z.object({ token: z.string().optional(), csrfToken: z.string().optional(), twoFactorRequired: z.boolean().optional(), admin: z.object({ email: z.string() }).optional(), stores: z.array(StoreAccess).optional() })) },
       401: { description: 'Invalid', ...errBody },
       429: { description: 'Too many attempts', ...errBody },
     },
   }),
   async (c) => guard(c, async () => {
-    const { email, password } = c.req.valid('json');
+    const { email, password, totp } = c.req.valid('json');
     const ip = clientIp(c);
     const retry = loginRetryAfter(ip, `admin:${email}`);
     if (retry > 0) throw new HttpError(429, `too many attempts — try again in ${retry}s`);
     const u = await findAdminByEmail(email);
     if (!u || !(await verifyPassword(password, u.passwordHash))) { recordLoginFailure(ip, `admin:${email}`); throw new HttpError(401, 'invalid email or password'); }
+    // Second factor, if enabled.
+    if (u.totpSecret) {
+      if (!totp) return c.json({ twoFactorRequired: true }, 200); // prompt for the code
+      if (!verifyTotp(u.totpSecret, totp)) { recordLoginFailure(ip, `admin:${email}`); throw new HttpError(401, 'invalid 2FA code'); }
+    }
     clearLoginAttempts(ip, `admin:${email}`);
     const token = await createAdminSession(u.id);
+    const csrf = newCsrf();
+    setAuthCookies(c, token, csrf); // httpOnly session cookie + CSRF cookie
     const admin = await resolveAdmin(token);
-    return c.json({ token, admin: { email: u.email }, stores: admin?.stores ?? [] }, 200);
+    return c.json({ token, csrfToken: csrf, admin: { email: u.email }, stores: admin?.stores ?? [] }, 200);
   }),
 );
 
@@ -44,8 +53,9 @@ admin.openapi(
     responses: { 200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) } },
   }),
   async (c) => {
-    const token = bearer(c.req.header('authorization'));
+    const token = bearer(c.req.header('authorization')) ?? cookie(c, SESSION_COOKIE);
     if (token) await deleteAdminSession(token);
+    clearAuthCookies(c);
     return c.json({ ok: true }, 200);
   },
 );

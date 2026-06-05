@@ -88,7 +88,7 @@ export async function resolveAdmin(token: string): Promise<AdminPrincipal | null
 /** Find an admin user by email — global registry lookup on the default db client. */
 export async function findAdminByEmail(email: string) {
   const [u] = await db
-    .select({ id: s.adminUser.id, email: s.adminUser.email, passwordHash: s.adminUser.passwordHash })
+    .select({ id: s.adminUser.id, email: s.adminUser.email, passwordHash: s.adminUser.passwordHash, totpSecret: s.adminUser.totpSecret })
     .from(s.adminUser)
     .where(eq(s.adminUser.email, email))
     .limit(1);
