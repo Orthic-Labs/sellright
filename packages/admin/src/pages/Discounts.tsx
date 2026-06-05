@@ -20,14 +20,15 @@ export default function Discounts() {
   const create = useMutation({
     mutationFn: () => {
       const f = form!; const isPct = f.type === 'percentage';
-      return api.post('/promotions', { code: f.code, type: f.type, value: f.type === 'free_shipping' ? 0 : Math.round(parseFloat(f.value || '0') * (isPct ? 100 : 100)), usageLimit: f.usageLimit ? Number(f.usageLimit) : null, perCustomerUsageLimit: f.perCustomerUsageLimit ? Number(f.perCustomerUsageLimit) : null });
+      // percentage value = the percent integer (10 = 10%); fixed value = cents.
+      return api.post('/promotions', { code: f.code, type: f.type, value: f.type === 'free_shipping' ? 0 : isPct ? Math.round(parseFloat(f.value || '0')) : Math.round(parseFloat(f.value || '0') * 100), usageLimit: f.usageLimit ? Number(f.usageLimit) : null, perCustomerUsageLimit: f.perCustomerUsageLimit ? Number(f.perCustomerUsageLimit) : null });
     },
     onSuccess: () => { setForm(null); invalidate(); },
   });
   const toggle = useMutation({ mutationFn: (p: Promo) => api.patch(`/promotions/${p.id}`, { enabled: !p.enabled }), onSuccess: invalidate });
   const del = useMutation({ mutationFn: (id: string) => api.del(`/promotions/${id}`), onSuccess: invalidate });
 
-  const fmtValue = (p: Promo) => p.type === 'percentage' ? `${(p.value / 100).toFixed(0)}%` : p.type === 'free_shipping' ? 'Free shipping' : money(p.value, cur);
+  const fmtValue = (p: Promo) => p.type === 'percentage' ? `${p.value}%` : p.type === 'free_shipping' ? 'Free shipping' : money(p.value, cur);
 
   return (
     <>

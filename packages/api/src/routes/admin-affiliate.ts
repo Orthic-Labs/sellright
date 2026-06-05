@@ -63,7 +63,8 @@ adminAffiliate.openapi(
     const res = await withStore(st.storeId, async (tx) => {
       const [dupePromo] = await tx.select({ id: s.promotion.id }).from(s.promotion).where(eq(s.promotion.code, code)).limit(1);
       if (dupePromo) return { dupe: true as const };
-      const [promo] = await tx.insert(s.promotion).values({ storeId: st.storeId, code, type: 'percentage', value: b.discountPct * 100, enabled: true }).returning({ id: s.promotion.id });
+      // percentage promo value is the percent integer (10 = 10%) — see totals.ts.
+      const [promo] = await tx.insert(s.promotion).values({ storeId: st.storeId, code, type: 'percentage', value: b.discountPct, enabled: true }).returning({ id: s.promotion.id });
       const accessToken = randomBytes(24).toString('hex'); // 48 chars
       const [aff] = await tx.insert(s.affiliate).values({ storeId: st.storeId, promotionId: promo!.id, email: b.email, accessToken }).returning({ id: s.affiliate.id });
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'affiliate', entityId: aff!.id, action: 'onboard', data: { email: b.email, code } });
