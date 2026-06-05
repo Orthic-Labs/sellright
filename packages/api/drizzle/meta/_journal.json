@@ -64,6 +64,13 @@
       "when": 1780650100000,
       "tag": "0008_admin_store_registry_disable_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1780660000000,
+      "tag": "0009_model_completeness",
+      "breakpoints": true
     }
   ]
 }

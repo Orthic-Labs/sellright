@@ -151,7 +151,7 @@ async function main() {
     for (const vo of await q(`SELECT "productVariantId" AS vid, "productOptionId" AS oid FROM product_variant_options_product_option`)) {
       const variantId = variantMap.get(vo.vid);
       const optionId = optionMap.get(vo.oid);
-      if (variantId && optionId) await tx.insert(s.variantOption).values({ variantId, optionId });
+      if (variantId && optionId) await tx.insert(s.variantOption).values({ storeId, variantId, optionId });
     }
 
     // --- stock levels (sum across locations; fresh system starts allocated=0) ---
@@ -218,21 +218,21 @@ async function main() {
       const key = `${collectionId}:${productId}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      await tx.insert(s.collectionProduct).values({ collectionId, productId });
+      await tx.insert(s.collectionProduct).values({ storeId, collectionId, productId });
     }
 
     // --- product <-> asset ---
     for (const pa of await q(`SELECT "productId" AS pid, "assetId" AS aid, position FROM product_asset`)) {
       const productId = productMap.get(pa.pid);
       const assetId = assetMap.get(pa.aid);
-      if (productId && assetId) await tx.insert(s.productAsset).values({ productId, assetId, position: pa.position ?? 0 });
+      if (productId && assetId) await tx.insert(s.productAsset).values({ storeId, productId, assetId, position: pa.position ?? 0 });
     }
 
     // --- variant <-> asset ---
     for (const va of await q(`SELECT "productVariantId" AS vid, "assetId" AS aid, position FROM product_variant_asset`)) {
       const variantId = variantMap.get(va.vid);
       const assetId = assetMap.get(va.aid);
-      if (variantId && assetId) await tx.insert(s.variantAsset).values({ variantId, assetId, position: va.position ?? 0 });
+      if (variantId && assetId) await tx.insert(s.variantAsset).values({ storeId, variantId, assetId, position: va.position ?? 0 });
     }
 
     // eslint-disable-next-line no-console

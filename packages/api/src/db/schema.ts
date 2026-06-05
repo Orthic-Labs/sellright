@@ -74,7 +74,7 @@ export const adminUserStore = pgTable(
 export const session = pgTable('session', {
   id: uuid().primaryKey().defaultRandom(),
   storeId: uuid().references(() => store.id),
-  customerId: uuid(),
+  customerId: uuid().references(() => customer.id),
   adminUserId: uuid().references(() => adminUser.id),
   tokenHash: text().notNull().unique(),
   expiresAt: timestamp({ withTimezone: true }).notNull(),
@@ -146,9 +146,11 @@ export const productVariant = pgTable(
   (t) => [unique('variant_store_sku').on(t.storeId, t.sku)],
 );
 
+// store_id on every link table (defense-in-depth RLS — migration 0009).
 export const variantOption = pgTable(
   'variant_option',
   {
+    storeId: uuid().notNull().references(() => store.id),
     variantId: uuid().notNull().references(() => productVariant.id),
     optionId: uuid().notNull().references(() => productOption.id),
   },
@@ -162,7 +164,7 @@ export const collection = pgTable(
     storeId: uuid().notNull().references(() => store.id),
     slug: text().notNull(),
     name: text().notNull(),
-    parentId: uuid(),
+    parentId: uuid().references((): import('drizzle-orm/pg-core').AnyPgColumn => collection.id),
     description: text(),
   },
   (t) => [unique('collection_store_slug').on(t.storeId, t.slug)],
@@ -171,6 +173,7 @@ export const collection = pgTable(
 export const collectionProduct = pgTable(
   'collection_product',
   {
+    storeId: uuid().notNull().references(() => store.id),
     collectionId: uuid().notNull().references(() => collection.id),
     productId: uuid().notNull().references(() => product.id),
     position: integer().notNull().default(0),
@@ -181,6 +184,7 @@ export const collectionProduct = pgTable(
 export const productAsset = pgTable(
   'product_asset',
   {
+    storeId: uuid().notNull().references(() => store.id),
     productId: uuid().notNull().references(() => product.id),
     assetId: uuid().notNull().references(() => asset.id),
     position: integer().notNull().default(0),
@@ -191,6 +195,7 @@ export const productAsset = pgTable(
 export const variantAsset = pgTable(
   'variant_asset',
   {
+    storeId: uuid().notNull().references(() => store.id),
     variantId: uuid().notNull().references(() => productVariant.id),
     assetId: uuid().notNull().references(() => asset.id),
     position: integer().notNull().default(0),
@@ -285,6 +290,9 @@ export const order = pgTable(
     // Stripe-canonical idempotency: a client-supplied key per checkout attempt.
     // Same (store, key) -> the same order, so a double-submit can't create two.
     idempotencyKey: text(),
+    // The promotion applied to this order (single-coupon v1). promotion_usage is
+    // the per-customer ledger that enforces per_customer_usage_limit.
+    promotionId: uuid().references(() => promotion.id),
     shippingAddress: jsonb(),
     billingAddress: jsonb(),
     placedAt: timestamp({ withTimezone: true }),
@@ -342,6 +350,7 @@ export const refund = pgTable('refund', {
 
 export const refundLine = pgTable('refund_line', {
   id: uuid().primaryKey().defaultRandom(),
+  storeId: uuid().notNull().references(() => store.id),
   refundId: uuid().notNull().references(() => refund.id),
   orderLineId: uuid().notNull().references(() => orderLine.id),
   quantity: integer().notNull(),
@@ -362,6 +371,7 @@ export const fulfillment = pgTable('fulfillment', {
 
 export const fulfillmentLine = pgTable('fulfillment_line', {
   id: uuid().primaryKey().defaultRandom(),
+  storeId: uuid().notNull().references(() => store.id),
   fulfillmentId: uuid().notNull().references(() => fulfillment.id),
   orderLineId: uuid().notNull().references(() => orderLine.id),
   quantity: integer().notNull(),
@@ -381,7 +391,7 @@ export const stockMovement = pgTable('stock_movement', {
   variantId: uuid().notNull().references(() => productVariant.id),
   delta: integer().notNull(),
   reason: text().notNull(),
-  refOrderId: uuid(),
+  refOrderId: uuid().references(() => order.id),
   createdAt: ts(),
 });
 
@@ -480,6 +490,37 @@ export const cartLine = pgTable(
   },
   (t) => [unique('cart_line_cart_sku').on(t.cartId, t.sku)],
 );
+
+// ── promotion usage ledger (enforce per_customer_usage_limit; audit which order
+//    used which promo). One row per (promotion, order). Migration 0009. ────────
+export const promotionUsage = pgTable(
+  'promotion_usage',
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    storeId: uuid().notNull().references(() => store.id),
+    promotionId: uuid().notNull().references(() => promotion.id),
+    customerId: uuid().references(() => customer.id),
+    orderId: uuid().notNull().references(() => order.id),
+    createdAt: ts(),
+  },
+  (t) => [unique('promotion_usage_promo_order').on(t.promotionId, t.orderId)],
+);
+
+// ── saved payment methods (gateway vault refs — Stripe/PayPal). NEVER a PAN. ──
+export const paymentMethod = pgTable('payment_method', {
+  id: uuid().primaryKey().defaultRandom(),
+  storeId: uuid().notNull().references(() => store.id),
+  customerId: uuid().notNull().references(() => customer.id),
+  gateway: text().notNull(), // stripe | paypal | nmi | sezzle
+  providerCustomerRef: text(), // Stripe customer id / PayPal payer id
+  providerMethodRef: text(), // payment_method / token id
+  brand: text(),
+  last4: text(),
+  expMonth: integer(),
+  expYear: integer(),
+  isDefault: boolean().notNull().default(false),
+  createdAt: ts(),
+});
 
 export type Store = typeof store.$inferSelect;
 export type Order = typeof order.$inferSelect;
