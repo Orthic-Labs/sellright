@@ -69,7 +69,7 @@ can't disturb the `api`/`shared` build. Install them with
 | `admin` | React 18, Vite 5, TypeScript, Tailwind 3, TanStack Query 5, react-router 6, lucide-react. Hand-rolled fetch client (not `hc`) |
 | `storefront` | Qwik (cloned DD storefront), Vite SSR |
 
-### 1.3 Data model (35 tables, by domain)
+### 1.3 Data model (37 tables, by domain)
 
 - **Tenancy:** `store` (registry), `admin_user`, `admin_user_store` (ACL),
   `session` (customer + admin sessions share the table, discriminated by
@@ -77,14 +77,20 @@ can't disturb the `api`/`shared` build. Install them with
 - **Catalog:** `product`, `product_variant`, `product_option_group`,
   `product_option`, `variant_option`, `collection`, `collection_product`,
   `asset`, `product_asset`, `variant_asset`.
-- **Customer:** `customer`, `address`.
-- **Orders & money:** `order`, `order_line` (with snapshot cols), `payment`,
-  `refund`, `refund_line`, `fulfillment`, `fulfillment_line`.
+- **Customer:** `customer`, `address`, `payment_method` (gateway vault refs).
+- **Orders & money:** `order` (→ `promotion_id`), `order_line` (with snapshot
+  cols), `payment`, `refund`, `refund_line`, `fulfillment`, `fulfillment_line`.
 - **Inventory:** `stock` (on_hand/allocated), `stock_movement`.
-- **Promotions/shipping:** `promotion`, `shipping_method`.
+- **Promotions/shipping:** `promotion`, `promotion_usage` (per-customer usage
+  ledger), `shipping_method`.
 - **Cart (separate from orders):** `cart`, `cart_line`.
 - **DD-parity:** `affiliate`, `affiliate_settle`, `blog_post`.
 - **Infra:** `processed_event` (idempotency), `audit_log`.
+
+All six M:N link tables (`variant_option`, `collection_product`,
+`product_asset`, `variant_asset`, `fulfillment_line`, `refund_line`) now carry
+`store_id` + FORCE RLS (migration 0009) — isolation no longer rides on the parent
+FK alone. See §1.14 for the full relationship review.
 
 Money is **integer cents** everywhere. PKs are UUID. Column names are
 `snake_case` (Drizzle `casing: 'snake_case'` set in **both** `drizzle.config.ts`
@@ -204,11 +210,56 @@ snapshot columns (`variant_sku`/`variant_name`, nullable `variant_id`) because
 
 ---
 
+### 1.14 Data-model relationship review (2026-06-05)
+
+A full pass over every FK/relationship. **What's strong (keep):** order-line
+snapshots (survive product deletion), address-as-jsonb-snapshot on the order,
+payment/refund/fulfillment as independent records (two-axis money-vs-shipping
+state), cart split from orders, integer-cents money, RLS on every data table.
+
+**Gaps fixed (migration 0009 + code, verified live):**
+- **Promotions had no order linkage and no usage ledger** — worse, *checkout
+  ignored coupons entirely* (orders were created at full price even when the cart
+  preview showed a discount). Fixed: `order.promotion_id` FK + `promotion_usage`
+  ledger; checkout now re-validates the coupon server-side, applies the discount,
+  records usage, bumps `used_count`, and **enforces `usage_limit` +
+  `per_customer_usage_limit`**. Verified: `bigred` → discount applied,
+  `promotion_usage` row, counter incremented.
+- **Address shape inconsistency** (`street_line1`/`country_code` in the order
+  jsonb vs `line1`/`country` in the `address` table) — fixed: the order snapshot
+  is normalized to the canonical `address`-table shape on write (accepts either
+  input shape). Admin reader stays tolerant for legacy imported orders.
+- **Link tables lacked `store_id`/RLS** — fixed: all six now carry `store_id` +
+  FORCE RLS (defense-in-depth; `pnpm verify` asserts 34 store-scoped tables FORCE).
+- **Loose FKs tightened** — `collection.parent_id` (self-ref), `stock_movement.ref_order_id`, `session.customer_id` now have FK constraints (NOT VALID so legacy rows don't block; enforced for new writes).
+- **Saved payment methods** — new `payment_method` table (gateway vault refs,
+  never a PAN) replaces the lone `customer.stripe_customer_id` approach; foundation
+  for Stripe/PayPal.
+
+**Deliberate decisions — NOT built (would be dormant scaffolding per rule #10;
+documented with the trigger that flips each):**
+- **Single-currency, single-tier pricing on the variant** (`price`/`sale_price`/
+  `pre_order_price`; currency on `store`). No multi-currency, no customer-group/
+  B2B/quantity-break pricing. *Trigger to build a `price` table keyed by
+  `(variant, currency, customer_group, min_qty)`:* the first multi-currency or B2B
+  store. This is the main modelling ceiling for SellRight-as-a-product.
+- **No facet/attribute model** — `product_option`/`variant_option` are per-product
+  variant axes, not store-wide filterable facets; `collection` (with `parent_id`
+  tree) is the category/navigation system. *Trigger:* faceted filtering (color/
+  size/material across products) → v2.
+- **Tax is one rate** (`store.tax_rate`). No tax classes/zones. *Trigger:* a store
+  that needs per-product tax classes (DD/RH don't).
+- **No customer groups / B2B** — single tier. *Trigger:* tiered pricing or B2B
+  (pairs with the pricing decision above).
+- **No returns/RMA entity** — `refund` models money; `refund_line.restock` is a
+  bool. *Trigger:* a real returns workflow (inspection, RMA lifecycle) → v2.
+
 ## 2. Status matrix
 
 | Area | State |
 |---|---|
-| Schema + RLS (35 tables, migrations 0000–0006) | ✅ applied, isolation tested |
+| Schema + RLS (37 tables, migrations 0000–0009) | ✅ applied, isolation tested |
+| Coupons applied + audited at checkout (promotion_usage, limits enforced) | ✅ verified live |
 | Data importer (catalog/customers/orders) | ✅ cent-perfect parity |
 | Shop API: catalog, cart estimate, checkout, pay, auth, account, coupons | ✅ verified on real data |
 | Payments: `cod` + `manual` | ✅ | real NMI/Sezzle/Stripe ⛔ blocked on creds |
