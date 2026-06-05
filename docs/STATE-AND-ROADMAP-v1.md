@@ -401,16 +401,29 @@ backups can proceed in parallel once 1–2 land.
 5. **Real payment gateway** for the launching store (§3.1) — NMI-tokenized for
    DD, or Stripe for RH (RH launches first, greenfield).
    **Done =** a real sandbox transaction completes through `PaymentProvider`
-   (tokenized — no raw PAN), webhook/verify idempotent, order → Paid.
+   (tokenized — no raw PAN), order → Paid; **plus** (Codex): the webhook handler
+   is **idempotent AND retry-safe** (duplicate/late/out-of-order webhooks
+   converge to the same state; a dropped webhook is recovered by a poll/verify
+   fallback), and a **daily reconciliation** job diffs provider-side transactions
+   against our `payment` rows and flags any mismatch. Acceptance test: replay a
+   duplicate webhook, a delayed webhook, and a dropped webhook (verify-fallback
+   catches it) → exactly one settled payment, order Paid once.
 6. **Minimal observability** *(added in self-review — was deferred to "future,"
    which is wrong for a money-taking store).*
-   **Done =** structured error logging shipped somewhere queryable, an uptime
-   check on the API + storefront, and one alert channel that pages you on
-   down/5xx-spike. Launching blind to errors is a self-inflicted outage.
+   **Done =** structured error logging to a queryable sink (e.g. a log service /
+   Sentry-class error tracker); an uptime check on the API + storefront; and an
+   alert channel that **pages you** on concrete triggers (Codex): **API down/health
+   fail for >1 min**, **5xx rate >2% over 5 min**, **checkout-success rate drops
+   below the agreed floor**, and **p95 request latency >1 s for 5 min**. (Tune the
+   numbers once a baseline exists; the point is they're defined, not "agreed
+   bounds".)
 7. **Automated DB backups** *(added in self-review — the rollback story only
    covered pre-migration snapshots, not a live store).*
-   **Done =** scheduled `pg_dump` (or PITR) of the prod DB with an offsite copy
-   and a **tested restore**, before the store takes a real order.
+   **Done =** scheduled backups with a **stated RPO/RTO** (Codex): target
+   **RPO ≤ 5 min** (WAL-archiving / PITR) — or **RPO ≤ 24 h** if daily `pg_dump`
+   is accepted for the launch store — and **RTO ≤ 1 h** to a defined restore
+   target (a standby instance or a documented restore runbook). Offsite copy +
+   a **tested restore** to that target before the store takes a real order.
 8. **Secrets management** *(added in self-review).*
    **Done =** prod secrets (DB URL, payment keys, admin bootstrap) live in a
    restricted-perms env file or a secrets store loaded by the systemd unit —
@@ -427,23 +440,52 @@ and additionally needs the asset service + the parity-replay gate below.
 
 ### Cutover & rollback (the missing reversibility story)
 
-The council correctly flagged there was no documented rollback. The plan:
+The council flagged the missing rollback; Codex flagged that the *naïve* version
+("revert the storefront provider to Vendure") silently abandons any orders,
+payments, and customer edits that SellRight already accepted during the bake.
+There are **two distinct rollback regimes** and they are not the same:
 
-- **Keep the Vendure stack warm** through each cutover — do not decommission it
-  until parity is proven and the store has run clean on SellRight for a defined
-  bake period.
-- **Storefront rollback:** the `providers/shop/*` modules are the seam. Reverting
-  a flow = point that provider back at the Vendure `/shop-api` GraphQL endpoint
-  (+ DNS/API base if needed). Per-flow, instant, no data migration.
-- **DD/SS data cutover gate (M9):** the **parity-replay** test — re-run real
-  historical order inputs through SellRight's money core and diff totals against
-  Vendure's stored `grand_total` to the cent (the one-shot import already proved
-  $852,930.51 parity; replay proves the *live compute path*). Preserve external
-  customer IDs (Stripe/NMI/Sezzle) so payment history survives.
-- **DB rollback:** snapshot `sellright_dev`/prod before each migration and before
-  cutover; migrations are forward-only but a snapshot restore is the floor.
-- **Smallest test scope:** shadow a single flow (account login) on a staging
-  domain with real traffic before the full storefront cutover.
+**Regime A — rollback BEFORE the first real order (clean, instant).**
+- The `providers/shop/*` modules are the seam: revert a flow by pointing it back
+  at the Vendure `/shop-api` GraphQL endpoint (+ DNS/API base if needed). Per-flow,
+  no data migration, no reconciliation. This is the *only* truly instant rollback.
+
+**Regime B — rollback AFTER SellRight has accepted real writes (reconciliation
+required — you cannot just flip the switch).**
+- Orders + payments created on SellRight during the bake **exist only in
+  SellRight**; Vendure has never seen them. Reverting the storefront to Vendure
+  without moving them strands real customer money. So Regime B requires a
+  **forward reconciliation export**: a one-way exporter that writes
+  SellRight-side orders/payments (and any customer/address edits) **back into
+  Vendure** before/at the moment of revert, OR an explicit decision to **stop
+  taking new orders, drain in-flight ones, then revert** (maintenance window).
+- **Therefore: prefer forward-fix over rollback once real orders flow.** Regime B
+  is the break-glass option, not the default. Build the SellRight→Vendure
+  order/payment exporter (or accept the maintenance-window drain) *before*
+  SellRight takes the first real order, so the option actually exists.
+
+**Data ownership during the bake (so a revert doesn't lose customer changes).**
+While auth/account is being cut over, exactly one system owns customer-mutable
+data at a time:
+- During the bake, **SellRight is the writer of record** for any flow already
+  cut over; Vendure's copy is treated as stale for that flow. Account/address
+  edits made on SellRight are included in the Regime-B reconciliation export.
+- Do **not** run a window where both systems accept writes to the same record
+  with no reconciliation — that is the silent-divergence trap. Cut a flow over
+  fully (with the exporter ready) rather than splitting writes.
+
+**DD/SS data cutover gate (M9):** the **parity-replay** test — re-run real
+historical order inputs through SellRight's money core and diff totals against
+Vendure's stored `grand_total` to the cent (the one-shot import already proved
+$852,930.51 parity; replay proves the *live compute path*). Preserve external
+customer IDs (Stripe/NMI/Sezzle) so payment history survives.
+
+**DB rollback:** snapshot `sellright_dev`/prod before each migration and before
+cutover; migrations are forward-only but a snapshot restore is the floor (subject
+to the RPO/RTO in gate item 7).
+
+**Smallest test scope:** shadow a single flow (account login) on a staging domain
+with real traffic before the full storefront cutover.
 
 ### Scalability / performance (not a v1 blocker, but on the radar)
 
@@ -511,7 +553,7 @@ dashboard (gate item 6); and a **restore from backup has been tested** (gate ite
 
 | Item | Risk | Mitigation |
 |---|---|---|
-| App connects as DB **owner**; RLS safety = `FORCE` on every table | A future table missing `FORCE` leaks cross-tenant under owner | §3.7: `pnpm verify` FORCE-assertion + eventual non-owner role |
+| App connects as DB **owner** (dev only); RLS safety currently = `FORCE` on every table | A future table missing `FORCE` leaks cross-tenant under owner | **§3A gate item 1 (do before public exposure):** run as non-owner role (fails closed) + `pnpm verify` FORCE-assertion as backstop |
 | Admin token in **localStorage**, 14-day TTL | XSS exfiltration | §3.3: httpOnly cookie + CSP |
 | **No login rate-limit** | Credential stuffing | §3.4: PG attempt counter |
 | Assets **proxied to DD** | Coupling to old stack; not independent | §3.8: asset service + CDN |
@@ -594,5 +636,25 @@ DD plugin parity → `DD-CUSTOMIZATION-SPEC-v1.md`; original plans →
     "added a first-launch definition-of-done with observable success signals"
   ],
   "note": "self-review is internal critique, not an independent jury; findings labeled as such"
+}
+```
+
+```json
+{
+  "artifact": "STATE-AND-ROADMAP-v1.md",
+  "review": "/review-cli codex (gpt-5.5, plan rubric)",
+  "date": "2026-06-05",
+  "verdict": "NEEDS-REVISION",
+  "score": 7,
+  "top_concern": "rollback/data reconciliation still underspecified once real orders start",
+  "revisions_applied": [
+    "Cutover & rollback split into Regime A (pre-first-order, instant) vs Regime B (post-real-writes, requires a SellRight->Vendure order/payment reconciliation export or a maintenance-window drain) — prefer forward-fix over rollback once orders flow",
+    "added data-ownership-during-bake rule (single writer of record per flow; no dual-write window)",
+    "fixed contradiction: risk-register row no longer says non-owner role is 'eventual' — points to §3A gate item 1",
+    "gate item 5: payment Done now requires retry-safe webhooks + verify-fallback + daily provider reconciliation, with a replay acceptance test",
+    "gate item 6: concrete observability triggers (health >1min, 5xx >2%/5min, checkout-success floor, p95 >1s/5min) + named log sink",
+    "gate item 7: backups now carry RPO (<=5min PITR or <=24h dump) / RTO (<=1h) + restore target"
+  ],
+  "infra_fix": "codex CLI was broken globally — config.toml had service_tier='priority' (invalid; codex now accepts only fast|flex). Changed to 'fast'."
 }
 ```
