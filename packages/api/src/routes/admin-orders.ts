@@ -10,6 +10,17 @@ import { canTransition, type OrderState } from '../money/fsm.js';
 export const adminOrders = new OpenAPIHono();
 
 const orderCode = () => ('SR' + randomUUID().replace(/-/g, '').slice(0, 10)).toUpperCase();
+
+/** Infer carrier from a tracking number shape (USPS/UPS/FedEx) — matches the DD
+ *  order-tools heuristic. Returns null if unknown. */
+function inferCarrier(t: string): string | null {
+  const x = t.replace(/\s/g, '').toUpperCase();
+  if (/^1Z[0-9A-Z]{16}$/.test(x)) return 'UPS';
+  if (/^(94|93|92|95|420)\d{20,}$/.test(x) || /^[A-Z]{2}\d{9}US$/.test(x)) return 'USPS';
+  if (/^\d{12}$/.test(x) || /^\d{15}$/.test(x) || /^\d{20,22}$/.test(x)) return 'FedEx';
+  return null;
+}
+const csvCell = (v: unknown) => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
 function unitPrice(v: { price: number; salePrice: number | null; isPreOrder: boolean; preOrderPrice: number | null }): number {
   if (v.isPreOrder && v.preOrderPrice != null) return v.preOrderPrice;
   if (v.salePrice != null) return v.salePrice;
@@ -155,5 +166,84 @@ adminOrders.openapi(
       return { items: rows.filter((r) => r.items > 0).map((r) => ({ ...r, updatedAt: r.updatedAt.toISOString() })), total: cnt[0]?.n ?? 0, page, pageSize };
     });
     return c.json(out, 200);
+  }),
+);
+
+// ── order export (CSV) ───────────────────────────────────────────────────────
+// Plain handler (not .openapi) so it can stream text/csv as a download.
+adminOrders.get('/v1/admin/export/orders', async (c) => {
+  try {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    const days = Math.min(3650, Math.max(1, Number(c.req.query('days') ?? '365')));
+    const state = c.req.query('state') || undefined;
+    const rows = await withStore(st.storeId, async (tx) => {
+      const conds = [sql`coalesce(${s.order.placedAt}, ${s.order.createdAt}) >= now() - (${days} || ' days')::interval`] as never[];
+      if (state) conds.push(sql`${s.order.state} = ${state}` as never);
+      return tx
+        .select({
+          code: s.order.code, state: s.order.state, isPreOrder: s.order.isPreOrder, email: s.customer.email,
+          subtotal: s.order.subtotal, discountTotal: s.order.discountTotal, shippingTotal: s.order.shippingTotal,
+          taxTotal: s.order.taxTotal, grandTotal: s.order.grandTotal, currency: s.order.currency,
+          placedAt: s.order.placedAt, createdAt: s.order.createdAt,
+          tracking: sql<string | null>`(select f.tracking_code from fulfillment f where f.order_id = ${s.order.id} order by f.created_at desc limit 1)`,
+          fulfillmentState: sql<string | null>`(select f.state from fulfillment f where f.order_id = ${s.order.id} order by f.created_at desc limit 1)`,
+        })
+        .from(s.order).leftJoin(s.customer, eq(s.customer.id, s.order.customerId))
+        .where(and(...conds)).orderBy(desc(sql`coalesce(${s.order.placedAt}, ${s.order.createdAt})`)).limit(50000);
+    });
+    const header = ['code', 'date', 'email', 'state', 'preOrder', 'fulfillment', 'tracking', 'subtotal', 'discount', 'shipping', 'tax', 'total', 'currency'];
+    const lines = [header.join(',')];
+    const c2 = (n: number) => (n / 100).toFixed(2);
+    for (const r of rows) {
+      lines.push([r.code, (r.placedAt ?? r.createdAt).toISOString().slice(0, 10), r.email ?? '', r.state, r.isPreOrder ? 'yes' : '', r.fulfillmentState ?? '', r.tracking ?? '', c2(r.subtotal), c2(r.discountTotal), c2(r.shippingTotal), c2(r.taxTotal), c2(r.grandTotal), r.currency].map(csvCell).join(','));
+    }
+    return c.body(lines.join('\n'), 200, { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="orders-${st.slug}.csv"` });
+  } catch (e) {
+    if (e instanceof HttpError) return c.json({ error: e.message }, e.status);
+    throw e;
+  }
+});
+
+// ── tracking CSV import (bulk fulfill -> Shipped) ────────────────────────────
+adminOrders.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/import-tracking', summary: 'Bulk import tracking numbers (creates Shipped fulfillments)',
+    request: { body: { content: J(z.object({ rows: z.array(z.object({ code: z.string(), tracking: z.string(), carrier: z.string().optional() })).min(1).max(5000) })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ updated: z.number().int(), errors: z.array(z.object({ code: z.string(), error: z.string() })) })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireWrite(st);
+    const { rows } = c.req.valid('json');
+    const result = await withStore(st.storeId, async (tx) => {
+      let updated = 0; const errors: { code: string; error: string }[] = [];
+      for (const row of rows) {
+        const [o] = await tx.select().from(s.order).where(eq(s.order.code, row.code)).limit(1);
+        if (!o) { errors.push({ code: row.code, error: 'order not found' }); continue; }
+        if (o.state !== 'Paid' && o.state !== 'PartiallyRefunded') { errors.push({ code: row.code, error: `not shippable (${o.state})` }); continue; }
+        const carrier = row.carrier || inferCarrier(row.tracking) || null;
+        const [existing] = await tx.select().from(s.fulfillment).where(eq(s.fulfillment.orderId, o.id)).orderBy(desc(s.fulfillment.createdAt)).limit(1);
+        if (existing) {
+          await tx.update(s.fulfillment).set({ state: 'Shipped', trackingCode: row.tracking, carrier, updatedAt: new Date() }).where(eq(s.fulfillment.id, existing.id));
+        } else {
+          await tx.insert(s.fulfillment).values({ storeId: st.storeId, orderId: o.id, state: 'Shipped', trackingCode: row.tracking, carrier });
+          const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
+          for (const l of lines) {
+            const ship = l.quantity - l.fulfilledQty;
+            if (ship <= 0) continue;
+            await tx.update(s.orderLine).set({ fulfilledQty: l.quantity }).where(eq(s.orderLine.id, l.id));
+            if (l.variantId) {
+              await tx.update(s.stock).set({ onHand: sql`greatest(${s.stock.onHand} - ${ship}, 0)`, allocated: sql`greatest(${s.stock.allocated} - ${ship}, 0)` }).where(and(eq(s.stock.variantId, l.variantId), eq(s.stock.storeId, st.storeId)));
+              await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: l.variantId, delta: -ship, reason: 'fulfillment', refOrderId: o.id });
+            }
+          }
+        }
+        await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: o.id, action: 'tracking_import', toState: 'Shipped', data: { tracking: row.tracking, carrier } });
+        updated++;
+      }
+      return { updated, errors };
+    });
+    return c.json(result, 200);
   }),
 );

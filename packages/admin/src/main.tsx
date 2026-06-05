@@ -19,7 +19,10 @@ import Inventory from './pages/Inventory';
 import Customers from './pages/Customers';
 import CustomerDetail from './pages/CustomerDetail';
 import DraftOrder from './pages/DraftOrder';
+import ImportTracking from './pages/ImportTracking';
 import AbandonedCarts from './pages/AbandonedCarts';
+import Affiliates from './pages/Affiliates';
+import AffiliateDetail from './pages/AffiliateDetail';
 import Discounts from './pages/Discounts';
 import Marketing from './pages/Marketing';
 import Reports from './pages/Reports';
@@ -43,8 +46,11 @@ function App() {
         <Route path="/" element={<Dashboard />} />
         <Route path="/orders" element={<Orders />} />
         <Route path="/orders/new" element={<DraftOrder />} />
+        <Route path="/orders/import-tracking" element={<ImportTracking />} />
         <Route path="/orders/:code" element={<OrderDetail />} />
         <Route path="/abandoned-carts" element={<AbandonedCarts />} />
+        <Route path="/affiliates" element={<Affiliates />} />
+        <Route path="/affiliates/:id" element={<AffiliateDetail />} />
         <Route path="/products" element={<Products />} />
         <Route path="/products/new" element={<ProductCreate />} />
         <Route path="/products/:id" element={<ProductDetail />} />

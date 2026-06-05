@@ -114,20 +114,21 @@ admin.openapi(
 admin.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/orders', summary: 'List orders',
-    request: { query: z.object({ state: z.string().optional(), q: z.string().optional(), page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(25) }) },
+    request: { query: z.object({ state: z.string().optional(), q: z.string().optional(), preOrder: z.coerce.boolean().optional(), page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(25) }) },
     responses: { 200: { description: 'OK', content: J(Page) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c);
-    const { state, q, page, pageSize } = c.req.valid('query');
+    const { state, q, preOrder, page, pageSize } = c.req.valid('query');
     const out = await withStore(st.storeId, async (tx) => {
       const conds = [] as ReturnType<typeof eq>[];
       if (state) conds.push(sql`${s.order.state} = ${state}` as never);
+      if (preOrder) conds.push(eq(s.order.isPreOrder, true) as never);
       if (q) conds.push(or(ilike(s.order.code, `%${q}%`), ilike(s.customer.email, `%${q}%`)) as never);
       const where = conds.length ? and(...conds) : undefined;
       const base = tx
-        .select({ code: s.order.code, state: s.order.state, grandTotal: s.order.grandTotal, currency: s.order.currency, placedAt: s.order.placedAt, createdAt: s.order.createdAt, email: s.customer.email })
+        .select({ code: s.order.code, state: s.order.state, isPreOrder: s.order.isPreOrder, grandTotal: s.order.grandTotal, currency: s.order.currency, placedAt: s.order.placedAt, createdAt: s.order.createdAt, email: s.customer.email })
         .from(s.order)
         .leftJoin(s.customer, eq(s.customer.id, s.order.customerId))
         .$dynamic();
@@ -168,7 +169,7 @@ admin.openapi(
         customer = cu ?? null;
       }
       return {
-        code: o.code, state: o.state, currency: o.currency,
+        code: o.code, state: o.state, isPreOrder: o.isPreOrder, currency: o.currency,
         subtotal: o.subtotal, discountTotal: o.discountTotal, shippingTotal: o.shippingTotal, taxTotal: o.taxTotal, grandTotal: o.grandTotal,
         placedAt: o.placedAt ? o.placedAt.toISOString() : null, createdAt: o.createdAt.toISOString(),
         shippingAddress: o.shippingAddress ?? null, billingAddress: o.billingAddress ?? null,

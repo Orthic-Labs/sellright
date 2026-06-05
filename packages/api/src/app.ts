@@ -12,6 +12,7 @@ import { adminOrders } from './routes/admin-orders.js';
 import { adminMarketing } from './routes/admin-marketing.js';
 import { adminSettings } from './routes/admin-settings.js';
 import { adminReports } from './routes/admin-reports.js';
+import { adminAffiliate } from './routes/admin-affiliate.js';
 
 /**
  * The API is typed REST: every route declares a zod schema, which generates
@@ -64,6 +65,7 @@ export function createApp(): OpenAPIHono {
   app.route('/', adminMarketing); // promotions manager + Listmonk integration
   app.route('/', adminSettings); // store/tax, payments, shipping, staff/roles, notifications
   app.route('/', adminReports); // customers write, reports, search, activity
+  app.route('/', adminAffiliate); // affiliate program + public self-serve dashboard
 
   // Published API contract — the product surface (versioned under /v1).
   app.doc('/v1/openapi.json', {

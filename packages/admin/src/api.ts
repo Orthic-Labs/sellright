@@ -37,13 +37,27 @@ export const api = {
   del: <T>(p: string) => req<T>('DELETE', p),
 };
 
+/** Fetch a file (e.g. CSV export) with auth headers and trigger a download. */
+export async function downloadFile(path: string, filename: string): Promise<void> {
+  const headers: Record<string, string> = {};
+  if (auth.token) headers.authorization = `Bearer ${auth.token}`;
+  if (auth.store) headers['x-store-slug'] = auth.store;
+  const res = await fetch(`/v1/admin${path}`, { headers });
+  if (!res.ok) throw new ApiError(res.status, `export failed (${res.status})`);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
 // ── shared types ────────────────────────────────────────────────────────────
 export interface StoreAccess { storeId: string; slug: string; name: string; currency: string; role: string; }
 export interface Me { email: string; stores: StoreAccess[]; }
 export interface LoginResp { token: string; admin: { email: string }; stores: StoreAccess[]; }
 export interface Page<T> { items: T[]; total: number; page: number; pageSize: number; }
 
-export interface OrderRow { code: string; state: string; grandTotal: number; currency: string; placedAt: string | null; createdAt: string; email: string | null; }
+export interface OrderRow { code: string; state: string; isPreOrder?: boolean; grandTotal: number; currency: string; placedAt: string | null; createdAt: string; email: string | null; }
 export interface Dashboard {
   store: { slug: string; name: string; currency: string };
   revenue: number; orders: number; aov: number; pendingFulfillment: number; customers: number; lowStock: number;
