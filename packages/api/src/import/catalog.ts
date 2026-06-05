@@ -15,21 +15,16 @@ import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { pool, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
+import { DD_STORE_ID, ensureDdStore, parseDate } from './store.js';
 
 const SOURCE_URL = process.env.SOURCE_DATABASE_URL;
 if (!SOURCE_URL) throw new Error('SOURCE_DATABASE_URL is required (the damned_vendure clone)');
 const LANG = 'en';
-const STORE = { slug: 'damned', name: 'Damned Designs', currency: 'USD' };
 
 const src = new Pool({ connectionString: SOURCE_URL });
 const q = async (sql: string, params: unknown[] = []) => (await src.query(sql, params)).rows;
 
 const lower = (v: string | null) => (v ?? 'image').toLowerCase();
-function parseDate(v: string | null): Date | null {
-  if (!v) return null;
-  const d = new Date(v);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
 
 const CATALOG_TABLES = [
   'variant_asset', 'product_asset', 'collection_product', 'variant_option',
@@ -41,7 +36,7 @@ async function main() {
   // Reset catalog (dev — re-runnable). TRUNCATE is table-level, not RLS-gated.
   await pool.query(`TRUNCATE ${CATALOG_TABLES.map((t) => `"${t}"`).join(', ')} CASCADE`);
 
-  const storeId = randomUUID();
+  const storeId = DD_STORE_ID;
   const assetMap = new Map<number, string>();
   const productMap = new Map<number, string>();
   const groupMap = new Map<number, string>();
@@ -53,7 +48,7 @@ async function main() {
   const skuCollisions: { original: string; assigned: string; vendureVariantId: number }[] = [];
 
   await withStore(storeId, async (tx) => {
-    await tx.insert(s.store).values({ id: storeId, slug: STORE.slug, name: STORE.name, currency: STORE.currency });
+    await ensureDdStore(tx);
 
     // --- assets ---
     for (const a of await q(`SELECT id, type, source, preview, width, height FROM asset`)) {
