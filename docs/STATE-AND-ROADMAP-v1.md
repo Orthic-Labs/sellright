@@ -265,6 +265,9 @@ documented with the trigger that flips each):**
 | Payments: `cod` + `manual` | ✅ | real NMI/Sezzle/Stripe ⛔ blocked on creds |
 | Admin API + SPA (orders/products/customers/dashboard) | ✅ live + audited |
 | Admin: fulfillment inventory side-effect, RBAC `read_only` gate | ✅ fixed + verified 2026-06-05 |
+| **Admin Shopify-parity (5 phases)**: catalog create/collections/inventory, refunds, draft orders, abandoned carts, discounts manager, **Listmonk in-admin**, settings (payments/shipping/staff-roles/tax), reports, search, activity, customer edit | ✅ shipped + verified 2026-06-05 |
+| Admin: product **image upload** | ⛔ depends on asset service (§3.8) |
+| Listmonk live connection | ⚠ integration built; needs Listmonk URL+token |
 | Storefront: browse + checkout→COD→confirmation | ✅ plumbing-verified |
 | Storefront: auth / account / text-search UI | ⛔ still Vendure GraphQL |
 | Facets / category filters | ⛔ not imported (no facet model) |
