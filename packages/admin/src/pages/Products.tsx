@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { Search, Package } from 'lucide-react';
+import { Search, Package, Plus } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { api, assetUrl, type Page, type ProductRow } from '../api';
 import { useAuth } from '../auth';
 import { money } from '../lib/format';
@@ -22,9 +23,12 @@ export default function Products() {
   return (
     <>
       <PageHeader title="Products" subtitle={data ? `${data.total} total` : undefined} actions={
-        <div className="relative">
-          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-          <input className="input pl-9 w-64" placeholder="Search products" value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} />
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input className="input pl-9 w-56" placeholder="Search products" value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} />
+          </div>
+          <Link to="/products/new" className="btn-primary whitespace-nowrap"><Plus size={16} /> New product</Link>
         </div>
       } />
 

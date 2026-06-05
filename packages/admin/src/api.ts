@@ -34,6 +34,7 @@ export const api = {
   get: <T>(p: string) => req<T>('GET', p),
   post: <T>(p: string, b?: unknown) => req<T>('POST', p, b ?? {}),
   patch: <T>(p: string, b?: unknown) => req<T>('PATCH', p, b ?? {}),
+  del: <T>(p: string) => req<T>('DELETE', p),
 };
 
 // ── shared types ────────────────────────────────────────────────────────────
@@ -69,6 +70,11 @@ export interface CustomerDetail {
   addresses: { fullName: string | null; line1: string; line2: string | null; city: string; province: string | null; postalCode: string | null; country: string; phone: string | null }[];
   orders: OrderRow[];
 }
+
+export interface CollectionRow { id: string; slug: string; name: string; parentId: string | null; products: number; }
+export interface CollectionDetail { id: string; slug: string; name: string; description: string | null; parentId: string | null; products: { id: string; name: string; status: string; position: number }[]; }
+export interface InventoryRow { variantId: string; sku: string; name: string; productName: string; onHand: number; allocated: number; available: number; }
+export interface StockMovementRow { delta: number; reason: string; refOrderId: string | null; createdAt: string; }
 
 export function assetUrl(path: string | null): string | null {
   if (!path) return null;

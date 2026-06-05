@@ -12,6 +12,10 @@ import Orders from './pages/Orders';
 import OrderDetail from './pages/OrderDetail';
 import Products from './pages/Products';
 import ProductDetail from './pages/ProductDetail';
+import ProductCreate from './pages/ProductCreate';
+import Collections from './pages/Collections';
+import CollectionDetail from './pages/CollectionDetail';
+import Inventory from './pages/Inventory';
 import Customers from './pages/Customers';
 import CustomerDetail from './pages/CustomerDetail';
 import SettingsPage from './pages/Settings';
@@ -34,7 +38,11 @@ function App() {
         <Route path="/orders" element={<Orders />} />
         <Route path="/orders/:code" element={<OrderDetail />} />
         <Route path="/products" element={<Products />} />
+        <Route path="/products/new" element={<ProductCreate />} />
         <Route path="/products/:id" element={<ProductDetail />} />
+        <Route path="/collections" element={<Collections />} />
+        <Route path="/collections/:id" element={<CollectionDetail />} />
+        <Route path="/inventory" element={<Inventory />} />
         <Route path="/customers" element={<Customers />} />
         <Route path="/customers/:id" element={<CustomerDetail />} />
         <Route path="/settings" element={<SettingsPage />} />

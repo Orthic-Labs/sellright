@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { LayoutDashboard, ShoppingBag, Package, Users, Settings, ChevronDown, LogOut, Store } from 'lucide-react';
+import { LayoutDashboard, ShoppingBag, Package, Layers, Boxes, Users, Settings, ChevronDown, LogOut, Store } from 'lucide-react';
 import { useAuth } from '../auth';
 import { initials } from '../lib/format';
 
@@ -8,6 +8,8 @@ const NAV = [
   { to: '/', label: 'Home', icon: LayoutDashboard, end: true },
   { to: '/orders', label: 'Orders', icon: ShoppingBag },
   { to: '/products', label: 'Products', icon: Package },
+  { to: '/collections', label: 'Collections', icon: Layers },
+  { to: '/inventory', label: 'Inventory', icon: Boxes },
   { to: '/customers', label: 'Customers', icon: Users },
   { to: '/settings', label: 'Settings', icon: Settings },
 ];

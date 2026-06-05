@@ -4,70 +4,12 @@ import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { bearer } from '../auth/session.js';
 import { verifyPassword } from '../auth/password.js';
-import {
-  createAdminSession,
-  deleteAdminSession,
-  findAdminByEmail,
-  resolveAdmin,
-  type AdminPrincipal,
-  type AdminStoreAccess,
-} from '../auth/admin-session.js';
+import { createAdminSession, deleteAdminSession, findAdminByEmail, resolveAdmin } from '../auth/admin-session.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
+import { HttpError, J, errBody, requireAdmin, requireStore, requireWrite, guard, money, Page, PAID_STATES } from './admin-helpers.js';
 
 export const admin = new OpenAPIHono();
 
-// ── helpers ───────────────────────────────────────────────────────────────
-const J = (schema: z.ZodTypeAny) => ({ 'application/json': { schema } });
-const errBody = { content: J(z.object({ error: z.string() })) };
-
-class HttpError extends Error {
-  constructor(public status: 401 | 403 | 404 | 409, message: string) {
-    super(message);
-  }
-}
-
-type ReqCtx = { req: { header: (k: string) => string | undefined } };
-
-async function requireAdmin(c: ReqCtx): Promise<{ admin: AdminPrincipal; token: string }> {
-  const token = bearer(c.req.header('authorization'));
-  if (!token) throw new HttpError(401, 'missing bearer token');
-  const admin = await resolveAdmin(token);
-  if (!admin) throw new HttpError(401, 'invalid or expired session');
-  return { admin, token };
-}
-
-/** Resolve the selected store from x-store-slug and assert the admin can access it. */
-function requireStore(admin: AdminPrincipal, c: ReqCtx): AdminStoreAccess {
-  const slug = c.req.header('x-store-slug') ?? admin.stores[0]?.slug;
-  const st = admin.stores.find((x) => x.slug === slug);
-  if (!st) throw new HttpError(403, `no access to store: ${slug ?? '(none)'}`);
-  return st;
-}
-
-// Roles allowed to mutate. `read_only` may view but not change anything. This is
-// the minimum RBAC gate — a full per-action permission matrix is still TODO.
-const WRITE_ROLES = new Set(['owner', 'manager', 'staff']);
-function requireWrite(st: AdminStoreAccess): void {
-  if (!WRITE_ROLES.has(st.role)) throw new HttpError(403, `role '${st.role}' is read-only`);
-}
-
-// The order states that count as revenue-bearing (paid lifecycle). Reused across
-// dashboard + customer aggregates so the literal list lives in exactly one place.
-const PAID_STATES = sql`array['Paid','PartiallyRefunded','Refunded']::order_state[]`;
-
-// Generic so the happy-path return type (the typed c.json union) flows through
-// to the OpenAPIHono handler; the error branch is cast into that same union.
-async function guard<T>(c: { json: (b: unknown, status?: number) => Response }, fn: () => Promise<T>): Promise<T> {
-  try {
-    return await fn();
-  } catch (e) {
-    if (e instanceof HttpError) return c.json({ error: e.message }, e.status) as unknown as T;
-    throw e;
-  }
-}
-
-const money = z.number().int();
-const Page = z.object({ items: z.array(z.any()), total: z.number().int(), page: z.number().int(), pageSize: z.number().int() });
 const StoreAccess = z.object({ storeId: z.string(), slug: z.string(), name: z.string(), currency: z.string(), role: z.string() });
 
 // ── auth: login / logout / me ─────────────────────────────────────────────

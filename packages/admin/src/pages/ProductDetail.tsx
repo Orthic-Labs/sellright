@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Package } from 'lucide-react';
+import { useParams, Link, useNavigate } from 'react-router-dom';
+import { ArrowLeft, Package, Trash2, Plus, X } from 'lucide-react';
 import { api, assetUrl, type ProductDetail, type VariantRow } from '../api';
 import { useAuth } from '../auth';
 import { Loading, ErrorNote, Spinner } from '../components/ui';
@@ -59,6 +59,21 @@ export default function ProductDetailPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['product', store?.slug, id] }),
   });
 
+  const nav = useNavigate();
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['product', store?.slug, id] });
+  const del = useMutation({ mutationFn: () => api.del(`/products/${id}`), onSuccess: () => nav('/products') });
+  const delVariant = useMutation({ mutationFn: (vid: string) => api.del(`/variants/${vid}`), onSuccess: invalidate });
+  const [nv, setNv] = useState<{ sku: string; name: string; price: string; onHand: string } | null>(null);
+  const addVariant = useMutation({
+    mutationFn: async () => {
+      if (!nv) return;
+      const price = toCents(nv.price); const onHand = Number(nv.onHand || '0');
+      if (!nv.sku.trim() || !nv.name.trim() || Number.isNaN(price) || !Number.isInteger(onHand) || onHand < 0) throw new Error('SKU, name, valid price and stock required');
+      await api.post(`/products/${id}/variants`, { sku: nv.sku, name: nv.name, price, onHand });
+    },
+    onSuccess: () => { setNv(null); invalidate(); },
+  });
+
   if (isLoading) return <Loading />;
   if (error) return <ErrorNote message={(error as Error).message} />;
   if (!p || !draft) return null;
@@ -73,11 +88,16 @@ export default function ProductDetailPage() {
       <Link to="/products" className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-ink mb-3"><ArrowLeft size={15} /> Products</Link>
       <div className="flex items-center justify-between mb-5 gap-4">
         <h1 className="text-xl font-semibold tracking-tight">{p.name}</h1>
-        <button className="btn-primary" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>
-          {save.isPending ? <Spinner className="text-white" /> : 'Save changes'}
-        </button>
+        <div className="flex items-center gap-2">
+          <button className="btn-danger" disabled={del.isPending} onClick={() => { if (confirm(`Archive product "${p.name}" and its variants? Order history is preserved.`)) del.mutate(); }}>
+            {del.isPending ? <Spinner /> : <><Trash2 size={15} /> Delete</>}
+          </button>
+          <button className="btn-primary" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>
+            {save.isPending ? <Spinner className="text-white" /> : 'Save changes'}
+          </button>
+        </div>
       </div>
-      {save.error && <div className="mb-4"><ErrorNote message={(save.error as Error).message} /></div>}
+      {(save.error || addVariant.error || del.error) && <div className="mb-4"><ErrorNote message={((save.error || addVariant.error || del.error) as Error).message} /></div>}
 
       <div className="grid lg:grid-cols-3 gap-5">
         <div className="lg:col-span-2 space-y-5">
@@ -90,7 +110,7 @@ export default function ProductDetailPage() {
             <div className="px-4 py-3 border-b border-gray-100 text-sm font-semibold">Variants & inventory</div>
             <table className="w-full">
               <thead><tr>
-                <th className="th">Variant</th><th className="th">Price</th><th className="th">Sale</th><th className="th text-center">On hand</th><th className="th text-center">Active</th>
+                <th className="th">Variant</th><th className="th">Price</th><th className="th">Sale</th><th className="th text-center">On hand</th><th className="th text-center">Active</th><th className="th"></th>
               </tr></thead>
               <tbody>
                 {p.variants.map((v: VariantRow) => {
@@ -102,11 +122,26 @@ export default function ProductDetailPage() {
                       <td className="td"><CurrencyInput value={d.salePrice} placeholder="—" onChange={(val) => setV(v.id, { salePrice: val })} cur={cur} /></td>
                       <td className="td"><input className="input w-20 text-center mx-auto" type="number" min={0} value={d.onHand} onChange={(e) => setV(v.id, { onHand: e.target.value })} /></td>
                       <td className="td text-center"><input type="checkbox" className="h-4 w-4 accent-brand" checked={d.enabled} onChange={(e) => setV(v.id, { enabled: e.target.checked })} /></td>
+                      <td className="td text-right"><button className="text-gray-300 hover:text-red-600" title="Delete variant" onClick={() => { if (confirm(`Delete variant ${v.sku}?`)) delVariant.mutate(v.id); }}><X size={16} /></button></td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
+            <div className="border-t border-gray-100 p-3">
+              {nv ? (
+                <div className="flex flex-wrap items-end gap-2">
+                  <div><label className="label">SKU</label><input className="input w-32" value={nv.sku} onChange={(e) => setNv({ ...nv, sku: e.target.value })} /></div>
+                  <div><label className="label">Name</label><input className="input w-32" value={nv.name} onChange={(e) => setNv({ ...nv, name: e.target.value })} placeholder="e.g. Black / M" /></div>
+                  <div><label className="label">Price</label><input className="input w-24" inputMode="decimal" value={nv.price} onChange={(e) => setNv({ ...nv, price: e.target.value })} placeholder="0.00" /></div>
+                  <div><label className="label">On hand</label><input className="input w-20" type="number" min={0} value={nv.onHand} onChange={(e) => setNv({ ...nv, onHand: e.target.value })} /></div>
+                  <button className="btn-primary" disabled={addVariant.isPending} onClick={() => addVariant.mutate()}>{addVariant.isPending ? <Spinner className="text-white" /> : 'Add'}</button>
+                  <button className="btn-ghost" onClick={() => setNv(null)}>Cancel</button>
+                </div>
+              ) : (
+                <button className="btn-ghost" onClick={() => setNv({ sku: '', name: '', price: '', onHand: '0' })}><Plus size={15} /> Add variant</button>
+              )}
+            </div>
           </div>
         </div>
 

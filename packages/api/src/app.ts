@@ -7,6 +7,7 @@ import { auth } from './routes/auth.js';
 import { account } from './routes/account.js';
 import { orders } from './routes/orders.js';
 import { admin } from './routes/admin.js';
+import { adminCatalog } from './routes/admin-catalog.js';
 
 /**
  * The API is typed REST: every route declares a zod schema, which generates
@@ -54,6 +55,7 @@ export function createApp(): OpenAPIHono {
 
   // Admin API — operator surface (auth, dashboard, orders, products, customers).
   app.route('/', admin);
+  app.route('/', adminCatalog); // catalog mgmt: product/variant create+delete, collections, inventory
 
   // Published API contract — the product surface (versioned under /v1).
   app.doc('/v1/openapi.json', {
