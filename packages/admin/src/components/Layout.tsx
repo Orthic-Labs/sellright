@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, ShoppingBag, Package, Layers, Boxes, Users, Settings, ChevronDown, LogOut, Store, Percent, Mail, BarChart3, Activity, Search, HandCoins } from 'lucide-react';
+import { LayoutDashboard, ShoppingBag, Package, Layers, Boxes, Users, Settings, ChevronDown, LogOut, Store, Percent, Mail, BarChart3, Activity, Search, HandCoins, FileText } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../auth';
 import { api } from '../api';
@@ -16,6 +16,7 @@ const NAV = [
   { to: '/discounts', label: 'Discounts', icon: Percent },
   { to: '/affiliates', label: 'Affiliates', icon: HandCoins },
   { to: '/marketing', label: 'Marketing', icon: Mail },
+  { to: '/blog', label: 'Blog', icon: FileText },
   { to: '/reports', label: 'Reports', icon: BarChart3 },
   { to: '/activity', label: 'Activity', icon: Activity },
   { to: '/settings', label: 'Settings', icon: Settings },

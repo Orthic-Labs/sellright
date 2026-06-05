@@ -13,6 +13,8 @@ import { adminMarketing } from './routes/admin-marketing.js';
 import { adminSettings } from './routes/admin-settings.js';
 import { adminReports } from './routes/admin-reports.js';
 import { adminAffiliate } from './routes/admin-affiliate.js';
+import { adminContent } from './routes/admin-content.js';
+import { shopExtra } from './routes/shop-extra.js';
 
 /**
  * The API is typed REST: every route declares a zod schema, which generates
@@ -66,6 +68,8 @@ export function createApp(): OpenAPIHono {
   app.route('/', adminSettings); // store/tax, payments, shipping, staff/roles, notifications
   app.route('/', adminReports); // customers write, reports, search, activity
   app.route('/', adminAffiliate); // affiliate program + public self-serve dashboard
+  app.route('/', adminContent); // blog CMS admin
+  app.route('/', shopExtra); // shop: guest tracking, public blog, shipping eligibility, newsletter
 
   // Published API contract — the product surface (versioned under /v1).
   app.doc('/v1/openapi.json', {

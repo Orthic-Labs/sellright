@@ -25,6 +25,7 @@ import Affiliates from './pages/Affiliates';
 import AffiliateDetail from './pages/AffiliateDetail';
 import Discounts from './pages/Discounts';
 import Marketing from './pages/Marketing';
+import Blog from './pages/Blog';
 import Reports from './pages/Reports';
 import Activity from './pages/Activity';
 import SettingsPage from './pages/Settings';
@@ -61,6 +62,7 @@ function App() {
         <Route path="/customers/:id" element={<CustomerDetail />} />
         <Route path="/discounts" element={<Discounts />} />
         <Route path="/marketing" element={<Marketing />} />
+        <Route path="/blog" element={<Blog />} />
         <Route path="/reports" element={<Reports />} />
         <Route path="/activity" element={<Activity />} />
         <Route path="/settings" element={<SettingsPage />} />
