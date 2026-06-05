@@ -24,7 +24,7 @@ adminSettings.openapi(
     const st = requireStore(admin, c);
     const row = await storeRow(st.storeId);
     const config = cfg(row);
-    return c.json({ name: row.name, slug: row.slug, currency: row.currency, taxRate: row.taxRate, shippingTaxable: row.shippingTaxable, payments: (config.payments as object) ?? { cod: true, manual: true }, notifications: (config.notifications as object) ?? {} }, 200);
+    return c.json({ name: row.name, slug: row.slug, currency: row.currency, taxRate: row.taxRate, shippingTaxable: row.shippingTaxable, payments: (config.payments as object) ?? { cod: true, manual: true }, notifications: (config.notifications as object) ?? {}, googleClientId: (config.googleClientId as string) ?? null }, 200);
   }),
 );
 
@@ -60,6 +60,23 @@ adminSettings.openapi(
     const payments = { cod: true, manual: true, ...((cfg(row).payments as object) ?? {}), ...b };
     await db.update(s.store).set({ config: { ...cfg(row), payments } }).where(eq(s.store.id, st.storeId));
     return c.json({ payments }, 200);
+  }),
+);
+
+// ── Google sign-in client id (for customer Google auth) ──────────────────────
+adminSettings.openapi(
+  createRoute({
+    method: 'patch', path: '/v1/admin/settings/google', summary: 'Set Google OAuth client id',
+    request: { body: { content: J(z.object({ clientId: z.string().nullable() })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireManage(st);
+    const { clientId } = c.req.valid('json');
+    const row = await storeRow(st.storeId);
+    await db.update(s.store).set({ config: { ...cfg(row), googleClientId: clientId || undefined } }).where(eq(s.store.id, st.storeId));
+    return c.json({ ok: true }, 200);
   }),
 );
 

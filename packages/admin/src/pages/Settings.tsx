@@ -17,6 +17,8 @@ export default function SettingsPage() {
   const [store2, setStore2] = useState<{ name: string; taxRate: string } | null>(null);
   const saveStore = useMutation({ mutationFn: () => api.patch('/settings/store', { name: store2!.name, taxRate: Math.round(parseFloat(store2!.taxRate || '0') * 100) }), onSuccess: () => { setStore2(null); qc.invalidateQueries({ queryKey: sk }); } });
   const togglePay = useMutation({ mutationFn: (p: { k: string; v: boolean }) => api.patch('/settings/payments', { [p.k]: p.v }), onSuccess: () => qc.invalidateQueries({ queryKey: sk }) });
+  const [gid, setGid] = useState<string | null>(null);
+  const saveGoogle = useMutation({ mutationFn: () => api.patch('/settings/google', { clientId: gid }), onSuccess: () => { setGid(null); qc.invalidateQueries({ queryKey: sk }); } });
 
   const [sm, setSm] = useState<{ code: string; name: string; rate: string } | null>(null);
   const addShip = useMutation({ mutationFn: () => api.post('/shipping-methods', { code: sm!.code, name: sm!.name, calculator: { flat: Math.round(parseFloat(sm!.rate || '0') * 100) } }), onSuccess: () => { setSm(null); ship.refetch(); } });
@@ -63,6 +65,22 @@ export default function SettingsPage() {
               </label>
             ))}
           </div>
+        </Section>
+
+        <Section title="Customer sign-in (Google)">
+          <p className="text-xs text-gray-500 mb-2">Paste your Google OAuth <b>client ID</b> to enable “Sign in with Google” on the storefront. (Verification happens server-side against this ID.)</p>
+          {gid !== null ? (
+            <div className="flex items-end gap-2">
+              <input className="input font-mono text-xs" value={gid} onChange={(e) => setGid(e.target.value)} placeholder="xxxx.apps.googleusercontent.com" />
+              <button className="btn-primary" disabled={saveGoogle.isPending} onClick={() => saveGoogle.mutate()}>{saveGoogle.isPending ? <Spinner className="text-white" /> : 'Save'}</button>
+              <button className="btn-ghost" onClick={() => setGid(null)}>Cancel</button>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between text-sm">
+              <span className="font-mono text-xs text-gray-600">{cfg.googleClientId ? `${String(cfg.googleClientId).slice(0, 24)}…` : <span className="text-gray-400">not set</span>}</span>
+              {canManage && <button className="btn-ghost" onClick={() => setGid(cfg.googleClientId ?? '')}>{cfg.googleClientId ? 'Change' : 'Set'}</button>}
+            </div>
+          )}
         </Section>
 
         <Section title="Shipping methods">

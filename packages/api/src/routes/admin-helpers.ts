@@ -12,7 +12,7 @@ export const J = (schema: z.ZodTypeAny) => ({ 'application/json': { schema } });
 export const errBody = { content: J(z.object({ error: z.string() })) };
 
 export class HttpError extends Error {
-  constructor(public status: 401 | 403 | 404 | 409, message: string) {
+  constructor(public status: 401 | 403 | 404 | 409 | 429, message: string) {
     super(message);
   }
 }

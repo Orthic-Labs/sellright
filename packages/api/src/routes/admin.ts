@@ -7,6 +7,7 @@ import { verifyPassword } from '../auth/password.js';
 import { createAdminSession, deleteAdminSession, findAdminByEmail, resolveAdmin } from '../auth/admin-session.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireWrite, guard, money, Page, PAID_STATES } from './admin-helpers.js';
+import { clientIp, loginRetryAfter, recordLoginFailure, clearLoginAttempts } from '../auth/rate-limit.js';
 
 export const admin = new OpenAPIHono();
 
@@ -20,12 +21,17 @@ admin.openapi(
     responses: {
       200: { description: 'OK', content: J(z.object({ token: z.string(), admin: z.object({ email: z.string() }), stores: z.array(StoreAccess) })) },
       401: { description: 'Invalid', ...errBody },
+      429: { description: 'Too many attempts', ...errBody },
     },
   }),
   async (c) => guard(c, async () => {
     const { email, password } = c.req.valid('json');
+    const ip = clientIp(c);
+    const retry = loginRetryAfter(ip, `admin:${email}`);
+    if (retry > 0) throw new HttpError(429, `too many attempts — try again in ${retry}s`);
     const u = await findAdminByEmail(email);
-    if (!u || !(await verifyPassword(password, u.passwordHash))) throw new HttpError(401, 'invalid email or password');
+    if (!u || !(await verifyPassword(password, u.passwordHash))) { recordLoginFailure(ip, `admin:${email}`); throw new HttpError(401, 'invalid email or password'); }
+    clearLoginAttempts(ip, `admin:${email}`);
     const token = await createAdminSession(u.id);
     const admin = await resolveAdmin(token);
     return c.json({ token, admin: { email: u.email }, stores: admin?.stores ?? [] }, 200);
