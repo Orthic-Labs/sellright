@@ -24,6 +24,7 @@ import { useCheckout } from '~/hooks/useCheckout';
 import { transitionOrderToStateMutation } from '~/providers/shop/checkout/checkout';
 
 import { LocalCartService } from '~/services/LocalCartService';
+import { srCreateOrder, srPayOrder } from '~/utils/sellright';
 import { CheckoutOptimizationService } from '~/services/CheckoutOptimizationService';
 import { validateBillingSection, validateCustomerSection, validateShippingSection } from '~/utils/checkout-section-validation';
 
@@ -264,6 +265,31 @@ const CheckoutContent = component$(() => {
         if (!billingSection.isValid) {
           throw new Error('Please complete all required billing address information.');
         }
+      }
+
+      // ── SellRight: single create-order + COD pay (replaces the Vendure flow) ──
+      {
+        const items = (localCart.localCart.items || [])
+          .map((it: any) => ({ sku: it.productVariantId as string, quantity: it.quantity as number }))
+          .filter((i) => i.sku && i.quantity > 0);
+        if (!items.length) throw new Error('Your cart is empty.');
+        const sa: any = appState.shippingAddress || {};
+        const shippingAddress = {
+          fullName: `${appState.customer?.firstName || ''} ${appState.customer?.lastName || ''}`.trim(),
+          streetLine1: sa.streetLine1, streetLine2: sa.streetLine2, city: sa.city,
+          province: sa.province, postalCode: sa.postalCode, countryCode: sa.countryCode, phone: sa.phoneNumber,
+        };
+        const created = await srCreateOrder({
+          items, shipping: 0,
+          email: appState.customer?.emailAddress || undefined,
+          shippingAddress,
+        });
+        await srPayOrder(created.code, 'cod');
+        try { LocalCartService.clearCart(); } catch { /* ignore */ }
+        showProcessingModal.value = false;
+        isOrderProcessing.value = false;
+        navigate(`/checkout/confirmation/${created.code}`);
+        return;
       }
 
       // If retrying after payment failure, verify actual server state before transitioning

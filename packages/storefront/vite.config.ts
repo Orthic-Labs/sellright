@@ -181,6 +181,12 @@ export default defineConfig((config) => {
           fs: {
             allow: ['..'], // Allow serving files from one level up
           },
+          proxy: {
+            // Dynamic API -> SellRight backend (browser uses same-origin /v1, no CORS)
+            '/v1': { target: 'http://127.0.0.1:3300', changeOrigin: true },
+            // Product images -> DD's asset server for now (migrate to SellRight storage later)
+            '/assets': { target: 'https://www.damneddesigns.com', changeOrigin: true, secure: true },
+          },
         }
       : undefined,
   };

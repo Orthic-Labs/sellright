@@ -4,6 +4,7 @@ import { APP_STATE } from '~/constants';
 import { CartContextId, clearLocalCart } from '~/contexts/CartContext';
 import { Order } from '~/generated/graphql-shop';
 import { getOrderByCodeQuery, verifySezzlePaymentMutation } from '~/providers/shop/orders/order';
+import { srGetOrder } from '~/utils/sellright';
 import { createSEOHead } from '~/utils/seo';
 import { formatPrice } from '~/utils';
 import { OptimizedImage } from '~/components/ui';
@@ -49,7 +50,19 @@ const ConfirmationPage = component$(() => {
 
 	useVisibleTask$(async () => {
 		try {
-			store.order = await getOrderByCodeQuery(code);
+			const sr = await srGetOrder(code);
+			store.order = {
+				id: sr.code, code: sr.code, state: sr.state,
+				totalWithTax: sr.grandTotal, subTotal: sr.subtotal, subTotalWithTax: sr.subtotal + sr.taxTotal,
+				shippingWithTax: sr.shippingTotal,
+				customer: null, discounts: [], shippingLines: [],
+				payments: [{ method: 'cod', state: sr.state === 'Paid' ? 'Settled' : 'Created', amount: sr.grandTotal }],
+				shippingAddress: (sr.shippingAddress as any) || {}, billingAddress: {},
+				lines: sr.lines.map((l) => ({
+					id: l.sku, quantity: l.quantity, linePriceWithTax: l.lineTotal, priceWithTax: l.unitPrice,
+					featuredAsset: { preview: '' }, productVariant: { name: l.name, sku: l.sku },
+				})),
+			} as unknown as typeof store.order;
 
 			const sezzlePayment = store.order?.payments?.find(p => p.method === 'sezzle' && p.state === 'Authorized');
 			const sezzleVerifyKey = `sezzle-verified-${code}`;

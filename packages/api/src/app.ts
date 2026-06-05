@@ -5,6 +5,7 @@ import { checkout } from './routes/checkout.js';
 import { pay } from './routes/pay.js';
 import { auth } from './routes/auth.js';
 import { account } from './routes/account.js';
+import { orders } from './routes/orders.js';
 
 /**
  * The API is typed REST: every route declares a zod schema, which generates
@@ -48,6 +49,7 @@ export function createApp(): OpenAPIHono {
   app.route('/', pay);
   app.route('/', auth);
   app.route('/', account);
+  app.route('/', orders);
 
   // Published API contract — the product surface (versioned under /v1).
   app.doc('/v1/openapi.json', {
