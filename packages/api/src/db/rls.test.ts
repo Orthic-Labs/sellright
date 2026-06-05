@@ -43,9 +43,10 @@ describe('RLS tenant isolation', () => {
     expect(aProducts).toHaveLength(1);
     expect(aProducts[0]?.slug).toBe('prod-a');
 
-    const aStores = await withStore(A, (tx) => tx.select().from(store));
-    expect(aStores).toHaveLength(1);
-    expect(aStores[0]?.slug).toBe('store-a');
+    // store is the tenant registry (not RLS'd) — both stores are visible for
+    // host resolution + the admin switcher. Isolation is on store-scoped data.
+    const allStores = await withStore(A, (tx) => tx.select().from(store));
+    expect(allStores.length).toBeGreaterThanOrEqual(2);
   });
 
   it("a store cannot read another store's row even by id", async () => {

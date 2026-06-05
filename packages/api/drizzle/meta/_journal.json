@@ -29,6 +29,13 @@
       "when": 1780639435852,
       "tag": "0003_order_line_snapshot",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1780640016828,
+      "tag": "0004_store_registry_no_rls",
+      "breakpoints": true
     }
   ]
 }
