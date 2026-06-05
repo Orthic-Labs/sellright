@@ -71,6 +71,13 @@
       "when": 1780660000000,
       "tag": "0009_model_completeness",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1780670000000,
+      "tag": "0010_customer_tags",
+      "breakpoints": true
     }
   ]
 }

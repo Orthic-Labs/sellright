@@ -11,6 +11,7 @@ export interface AdminStoreAccess {
   slug: string;
   name: string;
   currency: string;
+  taxRate: number;
   role: 'owner' | 'manager' | 'staff' | 'read_only';
 }
 
@@ -55,6 +56,7 @@ export async function resolveAdmin(token: string): Promise<AdminPrincipal | null
       slug: s.store.slug,
       name: s.store.name,
       currency: s.store.currency,
+      taxRate: s.store.taxRate,
       role: s.adminUserStore.role,
     })
     .from(s.session)
@@ -77,6 +79,7 @@ export async function resolveAdmin(token: string): Promise<AdminPrincipal | null
       slug: r.slug!,
       name: r.name!,
       currency: r.currency!,
+      taxRate: r.taxRate ?? 0,
       role: r.role as AdminStoreAccess['role'],
     }));
   return { id: first.id, email: first.email, stores };

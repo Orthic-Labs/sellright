@@ -8,6 +8,10 @@ import { account } from './routes/account.js';
 import { orders } from './routes/orders.js';
 import { admin } from './routes/admin.js';
 import { adminCatalog } from './routes/admin-catalog.js';
+import { adminOrders } from './routes/admin-orders.js';
+import { adminMarketing } from './routes/admin-marketing.js';
+import { adminSettings } from './routes/admin-settings.js';
+import { adminReports } from './routes/admin-reports.js';
 
 /**
  * The API is typed REST: every route declares a zod schema, which generates
@@ -56,6 +60,10 @@ export function createApp(): OpenAPIHono {
   // Admin API — operator surface (auth, dashboard, orders, products, customers).
   app.route('/', admin);
   app.route('/', adminCatalog); // catalog mgmt: product/variant create+delete, collections, inventory
+  app.route('/', adminOrders); // orders++: refunds, draft orders, abandoned carts
+  app.route('/', adminMarketing); // promotions manager + Listmonk integration
+  app.route('/', adminSettings); // store/tax, payments, shipping, staff/roles, notifications
+  app.route('/', adminReports); // customers write, reports, search, activity
 
   // Published API contract — the product surface (versioned under /v1).
   app.doc('/v1/openapi.json', {

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
-import { Search } from 'lucide-react';
+import { useNavigate, Link } from 'react-router-dom';
+import { Search, Plus } from 'lucide-react';
 import { api, type Page, type OrderRow } from '../api';
 import { useAuth } from '../auth';
 import { money, dateTime } from '../lib/format';
@@ -30,7 +30,12 @@ export default function Orders() {
 
   return (
     <>
-      <PageHeader title="Orders" subtitle={data ? `${data.total} total` : undefined} />
+      <PageHeader title="Orders" subtitle={data ? `${data.total} total` : undefined} actions={
+        <div className="flex items-center gap-2">
+          <Link to="/abandoned-carts" className="btn-ghost whitespace-nowrap">Abandoned carts</Link>
+          <Link to="/orders/new" className="btn-primary whitespace-nowrap"><Plus size={16} /> New order</Link>
+        </div>
+      } />
 
       <div className="flex flex-wrap items-center gap-2 mb-4">
         <div className="flex rounded-lg border border-gray-200 bg-white p-0.5">

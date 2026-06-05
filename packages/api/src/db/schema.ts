@@ -213,6 +213,7 @@ export const customer = pgTable(
     firstName: text(),
     lastName: text(),
     phone: text(),
+    tags: text().array(),
     stripeCustomerId: text(),
     listmonkSubscribedAt: timestamp({ withTimezone: true }),
     googleSub: text(),

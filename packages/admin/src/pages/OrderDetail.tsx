@@ -41,6 +41,12 @@ export default function OrderDetailPage() {
     mutationFn: () => api.post(`/orders/${encodeURIComponent(code)}/cancel`, {}),
     onSuccess: invalidate,
   });
+  const [refundAmt, setRefundAmt] = useState('');
+  const [restock, setRestock] = useState(true);
+  const refund = useMutation({
+    mutationFn: () => api.post(`/orders/${encodeURIComponent(code)}/refund`, { amount: refundAmt ? Math.round(parseFloat(refundAmt) * 100) : undefined, restock }),
+    onSuccess: () => { setRefundAmt(''); invalidate(); },
+  });
 
   if (isLoading) return <Loading />;
   if (error) return <ErrorNote message={(error as Error).message} />;
@@ -50,7 +56,8 @@ export default function OrderDetailPage() {
   const latestFul = o.fulfillments[0];
   const canFulfill = o.state === 'Paid' || o.state === 'PartiallyRefunded';
   const canCancel = o.state === 'PendingPayment' || o.state === 'Paid';
-  const actionErr = (fulfill.error || cancel.error) as Error | null;
+  const canRefund = o.state === 'Paid' || o.state === 'PartiallyRefunded';
+  const actionErr = (fulfill.error || cancel.error || refund.error) as Error | null;
 
   return (
     <>
@@ -172,6 +179,19 @@ export default function OrderDetailPage() {
               </div>
             ))}
           </div>
+
+          {canRefund && (
+            <div className="card p-4">
+              <div className="text-sm font-semibold mb-2">Refund</div>
+              <div className="flex items-end gap-2">
+                <div className="flex-1"><label className="label">Amount ({cur}) — blank = full remaining</label><input className="input" inputMode="decimal" value={refundAmt} onChange={(e) => setRefundAmt(e.target.value)} placeholder={(o.grandTotal / 100).toFixed(2)} /></div>
+              </div>
+              <label className="flex items-center gap-2 text-sm mt-2"><input type="checkbox" className="h-4 w-4 accent-brand" checked={restock} onChange={(e) => setRestock(e.target.checked)} /> Restock items</label>
+              <button className="btn-danger w-full mt-3" disabled={refund.isPending} onClick={() => { if (confirm('Issue this refund?')) refund.mutate(); }}>
+                {refund.isPending ? <Spinner /> : 'Issue refund'}
+              </button>
+            </div>
+          )}
 
           {canCancel && (
             <div className="card p-4 border-red-200">

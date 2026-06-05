@@ -18,6 +18,12 @@ import CollectionDetail from './pages/CollectionDetail';
 import Inventory from './pages/Inventory';
 import Customers from './pages/Customers';
 import CustomerDetail from './pages/CustomerDetail';
+import DraftOrder from './pages/DraftOrder';
+import AbandonedCarts from './pages/AbandonedCarts';
+import Discounts from './pages/Discounts';
+import Marketing from './pages/Marketing';
+import Reports from './pages/Reports';
+import Activity from './pages/Activity';
 import SettingsPage from './pages/Settings';
 
 const qc = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false, staleTime: 15_000 } } });
@@ -36,7 +42,9 @@ function App() {
       <Route element={<Protected />}>
         <Route path="/" element={<Dashboard />} />
         <Route path="/orders" element={<Orders />} />
+        <Route path="/orders/new" element={<DraftOrder />} />
         <Route path="/orders/:code" element={<OrderDetail />} />
+        <Route path="/abandoned-carts" element={<AbandonedCarts />} />
         <Route path="/products" element={<Products />} />
         <Route path="/products/new" element={<ProductCreate />} />
         <Route path="/products/:id" element={<ProductDetail />} />
@@ -45,6 +53,10 @@ function App() {
         <Route path="/inventory" element={<Inventory />} />
         <Route path="/customers" element={<Customers />} />
         <Route path="/customers/:id" element={<CustomerDetail />} />
+        <Route path="/discounts" element={<Discounts />} />
+        <Route path="/marketing" element={<Marketing />} />
+        <Route path="/reports" element={<Reports />} />
+        <Route path="/activity" element={<Activity />} />
         <Route path="/settings" element={<SettingsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

@@ -1,7 +1,9 @@
 import { useState } from 'react';
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { LayoutDashboard, ShoppingBag, Package, Layers, Boxes, Users, Settings, ChevronDown, LogOut, Store } from 'lucide-react';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { LayoutDashboard, ShoppingBag, Package, Layers, Boxes, Users, Settings, ChevronDown, LogOut, Store, Percent, Mail, BarChart3, Activity, Search } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../auth';
+import { api } from '../api';
 import { initials } from '../lib/format';
 
 const NAV = [
@@ -11,8 +13,43 @@ const NAV = [
   { to: '/collections', label: 'Collections', icon: Layers },
   { to: '/inventory', label: 'Inventory', icon: Boxes },
   { to: '/customers', label: 'Customers', icon: Users },
+  { to: '/discounts', label: 'Discounts', icon: Percent },
+  { to: '/marketing', label: 'Marketing', icon: Mail },
+  { to: '/reports', label: 'Reports', icon: BarChart3 },
+  { to: '/activity', label: 'Activity', icon: Activity },
   { to: '/settings', label: 'Settings', icon: Settings },
 ];
+
+function GlobalSearch() {
+  const [q, setQ] = useState('');
+  const [open, setOpen] = useState(false);
+  const nav = useNavigate();
+  const { data } = useQuery({
+    queryKey: ['global-search', q],
+    queryFn: () => api.get<{ orders: any[]; products: any[]; customers: any[] }>(`/search?q=${encodeURIComponent(q)}`),
+    enabled: q.trim().length > 1,
+  });
+  const go = (path: string) => { setQ(''); setOpen(false); nav(path); };
+  const has = data && (data.orders.length || data.products.length || data.customers.length);
+  return (
+    <div className="relative w-72 max-w-[40vw]">
+      <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+      <input className="input pl-9 py-1.5" placeholder="Search orders, products, customers" value={q}
+        onChange={(e) => { setQ(e.target.value); setOpen(true); }} onFocus={() => setOpen(true)} />
+      {open && q.trim().length > 1 && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute z-20 mt-1.5 w-80 right-0 card p-1 max-h-96 overflow-auto text-sm">
+            {!has && <div className="px-3 py-2 text-gray-400">No matches</div>}
+            {data?.orders.map((o) => <button key={o.code} className="block w-full text-left px-3 py-1.5 rounded hover:bg-gray-50" onClick={() => go(`/orders/${o.code}`)}><span className="font-mono">{o.code}</span> <span className="text-gray-400">{o.email ?? ''}</span></button>)}
+            {data?.products.map((p) => <button key={p.id} className="block w-full text-left px-3 py-1.5 rounded hover:bg-gray-50" onClick={() => go(`/products/${p.id}`)}>📦 {p.name}</button>)}
+            {data?.customers.map((c) => <button key={c.id} className="block w-full text-left px-3 py-1.5 rounded hover:bg-gray-50" onClick={() => go(`/customers/${c.id}`)}>👤 {c.email}</button>)}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 function StoreSwitcher() {
   const { store, stores, setStore } = useAuth();
@@ -77,6 +114,7 @@ export default function Layout() {
       <div className="flex flex-1 flex-col min-w-0">
         <header className="flex items-center justify-between gap-3 h-14 px-5 border-b border-gray-200 bg-white/80 backdrop-blur">
           <div className="md:hidden font-semibold">SellRight</div>
+          <GlobalSearch />
           <div className="flex-1" />
           <StoreSwitcher />
           <div className="flex items-center gap-2 pl-1">
