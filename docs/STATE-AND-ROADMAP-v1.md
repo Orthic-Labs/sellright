@@ -18,6 +18,22 @@ Shopify-style admin SPA, and a Qwik storefront. Dogfooded on **Damned Designs
 (DD)** and **Rotten Hand (RH)**; intended to become a sellable / open-source
 product.
 
+### Locked decisions & non-goals (do not re-litigate)
+
+These are settled; they're recorded here so reviewers don't keep surfacing them
+as "missing alternatives":
+
+- **From-scratch, NOT a fork/framework.** Medusa (tried pre-Vendure, bad
+  experience), Saleor, Shopify, and "fork/freeze Vendure" were all explicitly
+  rejected. Rationale: full control of the data model, the money path, the
+  multi-tenant model, and licensing; the goal is a *product we own and can sell*,
+  not a customization of someone else's. This is final.
+- **Monorepo-modular, NOT microservices.** One deployable API with clean internal
+  module boundaries. A solo operator does not pay the microservices ops tax for
+  this traffic. Revisit only if a single component needs independent scaling.
+- **Frontend = Qwik** (best-for-ecom, locked). **API = typed REST (Hono +
+  zod-openapi)**, not GraphQL/tRPC.
+
 ---
 
 ## 1. Current architecture
@@ -275,11 +291,20 @@ Risk: a *future* `store_id` table added with `ENABLE` but not `FORCE` would
 silently leak under an owner connection.
 **Decision.** Run the app as a dedicated non-owner login role, or keep owner +
 a guard?
-**Recommendation.** **Both, cheaply:** (a) add a `pnpm verify` assertion that
-every table with a `store_id` column has `FORCE` RLS (fails the build if not) —
-this is the real safety net; (b) eventually run the app as a non-owner role with
-explicit `GRANT`s so a missing `FORCE` fails *closed*. (a) first; (b) when
-convenient.
+**Recommendation (revised after council review).** **Make the non-owner role the
+primary fix, and do it before any public exposure — not "when convenient."** The
+council's point is correct: with a non-owner role, a future `store_id` table that
+forgets `FORCE` **fails closed immediately** (the policy applies and returns zero
+rows), whereas a build-time assertion only catches it if someone runs the build
+and reads the failure. So:
+1. **Now / launch-gate:** run the app as a dedicated **non-owner** login role
+   with explicit `GRANT`s; migrations still run as owner. This makes "missing
+   `FORCE`" fail safe by default.
+2. **Belt-and-suspenders:** *also* add the `pnpm verify` assertion that every
+   `store_id` table has `FORCE` RLS — a fast, explicit signal even though the
+   non-owner role already protects you.
+Owner-as-runtime-role is acceptable only for the current single-operator dev
+phase; it must not survive into a publicly reachable deployment.
 
 ### 3.8 Asset / image hosting
 **Context.** Product images are served by proxying `/assets/*` to DD's Vendure
@@ -298,7 +323,9 @@ call Vendure `/shop-api` GraphQL** → those UI flows fail.
 "plumbing works" and "a customer can actually use the site." Rewire the
 `providers/shop/*` modules to the existing SellRight REST endpoints (auth,
 account, and a `/v1/shop/search` to add). Needs dev-server + browser QA. Do it
-in parallel with §3.1.
+in parallel with §3.1. **Migrate one flow at a time** (start with account login),
+each behind a staging domain with the old Vendure path kept warm as the instant
+rollback — don't cut all four flows over at once.
 
 ### 3.10 Facets / category filters
 **Context.** DD's "category" facet wasn't imported (no facet model); products
@@ -339,6 +366,67 @@ changes). Order-status + live-stock SSE are nice-to-have **v2**.
 **Recommendation.** **Keep manual for now** (minimum mechanism). Add a
 **pre-push git hook** running `pnpm verify` so the gate can't be forgotten —
 cheaper and more reliable than a runner for a solo operator.
+
+---
+
+## 3A. Launch-blocking gate — clear BEFORE any public exposure or v2 work
+
+The council's sharpest criticism: several §3 items are framed as peer "decisions"
+when they are actually **hard prerequisites** — a v2 feature wishlist must not
+start while the system is unsafe to expose. None of the v2 list (§4) begins until
+this gate is green. Ordered by dependency:
+
+1. **DB non-owner role + `FORCE` assertion** (§3.7) — fail-closed tenant
+   isolation. *Foundational; do first.*
+2. **Storefront auth / account / search rewired to SellRight** (§3.9) — without
+   this, customers cannot log in, view orders, or search. Core flows are broken
+   on SellRight today. Migrate one flow at a time, Vendure kept warm.
+3. **Admin auth hardening** — httpOnly cookie + CSRF + CSP (§3.3) **and** login
+   rate-limiting (§3.4). Required before the admin is reachable beyond the SSH
+   tunnel.
+4. **Production admin host** — built `dist/` behind nginx + Cloudflare Access +
+   systemd for the API (§3.12). Replaces the dev-server-on-a-tunnel.
+5. **Real payment gateway** for the launching store (§3.1) — NMI-tokenized for
+   DD, or Stripe for RH (RH launches first, greenfield).
+6. **Asset service** (§3.8) if the launching store must be independent of the old
+   DD asset server (RH can launch on its own assets without this; DD cutover
+   needs it).
+
+**RH launches first** (zero orders → zero cutover risk) and needs items 1–5 (6
+only if it can't reuse DD assets). **DD/SS cutover is later** and additionally
+needs item 6 + the parity-replay gate below.
+
+### Cutover & rollback (the missing reversibility story)
+
+The council correctly flagged there was no documented rollback. The plan:
+
+- **Keep the Vendure stack warm** through each cutover — do not decommission it
+  until parity is proven and the store has run clean on SellRight for a defined
+  bake period.
+- **Storefront rollback:** the `providers/shop/*` modules are the seam. Reverting
+  a flow = point that provider back at the Vendure `/shop-api` GraphQL endpoint
+  (+ DNS/API base if needed). Per-flow, instant, no data migration.
+- **DD/SS data cutover gate (M9):** the **parity-replay** test — re-run real
+  historical order inputs through SellRight's money core and diff totals against
+  Vendure's stored `grand_total` to the cent (the one-shot import already proved
+  $852,930.51 parity; replay proves the *live compute path*). Preserve external
+  customer IDs (Stripe/NMI/Sezzle) so payment history survives.
+- **DB rollback:** snapshot `sellright_dev`/prod before each migration and before
+  cutover; migrations are forward-only but a snapshot restore is the floor.
+- **Smallest test scope:** shadow a single flow (account login) on a staging
+  domain with real traffic before the full storefront cutover.
+
+### Scalability / performance (not a v1 blocker, but on the radar)
+
+Deliberately *not* solved by microservices (see non-goals). Concrete items when
+traffic warrants: a single `pg.Pool` is shared (fine now); **browse load is
+already offloaded** to the static catalog manifest (no DB on home/shop/PDP);
+admin auth currently costs ~2 DB round-trips before the handler's own txn
+(collapse `resolveAdmin`+`adminStores` into one query, or cache per-token); add
+indexes on the hot filter/sort paths (`order(store_id,state,created_at)`,
+`order(customer_id)`, `product(store_id,name)`) before large admin lists get
+slow; move heavy/async work (emails, recovery, settlement) to the planned
+BullMQ/Redis layer rather than request threads.
 
 ---
 
@@ -392,6 +480,8 @@ cheaper and more reliable than a runner for a solo operator.
 | `order_line` 93% reference **deleted products** | History relies on snapshot cols | Already mitigated (snapshot cols + nullable variant_id) |
 | Link tables lack `store_id`/RLS (isolation via parent FKs) | Defense-in-depth gap | Add `store_id` + RLS as hardening |
 | **Parallel dev** on one repo (other sessions commit) | Merge drift | Pull before work; coordinate |
+| No load/perf testing; admin auth ~2 round-trips/req; missing hot-path indexes | Slow admin lists / latency at scale | §3A scalability: indexes, collapse auth query, BullMQ for async |
+| No documented **cutover rollback** until this revision | Risky DD/SS migration | §3A Cutover & rollback (Vendure kept warm, per-flow revert, parity-replay) |
 
 ---
 
@@ -417,3 +507,34 @@ cd ~/sites/sellright/packages/api && pnpm exec tsx src/index.ts   # env: DATABAS
 **Canonical references:** commerce rules → `SELLRIGHT-ECOMMERCE-RULEBOOK-v1.md`;
 DD plugin parity → `DD-CUSTOMIZATION-SPEC-v1.md`; original plans →
 `ARCHITECTURE-PLAN-v1.md`, `BUILD-PLAN-RH-v1.md`.
+
+---
+
+## 8. Review history
+
+```json
+{
+  "artifact": "STATE-AND-ROADMAP-v1.md",
+  "review": "council review-plan (API jury: kimi-k2.6, nemotron-3-super-120b, gpt-oss-120b)",
+  "date": "2026-06-05",
+  "verdict": "NEEDS-REVISION",
+  "avg_score": 5.3,
+  "top_concerns": [
+    "RLS isolation rested only on FORCE-on-every-table under an owner connection",
+    "production-safety items (cookie auth, rate-limit, prod host, storefront rewire) not prioritized over the v2 wishlist",
+    "no documented cutover rollback story"
+  ],
+  "revisions_applied": [
+    "§3.7 elevated: run as non-owner DB role NOW (fails closed) + FORCE assertion as backstop",
+    "added §3A Launch-blocking gate sequencing safety/cutover BEFORE any v2 work",
+    "added §3A Cutover & rollback (Vendure kept warm, per-flow revert, parity-replay, DB snapshot)",
+    "added §3A scalability/perf note (indexes, auth round-trips, BullMQ)",
+    "§3.9 staged one-flow-at-a-time rewire with warm rollback",
+    "documented Locked decisions & non-goals (from-scratch, monorepo-not-microservices) — pushed back on the jury's 'use Medusa/Saleor' and 'microservices' as out-of-context"
+  ],
+  "rejected": [
+    "use an existing commerce framework (Medusa/Saleor/Shopify) — locked from-scratch decision, rationale documented",
+    "microservices for scalability — deliberate non-goal for a solo operator"
+  ]
+}
+```
