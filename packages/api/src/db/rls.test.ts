@@ -9,6 +9,13 @@ import { product, store } from './schema.js';
  * Requires migrations applied to DATABASE_URL. Runs as the (non-superuser) app
  * role, so FORCE ROW LEVEL SECURITY applies to it.
  */
+// SAFETY: this suite TRUNCATEs store/product. Refuse to run against anything
+// but a dedicated *_test database, so it can never wipe sellright_dev's data.
+const DB = process.env.DATABASE_URL ?? '';
+if (!/_test(\b|$|\?)/.test(DB)) {
+  throw new Error(`RLS test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
+}
+
 const A = '11111111-1111-1111-1111-111111111111';
 const B = '22222222-2222-2222-2222-222222222222';
 
