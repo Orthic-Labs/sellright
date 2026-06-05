@@ -1,0 +1,75 @@
+// Thin fetch client for the SellRight admin API. Token + active store live in
+// localStorage; every request carries the bearer token and x-store-slug header.
+
+const TOKEN_KEY = 'sr_admin_token';
+const STORE_KEY = 'sr_admin_store';
+
+export const auth = {
+  get token() { return localStorage.getItem(TOKEN_KEY); },
+  set token(v: string | null) { v ? localStorage.setItem(TOKEN_KEY, v) : localStorage.removeItem(TOKEN_KEY); },
+  get store() { return localStorage.getItem(STORE_KEY); },
+  set store(v: string | null) { v ? localStorage.setItem(STORE_KEY, v) : localStorage.removeItem(STORE_KEY); },
+};
+
+export class ApiError extends Error {
+  constructor(public status: number, message: string) { super(message); }
+}
+
+async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  if (auth.token) headers.authorization = `Bearer ${auth.token}`;
+  if (auth.store) headers['x-store-slug'] = auth.store;
+  const res = await fetch(`/v1/admin${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+  if (res.status === 401 && !path.startsWith('/login')) {
+    auth.token = null;
+    if (location.pathname !== '/login') location.assign('/login');
+  }
+  const text = await res.text();
+  const json = text ? JSON.parse(text) : {};
+  if (!res.ok) throw new ApiError(res.status, json?.error ?? `HTTP ${res.status}`);
+  return json as T;
+}
+
+export const api = {
+  get: <T>(p: string) => req<T>('GET', p),
+  post: <T>(p: string, b?: unknown) => req<T>('POST', p, b ?? {}),
+  patch: <T>(p: string, b?: unknown) => req<T>('PATCH', p, b ?? {}),
+};
+
+// ── shared types ────────────────────────────────────────────────────────────
+export interface StoreAccess { storeId: string; slug: string; name: string; currency: string; role: string; }
+export interface Me { email: string; stores: StoreAccess[]; }
+export interface LoginResp { token: string; admin: { email: string }; stores: StoreAccess[]; }
+export interface Page<T> { items: T[]; total: number; page: number; pageSize: number; }
+
+export interface OrderRow { code: string; state: string; grandTotal: number; currency: string; placedAt: string | null; createdAt: string; email: string | null; }
+export interface Dashboard {
+  store: { slug: string; name: string; currency: string };
+  revenue: number; orders: number; aov: number; pendingFulfillment: number; customers: number; lowStock: number;
+  recentOrders: OrderRow[];
+}
+export interface OrderDetail {
+  code: string; state: string; currency: string;
+  subtotal: number; discountTotal: number; shippingTotal: number; taxTotal: number; grandTotal: number;
+  placedAt: string | null; createdAt: string;
+  shippingAddress: Record<string, unknown> | null; billingAddress: Record<string, unknown> | null;
+  customer: { id: string; email: string; firstName: string | null; lastName: string | null; phone: string | null } | null;
+  lines: { sku: string; name: string; quantity: number; unitPrice: number; lineTotal: number; fulfilledQty: number; refundedQty: number }[];
+  payments: { method: string; amount: number; state: string; providerRef: string | null; createdAt: string }[];
+  fulfillments: { id: string; state: string; trackingCode: string | null; carrier: string | null; createdAt: string }[];
+  events: { action: string; fromState: string | null; toState: string | null; actor: string | null; at: string }[];
+}
+export interface ProductRow { id: string; slug: string; name: string; status: string; assetPath: string | null; variants: number; minPrice: number | null; stock: number; }
+export interface VariantRow { id: string; sku: string; name: string; price: number; salePrice: number | null; enabled: boolean; onHand: number; allocated: number; available: number; }
+export interface ProductDetail { id: string; slug: string; name: string; description: string | null; status: string; assetPath: string | null; variants: VariantRow[]; }
+export interface CustomerRow { id: string; email: string; firstName: string | null; lastName: string | null; createdAt: string; orders: number; spent: number; }
+export interface CustomerDetail {
+  id: string; email: string; firstName: string | null; lastName: string | null; phone: string | null; emailVerified: boolean; createdAt: string;
+  addresses: { fullName: string | null; line1: string; line2: string | null; city: string; province: string | null; postalCode: string | null; country: string; phone: string | null }[];
+  orders: OrderRow[];
+}
+
+export function assetUrl(path: string | null): string | null {
+  if (!path) return null;
+  return path.startsWith('http') ? path : `/assets/${path.replace(/^\/+/, '')}`;
+}

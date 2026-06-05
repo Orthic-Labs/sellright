@@ -1,0 +1,59 @@
+import { useState } from 'react';
+import { Navigate } from 'react-router-dom';
+import { api, auth, type LoginResp } from '../api';
+import { useAuth } from '../auth';
+import { Spinner } from '../components/ui';
+
+export default function Login() {
+  const { me, refresh } = useAuth();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  if (me) return <Navigate to="/" replace />;
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setErr(null); setBusy(true);
+    try {
+      const r = await api.post<LoginResp>('/login', { email, password });
+      auth.token = r.token;
+      auth.store = r.stores[0]?.slug ?? null;
+      await refresh();
+      location.assign('/');
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : 'Login failed');
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="h-full grid place-items-center bg-[#f1f1f1] p-4">
+      <div className="w-full max-w-sm">
+        <div className="flex items-center justify-center gap-2 mb-6">
+          <div className="h-7 w-7 rounded bg-brand" />
+          <span className="text-lg font-semibold tracking-tight">SellRight</span>
+        </div>
+        <form onSubmit={submit} className="card p-6 space-y-4">
+          <div>
+            <h1 className="text-base font-semibold">Sign in</h1>
+            <p className="text-sm text-gray-500">Manage your stores</p>
+          </div>
+          {err && <div className="rounded-lg bg-red-50 text-red-700 text-sm px-3 py-2 border border-red-200">{err}</div>}
+          <div>
+            <label className="label">Email</label>
+            <input className="input" type="email" autoFocus value={email} onChange={(e) => setEmail(e.target.value)} required />
+          </div>
+          <div>
+            <label className="label">Password</label>
+            <input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+          </div>
+          <button className="btn-primary w-full" disabled={busy}>
+            {busy ? <Spinner className="text-white" /> : 'Sign in'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}

@@ -43,6 +43,13 @@
       "when": 1780643058826,
       "tag": "0005_cart_tables",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1780643200000,
+      "tag": "0006_admin_store_no_force",
+      "breakpoints": true
     }
   ]
 }
