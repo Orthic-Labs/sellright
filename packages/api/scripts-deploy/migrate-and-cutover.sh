@@ -9,8 +9,17 @@ EMAIL="${1:?email}"
 PW="${ADMIN_PASSWORD:?set ADMIN_PASSWORD env}"
 SKU="${2:-759382993416}"
 export PNPM_HOME="$HOME/.local/share/pnpm"; export PATH="$PNPM_HOME:$PATH"
-[ -f "$HOME/.sellright/env" ] || { echo "FATAL: ~/.sellright/env missing — run create-app-role.sh first" >&2; exit 1; }
-source "$HOME/.sellright/env"
+# App-role mode if ~/.sellright/env exists; otherwise OWNER-ONLY mode (the role
+# needs a superuser to create — until then the app stays on the owner role, which
+# is still fail-closed via FORCE-on-owner; everything else deploys + verifies).
+if [ -f "$HOME/.sellright/env" ]; then
+  source "$HOME/.sellright/env"; MODE="app-role"
+else
+  APIPID="$(pgrep -f 'src/index.ts' | head -1)"
+  DATABASE_URL_OWNER="$(tr '\0' '\n' < /proc/$APIPID/environ | grep -E '^DATABASE_URL=' | cut -d= -f2-)"
+  DATABASE_URL_APP="$DATABASE_URL_OWNER"; MODE="owner-only (no app role yet)"
+fi
+echo "[mode] $MODE"
 
 cd ~/sites/sellright
 echo "[1] pull"; git pull --ff-only | tail -1; git rev-parse --short HEAD

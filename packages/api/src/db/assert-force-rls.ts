@@ -5,12 +5,19 @@
  * closed); it's a fast, explicit signal that catches a future table added with
  * ENABLE-but-not-FORCE (or no RLS at all) before it ships.
  *
- * Registry/ACL tables (store, admin_user, admin_user_store) have NO store_id and
- * are intentionally exempt. Run via `pnpm verify`.
+ * Exemptions are tables that carry a `store_id` FK for convenience but are NOT
+ * tenant-data and MUST be readable without a store context:
+ *   - store / admin_user / admin_user_store — registry/ACL (resolved pre-context)
+ *   - session — auth lookups run by token hash BEFORE any store is chosen; RLS
+ *     here would make login return zero rows. Sessions are also cross-store for
+ *     admins. Isolation comes from the 256-bit token hash, not RLS.
+ *   - processed_event — idempotency ledger; claims happen inside withStore but
+ *     the table itself is cross-cutting infra, not per-tenant data.
+ * Run via `pnpm verify`.
  */
 import { pool } from './client.js';
 
-const EXEMPT = new Set(['store', 'admin_user', 'admin_user_store']);
+const EXEMPT = new Set(['store', 'admin_user', 'admin_user_store', 'session', 'processed_event']);
 
 async function main() {
   const { rows } = await pool.query<{ table: string; rls: boolean; force: boolean }>(`

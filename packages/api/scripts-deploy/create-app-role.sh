@@ -18,14 +18,16 @@ WHO="$(psql "$OWNER_URL" -tAc 'select current_user')"
 if [ "$WHO" = "sellright_app" ]; then echo "FATAL: connected as sellright_app; need the owner role" >&2; exit 1; fi
 echo "[create-app-role] connected as owner: $WHO"
 
-psql "$OWNER_URL" -v ON_ERROR_STOP=1 -v pw="$APP_PW" <<'SQL'
-DO $$ BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='sellright_app') THEN
-    EXECUTE format('ALTER ROLE sellright_app LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE PASSWORD %L', :'pw');
-  ELSE
-    EXECUTE format('CREATE ROLE sellright_app LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE PASSWORD %L', :'pw');
-  END IF;
-END $$;
+# Create or update the role. Password is hex (no quoting hazard) so inline-safe.
+# (psql does NOT substitute :vars inside a DO $$…$$ block, so do this from bash.)
+ROLE_ATTRS="LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE PASSWORD '$APP_PW'"
+if [ "$(psql "$OWNER_URL" -tAc "select 1 from pg_roles where rolname='sellright_app'")" = "1" ]; then
+  psql "$OWNER_URL" -v ON_ERROR_STOP=1 -c "ALTER ROLE sellright_app $ROLE_ATTRS"
+else
+  psql "$OWNER_URL" -v ON_ERROR_STOP=1 -c "CREATE ROLE sellright_app $ROLE_ATTRS"
+fi
+
+psql "$OWNER_URL" -v ON_ERROR_STOP=1 <<'SQL'
 GRANT USAGE ON SCHEMA public TO sellright_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO sellright_app;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO sellright_app;
