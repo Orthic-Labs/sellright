@@ -9,6 +9,7 @@ import { evaluateCoupon } from '../money/coupon.js';
 import { bearer, resolveCustomer } from '../auth/session.js';
 import { normalizeEmail } from '../auth/email.js';
 import { reserveStockOrThrow, StockReservationError, validateReservableItems } from '../orders/stock-reservation.js';
+import { isMethodEligible, shippingRate, ShippingUnavailableError } from '../shipping/calculator.js';
 
 async function store(c: { req: { header: (k: string) => string | undefined } }): Promise<StoreCtx> {
   const slug = c.req.header('x-store-slug') ?? DEV_DEFAULT_STORE;
@@ -64,6 +65,10 @@ checkout.openapi(
           'application/json': {
             schema: z.object({
               items: z.array(z.object({ sku: z.string(), quantity: z.number().int().min(1) })).min(1),
+              // Server-authoritative: when a method is selected (or any method is
+              // configured) the rate is computed server-side. `shipping` is only a
+              // bootstrap fallback for stores with zero configured methods.
+              shippingMethodCode: z.string().optional(),
               shipping: z.number().int().min(0).default(0),
               couponCode: z.string().optional(),
               email: z.string().email().optional(),
@@ -79,7 +84,7 @@ checkout.openapi(
         description: 'Order created',
         content: { 'application/json': { schema: z.object({ code: z.string(), state: z.string(), grandTotal: z.number().int(), discountTotal: z.number().int(), currency: z.string(), couponApplied: z.boolean() }) } },
       },
-      409: { description: 'Out of stock / unavailable', content: { 'application/json': { schema: z.object({ error: z.string(), skus: z.array(z.string()) }) } } },
+      409: { description: 'Out of stock / shipping unavailable', content: { 'application/json': { schema: z.object({ error: z.string(), skus: z.array(z.string()).optional(), reason: z.string().optional() }) } } },
     },
   }),
   async (c) => {
@@ -89,7 +94,7 @@ checkout.openapi(
     const token = bearer(c.req.header('authorization'));
     const skus = [...new Set(body.items.map((i) => i.sku))];
 
-    type Result = { blocked: string[] } | { code: string; grandTotal: number; discountTotal: number; couponApplied: boolean; replay?: boolean };
+    type Result = { blocked: string[] } | { shippingError: string } | { code: string; grandTotal: number; discountTotal: number; couponApplied: boolean; replay?: boolean };
     const out = await withStore(st.id, async (tx): Promise<Result> => {
       // Idempotency: same key -> the same order (also guarded by a unique index).
       if (idemKey) {
@@ -115,6 +120,25 @@ checkout.openapi(
         const v = bySku.get(i.sku)!;
         return { v, qty: i.quantity, unitPrice: selectUnitPrice(v) };
       });
+
+      // ── Shipping: server-authoritative rate (never trust body.shipping once a
+      //    method is configured) ─────────────────────────────────────────────
+      const subtotalCents = priced.reduce((a, p) => a + p.unitPrice * p.qty, 0);
+      const shipCountry = (normalizeAddress(body.shippingAddress) as { country?: string } | null)?.country ?? null;
+      const methods = await tx.select().from(s.shippingMethod).where(eq(s.shippingMethod.enabled, true));
+      let shippingAmount: number;
+      if (body.shippingMethodCode) {
+        const m = methods.find((x) => x.code === body.shippingMethodCode);
+        if (!m) throw new ShippingUnavailableError('method_not_found');
+        if (!isMethodEligible(m.calculator, { subtotal: subtotalCents, country: shipCountry })) throw new ShippingUnavailableError('not_eligible');
+        shippingAmount = shippingRate(m.calculator);
+      } else if (methods.length > 0) {
+        // Methods exist but none chosen — force an explicit, validated selection.
+        throw new ShippingUnavailableError('method_required');
+      } else {
+        // Bootstrap: store hasn't configured shipping yet; trust the request.
+        shippingAmount = body.shipping;
+      }
 
       // Verification BENEFITS require an authenticated session — a guest can't
       // claim another account's verified status via the email field (that was a
@@ -144,7 +168,13 @@ checkout.openapi(
           ))
           .limit(1);
         if (promo) {
-          const globalOk = promo.usageLimit == null || promo.usedCount < promo.usageLimit;
+          // Serialize concurrent redemptions of THIS promo: take a row lock and
+          // re-read usedCount under it, so the global/per-customer limit checks
+          // and the usedCount increment below can't race (check-then-increment).
+          // The lock is held until the txn commits.
+          const lockRes = await tx.execute(sql`SELECT used_count FROM promotion WHERE id = ${promo.id} FOR UPDATE`);
+          const usedNow = (lockRes as unknown as { rows: Array<{ used_count: number }> }).rows[0]?.used_count ?? promo.usedCount;
+          const globalOk = promo.usageLimit == null || usedNow < promo.usageLimit;
           let perCustomerOk = true;
           if (promo.perCustomerUsageLimit != null && customerId) {
             const usedRows = await tx
@@ -153,10 +183,9 @@ checkout.openapi(
               .where(and(eq(s.promotionUsage.promotionId, promo.id), eq(s.promotionUsage.customerId, customerId)));
             perCustomerOk = (usedRows[0]?.n ?? 0) < promo.perCustomerUsageLimit;
           }
-          const presubtotal = priced.reduce((a, p) => a + p.unitPrice * p.qty, 0);
           const ev = evaluateCoupon(
             { type: promo.type, value: promo.value, conditions: promo.conditions },
-            { subtotal: presubtotal, activeVerifications },
+            { subtotal: subtotalCents, activeVerifications },
           );
           // Apply only if valid AND within limits; else proceed at full price
           // (server is authoritative — the returned grandTotal is the truth).
@@ -166,7 +195,7 @@ checkout.openapi(
 
       const totals = calculateOrderTotals({
         lines: priced.map((p) => ({ unitPrice: p.unitPrice, quantity: p.qty })),
-        shipping: body.shipping, taxRate: st.taxRate, shippingTaxable: st.shippingTaxable, promotion,
+        shipping: shippingAmount, taxRate: st.taxRate, shippingTaxable: st.shippingTaxable, promotion,
       });
 
       const orderId = randomUUID();
@@ -210,9 +239,11 @@ checkout.openapi(
         });
       }
       if (e instanceof StockReservationError) return { blocked: e.skus };
+      if (e instanceof ShippingUnavailableError) return { shippingError: e.reason };
       throw e;
     });
 
+    if ('shippingError' in out) return c.json({ error: 'shipping unavailable', reason: out.shippingError }, 409);
     if ('blocked' in out) return c.json({ error: 'unavailable or out of stock', skus: out.blocked }, 409);
     return c.json({ code: out.code, state: 'PendingPayment', grandTotal: out.grandTotal, discountTotal: out.discountTotal, currency: st.currency, couponApplied: out.couponApplied }, 200);
   },

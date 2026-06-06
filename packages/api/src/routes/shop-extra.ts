@@ -3,6 +3,7 @@ import { and, desc, eq } from 'drizzle-orm';
 import { withStore, db } from '../db/client.js';
 import { resolveStore, DEV_DEFAULT_STORE } from '../store-context.js';
 import * as s from '../db/schema.js';
+import { isMethodEligible, shippingRate } from '../shipping/calculator.js';
 
 export const shopExtra = new OpenAPIHono();
 
@@ -82,13 +83,9 @@ shopExtra.openapi(
     const st = await storeId(c);
     const { country, subtotal } = c.req.valid('query');
     const methods = await withStore(st.id, async (tx) => tx.select().from(s.shippingMethod).where(eq(s.shippingMethod.enabled, true)));
-    const eligible = methods.filter((m) => {
-      const calc = (m.calculator as { flat?: number; min?: number; max?: number; countries?: string[]; exclude?: boolean } | null) ?? {};
-      if (calc.min != null && subtotal < calc.min) return false;
-      if (calc.max != null && subtotal > calc.max) return false;
-      if (calc.countries?.length && country) { const inList = calc.countries.includes(country); if (calc.exclude ? inList : !inList) return false; }
-      return true;
-    }).map((m) => ({ code: m.code, name: m.name, rate: ((m.calculator as { flat?: number })?.flat) ?? 0 }));
+    const eligible = methods
+      .filter((m) => isMethodEligible(m.calculator, { subtotal, country }))
+      .map((m) => ({ code: m.code, name: m.name, rate: shippingRate(m.calculator) }));
     return c.json({ methods: eligible }, 200);
   },
 );
