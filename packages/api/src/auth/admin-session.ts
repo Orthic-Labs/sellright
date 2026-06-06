@@ -15,6 +15,7 @@ export interface AdminStoreAccess {
   taxRate: number;
   shippingTaxable: boolean;
   role: 'owner' | 'manager' | 'staff' | 'read_only';
+  permissions: Record<string, boolean> | null;
 }
 
 export interface AdminPrincipal {
@@ -61,6 +62,7 @@ export async function resolveAdmin(token: string): Promise<AdminPrincipal | null
       taxRate: s.store.taxRate,
       shippingTaxable: s.store.shippingTaxable,
       role: s.adminUserStore.role,
+      permissions: s.adminUserStore.permissions,
     })
     .from(s.session)
     .innerJoin(s.adminUser, eq(s.adminUser.id, s.session.adminUserId))
@@ -85,6 +87,7 @@ export async function resolveAdmin(token: string): Promise<AdminPrincipal | null
       taxRate: r.taxRate ?? 0,
       shippingTaxable: r.shippingTaxable ?? false,
       role: r.role as AdminStoreAccess['role'],
+      permissions: (r.permissions as Record<string, boolean> | null) ?? null,
     }));
   return { id: first.id, email: first.email, stores };
 }

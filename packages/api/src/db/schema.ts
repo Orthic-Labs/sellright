@@ -81,6 +81,7 @@ export const adminUserStore = pgTable(
     adminUserId: uuid().notNull().references(() => adminUser.id),
     storeId: uuid().notNull().references(() => store.id),
     role: adminRole().notNull().default('staff'),
+    permissions: jsonb(), // optional per-action grants, e.g. { discounts: true, refunds: true }
   },
   (t) => [primaryKey({ columns: [t.adminUserId, t.storeId] })],
 );

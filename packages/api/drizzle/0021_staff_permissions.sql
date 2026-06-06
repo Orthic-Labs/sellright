@@ -1,0 +1,1 @@
+ALTER TABLE "admin_user_store" ADD COLUMN "permissions" jsonb;

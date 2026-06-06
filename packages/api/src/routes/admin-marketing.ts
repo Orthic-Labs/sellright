@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { and, desc, eq } from 'drizzle-orm';
 import { db, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
-import { HttpError, J, errBody, money, requireAdmin, requireStore, requireWrite, requireManage, guard } from './admin-helpers.js';
+import { HttpError, J, errBody, money, requireAdmin, requireStore, requireWrite, requireManage, requirePermission, guard } from './admin-helpers.js';
 
 export const adminMarketing = new OpenAPIHono();
 
@@ -279,7 +279,7 @@ adminMarketing.openapi(
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
-    const st = requireStore(admin, c); requireManage(st);
+    const st = requireStore(admin, c); requirePermission(st, 'giftcards');
     const b = c.req.valid('json');
     const code = b.code || giftCode();
     const res = await withStore(st.storeId, async (tx) => {

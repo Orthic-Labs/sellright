@@ -50,6 +50,18 @@ export function requireManage(st: AdminStoreAccess): void {
   if (!ADMIN_ROLES.has(st.role)) throw new HttpError(403, `role '${st.role}' cannot manage settings/staff`);
 }
 
+/**
+ * Per-action permission gate (composes with roles). owner/manager always pass.
+ * Otherwise the action must be explicitly granted via the staff member's
+ * `permissions` map — letting you give a `staff` user a single manage-class
+ * capability (e.g. discounts or refunds) without making them a full manager.
+ */
+export function requirePermission(st: AdminStoreAccess, action: string): void {
+  if (ADMIN_ROLES.has(st.role)) return;
+  if (st.permissions?.[action] === true) return;
+  throw new HttpError(403, `role '${st.role}' lacks the '${action}' permission`);
+}
+
 // Order states that count as revenue-bearing (paid lifecycle).
 export const PAID_STATES = sql`array['Paid','PartiallyRefunded','Refunded']::order_state[]`;
 

@@ -6,7 +6,7 @@ import * as s from '../db/schema.js';
 import { hashPassword } from '../auth/password.js';
 import { newTotpSecret, verifyTotp, otpauthUri } from '../auth/totp.js';
 import { normalizeEmail } from '../auth/email.js';
-import { HttpError, J, errBody, requireAdmin, requireStore, requireWrite, requireManage, guard } from './admin-helpers.js';
+import { HttpError, J, errBody, requireAdmin, requireStore, requireWrite, requireManage, requirePermission, guard } from './admin-helpers.js';
 
 export const adminSettings = new OpenAPIHono();
 
@@ -319,7 +319,7 @@ adminSettings.openapi(
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
-    const st = requireStore(admin, c); requireManage(st);
+    const st = requireStore(admin, c); requirePermission(st, 'webhooks');
     const b = c.req.valid('json');
     const secret = randomBytes(24).toString('hex');
     const id = await withStore(st.storeId, async (tx) => {
@@ -542,5 +542,23 @@ adminSettings.openapi(
         .onConflictDoUpdate({ target: [s.currencyRate.storeId, s.currencyRate.currency], set: { rate: b.rate, enabled: b.enabled } });
     });
     return c.json({ currency: cur, rate: b.rate }, 200);
+  }),
+);
+
+// ── per-action staff permissions (P3) ─────────────────────────────────────────
+adminSettings.openapi(
+  createRoute({
+    method: 'put', path: '/v1/admin/staff/{adminUserId}/permissions', summary: 'Grant per-action permissions to a staff member',
+    request: { params: z.object({ adminUserId: z.string() }), body: { content: J(z.object({ permissions: z.record(z.string(), z.boolean()) })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ adminUserId: z.string() })) }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireManage(st);
+    const { adminUserId } = c.req.valid('param');
+    const b = c.req.valid('json');
+    const res = await db.update(s.adminUserStore).set({ permissions: b.permissions }).where(and(eq(s.adminUserStore.adminUserId, adminUserId), eq(s.adminUserStore.storeId, st.storeId))).returning({ adminUserId: s.adminUserStore.adminUserId });
+    if (!res.length) throw new HttpError(404, 'staff member not enrolled in this store');
+    return c.json({ adminUserId }, 200);
   }),
 );
