@@ -164,16 +164,52 @@ sandbox creds** (§3.1). Payments are idempotent via `processed_event`; the
 provider confirms the exact amount SellRight computed (provider never defines
 the total).
 
-### 1.10 Admin (API + SPA)
+### 1.10 Admin (API + SPA) — full Shopify-parity (built 2026-06-05)
 
-- **API** (`routes/admin.ts`, `/v1/admin/*`): bearer-admin auth, dashboard KPIs,
-  orders (list/detail/fulfill/cancel), products (list/detail/edit), variants
-  (price/sale/enabled/stock), customers (list/detail). Store-scoped via
-  `withStore`; mutations write `audit_log` (order timeline); `requireWrite()`
-  blocks `read_only` admins.
-- **SPA** (`packages/admin`): Shopify-style light theme, store switcher, the
-  pages above with inline edit + fulfill/cancel UI. Token + active store in
-  `localStorage`. Builds ~76 KB gzip.
+The admin API is split into per-domain route files sharing `admin-helpers.ts`
+(auth/role guards, `guard()`, zod fragments): `admin.ts` (auth, dashboard, orders
+list/detail/fulfill/cancel, products, variants, customers), `admin-catalog.ts`
+(product/variant create+delete, collections, inventory), `admin-orders.ts`
+(refunds, draft orders, abandoned carts, CSV order export, tracking CSV import),
+`admin-marketing.ts` (promotions CRUD + Listmonk), `admin-settings.ts` (store/tax,
+payments, shipping methods, staff+roles, notifications, Google client id, 2FA),
+`admin-reports.ts` (customer write, sales/top reports, global search, activity),
+`admin-affiliate.ts` (affiliate program + public dashboard), `admin-content.ts`
+(blog). Store-scoped via `withStore`; mutations write `audit_log`; RBAC via
+`requireWrite` (read_only blocked) + `requireManage` (owner/manager for
+settings/staff).
+
+**SPA** (`packages/admin`, ~24 pages, ~89 KB gz): Shopify-style light theme, store
+switcher, global search. Nav: Home, Orders (+ New/Import-tracking/Export/Pre-orders/
+Abandoned), Products (+ create), Collections, Inventory, Customers (+ create/edit/
+tags), Discounts, Affiliates, Marketing (Listmonk), Blog, Reports, Activity,
+Settings (store/tax, payments, shipping, staff/roles, Google sign-in, **2FA**).
+
+**Auth (see §1.10a):** httpOnly cookie session + CSRF; no token in localStorage.
+
+### 1.10a Authentication & session security (built 2026-06-05)
+
+- **Passwords:** scrypt, per-user salt, constant-time compare (`auth/password.ts`).
+- **Sessions:** opaque 256-bit token, only its SHA-256 hash stored (`session`
+  table; admin 14 d / customer 30 d TTL). A DB leak yields no usable tokens.
+- **Admin transport = httpOnly cookie** (`auth/cookies.ts`): `sr_admin` (httpOnly,
+  SameSite=Lax, Secure in prod) + a non-httpOnly `sr_csrf` cookie. `requireAdmin`
+  accepts the cookie OR a bearer header (API clients unaffected). **No admin token
+  in localStorage** — XSS can't read it.
+- **CSRF** (`app.ts` middleware on `/v1/admin/*` mutations): double-submit —
+  `x-csrf-token` must equal the `sr_csrf` cookie; bearer requests exempt; login/
+  logout exempt.
+- **Admin 2FA (TOTP, RFC 6238, no dep — `auth/totp.ts`):** `/2fa` setup/enable/
+  disable; login returns `twoFactorRequired` then needs the 6-digit code.
+- **Login rate-limiting** (`auth/rate-limit.ts`): 8 fails / 15 min per ip+identity
+  → 429; admin + customer.
+- **Customer Google sign-in** (`/v1/shop/auth/google`): verifies the GIS ID token
+  via Google tokeninfo + `aud` check; upsert by `google_sub`. Client id in admin
+  Settings (`store.config.googleClientId`) or `GOOGLE_CLIENT_ID` env.
+- **RBAC:** `owner / manager / staff / read_only`.
+- **Still open:** storefront (customer) still uses bearer-in-localStorage (migrate
+  to cookies); password-reset + email-verification enforcement (needs SMTP); CSP
+  on the prod admin host.
 
 ### 1.11 Storefront
 
@@ -258,7 +294,7 @@ documented with the trigger that flips each):**
 
 | Area | State |
 |---|---|
-| Schema + RLS (37 tables, migrations 0000–0009) | ✅ applied, isolation tested |
+| Schema + RLS (37 tables, migrations 0000–0010) | ✅ applied, isolation tested |
 | Coupons applied + audited at checkout (promotion_usage, limits enforced) | ✅ verified live |
 | Data importer (catalog/customers/orders) | ✅ cent-perfect parity |
 | Shop API: catalog, cart estimate, checkout, pay, auth, account, coupons | ✅ verified on real data |
@@ -266,8 +302,11 @@ documented with the trigger that flips each):**
 | Admin API + SPA (orders/products/customers/dashboard) | ✅ live + audited |
 | Admin: fulfillment inventory side-effect, RBAC `read_only` gate | ✅ fixed + verified 2026-06-05 |
 | **Admin Shopify-parity (5 phases)**: catalog create/collections/inventory, refunds, draft orders, abandoned carts, discounts manager, **Listmonk in-admin**, settings (payments/shipping/staff-roles/tax), reports, search, activity, customer edit | ✅ shipped + verified 2026-06-05 |
+| **DD-customization parity**: order CSV export, tracking CSV import, pre-order statuses, **affiliate system** (10% commission + settle + dashboard), blog CMS, guest order tracking, shipping eligibility, newsletter, auto-Delivered cron | ✅ shipped + verified 2026-06-05 |
+| **Auth hardening**: httpOnly cookie sessions + CSRF + admin 2FA (TOTP) + login rate-limiting + customer Google sign-in | ✅ shipped + verified 2026-06-05 |
 | Admin: product **image upload** | ⛔ depends on asset service (§3.8) |
-| Listmonk live connection | ⚠ integration built; needs Listmonk URL+token |
+| Listmonk live connection / Google sign-in live | ⚠ integration built; needs Listmonk URL+token / Google client id |
+| DD custom features still blocked | ⛔ NMI/Sezzle (keys), SheerID webhook (account), SSE cache-invalidation (Redis/CF), contact-form + email flows (SMTP) |
 | Storefront: browse + checkout→COD→confirmation | ✅ plumbing-verified |
 | Storefront: auth / account / text-search UI | ⛔ still Vendure GraphQL |
 | Facets / category filters | ⛔ not imported (no facet model) |
@@ -304,23 +343,27 @@ orders/fulfillment only; `read_only` = view. Encode as a per-action capability
 check (`requireCap('order.refund')`) mapping role→caps in one table, so it's data
 not code. Defer fine-grained custom roles to v2.
 
-### 3.3 Admin token storage — localStorage vs httpOnly cookie
-**Context.** Admin bearer token is in `localStorage` (JS-readable ⇒ XSS can
-exfiltrate; 14-day TTL widens the window).
-**Decision.** Move to httpOnly cookie + CSRF, or keep localStorage + mitigations.
-**Recommendation.** **Move to an httpOnly, Secure, SameSite=Strict session
-cookie** set by the API, with a CSRF token for mutations and a strict CSP on the
-admin host. It's the standard fix and the admin is same-origin behind nginx
-anyway. Until then: shorten TTL to ~2 days and add CSP. Worth doing before the
-admin is exposed beyond the SSH tunnel.
+### 3.3 Admin token storage — ✅ RESOLVED (httpOnly cookie + CSRF, 2026-06-05)
+Done: admin sessions moved to an httpOnly, SameSite=Lax (Secure in prod) cookie +
+double-submit CSRF; no token in localStorage. See §1.10a. (`Secure` is prod-only
+because dev runs over http://localhost; admin 2FA also shipped.) **Remaining
+sub-item:** apply the same cookie model to the **storefront/customer** auth (still
+bearer-in-localStorage), and add a strict CSP on the prod admin host.
 
-### 3.4 Login rate-limiting / lockout
-**Context.** `/v1/admin/login` has no throttle. scrypt is slow but doesn't stop
-credential-stuffing.
-**Decision.** Where does the counter live?
-**Recommendation.** **Postgres-backed attempt counter** (per-email + per-IP,
-exponential backoff, short lockout) for v1 — no new infra. Move to Redis only
-when BullMQ/Redis lands anyway. Add to the shop login too.
+### 3.4 Login rate-limiting / lockout — ✅ RESOLVED (2026-06-05)
+Done: in-memory sliding window (8 fails / 15 min per ip+identity → 429), wired
+into admin AND customer login (`auth/rate-limit.ts`). It's per-process — move the
+store to Redis when running multiple API instances (the only remaining upgrade).
+
+### 3.5 Partial fulfillment
+**Context.** Fulfillment is all-or-nothing per order; `fulfillment_line` is
+unused. Stock side-effect now correct for the all-or-nothing path.
+**Decision.** Support per-line / per-quantity shipments?
+**Recommendation.** **v2.** Most DD/RH orders are small; all-or-nothing is fine
+to launch. When built: accept per-line quantities, write `fulfillment_line`,
+increment `fulfilled_qty` by shipped units, decrement stock per shipped unit
+(the current single-record path already moves stock correctly — extend, don't
+rewrite).
 
 ### 3.5 Partial fulfillment
 **Context.** Fulfillment is all-or-nothing per order; `fulfillment_line` is
@@ -449,10 +492,10 @@ backups can proceed in parallel once 1–2 land.
    **Done =** register/login/logout, account order-history + addresses, and
    product search all run through `/v1/shop/*` with no remaining Vendure
    `/shop-api` calls in `providers/shop/*`; browser-QA'd end to end.
-3. **Admin auth hardening** — httpOnly+Secure+SameSite cookie + CSRF + CSP
-   (§3.3) **and** login rate-limiting (§3.4).
-   **Done =** no admin token in `localStorage`; mutations require a CSRF token;
-   a brute-force loop on `/v1/admin/login` trips lockout.
+3. **Admin auth hardening** — ✅ **mostly DONE (2026-06-05):** httpOnly cookie +
+   CSRF + login rate-limiting + admin 2FA all shipped & verified (§1.10a, §3.3,
+   §3.4). **Remaining:** CSP headers on the prod admin host (ships with item 4),
+   and migrate the storefront/customer auth to cookies too.
 4. **Production admin host** — built `dist/` behind nginx + Cloudflare Access +
    systemd for the API (§3.12). Replaces the dev-server-on-a-tunnel.
    **Done =** admin reachable on its subdomain through Access (no SSH tunnel);
@@ -689,7 +732,14 @@ dashboard (gate item 6); and a **restore from backup has been tested** (gate ite
 
 **Migrations:** `0000` schema · `0001` RLS policies · `0002` nullif hardening ·
 `0003` order_line snapshot · `0004` store registry NO FORCE · `0005` cart tables ·
-`0006` admin_user_store NO FORCE.
+`0006` admin_user_store NO FORCE · `0007` order idempotency + indexes · `0008`
+admin_user_store registry (disable RLS) · `0009` model completeness (promotion
+linkage/usage, payment_method, link-table RLS, FK tightening) · `0010`
+customer.tags.
+
+**API restart:** use `scripts-deploy/start-api.sh` (setsid — survives the SSH
+channel); inline `nohup … &` over ssh dies on channel close. `start-admin.sh`
+likewise for the SPA. Ops/verify scripts live in `packages/api/scripts-deploy/`.
 
 **Run the stack (on Hetzner):**
 ```bash
