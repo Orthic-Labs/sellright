@@ -3,7 +3,7 @@ import { and, desc, eq, sql } from 'drizzle-orm';
 import { withStore, type Tx } from '../db/client.js';
 import { resolveStore, DEV_DEFAULT_STORE, type StoreCtx } from '../store-context.js';
 import * as s from '../db/schema.js';
-import { bearer, resolveCustomer, type SessionCustomer } from '../auth/session.js';
+import { customerToken, resolveCustomer, type SessionCustomer } from '../auth/session.js';
 
 async function store(c: { req: { header: (k: string) => string | undefined } }): Promise<StoreCtx> {
   const slug = c.req.header('x-store-slug') ?? DEV_DEFAULT_STORE;
@@ -12,8 +12,7 @@ async function store(c: { req: { header: (k: string) => string | undefined } }):
   return found;
 }
 
-async function me(tx: Tx, authHeader: string | undefined): Promise<SessionCustomer | null> {
-  const token = bearer(authHeader);
+async function me(tx: Tx, token: string | null): Promise<SessionCustomer | null> {
   return token ? resolveCustomer(tx, token) : null;
 }
 
@@ -31,7 +30,7 @@ account.openapi(
   async (c) => {
     const st = await store(c);
     const out = await withStore(st.id, async (tx) => {
-      const cust = await me(tx, c.req.header('authorization'));
+      const cust = await me(tx, customerToken(c));
       if (!cust) return null;
       const items = await tx
         .select({
@@ -65,7 +64,7 @@ account.openapi(
     const st = await store(c);
     const { code } = c.req.valid('param');
     const out = await withStore(st.id, async (tx) => {
-      const cust = await me(tx, c.req.header('authorization'));
+      const cust = await me(tx, customerToken(c));
       if (!cust) return { kind: 'unauth' as const };
       const [order] = await tx.select().from(s.order).where(and(eq(s.order.code, code), eq(s.order.customerId, cust.id))).limit(1);
       if (!order) return { kind: 'notfound' as const };
@@ -89,7 +88,7 @@ account.openapi(
   async (c) => {
     const st = await store(c);
     const out = await withStore(st.id, async (tx) => {
-      const cust = await me(tx, c.req.header('authorization'));
+      const cust = await me(tx, customerToken(c));
       if (!cust) return null;
       return tx.select({ id: s.address.id, fullName: s.address.fullName, line1: s.address.line1, city: s.address.city, country: s.address.country }).from(s.address).where(eq(s.address.customerId, cust.id));
     });

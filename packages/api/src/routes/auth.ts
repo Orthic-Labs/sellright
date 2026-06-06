@@ -4,7 +4,8 @@ import { withStore, db } from '../db/client.js';
 import { resolveStore, DEV_DEFAULT_STORE, type StoreCtx } from '../store-context.js';
 import * as s from '../db/schema.js';
 import { hashPassword, verifyPassword } from '../auth/password.js';
-import { bearer, createSession, deleteSession, resolveCustomer } from '../auth/session.js';
+import { customerToken, createSession, deleteSession, resolveCustomer } from '../auth/session.js';
+import { setCustomerCookies, clearCustomerCookies, customerCsrfValid, newCsrf } from '../auth/cookies.js';
 import { clientIp, loginRetryAfter, recordLoginFailure, clearLoginAttempts } from '../auth/rate-limit.js';
 import { normalizeEmail } from '../auth/email.js';
 
@@ -61,6 +62,7 @@ auth.openapi(
       return { token, firstName: cust!.firstName, lastName: cust!.lastName };
     });
     if ('taken' in out) return c.json({ error: 'email already registered' }, 409);
+    setCustomerCookies(c, out.token, newCsrf());
     return c.json({ token: out.token, customer: { email, firstName: out.firstName, lastName: out.lastName, emailVerified: false } }, 200);
   },
 );
@@ -93,6 +95,7 @@ auth.openapi(
     });
     if (!out.ok) { recordLoginFailure(ip, email); return c.json({ error: 'invalid email or password' }, 401); }
     clearLoginAttempts(ip, email);
+    setCustomerCookies(c, out.token, newCsrf());
     return c.json({ token: out.token, customer: out.customer }, 200);
   },
 );
@@ -133,6 +136,7 @@ auth.openapi(
       const token = await createSession(tx, st.id, cust.id);
       return { token, customer: { email: cust.email, firstName: cust.firstName, lastName: cust.lastName, emailVerified: true } };
     });
+    setCustomerCookies(c, out.token, newCsrf());
     return c.json(out, 200);
   },
 );
@@ -150,7 +154,7 @@ auth.openapi(
   }),
   async (c) => {
     const st = await store(c);
-    const token = bearer(c.req.header('authorization'));
+    const token = customerToken(c);
     if (!token) return c.json({ error: 'not authenticated' }, 401);
     const cust = await withStore(st.id, (tx) => resolveCustomer(tx, token));
     if (!cust) return c.json({ error: 'not authenticated' }, 401);
@@ -164,12 +168,14 @@ auth.openapi(
     method: 'post',
     path: '/v1/shop/auth/logout',
     summary: 'Log out',
-    responses: { 200: { description: 'OK', content: { 'application/json': { schema: z.object({ ok: z.boolean() }) } } } },
+    responses: { 200: { description: 'OK', content: { 'application/json': { schema: z.object({ ok: z.boolean() }) } } }, 403: { description: 'CSRF', content: { 'application/json': { schema: z.object({ error: z.string() }) } } } },
   }),
   async (c) => {
     const st = await store(c);
-    const token = bearer(c.req.header('authorization'));
+    if (!customerCsrfValid(c)) return c.json({ error: 'invalid CSRF token' }, 403);
+    const token = customerToken(c);
     if (token) await withStore(st.id, (tx) => deleteSession(tx, token));
+    clearCustomerCookies(c);
     return c.json({ ok: true }, 200);
   },
 );

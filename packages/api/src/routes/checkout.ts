@@ -6,7 +6,7 @@ import { resolveStore, DEV_DEFAULT_STORE, type StoreCtx } from '../store-context
 import * as s from '../db/schema.js';
 import { calculateOrderTotals, type Promotion } from '../money/totals.js';
 import { evaluateCoupon } from '../money/coupon.js';
-import { bearer, resolveCustomer } from '../auth/session.js';
+import { customerToken, resolveCustomer } from '../auth/session.js';
 import { normalizeEmail } from '../auth/email.js';
 import { reserveStockOrThrow, StockReservationError, validateReservableItems } from '../orders/stock-reservation.js';
 import { isMethodEligible, shippingRate, ShippingUnavailableError } from '../shipping/calculator.js';
@@ -93,7 +93,7 @@ checkout.openapi(
     const st = await store(c);
     const body = c.req.valid('json');
     const idemKey = c.req.header('idempotency-key') || null;
-    const token = bearer(c.req.header('authorization'));
+    const token = customerToken(c);
     const skus = [...new Set(body.items.map((i) => i.sku))];
 
     type Result = { blocked: string[] } | { shippingError: string } | { code: string; grandTotal: number; discountTotal: number; couponApplied: boolean; replay?: boolean };

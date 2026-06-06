@@ -51,3 +51,27 @@ export function csrfValid(c: { req: { header: (k: string) => string | undefined 
   const cooked = cookie(c, CSRF_COOKIE);
   return !!header && !!cooked && header === cooked;
 }
+
+// ── Storefront customer cookies (separate names from the admin app) ───────────
+export const CUST_COOKIE = 'sr_cust';
+export const CUST_CSRF_COOKIE = 'sr_cust_csrf';
+
+export function setCustomerCookies(c: Ctx, token: string, csrf: string): void {
+  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  const base = `Path=/; Max-Age=${MAX_AGE}; SameSite=Lax${secure}`;
+  c.header('Set-Cookie', `${CUST_COOKIE}=${token}; HttpOnly; ${base}`, { append: true });
+  c.header('Set-Cookie', `${CUST_CSRF_COOKIE}=${csrf}; ${base}`, { append: true });
+}
+
+export function clearCustomerCookies(c: Ctx): void {
+  c.header('Set-Cookie', `${CUST_COOKIE}=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax`, { append: true });
+  c.header('Set-Cookie', `${CUST_CSRF_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax`, { append: true });
+}
+
+/** CSRF check for cookie-authenticated customer mutations (bearer is exempt). */
+export function customerCsrfValid(c: { req: { header: (k: string) => string | undefined } }): boolean {
+  if (c.req.header('authorization')) return true;
+  const header = c.req.header('x-csrf-token');
+  const cooked = cookie(c, CUST_CSRF_COOKIE);
+  return !!header && !!cooked && header === cooked;
+}

@@ -6,7 +6,7 @@ import { resolveStore, DEV_DEFAULT_STORE, type StoreCtx } from '../store-context
 import * as s from '../db/schema.js';
 import { calculateOrderTotals, type Promotion } from '../money/totals.js';
 import { evaluateCoupon } from '../money/coupon.js';
-import { bearer, resolveCustomer } from '../auth/session.js';
+import { customerToken, resolveCustomer } from '../auth/session.js';
 import { normalizeEmail } from '../auth/email.js';
 
 async function store(c: { req: { header: (k: string) => string | undefined } }): Promise<StoreCtx> {
@@ -147,7 +147,7 @@ cart.openapi(
   async (c) => {
     const st = await store(c);
     const { items, shipping, couponCode } = c.req.valid('json');
-    const token = bearer(c.req.header('authorization'));
+    const token = customerToken(c);
     const result = await withStore(st.id, (tx) => priceCart(tx, st, items, { couponCode, shipping, token }));
     return c.json(result, 200);
   },
@@ -216,7 +216,7 @@ cart.openapi(
   async (c) => {
     const st = await store(c);
     const body = c.req.valid('json');
-    const authTok = bearer(c.req.header('authorization'));
+    const authTok = customerToken(c);
     const out = await withStore(st.id, async (tx) => {
       const customer = authTok ? await resolveCustomer(tx, authTok) : null;
       const token = randomUUID();
@@ -243,7 +243,7 @@ cart.openapi(
     const st = await store(c);
     const { token } = c.req.valid('param');
     const { couponCode } = c.req.valid('query');
-    const authTok = bearer(c.req.header('authorization'));
+    const authTok = customerToken(c);
     const out = await withStore(st.id, async (tx) => {
       const [row] = await tx.select().from(s.cart).where(eq(s.cart.token, token)).limit(1);
       if (!row) return null;
@@ -265,7 +265,7 @@ cart.openapi(
     const st = await store(c);
     const { token } = c.req.valid('param');
     const body = c.req.valid('json');
-    const authTok = bearer(c.req.header('authorization'));
+    const authTok = customerToken(c);
     const out = await withStore(st.id, async (tx) => {
       const [row] = await tx.select().from(s.cart).where(eq(s.cart.token, token)).limit(1);
       if (!row) return null;
@@ -317,7 +317,7 @@ cart.openapi(
   async (c) => {
     const st = await store(c);
     const { token } = c.req.valid('param');
-    const authTok = bearer(c.req.header('authorization'));
+    const authTok = customerToken(c);
     const res = await withStore(st.id, async (tx) => {
       const customer = authTok ? await resolveCustomer(tx, authTok) : null;
       if (!customer) return { code: 401 as const };

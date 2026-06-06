@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { and, eq, gt } from 'drizzle-orm';
 import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
+import { cookie, CUST_COOKIE } from './cookies.js';
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const hashToken = (t: string) => createHash('sha256').update(t).digest('hex');
@@ -54,4 +55,13 @@ export function bearer(authHeader: string | undefined): string | null {
   if (!authHeader) return null;
   const m = /^Bearer\s+(.+)$/i.exec(authHeader);
   return m ? m[1]! : null;
+}
+
+/**
+ * Resolve the customer session token from EITHER the Authorization bearer header
+ * (API clients) OR the httpOnly `sr_cust` cookie (browsers). Additive — bearer
+ * keeps working; cookies are the XSS-safe path for the storefront.
+ */
+export function customerToken(c: { req: { header: (k: string) => string | undefined } }): string | null {
+  return bearer(c.req.header('authorization')) ?? cookie(c, CUST_COOKIE) ?? null;
 }
