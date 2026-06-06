@@ -403,6 +403,20 @@ export const refundLine = pgTable('refund_line', {
   restock: boolean().notNull().default(false),
 });
 
+// Multi-currency (additive, display-only). Orders are charged in the store base
+// currency; these rates drive presentment conversion for the storefront. Real
+// settlement in another currency needs a gateway (separate, gated work).
+export const currencyRate = pgTable(
+  'currency_rate',
+  {
+    storeId: uuid().notNull().references(() => store.id),
+    currency: text().notNull(), // ISO-4217, e.g. 'EUR'
+    rate: integer().notNull(), // units of `currency` per 1 base, scaled ×10000 (1.0834 → 10834)
+    enabled: boolean().notNull().default(true),
+  },
+  (t) => [primaryKey({ columns: [t.storeId, t.currency] })],
+);
+
 // Multi-location inventory (additive). The aggregate `stock.onHand` remains the
 // sellable total the reservation engine works against; these tables add
 // per-location breakdown + transfers for fulfillment routing/visibility.

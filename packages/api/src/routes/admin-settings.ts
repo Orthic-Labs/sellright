@@ -510,3 +510,37 @@ adminSettings.openapi(
     return c.json({ revoked: del.length }, 200);
   }),
 );
+
+// ── currency rates (presentment, display-only) (P3) ───────────────────────────
+adminSettings.openapi(
+  createRoute({
+    method: 'get', path: '/v1/admin/currency-rates', summary: 'List presentment currency rates',
+    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.any()) })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    const items = await withStore(st.storeId, async (tx) => tx.select().from(s.currencyRate).orderBy(s.currencyRate.currency));
+    return c.json({ items }, 200);
+  }),
+);
+
+adminSettings.openapi(
+  createRoute({
+    method: 'put', path: '/v1/admin/currency-rates/{currency}', summary: 'Upsert a presentment rate (×10000 of base)',
+    request: { params: z.object({ currency: z.string().length(3) }), body: { content: J(z.object({ rate: z.number().int().min(1), enabled: z.boolean().default(true) })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ currency: z.string(), rate: z.number().int() })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireManage(st);
+    const { currency } = c.req.valid('param');
+    const b = c.req.valid('json');
+    const cur = currency.toUpperCase();
+    await withStore(st.storeId, async (tx) => {
+      await tx.insert(s.currencyRate).values({ storeId: st.storeId, currency: cur, rate: b.rate, enabled: b.enabled })
+        .onConflictDoUpdate({ target: [s.currencyRate.storeId, s.currencyRate.currency], set: { rate: b.rate, enabled: b.enabled } });
+    });
+    return c.json({ currency: cur, rate: b.rate }, 200);
+  }),
+);

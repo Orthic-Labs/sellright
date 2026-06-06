@@ -3,6 +3,7 @@ import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import { resolveStore, DEV_DEFAULT_STORE, type StoreCtx } from '../store-context.js';
 import * as s from '../db/schema.js';
+import { convertMoney, rateFor, RATE_SCALE } from '../money/currency.js';
 
 async function store(c: { req: { header: (k: string) => string | undefined } }): Promise<StoreCtx> {
   const slug = c.req.header('x-store-slug') ?? DEV_DEFAULT_STORE;
@@ -38,6 +39,7 @@ const ProductDetail = z.object({
   status: z.string(),
   seoTitle: z.string().nullable(),
   seoDescription: z.string().nullable(),
+  currency: z.string(),
   images: z.array(z.string()),
   variants: z.array(Variant),
 });
@@ -99,7 +101,7 @@ catalog.openapi(
     method: 'get',
     path: '/v1/shop/catalog/products/{slug}',
     summary: 'Product detail',
-    request: { params: z.object({ slug: z.string() }) },
+    request: { params: z.object({ slug: z.string() }), query: z.object({ currency: z.string().optional() }) },
     responses: {
       200: { description: 'Product', content: { 'application/json': { schema: ProductDetail } } },
       404: { description: 'Not found', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
@@ -108,6 +110,7 @@ catalog.openapi(
   async (c) => {
     const st = await store(c);
     const { slug } = c.req.valid('param');
+    const { currency } = c.req.valid('query');
     const detail = await withStore(st.id, async (tx) => {
       const [p] = await tx
         .select()
@@ -115,7 +118,15 @@ catalog.openapi(
         .where(and(eq(s.product.slug, slug), isNull(s.product.deletedAt)))
         .limit(1);
       if (!p) return null;
-      const variants = await tx
+      // Presentment conversion (display-only): orders still charge in base currency.
+      const displayCurrency = (currency ?? st.currency).toUpperCase();
+      let rate = RATE_SCALE;
+      if (displayCurrency !== st.currency.toUpperCase()) {
+        const rates = await tx.select({ currency: s.currencyRate.currency, rate: s.currencyRate.rate, enabled: s.currencyRate.enabled }).from(s.currencyRate);
+        rate = rateFor(rates, st.currency, displayCurrency);
+      }
+      const conv = (v: number | null) => (v == null ? null : convertMoney(v, rate));
+      const variants = (await tx
         .select({
           sku: s.productVariant.sku,
           name: s.productVariant.name,
@@ -127,7 +138,8 @@ catalog.openapi(
         })
         .from(s.productVariant)
         .where(and(eq(s.productVariant.productId, p.id), isNull(s.productVariant.deletedAt)))
-        .orderBy(asc(s.productVariant.name));
+        .orderBy(asc(s.productVariant.name)))
+        .map((v) => ({ ...v, price: convertMoney(v.price, rate), salePrice: conv(v.salePrice), compareAtPrice: conv(v.compareAtPrice) }));
       const imgs = await tx
         .select({ path: s.asset.path })
         .from(s.productAsset)
@@ -141,6 +153,7 @@ catalog.openapi(
         status: p.status,
         seoTitle: p.seoTitle,
         seoDescription: p.seoDescription,
+        currency: displayCurrency,
         images: imgs.map((i) => i.path),
         variants,
       };
@@ -221,5 +234,18 @@ catalog.openapi(
     });
     if (!out) return c.json({ error: 'collection not found' }, 404);
     return c.json(out, 200);
+  },
+);
+
+// GET /v1/shop/currencies — enabled presentment currencies (+ base)
+catalog.openapi(
+  createRoute({
+    method: 'get', path: '/v1/shop/currencies', summary: 'Available presentment currencies',
+    responses: { 200: { description: 'OK', content: { 'application/json': { schema: z.object({ base: z.string(), currencies: z.array(z.object({ currency: z.string(), rate: z.number().int() })) }) } } } },
+  }),
+  async (c) => {
+    const st = await store(c);
+    const rates = await withStore(st.id, (tx) => tx.select({ currency: s.currencyRate.currency, rate: s.currencyRate.rate, enabled: s.currencyRate.enabled }).from(s.currencyRate));
+    return c.json({ base: st.currency, currencies: rates.filter((r) => r.enabled).map((r) => ({ currency: r.currency, rate: r.rate })) }, 200);
   },
 );

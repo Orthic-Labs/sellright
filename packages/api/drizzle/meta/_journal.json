@@ -141,6 +141,13 @@
       "when": 1780766116367,
       "tag": "0019_locations",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1780766508162,
+      "tag": "0020_currency_rates",
+      "breakpoints": true
     }
   ]
 }
