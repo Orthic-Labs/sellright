@@ -354,8 +354,8 @@ consciously re-including them. Sequenced critical-path-first below.
 | Product/variant merchandising: compare-at/cost/barcode/dimensions/metafields + SEO | ✅ done 2026-06-06 (22420eb) |
 | Smart collections (rule membership) + publish/SEO | ✅ done 2026-06-06 (48c1e1d) |
 | Invoices + packing slips | ✅ done 2026-06-06 (6bd3a30) |
-| Order editing after placement (recompute + stock + audit) | ⏳ next — buildable now |
-| Returns / exchanges (RMA → restock → refund) | ⏳ next — buildable now |
+| Order editing after placement (recompute + stock + audit) | ✅ done 2026-06-06 (265d4f8) |
+| Returns / exchanges (RMA → restock → refund) | ✅ done 2026-06-06 (c8faa29) |
 | Option-group editor UI · bulk import/export | ⏳ buildable now (schema present) |
 | Gift cards / store credit · multi-location inventory + transfers | ⏳ buildable now |
 | Customer notifications (order/shipping emails) | ⛔ **blocked: SMTP** |
