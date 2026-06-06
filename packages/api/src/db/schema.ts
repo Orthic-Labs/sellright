@@ -390,6 +390,32 @@ export const refundLine = pgTable('refund_line', {
   restock: boolean().notNull().default(false),
 });
 
+// Webhooks — outbox pattern. An endpoint subscribes to topics; events are
+// enqueued as deliveries and pushed by the scheduler with HMAC signing + retry.
+export const webhookEndpoint = pgTable('webhook_endpoint', {
+  id: uuid().primaryKey().defaultRandom(),
+  storeId: uuid().notNull().references(() => store.id),
+  url: text().notNull(),
+  topics: text().array().notNull(), // e.g. ['order.created','order.paid'] or ['*']
+  secret: text().notNull(), // HMAC-SHA256 signing secret
+  enabled: boolean().notNull().default(true),
+  createdAt: ts(),
+});
+
+export const webhookDelivery = pgTable('webhook_delivery', {
+  id: uuid().primaryKey().defaultRandom(),
+  storeId: uuid().notNull().references(() => store.id),
+  endpointId: uuid().notNull().references(() => webhookEndpoint.id),
+  topic: text().notNull(),
+  payload: jsonb().notNull(),
+  status: text().notNull().default('pending'), // pending | delivered | failed
+  attempts: integer().notNull().default(0),
+  lastError: text(),
+  nextAttemptAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  deliveredAt: timestamp({ withTimezone: true }),
+  createdAt: ts(),
+});
+
 // Gift cards / store credit. A code carries a redeemable cent balance; checkout
 // draws it down as a 'gift_card' tender. Store-scoped (RLS).
 export const giftCard = pgTable('gift_card', {

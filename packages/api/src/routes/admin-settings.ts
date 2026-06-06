@@ -1,4 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
+import { randomBytes } from 'node:crypto';
 import { and, desc, eq } from 'drizzle-orm';
 import { db, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
@@ -292,6 +293,76 @@ adminSettings.openapi(
     const st = requireStore(admin, c); requireManage(st);
     const { id } = c.req.valid('param');
     await withStore(st.storeId, async (tx) => { await tx.delete(s.taxZone).where(eq(s.taxZone.id, id)); });
+    return c.json({ id }, 200);
+  }),
+);
+
+// ── webhooks (outbox endpoints) ───────────────────────────────────────────────
+adminSettings.openapi(
+  createRoute({
+    method: 'get', path: '/v1/admin/webhooks', summary: 'List webhook endpoints',
+    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.any()) })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    const items = await withStore(st.storeId, async (tx) => tx.select({ id: s.webhookEndpoint.id, url: s.webhookEndpoint.url, topics: s.webhookEndpoint.topics, enabled: s.webhookEndpoint.enabled }).from(s.webhookEndpoint).orderBy(desc(s.webhookEndpoint.createdAt)));
+    return c.json({ items }, 200);
+  }),
+);
+
+adminSettings.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/webhooks', summary: 'Create a webhook endpoint (returns the signing secret once)',
+    request: { body: { content: J(z.object({ url: z.string().url(), topics: z.array(z.string()).min(1) })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string(), secret: z.string() })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireManage(st);
+    const b = c.req.valid('json');
+    const secret = randomBytes(24).toString('hex');
+    const id = await withStore(st.storeId, async (tx) => {
+      const [w] = await tx.insert(s.webhookEndpoint).values({ storeId: st.storeId, url: b.url, topics: b.topics, secret }).returning({ id: s.webhookEndpoint.id });
+      return w!.id;
+    });
+    return c.json({ id, secret }, 200);
+  }),
+);
+
+adminSettings.openapi(
+  createRoute({
+    method: 'patch', path: '/v1/admin/webhooks/{id}', summary: 'Update a webhook endpoint',
+    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ url: z.string().url().optional(), topics: z.array(z.string()).optional(), enabled: z.boolean().optional() })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireManage(st);
+    const { id } = c.req.valid('param');
+    const b = c.req.valid('json');
+    const ok = await withStore(st.storeId, async (tx) => {
+      const [w] = await tx.select({ id: s.webhookEndpoint.id }).from(s.webhookEndpoint).where(eq(s.webhookEndpoint.id, id)).limit(1);
+      if (!w) return false;
+      await tx.update(s.webhookEndpoint).set(b).where(eq(s.webhookEndpoint.id, id));
+      return true;
+    });
+    if (!ok) throw new HttpError(404, 'webhook not found');
+    return c.json({ id }, 200);
+  }),
+);
+
+adminSettings.openapi(
+  createRoute({
+    method: 'delete', path: '/v1/admin/webhooks/{id}', summary: 'Delete a webhook endpoint',
+    request: { params: z.object({ id: z.string() }) },
+    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireManage(st);
+    const { id } = c.req.valid('param');
+    await withStore(st.storeId, async (tx) => { await tx.delete(s.webhookDelivery).where(eq(s.webhookDelivery.endpointId, id)); await tx.delete(s.webhookEndpoint).where(eq(s.webhookEndpoint.id, id)); });
     return c.json({ id }, 200);
   }),
 );

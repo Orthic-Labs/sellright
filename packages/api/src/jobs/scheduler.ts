@@ -20,6 +20,7 @@
 import { env } from '../env.js';
 import { autoDeliver } from './auto-deliver.js';
 import { releaseStaleAllocations } from './release-stale-allocations.js';
+import { deliverWebhooks } from '../webhooks/emit.js';
 
 const HOUR = 3_600_000;
 const log = (m: string) => console.log(m);
@@ -52,4 +53,5 @@ export function startJobScheduler(): void {
 
   every(HOUR, 'auto-deliver', () => autoDeliver({ apply: autoDeliverApply, days: autoDeliverDays, log }));
   every(15 * 60_000, 'release-stale', () => releaseStaleAllocations({ apply: releaseApply, ttlMin: releaseTtlMin, log }));
+  every(60_000, 'webhooks', () => deliverWebhooks({ log })); // push due webhook deliveries every minute
 }

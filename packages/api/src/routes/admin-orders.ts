@@ -11,6 +11,7 @@ import { normalizeEmail } from '../auth/email.js';
 import { buildInvoice, buildPackingSlip, renderInvoiceHtml } from '../orders/invoice.js';
 import { evaluateCoupon } from '../money/coupon.js';
 import { resolveTaxRate } from '../money/tax.js';
+import { emitEvent } from '../webhooks/emit.js';
 
 export const adminOrders = new OpenAPIHono();
 
@@ -203,6 +204,7 @@ adminOrders.openapi(
       const newState: OrderState = totalRefunded >= o.grandTotal ? 'Refunded' : 'PartiallyRefunded';
       if (canTransition(o.state as OrderState, newState)) await tx.update(s.order).set({ state: newState, updatedAt: new Date() }).where(eq(s.order.id, o.id));
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: o.id, action: 'refund', fromState: o.state, toState: newState, data: { amount, restock: body.restock } });
+      await emitEvent(tx, st.storeId, 'order.refunded', { code: o.code, amount, state: newState });
       return { kind: 'ok' as const, state: newState, refunded: amount };
     });
     if (res.kind === 'notfound') throw new HttpError(404, 'order not found');

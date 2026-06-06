@@ -9,6 +9,7 @@ import { evaluateCoupon } from '../money/coupon.js';
 import { selectAutomaticPromotion } from '../money/auto-discount.js';
 import { resolveTaxRate } from '../money/tax.js';
 import { applyGiftCard } from '../money/gift-card.js';
+import { emitEvent } from '../webhooks/emit.js';
 import { customerToken, resolveCustomer } from '../auth/session.js';
 import { normalizeEmail } from '../auth/email.js';
 import { reserveStockOrThrow, StockReservationError, validateReservableItems } from '../orders/stock-reservation.js';
@@ -275,6 +276,10 @@ checkout.openapi(
       if (body.cartToken) {
         await tx.update(s.cart).set({ status: 'converted', convertedOrderId: orderId, updatedAt: new Date() }).where(eq(s.cart.token, body.cartToken));
       }
+
+      // Webhook events (transactional outbox — enqueued in the same txn).
+      await emitEvent(tx, st.id, 'order.created', { code, grandTotal: totals.grandTotal, currency: st.currency });
+      if (paid) await emitEvent(tx, st.id, 'order.paid', { code, grandTotal: totals.grandTotal, currency: st.currency });
       return { code, grandTotal: totals.grandTotal, discountTotal: totals.discountTotal, couponApplied: promoId != null, giftCardApplied, paid };
     }).catch(async (e: unknown): Promise<Result> => {
       // Concurrent double-submit with the same Idempotency-Key: the unique
