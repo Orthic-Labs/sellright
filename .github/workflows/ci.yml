@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Mirrors the production DB role model (scripts-deploy/create-app-role.sh):
+#   sellright      — owner; runs migrations/seed/jobs
+#   sellright_app  — non-owner, NOSUPERUSER NOBYPASSRLS; the app runs as this so
+#                    FORCE ROW LEVEL SECURITY fails closed. Tests run as this role
+#                    against a *_test DB so src/db/rls.test.ts actually executes
+#                    (it refuses to run against any non-_test database).
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      OWNER_URL: postgres://sellright:sellright@localhost:5432/sellright_test
+      APP_URL: postgres://sellright_app:sellright_app@localhost:5432/sellright_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.10.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Provision roles + test database (as superuser)
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE sellright LOGIN PASSWORD 'sellright';
+          CREATE ROLE sellright_app LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE PASSWORD 'sellright_app';
+          CREATE DATABASE sellright_test OWNER sellright;
+          SQL
+
+      - name: Migrate (as owner)
+        env:
+          DATABASE_URL: ${{ env.OWNER_URL }}
+        run: pnpm --filter @sellright/api exec drizzle-kit migrate
+
+      - name: Grant app role (non-owner) — mirrors create-app-role.sh
+        env:
+          PGPASSWORD: sellright
+        run: |
+          psql -h localhost -U sellright -d sellright_test -v ON_ERROR_STOP=1 <<'SQL'
+          GRANT CONNECT ON DATABASE sellright_test TO sellright_app;
+          GRANT USAGE ON SCHEMA public TO sellright_app;
+          GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA public TO sellright_app;
+          GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO sellright_app;
+          -- registries are read-only to the app (writes go through the owner)
+          REVOKE INSERT, UPDATE, DELETE ON "store", "admin_user", "admin_user_store" FROM sellright_app;
+          SQL
+
+      - name: Build
+        run: pnpm -r build
+
+      - name: Typecheck
+        run: pnpm -r typecheck
+
+      - name: Unit + RLS tests (as non-owner app role)
+        env:
+          DATABASE_URL: ${{ env.APP_URL }}
+          NODE_ENV: test
+        run: pnpm --filter @sellright/api test
+
+      - name: Assert FORCE RLS on every store-scoped table
+        env:
+          DATABASE_URL: ${{ env.APP_URL }}
+        run: pnpm --filter @sellright/api db:assert-rls

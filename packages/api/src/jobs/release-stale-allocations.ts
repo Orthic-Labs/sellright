@@ -19,15 +19,19 @@ import { and, eq, lt, sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 
-async function main() {
-  const apply = process.argv.includes('--apply');
-  const ttlMin = Number(process.env.TTL_MINUTES ?? 60);
-  if (!Number.isFinite(ttlMin) || ttlMin <= 0) {
-    console.error('TTL_MINUTES must be a positive number');
-    process.exit(1);
-  }
+export type ReleaseStaleOpts = { apply: boolean; ttlMin: number; log?: (m: string) => void };
+
+/**
+ * One idempotent pass: cancel stale unpaid orders and release their stock
+ * reservation. Reusable from the CLI wrapper (manual) or the scheduler. Does NOT
+ * close the pool — the caller owns the pool lifecycle.
+ */
+export async function releaseStaleAllocations(opts: ReleaseStaleOpts): Promise<{ orders: number; released: number }> {
+  const { apply, ttlMin } = opts;
+  const log = opts.log ?? (() => {});
+  if (!Number.isFinite(ttlMin) || ttlMin <= 0) throw new Error('ttlMin must be a positive number');
   const cutoff = new Date(Date.now() - ttlMin * 60_000);
-  console.log(`[release-stale] mode=${apply ? 'APPLY' : 'DRY-RUN'} ttl=${ttlMin}min cutoff=${cutoff.toISOString()}`);
+  log(`[release-stale] mode=${apply ? 'APPLY' : 'DRY-RUN'} ttl=${ttlMin}min cutoff=${cutoff.toISOString()}`);
 
   const stores = await pool.query<{ id: string; slug: string }>('SELECT id, slug FROM store');
   let totalOrders = 0;
@@ -66,14 +70,18 @@ async function main() {
     });
     totalOrders += res.count;
     totalReleased += res.released;
-    if (res.count) console.log(`[release-stale] ${st.slug}: ${apply ? 'cancelled' : 'would cancel'} ${res.count} orders, ${apply ? 'released' : 'would release'} ${res.released} units`);
+    if (res.count) log(`[release-stale] ${st.slug}: ${apply ? 'cancelled' : 'would cancel'} ${res.count} orders, ${apply ? 'released' : 'would release'} ${res.released} units`);
   }
 
-  console.log(`[release-stale] done: ${totalOrders} orders, ${totalReleased} units${apply ? '' : ' (DRY RUN — re-run with --apply to act)'}`);
-  await pool.end();
+  log(`[release-stale] done: ${totalOrders} orders, ${totalReleased} units${apply ? '' : ' (DRY RUN — re-run with --apply to act)'}`);
+  return { orders: totalOrders, released: totalReleased };
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+// CLI entry: `tsx src/jobs/release-stale-allocations.ts [--apply]` (TTL_MINUTES env).
+// Only runs when executed directly, not when imported by the scheduler.
+const isCli = import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith('release-stale-allocations.ts');
+if (isCli) {
+  releaseStaleAllocations({ apply: process.argv.includes('--apply'), ttlMin: Number(process.env.TTL_MINUTES ?? 60), log: (m) => console.log(m) })
+    .then(() => pool.end())
+    .catch((e) => { console.error(e); process.exit(1); });
+}

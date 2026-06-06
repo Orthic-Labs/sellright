@@ -8,11 +8,17 @@ import { and, eq, lt } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 
-async function main() {
-  const apply = process.argv.includes('--apply');
-  const days = Number(process.env.DAYS ?? 10);
+export type AutoDeliverOpts = { apply: boolean; days: number; log?: (m: string) => void };
+
+/**
+ * One idempotent pass: mark Shipped fulfillments older than `days` as Delivered.
+ * Reusable from the CLI wrapper or the scheduler. Caller owns the pool lifecycle.
+ */
+export async function autoDeliver(opts: AutoDeliverOpts): Promise<number> {
+  const { apply, days } = opts;
+  const log = opts.log ?? (() => {});
   const cutoff = new Date(Date.now() - days * 86_400_000);
-  console.log(`[auto-deliver] mode=${apply ? 'APPLY' : 'DRY-RUN'} days=${days} cutoff=${cutoff.toISOString()}`);
+  log(`[auto-deliver] mode=${apply ? 'APPLY' : 'DRY-RUN'} days=${days} cutoff=${cutoff.toISOString()}`);
 
   const stores = await pool.query<{ id: string; slug: string }>('SELECT id, slug FROM store');
   let total = 0;
@@ -29,9 +35,16 @@ async function main() {
       return due.length;
     });
     total += n;
-    if (n) console.log(`[auto-deliver] ${st.slug}: ${apply ? 'delivered' : 'would deliver'} ${n}`);
+    if (n) log(`[auto-deliver] ${st.slug}: ${apply ? 'delivered' : 'would deliver'} ${n}`);
   }
-  console.log(`[auto-deliver] done: ${total}${apply ? '' : ' (DRY RUN — --apply to act)'}`);
-  await pool.end();
+  log(`[auto-deliver] done: ${total}${apply ? '' : ' (DRY RUN — --apply to act)'}`);
+  return total;
 }
-main().catch((e) => { console.error(e); process.exit(1); });
+
+// CLI entry: `tsx src/jobs/auto-deliver.ts [--apply]` (DAYS env).
+const isCli = import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith('auto-deliver.ts');
+if (isCli) {
+  autoDeliver({ apply: process.argv.includes('--apply'), days: Number(process.env.DAYS ?? 10), log: (m) => console.log(m) })
+    .then(() => pool.end())
+    .catch((e) => { console.error(e); process.exit(1); });
+}
