@@ -8,8 +8,60 @@ import { calculateOrderTotals } from '../money/totals.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
 import { reserveStockOrThrow, StockReservationError, validateReservableItems } from '../orders/stock-reservation.js';
 import { normalizeEmail } from '../auth/email.js';
+import { buildInvoice, buildPackingSlip, renderInvoiceHtml } from '../orders/invoice.js';
 
 export const adminOrders = new OpenAPIHono();
+
+// ── invoice + packing slip (printable order documents) ────────────────────────
+async function loadOrderForDoc(storeId: string, code: string) {
+  return withStore(storeId, async (tx) => {
+    const [order] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
+    if (!order) return null;
+    const lines = await tx
+      .select({ variantSku: s.orderLine.variantSku, variantName: s.orderLine.variantName, quantity: s.orderLine.quantity, unitPrice: s.orderLine.unitPrice, lineTotal: s.orderLine.lineTotal })
+      .from(s.orderLine)
+      .where(eq(s.orderLine.orderId, order.id));
+    const [storeRow] = await tx.select({ name: s.store.name, slug: s.store.slug }).from(s.store).where(eq(s.store.id, storeId)).limit(1);
+    return { order, lines, store: { name: storeRow?.name ?? 'Store', slug: storeRow?.slug ?? '' } };
+  });
+}
+
+adminOrders.openapi(
+  createRoute({
+    method: 'get', path: '/v1/admin/orders/{code}/invoice', summary: 'Order invoice (json or ?format=html)',
+    request: { params: z.object({ code: z.string() }), query: z.object({ format: z.enum(['json', 'html']).default('json') }) },
+    responses: { 200: { description: 'Invoice', content: { 'application/json': { schema: z.any() }, 'text/html': { schema: z.string() } } }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    const { code } = c.req.valid('param');
+    const { format } = c.req.valid('query');
+    const data = await loadOrderForDoc(st.storeId, code);
+    if (!data) throw new HttpError(404, 'order not found');
+    
+    const doc = buildInvoice(data.order as never, data.lines, data.store);
+    if (format === 'html') return c.html(renderInvoiceHtml(doc));
+    return c.json(doc, 200);
+  }),
+);
+
+adminOrders.openapi(
+  createRoute({
+    method: 'get', path: '/v1/admin/orders/{code}/packing-slip', summary: 'Order packing slip',
+    request: { params: z.object({ code: z.string() }) },
+    responses: { 200: { description: 'Packing slip', content: J(z.any()) }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    const { code } = c.req.valid('param');
+    const data = await loadOrderForDoc(st.storeId, code);
+    if (!data) throw new HttpError(404, 'order not found');
+    
+    return c.json(buildPackingSlip(data.order as never, data.lines, data.store), 200);
+  }),
+);
 
 const orderCode = () => ('SR' + randomUUID().replace(/-/g, '').slice(0, 10)).toUpperCase();
 
