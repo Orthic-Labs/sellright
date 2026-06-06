@@ -168,3 +168,71 @@ adminReports.openapi(
     return c.json({ items }, 200);
   }),
 );
+
+// ── CSV exports + advanced metrics (P3) ───────────────────────────────────────
+const cell = (v: unknown) => { const x = v == null ? '' : String(v); return /[",\n]/.test(x) ? `"${x.replace(/"/g, '""')}"` : x; };
+const csv = (header: string[], rows: unknown[][]) => [header.join(','), ...rows.map((r) => r.map(cell).join(','))].join('\n');
+
+adminReports.openapi(
+  createRoute({
+    method: 'get', path: '/v1/admin/export/products.csv', summary: 'Export products as CSV',
+    responses: { 200: { description: 'CSV', content: { 'text/csv': { schema: z.string() } } }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    const out = await withStore(st.storeId, async (tx) =>
+      tx.select({ slug: s.product.slug, name: s.product.name, status: s.product.status, sku: s.productVariant.sku, price: s.productVariant.price, salePrice: s.productVariant.salePrice, barcode: s.productVariant.barcode })
+        .from(s.product).leftJoin(s.productVariant, and(eq(s.productVariant.productId, s.product.id), isNull(s.productVariant.deletedAt)))
+        .where(isNull(s.product.deletedAt)).orderBy(s.product.name));
+    const body = csv(['slug', 'name', 'status', 'sku', 'price', 'salePrice', 'barcode'], out.map((r) => [r.slug, r.name, r.status, r.sku, r.price, r.salePrice, r.barcode]));
+    return c.body(body, 200, { 'content-type': 'text/csv', 'content-disposition': 'attachment; filename="products.csv"' });
+  }),
+);
+
+adminReports.openapi(
+  createRoute({
+    method: 'get', path: '/v1/admin/export/customers.csv', summary: 'Export customers as CSV',
+    responses: { 200: { description: 'CSV', content: { 'text/csv': { schema: z.string() } } }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    const out = await withStore(st.storeId, async (tx) =>
+      tx.select({ email: s.customer.email, firstName: s.customer.firstName, lastName: s.customer.lastName, phone: s.customer.phone, emailVerified: s.customer.emailVerified, createdAt: s.customer.createdAt })
+        .from(s.customer).where(isNull(s.customer.deletedAt)).orderBy(desc(s.customer.createdAt)));
+    const body = csv(['email', 'firstName', 'lastName', 'phone', 'emailVerified', 'createdAt'], out.map((r) => [r.email, r.firstName, r.lastName, r.phone, r.emailVerified, r.createdAt.toISOString()]));
+    return c.body(body, 200, { 'content-type': 'text/csv', 'content-disposition': 'attachment; filename="customers.csv"' });
+  }),
+);
+
+adminReports.openapi(
+  createRoute({
+    method: 'get', path: '/v1/admin/reports/metrics', summary: 'Advanced metrics (AOV, repeat rate, new vs returning)',
+    request: daysQuery,
+    responses: { 200: { description: 'OK', content: J(z.object({ aov: z.number().int(), orders: z.number().int(), revenue: z.number().int(), repeatRate: z.number(), newCustomers: z.number().int(), returningCustomers: z.number().int() })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    const { days } = c.req.valid('query');
+    const out = await withStore(st.storeId, async (tx) => {
+      const r = await tx.execute(sql`
+        with paid as (
+          select id, customer_id, grand_total from "order"
+          where state = any(${PAID_STATES}) and coalesce(placed_at, created_at) >= now() - (${days} || ' days')::interval
+        ),
+        per_cust as (select customer_id, count(*) as n from paid where customer_id is not null group by 1)
+        select
+          (select coalesce(sum(grand_total),0) from paid)::int as revenue,
+          (select count(*) from paid)::int as orders,
+          (select count(*) from per_cust)::int as customers,
+          (select count(*) from per_cust where n > 1)::int as repeat_customers`);
+      const row = (r as unknown as { rows: Array<{ revenue: number; orders: number; customers: number; repeat_customers: number }> }).rows[0]!;
+      const aov = row.orders > 0 ? Math.round(row.revenue / row.orders) : 0;
+      const repeatRate = row.customers > 0 ? Number((row.repeat_customers / row.customers).toFixed(4)) : 0;
+      return { aov, orders: row.orders, revenue: row.revenue, repeatRate, newCustomers: row.customers - row.repeat_customers, returningCustomers: row.repeat_customers };
+    });
+    return c.json(out, 200);
+  }),
+);
