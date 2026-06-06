@@ -8,9 +8,10 @@ placeholder).
 - React 18 + Vite 5 + TypeScript
 - Tailwind (light theme, copper-free; `brand` green `#008060` accent)
 - TanStack Query (data) + react-router-dom (routing)
-- **Hand-rolled fetch client** (`src/api.ts`) — NOT the hono `hc` client. Bearer
-  token + active store slug are kept in `localStorage` and sent as
-  `Authorization` / `x-store-slug` headers on every `/v1/admin/*` request.
+- **Hand-rolled fetch client** (`src/api.ts`) — NOT the hono `hc` client. The
+  session token lives in an httpOnly `sr_admin` cookie, mutations echo the
+  non-httpOnly CSRF cookie in `x-csrf-token`, and only the active store slug is
+  kept in `localStorage`.
 
 ## Toolchain isolation
 
@@ -21,12 +22,13 @@ React deps cannot disturb the api/shared build. Install with
 
 ## Pages
 
-- **Login** — admin email/password → session token
+- **Login** — admin email/password, optional TOTP, httpOnly cookie session
 - **Dashboard** — KPIs (revenue, orders, AOV, to-fulfill, customers, low-stock) + recent orders
 - **Orders** — list (status filter, search, paginate) · detail · mark shipped (tracking) · mark delivered · cancel
 - **Products** — list · detail with inline edit of title/description/status and per-variant price / sale price / on-hand stock / active
 - **Customers** — list (orders + lifetime spend) · detail (orders, addresses)
-- **Settings** — account + accessible stores
+- **Settings** — store/tax, payment toggles, shipping methods, staff roles,
+  Google sign-in client id, notifications, and 2FA
 
 A multi-store switcher (top bar) sets the active store; all data is store-scoped
 server-side via RLS.
@@ -49,8 +51,6 @@ working API connection.
 
 ## Known gaps (deferred)
 
-No product/variant **create** or image upload (edit-existing only); no
-discounts/shipping/tax config UI, refunds UI, or staff-user management UI. RBAC
-is minimal — `read_only` is blocked from mutations server-side, but a full
-per-action permission matrix is still TODO. Production admin host (nginx-fronted)
-not yet set up; currently dev server behind an SSH tunnel.
+No product image upload/media manager, no fine-grained per-action permission
+matrix, no production admin host yet, and no real gateway/payment operations.
+The admin is currently served by Vite behind an SSH tunnel.

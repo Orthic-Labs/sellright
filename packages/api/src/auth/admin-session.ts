@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { and, eq, gt, isNotNull } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as s from '../db/schema.js';
+import { normalizeEmail } from './email.js';
 
 const ADMIN_SESSION_TTL_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
 const hashToken = (t: string) => createHash('sha256').update(t).digest('hex');
@@ -12,6 +13,7 @@ export interface AdminStoreAccess {
   name: string;
   currency: string;
   taxRate: number;
+  shippingTaxable: boolean;
   role: 'owner' | 'manager' | 'staff' | 'read_only';
 }
 
@@ -57,6 +59,7 @@ export async function resolveAdmin(token: string): Promise<AdminPrincipal | null
       name: s.store.name,
       currency: s.store.currency,
       taxRate: s.store.taxRate,
+      shippingTaxable: s.store.shippingTaxable,
       role: s.adminUserStore.role,
     })
     .from(s.session)
@@ -80,6 +83,7 @@ export async function resolveAdmin(token: string): Promise<AdminPrincipal | null
       name: r.name!,
       currency: r.currency!,
       taxRate: r.taxRate ?? 0,
+      shippingTaxable: r.shippingTaxable ?? false,
       role: r.role as AdminStoreAccess['role'],
     }));
   return { id: first.id, email: first.email, stores };
@@ -90,7 +94,7 @@ export async function findAdminByEmail(email: string) {
   const [u] = await db
     .select({ id: s.adminUser.id, email: s.adminUser.email, passwordHash: s.adminUser.passwordHash, totpSecret: s.adminUser.totpSecret })
     .from(s.adminUser)
-    .where(eq(s.adminUser.email, email))
+    .where(eq(s.adminUser.email, normalizeEmail(email)))
     .limit(1);
   return u ?? null;
 }

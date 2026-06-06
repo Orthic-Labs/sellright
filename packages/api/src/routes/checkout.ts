@@ -6,6 +6,9 @@ import { resolveStore, DEV_DEFAULT_STORE, type StoreCtx } from '../store-context
 import * as s from '../db/schema.js';
 import { calculateOrderTotals, type Promotion } from '../money/totals.js';
 import { evaluateCoupon } from '../money/coupon.js';
+import { bearer, resolveCustomer } from '../auth/session.js';
+import { normalizeEmail } from '../auth/email.js';
+import { reserveStockOrThrow, StockReservationError, validateReservableItems } from '../orders/stock-reservation.js';
 
 async function store(c: { req: { header: (k: string) => string | undefined } }): Promise<StoreCtx> {
   const slug = c.req.header('x-store-slug') ?? DEV_DEFAULT_STORE;
@@ -83,6 +86,7 @@ checkout.openapi(
     const st = await store(c);
     const body = c.req.valid('json');
     const idemKey = c.req.header('idempotency-key') || null;
+    const token = bearer(c.req.header('authorization'));
     const skus = [...new Set(body.items.map((i) => i.sku))];
 
     type Result = { blocked: string[] } | { code: string; grandTotal: number; discountTotal: number; couponApplied: boolean; replay?: boolean };
@@ -103,29 +107,26 @@ checkout.openapi(
         .where(and(inArray(s.productVariant.sku, skus), isNull(s.productVariant.deletedAt)));
       const bySku = new Map(variants.map((v) => [v.sku, v]));
 
-      // Validate availability + allocate stock atomically (skip stock for pre-orders).
-      const blocked: string[] = [];
-      for (const i of body.items) {
-        const v = bySku.get(i.sku);
-        if (!v || !v.enabled) { blocked.push(i.sku); continue; }
-        if (v.isPreOrder) continue;
-        const res = await tx.execute(sql`
-          UPDATE "stock" SET allocated = allocated + ${i.quantity}
-          WHERE variant_id = ${v.id} AND store_id = ${st.id} AND (on_hand - allocated) >= ${i.quantity}`);
-        if ((res as { rowCount: number | null }).rowCount !== 1) blocked.push(i.sku);
-      }
+      const blocked = validateReservableItems(body.items, bySku);
       if (blocked.length) return { blocked };
+      await reserveStockOrThrow(tx, st.id, body.items, bySku);
 
       const priced = body.items.map((i) => {
         const v = bySku.get(i.sku)!;
         return { v, qty: i.quantity, unitPrice: selectUnitPrice(v) };
       });
 
-      // Resolve the customer (id + verification categories) for coupon rules.
-      const customer = body.email
-        ? (await tx.select({ id: s.customer.id, activeVerifications: s.customer.activeVerifications }).from(s.customer).where(eq(s.customer.email, body.email)).limit(1))[0]
-        : undefined;
-      const customerId = customer?.id ?? null;
+      // Verification BENEFITS require an authenticated session — a guest can't
+      // claim another account's verified status via the email field (that was a
+      // real auth-bypass). But still LINK the order to an existing account by
+      // email so guest-checkout order history + per-customer coupon limits work.
+      const sessionCustomer = token ? await resolveCustomer(tx, token) : null;
+      const activeVerifications = sessionCustomer?.activeVerifications ?? [];
+      let customerId = sessionCustomer?.id ?? null;
+      if (!customerId && body.email) {
+        const [byEmail] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, normalizeEmail(body.email))).limit(1);
+        customerId = byEmail?.id ?? null;
+      }
 
       // ── Coupon: re-validate server-side + enforce usage limits ───────────────
       let promotion: Promotion | undefined;
@@ -155,7 +156,7 @@ checkout.openapi(
           const presubtotal = priced.reduce((a, p) => a + p.unitPrice * p.qty, 0);
           const ev = evaluateCoupon(
             { type: promo.type, value: promo.value, conditions: promo.conditions },
-            { subtotal: presubtotal, activeVerifications: customer?.activeVerifications ?? [] },
+            { subtotal: presubtotal, activeVerifications },
           );
           // Apply only if valid AND within limits; else proceed at full price
           // (server is authoritative — the returned grandTotal is the truth).
@@ -165,7 +166,7 @@ checkout.openapi(
 
       const totals = calculateOrderTotals({
         lines: priced.map((p) => ({ unitPrice: p.unitPrice, quantity: p.qty })),
-        shipping: body.shipping, taxRate: st.taxRate, promotion,
+        shipping: body.shipping, taxRate: st.taxRate, shippingTaxable: st.shippingTaxable, promotion,
       });
 
       const orderId = randomUUID();
@@ -208,6 +209,7 @@ checkout.openapi(
           throw e;
         });
       }
+      if (e instanceof StockReservationError) return { blocked: e.skus };
       throw e;
     });
 

@@ -111,7 +111,7 @@ cart.openapi(
 
       const totals = calculateOrderTotals({
         lines: priced.filter((p) => p.available).map((p) => ({ unitPrice: p.unitPrice, quantity: p.quantity })),
-        shipping, taxRate: st.taxRate, promotion,
+        shipping, taxRate: st.taxRate, shippingTaxable: st.shippingTaxable, promotion,
       });
 
       // Re-attach per-line breakdown (only available lines were costed).

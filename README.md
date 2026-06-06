@@ -24,6 +24,13 @@ pnpm build
 ```
 
 ## Status
-**M0 — skeleton.** Bootable API serving `/v1/health` + `/v1/openapi.json`; shared money primitives; Drizzle `store` table proving the migration pipeline. See `docs/BUILD-PLAN-RH-v1.md` for M1→M9.
+Active backend MVP. Core API, multi-tenant schema/RLS, catalog import, checkout,
+manual/COD payments, customer auth/account endpoints, and a Shopify-style admin
+surface are implemented. Real gateway payments, storefront auth/account/search
+rewire, production admin hosting, email flows, carrier fulfillment, and deeper
+Shopify-parity features remain open.
+
+Current state: `docs/STATE-AND-ROADMAP-v1.md`.
+Backend audit: `docs/ECOMMERCE-BACKEND-AUDIT-2026-06-06.md`.
 
 Plans: `docs/ARCHITECTURE-PLAN-v1.md`, `docs/BUILD-PLAN-RH-v1.md`, `docs/DD-CUSTOMIZATION-SPEC-v1.md`.

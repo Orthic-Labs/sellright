@@ -17,6 +17,7 @@ export interface TotalsInput {
   lines: CartLineInput[];
   shipping: number; // cents
   taxRate: number; // basis points (875 = 8.75%); 0 = no tax
+  shippingTaxable?: boolean;
   promotion?: Promotion | null;
 }
 
@@ -56,7 +57,8 @@ export function calculateOrderTotals(input: TotalsInput): OrderTotals {
 
   const discountedSubtotal = subtotal - discountTotal;
   const shippingTotal = promo?.type === 'free_shipping' ? 0 : input.shipping;
-  const taxTotal = input.taxRate > 0 ? roundHalfUp((discountedSubtotal * input.taxRate) / 10000) : 0;
+  const taxableShipping = input.shippingTaxable ? shippingTotal : 0;
+  const taxTotal = input.taxRate > 0 ? roundHalfUp(((discountedSubtotal + taxableShipping) * input.taxRate) / 10000) : 0;
   const grandTotal = discountedSubtotal + shippingTotal + taxTotal;
 
   return { lines, subtotal, discountTotal, shippingTotal, taxTotal, grandTotal };

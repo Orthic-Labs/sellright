@@ -6,6 +6,7 @@ import * as s from '../db/schema.js';
 import { hashPassword, verifyPassword } from '../auth/password.js';
 import { bearer, createSession, deleteSession, resolveCustomer } from '../auth/session.js';
 import { clientIp, loginRetryAfter, recordLoginFailure, clearLoginAttempts } from '../auth/rate-limit.js';
+import { normalizeEmail } from '../auth/email.js';
 
 async function store(c: { req: { header: (k: string) => string | undefined } }): Promise<StoreCtx> {
   const slug = c.req.header('x-store-slug') ?? DEV_DEFAULT_STORE;
@@ -28,7 +29,7 @@ async function verifyGoogleIdToken(credential: string, clientId: string): Promis
   const p = (await res.json()) as { aud?: string; sub?: string; email?: string; email_verified?: string | boolean; given_name?: string; family_name?: string };
   if (!p.sub || !p.email || p.aud !== clientId) return null;
   const emailVerified = p.email_verified === true || p.email_verified === 'true';
-  return { sub: p.sub, email: p.email.toLowerCase(), emailVerified, firstName: p.given_name ?? null, lastName: p.family_name ?? null };
+  return { sub: p.sub, email: normalizeEmail(p.email), emailVerified, firstName: p.given_name ?? null, lastName: p.family_name ?? null };
 }
 
 const CustomerOut = z.object({ email: z.string(), firstName: z.string().nullable(), lastName: z.string().nullable(), emailVerified: z.boolean() });
@@ -49,7 +50,8 @@ auth.openapi(
   }),
   async (c) => {
     const st = await store(c);
-    const { email, password, firstName, lastName } = c.req.valid('json');
+    const { email: rawEmail, password, firstName, lastName } = c.req.valid('json');
+    const email = normalizeEmail(rawEmail);
     const passwordHash = await hashPassword(password);
     const out = await withStore(st.id, async (tx): Promise<{ taken: true } | { token: string; firstName: string | null; lastName: string | null }> => {
       const existing = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, email)).limit(1);
@@ -78,7 +80,8 @@ auth.openapi(
   }),
   async (c) => {
     const st = await store(c);
-    const { email, password } = c.req.valid('json');
+    const { email: rawEmail, password } = c.req.valid('json');
+    const email = normalizeEmail(rawEmail);
     const ip = clientIp(c);
     const retry = loginRetryAfter(ip, email);
     if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);

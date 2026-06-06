@@ -4,7 +4,7 @@ import { withStore } from '../db/client.js';
 import { resolveStore, DEV_DEFAULT_STORE, type StoreCtx } from '../store-context.js';
 import * as s from '../db/schema.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
-import { getProvider } from '../payments/provider.js';
+import { getProvider, isPaymentMethodEnabled } from '../payments/provider.js';
 
 async function store(c: { req: { header: (k: string) => string | undefined } }): Promise<StoreCtx> {
   const slug = c.req.header('x-store-slug') ?? DEV_DEFAULT_STORE;
@@ -40,6 +40,7 @@ pay.openapi(
 
     const provider = getProvider(method);
     if (!provider) return c.json({ error: `unknown payment method: ${method}` }, 404);
+    if (!isPaymentMethodEnabled(st.config, method)) return c.json({ error: `payment method disabled: ${method}`, state: 'Disabled' }, 409);
 
     type R =
       | { kind: 'notfound' }

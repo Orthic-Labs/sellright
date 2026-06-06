@@ -51,4 +51,20 @@ describe('calculateOrderTotals', () => {
     expect(t.taxTotal).toBe(875);
     expect(t.grandTotal).toBe(10875);
   });
+
+  it('includes shipping in tax basis only when configured', () => {
+    const untaxedShipping = calculateOrderTotals({
+      lines: [{ unitPrice: 10000, quantity: 1 }],
+      shipping: 1000, taxRate: 1000, shippingTaxable: false,
+    });
+    const taxedShipping = calculateOrderTotals({
+      lines: [{ unitPrice: 10000, quantity: 1 }],
+      shipping: 1000, taxRate: 1000, shippingTaxable: true,
+    });
+
+    expect(untaxedShipping.taxTotal).toBe(1000);
+    expect(untaxedShipping.grandTotal).toBe(12000);
+    expect(taxedShipping.taxTotal).toBe(1100);
+    expect(taxedShipping.grandTotal).toBe(12100);
+  });
 });

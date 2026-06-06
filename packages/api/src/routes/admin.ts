@@ -10,6 +10,7 @@ import { HttpError, J, errBody, requireAdmin, requireStore, requireWrite, guard,
 import { clientIp, loginRetryAfter, recordLoginFailure, clearLoginAttempts } from '../auth/rate-limit.js';
 import { setAuthCookies, clearAuthCookies, newCsrf, cookie, SESSION_COOKIE } from '../auth/cookies.js';
 import { verifyTotp } from '../auth/totp.js';
+import { normalizeEmail } from '../auth/email.js';
 
 export const admin = new OpenAPIHono();
 
@@ -27,7 +28,8 @@ admin.openapi(
     },
   }),
   async (c) => guard(c, async () => {
-    const { email, password, totp } = c.req.valid('json');
+    const { email: rawEmail, password, totp } = c.req.valid('json');
+    const email = normalizeEmail(rawEmail);
     const ip = clientIp(c);
     const retry = loginRetryAfter(ip, `admin:${email}`);
     if (retry > 0) throw new HttpError(429, `too many attempts — try again in ${retry}s`);

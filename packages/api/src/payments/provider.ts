@@ -50,6 +50,12 @@ const PROVIDERS: Record<string, PaymentProvider> = {
   // nmi / sezzle / stripe: implement against this interface (need credentials).
 };
 
+export function isPaymentMethodEnabled(config: unknown, method: string): boolean {
+  const payments = (config as { payments?: Record<string, boolean> } | null | undefined)?.payments;
+  if (payments && Object.prototype.hasOwnProperty.call(payments, method)) return payments[method] === true;
+  return method === 'manual' || method === 'cod';
+}
+
 export function getProvider(method: string): PaymentProvider | null {
   return PROVIDERS[method] ?? null;
 }

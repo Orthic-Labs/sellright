@@ -62,7 +62,8 @@ export function createApp(): OpenAPIHono {
   app.onError((err, c) => {
     // eslint-disable-next-line no-console
     console.error('[api error]', err);
-    return c.json({ error: err instanceof Error ? err.message : 'internal error' }, 500);
+    const expose = process.env.NODE_ENV !== 'production';
+    return c.json({ error: expose && err instanceof Error ? err.message : 'internal error' }, 500);
   });
 
   // Shop catalog read API (store resolved per-request, RLS-scoped).

@@ -6,6 +6,8 @@ import * as s from '../db/schema.js';
 import { HttpError, J, errBody, money, Page, requireAdmin, requireStore, requireWrite, guard } from './admin-helpers.js';
 import { calculateOrderTotals } from '../money/totals.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
+import { reserveStockOrThrow, StockReservationError, validateReservableItems } from '../orders/stock-reservation.js';
+import { normalizeEmail } from '../auth/email.js';
 
 export const adminOrders = new OpenAPIHono();
 
@@ -117,18 +119,12 @@ adminOrders.openapi(
     const res = await withStore(st.storeId, async (tx) => {
       const variants = await tx.select().from(s.productVariant).where(and(inArray(s.productVariant.sku, skus), isNull(s.productVariant.deletedAt)));
       const bySku = new Map(variants.map((v) => [v.sku, v]));
-      const blocked: string[] = [];
-      for (const i of items) {
-        const v = bySku.get(i.sku);
-        if (!v || !v.enabled) { blocked.push(i.sku); continue; }
-        if (v.isPreOrder) continue;
-        const r = await tx.execute(sql`UPDATE "stock" SET allocated = allocated + ${i.quantity} WHERE variant_id = ${v.id} AND store_id = ${st.storeId} AND (on_hand - allocated) >= ${i.quantity}`);
-        if ((r as { rowCount: number | null }).rowCount !== 1) blocked.push(i.sku);
-      }
+      const blocked = validateReservableItems(items, bySku);
       if (blocked.length) return { kind: 'blocked' as const, skus: blocked };
+      await reserveStockOrThrow(tx, st.storeId, items, bySku);
       const priced = items.map((i) => { const v = bySku.get(i.sku)!; return { v, qty: i.quantity, unitPrice: unitPrice(v) }; });
-      const totals = calculateOrderTotals({ lines: priced.map((p) => ({ unitPrice: p.unitPrice, quantity: p.qty })), shipping: body.shipping, taxRate: st.taxRate });
-      const customerId = body.email ? (await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, body.email)).limit(1))[0]?.id ?? null : null;
+      const totals = calculateOrderTotals({ lines: priced.map((p) => ({ unitPrice: p.unitPrice, quantity: p.qty })), shipping: body.shipping, taxRate: st.taxRate, shippingTaxable: st.shippingTaxable });
+      const customerId = body.email ? (await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, normalizeEmail(body.email))).limit(1))[0]?.id ?? null : null;
       const orderId = randomUUID(); const code = orderCode();
       const paid = body.markPaid;
       await tx.insert(s.order).values({ id: orderId, storeId: st.storeId, code, customerId, state: paid ? 'Paid' : 'PendingPayment', currency: st.currency, subtotal: totals.subtotal, discountTotal: totals.discountTotal, shippingTotal: totals.shippingTotal, taxTotal: totals.taxTotal, grandTotal: totals.grandTotal, placedAt: paid ? new Date() : null, shippingAddress: body.shippingAddress ?? null });
@@ -136,6 +132,9 @@ adminOrders.openapi(
       if (paid) await tx.insert(s.payment).values({ storeId: st.storeId, orderId, amount: totals.grandTotal, method: 'manual', providerRef: `admin-${code}`, state: 'Settled', metadata: { manual: true, by: admin.email } });
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: orderId, action: 'draft_create', toState: paid ? 'Paid' : 'PendingPayment' });
       return { kind: 'ok' as const, code, state: paid ? 'Paid' : 'PendingPayment', grandTotal: totals.grandTotal };
+    }).catch((e: unknown) => {
+      if (e instanceof StockReservationError) return { kind: 'blocked' as const, skus: e.skus };
+      throw e;
     });
     if (res.kind === 'blocked') return c.json({ error: 'unavailable or out of stock', skus: res.skus }, 409);
     return c.json({ code: res.code, state: res.state, grandTotal: res.grandTotal }, 200);

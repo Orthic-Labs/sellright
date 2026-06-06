@@ -6,6 +6,8 @@ export interface StoreCtx {
   name: string;
   currency: string;
   taxRate: number;
+  shippingTaxable: boolean;
+  config: unknown | null;
 }
 
 /**
@@ -16,7 +18,7 @@ export interface StoreCtx {
  */
 export async function resolveStore(slug: string): Promise<StoreCtx | null> {
   const r = await pool.query<StoreCtx>(
-    'SELECT id, slug, name, currency, tax_rate AS "taxRate" FROM store WHERE slug = $1 LIMIT 1',
+    'SELECT id, slug, name, currency, tax_rate AS "taxRate", shipping_taxable AS "shippingTaxable", config FROM store WHERE slug = $1 LIMIT 1',
     [slug],
   );
   return r.rows[0] ?? null;

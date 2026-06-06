@@ -3,6 +3,7 @@ import { and, desc, eq, ilike, isNull, or, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireWrite, guard, PAID_STATES } from './admin-helpers.js';
+import { normalizeEmail } from '../auth/email.js';
 
 export const adminReports = new OpenAPIHono();
 
@@ -17,10 +18,11 @@ adminReports.openapi(
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireWrite(st);
     const b = c.req.valid('json');
+    const email = normalizeEmail(b.email);
     const res = await withStore(st.storeId, async (tx) => {
-      const [dupe] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, b.email)).limit(1);
+      const [dupe] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, email)).limit(1);
       if (dupe) return { dupe: true as const };
-      const [cu] = await tx.insert(s.customer).values({ storeId: st.storeId, email: b.email, firstName: b.firstName ?? null, lastName: b.lastName ?? null, phone: b.phone ?? null, tags: b.tags ?? null }).returning({ id: s.customer.id });
+      const [cu] = await tx.insert(s.customer).values({ storeId: st.storeId, email, firstName: b.firstName ?? null, lastName: b.lastName ?? null, phone: b.phone ?? null, tags: b.tags ?? null }).returning({ id: s.customer.id });
       return { id: cu!.id };
     });
     if ('dupe' in res) throw new HttpError(409, 'a customer with that email already exists');

@@ -4,6 +4,7 @@ import { db, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { hashPassword } from '../auth/password.js';
 import { newTotpSecret, verifyTotp, otpauthUri } from '../auth/totp.js';
+import { normalizeEmail } from '../auth/email.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireWrite, requireManage, guard } from './admin-helpers.js';
 
 export const adminSettings = new OpenAPIHono();
@@ -253,7 +254,8 @@ adminSettings.openapi(
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireManage(st);
-    const { email, role, password } = c.req.valid('json');
+    const { email: rawEmail, role, password } = c.req.valid('json');
+    const email = normalizeEmail(rawEmail);
     const [existing] = await db.select({ id: s.adminUser.id }).from(s.adminUser).where(eq(s.adminUser.email, email)).limit(1);
     let adminUserId = existing?.id;
     if (!adminUserId) {
