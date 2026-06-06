@@ -317,7 +317,7 @@ documented with the trigger that flips each):**
 | Shipping methods / tax config | ⚠ schema exists, no admin UI; DD has no tax |
 | SSE channel (cache-invalidation / order-status / live-stock) | ❌ designed, not built |
 | Prod admin host (nginx) + auth hardening | ❌ dev server + SSH tunnel |
-| CI | ✅ GitHub Actions: build/typecheck/unit + RLS suite vs `_test` Postgres (2026-06-06) |
+| CI | ❌ **no GitHub Actions** (locked decision — out of hosted minutes). Gate = `pnpm verify` (build + typecheck + unit + RLS suite + `db:assert-rls`) run by hand on the box vs the 5433 `sellright_test` DB before each push. (A workflow was briefly re-added 2026-06-06 then removed — it reversed the locked call.) |
 | **Checkout shipping authoritative** (server computes rate from selected method; body.shipping is bootstrap-only fallback) | ✅ shipped 2026-06-06 (`shipping/calculator.ts` + tests) |
 | **Promotion concurrency** (FOR UPDATE row lock + re-read usedCount under lock) | ✅ shipped 2026-06-06 |
 | **Audit-pass correctness** (atomic stock-reservation rollback, coupon-verification trust w/ guest email-linking, email normalization) | ✅ committed 73e041c (2026-06-06) |
@@ -340,7 +340,7 @@ consciously re-including them. Sequenced critical-path-first below.
 | Audit-pass correctness fixes (stock rollback, coupon trust, email normalize) | ✅ done 2026-06-06 (73e041c) |
 | Shipping authoritative at checkout | ✅ done 2026-06-06 (5ed999c) |
 | Promotion concurrency hardening | ✅ done 2026-06-06 (5ed999c) |
-| CI + `_test` Postgres (RLS suite runs) + opt-in job scheduler | ✅ done 2026-06-06 (688b8c9) |
+| `_test` Postgres verification (RLS suite runs against real PG) + opt-in job scheduler | ✅ code proven on real Postgres 17 — RLS dual-pool test (seed as owner, assert as non-owner) ran **48/48 incl. 4 tenant-isolation tests under FORCE RLS**; gate is `pnpm verify` by hand (GitHub Actions removed per locked decision, 98929e5). ⚠️ **Re-run on the box's 5433 `sellright_test` is pending** — the box working tree needs git reconciliation first (see note). |
 | Cart as a first-class resource (CRUD/merge/abandoned/convert) | ✅ done 2026-06-06 (6530251) |
 | Customer cookie sessions + CSRF (mirror admin model) | ✅ done 2026-06-06 (03182d8); reset/verify emails ⛔ SMTP |
 | Real NMI tokenized payments + webhooks + capture/void + gateway refunds + reconciliation | ⛔ **blocked: NMI sandbox keys** |
