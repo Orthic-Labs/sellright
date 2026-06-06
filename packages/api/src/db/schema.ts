@@ -85,6 +85,19 @@ export const adminUserStore = pgTable(
   (t) => [primaryKey({ columns: [t.adminUserId, t.storeId] })],
 );
 
+// Staff invitations. Looked up by token hash at accept time (BEFORE any store
+// context), so — like `session` — this is RLS-exempt; isolation is the token.
+export const staffInvite = pgTable('staff_invite', {
+  id: uuid().primaryKey().defaultRandom(),
+  storeId: uuid().notNull().references(() => store.id),
+  email: text().notNull(),
+  role: adminRole().notNull().default('staff'),
+  tokenHash: text().notNull().unique(),
+  expiresAt: timestamp({ withTimezone: true }).notNull(),
+  acceptedAt: timestamp({ withTimezone: true }),
+  createdAt: ts(),
+});
+
 export const session = pgTable('session', {
   id: uuid().primaryKey().defaultRandom(),
   storeId: uuid().references(() => store.id),

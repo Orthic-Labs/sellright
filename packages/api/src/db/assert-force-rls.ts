@@ -17,7 +17,7 @@
  */
 import { pool } from './client.js';
 
-const EXEMPT = new Set(['store', 'admin_user', 'admin_user_store', 'session', 'processed_event']);
+const EXEMPT = new Set(['store', 'admin_user', 'admin_user_store', 'session', 'processed_event', 'staff_invite']);
 
 async function main() {
   const { rows } = await pool.query<{ table: string; rls: boolean; force: boolean }>(`

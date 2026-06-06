@@ -1,5 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import { and, desc, eq } from 'drizzle-orm';
 import { db, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
@@ -438,5 +438,75 @@ adminSettings.openapi(
     if (adminUserId === admin.id) throw new HttpError(409, 'cannot remove your own access');
     await db.delete(s.adminUserStore).where(and(eq(s.adminUserStore.adminUserId, adminUserId), eq(s.adminUserStore.storeId, st.storeId)));
     return c.json({ ok: true }, 200);
+  }),
+);
+
+// ── staff invitations + session revocation (P3) ───────────────────────────────
+const hashTok = (t: string) => createHash('sha256').update(t).digest('hex');
+const INVITE_TTL_MS = 7 * 24 * 3600 * 1000;
+
+adminSettings.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/staff/invites', summary: 'Invite a staff member (returns a one-time accept token)',
+    request: { body: { content: J(z.object({ email: z.string().email(), role: z.enum(['owner', 'manager', 'staff', 'read_only']).default('staff') })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string(), token: z.string(), acceptUrl: z.string() })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireManage(st);
+    const b = c.req.valid('json');
+    const token = randomBytes(24).toString('hex');
+    const [inv] = await db.insert(s.staffInvite).values({ storeId: st.storeId, email: normalizeEmail(b.email), role: b.role, tokenHash: hashTok(token), expiresAt: new Date(Date.now() + INVITE_TTL_MS) }).returning({ id: s.staffInvite.id });
+    // SMTP-less: token is returned for the inviter to share; an email layer can send acceptUrl when SMTP lands.
+    return c.json({ id: inv!.id, token, acceptUrl: `/admin/accept-invite?token=${token}` }, 200);
+  }),
+);
+
+adminSettings.openapi(
+  createRoute({
+    method: 'get', path: '/v1/admin/staff/invites', summary: 'List pending invites',
+    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.any()) })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireManage(st);
+    const items = await db.select({ id: s.staffInvite.id, email: s.staffInvite.email, role: s.staffInvite.role, acceptedAt: s.staffInvite.acceptedAt, expiresAt: s.staffInvite.expiresAt }).from(s.staffInvite).where(eq(s.staffInvite.storeId, st.storeId)).orderBy(desc(s.staffInvite.createdAt)).limit(100);
+    return c.json({ items: items.map((i) => ({ ...i, acceptedAt: i.acceptedAt?.toISOString() ?? null, expiresAt: i.expiresAt.toISOString() })) }, 200);
+  }),
+);
+
+// PUBLIC — accept an invite by token (no admin auth; isolation is the token).
+adminSettings.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/staff/accept', summary: 'Accept a staff invite + set password',
+    request: { body: { content: J(z.object({ token: z.string(), password: z.string().min(8), firstName: z.string().optional(), lastName: z.string().optional() })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) }, 409: { description: 'Invalid/expired', ...errBody } },
+  }),
+  async (c) => {
+    const b = c.req.valid('json');
+    const [inv] = await db.select().from(s.staffInvite).where(eq(s.staffInvite.tokenHash, hashTok(b.token))).limit(1);
+    if (!inv || inv.acceptedAt || inv.expiresAt.getTime() <= Date.now()) throw new HttpError(409, 'invite is invalid, already used, or expired');
+    const passwordHash = await hashPassword(b.password);
+    const [existing] = await db.select({ id: s.adminUser.id }).from(s.adminUser).where(eq(s.adminUser.email, inv.email)).limit(1);
+    const adminId = existing?.id ?? (await db.insert(s.adminUser).values({ email: inv.email, passwordHash }).returning({ id: s.adminUser.id }))[0]!.id;
+    if (existing) await db.update(s.adminUser).set({ passwordHash }).where(eq(s.adminUser.id, adminId));
+    await db.insert(s.adminUserStore).values({ adminUserId: adminId, storeId: inv.storeId, role: inv.role }).onConflictDoUpdate({ target: [s.adminUserStore.adminUserId, s.adminUserStore.storeId], set: { role: inv.role } });
+    await db.update(s.staffInvite).set({ acceptedAt: new Date() }).where(eq(s.staffInvite.id, inv.id));
+    return c.json({ ok: true }, 200);
+  },
+);
+
+adminSettings.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/staff/{adminUserId}/revoke-sessions', summary: 'Force-logout a staff member (revoke all sessions)',
+    request: { params: z.object({ adminUserId: z.string() }) },
+    responses: { 200: { description: 'OK', content: J(z.object({ revoked: z.number().int() })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireManage(st);
+    const { adminUserId } = c.req.valid('param');
+    const del = await db.delete(s.session).where(eq(s.session.adminUserId, adminUserId)).returning({ id: s.session.id });
+    return c.json({ revoked: del.length }, 200);
   }),
 );
