@@ -341,8 +341,8 @@ consciously re-including them. Sequenced critical-path-first below.
 | Shipping authoritative at checkout | ✅ done 2026-06-06 (5ed999c) |
 | Promotion concurrency hardening | ✅ done 2026-06-06 (5ed999c) |
 | CI + `_test` Postgres (RLS suite runs) + opt-in job scheduler | ✅ done 2026-06-06 (688b8c9) |
-| Cart as a first-class resource (CRUD/merge/abandoned/convert) | ⏳ next — buildable now |
-| Customer cookie sessions + CSRF (mirror admin model) | ⏳ buildable now (reset/verify emails ⛔ SMTP) |
+| Cart as a first-class resource (CRUD/merge/abandoned/convert) | ✅ done 2026-06-06 (6530251) |
+| Customer cookie sessions + CSRF (mirror admin model) | ✅ done 2026-06-06 (03182d8); reset/verify emails ⛔ SMTP |
 | Real NMI tokenized payments + webhooks + capture/void + gateway refunds + reconciliation | ⛔ **blocked: NMI sandbox keys** |
 | Prod admin host + CSP + `NODE_ENV=production` + non-owner DB role + backups + observability | ⛔ **blocked: domain + CF Access + one sudo** |
 
