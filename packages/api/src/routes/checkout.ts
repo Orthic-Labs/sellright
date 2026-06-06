@@ -8,6 +8,7 @@ import { calculateOrderTotals, type Promotion } from '../money/totals.js';
 import { evaluateCoupon } from '../money/coupon.js';
 import { selectAutomaticPromotion } from '../money/auto-discount.js';
 import { resolveTaxRate } from '../money/tax.js';
+import { applyGiftCard } from '../money/gift-card.js';
 import { customerToken, resolveCustomer } from '../auth/session.js';
 import { normalizeEmail } from '../auth/email.js';
 import { reserveStockOrThrow, StockReservationError, validateReservableItems } from '../orders/stock-reservation.js';
@@ -73,6 +74,7 @@ checkout.openapi(
               shippingMethodCode: z.string().optional(),
               shipping: z.number().int().min(0).default(0),
               couponCode: z.string().optional(),
+              giftCardCode: z.string().optional(), // applied as a tender against the order total
               cartToken: z.string().optional(), // when set, the cart is marked converted on success
 
               email: z.string().email().optional(),
@@ -86,7 +88,7 @@ checkout.openapi(
     responses: {
       200: {
         description: 'Order created',
-        content: { 'application/json': { schema: z.object({ code: z.string(), state: z.string(), grandTotal: z.number().int(), discountTotal: z.number().int(), currency: z.string(), couponApplied: z.boolean() }) } },
+        content: { 'application/json': { schema: z.object({ code: z.string(), state: z.string(), grandTotal: z.number().int(), discountTotal: z.number().int(), currency: z.string(), couponApplied: z.boolean(), giftCardApplied: z.number().int() }) } },
       },
       409: { description: 'Out of stock / shipping unavailable', content: { 'application/json': { schema: z.object({ error: z.string(), skus: z.array(z.string()).optional(), reason: z.string().optional() }) } } },
     },
@@ -98,7 +100,7 @@ checkout.openapi(
     const token = customerToken(c);
     const skus = [...new Set(body.items.map((i) => i.sku))];
 
-    type Result = { blocked: string[] } | { shippingError: string } | { code: string; grandTotal: number; discountTotal: number; couponApplied: boolean; replay?: boolean };
+    type Result = { blocked: string[] } | { shippingError: string } | { code: string; grandTotal: number; discountTotal: number; couponApplied: boolean; replay?: boolean; giftCardApplied?: number; paid?: boolean };
     const out = await withStore(st.id, async (tx): Promise<Result> => {
       // Idempotency: same key -> the same order (also guarded by a unique index).
       if (idemKey) {
@@ -248,11 +250,32 @@ checkout.openapi(
         await tx.update(s.promotion).set({ usedCount: sql`${s.promotion.usedCount} + 1` }).where(eq(s.promotion.id, promoId));
       }
 
+      // Gift card / store credit: drawn down as a 'gift_card' tender (not a
+      // discount). Fully covers → order goes Paid; otherwise the rest is owed.
+      let giftCardApplied = 0;
+      let paid = false;
+      if (body.giftCardCode) {
+        const [gc] = await tx.select().from(s.giftCard).where(eq(s.giftCard.code, body.giftCardCode)).limit(1);
+        if (gc) {
+          const appn = applyGiftCard({ balance: gc.balance, enabled: gc.enabled, expiresAt: gc.expiresAt }, totals.grandTotal, new Date());
+          if (appn.applicable) {
+            await tx.insert(s.payment).values({ storeId: st.id, orderId, amount: appn.applied, method: 'gift_card', state: 'Settled' });
+            await tx.update(s.giftCard).set({ balance: appn.newBalance, updatedAt: new Date() }).where(eq(s.giftCard.id, gc.id));
+            await tx.insert(s.giftCardTransaction).values({ storeId: st.id, giftCardId: gc.id, orderId, amount: -appn.applied });
+            giftCardApplied = appn.applied;
+            if (appn.remainingDue <= 0) {
+              await tx.update(s.order).set({ state: 'Paid', placedAt: new Date(), updatedAt: new Date() }).where(eq(s.order.id, orderId));
+              paid = true;
+            }
+          }
+        }
+      }
+
       // Cart → order conversion (atomic with the order): retire the cart.
       if (body.cartToken) {
         await tx.update(s.cart).set({ status: 'converted', convertedOrderId: orderId, updatedAt: new Date() }).where(eq(s.cart.token, body.cartToken));
       }
-      return { code, grandTotal: totals.grandTotal, discountTotal: totals.discountTotal, couponApplied: promoId != null };
+      return { code, grandTotal: totals.grandTotal, discountTotal: totals.discountTotal, couponApplied: promoId != null, giftCardApplied, paid };
     }).catch(async (e: unknown): Promise<Result> => {
       // Concurrent double-submit with the same Idempotency-Key: the unique
       // (store, key) index rejected the loser; its txn (incl. allocation) rolled
@@ -275,6 +298,6 @@ checkout.openapi(
 
     if ('shippingError' in out) return c.json({ error: 'shipping unavailable', reason: out.shippingError }, 409);
     if ('blocked' in out) return c.json({ error: 'unavailable or out of stock', skus: out.blocked }, 409);
-    return c.json({ code: out.code, state: 'PendingPayment', grandTotal: out.grandTotal, discountTotal: out.discountTotal, currency: st.currency, couponApplied: out.couponApplied }, 200);
+    return c.json({ code: out.code, state: out.paid ? 'Paid' : 'PendingPayment', grandTotal: out.grandTotal, discountTotal: out.discountTotal, currency: st.currency, couponApplied: out.couponApplied, giftCardApplied: out.giftCardApplied ?? 0 }, 200);
   },
 );

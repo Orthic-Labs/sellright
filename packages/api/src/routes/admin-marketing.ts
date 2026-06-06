@@ -1,4 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
+import { randomBytes } from 'node:crypto';
 import { and, desc, eq } from 'drizzle-orm';
 import { db, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
@@ -251,5 +252,69 @@ adminMarketing.openapi(
     if (!cfg) throw new HttpError(409, 'Listmonk not configured');
     const out = (await lm(cfg, '/api/campaigns', { method: 'POST', body: JSON.stringify({ name: b.name, subject: b.subject, lists: [b.listId], type: 'regular', content_type: 'html', body: b.body || '<p></p>' }) })) as { data?: { id?: number } };
     return c.json({ id: out.data?.id ?? null, name: b.name }, 200);
+  }),
+);
+
+// ── gift cards / store credit ─────────────────────────────────────────────────
+const giftCode = () => 'GC-' + randomBytes(6).toString('hex').toUpperCase().replace(/(.{4})(.{4})(.{4})/, '$1-$2-$3');
+
+adminMarketing.openapi(
+  createRoute({
+    method: 'get', path: '/v1/admin/gift-cards', summary: 'List gift cards',
+    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.any()) })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    const items = await withStore(st.storeId, async (tx) => tx.select({ id: s.giftCard.id, code: s.giftCard.code, initialBalance: s.giftCard.initialBalance, balance: s.giftCard.balance, enabled: s.giftCard.enabled, expiresAt: s.giftCard.expiresAt }).from(s.giftCard).orderBy(desc(s.giftCard.createdAt)).limit(200));
+    return c.json({ items: items.map((g) => ({ ...g, expiresAt: g.expiresAt?.toISOString() ?? null })) }, 200);
+  }),
+);
+
+adminMarketing.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/gift-cards', summary: 'Issue a gift card',
+    request: { body: { content: J(z.object({ balance: money, code: z.string().optional(), expiresAt: z.string().nullable().optional() })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string(), code: z.string() })) }, 409: { description: 'Code exists', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireManage(st);
+    const b = c.req.valid('json');
+    const code = b.code || giftCode();
+    const res = await withStore(st.storeId, async (tx) => {
+      const [dupe] = await tx.select({ id: s.giftCard.id }).from(s.giftCard).where(eq(s.giftCard.code, code)).limit(1);
+      if (dupe) return { dupe: true as const };
+      const [g] = await tx.insert(s.giftCard).values({ storeId: st.storeId, code, initialBalance: b.balance, balance: b.balance, expiresAt: b.expiresAt ? new Date(b.expiresAt) : null }).returning({ id: s.giftCard.id });
+      await tx.insert(s.giftCardTransaction).values({ storeId: st.storeId, giftCardId: g!.id, amount: b.balance });
+      await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'gift_card', entityId: g!.id, action: 'issue', data: { balance: b.balance } });
+      return { id: g!.id };
+    });
+    if ('dupe' in res) throw new HttpError(409, 'gift card code already exists');
+    return c.json({ id: res.id, code }, 200);
+  }),
+);
+
+adminMarketing.openapi(
+  createRoute({
+    method: 'patch', path: '/v1/admin/gift-cards/{id}', summary: 'Enable/disable or adjust a gift card',
+    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ enabled: z.boolean().optional(), adjust: z.number().int().optional() })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string(), balance: money })) }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireManage(st);
+    const { id } = c.req.valid('param');
+    const b = c.req.valid('json');
+    const res = await withStore(st.storeId, async (tx) => {
+      const [g] = await tx.select().from(s.giftCard).where(eq(s.giftCard.id, id)).limit(1);
+      if (!g) return null;
+      const balance = Math.max(0, g.balance + (b.adjust ?? 0));
+      await tx.update(s.giftCard).set({ enabled: b.enabled ?? g.enabled, balance, updatedAt: new Date() }).where(eq(s.giftCard.id, id));
+      if (b.adjust) await tx.insert(s.giftCardTransaction).values({ storeId: st.storeId, giftCardId: id, amount: b.adjust });
+      return { balance };
+    });
+    if (!res) throw new HttpError(404, 'gift card not found');
+    return c.json({ id, balance: res.balance }, 200);
   }),
 );

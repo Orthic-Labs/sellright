@@ -90,6 +90,26 @@ shopExtra.openapi(
   },
 );
 
+// ── gift card balance check ───────────────────────────────────────────────────
+shopExtra.openapi(
+  createRoute({
+    method: 'get', path: '/v1/shop/gift-card/{code}', summary: 'Check a gift card balance',
+    request: { params: z.object({ code: z.string() }) },
+    responses: { 200: { description: 'OK', content: J(z.object({ code: z.string(), balance: z.number().int(), currency: z.string(), valid: z.boolean() })) }, 404: { description: 'Not found', content: J(z.object({ error: z.string() })) } },
+  }),
+  async (c) => {
+    const st = await storeId(c);
+    const { code } = c.req.valid('param');
+    const gc = await withStore(st.id, async (tx) => {
+      const [g] = await tx.select({ code: s.giftCard.code, balance: s.giftCard.balance, currency: s.giftCard.currency, enabled: s.giftCard.enabled, expiresAt: s.giftCard.expiresAt }).from(s.giftCard).where(eq(s.giftCard.code, code)).limit(1);
+      return g ?? null;
+    });
+    if (!gc) return c.json({ error: 'gift card not found' }, 404);
+    const valid = gc.enabled && gc.balance > 0 && (!gc.expiresAt || gc.expiresAt.getTime() > Date.now());
+    return c.json({ code: gc.code, balance: gc.balance, currency: gc.currency, valid }, 200);
+  },
+);
+
 // ── newsletter signup (Listmonk, if configured) ──────────────────────────────
 shopExtra.openapi(
   createRoute({

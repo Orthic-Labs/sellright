@@ -390,6 +390,31 @@ export const refundLine = pgTable('refund_line', {
   restock: boolean().notNull().default(false),
 });
 
+// Gift cards / store credit. A code carries a redeemable cent balance; checkout
+// draws it down as a 'gift_card' tender. Store-scoped (RLS).
+export const giftCard = pgTable('gift_card', {
+  id: uuid().primaryKey().defaultRandom(),
+  storeId: uuid().notNull().references(() => store.id),
+  code: text().notNull().unique(),
+  initialBalance: integer().notNull(), // cents
+  balance: integer().notNull(), // cents remaining
+  currency: text().notNull().default('USD'),
+  enabled: boolean().notNull().default(true),
+  customerId: uuid().references(() => customer.id), // optional owner
+  expiresAt: timestamp({ withTimezone: true }),
+  createdAt: ts(),
+  updatedAt: ts(),
+});
+
+export const giftCardTransaction = pgTable('gift_card_transaction', {
+  id: uuid().primaryKey().defaultRandom(),
+  storeId: uuid().notNull().references(() => store.id),
+  giftCardId: uuid().notNull().references(() => giftCard.id),
+  orderId: uuid().references(() => order.id),
+  amount: integer().notNull(), // negative = redeem, positive = issue/top-up/refund
+  createdAt: ts(),
+});
+
 // Return / exchange requests (RMA). Approval restocks + records a refund through
 // the existing refund machinery. Store-scoped (RLS).
 export const returnRequest = pgTable('return_request', {
