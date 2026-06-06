@@ -36,6 +36,7 @@ export const paymentState = pgEnum('payment_state', [
   'Failed',
 ]);
 export const refundState = pgEnum('refund_state', ['Pending', 'Settled', 'Failed']);
+export const returnStatus = pgEnum('return_status', ['requested', 'approved', 'rejected', 'received', 'refunded']);
 export const promotionType = pgEnum('promotion_type', ['percentage', 'fixed', 'free_shipping']);
 
 const ts = () => timestamp({ withTimezone: true }).notNull().defaultNow();
@@ -387,6 +388,28 @@ export const refundLine = pgTable('refund_line', {
   quantity: integer().notNull(),
   amount: integer().notNull(), // cents
   restock: boolean().notNull().default(false),
+});
+
+// Return / exchange requests (RMA). Approval restocks + records a refund through
+// the existing refund machinery. Store-scoped (RLS).
+export const returnRequest = pgTable('return_request', {
+  id: uuid().primaryKey().defaultRandom(),
+  storeId: uuid().notNull().references(() => store.id),
+  orderId: uuid().notNull().references(() => order.id),
+  status: returnStatus().notNull().default('requested'),
+  reason: text(),
+  refundId: uuid().references(() => refund.id), // set when approved + refunded
+  createdAt: ts(),
+  updatedAt: ts(),
+});
+
+export const returnLine = pgTable('return_line', {
+  id: uuid().primaryKey().defaultRandom(),
+  storeId: uuid().notNull().references(() => store.id),
+  returnId: uuid().notNull().references(() => returnRequest.id),
+  orderLineId: uuid().notNull().references(() => orderLine.id),
+  quantity: integer().notNull(),
+  restock: boolean().notNull().default(true),
 });
 
 export const fulfillment = pgTable('fulfillment', {

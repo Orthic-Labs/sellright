@@ -218,6 +218,135 @@ async function alreadyRefunded(tx: { select: Function }, orderId: string): Promi
   return r?.n ?? 0;
 }
 
+// ── returns / exchanges (RMA) ─────────────────────────────────────────────────
+// Create a request, then approve (restock + record a refund via the existing
+// refund machinery) or reject. Gateway refund is payment-blocked; this records
+// the ledger refund + restock, same as the manual refund endpoint.
+adminOrders.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/orders/{code}/returns', summary: 'Open a return request for order lines',
+    request: { params: z.object({ code: z.string() }), body: { content: J(z.object({ lines: z.array(z.object({ orderLineId: z.string(), quantity: z.number().int().min(1), restock: z.boolean().default(true) })).min(1), reason: z.string().optional() })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 404: { description: 'Not found', ...errBody }, 409: { description: 'Bad lines', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireWrite(st);
+    const { code } = c.req.valid('param');
+    const body = c.req.valid('json');
+    const reqLines = body.lines as Array<{ orderLineId: string; quantity: number; restock: boolean }>;
+    const res = await withStore(st.storeId, async (tx) => {
+      const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
+      if (!o) return { kind: 'notfound' as const };
+      const oLines = await tx.select({ id: s.orderLine.id, quantity: s.orderLine.quantity, refundedQty: s.orderLine.refundedQty }).from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
+      const byId = new Map(oLines.map((l) => [l.id, l]));
+      for (const rl of reqLines) {
+        const ol = byId.get(rl.orderLineId);
+        if (!ol || rl.quantity > ol.quantity - ol.refundedQty) return { kind: 'badlines' as const };
+      }
+      const [rr] = await tx.insert(s.returnRequest).values({ storeId: st.storeId, orderId: o.id, reason: body.reason ?? null, status: 'requested' }).returning({ id: s.returnRequest.id });
+      await tx.insert(s.returnLine).values(reqLines.map((rl) => ({ storeId: st.storeId, returnId: rr!.id, orderLineId: rl.orderLineId, quantity: rl.quantity, restock: rl.restock })));
+      await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'return', entityId: rr!.id, action: 'create', data: { orderCode: code, lines: reqLines.length } });
+      return { kind: 'ok' as const, id: rr!.id };
+    });
+    if (res.kind === 'notfound') throw new HttpError(404, 'order not found');
+    if (res.kind === 'badlines') throw new HttpError(409, 'return quantity exceeds the unrefunded quantity on a line');
+    return c.json({ id: res.id }, 200);
+  }),
+);
+
+adminOrders.openapi(
+  createRoute({
+    method: 'get', path: '/v1/admin/returns', summary: 'List return requests',
+    request: { query: z.object({ status: z.enum(['requested', 'approved', 'rejected', 'received', 'refunded']).optional() }) },
+    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.any()) })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    const { status } = c.req.valid('query');
+    const items = await withStore(st.storeId, async (tx) => {
+      const base = tx.select({ id: s.returnRequest.id, status: s.returnRequest.status, reason: s.returnRequest.reason, orderCode: s.order.code, createdAt: s.returnRequest.createdAt })
+        .from(s.returnRequest).innerJoin(s.order, eq(s.order.id, s.returnRequest.orderId)).$dynamic();
+      const rows = await (status ? base.where(eq(s.returnRequest.status, status)) : base).orderBy(desc(s.returnRequest.createdAt)).limit(200);
+      return rows.map((r) => ({ ...r, createdAt: r.createdAt.toISOString() }));
+    });
+    return c.json({ items }, 200);
+  }),
+);
+
+adminOrders.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/returns/{id}/approve', summary: 'Approve a return: restock + record refund',
+    request: { params: z.object({ id: z.string() }) },
+    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string(), refunded: money, state: z.string() })) }, 404: { description: 'Not found', ...errBody }, 409: { description: 'Conflict', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireWrite(st);
+    const { id } = c.req.valid('param');
+    const res = await withStore(st.storeId, async (tx) => {
+      const [rr] = await tx.select().from(s.returnRequest).where(eq(s.returnRequest.id, id)).limit(1);
+      if (!rr) return { kind: 'notfound' as const };
+      if (rr.status !== 'requested' && rr.status !== 'approved') return { kind: 'badstate' as const, status: rr.status };
+      const [o] = await tx.select().from(s.order).where(eq(s.order.id, rr.orderId)).limit(1);
+      if (!o) return { kind: 'notfound' as const };
+      const [pay] = await tx.select().from(s.payment).where(and(eq(s.payment.orderId, o.id), eq(s.payment.state, 'Settled'))).orderBy(desc(s.payment.createdAt)).limit(1);
+      if (!pay) return { kind: 'nopayment' as const };
+      const rLines = await tx.select().from(s.returnLine).where(eq(s.returnLine.returnId, rr.id));
+      const oLines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
+      const byId = new Map(oLines.map((l) => [l.id, l]));
+
+      let amount = 0;
+      for (const rl of rLines) { const ol = byId.get(rl.orderLineId); if (ol) amount += Math.round((ol.lineTotal / ol.quantity) * rl.quantity); }
+      const priorRefunded = await alreadyRefunded(tx, o.id);
+      if (amount <= 0 || amount > o.grandTotal - priorRefunded) return { kind: 'badamount' as const };
+
+      const [refund] = await tx.insert(s.refund).values({ storeId: st.storeId, paymentId: pay.id, orderId: o.id, amount, reason: rr.reason ?? 'return', state: 'Settled' }).returning({ id: s.refund.id });
+      for (const rl of rLines) {
+        const ol = byId.get(rl.orderLineId); if (!ol) continue;
+        await tx.insert(s.refundLine).values({ storeId: st.storeId, refundId: refund!.id, orderLineId: ol.id, quantity: rl.quantity, amount: Math.round((ol.lineTotal / ol.quantity) * rl.quantity), restock: rl.restock });
+        await tx.update(s.orderLine).set({ refundedQty: Math.min(ol.quantity, ol.refundedQty + rl.quantity) }).where(eq(s.orderLine.id, ol.id));
+        if (rl.restock && ol.variantId) {
+          await tx.update(s.stock).set({ onHand: sql`${s.stock.onHand} + ${rl.quantity}` }).where(and(eq(s.stock.variantId, ol.variantId), eq(s.stock.storeId, st.storeId)));
+          await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: ol.variantId, delta: rl.quantity, reason: 'return_restock', refOrderId: o.id });
+        }
+      }
+      const newState: OrderState = priorRefunded + amount >= o.grandTotal ? 'Refunded' : 'PartiallyRefunded';
+      if (canTransition(o.state as OrderState, newState)) await tx.update(s.order).set({ state: newState, updatedAt: new Date() }).where(eq(s.order.id, o.id));
+      await tx.update(s.returnRequest).set({ status: 'refunded', refundId: refund!.id, updatedAt: new Date() }).where(eq(s.returnRequest.id, rr.id));
+      await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'return', entityId: rr.id, action: 'approve', toState: newState, data: { amount } });
+      return { kind: 'ok' as const, refunded: amount, state: newState };
+    });
+    if (res.kind === 'notfound') throw new HttpError(404, 'return not found');
+    if (res.kind === 'badstate') throw new HttpError(409, `return already ${res.status}`);
+    if (res.kind === 'nopayment') throw new HttpError(409, 'no settled payment to refund against');
+    if (res.kind === 'badamount') throw new HttpError(409, 'return amount exceeds the refundable balance');
+    return c.json({ id, refunded: res.refunded, state: res.state }, 200);
+  }),
+);
+
+adminOrders.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/returns/{id}/reject', summary: 'Reject a return request',
+    request: { params: z.object({ id: z.string() }) },
+    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireWrite(st);
+    const { id } = c.req.valid('param');
+    const ok = await withStore(st.storeId, async (tx) => {
+      const [rr] = await tx.select({ id: s.returnRequest.id }).from(s.returnRequest).where(eq(s.returnRequest.id, id)).limit(1);
+      if (!rr) return false;
+      await tx.update(s.returnRequest).set({ status: 'rejected', updatedAt: new Date() }).where(eq(s.returnRequest.id, id));
+      await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'return', entityId: id, action: 'reject' });
+      return true;
+    });
+    if (!ok) throw new HttpError(404, 'return not found');
+    return c.json({ id }, 200);
+  }),
+);
+
 // ── draft / manual orders ────────────────────────────────────────────────────
 adminOrders.openapi(
   createRoute({
