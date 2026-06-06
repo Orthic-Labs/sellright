@@ -1,5 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { and, asc, count, desc, eq, isNull, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
@@ -415,6 +415,84 @@ adminCatalog.openapi(
       return { ok: true as const };
     });
     if (!res.ok) throw new HttpError(409, 'insufficient stock at the source location');
+    return c.json({ id }, 200);
+  }),
+);
+
+// ── option-group editor (variant options) (P3) ────────────────────────────────
+adminCatalog.openapi(
+  createRoute({
+    method: 'get', path: '/v1/admin/products/{id}/options', summary: 'Option groups + values for a product',
+    request: { params: z.object({ id: z.string() }) },
+    responses: { 200: { description: 'OK', content: J(z.object({ groups: z.array(z.any()) })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    const { id } = c.req.valid('param');
+    const groups = await withStore(st.storeId, async (tx) => {
+      const gs = await tx.select().from(s.productOptionGroup).where(eq(s.productOptionGroup.productId, id));
+      const opts = gs.length ? await tx.select().from(s.productOption).where(inArray(s.productOption.groupId, gs.map((g) => g.id))) : [];
+      return gs.map((g) => ({ id: g.id, name: g.name, options: opts.filter((o) => o.groupId === g.id).map((o) => ({ id: o.id, value: o.value })) }));
+    });
+    return c.json({ groups }, 200);
+  }),
+);
+
+adminCatalog.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/products/{id}/option-groups', summary: 'Add an option group to a product',
+    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ name: z.string().min(1), values: z.array(z.string()).optional() })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireWrite(st);
+    const { id } = c.req.valid('param');
+    const b = c.req.valid('json');
+    const gid = await withStore(st.storeId, async (tx) => {
+      const [g] = await tx.insert(s.productOptionGroup).values({ storeId: st.storeId, productId: id, name: b.name }).returning({ id: s.productOptionGroup.id });
+      if (b.values?.length) await tx.insert(s.productOption).values(b.values.map((v: string) => ({ storeId: st.storeId, groupId: g!.id, value: v })));
+      return g!.id;
+    });
+    return c.json({ id: gid }, 200);
+  }),
+);
+
+adminCatalog.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/option-groups/{groupId}/options', summary: 'Add a value to an option group',
+    request: { params: z.object({ groupId: z.string() }), body: { content: J(z.object({ value: z.string().min(1) })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireWrite(st);
+    const { groupId } = c.req.valid('param');
+    const b = c.req.valid('json');
+    const oid = await withStore(st.storeId, async (tx) => {
+      const [o] = await tx.insert(s.productOption).values({ storeId: st.storeId, groupId, value: b.value }).returning({ id: s.productOption.id });
+      return o!.id;
+    });
+    return c.json({ id: oid }, 200);
+  }),
+);
+
+adminCatalog.openapi(
+  createRoute({
+    method: 'put', path: '/v1/admin/variants/{id}/options', summary: 'Set the option values for a variant (replaces the set)',
+    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ optionIds: z.array(z.string()) })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireWrite(st);
+    const { id } = c.req.valid('param');
+    const b = c.req.valid('json');
+    await withStore(st.storeId, async (tx) => {
+      await tx.delete(s.variantOption).where(eq(s.variantOption.variantId, id));
+      if (b.optionIds.length) await tx.insert(s.variantOption).values(b.optionIds.map((oid: string) => ({ storeId: st.storeId, variantId: id, optionId: oid })));
+    });
     return c.json({ id }, 200);
   }),
 );
