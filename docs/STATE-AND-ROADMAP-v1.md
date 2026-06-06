@@ -317,7 +317,55 @@ documented with the trigger that flips each):**
 | Shipping methods / tax config | ⚠ schema exists, no admin UI; DD has no tax |
 | SSE channel (cache-invalidation / order-status / live-stock) | ❌ designed, not built |
 | Prod admin host (nginx) + auth hardening | ❌ dev server + SSH tunnel |
-| CI | ❌ deliberate (manual `pnpm verify`) |
+| CI | ✅ GitHub Actions: build/typecheck/unit + RLS suite vs `_test` Postgres (2026-06-06) |
+| **Checkout shipping authoritative** (server computes rate from selected method; body.shipping is bootstrap-only fallback) | ✅ shipped 2026-06-06 (`shipping/calculator.ts` + tests) |
+| **Promotion concurrency** (FOR UPDATE row lock + re-read usedCount under lock) | ✅ shipped 2026-06-06 |
+| **Audit-pass correctness** (atomic stock-reservation rollback, coupon-verification trust w/ guest email-linking, email normalization) | ✅ committed 73e041c (2026-06-06) |
+| **Housekeeping jobs scheduled** (auto-deliver + release-stale) | ✅ opt-in in-process scheduler (`JOBS_ENABLED=1`); release-stale APPLY gated on cutoff confirmation |
+
+---
+
+## 2A. Path to 10 (Shopify parity) — roadmap + live progress
+
+Source: adversarial review of `ECOMMERCE-BACKEND-AUDIT-2026-06-06.md` (Codex scored
+the backend 5.5/10 vs a full-Shopify "10"). Note the framing caveat: a literal
+10 measures against Shopify's *entire* surface (app platform, POS, multi-currency,
+gift cards, smart collections, multi-location) — several of which are prior
+**deliberate non-goals** for the DD/RH dogfood. Reaching a literal 10 means
+consciously re-including them. Sequenced critical-path-first below.
+
+### Phase 1 — Launch-grade (the real critical path)
+| Item | State |
+|---|---|
+| Audit-pass correctness fixes (stock rollback, coupon trust, email normalize) | ✅ done 2026-06-06 (73e041c) |
+| Shipping authoritative at checkout | ✅ done 2026-06-06 (5ed999c) |
+| Promotion concurrency hardening | ✅ done 2026-06-06 (5ed999c) |
+| CI + `_test` Postgres (RLS suite runs) + opt-in job scheduler | ✅ done 2026-06-06 (688b8c9) |
+| Cart as a first-class resource (CRUD/merge/abandoned/convert) | ⏳ next — buildable now |
+| Customer cookie sessions + CSRF (mirror admin model) | ⏳ buildable now (reset/verify emails ⛔ SMTP) |
+| Real NMI tokenized payments + webhooks + capture/void + gateway refunds + reconciliation | ⛔ **blocked: NMI sandbox keys** |
+| Prod admin host + CSP + `NODE_ENV=production` + non-owner DB role + backups + observability | ⛔ **blocked: domain + CF Access + one sudo** |
+
+### Phase 2 — Shopify-core parity (buildable now unless noted)
+Order editing · returns/exchanges · invoices/packing slips · customer
+notifications (⛔ SMTP) · product **media upload** (⛔ object storage) · option-group
+editor · compare-at/cost/barcode/dimensions/metafields · product+collection SEO
+fields · smart collections + publish/SEO · tax zones/inclusive tax · automatic
+discounts · gift cards/store credit · multi-location inventory + transfers.
+
+### Phase 3 — Competitive platform
+Webhooks/outbox + app surface (⚠ Redis at scale) · bulk import/export · advanced
+analytics · fine-grained per-action permissions + staff invitations + session
+revocation · multi-currency/markets/duties.
+
+### What only Adrian can unblock (≈half of "10")
+- **Payment sandbox keys** — NMI (primary), Sezzle, Stripe
+- **SMTP / email provider** — password reset, email verification, order/shipping
+  notifications, recovery, staff invitations
+- **Object storage + CDN** (S3/R2 + Cloudflare token) — product image upload
+- **Prod admin host** (domain + Cloudflare Access) + go to set `NODE_ENV=production`
+  and create the non-owner DB role on the box (one sudo)
+- Optional: Redis (atomic rate-limit/jobs/outbox), Listmonk URL+token, SheerID account
 
 ---
 
