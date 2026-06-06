@@ -184,3 +184,42 @@ catalog.openapi(
     return c.json({ items });
   },
 );
+
+// ── storefront collection browse (manual or smart; published only) ────────────
+import { productMatchesRules, parseRules } from '../catalog/collection-rules.js';
+
+catalog.openapi(
+  createRoute({
+    method: 'get', path: '/v1/shop/collections/{slug}', summary: 'Collection page (products + SEO)',
+    request: { params: z.object({ slug: z.string() }) },
+    responses: {
+      200: { description: 'Collection', content: { 'application/json': { schema: z.object({ slug: z.string(), name: z.string(), description: z.string().nullable(), seoTitle: z.string().nullable(), seoDescription: z.string().nullable(), products: z.array(z.any()) }) } } },
+      404: { description: 'Not found', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+    },
+  }),
+  async (c) => {
+    const st = await store(c);
+    const { slug } = c.req.valid('param');
+    const out = await withStore(st.id, async (tx) => {
+      const [col] = await tx.select().from(s.collection).where(eq(s.collection.slug, slug)).limit(1);
+      if (!col || !col.published) return null;
+      let products;
+      const parsed = parseRules(col.rules);
+      if (parsed) {
+        const rows = await tx
+          .select({ id: s.product.id, slug: s.product.slug, name: s.product.name, vendor: s.product.vendor, productType: s.product.productType, tags: s.product.tags, minPrice: sql<number | null>`(select min(price) from product_variant pv where pv.product_id = ${s.product.id} and pv.deleted_at is null)` })
+          .from(s.product).where(and(eq(s.product.status, 'active'), isNull(s.product.deletedAt)));
+        products = rows.filter((r) => productMatchesRules({ name: r.name, vendor: r.vendor, productType: r.productType, tags: r.tags, minPrice: r.minPrice }, parsed)).map((r) => ({ slug: r.slug, name: r.name, minPrice: r.minPrice }));
+      } else {
+        products = await tx
+          .select({ slug: s.product.slug, name: s.product.name, minPrice: sql<number | null>`(select min(price) from product_variant pv where pv.product_id = ${s.product.id} and pv.deleted_at is null)` })
+          .from(s.collectionProduct).innerJoin(s.product, eq(s.product.id, s.collectionProduct.productId))
+          .where(and(eq(s.collectionProduct.collectionId, col.id), eq(s.product.status, 'active'), isNull(s.product.deletedAt)))
+          .orderBy(asc(s.collectionProduct.position), s.product.name);
+      }
+      return { slug: col.slug, name: col.name, description: col.description, seoTitle: col.seoTitle, seoDescription: col.seoDescription, products };
+    });
+    if (!out) return c.json({ error: 'collection not found' }, 404);
+    return c.json(out, 200);
+  },
+);

@@ -362,9 +362,16 @@ consciously re-including them. Sequenced critical-path-first below.
 | Product **media upload** | ⛔ **blocked: object storage** |
 
 ### Phase 3 — Competitive platform
-Webhooks/outbox + app surface (⚠ Redis at scale) · bulk import/export · advanced
-analytics · fine-grained per-action permissions + staff invitations + session
-revocation · multi-currency/markets/duties.
+| Item | State |
+|---|---|
+| Gift cards / store credit | ✅ done 2026-06-06 (1ffea31) |
+| Webhooks / outbox + HMAC delivery + retries | ✅ done 2026-06-06 (9817540) |
+| Bulk CSV export (products/customers) + advanced metrics (AOV/repeat) | ✅ done 2026-06-06 (fc16e0f) |
+| Staff invitations + session revocation | ✅ done 2026-06-06 (c1e2889) |
+| Multi-location inventory + transfers (additive) | ✅ done 2026-06-06 (6590dcd) |
+| Per-action permission grants (beyond the 4 roles) | ⏳ buildable now |
+| Multi-currency / markets / duties | ⏳ buildable now (touches money core — verify first) |
+| Allocation-by-location (vs aggregate) | ⏳ follow-up (keeps reservation core stable) |
 
 ### What only Adrian can unblock (≈half of "10")
 - **Payment sandbox keys** — NMI (primary), Sezzle, Stripe
