@@ -6,6 +6,7 @@ import { resolveStore, DEV_DEFAULT_STORE, type StoreCtx } from '../store-context
 import * as s from '../db/schema.js';
 import { calculateOrderTotals, type Promotion } from '../money/totals.js';
 import { evaluateCoupon } from '../money/coupon.js';
+import { selectAutomaticPromotion } from '../money/auto-discount.js';
 import { customerToken, resolveCustomer } from '../auth/session.js';
 import { normalizeEmail } from '../auth/email.js';
 
@@ -66,27 +67,35 @@ async function priceCart(
 
   let promotion: Promotion | undefined;
   let coupon: { code: string; applied: boolean; reason?: string } | null = null;
+  const availSubtotal = priced.filter((p) => p.available).reduce((a, p) => a + p.unitPrice * p.quantity, 0);
+  const now = new Date();
+  const timeValid = and(or(isNull(s.promotion.startsAt), lte(s.promotion.startsAt, now)), or(isNull(s.promotion.endsAt), gte(s.promotion.endsAt, now)));
+  const activeVerifications = opts.token ? (await resolveCustomer(tx, opts.token))?.activeVerifications ?? [] : [];
   if (opts.couponCode) {
-    const now = new Date();
     const [promo] = await tx
       .select()
       .from(s.promotion)
-      .where(and(
-        eq(s.promotion.code, opts.couponCode),
-        eq(s.promotion.enabled, true),
-        or(isNull(s.promotion.startsAt), lte(s.promotion.startsAt, now)),
-        or(isNull(s.promotion.endsAt), gte(s.promotion.endsAt, now)),
-      ))
+      .where(and(eq(s.promotion.code, opts.couponCode), eq(s.promotion.enabled, true), timeValid))
       .limit(1);
     if (!promo) {
       coupon = { code: opts.couponCode, applied: false, reason: 'invalid or expired code' };
     } else {
-      const presubtotal = priced.filter((p) => p.available).reduce((a, p) => a + p.unitPrice * p.quantity, 0);
-      const activeVerifications = opts.token ? (await resolveCustomer(tx, opts.token))?.activeVerifications ?? [] : [];
-      const ev = evaluateCoupon({ type: promo.type, value: promo.value, conditions: promo.conditions }, { subtotal: presubtotal, activeVerifications });
+      const ev = evaluateCoupon({ type: promo.type, value: promo.value, conditions: promo.conditions }, { subtotal: availSubtotal, activeVerifications });
       if (ev.valid && ev.promotion) { promotion = ev.promotion; coupon = { code: opts.couponCode, applied: true }; }
       else coupon = { code: opts.couponCode, applied: false, reason: ev.reason };
     }
+  } else {
+    // No code → preview the best eligible AUTOMATIC promotion (estimate only;
+    // checkout re-applies it authoritatively with usage-limit enforcement).
+    const autos = await tx
+      .select()
+      .from(s.promotion)
+      .where(and(isNull(s.promotion.code), eq(s.promotion.enabled, true), timeValid));
+    const best = selectAutomaticPromotion(
+      autos.map((a) => ({ id: a.id, type: a.type, value: a.value, conditions: a.conditions, priority: a.priority })),
+      { subtotal: availSubtotal, activeVerifications },
+    );
+    if (best) promotion = { type: best.type, value: best.value };
   }
 
   const totals = calculateOrderTotals({

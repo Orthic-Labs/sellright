@@ -8,12 +8,14 @@ export const adminMarketing = new OpenAPIHono();
 
 // ── promotions / discounts manager ───────────────────────────────────────────
 const promoBody = z.object({
-  code: z.string().min(1),
+  code: z.string().min(1).nullable().optional(), // null/omitted = AUTOMATIC discount
   type: z.enum(['percentage', 'fixed', 'free_shipping']),
-  value: money.default(0), // percent basis-points or fixed cents
+  value: money.default(0), // percentage: 0–100; fixed: cents
   conditions: z.array(z.any()).nullable().optional(),
   usageLimit: z.number().int().nullable().optional(),
   perCustomerUsageLimit: z.number().int().nullable().optional(),
+  priority: z.number().int().optional(), // automatic-discount tie-break (higher wins)
+  exclusionGroup: z.string().nullable().optional(),
   startsAt: z.string().nullable().optional(),
   endsAt: z.string().nullable().optional(),
   enabled: z.boolean().default(true),
@@ -51,8 +53,9 @@ adminMarketing.openapi(
         if (dupe) return { dupe: true as const };
       }
       const [p] = await tx.insert(s.promotion).values({
-        storeId: st.storeId, code: b.code, type: b.type, value: b.value,
+        storeId: st.storeId, code: b.code ?? null, type: b.type, value: b.value,
         conditions: b.conditions ?? null, usageLimit: b.usageLimit ?? null, perCustomerUsageLimit: b.perCustomerUsageLimit ?? null,
+        priority: b.priority ?? 0, exclusionGroup: b.exclusionGroup ?? null,
         startsAt: b.startsAt ? new Date(b.startsAt) : null, endsAt: b.endsAt ? new Date(b.endsAt) : null, enabled: b.enabled,
       }).returning({ id: s.promotion.id });
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'promotion', entityId: p!.id, action: 'create', data: { code: b.code } });
@@ -109,7 +112,7 @@ adminMarketing.openapi(
       const [p] = await tx.select({ id: s.promotion.id }).from(s.promotion).where(eq(s.promotion.id, id)).limit(1);
       if (!p) return false;
       const patch: Record<string, unknown> = {};
-      for (const k of ['code', 'type', 'value', 'conditions', 'usageLimit', 'perCustomerUsageLimit', 'enabled'] as const) if (b[k] !== undefined) patch[k] = b[k];
+      for (const k of ['code', 'type', 'value', 'conditions', 'usageLimit', 'perCustomerUsageLimit', 'priority', 'exclusionGroup', 'enabled'] as const) if (b[k] !== undefined) patch[k] = b[k];
       if (b.startsAt !== undefined) patch.startsAt = b.startsAt ? new Date(b.startsAt) : null;
       if (b.endsAt !== undefined) patch.endsAt = b.endsAt ? new Date(b.endsAt) : null;
       await tx.update(s.promotion).set(patch).where(eq(s.promotion.id, id));

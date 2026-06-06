@@ -6,6 +6,7 @@ import { resolveStore, DEV_DEFAULT_STORE, type StoreCtx } from '../store-context
 import * as s from '../db/schema.js';
 import { calculateOrderTotals, type Promotion } from '../money/totals.js';
 import { evaluateCoupon } from '../money/coupon.js';
+import { selectAutomaticPromotion } from '../money/auto-discount.js';
 import { customerToken, resolveCustomer } from '../auth/session.js';
 import { normalizeEmail } from '../auth/email.js';
 import { reserveStockOrThrow, StockReservationError, validateReservableItems } from '../orders/stock-reservation.js';
@@ -154,21 +155,35 @@ checkout.openapi(
         customerId = byEmail?.id ?? null;
       }
 
-      // ── Coupon: re-validate server-side + enforce usage limits ───────────────
+      // ── Discount: explicit coupon OR best automatic; re-validate server-side
+      //    + enforce usage limits ──────────────────────────────────────────────
       let promotion: Promotion | undefined;
       let promoId: string | null = null;
-      if (body.couponCode) {
+      {
         const now = new Date();
-        const [promo] = await tx
-          .select()
-          .from(s.promotion)
-          .where(and(
-            eq(s.promotion.code, body.couponCode),
-            eq(s.promotion.enabled, true),
-            or(isNull(s.promotion.startsAt), lte(s.promotion.startsAt, now)),
-            or(isNull(s.promotion.endsAt), gte(s.promotion.endsAt, now)),
-          ))
-          .limit(1);
+        const timeValid = and(
+          or(isNull(s.promotion.startsAt), lte(s.promotion.startsAt, now)),
+          or(isNull(s.promotion.endsAt), gte(s.promotion.endsAt, now)),
+        );
+        let promo: typeof s.promotion.$inferSelect | undefined;
+        if (body.couponCode) {
+          [promo] = await tx
+            .select()
+            .from(s.promotion)
+            .where(and(eq(s.promotion.code, body.couponCode), eq(s.promotion.enabled, true), timeValid))
+            .limit(1);
+        } else {
+          // No code → apply the best eligible AUTOMATIC promotion (code IS NULL).
+          const autos = await tx
+            .select()
+            .from(s.promotion)
+            .where(and(isNull(s.promotion.code), eq(s.promotion.enabled, true), timeValid));
+          const best = selectAutomaticPromotion(
+            autos.map((a) => ({ id: a.id, type: a.type, value: a.value, conditions: a.conditions, priority: a.priority })),
+            { subtotal: subtotalCents, activeVerifications },
+          );
+          promo = best ? autos.find((a) => a.id === best.id) : undefined;
+        }
         if (promo) {
           // Serialize concurrent redemptions of THIS promo: take a row lock and
           // re-read usedCount under it, so the global/per-customer limit checks
