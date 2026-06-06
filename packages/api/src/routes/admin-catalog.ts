@@ -337,3 +337,84 @@ adminCatalog.openapi(
     return c.json({ items: items.map((m) => ({ ...m, createdAt: m.createdAt.toISOString() })) }, 200);
   }),
 );
+
+// ── multi-location inventory (P3) ─────────────────────────────────────────────
+adminCatalog.openapi(
+  createRoute({
+    method: 'get', path: '/v1/admin/locations', summary: 'List inventory locations',
+    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.any()) })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    const items = await withStore(st.storeId, async (tx) => tx.select().from(s.location).orderBy(desc(s.location.isDefault), s.location.name));
+    return c.json({ items }, 200);
+  }),
+);
+
+adminCatalog.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/locations', summary: 'Create a location',
+    request: { body: { content: J(z.object({ name: z.string().min(1), code: z.string().min(1), isDefault: z.boolean().default(false), address: z.record(z.string(), z.any()).optional() })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireWrite(st);
+    const b = c.req.valid('json');
+    const id = await withStore(st.storeId, async (tx) => {
+      if (b.isDefault) await tx.update(s.location).set({ isDefault: false }).where(eq(s.location.isDefault, true));
+      const [l] = await tx.insert(s.location).values({ storeId: st.storeId, name: b.name, code: b.code, isDefault: b.isDefault, address: b.address ?? null }).returning({ id: s.location.id });
+      return l!.id;
+    });
+    return c.json({ id }, 200);
+  }),
+);
+
+adminCatalog.openapi(
+  createRoute({
+    method: 'patch', path: '/v1/admin/variants/{id}/location-stock', summary: 'Set a variant on-hand at a location (recomputes aggregate)',
+    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ locationId: z.string(), onHand: z.number().int().min(0) })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string(), onHand: z.number().int() })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireWrite(st);
+    const { id } = c.req.valid('param');
+    const b = c.req.valid('json');
+    const total = await withStore(st.storeId, async (tx) => {
+      await tx.insert(s.stockLocation).values({ storeId: st.storeId, variantId: id, locationId: b.locationId, onHand: b.onHand })
+        .onConflictDoUpdate({ target: [s.stockLocation.variantId, s.stockLocation.locationId], set: { onHand: b.onHand } });
+      const [sum] = await tx.select({ n: sql<number>`coalesce(sum(${s.stockLocation.onHand}),0)::int` }).from(s.stockLocation).where(eq(s.stockLocation.variantId, id));
+      const agg = sum?.n ?? 0;
+      await tx.insert(s.stock).values({ storeId: st.storeId, variantId: id, onHand: agg, allocated: 0 })
+        .onConflictDoUpdate({ target: s.stock.variantId, set: { onHand: agg } });
+      return agg;
+    });
+    return c.json({ id, onHand: total }, 200);
+  }),
+);
+
+adminCatalog.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/variants/{id}/transfer', summary: 'Transfer stock between locations (aggregate unchanged)',
+    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ fromLocationId: z.string(), toLocationId: z.string(), quantity: z.number().int().min(1) })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 409: { description: 'Insufficient at source', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireWrite(st);
+    const { id } = c.req.valid('param');
+    const b = c.req.valid('json');
+    const res = await withStore(st.storeId, async (tx) => {
+      const [from] = await tx.select({ onHand: s.stockLocation.onHand }).from(s.stockLocation).where(and(eq(s.stockLocation.variantId, id), eq(s.stockLocation.locationId, b.fromLocationId))).limit(1);
+      if (!from || from.onHand < b.quantity) return { ok: false as const };
+      await tx.update(s.stockLocation).set({ onHand: sql`${s.stockLocation.onHand} - ${b.quantity}` }).where(and(eq(s.stockLocation.variantId, id), eq(s.stockLocation.locationId, b.fromLocationId)));
+      await tx.insert(s.stockLocation).values({ storeId: st.storeId, variantId: id, locationId: b.toLocationId, onHand: b.quantity })
+        .onConflictDoUpdate({ target: [s.stockLocation.variantId, s.stockLocation.locationId], set: { onHand: sql`${s.stockLocation.onHand} + ${b.quantity}` } });
+      return { ok: true as const };
+    });
+    if (!res.ok) throw new HttpError(409, 'insufficient stock at the source location');
+    return c.json({ id }, 200);
+  }),
+);

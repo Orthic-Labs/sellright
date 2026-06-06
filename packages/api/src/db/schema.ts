@@ -403,6 +403,31 @@ export const refundLine = pgTable('refund_line', {
   restock: boolean().notNull().default(false),
 });
 
+// Multi-location inventory (additive). The aggregate `stock.onHand` remains the
+// sellable total the reservation engine works against; these tables add
+// per-location breakdown + transfers for fulfillment routing/visibility.
+export const location = pgTable('location', {
+  id: uuid().primaryKey().defaultRandom(),
+  storeId: uuid().notNull().references(() => store.id),
+  name: text().notNull(),
+  code: text().notNull(),
+  address: jsonb(),
+  isDefault: boolean().notNull().default(false),
+  enabled: boolean().notNull().default(true),
+  createdAt: ts(),
+});
+
+export const stockLocation = pgTable(
+  'stock_location',
+  {
+    storeId: uuid().notNull().references(() => store.id),
+    variantId: uuid().notNull().references(() => productVariant.id),
+    locationId: uuid().notNull().references(() => location.id),
+    onHand: integer().notNull().default(0),
+  },
+  (t) => [primaryKey({ columns: [t.variantId, t.locationId] })],
+);
+
 // Webhooks — outbox pattern. An endpoint subscribes to topics; events are
 // enqueued as deliveries and pushed by the scheduler with HMAC signing + retry.
 export const webhookEndpoint = pgTable('webhook_endpoint', {
