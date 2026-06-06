@@ -369,7 +369,7 @@ admin.openapi(
 admin.openapi(
   createRoute({
     method: 'patch', path: '/v1/admin/products/{id}', summary: 'Update product',
-    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ name: z.string().optional(), description: z.string().nullable().optional(), status: z.enum(['draft', 'active']).optional() })) } },
+    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ name: z.string().optional(), description: z.string().nullable().optional(), status: z.enum(['draft', 'active']).optional(), vendor: z.string().nullable().optional(), productType: z.string().nullable().optional(), tags: z.array(z.string()).nullable().optional(), seoTitle: z.string().nullable().optional(), seoDescription: z.string().nullable().optional(), metafields: z.record(z.string(), z.any()).nullable().optional() })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
@@ -393,7 +393,7 @@ admin.openapi(
 admin.openapi(
   createRoute({
     method: 'patch', path: '/v1/admin/variants/{id}', summary: 'Update variant price/availability',
-    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ price: money.optional(), salePrice: money.nullable().optional(), enabled: z.boolean().optional() })) } },
+    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ price: money.optional(), salePrice: money.nullable().optional(), compareAtPrice: money.nullable().optional(), cost: money.nullable().optional(), barcode: z.string().nullable().optional(), weightG: z.number().int().nullable().optional(), dimensions: z.record(z.string(), z.any()).nullable().optional(), metafields: z.record(z.string(), z.any()).nullable().optional(), enabled: z.boolean().optional() })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {

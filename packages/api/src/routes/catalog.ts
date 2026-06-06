@@ -26,6 +26,7 @@ const Variant = z.object({
   name: z.string(),
   price: Money,
   salePrice: Money.nullable(),
+  compareAtPrice: Money.nullable(),
   isPreOrder: z.boolean(),
   enabled: z.boolean(),
 });
@@ -35,6 +36,8 @@ const ProductDetail = z.object({
   name: z.string(),
   description: z.string().nullable(),
   status: z.string(),
+  seoTitle: z.string().nullable(),
+  seoDescription: z.string().nullable(),
   images: z.array(z.string()),
   variants: z.array(Variant),
 });
@@ -118,6 +121,7 @@ catalog.openapi(
           name: s.productVariant.name,
           price: s.productVariant.price,
           salePrice: s.productVariant.salePrice,
+          compareAtPrice: s.productVariant.compareAtPrice,
           isPreOrder: s.productVariant.isPreOrder,
           enabled: s.productVariant.enabled,
         })
@@ -135,6 +139,8 @@ catalog.openapi(
         name: p.name,
         description: p.description,
         status: p.status,
+        seoTitle: p.seoTitle,
+        seoDescription: p.seoDescription,
         images: imgs.map((i) => i.path),
         variants,
       };

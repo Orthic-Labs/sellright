@@ -116,6 +116,12 @@ export const product = pgTable(
     description: text(),
     status: productStatus().notNull().default('draft'),
     featuredAssetId: uuid().references(() => asset.id),
+    vendor: text(),
+    productType: text(),
+    tags: text().array(),
+    seoTitle: text(),
+    seoDescription: text(),
+    metafields: jsonb(), // arbitrary key/value app data
     deletedAt: timestamp({ withTimezone: true }),
     createdAt: ts(),
     updatedAt: ts(),
@@ -147,10 +153,15 @@ export const productVariant = pgTable(
     name: text().notNull(),
     price: integer().notNull(), // cents
     salePrice: integer(), // cents, nullable
+    compareAtPrice: integer(), // cents — "was" price for strikethrough display
+    cost: integer(), // cents — unit cost (margin reporting; never shown to shoppers)
     preOrderPrice: integer(), // cents, nullable
     isPreOrder: boolean().notNull().default(false),
     shipDate: timestamp({ withTimezone: true }), // pre-order fulfillment hold
     weightG: integer(),
+    barcode: text(), // UPC/EAN/ISBN
+    dimensions: jsonb(), // { length, width, height, unit }
+    metafields: jsonb(),
     enabled: boolean().notNull().default(true),
     deletedAt: timestamp({ withTimezone: true }),
     createdAt: ts(),
