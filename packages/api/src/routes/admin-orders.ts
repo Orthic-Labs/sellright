@@ -9,6 +9,8 @@ import { canTransition, type OrderState } from '../money/fsm.js';
 import { reserveStockOrThrow, StockReservationError, validateReservableItems } from '../orders/stock-reservation.js';
 import { normalizeEmail } from '../auth/email.js';
 import { buildInvoice, buildPackingSlip, renderInvoiceHtml } from '../orders/invoice.js';
+import { evaluateCoupon } from '../money/coupon.js';
+import { resolveTaxRate } from '../money/tax.js';
 
 export const adminOrders = new OpenAPIHono();
 
@@ -60,6 +62,73 @@ adminOrders.openapi(
     if (!data) throw new HttpError(404, 'order not found');
     
     return c.json(buildPackingSlip(data.order as never, data.lines, data.store), 200);
+  }),
+);
+
+// ── order editing (unpaid orders only — no gateway adjustment needed) ─────────
+adminOrders.openapi(
+  createRoute({
+    method: 'patch', path: '/v1/admin/orders/{code}/lines', summary: 'Edit lines of an unpaid order (re-reserve stock + recompute totals)',
+    request: { params: z.object({ code: z.string() }), body: { content: J(z.object({ lines: z.array(z.object({ sku: z.string(), quantity: z.number().int().min(1) })).min(1) })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ code: z.string(), grandTotal: money })) }, 404: { description: 'Not found', ...errBody }, 409: { description: 'Bad state / stock', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireWrite(st);
+    const { code } = c.req.valid('param');
+    const body = c.req.valid('json');
+    const reqLines: Array<{ sku: string; quantity: number }> = body.lines;
+    type R = { kind: 'ok'; grandTotal: number } | { kind: 'notfound' } | { kind: 'badstate'; state: string } | { kind: 'blocked'; skus: string[] };
+    const res: R = await withStore(st.storeId, async (tx): Promise<R> => {
+      const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
+      if (!o) return { kind: 'notfound' };
+      if (o.state !== 'PendingPayment') return { kind: 'badstate', state: o.state };
+
+      // Release the order's current allocations, then re-reserve the new set
+      // (throws → whole txn rolls back, leaving the order + stock untouched).
+      const oldLines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
+      for (const l of oldLines) {
+        const rel = l.quantity - l.fulfilledQty;
+        if (rel > 0 && l.variantId) {
+          await tx.update(s.stock).set({ allocated: sql`greatest(${s.stock.allocated} - ${rel}, 0)` }).where(and(eq(s.stock.variantId, l.variantId), eq(s.stock.storeId, st.storeId)));
+        }
+      }
+      const skus = [...new Set(reqLines.map((i) => i.sku))];
+      const variants = await tx.select().from(s.productVariant).where(and(inArray(s.productVariant.sku, skus), isNull(s.productVariant.deletedAt)));
+      const bySku = new Map(variants.map((v) => [v.sku, v]));
+      const blocked = validateReservableItems(reqLines, bySku);
+      if (blocked.length) throw new StockReservationError(blocked);
+      await reserveStockOrThrow(tx, st.storeId, reqLines, bySku);
+
+      const priced = reqLines.map((i) => { const v = bySku.get(i.sku)!; return { v, qty: i.quantity, unitPrice: unitPrice(v) }; });
+      const subtotalCents = priced.reduce((a, p) => a + p.unitPrice * p.qty, 0);
+      const [storeRow] = await tx.select({ taxRate: s.store.taxRate, taxInclusive: s.store.taxInclusive, shippingTaxable: s.store.shippingTaxable }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1);
+      const shipCountry = (o.shippingAddress as { country?: string } | null)?.country ?? null;
+      const zones = await tx.select({ countries: s.taxZone.countries, rate: s.taxZone.rate, priority: s.taxZone.priority }).from(s.taxZone).where(eq(s.taxZone.enabled, true));
+      const taxRate = resolveTaxRate(zones, shipCountry, storeRow!.taxRate);
+
+      // Keep the order's existing promotion applied, recomputed on the new subtotal.
+      let promotion;
+      if (o.promotionId) {
+        const [promo] = await tx.select().from(s.promotion).where(eq(s.promotion.id, o.promotionId)).limit(1);
+        if (promo) { const ev = evaluateCoupon({ type: promo.type, value: promo.value, conditions: promo.conditions }, { subtotal: subtotalCents, activeVerifications: [] }); if (ev.valid && ev.promotion) promotion = ev.promotion; }
+      }
+      const totals = calculateOrderTotals({ lines: priced.map((p) => ({ unitPrice: p.unitPrice, quantity: p.qty })), shipping: o.shippingTotal, taxRate, taxInclusive: storeRow!.taxInclusive, shippingTaxable: storeRow!.shippingTaxable, promotion });
+
+      await tx.delete(s.orderLine).where(eq(s.orderLine.orderId, o.id));
+      await tx.insert(s.orderLine).values(priced.map((p, idx) => ({
+        storeId: st.storeId, orderId: o.id, variantId: p.v.id, variantSku: p.v.sku, variantName: p.v.name,
+        quantity: p.qty, unitPrice: p.unitPrice, lineSubtotal: totals.lines[idx]!.lineSubtotal, lineDiscount: totals.lines[idx]!.lineDiscount, lineTax: 0, lineTotal: totals.lines[idx]!.lineTotal,
+      })));
+      await tx.update(s.order).set({ subtotal: totals.subtotal, discountTotal: totals.discountTotal, shippingTotal: totals.shippingTotal, taxTotal: totals.taxTotal, grandTotal: totals.grandTotal, updatedAt: new Date() }).where(eq(s.order.id, o.id));
+      await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: o.id, action: 'edit_lines', data: { grandTotal: totals.grandTotal, lines: priced.length } });
+      return { kind: 'ok', grandTotal: totals.grandTotal };
+    }).catch((e: unknown): R => { if (e instanceof StockReservationError) return { kind: 'blocked', skus: e.skus }; throw e; });
+
+    if (res.kind === 'notfound') throw new HttpError(404, 'order not found');
+    if (res.kind === 'badstate') throw new HttpError(409, `only unpaid (PendingPayment) orders can be edited — this one is ${res.state}`);
+    if (res.kind === 'blocked') return c.json({ error: 'insufficient stock', skus: res.skus }, 409);
+    return c.json({ code, grandTotal: res.grandTotal }, 200);
   }),
 );
 
