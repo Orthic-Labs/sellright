@@ -369,9 +369,15 @@ consciously re-including them. Sequenced critical-path-first below.
 | Bulk CSV export (products/customers) + advanced metrics (AOV/repeat) | ✅ done 2026-06-06 (fc16e0f) |
 | Staff invitations + session revocation | ✅ done 2026-06-06 (c1e2889) |
 | Multi-location inventory + transfers (additive) | ✅ done 2026-06-06 (6590dcd) |
-| Per-action permission grants (beyond the 4 roles) | ⏳ buildable now |
-| Multi-currency / markets / duties | ⏳ buildable now (touches money core — verify first) |
+| Per-action permission grants (beyond the 4 roles) | ✅ done 2026-06-06 (f4429a8) |
+| Multi-currency (presentment/display) | ✅ done 2026-06-06 (eab9b1a) |
+| Storefront collection browse (manual+smart) | ✅ done 2026-06-06 (9aa7591) |
+| Option-group editor | ✅ done 2026-06-06 |
 | Allocation-by-location (vs aggregate) | ⏳ follow-up (keeps reservation core stable) |
+| Multi-currency **settlement** (charge in non-base) | ⛔ needs a payment gateway |
+
+### Buildable backend surface — COMPLETE (2026-06-06)
+Phases 1–3 (the no-credentials backend) are done: **27 commits this session, migrations 0011–0021, 44 unit tests, every new store-scoped table FORCE-RLS'd.** The remaining gap to a literal Shopify-10 is now only: (a) the 4 credential/infra blockers below, (b) the **admin SPA UI** for the ~25 new endpoints (a frontend workstream that needs a running env + the taste gate), and (c) **end-to-end verification** — the new migrations/endpoints are typechecked + unit-green but not yet integration-run (needs the CI `_test` Postgres or a box deploy).
 
 ### What only Adrian can unblock (≈half of "10")
 - **Payment sandbox keys** — NMI (primary), Sezzle, Stripe
