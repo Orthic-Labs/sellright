@@ -46,11 +46,24 @@ export const store = pgTable('store', {
   slug: text().notNull().unique(),
   name: text().notNull(),
   currency: text().notNull().default('USD'),
-  taxRate: integer().notNull().default(0), // basis points (875 = 8.75%); 0 = no tax
+  taxRate: integer().notNull().default(0), // basis points (875 = 8.75%); 0 = no tax. Fallback when no tax_zone matches.
+  taxInclusive: boolean().notNull().default(false), // true = catalog prices already include tax (extract, don't add)
   shippingTaxable: boolean().notNull().default(false),
   config: jsonb(),
   createdAt: ts(),
   updatedAt: ts(),
+});
+
+// Per-destination tax rates. The matching zone (by ship-to country) overrides the
+// store's flat taxRate; no match → store.taxRate. Store-scoped (RLS).
+export const taxZone = pgTable('tax_zone', {
+  id: uuid().primaryKey().defaultRandom(),
+  storeId: uuid().notNull().references(() => store.id),
+  name: text().notNull(),
+  countries: text().array().notNull(), // ISO-3166 alpha-2 list this zone covers
+  rate: integer().notNull(), // basis points
+  priority: integer().notNull().default(0), // higher wins when multiple zones match
+  enabled: boolean().notNull().default(true),
 });
 
 export const adminUser = pgTable('admin_user', {

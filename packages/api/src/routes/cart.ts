@@ -100,7 +100,7 @@ async function priceCart(
 
   const totals = calculateOrderTotals({
     lines: priced.filter((p) => p.available).map((p) => ({ unitPrice: p.unitPrice, quantity: p.quantity })),
-    shipping: opts.shipping ?? 0, taxRate: st.taxRate, shippingTaxable: st.shippingTaxable, promotion,
+    shipping: opts.shipping ?? 0, taxRate: st.taxRate, taxInclusive: st.taxInclusive, shippingTaxable: st.shippingTaxable, promotion,
   });
 
   let idx = 0;

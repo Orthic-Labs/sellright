@@ -18,6 +18,7 @@ export interface TotalsInput {
   shipping: number; // cents
   taxRate: number; // basis points (875 = 8.75%); 0 = no tax
   shippingTaxable?: boolean;
+  taxInclusive?: boolean; // true = line/shipping prices already include tax (extract, don't add)
   promotion?: Promotion | null;
 }
 
@@ -58,8 +59,16 @@ export function calculateOrderTotals(input: TotalsInput): OrderTotals {
   const discountedSubtotal = subtotal - discountTotal;
   const shippingTotal = promo?.type === 'free_shipping' ? 0 : input.shipping;
   const taxableShipping = input.shippingTaxable ? shippingTotal : 0;
-  const taxTotal = input.taxRate > 0 ? roundHalfUp(((discountedSubtotal + taxableShipping) * input.taxRate) / 10000) : 0;
-  const grandTotal = discountedSubtotal + shippingTotal + taxTotal;
+  const taxableBase = discountedSubtotal + taxableShipping;
+  // Inclusive: the tax is already inside taxableBase — extract it (don't add).
+  // Exclusive (default): tax is added on top.
+  let taxTotal = 0;
+  if (input.taxRate > 0) {
+    taxTotal = input.taxInclusive
+      ? taxableBase - roundHalfUp((taxableBase * 10000) / (10000 + input.taxRate))
+      : roundHalfUp((taxableBase * input.taxRate) / 10000);
+  }
+  const grandTotal = input.taxInclusive ? discountedSubtotal + shippingTotal : discountedSubtotal + shippingTotal + taxTotal;
 
   return { lines, subtotal, discountTotal, shippingTotal, taxTotal, grandTotal };
 }

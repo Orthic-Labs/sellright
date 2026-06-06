@@ -7,6 +7,7 @@ import * as s from '../db/schema.js';
 import { calculateOrderTotals, type Promotion } from '../money/totals.js';
 import { evaluateCoupon } from '../money/coupon.js';
 import { selectAutomaticPromotion } from '../money/auto-discount.js';
+import { resolveTaxRate } from '../money/tax.js';
 import { customerToken, resolveCustomer } from '../auth/session.js';
 import { normalizeEmail } from '../auth/email.js';
 import { reserveStockOrThrow, StockReservationError, validateReservableItems } from '../orders/stock-reservation.js';
@@ -210,9 +211,16 @@ checkout.openapi(
         }
       }
 
+      // Destination tax: the ship-to country's zone overrides the store flat rate.
+      const taxZones = await tx
+        .select({ countries: s.taxZone.countries, rate: s.taxZone.rate, priority: s.taxZone.priority })
+        .from(s.taxZone)
+        .where(eq(s.taxZone.enabled, true));
+      const taxRate = resolveTaxRate(taxZones, shipCountry, st.taxRate);
+
       const totals = calculateOrderTotals({
         lines: priced.map((p) => ({ unitPrice: p.unitPrice, quantity: p.qty })),
-        shipping: shippingAmount, taxRate: st.taxRate, shippingTaxable: st.shippingTaxable, promotion,
+        shipping: shippingAmount, taxRate, taxInclusive: st.taxInclusive, shippingTaxable: st.shippingTaxable, promotion,
       });
 
       const orderId = randomUUID();

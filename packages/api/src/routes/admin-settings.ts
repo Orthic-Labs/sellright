@@ -1,5 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { db, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { hashPassword } from '../auth/password.js';
@@ -83,14 +83,14 @@ adminSettings.openapi(
     const st = requireStore(admin, c);
     const row = await storeRow(st.storeId);
     const config = cfg(row);
-    return c.json({ name: row.name, slug: row.slug, currency: row.currency, taxRate: row.taxRate, shippingTaxable: row.shippingTaxable, payments: (config.payments as object) ?? { cod: true, manual: true }, notifications: (config.notifications as object) ?? {}, googleClientId: (config.googleClientId as string) ?? null }, 200);
+    return c.json({ name: row.name, slug: row.slug, currency: row.currency, taxRate: row.taxRate, taxInclusive: row.taxInclusive, shippingTaxable: row.shippingTaxable, payments: (config.payments as object) ?? { cod: true, manual: true }, notifications: (config.notifications as object) ?? {}, googleClientId: (config.googleClientId as string) ?? null }, 200);
   }),
 );
 
 adminSettings.openapi(
   createRoute({
     method: 'patch', path: '/v1/admin/settings/store', summary: 'Update store details / tax',
-    request: { body: { content: J(z.object({ name: z.string().optional(), currency: z.string().optional(), taxRate: z.number().int().min(0).optional(), shippingTaxable: z.boolean().optional() })) } },
+    request: { body: { content: J(z.object({ name: z.string().optional(), currency: z.string().optional(), taxRate: z.number().int().min(0).optional(), taxInclusive: z.boolean().optional(), shippingTaxable: z.boolean().optional() })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
@@ -221,6 +221,77 @@ adminSettings.openapi(
     const st = requireStore(admin, c); requireManage(st);
     const { id } = c.req.valid('param');
     await withStore(st.storeId, async (tx) => { await tx.delete(s.shippingMethod).where(eq(s.shippingMethod.id, id)); });
+    return c.json({ id }, 200);
+  }),
+);
+
+// ── tax zones (destination rates; override the store flat taxRate) ────────────
+adminSettings.openapi(
+  createRoute({
+    method: 'get', path: '/v1/admin/tax-zones', summary: 'List tax zones',
+    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.any()) })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    const items = await withStore(st.storeId, async (tx) => tx.select().from(s.taxZone).orderBy(desc(s.taxZone.priority), s.taxZone.name));
+    return c.json({ items }, 200);
+  }),
+);
+
+adminSettings.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/tax-zones', summary: 'Create a tax zone',
+    request: { body: { content: J(z.object({ name: z.string().min(1), countries: z.array(z.string()).min(1), rate: z.number().int().min(0), priority: z.number().int().default(0), enabled: z.boolean().default(true) })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireManage(st);
+    const b = c.req.valid('json');
+    const id = await withStore(st.storeId, async (tx) => {
+      const [z2] = await tx.insert(s.taxZone).values({ storeId: st.storeId, name: b.name, countries: b.countries.map((x: string) => x.toUpperCase()), rate: b.rate, priority: b.priority, enabled: b.enabled }).returning({ id: s.taxZone.id });
+      return z2!.id;
+    });
+    return c.json({ id }, 200);
+  }),
+);
+
+adminSettings.openapi(
+  createRoute({
+    method: 'patch', path: '/v1/admin/tax-zones/{id}', summary: 'Update a tax zone',
+    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ name: z.string().optional(), countries: z.array(z.string()).optional(), rate: z.number().int().min(0).optional(), priority: z.number().int().optional(), enabled: z.boolean().optional() })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireManage(st);
+    const { id } = c.req.valid('param');
+    const b = c.req.valid('json');
+    const patch: Record<string, unknown> = { ...b };
+    if (b.countries) patch.countries = b.countries.map((x: string) => x.toUpperCase());
+    const ok = await withStore(st.storeId, async (tx) => {
+      const [z2] = await tx.select({ id: s.taxZone.id }).from(s.taxZone).where(eq(s.taxZone.id, id)).limit(1);
+      if (!z2) return false;
+      await tx.update(s.taxZone).set(patch).where(eq(s.taxZone.id, id));
+      return true;
+    });
+    if (!ok) throw new HttpError(404, 'tax zone not found');
+    return c.json({ id }, 200);
+  }),
+);
+
+adminSettings.openapi(
+  createRoute({
+    method: 'delete', path: '/v1/admin/tax-zones/{id}', summary: 'Delete a tax zone',
+    request: { params: z.object({ id: z.string() }) },
+    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireManage(st);
+    const { id } = c.req.valid('param');
+    await withStore(st.storeId, async (tx) => { await tx.delete(s.taxZone).where(eq(s.taxZone.id, id)); });
     return c.json({ id }, 200);
   }),
 );
