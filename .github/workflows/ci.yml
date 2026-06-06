@@ -77,9 +77,10 @@ jobs:
       - name: Typecheck
         run: pnpm -r typecheck
 
-      - name: Unit + RLS tests (as non-owner app role)
+      - name: Unit + RLS tests (seed as owner, assert isolation as app role)
         env:
-          DATABASE_URL: ${{ env.APP_URL }}
+          DATABASE_URL: ${{ env.OWNER_URL }}
+          DATABASE_URL_NONOWNER: ${{ env.APP_URL }}
           NODE_ENV: test
         run: pnpm --filter @sellright/api test
 
