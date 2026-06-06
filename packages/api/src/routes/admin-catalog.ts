@@ -4,6 +4,25 @@ import { randomBytes } from 'node:crypto';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { HttpError, J, errBody, money, Page, requireAdmin, requireStore, requireWrite, guard, slugify } from './admin-helpers.js';
+import { productMatchesRules, parseRules } from '../catalog/collection-rules.js';
+import type { Tx } from '../db/client.js';
+
+/** Products matching a smart collection's rules (dynamic membership, no stored rows). */
+async function smartCollectionProducts(tx: Tx, rules: unknown) {
+  const parsed = parseRules(rules);
+  if (!parsed) return [];
+  const rows = await tx
+    .select({
+      id: s.product.id, name: s.product.name, status: s.product.status, vendor: s.product.vendor,
+      productType: s.product.productType, tags: s.product.tags,
+      minPrice: sql<number | null>`(select min(price) from product_variant pv where pv.product_id = ${s.product.id} and pv.deleted_at is null)`,
+    })
+    .from(s.product)
+    .where(isNull(s.product.deletedAt));
+  return rows
+    .filter((r) => productMatchesRules({ name: r.name, vendor: r.vendor, productType: r.productType, tags: r.tags, minPrice: r.minPrice }, parsed))
+    .map((r) => ({ id: r.id, name: r.name, status: r.status, position: 0 }));
+}
 
 export const adminCatalog = new OpenAPIHono();
 
@@ -135,7 +154,7 @@ adminCatalog.openapi(
 adminCatalog.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/collections', summary: 'Create a collection',
-    request: { body: { content: J(z.object({ name: z.string().min(1), slug: z.string().optional(), description: z.string().optional(), parentId: z.string().nullable().optional() })) } },
+    request: { body: { content: J(z.object({ name: z.string().min(1), slug: z.string().optional(), description: z.string().optional(), parentId: z.string().nullable().optional(), rules: z.any().optional(), published: z.boolean().optional(), seoTitle: z.string().optional(), seoDescription: z.string().optional() })) } },
     responses: { 200: { description: 'Created', content: J(z.object({ id: z.string(), slug: z.string() })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
@@ -144,7 +163,7 @@ adminCatalog.openapi(
     const body = c.req.valid('json');
     const out = await withStore(st.storeId, async (tx) => {
       const slug = await uniqueSlug(tx, s.collection, body.slug ? slugify(body.slug) : slugify(body.name));
-      const [col] = await tx.insert(s.collection).values({ storeId: st.storeId, name: body.name, slug, description: body.description ?? null, parentId: body.parentId ?? null }).returning({ id: s.collection.id });
+      const [col] = await tx.insert(s.collection).values({ storeId: st.storeId, name: body.name, slug, description: body.description ?? null, parentId: body.parentId ?? null, rules: body.rules ?? null, published: body.published ?? true, seoTitle: body.seoTitle ?? null, seoDescription: body.seoDescription ?? null }).returning({ id: s.collection.id });
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'collection', entityId: col!.id, action: 'create', data: { name: body.name } });
       return { id: col!.id, slug };
     });
@@ -165,13 +184,16 @@ adminCatalog.openapi(
     const out = await withStore(st.storeId, async (tx) => {
       const [col] = await tx.select().from(s.collection).where(eq(s.collection.id, id)).limit(1);
       if (!col) return null;
-      const products = await tx
-        .select({ id: s.product.id, name: s.product.name, status: s.product.status, position: s.collectionProduct.position })
-        .from(s.collectionProduct)
-        .innerJoin(s.product, eq(s.product.id, s.collectionProduct.productId))
-        .where(and(eq(s.collectionProduct.collectionId, id), isNull(s.product.deletedAt)))
-        .orderBy(asc(s.collectionProduct.position), s.product.name);
-      return { id: col.id, slug: col.slug, name: col.name, description: col.description, parentId: col.parentId, products };
+      // Smart collection (has rules) → dynamic membership; else manual join.
+      const products = col.rules
+        ? await smartCollectionProducts(tx, col.rules)
+        : await tx
+            .select({ id: s.product.id, name: s.product.name, status: s.product.status, position: s.collectionProduct.position })
+            .from(s.collectionProduct)
+            .innerJoin(s.product, eq(s.product.id, s.collectionProduct.productId))
+            .where(and(eq(s.collectionProduct.collectionId, id), isNull(s.product.deletedAt)))
+            .orderBy(asc(s.collectionProduct.position), s.product.name);
+      return { id: col.id, slug: col.slug, name: col.name, description: col.description, parentId: col.parentId, rules: col.rules, published: col.published, seoTitle: col.seoTitle, seoDescription: col.seoDescription, smart: !!col.rules, products };
     });
     if (!out) throw new HttpError(404, 'collection not found');
     return c.json(out, 200);
@@ -181,7 +203,7 @@ adminCatalog.openapi(
 adminCatalog.openapi(
   createRoute({
     method: 'patch', path: '/v1/admin/collections/{id}', summary: 'Update a collection',
-    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ name: z.string().optional(), description: z.string().nullable().optional(), parentId: z.string().nullable().optional() })) } },
+    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ name: z.string().optional(), description: z.string().nullable().optional(), parentId: z.string().nullable().optional(), rules: z.any().nullable().optional(), published: z.boolean().optional(), seoTitle: z.string().nullable().optional(), seoDescription: z.string().nullable().optional(), imageAssetId: z.string().nullable().optional() })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {

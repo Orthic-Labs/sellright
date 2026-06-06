@@ -190,6 +190,12 @@ export const collection = pgTable(
     name: text().notNull(),
     parentId: uuid().references((): import('drizzle-orm/pg-core').AnyPgColumn => collection.id),
     description: text(),
+    rules: jsonb(), // { match: 'all'|'any', conditions: [{ field, op, value }] } — null = manual collection
+    published: boolean().notNull().default(true),
+    publishedAt: timestamp({ withTimezone: true }),
+    imageAssetId: uuid().references(() => asset.id),
+    seoTitle: text(),
+    seoDescription: text(),
   },
   (t) => [unique('collection_store_slug').on(t.storeId, t.slug)],
 );

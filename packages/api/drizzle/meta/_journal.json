@@ -99,6 +99,13 @@
       "when": 1780761256610,
       "tag": "0013_product_merchandising",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1780761485092,
+      "tag": "0014_smart_collections",
+      "breakpoints": true
     }
   ]
 }
