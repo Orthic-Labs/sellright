@@ -347,11 +347,19 @@ consciously re-including them. Sequenced critical-path-first below.
 | Prod admin host + CSP + `NODE_ENV=production` + non-owner DB role + backups + observability | ⛔ **blocked: domain + CF Access + one sudo** |
 
 ### Phase 2 — Shopify-core parity (buildable now unless noted)
-Order editing · returns/exchanges · invoices/packing slips · customer
-notifications (⛔ SMTP) · product **media upload** (⛔ object storage) · option-group
-editor · compare-at/cost/barcode/dimensions/metafields · product+collection SEO
-fields · smart collections + publish/SEO · tax zones/inclusive tax · automatic
-discounts · gift cards/store credit · multi-location inventory + transfers.
+| Item | State |
+|---|---|
+| Automatic discounts (best-eligible, no code) | ✅ done 2026-06-06 (8c56053) |
+| Tax zones (destination rates) + tax-inclusive pricing | ✅ done 2026-06-06 (b22ee5c) |
+| Product/variant merchandising: compare-at/cost/barcode/dimensions/metafields + SEO | ✅ done 2026-06-06 (22420eb) |
+| Smart collections (rule membership) + publish/SEO | ✅ done 2026-06-06 (48c1e1d) |
+| Invoices + packing slips | ✅ done 2026-06-06 (6bd3a30) |
+| Order editing after placement (recompute + stock + audit) | ⏳ next — buildable now |
+| Returns / exchanges (RMA → restock → refund) | ⏳ next — buildable now |
+| Option-group editor UI · bulk import/export | ⏳ buildable now (schema present) |
+| Gift cards / store credit · multi-location inventory + transfers | ⏳ buildable now |
+| Customer notifications (order/shipping emails) | ⛔ **blocked: SMTP** |
+| Product **media upload** | ⛔ **blocked: object storage** |
 
 ### Phase 3 — Competitive platform
 Webhooks/outbox + app surface (⚠ Redis at scale) · bulk import/export · advanced
