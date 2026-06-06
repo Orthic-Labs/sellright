@@ -471,6 +471,7 @@ export const cart = pgTable('cart', {
   id: uuid().primaryKey().defaultRandom(),
   storeId: uuid().notNull().references(() => store.id),
   customerId: uuid().references(() => customer.id),
+  email: text(), // captured for guest abandoned-cart recovery (no account yet)
   token: text().notNull().unique(), // device/guest cart token
   status: cartStatus().notNull().default('active'),
   convertedOrderId: uuid().references(() => order.id),

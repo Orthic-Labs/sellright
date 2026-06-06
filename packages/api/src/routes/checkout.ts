@@ -71,6 +71,8 @@ checkout.openapi(
               shippingMethodCode: z.string().optional(),
               shipping: z.number().int().min(0).default(0),
               couponCode: z.string().optional(),
+              cartToken: z.string().optional(), // when set, the cart is marked converted on success
+
               email: z.string().email().optional(),
               shippingAddress: z.record(z.string(), z.unknown()).optional(),
               billingAddress: z.record(z.string(), z.unknown()).optional(),
@@ -221,6 +223,11 @@ checkout.openapi(
       if (promoId) {
         await tx.insert(s.promotionUsage).values({ storeId: st.id, promotionId: promoId, customerId, orderId });
         await tx.update(s.promotion).set({ usedCount: sql`${s.promotion.usedCount} + 1` }).where(eq(s.promotion.id, promoId));
+      }
+
+      // Cart → order conversion (atomic with the order): retire the cart.
+      if (body.cartToken) {
+        await tx.update(s.cart).set({ status: 'converted', convertedOrderId: orderId, updatedAt: new Date() }).where(eq(s.cart.token, body.cartToken));
       }
       return { code, grandTotal: totals.grandTotal, discountTotal: totals.discountTotal, couponApplied: promoId != null };
     }).catch(async (e: unknown): Promise<Result> => {

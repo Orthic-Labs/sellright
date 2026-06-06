@@ -156,7 +156,7 @@ adminOrders.openapi(
       const where = isNull(s.cart.convertedOrderId);
       const rows = await tx
         .select({
-          token: s.cart.token, status: s.cart.status, updatedAt: s.cart.updatedAt, email: s.customer.email,
+          token: s.cart.token, status: s.cart.status, updatedAt: s.cart.updatedAt, email: sql<string | null>`coalesce(${s.cart.email}, ${s.customer.email})`,
           items: sql<number>`(select coalesce(sum(cl.quantity),0) from cart_line cl where cl.cart_id = ${s.cart.id})::int`,
         })
         .from(s.cart).leftJoin(s.customer, eq(s.customer.id, s.cart.customerId))
