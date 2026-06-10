@@ -17,7 +17,7 @@ Companion to [APP-AUDIT-2026-06-10.md](APP-AUDIT-2026-06-10.md) (the WHY) — th
 9. Runtime facts: Hono 4 + `@hono/zod-openapi`, Drizzle 0.36, `pg`, tsx, vitest. **No Redis** (despite `.env.example` vars — no redis dep exists). Jobs are `setInterval` via `jobs/scheduler.ts::every()`, gated on `JOBS_ENABLED=1`.
 10. Stack conventions: routes are `OpenAPIHono` sub-apps mounted in `app.ts`; zod schemas on every route; snake_case DB / camelCase TS via Drizzle `casing`.
 
-**Work package order** (dependencies, not durations): WP0 → WP1 → {WP2, WP3 in parallel} → WP4 (needs WP2+WP3) → WP5 (needs WP4) → WP6 anytime → WP7 last.
+**Work package order** (dependencies, not durations): WP0 → WP1 → {WP2, WP3, WP8, WP9 in parallel} → WP4 (needs WP2+WP3) → {WP5, WP10} (need WP4) → WP6 anytime → WP7 last. WP8–WP10 added 2026-06-10 to close the "basics to 10" gaps (catalog authoring, accuracy/security sweep, saved cards).
 
 ---
 
@@ -266,16 +266,88 @@ rclone copy /home/vendure/backups/sellright remote:sellright-backups --max-age 2
 ### 6d. Monitoring (minimum mechanism — no observability stack)
 Uptime: external check on `GET /v1/health` (UptimeRobot-class, alert to email/Telegram). Errors: `app.ts:62` onError additionally appends JSON-line to a log file; a 5-min cron greps the last window and alerts on threshold. That's it for v1.
 
-**Accept:** reboot the box → API and admin come back unaided; restore drill documented with output; health alert fires when API stopped deliberately.
+### 6e. Load-test gate (added 2026-06-10 — "speed locked down" requires evidence, not design)
+k6 (single binary, no infra) against the box from the laptop, on `sellright_test`-seeded data at DD scale (13k orders, full catalog):
+```js
+// scripts-deploy/loadtest.js — k6 run scripts-deploy/loadtest.js
+import http from 'k6/http';
+export const options = { scenarios: {
+  browse:   { executor: 'constant-vus', vus: 50, duration: '2m', exec: 'browse' },   // manifest+PDP
+  checkout: { executor: 'constant-arrival-rate', rate: 5, timeUnit: '1s', duration: '2m', preAllocatedVUs: 30, exec: 'checkout' },
+}, thresholds: { http_req_duration: ['p(95)<300'], http_req_failed: ['rate<0.01'] } };
+```
+Browse hits `GET /v1/shop/catalog/products/{slug}`; checkout exercises the full `POST /v1/shop/checkout` → `/pay` (cod) path with unique idempotency keys. **Thresholds: p95 < 300ms, error rate < 1%, zero oversells in `stock` after the run** (`allocated <= on_hand` for all rows). Run AFTER the WP9 index batch; capture before/after `EXPLAIN ANALYZE` for the top-5 queries in the results note.
+
+**Accept:** reboot the box → API and admin come back unaided; restore drill documented with output; health alert fires when API stopped deliberately; load-test thresholds met with results committed to `docs/fable/LOADTEST-RESULTS-<date>.md`.
 
 ## WP7 — RH cutover (gates in [STRATEGY-MOAT-POSITIONING.md](STRATEGY-MOAT-POSITIONING.md) §4)
 
 Pre-flight: all WP0–WP6 accepted; `rotten` store row + catalog imported (importer is DD-specific in field mapping — check `import/catalog.ts` custom-field block against RH's Vendure schema first); end-to-end sandbox order incl. refund; DNS/cache plan; Regime-A rollback rehearsed (point storefront providers back at Vendure GraphQL per flow). Then: storefront → SellRight in production, Vendure warm for 30 days, watch error log + Stripe dashboard daily. **Write the hour-by-hour runbook as a separate doc when WP4 is done — too many unknowns now (honesty: this plan does not contain it).**
 
+## WP8 — Catalog authoring: asset service + admin create UI (added 2026-06-10)
+
+Correcting the audit: the create **API already exists** — `POST /v1/admin/products` (`admin-catalog.ts:43`), `POST /v1/admin/products/{id}/variants` (`:87`), option groups/values (`:425-483`), collections CRUD. The `asset` table exists (`schema.ts:113-122`: `id, store_id, type, path, width, height, alt`) and `product.imageAssetId` references it (`schema.ts:211`). What's missing: **an upload endpoint (none anywhere — grep `upload|multipart` returns nothing), file storage, image serving, and the admin UI pages.**
+
+### 8a. Storage decision: local disk + nginx, NOT S3/R2 for v1
+Minimum mechanism: one box, nginx already planned (WP6b). `ASSET_DIR=/home/vendure/sites/sellright-assets/<storeSlug>/` (note: `CATALOG_DIR` manifests already use a sibling pattern). nginx serves `/assets/` from it with long-cache headers; Cloudflare caches in front. S3/R2 + image resizing is the DD-scale upgrade — design the `asset.path` value as a relative key (`<storeSlug>/2026/06/<uuid>.webp`) so the storage backend can swap without a data migration.
+
+### 8b. Upload endpoint — `src/routes/admin-assets.ts` (new, mount in `app.ts`)
+```ts
+// POST /v1/admin/assets — multipart; field "file"; returns asset row
+adminAssets.post('/v1/admin/assets', async (c) => {
+  const ctx = await requireAdmin(c);                       // reuse admin-helpers auth (verify exact fn name)
+  const body = await c.req.parseBody();                    // Hono multipart
+  const file = body['file'];
+  if (!(file instanceof File)) return c.json({ error: 'file required' }, 400);
+  if (file.size > 10 * 1024 * 1024) return c.json({ error: 'max 10MB' }, 413);
+  const buf = Buffer.from(await file.arrayBuffer());
+  const img = sharp(buf);                                  // dep: sharp — also re-encodes, which strips any payload hidden in the original
+  const meta = await img.metadata();
+  if (!meta.format || !['jpeg','png','webp','avif'].includes(meta.format))
+    return c.json({ error: 'unsupported format' }, 415);   // magic-bytes validation via sharp, NOT extension/mime-header trust
+  const key = `${ctx.store.slug}/${new Date().toISOString().slice(0,7)}/${crypto.randomUUID()}.webp`;
+  await fs.mkdir(path.dirname(`${env.ASSET_DIR}/${key}`), { recursive: true });
+  await img.webp({ quality: 85 }).toFile(`${env.ASSET_DIR}/${key}`);
+  const [row] = await withStore(ctx.store.id, (tx) =>
+    tx.insert(s.asset).values({ storeId: ctx.store.id, type: 'image', path: key, width: meta.width, height: meta.height, alt: body['alt']?.toString() ?? null }).returning());
+  return c.json(row, 201);
+});
+```
+Plus `DELETE /v1/admin/assets/{id}` (DB row + file; refuse if referenced by `product.imageAssetId`/`collection.imageAssetId`), `GET /v1/admin/assets` (paged list for a picker), and a `product_asset` link question: **check whether multi-image-per-product needs a join table** — current schema is single `imageAssetId`; DD products have galleries. If galleries are required (they are — check `import/catalog.ts` asset handling for what Vendure had), add migration `product_asset(product_id, asset_id, position)` with FORCE RLS.
+
+### 8c. Admin UI (the actual gap per `packages/admin/README.md` "Known gaps")
+Pages: product create form (name/slug/description/price → POST products, then variants via option groups), image upload + picker component (drag-drop → POST assets → attach), variant editor for new products. Follow existing page patterns in `packages/admin/src/pages/` (hand-rolled fetch client, not hono hc).
+
+### 8d. Storefront image path
+Manifest generator (`manifest/generate.ts`) and catalog REST responses emit asset URLs as `/assets/<path>` — verify how imported DD images are referenced today (currently proxied to Vendure's asset server) and add a migration script that downloads/re-encodes them into `ASSET_DIR` (this also unblocks the DD asset-migration item early).
+
+**Accept:** create a product with two gallery images entirely through the admin UI against dev; images served via nginx with cache headers; `pnpm verify` green (new RLS table covered by assert-force-rls automatically); upload rejects a PHP file renamed `.png`.
+
+## WP9 — Accuracy & security sweep (added 2026-06-10 — every orphaned audit item gets a home)
+
+1. **Fixed-discount line distribution** (`money/totals.ts:51-57`): distribute `fixed` discounts across lines proportionally to `lineSubtotal` (largest-remainder method so cents sum exactly), so `lineDiscount`/`lineTotal` are correct per line — refund and tax math depend on it. Test: $10 off across 3 lines of $7/$11/$13 sums to exactly 1000 with no cent lost.
+2. **TOTP replay guard** (`auth/totp.ts:42-47`): store last-accepted `(adminUserId, codeStep)` and reject reuse within the window — one small table or column, no dep.
+3. **`session` + `admin_user_store` enumeration** (audit §4 #6): revoke app-role SELECT where possible or add scoped policies; document the chosen stance in the migration header.
+4. **Import TRUNCATE guard** (`import/catalog.ts:48` et al.): refuse to run unless target DB name ends `_dev`/`_test` or `--force` passed; print row counts and 5s countdown; close source pool in `finally`.
+5. **Guest auto-link by email** (`checkout.ts:157-160`): keep, but mark linked orders `linked_via: 'email_match'` in metadata + exclude from account order list until customer verifies email (decide + document; the silent link is the issue, not the link).
+6. **RLS test expansion** (`db/rls.test.ts`): table-driven loop over ALL store-scoped tables from `assert-force-rls.ts`'s discovery query — insert as store A, assert invisible + unwritable as store B, fail-closed without context. One parameterized test kills the whole gap class.
+7. **Index batch** — audit §6.7 verbatim, now homed here as migration `00NN_indexes.sql`; verify every column name against `schema.ts` first; run before the WP6e load test.
+
+**Accept:** `pnpm verify` green; RLS suite covers every store-scoped table; discount-distribution property test (random line sets, sum invariant) passes.
+
+## WP10 — Saved cards (vault) — basics-complete payments (added 2026-06-10; needs WP3+WP4)
+
+The `payment_method` table is schema-ready (`gateway, provider_customer_ref, provider_method_ref, brand, last4, exp_month, exp_year, is_default`) and `customer.stripe_customer_id` exists — nothing uses them.
+- **Save:** on a logged-in customer's successful payment with consent checkbox: create/reuse Stripe Customer (`stripe_customer_id`), attach the PaymentMethod, insert `payment_method` row with brand/last4/exp from Stripe's response. SellRight stores **refs only — never PAN** (stays SAQ-A).
+- **Use:** `GET /v1/shop/account/payment-methods` (list: brand/last4/exp/is_default — refs never leave the server); checkout option `savedMethodId` → server creates PaymentIntent with `customer` + `payment_method` + `off_session: false`, confirm client-side (3DS may still challenge).
+- **Manage:** `DELETE /v1/shop/account/payment-methods/{id}` (detach at Stripe + delete row); set-default.
+- Expiry hygiene: `webhooks/stripe` handles `payment_method.updated/detached` to sync the vault row.
+
+**Accept:** sandbox flow — pay & save → second order pays with saved card without re-entering details → delete card → it's gone at Stripe too.
+
 ---
 
 ## Not in this plan (explicit)
 - NMI + Sezzle providers (DD cutover — spec after Stripe proves the provider model; NMI Collect.js tokenization keeps SAQ-A scope, Sezzle is `requiresRedirect: true` — the flag exists for it).
-- Asset/object storage (S3/R2) — blocks DD (image-heavy), not RH cutover if RH images stay on the existing asset host short-term. Decide before DD.
-- Index batch (audit §6.7) — fold into any WP's migration; verify column names first.
-- Load testing, PCI formal scoping, multi-brand rollout sequencing beyond RH→DD.
+- S3/R2 + on-the-fly image resizing — WP8a's relative-key design makes this a drop-in upgrade at DD scale; local disk + Cloudflare cache is v1.
+- PCI formal scoping, multi-brand rollout sequencing beyond RH→DD, HA/standby Postgres (single-box reliability accepted per Adrian 2026-06-10 — Hetzner uptime + systemd + backups + PITR-before-DD is the stance).
