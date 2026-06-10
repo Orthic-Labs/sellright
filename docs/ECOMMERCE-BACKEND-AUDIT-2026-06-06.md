@@ -1,5 +1,7 @@
 # SellRight Ecommerce Backend Audit
 
+> **SUPERSEDED (2026-06-10):** this audit predates the 27-commit hardening session (migrations 0011–0021) and lists items as gaps that have since shipped (cart CRUD, promotion concurrency, refunds, gift cards, webhooks, smart collections, staff invites, multi-location, per-action permissions, multi-currency — see STATE-AND-ROADMAP-v1.md §2A). Current audit: [docs/fable/APP-AUDIT-2026-06-10.md](fable/APP-AUDIT-2026-06-10.md). Kept for historical context only.
+
 Generated: 2026-06-06
 Workspace: `D:\Claude\sellright`
 Commit at audit start: `c8d31c7e1cfd1ba4551c3cb0db0cfb269eb6294b`
