@@ -31,7 +31,11 @@ async function verifyGoogleIdToken(credential: string, clientId: string): Promis
   return { sub: p.sub, email: normalizeEmail(p.email), emailVerified, firstName: p.given_name ?? null, lastName: p.family_name ?? null };
 }
 
-const CustomerOut = z.object({ email: z.string(), firstName: z.string().nullable(), lastName: z.string().nullable(), emailVerified: z.boolean() });
+// WP5: isMigrated is true for customers imported from Vendure with no password
+// hash. The storefront reads it to render the "set your password" banner. The
+// shape is intentionally identical across register / login / google / me so
+// the storefront doesn't need to know which endpoint produced the customer.
+const CustomerOut = z.object({ email: z.string(), firstName: z.string().nullable(), lastName: z.string().nullable(), emailVerified: z.boolean(), isMigrated: z.boolean() });
 
 export const auth = new OpenAPIHono();
 
@@ -69,7 +73,8 @@ auth.openapi(
     if ('taken' in out) { recordLoginFailure(regIp, regBucket); return c.json({ error: 'email already registered' }, 409); }
     clearLoginAttempts(regIp, regBucket);
     setCustomerCookies(c, out.token, newCsrf());
-    return c.json({ token: out.token, customer: { email, firstName: out.firstName, lastName: out.lastName, emailVerified: false } }, 200);
+    // Fresh register: passwordHash was just set, isMigrated = false.
+    return c.json({ token: out.token, customer: { email, firstName: out.firstName, lastName: out.lastName, emailVerified: false, isMigrated: false } }, 200);
   },
 );
 
@@ -96,8 +101,12 @@ auth.openapi(
     const out = await withStore(st.id, async (tx): Promise<{ ok: false } | { ok: true; token: string; customer: z.infer<typeof CustomerOut> }> => {
       const [cust] = await tx.select().from(s.customer).where(eq(s.customer.email, email)).limit(1);
       if (!cust || !(await verifyPassword(password, cust.passwordHash))) return { ok: false };
+      // A migrated customer who set a password via the forgot-password flow
+      // (WP2d) has passwordHash != null here, so isMigrated will be false from
+      // then on. The flag is intentionally a snapshot of the current state,
+      // not a sticky "migrated" bit.
       const token = await createSession(tx, st.id, cust.id);
-      return { ok: true, token, customer: { email: cust.email, firstName: cust.firstName, lastName: cust.lastName, emailVerified: cust.emailVerified } };
+      return { ok: true, token, customer: { email: cust.email, firstName: cust.firstName, lastName: cust.lastName, emailVerified: cust.emailVerified, isMigrated: cust.passwordHash == null } };
     });
     if (!out.ok) { recordLoginFailure(ip, email); return c.json({ error: 'invalid email or password' }, 401); }
     clearLoginAttempts(ip, email);
@@ -140,7 +149,7 @@ auth.openapi(
         }
       }
       const token = await createSession(tx, st.id, cust.id);
-      return { token, customer: { email: cust.email, firstName: cust.firstName, lastName: cust.lastName, emailVerified: true } };
+      return { token, customer: { email: cust.email, firstName: cust.firstName, lastName: cust.lastName, emailVerified: true, isMigrated: cust.passwordHash == null } };
     });
     setCustomerCookies(c, out.token, newCsrf());
     return c.json(out, 200);
@@ -164,7 +173,7 @@ auth.openapi(
     if (!token) return c.json({ error: 'not authenticated' }, 401);
     const cust = await withStore(st.id, (tx) => resolveCustomer(tx, token));
     if (!cust) return c.json({ error: 'not authenticated' }, 401);
-    return c.json({ email: cust.email, firstName: cust.firstName, lastName: cust.lastName, emailVerified: cust.emailVerified }, 200);
+    return c.json({ email: cust.email, firstName: cust.firstName, lastName: cust.lastName, emailVerified: cust.emailVerified, isMigrated: cust.isMigrated }, 200);
   },
 );
 
