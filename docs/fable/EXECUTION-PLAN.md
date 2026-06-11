@@ -22,7 +22,7 @@
 > - ✅ Rate limiting on `/checkout`, `/pay`, `/register` — **done by freebuff**
 > - ✅ SellRight→Vendure reconciliation exporter (`admin/reconcile-export.ts`, CLI + stream) — **done by freebuff**
 > - 🟢 WP3 Stripe provider + inbound webhooks — **scaffolding built by claude** (provider w/ pure server-side `verifyIntent`, `createPaymentIntent`, `POST /orders/{code}/payment-intent`, inbound `POST /v1/webhooks/stripe` signature-verified + idempotent, gateway-backed refund, shared `settle.ts`, 10 unit tests). **Only the live sandbox e2e run is pending** (needs the Stripe key from Adrian); refund/dispute webhook reconcile are TODO stubs.
-> - ⏳ WP4 Storefront rewire — out of scope per task brief (Regime-A rollback path)
+> - 🟢 WP4a backend endpoints — **built + smoke-tested by claude** (catalog `search` + `products/{slug}/stock`; account `PATCH /me`, `POST /password`, addresses POST/PATCH/DELETE + widened list; `auth/check-email` rate-limited; `/me|/login|/register|/google` now return id+phone). Verified live against real DD catalog + a register→patch→address-CRUD→delete e2e run. **⏳ WP4b (Qwik storefront rewire** — the actual store front-end calling these) **remains** — needs the storefront app running + browser QA, not done.
 > - ✅ WP5 Migrated-customer activation — **done by freebuff** (server side: `isMigrated: boolean` on `/auth/{me,register,login,google}`; lazy forgot-password flow covers password set; storefront banner remains a WP4 follow-up)
 > - ⏳ WP7 RH cutover — excluded (launch)
 > - ⏳ WP10 Saved cards — needs WP3+WP4 (Stripe + storefront rewire)
