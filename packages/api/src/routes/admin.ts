@@ -11,6 +11,8 @@ import { clientIp, loginRetryAfter, recordLoginFailure, clearLoginAttempts } fro
 import { setAuthCookies, clearAuthCookies, newCsrf, cookie, SESSION_COOKIE } from '../auth/cookies.js';
 import { verifyTotp } from '../auth/totp.js';
 import { normalizeEmail } from '../auth/email.js';
+import { sendShippingNotification } from '../email/dispatch.js';
+import { emitEvent } from '../webhooks/emit.js';
 
 export const admin = new OpenAPIHono();
 
@@ -257,11 +259,30 @@ admin.openapi(
         }
       }
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: o.id, action: 'fulfill', toState: state });
-      return { kind: 'ok' as const, fid, state };
+      // WP2: emit order.shipped (existing webhook pattern) + best-effort email
+      // to the linked customer. Only on the first Shipped transition so we
+      // don't double-email a re-fulfill that just refreshes tracking. Both the
+      // webhook emit and the Shipped state commit in the same txn.
+      // Webhook fires for ALL orders (3rd-party fulfillment/analytics subscribers);
+      // the customer email is gated on customerId (nullable FK → eq() needs guard).
+      let emailTo: string | null = null;
+      if (state === 'Shipped' && advancingToShipped) {
+        await emitEvent(tx, st.storeId, 'order.shipped', { code, trackingCode: trackingCode ?? null, carrier: carrier ?? null });
+        if (o.customerId) {
+          const [cust] = await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, o.customerId)).limit(1);
+          if (cust?.email) emailTo = cust.email;
+        }
+      }
+      return { kind: 'ok' as const, fid, state, emailTo, trackingCode: trackingCode ?? null, carrier: carrier ?? null };
     });
     if (res.kind === 'notfound') throw new HttpError(404, 'order not found');
     if (res.kind === 'badstate') throw new HttpError(409, `order not fulfillable in state ${res.state}`);
     if (res.kind === 'regress') throw new HttpError(409, `cannot move fulfillment from ${res.state} back to Shipped`);
+    // WP2: best-effort email AFTER the txn commits (failure doesn't roll back
+    // the Shipped state). Webhook is already in the outbox via the txn above.
+    if (res.emailTo) {
+      try { await sendShippingNotification({ name: st.name, currency: st.currency }, res.emailTo, { code, trackingCode: res.trackingCode, carrier: res.carrier }); } catch (e) { console.error('[email:shipping] failed', e); }
+    }
     return c.json({ code, fulfillment: res.state }, 200);
   }),
 );

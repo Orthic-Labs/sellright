@@ -12,8 +12,9 @@ import { resolveAdmin, type AdminPrincipal, type AdminStoreAccess } from '../aut
 export const J = (schema: z.ZodTypeAny) => ({ 'application/json': { schema } });
 export const errBody = { content: J(z.object({ error: z.string() })) };
 
+export type HttpStatus = 400 | 401 | 403 | 404 | 409 | 413 | 415 | 429;
 export class HttpError extends Error {
-  constructor(public status: 401 | 403 | 404 | 409 | 429, message: string) {
+  constructor(public status: HttpStatus, message: string) {
     super(message);
   }
 }

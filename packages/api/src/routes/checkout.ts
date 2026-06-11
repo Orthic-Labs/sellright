@@ -14,6 +14,7 @@ import { customerToken, resolveCustomer } from '../auth/session.js';
 import { normalizeEmail } from '../auth/email.js';
 import { reserveStockOrThrow, StockReservationError, validateReservableItems } from '../orders/stock-reservation.js';
 import { isMethodEligible, shippingRate, ShippingUnavailableError } from '../shipping/calculator.js';
+import { sendOrderConfirmation } from '../email/dispatch.js';
 
 async function store(c: { req: { header: (k: string) => string | undefined } }): Promise<StoreCtx> {
   const slug = c.req.header('x-store-slug') ?? DEV_DEFAULT_STORE;
@@ -302,6 +303,28 @@ checkout.openapi(
 
     if ('shippingError' in out) return c.json({ error: 'shipping unavailable', reason: out.shippingError }, 409);
     if ('blocked' in out) return c.json({ error: 'unavailable or out of stock', skus: out.blocked }, 409);
+
+    // WP2: best-effort order-confirmation email to the linked customer (or the
+    // guest email on the request). Not blocking — a failed send must not roll
+    // back the order the user just paid for.
+    try {
+      const email = await withStore(st.id, async (tx) => {
+        const [o] = await tx
+          .select({ id: s.order.id, customerEmail: s.customer.email, code: s.order.code, grandTotal: s.order.grandTotal, currency: s.order.currency })
+          .from(s.order)
+          .leftJoin(s.customer, eq(s.customer.id, s.order.customerId))
+          .where(eq(s.order.code, out.code))
+          .limit(1);
+        if (!o) return null;
+        const lines = await tx
+          .select({ name: s.orderLine.variantName, quantity: s.orderLine.quantity, lineTotal: s.orderLine.lineTotal })
+          .from(s.orderLine)
+          .where(eq(s.orderLine.orderId, o.id));
+        return { to: o.customerEmail ?? null, data: { code: out.code, grandTotal: out.grandTotal, currency: o.currency, lines } };
+      });
+      if (email?.to) await sendOrderConfirmation({ name: st.name, currency: st.currency }, email.to, email.data);
+    } catch (e) { console.error('[email:orderConfirmation] failed', e); }
+
     return c.json({ code: out.code, state: out.paid ? 'Paid' : 'PendingPayment', grandTotal: out.grandTotal, discountTotal: out.discountTotal, currency: st.currency, couponApplied: out.couponApplied, giftCardApplied: out.giftCardApplied ?? 0 }, 200);
   },
 );

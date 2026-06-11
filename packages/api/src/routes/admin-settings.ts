@@ -6,6 +6,8 @@ import * as s from '../db/schema.js';
 import { hashPassword } from '../auth/password.js';
 import { newTotpSecret, verifyTotp, otpauthUri } from '../auth/totp.js';
 import { normalizeEmail } from '../auth/email.js';
+import { sendStaffInvite } from '../email/dispatch.js';
+import { env } from '../env.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireWrite, requireManage, requirePermission, guard } from './admin-helpers.js';
 
 export const adminSettings = new OpenAPIHono();
@@ -457,8 +459,11 @@ adminSettings.openapi(
     const b = c.req.valid('json');
     const token = randomBytes(24).toString('hex');
     const [inv] = await db.insert(s.staffInvite).values({ storeId: st.storeId, email: normalizeEmail(b.email), role: b.role, tokenHash: hashTok(token), expiresAt: new Date(Date.now() + INVITE_TTL_MS) }).returning({ id: s.staffInvite.id });
-    // SMTP-less: token is returned for the inviter to share; an email layer can send acceptUrl when SMTP lands.
-    return c.json({ id: inv!.id, token, acceptUrl: `/admin/accept-invite?token=${token}` }, 200);
+    const acceptUrl = `/admin/accept-invite?token=${token}`;
+    // WP2: best-effort invite email. If SMTP is unconfigured the dev log line
+    // will surface the token; the response still includes it for the inviter.
+    try { await sendStaffInvite({ name: st.name, currency: st.currency }, normalizeEmail(b.email), { acceptUrl: `${env.STOREFRONT_URL}${acceptUrl}`, role: b.role, inviterEmail: admin.email }); } catch (e) { console.error('[email:staffInvite] failed', e); }
+    return c.json({ id: inv!.id, token, acceptUrl }, 200);
   }),
 );
 

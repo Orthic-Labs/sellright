@@ -17,7 +17,7 @@ import {
   primaryKey,
 } from 'drizzle-orm/pg-core';
 
-// ── enums ───────────────────────────────────────────────────────────────────
+// ── enums ────────────────────────────────────────────────────────────────────
 export const adminRole = pgEnum('admin_role', ['owner', 'manager', 'staff', 'read_only']);
 export const productStatus = pgEnum('product_status', ['draft', 'active']);
 export const orderState = pgEnum('order_state', [
@@ -461,7 +461,7 @@ export const webhookDelivery = pgTable('webhook_delivery', {
   endpointId: uuid().notNull().references(() => webhookEndpoint.id),
   topic: text().notNull(),
   payload: jsonb().notNull(),
-  status: text().notNull().default('pending'), // pending | delivered | failed
+  status: text().notNull().default('pending'), // pending | processing | delivered | failed
   attempts: integer().notNull().default(0),
   lastError: text(),
   nextAttemptAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
@@ -554,6 +554,20 @@ export const stockMovement = pgTable('stock_movement', {
 });
 
 // ── infra (safety rails) ────────────────────────────────────────────────────
+// WP2d: customer_token — one-time tokens for password reset / email verify / set-password.
+export const customerToken = pgTable('customer_token', {
+  id: uuid().primaryKey().defaultRandom(),
+  storeId: uuid().notNull().references(() => store.id),
+  customerId: uuid().notNull().references(() => customer.id),
+  // Compile-time enum — typos in `kind` fail at the TS layer, not at insert.
+  // The DB-level CHECK constraint is added by migration 0023 (defense in depth).
+  kind: text({ enum: ['password_reset', 'email_verify', 'set_password'] }).notNull(),
+  tokenHash: text().notNull().unique(),
+  expiresAt: timestamp({ withTimezone: true }).notNull(),
+  usedAt: timestamp({ withTimezone: true }),
+  createdAt: ts(),
+});
+
 export const processedEvent = pgTable('processed_event', {
   id: text().primaryKey(), // provider event id (idempotency)
   storeId: uuid().references(() => store.id),

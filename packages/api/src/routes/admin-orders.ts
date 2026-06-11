@@ -1,7 +1,7 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
-import { withStore } from '../db/client.js';
+import { withStore, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { HttpError, J, errBody, money, Page, requireAdmin, requireStore, requireWrite, guard } from './admin-helpers.js';
 import { calculateOrderTotals } from '../money/totals.js';
@@ -12,6 +12,7 @@ import { buildInvoice, buildPackingSlip, renderInvoiceHtml } from '../orders/inv
 import { evaluateCoupon } from '../money/coupon.js';
 import { resolveTaxRate } from '../money/tax.js';
 import { emitEvent } from '../webhooks/emit.js';
+import { sendShippingNotification } from '../email/dispatch.js';
 
 export const adminOrders = new OpenAPIHono();
 
@@ -215,8 +216,10 @@ adminOrders.openapi(
   }),
 );
 
-async function alreadyRefunded(tx: { select: Function }, orderId: string): Promise<number> {
-  const [r] = await (tx as any).select({ n: sql<number>`coalesce(sum(${s.refund.amount}),0)::int` }).from(s.refund).where(eq(s.refund.orderId, orderId));
+async function alreadyRefunded(tx: Tx, orderId: string): Promise<number> {
+  // Drizzle's typed query builder — no `as any`. `tx` is the withStore() txn
+  // handle and exposes the same `select({...}).from(...).where(...)` shape.
+  const [r] = await tx.select({ n: sql<number>`coalesce(sum(${s.refund.amount}),0)::int` }).from(s.refund).where(eq(s.refund.orderId, orderId));
   return r?.n ?? 0;
 }
 
@@ -469,6 +472,7 @@ adminOrders.openapi(
     const { rows } = c.req.valid('json');
     const result = await withStore(st.storeId, async (tx) => {
       let updated = 0; const errors: { code: string; error: string }[] = [];
+      const notifications: Array<{ email: string; code: string; tracking: string; carrier: string | null }> = [];
       for (const row of rows) {
         const [o] = await tx.select().from(s.order).where(eq(s.order.code, row.code)).limit(1);
         if (!o) { errors.push({ code: row.code, error: 'order not found' }); continue; }
@@ -491,10 +495,23 @@ adminOrders.openapi(
           }
         }
         await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: o.id, action: 'tracking_import', toState: 'Shipped', data: { tracking: row.tracking, carrier } });
+        // WP2: emit order.shipped + best-effort email for the newly-Shipped order.
+        // `emitEvent` runs inside the same txn so the webhook delivery is
+        // committed atomically with the Shipped state transition. Guard
+        // customerId (nullable FK) before the eq().
+        await emitEvent(tx, st.storeId, 'order.shipped', { code: o.code, trackingCode: row.tracking, carrier });
+        if (o.customerId) {
+          const [cust] = await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, o.customerId)).limit(1);
+          if (cust?.email) notifications.push({ email: cust.email, code: o.code, tracking: row.tracking, carrier });
+        }
         updated++;
       }
-      return { updated, errors };
+      return { updated, errors, notifications };
     });
-    return c.json(result, 200);
+    // WP2: fire-and-forget emails (failure here doesn't fail the import).
+    for (const n of result.notifications) {
+      try { await sendShippingNotification({ name: st.name, currency: st.currency }, n.email, { code: n.code, trackingCode: n.tracking, carrier: n.carrier }); } catch (e) { console.error('[email:shipping] failed', e); }
+    }
+    return c.json({ updated: result.updated, errors: result.errors }, 200);
   }),
 );

@@ -14,7 +14,9 @@ import { adminSettings } from './routes/admin-settings.js';
 import { adminReports } from './routes/admin-reports.js';
 import { adminAffiliate } from './routes/admin-affiliate.js';
 import { adminContent } from './routes/admin-content.js';
+import { adminAssets } from './routes/admin-assets.js';
 import { shopExtra } from './routes/shop-extra.js';
+import { customerTokens } from './routes/customer-tokens.js';
 import { csrfValid, customerCsrfValid, getCustomerSessionToken } from './auth/cookies.js';
 
 /**
@@ -94,6 +96,7 @@ export function createApp(): OpenAPIHono {
   app.route('/', checkout);
   app.route('/', pay);
   app.route('/', auth);
+  app.route('/', customerTokens);
   app.route('/', account);
   app.route('/', orders);
 
@@ -106,6 +109,7 @@ export function createApp(): OpenAPIHono {
   app.route('/', adminReports); // customers write, reports, search, activity
   app.route('/', adminAffiliate); // affiliate program + public self-serve dashboard
   app.route('/', adminContent); // blog CMS admin
+  app.route('/', adminAssets); // WP8: asset upload + management
   app.route('/', shopExtra); // shop: guest tracking, public blog, shipping eligibility, newsletter
 
   // Published API contract — the product surface (versioned under /v1).
