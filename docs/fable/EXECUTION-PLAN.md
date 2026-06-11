@@ -21,7 +21,7 @@
 > - ✅ WP9.7 Index batch (`drizzle/0022_indexes.sql`) — **done by freebuff**
 > - ✅ Rate limiting on `/checkout`, `/pay`, `/register` — **done by freebuff**
 > - ✅ SellRight→Vendure reconciliation exporter (`admin/reconcile-export.ts`, CLI + stream) — **done by freebuff**
-> - ⏳ WP3 Stripe provider + inbound webhooks — blocked on Stripe sandbox key (Adrian)
+> - 🟢 WP3 Stripe provider + inbound webhooks — **scaffolding built by claude** (provider w/ pure server-side `verifyIntent`, `createPaymentIntent`, `POST /orders/{code}/payment-intent`, inbound `POST /v1/webhooks/stripe` signature-verified + idempotent, gateway-backed refund, shared `settle.ts`, 10 unit tests). **Only the live sandbox e2e run is pending** (needs the Stripe key from Adrian); refund/dispute webhook reconcile are TODO stubs.
 > - ⏳ WP4 Storefront rewire — out of scope per task brief (Regime-A rollback path)
 > - ✅ WP5 Migrated-customer activation — **done by freebuff** (server side: `isMigrated: boolean` on `/auth/{me,register,login,google}`; lazy forgot-password flow covers password set; storefront banner remains a WP4 follow-up)
 > - ⏳ WP7 RH cutover — excluded (launch)
@@ -35,6 +35,8 @@
 > - 🟡→✅ Hardening: CSRF compare now constant-time (`cookies.ts`); email subject CRLF-stripped vs SMTP header injection (`templates.ts`); asset upload Content-Length pre-check vs OOM + `alt` length cap (`admin-assets.ts`); WP9.6 per-table RLS **policy-shape** assertion added (every store-scoped table's USING must reference `store_id` + `app.current_store`, catching a `USING(true)`/wrong-predicate table that FORCE-RLS-only checks miss) (`rls-tables.test.ts`).
 > - ⚠️ NOTED (not fixed — needs a decision): `routes/auth.ts` imports `unsafeUnscopedDb` for a store-*registry* read (non-RLS, so safe) — but it means wiring eslint `no-restricted-imports` into `pnpm verify` would break the build; the WP1.3 seal is advisory until that registry read gets a dedicated accessor. Rate limiter is in-memory/per-process (accepted single-instance per plan); `cf-connecting-ip` trust requires the `:3300` port be firewalled to Cloudflare ranges (WP6 ops control).
 > - `verifyPassword(null)` verified SAFE (early `return false`); migration columns (0022 indexes) verified against schema; asset upload magic-byte validation + SVG exclusion + webp re-encode verified correct.
+> - 🔴→✅ **MIGRATIONS 0022-0025 WERE NEVER APPLIED** — freebuff added the SQL files but never journaled them, so `pnpm db:migrate` (journal-driven) silently skipped all four. `order.metadata` (0024) and the `customer_token` table (0023) were **MISSING on both `sellright_dev` and `sellright_test`** → WP2 token flows + WP9.5 metadata would have crashed at runtime, and the first "62/62 green" ran against a DB without that schema. **Fixed:** journaled 0022-0026, `migrate` now applies them; applied to both `sellright_test` and the live `sellright_dev`. Verified: columns present, **72/72 tests**, assert-rls **46 tables** (customer_token now FORCE-RLS'd).
+> - 🟢 **WP3 Stripe scaffolding built** (see WP3 status above) — env default also hardened (`:5432`→`:5433`, the prod-port footgun, audit §8).
 
 
 
