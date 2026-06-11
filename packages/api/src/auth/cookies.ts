@@ -4,7 +4,15 @@
  * echoed back by the SPA in `x-csrf-token` (double-submit) and checked on
  * mutations. `Secure` is set only in production (dev runs over http://localhost).
  */
-import { randomBytes } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
+
+/** Constant-time double-submit token compare (mirrors the password compare in auth/password.ts). */
+function csrfEqual(header: string | undefined, cooked: string | undefined): boolean {
+  if (!header || !cooked) return false;
+  const a = Buffer.from(header);
+  const b = Buffer.from(cooked);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
 
 export const SESSION_COOKIE = 'sr_admin';
 export const CSRF_COOKIE = 'sr_csrf';
@@ -49,7 +57,7 @@ export function csrfValid(c: { req: { header: (k: string) => string | undefined 
   if (c.req.header('authorization')) return true; // bearer client, not cookie
   const header = c.req.header('x-csrf-token');
   const cooked = cookie(c, CSRF_COOKIE);
-  return !!header && !!cooked && header === cooked;
+  return csrfEqual(header, cooked);
 }
 
 // ── Storefront customer cookies (separate names from the admin app) ───────────
@@ -73,7 +81,7 @@ export function customerCsrfValid(c: { req: { header: (k: string) => string | un
   if (c.req.header('authorization')) return true;
   const header = c.req.header('x-csrf-token');
   const cooked = cookie(c, CUST_CSRF_COOKIE);
-  return !!header && !!cooked && header === cooked;
+  return csrfEqual(header, cooked);
 }
 
 /** Get the customer session token from the request cookie (or undefined for guests). */

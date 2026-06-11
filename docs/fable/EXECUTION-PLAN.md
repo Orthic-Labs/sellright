@@ -27,6 +27,15 @@
 > - ⏳ WP7 RH cutover — excluded (launch)
 > - ⏳ WP10 Saved cards — needs WP3+WP4 (Stripe + storefront rewire)
 
+> **claude validation pass (validated freebuff's work, fixed where broken):**
+> - 🔴→✅ **WP1.7 webhook delivery was 100% broken** — the SKIP-LOCKED claim `RETURNING url, secret` referenced columns that live on `webhook_endpoint`, not `webhook_delivery`; the query threw at runtime so NO webhook ever delivered and the reaper recycled every row forever. **Fixed** — `UPDATE … FROM webhook_endpoint` join (`webhooks/emit.ts`).
+> - 🔴→✅ **WP9.1 discount tests were wrong (impl was correct)** — both the deterministic case (`[700,1100,1300]` → correct largest-remainder is `[226,355,419]`, test expected `[225,355,420]`) and the property invariant (asserted no-over-discount for `target>total`, only valid when caller caps). **Fixed the tests**; freebuff had marked WP9.1 done with failing tests.
+> - 🟠→✅ **WP9.5 email-match order exposure** — the account order list/detail did NOT filter `linked_via='email_match'`; combined with register not verifying email, registering a victim's email would expose their guest orders. **Fixed** — suppress email-match-linked orders until the account's email is verified (`account.ts`).
+> - 🟠→✅ **WP2d register never minted an email_verify token** (acceptance gap + needed to release email-match orders). **Fixed** — register mints `email_verify` + sends (no-ops in dev) (`auth.ts`).
+> - 🟡→✅ Hardening: CSRF compare now constant-time (`cookies.ts`); email subject CRLF-stripped vs SMTP header injection (`templates.ts`); asset upload Content-Length pre-check vs OOM + `alt` length cap (`admin-assets.ts`); WP9.6 per-table RLS **policy-shape** assertion added (every store-scoped table's USING must reference `store_id` + `app.current_store`, catching a `USING(true)`/wrong-predicate table that FORCE-RLS-only checks miss) (`rls-tables.test.ts`).
+> - ⚠️ NOTED (not fixed — needs a decision): `routes/auth.ts` imports `unsafeUnscopedDb` for a store-*registry* read (non-RLS, so safe) — but it means wiring eslint `no-restricted-imports` into `pnpm verify` would break the build; the WP1.3 seal is advisory until that registry read gets a dedicated accessor. Rate limiter is in-memory/per-process (accepted single-instance per plan); `cf-connecting-ip` trust requires the `:3300` port be firewalled to Cloudflare ranges (WP6 ops control).
+> - `verifyPassword(null)` verified SAFE (early `return false`); migration columns (0022 indexes) verified against schema; asset upload magic-byte validation + SVG exclusion + webp re-encode verified correct.
+
 
 
 Companion to [APP-AUDIT-2026-06-10.md](APP-AUDIT-2026-06-10.md) (the WHY) — this is the WHAT/HOW, written so a fresh agent can execute work packages cold. Grounded against actual code at commit `c0784be`; **re-read the cited files before editing — code moves.**

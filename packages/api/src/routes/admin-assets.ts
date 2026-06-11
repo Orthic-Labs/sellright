@@ -34,6 +34,12 @@ adminAssets.openapi(
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireWrite(st);
+    // Reject by declared Content-Length BEFORE parseBody buffers the whole body
+    // into memory (the file.size check below only fires post-buffer). A client
+    // can still under-declare CL, so a server-level hard body limit (WP6/nginx
+    // client_max_body_size) remains the complete fix; this is admin-only anyway.
+    const declaredLen = Number(c.req.header('content-length') ?? '0');
+    if (declaredLen > MAX_BYTES) throw new HttpError(413, `max ${MAX_BYTES / 1024 / 1024}MB`);
     const body = await c.req.parseBody();
     const file = body['file'];
     if (!(file instanceof File)) throw new HttpError(400, 'file required (multipart field "file")');
@@ -52,7 +58,7 @@ adminAssets.openapi(
     // Re-encode to webp (strips any payload hidden in the original, normalizes size).
     await sharp(buf).webp({ quality: 85 }).toFile(absPath);
 
-    const alt = (body['alt']?.toString() ?? '').trim() || null;
+    const alt = ((body['alt']?.toString() ?? '').trim().slice(0, 1000)) || null;
     const id = randomUUID();
     await withStore(st.storeId, (tx) =>
       tx.insert(s.asset).values({ id, storeId: st.storeId, type: 'image', path: key, width: meta.width ?? null, height: meta.height ?? null, alt }).returning());

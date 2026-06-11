@@ -5,7 +5,10 @@
 export interface StoreCtx { name: string; currency: string; storefrontUrl: string; fromEmail: string; }
 
 const wrap = (store: StoreCtx, title: string, body: string) => ({
-  subject: `[${store.name}] ${title}`,
+  // Strip CR/LF from the subject — titles interpolate caller data (e.g. the
+  // inviter's email in staffInvite); a newline would otherwise allow SMTP
+  // header injection. (HTML-escaping is wrong for a subject; it's not HTML.)
+  subject: `[${store.name}] ${title}`.replace(/[\r\n]+/g, ' '),
   html: `<!doctype html><html><body style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#222">
     <h2 style="margin:0 0 16px">${escape(title)}</h2>
     ${body}

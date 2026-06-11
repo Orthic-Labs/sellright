@@ -62,14 +62,16 @@ describe('distributeLargestRemainder (WP9.1)', () => {
 
   it('audit example: $10 off across $7/$11/$13 (700/1100/1300) sums to exactly 1000', () => {
     // 1000 cents across weights [700, 1100, 1300] = 3100 total
-    // raw shares: 700*1000/3100 = 225.80..., 1100*1000/3100 = 354.83..., 1300*1000/3100 = 419.35...
-    // floors: 225, 354, 419 = 998. Remainder 2 cents -> top 2 fractional parts: 0.838, 0.806 → indices 1, 2
-    // expected: 225, 355, 420 = 1000.
+    // raw shares: 700*1000/3100 = 225.806, 1100*1000/3100 = 354.838, 1300*1000/3100 = 419.354
+    // floors: 225, 354, 419 = 998. Remainder 2 cents -> two largest fractional parts:
+    //   idx1 = 0.838, idx0 = 0.806 (idx2 = 0.354 is smallest) → +1 to idx1 and idx0.
+    // expected: 226, 355, 419 = 1000. (largest-remainder: the extra cent goes to the
+    // largest fraction, NOT the largest line.)
     const got = distribute(1000, [700, 1100, 1300]);
     expect(got.reduce((a, x) => a + x, 0)).toBe(1000);
-    expect(got[0]).toBe(225);
+    expect(got[0]).toBe(226);
     expect(got[1]).toBe(355);
-    expect(got[2]).toBe(420);
+    expect(got[2]).toBe(419);
   });
 
   it('via calculateOrderTotals: fixed-amount discount per line sums exactly', () => {
@@ -113,12 +115,23 @@ describe('distributeLargestRemainder (WP9.1)', () => {
     for (let trial = 0; trial < 500; trial++) {
       const n = 1 + Math.floor(rand() * 8); // 1..8 lines
       const weights = Array.from({ length: n }, () => Math.floor(rand() * 50_000) + 1);
+      const total = weights.reduce((a, w) => a + w, 0);
       const target = Math.floor(rand() * 200_000);
       const got = distribute(target, weights);
       expect(got.length).toBe(n);
+      // Contract #1 — always sums to target exactly, for ANY target (no cent lost/gained).
       expect(got.reduce((a, x) => a + x, 0)).toBe(target);
-      // No share exceeds the line subtotal weight (would over-discount).
-      for (let i = 0; i < n; i++) expect(got[i]!).toBeLessThanOrEqual(weights[i]!);
+      // Shares are non-negative.
+      for (let i = 0; i < n; i++) expect(got[i]!).toBeGreaterThanOrEqual(0);
+      // Contract #2 — no share exceeds its line weight, but ONLY in the realistic
+      // regime where the discount fits within the subtotal (target <= total). The
+      // caller (calculateOrderTotals) caps fixed discounts at the subtotal before
+      // distributing, so this is the regime that actually reaches the function. When
+      // target > total the raw function still sums to target (contract #1) but
+      // necessarily over-fills some line — that input never occurs in practice.
+      if (target <= total) {
+        for (let i = 0; i < n; i++) expect(got[i]!).toBeLessThanOrEqual(weights[i]!);
+      }
     }
   });
 });

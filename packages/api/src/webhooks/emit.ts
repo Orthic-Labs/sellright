@@ -36,16 +36,23 @@ export async function deliverWebhooks(opts: { limit?: number; log?: (m: string) 
       // of this txn, then marked status='processing' (so a crash mid-delivery
       // leaves a recoverable row — reaper resets stuck 'processing' rows).
       const claim = await tx.execute(
-        sql`UPDATE webhook_delivery
-            SET status = 'processing', attempts = attempts + 1
-            WHERE id IN (
-              SELECT id FROM webhook_delivery
-              WHERE status = 'pending' AND next_attempt_at <= now()
-              ORDER BY next_attempt_at
-              LIMIT ${sql.raw(String(limit))}
-              FOR UPDATE SKIP LOCKED
-            )
-            RETURNING id, topic, payload, url, secret, attempts`,
+        // url + secret live on webhook_endpoint (delivery references it via
+        // endpoint_id) — join it in the UPDATE…FROM so RETURNING can surface
+        // them. (Earlier this RETURNed url/secret straight off webhook_delivery,
+        // which has neither column → the query threw at runtime and NO webhook
+        // ever delivered; the reaper then recycled every row forever.)
+        sql`UPDATE webhook_delivery wd
+            SET status = 'processing', attempts = wd.attempts + 1
+            FROM webhook_endpoint we
+            WHERE we.id = wd.endpoint_id
+              AND wd.id IN (
+                SELECT id FROM webhook_delivery
+                WHERE status = 'pending' AND next_attempt_at <= now()
+                ORDER BY next_attempt_at
+                LIMIT ${sql.raw(String(limit))}
+                FOR UPDATE SKIP LOCKED
+              )
+            RETURNING wd.id, wd.topic, wd.payload, we.url, we.secret, wd.attempts`,
       );
       const due = (claim as unknown as { rows: Array<{ id: string; topic: string; payload: unknown; url: string; secret: string; attempts: number }> }).rows;
 

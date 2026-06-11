@@ -122,14 +122,32 @@ describe('WP9.6 — RLS table-driven loop', () => {
       await tx.execute(sql`INSERT INTO product (id, store_id, slug, name) VALUES (gen_random_uuid(), ${B}, 'pb', 'PB')`);
     });
 
-    // Use the `product` table as a representative; every other table uses the
-    // same RLS predicate (store_id = current_store), so a smoke test on product
-    // + a fail-closed test on all tables is the strongest evidence the docs
-    // can ask for without writing N per-table tests.
+    // `product` is the runtime smoke for "A sees A, not B". Per-table positive
+    // inserts are impractical (each table has different NOT NULL/FK columns), so
+    // the per-table predicate guarantee is proven statically by the policy-shape
+    // test below (every table's USING references store_id + app.current_store),
+    // plus the fail-closed loop above and the FORCE RLS guard in assert-rls.
     const aProducts = await withStoreApp(A, (tx) => tx.execute(sql`SELECT slug FROM product ORDER BY slug`));
     const bProducts = await withStoreApp(B, (tx) => tx.execute(sql`SELECT slug FROM product ORDER BY slug`));
     expect((aProducts as unknown as { rows: Array<{ slug: string }> }).rows.map((r) => r.slug)).toEqual(['pa']);
     expect((bProducts as unknown as { rows: Array<{ slug: string }> }).rows.map((r) => r.slug)).toEqual(['pb']);
+  });
+
+  it('each store-scoped table has an RLS policy that scopes to the current store (not USING(true))', async () => {
+    // Per-table proof of the predicate SHAPE: every non-exempt store-scoped table
+    // must carry an RLS policy whose USING clause references BOTH the tenant
+    // column (store_id) AND the request GUC (app.current_store). This catches a
+    // table that has FORCE RLS on (so it passes the fail-closed test) but a wrong
+    // predicate — e.g. USING (true), USING (store_id IS NOT NULL), or a typo'd
+    // GUC name — that would leak cross-tenant once a context is set.
+    for (const t of tablesNeedingCheck) {
+      const { rows } = await pool.query<{ qual: string | null }>(
+        `SELECT qual FROM pg_policies WHERE schemaname='public' AND tablename=$1`, [t]);
+      expect(rows.length, `table ${t} must have at least one RLS policy`).toBeGreaterThan(0);
+      const usings = rows.map((r) => (r.qual ?? '').toLowerCase());
+      const scoped = usings.some((q) => q.includes('store_id') && q.includes('current_store'));
+      expect(scoped, `table ${t}: an RLS USING clause must reference store_id + app.current_store, got ${JSON.stringify(usings)}`).toBe(true);
+    }
   });
 
   it('a store cannot write into another store (WITH CHECK) on product', async () => {

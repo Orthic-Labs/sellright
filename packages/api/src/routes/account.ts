@@ -37,7 +37,14 @@ account.openapi(
         })
         .from(s.order)
         .leftJoin(s.orderLine, eq(s.orderLine.orderId, s.order.id))
-        .where(eq(s.order.customerId, cust.id))
+        .where(and(
+          eq(s.order.customerId, cust.id),
+          // WP9.5: a guest order auto-linked to this account purely by email match
+          // stays hidden until the account's email is verified. Registration does
+          // NOT gate on verification, so without this an attacker who registers a
+          // victim's email would see the victim's past guest orders.
+          ...(cust.emailVerified ? [] : [sql`(${s.order.metadata} ->> 'linked_via') IS DISTINCT FROM 'email_match'`]),
+        ))
         .groupBy(s.order.id)
         .orderBy(desc(s.order.createdAt))
         .limit(50);
@@ -64,7 +71,13 @@ account.openapi(
     const out = await withStore(st.id, async (tx) => {
       const cust = await me(tx, customerToken(c));
       if (!cust) return { kind: 'unauth' as const };
-      const [order] = await tx.select().from(s.order).where(and(eq(s.order.code, code), eq(s.order.customerId, cust.id))).limit(1);
+      const [order] = await tx.select().from(s.order).where(and(
+        eq(s.order.code, code),
+        eq(s.order.customerId, cust.id),
+        // WP9.5: same email-match suppression as the list — an unverified account
+        // cannot open a guest order linked to it purely by email match.
+        ...(cust.emailVerified ? [] : [sql`(${s.order.metadata} ->> 'linked_via') IS DISTINCT FROM 'email_match'`]),
+      )).limit(1);
       if (!order) return { kind: 'notfound' as const };
       const lines = await tx.select({ sku: s.orderLine.variantSku, name: s.orderLine.variantName, quantity: s.orderLine.quantity, lineTotal: s.orderLine.lineTotal }).from(s.orderLine).where(eq(s.orderLine.orderId, order.id));
       return { kind: 'ok' as const, order, lines };

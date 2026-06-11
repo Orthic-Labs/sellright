@@ -8,6 +8,14 @@ import { customerToken, createSession, deleteSession, resolveCustomer } from '..
 import { setCustomerCookies, clearCustomerCookies, customerCsrfValid, newCsrf } from '../auth/cookies.js';
 import { clientIp, loginRetryAfter, recordLoginFailure, clearLoginAttempts } from '../auth/rate-limit.js';
 import { normalizeEmail } from '../auth/email.js';
+import { createHash, randomBytes } from 'node:crypto';
+import { sendEmail } from '../email/mailer.js';
+import { emailVerify } from '../email/templates.js';
+import { env } from '../env.js';
+
+const hashToken = (t: string) => createHash('sha256').update(t).digest('hex');
+const EMAIL_VERIFY_TTL_HOURS = 48;
+const emailStoreCtx = (st: StoreCtx) => ({ name: st.name, currency: st.currency, storefrontUrl: env.STOREFRONT_URL, fromEmail: env.SMTP_FROM });
 
 async function store(c: { req: { header: (k: string) => string | undefined } }): Promise<StoreCtx> {
   const slug = c.req.header('x-store-slug') ?? DEV_DEFAULT_STORE;
@@ -63,16 +71,24 @@ auth.openapi(
     const regRetry = loginRetryAfter(regIp, regBucket);
     if (regRetry > 0) return c.json({ error: `too many attempts — try again in ${regRetry}s` }, 429);
     const passwordHash = await hashPassword(password);
-    const out = await withStore(st.id, async (tx): Promise<{ taken: true } | { token: string; firstName: string | null; lastName: string | null }> => {
+    const out = await withStore(st.id, async (tx): Promise<{ taken: true } | { token: string; firstName: string | null; lastName: string | null; verifyRaw: string }> => {
       const existing = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, email)).limit(1);
       if (existing.length) return { taken: true };
       const [cust] = await tx.insert(s.customer).values({ storeId: st.id, email, firstName: firstName ?? null, lastName: lastName ?? null, passwordHash, emailVerified: false }).returning({ id: s.customer.id, firstName: s.customer.firstName, lastName: s.customer.lastName });
       const token = await createSession(tx, st.id, cust!.id);
-      return { token, firstName: cust!.firstName, lastName: cust!.lastName };
+      // WP2d: mint an email_verify token in the same txn. Proving address
+      // ownership is what releases email_match-linked guest orders (WP9.5).
+      const verifyRaw = randomBytes(32).toString('base64url');
+      await tx.insert(s.customerToken).values({ storeId: st.id, customerId: cust!.id, kind: 'email_verify', tokenHash: hashToken(verifyRaw), expiresAt: new Date(Date.now() + EMAIL_VERIFY_TTL_HOURS * 3600 * 1000) });
+      return { token, firstName: cust!.firstName, lastName: cust!.lastName, verifyRaw };
     });
     if ('taken' in out) { recordLoginFailure(regIp, regBucket); return c.json({ error: 'email already registered' }, 409); }
     clearLoginAttempts(regIp, regBucket);
     setCustomerCookies(c, out.token, newCsrf());
+    // Email is not rollback-able — send AFTER the txn commits (WP2c). No-ops with a
+    // log line in dev/without SMTP; the storefront link wiring is WP4.
+    const verifyUrl = `${env.STOREFRONT_URL}/verify-email?token=${out.verifyRaw}`;
+    await sendEmail({ to: email, ...emailVerify(emailStoreCtx(st), { url: verifyUrl }) });
     // Fresh register: passwordHash was just set, isMigrated = false.
     return c.json({ token: out.token, customer: { email, firstName: out.firstName, lastName: out.lastName, emailVerified: false, isMigrated: false } }, 200);
   },
