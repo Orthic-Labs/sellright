@@ -23,7 +23,7 @@
 > - ✅ SellRight→Vendure reconciliation exporter (`admin/reconcile-export.ts`, CLI + stream) — **done by freebuff**
 > - ⏳ WP3 Stripe provider + inbound webhooks — blocked on Stripe sandbox key (Adrian)
 > - ⏳ WP4 Storefront rewire — out of scope per task brief (Regime-A rollback path)
-> - ⏳ WP5 Migrated-customer activation — needs WP2 (done); lazy forgot-password flow covers it; banner remains a follow-up
+> - ✅ WP5 Migrated-customer activation — **done by freebuff** (server side: `isMigrated: boolean` on `/auth/{me,register,login,google}`; lazy forgot-password flow covers password set; storefront banner remains a WP4 follow-up)
 > - ⏳ WP7 RH cutover — excluded (launch)
 > - ⏳ WP10 Saved cards — needs WP3+WP4 (Stripe + storefront rewire)
 
