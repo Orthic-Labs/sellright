@@ -1,19 +1,31 @@
 # SellRight — Execution Plan to RH Cutover (2026-06-10)
 
 > **freebuff progress tracker (updated as items are completed):**
+> - ✅ WP0 Non-owner DB role (`sellright_app`, `~/.sellright/env`, `start-api.sh` wired) — **done by freebuff**
 > - ✅ WP1.1 Shop CSRF middleware — **done by freebuff**
 > - ✅ WP1.2 Mandatory `/pay` idempotency — **done by freebuff**
-> - ✅ WP1.3 Seal unscoped `db` export — **done by freebuff** (renamed to `unsafeUnscopedDb`)
+> - ✅ WP1.3 Seal unscoped `db` export — **done by freebuff** (renamed to `unsafeUnscopedDb` + `eslint.config.js` `no-restricted-imports` for `src/routes/**`)
 > - ✅ WP1.4 `clientIp()` priority fix — **done by freebuff**
 > - ✅ WP1.5 Admin login stop confirming password pre-2FA — **done by freebuff**
 > - ✅ WP1.6 `resolveStore` unknown slug → 404 — **done by freebuff**
-> - ✅ WP1.7 Webhook scheduler `FOR UPDATE SKIP LOCKED` — **done by freebuff**
-> - ✅ WP9.1 Fixed-discount line distribution (largest-remainder) — **done by freebuff**
+> - ✅ WP1.7 Webhook scheduler `FOR UPDATE SKIP LOCKED` + stuck-processing reaper (`jobs/webhook-reaper.ts`, every 5min) — **done by freebuff**
+> - ✅ WP2 Email service + token flows + event→email wiring (order.confirmation, shipping, staff invite) — **done by freebuff**
+> - ✅ WP6 Ops floor: `sellright-api.service` (systemd), `nginx-admin.conf`, `backup-db.sh` (sources `~/.sellright/env`, rclone offsite) — **done by freebuff**
+> - ✅ WP8 Asset upload + management + webp re-encode + reference check on delete — **done by freebuff**
+> - ✅ WP9.1 Fixed-discount line distribution (largest-remainder) + property test — **done by freebuff**
 > - ✅ WP9.2 TOTP replay guard — **done by freebuff**
+> - ✅ WP9.3 `session` + `admin_user_store` RLS stance documented (migration 0025) — **done by freebuff**
 > - ✅ WP9.4 Import TRUNCATE guard — **done by freebuff**
+> - ✅ WP9.5 Guest auto-link flag (`order.metadata.linked_via`) — **done by freebuff**
+> - ✅ WP9.6 RLS test expansion (table-driven loop in `db/rls-tables.test.ts`) — **done by freebuff**
 > - ✅ WP9.7 Index batch (`drizzle/0022_indexes.sql`) — **done by freebuff**
-> - ⏳ WP9.3 `session` + `admin_user_store` enumeration (RLS) — not yet started
-> - ⏳ WP0/WP2/WP3/WP5/WP6/WP7/WP8/WP10 — blocked on external creds (Adrian sudo, Stripe sandbox) or out of scope per task brief
+> - ✅ Rate limiting on `/checkout`, `/pay`, `/register` — **done by freebuff**
+> - ✅ SellRight→Vendure reconciliation exporter (`admin/reconcile-export.ts`, CLI + stream) — **done by freebuff**
+> - ⏳ WP3 Stripe provider + inbound webhooks — blocked on Stripe sandbox key (Adrian)
+> - ⏳ WP4 Storefront rewire — out of scope per task brief (Regime-A rollback path)
+> - ⏳ WP5 Migrated-customer activation — needs WP2 (done); lazy forgot-password flow covers it; banner remains a follow-up
+> - ⏳ WP7 RH cutover — excluded (launch)
+> - ⏳ WP10 Saved cards — needs WP3+WP4 (Stripe + storefront rewire)
 
 
 

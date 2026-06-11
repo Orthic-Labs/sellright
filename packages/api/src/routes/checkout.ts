@@ -15,6 +15,7 @@ import { normalizeEmail } from '../auth/email.js';
 import { reserveStockOrThrow, StockReservationError, validateReservableItems } from '../orders/stock-reservation.js';
 import { isMethodEligible, shippingRate, ShippingUnavailableError } from '../shipping/calculator.js';
 import { sendOrderConfirmation } from '../email/dispatch.js';
+import { clientIp, loginRetryAfter } from '../auth/rate-limit.js';
 
 async function store(c: { req: { header: (k: string) => string | undefined } }): Promise<StoreCtx> {
   const slug = c.req.header('x-store-slug') ?? DEV_DEFAULT_STORE;
@@ -92,6 +93,7 @@ checkout.openapi(
         content: { 'application/json': { schema: z.object({ code: z.string(), state: z.string(), grandTotal: z.number().int(), discountTotal: z.number().int(), currency: z.string(), couponApplied: z.boolean(), giftCardApplied: z.number().int() }) } },
       },
       409: { description: 'Out of stock / shipping unavailable', content: { 'application/json': { schema: z.object({ error: z.string(), skus: z.array(z.string()).optional(), reason: z.string().optional() }) } } },
+      429: { description: 'Rate limited', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
     },
   }),
   async (c) => {
@@ -100,6 +102,13 @@ checkout.openapi(
     const idemKey = c.req.header('idempotency-key') || null;
     const token = customerToken(c);
     const skus = [...new Set(body.items.map((i) => i.sku))];
+    // Rate-limit: throttle anonymous checkout spam (an authenticated customer
+    // is bound by the same window — login is the friction point if it's a
+    // bot behind a credential-stuffing script).
+    const ip = clientIp(c);
+    const checkoutBucket = `checkout:${token ?? ip}`;
+    const checkoutRetry = loginRetryAfter(ip, checkoutBucket);
+    if (checkoutRetry > 0) return c.json({ error: `too many checkouts — try again in ${checkoutRetry}s` }, 429);
 
     type Result = { blocked: string[] } | { shippingError: string } | { code: string; grandTotal: number; discountTotal: number; couponApplied: boolean; replay?: boolean; giftCardApplied?: number; paid?: boolean };
     const out = await withStore(st.id, async (tx): Promise<Result> => {
@@ -154,9 +163,16 @@ checkout.openapi(
       const sessionCustomer = token ? await resolveCustomer(tx, token) : null;
       const activeVerifications = sessionCustomer?.activeVerifications ?? [];
       let customerId = sessionCustomer?.id ?? null;
+      // WP9.5: guest auto-link by email. Keep the link (so abandoned-cart
+      // recovery + per-customer coupon limits work) but mark how it was linked
+      // in the order metadata. The account-order list filters on this so an
+      // unverified-email link doesn't surface someone else's orders in their
+      // account until the email is verified.
+      let linkedVia: 'session' | 'email_match' | null = sessionCustomer ? 'session' : null;
       if (!customerId && body.email) {
         const [byEmail] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, normalizeEmail(body.email))).limit(1);
         customerId = byEmail?.id ?? null;
+        if (customerId) linkedVia = 'email_match';
       }
 
       // ── Discount: explicit coupon OR best automatic; re-validate server-side
@@ -235,6 +251,10 @@ checkout.openapi(
         taxTotal: totals.taxTotal, grandTotal: totals.grandTotal,
         isPreOrder: priced.some((p) => p.v.isPreOrder),
         shippingAddress: normalizeAddress(body.shippingAddress), billingAddress: normalizeAddress(body.billingAddress),
+        // WP9.5: attach the link provenance to the order metadata. The account
+        // order-list endpoint reads this to suppress email_match-linked orders
+        // until the customer verifies the email. See WP9.5 in EXECUTION-PLAN.md.
+        metadata: linkedVia ? { linked_via: linkedVia } : null,
       });
       await tx.insert(s.orderLine).values(
         priced.map((p, idx) => ({

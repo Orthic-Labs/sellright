@@ -5,6 +5,7 @@ import { resolveStore, DEV_DEFAULT_STORE, type StoreCtx } from '../store-context
 import * as s from '../db/schema.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
 import { getProvider, isPaymentMethodEnabled } from '../payments/provider.js';
+import { clientIp, loginRetryAfter } from '../auth/rate-limit.js';
 
 async function store(c: { req: { header: (k: string) => string | undefined } }): Promise<StoreCtx> {
   const slug = c.req.header('x-store-slug') ?? DEV_DEFAULT_STORE;
@@ -28,6 +29,7 @@ pay.openapi(
       200: { description: 'Paid', content: { 'application/json': { schema: z.object({ code: z.string(), state: z.string(), payment: z.string() }) } } },
       404: { description: 'Not found', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
       409: { description: 'Not payable', content: { 'application/json': { schema: z.object({ error: z.string(), state: z.string() }) } } },
+      429: { description: 'Rate limited', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
     },
   }),
   async (c) => {
@@ -35,6 +37,14 @@ pay.openapi(
     const { code } = c.req.valid('param');
     const { method } = c.req.valid('json');
     const idemKey = c.req.header('idempotency-key');
+    // Rate-limit: payment attempts per IP. Keyed on ip+method so a flood of
+    // card-testing on one gateway doesn't trip the throttle for a different
+    // method on the same IP. Idempotency keys are per-attempt, so the same
+    // client retrying the SAME intent is safe (the claim short-circuits).
+    const payIp = clientIp(c);
+    const payBucket = `pay:${payIp}:${method}`;
+    const payRetry = loginRetryAfter(payIp, payBucket);
+    if (payRetry > 0) return c.json({ error: `too many payment attempts — try again in ${payRetry}s` }, 429);
 
     const provider = getProvider(method);
     if (!provider) return c.json({ error: `unknown payment method: ${method}` }, 404);

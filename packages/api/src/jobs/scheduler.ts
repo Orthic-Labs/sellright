@@ -20,6 +20,7 @@
 import { env } from '../env.js';
 import { autoDeliver } from './auto-deliver.js';
 import { releaseStaleAllocations } from './release-stale-allocations.js';
+import { reapStuckWebhooks } from './webhook-reaper.js';
 import { deliverWebhooks } from '../webhooks/emit.js';
 
 const HOUR = 3_600_000;
@@ -54,4 +55,10 @@ export function startJobScheduler(): void {
   every(HOUR, 'auto-deliver', () => autoDeliver({ apply: autoDeliverApply, days: autoDeliverDays, log }));
   every(15 * 60_000, 'release-stale', () => releaseStaleAllocations({ apply: releaseApply, ttlMin: releaseTtlMin, log }));
   every(60_000, 'webhooks', () => deliverWebhooks({ log })); // push due webhook deliveries every minute
+  // WP1.7 safety net: reset webhook_delivery rows stuck in 'processing' (a
+  // crashed scheduler) back to 'pending' so the next pass re-claims them.
+  // 10-min grace = a crashed worker is recovered within 15 min.
+  const webhookReaperApply = process.env.JOBS_WEBHOOK_REAPER_APPLY === '1';
+  const webhookReaperGraceMin = Number(process.env.JOBS_WEBHOOK_REAPER_GRACE_MIN ?? 10);
+  every(5 * 60_000, 'webhook-reaper', () => reapStuckWebhooks({ apply: webhookReaperApply, graceMin: webhookReaperGraceMin, log }));
 }

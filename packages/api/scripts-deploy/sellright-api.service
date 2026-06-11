@@ -1,0 +1,34 @@
+# /etc/systemd/system/sellright-api.service
+# Replaces the setsid+nohup pattern in start-api.sh. Installed by `sudo cp` +
+# `sudo systemctl daemon-reload && sudo systemctl enable --now sellright-api`.
+# `EnvironmentFile=/home/vendure/.sellright/env` is written by WP0's
+# create-app-role.sh and contains DATABASE_URL_APP (non-owner app role) plus
+# DATABASE_URL_OWNER (for migrations only).
+[Unit]
+Description=SellRight API
+After=network.target
+# Postgres runs natively on the box (port 5433) — not Docker-managed, so no
+# After= dependency on docker / containerd. If you migrate to managed
+# postgres, add a Wants= + After= here.
+
+[Service]
+Type=simple
+User=vendure
+WorkingDirectory=/home/vendure/sites/sellright/packages/api
+EnvironmentFile=/home/vendure/.sellright/env
+Environment=NODE_ENV=production
+Environment=PORT=3300
+Environment=JOBS_ENABLED=1
+ExecStart=/usr/bin/env pnpm exec tsx src/index.ts
+Restart=on-failure
+RestartSec=5
+# Give Postgres + schema validation enough time to fail loudly.
+TimeoutStartSec=20
+# Hard cap runaway memory; Hono is light, tsx watch is the only heavy bit.
+MemoryMax=512M
+
+# Hardening: API only needs the project + its data dirs.
+ReadWritePaths=/home/vendure/sites/sellright /home/vendure/sites/sellright-assets /home/vendure/backups
+
+[Install]
+WantedBy=multi-user.target

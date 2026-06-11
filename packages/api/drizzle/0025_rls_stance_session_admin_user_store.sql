@@ -1,0 +1,24 @@
+-- WP9.3: formalize the documented stance for `session` and `admin_user_store`.
+-- These two tables intentionally EXEMPT from RLS:
+--
+--   `session` — looked up by token hash BEFORE any store context exists (the
+--                auth path runs pre-resolution). Cross-store for admin sessions
+--                (admins switch stores via x-store-slug, the token is global).
+--                Isolation comes from the 256-bit token hash, not RLS.
+--
+--   `admin_user_store` — the ACL registry. The app must read it BEFORE store
+--                        context to build the admin's store list. Inherently
+--                        cross-store (one admin can have access to N stores).
+--                        Writes happen via the owner role (seed-admin); the
+--                        app filters by admin_user_id at the app layer.
+--
+-- The chosen stance is also documented in:
+--   - src/db/assert-force-rls.ts (EXEMPT set + the rationale)
+--   - drizzle/0004_store_registry_no_rls.sql (the precedent for the `store`
+--     registry)
+--   - drizzle/0008_admin_store_registry_disable_rls.sql (the admin_user_store
+--     precedent this stance extends)
+--
+-- No schema change — this migration exists to capture the decision in the
+-- migration history so a future audit / agent can find it.
+SELECT 'WP9.3: session + admin_user_store RLS stance documented — see migration body' AS note;

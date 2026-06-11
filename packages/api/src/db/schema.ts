@@ -341,6 +341,10 @@ export const order = pgTable(
     promotionId: uuid().references(() => promotion.id),
     shippingAddress: jsonb(),
     billingAddress: jsonb(),
+    // WP9.5: provenance for the customer link (session | email_match) + future
+    // freeform keys. Kept as a separate JSONB so a structured linked_via query
+    // is indexable later if the email-match rate climbs.
+    metadata: jsonb(),
     placedAt: timestamp({ withTimezone: true }),
     createdAt: ts(),
     updatedAt: ts(),

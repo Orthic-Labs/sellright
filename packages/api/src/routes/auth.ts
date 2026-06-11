@@ -45,12 +45,19 @@ auth.openapi(
     responses: {
       200: { description: 'Registered', content: { 'application/json': { schema: z.object({ token: z.string(), customer: CustomerOut }) } } },
       409: { description: 'Email taken', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+      429: { description: 'Rate limited', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
     },
   }),
   async (c) => {
     const st = await store(c);
     const { email: rawEmail, password, firstName, lastName } = c.req.valid('json');
     const email = normalizeEmail(rawEmail);
+    // Rate-limit: register is a credential-stuffing / spam vector. Per-IP+email
+    // bucket (NOT per-account — an attacker could lock a real customer out).
+    const regIp = clientIp(c);
+    const regBucket = `register:${regIp}:${email}`;
+    const regRetry = loginRetryAfter(regIp, regBucket);
+    if (regRetry > 0) return c.json({ error: `too many attempts — try again in ${regRetry}s` }, 429);
     const passwordHash = await hashPassword(password);
     const out = await withStore(st.id, async (tx): Promise<{ taken: true } | { token: string; firstName: string | null; lastName: string | null }> => {
       const existing = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, email)).limit(1);
@@ -59,7 +66,8 @@ auth.openapi(
       const token = await createSession(tx, st.id, cust!.id);
       return { token, firstName: cust!.firstName, lastName: cust!.lastName };
     });
-    if ('taken' in out) return c.json({ error: 'email already registered' }, 409);
+    if ('taken' in out) { recordLoginFailure(regIp, regBucket); return c.json({ error: 'email already registered' }, 409); }
+    clearLoginAttempts(regIp, regBucket);
     setCustomerCookies(c, out.token, newCsrf());
     return c.json({ token: out.token, customer: { email, firstName: out.firstName, lastName: out.lastName, emailVerified: false } }, 200);
   },
