@@ -58,6 +58,86 @@ adminCatalog.openapi(
   }),
 );
 
+// PATCH product — update fields + set the featured image. WP8c (no product
+// update endpoint existed before; image attach had nowhere to write).
+adminCatalog.openapi(
+  createRoute({
+    method: 'patch', path: '/v1/admin/products/{id}', summary: 'Update a product (fields + featured image)',
+    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({
+      name: z.string().min(1).optional(),
+      description: z.string().nullable().optional(),
+      status: z.enum(['draft', 'active']).optional(),
+      featuredAssetId: z.string().uuid().nullable().optional(),
+    })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireWrite(st);
+    const { id } = c.req.valid('param');
+    const body = c.req.valid('json');
+    const res = await withStore(st.storeId, async (tx): Promise<'notfound' | 'noasset' | 'ok'> => {
+      const [p] = await tx.select({ id: s.product.id }).from(s.product).where(and(eq(s.product.id, id), isNull(s.product.deletedAt))).limit(1);
+      if (!p) return 'notfound';
+      if (body.featuredAssetId) {
+        const [a] = await tx.select({ id: s.asset.id }).from(s.asset).where(eq(s.asset.id, body.featuredAssetId)).limit(1);
+        if (!a) return 'noasset'; // RLS already scopes assets to this store
+      }
+      const patch: Record<string, unknown> = {};
+      if (body.name !== undefined) patch.name = body.name;
+      if (body.description !== undefined) patch.description = body.description;
+      if (body.status !== undefined) patch.status = body.status;
+      if (body.featuredAssetId !== undefined) patch.featuredAssetId = body.featuredAssetId;
+      if (Object.keys(patch).length) await tx.update(s.product).set(patch).where(eq(s.product.id, id));
+      await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'product', entityId: id, action: 'update', data: body });
+      return 'ok';
+    });
+    if (res === 'notfound') throw new HttpError(404, 'product not found');
+    if (res === 'noasset') throw new HttpError(404, 'asset not found');
+    return c.json({ id }, 200);
+  }),
+);
+
+// Product gallery (product_asset): add / remove an image. WP8c.
+adminCatalog.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/products/{id}/assets', summary: 'Attach a gallery image',
+    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ assetId: z.string().uuid(), position: z.number().int().min(0).optional() })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireWrite(st);
+    const { id } = c.req.valid('param');
+    const { assetId, position } = c.req.valid('json');
+    const res = await withStore(st.storeId, async (tx): Promise<'notfound' | 'ok'> => {
+      const [p] = await tx.select({ id: s.product.id }).from(s.product).where(and(eq(s.product.id, id), isNull(s.product.deletedAt))).limit(1);
+      if (!p) return 'notfound';
+      const [a] = await tx.select({ id: s.asset.id }).from(s.asset).where(eq(s.asset.id, assetId)).limit(1);
+      if (!a) return 'notfound';
+      await tx.insert(s.productAsset).values({ storeId: st.storeId, productId: id, assetId, position: position ?? 0 }).onConflictDoNothing();
+      return 'ok';
+    });
+    if (res === 'notfound') throw new HttpError(404, 'product or asset not found');
+    return c.json({ ok: true }, 200);
+  }),
+);
+
+adminCatalog.openapi(
+  createRoute({
+    method: 'delete', path: '/v1/admin/products/{id}/assets/{assetId}', summary: 'Detach a gallery image',
+    request: { params: z.object({ id: z.string(), assetId: z.string() }) },
+    responses: { 200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireWrite(st);
+    const { id, assetId } = c.req.valid('param');
+    await withStore(st.storeId, (tx) => tx.delete(s.productAsset).where(and(eq(s.productAsset.productId, id), eq(s.productAsset.assetId, assetId))));
+    return c.json({ ok: true }, 200);
+  }),
+);
+
 adminCatalog.openapi(
   createRoute({
     method: 'delete', path: '/v1/admin/products/{id}', summary: 'Delete (archive) a product',

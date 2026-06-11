@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Package, Trash2, Plus, X } from 'lucide-react';
-import { api, assetUrl, type ProductDetail, type VariantRow } from '../api';
+import { ArrowLeft, Package, Trash2, Plus, X, Upload } from 'lucide-react';
+import { api, assetUrl, uploadAsset, type ProductDetail, type VariantRow } from '../api';
 import { useAuth } from '../auth';
 import { Loading, ErrorNote, Spinner } from '../components/ui';
 
@@ -73,6 +73,21 @@ export default function ProductDetailPage() {
     },
     onSuccess: () => { setNv(null); invalidate(); },
   });
+
+  // WP8c: featured-image upload — upload the file, then set it as the product's
+  // featured asset. The API re-encodes to webp + validates magic bytes server-side.
+  const [uploading, setUploading] = useState(false);
+  const [uploadErr, setUploadErr] = useState<string | null>(null);
+  async function onPickImage(file: File) {
+    setUploadErr(null); setUploading(true);
+    try {
+      const asset = await uploadAsset(file);
+      await api.patch(`/products/${id}`, { featuredAssetId: asset.id });
+      invalidate();
+    } catch (e) { setUploadErr((e as Error).message); }
+    finally { setUploading(false); }
+  }
+  const removeImage = useMutation({ mutationFn: () => api.patch(`/products/${id}`, { featuredAssetId: null }), onSuccess: invalidate });
 
   if (isLoading) return <Loading />;
   if (error) return <ErrorNote message={(error as Error).message} />;
@@ -154,9 +169,20 @@ export default function ProductDetailPage() {
             </select>
           </div>
           <div className="card p-3">
-            <div className="aspect-square rounded-lg bg-gray-100 grid place-items-center overflow-hidden">
+            <label className="label">Featured image</label>
+            <div className="aspect-square rounded-lg bg-gray-100 grid place-items-center overflow-hidden relative">
               {img ? <img src={img} alt={p.name} className="h-full w-full object-cover" /> : <Package size={28} className="text-gray-300" />}
+              {uploading && <div className="absolute inset-0 bg-white/60 grid place-items-center"><Spinner /></div>}
             </div>
+            <div className="flex items-center gap-3 mt-2">
+              <label className="btn-ghost cursor-pointer text-sm">
+                <Upload size={14} /> {img ? 'Replace' : 'Upload'}
+                <input type="file" accept="image/*" className="hidden" disabled={uploading}
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) onPickImage(f); e.currentTarget.value = ''; }} />
+              </label>
+              {img && <button className="text-sm text-gray-400 hover:text-red-600" disabled={removeImage.isPending} onClick={() => removeImage.mutate()}>Remove</button>}
+            </div>
+            {uploadErr && <div className="text-xs text-red-600 mt-1">{uploadErr}</div>}
             <div className="text-xs text-gray-400 mt-2 truncate">/{p.slug}</div>
           </div>
         </div>

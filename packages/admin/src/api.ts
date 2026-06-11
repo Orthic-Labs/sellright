@@ -53,6 +53,25 @@ export async function downloadFile(path: string, filename: string): Promise<void
   URL.revokeObjectURL(url);
 }
 
+export interface AssetRow { id: string; path: string; url: string; width: number | null; height: number | null; alt: string | null }
+
+/** Upload an image (multipart). The browser sets the multipart boundary, so we
+ *  must NOT set content-type here (unlike the JSON `req`). CSRF + store headers
+ *  still apply. WP8c. */
+export async function uploadAsset(file: File, alt?: string): Promise<AssetRow> {
+  const headers: Record<string, string> = {};
+  if (auth.store) headers['x-store-slug'] = auth.store;
+  const csrf = readCookie('sr_csrf'); if (csrf) headers['x-csrf-token'] = csrf;
+  const fd = new FormData();
+  fd.append('file', file);
+  if (alt) fd.append('alt', alt);
+  const res = await fetch('/v1/admin/assets', { method: 'POST', headers, credentials: 'include', body: fd });
+  const text = await res.text();
+  const json = text ? JSON.parse(text) : {};
+  if (!res.ok) throw new ApiError(res.status, json?.error ?? `upload failed (${res.status})`);
+  return json as AssetRow;
+}
+
 // ── shared types ────────────────────────────────────────────────────────────
 export interface StoreAccess { storeId: string; slug: string; name: string; currency: string; role: string; }
 export interface Me { email: string; stores: StoreAccess[]; }
