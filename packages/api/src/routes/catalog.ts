@@ -247,3 +247,76 @@ catalog.openapi(
     return c.json({ base: st.currency, currencies: rates.filter((r) => r.enabled).map((r) => ({ currency: r.currency, rate: r.rate })) }, 200);
   },
 );
+
+// GET /v1/shop/catalog/search — term search over active products (name + description),
+// optional collection + in-stock filters, paginated. WP4a. (ILIKE is fine at current
+// catalog scale; a GIN/trigram index is the perf upgrade when catalogs grow.)
+catalog.openapi(
+  createRoute({
+    method: 'get', path: '/v1/shop/catalog/search', summary: 'Search products',
+    request: { query: z.object({
+      term: z.string().min(1).max(120),
+      collectionSlug: z.string().max(200).optional(),
+      take: z.coerce.number().int().min(1).max(100).default(24),
+      skip: z.coerce.number().int().min(0).default(0),
+      inStock: z.coerce.boolean().optional(),
+    }) },
+    responses: { 200: { description: 'Results', content: { 'application/json': { schema: z.object({ items: z.array(ProductListItem), total: z.number().int() }) } } } },
+  }),
+  async (c) => {
+    const st = await store(c);
+    const { term, collectionSlug, take, skip, inStock } = c.req.valid('query');
+    const like = `%${term}%`;
+    const result = await withStore(st.id, async (tx) => {
+      const conds = [
+        eq(s.product.status, 'active'),
+        isNull(s.product.deletedAt),
+        sql`(${s.product.name} ilike ${like} or coalesce(${s.product.description}, '') ilike ${like})`,
+      ];
+      if (collectionSlug) conds.push(sql`exists (select 1 from collection_product cp join collection c2 on c2.id = cp.collection_id where cp.product_id = ${s.product.id} and c2.slug = ${collectionSlug})`);
+      if (inStock) conds.push(sql`exists (select 1 from product_variant pv join stock stk on stk.variant_id = pv.id where pv.product_id = ${s.product.id} and pv.deleted_at is null and (stk.on_hand - stk.allocated) > 0)`);
+      const where = and(...conds);
+      const items = await tx
+        .select({
+          slug: s.product.slug, name: s.product.name, status: s.product.status,
+          minPrice: sql<number | null>`min(${s.productVariant.price})`,
+          image: sql<string | null>`max(${s.asset.path})`,
+        })
+        .from(s.product)
+        .leftJoin(s.productVariant, eq(s.productVariant.productId, s.product.id))
+        .leftJoin(s.asset, eq(s.asset.id, s.product.featuredAssetId))
+        .where(where).groupBy(s.product.id).orderBy(asc(s.product.name)).limit(take).offset(skip);
+      const totalRows = await tx.select({ total: sql<number>`count(*)::int` }).from(s.product).where(where);
+      return { items, total: totalRows[0]?.total ?? 0 };
+    });
+    return c.json(result, 200);
+  },
+);
+
+// GET /v1/shop/catalog/products/{slug}/stock — lightweight per-variant availability. WP4a.
+catalog.openapi(
+  createRoute({
+    method: 'get', path: '/v1/shop/catalog/products/{slug}/stock', summary: 'Per-variant stock',
+    request: { params: z.object({ slug: z.string() }) },
+    responses: {
+      200: { description: 'Stock', content: { 'application/json': { schema: z.object({ variants: z.array(z.object({ sku: z.string(), inStock: z.boolean() })) }) } } },
+      404: { description: 'Not found', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+    },
+  }),
+  async (c) => {
+    const st = await store(c);
+    const { slug } = c.req.valid('param');
+    const out = await withStore(st.id, async (tx) => {
+      const [p] = await tx.select({ id: s.product.id }).from(s.product).where(and(eq(s.product.slug, slug), isNull(s.product.deletedAt))).limit(1);
+      if (!p) return null;
+      const rows = await tx
+        .select({ sku: s.productVariant.sku, isPreOrder: s.productVariant.isPreOrder, onHand: s.stock.onHand, allocated: s.stock.allocated })
+        .from(s.productVariant)
+        .leftJoin(s.stock, eq(s.stock.variantId, s.productVariant.id))
+        .where(and(eq(s.productVariant.productId, p.id), isNull(s.productVariant.deletedAt)));
+      return rows.map((r) => ({ sku: r.sku, inStock: r.isPreOrder || ((r.onHand ?? 0) - (r.allocated ?? 0)) > 0 }));
+    });
+    if (out === null) return c.json({ error: 'not found' }, 404);
+    return c.json({ variants: out }, 200);
+  },
+);

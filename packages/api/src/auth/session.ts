@@ -24,6 +24,7 @@ export interface SessionCustomer {
   email: string;
   firstName: string | null;
   lastName: string | null;
+  phone: string | null;
   emailVerified: boolean;
   activeVerifications: string[];
   // WP5: a migrated-from-Vendure customer has no password hash (imported with
@@ -44,6 +45,7 @@ export async function resolveCustomer(tx: Tx, token: string): Promise<SessionCus
       email: s.customer.email,
       firstName: s.customer.firstName,
       lastName: s.customer.lastName,
+      phone: s.customer.phone,
       emailVerified: s.customer.emailVerified,
       activeVerifications: s.customer.activeVerifications,
       passwordHash: s.customer.passwordHash,

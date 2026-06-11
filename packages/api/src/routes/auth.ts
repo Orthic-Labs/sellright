@@ -43,7 +43,7 @@ async function verifyGoogleIdToken(credential: string, clientId: string): Promis
 // hash. The storefront reads it to render the "set your password" banner. The
 // shape is intentionally identical across register / login / google / me so
 // the storefront doesn't need to know which endpoint produced the customer.
-const CustomerOut = z.object({ email: z.string(), firstName: z.string().nullable(), lastName: z.string().nullable(), emailVerified: z.boolean(), isMigrated: z.boolean() });
+const CustomerOut = z.object({ id: z.string(), email: z.string(), firstName: z.string().nullable(), lastName: z.string().nullable(), phone: z.string().nullable(), emailVerified: z.boolean(), isMigrated: z.boolean() });
 
 export const auth = new OpenAPIHono();
 
@@ -71,7 +71,7 @@ auth.openapi(
     const regRetry = loginRetryAfter(regIp, regBucket);
     if (regRetry > 0) return c.json({ error: `too many attempts — try again in ${regRetry}s` }, 429);
     const passwordHash = await hashPassword(password);
-    const out = await withStore(st.id, async (tx): Promise<{ taken: true } | { token: string; firstName: string | null; lastName: string | null; verifyRaw: string }> => {
+    const out = await withStore(st.id, async (tx): Promise<{ taken: true } | { token: string; id: string; firstName: string | null; lastName: string | null; verifyRaw: string }> => {
       const existing = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, email)).limit(1);
       if (existing.length) return { taken: true };
       const [cust] = await tx.insert(s.customer).values({ storeId: st.id, email, firstName: firstName ?? null, lastName: lastName ?? null, passwordHash, emailVerified: false }).returning({ id: s.customer.id, firstName: s.customer.firstName, lastName: s.customer.lastName });
@@ -80,7 +80,7 @@ auth.openapi(
       // ownership is what releases email_match-linked guest orders (WP9.5).
       const verifyRaw = randomBytes(32).toString('base64url');
       await tx.insert(s.customerToken).values({ storeId: st.id, customerId: cust!.id, kind: 'email_verify', tokenHash: hashToken(verifyRaw), expiresAt: new Date(Date.now() + EMAIL_VERIFY_TTL_HOURS * 3600 * 1000) });
-      return { token, firstName: cust!.firstName, lastName: cust!.lastName, verifyRaw };
+      return { token, id: cust!.id, firstName: cust!.firstName, lastName: cust!.lastName, verifyRaw };
     });
     if ('taken' in out) { recordLoginFailure(regIp, regBucket); return c.json({ error: 'email already registered' }, 409); }
     clearLoginAttempts(regIp, regBucket);
@@ -90,7 +90,7 @@ auth.openapi(
     const verifyUrl = `${env.STOREFRONT_URL}/verify-email?token=${out.verifyRaw}`;
     await sendEmail({ to: email, ...emailVerify(emailStoreCtx(st), { url: verifyUrl }) });
     // Fresh register: passwordHash was just set, isMigrated = false.
-    return c.json({ token: out.token, customer: { email, firstName: out.firstName, lastName: out.lastName, emailVerified: false, isMigrated: false } }, 200);
+    return c.json({ token: out.token, customer: { id: out.id, email, firstName: out.firstName, lastName: out.lastName, phone: null, emailVerified: false, isMigrated: false } }, 200);
   },
 );
 
@@ -122,7 +122,7 @@ auth.openapi(
       // then on. The flag is intentionally a snapshot of the current state,
       // not a sticky "migrated" bit.
       const token = await createSession(tx, st.id, cust.id);
-      return { ok: true, token, customer: { email: cust.email, firstName: cust.firstName, lastName: cust.lastName, emailVerified: cust.emailVerified, isMigrated: cust.passwordHash == null } };
+      return { ok: true, token, customer: { id: cust.id, email: cust.email, firstName: cust.firstName, lastName: cust.lastName, phone: cust.phone, emailVerified: cust.emailVerified, isMigrated: cust.passwordHash == null } };
     });
     if (!out.ok) { recordLoginFailure(ip, email); return c.json({ error: 'invalid email or password' }, 401); }
     clearLoginAttempts(ip, email);
@@ -165,7 +165,7 @@ auth.openapi(
         }
       }
       const token = await createSession(tx, st.id, cust.id);
-      return { token, customer: { email: cust.email, firstName: cust.firstName, lastName: cust.lastName, emailVerified: true, isMigrated: cust.passwordHash == null } };
+      return { token, customer: { id: cust.id, email: cust.email, firstName: cust.firstName, lastName: cust.lastName, phone: cust.phone, emailVerified: true, isMigrated: cust.passwordHash == null } };
     });
     setCustomerCookies(c, out.token, newCsrf());
     return c.json(out, 200);
@@ -189,7 +189,35 @@ auth.openapi(
     if (!token) return c.json({ error: 'not authenticated' }, 401);
     const cust = await withStore(st.id, (tx) => resolveCustomer(tx, token));
     if (!cust) return c.json({ error: 'not authenticated' }, 401);
-    return c.json({ email: cust.email, firstName: cust.firstName, lastName: cust.lastName, emailVerified: cust.emailVerified, isMigrated: cust.isMigrated }, 200);
+    return c.json({ id: cust.id, email: cust.email, firstName: cust.firstName, lastName: cust.lastName, phone: cust.phone, emailVerified: cust.emailVerified, isMigrated: cust.isMigrated }, 200);
+  },
+);
+
+// GET /v1/shop/auth/check-email?email= — pre-submit UX ("email already in use").
+// WP4a. This is a deliberate account-existence oracle, so it's rate-limited per
+// IP (8/15min, same bucket family as login) to blunt enumeration/scraping.
+auth.openapi(
+  createRoute({
+    method: 'get', path: '/v1/shop/auth/check-email',
+    summary: 'Check if an email is already registered (rate-limited)',
+    request: { query: z.object({ email: z.string().email() }) },
+    responses: {
+      200: { description: 'OK', content: { 'application/json': { schema: z.object({ exists: z.boolean() }) } } },
+      429: { description: 'Too many attempts', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+    },
+  }),
+  async (c) => {
+    const st = await store(c);
+    const ip = clientIp(c);
+    const retry = loginRetryAfter(ip, `checkemail:${ip}`);
+    if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
+    recordLoginFailure(ip, `checkemail:${ip}`); // count every probe toward the throttle
+    const email = normalizeEmail(c.req.valid('query').email);
+    const exists = await withStore(st.id, async (tx) => {
+      const [row] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, email)).limit(1);
+      return !!row;
+    });
+    return c.json({ exists }, 200);
   },
 );
 
