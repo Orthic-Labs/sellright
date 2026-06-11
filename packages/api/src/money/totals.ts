@@ -41,20 +41,53 @@ export interface OrderTotals {
 
 const roundHalfUp = (n: number): number => Math.round(n);
 
+/** Distribute `target` cents across `weights` using the largest-remainder method
+ *  so the sum is exactly `target` and each share is proportional. Used for
+ *  fixed-amount discounts across lines (WP9.1). Empty weights -> all zeros. */
+function distributeLargestRemainder(target: number, weights: number[]): number[] {
+  if (target <= 0 || weights.length === 0) return weights.map(() => 0);
+  const total = weights.reduce((a, w) => a + w, 0);
+  if (total <= 0) return weights.map(() => 0);
+  const raw = weights.map((w) => (w / total) * target);
+  const floored = raw.map((x) => Math.floor(x));
+  let remainder = target - floored.reduce((a, x) => a + x, 0);
+  // Assign leftover cents to the lines with the largest fractional parts first
+  // (deterministic tie-break by original index). Capped at floor + 1 per line.
+  const order = raw
+    .map((x, i) => ({ i, frac: x - Math.floor(x) }))
+    .sort((a, b) => b.frac - a.frac || a.i - b.i);
+  for (let k = 0; k < order.length && remainder > 0; k++) {
+    floored[order[k]!.i]! += 1;
+    remainder--;
+  }
+  return floored;
+}
+
 export function calculateOrderTotals(input: TotalsInput): OrderTotals {
   const promo = input.promotion ?? null;
   const pct = promo?.type === 'percentage' ? promo.value : 0;
 
-  const lines: LineTotals[] = input.lines.map((l) => {
-    const lineSubtotal = l.unitPrice * l.quantity;
+  // Compute line subtotals first (needed for both pct and fixed-distribution math).
+  const lineSubtotals = input.lines.map((l) => l.unitPrice * l.quantity);
+  const subtotalBefore = lineSubtotals.reduce((a, x) => a + x, 0);
+
+  let perLineDiscount: number[] = input.lines.map(() => 0);
+  if (promo?.type === 'percentage' && pct > 0) {
     // Line-level rounding for percentage discounts (locked rulebook §6).
-    const lineDiscount = pct > 0 ? roundHalfUp((lineSubtotal * pct) / 100) : 0;
+    perLineDiscount = lineSubtotals.map((s) => roundHalfUp((s * pct) / 100));
+  } else if (promo?.type === 'fixed') {
+    const target = Math.min(promo.value, subtotalBefore); // capped at subtotal
+    perLineDiscount = distributeLargestRemainder(target, lineSubtotals);
+  }
+
+  const lines: LineTotals[] = input.lines.map((l, i) => {
+    const lineSubtotal = lineSubtotals[i]!;
+    const lineDiscount = perLineDiscount[i]!;
     return { unitPrice: l.unitPrice, quantity: l.quantity, lineSubtotal, lineDiscount, lineTotal: lineSubtotal - lineDiscount };
   });
 
-  const subtotal = lines.reduce((a, l) => a + l.lineSubtotal, 0);
-  let discountTotal = lines.reduce((a, l) => a + l.lineDiscount, 0);
-  if (promo?.type === 'fixed') discountTotal = Math.min(promo.value, subtotal); // capped at subtotal
+  const subtotal = subtotalBefore;
+  const discountTotal = lines.reduce((a, l) => a + l.lineDiscount, 0);
 
   const discountedSubtotal = subtotal - discountTotal;
   const shippingTotal = promo?.type === 'free_shipping' ? 0 : input.shipping;

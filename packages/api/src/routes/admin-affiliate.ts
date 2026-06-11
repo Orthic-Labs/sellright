@@ -142,15 +142,14 @@ adminAffiliate.openapi(
   }),
   async (c) => guard(c, async () => {
     const slug = c.req.header('x-store-slug') ?? DEV_DEFAULT_STORE;
-    const store = await resolveStore(slug);
-    if (!store) throw new HttpError(404, 'unknown store');
+    const ctx = await resolveStore(slug);
     const { t } = c.req.valid('query');
-    const out = await withStore(store.id, async (tx) => {
+    const out = await withStore(ctx.id, async (tx) => {
       const [a] = await tx.select().from(s.affiliate).where(eq(s.affiliate.accessToken, t)).limit(1);
       if (!a) return null;
       const [promo] = await tx.select({ code: s.promotion.code }).from(s.promotion).where(eq(s.promotion.id, a.promotionId)).limit(1);
       const amt = await affiliateAmounts(tx, a.promotionId);
-      return { email: a.email, code: promo?.code, commissionPct: COMMISSION_PCT, currency: store.currency, ...amt };
+      return { email: a.email, code: promo?.code, commissionPct: COMMISSION_PCT, currency: ctx.currency, ...amt };
     });
     if (!out) throw new HttpError(404, 'invalid affiliate link');
     return c.json(out, 200);

@@ -75,3 +75,8 @@ export function customerCsrfValid(c: { req: { header: (k: string) => string | un
   const cooked = cookie(c, CUST_CSRF_COOKIE);
   return !!header && !!cooked && header === cooked;
 }
+
+/** Get the customer session token from the request cookie (or undefined for guests). */
+export function getCustomerSessionToken(c: { req: { header: (k: string) => string | undefined } }): string | undefined {
+  return cookie(c, CUST_COOKIE);
+}

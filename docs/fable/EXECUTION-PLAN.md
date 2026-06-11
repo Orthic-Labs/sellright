@@ -1,5 +1,22 @@
 # SellRight — Execution Plan to RH Cutover (2026-06-10)
 
+> **freebuff progress tracker (updated as items are completed):**
+> - ✅ WP1.1 Shop CSRF middleware — **done by freebuff**
+> - ✅ WP1.2 Mandatory `/pay` idempotency — **done by freebuff**
+> - ✅ WP1.3 Seal unscoped `db` export — **done by freebuff** (renamed to `unsafeUnscopedDb`)
+> - ✅ WP1.4 `clientIp()` priority fix — **done by freebuff**
+> - ✅ WP1.5 Admin login stop confirming password pre-2FA — **done by freebuff**
+> - ✅ WP1.6 `resolveStore` unknown slug → 404 — **done by freebuff**
+> - ✅ WP1.7 Webhook scheduler `FOR UPDATE SKIP LOCKED` — **done by freebuff**
+> - ✅ WP9.1 Fixed-discount line distribution (largest-remainder) — **done by freebuff**
+> - ✅ WP9.2 TOTP replay guard — **done by freebuff**
+> - ✅ WP9.4 Import TRUNCATE guard — **done by freebuff**
+> - ✅ WP9.7 Index batch (`drizzle/0022_indexes.sql`) — **done by freebuff**
+> - ⏳ WP9.3 `session` + `admin_user_store` enumeration (RLS) — not yet started
+> - ⏳ WP0/WP2/WP3/WP5/WP6/WP7/WP8/WP10 — blocked on external creds (Adrian sudo, Stripe sandbox) or out of scope per task brief
+
+
+
 Companion to [APP-AUDIT-2026-06-10.md](APP-AUDIT-2026-06-10.md) (the WHY) — this is the WHAT/HOW, written so a fresh agent can execute work packages cold. Grounded against actual code at commit `c0784be`; **re-read the cited files before editing — code moves.**
 
 ---

@@ -7,9 +7,7 @@ import { customerToken, resolveCustomer, type SessionCustomer } from '../auth/se
 
 async function store(c: { req: { header: (k: string) => string | undefined } }): Promise<StoreCtx> {
   const slug = c.req.header('x-store-slug') ?? DEV_DEFAULT_STORE;
-  const found = await resolveStore(slug);
-  if (!found) throw new Error(`unknown store: ${slug}`);
-  return found;
+  return resolveStore(slug);
 }
 
 async function me(tx: Tx, token: string | null): Promise<SessionCustomer | null> {

@@ -5,7 +5,7 @@
  * pass that pushes due rows with an HMAC signature + exponential backoff.
  */
 import { createHmac } from 'node:crypto';
-import { and, eq, lte } from 'drizzle-orm';
+import { eq, lte, sql } from 'drizzle-orm';
 import { pool, withStore, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 
@@ -30,12 +30,24 @@ export async function deliverWebhooks(opts: { limit?: number; log?: (m: string) 
 
   for (const st of stores.rows) {
     await withStore(st.id, async (tx) => {
-      const due = await tx
-        .select({ id: s.webhookDelivery.id, topic: s.webhookDelivery.topic, payload: s.webhookDelivery.payload, attempts: s.webhookDelivery.attempts, url: s.webhookEndpoint.url, secret: s.webhookEndpoint.secret })
-        .from(s.webhookDelivery)
-        .innerJoin(s.webhookEndpoint, eq(s.webhookEndpoint.id, s.webhookDelivery.endpointId))
-        .where(and(eq(s.webhookDelivery.status, 'pending'), lte(s.webhookDelivery.nextAttemptAt, new Date())))
-        .limit(limit);
+      // WP1.7 / WP9 (perf): claim a batch of due rows under FOR UPDATE SKIP
+      // LOCKED so concurrent scheduler passes (e.g. multi-instance deploys)
+      // don't double-deliver the same row. The claim is held for the duration
+      // of this txn, then marked status='processing' (so a crash mid-delivery
+      // leaves a recoverable row — reaper resets stuck 'processing' rows).
+      const claim = await tx.execute(
+        sql`UPDATE webhook_delivery
+            SET status = 'processing', attempts = attempts + 1
+            WHERE id IN (
+              SELECT id FROM webhook_delivery
+              WHERE status = 'pending' AND next_attempt_at <= now()
+              ORDER BY next_attempt_at
+              LIMIT ${sql.raw(String(limit))}
+              FOR UPDATE SKIP LOCKED
+            )
+            RETURNING id, topic, payload, url, secret, attempts`,
+      );
+      const due = (claim as unknown as { rows: Array<{ id: string; topic: string; payload: unknown; url: string; secret: string; attempts: number }> }).rows;
 
       for (const d of due) {
         const body = JSON.stringify({ id: d.id, topic: d.topic, payload: d.payload });
@@ -51,10 +63,11 @@ export async function deliverWebhooks(opts: { limit?: number; log?: (m: string) 
           await tx.update(s.webhookDelivery).set({ status: 'delivered', deliveredAt: new Date() }).where(eq(s.webhookDelivery.id, d.id));
           delivered++;
         } catch (e) {
-          const attempts = d.attempts + 1;
-          const giveUp = attempts >= MAX_ATTEMPTS;
-          const backoff = BACKOFF_S[Math.min(attempts - 1, BACKOFF_S.length - 1)]!;
-          await tx.update(s.webhookDelivery).set({ attempts, lastError: String(e instanceof Error ? e.message : e), status: giveUp ? 'failed' : 'pending', nextAttemptAt: new Date(Date.now() + backoff * 1000) }).where(eq(s.webhookDelivery.id, d.id));
+          // `d.attempts` is the post-claim value (incremented at claim time);
+          // use it directly for the give-up decision so BACKOFF progresses.
+          const giveUp = d.attempts >= MAX_ATTEMPTS;
+          const backoff = BACKOFF_S[Math.min(d.attempts - 1, BACKOFF_S.length - 1)]!;
+          await tx.update(s.webhookDelivery).set({ lastError: String(e instanceof Error ? e.message : e), status: giveUp ? 'failed' : 'pending', nextAttemptAt: new Date(Date.now() + backoff * 1000) }).where(eq(s.webhookDelivery.id, d.id));
           if (giveUp) failed++;
         }
       }

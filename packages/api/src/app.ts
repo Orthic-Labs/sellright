@@ -15,7 +15,7 @@ import { adminReports } from './routes/admin-reports.js';
 import { adminAffiliate } from './routes/admin-affiliate.js';
 import { adminContent } from './routes/admin-content.js';
 import { shopExtra } from './routes/shop-extra.js';
-import { csrfValid } from './auth/cookies.js';
+import { csrfValid, customerCsrfValid, getCustomerSessionToken } from './auth/cookies.js';
 
 /**
  * The API is typed REST: every route declares a zod schema, which generates
@@ -34,6 +34,28 @@ export function createApp(): OpenAPIHono {
       const p = c.req.path;
       const exempt = p === '/v1/admin/login' || p === '/v1/admin/logout';
       if (!exempt && !csrfValid(c)) return c.json({ error: 'CSRF token missing or invalid' }, 403);
+    }
+    await next();
+  });
+
+  // Shop-surface CSRF guard (WP1.1). Mirrors the admin block: cookie-session
+  // requests must double-submit the customer CSRF token. Bearer/API clients are
+  // exempt; guest checkouts (no session) pass through; login/register exempt.
+  app.use('/v1/shop/*', async (c, next) => {
+    const m = c.req.method;
+    if (m === 'POST' || m === 'PUT' || m === 'PATCH' || m === 'DELETE') {
+      const p = c.req.path;
+      const exempt =
+        p === '/v1/shop/auth/login' ||
+        p === '/v1/shop/auth/register' ||
+        p === '/v1/shop/auth/google' ||
+        // Pre-session token endpoints (WP2d) — no customer cookie exists yet.
+        p === '/v1/shop/auth/forgot-password' ||
+        p === '/v1/shop/auth/reset-password' ||
+        p === '/v1/shop/auth/verify-email';
+      if (!exempt && getCustomerSessionToken(c) && !customerCsrfValid(c)) {
+        return c.json({ error: 'CSRF token missing or invalid' }, 403);
+      }
     }
     await next();
   });

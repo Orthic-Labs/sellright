@@ -17,10 +17,26 @@ import { DD_STORE_ID, ensureDdStore, chunk, parseDate, parseJson, parseStrArray 
 const SOURCE_URL = process.env.SOURCE_DATABASE_URL;
 if (!SOURCE_URL) throw new Error('SOURCE_DATABASE_URL is required (the damned_vendure clone)');
 
+// WP9.4: TRUNCATE guard (mirrors catalog.ts) — requires BOTH --force and
+// ALLOW_FORCE_TRUNCATE=1 to override.
+const TARGET_URL = process.env.DATABASE_URL ?? '';
+const forceFlag = process.argv.includes('--force');
+const forceEnv = process.env.ALLOW_FORCE_TRUNCATE === '1';
+const allowedTarget = /[/_](dev|test)(\b|$|\?)/.test(TARGET_URL);
+if (!allowedTarget && !(forceFlag && forceEnv)) {
+  throw new Error(
+    `REFUSING to TRUNCATE: DATABASE_URL does not look like a dev/test instance. ` +
+    `Override requires BOTH --force and ALLOW_FORCE_TRUNCATE=1. url=${TARGET_URL.replace(/:[^:@/]+@/, ':***@')}`,
+  );
+}
+
 const src = new Pool({ connectionString: SOURCE_URL });
 const q = async (sql: string, params: unknown[] = []) => (await src.query(sql, params)).rows;
 
 async function main() {
+  // eslint-disable-next-line no-console
+  console.log(`[import:customers] about to TRUNCATE address, customer. 5s to abort with Ctrl-C…`);
+  await new Promise<void>((r) => setTimeout(r, 5_000));
   await pool.query(`TRUNCATE "address", "customer" CASCADE`);
 
   const customerMap = new Map<number, string>();
@@ -97,8 +113,13 @@ async function main() {
   await pool.end();
 }
 
-main().catch((e) => {
-  // eslint-disable-next-line no-console
-  console.error(e);
-  process.exit(1);
-});
+main()
+  .catch((e) => {
+    // eslint-disable-next-line no-console
+    console.error(e);
+    process.exitCode = 1;
+  })
+  .finally(async () => {
+    try { await src.end(); } catch { /* noop */ }
+    try { await pool.end(); } catch { /* noop */ }
+  });

@@ -21,6 +21,21 @@ const SOURCE_URL = process.env.SOURCE_DATABASE_URL;
 if (!SOURCE_URL) throw new Error('SOURCE_DATABASE_URL is required (the damned_vendure clone)');
 const LANG = 'en';
 
+// WP9.4: TRUNCATE guard — refuse to run unless the target DB name ends with
+// _dev / _test, OR the operator passed --force AND set ALLOW_FORCE_TRUNCATE=1.
+// Both gates are required so the override can't be accidentally hit by a CI
+// script that just passes --force. Mirrored in customers.ts and orders.ts.
+const TARGET_URL = process.env.DATABASE_URL ?? '';
+const forceFlag = process.argv.includes('--force');
+const forceEnv = process.env.ALLOW_FORCE_TRUNCATE === '1';
+const allowedTarget = /[/_](dev|test)(\b|$|\?)/.test(TARGET_URL);
+if (!allowedTarget && !(forceFlag && forceEnv)) {
+  throw new Error(
+    `REFUSING to TRUNCATE: DATABASE_URL does not look like a dev/test instance. ` +
+    `Override requires BOTH --force and ALLOW_FORCE_TRUNCATE=1. url=${TARGET_URL.replace(/:[^:@/]+@/, ':***@')}`,
+  );
+}
+
 const src = new Pool({ connectionString: SOURCE_URL });
 const q = async (sql: string, params: unknown[] = []) => (await src.query(sql, params)).rows;
 
@@ -45,6 +60,13 @@ function actionToTypeValue(actions: Array<{ code: string; args?: Array<{ name: s
 
 async function main() {
   // Reset catalog (dev — re-runnable). TRUNCATE is table-level, not RLS-gated.
+  // (WP9.4: the TRUNCATE-guard + 5s warning run BEFORE this line; see module
+  // top. We don't print per-table row counts here — the per-table count query
+  // requires elevated privileges the app role may not have, and the warning
+  // is informational only.)
+  // eslint-disable-next-line no-console
+  console.log(`[import:catalog] TRUNCATE ${CATALOG_TABLES.length} catalog tables in 5s (Ctrl-C to abort)…`);
+  await new Promise<void>((r) => setTimeout(r, 5_000));
   await pool.query(`TRUNCATE ${CATALOG_TABLES.map((t) => `"${t}"`).join(', ')} CASCADE`);
 
   const storeId = DD_STORE_ID;
@@ -252,8 +274,14 @@ async function main() {
   await pool.end();
 }
 
-main().catch((e) => {
-  // eslint-disable-next-line no-console
-  console.error(e);
-  process.exit(1);
-});
+main()
+  .catch((e) => {
+    // eslint-disable-next-line no-console
+    console.error(e);
+    process.exitCode = 1;
+  })
+  .finally(async () => {
+    // WP9.4: always close the source pool, even on error.
+    try { await src.end(); } catch { /* noop */ }
+    try { await pool.end(); } catch { /* noop */ }
+  });

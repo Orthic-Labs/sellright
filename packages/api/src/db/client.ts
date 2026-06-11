@@ -9,8 +9,20 @@ export const pool = new Pool({ connectionString: env.DATABASE_URL });
 // emit camelCase column names the snake_case DB doesn't have.
 const drizzleOpts = { schema, casing: 'snake_case' } as const;
 
-/** Unscoped client — only for migrations, jobs that set their own store context, or admin-cross-store reads. */
-export const db = drizzle(pool, drizzleOpts);
+/**
+ * Unscoped client — ONLY for migrations, jobs that set their own store context,
+ * or admin-cross-store reads. Route handlers MUST use withStore().
+ *
+ * Named `unsafeUnscopedDb` + JSDoc warning so a lint rule (see eslint.config.js
+ * `no-restricted-imports`) can block imports from src/routes/. See WP1.3 in
+ * docs/fable/EXECUTION-PLAN.md.
+ */
+export const unsafeUnscopedDb = drizzle(pool, drizzleOpts);
+
+// NOTE: the previous `export const db = ...` name has been removed. Any
+// remaining callers (migrations/jobs) were updated as part of WP1.3 to import
+// `unsafeUnscopedDb` directly. An ESLint `no-restricted-imports` rule on
+// `src/routes/**` blocks accidental use there — see eslint.config.js.
 
 export type Tx = ReturnType<typeof drizzle>;
 

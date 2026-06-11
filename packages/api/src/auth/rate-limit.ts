@@ -42,9 +42,11 @@ export function clearLoginAttempts(ip: string, identifier: string): void {
   store.delete(`${ip}|${identifier.toLowerCase()}`);
 }
 
-/** Best-effort client IP from proxy headers (nginx/Cloudflare) or fallback. */
-export function clientIp(c: { req: { header: (k: string) => string | undefined } }): string {
-  const xff = c.req.header('x-forwarded-for');
-  if (xff) return xff.split(',')[0]!.trim();
-  return c.req.header('cf-connecting-ip') ?? c.req.header('x-real-ip') ?? 'unknown';
+/** Best-effort client IP from proxy headers (Cloudflare / nginx) or fallback.
+ *  Priority: CF-Connecting-IP (set by the Cloudflare edge, unspoofable) >
+ *  X-Real-IP (set by our own nginx) > socket. X-Forwarded-For is INTENTIONALLY
+ *  ignored because anyone on the public internet can forge it and use it to
+ *  bypass rate limits. See WP1.4. */
+export function clientIp(c: { req: { header: (k: string) => string | undefined }; env?: { remoteAddr?: string } }): string {
+  return c.req.header('cf-connecting-ip') ?? c.req.header('x-real-ip') ?? c.env?.remoteAddr ?? 'unknown';
 }

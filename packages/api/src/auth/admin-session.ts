@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { and, eq, gt, isNotNull } from 'drizzle-orm';
-import { db } from '../db/client.js';
+import { unsafeUnscopedDb as db } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { normalizeEmail } from './email.js';
 

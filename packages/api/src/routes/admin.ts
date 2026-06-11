@@ -34,11 +34,16 @@ admin.openapi(
     const retry = loginRetryAfter(ip, `admin:${email}`);
     if (retry > 0) throw new HttpError(429, `too many attempts — try again in ${retry}s`);
     const u = await findAdminByEmail(email);
-    if (!u || !(await verifyPassword(password, u.passwordHash))) { recordLoginFailure(ip, `admin:${email}`); throw new HttpError(401, 'invalid email or password'); }
-    // Second factor, if enabled.
+    // WP1.5: do NOT confirm password validity to unauthenticated callers. The
+    // previous shape returned {twoFactorRequired:true} for valid password +
+    // missing TOTP, which let an attacker enumerate "valid password" + "2FA
+    // enabled" via the response. The fix: treat a 2FA-enabled account with a
+    // missing TOTP as a single incomplete login attempt (401, generic message).
+    // The UI must always send both password and TOTP together.
+    if (!u || !(await verifyPassword(password, u.passwordHash))) { recordLoginFailure(ip, `admin:${email}`); throw new HttpError(401, 'invalid email, password, or 2FA code'); }
     if (u.totpSecret) {
-      if (!totp) return c.json({ twoFactorRequired: true }, 200); // prompt for the code
-      if (!verifyTotp(u.totpSecret, totp)) { recordLoginFailure(ip, `admin:${email}`); throw new HttpError(401, 'invalid 2FA code'); }
+      if (!totp) { recordLoginFailure(ip, `admin:${email}`); throw new HttpError(401, 'invalid email, password, or 2FA code'); }
+      if (!verifyTotp(u.totpSecret, totp, u.id)) { recordLoginFailure(ip, `admin:${email}`); throw new HttpError(401, 'invalid email, password, or 2FA code'); }
     }
     clearLoginAttempts(ip, `admin:${email}`);
     const token = await createAdminSession(u.id);

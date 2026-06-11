@@ -1,6 +1,6 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { eq } from 'drizzle-orm';
-import { withStore, db } from '../db/client.js';
+import { withStore, unsafeUnscopedDb as db } from '../db/client.js';
 import { resolveStore, DEV_DEFAULT_STORE, type StoreCtx } from '../store-context.js';
 import * as s from '../db/schema.js';
 import { hashPassword, verifyPassword } from '../auth/password.js';
@@ -11,9 +11,7 @@ import { normalizeEmail } from '../auth/email.js';
 
 async function store(c: { req: { header: (k: string) => string | undefined } }): Promise<StoreCtx> {
   const slug = c.req.header('x-store-slug') ?? DEV_DEFAULT_STORE;
-  const found = await resolveStore(slug);
-  if (!found) throw new Error(`unknown store: ${slug}`);
-  return found;
+  return resolveStore(slug);
 }
 
 /** The store's Google OAuth client id (store config or env GOOGLE_CLIENT_ID). */

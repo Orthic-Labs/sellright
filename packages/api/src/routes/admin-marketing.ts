@@ -1,7 +1,7 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { randomBytes } from 'node:crypto';
 import { and, desc, eq } from 'drizzle-orm';
-import { db, withStore } from '../db/client.js';
+import { unsafeUnscopedDb as db, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { HttpError, J, errBody, money, requireAdmin, requireStore, requireWrite, requireManage, requirePermission, guard } from './admin-helpers.js';
 

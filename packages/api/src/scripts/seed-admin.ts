@@ -3,7 +3,7 @@
  * Usage: tsx src/scripts/seed-admin.ts <email> <password>
  * Idempotent: re-running updates the password and re-grants store access.
  */
-import { db, pool } from '../db/client.js';
+import { unsafeUnscopedDb as db, pool } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { hashPassword } from '../auth/password.js';

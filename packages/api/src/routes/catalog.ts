@@ -7,9 +7,7 @@ import { convertMoney, rateFor, RATE_SCALE } from '../money/currency.js';
 
 async function store(c: { req: { header: (k: string) => string | undefined } }): Promise<StoreCtx> {
   const slug = c.req.header('x-store-slug') ?? DEV_DEFAULT_STORE;
-  const found = await resolveStore(slug);
-  if (!found) throw new Error(`unknown store: ${slug}`);
-  return found;
+  return resolveStore(slug);
 }
 
 const Money = z.number().int().describe('integer minor units (cents)');

@@ -8,9 +8,7 @@ import { getProvider, isPaymentMethodEnabled } from '../payments/provider.js';
 
 async function store(c: { req: { header: (k: string) => string | undefined } }): Promise<StoreCtx> {
   const slug = c.req.header('x-store-slug') ?? DEV_DEFAULT_STORE;
-  const found = await resolveStore(slug);
-  if (!found) throw new Error(`unknown store: ${slug}`);
-  return found;
+  return resolveStore(slug);
 }
 
 export const pay = new OpenAPIHono();
@@ -53,15 +51,18 @@ pay.openapi(
       if (!order) return { kind: 'notfound' };
       if (order.state !== 'PendingPayment') return { kind: 'badstate', state: order.state };
 
-      // Idempotency: claim the key before any side effect; duplicate = no-op.
-      if (idemKey) {
-        const claimed = await tx
-          .insert(s.processedEvent)
-          .values({ id: idemKey, storeId: st.id, type: 'payment' })
-          .onConflictDoNothing()
-          .returning({ id: s.processedEvent.id });
-        if (claimed.length === 0) return { kind: 'noop', state: order.state };
-      }
+      // WP1.2: idempotency is MANDATORY. If the client didn't send a key we
+      // derive a deterministic one keyed on (orderCode, method) so the claim
+      // ALWAYS runs and a concurrent double-submit can't double-charge. The
+      // derived key is per-(order, method), so a deliberate retry of a Declined
+      // payment must clear the claim first (handled below in the Declined branch).
+      const claimKey = idemKey ?? `pay:${code}:${method}`;
+      const claimed = await tx
+        .insert(s.processedEvent)
+        .values({ id: claimKey, storeId: st.id, type: 'payment' })
+        .onConflictDoNothing()
+        .returning({ id: s.processedEvent.id });
+      if (claimed.length === 0) return { kind: 'noop', state: order.state };
 
       const result = await provider.createPayment({ orderCode: code, amount: order.grandTotal, currency: order.currency });
       await tx.insert(s.payment).values({
@@ -73,6 +74,14 @@ pay.openapi(
       if (result.state === 'Settled' && canTransition(order.state as OrderState, 'Paid')) {
         await tx.update(s.order).set({ state: 'Paid', placedAt: new Date() }).where(eq(s.order.id, order.id));
         return { kind: 'ok', state: 'Paid', payment: 'Settled' };
+      }
+      // Declined / Failed: release the deterministic claim so the customer can
+      // retry. The order STAYS in PendingPayment — auto-cancelling on a
+      // transient decline would make recovery impossible (a real provider's
+      // 3DS/network blip would leave the customer stuck). For client-supplied
+      // keys, the caller can rotate by sending a new key.
+      if ((result.state === 'Declined' || result.state === 'Failed') && !idemKey) {
+        await tx.delete(s.processedEvent).where(and(eq(s.processedEvent.id, claimKey), eq(s.processedEvent.type, 'payment')));
       }
       return { kind: 'ok', state: order.state, payment: result.state };
     });

@@ -1,6 +1,6 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, desc, eq } from 'drizzle-orm';
-import { withStore, db } from '../db/client.js';
+import { withStore, unsafeUnscopedDb as db } from '../db/client.js';
 import { resolveStore, DEV_DEFAULT_STORE } from '../store-context.js';
 import * as s from '../db/schema.js';
 import { isMethodEligible, shippingRate } from '../shipping/calculator.js';
@@ -10,9 +10,7 @@ export const shopExtra = new OpenAPIHono();
 const J = (schema: z.ZodTypeAny) => ({ 'application/json': { schema } });
 async function storeId(c: { req: { header: (k: string) => string | undefined } }): Promise<{ id: string; currency: string }> {
   const slug = c.req.header('x-store-slug') ?? DEV_DEFAULT_STORE;
-  const st = await resolveStore(slug);
-  if (!st) throw new Error(`unknown store: ${slug}`);
-  return st;
+  return resolveStore(slug);
 }
 
 // ── guest order tracking (code + email) ──────────────────────────────────────

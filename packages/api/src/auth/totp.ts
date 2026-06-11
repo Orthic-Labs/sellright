@@ -38,12 +38,34 @@ function hotp(secret: Buffer, counter: number): string {
   return (code % 1_000_000).toString().padStart(6, '0');
 }
 
-/** Verify a 6-digit code, allowing ±1 step (clock drift). */
-export function verifyTotp(secretB32: string, code: string): boolean {
+/**
+ * Verify a 6-digit code, allowing ±1 step (clock drift). WP9.2: when `actorId`
+ * is provided, the (actorId, step) of the most recently-accepted code is
+ * remembered in-process and a second submit of the same code within the window
+ * is rejected. This kills replay attacks without DB writes on the hot path
+ * (acceptable: a server restart only widens the window to 90s, not 0).
+ */
+const recentByActor = new Map<string, { step: number; at: number }>();
+const REPLAY_TTL_MS = 5 * 60 * 1000;
+
+export function verifyTotp(secretB32: string, code: string, actorId?: string): boolean {
   if (!/^\d{6}$/.test(code.trim())) return false;
   const secret = base32Decode(secretB32);
   const step = Math.floor(Date.now() / 30000);
-  for (let w = -1; w <= 1; w++) if (hotp(secret, step + w) === code.trim()) return true;
+  for (let w = -1; w <= 1; w++) {
+    if (hotp(secret, step + w) !== code.trim()) continue;
+    if (actorId) {
+      const prev = recentByActor.get(actorId);
+      const now = Date.now();
+      // Opportunistic GC to keep the map bounded.
+      if (recentByActor.size > 1000) {
+        for (const [k, v] of recentByActor) if (now - v.at > REPLAY_TTL_MS) recentByActor.delete(k);
+      }
+      if (prev && now - prev.at < REPLAY_TTL_MS && prev.step === step + w) return false; // replay
+      recentByActor.set(actorId, { step: step + w, at: now });
+    }
+    return true;
+  }
   return false;
 }
 

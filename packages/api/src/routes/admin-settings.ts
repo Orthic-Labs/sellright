@@ -1,7 +1,7 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { randomBytes, createHash } from 'node:crypto';
 import { and, desc, eq } from 'drizzle-orm';
-import { db, withStore } from '../db/client.js';
+import { unsafeUnscopedDb as db, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { hashPassword } from '../auth/password.js';
 import { newTotpSecret, verifyTotp, otpauthUri } from '../auth/totp.js';

@@ -17,10 +17,9 @@ import { isMethodEligible, shippingRate, ShippingUnavailableError } from '../shi
 
 async function store(c: { req: { header: (k: string) => string | undefined } }): Promise<StoreCtx> {
   const slug = c.req.header('x-store-slug') ?? DEV_DEFAULT_STORE;
-  const found = await resolveStore(slug);
-  if (!found) throw new Error(`unknown store: ${slug}`);
-  return found;
+  return resolveStore(slug);
 }
+
 
 function selectUnitPrice(v: { price: number; salePrice: number | null; isPreOrder: boolean; preOrderPrice: number | null }): number {
   if (v.isPreOrder && v.preOrderPrice != null) return v.preOrderPrice;
