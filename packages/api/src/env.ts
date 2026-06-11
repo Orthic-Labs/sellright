@@ -4,7 +4,10 @@ import { z } from 'zod';
 const EnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(3300),
-  DATABASE_URL: z.string().url().default('postgres://cp:cp@127.0.0.1:5432/cp_dev'),
+  // Default targets the :5433 DEV cluster, never :5432 (the prod vendure-postgres
+  // Docker port) — an accidental boot without DATABASE_URL set must not reach prod.
+  // The cp:cp creds don't auth anyway; this is fail-safe-by-port, not by secret.
+  DATABASE_URL: z.string().url().default('postgres://cp:cp@127.0.0.1:5433/sellright_dev'),
   /**
    * Non-owner connection string for the app role (NOSUPERUSER NOBYPASSRLS).
    * Used by the RLS test suite to exercise tenant isolation under FORCE RLS.
