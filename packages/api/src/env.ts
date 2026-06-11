@@ -26,6 +26,10 @@ const EnvSchema = z.object({
   ASSET_DIR: z.string().default('/home/vendure/sites/sellright-assets'),
   // Public storefront URL used in email links (password reset, verify, etc.).
   STOREFRONT_URL: z.string().url().default('https://store.example.com'),
+  // WP3: Stripe (optional — the provider/endpoints no-op or 503 when unset, so
+  // dev/tests boot without a key; only the live end-to-end run needs them).
+  STRIPE_SECRET_KEY: z.string().optional(),
+  STRIPE_WEBHOOK_SECRET: z.string().optional(),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

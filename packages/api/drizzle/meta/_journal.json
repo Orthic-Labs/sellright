@@ -155,6 +155,41 @@
       "when": 1780766759822,
       "tag": "0021_staff_permissions",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1780766781822,
+      "tag": "0022_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1780766782822,
+      "tag": "0023_customer_tokens",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1780766783822,
+      "tag": "0024_order_metadata",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1780766784822,
+      "tag": "0025_rls_stance_session_admin_user_store",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1780766785822,
+      "tag": "0026_refund_provider_ref",
+      "breakpoints": true
     }
   ]
 }

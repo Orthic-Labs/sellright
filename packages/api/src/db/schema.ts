@@ -395,6 +395,7 @@ export const refund = pgTable('refund', {
   amount: integer().notNull(), // cents
   reason: text(),
   state: refundState().notNull().default('Pending'),
+  providerRef: text(), // WP3: gateway refund id (e.g. Stripe re_...); null for manual/cod
   createdAt: ts(),
 });
 

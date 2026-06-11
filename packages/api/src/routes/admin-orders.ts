@@ -13,6 +13,7 @@ import { evaluateCoupon } from '../money/coupon.js';
 import { resolveTaxRate } from '../money/tax.js';
 import { emitEvent } from '../webhooks/emit.js';
 import { sendShippingNotification } from '../email/dispatch.js';
+import { getProvider } from '../payments/provider.js';
 
 export const adminOrders = new OpenAPIHono();
 
@@ -192,7 +193,20 @@ adminOrders.openapi(
       const priorRefunded = await alreadyRefunded(tx, o.id);
       if (amount <= 0 || amount > o.grandTotal - priorRefunded) return { kind: 'badamount' as const, max: o.grandTotal - priorRefunded };
 
-      const [refund] = await tx.insert(s.refund).values({ storeId: st.storeId, paymentId: pay.id, orderId: o.id, amount, reason: body.reason ?? null, state: 'Settled' }).returning({ id: s.refund.id });
+      // WP3: reverse the money at the gateway BEFORE writing the ledger row, so a
+      // gateway failure aborts the whole refund (txn rolls back, no orphan ledger
+      // row). manual/cod refundPayment is a no-op Settled; stripe actually refunds.
+      const provider = getProvider(pay.method);
+      let refundState: 'Settled' | 'Pending' | 'Failed' = 'Settled';
+      let refundRef: string | null = null;
+      if (provider?.refundPayment) {
+        const r = await provider.refundPayment({ providerRef: pay.providerRef, amount, currency: o.currency });
+        if (r.state === 'Failed') return { kind: 'providerfail' as const, message: r.errorMessage ?? 'gateway refund failed' };
+        refundState = r.state;
+        refundRef = r.providerRef;
+      }
+
+      const [refund] = await tx.insert(s.refund).values({ storeId: st.storeId, paymentId: pay.id, orderId: o.id, amount, reason: body.reason ?? null, state: refundState, providerRef: refundRef }).returning({ id: s.refund.id });
       for (const x of refundLines) {
         await tx.insert(s.refundLine).values({ storeId: st.storeId, refundId: refund!.id, orderLineId: x.line!.id, quantity: x.quantity, amount: Math.round((x.line!.lineTotal / x.line!.quantity) * x.quantity), restock: body.restock });
         await tx.update(s.orderLine).set({ refundedQty: Math.min(x.line!.quantity, x.line!.refundedQty + x.quantity) }).where(eq(s.orderLine.id, x.line!.id));
@@ -212,6 +226,7 @@ adminOrders.openapi(
     if (res.kind === 'badstate') throw new HttpError(409, `order not refundable in state ${res.state}`);
     if (res.kind === 'nopayment') throw new HttpError(409, 'no settled payment to refund');
     if (res.kind === 'badamount') throw new HttpError(409, `refund amount must be 1..${res.max} cents`);
+    if (res.kind === 'providerfail') throw new HttpError(502, res.message);
     return c.json({ code, state: res.state, refunded: res.refunded }, 200);
   }),
 );

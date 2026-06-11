@@ -17,6 +17,7 @@ import { adminContent } from './routes/admin-content.js';
 import { adminAssets } from './routes/admin-assets.js';
 import { shopExtra } from './routes/shop-extra.js';
 import { customerTokens } from './routes/customer-tokens.js';
+import { paymentWebhooks } from './routes/payment-webhooks.js';
 import { csrfValid, customerCsrfValid, getCustomerSessionToken } from './auth/cookies.js';
 
 /**
@@ -99,6 +100,7 @@ export function createApp(): OpenAPIHono {
   app.route('/', customerTokens);
   app.route('/', account);
   app.route('/', orders);
+  app.route('/', paymentWebhooks); // WP3: inbound Stripe webhooks (signature-auth, no CSRF/cookie)
 
   // Admin API — operator surface (auth, dashboard, orders, products, customers).
   app.route('/', admin);
