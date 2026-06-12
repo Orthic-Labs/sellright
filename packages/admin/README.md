@@ -51,6 +51,10 @@ working API connection.
 
 ## Known gaps (deferred)
 
-No product image upload/media manager, no fine-grained per-action permission
-matrix, no production admin host yet, and no real gateway/payment operations.
-The admin is currently served by Vite behind an SSH tunnel.
+Product **featured-image upload** + **option-group editor** now live on the
+product page; the per-action **permission matrix** ships on `/staff`; and
+screens for returns, gift cards, webhooks, locations, tax zones, and currency
+rates are built. Remaining: a full media-library/gallery manager (only the
+featured image is wired today), per-variant option *assignment* UI, no
+production admin host yet, and no real gateway/payment operations. The admin is
+currently served by Vite behind an SSH tunnel.
