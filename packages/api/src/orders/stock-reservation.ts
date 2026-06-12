@@ -10,6 +10,7 @@ export interface ReservableVariant {
   sku: string;
   enabled: boolean;
   isPreOrder: boolean;
+  fulfillmentType?: string;
 }
 
 export class StockReservationError extends Error {
@@ -34,7 +35,7 @@ export async function reserveStockOrThrow(
   const failed: string[] = [];
   for (const i of items) {
     const v = bySku.get(i.sku);
-    if (!v || !v.enabled || v.isPreOrder) continue;
+    if (!v || !v.enabled || v.isPreOrder || (v.fulfillmentType ?? 'physical') !== 'physical') continue;
     const res = await tx.execute(sql`
       UPDATE "stock" SET allocated = allocated + ${i.quantity}
       WHERE variant_id = ${v.id} AND store_id = ${storeId} AND (on_hand - allocated) >= ${i.quantity}`);

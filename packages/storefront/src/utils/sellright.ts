@@ -5,8 +5,8 @@
  */
 import { isServer } from '@qwik.dev/core/build';
 
-const API = 'http://127.0.0.1:3300';
-const STORE_SLUG = 'damned';
+const API = import.meta.env.VITE_SELLRIGHT_API_URL || 'http://127.0.0.1:3300';
+const STORE_SLUG = import.meta.env.VITE_SELLRIGHT_STORE_SLUG || 'damned';
 
 async function sr<T>(path: string, init: RequestInit = {}): Promise<T> {
   const url = isServer ? `${API}${path}` : path;

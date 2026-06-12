@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { StockReservationError, reserveStockOrThrow, validateReservableItems } from './stock-reservation.js';
 
-const variant = (overrides: Partial<{ id: string; sku: string; enabled: boolean; isPreOrder: boolean }> = {}) => ({
+const variant = (overrides: Partial<{ id: string; sku: string; enabled: boolean; isPreOrder: boolean; fulfillmentType: string }> = {}) => ({
   id: overrides.id ?? 'variant-1',
   sku: overrides.sku ?? 'SKU-1',
   enabled: overrides.enabled ?? true,
   isPreOrder: overrides.isPreOrder ?? false,
+  fulfillmentType: overrides.fulfillmentType ?? 'physical',
 });
 
 describe('stock reservation', () => {
@@ -33,5 +34,21 @@ describe('stock reservation', () => {
 
     await expect(reserveStockOrThrow(tx, 'store-1', [{ sku: 'A', quantity: 1 }, { sku: 'B', quantity: 1 }], bySku)).rejects.toBeInstanceOf(StockReservationError);
     expect(calls).toHaveLength(2);
+  });
+
+  it('does not require stock rows for license variants', async () => {
+    const calls: string[] = [];
+    const tx = {
+      async execute() {
+        calls.push('update');
+        return { rowCount: 0 };
+      },
+    };
+    const bySku = new Map([
+      ['VIEWRIGHT-PRO', variant({ id: 'license-1', sku: 'VIEWRIGHT-PRO', fulfillmentType: 'license' })],
+    ]);
+
+    await expect(reserveStockOrThrow(tx, 'store-1', [{ sku: 'VIEWRIGHT-PRO', quantity: 1 }], bySku)).resolves.toBeUndefined();
+    expect(calls).toHaveLength(0);
   });
 });

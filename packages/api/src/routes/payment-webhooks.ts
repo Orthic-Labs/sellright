@@ -51,7 +51,7 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
         const code = pi.metadata?.orderCode;
         if (!code) return;
         const [order] = await tx
-          .select({ id: s.order.id, state: s.order.state, grandTotal: s.order.grandTotal, currency: s.order.currency })
+          .select({ id: s.order.id, state: s.order.state, grandTotal: s.order.grandTotal, currency: s.order.currency, customerId: s.order.customerId })
           .from(s.order).where(eq(s.order.code, code)).limit(1);
         // Safety net for a client that died before calling /pay. If /pay already
         // settled it the order is Paid → skip (no duplicate payment row). Re-run

@@ -11,7 +11,8 @@
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:assert-rls": "tsx src/db/assert-force-rls.ts"
+    "db:assert-rls": "tsx src/db/assert-force-rls.ts",
+    "provision:right-apps": "tsx src/scripts/provision-right-apps.ts"
   },
   "dependencies": {
     "@sellright/shared": "workspace:*",

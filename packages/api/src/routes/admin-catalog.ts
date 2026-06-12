@@ -126,7 +126,20 @@ adminCatalog.openapi(
 adminCatalog.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/products/{id}/variants', summary: 'Add a variant',
-    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ sku: z.string().min(1), name: z.string().min(1), price: money, salePrice: money.nullable().optional(), onHand: z.number().int().min(0).default(0) })) } },
+    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({
+      sku: z.string().min(1),
+      name: z.string().min(1),
+      price: money,
+      salePrice: money.nullable().optional(),
+      onHand: z.number().int().min(0).default(0),
+      fulfillmentType: z.enum(['physical', 'digital_download', 'license', 'update_pass']).default('physical'),
+      appKey: z.string().nullable().optional(),
+      artifactKey: z.string().nullable().optional(),
+      licenseSeats: z.number().int().min(1).max(100).default(1),
+      licenseDurationDays: z.number().int().positive().nullable().optional(),
+      updatesDurationDays: z.number().int().positive().nullable().optional(),
+      metafields: z.record(z.string(), z.any()).nullable().optional(),
+    })) } },
     responses: { 200: { description: 'Created', content: J(z.object({ id: z.string() })) }, 404: { description: 'Not found', ...errBody }, 409: { description: 'SKU exists', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
@@ -139,9 +152,25 @@ adminCatalog.openapi(
       if (!p) return { kind: 'notfound' as const };
       const [dupe] = await tx.select({ id: s.productVariant.id }).from(s.productVariant).where(eq(s.productVariant.sku, body.sku)).limit(1);
       if (dupe) return { kind: 'dupe' as const };
-      const [v] = await tx.insert(s.productVariant).values({ storeId: st.storeId, productId: id, sku: body.sku, name: body.name, price: body.price, salePrice: body.salePrice ?? null }).returning({ id: s.productVariant.id });
-      await tx.insert(s.stock).values({ variantId: v!.id, storeId: st.storeId, onHand: body.onHand, allocated: 0 });
-      if (body.onHand > 0) await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: v!.id, delta: body.onHand, reason: 'admin_create' });
+      const [v] = await tx.insert(s.productVariant).values({
+        storeId: st.storeId,
+        productId: id,
+        sku: body.sku,
+        name: body.name,
+        price: body.price,
+        salePrice: body.salePrice ?? null,
+        fulfillmentType: body.fulfillmentType,
+        appKey: body.appKey ?? null,
+        artifactKey: body.artifactKey ?? null,
+        licenseSeats: body.licenseSeats,
+        licenseDurationDays: body.licenseDurationDays ?? null,
+        updatesDurationDays: body.updatesDurationDays ?? null,
+        metafields: body.metafields ?? null,
+      }).returning({ id: s.productVariant.id });
+      if (body.fulfillmentType === 'physical') {
+        await tx.insert(s.stock).values({ variantId: v!.id, storeId: st.storeId, onHand: body.onHand, allocated: 0 });
+        if (body.onHand > 0) await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: v!.id, delta: body.onHand, reason: 'admin_create' });
+      }
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'variant', entityId: v!.id, action: 'create', data: { sku: body.sku } });
       return { kind: 'ok' as const, id: v!.id };
     });

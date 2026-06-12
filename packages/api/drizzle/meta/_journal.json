@@ -190,6 +190,13 @@
       "when": 1780766785822,
       "tag": "0026_refund_provider_ref",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1780766786822,
+      "tag": "0027_software_entitlements",
+      "breakpoints": true
     }
   ]
 }

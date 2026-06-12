@@ -16,6 +16,7 @@ import { reserveStockOrThrow, StockReservationError, validateReservableItems } f
 import { isMethodEligible, shippingRate, ShippingUnavailableError } from '../shipping/calculator.js';
 import { sendOrderConfirmation } from '../email/dispatch.js';
 import { clientIp, loginRetryAfter } from '../auth/rate-limit.js';
+import { issueLicensesForPaidOrder } from '../licensing/issue.js';
 
 async function store(c: { req: { header: (k: string) => string | undefined } }): Promise<StoreCtx> {
   const slug = c.req.header('x-store-slug') ?? DEV_DEFAULT_STORE;
@@ -285,7 +286,9 @@ checkout.openapi(
             await tx.insert(s.giftCardTransaction).values({ storeId: st.id, giftCardId: gc.id, orderId, amount: -appn.applied });
             giftCardApplied = appn.applied;
             if (appn.remainingDue <= 0) {
-              await tx.update(s.order).set({ state: 'Paid', placedAt: new Date(), updatedAt: new Date() }).where(eq(s.order.id, orderId));
+              const paidAt = new Date();
+              await tx.update(s.order).set({ state: 'Paid', placedAt: paidAt, updatedAt: paidAt }).where(eq(s.order.id, orderId));
+              await issueLicensesForPaidOrder(tx, { storeId: st.id, orderId, customerId, paidAt });
               paid = true;
             }
           }

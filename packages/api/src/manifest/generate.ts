@@ -9,10 +9,11 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { and, asc, eq, isNull } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
-import { DD_STORE_ID } from '../import/store.js';
+import { resolveStore, DEV_DEFAULT_STORE } from '../store-context.js';
 import * as s from '../db/schema.js';
 
 const OUT = process.env.CATALOG_DIR || '/home/vendure/sites/sellright-data';
+const STORE_SLUG = process.env.STORE_SLUG || DEV_DEFAULT_STORE;
 const assetUrl = (path: string | null | undefined) => (path ? `/assets/${path}` : null);
 const selectPrice = (v: { price: number; salePrice: number | null; isPreOrder: boolean; preOrderPrice: number | null }) =>
   v.isPreOrder && v.preOrderPrice != null ? v.preOrderPrice : v.salePrice ?? v.price;
@@ -30,7 +31,8 @@ async function main() {
   await mkdir(`${OUT}/products`, { recursive: true });
   const now = new Date().toISOString();
 
-  const { manifest, details } = await withStore(DD_STORE_ID, async (tx) => {
+  const store = await resolveStore(STORE_SLUG);
+  const { manifest, details } = await withStore(store.id, async (tx) => {
     const products = await tx.select().from(s.product)
       .where(and(eq(s.product.status, 'active'), isNull(s.product.deletedAt))).orderBy(asc(s.product.name));
     const assetById = new Map((await tx.select({ id: s.asset.id, path: s.asset.path }).from(s.asset)).map((a) => [a.id, a.path]));
@@ -53,7 +55,7 @@ async function main() {
       const prices = vs.map(selectPrice);
       const min = prices.length ? Math.min(...prices) : 0;
       const max = prices.length ? Math.max(...prices) : 0;
-      const inStock = vs.some((v) => v.isPreOrder || (stockByVariant.get(v.id) ?? 0) > 0);
+      const inStock = vs.some((v) => v.fulfillmentType !== 'physical' || v.isPreOrder || (stockByVariant.get(v.id) ?? 0) > 0);
       const featured = assetUrl(p.featuredAssetId ? assetById.get(p.featuredAssetId) : null);
       const v0 = vs[0];
       const cf = { salePrice: v0?.salePrice ?? null, preOrderPrice: v0?.preOrderPrice ?? null, shipDate: v0?.shipDate ?? null, isPreOrder: v0?.isPreOrder ?? false };
@@ -81,7 +83,7 @@ async function main() {
   await writeFile(`${OUT}/shop-catalog.json`, JSON.stringify(manifest));
   for (const d of details) await writeFile(`${OUT}/products/${d.slug}.json`, JSON.stringify(d));
   // eslint-disable-next-line no-console
-  console.log(`manifest: ${manifest.totalItems} products + ${details.length} detail files -> ${OUT}`);
+  console.log(`manifest: ${STORE_SLUG}: ${manifest.totalItems} products + ${details.length} detail files -> ${OUT}`);
   await pool.end();
 }
 

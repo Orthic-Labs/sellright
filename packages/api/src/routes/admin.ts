@@ -377,7 +377,22 @@ admin.openapi(
         assetPath = a?.path ?? null;
       }
       const variants = await tx
-        .select({ id: s.productVariant.id, sku: s.productVariant.sku, name: s.productVariant.name, price: s.productVariant.price, salePrice: s.productVariant.salePrice, enabled: s.productVariant.enabled, onHand: s.stock.onHand, allocated: s.stock.allocated })
+        .select({
+          id: s.productVariant.id,
+          sku: s.productVariant.sku,
+          name: s.productVariant.name,
+          price: s.productVariant.price,
+          salePrice: s.productVariant.salePrice,
+          enabled: s.productVariant.enabled,
+          fulfillmentType: s.productVariant.fulfillmentType,
+          appKey: s.productVariant.appKey,
+          artifactKey: s.productVariant.artifactKey,
+          licenseSeats: s.productVariant.licenseSeats,
+          licenseDurationDays: s.productVariant.licenseDurationDays,
+          updatesDurationDays: s.productVariant.updatesDurationDays,
+          onHand: s.stock.onHand,
+          allocated: s.stock.allocated,
+        })
         .from(s.productVariant)
         .leftJoin(s.stock, eq(s.stock.variantId, s.productVariant.id))
         .where(and(eq(s.productVariant.productId, id), sql`${s.productVariant.deletedAt} is null`))
@@ -431,7 +446,23 @@ admin.openapi(
 admin.openapi(
   createRoute({
     method: 'patch', path: '/v1/admin/variants/{id}', summary: 'Update variant price/availability',
-    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ price: money.optional(), salePrice: money.nullable().optional(), compareAtPrice: money.nullable().optional(), cost: money.nullable().optional(), barcode: z.string().nullable().optional(), weightG: z.number().int().nullable().optional(), dimensions: z.record(z.string(), z.any()).nullable().optional(), metafields: z.record(z.string(), z.any()).nullable().optional(), enabled: z.boolean().optional() })) } },
+    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({
+      price: money.optional(),
+      salePrice: money.nullable().optional(),
+      compareAtPrice: money.nullable().optional(),
+      cost: money.nullable().optional(),
+      barcode: z.string().nullable().optional(),
+      weightG: z.number().int().nullable().optional(),
+      dimensions: z.record(z.string(), z.any()).nullable().optional(),
+      metafields: z.record(z.string(), z.any()).nullable().optional(),
+      enabled: z.boolean().optional(),
+      fulfillmentType: z.enum(['physical', 'digital_download', 'license', 'update_pass']).optional(),
+      appKey: z.string().nullable().optional(),
+      artifactKey: z.string().nullable().optional(),
+      licenseSeats: z.number().int().min(1).max(100).optional(),
+      licenseDurationDays: z.number().int().positive().nullable().optional(),
+      updatesDurationDays: z.number().int().positive().nullable().optional(),
+    })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {

@@ -28,6 +28,7 @@ export const orderState = pgEnum('order_state', [
   'Cancelled',
 ]);
 export const fulfillmentState = pgEnum('fulfillment_state', ['Pending', 'Shipped', 'Delivered']);
+export const fulfillmentType = pgEnum('fulfillment_type', ['physical', 'digital_download', 'license', 'update_pass']);
 export const paymentState = pgEnum('payment_state', [
   'Pending',
   'Authorized',
@@ -38,6 +39,7 @@ export const paymentState = pgEnum('payment_state', [
 export const refundState = pgEnum('refund_state', ['Pending', 'Settled', 'Failed']);
 export const returnStatus = pgEnum('return_status', ['requested', 'approved', 'rejected', 'received', 'refunded']);
 export const promotionType = pgEnum('promotion_type', ['percentage', 'fixed', 'free_shipping']);
+export const licenseStatus = pgEnum('license_status', ['active', 'revoked', 'expired']);
 
 const ts = () => timestamp({ withTimezone: true }).notNull().defaultNow();
 
@@ -173,6 +175,12 @@ export const productVariant = pgTable(
     preOrderPrice: integer(), // cents, nullable
     isPreOrder: boolean().notNull().default(false),
     shipDate: timestamp({ withTimezone: true }), // pre-order fulfillment hold
+    fulfillmentType: fulfillmentType().notNull().default('physical'),
+    appKey: text(), // e.g. viewright; set for software licenses/downloads/update passes
+    artifactKey: text(), // optional direct download artifact key
+    licenseSeats: integer().notNull().default(1), // device/activation allowance for issued licenses
+    licenseDurationDays: integer(), // null = perpetual
+    updatesDurationDays: integer(), // null = no update entitlement
     weightG: integer(),
     barcode: text(), // UPC/EAN/ISBN
     dimensions: jsonb(), // { length, width, height, unit }
@@ -373,6 +381,76 @@ export const orderLine = pgTable('order_line', {
   fulfilledQty: integer().notNull().default(0),
   refundedQty: integer().notNull().default(0),
 });
+
+// Software entitlements issued from paid order lines. Store-scoped: Right Apps
+// can host ViewRight/CodeRight/etc. in one instance, while Damned/RH remain
+// separate DB/API instances with their own license rows.
+export const license = pgTable(
+  'license',
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    storeId: uuid().notNull().references(() => store.id),
+    customerId: uuid().references(() => customer.id),
+    orderId: uuid().notNull().references(() => order.id),
+    orderLineId: uuid().notNull().references(() => orderLine.id),
+    appKey: text().notNull(),
+    licenseKey: text().notNull().unique(),
+    status: licenseStatus().notNull().default('active'),
+    seats: integer().notNull().default(1),
+    updatesUntil: timestamp({ withTimezone: true }),
+    expiresAt: timestamp({ withTimezone: true }),
+    metadata: jsonb(),
+    createdAt: ts(),
+    updatedAt: ts(),
+  },
+);
+
+export const licenseActivation = pgTable(
+  'license_activation',
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    storeId: uuid().notNull().references(() => store.id),
+    licenseId: uuid().notNull().references(() => license.id),
+    appKey: text().notNull(),
+    deviceIdHash: text().notNull(),
+    activationTokenHash: text(),
+    deviceLabel: text(),
+    activatedAt: ts(),
+    lastSeenAt: ts(),
+  },
+  (t) => [unique('license_activation_device').on(t.licenseId, t.deviceIdHash)],
+);
+
+export const appRelease = pgTable(
+  'app_release',
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    storeId: uuid().notNull().references(() => store.id),
+    appKey: text().notNull(),
+    version: text().notNull(),
+    channel: text().notNull().default('stable'),
+    platform: text(),
+    manifest: jsonb().notNull(),
+    publishedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    createdAt: ts(),
+  },
+  (t) => [unique('app_release_unique').on(t.storeId, t.appKey, t.channel, t.platform, t.version)],
+);
+
+export const downloadArtifact = pgTable(
+  'download_artifact',
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    storeId: uuid().notNull().references(() => store.id),
+    appReleaseId: uuid().notNull().references(() => appRelease.id),
+    artifactKey: text().notNull(),
+    path: text().notNull(),
+    sha256: text(),
+    sizeBytes: integer(),
+    createdAt: ts(),
+  },
+  (t) => [unique('download_artifact_key').on(t.storeId, t.artifactKey)],
+);
 
 export const payment = pgTable('payment', {
   id: uuid().primaryKey().defaultRandom(),

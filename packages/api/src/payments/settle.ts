@@ -13,12 +13,14 @@ import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
 import type { PaymentResult } from './provider.js';
+import { issueLicensesForPaidOrder } from '../licensing/issue.js';
 
 export interface SettleOrderRef {
   id: string;
   state: string;
   grandTotal: number;
   currency: string;
+  customerId?: string | null;
 }
 
 export async function applyPaymentResult(
@@ -37,7 +39,9 @@ export async function applyPaymentResult(
     errorMessage: result.errorMessage ?? null,
   });
   if (result.state === 'Settled' && canTransition(order.state as OrderState, 'Paid')) {
-    await tx.update(s.order).set({ state: 'Paid', placedAt: new Date() }).where(eq(s.order.id, order.id));
+    const paidAt = new Date();
+    await tx.update(s.order).set({ state: 'Paid', placedAt: paidAt }).where(eq(s.order.id, order.id));
+    await issueLicensesForPaidOrder(tx, { storeId, orderId: order.id, customerId: order.customerId ?? null, paidAt });
     return { orderState: 'Paid', paymentState: 'Settled' };
   }
   return { orderState: order.state as OrderState, paymentState: result.state };
