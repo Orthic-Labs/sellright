@@ -1,5 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { and, desc, eq, ilike, or, sql } from 'drizzle-orm';
+import { and, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { bearer } from '../auth/session.js';
@@ -382,9 +382,21 @@ admin.openapi(
         .leftJoin(s.stock, eq(s.stock.variantId, s.productVariant.id))
         .where(and(eq(s.productVariant.productId, id), sql`${s.productVariant.deletedAt} is null`))
         .orderBy(s.productVariant.name);
+      // WP8c: gallery images (product_asset) + per-variant option assignments.
+      const gallery = await tx
+        .select({ assetId: s.productAsset.assetId, path: s.asset.path, position: s.productAsset.position })
+        .from(s.productAsset)
+        .innerJoin(s.asset, eq(s.asset.id, s.productAsset.assetId))
+        .where(eq(s.productAsset.productId, id))
+        .orderBy(s.productAsset.position);
+      const vIds = variants.map((v) => v.id);
+      const vopts = vIds.length
+        ? await tx.select({ variantId: s.variantOption.variantId, optionId: s.variantOption.optionId }).from(s.variantOption).where(inArray(s.variantOption.variantId, vIds))
+        : [];
       return {
-        id: p.id, slug: p.slug, name: p.name, description: p.description, status: p.status, assetPath,
-        variants: variants.map((v) => ({ ...v, onHand: v.onHand ?? 0, allocated: v.allocated ?? 0, available: (v.onHand ?? 0) - (v.allocated ?? 0) })),
+        id: p.id, slug: p.slug, name: p.name, description: p.description, status: p.status, assetPath, featuredAssetId: p.featuredAssetId,
+        images: gallery.map((g) => ({ assetId: g.assetId, path: g.path, url: `/assets/${g.path}`, position: g.position })),
+        variants: variants.map((v) => ({ ...v, onHand: v.onHand ?? 0, allocated: v.allocated ?? 0, available: (v.onHand ?? 0) - (v.allocated ?? 0), optionIds: vopts.filter((o) => o.variantId === v.id).map((o) => o.optionId) })),
       };
     });
     if (!out) throw new HttpError(404, 'product not found');
@@ -395,7 +407,7 @@ admin.openapi(
 admin.openapi(
   createRoute({
     method: 'patch', path: '/v1/admin/products/{id}', summary: 'Update product',
-    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ name: z.string().optional(), description: z.string().nullable().optional(), status: z.enum(['draft', 'active']).optional(), vendor: z.string().nullable().optional(), productType: z.string().nullable().optional(), tags: z.array(z.string()).nullable().optional(), seoTitle: z.string().nullable().optional(), seoDescription: z.string().nullable().optional(), metafields: z.record(z.string(), z.any()).nullable().optional() })) } },
+    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ name: z.string().optional(), description: z.string().nullable().optional(), status: z.enum(['draft', 'active']).optional(), vendor: z.string().nullable().optional(), productType: z.string().nullable().optional(), tags: z.array(z.string()).nullable().optional(), seoTitle: z.string().nullable().optional(), seoDescription: z.string().nullable().optional(), metafields: z.record(z.string(), z.any()).nullable().optional(), featuredAssetId: z.string().uuid().nullable().optional() })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {

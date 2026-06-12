@@ -88,6 +88,14 @@ export default function ProductDetailPage() {
     finally { setUploading(false); }
   }
   const removeImage = useMutation({ mutationFn: () => api.patch(`/products/${id}`, { featuredAssetId: null }), onSuccess: invalidate });
+  // WP8c gallery (product_asset): upload → attach, remove, promote-to-featured.
+  async function addToGallery(file: File) {
+    setUploadErr(null); setUploading(true);
+    try { const a = await uploadAsset(file); await api.post(`/products/${id}/assets`, { assetId: a.id }); invalidate(); }
+    catch (e) { setUploadErr((e as Error).message); } finally { setUploading(false); }
+  }
+  const removeFromGallery = useMutation({ mutationFn: (assetId: string) => api.del(`/products/${id}/assets/${assetId}`), onSuccess: invalidate });
+  const setFeatured = useMutation({ mutationFn: (assetId: string) => api.patch(`/products/${id}`, { featuredAssetId: assetId }), onSuccess: invalidate });
 
   if (isLoading) return <Loading />;
   if (error) return <ErrorNote message={(error as Error).message} />;
@@ -158,7 +166,7 @@ export default function ProductDetailPage() {
               )}
             </div>
           </div>
-          <OptionsEditor productId={p.id} storeSlug={store?.slug} />
+          <OptionsEditor productId={p.id} storeSlug={store?.slug} variants={p.variants.map((v) => ({ id: v.id, sku: v.sku, optionIds: v.optionIds }))} />
         </div>
 
         <div className="space-y-5">
@@ -184,6 +192,23 @@ export default function ProductDetailPage() {
               {img && <button className="text-sm text-gray-400 hover:text-red-600" disabled={removeImage.isPending} onClick={() => removeImage.mutate()}>Remove</button>}
             </div>
             {uploadErr && <div className="text-xs text-red-600 mt-1">{uploadErr}</div>}
+            {p.images.length > 0 && (
+              <div className="grid grid-cols-3 gap-1.5 mt-3">
+                {p.images.map((im) => (
+                  <div key={im.assetId} className="group relative aspect-square rounded bg-gray-100 overflow-hidden ring-1 ring-gray-100">
+                    <img src={assetUrl(im.path) ?? im.url} alt="" className="h-full w-full object-cover" />
+                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center gap-1.5">
+                      <button title="Set as featured" className="text-white text-xs bg-black/50 rounded px-1.5 py-0.5 hover:bg-black/70" disabled={setFeatured.isPending} onClick={() => setFeatured.mutate(im.assetId)}>★</button>
+                      <button title="Remove from gallery" className="text-white text-xs bg-black/50 rounded px-1.5 py-0.5 hover:bg-red-600" disabled={removeFromGallery.isPending} onClick={() => removeFromGallery.mutate(im.assetId)}>×</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <label className="btn-ghost cursor-pointer text-sm mt-2 inline-flex">
+              <Upload size={14} /> Add to gallery
+              <input type="file" accept="image/*" className="hidden" disabled={uploading} onChange={(e) => { const f = e.target.files?.[0]; if (f) addToGallery(f); e.currentTarget.value = ''; }} />
+            </label>
             <div className="text-xs text-gray-400 mt-2 truncate">/{p.slug}</div>
           </div>
         </div>
@@ -193,11 +218,22 @@ export default function ProductDetailPage() {
 }
 
 type OptGroup = { id: string; name: string; options: { id: string; value: string }[] };
-function OptionsEditor({ productId, storeSlug }: { productId: string; storeSlug?: string }) {
+function OptionsEditor({ productId, storeSlug, variants }: { productId: string; storeSlug?: string; variants: { id: string; sku: string; optionIds?: string[] }[] }) {
   const qc = useQueryClient();
   const key = ['product-options', storeSlug, productId];
   const { data, isLoading } = useQuery({ queryKey: key, queryFn: () => api.get<{ groups: OptGroup[] }>(`/products/${productId}/options`) });
   const invalidate = () => qc.invalidateQueries({ queryKey: key });
+  // Per-variant option assignment writes through PUT and refreshes the product
+  // query (variant.optionIds lives on the product detail, not the options query).
+  const setVariantOptions = useMutation({
+    mutationFn: ({ variantId, optionIds }: { variantId: string; optionIds: string[] }) => api.put(`/variants/${variantId}/options`, { optionIds }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['product', storeSlug, productId] }),
+  });
+  const toggleVariantOption = (v: { id: string; optionIds?: string[] }, optionId: string) => {
+    const cur = new Set(v.optionIds ?? []);
+    if (cur.has(optionId)) cur.delete(optionId); else cur.add(optionId);
+    setVariantOptions.mutate({ variantId: v.id, optionIds: [...cur] });
+  };
   const [gName, setGName] = useState('');
   const [gValues, setGValues] = useState('');
   const [valInput, setValInput] = useState<Record<string, string>>({});
@@ -232,7 +268,33 @@ function OptionsEditor({ productId, storeSlug }: { productId: string; storeSlug?
           <div><label className="label">Values (comma-sep)</label><input className="input w-44" placeholder="S, M, L" value={gValues} onChange={(e) => setGValues(e.target.value)} /></div>
           <button className="btn-primary" disabled={!gName.trim() || addGroup.isPending} onClick={() => addGroup.mutate()}>{addGroup.isPending ? <Spinner className="text-white" /> : <><Plus size={15} /> Add group</>}</button>
         </div>
-        {(addGroup.error || addValue.error) && <div className="text-xs text-red-600">{((addGroup.error || addValue.error) as Error).message}</div>}
+        {(addGroup.error || addValue.error || setVariantOptions.error) && <div className="text-xs text-red-600">{((addGroup.error || addValue.error || setVariantOptions.error) as Error).message}</div>}
+        {(() => {
+          const allValues = groups.flatMap((g) => g.options.map((o) => ({ ...o, group: g.name })));
+          if (!allValues.length || !variants.length) return null;
+          return (
+            <div className="border-t border-gray-100 pt-3">
+              <div className="text-xs font-medium text-gray-500 mb-2">Assign values to variants</div>
+              <div className="overflow-x-auto">
+                <table className="text-xs">
+                  <thead><tr><th className="text-left pr-2 pb-1"></th>{allValues.map((o) => <th key={o.id} className="px-1.5 pb-1 font-normal text-gray-500 whitespace-nowrap" title={o.group}>{o.value}</th>)}</tr></thead>
+                  <tbody>
+                    {variants.map((v) => (
+                      <tr key={v.id}>
+                        <td className="pr-2 py-0.5 font-medium whitespace-nowrap">{v.sku}</td>
+                        {allValues.map((o) => (
+                          <td key={o.id} className="px-1.5 text-center">
+                            <input type="checkbox" className="h-3.5 w-3.5 accent-brand" checked={(v.optionIds ?? []).includes(o.id)} disabled={setVariantOptions.isPending} onChange={() => toggleVariantOption(v, o.id)} />
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          );
+        })()}
       </div>
     </div>
   );
