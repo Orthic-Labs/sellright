@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, ShoppingBag, Package, Layers, Boxes, Users, Settings, ChevronDown, LogOut, Store, Percent, Mail, BarChart3, Activity, Search, HandCoins, FileText } from 'lucide-react';
+import { LayoutDashboard, ShoppingBag, Package, Layers, Boxes, Users, Settings, ChevronDown, LogOut, Store, Percent, Mail, BarChart3, Activity, Search, HandCoins, FileText, RotateCcw, Gift, Webhook, Warehouse, Receipt, Coins, Shield } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../auth';
 import { api } from '../api';
@@ -9,16 +9,23 @@ import { initials } from '../lib/format';
 const NAV = [
   { to: '/', label: 'Home', icon: LayoutDashboard, end: true },
   { to: '/orders', label: 'Orders', icon: ShoppingBag },
+  { to: '/returns', label: 'Returns', icon: RotateCcw },
   { to: '/products', label: 'Products', icon: Package },
   { to: '/collections', label: 'Collections', icon: Layers },
   { to: '/inventory', label: 'Inventory', icon: Boxes },
+  { to: '/locations', label: 'Locations', icon: Warehouse },
   { to: '/customers', label: 'Customers', icon: Users },
   { to: '/discounts', label: 'Discounts', icon: Percent },
+  { to: '/gift-cards', label: 'Gift cards', icon: Gift },
   { to: '/affiliates', label: 'Affiliates', icon: HandCoins },
   { to: '/marketing', label: 'Marketing', icon: Mail },
   { to: '/blog', label: 'Blog', icon: FileText },
   { to: '/reports', label: 'Reports', icon: BarChart3 },
   { to: '/activity', label: 'Activity', icon: Activity },
+  { to: '/tax-zones', label: 'Tax zones', icon: Receipt },
+  { to: '/currency-rates', label: 'Currencies', icon: Coins },
+  { to: '/webhooks', label: 'Webhooks', icon: Webhook },
+  { to: '/staff', label: 'Staff', icon: Shield },
   { to: '/settings', label: 'Settings', icon: Settings },
 ];
 

@@ -29,6 +29,13 @@ import Blog from './pages/Blog';
 import Reports from './pages/Reports';
 import Activity from './pages/Activity';
 import SettingsPage from './pages/Settings';
+import Returns from './pages/Returns';
+import GiftCards from './pages/GiftCards';
+import Webhooks from './pages/Webhooks';
+import Locations from './pages/Locations';
+import TaxZones from './pages/TaxZones';
+import CurrencyRates from './pages/CurrencyRates';
+import Staff from './pages/Staff';
 
 const qc = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false, staleTime: 15_000 } } });
 
@@ -65,6 +72,13 @@ function App() {
         <Route path="/blog" element={<Blog />} />
         <Route path="/reports" element={<Reports />} />
         <Route path="/activity" element={<Activity />} />
+        <Route path="/returns" element={<Returns />} />
+        <Route path="/gift-cards" element={<GiftCards />} />
+        <Route path="/locations" element={<Locations />} />
+        <Route path="/tax-zones" element={<TaxZones />} />
+        <Route path="/currency-rates" element={<CurrencyRates />} />
+        <Route path="/webhooks" element={<Webhooks />} />
+        <Route path="/staff" element={<Staff />} />
         <Route path="/settings" element={<SettingsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

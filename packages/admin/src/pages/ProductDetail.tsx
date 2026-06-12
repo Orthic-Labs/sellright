@@ -158,6 +158,7 @@ export default function ProductDetailPage() {
               )}
             </div>
           </div>
+          <OptionsEditor productId={p.id} storeSlug={store?.slug} />
         </div>
 
         <div className="space-y-5">
@@ -188,6 +189,52 @@ export default function ProductDetailPage() {
         </div>
       </div>
     </>
+  );
+}
+
+type OptGroup = { id: string; name: string; options: { id: string; value: string }[] };
+function OptionsEditor({ productId, storeSlug }: { productId: string; storeSlug?: string }) {
+  const qc = useQueryClient();
+  const key = ['product-options', storeSlug, productId];
+  const { data, isLoading } = useQuery({ queryKey: key, queryFn: () => api.get<{ groups: OptGroup[] }>(`/products/${productId}/options`) });
+  const invalidate = () => qc.invalidateQueries({ queryKey: key });
+  const [gName, setGName] = useState('');
+  const [gValues, setGValues] = useState('');
+  const [valInput, setValInput] = useState<Record<string, string>>({});
+  const addGroup = useMutation({
+    mutationFn: () => api.post(`/products/${productId}/option-groups`, { name: gName.trim(), values: gValues.split(',').map((v) => v.trim()).filter(Boolean) }),
+    onSuccess: () => { setGName(''); setGValues(''); invalidate(); },
+  });
+  const addValue = useMutation({
+    mutationFn: (groupId: string) => api.post(`/option-groups/${groupId}/options`, { value: (valInput[groupId] ?? '').trim() }),
+    onSuccess: (_d, groupId) => { setValInput((m) => ({ ...m, [groupId]: '' })); invalidate(); },
+  });
+  const groups = data?.groups ?? [];
+  return (
+    <div className="card overflow-hidden">
+      <div className="px-4 py-3 border-b border-gray-100 text-sm font-semibold">Options</div>
+      <div className="p-4 space-y-3">
+        {isLoading ? <Spinner /> : groups.length === 0 ? <p className="text-sm text-gray-400">No option groups yet (e.g. Size, Color).</p> : groups.map((g) => (
+          <div key={g.id} className="rounded-lg border border-gray-100 p-3">
+            <div className="font-medium text-sm mb-2">{g.name}</div>
+            <div className="flex flex-wrap gap-1.5 mb-2">
+              {g.options.map((o) => <span key={o.id} className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs">{o.value}</span>)}
+              {g.options.length === 0 && <span className="text-xs text-gray-400">no values</span>}
+            </div>
+            <div className="flex gap-2">
+              <input className="input py-1 text-sm" placeholder="Add value" value={valInput[g.id] ?? ''} onChange={(e) => setValInput((m) => ({ ...m, [g.id]: e.target.value }))} />
+              <button className="btn-ghost text-sm" disabled={!(valInput[g.id] ?? '').trim() || addValue.isPending} onClick={() => addValue.mutate(g.id)}>Add</button>
+            </div>
+          </div>
+        ))}
+        <div className="border-t border-gray-100 pt-3 flex flex-wrap items-end gap-2">
+          <div><label className="label">New group</label><input className="input w-32" placeholder="e.g. Size" value={gName} onChange={(e) => setGName(e.target.value)} /></div>
+          <div><label className="label">Values (comma-sep)</label><input className="input w-44" placeholder="S, M, L" value={gValues} onChange={(e) => setGValues(e.target.value)} /></div>
+          <button className="btn-primary" disabled={!gName.trim() || addGroup.isPending} onClick={() => addGroup.mutate()}>{addGroup.isPending ? <Spinner className="text-white" /> : <><Plus size={15} /> Add group</>}</button>
+        </div>
+        {(addGroup.error || addValue.error) && <div className="text-xs text-red-600">{((addGroup.error || addValue.error) as Error).message}</div>}
+      </div>
+    </div>
   );
 }
 
