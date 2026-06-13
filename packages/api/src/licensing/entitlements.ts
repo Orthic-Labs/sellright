@@ -44,7 +44,10 @@ export function buildLicenseGrants(lines: LicenseGrantInput[], now = new Date())
 }
 
 export function canReceiveUpdate(license: { status: string; updatesUntil: Date | null }, now = new Date()): boolean {
-  return license.status === 'active' && license.updatesUntil != null && license.updatesUntil.getTime() >= now.getTime();
+  // updatesUntil == null means perpetual/lifetime updates (a variant with
+  // updatesDurationDays = null, e.g. a "Lifetime" plan) — mirrors canAccessDownload's
+  // treatment of expiresAt == null. A time-limited update window sets a date.
+  return license.status === 'active' && (license.updatesUntil == null || license.updatesUntil.getTime() >= now.getTime());
 }
 
 export function canAccessDownload(license: { status: string; expiresAt: Date | null }, now = new Date()): boolean {

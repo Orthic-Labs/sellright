@@ -123,7 +123,11 @@ apps.get('/releases/latest.json', async (c) => {
   const activationToken = bearerToken(c.req.header('authorization')) ?? c.req.header('x-viewright-license');
   if (!activationToken) return c.json({ ok: false, message: 'Missing activation token' }, 401);
 
-  const { appKey, st } = await publicAppStore(c, c.req.header('x-viewright-app'));
+  // Require an explicit app identifier — never fall back to DEV_DEFAULT_STORE /
+  // Host-header derivation here (mirrors the /api/licenses/activate hardening).
+  const explicitApp = c.req.header('x-viewright-app') ?? c.req.header('x-app-key');
+  if (!explicitApp) return c.json({ ok: false, message: 'Missing app identifier (X-ViewRight-App header)' }, 400);
+  const { appKey, st } = await publicAppStore(c, explicitApp);
   const deviceId = c.req.header('x-viewright-device');
   const channel = c.req.query('channel') ?? 'stable';
   const platform = c.req.query('platform') ?? undefined;
