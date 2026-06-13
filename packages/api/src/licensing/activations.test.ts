@@ -36,16 +36,14 @@ const ORDER_B = 'bbbbbbbb-bbbb-bbbb-bbbb-000000000001';
 const LINE_A = 'aaaaaaaa-aaaa-aaaa-aaaa-000000000002';
 const LINE_B = 'bbbbbbbb-bbbb-bbbb-bbbb-000000000002';
 
-/** Wipe licensing rows and the two test stores (CASCADE takes the rest).
- *  Uses pool.query directly to avoid RLS filtering by app.current_store —
- *  the owner role (DATABASE_URL) can see all rows regardless of RLS. */
+/** Wipe the test DB between tests. The store-scoped tables have FORCE RLS, so
+ *  the owner role cannot DELETE rows it can't see without app.current_store set —
+ *  but TRUNCATE is a table-level op that bypasses RLS. CASCADE clears every table
+ *  that FKs to `store` (order, order_line, license, license_activation, ...).
+ *  Mirrors db/rls.test.ts; safe because vitest runs files serially
+ *  (fileParallelism: false in vitest.config.ts). */
 async function wipe() {
-  // DELETE in FK order so referential integrity is not violated.
-  await pool.query(`DELETE FROM license_activation WHERE store_id IN ($1, $2)`, [STORE_A, STORE_B]);
-  await pool.query(`DELETE FROM license WHERE store_id IN ($1, $2)`, [STORE_A, STORE_B]);
-  await pool.query(`DELETE FROM order_line WHERE store_id IN ($1, $2)`, [STORE_A, STORE_B]);
-  await pool.query(`DELETE FROM "order" WHERE store_id IN ($1, $2)`, [STORE_A, STORE_B]);
-  await pool.query(`DELETE FROM store WHERE id IN ($1, $2)`, [STORE_A, STORE_B]);
+  await pool.query('TRUNCATE store CASCADE');
 }
 
 interface SeedOpts {
