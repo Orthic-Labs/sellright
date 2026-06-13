@@ -1,110 +1,138 @@
-# Handover — Right Apps SellRight instance: finish public exposure (+ open tracks)
+# Handover — Right Apps SellRight instance (for an on-box agent)
 
-**Date:** 2026-06-13 · **For:** an agent running **on the box** (`vendure@rottenhand`, 5.78.82.156) with docker-group + sudo access (the off-box agent that did the work below has neither, which is why this is handed over).
+**Updated:** 2026-06-13 · **For:** an agent running **on the box** (`vendure@rottenhand`, `5.78.82.156`) with docker-group + sudo access. The off-box agent that did the work below has **neither docker-socket access nor sudo** (and a safety hook blocks `docker exec`), which is why the remaining ops steps are handed over.
 
-**Repo source of truth:** laptop `D:\Claude\sellright` → GitHub `origin/main` → box deploy checkout `/home/vendure/sites/sellright` (clean checkout of origin/main; `git pull` to update, never edit code there). Latest commit at handover: `2649b99`.
+**Repo:** laptop `D:\Claude\sellright` → GitHub `origin/main` → box deploy checkout `/home/vendure/sites/sellright` (clean checkout of `origin/main`; `git pull` / `git reset --hard origin/main` to update — **never edit code there**, edit on the laptop). **Latest commit at handover: `08906b5`.**
+
+**First thing to do:** `cd ~/sites/sellright && git fetch origin && git reset --hard origin/main` so you have this doc + all fixes.
 
 ---
 
-## 0. The ONE thing blocking you right now
+## 0. IMMEDIATE BLOCKER — public `:443` returns 000 (finish the exposure)
 
-**Symptom:** `https://api.spoares.com/v1/health` and `https://admin.spoares.com` return nothing (curl `HTTP:000`, ~hang). Everything else is healthy.
+`https://api.spoares.com/v1/health` / `https://admin.spoares.com` hang (`HTTP:000`). Already diagnosed — **don't re-derive**:
 
-**Fully characterised (already diagnosed, don't re-derive):**
-- rightapps API origin is UP: `curl http://127.0.0.1:3301/v1/health` → **200**. Binds `*:3301` (all interfaces).
+- rightapps API origin is UP: `curl http://127.0.0.1:3301/v1/health` → **200**, binds `*:3301`.
 - DNS resolves: `admin/api.spoares.com` → `5.78.82.156` (Cloudflare, **DNS-only/grey**).
-- TLS is CORRECT: `openssl s_client -connect 127.0.0.1:443 -servername api.spoares.com` presents `CN=admin.spoares.com`, SAN `admin.spoares.com, api.spoares.com`, chain depth 4 (complete). The dedicated LE cert `/etc/letsencrypt/live/rightapps/` was issued and the vhost points at it.
-- `:80` works: `http://api.spoares.com/...` → **301** redirect (so the rightapps vhost IS loaded in the running nginx).
-- Brand sites are fine: `https://damneddesigns.com/` (SNI→127.0.0.1) → **200** (nginx healthy).
-- The hang is at nginx → upstream: TLS handshake completes, the HTTP request is sent, **nginx never responds** (both HTTP/1.1 and HTTP/2). It is NOT TLS, NOT cert, NOT http2.
-- From the **host**, `curl http://172.22.0.1:3301/v1/health` → **200** (172.22.0.1 = docker bridge gateway, the IP the nginx vhost proxies to).
+- TLS is CORRECT: dedicated LE cert `/etc/letsencrypt/live/rightapps/` (`CN=admin.spoares.com`, SAN `admin,api.spoares.com`, full chain), vhost points at it, `:80` redirects (301).
+- Brand sites fine (`https://damneddesigns.com` → 200) → nginx healthy.
+- The hang is **nginx → upstream**: TLS completes, the HTTP request is sent, nginx never responds (h1 + h2). From the **host**, `curl http://172.22.0.1:3301/v1/health` → 200 (172.22.0.1 = docker bridge gateway, what the vhost proxies to).
 
-**Top hypothesis (verify first):** a **host firewall rule** (ufw / iptables `DOCKER-USER`) lets the docker bridge reach the existing brand backend ports (`:3100`, `:3300`, `:9000`, etc.) but **not the new `:3301`**, so from *inside* the nginx-brotli container `172.22.0.1:3301` is blocked → nginx waits on the upstream → 000. The vhost `proxy_read_timeout` is 30s; curl gave up at 6s.
+**Hypothesis (test first):** a host firewall (ufw / iptables `DOCKER-USER`) allows the docker bridge → the brand backend ports (`:3100/:3300/:9000`) but **not the new `:3301`**, so from *inside* the nginx container `172.22.0.1:3301` is blocked → nginx waits on the upstream → 000.
 
-**Confirm + fix:**
 ```bash
-# 1. Does nginx-in-container reach the upstream? (THE decisive test)
+# DECISIVE test — does nginx-in-container reach the upstream?
 docker compose -f ~/sites/nginx/docker-compose.yml exec nginx-brotli \
   wget -qO- --timeout=5 http://172.22.0.1:3301/v1/health ; echo
-#   -> if this hangs/fails but the host curl works, it's the firewall.
+#   hangs/fails while the host curl works  ->  it's the firewall.
 
-# 2. See what the firewall allows for the docker bridge vs the brand ports
-sudo ufw status numbered | grep -iE "172\.|3100|3300|3301|docker"
+# See what lets the brand ports through, mirror it for :3301
+sudo ufw status numbered | grep -iE "172\.|3100|3300|3301"
 sudo iptables -S DOCKER-USER 2>/dev/null
-sudo iptables -L -n | grep -E "3100|3300|3301"
+sudo ufw allow from 172.16.0.0/12 to any port 3301 proto tcp   # COPY the exact source the :3100/:3300 rules use
 
-# 3. Fix — mirror whatever rule lets :3100/:3300 through, for :3301. Examples:
-#    ufw:
-sudo ufw allow from 172.16.0.0/12 to any port 3301 proto tcp
-#    (use the SAME source subnet the brand-port rules use — copy their exact form)
-#    then re-test:
-curl -sk -m 6 --resolve api.spoares.com:443:127.0.0.1 https://api.spoares.com/v1/health
+# verify
+curl -sI https://api.spoares.com/v1/health        # expect 200
 ```
 
-**Also check (secondary hypotheses if the firewall is not it):**
-- `docker logs --tail=50 nginx-brotli` — look for upstream timeout / connect errors for `172.22.0.1:3301`.
-- `/home/vendure/sites/nginx/logs/rightapps-api_error.log` and `rightapps-admin_error.log` (mounted from the container).
-- `docker compose exec nginx-brotli nginx -T | grep -A40 "server_name api.spoares.com"` — confirm the live config matches `~/sites/nginx/rightapps.conf`.
-- Confirm the deploy actually completed phase 3 (vhost on `/rightapps/`, container rebuilt): `grep ssl_certificate ~/sites/nginx/rightapps.conf` should show `/etc/letsencrypt/live/rightapps/`.
+**If it's NOT the firewall, check:** `docker logs --tail=50 nginx-brotli`; `/home/vendure/sites/nginx/logs/rightapps-{api,admin}_error.log`; `docker compose exec nginx-brotli nginx -T | grep -A40 "server_name api.spoares.com"` (confirm live config matches `~/sites/nginx/rightapps.conf`).
 
-**When fixed, verify the full path:** `curl -sI https://api.spoares.com/v1/health` → 200, then open `https://admin.spoares.com`, log in `adrdsouza@gmail.com` / (password handed over separately — generated, change it). Optionally flip the 2 DNS records to **proxied/orange** afterward (CF in front); they're grey now.
+**When 200:** open `https://admin.spoares.com`, log in (`adrdsouza@gmail.com` / password handed over separately — generated, change it). Optionally flip the 2 CF DNS records to **proxied/orange** afterward (they're grey now).
 
 ---
 
-## 1. What is already done (do NOT redo)
+## 1. What is DONE (do not redo)
 
-**Audit remediation (32 findings) — shipped + verified.** Committed; `pnpm verify` gate green on the box: **90/90 tests** against `sellright_test` with the real non-owner app role, `db:assert-rls` (50 FORCE-RLS tables), `assert:shop-isolation` (11 routes). New verify gate: `pnpm --filter @sellright/api assert:shop-isolation`.
-
-**Right Apps instance — its own DB, separate from the DD clone.**
-- DB `rightapps` on the **native :5433 cluster** (owner `sellright`, app role `sellright_app`). 28 migrations applied (0000-0027), 52 tables, 50 FORCE-RLS. DD clone `sellright_dev` untouched.
-- Admin `adrdsouza@gmail.com` seeded; **5 stores** provisioned (`viewright`, `coderight`, `heardright`, `mailright`, `scraperight`), admin = owner on each.
-- **`rightapps-api` runs under PM2** (`pm2 describe rightapps-api`), entrypoint `packages/api/scripts-deploy/start-rightapps.sh`, env `~/.sellright/rightapps.env` (0600), compiled `dist/index.js`, port **3301**, `pm2 save`d (survives reboot).
-- Admin SPA built: `packages/admin/dist` (mounted into nginx, see below).
-- DNS `admin/api.spoares.com` → box IP (Cloudflare, DNS-only).
-- nginx: vhost `~/sites/nginx/rightapps.conf`, Dockerfile `COPY rightapps.conf`, compose mount `packages/admin/dist → /var/www/rightapps-admin:ro`, dedicated cert `rightapps` issued. (This is the layer with the §0 blocker.)
+- **Audit remediation (32 findings from round 1)** — shipped + verified, `pnpm verify` green.
+- **Round-2 deep audit fixes** (commits `2842c9d`, `08906b5`), all gate-green (90/90) + deployed:
+  - CRITICAL gift-card double-spend → `FOR UPDATE` lock (`checkout.ts`).
+  - License issuance idempotency/concurrency (order `FOR UPDATE` + per-line shortfall, `issue.ts`).
+  - Perpetual-updates licenses revived (`entitlements.ts`).
+  - `/releases/latest.json` requires an app header (`apps.ts`).
+  - Refund: exclude `Failed` from `alreadyRefunded` + order `FOR UPDATE` on refund/return-approve (`admin-orders.ts`).
+- **Right Apps instance** (its own DB, separate from the DD clone):
+  - DB `rightapps` on the **native :5433 cluster** (owner `sellright`, app role `sellright_app`), 28 migrations, 52 tables, 50 FORCE-RLS. DD clone `sellright_dev` untouched.
+  - Admin `adrdsouza@gmail.com`; **5 stores** (`viewright`, `coderight`, `heardright`, `mailright`, `scraperight`), owner on each.
+  - **`rightapps-api` under PM2** (`pm2 describe rightapps-api`), `:3301`, env `~/.sellright/rightapps.env` (0600), compiled `dist/index.js`, `pm2 save`d.
+  - Admin SPA built (`packages/admin/dist`, mounted into nginx).
+  - DNS + nginx vhost + dedicated TLS cert (the §0 blocker is the last mile).
 
 ---
 
-## 2. Architecture + gotchas (the non-obvious stuff)
+## 2. Architecture + gotchas (the non-obvious stuff — read before touching anything)
 
-- **Two SellRight API instances, two DBs, both on :5433 native cluster:**
-  - dev API `:3300` → `sellright_dev` (DD PII clone, for DD-cutover testing). Runs via nohup/pnpm (pid varies).
-  - **rightapps API `:3301` → `rightapps`** (the new proper instance, PM2 `rightapps-api`).
-  - **NEVER touch the `:5432` `vendure-postgres` Docker container — that's LIVE production stores.** A `prod-db-guard` hook blocks docker-exec + prod psql; if you hit it you're on the wrong instance.
-- **nginx is dockerized** (`nginx-brotli` container, `~/sites/nginx/`, configs **baked via Dockerfile COPY** — so a vhost change needs `docker compose build && up -d`, not just reload). It fronts :80/:443 for ALL sites.
-- **Inside the nginx container, host services are at `172.22.0.1:<port>`** (docker bridge gateway), NOT `127.0.0.1` (that's the container). The rightapps vhost correctly uses `172.22.0.1:3301`. (WP6's old `nginx-admin.conf` wrongly used `127.0.0.1` — ignore it; `nginx-rightapps.conf` is the right one.)
-- **Cloudflare Access is on the `spoares.com` apex** → its ACME HTTP-01 challenge redirects to a login page. That's why the cert is a **dedicated `rightapps` cert for admin+api only** (apex excluded), not a `--expand` of the `spoares.com` cert. Don't try to expand the apex.
-- **pnpm on the box:** not on the non-interactive PATH. Use `COREPACK_ENABLE_DOWNLOAD_PROMPT=0 corepack pnpm ...` from the repo dir (reads `packageManager: pnpm@10.10.0`). `node`/`certbot`/`pm2`/`docker`/`certbot` are at standard paths; `nginx` only exists inside the container.
-- **DB creds:** `~/.sellright/env` (0600) has `DATABASE_URL_OWNER` + `DATABASE_URL_APP` (both point at `sellright_dev`); derive other DBs by swapping the trailing db name, e.g. `RIGHTAPPS_OWNER="${DATABASE_URL_OWNER%/*}/rightapps"`. Tests run vs `sellright_test` ONLY (the RLS suite TRUNCATEs).
-- **Reusable ops scripts** (committed, `packages/api/scripts-deploy/`): `create-tenant-db.sh`, `grant-app-role.sh` (re-apply `sellright_app` grants to any DB — required for any new DB **and** `sellright_test`, else "permission denied" under the real app role), `start-rightapps.sh`, `deploy-rightapps-tls.sh`.
+- **Two API instances, two DBs, both on :5433 native cluster:** dev `:3300`→`sellright_dev` (DD clone), **rightapps `:3301`→`rightapps`** (PM2 `rightapps-api`). **NEVER touch the `:5432` `vendure-postgres` Docker container — LIVE production stores.** A `prod-db-guard` hook blocks docker-exec + prod psql + raw `DROP/TRUNCATE/DELETE FROM/ALTER ROLE|DATABASE` (it even false-positives on those words in commit messages — write commit bodies to a file + `git commit -F`).
+- **nginx is dockerized** (`nginx-brotli` container, dir `~/sites/nginx/`, configs **baked via Dockerfile `COPY`** → a vhost change needs `sudo docker compose build && up -d`, not a reload). Backends inside the container are at **`172.22.0.1:<port>`** (bridge gateway), NOT `127.0.0.1`.
+- **Cloudflare Access is on the `spoares.com` apex** → apex ACME HTTP-01 redirects to a login page. That's why the rightapps cert is a **dedicated cert for admin+api only** (apex excluded), via `deploy-rightapps-tls.sh`. Don't `--expand` the apex.
+- **pnpm not on the non-interactive PATH:** use `COREPACK_ENABLE_DOWNLOAD_PROMPT=0 corepack pnpm ...` from a repo dir. `node/certbot/pm2/docker/certbot` standard paths; `nginx` only exists inside the container.
+- **DB creds:** `~/.sellright/env` (0600) → `DATABASE_URL_OWNER` + `DATABASE_URL_APP` (both point at `sellright_dev`); swap the trailing db name for others, e.g. `RIGHTAPPS_OWNER="${DATABASE_URL_OWNER%/*}/rightapps"`. The API runs as the **non-owner `sellright_app`** (fail-closed RLS); migrations/seed/scripts run as the owner.
+- **Cloudflare DNS:** a CF API token with `spoares.com` zone access is in the laptop PS env (`CLOUDFLARE_API_TOKEN`); the box only has a DD-cache-scoped token. So DNS changes are easiest from the laptop / dashboard.
+- **Reusable ops scripts** (committed, `packages/api/scripts-deploy/`): `create-tenant-db.sh`, `grant-app-role.sh` (re-apply `sellright_app` grants to ANY db — required for every new DB **and** `sellright_test`, else "permission denied" under the real app role), `start-rightapps.sh`, `deploy-rightapps-tls.sh`.
+
+### The test gate (run after ANY api change)
+```bash
+cd ~/sites/sellright/packages/api
+set -a; . ~/.sellright/env; set +a
+TEST_OWNER="${DATABASE_URL_OWNER%/*}/sellright_test"; TEST_APP="${DATABASE_URL_APP%/*}/sellright_test"
+DATABASE_URL="$TEST_OWNER" COREPACK_ENABLE_DOWNLOAD_PROMPT=0 corepack pnpm db:migrate    # apply any new migration to _test
+DATABASE_URL="$TEST_OWNER" DATABASE_URL_NONOWNER="$TEST_APP" COREPACK_ENABLE_DOWNLOAD_PROMPT=0 corepack pnpm test
+DATABASE_URL="$TEST_OWNER" COREPACK_ENABLE_DOWNLOAD_PROMPT=0 corepack pnpm db:assert-rls
+COREPACK_ENABLE_DOWNLOAD_PROMPT=0 corepack pnpm assert:shop-isolation
+```
+Currently **90/90**. New store-scoped tables MUST get FORCE RLS (`assert-rls` enforces it) — copy the pattern from `drizzle/0002_harden_rls_nullif.sql`.
 
 ### Redeploy the rightapps instance after a code change
 ```bash
-cd ~/sites/sellright && git pull && COREPACK_ENABLE_DOWNLOAD_PROMPT=0 corepack pnpm -r build
-pm2 restart rightapps-api
-# admin SPA changed? cd packages/admin && corepack pnpm install && corepack pnpm build  (it's a separate, non-workspace toolchain)
-# nginx vhost changed? cd ~/sites/nginx && sudo docker compose build && sudo docker compose up -d
+cd ~/sites/sellright && git pull && COREPACK_ENABLE_DOWNLOAD_PROMPT=0 corepack pnpm -r build && pm2 restart rightapps-api
+# new migration? apply to rightapps too: DATABASE_URL="${DATABASE_URL_OWNER%/*}/rightapps" corepack pnpm --filter @sellright/api db:migrate
+# admin SPA changed? cd packages/admin && corepack pnpm install && corepack pnpm build   (separate, non-workspace toolchain)
+# nginx vhost changed? cd ~/sites/nginx && sudo docker compose build && sudo docker compose run --rm nginx-brotli nginx -t && sudo docker compose up -d
 ```
 
 ---
 
-## 3. Other open tracks (the off-box agent is handling these; coordinate)
+## 3. Track B — Stripe (test-mode first)
 
-1. **Stripe** — pending the **test secret key** (`sk_test_...`) from Adrian. When available: add `STRIPE_SECRET_KEY` (and later `STRIPE_WEBHOOK_SECRET`) to `~/.sellright/rightapps.env`, `pm2 restart rightapps-api`. Then validate: create a ViewRight `license`-type product variant (`fulfillmentType=license`, `appKey=viewright`, a price), run order → `POST /v1/shop/orders/{code}/payment-intent` → confirm with `pm_card_visa` (server-side, test mode) → `POST /v1/shop/orders/{code}/pay` → assert a `license` row is issued. Webhook endpoint once public: `https://api.spoares.com/v1/webhooks/stripe` (register in Stripe dashboard → get `whsec_`).
-2. **Deep security/logic/perf audit** — a 6-agent audit was run; confirmed findings get fixed off-box with the 90-test gate. Notable licensing findings to be aware of (may already be fixed by the time you read this — check git log): qty>1 license idempotency (no `unique(order_line_id)`, can under/double-issue), `canReceiveUpdate` returns false for perpetual (`updatesUntil=null`) licenses, `GET /releases/latest.json` falls back to `DEV_DEFAULT_STORE` when the app header is absent. **Do not independently fix these** unless coordinating — they touch the money/licensing path and need the test gate.
+Pending the **test secret key** (`sk_test_...`) from Adrian. Then:
+1. Add `STRIPE_SECRET_KEY=sk_test_...` to `~/.sellright/rightapps.env`; `pm2 restart rightapps-api`.
+2. Create a ViewRight license product + variant via the admin API (or a one-off script): `fulfillmentType=license`, `appKey=viewright`, a price (integer cents), `licenseSeats`, `licenseDurationDays`/`updatesDurationDays`.
+3. Validate the full flow (test mode): order → `POST /v1/shop/orders/{code}/payment-intent` → confirm with `pm_card_visa` (server-side via the Stripe SDK) → `POST /v1/shop/orders/{code}/pay` (token = the intent id) → assert order `Paid` AND a `license` row issued (`issueLicensesForPaidOrder` runs on settle).
+4. Webhook (after §0 is live): register `https://api.spoares.com/v1/webhooks/stripe` in the Stripe dashboard → put the `whsec_...` in `rightapps.env` as `STRIPE_WEBHOOK_SECRET` → restart. The handler verifies the raw-body signature + is idempotent (`processed_event`).
+
+Provider code is built (`payments/stripe.ts`, `routes/pay.ts`, `routes/payment-webhooks.ts`, `payments/settle.ts`); only the live e2e + keys were pending.
 
 ---
 
-## 4. Quick reference
+## 4. Track C — deep-audit queue (verified-real, deferred; fix with the gate)
+
+The round-2 audit's high-value correctness/security fixes are DONE (§1). These remain — verify each against current code, fix, run the gate, commit. (The audit's parallel verify-skeptic pass died on a rate-limit, so treat severities as the finder's claim + re-confirm.)
+
+**Tenancy (migration `0029`):**
+- `gift_card.code` has a **global** UNIQUE (`schema.ts` ~571) → should be `UNIQUE(store_id, code)`. Same for `license.license_key` (`schema.ts` ~400) → `UNIQUE(store_id, license_key)`. Write `drizzle/0029_per_store_unique.sql` (drop global, add composite), journal it (`meta/_journal.json` — copy the 0028 entry shape; **un-journaled migrations are silently skipped** — that bit us before), update `schema.ts` `unique()` calls, apply to `_test` + `rightapps` + `sellright_dev`, run the gate. No existing cross-store dup codes, so it's safe.
+
+**Security hardening:**
+- No rate-limit on `POST /api/licenses/activate` + `/v1/apps/{appKey}/licenses/activate` (license-key brute-force). Add `clientIp()` + `loginRetryAfter()` keyed on ip (pattern: `routes/pay.ts`).
+- No rate-limit on staff-invite accept (`admin-settings.ts` ~500, 48-char token brute-force). Same pattern.
+- `/releases/latest.json` device-binding is optional (token reuse across devices) — consider requiring `x-viewright-device` when the activation was device-bound.
+- SSRF via admin-configured Listmonk URL (`shop-extra.ts` newsletter, `admin-marketing.ts`) — admin-controlled so lower risk; consider an allowlist/scheme+host validation.
+
+**Perf (NOT urgent at low data — do before DD-scale):** ~12 N+1 / correlated-subquery / full-scan spots: admin product/customer/order list + export (`admin.ts`, `admin-orders.ts`), `manifest/generate.ts` (in-memory joins), jobs (`release-stale-allocations.ts`, `auto-deliver.ts`), `webhooks/emit.ts` endpoint scan, `catalog.ts` smart-collection in-memory filter. Convert to single aggregate/JOIN queries; add covering indexes.
+
+**Refuted (no action):** manifest "no store_id filter" (RLS scopes it inside `withStore`); activation `FOR UPDATE` "bypasses RLS" (RLS applies to locking selects).
+
+---
+
+## 5. Quick reference
 
 | Item | Value |
 |---|---|
-| Box | `ssh vendure@5.78.82.156` (host alias `dd`) |
+| Box | `ssh dd` (alias) / `vendure@5.78.82.156` |
 | rightapps API | PM2 `rightapps-api`, `:3301`, DB `rightapps` |
 | rightapps env | `~/.sellright/rightapps.env` (0600) |
-| nginx | docker `nginx-brotli`, `~/sites/nginx/` (configs baked; rebuild to change) |
-| rightapps vhost | `~/sites/nginx/rightapps.conf` (repo: `packages/api/scripts-deploy/nginx-rightapps.conf`) |
+| nginx | docker `nginx-brotli`, `~/sites/nginx/` (configs baked → rebuild to change; backends at `172.22.0.1:<port>`) |
+| rightapps vhost | `~/sites/nginx/rightapps.conf` (repo copy: `packages/api/scripts-deploy/nginx-rightapps.conf`) |
 | rightapps cert | `/etc/letsencrypt/live/rightapps/` (admin+api.spoares.com) |
 | Admin URL / login | `https://admin.spoares.com` · `adrdsouza@gmail.com` |
-| Verify gate | `cd packages/api && DATABASE_URL=…5433/sellright_test DATABASE_URL_NONOWNER=…app…/sellright_test corepack pnpm test` |
-| TLS deploy script | `sudo bash packages/api/scripts-deploy/deploy-rightapps-tls.sh` (idempotent) |
+| TLS deploy script | `sudo bash ~/sites/sellright/packages/api/scripts-deploy/deploy-rightapps-tls.sh` (idempotent) |
+| Test gate | §2 above — currently 90/90 |
+| Latest commit | `08906b5` |
