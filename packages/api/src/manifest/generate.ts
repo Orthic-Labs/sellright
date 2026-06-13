@@ -13,7 +13,8 @@ import { resolveStore, DEV_DEFAULT_STORE } from '../store-context.js';
 import { env } from '../env.js';
 import * as s from '../db/schema.js';
 
-const OUT = env.CATALOG_DIR ?? '/home/vendure/sites/sellright-data';
+// Default stays INSIDE the checkout (<checkout>/var/catalog), never ~/sites root.
+const OUT = env.CATALOG_DIR ?? 'var/catalog';
 const STORE_SLUG = env.STORE_SLUG ?? DEV_DEFAULT_STORE;
 const assetUrl = (path: string | null | undefined) => (path ? `/assets/${path}` : null);
 const selectPrice = (v: { price: number; salePrice: number | null; isPreOrder: boolean; preOrderPrice: number | null }) =>

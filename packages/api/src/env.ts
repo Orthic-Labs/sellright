@@ -22,8 +22,10 @@ const EnvSchema = z.object({
   SMTP_FROM: z.string().email().default('noreply@sellright.local'),
   // Force the no-op path even when SMTP_HOST is set (load tests, demos).
   SMTP_ENABLED: z.enum(['true', 'false']).optional(),
-  // WP8: asset storage directory (default works for the on-box dev layout).
-  ASSET_DIR: z.string().default('/home/vendure/sites/sellright-assets'),
+  // WP8: asset storage directory. Default is contained INSIDE the checkout
+  // (<checkout>/var/assets via the packages/api cwd) — never ~/sites root. Each
+  // deployment sets ASSET_DIR explicitly in its env (dev vs rightapps prod).
+  ASSET_DIR: z.string().default('var/assets'),
   // Public storefront URL used in email links (password reset, verify, etc.).
   STOREFRONT_URL: z.string().url().default('https://store.example.com'),
   // WP3: Stripe (optional — the provider/endpoints no-op or 503 when unset, so
