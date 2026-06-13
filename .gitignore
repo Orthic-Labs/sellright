@@ -19,3 +19,6 @@ dist/
 *.old
 *.orig
 *.tmp
+
+# Per-deployment runtime state (assets, catalog/manifest) — never committed.
+var/
