@@ -1,14 +1,9 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
-import { resolveStore, DEV_DEFAULT_STORE, type StoreCtx } from '../store-context.js';
+import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
 import { convertMoney, rateFor, RATE_SCALE } from '../money/currency.js';
-
-async function store(c: { req: { header: (k: string) => string | undefined } }): Promise<StoreCtx> {
-  const slug = c.req.header('x-store-slug') ?? DEV_DEFAULT_STORE;
-  return resolveStore(slug);
-}
 
 const Money = z.number().int().describe('integer minor units (cents)');
 
@@ -64,7 +59,7 @@ catalog.openapi(
     },
   }),
   async (c) => {
-    const st = await store(c);
+    const st = await resolveStoreFromCtx(c);
     const { limit, offset } = c.req.valid('query');
     const result = await withStore(st.id, async (tx) => {
       const items = await tx
@@ -106,7 +101,7 @@ catalog.openapi(
     },
   }),
   async (c) => {
-    const st = await store(c);
+    const st = await resolveStoreFromCtx(c);
     const { slug } = c.req.valid('param');
     const { currency } = c.req.valid('query');
     const detail = await withStore(st.id, async (tx) => {
@@ -179,7 +174,7 @@ catalog.openapi(
     },
   }),
   async (c) => {
-    const st = await store(c);
+    const st = await resolveStoreFromCtx(c);
     const items = await withStore(st.id, (tx) =>
       tx
         .select({
@@ -209,7 +204,7 @@ catalog.openapi(
     },
   }),
   async (c) => {
-    const st = await store(c);
+    const st = await resolveStoreFromCtx(c);
     const { slug } = c.req.valid('param');
     const out = await withStore(st.id, async (tx) => {
       const [col] = await tx.select().from(s.collection).where(eq(s.collection.slug, slug)).limit(1);
@@ -242,7 +237,7 @@ catalog.openapi(
     responses: { 200: { description: 'OK', content: { 'application/json': { schema: z.object({ base: z.string(), currencies: z.array(z.object({ currency: z.string(), rate: z.number().int() })) }) } } } },
   }),
   async (c) => {
-    const st = await store(c);
+    const st = await resolveStoreFromCtx(c);
     const rates = await withStore(st.id, (tx) => tx.select({ currency: s.currencyRate.currency, rate: s.currencyRate.rate, enabled: s.currencyRate.enabled }).from(s.currencyRate));
     return c.json({ base: st.currency, currencies: rates.filter((r) => r.enabled).map((r) => ({ currency: r.currency, rate: r.rate })) }, 200);
   },
@@ -264,7 +259,7 @@ catalog.openapi(
     responses: { 200: { description: 'Results', content: { 'application/json': { schema: z.object({ items: z.array(ProductListItem), total: z.number().int() }) } } } },
   }),
   async (c) => {
-    const st = await store(c);
+    const st = await resolveStoreFromCtx(c);
     const { term, collectionSlug, take, skip, inStock } = c.req.valid('query');
     const like = `%${term}%`;
     const result = await withStore(st.id, async (tx) => {
@@ -304,7 +299,7 @@ catalog.openapi(
     },
   }),
   async (c) => {
-    const st = await store(c);
+    const st = await resolveStoreFromCtx(c);
     const { slug } = c.req.valid('param');
     const out = await withStore(st.id, async (tx) => {
       const [p] = await tx.select({ id: s.product.id }).from(s.product).where(and(eq(s.product.slug, slug), isNull(s.product.deletedAt))).limit(1);

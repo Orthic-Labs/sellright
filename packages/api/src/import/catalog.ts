@@ -15,9 +15,10 @@ import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { pool, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
+import { env } from '../env.js';
 import { DD_STORE_ID, ensureDdStore, parseDate } from './store.js';
 
-const SOURCE_URL = process.env.SOURCE_DATABASE_URL;
+const SOURCE_URL = env.SOURCE_DATABASE_URL;
 if (!SOURCE_URL) throw new Error('SOURCE_DATABASE_URL is required (the damned_vendure clone)');
 const LANG = 'en';
 
@@ -25,9 +26,9 @@ const LANG = 'en';
 // _dev / _test, OR the operator passed --force AND set ALLOW_FORCE_TRUNCATE=1.
 // Both gates are required so the override can't be accidentally hit by a CI
 // script that just passes --force. Mirrored in customers.ts and orders.ts.
-const TARGET_URL = process.env.DATABASE_URL ?? '';
+const TARGET_URL = env.DATABASE_URL;
 const forceFlag = process.argv.includes('--force');
-const forceEnv = process.env.ALLOW_FORCE_TRUNCATE === '1';
+const forceEnv = env.ALLOW_FORCE_TRUNCATE === '1';
 const allowedTarget = /[/_](dev|test)(\b|$|\?)/.test(TARGET_URL);
 if (!allowedTarget && !(forceFlag && forceEnv)) {
   throw new Error(

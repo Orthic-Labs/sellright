@@ -22,6 +22,7 @@
 		"build.client": "NODE_OPTIONS=\"$(node ../scripts/node-heap-options.mjs --reserve-mb=4096 --max-mb=3072 --min-mb=1536)\" vite build --logLevel warn",
 		"build.preview": "NODE_OPTIONS=\"$(node ../scripts/node-heap-options.mjs --reserve-mb=4096 --max-mb=3072 --min-mb=1536)\" vite build --ssr src/entry.preview.tsx --logLevel warn",
 		"build.server": "NODE_OPTIONS=\"$(node ../scripts/node-heap-options.mjs --reserve-mb=4096 --max-mb=3072 --min-mb=1536)\" vite build -c adapters/express/vite.config.mts --logLevel warn",
+		"prebuild.types": "pnpm run guard:graphql-customer && pnpm run guard:no-graphql-tag",
 		"build.types": "tsc --incremental --noEmit",
 		"develop": "concurrently pnpm:dev pnpm:dev.server",
 		"dev": "vite --mode ssr --port 4100",

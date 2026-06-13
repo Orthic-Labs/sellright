@@ -40,6 +40,8 @@
 
 
 
+> **NOTE (2026-06-13):** The progress tracker above is authoritative. The WP section **body text** below reflects the codebase at `c0784be` and may describe now-built things as unbuilt. When in doubt, check the code. The tracker and `.audit/audit-2026-06-13.json` are the ground truth for current state.
+
 Companion to [APP-AUDIT-2026-06-10.md](APP-AUDIT-2026-06-10.md) (the WHY) — this is the WHAT/HOW, written so a fresh agent can execute work packages cold. Grounded against actual code at commit `c0784be`; **re-read the cited files before editing — code moves.**
 
 ---
@@ -85,7 +87,9 @@ All snippets in audit §6 with file:line. Scope:
 
 ## WP2 — Email service + token flows
 
-Nothing exists today: `auth/email.ts` is only `normalizeEmail()`; staff invites are explicitly "SMTP-less" (`admin-settings.ts:460`); zero email vars in `EnvSchema` (`env.ts`).
+> ✅ DONE — `src/email/` mailer + templates built; `SMTP_*` vars in `EnvSchema`; order confirmation, shipping notification, staff invite, password-reset, email-verify, set-password flows all wired. `customer_token` table (migration 0023, FORCE RLS) and auth endpoints (`forgot-password`, `reset-password`, `verify-email`) exist. See tracker above.
+
+Nothing existed at c0784be: `auth/email.ts` was only `normalizeEmail()`; staff invites were explicitly "SMTP-less" (`admin-settings.ts:460`); zero email vars in `EnvSchema` (`env.ts`).
 
 ### 2a. Mailer module — `src/email/mailer.ts`
 Provider decision: **SMTP via nodemailer** (the box already runs mail infra for the brands; Resend acceptable alternative — decide at implementation, the interface hides it):
@@ -132,6 +136,8 @@ New migration `00NN_customer_tokens.sql`: `customer_token(id uuid pk, store_id u
 **Accept:** vitest for token lifecycle (valid/expired/reused/wrong-store); `pnpm verify` green; manual: trigger forgot-password against dev, see `[email:skipped]` log with correct reset URL.
 
 ## WP3 — Stripe provider + inbound payment webhooks
+
+> ✅ DONE (scaffolding) — `payments/stripe.ts` built: server-side `verifyIntent`, `createPaymentIntent`, `POST /orders/{code}/payment-intent`, inbound `POST /v1/webhooks/stripe` (signature-verified, idempotent via `processed_event`), gateway-backed refund via `settle.ts`, 10 unit tests. **Only the live sandbox e2e run remains** (needs Stripe test key from Adrian). Dispute/refund webhook reconcile are TODO stubs.
 
 Grounding: `PaymentProvider` interface verbatim at `payments/provider.ts` —
 ```ts
@@ -212,9 +218,13 @@ The succeeded-reconcile path reuses the exact `pay.ts:66-77` insert+transition l
 
 ## WP4 — Storefront rewire (Vendure GraphQL → SellRight REST)
 
+> **WP4a ✅ DONE** — All 12 backend endpoints built and smoke-tested (catalog `search` + `products/{slug}/stock`; account `PATCH /me`, `POST /password`, addresses POST/PATCH/DELETE + widened list; `auth/check-email` rate-limited; `/me|/login|/register|/google` now return id+phone). Verified live against real DD catalog + register→patch→address-CRUD→delete e2e run.
+>
+> **WP4b ⏳ REMAINS** — The Qwik storefront rewire (`providers/shop/*` modules pointing at Vendure `/shop-api`) is not done. The storefront still calls Vendure GraphQL for auth, account, and search. This is the largest remaining blocker to RH cutover.
+
 The grounded flow map (agents: re-verify file:lines before editing). Auth mechanics change everywhere: drop the `vendure-auth-token` header-extraction in `utils/api.ts:63` — REST uses httpOnly cookies (`credentials: 'include'`) + CSRF header from the `sr_cust_csrf` cookie.
 
-### 4a. REST endpoints to BUILD first (12 missing)
+### 4a. REST endpoints (built — see note above)
 | Endpoint | For | Shape |
 |---|---|---|
 | `POST /v1/shop/auth/forgot-password` | reset | WP2d |

@@ -9,7 +9,7 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm --filter @sellright/api test",
-    "verify": "pnpm -r build && pnpm -r typecheck && pnpm --filter @sellright/api test && pnpm --filter @sellright/api db:assert-rls",
+    "verify": "pnpm -r build && pnpm -r typecheck && pnpm --filter @sellright/api test && pnpm --filter @sellright/api db:assert-rls && pnpm --filter @sellright/api assert:shop-isolation",
     "dev": "pnpm --filter @sellright/api dev"
   },
   "devDependencies": {

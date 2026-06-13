@@ -10,10 +10,11 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { and, asc, eq, isNull } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
 import { resolveStore, DEV_DEFAULT_STORE } from '../store-context.js';
+import { env } from '../env.js';
 import * as s from '../db/schema.js';
 
-const OUT = process.env.CATALOG_DIR || '/home/vendure/sites/sellright-data';
-const STORE_SLUG = process.env.STORE_SLUG || DEV_DEFAULT_STORE;
+const OUT = env.CATALOG_DIR ?? '/home/vendure/sites/sellright-data';
+const STORE_SLUG = env.STORE_SLUG ?? DEV_DEFAULT_STORE;
 const assetUrl = (path: string | null | undefined) => (path ? `/assets/${path}` : null);
 const selectPrice = (v: { price: number; salePrice: number | null; isPreOrder: boolean; preOrderPrice: number | null }) =>
   v.isPreOrder && v.preOrderPrice != null ? v.preOrderPrice : v.salePrice ?? v.price;

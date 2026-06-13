@@ -1,5 +1,11 @@
 # SellRight — Licensing (2026-06-10)
 
+> **DISAMBIGUATION (added 2026-06-13 — read before editing):**
+>
+> This document covers **licensing SellRight-the-backend to external operators** — the per-instance Ed25519 signed-blob scheme, store-count metering, and degrade-not-revoke enforcement. This is a **future productization concern**; the scheme described below is **entirely unbuilt** (status: internal now, product later — see §1).
+>
+> It is **distinct** from the **catalog/app-licensing subsystem** that IS built (commit 43ebcbb): `packages/api/src/licensing/`, migration `0027_software_entitlements.sql`, `routes/apps.ts`, and `docs/RIGHT-APPS-SELLRIGHT-SETUP.md`. That subsystem sells app licenses as catalog products for Right Apps (HeardRight, ViewRight, etc.) and uses **opaque bearer activation tokens**, not the Ed25519 signed-blob scheme designed in this doc. Both are real; they address different things.
+
 *Status: **internal now, product later** (Adrian, 2026-06-10). SellRight is currently unlicensed internal infrastructure powering DD/RH/TS/SS. Nothing below exists in code, and nothing should be built until the productization trigger in [STRATEGY-MOAT-POSITIONING.md](STRATEGY-MOAT-POSITIONING.md) §6 fires (all four brands live ≥ one quarter). This doc adapts the Right Suite licensing standard ([MailRight LICENSING.md](../../../mailright/docs/fable/LICENSING.md)) to SERVER software so the design is decided before it's needed.*
 
 ---

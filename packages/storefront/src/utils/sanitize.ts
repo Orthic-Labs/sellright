@@ -28,7 +28,7 @@ export const sanitizeHtml = (dirty: string, options?: DomPurifyConfig): string =
 			'img', 'figure', 'figcaption', 'hr', 'pre', 'code',
 			'table', 'thead', 'tbody', 'tr', 'th', 'td'
 		],
-		ALLOWED_ATTR: ['href', 'title', 'target', 'rel', 'class', 'src', 'alt', 'width', 'height', 'style'],
+		ALLOWED_ATTR: ['href', 'title', 'target', 'rel', 'class', 'src', 'alt', 'width', 'height'],
 		ALLOW_DATA_ATTR: true,
 		// Forbid tags that can execute JavaScript
 		FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form', 'input', 'button'],

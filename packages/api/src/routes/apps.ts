@@ -15,6 +15,10 @@ async function store(c: { req: { header: (k: string) => string | undefined } }):
 
 export const apps = new OpenAPIHono();
 
+// ra-011: appKeyFromHost is intentionally NOT used on the public activate endpoint
+// any more — kept for the update/release paths which are read-only and keyed by
+// the activation token (not the license key), so host-header spoofing there
+// cannot escalate privileges beyond what the bearer token allows.
 function appKeyFromHost(host: string | undefined): string | null {
   const hostname = host?.split(':')[0]?.toLowerCase();
   if (!hostname || hostname === 'localhost' || hostname === '127.0.0.1') return null;
@@ -43,8 +47,12 @@ const CreateReleaseIn = z.object({
   artifacts: z.array(ReleaseArtifactIn).optional(),
 });
 type CreateReleaseBody = z.infer<typeof CreateReleaseIn>;
+
+// ra-011: body.app is now REQUIRED on the public activate endpoint. We never
+// fall back to Host-header-derived appKey here — an attacker controlling the
+// Host header could otherwise pivot to any store's license namespace.
 const PublicActivateIn = z.object({
-  app: z.string().min(1).optional(),
+  app: z.string().min(1),
   deviceId: z.string().min(1),
   licenseKey: z.string().min(1),
   version: z.string().optional(),
@@ -86,6 +94,9 @@ apps.openapi(
   },
 );
 
+// ra-011: body.app is required — PublicActivateIn.parse will throw (400) if omitted.
+// We pass body.app directly into publicAppStore so the store is always caller-supplied,
+// never derived from the Host header.
 apps.post('/api/licenses/activate', async (c) => {
   const body = PublicActivateIn.parse(await c.req.json());
   const { appKey, st } = await publicAppStore(c, body.app);
@@ -148,21 +159,27 @@ apps.openapi(
     summary: 'Return latest app update manifest when the license is eligible',
     request: {
       params: z.object({ appKey: z.string().min(1) }),
+      // ra-006: licenseKey is no longer accepted as a query param (proxy/CDN logging).
+      // Clients MUST send it as: Authorization: Bearer <licenseKey>
+      // CLIENT CONTRACT CHANGE: remove licenseKey from query; add Authorization header.
       query: z.object({
-        licenseKey: z.string().min(1),
         channel: z.string().default('stable'),
         platform: z.string().optional(),
       }),
     },
     responses: {
       200: { description: 'Eligibility + manifest', content: J(z.object({ eligible: z.boolean(), reason: z.string().optional(), manifest: z.any().optional(), version: z.string().optional() })) },
+      401: { description: 'Missing or invalid license key', ...errBody },
       404: { description: 'Not found', ...errBody },
     },
   }),
   async (c) => {
     const st = await store(c);
     const { appKey } = c.req.valid('param');
-    const { licenseKey, channel, platform } = c.req.valid('query');
+    // ra-006: read license key from Authorization: Bearer header only.
+    const licenseKey = bearerToken(c.req.header('authorization'));
+    if (!licenseKey) return c.json({ error: 'Missing license key — provide Authorization: Bearer <licenseKey>' }, 401);
+    const { channel, platform } = c.req.valid('query');
     const out = await withStore(st.id, async (tx) => {
       const [lic] = await tx.select().from(s.license).where(and(eq(s.license.licenseKey, licenseKey), eq(s.license.appKey, appKey))).limit(1);
       if (!lic) return { kind: 'notfound' as const };
@@ -194,18 +211,24 @@ apps.openapi(
     summary: 'Return a licensed digital download artifact',
     request: {
       params: z.object({ appKey: z.string().min(1), artifactKey: z.string().min(1) }),
-      query: z.object({ licenseKey: z.string().min(1) }),
+      // ra-006: licenseKey is no longer accepted as a query param (proxy/CDN logging).
+      // Clients MUST send it as: Authorization: Bearer <licenseKey>
+      // CLIENT CONTRACT CHANGE: remove licenseKey from query; add Authorization header.
+      query: z.object({}),
     },
     responses: {
       200: { description: 'Download artifact', content: J(z.object({ artifactKey: z.string(), url: z.string(), sha256: z.string().nullable(), sizeBytes: z.number().int().nullable() })) },
-      404: { description: 'Not found', ...errBody },
+      401: { description: 'Missing or invalid license key', ...errBody },
       403: { description: 'Not entitled', ...errBody },
+      404: { description: 'Not found', ...errBody },
     },
   }),
   async (c) => {
     const st = await store(c);
     const { appKey, artifactKey } = c.req.valid('param');
-    const { licenseKey } = c.req.valid('query');
+    // ra-006: read license key from Authorization: Bearer header only.
+    const licenseKey = bearerToken(c.req.header('authorization'));
+    if (!licenseKey) return c.json({ error: 'Missing license key — provide Authorization: Bearer <licenseKey>' }, 401);
     const out = await withStore(st.id, async (tx) => {
       const [lic] = await tx.select().from(s.license).where(and(eq(s.license.licenseKey, licenseKey), eq(s.license.appKey, appKey))).limit(1);
       if (!lic) return { kind: 'notfound' as const };
@@ -226,6 +249,12 @@ apps.openapi(
     });
     if (out.kind === 'forbidden') return c.json({ error: 'license is not active' }, 403);
     if (out.kind === 'notfound') return c.json({ error: 'download not found' }, 404);
+    // ra-005 (SAFE SUBSET): The artifact.path is a raw, permanent URL stored verbatim in
+    // the DB. We cannot issue a one-time signed URL here without knowing the storage
+    // backend (S3/CF vs local disk) — see findings_deferred. As an interim measure we
+    // prevent CDN/proxy caching of this response so the URL is not stored in any
+    // intermediate cache layer. The full fix (signed URL / one-time token) is deferred.
+    c.header('Cache-Control', 'no-store');
     return c.json({
       artifactKey: out.artifact.artifactKey,
       url: out.artifact.path,

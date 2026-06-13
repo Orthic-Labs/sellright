@@ -39,6 +39,9 @@ export const paymentState = pgEnum('payment_state', [
 export const refundState = pgEnum('refund_state', ['Pending', 'Settled', 'Failed']);
 export const returnStatus = pgEnum('return_status', ['requested', 'approved', 'rejected', 'received', 'refunded']);
 export const promotionType = pgEnum('promotion_type', ['percentage', 'fixed', 'free_shipping']);
+// 'expired' is NOT auto-transitioned by any background job. Expiry is detected
+// at read time by comparing NOW() against license.expires_at. The only admin-
+// driven status transition is active → revoked. (ra-010)
 export const licenseStatus = pgEnum('license_status', ['active', 'revoked', 'expired']);
 
 const ts = () => timestamp({ withTimezone: true }).notNull().defaultNow();
@@ -413,6 +416,14 @@ export const licenseActivation = pgTable(
     licenseId: uuid().notNull().references(() => license.id),
     appKey: text().notNull(),
     deviceIdHash: text().notNull(),
+    // UNIQUENESS NOTE (ra-007): the UNIQUE constraint on this column is enforced
+    // by a PARTIAL index created in migration 0027:
+    //   CREATE UNIQUE INDEX … ON license_activation (activation_token_hash)
+    //   WHERE activation_token_hash IS NOT NULL
+    // drizzle-kit does NOT model partial indexes, so it will never generate a
+    // migration for this index — but it MUST NOT be allowed to DROP it either.
+    // Never run `drizzle-kit generate` without reviewing the output for a
+    // spurious DROP INDEX on license_activation_token_hash_unique.
     activationTokenHash: text(),
     deviceLabel: text(),
     activatedAt: ts(),

@@ -193,20 +193,26 @@ adminOrders.openapi(
       const priorRefunded = await alreadyRefunded(tx, o.id);
       if (amount <= 0 || amount > o.grandTotal - priorRefunded) return { kind: 'badamount' as const, max: o.grandTotal - priorRefunded };
 
+      // ra-022: check the target state transition is valid BEFORE writing any
+      // ledger rows — an invalid transition returns badstate so the txn rolls
+      // back with no orphan refund row.
+      const totalRefunded = priorRefunded + amount;
+      const newState: OrderState = totalRefunded >= o.grandTotal ? 'Refunded' : 'PartiallyRefunded';
+      if (!canTransition(o.state as OrderState, newState)) return { kind: 'badstate' as const, state: o.state };
+
       // WP3: reverse the money at the gateway BEFORE writing the ledger row, so a
       // gateway failure aborts the whole refund (txn rolls back, no orphan ledger
       // row). manual/cod refundPayment is a no-op Settled; stripe actually refunds.
-      const provider = getProvider(pay.method);
-      let refundState: 'Settled' | 'Pending' | 'Failed' = 'Settled';
-      let refundRef: string | null = null;
-      if (provider?.refundPayment) {
-        const r = await provider.refundPayment({ providerRef: pay.providerRef, amount, currency: o.currency });
-        if (r.state === 'Failed') return { kind: 'providerfail' as const, message: r.errorMessage ?? 'gateway refund failed' };
-        refundState = r.state;
-        refundRef = r.providerRef;
+      let gatewayResult: { state: 'Settled' | 'Pending'; providerRef: string | null };
+      try {
+        gatewayResult = await executeGatewayRefund(pay.method, pay.providerRef, amount, o.currency);
+      } catch (e: unknown) {
+        const err = e as { kind?: string; message?: string };
+        if (err.kind === 'providerfail') return { kind: 'providerfail' as const, message: err.message ?? 'gateway refund failed' };
+        throw e;
       }
 
-      const [refund] = await tx.insert(s.refund).values({ storeId: st.storeId, paymentId: pay.id, orderId: o.id, amount, reason: body.reason ?? null, state: refundState, providerRef: refundRef }).returning({ id: s.refund.id });
+      const [refund] = await tx.insert(s.refund).values({ storeId: st.storeId, paymentId: pay.id, orderId: o.id, amount, reason: body.reason ?? null, state: gatewayResult.state, providerRef: gatewayResult.providerRef }).returning({ id: s.refund.id });
       for (const x of refundLines) {
         await tx.insert(s.refundLine).values({ storeId: st.storeId, refundId: refund!.id, orderLineId: x.line!.id, quantity: x.quantity, amount: Math.round((x.line!.lineTotal / x.line!.quantity) * x.quantity), restock: body.restock });
         await tx.update(s.orderLine).set({ refundedQty: Math.min(x.line!.quantity, x.line!.refundedQty + x.quantity) }).where(eq(s.orderLine.id, x.line!.id));
@@ -215,15 +221,13 @@ adminOrders.openapi(
           await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: x.line!.variantId, delta: x.quantity, reason: 'refund_restock', refOrderId: o.id });
         }
       }
-      const totalRefunded = priorRefunded + amount;
-      const newState: OrderState = totalRefunded >= o.grandTotal ? 'Refunded' : 'PartiallyRefunded';
-      if (canTransition(o.state as OrderState, newState)) await tx.update(s.order).set({ state: newState, updatedAt: new Date() }).where(eq(s.order.id, o.id));
+      await tx.update(s.order).set({ state: newState, updatedAt: new Date() }).where(eq(s.order.id, o.id));
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: o.id, action: 'refund', fromState: o.state, toState: newState, data: { amount, restock: body.restock } });
       await emitEvent(tx, st.storeId, 'order.refunded', { code: o.code, amount, state: newState });
       return { kind: 'ok' as const, state: newState, refunded: amount };
     });
     if (res.kind === 'notfound') throw new HttpError(404, 'order not found');
-    if (res.kind === 'badstate') throw new HttpError(409, `order not refundable in state ${res.state}`);
+    if (res.kind === 'badstate') throw new HttpError(409, `order not refundable in state ${res.state} — transition to Refunded/PartiallyRefunded not allowed`);
     if (res.kind === 'nopayment') throw new HttpError(409, 'no settled payment to refund');
     if (res.kind === 'badamount') throw new HttpError(409, `refund amount must be 1..${res.max} cents`);
     if (res.kind === 'providerfail') throw new HttpError(502, res.message);
@@ -236,6 +240,31 @@ async function alreadyRefunded(tx: Tx, orderId: string): Promise<number> {
   // handle and exposes the same `select({...}).from(...).where(...)` shape.
   const [r] = await tx.select({ n: sql<number>`coalesce(sum(${s.refund.amount}),0)::int` }).from(s.refund).where(eq(s.refund.orderId, orderId));
   return r?.n ?? 0;
+}
+
+/**
+ * Calls the payment gateway to execute the monetary refund and returns the
+ * provider-resolved state + ref. For manual/cod (no provider.refundPayment)
+ * this is a no-op that returns { state: 'Settled', providerRef: null }.
+ *
+ * Throws { kind: 'providerfail', message } on gateway failure so the caller
+ * can exit the withStore() txn cleanly without writing any ledger rows.
+ */
+async function executeGatewayRefund(
+  payMethod: string,
+  payProviderRef: string | null,
+  amount: number,
+  currency: string,
+): Promise<{ state: 'Settled' | 'Pending'; providerRef: string | null }> {
+  const provider = getProvider(payMethod);
+  if (!provider?.refundPayment) {
+    return { state: 'Settled', providerRef: null };
+  }
+  const r = await provider.refundPayment({ providerRef: payProviderRef, amount, currency });
+  if (r.state === 'Failed') {
+    throw Object.assign(new Error(r.errorMessage ?? 'gateway refund failed'), { kind: 'providerfail' as const, message: r.errorMessage ?? 'gateway refund failed' });
+  }
+  return { state: r.state as 'Settled' | 'Pending', providerRef: r.providerRef };
 }
 
 // ── returns / exchanges (RMA) ─────────────────────────────────────────────────
@@ -321,7 +350,25 @@ adminOrders.openapi(
       const priorRefunded = await alreadyRefunded(tx, o.id);
       if (amount <= 0 || amount > o.grandTotal - priorRefunded) return { kind: 'badamount' as const };
 
-      const [refund] = await tx.insert(s.refund).values({ storeId: st.storeId, paymentId: pay.id, orderId: o.id, amount, reason: rr.reason ?? 'return', state: 'Settled' }).returning({ id: s.refund.id });
+      // ra-022: validate the FSM transition BEFORE writing any ledger rows so an
+      // invalid transition rolls back without leaving an orphan Settled refund.
+      const newState: OrderState = priorRefunded + amount >= o.grandTotal ? 'Refunded' : 'PartiallyRefunded';
+      if (!canTransition(o.state as OrderState, newState)) return { kind: 'badstate' as const, status: o.state };
+
+      // ra-002: call the payment gateway BEFORE writing the ledger row. For
+      // manual/cod (no provider.refundPayment) this is a no-op returning Settled.
+      // A gateway failure throws { kind: 'providerfail' } which propagates up and
+      // causes the withStore() txn to roll back — no orphan refund row.
+      let gatewayResult: { state: 'Settled' | 'Pending'; providerRef: string | null };
+      try {
+        gatewayResult = await executeGatewayRefund(pay.method, pay.providerRef, amount, o.currency);
+      } catch (e: unknown) {
+        const err = e as { kind?: string; message?: string };
+        if (err.kind === 'providerfail') return { kind: 'providerfail' as const, message: err.message ?? 'gateway refund failed' };
+        throw e;
+      }
+
+      const [refund] = await tx.insert(s.refund).values({ storeId: st.storeId, paymentId: pay.id, orderId: o.id, amount, reason: rr.reason ?? 'return', state: gatewayResult.state, providerRef: gatewayResult.providerRef }).returning({ id: s.refund.id });
       for (const rl of rLines) {
         const ol = byId.get(rl.orderLineId); if (!ol) continue;
         await tx.insert(s.refundLine).values({ storeId: st.storeId, refundId: refund!.id, orderLineId: ol.id, quantity: rl.quantity, amount: Math.round((ol.lineTotal / ol.quantity) * rl.quantity), restock: rl.restock });
@@ -331,16 +378,16 @@ adminOrders.openapi(
           await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: ol.variantId, delta: rl.quantity, reason: 'return_restock', refOrderId: o.id });
         }
       }
-      const newState: OrderState = priorRefunded + amount >= o.grandTotal ? 'Refunded' : 'PartiallyRefunded';
-      if (canTransition(o.state as OrderState, newState)) await tx.update(s.order).set({ state: newState, updatedAt: new Date() }).where(eq(s.order.id, o.id));
+      await tx.update(s.order).set({ state: newState, updatedAt: new Date() }).where(eq(s.order.id, o.id));
       await tx.update(s.returnRequest).set({ status: 'refunded', refundId: refund!.id, updatedAt: new Date() }).where(eq(s.returnRequest.id, rr.id));
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'return', entityId: rr.id, action: 'approve', toState: newState, data: { amount } });
       return { kind: 'ok' as const, refunded: amount, state: newState };
     });
     if (res.kind === 'notfound') throw new HttpError(404, 'return not found');
-    if (res.kind === 'badstate') throw new HttpError(409, `return already ${res.status}`);
+    if (res.kind === 'badstate') throw new HttpError(409, `return cannot be approved — order is in state ${res.status} which does not allow transition`);
     if (res.kind === 'nopayment') throw new HttpError(409, 'no settled payment to refund against');
     if (res.kind === 'badamount') throw new HttpError(409, 'return amount exceeds the refundable balance');
+    if (res.kind === 'providerfail') throw new HttpError(502, res.message);
     return c.json({ id, refunded: res.refunded, state: res.state }, 200);
   }),
 );
@@ -495,6 +542,8 @@ adminOrders.openapi(
         const carrier = row.carrier || inferCarrier(row.tracking) || null;
         const [existing] = await tx.select().from(s.fulfillment).where(eq(s.fulfillment.orderId, o.id)).orderBy(desc(s.fulfillment.createdAt)).limit(1);
         if (existing) {
+          // ra-023: do not regress a Delivered fulfillment back to Shipped.
+          if (existing.state === 'Delivered') { errors.push({ code: row.code, error: 'already Delivered' }); continue; }
           await tx.update(s.fulfillment).set({ state: 'Shipped', trackingCode: row.tracking, carrier, updatedAt: new Date() }).where(eq(s.fulfillment.id, existing.id));
         } else {
           await tx.insert(s.fulfillment).values({ storeId: st.storeId, orderId: o.id, state: 'Shipped', trackingCode: row.tracking, carrier });

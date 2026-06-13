@@ -1,17 +1,12 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, eq } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
-import { resolveStore, DEV_DEFAULT_STORE, type StoreCtx } from '../store-context.js';
+import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
 import { getProvider, isPaymentMethodEnabled } from '../payments/provider.js';
 import { applyPaymentResult } from '../payments/settle.js';
 import { createPaymentIntent, stripeConfigured } from '../payments/stripe.js';
 import { clientIp, loginRetryAfter } from '../auth/rate-limit.js';
-
-async function store(c: { req: { header: (k: string) => string | undefined } }): Promise<StoreCtx> {
-  const slug = c.req.header('x-store-slug') ?? DEV_DEFAULT_STORE;
-  return resolveStore(slug);
-}
 
 export const pay = new OpenAPIHono();
 
@@ -34,7 +29,7 @@ pay.openapi(
     },
   }),
   async (c) => {
-    const st = await store(c);
+    const st = await resolveStoreFromCtx(c);
     const { code } = c.req.valid('param');
     const { method, token } = c.req.valid('json');
     const idemKey = c.req.header('idempotency-key');
@@ -114,7 +109,7 @@ pay.openapi(
     },
   }),
   async (c) => {
-    const st = await store(c);
+    const st = await resolveStoreFromCtx(c);
     const { code } = c.req.valid('param');
     if (!isPaymentMethodEnabled(st.config, 'stripe')) return c.json({ error: 'payment method disabled: stripe', state: 'Disabled' }, 409);
     if (!stripeConfigured()) return c.json({ error: 'stripe is not configured' }, 503);

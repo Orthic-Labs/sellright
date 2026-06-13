@@ -30,6 +30,36 @@ const EnvSchema = z.object({
   // dev/tests boot without a key; only the live end-to-end run needs them).
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
+  // Google OAuth — consumed by routes/auth.ts (lane G).
+  GOOGLE_CLIENT_ID: z.string().optional(),
+  // Admin bootstrap scripts (seed-admin, provision-right-apps).
+  ADMIN_EMAIL: z.string().email().optional(),
+  ADMIN_PASSWORD: z.string().optional(),
+  // Import scripts: Vendure source DB (read-only clone used by catalog/customers/orders importers).
+  SOURCE_DATABASE_URL: z.string().url().optional(),
+  // Import scripts: TRUNCATE guard override — BOTH --force argv AND ALLOW_FORCE_TRUNCATE=1
+  // must be set to allow a truncating import against a non-dev/test DB.
+  // ⚠ DANGER: Setting this to '1' in production will permit mass data deletion.
+  ALLOW_FORCE_TRUNCATE: z.enum(['0', '1']).optional(),
+  // Manifest generator: output directory for static JSON catalog files.
+  CATALOG_DIR: z.string().optional(),
+  // Manifest generator / multi-store: which store to generate for.
+  STORE_SLUG: z.string().optional(),
+  // Job scheduler: master on/off switch (default off — safe for dev/test).
+  JOBS_ENABLED: z.enum(['0', '1']).optional(),
+  // auto-deliver job: actually transition Shipped→Delivered (default: dry-run log only).
+  JOBS_AUTO_DELIVER_APPLY: z.enum(['0', '1']).optional(),
+  // auto-deliver job: age threshold in days before Shipped becomes Delivered.
+  JOBS_AUTO_DELIVER_DAYS: z.coerce.number().int().positive().optional(),
+  // release-stale-allocations job: actually cancel + release (default: dry-run).
+  // ⚠ DANGER: Enabling against imported historical PendingPayment orders will mass-cancel them.
+  JOBS_RELEASE_STALE_APPLY: z.enum(['0', '1']).optional(),
+  // release-stale-allocations job: unpaid-order age threshold in minutes.
+  JOBS_RELEASE_STALE_TTL_MIN: z.coerce.number().int().positive().optional(),
+  // webhook-reaper job: actually reset stuck processing rows (default: dry-run).
+  JOBS_WEBHOOK_REAPER_APPLY: z.enum(['0', '1']).optional(),
+  // webhook-reaper job: grace period in minutes before a processing row is considered stuck.
+  JOBS_WEBHOOK_REAPER_GRACE_MIN: z.coerce.number().int().positive().optional(),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

@@ -41,14 +41,14 @@ function every(ms: number, label: string, fn: () => Promise<unknown>): NodeJS.Ti
 }
 
 export function startJobScheduler(): void {
-  if (process.env.JOBS_ENABLED !== '1' || env.NODE_ENV === 'test') {
+  if (env.JOBS_ENABLED !== '1' || env.NODE_ENV === 'test') {
     console.log('[jobs] scheduler disabled (set JOBS_ENABLED=1 to enable)');
     return;
   }
-  const autoDeliverApply = process.env.JOBS_AUTO_DELIVER_APPLY === '1';
-  const autoDeliverDays = Number(process.env.JOBS_AUTO_DELIVER_DAYS ?? 10);
-  const releaseApply = process.env.JOBS_RELEASE_STALE_APPLY === '1';
-  const releaseTtlMin = Number(process.env.JOBS_RELEASE_STALE_TTL_MIN ?? 60);
+  const autoDeliverApply = env.JOBS_AUTO_DELIVER_APPLY === '1';
+  const autoDeliverDays = env.JOBS_AUTO_DELIVER_DAYS ?? 10;
+  const releaseApply = env.JOBS_RELEASE_STALE_APPLY === '1';
+  const releaseTtlMin = env.JOBS_RELEASE_STALE_TTL_MIN ?? 60;
 
   console.log(`[jobs] scheduler on — auto-deliver(apply=${autoDeliverApply}, days=${autoDeliverDays}) hourly; release-stale(apply=${releaseApply}, ttl=${releaseTtlMin}m) every 15m`);
 
@@ -58,7 +58,7 @@ export function startJobScheduler(): void {
   // WP1.7 safety net: reset webhook_delivery rows stuck in 'processing' (a
   // crashed scheduler) back to 'pending' so the next pass re-claims them.
   // 10-min grace = a crashed worker is recovered within 15 min.
-  const webhookReaperApply = process.env.JOBS_WEBHOOK_REAPER_APPLY === '1';
-  const webhookReaperGraceMin = Number(process.env.JOBS_WEBHOOK_REAPER_GRACE_MIN ?? 10);
+  const webhookReaperApply = env.JOBS_WEBHOOK_REAPER_APPLY === '1';
+  const webhookReaperGraceMin = env.JOBS_WEBHOOK_REAPER_GRACE_MIN ?? 10;
   every(5 * 60_000, 'webhook-reaper', () => reapStuckWebhooks({ apply: webhookReaperApply, graceMin: webhookReaperGraceMin, log }));
 }

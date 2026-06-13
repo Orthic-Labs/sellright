@@ -69,7 +69,7 @@ can't disturb the `api`/`shared` build. Install them with
 | `admin` | React 18, Vite 5, TypeScript, Tailwind 3, TanStack Query 5, react-router 6, lucide-react. Hand-rolled fetch client (not `hc`) |
 | `storefront` | Qwik (cloned DD storefront), Vite SSR |
 
-### 1.3 Data model (37 tables, by domain)
+### 1.3 Data model (52 tables, by domain)
 
 - **Tenancy:** `store` (registry), `admin_user`, `admin_user_store` (ACL),
   `session` (customer + admin sessions share the table, discriminated by
@@ -218,10 +218,20 @@ Cloned DD Qwik app. **Browse + checkout→COD→confirmation are wired to SellRi
 `srCreateOrder`+`srPayOrder('cod')`). Still on Vendure GraphQL: **auth, account,
 text-search** (those UI flows fail until rewired — §3.9).
 
+**WP4a backend endpoints are built** (commit 43ebcbb): catalog search,
+`products/{slug}/stock`, account `PATCH /me` / `POST /password` / addresses
+POST/PATCH/DELETE, auth `check-email`, widened response shapes on `/me`,
+`/addresses`, and order detail — all built and smoke-tested. **WP4b (Qwik
+storefront rewire)** remains: `providers/shop/*` modules still call Vendure
+`/shop-api`; this is the critical remaining blocker for RH cutover.
+
 ### 1.12 Dev / deploy environment
 
-- **Code + DB live on Hetzner** (`/home/vendure/sites/sellright`); the laptop
-  clone (`D:\Claude\sellright`) is secondary, synced via git push/pull.
+- **Source of truth: laptop `D:\Claude\sellright`** (locked 2026-06-10,
+  CLAUDE.md + MEMORY.md). GitHub origin is the sync hub. The server
+  `/home/vendure/sites/sellright` is a **deploy target only** — a clean checkout
+  of `origin/main`. Never edit code directly on the box; never let its working
+  tree go dirty. Deploy = `git pull` on the box, then restart scripts.
 - **DB = native (non-docker) Postgres 17.10 on port 5433** (docker
   `vendure-postgres` owns 5432). DB `sellright_dev`, role `sellright`.
 - **Ports on the box:** API `:3300` · storefront SSR `:4100` · admin SPA `:4300`
@@ -294,7 +304,7 @@ documented with the trigger that flips each):**
 
 | Area | State |
 |---|---|
-| Schema + RLS (37 tables, migrations 0000–0010) | ✅ applied, isolation tested |
+| Schema + RLS (52 tables, migrations 0000–0027) | ✅ applied, isolation tested |
 | Coupons applied + audited at checkout (promotion_usage, limits enforced) | ✅ verified live |
 | Data importer (catalog/customers/orders) | ✅ cent-perfect parity |
 | Shop API: catalog, cart estimate, checkout, pay, auth, account, coupons | ✅ verified on real data |
@@ -799,12 +809,24 @@ dashboard (gate item 6); and a **restore from backup has been tested** (gate ite
 
 ## 7. Appendix
 
-**Migrations:** `0000` schema · `0001` RLS policies · `0002` nullif hardening ·
+**Migrations (28, 0000–0027 — journal complete at commit 43ebcbb):**
+`0000` schema · `0001` RLS policies · `0002` nullif hardening ·
 `0003` order_line snapshot · `0004` store registry NO FORCE · `0005` cart tables ·
 `0006` admin_user_store NO FORCE · `0007` order idempotency + indexes · `0008`
 admin_user_store registry (disable RLS) · `0009` model completeness (promotion
 linkage/usage, payment_method, link-table RLS, FK tightening) · `0010`
-customer.tags.
+customer.tags · `0011` cart email · `0012` tax zones · `0013` product
+merchandising (compare-at, cost, barcode, dimensions, metafields, SEO) · `0014`
+smart collections (rule membership, publish/SEO) · `0015` returns (RMA → restock
+→ refund) · `0016` gift cards · `0017` webhooks (outbox + HMAC delivery) · `0018`
+staff invites · `0019` locations (multi-location inventory) · `0020` currency
+rates · `0021` staff permissions (per-action RBAC) · `0022` indexes (11 hot-path
+indexes) · `0023` customer tokens (password-reset, email-verify, set-password;
+FORCE RLS) · `0024` order metadata · `0025` RLS stance — session +
+admin_user_store (documented NO FORCE policy) · `0026` refund provider ref ·
+`0027` software entitlements (app licensing: `app`, `app_release`,
+`download_artifact`, `license`, `license_activation`, `processed_event` extension;
+FORCE RLS on store-scoped tables).
 
 **API restart:** use `scripts-deploy/start-api.sh` (setsid — survives the SSH
 channel); inline `nohup … &` over ssh dies on channel close. `start-admin.sh`

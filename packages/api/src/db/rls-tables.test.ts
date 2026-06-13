@@ -159,4 +159,31 @@ describe('WP9.6 — RLS table-driven loop', () => {
       withStoreApp(A, (tx) => tx.execute(sql`INSERT INTO product (id, store_id, slug, name) VALUES (gen_random_uuid(), ${B}, 'sneaky', 'Sneaky')`)),
     ).rejects.toThrow(/row-level security/i);
   });
+
+  // ra-013: verify WITH CHECK RLS also fires for the license table.
+  // Store A context must not be able to insert a license row with store_id = B.
+  it('a store cannot write into another store (WITH CHECK) on license', async () => {
+    // Seed both stores + the minimum FK chain: customer, order, order_line, license.
+    // We use the owner pool (withStore) to bypass RLS for seeding.
+    await withStore(A, async (tx) => {
+      await tx.execute(sql`INSERT INTO store (id, slug, name) VALUES (${A}, 'a', 'A') ON CONFLICT DO NOTHING`);
+      await tx.execute(sql`INSERT INTO store (id, slug, name) VALUES (${B}, 'b', 'B') ON CONFLICT DO NOTHING`);
+    });
+
+    // The license INSERT is what we test — no FK chain required because the
+    // RLS WITH CHECK fires before any FK look-up when the store_id mismatch is
+    // detected. We just need both store rows to exist.
+    await expect(
+      withStoreApp(A, (tx) =>
+        tx.execute(sql`
+          INSERT INTO license
+            (id, store_id, order_id, order_line_id, app_key, license_key, status, seats, created_at, updated_at)
+          VALUES
+            (gen_random_uuid(), ${B},
+             gen_random_uuid(), gen_random_uuid(),
+             'viewright', 'LK-CROSS-TENANT-TEST', 'active', 1, now(), now())
+        `),
+      ),
+    ).rejects.toThrow(/row-level security/i);
+  });
 });

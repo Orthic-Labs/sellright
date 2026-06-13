@@ -6,6 +6,7 @@ export default defineConfig({
   dialect: 'postgresql',
   casing: 'snake_case',
   dbCredentials: {
-    url: process.env.DATABASE_URL ?? 'postgres://sr:sr@127.0.0.1:5432/sellright_dev',
+    // Default mirrors env.ts: :5433 (DEV cluster) — never :5432 (prod vendure-postgres).
+    url: process.env.DATABASE_URL ?? 'postgres://sellright:CHANGE_ME@127.0.0.1:5433/sellright_dev',
   },
 });

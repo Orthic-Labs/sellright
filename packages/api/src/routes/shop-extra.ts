@@ -1,17 +1,13 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, desc, eq } from 'drizzle-orm';
-import { withStore, unsafeUnscopedDb as db } from '../db/client.js';
-import { resolveStore, DEV_DEFAULT_STORE } from '../store-context.js';
+import { withStore } from '../db/client.js';
+import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
 import { isMethodEligible, shippingRate } from '../shipping/calculator.js';
 
 export const shopExtra = new OpenAPIHono();
 
 const J = (schema: z.ZodTypeAny) => ({ 'application/json': { schema } });
-async function storeId(c: { req: { header: (k: string) => string | undefined } }): Promise<{ id: string; currency: string }> {
-  const slug = c.req.header('x-store-slug') ?? DEV_DEFAULT_STORE;
-  return resolveStore(slug);
-}
 
 // ── guest order tracking (code + email) ──────────────────────────────────────
 shopExtra.openapi(
@@ -21,7 +17,7 @@ shopExtra.openapi(
     responses: { 200: { description: 'OK', content: J(z.any()) }, 404: { description: 'Not found', content: J(z.object({ error: z.string() })) } },
   }),
   async (c) => {
-    const st = await storeId(c);
+    const st = await resolveStoreFromCtx(c);
     const { code, email } = c.req.valid('query');
     const out = await withStore(st.id, async (tx) => {
       const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
@@ -46,7 +42,7 @@ shopExtra.openapi(
     responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.any()) })) } },
   }),
   async (c) => {
-    const st = await storeId(c);
+    const st = await resolveStoreFromCtx(c);
     const items = await withStore(st.id, async (tx) =>
       tx.select({ title: s.blogPost.title, slug: s.blogPost.slug, excerpt: s.blogPost.excerpt, authorName: s.blogPost.authorName, readingTime: s.blogPost.readingTime, publishDate: s.blogPost.publishDate, tags: s.blogPost.tags })
         .from(s.blogPost).where(eq(s.blogPost.isPublished, true)).orderBy(desc(s.blogPost.publishDate)),
@@ -62,7 +58,7 @@ shopExtra.openapi(
     responses: { 200: { description: 'OK', content: J(z.any()) }, 404: { description: 'Not found', content: J(z.object({ error: z.string() })) } },
   }),
   async (c) => {
-    const st = await storeId(c);
+    const st = await resolveStoreFromCtx(c);
     const { slug } = c.req.valid('param');
     const out = await withStore(st.id, async (tx) => (await tx.select().from(s.blogPost).where(and(eq(s.blogPost.slug, slug), eq(s.blogPost.isPublished, true))).limit(1))[0]);
     if (!out) return c.json({ error: 'post not found' }, 404);
@@ -78,7 +74,7 @@ shopExtra.openapi(
     responses: { 200: { description: 'OK', content: J(z.object({ methods: z.array(z.any()) })) } },
   }),
   async (c) => {
-    const st = await storeId(c);
+    const st = await resolveStoreFromCtx(c);
     const { country, subtotal } = c.req.valid('query');
     const methods = await withStore(st.id, async (tx) => tx.select().from(s.shippingMethod).where(eq(s.shippingMethod.enabled, true)));
     const eligible = methods
@@ -96,7 +92,7 @@ shopExtra.openapi(
     responses: { 200: { description: 'OK', content: J(z.object({ code: z.string(), balance: z.number().int(), currency: z.string(), valid: z.boolean() })) }, 404: { description: 'Not found', content: J(z.object({ error: z.string() })) } },
   }),
   async (c) => {
-    const st = await storeId(c);
+    const st = await resolveStoreFromCtx(c);
     const { code } = c.req.valid('param');
     const gc = await withStore(st.id, async (tx) => {
       const [g] = await tx.select({ code: s.giftCard.code, balance: s.giftCard.balance, currency: s.giftCard.currency, enabled: s.giftCard.enabled, expiresAt: s.giftCard.expiresAt }).from(s.giftCard).where(eq(s.giftCard.code, code)).limit(1);
@@ -116,15 +112,21 @@ shopExtra.openapi(
     responses: { 200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) } },
   }),
   async (c) => {
-    const st = await storeId(c);
+    const st = await resolveStoreFromCtx(c);
     const { email, name } = c.req.valid('json');
-    const [row] = await db.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.id)).limit(1);
+    // Store row read via withStore (the `store` registry table is RLS-exempt, but
+    // routing it through the scoped client keeps shop routes free of the unscoped
+    // DB import — the RLS-bypass seal, ra-003).
+    const row = await withStore(st.id, async (tx) => {
+      const [r] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.id)).limit(1);
+      return r ?? null;
+    });
     const lm = (row?.config as { listmonk?: { url: string; apiUser: string; apiToken: string } } | null)?.listmonk;
     if (lm?.url && lm?.apiToken) {
       try {
         const auth = Buffer.from(`${lm.apiUser}:${lm.apiToken}`).toString('base64');
         await fetch(`${lm.url.replace(/\/$/, '')}/api/subscribers`, { method: 'POST', headers: { authorization: `Basic ${auth}`, 'content-type': 'application/json' }, body: JSON.stringify({ email, name: name || email, status: 'enabled' }) });
-      } catch { /* best-effort */ }
+      } catch (e) { console.error('[newsletter] listmonk error', e); }
     }
     return c.json({ ok: true }, 200);
   },

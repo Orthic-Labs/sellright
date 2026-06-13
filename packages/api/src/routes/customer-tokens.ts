@@ -7,7 +7,8 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { createHash, randomBytes } from 'node:crypto';
 import { and, eq, gt, isNull } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
-import { resolveStore, DEV_DEFAULT_STORE, type StoreCtx } from '../store-context.js';
+import { type StoreCtx } from '../store-context.js';
+import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
 import { hashPassword } from '../auth/password.js';
 import { normalizeEmail } from '../auth/email.js';
@@ -15,11 +16,6 @@ import { sendEmail } from '../email/mailer.js';
 import { passwordReset } from '../email/templates.js';
 import { clientIp, loginRetryAfter, recordLoginFailure } from '../auth/rate-limit.js';
 import { env } from '../env.js';
-
-async function store(c: { req: { header: (k: string) => string | undefined } }): Promise<StoreCtx> {
-  const slug = c.req.header('x-store-slug') ?? DEV_DEFAULT_STORE;
-  return resolveStore(slug);
-}
 
 const hashToken = (t: string) => createHash('sha256').update(t).digest('hex');
 const TTL_HOURS = 2;
@@ -39,7 +35,7 @@ customerTokens.openapi(
     responses: { 200: { description: 'Always OK', content: { 'application/json': { schema: z.object({ ok: z.boolean() }) } } }, 429: { description: 'Rate limited', content: { 'application/json': { schema: z.object({ error: z.string() }) } } } },
   }),
   async (c) => {
-    const st = await store(c);
+    const st = await resolveStoreFromCtx(c);
     const { email: rawEmail } = c.req.valid('json');
     const email = normalizeEmail(rawEmail);
     const ip = clientIp(c);
@@ -69,7 +65,7 @@ customerTokens.openapi(
     responses: { 200: { description: 'OK', content: { 'application/json': { schema: z.object({ ok: z.boolean() }) } } }, 409: { description: 'Invalid/expired/used', content: { 'application/json': { schema: z.object({ error: z.string() }) } } } },
   }),
   async (c) => {
-    const st = await store(c);
+    const st = await resolveStoreFromCtx(c);
     const { token, password } = c.req.valid('json');
     const tokenHash = hashToken(token);
     const ok = await withStore(st.id, async (tx): Promise<boolean> => {
@@ -102,7 +98,7 @@ customerTokens.openapi(
     },
   }),
   async (c) => {
-    const st = await store(c);
+    const st = await resolveStoreFromCtx(c);
     const { token } = c.req.valid('json');
     const tokenHash = hashToken(token);
     const ip = clientIp(c);

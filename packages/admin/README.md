@@ -20,15 +20,38 @@ Standalone — **excluded from the pnpm workspace** (`!packages/admin` in
 React deps cannot disturb the api/shared build. Install with
 `pnpm install --ignore-workspace`.
 
-## Pages
+## Pages (30)
 
 - **Login** — admin email/password, optional TOTP, httpOnly cookie session
 - **Dashboard** — KPIs (revenue, orders, AOV, to-fulfill, customers, low-stock) + recent orders
-- **Orders** — list (status filter, search, paginate) · detail · mark shipped (tracking) · mark delivered · cancel
-- **Products** — list · detail with inline edit of title/description/status and per-variant price / sale price / on-hand stock / active
-- **Customers** — list (orders + lifetime spend) · detail (orders, addresses)
-- **Settings** — store/tax, payment toggles, shipping methods, staff roles,
-  Google sign-in client id, notifications, and 2FA
+- **Orders** — list (status filter, search, paginate)
+- **OrderDetail** — fulfillment, tracking, cancel, refunds
+- **DraftOrder** — create manual orders
+- **ImportTracking** — bulk tracking CSV import
+- **AbandonedCarts** — abandoned cart list
+- **Products** — list
+- **ProductDetail** — inline edit title/description/status; per-variant price/sale price/on-hand/active; featured image upload; gallery add/remove/promote-to-featured (WP8c, b93dae6); per-variant option assignment (option groups + toggle per variant, b93dae6)
+- **ProductCreate** — create new product + initial variant
+- **Collections** — list
+- **CollectionDetail** — smart/manual collection edit
+- **Inventory** — stock levels across variants
+- **Customers** — list (orders + lifetime spend)
+- **CustomerDetail** — orders, addresses, tags
+- **Discounts** — promotions CRUD
+- **Affiliates** — affiliate list
+- **AffiliateDetail** — affiliate detail + settlements
+- **Marketing** — Listmonk newsletter integration
+- **Blog** — blog post list/edit
+- **Reports** — sales, top products, customer write, global search
+- **Activity** — audit log
+- **Returns** — return/RMA list and approval
+- **GiftCards** — gift card list
+- **Locations** — multi-location inventory
+- **Webhooks** — webhook endpoint management
+- **TaxZones** — tax zone configuration
+- **Staff** — staff list, roles, invitations; per-action permission matrix
+- **CurrencyRates** — currency exchange rate management
+- **Settings** — store/tax, payment toggles, shipping methods, Google sign-in client id, notifications, 2FA
 
 A multi-store switcher (top bar) sets the active store; all data is store-scoped
 server-side via RLS.
@@ -49,12 +72,14 @@ dev on `:4300`, setsid+nohup). **Do not use `:4200` — that's the Stunning
 Strangers production store.** `vite preview` has no proxy, so use `dev` for a
 working API connection.
 
-## Known gaps (deferred)
+## Known gaps (as of commit 43ebcbb)
 
-Product **featured-image upload** + **option-group editor** now live on the
-product page; the per-action **permission matrix** ships on `/staff`; and
-screens for returns, gift cards, webhooks, locations, tax zones, and currency
-rates are built. Remaining: a full media-library/gallery manager (only the
-featured image is wired today), per-variant option *assignment* UI, no
-production admin host yet, and no real gateway/payment operations. The admin is
-currently served by Vite behind an SSH tunnel.
+The following are now wired (no longer gaps):
+- **Gallery management** — `ProductDetail` adds/removes/promotes gallery images via `product_asset` (WP8c, commit b93dae6).
+- **Per-variant option assignment** — `OptionsEditor` in `ProductDetail` toggles options per variant via `PUT /variants/{variantId}/options` (commit b93dae6).
+
+Remaining gaps:
+- **Media library** — there is no standalone asset browser/picker; images are uploaded inline on the product page only.
+- **Production admin host** — the admin is currently served by Vite dev server behind an SSH tunnel; no nginx/Cloudflare Access yet.
+- **Real gateway/payment operations** — Stripe scaffolding exists in the API; no payment UI actions in the admin beyond toggling the provider.
+- **Gateway-backed refund UI** — the return-approval flow writes a Settled ledger row but does not call the payment gateway (ra-002).

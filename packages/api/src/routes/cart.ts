@@ -2,18 +2,14 @@ import { randomUUID } from 'node:crypto';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import { withStore, type Tx } from '../db/client.js';
-import { resolveStore, DEV_DEFAULT_STORE, type StoreCtx } from '../store-context.js';
+import { resolveStoreFromCtx } from './store-context.js';
+import { type StoreCtx } from '../store-context.js';
 import * as s from '../db/schema.js';
 import { calculateOrderTotals, type Promotion } from '../money/totals.js';
 import { evaluateCoupon } from '../money/coupon.js';
 import { selectAutomaticPromotion } from '../money/auto-discount.js';
 import { customerToken, resolveCustomer } from '../auth/session.js';
 import { normalizeEmail } from '../auth/email.js';
-
-async function store(c: { req: { header: (k: string) => string | undefined } }): Promise<StoreCtx> {
-  const slug = c.req.header('x-store-slug') ?? DEV_DEFAULT_STORE;
-  return resolveStore(slug);
-}
 
 /** Price selection (rulebook §2): preorder > sale > base. */
 function selectUnitPrice(v: { price: number; salePrice: number | null; isPreOrder: boolean; preOrderPrice: number | null }): number {
@@ -152,7 +148,7 @@ cart.openapi(
     },
   }),
   async (c) => {
-    const st = await store(c);
+    const st = await resolveStoreFromCtx(c);
     const { items, shipping, couponCode } = c.req.valid('json');
     const token = customerToken(c);
     const result = await withStore(st.id, (tx) => priceCart(tx, st, items, { couponCode, shipping, token }));
@@ -221,7 +217,7 @@ cart.openapi(
     responses: { 200: { description: 'Cart', content: { 'application/json': { schema: CartOut } } } },
   }),
   async (c) => {
-    const st = await store(c);
+    const st = await resolveStoreFromCtx(c);
     const body = c.req.valid('json');
     const authTok = customerToken(c);
     const out = await withStore(st.id, async (tx) => {
@@ -247,7 +243,7 @@ cart.openapi(
     responses: { 200: { description: 'Cart', content: { 'application/json': { schema: CartOut } } }, 404: { description: 'Not found', content: { 'application/json': { schema: z.object({ error: z.string() }) } } } },
   }),
   async (c) => {
-    const st = await store(c);
+    const st = await resolveStoreFromCtx(c);
     const { token } = c.req.valid('param');
     const { couponCode } = c.req.valid('query');
     const authTok = customerToken(c);
@@ -269,7 +265,7 @@ cart.openapi(
     responses: { 200: { description: 'Cart', content: { 'application/json': { schema: CartOut } } }, 404: { description: 'Not found', content: { 'application/json': { schema: z.object({ error: z.string() }) } } } },
   }),
   async (c) => {
-    const st = await store(c);
+    const st = await resolveStoreFromCtx(c);
     const { token } = c.req.valid('param');
     const body = c.req.valid('json');
     const authTok = customerToken(c);
@@ -293,7 +289,7 @@ cart.openapi(
     responses: { 200: { description: 'Cart', content: { 'application/json': { schema: CartOut } } }, 404: { description: 'Not found', content: { 'application/json': { schema: z.object({ error: z.string() }) } } } },
   }),
   async (c) => {
-    const st = await store(c);
+    const st = await resolveStoreFromCtx(c);
     const { token } = c.req.valid('param');
     const { email } = c.req.valid('json');
     const out = await withStore(st.id, async (tx) => {
@@ -322,7 +318,7 @@ cart.openapi(
     responses: { 200: { description: 'Cart', content: { 'application/json': { schema: CartOut } } }, 401: { description: 'Auth required', content: { 'application/json': { schema: z.object({ error: z.string() }) } } }, 404: { description: 'Not found', content: { 'application/json': { schema: z.object({ error: z.string() }) } } } },
   }),
   async (c) => {
-    const st = await store(c);
+    const st = await resolveStoreFromCtx(c);
     const { token } = c.req.valid('param');
     const authTok = customerToken(c);
     const res = await withStore(st.id, async (tx) => {

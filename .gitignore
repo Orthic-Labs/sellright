@@ -9,3 +9,13 @@ dist/
 /data/
 /.cache/
 .commandcode/
+
+# audit reports (local baseline diffing)
+.audit/
+
+# editor/tool backup artifacts — never commit these
+*.bak
+*.backup
+*.old
+*.orig
+*.tmp

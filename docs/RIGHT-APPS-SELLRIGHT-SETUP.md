@@ -24,6 +24,18 @@ STRIPE_WEBHOOK_SECRET=whsec_...
 STOREFRONT_URL=https://viewright.cc
 ```
 
+Host the Right Apps admin at:
+
+```txt
+https://admin.spoares.com
+```
+
+That is cleaner than `spoares.com/admin` for the current admin SPA because the
+admin frontend uses root-relative API calls like `/v1/admin/login`. With a
+dedicated subdomain, nginx can serve the admin build at `/` and proxy `/v1/*`
+to the Right Apps API without path rewriting. `spoares.com/admin` is possible
+later, but it needs a SPA base path plus API rewrite rules.
+
 Each Cloudflare Pages storefront build sets:
 
 ```env

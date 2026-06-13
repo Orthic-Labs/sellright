@@ -22,7 +22,7 @@ Research backing: `docs/research/ecom-backend-research-2026-06.md` §2 ("composa
 
 - **Today (Vendure ×4):** 4 DBs, 4 admin processes, 4 store processes on the Hetzner box; every Vendure major upgrade ×4; plugin/custom-field maintenance per brand; GraphQL codegen churn in each storefront.
 - **Target (SellRight):** 1 API process, 1 admin, 1 Postgres cluster (5433), N storefronts on static manifests + one REST contract. Marginal cost of brand #5 ≈ one `store` row + storefront skin.
-- **Build cost already sunk:** schema (37 tables), RLS model, money core, import parity, admin SPA (~24 pages) — the remaining spend is gateway/email/ops glue (audit §3 Tier 1), not architecture.
+- **Build cost already sunk:** schema (52 tables), RLS model, money core, import parity, admin SPA (~30 pages) — the remaining spend is storefront rewire, live gateway e2e, and ops floor, not architecture.
 - **Counter-cost to keep honest:** SellRight's maintenance has no community. Every tax rule, carrier API, and payment quirk is in-house forever. The TCO win holds only while the commerce surface stays as narrow as the four brands' actual needs. Scope discipline IS the TCO argument.
 
 ## 3. Risk register

@@ -61,7 +61,12 @@ const execute = async <R, V = Record<string, any>>(
 				: await executeRequest(requestOptions, 'http://localhost:3100/shop-api');
 
 	if (isBrowser && response.token) {
-		setCookie(AUTH_TOKEN, response.token, 365);
+		// SECURITY (ra-004 partial): Use a short 1-day expiry instead of 365 days so
+		// anonymous/session tokens don't persist indefinitely in the JS-readable cookie.
+		// Authenticated customer tokens are refreshed on every request that returns a
+		// new token, so the effective session length is unaffected for active users.
+		// Full fix (httpOnly server-proxy) is deferred — see findings_deferred ra-004.
+		setCookie(AUTH_TOKEN, response.token, 1);
 	}
 
 	return response.data;

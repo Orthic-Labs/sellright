@@ -1,7 +1,8 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { eq } from 'drizzle-orm';
-import { withStore, unsafeUnscopedDb as db } from '../db/client.js';
-import { resolveStore, DEV_DEFAULT_STORE, type StoreCtx } from '../store-context.js';
+import { withStore } from '../db/client.js';
+import { resolveStoreFromCtx } from './store-context.js';
+import { type StoreCtx } from '../store-context.js';
 import * as s from '../db/schema.js';
 import { hashPassword, verifyPassword } from '../auth/password.js';
 import { customerToken, createSession, deleteSession, resolveCustomer } from '../auth/session.js';
@@ -17,15 +18,14 @@ const hashToken = (t: string) => createHash('sha256').update(t).digest('hex');
 const EMAIL_VERIFY_TTL_HOURS = 48;
 const emailStoreCtx = (st: StoreCtx) => ({ name: st.name, currency: st.currency, storefrontUrl: env.STOREFRONT_URL, fromEmail: env.SMTP_FROM });
 
-async function store(c: { req: { header: (k: string) => string | undefined } }): Promise<StoreCtx> {
-  const slug = c.req.header('x-store-slug') ?? DEV_DEFAULT_STORE;
-  return resolveStore(slug);
-}
-
-/** The store's Google OAuth client id (store config or env GOOGLE_CLIENT_ID). */
+/** The store's Google OAuth client id (store config or env GOOGLE_CLIENT_ID).
+ *  Reads the store row through withStore so it is RLS-scoped to the resolved store. */
 async function googleClientId(storeId: string): Promise<string | null> {
-  const [row] = await db.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, storeId)).limit(1);
-  return (row?.config as { googleClientId?: string } | null)?.googleClientId ?? process.env.GOOGLE_CLIENT_ID ?? null;
+  const config = await withStore(storeId, async (tx) => {
+    const [row] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, storeId)).limit(1);
+    return row?.config ?? null;
+  });
+  return (config as { googleClientId?: string } | null)?.googleClientId ?? env.GOOGLE_CLIENT_ID ?? null;
 }
 
 /** Verify a Google Identity Services ID token via Google's tokeninfo endpoint —
@@ -61,7 +61,7 @@ auth.openapi(
     },
   }),
   async (c) => {
-    const st = await store(c);
+    const st = await resolveStoreFromCtx(c);
     const { email: rawEmail, password, firstName, lastName } = c.req.valid('json');
     const email = normalizeEmail(rawEmail);
     // Rate-limit: register is a credential-stuffing / spam vector. Per-IP+email
@@ -108,7 +108,7 @@ auth.openapi(
     },
   }),
   async (c) => {
-    const st = await store(c);
+    const st = await resolveStoreFromCtx(c);
     const { email: rawEmail, password } = c.req.valid('json');
     const email = normalizeEmail(rawEmail);
     const ip = clientIp(c);
@@ -145,7 +145,7 @@ auth.openapi(
     },
   }),
   async (c) => {
-    const st = await store(c);
+    const st = await resolveStoreFromCtx(c);
     const clientId = await googleClientId(st.id);
     if (!clientId) return c.json({ error: 'Google sign-in is not configured for this store' }, 409);
     const { credential } = c.req.valid('json');
@@ -184,7 +184,7 @@ auth.openapi(
     },
   }),
   async (c) => {
-    const st = await store(c);
+    const st = await resolveStoreFromCtx(c);
     const token = customerToken(c);
     if (!token) return c.json({ error: 'not authenticated' }, 401);
     const cust = await withStore(st.id, (tx) => resolveCustomer(tx, token));
@@ -207,7 +207,7 @@ auth.openapi(
     },
   }),
   async (c) => {
-    const st = await store(c);
+    const st = await resolveStoreFromCtx(c);
     const ip = clientIp(c);
     const retry = loginRetryAfter(ip, `checkemail:${ip}`);
     if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
@@ -230,7 +230,7 @@ auth.openapi(
     responses: { 200: { description: 'OK', content: { 'application/json': { schema: z.object({ ok: z.boolean() }) } } }, 403: { description: 'CSRF', content: { 'application/json': { schema: z.object({ error: z.string() }) } } } },
   }),
   async (c) => {
-    const st = await store(c);
+    const st = await resolveStoreFromCtx(c);
     if (!customerCsrfValid(c)) return c.json({ error: 'invalid CSRF token' }, 403);
     const token = customerToken(c);
     if (token) await withStore(st.id, (tx) => deleteSession(tx, token));

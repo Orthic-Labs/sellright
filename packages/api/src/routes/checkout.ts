@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, count, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
-import { resolveStore, DEV_DEFAULT_STORE, type StoreCtx } from '../store-context.js';
+import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
 import { calculateOrderTotals, type Promotion } from '../money/totals.js';
 import { evaluateCoupon } from '../money/coupon.js';
@@ -17,12 +17,6 @@ import { isMethodEligible, shippingRate, ShippingUnavailableError } from '../shi
 import { sendOrderConfirmation } from '../email/dispatch.js';
 import { clientIp, loginRetryAfter } from '../auth/rate-limit.js';
 import { issueLicensesForPaidOrder } from '../licensing/issue.js';
-
-async function store(c: { req: { header: (k: string) => string | undefined } }): Promise<StoreCtx> {
-  const slug = c.req.header('x-store-slug') ?? DEV_DEFAULT_STORE;
-  return resolveStore(slug);
-}
-
 
 function selectUnitPrice(v: { price: number; salePrice: number | null; isPreOrder: boolean; preOrderPrice: number | null }): number {
   if (v.isPreOrder && v.preOrderPrice != null) return v.preOrderPrice;
@@ -98,7 +92,7 @@ checkout.openapi(
     },
   }),
   async (c) => {
-    const st = await store(c);
+    const st = await resolveStoreFromCtx(c);
     const body = c.req.valid('json');
     const idemKey = c.req.header('idempotency-key') || null;
     const token = customerToken(c);

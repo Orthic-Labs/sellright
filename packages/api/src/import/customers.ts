@@ -12,16 +12,17 @@ import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { pool, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
+import { env } from '../env.js';
 import { DD_STORE_ID, ensureDdStore, chunk, parseDate, parseJson, parseStrArray } from './store.js';
 
-const SOURCE_URL = process.env.SOURCE_DATABASE_URL;
+const SOURCE_URL = env.SOURCE_DATABASE_URL;
 if (!SOURCE_URL) throw new Error('SOURCE_DATABASE_URL is required (the damned_vendure clone)');
 
 // WP9.4: TRUNCATE guard (mirrors catalog.ts) — requires BOTH --force and
 // ALLOW_FORCE_TRUNCATE=1 to override.
-const TARGET_URL = process.env.DATABASE_URL ?? '';
+const TARGET_URL = env.DATABASE_URL;
 const forceFlag = process.argv.includes('--force');
-const forceEnv = process.env.ALLOW_FORCE_TRUNCATE === '1';
+const forceEnv = env.ALLOW_FORCE_TRUNCATE === '1';
 const allowedTarget = /[/_](dev|test)(\b|$|\?)/.test(TARGET_URL);
 if (!allowedTarget && !(forceFlag && forceEnv)) {
   throw new Error(

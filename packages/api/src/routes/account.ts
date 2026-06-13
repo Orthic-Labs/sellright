@@ -1,7 +1,7 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { withStore, type Tx } from '../db/client.js';
-import { resolveStore, DEV_DEFAULT_STORE, type StoreCtx } from '../store-context.js';
+import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
 import { customerToken, resolveCustomer, type SessionCustomer } from '../auth/session.js';
 import { hashPassword, verifyPassword } from '../auth/password.js';
@@ -23,11 +23,6 @@ const Address = z.object({
 });
 const errSchema = z.object({ error: z.string() });
 
-async function store(c: { req: { header: (k: string) => string | undefined } }): Promise<StoreCtx> {
-  const slug = c.req.header('x-store-slug') ?? DEV_DEFAULT_STORE;
-  return resolveStore(slug);
-}
-
 async function me(tx: Tx, token: string | null): Promise<SessionCustomer | null> {
   return token ? resolveCustomer(tx, token) : null;
 }
@@ -44,7 +39,7 @@ account.openapi(
     },
   }),
   async (c) => {
-    const st = await store(c);
+    const st = await resolveStoreFromCtx(c);
     const out = await withStore(st.id, async (tx) => {
       const cust = await me(tx, customerToken(c));
       if (!cust) return null;
@@ -84,7 +79,7 @@ account.openapi(
     },
   }),
   async (c) => {
-    const st = await store(c);
+    const st = await resolveStoreFromCtx(c);
     const { code } = c.req.valid('param');
     const out = await withStore(st.id, async (tx) => {
       const cust = await me(tx, customerToken(c));
@@ -115,7 +110,7 @@ account.openapi(
     },
   }),
   async (c) => {
-    const st = await store(c);
+    const st = await resolveStoreFromCtx(c);
     const out = await withStore(st.id, async (tx) => {
       const cust = await me(tx, customerToken(c));
       if (!cust) return null;
@@ -142,7 +137,7 @@ account.openapi(
     },
   }),
   async (c) => {
-    const st = await store(c);
+    const st = await resolveStoreFromCtx(c);
     const body = c.req.valid('json');
     const out = await withStore(st.id, async (tx) => {
       const cust = await me(tx, customerToken(c));
@@ -171,7 +166,7 @@ account.openapi(
     },
   }),
   async (c) => {
-    const st = await store(c);
+    const st = await resolveStoreFromCtx(c);
     const { currentPassword, newPassword } = c.req.valid('json');
     const out = await withStore(st.id, async (tx): Promise<'unauth' | 'wrong' | 'ok'> => {
       const cust = await me(tx, customerToken(c));
@@ -204,7 +199,7 @@ account.openapi(
     },
   }),
   async (c) => {
-    const st = await store(c);
+    const st = await resolveStoreFromCtx(c);
     const body = c.req.valid('json');
     const out = await withStore(st.id, async (tx) => {
       const cust = await me(tx, customerToken(c));
@@ -235,7 +230,7 @@ account.openapi(
     },
   }),
   async (c) => {
-    const st = await store(c);
+    const st = await resolveStoreFromCtx(c);
     const { id } = c.req.valid('param');
     const body = c.req.valid('json');
     const out = await withStore(st.id, async (tx): Promise<'unauth' | 'notfound' | 'ok'> => {
@@ -269,7 +264,7 @@ account.openapi(
     },
   }),
   async (c) => {
-    const st = await store(c);
+    const st = await resolveStoreFromCtx(c);
     const { id } = c.req.valid('param');
     const out = await withStore(st.id, async (tx): Promise<'unauth' | 'notfound' | 'ok'> => {
       const cust = await me(tx, customerToken(c));
