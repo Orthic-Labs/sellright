@@ -23,8 +23,8 @@ import { csrfValid, customerCsrfValid, getCustomerSessionToken } from './auth/co
 
 /**
  * The API is typed REST: every route declares a zod schema, which generates
- * both the OpenAPI contract (/v1/openapi.json) and the typed `hc` client the
- * Qwik storefront + admin consume. No GraphQL. See docs/BUILD-PLAN-RH-v1.md §4.
+ * both the OpenAPI contract (/v1/openapi.json) and typed clients for consumers.
+ * No GraphQL. See docs/ARCHITECTURE.md.
  */
 export function createApp(): OpenAPIHono {
   const app = new OpenAPIHono();

@@ -27,19 +27,19 @@ export default [
             {
               name: '../db/client.js',
               importNames: ['unsafeUnscopedDb'],
-              message: 'Route handlers must use withStore() — unsafeUnscopedDb bypasses RLS. See WP1.3 in docs/fable/EXECUTION-PLAN.md.',
+              message: 'Route handlers must use withStore() — unsafeUnscopedDb bypasses RLS. See docs/ARCHITECTURE.md.',
             },
             {
               name: '../../db/client.js',
               importNames: ['unsafeUnscopedDb'],
-              message: 'Route handlers must use withStore() — unsafeUnscopedDb bypasses RLS. See WP1.3 in docs/fable/EXECUTION-PLAN.md.',
+              message: 'Route handlers must use withStore() — unsafeUnscopedDb bypasses RLS. See docs/ARCHITECTURE.md.',
             },
           ],
           patterns: [
             {
               group: ['**/db/client'],
               importNames: ['unsafeUnscopedDb'],
-              message: 'Route handlers must use withStore() — unsafeUnscopedDb bypasses RLS. See WP1.3.',
+              message: 'Route handlers must use withStore() — unsafeUnscopedDb bypasses RLS. See docs/ARCHITECTURE.md.',
             },
           ],
         },

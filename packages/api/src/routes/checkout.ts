@@ -248,7 +248,7 @@ checkout.openapi(
         shippingAddress: normalizeAddress(body.shippingAddress), billingAddress: normalizeAddress(body.billingAddress),
         // WP9.5: attach the link provenance to the order metadata. The account
         // order-list endpoint reads this to suppress email_match-linked orders
-        // until the customer verifies the email. See WP9.5 in EXECUTION-PLAN.md.
+        // until the customer verifies the email.
         metadata: linkedVia ? { linked_via: linkedVia } : null,
       });
       await tx.insert(s.orderLine).values(

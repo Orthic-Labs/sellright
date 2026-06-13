@@ -2,7 +2,7 @@
  * SellRight schema. Rules: integer cents for money, UUID PKs, store_id on every
  * store-scoped table (Postgres RLS enforces isolation — see migrations).
  * Column names are snake_case (drizzle `casing: snake_case` in drizzle.config).
- * Commerce rules: docs/SELLRIGHT-ECOMMERCE-RULEBOOK-v1.md.
+ * Commerce rules: docs/FEATURES.md and docs/ARCHITECTURE.md.
  */
 import {
   pgTable,

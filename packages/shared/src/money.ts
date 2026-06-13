@@ -1,7 +1,7 @@
 /**
  * Money is ALWAYS integer minor units (cents). Never floats, never major units
- * inside the system. This is the foundation the money-core (totals/tax/refund)
- * builds on — see docs/BUILD-PLAN-RH-v1.md §3.
+ * inside the system. This is the foundation the money core builds on.
+ * See docs/ARCHITECTURE.md.
  */
 
 /** Branded integer-cents type so a raw number can't be passed where cents are expected. */

@@ -14,8 +14,8 @@ const drizzleOpts = { schema, casing: 'snake_case' } as const;
  * or admin-cross-store reads. Route handlers MUST use withStore().
  *
  * Named `unsafeUnscopedDb` + JSDoc warning so a lint rule (see eslint.config.js
- * `no-restricted-imports`) can block imports from src/routes/. See WP1.3 in
- * docs/fable/EXECUTION-PLAN.md.
+ * `no-restricted-imports`) can block imports from src/routes/. See
+ * docs/ARCHITECTURE.md.
  */
 export const unsafeUnscopedDb = drizzle(pool, drizzleOpts);
 
