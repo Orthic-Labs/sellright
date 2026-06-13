@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Mail, Check, RefreshCw, Send } from 'lucide-react';
+import { Mail, RefreshCw, Send, Users, ListChecks } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../auth';
-import { Loading, ErrorNote, PageHeader, Spinner } from '../components/ui';
+import { Loading, PageHeader, Spinner, Badge, FormSection, Field, InlineAlert, EmptyState } from '../components/ui';
 
 interface ListmonkList { id: number; name: string; subscribers: number; type: string; }
+
+const isUrl = (v: string) => /^https?:\/\/.+/.test(v.trim());
 
 export default function Marketing() {
   const { store } = useAuth();
@@ -14,6 +16,7 @@ export default function Marketing() {
   const { data: cfg, isLoading } = useQuery({ queryKey: cfgKey, queryFn: () => api.get<{ configured: boolean; url: string | null }>('/marketing/config') });
 
   const [form, setForm] = useState({ url: '', apiUser: '', apiToken: '' });
+  const [touched, setTouched] = useState(false);
   const connect = useMutation({
     mutationFn: () => api.patch<{ ok: boolean; lists: number }>('/marketing/config', form),
     onSuccess: () => { qc.invalidateQueries({ queryKey: cfgKey }); qc.invalidateQueries({ queryKey: ['lm-lists', store?.slug] }); },
@@ -31,65 +34,80 @@ export default function Marketing() {
 
   if (isLoading) return <Loading />;
 
+  // Connection status drives the header badge.
+  const status = cfg?.configured ? (lists.error ? 'failed' : 'connected') : (connect.isPending ? 'connecting' : 'not_connected');
+  const urlError = touched && form.url && !isUrl(form.url) ? 'Enter a full URL including https://' : null;
+
   return (
     <>
-      <PageHeader title="Marketing & Email" subtitle="Listmonk — managed right here, no separate login." />
+      <PageHeader title="Marketing & Email" subtitle="Listmonk — managed right here, no separate login." actions={<Badge value={status} />} />
 
       {!cfg?.configured ? (
-        <div className="card p-5 max-w-xl">
-          <div className="flex items-center gap-2 mb-3 text-sm font-semibold"><Mail size={16} className="text-brand" /> Connect Listmonk</div>
-          <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); connect.mutate(); }}>
-            <div><label className="label">Listmonk URL</label><input className="input" value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} placeholder="https://listmonk.example.com" /></div>
-            <div className="grid grid-cols-2 gap-3">
-              <div><label className="label">API user</label><input className="input" value={form.apiUser} onChange={(e) => setForm({ ...form, apiUser: e.target.value })} /></div>
-              <div><label className="label">API token</label><input className="input" type="password" value={form.apiToken} onChange={(e) => setForm({ ...form, apiToken: e.target.value })} /></div>
-            </div>
-            {connect.error && <ErrorNote message={(connect.error as Error).message} />}
-            <button className="btn-primary" disabled={connect.isPending || !form.url}>{connect.isPending ? <Spinner className="text-white" /> : 'Connect & verify'}</button>
-          </form>
+        <div className="max-w-xl space-y-4">
+          <InlineAlert tone="info" title="Connect your Listmonk instance">
+            Once connected, SellRight syncs your customers into Listmonk lists and lets you draft campaigns here. Sending stays in Listmonk for safety.
+          </InlineAlert>
+          <FormSection title="Connect Listmonk"
+            actions={<button className="btn-primary" form="lm-connect" disabled={connect.isPending || !isUrl(form.url) || !form.apiUser || !form.apiToken}>{connect.isPending ? <><Spinner className="text-white" /> Connecting…</> : <><Mail size={15} /> Connect & verify</>}</button>}>
+            <form id="lm-connect" className="space-y-4" onSubmit={(e) => { e.preventDefault(); setTouched(true); if (isUrl(form.url)) connect.mutate(); }}>
+              <Field label="Listmonk URL" htmlFor="lm-url" error={urlError} hint="The base URL of your Listmonk install.">
+                <input id="lm-url" className={`input ${urlError ? 'input-invalid' : ''}`} value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} onBlur={() => setTouched(true)} placeholder="https://listmonk.example.com" />
+              </Field>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="API user" htmlFor="lm-user"><input id="lm-user" className="input" value={form.apiUser} onChange={(e) => setForm({ ...form, apiUser: e.target.value })} /></Field>
+                <Field label="API token" htmlFor="lm-token"><input id="lm-token" className="input" type="password" value={form.apiToken} onChange={(e) => setForm({ ...form, apiToken: e.target.value })} /></Field>
+              </div>
+              {connect.error && <InlineAlert tone="critical" title="Connection failed">{(connect.error as Error).message}</InlineAlert>}
+            </form>
+          </FormSection>
         </div>
       ) : (
         <div className="space-y-5">
-          <div className="card p-4 flex items-center justify-between">
-            <div className="text-sm"><Check size={15} className="inline text-emerald-600 mr-1" /> Connected to <span className="font-mono">{cfg.url}</span></div>
-            <button className="text-sm text-gray-400 hover:text-ink" onClick={() => connect.reset()}>Reconfigure</button>
-          </div>
+          <FormSection title="Connection" description="SellRight is syncing customers to this Listmonk instance."
+            actions={<button className="btn-ghost btn-sm" onClick={() => { connect.reset(); qc.setQueryData(cfgKey, { configured: false, url: null }); }}>Reconfigure</button>}>
+            <div className="flex items-center gap-2 text-sm">
+              <Badge value={status} />
+              <span className="font-mono text-xs text-gray-600">{cfg.url}</span>
+            </div>
+            {lists.error && <InlineAlert tone="critical" title="Can't reach Listmonk">{(lists.error as Error).message}</InlineAlert>}
+          </FormSection>
 
-          <div className="card overflow-hidden">
-            <div className="px-4 py-3 border-b border-gray-100 text-sm font-semibold">Lists</div>
-            {lists.isLoading ? <Loading /> : lists.error ? <ErrorNote message={(lists.error as Error).message} /> : (
-              <table className="w-full">
-                <thead><tr><th className="th">List</th><th className="th text-right">Subscribers</th><th className="th"></th></tr></thead>
+          <div className="panel overflow-hidden">
+            <div className="flex items-center gap-2 px-5 py-4 border-b border-gray-100 text-sm font-semibold"><ListChecks size={16} className="text-gray-400" /> Lists</div>
+            {lists.isLoading ? <Loading /> : lists.error ? null : lists.data && lists.data.lists.length === 0 ? (
+              <EmptyState title="No lists in Listmonk yet" hint="Create a list in Listmonk, then sync customers into it." />
+            ) : (
+              <table className="w-full table-fixed">
+                <thead><tr><th className="th">List</th><th className="th text-right" style={{ width: '18%' }}>Subscribers</th><th className="th text-right" style={{ width: '34%' }}></th></tr></thead>
                 <tbody>
                   {lists.data?.lists.map((l) => (
                     <tr key={l.id} className="border-t border-gray-100">
-                      <td className="td font-medium">{l.name}</td>
-                      <td className="td text-right text-gray-600">{l.subscribers}</td>
+                      <td className="td font-medium truncate">{l.name}</td>
+                      <td className="td text-right text-gray-600 tnum"><Users size={13} className="inline mr-1 text-gray-300" />{l.subscribers}</td>
                       <td className="td text-right space-x-2 whitespace-nowrap">
-                        <button className="btn-ghost py-1.5 px-2 text-xs" disabled={sync.isPending} onClick={() => sync.mutate(l.id)}>{sync.isPending ? <Spinner /> : <><RefreshCw size={13} /> Sync customers</>}</button>
-                        <button className="btn-ghost py-1.5 px-2 text-xs" onClick={() => setCampaign({ name: '', subject: '', listId: l.id, body: '' })}><Send size={13} /> Campaign</button>
+                        <button className="btn-ghost btn-sm" disabled={sync.isPending} onClick={() => sync.mutate(l.id)}>{sync.isPending ? <Spinner /> : <><RefreshCw size={13} /> Sync customers</>}</button>
+                        <button className="btn-ghost btn-sm" onClick={() => setCampaign({ name: '', subject: '', listId: l.id, body: '' })}><Send size={13} /> Campaign</button>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             )}
-            {sync.data && <div className="px-4 py-2 text-xs text-emerald-700 bg-emerald-50">Synced {sync.data.synced} customers.</div>}
+            {sync.data && <div className="px-5 py-2.5 text-xs text-emerald-700 bg-emerald-50">Synced {sync.data.synced} customers.</div>}
+            {sync.error && <div className="px-5 py-2.5 text-xs text-red-700 bg-red-50">{(sync.error as Error).message}</div>}
           </div>
 
           {campaign && (
-            <div className="card p-4 space-y-3 max-w-xl">
-              <div className="text-sm font-semibold">New campaign</div>
-              <div><label className="label">Name</label><input className="input" value={campaign.name} onChange={(e) => setCampaign({ ...campaign, name: e.target.value })} /></div>
-              <div><label className="label">Subject</label><input className="input" value={campaign.subject} onChange={(e) => setCampaign({ ...campaign, subject: e.target.value })} /></div>
-              <div><label className="label">Body (HTML)</label><textarea className="input min-h-[120px]" value={campaign.body} onChange={(e) => setCampaign({ ...campaign, body: e.target.value })} /></div>
-              {createCampaign.error && <ErrorNote message={(createCampaign.error as Error).message} />}
-              <div className="flex gap-2">
-                <button className="btn-primary" disabled={createCampaign.isPending || !campaign.name || !campaign.subject} onClick={() => createCampaign.mutate()}>{createCampaign.isPending ? <Spinner className="text-white" /> : 'Create draft in Listmonk'}</button>
+            <FormSection title="New campaign" description="Creates a draft in Listmonk — review and send from there."
+              actions={<>
                 <button className="btn-ghost" onClick={() => setCampaign(null)}>Cancel</button>
-              </div>
-              <p className="text-xs text-gray-400">Creates the campaign as a draft in Listmonk; review & send from the campaign (send scheduling stays in Listmonk for safety).</p>
-            </div>
+                <button className="btn-primary" disabled={createCampaign.isPending || !campaign.name || !campaign.subject} onClick={() => createCampaign.mutate()}>{createCampaign.isPending ? <Spinner className="text-white" /> : 'Create draft'}</button>
+              </>}>
+              {createCampaign.error && <InlineAlert tone="critical">{(createCampaign.error as Error).message}</InlineAlert>}
+              <Field label="Name" htmlFor="c-name"><input id="c-name" className="input" value={campaign.name} onChange={(e) => setCampaign({ ...campaign, name: e.target.value })} /></Field>
+              <Field label="Subject" htmlFor="c-subj"><input id="c-subj" className="input" value={campaign.subject} onChange={(e) => setCampaign({ ...campaign, subject: e.target.value })} /></Field>
+              <Field label="Body (HTML)" htmlFor="c-body"><textarea id="c-body" className="input min-h-[120px]" value={campaign.body} onChange={(e) => setCampaign({ ...campaign, body: e.target.value })} /></Field>
+            </FormSection>
           )}
         </div>
       )}

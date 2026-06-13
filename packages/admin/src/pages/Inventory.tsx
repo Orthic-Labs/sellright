@@ -1,21 +1,35 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
-import { Search, Check } from 'lucide-react';
+import { Check, Boxes } from 'lucide-react';
 import { api, type Page, type InventoryRow } from '../api';
 import { useAuth } from '../auth';
-import { Loading, ErrorNote, PageHeader, EmptyState, Pagination, Spinner } from '../components/ui';
+import {
+  PageHeader, Pagination, Spinner, Tabs, ResourceToolbar, SearchInput, ResourceTable,
+  Badge, EmptyStateActionPanel, type Column, type TabDef,
+} from '../components/ui';
+
+const VIEWS: TabDef[] = [
+  { key: 'all', label: 'All stock' },
+  { key: 'low', label: 'Low stock' },
+];
+
+function stockState(available: number): string {
+  if (available <= 0) return 'out_of_stock';
+  if (available <= 3) return 'low_stock';
+  return 'in_stock';
+}
 
 export default function Inventory() {
   const { store } = useAuth();
   const qc = useQueryClient();
   const [q, setQ] = useState('');
-  const [low, setLow] = useState(false);
+  const [view, setView] = useState('all');
   const [page, setPage] = useState(1);
   const [edits, setEdits] = useState<Record<string, string>>({});
+  const low = view === 'low';
 
-  const key = ['inventory', store?.slug, q, low, page];
-  const { data, isLoading, error, isFetching } = useQuery({
-    queryKey: key,
+  const { data, isLoading, error, isFetching, refetch } = useQuery({
+    queryKey: ['inventory', store?.slug, q, low, page],
     queryFn: () => api.get<Page<InventoryRow>>(`/inventory?${new URLSearchParams({ q, lowStock: low ? '1' : '', page: String(page), pageSize: '50' })}`),
     placeholderData: keepPreviousData,
   });
@@ -24,49 +38,50 @@ export default function Inventory() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['inventory', store?.slug] }),
   });
 
+  const columns: Column<InventoryRow>[] = [
+    { key: 'variant', header: 'Variant', render: (r) => (
+      <div className="min-w-0"><div className="font-medium truncate">{r.name}</div><div className="text-xs text-gray-400 truncate">{r.productName}</div></div>
+    )},
+    { key: 'sku', header: 'SKU', width: '16%', render: (r) => <span className="font-mono text-xs text-gray-500">{r.sku}</span> },
+    { key: 'status', header: 'Status', align: 'center', width: '12%', render: (r) => <Badge value={stockState(r.available)} /> },
+    { key: 'allocated', header: 'Committed', align: 'center', width: '11%', render: (r) => <span className="tnum text-gray-500">{r.allocated}</span> },
+    { key: 'available', header: 'Available', align: 'center', width: '11%', render: (r) => <span className={`tnum ${r.available <= 3 ? 'text-amber-600 font-medium' : 'text-gray-700'}`}>{r.available}</span> },
+    { key: 'onhand', header: 'On hand', align: 'center', width: '16%', render: (r) => {
+      const editing = edits[r.variantId];
+      const dirty = editing !== undefined && Number(editing) !== r.onHand;
+      return (
+        <div className="flex items-center justify-center gap-2">
+          <input className="input w-20 text-center tnum py-1.5" type="number" min={0} aria-label={`On hand for ${r.sku}`} value={editing ?? String(r.onHand)} onChange={(e) => setEdits((m) => ({ ...m, [r.variantId]: e.target.value }))} />
+          {dirty && <button className="btn-primary btn-sm" aria-label="Save stock" disabled={save.isPending} onClick={() => save.mutate({ variantId: r.variantId, onHand: Number(editing) })}>{save.isPending ? <Spinner className="text-white" /> : <Check size={15} />}</button>}
+        </div>
+      );
+    }},
+  ];
+
   return (
     <>
-      <PageHeader title="Inventory" subtitle={data ? `${data.total} variants` : undefined} actions={
-        <div className="flex items-center gap-2">
-          <button onClick={() => { setLow((v) => !v); setPage(1); }} className={`px-3 py-2 text-sm rounded-lg border ${low ? 'bg-brand-light text-brand border-brand/30 font-medium' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}>Low stock</button>
-          <div className="relative">
-            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input className="input pl-9 w-56" placeholder="Search sku or name" value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} />
-          </div>
-        </div>
-      } />
+      <PageHeader title="Inventory" subtitle={data ? `${data.total} variants` : undefined} />
 
-      <div className="card overflow-hidden">
-        {isLoading ? <Loading /> : error ? <ErrorNote message={(error as Error).message} /> : !data || data.items.length === 0 ? (
-          <EmptyState title="No variants" />
-        ) : (
-          <table className="w-full">
-            <thead><tr>
-              <th className="th">Variant</th><th className="th">SKU</th><th className="th text-center">Allocated</th><th className="th text-center">Available</th><th className="th text-center">On hand</th>
-            </tr></thead>
-            <tbody className={isFetching ? 'opacity-60' : ''}>
-              {data.items.map((r) => {
-                const editing = edits[r.variantId];
-                const dirty = editing !== undefined && Number(editing) !== r.onHand;
-                return (
-                  <tr key={r.variantId} className="border-t border-gray-100">
-                    <td className="td"><div className="font-medium">{r.name}</div><div className="text-xs text-gray-400">{r.productName}</div></td>
-                    <td className="td font-mono text-xs text-gray-500">{r.sku}</td>
-                    <td className="td text-center text-gray-500">{r.allocated}</td>
-                    <td className="td text-center"><span className={r.available <= 3 ? 'text-amber-600 font-medium' : 'text-gray-700'}>{r.available}</span></td>
-                    <td className="td">
-                      <div className="flex items-center justify-center gap-2">
-                        <input className="input w-20 text-center" type="number" min={0} value={editing ?? String(r.onHand)} onChange={(e) => setEdits((m) => ({ ...m, [r.variantId]: e.target.value }))} />
-                        {dirty && <button className="btn-primary py-1.5 px-2" disabled={save.isPending} onClick={() => save.mutate({ variantId: r.variantId, onHand: Number(editing) })}>{save.isPending ? <Spinner className="text-white" /> : <Check size={15} />}</button>}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </div>
+      <ResourceToolbar
+        left={<Tabs tabs={VIEWS} value={view} onChange={(k) => { setView(k); setPage(1); }} />}
+        right={<SearchInput value={q} onChange={(v) => { setQ(v); setPage(1); }} placeholder="Search SKU or name" className="w-56" />}
+      />
+
+      <ResourceTable
+        columns={columns}
+        rows={data?.items}
+        rowKey={(r) => r.variantId}
+        loading={isLoading}
+        isFetching={isFetching}
+        error={error ? (error as Error).message : null}
+        onRetry={() => refetch()}
+        empty={low
+          ? <EmptyStateActionPanel icon={<Boxes size={22} />} title="Nothing is low on stock" description="No variants are at or below the low-stock threshold. That's a good thing." actions={[{ label: 'Show all stock', variant: 'ghost', onClick: () => { setView('all'); setPage(1); } }]} />
+          : q
+            ? <EmptyStateActionPanel icon={<Boxes size={22} />} title="No matching variants" description="No variants match your search." actions={[{ label: 'Clear search', variant: 'ghost', onClick: () => { setQ(''); setPage(1); } }]} />
+            : <EmptyStateActionPanel icon={<Boxes size={22} />} title="No stock-tracked variants" description="Variants with stock tracking will appear here once you add products." actions={[{ label: 'Add product', to: '/products/new' }]} />}
+      />
+
       {data && <Pagination page={page} total={data.total} pageSize={data.pageSize} onPage={setPage} />}
     </>
   );

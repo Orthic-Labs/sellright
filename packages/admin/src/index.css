@@ -4,18 +4,46 @@
 @tailwind utilities;
 
 html, body, #root { height: 100%; }
-body { @apply bg-[#f1f1f1] text-ink antialiased; }
+body { @apply bg-canvas text-ink antialiased; }
 
-/* Shopify-ish surface tokens */
+/* Keyboard users get a clear, consistent focus ring everywhere. Mouse users don't. */
+@layer base {
+  :focus-visible { @apply outline-none ring-2 ring-brand/40 ring-offset-1 ring-offset-white rounded; }
+  /* Money, counts, and KPIs read as columns — tabular figures keep digits aligned. */
+  .tnum { font-variant-numeric: tabular-nums; }
+}
+
+/* Surface tokens + interactive primitives. */
 @layer components {
   .card { @apply bg-white border border-gray-200/80 rounded-xl shadow-[0_1px_2px_rgba(0,0,0,0.04)]; }
+  .panel { @apply bg-white border border-gray-200/80 rounded-xl; }
+
   .btn { @apply inline-flex items-center justify-center gap-2 rounded-lg text-sm font-medium px-3.5 py-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed; }
   .btn-primary { @apply btn bg-brand text-white hover:bg-brand-hover; }
   .btn-ghost { @apply btn bg-white border border-gray-300 text-ink hover:bg-gray-50; }
   .btn-danger { @apply btn bg-white border border-red-300 text-red-700 hover:bg-red-50; }
-  .input { @apply w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20; }
+  .btn-sm { @apply px-2.5 py-1.5 text-xs; }
+
+  .input { @apply w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none transition-shadow focus:border-brand focus:ring-2 focus:ring-brand/20; }
+  .input-invalid { @apply border-red-400 focus:border-red-500 focus:ring-red-500/20; }
   .label { @apply block text-xs font-medium text-gray-500 mb-1; }
+
+  /* Table primitives — fixed, dense, stable. */
   .th { @apply text-left text-xs font-semibold uppercase tracking-wide text-gray-500 px-4 py-2.5; }
-  .td { @apply px-4 py-3 text-sm border-t border-gray-100; }
-  .row-link { @apply hover:bg-gray-50 cursor-pointer; }
+  .td { @apply px-4 py-3 text-sm border-t border-gray-100 align-middle; }
+  .row-link { @apply hover:bg-gray-50 cursor-pointer transition-colors; }
+
+  /* Menu items inside ActionMenu / switchers. */
+  .menu-item { @apply flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-left text-gray-700 hover:bg-gray-50; }
+  .menu-item-danger { @apply menu-item text-red-700 hover:bg-red-50; }
+}
+
+@layer utilities {
+  /* Shimmer skeleton: a translucent sweep across a neutral block. */
+  .skeleton { @apply relative overflow-hidden bg-gray-100 rounded; }
+  .skeleton::after {
+    content: '';
+    @apply absolute inset-0 -translate-x-full animate-shimmer;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.6), transparent);
+  }
 }

@@ -11,7 +11,7 @@ export default defineConfig({
     port: 4300,
     host: '127.0.0.1',
     proxy: {
-      '/v1': { target: 'http://127.0.0.1:3300', changeOrigin: true },
+      '/v1': { target: 'http://127.0.0.1:3301', changeOrigin: true },
       '/assets': { target: 'https://www.damneddesigns.com', changeOrigin: true, secure: true },
     },
   },

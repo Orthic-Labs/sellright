@@ -24,6 +24,12 @@ async function apiPut<T>(path: string, body: unknown): Promise<T> {
 type Role = 'owner' | 'manager' | 'staff' | 'read_only';
 const ROLES: Role[] = ['owner', 'manager', 'staff', 'read_only'];
 const ROLE_LABELS: Record<Role, string> = { owner: 'Owner', manager: 'Manager', staff: 'Staff', read_only: 'Read-only' };
+const ROLE_DESC: Record<Role, string> = {
+  owner: 'Full access, including billing, staff, and store deletion.',
+  manager: 'Manage products, orders, customers, settings, and staff. No billing.',
+  staff: 'Day-to-day operations. Extra capabilities granted per-action below.',
+  read_only: 'View-only access. Cannot make changes.',
+};
 
 // The full set of per-action permission keys gated by requirePermission() across the API.
 const PERMISSION_ACTIONS: { key: string; label: string; hint: string }[] = [
@@ -360,6 +366,10 @@ export default function StaffPage() {
                   </select>
                 </div>
               </div>
+              {/* Permission preview — show what this role can do before the invite is created. */}
+              <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
+                <span className="font-medium">{ROLE_LABELS[inviteForm.role]}:</span> {ROLE_DESC[inviteForm.role]}
+              </div>
               {sendInvite.error && <ErrorNote message={(sendInvite.error as Error).message} />}
               <div className="flex gap-2">
                 <button className="btn-primary" type="submit" disabled={sendInvite.isPending}>
@@ -429,10 +439,14 @@ export default function StaffPage() {
         </div>
       )}
 
-      {/* ── permission key reference ── */}
-      <div className="card p-5">
-        <h2 className="text-sm font-semibold mb-2">Permission key reference</h2>
-        <p className="text-xs text-gray-500 mb-3">
+      {/* ── permission key reference (secondary — collapsed by default) ── */}
+      <details className="card p-5 group">
+        <summary className="flex cursor-pointer items-center justify-between text-sm font-semibold list-none">
+          Permission key reference
+          <span className="text-xs font-normal text-gray-400 group-open:hidden">Show</span>
+          <span className="text-xs font-normal text-gray-400 hidden group-open:inline">Hide</span>
+        </summary>
+        <p className="text-xs text-gray-500 mt-3 mb-3">
           Owners and managers always have all permissions. The checkboxes above grant a{' '}
           <span className="font-medium">staff</span> or{' '}
           <span className="font-medium">read_only</span> member a specific capability without
@@ -464,7 +478,7 @@ export default function StaffPage() {
             ))}
           </tbody>
         </table>
-      </div>
+      </details>
     </>
   );
 }
