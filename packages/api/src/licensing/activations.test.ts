@@ -101,12 +101,13 @@ async function seedLicense(opts: SeedOpts): Promise<string> {
     `);
   });
 
-  // Return the license id for assertions.
-  const result = await pool.query<{ id: string }>(
-    `SELECT id FROM license WHERE license_key = $1 LIMIT 1`,
-    [licenseKey],
-  );
-  return result.rows[0]!.id;
+  // Read the license id back under the store's RLS context — a context-less
+  // owner query sees 0 rows under FORCE RLS.
+  const id = await withStore(storeId, async (tx) => {
+    const r = await tx.execute(sql`SELECT id FROM license WHERE license_key = ${licenseKey} LIMIT 1`);
+    return (r.rows[0] as { id: string } | undefined)?.id;
+  });
+  return id ?? '';
 }
 
 beforeEach(wipe);
