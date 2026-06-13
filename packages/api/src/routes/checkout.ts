@@ -271,7 +271,10 @@ checkout.openapi(
       let giftCardApplied = 0;
       let paid = false;
       if (body.giftCardCode) {
-        const [gc] = await tx.select().from(s.giftCard).where(eq(s.giftCard.code, body.giftCardCode)).limit(1);
+        // FOR UPDATE: lock the gift-card row so two concurrent checkouts using the
+        // same code can't both read the same balance and double-spend it (the
+        // coupon path above already locks the promotion row the same way).
+        const [gc] = await tx.select().from(s.giftCard).where(eq(s.giftCard.code, body.giftCardCode)).limit(1).for('update');
         if (gc) {
           const appn = applyGiftCard({ balance: gc.balance, enabled: gc.enabled, expiresAt: gc.expiresAt }, totals.grandTotal, new Date());
           if (appn.applicable) {

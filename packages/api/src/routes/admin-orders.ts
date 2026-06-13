@@ -174,7 +174,9 @@ adminOrders.openapi(
     const { code } = c.req.valid('param');
     const body = c.req.valid('json');
     const res = await withStore(st.storeId, async (tx) => {
-      const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
+      // FOR UPDATE: lock the order so two concurrent refund requests can't both
+      // read the same priorRefunded and both pass the balance check (over-refund).
+      const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
       if (!o) return { kind: 'notfound' as const };
       if (o.state !== 'Paid' && o.state !== 'PartiallyRefunded') return { kind: 'badstate' as const, state: o.state };
       const [pay] = await tx.select().from(s.payment).where(and(eq(s.payment.orderId, o.id), eq(s.payment.state, 'Settled'))).orderBy(desc(s.payment.createdAt)).limit(1);
@@ -238,7 +240,9 @@ adminOrders.openapi(
 async function alreadyRefunded(tx: Tx, orderId: string): Promise<number> {
   // Drizzle's typed query builder — no `as any`. `tx` is the withStore() txn
   // handle and exposes the same `select({...}).from(...).where(...)` shape.
-  const [r] = await tx.select({ n: sql<number>`coalesce(sum(${s.refund.amount}),0)::int` }).from(s.refund).where(eq(s.refund.orderId, orderId));
+  // Exclude Failed refunds — a failed gateway reversal returned no money, so it
+  // must not count against the order's refundable balance (over-blocks otherwise).
+  const [r] = await tx.select({ n: sql<number>`coalesce(sum(${s.refund.amount}),0)::int` }).from(s.refund).where(and(eq(s.refund.orderId, orderId), sql`${s.refund.state} <> 'Failed'`));
   return r?.n ?? 0;
 }
 
@@ -284,7 +288,7 @@ adminOrders.openapi(
     const body = c.req.valid('json');
     const reqLines = body.lines as Array<{ orderLineId: string; quantity: number; restock: boolean }>;
     const res = await withStore(st.storeId, async (tx) => {
-      const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
+      const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
       if (!o) return { kind: 'notfound' as const };
       const oLines = await tx.select({ id: s.orderLine.id, quantity: s.orderLine.quantity, refundedQty: s.orderLine.refundedQty }).from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
       const byId = new Map(oLines.map((l) => [l.id, l]));
