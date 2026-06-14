@@ -136,7 +136,6 @@ async function main() {
     const orders = await withStore(old.id, (tx) => tx.select({ id: s.order.id }).from(s.order).limit(1));
     if (orders.length) { console.warn(`[consolidate] SKIP delete ${old.slug} — has orders`); continue; }
     await withStore(old.id, async (tx) => {
-      await tx.delete(s.auditLog).where(eq(s.auditLog.storeId, old.id));
       await tx.delete(s.collectionProduct).where(eq(s.collectionProduct.storeId, old.id));
       await tx.delete(s.collection).where(eq(s.collection.storeId, old.id));
       await tx.delete(s.productVariant).where(eq(s.productVariant.storeId, old.id));
