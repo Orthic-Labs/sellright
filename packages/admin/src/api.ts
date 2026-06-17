@@ -1,3 +1,5 @@
+import { maybeMock } from './qa-mocks.js';
+
 // Thin fetch client for the SellRight admin API. Token + active store live in
 // localStorage; every request carries the bearer token and x-store-slug header.
 
@@ -22,6 +24,18 @@ export class ApiError extends Error {
 }
 
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
+  // QA mock short-circuit — gated by VITE_QA_MOCK + ?qa=1 in qa-mocks.ts.
+  // Mutations always pass through so we don't accidentally let QA mode write
+  // to the real DB. The mock is at the network boundary, NOT inside pages.
+  if (method === 'GET') {
+    const qs = new URLSearchParams(path.includes('?') ? path.split('?').pop() || '' : '');
+    const pathOnly = path.split('?')[0]!;
+    const mock = maybeMock(pathOnly, qs, { method });
+    if (mock) {
+      if (mock.threw) throw new ApiError(500, mock.threw);
+      return mock.data as T;
+    }
+  }
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   if (auth.store) headers['x-store-slug'] = auth.store;
   if (method !== 'GET') { const csrf = readCookie('sr_csrf'); if (csrf) headers['x-csrf-token'] = csrf; }

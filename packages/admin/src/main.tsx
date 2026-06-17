@@ -5,6 +5,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import './index.css';
 import { AuthProvider, useAuth } from './auth';
 import { Loading } from './components/ui';
+import { ToastProvider } from './components/Toast';
+import { CommandPalette } from './components/CommandPalette';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
@@ -43,7 +45,14 @@ function Protected() {
   const { loading, me } = useAuth();
   if (loading) return <div className="h-full grid place-items-center"><Loading label="Starting up" /></div>;
   if (!me) return <Navigate to="/login" replace />;
-  return <Layout />;
+  return (
+    <>
+      <Layout />
+      {/* Global command palette — mounted outside Layout so it overlays
+          everything and uses the same router context. */}
+      <CommandPalette />
+    </>
+  );
 }
 
 function App() {
@@ -91,7 +100,9 @@ createRoot(document.getElementById('root')!).render(
     <QueryClientProvider client={qc}>
       <AuthProvider>
         <BrowserRouter>
-          <App />
+          <ToastProvider>
+            <App />
+          </ToastProvider>
         </BrowserRouter>
       </AuthProvider>
     </QueryClientProvider>

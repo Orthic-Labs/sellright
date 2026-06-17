@@ -4,8 +4,9 @@ import { useParams, Link } from 'react-router-dom';
 import { ArrowLeft, Truck, CheckCircle2, XCircle } from 'lucide-react';
 import { api, type OrderDetail } from '../api';
 import { useAuth } from '../auth';
+import { useToast } from '../components/Toast';
 import { money, dateTime } from '../lib/format';
-import { Badge, Loading, ErrorNote, Spinner } from '../components/ui';
+import { PageHeader, StatusBadge, FormSection, InlineAlert, ErrorState, Loading, Field, Spinner } from '../components/ui';
 
 function addr(a: Record<string, unknown> | null): string[] {
   if (!a) return [];
@@ -19,10 +20,17 @@ function addr(a: Record<string, unknown> | null): string[] {
   ].filter(Boolean);
 }
 
+function getErrorMessage(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === 'string') return e;
+  return 'An unexpected error occurred';
+}
+
 export default function OrderDetailPage() {
   const { code = '' } = useParams();
   const { store } = useAuth();
   const qc = useQueryClient();
+  const toast = useToast();
   const [tracking, setTracking] = useState('');
   const [carrier, setCarrier] = useState('');
 
@@ -35,21 +43,32 @@ export default function OrderDetailPage() {
   const fulfill = useMutation({
     mutationFn: (body: { state: 'Shipped' | 'Delivered'; trackingCode?: string; carrier?: string }) =>
       api.post(`/orders/${encodeURIComponent(code)}/fulfill`, body),
-    onSuccess: invalidate,
+    onSuccess: (_d, body) => { invalidate(); toast.success(body.state === 'Delivered' ? 'Order marked delivered' : 'Order marked shipped'); },
+    onError: (e) => toast.error('Fulfillment failed', getErrorMessage(e)),
   });
   const cancel = useMutation({
     mutationFn: () => api.post(`/orders/${encodeURIComponent(code)}/cancel`, {}),
-    onSuccess: invalidate,
+    onSuccess: () => { invalidate(); toast.success('Order cancelled'); },
+    onError: (e) => toast.error('Cancel failed', getErrorMessage(e)),
   });
   const [refundAmt, setRefundAmt] = useState('');
   const [restock, setRestock] = useState(true);
   const refund = useMutation({
-    mutationFn: () => api.post(`/orders/${encodeURIComponent(code)}/refund`, { amount: refundAmt ? Math.round(parseFloat(refundAmt) * 100) : undefined, restock }),
-    onSuccess: () => { setRefundAmt(''); invalidate(); },
+    mutationFn: () => {
+      let amount: number | undefined;
+      if (refundAmt.trim()) {
+        const parsed = Number(refundAmt);
+        if (!Number.isFinite(parsed) || parsed < 0) throw new Error('Invalid refund amount');
+        amount = Math.round(parsed * 100);
+      }
+      return api.post(`/orders/${encodeURIComponent(code)}/refund`, { amount, restock });
+    },
+    onSuccess: () => { setRefundAmt(''); invalidate(); toast.success('Refund issued'); },
+    onError: (e) => toast.error('Refund failed', getErrorMessage(e)),
   });
 
   if (isLoading) return <Loading />;
-  if (error) return <ErrorNote message={(error as Error).message} />;
+  if (error) return <ErrorState title="Couldn't load this order" message={(error as Error).message} onRetry={invalidate} />;
   if (!o) return null;
 
   const cur = o.currency;
@@ -57,25 +76,22 @@ export default function OrderDetailPage() {
   const canFulfill = o.state === 'Paid' || o.state === 'PartiallyRefunded';
   const canCancel = o.state === 'PendingPayment' || o.state === 'Paid';
   const canRefund = o.state === 'Paid' || o.state === 'PartiallyRefunded';
-  const actionErr = (fulfill.error || cancel.error || refund.error) as Error | null;
 
   return (
     <>
       <Link to="/orders" className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-ink mb-3"><ArrowLeft size={15} /> Orders</Link>
-      <div className="flex items-center gap-3 mb-5">
-        <h1 className="text-xl font-semibold tracking-tight">{o.code}</h1>
-        <Badge value={o.state} />
-        {latestFul && <Badge value={latestFul.state} />}
-        <span className="text-sm text-gray-400 ml-auto">{dateTime(o.placedAt ?? o.createdAt)}</span>
-      </div>
+      <PageHeader
+        title={o.code}
+        subtitle={dateTime(o.placedAt ?? o.createdAt)}
+        actions={<div className="flex items-center gap-2"><StatusBadge value={o.state} />{latestFul && <StatusBadge value={latestFul.state} />}</div>}
+      />
 
-      {actionErr && <div className="mb-4"><ErrorNote message={actionErr.message} /></div>}
+      {(fulfill.error || cancel.error || refund.error) && <div className="mb-4"><InlineAlert tone="critical">{getErrorMessage(fulfill.error || cancel.error || refund.error)}</InlineAlert></div>}
 
       <div className="grid lg:grid-cols-3 gap-5">
         {/* Left: items + actions + timeline */}
         <div className="lg:col-span-2 space-y-5">
-          <div className="card overflow-hidden">
-            <div className="px-4 py-3 border-b border-gray-100 text-sm font-semibold">Items</div>
+          <FormSection title="Items" description={`${o.lines.length} line${o.lines.length === 1 ? '' : 's'} on this order`}>
             <table className="w-full">
               <tbody>
                 {o.lines.map((l, i) => (
@@ -90,7 +106,7 @@ export default function OrderDetailPage() {
                 ))}
               </tbody>
             </table>
-            <div className="border-t border-gray-100 px-4 py-3 space-y-1 text-sm">
+            <div className="space-y-1 text-sm pt-2">
               <Row label="Subtotal" value={money(o.subtotal, cur)} />
               {o.discountTotal > 0 && <Row label="Discount" value={`− ${money(o.discountTotal, cur)}`} />}
               <Row label="Shipping" value={money(o.shippingTotal, cur)} />
@@ -99,18 +115,20 @@ export default function OrderDetailPage() {
                 <span>Total</span><span>{money(o.grandTotal, cur)}</span>
               </div>
             </div>
-          </div>
+          </FormSection>
 
           {/* Fulfillment actions */}
-          <div className="card p-4">
-            <div className="text-sm font-semibold mb-3">Fulfillment</div>
-            {!canFulfill && o.state !== 'PendingPayment' && <p className="text-sm text-gray-500">Order is {o.state.toLowerCase()}; no fulfillment actions.</p>}
-            {o.state === 'PendingPayment' && <p className="text-sm text-amber-600">Awaiting payment before fulfillment.</p>}
-            {canFulfill && (
+          <FormSection
+            title="Fulfillment"
+            description={canFulfill
+              ? 'Mark as shipped when the carrier picks up. Mark as delivered after the package is received.'
+              : o.state === 'PendingPayment' ? 'Order is awaiting payment.' : `Order is ${o.state.toLowerCase()}; no fulfillment actions.`}
+          >
+            {canFulfill ? (
               <div className="space-y-3">
-                <div className="grid grid-cols-2 gap-2">
-                  <div><label className="label">Tracking #</label><input className="input" value={tracking} onChange={(e) => setTracking(e.target.value)} placeholder="optional" /></div>
-                  <div><label className="label">Carrier</label><input className="input" value={carrier} onChange={(e) => setCarrier(e.target.value)} placeholder="optional" /></div>
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="Tracking #"><input className="input" value={tracking} onChange={(e) => setTracking(e.target.value)} placeholder="optional" /></Field>
+                  <Field label="Carrier"><input className="input" value={carrier} onChange={(e) => setCarrier(e.target.value)} placeholder="optional" /></Field>
                 </div>
                 <div className="flex gap-2">
                   <button className="btn-primary" disabled={fulfill.isPending}
@@ -124,18 +142,17 @@ export default function OrderDetailPage() {
                   )}
                 </div>
               </div>
-            )}
+            ) : null}
             {latestFul && (
-              <div className="mt-3 text-xs text-gray-500">
+              <div className="text-xs text-gray-500 pt-2 border-t border-gray-100">
                 {latestFul.state}{latestFul.trackingCode ? ` · ${latestFul.carrier ?? ''} ${latestFul.trackingCode}` : ''} · {dateTime(latestFul.createdAt)}
               </div>
             )}
-          </div>
+          </FormSection>
 
           {/* Timeline */}
           {o.events.length > 0 && (
-            <div className="card p-4">
-              <div className="text-sm font-semibold mb-3">Timeline</div>
+            <FormSection title="Timeline" description="Recent activity for this order">
               <ul className="space-y-2">
                 {o.events.map((e, i) => (
                   <li key={i} className="flex items-start gap-2 text-sm">
@@ -148,14 +165,13 @@ export default function OrderDetailPage() {
                   </li>
                 ))}
               </ul>
-            </div>
+            </FormSection>
           )}
         </div>
 
         {/* Right: customer + payment + danger */}
         <div className="space-y-5">
-          <div className="card p-4">
-            <div className="text-sm font-semibold mb-2">Customer</div>
+          <FormSection title="Customer" description={o.customer ? 'Linked to this store' : 'Guest checkout'}>
             {o.customer ? (
               <Link to={`/customers/${o.customer.id}`} className="text-sm text-brand hover:underline">
                 {[o.customer.firstName, o.customer.lastName].filter(Boolean).join(' ') || o.customer.email}
@@ -163,43 +179,39 @@ export default function OrderDetailPage() {
             ) : <span className="text-sm text-gray-400">Guest</span>}
             {o.customer?.email && <div className="text-sm text-gray-500 mt-0.5">{o.customer.email}</div>}
             {o.customer?.phone && <div className="text-sm text-gray-500">{o.customer.phone}</div>}
-          </div>
+          </FormSection>
 
-          <div className="card p-4">
-            <div className="text-sm font-semibold mb-2">Shipping address</div>
+          <FormSection title="Shipping address">
             {addr(o.shippingAddress).length ? addr(o.shippingAddress).map((l, i) => <div key={i} className="text-sm text-gray-600">{l}</div>) : <span className="text-sm text-gray-400">None</span>}
-          </div>
+          </FormSection>
 
-          <div className="card p-4">
-            <div className="text-sm font-semibold mb-2">Payment</div>
+          <FormSection title="Payment">
             {o.payments.length === 0 ? <span className="text-sm text-gray-400">No payments</span> : o.payments.map((p, i) => (
-              <div key={i} className="flex items-center justify-between text-sm">
+              <div key={i} className="flex items-center justify-between text-sm py-1">
                 <span className="capitalize text-gray-600">{p.method}</span>
-                <span className="flex items-center gap-2"><Badge value={p.state === 'Settled' ? 'Paid' : p.state} /> {money(p.amount, cur)}</span>
+                <span className="flex items-center gap-2"><StatusBadge value={p.state === 'Settled' ? 'Paid' : p.state} /> {money(p.amount, cur)}</span>
               </div>
             ))}
-          </div>
+          </FormSection>
 
           {canRefund && (
-            <div className="card p-4">
-              <div className="text-sm font-semibold mb-2">Refund</div>
-              <div className="flex items-end gap-2">
-                <div className="flex-1"><label className="label">Amount ({cur}) — blank = full remaining</label><input className="input" inputMode="decimal" value={refundAmt} onChange={(e) => setRefundAmt(e.target.value)} placeholder={(o.grandTotal / 100).toFixed(2)} /></div>
-              </div>
-              <label className="flex items-center gap-2 text-sm mt-2"><input type="checkbox" className="h-4 w-4 accent-brand" checked={restock} onChange={(e) => setRestock(e.target.checked)} /> Restock items</label>
-              <button className="btn-danger w-full mt-3" disabled={refund.isPending} onClick={() => { if (confirm('Issue this refund?')) refund.mutate(); }}>
+            <FormSection title="Refund" description="Partial refunds are supported. Restock puts the items back into inventory.">
+              <Field label={`Amount (${cur})`} hint="Blank = full remaining"><input className="input" inputMode="decimal" value={refundAmt} onChange={(e) => setRefundAmt(e.target.value)} placeholder={(o.grandTotal / 100).toFixed(2)} /></Field>
+              <label className="flex items-center gap-2 text-sm"><input type="checkbox" className="h-4 w-4 accent-brand" checked={restock} onChange={(e) => setRestock(e.target.checked)} /> Restock items</label>
+              <div className="pt-2"><button className="btn-danger" disabled={refund.isPending} onClick={() => { if (confirm('Issue this refund?')) refund.mutate(); }}>
                 {refund.isPending ? <Spinner /> : 'Issue refund'}
-              </button>
-            </div>
+              </button></div>
+            </FormSection>
           )}
 
           {canCancel && (
-            <div className="card p-4 border-red-200">
-              <div className="text-sm font-semibold mb-2 text-red-700">Danger zone</div>
-              <button className="btn-danger w-full" disabled={cancel.isPending}
-                onClick={() => { if (confirm(`Cancel order ${o.code}? Stock will be released.`)) cancel.mutate(); }}>
-                {cancel.isPending ? <Spinner /> : <><XCircle size={16} /> Cancel order</>}
-              </button>
+            <div className="border-red-200 [&>section]:border-red-200">
+              <FormSection title="Danger zone" description="Cancelling releases reserved stock. Refund must be issued separately.">
+                <button className="btn-danger" disabled={cancel.isPending}
+                  onClick={() => { if (confirm(`Cancel order ${o.code}? Stock will be released.`)) cancel.mutate(); }}>
+                  {cancel.isPending ? <Spinner /> : <><XCircle size={16} /> Cancel order</>}
+                </button>
+              </FormSection>
             </div>
           )}
         </div>

@@ -380,12 +380,30 @@ adminSettings.openapi(
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireManage(st);
+    // Include `permissions` from admin_user_store so the UI can render the
+    // existing grants without a second round-trip. Unknown keys are kept as-is
+    // (they round-trip through PUT with the same preservation rule).
     const items = await db
-      .select({ adminUserId: s.adminUser.id, email: s.adminUser.email, role: s.adminUserStore.role, createdAt: s.adminUser.createdAt })
+      .select({
+        adminUserId: s.adminUser.id,
+        email: s.adminUser.email,
+        role: s.adminUserStore.role,
+        createdAt: s.adminUser.createdAt,
+        permissions: s.adminUserStore.permissions,
+      })
       .from(s.adminUserStore)
       .innerJoin(s.adminUser, eq(s.adminUser.id, s.adminUserStore.adminUserId))
       .where(eq(s.adminUserStore.storeId, st.storeId));
-    return c.json({ items: items.map((i) => ({ ...i, createdAt: i.createdAt.toISOString(), isYou: i.email === admin.email })) }, 200);
+    return c.json({
+      items: items.map((i) => ({
+        adminUserId: i.adminUserId,
+        email: i.email,
+        role: i.role,
+        createdAt: i.createdAt.toISOString(),
+        permissions: (i.permissions ?? {}) as Record<string, boolean>,
+        isYou: i.email === admin.email,
+      })),
+    }, 200);
   }),
 );
 
@@ -551,19 +569,59 @@ adminSettings.openapi(
 );
 
 // ── per-action staff permissions (P3) ─────────────────────────────────────────
+// Backward-compatible PUT: the UI only knows a fixed allow-list of permission
+// keys, but the column is a free-form jsonb so other keys may already be set
+// (granted by a future feature, or manually by an admin via SQL). We MUST NOT
+// erase those unknown keys when the UI saves a partial update — that was the
+// long-standing bug where opening the editor + saving wiped a `giftcards: true`
+// grant. The merge: start from the stored value, overlay the known UI keys.
+const UI_PERMISSION_KEYS = ['giftcards', 'webhooks'] as const;
+type UiPermissionKey = typeof UI_PERMISSION_KEYS[number];
+
+export function isUiPermissionKey(k: string): k is UiPermissionKey {
+  return (UI_PERMISSION_KEYS as readonly string[]).includes(k);
+}
+
+/** Pure merge helper — extracted so the unit test can exercise the round-trip
+ *  contract without spinning up a real Postgres. Used by the PUT handler. */
+export function mergeStaffPermissions(
+  previous: Record<string, boolean> | null,
+  next: Record<string, boolean>,
+): Record<string, boolean> {
+  const prev = previous ?? {};
+  const out: Record<string, boolean> = {};
+  // Pass through unknown keys untouched.
+  for (const [k, v] of Object.entries(prev)) if (!isUiPermissionKey(k)) out[k] = !!v;
+  // Overlay known UI keys from the new payload. False is the implicit default
+  // for UI keys (not stored) — only true values are persisted.
+  for (const k of UI_PERMISSION_KEYS) if (next[k] === true) out[k] = true;
+  return out;
+}
+
 adminSettings.openapi(
   createRoute({
     method: 'put', path: '/v1/admin/staff/{adminUserId}/permissions', summary: 'Grant per-action permissions to a staff member',
     request: { params: z.object({ adminUserId: z.string() }), body: { content: J(z.object({ permissions: z.record(z.string(), z.boolean()) })) } },
-    responses: { 200: { description: 'OK', content: J(z.object({ adminUserId: z.string() })) }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: { 200: { description: 'OK', content: J(z.object({ adminUserId: z.string(), permissions: z.record(z.string(), z.boolean()) })) }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireManage(st);
     const { adminUserId } = c.req.valid('param');
     const b = c.req.valid('json');
-    const res = await db.update(s.adminUserStore).set({ permissions: b.permissions }).where(and(eq(s.adminUserStore.adminUserId, adminUserId), eq(s.adminUserStore.storeId, st.storeId))).returning({ adminUserId: s.adminUserStore.adminUserId });
-    if (!res.length) throw new HttpError(404, 'staff member not enrolled in this store');
-    return c.json({ adminUserId }, 200);
+    // Reject unknown keys with a clear message so a buggy client can't quietly
+    // write the whole map back. This is the only strictness contract — the
+    // stored row's unknown keys still round-trip unchanged.
+    for (const k of Object.keys(b.permissions)) if (!isUiPermissionKey(k)) throw new HttpError(400, `unknown permission key: ${k}`);
+    // The merge is pure: read the previous value, overlay known UI keys, write
+    // back. A single UPDATE is fine because the merge happens client-side over
+    // the value we just SELECTed — concurrent PUTs to the same member are rare
+    // and the resolution is whichever landed last (acceptable: the UI serializes
+    // edits from the same operator).
+    const [cur] = await db.select({ permissions: s.adminUserStore.permissions }).from(s.adminUserStore).where(and(eq(s.adminUserStore.adminUserId, adminUserId), eq(s.adminUserStore.storeId, st.storeId))).limit(1);
+    if (!cur) throw new HttpError(404, 'staff member not enrolled in this store');
+    const next = mergeStaffPermissions((cur.permissions ?? null) as Record<string, boolean> | null, b.permissions);
+    await db.update(s.adminUserStore).set({ permissions: next }).where(and(eq(s.adminUserStore.adminUserId, adminUserId), eq(s.adminUserStore.storeId, st.storeId)));
+    return c.json({ adminUserId, permissions: next }, 200);
   }),
 );

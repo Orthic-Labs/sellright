@@ -1,9 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { Package, CreditCard, Mail, ArrowRight, Truck, AlertTriangle, Users, CheckCircle2 } from 'lucide-react';
+import { Package, CreditCard, Mail, ArrowRight, Truck, AlertTriangle, Users, CheckCircle2, TrendingUp } from 'lucide-react';
 import { api, type Dashboard } from '../api';
 import { useAuth } from '../auth';
 import { money, dateTime } from '../lib/format';
+import { halfPeriodDelta, sparkHeights, totals, trendDeltaLabel, type TrendSeries } from '../lib/report-deltas';
 import { Badge, Loading, ErrorState, PageHeader, KpiCard, EmptyStateActionPanel } from '../components/ui';
 
 // An operational signal: a count that wants action when it's non-zero.
@@ -25,6 +26,19 @@ function OpCard({ label, count, hint, to, icon, danger }: {
   );
 }
 
+// Compact sparkline — derived from the real /reports/sales series, no fabrication.
+function TrendSpark({ series, pick }: { series: TrendSeries; pick: (p: TrendSeries[number]) => number }) {
+  const heights = sparkHeights(series, pick);
+  const max = Math.max(1, ...heights.map((h) => h));
+  return (
+    <div className="flex items-end gap-0.5 h-12">
+      {heights.map((h, i) => (
+        <div key={i} className="flex-1 bg-brand/70 rounded-t hover:bg-brand transition-colors" style={{ height: `${Math.max(2, (h / max) * 100)}%` }} />
+      ))}
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const { store } = useAuth();
   const { data, isLoading, error, refetch } = useQuery({
@@ -32,11 +46,26 @@ export default function Dashboard() {
     queryFn: () => api.get<Dashboard>('/dashboard'),
   });
 
+  // 30-day trend sits underneath the operational cards. Fails silently if the
+  // reports endpoint errors — the operator KPIs above stay usable.
+  const trend = useQuery({
+    queryKey: ['dash-trend', store?.slug],
+    queryFn: () => api.get<{ totalRevenue: number; totalOrders: number; series: TrendSeries }>(`/reports/sales?days=30`),
+    enabled: !!data && data.orders > 0,
+  });
+
   if (isLoading) return <Loading />;
   if (error) return <div className="card overflow-hidden"><ErrorState message={(error as Error).message} onRetry={() => refetch()} /></div>;
   if (!data) return null;
   const cur = data.store.currency;
   const fresh = data.orders === 0;
+
+  // Trend computation is local — never invent deltas.
+  const series = trend.data?.series ?? [];
+  const t = totals(series);
+  const revDelta = halfPeriodDelta(series, (p) => p.revenue);
+  const ordDelta = halfPeriodDelta(series, (p) => p.orders);
+  const revLabel = trendDeltaLabel(revDelta, totals(series.slice(0, Math.floor(series.length / 2))).revenue, t.revenue);
 
   return (
     <>
@@ -73,6 +102,35 @@ export default function Dashboard() {
             <KpiCard label="Revenue" value={money(data.revenue, cur)} hint={`${data.orders} paid orders · all-time`} />
             <KpiCard label="Paid orders" value={<span className="tnum">{data.orders}</span>} hint="all-time" to="/orders?state=Paid" />
           </div>
+
+          {/* 30-day trend — derived from real /reports/sales series. */}
+          {!trend.isLoading && trend.data && trend.data.series.length >= 4 && (
+            <section className="card overflow-hidden mb-6" aria-label="30-day sales trend">
+              <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+                <h2 className="flex items-center gap-2 text-sm font-semibold"><TrendingUp size={15} className="text-gray-400" /> Last 30 days</h2>
+                <Link to="/reports" className="text-sm text-brand hover:underline">View report</Link>
+              </div>
+              <div className="grid sm:grid-cols-[1fr_auto_auto] gap-4 items-center px-4 py-3">
+                <TrendSpark series={trend.data.series} pick={(p) => p.revenue} />
+                <div className="min-w-[120px]">
+                  <div className="text-xs text-gray-500">Revenue (30d)</div>
+                  <div className="text-lg font-semibold tnum">{money(t.revenue, cur)}</div>
+                </div>
+                <div className="min-w-[140px]">
+                  <div className="text-xs text-gray-500">Orders (30d)</div>
+                  <div className="text-lg font-semibold tnum">{t.orders}</div>
+                </div>
+              </div>
+              <div className="px-4 pb-3 -mt-1 text-xs">
+                <span className={`font-medium ${revLabel.tone === 'positive' ? 'text-emerald-600' : revLabel.tone === 'critical' ? 'text-rose-600' : 'text-gray-500'}`}>{revLabel.text}</span>
+                {ordDelta != null && ordDelta !== 0 && (
+                  <span className="ml-3 text-gray-500">
+                    {ordDelta > 0 ? '▲' : '▼'} {Math.abs(ordDelta)}% orders vs previous period
+                  </span>
+                )}
+              </div>
+            </section>
+          )}
         </>
       )}
 

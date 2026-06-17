@@ -6,19 +6,7 @@ import { api } from '../api';
 import { useAuth } from '../auth';
 import { Loading, ErrorState, PageHeader, KpiCard, EmptyState } from '../components/ui';
 import { money } from '../lib/format';
-
-type Series = { day: string; orders: number; revenue: number }[];
-
-// Period-over-period from the real series: compare the recent half against the
-// prior half (each an equal-length window). Honest — derived, not invented.
-function halfDelta(series: Series, pick: (s: Series[number]) => number): number | null {
-  if (!series || series.length < 4) return null;
-  const mid = Math.floor(series.length / 2);
-  const prev = series.slice(0, mid).reduce((a, s) => a + Number(pick(s)), 0);
-  const cur = series.slice(mid).reduce((a, s) => a + Number(pick(s)), 0);
-  if (prev === 0) return cur === 0 ? 0 : null;
-  return Math.round(((cur - prev) / prev) * 100);
-}
+import { halfPeriodDelta, sparkHeights, type TrendSeries } from '../lib/report-deltas';
 
 export default function Reports() {
   const { store } = useAuth();
@@ -26,14 +14,14 @@ export default function Reports() {
   const cur = store?.currency ?? 'USD';
   const [days, setDays] = useState(30);
 
-  const sales = useQuery({ queryKey: ['rep-sales', store?.slug, days], queryFn: () => api.get<{ totalRevenue: number; totalOrders: number; series: Series }>(`/reports/sales?days=${days}`) });
+  const sales = useQuery({ queryKey: ['rep-sales', store?.slug, days], queryFn: () => api.get<{ totalRevenue: number; totalOrders: number; series: TrendSeries }>(`/reports/sales?days=${days}`) });
   const products = useQuery({ queryKey: ['rep-products', store?.slug, days], queryFn: () => api.get<{ items: { name: string; sku: string; qty: number; revenue: number }[] }>(`/reports/top-products?days=${days}`) });
   const customers = useQuery({ queryKey: ['rep-customers', store?.slug, days], queryFn: () => api.get<{ items: { id: string; email: string; spent: number; orders: number }[] }>(`/reports/top-customers?days=${days}`) });
 
   const series = sales.data?.series ?? [];
-  const maxRev = Math.max(1, ...series.map((s) => Number(s.revenue)));
-  const revDelta = halfDelta(series, (s) => s.revenue);
-  const ordDelta = halfDelta(series, (s) => s.orders);
+  const heights = sparkHeights(series, (s) => s.revenue);
+  const revDelta = halfPeriodDelta(series, (s) => s.revenue);
+  const ordDelta = halfPeriodDelta(series, (s) => s.orders);
   const noData = sales.data && sales.data.totalOrders === 0;
 
   return (
@@ -57,8 +45,8 @@ export default function Reports() {
               <EmptyState title="No orders in this period" hint="Try a longer date range — this store may have orders outside the selected window." />
             ) : (
               <div className="flex items-end gap-0.5 h-28">
-                {series.map((s) => (
-                  <div key={s.day} className="flex-1 bg-brand/80 rounded-t hover:bg-brand transition-colors" style={{ height: `${Math.max(2, (Number(s.revenue) / maxRev) * 100)}%` }} title={`${s.day}: ${money(Number(s.revenue), cur)} (${s.orders})`} />
+                {heights.map((h, i) => (
+                  <div key={i} className="flex-1 bg-brand/80 rounded-t hover:bg-brand transition-colors" style={{ height: `${Math.max(2, h * 100)}%` }} title={`${series[i]?.day ?? ''}: ${money(Number(series[i]?.revenue ?? 0), cur)} (${series[i]?.orders ?? 0})`} />
                 ))}
               </div>
             )}

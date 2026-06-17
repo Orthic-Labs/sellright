@@ -284,6 +284,7 @@ const alignCls = (a?: 'left' | 'center' | 'right') => (a === 'right' ? 'text-rig
 
 export function ResourceTable<T>({
   columns, rows, rowKey, onRowClick, loading, isFetching, error, onRetry, empty, skeletonRows = 8,
+  selection, toolbar,
 }: {
   columns: Column<T>[];
   rows: T[] | undefined;
@@ -295,10 +296,37 @@ export function ResourceTable<T>({
   onRetry?: () => void;
   empty?: ReactNode;
   skeletonRows?: number;
+  /**
+   * Optional row selection. When provided, a checkbox column is rendered and
+   * `onSelectionChange` is called with the new set of selected row keys.
+   * The header checkbox selects/deselects only the rows currently visible —
+   * cross-page selection is intentionally NOT supported in v1 (would require
+   * either an unbounded cache or a server-side operation queue).
+   */
+  selection?: {
+    selectedKeys: ReadonlySet<string>;
+    onToggle: (key: string) => void;
+    onToggleAllVisible: (keys: string[]) => void;
+  };
+  toolbar?: (selectedCount: number) => ReactNode;
 }) {
+  const allChecked = !!selection && !!rows && rows.length > 0 && rows.every((r) => selection.selectedKeys.has(rowKey(r)));
+  const someChecked = !!selection && !!rows && rows.some((r) => selection.selectedKeys.has(rowKey(r)));
+  const headCheckbox = selection ? (
+    <input
+      type="checkbox"
+      aria-label="Select all visible rows"
+      className="h-4 w-4 accent-brand align-middle"
+      checked={allChecked}
+      ref={(el) => { if (el) el.indeterminate = !allChecked && someChecked; }}
+      onChange={() => selection.onToggleAllVisible(rows?.map(rowKey) ?? [])}
+    />
+  ) : null;
+
   const head = (
     <thead>
       <tr>
+        {headCheckbox !== null && <th className="th" style={{ width: '2.25rem' }}>{headCheckbox}</th>}
         {columns.map((c) => (
           <th key={c.key} className={`th ${alignCls(c.align)} ${c.className ?? ''}`} style={c.width ? { width: c.width } : undefined}>{c.header}</th>
         ))}
@@ -318,6 +346,7 @@ export function ResourceTable<T>({
           <tbody>
             {Array.from({ length: skeletonRows }).map((_, i) => (
               <tr key={i}>
+                {headCheckbox !== null && <td className="td"><SkeletonBlock className="h-4 w-4" /></td>}
                 {columns.map((c) => (
                   <td key={c.key} className={`td ${alignCls(c.align)}`}>
                     <SkeletonBlock className={`h-4 ${c.align === 'right' ? 'ml-auto w-12' : c.align === 'center' ? 'mx-auto w-10' : 'w-3/4'}`} />
@@ -335,18 +364,40 @@ export function ResourceTable<T>({
     return <div className="card overflow-hidden">{empty ?? <EmptyState title="Nothing here yet" />}</div>;
   }
 
+  const selectedCount = selection?.selectedKeys.size ?? 0;
   return (
     <div className="card overflow-hidden">
+      {toolbar && selectedCount > 0 && (
+        <div className="flex items-center gap-2 border-b border-gray-100 px-3 py-2 bg-brand-light/40">
+          <span className="text-xs font-medium text-brand">{selectedCount} selected</span>
+          <div className="ml-auto flex items-center gap-2">{toolbar(selectedCount)}</div>
+        </div>
+      )}
       <table className="w-full table-fixed">
         {head}
         <tbody className={isFetching ? 'opacity-60 transition-opacity' : 'transition-opacity'}>
-          {rows.map((row) => (
-            <tr key={rowKey(row)} className={onRowClick ? 'row-link' : ''} onClick={onRowClick ? () => onRowClick(row) : undefined}>
-              {columns.map((c) => (
-                <td key={c.key} className={`td ${alignCls(c.align)} ${c.className ?? ''}`}>{c.render(row)}</td>
-              ))}
-            </tr>
-          ))}
+          {rows.map((row) => {
+            const key = rowKey(row);
+            const isSelected = !!selection?.selectedKeys.has(key);
+            return (
+              <tr key={key} className={`${onRowClick ? 'row-link' : ''} ${isSelected ? 'bg-brand-light/40' : ''}`} onClick={onRowClick ? () => onRowClick(row) : undefined}>
+                {selection && (
+                  <td className="td" onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      aria-label={`Select row ${key}`}
+                      className="h-4 w-4 accent-brand align-middle"
+                      checked={isSelected}
+                      onChange={() => selection.onToggle(key)}
+                    />
+                  </td>
+                )}
+                {columns.map((c) => (
+                  <td key={c.key} className={`td ${alignCls(c.align)} ${c.className ?? ''}`}>{c.render(row)}</td>
+                ))}
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>

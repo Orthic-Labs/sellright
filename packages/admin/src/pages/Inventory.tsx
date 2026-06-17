@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tansta
 import { Check, Boxes } from 'lucide-react';
 import { api, type Page, type InventoryRow } from '../api';
 import { useAuth } from '../auth';
+import { useToast } from '../components/Toast';
 import {
   PageHeader, Pagination, Spinner, Tabs, ResourceToolbar, SearchInput, ResourceTable,
   Badge, EmptyStateActionPanel, type Column, type TabDef,
@@ -22,6 +23,7 @@ function stockState(available: number): string {
 export default function Inventory() {
   const { store } = useAuth();
   const qc = useQueryClient();
+  const toast = useToast();
   const [q, setQ] = useState('');
   const [view, setView] = useState('all');
   const [page, setPage] = useState(1);
@@ -35,7 +37,12 @@ export default function Inventory() {
   });
   const save = useMutation({
     mutationFn: ({ variantId, onHand }: { variantId: string; onHand: number }) => api.patch(`/variants/${variantId}/stock`, { onHand }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['inventory', store?.slug] }),
+    onSuccess: (_d, vars) => {
+      setEdits((m) => { const { [vars.variantId]: _, ...rest } = m; return rest; });
+      qc.invalidateQueries({ queryKey: ['inventory', store?.slug] });
+      toast.success('Stock saved', `On hand set to ${vars.onHand}`);
+    },
+    onError: (e) => toast.error('Stock save failed', (e as Error).message),
   });
 
   const columns: Column<InventoryRow>[] = [

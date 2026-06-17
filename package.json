@@ -6,11 +6,13 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "pnpm -r build",
-    "typecheck": "pnpm -r typecheck",
+    "build": "pnpm -r build && pnpm --dir packages/admin build",
+    "typecheck": "pnpm -r typecheck && pnpm --dir packages/admin typecheck",
     "test": "pnpm --filter @sellright/api test",
-    "verify": "pnpm -r build && pnpm -r typecheck && pnpm --filter @sellright/api test && pnpm --filter @sellright/api db:assert-rls && pnpm --filter @sellright/api assert:shop-isolation",
-    "dev": "pnpm --filter @sellright/api dev"
+    "verify": "pnpm -r build && pnpm -r typecheck && pnpm --dir packages/admin typecheck && pnpm --dir packages/admin build && pnpm --filter @sellright/api test && pnpm --filter @sellright/api db:assert-rls && pnpm --filter @sellright/api assert:shop-isolation",
+    "dev": "pnpm --filter @sellright/api dev",
+    "admin:typecheck": "pnpm --dir packages/admin typecheck",
+    "admin:build": "pnpm --dir packages/admin build"
   },
   "devDependencies": {
     "typescript": "^5.5.4"

@@ -287,6 +287,110 @@ admin.openapi(
   }),
 );
 
+// ── bulk order fulfillment (Phase 4) ──────────────────────────────────────────
+// Per-order outcomes — one bad apple never fails the whole batch. The UI uses
+// the per-row result to render an "X succeeded, Y skipped" panel after the
+// action. The bulk endpoint is a fan-out of POST /orders/{code}/fulfill
+// sharing the same transition rules + audit + shipping notification semantics.
+admin.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/orders/bulk-fulfill', summary: 'Fulfill multiple orders in one batch',
+    request: {
+      body: {
+        content: J(z.object({
+          orders: z.array(z.object({
+            code: z.string().min(1),
+            state: z.enum(['Shipped', 'Delivered']).default('Shipped'),
+            trackingCode: z.string().optional(),
+            carrier: z.string().optional(),
+          })).min(1).max(100),
+        })),
+      },
+    },
+    responses: {
+      200: { description: 'OK', content: J(z.object({
+        results: z.array(z.object({
+          code: z.string(),
+          ok: z.boolean(),
+          fulfillment: z.string().optional(),
+          error: z.string().optional(),
+        })),
+        succeeded: z.number().int(),
+        skipped: z.number().int(),
+      })) },
+      401: { description: 'Unauthorized', ...errBody },
+    },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    requireWrite(st);
+    const { orders } = c.req.valid('json');
+    const results: { code: string; ok: boolean; fulfillment?: string; error?: string }[] = [];
+    // De-duplicate by code within a single request — last write wins, but we
+    // only emit one row to the caller. Keeps the result panel honest.
+    const seen = new Map<string, typeof orders[number]>();
+    for (const o of orders) seen.set(o.code, o);
+    const deduped = [...seen.values()];
+    for (const o of deduped) {
+      const res = await withStore(st.storeId, async (tx): Promise<{ kind: 'ok' | 'notfound' | 'badstate' | 'regress'; state?: string; emailTo?: string | null; trackingCode?: string | null; carrier?: string | null }> => {
+        const [order] = await tx.select().from(s.order).where(eq(s.order.code, o.code)).limit(1);
+        if (!order) return { kind: 'notfound' };
+        if (order.state !== 'Paid' && order.state !== 'PartiallyRefunded') return { kind: 'badstate', state: order.state };
+        const [existing] = await tx.select().from(s.fulfillment).where(eq(s.fulfillment.orderId, order.id)).orderBy(desc(s.fulfillment.createdAt)).limit(1);
+        if (existing && existing.state === 'Delivered' && o.state === 'Shipped') return { kind: 'regress', state: existing.state };
+        if (o.state === 'Delivered' && (!existing || existing.state !== 'Shipped')) return { kind: 'badstate', state: existing?.state ?? 'Unfulfilled' };
+        const advancingToShipped = o.state === 'Shipped' && (!existing || existing.state === 'Pending');
+        if (existing) {
+          await tx.update(s.fulfillment).set({ state: o.state, trackingCode: o.trackingCode ?? existing.trackingCode, carrier: o.carrier ?? existing.carrier, updatedAt: new Date() }).where(eq(s.fulfillment.id, existing.id));
+        } else {
+          await tx.insert(s.fulfillment).values({ storeId: st.storeId, orderId: order.id, state: o.state, trackingCode: o.trackingCode ?? null, carrier: o.carrier ?? null });
+        }
+        if (advancingToShipped) {
+          const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, order.id));
+          for (const l of lines) {
+            const ship = l.quantity - l.fulfilledQty;
+            if (ship <= 0) continue;
+            await tx.update(s.orderLine).set({ fulfilledQty: l.quantity }).where(eq(s.orderLine.id, l.id));
+            if (l.variantId) {
+              await tx.update(s.stock).set({
+                onHand: sql`greatest(${s.stock.onHand} - ${ship}, 0)`,
+                allocated: sql`greatest(${s.stock.allocated} - ${ship}, 0)`,
+              }).where(eq(s.stock.variantId, l.variantId));
+              await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: l.variantId, delta: -ship, reason: 'fulfillment', refOrderId: order.id });
+            }
+          }
+        }
+        await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: order.id, action: 'fulfill', toState: o.state });
+        let emailTo: string | null = null;
+        if (o.state === 'Shipped' && advancingToShipped) {
+          await emitEvent(tx, st.storeId, 'order.shipped', { code: o.code, trackingCode: o.trackingCode ?? null, carrier: o.carrier ?? null });
+          if (order.customerId) {
+            const [cust] = await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, order.customerId)).limit(1);
+            if (cust?.email) emailTo = cust.email;
+          }
+        }
+        return { kind: 'ok', state: o.state, emailTo, trackingCode: o.trackingCode ?? null, carrier: o.carrier ?? null };
+      });
+      if (res.kind === 'ok') {
+        results.push({ code: o.code, ok: true, fulfillment: res.state });
+        if (res.emailTo) {
+          try { await sendShippingNotification({ name: st.name, currency: st.currency }, res.emailTo, { code: o.code, trackingCode: res.trackingCode ?? null, carrier: res.carrier ?? null }); } catch (e) { console.error('[email:shipping] failed', e); }
+        }
+      } else if (res.kind === 'notfound') {
+        results.push({ code: o.code, ok: false, error: 'not found' });
+      } else if (res.kind === 'badstate') {
+        results.push({ code: o.code, ok: false, error: `not fulfillable in state ${res.state}` });
+      } else {
+        results.push({ code: o.code, ok: false, error: `cannot move fulfillment from ${res.state} back to Shipped` });
+      }
+    }
+    const succeeded = results.filter((r) => r.ok).length;
+    const skipped = results.length - succeeded;
+    return c.json({ results, succeeded, skipped }, 200);
+  }),
+);
+
 admin.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/orders/{code}/cancel', summary: 'Cancel order',

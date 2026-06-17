@@ -4,7 +4,8 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Package, Trash2, Plus, X, Upload } from 'lucide-react';
 import { api, assetUrl, uploadAsset, type ProductDetail, type VariantRow } from '../api';
 import { useAuth } from '../auth';
-import { Loading, ErrorNote, Spinner } from '../components/ui';
+import { useToast } from '../components/Toast';
+import { PageHeader, StatusBadge, FormSection, InlineAlert, ErrorState, Loading, Field, Spinner } from '../components/ui';
 
 type Draft = { name: string; status: string; description: string; variants: Record<string, { price: string; salePrice: string; enabled: boolean; onHand: string }> };
 
@@ -23,6 +24,7 @@ export default function ProductDetailPage() {
   const { id = '' } = useParams();
   const { store } = useAuth();
   const qc = useQueryClient();
+  const toast = useToast();
   const cur = store?.currency ?? 'USD';
 
   const { data: p, isLoading, error } = useQuery({
@@ -56,13 +58,14 @@ export default function ProductDetailPage() {
         if (onHand !== v.onHand) await api.patch(`/variants/${v.id}/stock`, { onHand });
       }
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['product', store?.slug, id] }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['product', store?.slug, id] }); toast.success('Product saved'); },
+    onError: (e) => toast.error('Save failed', (e as Error).message),
   });
 
   const nav = useNavigate();
   const invalidate = () => qc.invalidateQueries({ queryKey: ['product', store?.slug, id] });
-  const del = useMutation({ mutationFn: () => api.del(`/products/${id}`), onSuccess: () => nav('/products') });
-  const delVariant = useMutation({ mutationFn: (vid: string) => api.del(`/variants/${vid}`), onSuccess: invalidate });
+  const del = useMutation({ mutationFn: () => api.del(`/products/${id}`), onSuccess: () => { toast.success('Product archived'); nav('/products'); }, onError: (e) => toast.error('Archive failed', (e as Error).message) });
+  const delVariant = useMutation({ mutationFn: (vid: string) => api.del(`/variants/${vid}`), onSuccess: () => { invalidate(); toast.success('Variant deleted'); }, onError: (e) => toast.error('Delete failed', (e as Error).message) });
   const [nv, setNv] = useState<{ sku: string; name: string; price: string; onHand: string } | null>(null);
   const addVariant = useMutation({
     mutationFn: async () => {
@@ -71,7 +74,8 @@ export default function ProductDetailPage() {
       if (!nv.sku.trim() || !nv.name.trim() || Number.isNaN(price) || !Number.isInteger(onHand) || onHand < 0) throw new Error('SKU, name, valid price and stock required');
       await api.post(`/products/${id}/variants`, { sku: nv.sku, name: nv.name, price, onHand });
     },
-    onSuccess: () => { setNv(null); invalidate(); },
+    onSuccess: () => { setNv(null); invalidate(); toast.success('Variant added'); },
+    onError: (e) => toast.error('Add variant failed', (e as Error).message),
   });
 
   // WP8c: featured-image upload — upload the file, then set it as the product's
@@ -84,21 +88,22 @@ export default function ProductDetailPage() {
       const asset = await uploadAsset(file);
       await api.patch(`/products/${id}`, { featuredAssetId: asset.id });
       invalidate();
+      toast.success('Featured image updated');
     } catch (e) { setUploadErr((e as Error).message); }
     finally { setUploading(false); }
   }
-  const removeImage = useMutation({ mutationFn: () => api.patch(`/products/${id}`, { featuredAssetId: null }), onSuccess: invalidate });
+  const removeImage = useMutation({ mutationFn: () => api.patch(`/products/${id}`, { featuredAssetId: null }), onSuccess: () => { invalidate(); toast.success('Featured image removed'); }, onError: (e) => toast.error('Remove failed', (e as Error).message) });
   // WP8c gallery (product_asset): upload → attach, remove, promote-to-featured.
   async function addToGallery(file: File) {
     setUploadErr(null); setUploading(true);
-    try { const a = await uploadAsset(file); await api.post(`/products/${id}/assets`, { assetId: a.id }); invalidate(); }
+    try { const a = await uploadAsset(file); await api.post(`/products/${id}/assets`, { assetId: a.id }); invalidate(); toast.success('Added to gallery'); }
     catch (e) { setUploadErr((e as Error).message); } finally { setUploading(false); }
   }
-  const removeFromGallery = useMutation({ mutationFn: (assetId: string) => api.del(`/products/${id}/assets/${assetId}`), onSuccess: invalidate });
-  const setFeatured = useMutation({ mutationFn: (assetId: string) => api.patch(`/products/${id}`, { featuredAssetId: assetId }), onSuccess: invalidate });
+  const removeFromGallery = useMutation({ mutationFn: (assetId: string) => api.del(`/products/${id}/assets/${assetId}`), onSuccess: () => { invalidate(); toast.success('Removed from gallery'); }, onError: (e) => toast.error('Remove failed', (e as Error).message) });
+  const setFeatured = useMutation({ mutationFn: (assetId: string) => api.patch(`/products/${id}`, { featuredAssetId: assetId }), onSuccess: () => { invalidate(); toast.success('Featured image updated'); }, onError: (e) => toast.error('Update failed', (e as Error).message) });
 
   if (isLoading) return <Loading />;
-  if (error) return <ErrorNote message={(error as Error).message} />;
+  if (error) return <ErrorState title="Couldn't load this product" message={(error as Error).message} onRetry={invalidate} />;
   if (!p || !draft) return null;
 
   const img = assetUrl(p.assetPath);
@@ -109,55 +114,62 @@ export default function ProductDetailPage() {
   return (
     <>
       <Link to="/products" className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-ink mb-3"><ArrowLeft size={15} /> Products</Link>
-      <div className="flex items-center justify-between mb-5 gap-4">
-        <h1 className="text-xl font-semibold tracking-tight">{p.name}</h1>
-        <div className="flex items-center gap-2">
-          <button className="btn-danger" disabled={del.isPending} onClick={() => { if (confirm(`Archive product "${p.name}" and its variants? Order history is preserved.`)) del.mutate(); }}>
-            {del.isPending ? <Spinner /> : <><Trash2 size={15} /> Delete</>}
-          </button>
-          <button className="btn-primary" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>
-            {save.isPending ? <Spinner className="text-white" /> : 'Save changes'}
-          </button>
-        </div>
-      </div>
-      {(save.error || addVariant.error || del.error) && <div className="mb-4"><ErrorNote message={((save.error || addVariant.error || del.error) as Error).message} /></div>}
+      <PageHeader
+        title={p.name}
+        subtitle={`/${p.slug}`}
+        actions={
+          <div className="flex items-center gap-2">
+            <StatusBadge value={p.status} />
+            <button className="btn-danger" disabled={del.isPending || save.isPending} onClick={() => { if (confirm(`Archive product "${p.name}" and its variants? Order history is preserved.`)) del.mutate(); }}>
+              {del.isPending ? <Spinner /> : <><Trash2 size={15} /> Archive</>}
+            </button>
+            <button className="btn-primary" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>
+              {save.isPending ? <Spinner className="text-white" /> : 'Save changes'}
+            </button>
+          </div>
+        }
+      />
+      {(save.error || addVariant.error || del.error || delVariant.error) && (
+        <div className="mb-4"><InlineAlert tone="critical">{((save.error || addVariant.error || del.error || delVariant.error) as Error).message}</InlineAlert></div>
+      )}
 
       <div className="grid lg:grid-cols-3 gap-5">
         <div className="lg:col-span-2 space-y-5">
-          <div className="card p-4 space-y-4">
-            <div><label className="label">Title</label><input className="input" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></div>
-            <div><label className="label">Description</label><textarea className="input min-h-[120px]" value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} /></div>
-          </div>
+          <FormSection title="Basics" description="Title, description, and core metadata shown to customers.">
+            <Field label="Title"><input className="input" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></Field>
+            <Field label="Description" hint="Markdown is not supported. Plain text only."><textarea className="input min-h-[120px]" value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} /></Field>
+          </FormSection>
 
-          <div className="card overflow-hidden">
-            <div className="px-4 py-3 border-b border-gray-100 text-sm font-semibold">Variants & inventory</div>
-            <table className="w-full">
-              <thead><tr>
-                <th className="th">Variant</th><th className="th">Price</th><th className="th">Sale</th><th className="th text-center">On hand</th><th className="th text-center">Active</th><th className="th"></th>
-              </tr></thead>
-              <tbody>
-                {p.variants.map((v: VariantRow) => {
-                  const d = draft.variants[v.id]!;
-                  return (
-                    <tr key={v.id} className="border-t border-gray-100">
-                      <td className="td"><div className="font-medium">{v.name}</div><div className="text-xs text-gray-400">{v.sku}{v.allocated > 0 && ` · ${v.allocated} allocated`}</div></td>
-                      <td className="td"><CurrencyInput value={d.price} onChange={(val) => setV(v.id, { price: val })} cur={cur} /></td>
-                      <td className="td"><CurrencyInput value={d.salePrice} placeholder="—" onChange={(val) => setV(v.id, { salePrice: val })} cur={cur} /></td>
-                      <td className="td"><input className="input w-20 text-center mx-auto" type="number" min={0} value={d.onHand} onChange={(e) => setV(v.id, { onHand: e.target.value })} /></td>
-                      <td className="td text-center"><input type="checkbox" className="h-4 w-4 accent-brand" checked={d.enabled} onChange={(e) => setV(v.id, { enabled: e.target.checked })} /></td>
-                      <td className="td text-right"><button className="text-gray-300 hover:text-red-600" title="Delete variant" onClick={() => { if (confirm(`Delete variant ${v.sku}?`)) delVariant.mutate(v.id); }}><X size={16} /></button></td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-            <div className="border-t border-gray-100 p-3">
+          <FormSection title="Variants & inventory" description="Edit price, sale price, on-hand stock, and active state per variant.">
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead><tr>
+                  <th className="th">Variant</th><th className="th">Price</th><th className="th">Sale</th><th className="th text-center">On hand</th><th className="th text-center">Active</th><th className="th"></th>
+                </tr></thead>
+                <tbody>
+                  {p.variants.map((v: VariantRow) => {
+                    const d = draft.variants[v.id]!;
+                    return (
+                      <tr key={v.id} className="border-t border-gray-100">
+                        <td className="td"><div className="font-medium truncate max-w-[14rem]">{v.name}</div><div className="text-xs text-gray-400 truncate">{v.sku}{v.allocated > 0 && ` · ${v.allocated} allocated`}</div></td>
+                        <td className="td"><CurrencyInput value={d.price} onChange={(val) => setV(v.id, { price: val })} cur={cur} /></td>
+                        <td className="td"><CurrencyInput value={d.salePrice} placeholder="—" onChange={(val) => setV(v.id, { salePrice: val })} cur={cur} /></td>
+                        <td className="td"><input className="input w-20 text-center mx-auto" type="number" min={0} value={d.onHand} onChange={(e) => setV(v.id, { onHand: e.target.value })} /></td>
+                        <td className="td text-center"><input type="checkbox" className="h-4 w-4 accent-brand" checked={d.enabled} onChange={(e) => setV(v.id, { enabled: e.target.checked })} /></td>
+                        <td className="td text-right"><button className="text-gray-300 hover:text-red-600" title="Delete variant" onClick={() => { if (confirm(`Delete variant ${v.sku}?`)) delVariant.mutate(v.id); }}><X size={16} /></button></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div className="border-t border-gray-100 pt-3">
               {nv ? (
                 <div className="flex flex-wrap items-end gap-2">
-                  <div><label className="label">SKU</label><input className="input w-32" value={nv.sku} onChange={(e) => setNv({ ...nv, sku: e.target.value })} /></div>
-                  <div><label className="label">Name</label><input className="input w-32" value={nv.name} onChange={(e) => setNv({ ...nv, name: e.target.value })} placeholder="e.g. Black / M" /></div>
-                  <div><label className="label">Price</label><input className="input w-24" inputMode="decimal" value={nv.price} onChange={(e) => setNv({ ...nv, price: e.target.value })} placeholder="0.00" /></div>
-                  <div><label className="label">On hand</label><input className="input w-20" type="number" min={0} value={nv.onHand} onChange={(e) => setNv({ ...nv, onHand: e.target.value })} /></div>
+                  <Field label="SKU"><input className="input w-32" value={nv.sku} onChange={(e) => setNv({ ...nv, sku: e.target.value })} /></Field>
+                  <Field label="Name"><input className="input w-32" value={nv.name} onChange={(e) => setNv({ ...nv, name: e.target.value })} placeholder="e.g. Black / M" /></Field>
+                  <Field label="Price"><input className="input w-24" inputMode="decimal" value={nv.price} onChange={(e) => setNv({ ...nv, price: e.target.value })} placeholder="0.00" /></Field>
+                  <Field label="On hand"><input className="input w-20" type="number" min={0} value={nv.onHand} onChange={(e) => setNv({ ...nv, onHand: e.target.value })} /></Field>
                   <button className="btn-primary" disabled={addVariant.isPending} onClick={() => addVariant.mutate()}>{addVariant.isPending ? <Spinner className="text-white" /> : 'Add'}</button>
                   <button className="btn-ghost" onClick={() => setNv(null)}>Cancel</button>
                 </div>
@@ -165,20 +177,18 @@ export default function ProductDetailPage() {
                 <button className="btn-ghost" onClick={() => setNv({ sku: '', name: '', price: '', onHand: '0' })}><Plus size={15} /> Add variant</button>
               )}
             </div>
-          </div>
+          </FormSection>
           <OptionsEditor productId={p.id} storeSlug={store?.slug} variants={p.variants.map((v) => ({ id: v.id, sku: v.sku, optionIds: v.optionIds }))} />
         </div>
 
         <div className="space-y-5">
-          <div className="card p-4">
-            <label className="label">Status</label>
+          <FormSection title="Status" description="Only active products appear in your storefront and search.">
             <select className="input" value={draft.status} onChange={(e) => setDraft({ ...draft, status: e.target.value })}>
               <option value="active">Active</option>
               <option value="draft">Draft</option>
             </select>
-          </div>
-          <div className="card p-3">
-            <label className="label">Featured image</label>
+          </FormSection>
+          <FormSection title="Media" description="Square crops work best. The first image is the one customers see in lists and search.">
             <div className="aspect-square rounded-lg bg-gray-100 grid place-items-center overflow-hidden relative">
               {img ? <img src={img} alt={p.name} className="h-full w-full object-cover" /> : <Package size={28} className="text-gray-300" />}
               {uploading && <div className="absolute inset-0 bg-white/60 grid place-items-center"><Spinner /></div>}
@@ -209,8 +219,7 @@ export default function ProductDetailPage() {
               <Upload size={14} /> Add to gallery
               <input type="file" accept="image/*" className="hidden" disabled={uploading} onChange={(e) => { const f = e.target.files?.[0]; if (f) addToGallery(f); e.currentTarget.value = ''; }} />
             </label>
-            <div className="text-xs text-gray-400 mt-2 truncate">/{p.slug}</div>
-          </div>
+          </FormSection>
         </div>
       </div>
     </>

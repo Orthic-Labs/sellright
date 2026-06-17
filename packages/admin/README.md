@@ -67,6 +67,14 @@ pnpm dev          # vite dev server on :4300 (proxy-enabled)
 pnpm build        # tsc + vite build -> dist/
 ```
 
+Root-level helpers (run from repo root):
+
+```bash
+pnpm admin:typecheck   # pnpm --dir packages/admin typecheck
+pnpm admin:build       # pnpm --dir packages/admin build
+pnpm verify            # includes admin typecheck + build
+```
+
 On Hetzner it's launched via `packages/api/scripts-deploy/start-admin.sh` (vite
 dev on `:4300`, setsid+nohup). **Do not use `:4200` — that's the Stunning
 Strangers production store.** `vite preview` has no proxy, so use `dev` for a
