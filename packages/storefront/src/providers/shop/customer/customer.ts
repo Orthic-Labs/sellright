@@ -30,10 +30,6 @@ import {
 	type LogoutMutationVariables,
 } from '~/generated/graphql-shop-typed';
 import { requester } from '~/utils/api';
-import {
-	clearCustomerCacheAfterMutation as clearServiceCache,
-	clearCustomerCacheOnLogout as clearServiceCacheOnLogout,
-} from '~/services/CustomerCacheService';
 
 // 🚀 CUSTOMER QUERY CACHE - 3-minute cache for customer data
 const customerCache = new Map<string, { data: any; timestamp: number }>();
@@ -96,7 +92,6 @@ export const deleteCustomerAddressMutation = async (id: string) => {
 		DeleteCustomerAddressMutationVariables
 	>(DeleteCustomerAddressDocument, { id });
 	clearCustomerCacheAfterMutation();
-	clearServiceCache();
 	return result;
 };
 
@@ -129,7 +124,6 @@ export const updateCustomerAddressMutation = async (
 		UpdateCustomerAddressMutationMutationVariables
 	>(UpdateCustomerAddressMutationDocument, { input }, { token });
 	clearCustomerCacheAfterMutation();
-	clearServiceCache();
 	return result;
 };
 
@@ -142,7 +136,6 @@ export const createCustomerAddressMutation = async (
 		CreateCustomerAddressMutationMutationVariables
 	>(CreateCustomerAddressMutationDocument, { input }, { token });
 	clearCustomerCacheAfterMutation();
-	clearServiceCache();
 	return result;
 };
 
@@ -152,7 +145,6 @@ export const logoutMutation = async () => {
 		undefined
 	);
 	clearCustomerCache();
-	clearServiceCacheOnLogout();
 	return result;
 };
 

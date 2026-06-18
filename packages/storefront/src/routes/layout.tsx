@@ -130,8 +130,6 @@ export default component$(() => {
 
 		const clearCaches = () => {
 			import('~/services/ProductCacheService').then(({ productCache }) => productCache.clear());
-			import('~/services/query-deduplication').then(({ queryDeduplication }) => queryDeduplication.clear());
-			import('~/services/shop-cache').then(({ ShopCache }) => ShopCache.clearAll());
 		};
 
 		let useFallbackPolling = false;

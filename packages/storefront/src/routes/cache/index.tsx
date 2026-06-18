@@ -18,6 +18,7 @@ export default component$(() => {
         const purgeStatus = useSignal<string | null>(null);
         const purgeError = useSignal<string | null>(null);
         const warming = useSignal(false);
+        const adminToken = useSignal('');
 
 	const loadHeaders = $(async () => {
 		// Don't clear purgeStatus here, otherwise it hides our success messages when auto-refreshing
@@ -77,6 +78,7 @@ export default component$(() => {
 	 	 	 	 method: 'POST',
 	 	 	 	 headers: {
 	 	 	 	 	 'Content-Type': 'application/json',
+					 'x-cache-admin-token': adminToken.value,
 	 	 	 	 },
 	 	 	 });
 			const json = await response.json().catch(() => null);
@@ -99,6 +101,7 @@ export default component$(() => {
 	 	 	 	 method: 'POST', 
 	 	 	 	 headers: { 
 	 	 	 	 	 'Content-Type': 'application/json', 
+					 'x-cache-admin-token': adminToken.value,
 	 	 	 	 }, 
 	 	 	 });
 			
@@ -137,6 +140,32 @@ export default component$(() => {
 				}}
 			>
 				<h1 style={{ fontSize: '1.75rem', marginBottom: '0.75rem' }}>Cache Debug</h1>
+				<label
+					style={{
+						display: 'block',
+						marginBottom: '1rem',
+						fontSize: '0.85rem',
+						color: '#333',
+					}}
+				>
+					<span style={{ display: 'block', marginBottom: '0.35rem' }}>Admin token</span>
+					<input
+						type="password"
+						value={adminToken.value}
+						onInput$={(_, el) => {
+							adminToken.value = el.value;
+						}}
+						style={{
+							width: '100%',
+							maxWidth: '360px',
+							padding: '0.45rem 0.6rem',
+							borderRadius: '4px',
+							border: '1px solid #ccc',
+							color: '#111',
+							background: '#fff',
+						}}
+					/>
+				</label>
 				<div
 					style={{
 						display: 'flex',

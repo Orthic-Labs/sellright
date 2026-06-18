@@ -40,7 +40,7 @@ Defensible:
 - tested migration from Vendure-like systems;
 - multi-brand operating model;
 - exact patterns for static catalog + dynamic checkout;
-- payment-provider abstraction proven across Stripe, NMI, and Sezzle;
+- payment-provider layer proven across Stripe, NMI, and Sezzle;
 - app/software licensing built into catalog sales;
 - operational runbooks for self-hosted commerce.
 

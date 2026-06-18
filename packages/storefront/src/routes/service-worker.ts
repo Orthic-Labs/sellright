@@ -11,7 +11,7 @@
  * - Image caching (cache-first) — /assets/ images cached indefinitely
  *
  * NOT cached here (handled by in-memory caches + SSE invalidation instead):
- * - GraphQL API responses — productCache + queryDeduplication handle this with SSE invalidation
+ * - GraphQL API responses — productCache handles this with SSE invalidation
  * - Page HTML — routeLoader$ with staleWhileRevalidate HTTP headers handles this
  */
 import { setupServiceWorker } from '@qwik.dev/router/service-worker';

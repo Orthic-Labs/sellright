@@ -1,10 +1,13 @@
 import { $, component$, useContext, useSignal, QRL, useTask$, useOnDocument, useComputed$ } from '@qwik.dev/core';
-import { APP_STATE, CUSTOMER_NOT_DEFINED_ID, AUTH_TOKEN } from '~/constants';
+import { APP_STATE, CUSTOMER_NOT_DEFINED_ID } from '~/constants';
 import AddressForm from '~/components/address-form/AddressForm';
 import BillingAddressForm from '~/components/billing-address-form/BillingAddressForm';
 // LoginModal moved to parent component
 import {
   getActiveOrderQuery,
+  setOrderBillingAddressMutation,
+  setOrderShippingAddressMutation,
+  setOrderShippingMethodMutation,
   setCustomerForOrderMutation,
 } from '~/providers/shop/orders/order';
 import {
@@ -14,18 +17,13 @@ import {
   updateCustomerAddressMutation as updateCustomerAddress,
 } from '~/providers/shop/customer/customer';
 import { Order } from '~/generated/graphql-shop';
-import { getCookie } from '~/utils';
 import { validateEmail, validateName, validatePhone, filterPhoneInput, sanitizePhoneNumber } from '~/utils/validation';
 import { validateBillingSection, validateCustomerSection, validateShippingSection } from '~/utils/checkout-section-validation';
 
 import { useCheckoutValidationActions } from '~/contexts/CheckoutValidationContext';
 import { useLoginModalActions } from '~/contexts/LoginModalContext';
-// import { useAddressContext } from '~/contexts/AddressContext'; // Not used in current implementation
 
-// Import shared addressState instead of defining it here
-import { addressState } from '~/utils/checkout-state';
 import { useCheckoutAddressState } from '~/contexts/CheckoutAddressContext';
-import { CheckoutOptimizationService } from '~/services/CheckoutOptimizationService';
 import { ValidationIcon } from './ValidationIcon';
 
 
@@ -134,8 +132,6 @@ export const CheckoutAddresses = component$<CheckoutAddressesProps>(({ onAddress
     track(() => addressSubmissionInProgress.value);
     checkoutAddressState.addressSubmissionComplete = addressSubmissionComplete.value;
     checkoutAddressState.addressSubmissionInProgress = addressSubmissionInProgress.value;
-    addressState.addressSubmissionComplete = addressSubmissionComplete.value;
-    addressState.addressSubmissionInProgress = addressSubmissionInProgress.value;
   });
 
 
@@ -426,10 +422,6 @@ export const CheckoutAddresses = component$<CheckoutAddressesProps>(({ onAddress
         appState.activeOrder = latestOrderBeforeMutations; // Update appState with the latest order data
         // console.log('✅ Active order confirmed before address mutations:', latestOrderBeforeMutations.code);
 
-        // 🚀 OPTIMIZATION: Use parallel processing for address and shipping setup
-        // This reduces checkout time by running independent operations concurrently
-        console.log('🚀 Using optimized parallel processing for address and shipping setup...');
-        
         // Ensure country code is defined before proceeding
         if (!appState.shippingAddress.countryCode) {
           throw new Error('Country code is required for shipping address');
@@ -466,25 +458,26 @@ export const CheckoutAddresses = component$<CheckoutAddressesProps>(({ onAddress
           };
         }
 
-        // Execute optimized parallel processing
-        const checkoutResult = await CheckoutOptimizationService.optimizedCheckoutProcessing(
-          shippingAddressInput,
-          billingAddressInput,
-          appState.activeOrder?.subTotalWithTax || 0
-        );
+        const shippingResult = await setOrderShippingAddressMutation(shippingAddressInput);
+        if (shippingResult.__typename !== 'Order') {
+          throw new Error('Failed to set shipping address');
+        }
+        appState.activeOrder = shippingResult as Order;
 
-        // Update order with the result
-        appState.activeOrder = checkoutResult.order;
-
-        // Log any non-critical errors
-        if (checkoutResult.errors.length > 0) {
-          console.warn('⚠️ Some non-critical errors occurred during checkout:', checkoutResult.errors);
+        if (billingAddressInput) {
+          const billingResult = await setOrderBillingAddressMutation(billingAddressInput);
+          if (billingResult.__typename === 'Order') {
+            appState.activeOrder = billingResult as Order;
+          }
         }
 
-        // Log success
-        console.log('✅ Parallel address and shipping setup completed successfully');
-        if (checkoutResult.shippingMethodsApplied) {
-          console.log('📦 Shipping method automatically applied');
+        const shippingMethodId = (shippingAddressInput.countryCode === 'US' || shippingAddressInput.countryCode === 'PR')
+          ? ((appState.activeOrder?.subTotalWithTax || 0) >= 10000 ? '6' : '3')
+          : '7';
+        appState.activeOrder = await setOrderShippingMethodMutation([shippingMethodId]);
+
+        if (!appState.activeOrder) {
+          throw new Error('Failed to set shipping method');
         }
         if (activeCustomer) {
           try {
@@ -509,9 +502,9 @@ export const CheckoutAddresses = component$<CheckoutAddressesProps>(({ onAddress
               await updateCustomerAddress({
                 id: defaultShipping.id,
                 ...shippingAddressInput
-              }, getCookie(AUTH_TOKEN));
+              }, undefined);
             } else {
-              const shippingAddressResult = await createCustomerAddress(shippingAddressInput, getCookie(AUTH_TOKEN));
+              const shippingAddressResult = await createCustomerAddress(shippingAddressInput, undefined);
               if (shippingAddressResult.createCustomerAddress.__typename !== 'Address') {
                 console.error('Failed to create customer shipping address', shippingAddressResult);
               }
@@ -535,9 +528,9 @@ export const CheckoutAddresses = component$<CheckoutAddressesProps>(({ onAddress
                 await updateCustomerAddress({
                   id: defaultBilling.id,
                   ...billingAddressInput
-                }, getCookie(AUTH_TOKEN));
+                }, undefined);
               } else {
-                const billingAddressResult = await createCustomerAddress(billingAddressInput, getCookie(AUTH_TOKEN));
+                const billingAddressResult = await createCustomerAddress(billingAddressInput, undefined);
 
                 if (billingAddressResult.createCustomerAddress.__typename !== 'Address') {
                   console.error('Failed to create customer billing address', billingAddressResult);

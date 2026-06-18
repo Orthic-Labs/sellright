@@ -16,10 +16,8 @@ import {
 	validateEmail, 
 	validateName, 
 	validatePhone,
-	clearFieldValidationCache,
-	clearAllValidationCache,
 	filterPhoneInput
-} from '~/utils/cached-validation';
+} from '~/utils/validation';
 import AutoShippingSelector from '../auto-shipping-selector/AutoShippingSelector';
 
 type IProps = {
@@ -45,8 +43,6 @@ export default component$<IProps>(({ onForward$, isReviewMode }) => {
 
 	// T31: Load order + customer data on qinit
 	useOnDocument('qinit', $(async () => {
-		clearAllValidationCache();
-		
 		const activeOrder = await getActiveOrderQuery();
 		if (activeOrder?.customer) {
 			const customer = activeOrder.customer;
@@ -153,9 +149,6 @@ export default component$<IProps>(({ onForward$, isReviewMode }) => {
 
 	// Email validation handler
 	const handleEmailChange$ = $((value: string) => {
-		// Clear cache for email validation when value changes
-		clearFieldValidationCache('emailAddress', 'email');
-		
 		// Update the email in app state
 		appState.customer = { ...appState.customer, emailAddress: value };
 		
@@ -174,9 +167,6 @@ export default component$<IProps>(({ onForward$, isReviewMode }) => {
 
 	// First name validation handlers
 	const handleFirstNameChange$ = $((value: string) => {
-		// Clear cache for first name validation when value changes
-		clearFieldValidationCache('First name', 'name');
-		
 		// Update the firstName in app state
 		appState.customer = { ...appState.customer, firstName: value };
 		
@@ -195,9 +185,6 @@ export default component$<IProps>(({ onForward$, isReviewMode }) => {
 
 	// Last name validation handlers
 	const handleLastNameChange$ = $((value: string) => {
-		// Clear cache for last name validation when value changes
-		clearFieldValidationCache('Last name', 'name');
-		
 		// Update the lastName in app state
 		appState.customer = { ...appState.customer, lastName: value };
 		
@@ -216,12 +203,8 @@ export default component$<IProps>(({ onForward$, isReviewMode }) => {
 
 	// Phone validation handlers (NEW)
 	const handlePhoneChange$ = $((value: string) => {
-		// Clear cache for phone validation when value changes
 		const countryCode = appState.shippingAddress.countryCode;
-		if (countryCode) {
-			clearFieldValidationCache(countryCode, 'phone');
-		}
-		
+
 		// Filter input to only allow valid phone characters
 		const filteredValue = filterPhoneInput(value);
 		appState.customer = { ...appState.customer, phoneNumber: filteredValue };

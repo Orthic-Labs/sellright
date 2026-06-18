@@ -5,11 +5,8 @@ import {
   validateAddress, 
   validateName, 
   validatePostalCode, 
-  validateStateProvince, 
-  clearFieldValidationCache,
-  clearCountryValidationCache
-} from '~/utils/cached-validation';
-import { getBillingFieldType } from '~/utils/field-type-helpers';
+  validateStateProvince
+} from '~/utils/validation';
 import type { ValidationResult } from '~/utils/validation';
 import { ValidationIcon } from '~/components/checkout/ValidationIcon';
 
@@ -304,16 +301,6 @@ const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress
   
   const handleInputChange$ = $((field: string, value: string) => {
     // console.log(`[BillingAddressForm] Input change: ${field}, value: ${value}`);
-    
-    // Clear validation cache for the field being changed
-    if (field === 'countryCode') {
-      // Clear country-specific caches when country changes
-      const oldCountry = appState.billingAddress?.countryCode;
-      clearCountryValidationCache(oldCountry, value);
-    } else {
-      // Clear cache for specific field
-      clearFieldValidationCache(field, getBillingFieldType(field));
-    }
     
     // Notify parent component on first user interaction
     if (!hasUserInteracted.value && onUserInteraction$) {

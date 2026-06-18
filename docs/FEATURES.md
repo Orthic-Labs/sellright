@@ -14,7 +14,7 @@ SellRight is a commerce backend for operators who want ownership, multi-store co
 | Catalog management | Built | Products, variants, collections, options, images, inventory, locations. |
 | Static catalog manifest | Built | Fast storefront browse path with generated JSON. |
 | Checkout | Built | Server-priced checkout with stock allocation, shipping, tax, coupons, gift-card tender. |
-| Payments abstraction | Partly built | Stripe scaffold exists; gateway live e2e needs keys; NMI/Sezzle are planned. |
+| Payments layer | Partly built | Stripe scaffold exists; gateway live e2e needs keys; NMI/Sezzle are planned. |
 | Refunds and returns | Built at backend level | Gateway-backed refund path exists for providers that implement it. |
 | Customer auth/account | Built | Register, login, Google auth, sessions, profile, addresses, password reset, email verification. |
 | Transactional email | Built | SMTP-backed event email flows. |

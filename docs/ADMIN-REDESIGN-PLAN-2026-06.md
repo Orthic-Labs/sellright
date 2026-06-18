@@ -486,7 +486,7 @@ Acceptance:
   seeded QA data or mock rows for visual QA.
 - Accessibility regressions: custom grouped nav and menus can break focus behavior.
   Mitigation: keyboard QA is part of Phase 5.
-- Over-building abstractions too early could make the simple pages harder to change.
+- Over-building shared components too early could make the simple pages harder to change.
   Mitigation: extract components only after two pages prove the pattern.
 - Visual polish can mask weak workflow decisions. Mitigation: every phase has a workflow
   acceptance check, not only a screenshot check.

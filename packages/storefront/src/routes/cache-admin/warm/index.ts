@@ -1,6 +1,17 @@
 import type { RequestHandler } from '@qwik.dev/router';
+import { requireCacheAdminToken } from '~/utils/cache-admin-auth';
 
-export const onPost: RequestHandler = async ({ json }) => {
+export const onPost: RequestHandler = async ({ request, json }) => {
+	const auth = requireCacheAdminToken(request);
+	if (!auth.ok) {
+		throw json(auth.status, { success: false, error: auth.error });
+	}
+
+	const warmToken = process.env.CACHE_WARM_TOKEN;
+	if (!warmToken) {
+		throw json(503, { success: false, error: 'CACHE_WARM_TOKEN is not configured' });
+	}
+
         const origin = process.env.STOREFRONT_ORIGIN || 'https://www.damneddesigns.com';
 
         const pathsToWarm = [
@@ -59,7 +70,7 @@ export const onPost: RequestHandler = async ({ json }) => {
 		try {
 			const res = await fetch(`https://damneddesigns-cache-warmer.fly.dev/warm`, {
 				headers: {
-					'x-warm-token': 'potholes@2',
+					'x-warm-token': warmToken,
 					'fly-prefer-region': region
 				}
 			});
@@ -77,4 +88,3 @@ export const onPost: RequestHandler = async ({ json }) => {
 		edge: edgeResults
 	});
 };
-

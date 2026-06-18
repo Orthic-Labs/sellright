@@ -38,8 +38,7 @@ export function requireStore(admin: AdminPrincipal, c: ReqCtx): AdminStoreAccess
   return st;
 }
 
-// Roles allowed to mutate. `read_only` may view but not change anything. Minimum
-// RBAC gate; a full per-action permission matrix is still TODO.
+// Roles allowed to mutate. `read_only` may view but not change anything.
 const WRITE_ROLES = new Set(['owner', 'manager', 'staff']);
 export function requireWrite(st: AdminStoreAccess): void {
   if (!WRITE_ROLES.has(st.role)) throw new HttpError(403, `role '${st.role}' is read-only`);

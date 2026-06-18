@@ -1,6 +1,12 @@
 import type { RequestHandler } from '@qwik.dev/router';
+import { requireCacheAdminToken } from '~/utils/cache-admin-auth';
 
 export const onPost: RequestHandler = async ({ request, json }) => {
+	const auth = requireCacheAdminToken(request);
+	if (!auth.ok) {
+		throw json(auth.status, { success: false, error: auth.error });
+	}
+
 	try {
 		const body = await request.text();
 
@@ -26,4 +32,3 @@ export const onPost: RequestHandler = async ({ request, json }) => {
 		throw json(500, { success: false, error: 'Proxy error' });
 	}
 };
-

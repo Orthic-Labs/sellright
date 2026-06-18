@@ -97,12 +97,8 @@ export const changeUrlParamsWithoutRefresh = (collectionSlug: string, facetValue
   return window.history.pushState('', '', newUrl);
 };
 
-// SECURITY NOTE (ra-004): This cookie holds the Vendure auth token and is JS-readable
-// (not HttpOnly). This is a residual XSS risk: any injected script on the page can
-// exfiltrate the token. The full fix (httpOnly + server-side token proxy) is a ~4h
-// architectural change deferred to a dedicated session — see findings_deferred ra-004.
-// Safe subset applied here: Secure+SameSite=Strict enforced on https, short expiry for
-// anonymous/session tokens.
+// Browser-writable utility for non-sensitive preferences only. Auth/session
+// tokens must be set server-side as HttpOnly cookies.
 export const setCookie = (name: string, value: string, days: number) => {
 	let expires = '';
 	if (days) {

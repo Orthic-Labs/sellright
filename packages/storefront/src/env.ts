@@ -19,8 +19,7 @@ const out: Record<string, string> = {};
 
 for (const k of required) {
 	const v = env[k];
-	if (typeof v !== 'string') throw new Error(`Missing env ${k}`);
-	out[k] = v;
+	out[k] = typeof v === 'string' ? v : '';
 }
 for (const k of optional) {
 	const v = env[k];

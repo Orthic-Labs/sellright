@@ -1,4 +1,5 @@
 import { drizzle } from 'drizzle-orm/node-postgres';
+import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { Pool, type PoolClient } from 'pg';
 import * as schema from './schema.js';
 import { env } from '../env.js';
@@ -24,7 +25,7 @@ export const unsafeUnscopedDb = drizzle(pool, drizzleOpts);
 // `unsafeUnscopedDb` directly. An ESLint `no-restricted-imports` rule on
 // `src/routes/**` blocks accidental use there — see eslint.config.js.
 
-export type Tx = ReturnType<typeof drizzle>;
+export type Tx = NodePgDatabase<typeof schema> & { $client: Pool | PoolClient };
 
 /**
  * Run `fn` inside a transaction scoped to one store. Sets `app.current_store`

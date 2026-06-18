@@ -30,8 +30,9 @@ const B = '22222222-2222-2222-2222-222222222222';
 // Owner-side pool (for seeding) + app-side pool (for isolation assertions).
 const appPool = new Pool({ connectionString: env.DATABASE_URL_NONOWNER ?? env.DATABASE_URL });
 const drizzleOpts = { casing: 'snake_case' } as const;
+type AppTx = ReturnType<typeof drizzle<Record<string, never>, PoolClient>>;
 
-async function withStoreApp<T>(storeId: string, fn: (tx: ReturnType<typeof drizzle>) => Promise<T>): Promise<T> {
+async function withStoreApp<T>(storeId: string, fn: (tx: AppTx) => Promise<T>): Promise<T> {
   const client: PoolClient = await appPool.connect();
   try {
     await client.query('BEGIN');

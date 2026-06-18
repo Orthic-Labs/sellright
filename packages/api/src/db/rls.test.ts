@@ -33,8 +33,9 @@ const B = '22222222-2222-2222-2222-222222222222';
 const appPoolUrl = env.DATABASE_URL_NONOWNER ?? env.DATABASE_URL;
 const appPool = new Pool({ connectionString: appPoolUrl });
 const drizzleOpts = { schema: { product, store }, casing: 'snake_case' } as const;
+type AppTx = ReturnType<typeof drizzle<typeof drizzleOpts.schema, PoolClient>>;
 
-async function withStoreApp<T>(storeId: string, fn: (tx: ReturnType<typeof drizzle>) => Promise<T>): Promise<T> {
+async function withStoreApp<T>(storeId: string, fn: (tx: AppTx) => Promise<T>): Promise<T> {
   const client: PoolClient = await appPool.connect();
   try {
     await client.query('BEGIN');

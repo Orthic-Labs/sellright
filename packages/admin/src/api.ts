@@ -1,8 +1,5 @@
 import { maybeMock } from './qa-mocks.js';
 
-// Thin fetch client for the SellRight admin API. Token + active store live in
-// localStorage; every request carries the bearer token and x-store-slug header.
-
 // The session token lives in an httpOnly cookie (set by the API on login) — JS
 // can't read it, so XSS can't steal it. We send `credentials: 'include'` so the
 // browser attaches it. Mutations echo the non-httpOnly CSRF cookie back in a

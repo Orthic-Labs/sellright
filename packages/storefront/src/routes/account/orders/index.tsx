@@ -13,8 +13,6 @@ export default component$(() => {
 	const navigate = useNavigate();
 	const expandedOrders = useSignal<Set<string>>(new Set());
 
-	// Use orders from SSR data (loaded in layout) - for now, fallback to client-side loading
-	// TODO: Once layout provides orders data, use: appState.orders
 	const activeCustomerOrdersSignal = useSignal<Customer>();
 
 	// Enhanced order loading that ensures custom fields are available

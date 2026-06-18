@@ -81,7 +81,7 @@ Medusa is a flexible open-source commerce platform. Medusa's docs describe comme
 SellRight's contrast:
 
 - not a general-purpose commerce framework;
-- fewer abstraction layers;
+- fewer indirection layers;
 - explicit RLS-based multi-tenancy;
 - built around a portfolio operator rather than agencies composing bespoke commerce projects.
 

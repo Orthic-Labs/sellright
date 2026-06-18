@@ -75,10 +75,8 @@ pnpm admin:build       # pnpm --dir packages/admin build
 pnpm verify            # includes admin typecheck + build
 ```
 
-On Hetzner it's launched via `packages/api/scripts-deploy/start-admin.sh` (vite
-dev on `:4300`, setsid+nohup). **Do not use `:4200` — that's the Stunning
-Strangers production store.** `vite preview` has no proxy, so use `dev` for a
-working API connection.
+For production, serve the built `dist/` directory behind the site proxy. Use
+`pnpm dev` only for local/dev environments where the Vite proxy is needed.
 
 ## Known gaps (as of commit 43ebcbb)
 
@@ -88,6 +86,7 @@ The following are now wired (no longer gaps):
 
 Remaining gaps:
 - **Media library** — there is no standalone asset browser/picker; images are uploaded inline on the product page only.
-- **Production admin host** — the admin is currently served by Vite dev server behind an SSH tunnel; no nginx/Cloudflare Access yet.
+- **Production admin host** — deployment is environment-specific; keep the
+  production path on built static assets, not the Vite dev server.
 - **Real gateway/payment operations** — Stripe scaffolding exists in the API; no payment UI actions in the admin beyond toggling the provider.
 - **Gateway-backed refund UI** — the return-approval flow writes a Settled ledger row but does not call the payment gateway (ra-002).

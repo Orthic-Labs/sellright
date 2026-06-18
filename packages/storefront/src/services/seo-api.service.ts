@@ -1,5 +1,4 @@
 import { server$ } from '@qwik.dev/router';
-import { isBrowser } from '@qwik.dev/core/build';
 import { DEV_API } from '~/constants';
 import type {
   SeoApiResponse,
@@ -143,7 +142,6 @@ export const fetchProductSchema = server$(async (productId: string): Promise<Pro
 
   return response.success ? response.data || null : null;
 });
-
 /**
  * Fetch organization schema from backend
  */
@@ -155,7 +153,6 @@ export const fetchOrganizationSchema = server$(async (): Promise<OrganizationSch
 
   return response.success ? response.data || null : null;
 });
-
 /**
  * Fetch website schema from backend
  */
@@ -167,7 +164,6 @@ export const fetchWebsiteSchema = server$(async (): Promise<WebsiteSchema | null
 
   return response.success ? response.data || null : null;
 });
-
 /**
  * Generate breadcrumb schema from breadcrumb items
  */
@@ -423,23 +419,3 @@ export const fetchRobotsTxt = server$(async (): Promise<string | null> => {
     return null;
   }
 });
-
-/**
- * Clear SEO cache (useful for development/testing)
- */
-export const clearSeoCache = (): void => {
-  if (isBrowser) {
-    seoCache.clear();
-    console.log('SEO cache cleared');
-  }
-};
-
-/**
- * Get cache statistics (useful for debugging)
- */
-export const getSeoCache = (): { size: number; config: SeoApiCacheConfig } => {
-  return {
-    size: seoCache['cache'].size,
-    config: CACHE_CONFIG
-  };
-};

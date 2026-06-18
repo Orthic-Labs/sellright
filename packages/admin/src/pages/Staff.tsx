@@ -1,23 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ShieldCheck, UserMinus, RefreshCw, Copy, Check } from 'lucide-react';
-import { api, ApiError } from '../api';
+import { api } from '../api';
 import { useAuth } from '../auth';
 import { PageHeader, Loading, ErrorNote, EmptyState, Badge, Spinner } from '../components/ui';
-
-// PUT helper (api.ts only exposes get/post/patch/del; we need PUT for permissions)
-async function apiPut<T>(path: string, body: unknown): Promise<T> {
-  const storeSlug = localStorage.getItem('sr_admin_store');
-  const headers: Record<string, string> = { 'content-type': 'application/json' };
-  if (storeSlug) headers['x-store-slug'] = storeSlug;
-  const csrfMatch = document.cookie.match(/(?:^|; )sr_csrf=([^;]*)/);
-  if (csrfMatch) headers['x-csrf-token'] = decodeURIComponent(csrfMatch[1]!);
-  const res = await fetch(`/v1/admin${path}`, { method: 'PUT', headers, credentials: 'include', body: JSON.stringify(body) });
-  const text = await res.text();
-  const json = text ? JSON.parse(text) : {};
-  if (!res.ok) throw new ApiError(res.status, json?.error ?? `HTTP ${res.status}`);
-  return json as T;
-}
 
 // ── local types ──────────────────────────────────────────────────────────────
 
@@ -115,7 +101,7 @@ function PermissionsMatrix({ member, onSave }: PermissionsMatrixProps) {
   const [open, setOpen] = useState(false);
 
   const save = useMutation({
-    mutationFn: () => apiPut<{ adminUserId: string; permissions: Record<string, boolean> }>(`/staff/${member.adminUserId}/permissions`, { permissions: perms }),
+    mutationFn: () => api.put<{ adminUserId: string; permissions: Record<string, boolean> }>(`/staff/${member.adminUserId}/permissions`, { permissions: perms }),
     onSuccess: (res) => { setOpen(false); onSave(); void res; },
   });
 

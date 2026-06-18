@@ -544,27 +544,4 @@ export class LocalAddressService {
     }
   }
 
-  // Get cache info for debugging
-  static getCacheInfo(): { addresses: number; lastSync: number; customerId?: string } {
-    const addresses = this.getAddresses();
-    
-    try {
-      const stored = sessionStorage.getItem(this.ADDRESS_KEY);
-      if (stored) {
-        const cache: LocalAddressCache = JSON.parse(stored);
-        return {
-          addresses: addresses.length,
-          lastSync: cache.lastSync,
-          customerId: cache.customerId
-        };
-      }
-    } catch (error) {
-      console.error('Error getting cache info:', error);
-    }
-    
-    return {
-      addresses: addresses.length,
-      lastSync: 0
-    };
-  }
 }

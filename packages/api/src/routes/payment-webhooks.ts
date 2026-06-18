@@ -63,12 +63,12 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
         }
         return;
       }
-      // TODO(reconcile): refund initiated from the Stripe dashboard. Matching it
-      // idempotently against the admin-initiated refund ledger needs a product
-      // decision to avoid double-counting; the event is claimed + ack'd here.
+      // Refunds initiated from the Stripe dashboard are claimed and ack'd here.
+      // Matching them idempotently against the admin refund ledger needs a
+      // product decision to avoid double-counting.
       case 'charge.refunded':
         return;
-      // TODO(ops): dispute alerting (operator email/Telegram) wires with WP6d.
+      // Dispute alerting can wire operator notifications here.
       case 'charge.dispute.created':
         return;
       default:

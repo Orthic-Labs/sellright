@@ -1,21 +1,20 @@
-import { lookupUsPostalServer, type PostalLookupResult } from './postal-lookup-server';
+export interface PostalLookupResult {
+  city: string;
+  province: string;
+}
 
-export type { PostalLookupResult };
-
-// Countries supported by zippopotam.us (ISO alpha-2, lowercase). US excluded
-// because we handle it locally via server$() for lower latency + no third-party.
+// Countries supported by zippopotam.us (ISO alpha-2, lowercase).
 const ZIPPO_COUNTRIES = new Set([
   'ad','ar','as','at','au','ax','az','bd','be','bg','bm','br','by','ca','ch','cl','co','cr','cz',
   'de','dk','do','dz','es','fi','fm','fo','fr','gb','gf','gg','gl','gp','gt','gu','hr','hu','ie',
   'im','in','is','it','je','jp','li','lk','lt','lu','lv','mc','md','mh','mk','mp','mq','mt','mx',
   'my','nc','nl','no','nz','pe','ph','pk','pl','pm','pr','pt','re','ro','ru','se','si','sj','sk',
-  'sm','th','tr','ua','va','vi','wf','yt','za',
+  'sm','th','tr','ua','us','va','vi','wf','yt','za',
 ]);
 
 /**
  * Look up city + state/province from country + postal code.
- * - US → local server$() call (~30-150ms, no third-party)
- * - Other supported countries → zippopotam.us (~150-400ms, free)
+ * Supported countries use zippopotam.us.
  * Returns null on any failure — caller should leave fields empty for manual entry.
  */
 export async function lookupPostalCode(
@@ -27,14 +26,6 @@ export async function lookupPostalCode(
   const cc = countryCode.toLowerCase();
   const trimmed = postalCode.trim();
   if (trimmed.length < 3) return null;
-
-  if (cc === 'us') {
-    try {
-      return await lookupUsPostalServer(trimmed);
-    } catch {
-      return null;
-    }
-  }
 
   if (!ZIPPO_COUNTRIES.has(cc)) return null;
 

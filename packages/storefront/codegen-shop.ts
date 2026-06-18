@@ -24,7 +24,6 @@ const config: CodegenConfig = {
 	generates: {
 		// Types-only target — kept so existing `import { FooQuery } from '~/generated/graphql-shop'`
 		// type imports across downstream files keep working without a rename pass.
-		// No more generic-sdk, no getSdk factory, no document AST in this file.
 		'src/generated/graphql-shop.ts': {
 			config: {
 				enumsAsConst: true,

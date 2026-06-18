@@ -6,9 +6,9 @@ import {
 } from '@qwik.dev/router';
 import CartContents from '~/components/cart-contents/CartContents';
 import CartTotals from '~/components/cart-totals/CartTotals';
-import { APP_STATE, AUTH_TOKEN, CUSTOMER_NOT_DEFINED_ID, COUNTRY_COOKIE } from '~/constants';
+import { APP_STATE, COUNTRY_COOKIE } from '~/constants';
 import { getCookie } from '~/utils';
-import { getActiveOrderQuery, setCustomerForOrderMutation } from '~/providers/shop/orders/order';
+import { getActiveOrderQuery } from '~/providers/shop/orders/order';
 import { getActiveCustomerQuery, getActiveCustomerAddressesQuery } from '~/providers/shop/customer/customer';
 import { CountryService } from '~/services/CountryService';
 import { CheckoutAddresses } from '~/components/checkout/CheckoutAddresses';
@@ -19,26 +19,14 @@ import { useLocalCart, refreshCartStock, loadCartIfNeeded, useHasMixedPreOrder }
 import { CheckoutValidationProvider, useCheckoutValidation, useCheckoutValidationActions } from '~/contexts/CheckoutValidationContext';
 import { OrderProcessingModal } from '~/components/OrderProcessingModal';
 
-import { clearAllValidationCache } from '~/utils/cached-validation';
 import { useCheckout } from '~/hooks/useCheckout';
 import { transitionOrderToStateMutation } from '~/providers/shop/checkout/checkout';
 
 import { LocalCartService } from '~/services/LocalCartService';
 import { srCreateOrder, srPayOrder } from '~/utils/sellright';
-import { CheckoutOptimizationService } from '~/services/CheckoutOptimizationService';
 import { validateBillingSection, validateCustomerSection, validateShippingSection } from '~/utils/checkout-section-validation';
 
 // No routeLoader$ — countries load client-side in useVisibleTask$ so the page renders instantly on navigation.
-
-const prefetchOrderConfirmation = $((orderCode: string) => {
-  if (typeof document !== 'undefined' && orderCode) {
-    const link = document.createElement('link');
-    link.rel = 'prefetch';
-    link.href = `/checkout/confirmation/${orderCode}`;
-    link.as = 'document';
-    document.head.appendChild(link);
-  }
-});
 
 interface CheckoutState {
   loading: boolean;
@@ -52,7 +40,7 @@ const CheckoutContent = component$(() => {
   const hasMixedPreOrder = useHasMixedPreOrder();
   const checkoutValidation = useCheckoutValidation();
   const validationActions = useCheckoutValidationActions();
-  const { checkoutState, convertLocalCartToVendureOrder } = useCheckout();
+  const { checkoutState } = useCheckout();
 
   const state = useStore<CheckoutState>({
     loading: false,
@@ -103,11 +91,10 @@ const CheckoutContent = component$(() => {
   useVisibleTask$(async () => {
     if (pageLoading.value) {
       try {
-        clearAllValidationCache();
         appState.showCart = false;
 
         const [customerData, orderData, countriesData] = await Promise.all([
-          getCookie(AUTH_TOKEN) ? getActiveCustomerQuery().catch(() => null) : Promise.resolve(null),
+          getActiveCustomerQuery().catch(() => null),
           getActiveOrderQuery().catch(() => null),
           CountryService.getAvailableCountries().catch(() => []),
         ]);
@@ -290,168 +277,6 @@ const CheckoutContent = component$(() => {
         isOrderProcessing.value = false;
         navigate(`/checkout/confirmation/${created.code}`);
         return;
-      }
-
-      // If retrying after payment failure, verify actual server state before transitioning
-      if (appState.activeOrder && appState.activeOrder.state === 'ArrangingPayment') {
-        try {
-          const currentOrder = await getActiveOrderQuery();
-          if (currentOrder && currentOrder.state === 'ArrangingPayment') {
-            const transitionResult = await transitionOrderToStateMutation('AddingItems');
-            const result = transitionResult.transitionOrderToState;
-            if (result && 'state' in result) {
-              appState.activeOrder = result as any;
-            } else if (result && 'errorCode' in result) {
-              console.error('[Checkout] Retry transition rejected by Vendure:', result);
-              state.error = 'Failed to reset order for retry. Please refresh the page.';
-              showProcessingModal.value = false;
-              isOrderProcessing.value = false;
-              return;
-            }
-          } else if (currentOrder) {
-            // Server already has order in AddingItems (or other) — sync local state
-            appState.activeOrder = currentOrder as any;
-          }
-        } catch (transitionError) {
-          console.error('[Checkout] Retry transition threw:', transitionError);
-          state.error = 'Failed to reset order for retry. Please refresh the page.';
-          showProcessingModal.value = false;
-          isOrderProcessing.value = false;
-          return;
-        }
-      }
-
-      // Refresh stock from server before proceeding to payment
-      try {
-        await refreshCartStock(localCart);
-        const stockCheck = LocalCartService.validateStock();
-        if (!stockCheck.valid) {
-          throw new Error(stockCheck.errors?.[0] || 'Some items are no longer available');
-        }
-      } catch (stockError) {
-        state.error = stockError instanceof Error ? stockError.message : 'Failed to verify stock availability';
-        showProcessingModal.value = false;
-        isOrderProcessing.value = false;
-        return;
-      }
-
-      // Convert local cart to Vendure order
-      try {
-        const vendureOrder = await convertLocalCartToVendureOrder();
-        if (!vendureOrder) {
-          throw new Error(checkoutState.error || 'Failed to create order from your cart.');
-        }
-        appState.activeOrder = vendureOrder;
-      } catch (conversionError) {
-        state.error = conversionError instanceof Error ? conversionError.message : 'An unknown error occurred while creating your order.';
-        showProcessingModal.value = false;
-        isOrderProcessing.value = false;
-        return;
-      }
-
-      // Set customer for order (guest checkout only)
-      const isGuest = !appState.customer.id || appState.customer.id === CUSTOMER_NOT_DEFINED_ID;
-
-      if (isGuest) {
-        const customerData = {
-          emailAddress: appState.customer.emailAddress || '',
-          firstName: appState.customer.firstName || '',
-          lastName: appState.customer.lastName || '',
-          phoneNumber: appState.shippingAddress.phoneNumber || '',
-        };
-
-        try {
-          const customerResult = await setCustomerForOrderMutation(customerData);
-
-          if (customerResult.__typename === 'Order') {
-            appState.activeOrder = customerResult as any;
-          } else if (customerResult.__typename === 'EmailAddressConflictError') {
-            const updatedOrder = await getActiveOrderQuery();
-            if (updatedOrder) {
-              appState.activeOrder = updatedOrder;
-            }
-          } else if (customerResult.__typename === 'GuestCheckoutError') {
-            throw new Error('Guest checkout is not enabled. Please create an account or log in to continue.');
-          } else if (customerResult.__typename === 'NoActiveOrderError') {
-            throw new Error('No active order found. Please restart your checkout process.');
-          } else {
-            throw new Error('Failed to set customer for order: ' + (customerResult as any).message || 'Unknown error');
-          }
-        } catch (customerError) {
-          throw customerError instanceof Error ? customerError : new Error('Failed to set customer information.');
-        }
-      }
-
-      // Use CheckoutOptimizationService for efficient address and shipping method processing
-      try {
-        const shippingAddressInput = {
-          fullName: appState.shippingAddress.fullName || `${appState.customer?.firstName || ''} ${appState.customer?.lastName || ''}`.trim(),
-          streetLine1: appState.shippingAddress.streetLine1 || '',
-          streetLine2: appState.shippingAddress.streetLine2,
-          city: appState.shippingAddress.city || '',
-          province: appState.shippingAddress.province || '',
-          postalCode: appState.shippingAddress.postalCode || '',
-          countryCode: appState.shippingAddress.countryCode || '',
-          phoneNumber: appState.shippingAddress.phoneNumber,
-          company: appState.shippingAddress.company,
-        };
-
-        const billingAddressInput = checkoutValidation.useDifferentBilling && appState.billingAddress ? {
-          fullName: `${appState.billingAddress.firstName || ''} ${appState.billingAddress.lastName || ''}`.trim(),
-          streetLine1: appState.billingAddress.streetLine1 || '',
-          streetLine2: appState.billingAddress.streetLine2,
-          city: appState.billingAddress.city || '',
-          province: appState.billingAddress.province || '',
-          postalCode: appState.billingAddress.postalCode || '',
-          countryCode: appState.billingAddress.countryCode || '',
-        } : undefined;
-
-        const optimizationResult = await CheckoutOptimizationService.optimizedCheckoutProcessing(
-          shippingAddressInput,
-          billingAddressInput,
-          appState.activeOrder?.subTotal || 0
-        );
-
-        if (!optimizationResult.order) {
-          throw new Error('Failed to process address and shipping information.');
-        }
-
-        appState.activeOrder = optimizationResult.order;
-      } catch (optimizationError) {
-        console.warn('CheckoutOptimizationService failed, falling back to manual address submission:', optimizationError);
-
-	        if (typeof window !== 'undefined' && (window as any).submitCheckoutAddressForm) {
-	          await (window as any).submitCheckoutAddressForm();
-	        } else {
-	          const submitError = new Error('Failed to submit address form.') as Error & { cause?: unknown };
-	          submitError.cause = optimizationError;
-	          throw submitError;
-	        }
-	      }
-
-      // Transition to ArrangingPayment
-      if (appState.activeOrder && appState.activeOrder.state !== 'ArrangingPayment') {
-        const transitionResult = await transitionOrderToStateMutation('ArrangingPayment');
-        if (transitionResult.transitionOrderToState && 'state' in transitionResult.transitionOrderToState) {
-          appState.activeOrder = transitionResult.transitionOrderToState as any;
-        } else {
-            throw new Error('Failed to prepare the order for payment.');
-        }
-      }
-
-      const latestOrder = await getActiveOrderQuery();
-      if (latestOrder?.state === 'ArrangingPayment') {
-        appState.activeOrder = latestOrder;
-        if (latestOrder.code) {
-          await prefetchOrderConfirmation(latestOrder.code);
-        }
-        if (selectedPaymentMethod.value === 'nmi' && nmiTriggerSignal.value === 0) {
-          nmiTriggerSignal.value++;
-        } else if (selectedPaymentMethod.value === 'sezzle' && sezzleTriggerSignal.value === 0) {
-          sezzleTriggerSignal.value++;
-        }
-      } else {
-        throw new Error('Order is not ready for payment. Please try again.');
       }
     } catch (error) {
       state.error = error instanceof Error ? error.message : 'An unknown error occurred. Please check your information and try again.';

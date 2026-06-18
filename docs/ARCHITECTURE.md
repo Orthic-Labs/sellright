@@ -70,7 +70,7 @@ The schema is a full commerce schema rather than a thin catalog API. It includes
 - Operator tools: blog posts, webhooks, affiliates, reports, staff invites, activity.
 - Software sales: licenses, activations, app releases, download artifacts.
 
-Most business tables are store-scoped. Registry-style tables that intentionally cross stores are documented and excluded from FORCE RLS only when needed.
+Most business tables are store-scoped. Shared registry tables that intentionally cross stores are documented and excluded from FORCE RLS only when needed.
 
 ## Money Path
 

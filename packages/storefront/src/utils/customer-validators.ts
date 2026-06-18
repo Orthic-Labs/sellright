@@ -5,7 +5,7 @@ import {
   validateEmail,
   validateAddress,
   validateStateProvince,
-} from '~/utils/cached-validation';
+} from '~/utils/validation';
 
 export const isShippingAddressValid = (orderAddress: ShippingAddress): boolean => {
   if (!orderAddress) return false;

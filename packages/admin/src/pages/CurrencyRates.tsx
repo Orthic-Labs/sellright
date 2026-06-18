@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Pencil } from 'lucide-react';
-import { api, auth, ApiError } from '../api';
+import { api } from '../api';
 import { useAuth } from '../auth';
 import { Loading, ErrorNote, PageHeader, EmptyState, Badge, Spinner } from '../components/ui';
 
@@ -37,31 +37,6 @@ function toStored(human: string): number {
   return Math.round(parseFloat(human) * RATE_SCALE);
 }
 
-function readCookie(name: string): string | null {
-  const m = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
-  return m ? decodeURIComponent(m[1]!) : null;
-}
-
-/** PUT helper — api.ts only exposes get/post/patch/del. We mirror its req()
- *  pattern for the single PUT endpoint needed here. */
-async function putJson<T>(path: string, body: unknown): Promise<T> {
-  const headers: Record<string, string> = { 'content-type': 'application/json' };
-  if (auth.store) headers['x-store-slug'] = auth.store;
-  const csrf = readCookie('sr_csrf');
-  if (csrf) headers['x-csrf-token'] = csrf;
-  const res = await fetch(`/v1/admin${path}`, {
-    method: 'PUT',
-    headers,
-    credentials: 'include',
-    body: JSON.stringify(body),
-  });
-  if (res.status === 401 && location.pathname !== '/login') location.assign('/login');
-  const text = await res.text();
-  const json = text ? JSON.parse(text) : {};
-  if (!res.ok) throw new ApiError(res.status, json?.error ?? `HTTP ${res.status}`);
-  return json as T;
-}
-
 // ── page ─────────────────────────────────────────────────────────────────────
 
 const BLANK_FORM: FormState = { currency: '', rate: '', enabled: true };
@@ -86,7 +61,7 @@ export default function CurrencyRatesPage() {
       const currency = f.currency.trim().toUpperCase();
       // Convert human decimal to the ×10000 integer the API expects.
       const rate = toStored(f.rate);
-      return putJson<{ currency: string; rate: number }>(
+      return api.put<{ currency: string; rate: number }>(
         `/currency-rates/${currency}`,
         { rate, enabled: f.enabled },
       );

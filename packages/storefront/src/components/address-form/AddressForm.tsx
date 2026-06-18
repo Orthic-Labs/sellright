@@ -5,11 +5,8 @@ import {
  validatePostalCode,
  validateName,
  validateAddress,
- validateStateProvince,
- clearFieldValidationCache,
- clearCountryValidationCache
-} from '~/utils/cached-validation';
-import { getFieldType } from '~/utils/field-type-helpers';
+ validateStateProvince
+} from '~/utils/validation';
 import { isActiveCustomerValid } from '~/utils/customer-validators';
 import { ValidationIcon } from '~/components/checkout/ValidationIcon';
 import { LocalCartService } from '~/services/LocalCartService';
@@ -373,16 +370,6 @@ export default component$<IProps>(({ shippingAddress, formApi, isReviewMode, onU
 
 	// Handle input changes
 	const handleInputChange$ = $((fieldName: string, value: string | boolean) => {
-		// Clear validation cache for the field being changed
-		if (fieldName === 'countryCode') {
-			// Clear country-specific caches when country changes
-			const oldCountry = appState.shippingAddress.countryCode;
-			clearCountryValidationCache(oldCountry, value as string);
-		} else {
-			// Clear cache for specific field
-			clearFieldValidationCache(fieldName, getFieldType(fieldName));
-		}
-		
 		// Notify parent component on first user interaction
 		if (!hasUserInteracted.value && onUserInteraction$) {
 			hasUserInteracted.value = true;
