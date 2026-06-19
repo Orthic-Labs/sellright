@@ -244,8 +244,10 @@ catalog.openapi(
 );
 
 // GET /v1/shop/catalog/search — term search over active products (name + description),
-// optional collection + in-stock filters, paginated. WP4a. (ILIKE is fine at current
-// catalog scale; a GIN/trigram index is the perf upgrade when catalogs grow.)
+// optional collection + in-stock filters, paginated. WP4a. The name+description ILIKE
+// is backed by GIN trigram indexes (migration 0029) so it stays index-served as the
+// catalog grows; `description ilike` (not coalesce) keeps that branch indexable —
+// NULL ilike yields NULL (excluded by WHERE), identical filtering to coalesce('').
 catalog.openapi(
   createRoute({
     method: 'get', path: '/v1/shop/catalog/search', summary: 'Search products',
@@ -266,7 +268,7 @@ catalog.openapi(
       const conds = [
         eq(s.product.status, 'active'),
         isNull(s.product.deletedAt),
-        sql`(${s.product.name} ilike ${like} or coalesce(${s.product.description}, '') ilike ${like})`,
+        sql`(${s.product.name} ilike ${like} or ${s.product.description} ilike ${like})`,
       ];
       if (collectionSlug) conds.push(sql`exists (select 1 from collection_product cp join collection c2 on c2.id = cp.collection_id where cp.product_id = ${s.product.id} and c2.slug = ${collectionSlug})`);
       if (inStock) conds.push(sql`exists (select 1 from product_variant pv left join stock stk on stk.variant_id = pv.id where pv.product_id = ${s.product.id} and pv.deleted_at is null and (pv.fulfillment_type <> 'physical' or (stk.on_hand - stk.allocated) > 0))`);
