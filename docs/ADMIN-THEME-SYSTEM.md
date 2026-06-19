@@ -12,7 +12,7 @@ Replaced the Shopify-green clone with a **runtime-swappable, multi-theme, light/
   - **Porcelain** — clean white / true black + cobalt `#0B5FFF`/`#4D8DFF`
   - **Carbon** — warm dark-first + amber `#985C00`/`#F5A623`
 - **Switcher** in the top bar (`ThemeMenu`): pick theme + Light/Dark/System. Persists to `localStorage`; a no-flash `<head>` script applies it before first paint.
-- **New type system** (replaces Inter everywhere): **Schibsted Grotesk** (display/titles/KPIs) · **Hanken Grotesk** (UI/body, tabular) · **JetBrains Mono** (ids/money/data). All OFL/free, loaded via Google Fonts (self-host later).
+- **New type system** (replaces Inter everywhere): **Schibsted Grotesk** (display/titles/KPIs) · **Hanken Grotesk** (UI/body, tabular) · **JetBrains Mono** (ids/money/data). All OFL/free, **self-hosted as variable WOFF2** (latin + latin-ext subsets, ~176 KB, loaded on demand) in `src/fonts/` + `src/fonts.css` — no CDN dependency. Regenerate with `.audit/themes/selfhost-fonts.cjs`.
 - **Lucide icons** kept (modern, consistent 2px stroke — not the problem).
 - **Status dots** added to badges (color + shape → color-blind safe), `prefers-reduced-motion` honored.
 - **Always-dark shell:** the sidebar uses a dedicated `--shell-*` token set that is **dark in every theme and every mode** (constant, not overridden by `.dark`), so the content area always sits lighter above it — dramatic in light mode (dark rail + light canvas), subtle in dark. Active nav item = theme accent. All shell text/active pairs pass WCAG AA.
@@ -35,7 +35,7 @@ Files touched: `tailwind.config.js`, `src/index.css`, `src/theme-tokens.css` (ne
 
 1. **~10 hardcoded semantic tints** (`bg-red-50`, `bg-amber-50`, `bg-emerald-50`, `bg-amber-100`) in low-traffic pages will look slightly washed in dark — swap to `bg-{danger,warning,success}-soft`. (High-traffic surfaces already done.)
 2. **Stray `text-white` on accent** in a few pages — fine in Vermillion (white on-accent) but should be `text-accent-on` for the light-accent dark themes (Graphite/Porcelain/Carbon dark).
-3. **Self-host the fonts** as WOFF2 subsets (currently Google Fonts CDN) before production.
+3. ✅ ~~Self-host the fonts~~ — done (variable WOFF2, latin + latin-ext, in `src/fonts/`).
 4. Optional: a density toggle; settings-page mirror of the theme picker.
 
 ## Not committed
