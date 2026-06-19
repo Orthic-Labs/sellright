@@ -12,31 +12,48 @@ import { eq } from 'drizzle-orm';
 import type Stripe from 'stripe';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
-import { env } from '../env.js';
-import { stripeClient, stripeConfigured, verifyIntent, type IntentLike } from '../payments/stripe.js';
+import { stripeConfigured, stripeCreds, stripeModeFromConfig, verifyStripeWebhook, verifyIntent, type IntentLike, type StripeMode } from '../payments/stripe.js';
 import { applyPaymentResult } from '../payments/settle.js';
 
 export const paymentWebhooks = new OpenAPIHono();
 
 paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
-  if (!stripeConfigured() || !env.STRIPE_WEBHOOK_SECRET) return c.json({ error: 'stripe not configured' }, 503);
+  if (!stripeConfigured('test') && !stripeConfigured('live')) return c.json({ error: 'stripe not configured' }, 503);
   const sig = c.req.header('stripe-signature');
   if (!sig) return c.json({ error: 'missing signature' }, 400);
   const raw = await c.req.text(); // raw body BEFORE json parse — Stripe sig requires it
-  let event: Stripe.Event;
-  try {
-    event = stripeClient().webhooks.constructEvent(raw, sig, env.STRIPE_WEBHOOK_SECRET);
-  } catch {
-    return c.json({ error: 'bad signature' }, 400);
+  let event: Stripe.Event | null = null;
+  let verifiedMode: StripeMode | null = null;
+  for (const mode of ['test', 'live'] as StripeMode[]) {
+    const secret = stripeCreds(mode).webhookSecret;
+    if (!secret) continue;
+    try {
+      // Verify with the webhook secret ONLY — must not require that mode's API
+      // secret key to be present (constructEvent is pure crypto), or a store with
+      // a webhook secret but a cleared/rotated API key can't process webhooks.
+      event = verifyStripeWebhook(raw, sig, secret);
+      verifiedMode = mode;
+      break;
+    } catch {
+      // signature didn't match this mode's secret — try the other.
+    }
   }
+  if (!event || !verifiedMode) return c.json({ error: 'bad signature' }, 400);
 
   const obj = event.data.object as { metadata?: { storeId?: string; orderCode?: string } };
   const storeId = obj.metadata?.storeId;
-  // No tenant on the object (e.g. a Charge that didn't inherit PI metadata) →
-  // ack so Stripe stops retrying; nothing for us to reconcile.
-  if (!storeId) return c.json({ received: true }, 200);
+  // No tenant on the object (e.g. a Charge that didn't inherit PI metadata), or a
+  // malformed id → ack so Stripe stops retrying. A non-UUID would also fail the
+  // ::uuid cast in the RLS policy and 500 → Stripe retry storm; reject it here.
+  if (!storeId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(storeId)) return c.json({ received: true }, 200);
 
   await withStore(storeId, async (tx) => {
+    // ra-sec: bind the verifying secret's mode to the store's configured mode. A
+    // webhook signed with the TEST secret must not drive payment_intent.succeeded
+    // on a LIVE store (a leaked test webhook secret would otherwise let a forged
+    // event settle a live order). Mismatch → ack + ignore.
+    const [store] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, storeId)).limit(1);
+    if (!store || stripeModeFromConfig(store.config) !== verifiedMode) return;
     // Idempotency: claim the event id. A duplicate delivery is a no-op.
     const claimed = await tx
       .insert(s.processedEvent)

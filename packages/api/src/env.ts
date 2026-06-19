@@ -28,10 +28,17 @@ const EnvSchema = z.object({
   ASSET_DIR: z.string().default('var/assets'),
   // Public storefront URL used in email links (password reset, verify, etc.).
   STOREFRONT_URL: z.string().url().default('https://store.example.com'),
-  // WP3: Stripe (optional — the provider/endpoints no-op or 503 when unset, so
-  // dev/tests boot without a key; only the live end-to-end run needs them).
+  // WP3: Stripe. Legacy single-key envs still work; optional test/live envs let
+  // one deployment hold both credential sets at once for runtime mode toggles.
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
+  STRIPE_PUBLISHABLE_KEY: z.string().optional(),
+  STRIPE_SECRET_KEY_TEST: z.string().optional(),
+  STRIPE_SECRET_KEY_LIVE: z.string().optional(),
+  STRIPE_WEBHOOK_SECRET_TEST: z.string().optional(),
+  STRIPE_WEBHOOK_SECRET_LIVE: z.string().optional(),
+  STRIPE_PUBLISHABLE_KEY_TEST: z.string().optional(),
+  STRIPE_PUBLISHABLE_KEY_LIVE: z.string().optional(),
   // Google OAuth — consumed by routes/auth.ts (lane G).
   GOOGLE_CLIENT_ID: z.string().optional(),
   // Admin bootstrap scripts (seed-admin, provision-right-apps).

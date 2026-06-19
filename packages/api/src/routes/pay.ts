@@ -5,7 +5,7 @@ import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
 import { getProvider, isPaymentMethodEnabled } from '../payments/provider.js';
 import { applyPaymentResult } from '../payments/settle.js';
-import { createPaymentIntent, stripeConfigured } from '../payments/stripe.js';
+import { createPaymentIntent, stripeUsable, stripeModeFromConfig } from '../payments/stripe.js';
 import { clientIp, loginRetryAfter } from '../auth/rate-limit.js';
 
 export const pay = new OpenAPIHono();
@@ -70,7 +70,7 @@ pay.openapi(
         .returning({ id: s.processedEvent.id });
       if (claimed.length === 0) return { kind: 'noop', state: order.state };
 
-      const result = await provider.createPayment({ orderCode: code, amount: order.grandTotal, currency: order.currency, token });
+      const result = await provider.createPayment({ orderCode: code, amount: order.grandTotal, currency: order.currency, token, stripeMode: stripeModeFromConfig(st.config) });
       // Shared with the Stripe webhook reconcile path (payments/settle.ts).
       const applied = await applyPaymentResult(tx, { storeId: st.id, order, method: provider.method, result });
       if (applied.orderState === 'Paid') return { kind: 'ok', state: 'Paid', payment: 'Settled' };
@@ -112,7 +112,11 @@ pay.openapi(
     const st = await resolveStoreFromCtx(c);
     const { code } = c.req.valid('param');
     if (!isPaymentMethodEnabled(st.config, 'stripe')) return c.json({ error: 'payment method disabled: stripe', state: 'Disabled' }, 409);
-    if (!stripeConfigured()) return c.json({ error: 'stripe is not configured' }, 503);
+    const mode = stripeModeFromConfig(st.config);
+    // stripeUsable (not just secret-key present) — the same gate /shop/config
+    // advertises, so the storefront never shows Stripe then gets a 503 here (and
+    // vice-versa). Needs a mode-matched sk_ AND a mode-matched pk_.
+    if (!stripeUsable(mode)) return c.json({ error: `stripe is not configured (${mode} mode)` }, 503);
     const order = await withStore(st.id, async (tx) => {
       const [o] = await tx.select({ id: s.order.id, state: s.order.state, grandTotal: s.order.grandTotal, currency: s.order.currency })
         .from(s.order).where(eq(s.order.code, code)).limit(1);
@@ -120,7 +124,7 @@ pay.openapi(
     });
     if (!order) return c.json({ error: 'order not found' }, 404);
     if (order.state !== 'PendingPayment') return c.json({ error: 'order is not payable', state: order.state }, 409);
-    const intent = await createPaymentIntent({ orderCode: code, storeId: st.id, amount: order.grandTotal, currency: order.currency });
+    const intent = await createPaymentIntent({ orderCode: code, storeId: st.id, amount: order.grandTotal, currency: order.currency, mode });
     return c.json(intent, 200);
   },
 );

@@ -16,6 +16,7 @@ import { adminAffiliate } from './routes/admin-affiliate.js';
 import { adminContent } from './routes/admin-content.js';
 import { adminAssets } from './routes/admin-assets.js';
 import { shopExtra } from './routes/shop-extra.js';
+import { shopConfig } from './routes/shop-config.js';
 import { customerTokens } from './routes/customer-tokens.js';
 import { paymentWebhooks } from './routes/payment-webhooks.js';
 import { apps } from './routes/apps.js';
@@ -98,6 +99,7 @@ export function createApp(): OpenAPIHono {
   app.route('/', checkout);
   app.route('/', pay);
   app.route('/', auth);
+  app.route('/', shopConfig);
   app.route('/', customerTokens);
   app.route('/', account);
   app.route('/', orders);

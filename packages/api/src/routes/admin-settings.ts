@@ -8,6 +8,7 @@ import { newTotpSecret, verifyTotp, otpauthUri } from '../auth/totp.js';
 import { normalizeEmail } from '../auth/email.js';
 import { sendStaffInvite } from '../email/dispatch.js';
 import { env } from '../env.js';
+import { stripeConfigured, stripeModeFromConfig } from '../payments/stripe.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireWrite, requireManage, requirePermission, guard } from './admin-helpers.js';
 
 export const adminSettings = new OpenAPIHono();
@@ -17,6 +18,23 @@ async function storeRow(storeId: string) {
   return row!;
 }
 const cfg = (row: { config: unknown }) => (row.config as Record<string, unknown> | null) ?? {};
+
+/** Atomic read-modify-write of store.config under a row lock. The config is a
+ *  single JSONB blob touched by several setting endpoints; a plain
+ *  read-then-write races (two concurrent saves each read the same value and the
+ *  second clobbers the first's keys). FOR UPDATE serialises them. Returns the
+ *  persisted config. */
+async function mutateStoreConfig(
+  storeId: string,
+  mutate: (config: Record<string, unknown>) => Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  return db.transaction(async (tx) => {
+    const [row] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, storeId)).for('update').limit(1);
+    const next = mutate((row?.config as Record<string, unknown> | null) ?? {});
+    await tx.update(s.store).set({ config: next }).where(eq(s.store.id, storeId));
+    return next;
+  });
+}
 
 // ── admin 2FA (TOTP) ─────────────────────────────────────────────────────────
 adminSettings.openapi(
@@ -52,6 +70,11 @@ adminSettings.openapi(
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const { secret, code } = c.req.valid('json');
+    // ra-sec: refuse to overwrite an existing factor. /disable requires the current
+    // code, so replacing 2FA always proves possession of the old device — otherwise
+    // a hijacked session could silently swap in an attacker-controlled secret.
+    const [u] = await db.select({ totpSecret: s.adminUser.totpSecret }).from(s.adminUser).where(eq(s.adminUser.id, admin.id)).limit(1);
+    if (u?.totpSecret) throw new HttpError(409, '2FA already enabled — disable it first');
     if (!verifyTotp(secret, code)) throw new HttpError(409, 'code did not match — check your authenticator app');
     await db.update(s.adminUser).set({ totpSecret: secret }).where(eq(s.adminUser.id, admin.id));
     return c.json({ enabled: true }, 200);
@@ -86,7 +109,18 @@ adminSettings.openapi(
     const st = requireStore(admin, c);
     const row = await storeRow(st.storeId);
     const config = cfg(row);
-    return c.json({ name: row.name, slug: row.slug, currency: row.currency, taxRate: row.taxRate, taxInclusive: row.taxInclusive, shippingTaxable: row.shippingTaxable, payments: (config.payments as object) ?? { cod: true, manual: true }, notifications: (config.notifications as object) ?? {}, googleClientId: (config.googleClientId as string) ?? null }, 200);
+    return c.json({
+      name: row.name,
+      slug: row.slug,
+      currency: row.currency,
+      taxRate: row.taxRate,
+      taxInclusive: row.taxInclusive,
+      shippingTaxable: row.shippingTaxable,
+      payments: (config.payments as object) ?? { cod: true, manual: true },
+      stripeMode: stripeModeFromConfig(config),
+      notifications: (config.notifications as object) ?? {},
+      googleClientId: (config.googleClientId as string) ?? null,
+    }, 200);
   }),
 );
 
@@ -116,12 +150,35 @@ adminSettings.openapi(
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireManage(st);
     const b = c.req.valid('json');
-    const row = await storeRow(st.storeId);
-    // Seed the credential-free defaults so toggling a gateway never silently
-    // disables cod/manual (which aren't persisted until first edited).
-    const payments = { cod: true, manual: true, ...((cfg(row).payments as object) ?? {}), ...b };
-    await db.update(s.store).set({ config: { ...cfg(row), payments } }).where(eq(s.store.id, st.storeId));
+    let payments: Record<string, unknown> = {};
+    await mutateStoreConfig(st.storeId, (config) => {
+      // Seed the credential-free defaults so toggling a gateway never silently
+      // disables cod/manual (which aren't persisted until first edited).
+      payments = { cod: true, manual: true, ...((config.payments as object) ?? {}), ...b };
+      return { ...config, payments };
+    });
     return c.json({ payments }, 200);
+  }),
+);
+
+adminSettings.openapi(
+  createRoute({
+    method: 'patch', path: '/v1/admin/settings/payments/stripe-mode', summary: 'Set the active Stripe mode (test/live)',
+    request: { body: { content: J(z.object({ mode: z.enum(['test', 'live']) })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ stripeMode: z.enum(['test', 'live']) })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireManage(st);
+    const { mode } = c.req.valid('json');
+    // Don't let an operator flip to a mode whose credentials aren't loaded — every
+    // subsequent /payment-intent would 503 with nothing surfaced at this endpoint.
+    if (!stripeConfigured(mode)) throw new HttpError(409, `cannot switch to ${mode} mode — Stripe ${mode} credentials are not configured`);
+    await mutateStoreConfig(st.storeId, (config) => {
+      const stripe = { ...(((config.stripe as object) ?? {}) as Record<string, unknown>), mode };
+      return { ...config, stripe };
+    });
+    return c.json({ stripeMode: mode }, 200);
   }),
 );
 
@@ -136,8 +193,7 @@ adminSettings.openapi(
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireManage(st);
     const { clientId } = c.req.valid('json');
-    const row = await storeRow(st.storeId);
-    await db.update(s.store).set({ config: { ...cfg(row), googleClientId: clientId || undefined } }).where(eq(s.store.id, st.storeId));
+    await mutateStoreConfig(st.storeId, (config) => ({ ...config, googleClientId: clientId || undefined }));
     return c.json({ ok: true }, 200);
   }),
 );
@@ -153,8 +209,7 @@ adminSettings.openapi(
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireManage(st);
     const b = c.req.valid('json');
-    const row = await storeRow(st.storeId);
-    await db.update(s.store).set({ config: { ...cfg(row), notifications: { ...((cfg(row).notifications as object) ?? {}), ...b } } }).where(eq(s.store.id, st.storeId));
+    await mutateStoreConfig(st.storeId, (config) => ({ ...config, notifications: { ...((config.notifications as object) ?? {}), ...b } }));
     return c.json({ ok: true }, 200);
   }),
 );
@@ -529,6 +584,11 @@ adminSettings.openapi(
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireManage(st);
     const { adminUserId } = c.req.valid('param');
+    // ra-sec: sessions are global (RLS-exempt), so scope the action here — confirm
+    // the target is enrolled in the caller's store before force-logging them out,
+    // or a manager could revoke a superadmin / another store's user by UUID (IDOR).
+    const [member] = await db.select({ id: s.adminUserStore.adminUserId }).from(s.adminUserStore).where(and(eq(s.adminUserStore.adminUserId, adminUserId), eq(s.adminUserStore.storeId, st.storeId))).limit(1);
+    if (!member) throw new HttpError(404, 'staff member not enrolled in this store');
     const del = await db.delete(s.session).where(eq(s.session.adminUserId, adminUserId)).returning({ id: s.session.id });
     return c.json({ revoked: del.length }, 200);
   }),

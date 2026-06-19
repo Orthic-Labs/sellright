@@ -19,6 +19,7 @@ export interface CreatePaymentInput {
   currency: string;
   /** Tokenized input from the client (never raw PAN). Shape is provider-specific. */
   token?: unknown;
+  stripeMode?: 'test' | 'live';
 }
 
 export interface RefundInput {
@@ -26,6 +27,7 @@ export interface RefundInput {
   providerRef: string | null;
   amount: number; // cents
   currency: string;
+  stripeMode?: 'test' | 'live';
 }
 
 export interface RefundResult {
