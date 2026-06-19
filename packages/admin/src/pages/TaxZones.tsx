@@ -188,7 +188,7 @@ export default function TaxZonesPage() {
                   </td>
                   <td className="td text-right">
                     <button
-                      className="text-gray-300 hover:text-red-600"
+                      className="text-gray-300 hover:text-danger"
                       onClick={() => {
                         if (confirm(`Delete tax zone "${z.name}"?`)) del.mutate(z.id);
                       }}

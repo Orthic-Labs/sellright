@@ -37,7 +37,7 @@ export default function DraftOrder() {
             <div key={i} className="flex items-end gap-2">
               <div className="flex-1"><label className="label">SKU</label><input className="input" value={it.sku} onChange={(e) => setItem(i, { sku: e.target.value })} placeholder="variant SKU" /></div>
               <div><label className="label">Qty</label><input className="input w-20" type="number" min={1} value={it.quantity} onChange={(e) => setItem(i, { quantity: Number(e.target.value) })} /></div>
-              {items.length > 1 && <button type="button" className="text-gray-300 hover:text-red-600 pb-2" onClick={() => setItems((a) => a.filter((_, idx) => idx !== i))}><X size={18} /></button>}
+              {items.length > 1 && <button type="button" className="text-gray-300 hover:text-danger pb-2" onClick={() => setItems((a) => a.filter((_, idx) => idx !== i))}><X size={18} /></button>}
             </div>
           ))}
           <button type="button" className="btn-ghost" onClick={() => setItems((a) => [...a, { sku: '', quantity: 1 }])}><Plus size={15} /> Add line</button>

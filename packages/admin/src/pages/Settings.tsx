@@ -145,7 +145,7 @@ export default function SettingsPage() {
                 {ship.data?.items.map((m) => (
                   <div key={m.id} className="flex items-center justify-between py-2.5 text-sm">
                     <span className="font-medium">{m.name} <span className="text-gray-400 text-xs font-normal">{m.code}</span></span>
-                    <span className="flex items-center gap-2"><Badge value={m.enabled ? 'active' : 'draft'} />{canManage && <button className="text-gray-300 hover:text-red-600" aria-label="Delete method" onClick={() => delShip.mutate(m.id)}><Trash2 size={15} /></button>}</span>
+                    <span className="flex items-center gap-2"><Badge value={m.enabled ? 'active' : 'draft'} />{canManage && <button className="text-gray-300 hover:text-danger" aria-label="Delete method" onClick={() => delShip.mutate(m.id)}><Trash2 size={15} /></button>}</span>
                   </div>
                 ))}
                 {ship.data?.items.length === 0 && !sm && <div className="text-sm text-gray-400 py-2">No shipping methods yet.</div>}
@@ -234,7 +234,7 @@ export default function SettingsPage() {
                           <select className="input py-1 text-xs w-28" value={u.role} disabled={u.isYou} onChange={(e) => setRole.mutate({ id: u.adminUserId, role: e.target.value })}>
                             {['owner', 'manager', 'staff', 'read_only'].map((r) => <option key={r} value={r}>{r}</option>)}
                           </select>
-                          {!u.isYou && <button className="text-gray-300 hover:text-red-600" aria-label="Remove staff" onClick={() => delStaff.mutate(u.adminUserId)}><Trash2 size={15} /></button>}
+                          {!u.isYou && <button className="text-gray-300 hover:text-danger" aria-label="Remove staff" onClick={() => delStaff.mutate(u.adminUserId)}><Trash2 size={15} /></button>}
                         </span>
                       </div>
                     ))}

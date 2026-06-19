@@ -45,7 +45,7 @@ export default function Products() {
     { key: 'status', header: 'Status', width: '12%', render: (p) => <Badge value={p.status} /> },
     { key: 'variants', header: 'Variants', align: 'center', width: '12%', render: (p) => <span className="tnum text-gray-500">{p.variants}</span> },
     { key: 'price', header: 'From', align: 'right', width: '15%', render: (p) => <span className="tnum">{p.minPrice != null ? money(p.minPrice, cur) : '—'}</span> },
-    { key: 'stock', header: 'Stock', align: 'right', width: '12%', render: (p) => <span className={`tnum ${p.stock <= 3 ? 'text-amber-600 font-medium' : 'text-gray-600'}`}>{p.stock}</span> },
+    { key: 'stock', header: 'Stock', align: 'right', width: '12%', render: (p) => <span className={`tnum ${p.stock <= 3 ? 'text-warning font-medium' : 'text-gray-600'}`}>{p.stock}</span> },
   ];
 
   const isFiltered = !!q || !!status;

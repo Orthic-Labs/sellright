@@ -12,8 +12,8 @@ function OpCard({ label, count, hint, to, icon, danger }: {
   label: string; count: number; hint: string; to: string; icon: React.ReactNode; danger?: boolean;
 }) {
   const attention = count > 0;
-  const tone = attention ? (danger ? 'border-rose-200 bg-rose-50/60' : 'border-amber-200 bg-amber-50/60') : 'border-gray-200/80';
-  const iconTone = !attention ? 'text-gray-300' : danger ? 'text-rose-500' : 'text-amber-500';
+  const tone = attention ? (danger ? 'border-danger/30 bg-danger-soft' : 'border-warning/30 bg-warning-soft') : 'border-line';
+  const iconTone = !attention ? 'text-gray-300' : danger ? 'text-danger' : 'text-warning';
   return (
     <Link to={to} className={`panel border ${tone} p-4 flex items-start justify-between gap-3 hover:border-gray-300 transition-colors`}>
       <div className="min-w-0">
@@ -122,7 +122,7 @@ export default function Dashboard() {
                 </div>
               </div>
               <div className="px-4 pb-3 -mt-1 text-xs">
-                <span className={`font-medium ${revLabel.tone === 'positive' ? 'text-emerald-600' : revLabel.tone === 'critical' ? 'text-rose-600' : 'text-gray-500'}`}>{revLabel.text}</span>
+                <span className={`font-medium ${revLabel.tone === 'positive' ? 'text-success' : revLabel.tone === 'critical' ? 'text-danger' : 'text-gray-500'}`}>{revLabel.text}</span>
                 {ordDelta != null && ordDelta !== 0 && (
                   <span className="ml-3 text-gray-500">
                     {ordDelta > 0 ? '▲' : '▼'} {Math.abs(ordDelta)}% orders vs previous period

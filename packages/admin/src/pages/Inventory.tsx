@@ -52,7 +52,7 @@ export default function Inventory() {
     { key: 'sku', header: 'SKU', width: '16%', render: (r) => <span className="font-mono text-xs text-gray-500">{r.sku}</span> },
     { key: 'status', header: 'Status', align: 'center', width: '12%', render: (r) => <Badge value={stockState(r.available)} /> },
     { key: 'allocated', header: 'Committed', align: 'center', width: '11%', render: (r) => <span className="tnum text-gray-500">{r.allocated}</span> },
-    { key: 'available', header: 'Available', align: 'center', width: '11%', render: (r) => <span className={`tnum ${r.available <= 3 ? 'text-amber-600 font-medium' : 'text-gray-700'}`}>{r.available}</span> },
+    { key: 'available', header: 'Available', align: 'center', width: '11%', render: (r) => <span className={`tnum ${r.available <= 3 ? 'text-warning font-medium' : 'text-gray-700'}`}>{r.available}</span> },
     { key: 'onhand', header: 'On hand', align: 'center', width: '16%', render: (r) => {
       const editing = edits[r.variantId];
       const dirty = editing !== undefined && Number(editing) !== r.onHand;

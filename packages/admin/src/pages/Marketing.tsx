@@ -93,8 +93,8 @@ export default function Marketing() {
                 </tbody>
               </table>
             )}
-            {sync.data && <div className={`px-5 py-2.5 text-xs ${sync.data.failed ? 'text-amber-700 bg-amber-50' : 'text-emerald-700 bg-emerald-50'}`}>Synced {sync.data.synced} customers{sync.data.failed ? ` — ${sync.data.failed} failed (check Listmonk connection/logs)` : ''}.</div>}
-            {sync.error && <div className="px-5 py-2.5 text-xs text-red-700 bg-red-50">{(sync.error as Error).message}</div>}
+            {sync.data && <div className={`px-5 py-2.5 text-xs ${sync.data.failed ? 'text-warning bg-warning-soft' : 'text-success bg-success-soft'}`}>Synced {sync.data.synced} customers{sync.data.failed ? ` — ${sync.data.failed} failed (check Listmonk connection/logs)` : ''}.</div>}
+            {sync.error && <div className="px-5 py-2.5 text-xs text-danger bg-danger-soft">{(sync.error as Error).message}</div>}
           </div>
 
           {campaign && (

@@ -59,7 +59,7 @@ export default function Discounts() {
                   <td className="td">{fmtValue(p)}</td>
                   <td className="td text-gray-500">{p.usedCount}{p.usageLimit ? ` / ${p.usageLimit}` : ''}{p.perCustomerUsageLimit ? ` · ${p.perCustomerUsageLimit}/cust` : ''}</td>
                   <td className="td"><button onClick={() => toggle.mutate(p)}><Badge value={p.enabled ? 'active' : 'draft'} /></button></td>
-                  <td className="td text-right">{p.usedCount === 0 && <button className="text-gray-300 hover:text-red-600" onClick={() => del.mutate(p.id)} title="Delete"><Trash2 size={15} /></button>}</td>
+                  <td className="td text-right">{p.usedCount === 0 && <button className="text-gray-300 hover:text-danger" onClick={() => del.mutate(p.id)} title="Delete"><Trash2 size={15} /></button>}</td>
                 </tr>
               ))}
             </tbody>

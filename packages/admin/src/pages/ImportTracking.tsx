@@ -38,10 +38,10 @@ export default function ImportTracking() {
 
         {result && (
           <div className="card p-4">
-            <div className="text-sm font-medium text-emerald-700">✓ {result.updated} orders marked shipped.</div>
+            <div className="text-sm font-medium text-success">✓ {result.updated} orders marked shipped.</div>
             {result.errors.length > 0 && (
               <div className="mt-2">
-                <div className="text-sm font-medium text-red-700">{result.errors.length} errors:</div>
+                <div className="text-sm font-medium text-danger">{result.errors.length} errors:</div>
                 <ul className="text-xs text-gray-600 mt-1 space-y-0.5">{result.errors.map((e, i) => <li key={i}><span className="font-mono">{e.code}</span> — {e.error}</li>)}</ul>
               </div>
             )}

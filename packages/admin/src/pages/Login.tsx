@@ -43,7 +43,7 @@ export default function Login() {
             <h1 className="text-base font-semibold">Sign in</h1>
             <p className="text-sm text-gray-500">Manage your stores</p>
           </div>
-          {err && <div className="rounded-lg bg-red-50 text-red-700 text-sm px-3 py-2 border border-red-200">{err}</div>}
+          {err && <div className="rounded-lg bg-danger-soft text-danger text-sm px-3 py-2 border border-danger/30">{err}</div>}
           {!need2fa ? (
             <>
               <div>

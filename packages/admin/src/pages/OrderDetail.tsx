@@ -99,7 +99,7 @@ export default function OrderDetailPage() {
                     <td className="td">
                       <div className="font-medium">{l.name}</div>
                       <div className="text-xs text-gray-400">{l.sku} · {money(l.unitPrice, cur)} × {l.quantity}
-                        {l.fulfilledQty > 0 && <span className="text-emerald-600"> · {l.fulfilledQty} shipped</span>}</div>
+                        {l.fulfilledQty > 0 && <span className="text-success"> · {l.fulfilledQty} shipped</span>}</div>
                     </td>
                     <td className="td text-right font-medium whitespace-nowrap">{money(l.lineTotal, cur)}</td>
                   </tr>
@@ -205,7 +205,7 @@ export default function OrderDetailPage() {
           )}
 
           {canCancel && (
-            <div className="border-red-200 [&>section]:border-red-200">
+            <div className="border-danger/30 [&>section]:border-danger/30">
               <FormSection title="Danger zone" description="Cancelling releases reserved stock. Refund must be issued separately.">
                 <button className="btn-danger" disabled={cancel.isPending}
                   onClick={() => { if (confirm(`Cancel order ${o.code}? Stock will be released.`)) cancel.mutate(); }}>

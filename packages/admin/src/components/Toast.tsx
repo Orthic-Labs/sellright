@@ -59,9 +59,9 @@ export interface ToastEvent {
 const Ctx = createContext<ToastContext | null>(null);
 
 const TONE_STYLE: Record<ToastTone, { wrap: string; icon: typeof Info; iconCls: string }> = {
-  success: { wrap: 'bg-white border-emerald-200 text-emerald-900', icon: CheckCircle2, iconCls: 'text-emerald-500' },
-  error: { wrap: 'bg-white border-red-200 text-red-900', icon: AlertCircle, iconCls: 'text-red-500' },
-  info: { wrap: 'bg-white border-blue-200 text-blue-900', icon: Info, iconCls: 'text-blue-500' },
+  success: { wrap: 'bg-surface border-success/30 text-emerald-900', icon: CheckCircle2, iconCls: 'text-success' },
+  error: { wrap: 'bg-surface border-danger/30 text-red-900', icon: AlertCircle, iconCls: 'text-danger' },
+  info: { wrap: 'bg-surface border-info/30 text-blue-900', icon: Info, iconCls: 'text-info' },
 };
 
 const DEFAULT_TTL: Record<ToastTone, number> = { success: 4000, info: 4000, error: 0 };

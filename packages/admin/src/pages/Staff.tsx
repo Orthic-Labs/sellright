@@ -69,7 +69,7 @@ function CopyButton({ text }: { text: string }) {
   };
   return (
     <button className="btn-ghost py-1 px-2 flex items-center gap-1 text-xs" onClick={copy} title="Copy token">
-      {copied ? <Check size={13} className="text-emerald-600" /> : <Copy size={13} />}
+      {copied ? <Check size={13} className="text-success" /> : <Copy size={13} />}
       {copied ? 'Copied' : 'Copy'}
     </button>
   );
@@ -299,7 +299,7 @@ export default function StaffPage() {
                             Revoke sessions
                           </button>
                           <button
-                            className="btn-ghost py-1 px-2 text-xs text-red-600 hover:bg-red-50 flex items-center gap-1"
+                            className="btn-ghost py-1 px-2 text-xs text-danger hover:bg-danger-soft flex items-center gap-1"
                             title="Remove from store"
                             disabled={removeStaff.isPending}
                             onClick={() => {
@@ -339,7 +339,7 @@ export default function StaffPage() {
 
           {inviteResult ? (
             <div className="space-y-3">
-              <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+              <div className="rounded-lg border border-success/30 bg-success-soft p-3 text-sm text-emerald-800">
                 Invite created. Share the token below with the invitee — they'll set their own password on acceptance.
               </div>
               <div>
@@ -494,8 +494,8 @@ export default function StaffPage() {
                 <td className="td font-mono text-xs text-gray-700">{key}</td>
                 <td className="td font-medium">{label}</td>
                 <td className="td text-gray-500">{hint}</td>
-                <td className="td text-center text-emerald-600">✓</td>
-                <td className="td text-center text-emerald-600">✓</td>
+                <td className="td text-center text-success">✓</td>
+                <td className="td text-center text-success">✓</td>
                 <td className="td text-center text-gray-400">per-grant</td>
                 <td className="td text-center text-gray-400">per-grant</td>
               </tr>

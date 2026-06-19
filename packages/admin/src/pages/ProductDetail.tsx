@@ -156,7 +156,7 @@ export default function ProductDetailPage() {
                         <td className="td"><CurrencyInput value={d.salePrice} placeholder="—" onChange={(val) => setV(v.id, { salePrice: val })} cur={cur} /></td>
                         <td className="td"><input className="input w-20 text-center mx-auto" type="number" min={0} value={d.onHand} onChange={(e) => setV(v.id, { onHand: e.target.value })} /></td>
                         <td className="td text-center"><input type="checkbox" className="h-4 w-4 accent-brand" checked={d.enabled} onChange={(e) => setV(v.id, { enabled: e.target.checked })} /></td>
-                        <td className="td text-right"><button className="text-gray-300 hover:text-red-600" title="Delete variant" onClick={() => { if (confirm(`Delete variant ${v.sku}?`)) delVariant.mutate(v.id); }}><X size={16} /></button></td>
+                        <td className="td text-right"><button className="text-gray-300 hover:text-danger" title="Delete variant" onClick={() => { if (confirm(`Delete variant ${v.sku}?`)) delVariant.mutate(v.id); }}><X size={16} /></button></td>
                       </tr>
                     );
                   })}
@@ -191,7 +191,7 @@ export default function ProductDetailPage() {
           <FormSection title="Media" description="Square crops work best. The first image is the one customers see in lists and search.">
             <div className="aspect-square rounded-lg bg-gray-100 grid place-items-center overflow-hidden relative">
               {img ? <img src={img} alt={p.name} className="h-full w-full object-cover" /> : <Package size={28} className="text-gray-300" />}
-              {uploading && <div className="absolute inset-0 bg-white/60 grid place-items-center"><Spinner /></div>}
+              {uploading && <div className="absolute inset-0 bg-surface/60 grid place-items-center"><Spinner /></div>}
             </div>
             <div className="flex items-center gap-3 mt-2">
               <label className="btn-ghost cursor-pointer text-sm">
@@ -199,9 +199,9 @@ export default function ProductDetailPage() {
                 <input type="file" accept="image/*" className="hidden" disabled={uploading}
                   onChange={(e) => { const f = e.target.files?.[0]; if (f) onPickImage(f); e.currentTarget.value = ''; }} />
               </label>
-              {img && <button className="text-sm text-gray-400 hover:text-red-600" disabled={removeImage.isPending} onClick={() => removeImage.mutate()}>Remove</button>}
+              {img && <button className="text-sm text-gray-400 hover:text-danger" disabled={removeImage.isPending} onClick={() => removeImage.mutate()}>Remove</button>}
             </div>
-            {uploadErr && <div className="text-xs text-red-600 mt-1">{uploadErr}</div>}
+            {uploadErr && <div className="text-xs text-danger mt-1">{uploadErr}</div>}
             {p.images.length > 0 && (
               <div className="grid grid-cols-3 gap-1.5 mt-3">
                 {p.images.map((im) => (
@@ -277,7 +277,7 @@ function OptionsEditor({ productId, storeSlug, variants }: { productId: string; 
           <div><label className="label">Values (comma-sep)</label><input className="input w-44" placeholder="S, M, L" value={gValues} onChange={(e) => setGValues(e.target.value)} /></div>
           <button className="btn-primary" disabled={!gName.trim() || addGroup.isPending} onClick={() => addGroup.mutate()}>{addGroup.isPending ? <Spinner className="text-white" /> : <><Plus size={15} /> Add group</>}</button>
         </div>
-        {(addGroup.error || addValue.error || setVariantOptions.error) && <div className="text-xs text-red-600">{((addGroup.error || addValue.error || setVariantOptions.error) as Error).message}</div>}
+        {(addGroup.error || addValue.error || setVariantOptions.error) && <div className="text-xs text-danger">{((addGroup.error || addValue.error || setVariantOptions.error) as Error).message}</div>}
         {(() => {
           const allValues = groups.flatMap((g) => g.options.map((o) => ({ ...o, group: g.name })));
           if (!allValues.length || !variants.length) return null;

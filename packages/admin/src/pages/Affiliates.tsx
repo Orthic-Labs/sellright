@@ -50,7 +50,7 @@ export default function Affiliates() {
                   <td className="td font-mono text-xs">{a.code}</td>
                   <td className="td text-center text-gray-500">{a.orders}</td>
                   <td className="td text-right">{money(a.earned, cur)}</td>
-                  <td className="td text-right font-medium">{a.unsettled > 0 ? <span className="text-amber-600">{money(a.unsettled, cur)}</span> : money(0, cur)}</td>
+                  <td className="td text-right font-medium">{a.unsettled > 0 ? <span className="text-warning">{money(a.unsettled, cur)}</span> : money(0, cur)}</td>
                 </tr>
               ))}
             </tbody>

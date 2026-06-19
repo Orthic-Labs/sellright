@@ -43,8 +43,8 @@ export function PageHeader({ title, subtitle, actions }: { title: string; subtit
   return (
     <div className="flex items-start justify-between mb-5 gap-4">
       <div className="min-w-0">
-        <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
-        {subtitle && <p className="text-sm text-gray-500 mt-0.5">{subtitle}</p>}
+        <h1 className="font-display text-2xl font-semibold tracking-tight text-balance">{title}</h1>
+        {subtitle && <p className="text-sm text-gray-500 mt-1">{subtitle}</p>}
       </div>
       {actions && <div className="flex items-center gap-2 shrink-0">{actions}</div>}
     </div>
@@ -55,11 +55,11 @@ export function PageHeader({ title, subtitle, actions }: { title: string; subtit
  * Status badges — domain states mapped onto a semantic palette
  * ------------------------------------------------------------------ */
 
-const POSITIVE = 'bg-emerald-50 text-emerald-700 ring-emerald-600/20';
-const ATTENTION = 'bg-amber-50 text-amber-700 ring-amber-600/20';
-const CRITICAL = 'bg-rose-50 text-rose-700 ring-rose-600/20';
-const INFO = 'bg-blue-50 text-blue-700 ring-blue-600/20';
-const NEUTRAL = 'bg-gray-100 text-gray-600 ring-gray-500/20';
+const POSITIVE = 'bg-success-soft text-success';
+const ATTENTION = 'bg-warning-soft text-warning';
+const CRITICAL = 'bg-danger-soft text-danger';
+const INFO = 'bg-info-soft text-info';
+const NEUTRAL = 'bg-surface-2 text-muted';
 
 const STATE_STYLES: Record<string, string> = {
   // Payment / order
@@ -86,7 +86,8 @@ const TONE: Record<BadgeTone, string> = { positive: POSITIVE, attention: ATTENTI
 export function Badge({ value, tone, label }: { value: string; tone?: BadgeTone; label?: string }) {
   const cls = tone ? TONE[tone] : (STATE_STYLES[value] ?? NEUTRAL);
   return (
-    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${cls}`}>
+    <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ${cls}`}>
+      <span className="h-1.5 w-1.5 rounded-full bg-current opacity-80" aria-hidden="true" />
       {label ?? LABELS[value] ?? value}
     </span>
   );
@@ -100,11 +101,11 @@ export const StatusBadge = Badge;
  * ------------------------------------------------------------------ */
 
 const ALERT: Record<BadgeTone, { wrap: string; icon: typeof Info; iconCls: string }> = {
-  info: { wrap: 'bg-blue-50 border-blue-200 text-blue-800', icon: Info, iconCls: 'text-blue-500' },
-  positive: { wrap: 'bg-emerald-50 border-emerald-200 text-emerald-800', icon: CheckCircle2, iconCls: 'text-emerald-500' },
-  attention: { wrap: 'bg-amber-50 border-amber-200 text-amber-800', icon: AlertTriangle, iconCls: 'text-amber-500' },
-  critical: { wrap: 'bg-red-50 border-red-200 text-red-800', icon: AlertCircle, iconCls: 'text-red-500' },
-  neutral: { wrap: 'bg-gray-50 border-gray-200 text-gray-700', icon: Info, iconCls: 'text-gray-400' },
+  info: { wrap: 'bg-info-soft border-info text-info', icon: Info, iconCls: 'text-info' },
+  positive: { wrap: 'bg-success-soft border-success text-success', icon: CheckCircle2, iconCls: 'text-success' },
+  attention: { wrap: 'bg-warning-soft border-warning text-warning', icon: AlertTriangle, iconCls: 'text-warning' },
+  critical: { wrap: 'bg-danger-soft border-danger text-danger', icon: AlertCircle, iconCls: 'text-danger' },
+  neutral: { wrap: 'bg-surface-2 border-line text-ink', icon: Info, iconCls: 'text-muted' },
 };
 
 export function InlineAlert({ tone = 'info', title, children }: { tone?: BadgeTone; title?: ReactNode; children?: ReactNode }) {
@@ -129,7 +130,7 @@ export function ErrorNote({ message }: { message: string }) {
 export function ErrorState({ title = 'Something went wrong', message, onRetry }: { title?: string; message: string; onRetry?: () => void }) {
   return (
     <div className="text-center py-14 px-6">
-      <AlertCircle size={26} className="mx-auto text-red-400" aria-hidden="true" />
+      <AlertCircle size={26} className="mx-auto text-danger" aria-hidden="true" />
       <p className="mt-3 text-sm font-medium text-gray-700">{title}</p>
       <p className="mt-1 text-xs text-gray-500 max-w-sm mx-auto">{message}</p>
       {onRetry && (
@@ -184,7 +185,7 @@ export interface TabDef { key: string; label: string; count?: number }
 
 export function Tabs({ tabs, value, onChange }: { tabs: TabDef[]; value: string; onChange: (key: string) => void }) {
   return (
-    <div className="flex rounded-lg border border-gray-200 bg-white p-0.5" role="tablist">
+    <div className="flex rounded-lg border border-gray-200 bg-surface p-0.5" role="tablist">
       {tabs.map((t) => {
         const active = value === t.key;
         return (
@@ -421,7 +422,7 @@ export function KpiCard({ label, value, delta, hint, icon, to, onClick }: {
       <div className="mt-1 text-2xl font-semibold tracking-tight tnum">{value}</div>
       <div className="mt-0.5 flex items-center gap-2 text-xs">
         {delta != null && (
-          <span className={`tnum font-medium ${delta > 0 ? 'text-emerald-600' : delta < 0 ? 'text-rose-600' : 'text-gray-400'}`}>
+          <span className={`tnum font-medium ${delta > 0 ? 'text-success' : delta < 0 ? 'text-danger' : 'text-subtle'}`}>
             {delta > 0 ? '▲' : delta < 0 ? '▼' : '—'} {Math.abs(delta)}%
           </span>
         )}
@@ -466,7 +467,7 @@ export function Field({ label, htmlFor, error, hint, children }: {
       <label className="label" htmlFor={htmlFor}>{label}</label>
       {children}
       {hint && !error && <p className="mt-1 text-xs text-gray-400">{hint}</p>}
-      {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
+      {error && <p className="mt-1 text-xs text-danger">{error}</p>}
     </div>
   );
 }

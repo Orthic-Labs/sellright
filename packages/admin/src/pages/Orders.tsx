@@ -133,7 +133,7 @@ export default function Orders() {
 
   const columns: Column<OrderRow>[] = [
     { key: 'code', header: 'Order', width: '20%', render: (o) => (
-      <span className="font-medium">{o.code}{o.isPreOrder && <span className="ml-1.5 align-middle text-[10px] uppercase font-semibold text-amber-600 bg-amber-50 rounded px-1 py-0.5">pre-order</span>}</span>
+      <span className="font-medium">{o.code}{o.isPreOrder && <span className="ml-1.5 align-middle text-[10px] uppercase font-semibold text-warning bg-warning-soft rounded px-1 py-0.5">pre-order</span>}</span>
     )},
     { key: 'date', header: 'Date', width: '22%', render: (o) => <span className="text-gray-500">{dateTime(o.placedAt ?? o.createdAt)}</span> },
     { key: 'customer', header: 'Customer', render: (o) => <span className="text-gray-600 truncate block">{o.email ?? '—'}</span> },
@@ -196,9 +196,9 @@ export default function Orders() {
         {userViews.map((v) => {
           const active = !isPre && state === v.state && q === v.q;
           return (
-            <span key={v.id} className={`inline-flex items-center rounded-md border ${active ? 'bg-brand-light border-brand/30 text-brand' : 'bg-white border-gray-300 text-gray-700'}`}>
+            <span key={v.id} className={`inline-flex items-center rounded-md border ${active ? 'bg-brand-light border-brand/30 text-brand' : 'bg-surface border-gray-300 text-gray-700'}`}>
               <button className="px-2.5 py-1 text-xs" onClick={() => applyView(v)}>{v.name}</button>
-              <button aria-label={`Delete view ${v.name}`} className="px-1.5 py-1 text-gray-400 hover:text-red-600" onClick={() => deleteView(v.id)}><Trash2 size={12} /></button>
+              <button aria-label={`Delete view ${v.name}`} className="px-1.5 py-1 text-gray-400 hover:text-danger" onClick={() => deleteView(v.id)}><Trash2 size={12} /></button>
             </span>
           );
         })}

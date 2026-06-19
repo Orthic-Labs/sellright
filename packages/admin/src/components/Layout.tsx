@@ -9,6 +9,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../auth';
 import { api } from '../api';
 import { initials } from '../lib/format';
+import { ThemeMenu } from '../theme';
 
 type IconType = ComponentType<{ size?: number | string; className?: string }>;
 interface NavItem { to: string; label: string; icon: IconType; end?: boolean }
@@ -89,7 +90,7 @@ function StoreSwitcher() {
   return (
     <div className="relative">
       <button onClick={() => setOpen((o) => !o)} aria-haspopup="menu" aria-expanded={open}
-        className="flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium hover:bg-gray-50">
+        className="flex items-center gap-2 rounded-lg border border-gray-300 bg-surface px-3 py-1.5 text-sm font-medium hover:bg-gray-50">
         <Store size={15} className="text-brand" aria-hidden="true" />
         <span className="max-w-[140px] truncate">{store.name}</span>
         <ChevronDown size={14} className="text-gray-400" aria-hidden="true" />
@@ -138,12 +139,12 @@ function AccountMenu() {
 function StoreMark({ name }: { name: string }) {
   return (
     <div className="flex items-center gap-2.5 min-w-0">
-      <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-brand text-white text-xs font-bold">
+      <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-brand text-brand-on text-xs font-bold">
         {initials(name)}
       </div>
       <div className="min-w-0 leading-tight">
         <div className="truncate text-sm font-semibold">{name}</div>
-        <div className="text-[11px] text-gray-400">SellRight admin</div>
+        <div className="text-[11px] text-shell-muted">SellRight admin</div>
       </div>
     </div>
   );
@@ -170,7 +171,7 @@ function NavItems({ onNavigate }: { onNavigate?: () => void }) {
         return (
           <div key={g.id}>
             <button onClick={() => toggle(g.id)} aria-expanded={open}
-              className="flex w-full items-center justify-between rounded-md px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-gray-400 hover:text-gray-600">
+              className="flex w-full items-center justify-between rounded-md px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-shell-muted hover:text-shell-text">
               {g.label}
               <ChevronDown size={13} className={`transition-transform ${open ? '' : '-rotate-90'}`} aria-hidden="true" />
             </button>
@@ -180,7 +181,7 @@ function NavItems({ onNavigate }: { onNavigate?: () => void }) {
                   <NavLink key={to} to={to} end={end} onClick={onNavigate}
                     className={({ isActive }) =>
                       `flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
-                        isActive ? 'bg-white shadow-[0_1px_2px_rgba(0,0,0,0.05)] font-semibold text-ink' : 'text-gray-600 hover:bg-white/70'
+                        isActive ? 'bg-shell-active font-semibold text-shell-active-text' : 'text-shell-muted hover:bg-shell-surface hover:text-shell-text'
                       }`}>
                     <Icon size={17} /> {label}
                   </NavLink>
@@ -212,13 +213,13 @@ export default function Layout() {
   return (
     <div className="flex h-full">
       {/* Desktop sidebar */}
-      <aside className="hidden md:flex w-60 shrink-0 flex-col border-r border-gray-200 bg-shell">
-        <div className="flex items-center px-4 h-14 border-b border-gray-200">
+      <aside className="hidden md:flex w-60 shrink-0 flex-col border-r border-shell-border bg-shell text-shell-text">
+        <div className="flex items-center px-4 h-14 border-b border-shell-border">
           <StoreMark name={storeName} />
         </div>
         <NavItems />
-        <div className="p-3 border-t border-gray-200">
-          <button onClick={() => void logout()} className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-gray-600 hover:bg-white/70">
+        <div className="p-3 border-t border-shell-border">
+          <button onClick={() => void logout()} className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-shell-muted hover:bg-shell-surface hover:text-shell-text">
             <LogOut size={16} /> Sign out
           </button>
         </div>
@@ -228,14 +229,14 @@ export default function Layout() {
       {drawer && (
         <div className="md:hidden fixed inset-0 z-40 flex">
           <div className="absolute inset-0 bg-black/30 animate-fade-in" onClick={() => setDrawer(false)} aria-hidden="true" />
-          <aside className="relative flex w-72 max-w-[80vw] flex-col bg-shell shadow-xl animate-drawer-in" role="dialog" aria-modal="true" aria-label="Navigation">
-            <div className="flex items-center justify-between px-4 h-14 border-b border-gray-200">
+          <aside className="relative flex w-72 max-w-[80vw] flex-col bg-shell text-shell-text shadow-xl animate-drawer-in" role="dialog" aria-modal="true" aria-label="Navigation">
+            <div className="flex items-center justify-between px-4 h-14 border-b border-shell-border">
               <StoreMark name={storeName} />
-              <button onClick={() => setDrawer(false)} aria-label="Close navigation" className="grid h-8 w-8 place-items-center rounded-lg text-gray-500 hover:bg-white/70"><X size={18} /></button>
+              <button onClick={() => setDrawer(false)} aria-label="Close navigation" className="grid h-8 w-8 place-items-center rounded-lg text-shell-muted hover:bg-shell-surface hover:text-shell-text"><X size={18} /></button>
             </div>
             <NavItems onNavigate={() => setDrawer(false)} />
-            <div className="p-3 border-t border-gray-200">
-              <button onClick={() => void logout()} className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-gray-600 hover:bg-white/70">
+            <div className="p-3 border-t border-shell-border">
+              <button onClick={() => void logout()} className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-shell-muted hover:bg-shell-surface hover:text-shell-text">
                 <LogOut size={16} /> Sign out
               </button>
             </div>
@@ -245,7 +246,7 @@ export default function Layout() {
 
       {/* Main column */}
       <div className="flex flex-1 flex-col min-w-0">
-        <header className="flex items-center gap-3 h-14 px-4 md:px-5 border-b border-gray-200 bg-white/80 backdrop-blur">
+        <header className="flex items-center gap-3 h-14 px-4 md:px-5 border-b border-gray-200 bg-surface/80 backdrop-blur">
           {/* Mobile: menu + store name */}
           <button className="md:hidden grid h-9 w-9 place-items-center rounded-lg text-gray-600 hover:bg-gray-100" aria-label="Open navigation" onClick={() => setDrawer(true)}>
             <Menu size={20} />
@@ -256,6 +257,7 @@ export default function Layout() {
           <div className="hidden md:block"><GlobalSearch /></div>
 
           <div className="flex-1" />
+          <ThemeMenu />
           <StoreSwitcher />
           <AccountMenu />
         </header>

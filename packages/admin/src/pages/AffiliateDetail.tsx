@@ -38,7 +38,7 @@ export default function AffiliateDetailPage() {
       <div className="grid grid-cols-3 gap-3 mb-5">
         <div className="card p-4"><div className="text-xs text-gray-500">Earned</div><div className="text-xl font-semibold">{money(a.earned, cur)}</div></div>
         <div className="card p-4"><div className="text-xs text-gray-500">Paid out</div><div className="text-xl font-semibold">{money(a.settled, cur)}</div></div>
-        <div className="card p-4"><div className="text-xs text-gray-500">Outstanding</div><div className="text-xl font-semibold text-amber-600">{money(a.unsettled, cur)}</div></div>
+        <div className="card p-4"><div className="text-xs text-gray-500">Outstanding</div><div className="text-xl font-semibold text-warning">{money(a.unsettled, cur)}</div></div>
       </div>
 
       <div className="card p-4 mb-5">

@@ -4,6 +4,18 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>SellRight Admin</title>
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem('sr-theme') || 'vermillion';
+          var m = localStorage.getItem('sr-mode') || 'system';
+          var dark = m === 'dark' || (m === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          var r = document.documentElement;
+          r.dataset.theme = t;
+          if (dark) r.classList.add('dark');
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

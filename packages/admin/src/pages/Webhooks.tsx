@@ -35,21 +35,21 @@ function SecretCallout({ secret, onDismiss }: { secret: string; onDismiss: () =>
   };
 
   return (
-    <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-4">
+    <div className="mb-4 rounded-lg border border-warning/30 bg-warning-soft p-4">
       <p className="text-sm font-semibold text-amber-800 mb-1">Copy your signing secret — it won't be shown again</p>
-      <p className="text-xs text-amber-700 mb-3">Store this secret somewhere safe. Use it to verify webhook payloads by checking the <code className="font-mono bg-amber-100 px-1 rounded">X-Webhook-Signature</code> header on incoming requests.</p>
+      <p className="text-xs text-warning mb-3">Store this secret somewhere safe. Use it to verify webhook payloads by checking the <code className="font-mono bg-warning-soft px-1 rounded">X-Webhook-Signature</code> header on incoming requests.</p>
       <div className="flex items-center gap-2">
-        <code className="flex-1 font-mono text-xs bg-white border border-amber-200 rounded px-3 py-2 text-amber-900 break-all select-all">{secret}</code>
+        <code className="flex-1 font-mono text-xs bg-surface border border-warning/30 rounded px-3 py-2 text-amber-900 break-all select-all">{secret}</code>
         <button
-          className="btn-ghost flex items-center gap-1.5 text-amber-700 border border-amber-300 hover:bg-amber-100 shrink-0"
+          className="btn-ghost flex items-center gap-1.5 text-warning border border-warning/30 hover:bg-warning-soft shrink-0"
           onClick={copy}
           type="button"
         >
-          {copied ? <Check size={14} className="text-green-600" /> : <Copy size={14} />}
+          {copied ? <Check size={14} className="text-success" /> : <Copy size={14} />}
           {copied ? 'Copied' : 'Copy'}
         </button>
       </div>
-      <button className="mt-3 text-xs text-amber-600 underline" type="button" onClick={onDismiss}>I've saved it — dismiss</button>
+      <button className="mt-3 text-xs text-warning underline" type="button" onClick={onDismiss}>I've saved it — dismiss</button>
     </div>
   );
 }
@@ -241,7 +241,7 @@ export default function WebhooksPage() {
                       <span className="flex items-center justify-end gap-2 text-sm">
                         <span className="text-gray-500">Delete?</span>
                         <button
-                          className="text-red-600 font-medium hover:underline"
+                          className="text-danger font-medium hover:underline"
                           onClick={() => del.mutate(w.id)}
                           disabled={del.isPending}
                         >
@@ -256,7 +256,7 @@ export default function WebhooksPage() {
                       </span>
                     ) : (
                       <button
-                        className="text-gray-300 hover:text-red-600"
+                        className="text-gray-300 hover:text-danger"
                         onClick={() => setDeleteConfirm(w.id)}
                         title="Delete endpoint"
                       >

@@ -44,7 +44,7 @@ export default function CollectionDetailPage() {
                   <tr key={p.id} className="border-t border-gray-100 first:border-0">
                     <td className="td"><Link to={`/products/${p.id}`} className="font-medium hover:text-brand">{p.name}</Link></td>
                     <td className="td"><Badge value={p.status} /></td>
-                    <td className="td text-right"><button className="text-gray-400 hover:text-red-600" onClick={() => remove.mutate(p.id)} title="Remove"><X size={16} /></button></td>
+                    <td className="td text-right"><button className="text-gray-400 hover:text-danger" onClick={() => remove.mutate(p.id)} title="Remove"><X size={16} /></button></td>
                   </tr>
                 ))}
               </tbody>
