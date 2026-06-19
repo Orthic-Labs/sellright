@@ -27,7 +27,7 @@ export default function Marketing() {
     queryFn: () => api.get<{ lists: ListmonkList[] }>('/marketing/lists'),
     enabled: !!cfg?.configured,
   });
-  const sync = useMutation({ mutationFn: (listId: number) => api.post<{ synced: number }>('/marketing/sync', { listId }), onSuccess: () => lists.refetch() });
+  const sync = useMutation({ mutationFn: (listId: number) => api.post<{ synced: number; failed: number }>('/marketing/sync', { listId }), onSuccess: () => lists.refetch() });
 
   const [campaign, setCampaign] = useState<{ name: string; subject: string; listId: number; body: string } | null>(null);
   const createCampaign = useMutation({ mutationFn: () => api.post('/marketing/campaigns', campaign), onSuccess: () => setCampaign(null) });
@@ -93,7 +93,7 @@ export default function Marketing() {
                 </tbody>
               </table>
             )}
-            {sync.data && <div className="px-5 py-2.5 text-xs text-emerald-700 bg-emerald-50">Synced {sync.data.synced} customers.</div>}
+            {sync.data && <div className={`px-5 py-2.5 text-xs ${sync.data.failed ? 'text-amber-700 bg-amber-50' : 'text-emerald-700 bg-emerald-50'}`}>Synced {sync.data.synced} customers{sync.data.failed ? ` — ${sync.data.failed} failed (check Listmonk connection/logs)` : ''}.</div>}
             {sync.error && <div className="px-5 py-2.5 text-xs text-red-700 bg-red-50">{(sync.error as Error).message}</div>}
           </div>
 

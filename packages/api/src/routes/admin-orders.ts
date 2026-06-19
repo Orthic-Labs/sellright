@@ -14,6 +14,7 @@ import { resolveTaxRate } from '../money/tax.js';
 import { emitEvent } from '../webhooks/emit.js';
 import { sendShippingNotification } from '../email/dispatch.js';
 import { getProvider } from '../payments/provider.js';
+import { stripeModeFromConfig } from '../payments/stripe.js';
 
 export const adminOrders = new OpenAPIHono();
 
@@ -207,7 +208,7 @@ adminOrders.openapi(
       // row). manual/cod refundPayment is a no-op Settled; stripe actually refunds.
       let gatewayResult: { state: 'Settled' | 'Pending'; providerRef: string | null };
       try {
-        gatewayResult = await executeGatewayRefund(pay.method, pay.providerRef, amount, o.currency);
+        gatewayResult = await executeGatewayRefund(tx, st.storeId, pay.method, pay.providerRef, amount, o.currency);
       } catch (e: unknown) {
         const err = e as { kind?: string; message?: string };
         if (err.kind === 'providerfail') return { kind: 'providerfail' as const, message: err.message ?? 'gateway refund failed' };
@@ -255,6 +256,8 @@ async function alreadyRefunded(tx: Tx, orderId: string): Promise<number> {
  * can exit the withStore() txn cleanly without writing any ledger rows.
  */
 async function executeGatewayRefund(
+  tx: Tx,
+  storeId: string,
   payMethod: string,
   payProviderRef: string | null,
   amount: number,
@@ -264,7 +267,12 @@ async function executeGatewayRefund(
   if (!provider?.refundPayment) {
     return { state: 'Settled', providerRef: null };
   }
-  const r = await provider.refundPayment({ providerRef: payProviderRef, amount, currency });
+  let stripeMode: 'test' | 'live' | undefined;
+  if (payMethod === 'stripe') {
+    const [row] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, storeId)).limit(1);
+    stripeMode = stripeModeFromConfig(row?.config);
+  }
+  const r = await provider.refundPayment({ providerRef: payProviderRef, amount, currency, stripeMode });
   if (r.state === 'Failed') {
     throw Object.assign(new Error(r.errorMessage ?? 'gateway refund failed'), { kind: 'providerfail' as const, message: r.errorMessage ?? 'gateway refund failed' });
   }
@@ -365,7 +373,7 @@ adminOrders.openapi(
       // causes the withStore() txn to roll back — no orphan refund row.
       let gatewayResult: { state: 'Settled' | 'Pending'; providerRef: string | null };
       try {
-        gatewayResult = await executeGatewayRefund(pay.method, pay.providerRef, amount, o.currency);
+        gatewayResult = await executeGatewayRefund(tx, st.storeId, pay.method, pay.providerRef, amount, o.currency);
       } catch (e: unknown) {
         const err = e as { kind?: string; message?: string };
         if (err.kind === 'providerfail') return { kind: 'providerfail' as const, message: err.message ?? 'gateway refund failed' };
@@ -444,7 +452,15 @@ adminOrders.openapi(
       if (blocked.length) return { kind: 'blocked' as const, skus: blocked };
       await reserveStockOrThrow(tx, st.storeId, items, bySku);
       const priced = items.map((i) => { const v = bySku.get(i.sku)!; return { v, qty: i.quantity, unitPrice: unitPrice(v) }; });
-      const totals = calculateOrderTotals({ lines: priced.map((p) => ({ unitPrice: p.unitPrice, quantity: p.qty })), shipping: body.shipping, taxRate: st.taxRate, shippingTaxable: st.shippingTaxable });
+      // Mirror the edit-lines path: resolve the destination tax zone and honour the
+      // store's tax-inclusive flag. Omitting taxInclusive here mispriced every
+      // tax-inclusive store's manual/phone orders.
+      const [storeRow] = await tx.select({ taxRate: s.store.taxRate, taxInclusive: s.store.taxInclusive, shippingTaxable: s.store.shippingTaxable }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1);
+      if (!storeRow) throw new HttpError(404, 'store not found');
+      const shipCountry = (body.shippingAddress as { country?: string } | null | undefined)?.country ?? null;
+      const zones = await tx.select({ countries: s.taxZone.countries, rate: s.taxZone.rate, priority: s.taxZone.priority }).from(s.taxZone).where(eq(s.taxZone.enabled, true));
+      const taxRate = resolveTaxRate(zones, shipCountry, storeRow.taxRate);
+      const totals = calculateOrderTotals({ lines: priced.map((p) => ({ unitPrice: p.unitPrice, quantity: p.qty })), shipping: body.shipping, taxRate, taxInclusive: storeRow.taxInclusive, shippingTaxable: storeRow.shippingTaxable });
       const customerId = body.email ? (await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, normalizeEmail(body.email))).limit(1))[0]?.id ?? null : null;
       const orderId = randomUUID(); const code = orderCode();
       const paid = body.markPaid;

@@ -115,7 +115,7 @@ auth.openapi(
     const retry = loginRetryAfter(ip, email);
     if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
     const out = await withStore(st.id, async (tx): Promise<{ ok: false } | { ok: true; token: string; customer: z.infer<typeof CustomerOut> }> => {
-      const [cust] = await tx.select().from(s.customer).where(eq(s.customer.email, email)).limit(1);
+      const [cust] = await tx.select({ id: s.customer.id, email: s.customer.email, firstName: s.customer.firstName, lastName: s.customer.lastName, phone: s.customer.phone, emailVerified: s.customer.emailVerified, passwordHash: s.customer.passwordHash }).from(s.customer).where(eq(s.customer.email, email)).limit(1);
       if (!cust || !(await verifyPassword(password, cust.passwordHash))) return { ok: false };
       // A migrated customer who set a password via the forgot-password flow
       // (WP2d) has passwordHash != null here, so isMigrated will be false from

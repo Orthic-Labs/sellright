@@ -32,7 +32,7 @@ docs/          product documentation
 
 Every store-scoped request resolves a store, then runs database work through `withStore(storeId, fn)`.
 
-`withStore` opens a transaction and sets `app.current_store` with `SET LOCAL`. RLS policies use that session value to confine reads and writes to one store. Route code must not import the unscoped database client; the unscoped export is named `unsafeUnscopedDb` and is blocked from route imports by ESLint.
+`withStore` opens a transaction and sets `app.current_store` with `SET LOCAL`. RLS policies use that session value to confine reads and writes to one store. Route code must not import the unscoped database client for store-scoped tenant queries; the unscoped export is named `unsafeUnscopedDb`. An ESLint `no-restricted-imports` rule in `packages/api/eslint.config.js` is written to block it from route files, but ESLint is not yet installed or wired into `pnpm verify`, so that rule is currently advisory rather than enforced. Two admin routes (`admin-settings`, `admin-marketing`) deliberately use the unscoped client for identity/config tables (`store`, `admin_user`, `admin_user_store`, `staff_invite`, `session`) with explicit `storeId` filtering.
 
 This gives SellRight two layers of tenant isolation:
 

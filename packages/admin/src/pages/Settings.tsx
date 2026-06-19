@@ -38,6 +38,7 @@ export default function SettingsPage() {
   const [tax, setTax] = useState<string | null>(null);
   const saveTax = useMutation({ mutationFn: () => api.patch('/settings/store', { taxRate: Math.round(parseFloat(tax || '0') * 100) }), onSuccess: () => { setTax(null); qc.invalidateQueries({ queryKey: sk }); } });
   const togglePay = useMutation({ mutationFn: (p: { k: string; v: boolean }) => api.patch('/settings/payments', { [p.k]: p.v }), onSuccess: () => qc.invalidateQueries({ queryKey: sk }) });
+  const setStripeMode = useMutation({ mutationFn: (mode: 'test' | 'live') => api.patch('/settings/payments/stripe-mode', { mode }), onSuccess: () => qc.invalidateQueries({ queryKey: sk }) });
   const [gid, setGid] = useState<string | null>(null);
   const saveGoogle = useMutation({ mutationFn: () => api.patch('/settings/google', { clientId: gid }), onSuccess: () => { setGid(null); qc.invalidateQueries({ queryKey: sk }); } });
 
@@ -118,6 +119,21 @@ export default function SettingsPage() {
                   );
                 })}
               </div>
+              {!!cfg.payments?.stripe && (
+                <div className="pt-4 border-t border-gray-100 mt-4">
+                  <Field label="Stripe mode" hint="Choose which env key set Stripe uses for payment intents, refunds, and webhook verification.">
+                    <select
+                      className="input w-40"
+                      disabled={!canManage || setStripeMode.isPending}
+                      value={cfg.stripeMode ?? 'test'}
+                      onChange={(e) => setStripeMode.mutate(e.target.value as 'test' | 'live')}
+                    >
+                      <option value="test">test</option>
+                      <option value="live">live</option>
+                    </select>
+                  </Field>
+                </div>
+              )}
               {!canManage && <InlineAlert tone="neutral">Only owners and managers can change payment settings.</InlineAlert>}
             </FormSection>
           )}

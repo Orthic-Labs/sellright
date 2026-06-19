@@ -215,7 +215,7 @@ adminMarketing.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/marketing/sync', summary: 'Push SellRight customers to a Listmonk list',
     request: { body: { content: J(z.object({ listId: z.number().int() })) } },
-    responses: { 200: { description: 'OK', content: J(z.object({ synced: z.number().int() })) }, 409: { description: 'Not configured', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: { 200: { description: 'OK', content: J(z.object({ synced: z.number().int(), failed: z.number().int() })) }, 409: { description: 'Not configured', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
@@ -226,15 +226,21 @@ adminMarketing.openapi(
     const customers = await withStore(st.storeId, async (tx) =>
       tx.select({ email: s.customer.email, firstName: s.customer.firstName, lastName: s.customer.lastName }).from(s.customer).where(and(eq(s.customer.emailVerified, true))).limit(5000),
     );
-    let synced = 0;
+    let synced = 0; const failures: string[] = [];
     for (const cu of customers) {
       try {
         await lm(cfg, '/api/subscribers', { method: 'POST', body: JSON.stringify({ email: cu.email, name: [cu.firstName, cu.lastName].filter(Boolean).join(' ') || cu.email, lists: [listId], status: 'enabled', preconfirm_subscriptions: true }) });
         synced++;
-      } catch { /* already exists / skip */ }
+      } catch (e) {
+        // Per-record failure is usually "already subscribed" (re-sync) — keep going,
+        // but don't pretend they all succeeded: count failures so a wholesale break
+        // (bad token / Listmonk down → 0 synced, N failed) is visible, not silent.
+        failures.push(e instanceof Error ? e.message : String(e));
+      }
     }
-    await withStore(st.storeId, async (tx) => { await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'marketing', entityId: String(listId), action: 'listmonk_sync', data: { synced } }); });
-    return c.json({ synced }, 200);
+    if (failures.length) console.error(`[listmonk:sync] ${failures.length}/${customers.length} failed; first: ${failures[0]}`);
+    await withStore(st.storeId, async (tx) => { await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'marketing', entityId: String(listId), action: 'listmonk_sync', data: { synced, failed: failures.length } }); });
+    return c.json({ synced, failed: failures.length }, 200);
   }),
 );
 
