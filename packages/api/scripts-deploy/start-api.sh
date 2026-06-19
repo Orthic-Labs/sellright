@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 # Start the SellRight API on :3300, fully detached (survives the SSH channel),
-# and report. Uses ~/.sellright/env's DATABASE_URL_APP if present (non-owner app
-# role), else the owner URL. Mirror of start-admin.sh's persistence pattern.
+# and report. Sources packages/api/.env inside the checkout, mirroring the
+# package-local env convention used by the other sites.
 export PNPM_HOME="$HOME/.local/share/pnpm"; export PATH="$PNPM_HOME:$PATH"
 cd ~/sites/sellright/packages/api
 
-if [ -f "$HOME/.sellright/env" ]; then source "$HOME/.sellright/env"; DBURL="$DATABASE_URL_APP"; fi
-DBURL="${DBURL:-postgres://sellright:srdev_pX7k2Qm9Lw@127.0.0.1:5433/sellright_dev}"
+ENV_FILE="$PWD/.env"
+[ -f "$ENV_FILE" ] && { set -a; . "$ENV_FILE"; set +a; }
+DBURL="${DATABASE_URL:-postgres://sellright:srdev_pX7k2Qm9Lw@127.0.0.1:5433/sellright_dev}"
 
 pkill -f 'src/index.ts' 2>/dev/null || true; sleep 2
 fuser -k 3300/tcp 2>/dev/null || true; sleep 1
 
-setsid nohup env DATABASE_URL="$DBURL" PORT=3300 pnpm exec tsx src/index.ts > ~/sites/sellright/api.log 2>&1 < /dev/null &
+setsid nohup env DATABASE_URL="$DBURL" PORT="${PORT:-3300}" pnpm exec tsx src/index.ts > ~/sites/sellright/api.log 2>&1 < /dev/null &
 sleep 7
 
 echo "=== port ==="

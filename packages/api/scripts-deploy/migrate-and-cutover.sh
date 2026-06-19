@@ -3,17 +3,18 @@
 # +indexes, 0008 admin_user_store registry) as OWNER, assert the FORCE-RLS
 # invariant, cut the API over to the NON-owner app role, and verify the full
 # stack incl. an idempotency-replay test and a cross-store leakage probe.
-# Prereq: ~/.sellright/env exists (run create-app-role.sh first).
+# Prereq: packages/api/.env exists (run create-app-role.sh first).
 set -euo pipefail
 EMAIL="${1:?email}"
 PW="${ADMIN_PASSWORD:?set ADMIN_PASSWORD env}"
 SKU="${2:-759382993416}"
 export PNPM_HOME="$HOME/.local/share/pnpm"; export PATH="$PNPM_HOME:$PATH"
-# App-role mode if ~/.sellright/env exists; otherwise OWNER-ONLY mode (the role
+# App-role mode if packages/api/.env exists; otherwise OWNER-ONLY mode (the role
 # needs a superuser to create — until then the app stays on the owner role, which
 # is still fail-closed via FORCE-on-owner; everything else deploys + verifies).
-if [ -f "$HOME/.sellright/env" ]; then
-  source "$HOME/.sellright/env"; MODE="app-role"
+ENV_FILE="$HOME/sites/sellright/packages/api/.env"
+if [ -f "$ENV_FILE" ]; then
+  source "$ENV_FILE"; DATABASE_URL_APP="${DATABASE_URL:-}"; MODE="app-role"
 else
   APIPID="$(pgrep -f 'src/index.ts' | head -1)"
   DATABASE_URL_OWNER="$(tr '\0' '\n' < /proc/$APIPID/environ | grep -E '^DATABASE_URL=' | cut -d= -f2-)"
@@ -34,7 +35,7 @@ DATABASE_URL="$DATABASE_URL_OWNER" pnpm db:assert-rls
 echo "[4] restart API as NON-owner app role on :3300"
 pkill -f 'src/index.ts' 2>/dev/null || true; sleep 2
 fuser -k 3300/tcp 2>/dev/null || true; sleep 1
-DATABASE_URL="$DATABASE_URL_APP" PORT=3300 nohup pnpm exec tsx src/index.ts > ~/sites/sellright/api.log 2>&1 & disown
+DATABASE_URL="$DATABASE_URL_APP" PORT="${PORT:-3300}" nohup pnpm exec tsx src/index.ts > ~/sites/sellright/api.log 2>&1 & disown
 sleep 5
 curl -s http://127.0.0.1:3300/v1/health; echo
 

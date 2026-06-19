@@ -15,16 +15,17 @@ command -v pnpm >/dev/null || { echo "FATAL: pnpm not found at $PNPM_HOME" >&2; 
 
 cd ~/sites/sellright
 
-# Connection model: once ~/.sellright/env exists (after create-app-role.sh), the
-# API runs as the NON-owner app role but migrate/seed MUST run as the owner.
-# Before that, fall back to inheriting the running API's (owner) DATABASE_URL.
+# Connection model: source packages/api/.env from this checkout. The API runs as
+# the NON-owner app role but migrate/seed MUST run as the owner. Before that,
+# fall back to inheriting the running API's DATABASE_URL.
 OWNER_URL=""; APP_URL=""
-if [ -f "$HOME/.sellright/env" ]; then
-  source "$HOME/.sellright/env"
-  OWNER_URL="$DATABASE_URL_OWNER"; APP_URL="$DATABASE_URL_APP"
+ENV_FILE="$PWD/packages/api/.env"
+if [ -f "$ENV_FILE" ]; then
+  source "$ENV_FILE"
+  OWNER_URL="${DATABASE_URL_OWNER:-}"; APP_URL="${DATABASE_URL:-}"
 else
   APIPID="$(pgrep -f 'src/index.ts' | head -1 || true)"
-  [ -n "$APIPID" ] || { echo "FATAL: no api proc and no ~/.sellright/env" >&2; exit 1; }
+  [ -n "$APIPID" ] || { echo "FATAL: no api proc and no $ENV_FILE" >&2; exit 1; }
   set -a; eval "$(tr '\0' '\n' < /proc/$APIPID/environ | grep -E '^DATABASE_URL=' | sed 's/^/export /')"; set +a
   OWNER_URL="$DATABASE_URL"; APP_URL="$DATABASE_URL"
 fi

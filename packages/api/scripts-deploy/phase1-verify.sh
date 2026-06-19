@@ -11,13 +11,13 @@ cd ~/sites/sellright
 echo "[1] pull"; git pull --ff-only | tail -1; git rev-parse --short HEAD
 
 # DB env (owner-only mode if no app role yet)
-if [ -f "$HOME/.sellright/env" ]; then source "$HOME/.sellright/env"; APP_URL="$DATABASE_URL_APP"
+if [ -f "$PWD/packages/api/.env" ]; then source "$PWD/packages/api/.env"; APP_URL="${DATABASE_URL:-}"
 else APIPID="$(pgrep -f 'src/index.ts' | head -1)"; APP_URL="$(tr '\0' '\n' < /proc/$APIPID/environ | grep '^DATABASE_URL=' | cut -d= -f2-)"; fi
 
 echo "[2] restart API"
 cd packages/api
 pkill -f 'src/index.ts' 2>/dev/null || true; sleep 2; fuser -k 3300/tcp 2>/dev/null || true; sleep 1
-DATABASE_URL="$APP_URL" PORT=3300 nohup pnpm exec tsx src/index.ts > ~/sites/sellright/api.log 2>&1 & disown
+DATABASE_URL="$APP_URL" PORT="${PORT:-3300}" nohup pnpm exec tsx src/index.ts > ~/sites/sellright/api.log 2>&1 & disown
 sleep 5
 curl -s http://127.0.0.1:3300/v1/health; echo
 

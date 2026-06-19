@@ -3,12 +3,12 @@
 # Restore drill: `createdb sellright_restore && pg_restore -d sellright_restore
 # /home/vendure/backups/sellright/sellright_<date>.dump`.
 #
-# Sources the same env file the systemd unit uses (DATABASE_URL_OWNER) so the
-# pg_dump connection matches whatever the API uses. Set SELLRIGHT_RCLONE_REMOTE
-# in the env file to enable offsite backups.
+# Sources the same env file the systemd unit uses (packages/api/.env with
+# DATABASE_URL_OWNER) so the pg_dump connection matches whatever the API uses.
+# Set SELLRIGHT_RCLONE_REMOTE in the env file to enable offsite backups.
 set -euo pipefail
 
-ENV_FILE="${SELLRIGHT_ENV_FILE:-$HOME/.sellright/env}"
+ENV_FILE="${SELLRIGHT_ENV_FILE:-$HOME/sites/sellright/packages/api/.env}"
 BACKUP_DIR="/home/vendure/backups/sellright"
 TS=$(date +%F)
 RETENTION_DAYS=14

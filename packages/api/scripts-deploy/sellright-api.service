@@ -1,9 +1,7 @@
 # /etc/systemd/system/sellright-api.service
 # Replaces the setsid+nohup pattern in start-api.sh. Installed by `sudo cp` +
 # `sudo systemctl daemon-reload && sudo systemctl enable --now sellright-api`.
-# `EnvironmentFile=/home/vendure/.sellright/env` is written by WP0's
-# create-app-role.sh and contains DATABASE_URL_APP (non-owner app role) plus
-# DATABASE_URL_OWNER (for migrations only).
+# The env file lives inside the checkout at packages/api/.env (gitignored).
 [Unit]
 Description=SellRight API
 After=network.target
@@ -15,7 +13,7 @@ After=network.target
 Type=simple
 User=vendure
 WorkingDirectory=/home/vendure/sites/sellright/packages/api
-EnvironmentFile=/home/vendure/.sellright/env
+EnvironmentFile=/home/vendure/sites/sellright/packages/api/.env
 Environment=NODE_ENV=production
 Environment=PORT=3300
 Environment=JOBS_ENABLED=1

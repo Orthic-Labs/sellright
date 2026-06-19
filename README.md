@@ -24,6 +24,17 @@ pnpm typecheck
 pnpm build
 ```
 
+## Env placement
+
+Keep env files with the package that uses them:
+
+- `packages/api/.env`
+- `packages/storefront/.env`
+- `packages/admin/.env`
+
+Examples live beside each package as `.env.example`. The old root-level
+`.env.example` is retired.
+
 ## Docs
 
 - [Architecture](docs/ARCHITECTURE.md)
