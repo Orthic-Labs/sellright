@@ -44,6 +44,7 @@ export const promotionType = pgEnum('promotion_type', ['percentage', 'fixed', 'f
 // at read time by comparing NOW() against license.expires_at. The only admin-
 // driven status transition is active → revoked. (ra-010)
 export const licenseStatus = pgEnum('license_status', ['active', 'revoked', 'expired']);
+export const subscriptionStatus = pgEnum('subscription_status', ['incomplete', 'active', 'past_due', 'canceled']);
 
 const ts = () => timestamp({ withTimezone: true }).notNull().defaultNow();
 
@@ -185,6 +186,8 @@ export const productVariant = pgTable(
     licenseSeats: integer().notNull().default(1), // device/activation allowance for issued licenses
     licenseDurationDays: integer(), // null = perpetual
     updatesDurationDays: integer(), // null = no update entitlement
+    stripePriceId: text(), // set => this variant is a recurring (subscription) plan
+    billingInterval: text(), // 'month' | 'year' (informational; cycle driven by Stripe)
     weightG: integer(),
     barcode: text(), // UPC/EAN/ISBN
     dimensions: jsonb(), // { length, width, height, unit }
@@ -412,6 +415,25 @@ export const license = pgTable(
     updatedAt: ts(),
   },
 );
+
+// A subscription links our order/license/customer to a Stripe Billing subscription.
+// It IS backed by a real order (license.order_id is NOT NULL); the first paid
+// invoice settles that order (issuing the license), renewals extend the license.
+export const subscription = pgTable('subscription', {
+  id: uuid().primaryKey().defaultRandom(),
+  storeId: uuid().notNull().references(() => store.id),
+  customerId: uuid().references(() => customer.id),
+  orderId: uuid().references(() => order.id),       // backing order (nullable: unlinked on order purge)
+  licenseId: uuid().references(() => license.id),   // null until the first paid invoice issues it
+  stripeSubscriptionId: text().notNull().unique(),
+  stripeCustomerId: text(),
+  priceId: text(),
+  status: subscriptionStatus().notNull().default('incomplete'),
+  currentPeriodEnd: timestamp({ withTimezone: true }),
+  cancelAtPeriodEnd: boolean().notNull().default(false),
+  createdAt: ts(),
+  updatedAt: ts(),
+});
 
 export const licenseActivation = pgTable(
   'license_activation',

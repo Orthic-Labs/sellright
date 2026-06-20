@@ -334,7 +334,7 @@ describe('bulk-purge (cascade)', () => {
   it('purge handles every FK that references order (fails when a new FK is added)', async () => {
     const HANDLED = new Set([
       'order_line', 'license', 'payment', 'refund', 'return_request', 'fulfillment', 'promotion_usage', // delete-cascaded
-      'cart', 'stock_movement', 'gift_card_transaction', // unlinked (nullable) back-refs
+      'cart', 'stock_movement', 'gift_card_transaction', 'subscription', // unlinked (nullable) back-refs
     ]);
     const r = await pool.query(
       `SELECT conrelid::regclass::text AS child FROM pg_constraint WHERE contype='f' AND confrelid='"order"'::regclass`,

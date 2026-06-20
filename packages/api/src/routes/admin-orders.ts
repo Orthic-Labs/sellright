@@ -771,6 +771,9 @@ adminOrders.openapi(
         // A converted cart points back at this order (nullable FK) — detach it so
         // the order row can be deleted (the cart row itself is analytics, kept).
         await tx.update(s.cart).set({ convertedOrderId: null }).where(eq(s.cart.convertedOrderId, o.id));
+        // A subscription's backing order (nullable FK) — detach so the order can be
+        // purged; the subscription row (Stripe link) is kept.
+        await tx.update(s.subscription).set({ orderId: null }).where(eq(s.subscription.orderId, o.id));
         await tx.delete(s.payment).where(eq(s.payment.orderId, o.id));
         await tx.delete(s.orderLine).where(eq(s.orderLine.orderId, o.id));
         await tx.delete(s.order).where(eq(s.order.id, o.id));
