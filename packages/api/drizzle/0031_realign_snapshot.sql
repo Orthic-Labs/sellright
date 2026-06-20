@@ -1,0 +1,13 @@
+-- Snapshot realignment — intentionally a NO-OP (no DDL).
+--
+-- drizzle's meta/*_snapshot.json had drifted from reality: migrations 0023–0030
+-- were hand-written SQL (--custom) that changed the DB without updating drizzle's
+-- snapshot, so `drizzle-kit generate` wanted to re-CREATE already-existing objects
+-- (app_release, license, license_activation, download_artifact, customer_token,
+-- the fulfillment_type/license_status enums, order.metadata, refund.provider_ref,
+-- and the product_variant entitlement columns). Every one of those already exists
+-- in the DB via 0023 / 0024 / 0026 / 0027, so there is nothing to apply.
+--
+-- This migration carries the corrected snapshot (meta/0031_snapshot.json) that
+-- matches schema.ts, so future `drizzle-kit generate` produces a clean diff. The
+-- SQL body is deliberately empty — applying it is a no-op on every environment.
