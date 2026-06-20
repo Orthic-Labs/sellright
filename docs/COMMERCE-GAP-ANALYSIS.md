@@ -20,6 +20,22 @@ Where competitors win is **not the engine** — it's (1) the **growth/retention 
 
 ---
 
+## ✅ Shipped since this analysis (updated 2026-06-20)
+
+The 2026-06-19 snapshot below is now partly historical — these gaps have been closed (all committed; backend items box-verified):
+
+- **Signed/tokenized download URLs** (Tier 1 #1) — artifacts served via expiring one-time tokens, not raw paths. ✅
+- **Subscriptions / recurring billing** (Tier 1 #2) — Stripe Billing wired: subscribe → backing order → first `invoice.paid` issues the license via the existing settle path → renewals extend the entitlement; tenant resolved from our own subscription row (not metadata propagation); admin Subscriptions view + per-customer section + hosted Customer Portal. DB suite green (8 lifecycle cases). ✅
+- **Stripe dispute/refund reconciliation** (Tier 1 #4) — `refund.*` + `charge.dispute.created` reconcile dashboard refunds + chargebacks into the ledger. ✅
+- **Search GIN/trigram + customer_token index** (Tier 1 #5) — product search backed by a trigram index; the token index is restored. ✅
+- **Server-authoritative cart lifecycle** — server cart with TTL + extend-on-activity, abandonment/cleanup jobs (abandoned carts preserved), lifecycle events, and checkout-reads-from-cart (fail-closed). ✅
+- **Bulk order management** — cancel / trash (soft-delete) / restore / gated purge (cascade + a FK-coverage guard test that fails when a new FK to `order` is unhandled). ✅
+- **Storefront ↔ SellRight REST** — the cloned DD Qwik storefront now resolves catalog/collections/cart/auth/account from `/v1/shop/*` (**runtime-verified against the live API with real products**); checkout (Stripe Elements) is in progress behind a `VITE_SR_CHECKOUT` flag.
+
+Cursor/keyset pagination (Tier 2 #8) was scoped out for now (the codec was removed as YAGNI — re-add at the first list that needs it). The scorecard + roadmap rows below predate the above and are kept for the broader competitive picture; treat the items here as DONE.
+
+---
+
 ## Scorecard at a glance
 
 | Domain | Verdict |
