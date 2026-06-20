@@ -14,6 +14,7 @@ import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { stripeConfigured, stripeCreds, stripeModeFromConfig, verifyStripeWebhook, verifyIntent, type IntentLike, type StripeMode } from '../payments/stripe.js';
 import { applyPaymentResult } from '../payments/settle.js';
+import { resolveStoreIdForStripeEvent, reconcileStripeRefund, recordStripeDispute, type StripeEventObj } from '../payments/webhook-reconcile.js';
 
 export const paymentWebhooks = new OpenAPIHono();
 
@@ -40,12 +41,13 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
   }
   if (!event || !verifiedMode) return c.json({ error: 'bad signature' }, 400);
 
-  const obj = event.data.object as { metadata?: { storeId?: string; orderCode?: string } };
-  const storeId = obj.metadata?.storeId;
-  // No tenant on the object (e.g. a Charge that didn't inherit PI metadata), or a
-  // malformed id → ack so Stripe stops retrying. A non-UUID would also fail the
-  // ::uuid cast in the RLS policy and 500 → Stripe retry storm; reject it here.
-  if (!storeId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(storeId)) return c.json({ received: true }, 200);
+  // Resolve the tenant: PaymentIntent-derived events carry storeId in metadata
+  // (Stripe copies PI metadata onto the Charge at confirmation); refund/dispute
+  // events fall back to a payment_intent → payment-ledger lookup. Unresolvable
+  // (or a malformed id that'd blow the ::uuid RLS cast) → ack so Stripe stops
+  // retrying. resolveStoreIdForStripeEvent only returns validated UUIDs.
+  const storeId = await resolveStoreIdForStripeEvent(event.data.object as StripeEventObj);
+  if (!storeId) return c.json({ received: true }, 200);
 
   await withStore(storeId, async (tx) => {
     // ra-sec: bind the verifying secret's mode to the store's configured mode. A
@@ -80,14 +82,33 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
         }
         return;
       }
-      // Refunds initiated from the Stripe dashboard are claimed and ack'd here.
-      // Matching them idempotently against the admin refund ledger needs a
-      // product decision to avoid double-counting.
-      case 'charge.refunded':
+      // Dashboard/API refunds → record in our ledger idempotently (dedup by the
+      // Stripe refund id) and recompute order refund state. refund.* is the
+      // primary path (Acacia 2024-10-28+ fires it for all refunds); charge.refunded
+      // is kept for pre-Acacia / belt-and-suspenders — both dedup on re_id.
+      case 'refund.created':
+      case 'refund.updated': {
+        const r = event.data.object as unknown as { id: string; amount: number; status: string; payment_intent?: string | { id?: string } };
+        const pi = typeof r.payment_intent === 'string' ? r.payment_intent : r.payment_intent?.id;
+        if (pi && r.id) await reconcileStripeRefund(tx, storeId, { reId: r.id, amount: r.amount, status: r.status, piId: pi });
         return;
-      // Dispute alerting can wire operator notifications here.
-      case 'charge.dispute.created':
+      }
+      case 'charge.refunded': {
+        const ch = event.data.object as unknown as { payment_intent?: string | { id?: string }; refunds?: { data?: Array<{ id: string; amount: number; status: string; payment_intent?: string | { id?: string } }> } };
+        const chPi = typeof ch.payment_intent === 'string' ? ch.payment_intent : ch.payment_intent?.id;
+        for (const r of ch.refunds?.data ?? []) {
+          const pi = (typeof r.payment_intent === 'string' ? r.payment_intent : r.payment_intent?.id) ?? chPi;
+          if (pi && r.id) await reconcileStripeRefund(tx, storeId, { reId: r.id, amount: r.amount, status: r.status, piId: pi });
+        }
         return;
+      }
+      // Chargeback opened → record for operator visibility (no auto-refund/cancel).
+      case 'charge.dispute.created': {
+        const d = event.data.object as unknown as { id: string; amount: number; reason: string; status: string; payment_intent?: string | { id?: string } };
+        const pi = typeof d.payment_intent === 'string' ? d.payment_intent : d.payment_intent?.id ?? null;
+        await recordStripeDispute(tx, storeId, { disputeId: d.id, amount: d.amount, reason: d.reason, status: d.status, piId: pi });
+        return;
+      }
       default:
         return;
     }
