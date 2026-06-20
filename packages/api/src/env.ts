@@ -14,6 +14,11 @@ const EnvSchema = z.object({
    * Falls back to DATABASE_URL when not set (e.g. local dev where only one role exists).
    */
   DATABASE_URL_NONOWNER: z.string().url().optional(),
+  // pg connection-pool tuning. Defaults match the `pg` library defaults so this
+  // is backwards-compatible; raise PGPOOL_MAX under load. Timeouts are in ms.
+  PGPOOL_MAX: z.coerce.number().int().positive().default(10),
+  PGPOOL_IDLE_TIMEOUT_MS: z.coerce.number().int().nonnegative().default(10000),
+  PGPOOL_CONNECTION_TIMEOUT_MS: z.coerce.number().int().nonnegative().default(0),
   // WP2: SMTP (all optional — mailer no-ops with a log line when unconfigured).
   SMTP_HOST: z.string().optional(),
   SMTP_PORT: z.coerce.number().int().positive().default(587),

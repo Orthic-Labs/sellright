@@ -4,7 +4,12 @@ import { Pool, type PoolClient } from 'pg';
 import * as schema from './schema.js';
 import { env } from '../env.js';
 
-export const pool = new Pool({ connectionString: env.DATABASE_URL });
+export const pool = new Pool({
+  connectionString: env.DATABASE_URL,
+  max: env.PGPOOL_MAX,
+  idleTimeoutMillis: env.PGPOOL_IDLE_TIMEOUT_MS,
+  connectionTimeoutMillis: env.PGPOOL_CONNECTION_TIMEOUT_MS,
+});
 
 // MUST match drizzle.config.ts `casing: 'snake_case'` — otherwise runtime queries
 // emit camelCase column names the snake_case DB doesn't have.
