@@ -355,50 +355,29 @@ export interface AdaptedOrder {
   customFields: { isPreOrder: boolean };
 }
 
+/** The defensive AdaptedOrder shell (all the zero/empty fields the REST order
+ *  endpoints don't carry but components read). Callers override the few they have. */
+function orderShell(code: string, state: string, total: number): AdaptedOrder {
+  return {
+    id: code, code, state, createdAt: null,
+    totalWithTax: total, total, subTotalWithTax: total, subTotal: total,
+    shippingWithTax: 0, shipping: 0, totalQuantity: 0, currencyCode: 'USD',
+    lines: [], discounts: [], couponCodes: [], surcharges: [], shippingLines: [],
+    payments: [], fulfillments: [], shippingAddress: null, billingAddress: null,
+    customer: null, customFields: { isPreOrder: false },
+  };
+}
+
 /** Order-history list row (no lines, just a count + totals). */
 export function adaptOrderSummary(o: SrAccountOrderSummary): AdaptedOrder {
-  return {
-    id: o.code,
-    code: o.code,
-    state: o.state,
-    createdAt: o.placedAt,
-    totalWithTax: o.grandTotal,
-    total: o.grandTotal,
-    subTotalWithTax: o.grandTotal,
-    subTotal: o.grandTotal,
-    shippingWithTax: 0,
-    shipping: 0,
-    totalQuantity: o.lines,
-    currencyCode: 'USD',
-    lines: [],
-    discounts: [],
-    couponCodes: [],
-    surcharges: [],
-    shippingLines: [],
-    payments: [],
-    fulfillments: [],
-    shippingAddress: null,
-    billingAddress: null,
-    customer: null,
-    customFields: { isPreOrder: false },
-  };
+  return { ...orderShell(o.code, o.state, o.grandTotal), createdAt: o.placedAt, totalQuantity: o.lines };
 }
 
 /** Order detail (owned, by code) — has line snapshots. */
 export function adaptOrderDetail(o: SrAccountOrderDetail): AdaptedOrder {
   return {
-    id: o.code,
-    code: o.code,
-    state: o.state,
-    createdAt: null,
-    totalWithTax: o.grandTotal,
-    total: o.grandTotal,
-    subTotalWithTax: o.grandTotal,
-    subTotal: o.grandTotal,
-    shippingWithTax: 0,
-    shipping: 0,
+    ...orderShell(o.code, o.state, o.grandTotal),
     totalQuantity: o.lines.reduce((a, l) => a + l.quantity, 0),
-    currencyCode: 'USD',
     lines: o.lines.map((l, i) => ({
       id: `${o.code}-${i}`,
       quantity: l.quantity,
@@ -408,16 +387,6 @@ export function adaptOrderDetail(o: SrAccountOrderDetail): AdaptedOrder {
       productVariant: { name: l.name, sku: l.sku, product: { name: l.name }, options: [], customFields: {} },
       customFields: {},
     })),
-    discounts: [],
-    couponCodes: [],
-    surcharges: [],
-    shippingLines: [],
-    payments: [],
-    fulfillments: [],
-    shippingAddress: null,
-    billingAddress: null,
-    customer: null,
-    customFields: { isPreOrder: false },
   };
 }
 
