@@ -1,25 +1,21 @@
-import { Collection } from '~/generated/graphql-shop';
+/**
+ * Collections provider — rewired from Vendure GraphQL to the SellRight REST shop
+ * API (strangler, pass 1). Signatures unchanged; responses normalised to the
+ * Vendure-ish `Collection` shape via sellright-adapters.
+ */
+import { srCollections, srCollectionBySlug } from '~/utils/sellright';
 import {
-	CollectionsDocument,
-	type CollectionsQuery,
-	type CollectionsQueryVariables,
-	CollectionDocument,
-	type CollectionQuery,
-	type CollectionQueryVariables,
-} from '~/generated/graphql-shop-typed';
-import { requester } from '~/utils/api';
+  adaptCollections,
+  adaptCollection,
+  type AdaptedCollection,
+} from '~/utils/sellright-adapters';
 
-export const getCollections = async () => {
-	const res = await requester<CollectionsQuery, CollectionsQueryVariables>(
-		CollectionsDocument,
-		undefined
-	);
-	return res?.collections.items as Collection[];
+export const getCollections = async (): Promise<AdaptedCollection[]> => {
+  const res = await srCollections();
+  return adaptCollections(res);
 };
 
-export const getCollectionBySlug = async (slug: string) => {
-	const res = await requester<CollectionQuery, CollectionQueryVariables>(CollectionDocument, {
-		slug,
-	});
-	return res.collection as Collection;
+export const getCollectionBySlug = async (slug: string): Promise<AdaptedCollection> => {
+  const res = await srCollectionBySlug(slug);
+  return adaptCollection(res);
 };

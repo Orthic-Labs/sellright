@@ -10,6 +10,18 @@ import {
   Slot
 } from '@qwik.dev/core';
 import { LocalCartService, type LocalCart, type StockValidationResult } from '~/services/LocalCartService';
+import { ServerCartService } from '~/services/ServerCartService';
+
+/**
+ * Strangler flag (cart-architecture plan, Phase B): when `VITE_SERVER_CART` is
+ * truthy the cart is backed by the server-authoritative ServerCartService;
+ * otherwise it stays on the localStorage-only LocalCartService. The exported
+ * hook shape is identical either way, so Cart.tsx / CartContents.tsx /
+ * header.tsx / the product page consume the same context unchanged.
+ */
+export const SERVER_CART_ENABLED =
+  String(import.meta.env.VITE_SERVER_CART ?? '').toLowerCase() === '1' ||
+  String(import.meta.env.VITE_SERVER_CART ?? '').toLowerCase() === 'true';
 
 // Applied coupon information for local cart mode
 export interface AppliedCoupon {
@@ -60,12 +72,23 @@ export const CartProvider = component$(() => {
     appliedCoupon: null
   });
 
-  // Init cart from localStorage on page boot
+  // Init cart on page boot. Under the server-cart flag we hydrate the optimistic
+  // mirror first (instant paint from the persisted copy) then reconcile from the
+  // server in the background (server wins). B0: ServerCartService seeds itself
+  // from any legacy local cart on the first mutation, never deleting that key.
   useOnDocument('qinit', $(() => {
     if (!cartState.hasLoadedOnce) {
       try {
-        cartState.localCart = LocalCartService.getCart();
-        cartState.hasLoadedOnce = true;
+        if (SERVER_CART_ENABLED) {
+          cartState.localCart = ServerCartService.getCart();
+          cartState.hasLoadedOnce = true;
+          ServerCartService.refresh()
+            .then((cart) => { cartState.localCart = cart; })
+            .catch((e) => console.error('CartContext: server cart refresh failed:', e));
+        } else {
+          cartState.localCart = LocalCartService.getCart();
+          cartState.hasLoadedOnce = true;
+        }
       } catch (error) {
         console.error('CartContext: Failed to load cart:', error);
         cartState.lastError = 'Failed to load cart';
@@ -142,7 +165,7 @@ export const useHasMixedPreOrder = () => {
 export const loadCartIfNeeded = $((cartState: CartContextState) => {
   if (!cartState.hasLoadedOnce) {
     try {
-      cartState.localCart = LocalCartService.getCart();
+      cartState.localCart = SERVER_CART_ENABLED ? ServerCartService.getCart() : LocalCartService.getCart();
       // Restore applied coupon from persisted cart data
       cartState.appliedCoupon = (cartState.localCart as any).appliedCoupon || null;
       cartState.hasLoadedOnce = true;
@@ -153,14 +176,17 @@ export const loadCartIfNeeded = $((cartState: CartContextState) => {
   }
 });
 
-// Refresh stock levels — always hits live backend, no debounce
+// Refresh stock levels — always hits live backend, no debounce. Under the server
+// cart flag this re-fetches the server-priced cart (server is the source of truth).
 export const refreshCartStock = $(async (cartState: CartContextState) => {
   if (!cartState.localCart.items.length) return;
   if (cartState.isRefreshingStock) return;
 
   try {
     cartState.isRefreshingStock = true;
-    const updatedCart = await LocalCartService.refreshAllStockLevels();
+    const updatedCart = SERVER_CART_ENABLED
+      ? await ServerCartService.refresh()
+      : await LocalCartService.refreshAllStockLevels();
     cartState.localCart = updatedCart;
   } catch (error) {
     console.error('CartContext: Failed to refresh stock levels:', error);
@@ -179,7 +205,9 @@ export const addToLocalCart = $(async (cartState: CartContextState, item: any) =
   cartState.lastError = null;
 
   try {
-    const result = LocalCartService.addItem(item);
+    const result = SERVER_CART_ENABLED
+      ? await ServerCartService.addItem(item)
+      : LocalCartService.addItem(item);
     cartState.localCart = result.cart;
     cartState.lastStockValidation[item.productVariantId] = result.stockResult;
 
@@ -208,7 +236,9 @@ export const updateLocalCartQuantity = $(async (cartState: CartContextState, pro
   cartState.lastError = null;
 
   try {
-    const result = await LocalCartService.updateItemQuantity(productVariantId, quantity);
+    const result = SERVER_CART_ENABLED
+      ? await ServerCartService.updateItemQuantity(productVariantId, quantity)
+      : await LocalCartService.updateItemQuantity(productVariantId, quantity);
     cartState.localCart = result.cart;
     cartState.lastStockValidation[productVariantId] = result.stockResult;
 
@@ -235,7 +265,9 @@ export const removeFromLocalCart = $(async (cartState: CartContextState, product
   await loadCartIfNeeded(cartState);
 
   try {
-    cartState.localCart = LocalCartService.removeItem(productVariantId);
+    cartState.localCart = SERVER_CART_ENABLED
+      ? await ServerCartService.removeItem(productVariantId)
+      : LocalCartService.removeItem(productVariantId);
     // Clear validation for removed item
     delete cartState.lastStockValidation[productVariantId];
     cartState.lastError = null;
@@ -251,9 +283,11 @@ export const removeFromLocalCart = $(async (cartState: CartContextState, product
   }
 });
 
-export const clearLocalCart = $((cartState: CartContextState) => {
+export const clearLocalCart = $(async (cartState: CartContextState) => {
   try {
-    cartState.localCart = LocalCartService.clearCart();
+    cartState.localCart = SERVER_CART_ENABLED
+      ? await ServerCartService.clearCart()
+      : LocalCartService.clearCart();
     cartState.lastStockValidation = {};
     cartState.appliedCoupon = null;
     cartState.lastError = null;

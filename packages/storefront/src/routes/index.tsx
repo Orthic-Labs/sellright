@@ -5,8 +5,8 @@ import { generateOrganizationSchema, generateWebsiteSchema } from '~/services/se
 import VerificationButton from '~/components/verification/VerificationButton';
 import { routeLoader$ } from '@qwik.dev/router';
 import { APP_STATE } from '~/constants';
-import { LocalCartService, type LocalCartItem } from '~/services/LocalCartService';
-import { useLocalCart } from '~/contexts/CartContext';
+import { type LocalCartItem } from '~/services/LocalCartService';
+import { useLocalCart, addToLocalCart } from '~/contexts/CartContext';
 import { loadCountryOnDemand } from '~/utils/addressStorage';
 import { getProductBySlug } from '~/providers/shop/products/products';
 
@@ -408,23 +408,12 @@ export default component$(() => {
         },
       };
 
-      // Inline cart add — sync localStorage, mutate cart context, dispatch event
-      const result = LocalCartService.addItem(localCartItem);
-      // Mutate individual fields so Qwik proxy notifies subscribers
-      localCart.localCart = {
-        items: [...result.cart.items],
-        totalQuantity: result.cart.totalQuantity,
-        subTotal: result.cart.subTotal,
-        currencyCode: result.cart.currencyCode,
-        countryCode: result.cart.countryCode,
-        countryExplicitlySet: result.cart.countryExplicitlySet,
-      };
+      // Cart add via the context helper — respects the LocalCart vs ServerCart
+      // strangler flag and dispatches the header-badge update itself.
+      await addToLocalCart(localCart, localCartItem);
       localCart.hasLoadedOnce = true;
       appState.showCart = true;
       loadCountryOnDemand(appState);
-      window.dispatchEvent(new CustomEvent('cart-updated', {
-        detail: { totalQuantity: result.cart.totalQuantity }
-      }));
 
       isAddingToCart.value = false;
     } catch (error) {
