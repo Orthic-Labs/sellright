@@ -3,7 +3,7 @@ import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { withStore, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
-import { HttpError, J, errBody, money, Page, requireAdmin, requireStore, requireWrite, guard } from './admin-helpers.js';
+import { HttpError, J, errBody, money, Page, requireAdmin, requireStore, requireWrite, requireManage, guard } from './admin-helpers.js';
 import { calculateOrderTotals } from '../money/totals.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
 import { reserveStockOrThrow, StockReservationError, validateReservableItems } from '../orders/stock-reservation.js';
@@ -17,6 +17,15 @@ import { getProvider } from '../payments/provider.js';
 import { stripeModeFromConfig } from '../payments/stripe.js';
 
 export const adminOrders = new OpenAPIHono();
+
+// Shared result shape for the bulk order operations (cancel / soft-delete /
+// restore / purge): a per-order outcome row + succeeded/skipped totals, so the
+// admin renders an "X succeeded, Y skipped" panel (mirrors bulk-fulfill).
+const BulkResult = z.object({
+  results: z.array(z.object({ code: z.string(), ok: z.boolean(), error: z.string().optional() })),
+  succeeded: z.number().int(),
+  skipped: z.number().int(),
+});
 
 // ── invoice + packing slip (printable order documents) ────────────────────────
 async function loadOrderForDoc(storeId: string, code: string) {
@@ -522,7 +531,7 @@ adminOrders.get('/v1/admin/export/orders', async (c) => {
     const days = Math.min(3650, Math.max(1, Number(c.req.query('days') ?? '365')));
     const state = c.req.query('state') || undefined;
     const rows = await withStore(st.storeId, async (tx) => {
-      const conds = [sql`coalesce(${s.order.placedAt}, ${s.order.createdAt}) >= now() - (${days} || ' days')::interval`] as never[];
+      const conds = [sql`coalesce(${s.order.placedAt}, ${s.order.createdAt}) >= now() - (${days} || ' days')::interval`, sql`${s.order.deletedAt} is null`] as never[];
       if (state) conds.push(sql`${s.order.state} = ${state}` as never);
       return tx
         .select({
@@ -605,5 +614,171 @@ adminOrders.openapi(
       try { await sendShippingNotification({ name: st.name, currency: st.currency }, n.email, { code: n.code, trackingCode: n.tracking, carrier: n.carrier }); } catch (e) { console.error('[email:shipping] failed', e); }
     }
     return c.json({ updated: result.updated, errors: result.errors }, 200);
+  }),
+);
+
+// ── bulk order management: cancel / soft-delete (trash) / restore / purge ──────
+// All four mirror bulk-fulfill: dedup codes → per-order withStore → one result
+// row each → { results, succeeded, skipped }. One bad order never fails the batch.
+
+// ── bulk cancel (unpaid orders only — releases stock; paid orders are skipped,
+//    use Refund for those so money is handled explicitly) ──────────────────────
+adminOrders.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/orders/bulk-cancel', summary: 'Cancel multiple unpaid orders (release stock)',
+    request: { body: { content: J(z.object({ codes: z.array(z.string().min(1)).min(1).max(100) })) } },
+    responses: { 200: { description: 'OK', content: J(BulkResult) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireWrite(st);
+    const { codes } = c.req.valid('json');
+    const results: { code: string; ok: boolean; error?: string }[] = [];
+    for (const code of [...new Set(codes)] as string[]) {
+      const r = await withStore(st.storeId, async (tx): Promise<{ ok: true } | { ok: false; error: string }> => {
+        const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
+        if (!o) return { ok: false, error: 'order not found' };
+        if (o.state === 'Cancelled') return { ok: false, error: 'already cancelled' };
+        if (o.state !== 'PendingPayment') return { ok: false, error: `paid order — use Refund (state ${o.state})` };
+        if (!canTransition(o.state as OrderState, 'Cancelled')) return { ok: false, error: `cannot cancel from ${o.state}` };
+        const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
+        for (const l of lines) {
+          const rel = l.quantity - l.fulfilledQty;
+          if (rel > 0 && l.variantId) {
+            await tx.update(s.stock).set({ allocated: sql`greatest(${s.stock.allocated} - ${rel}, 0)` })
+              .where(and(eq(s.stock.variantId, l.variantId), eq(s.stock.storeId, st.storeId)));
+          }
+        }
+        await tx.update(s.order).set({ state: 'Cancelled', updatedAt: new Date() }).where(eq(s.order.id, o.id));
+        await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: o.id, action: 'cancel', fromState: o.state, toState: 'Cancelled' });
+        return { ok: true };
+      });
+      results.push(r.ok ? { code, ok: true } : { code, ok: false, error: r.error });
+    }
+    const succeeded = results.filter((r) => r.ok).length;
+    return c.json({ results, succeeded, skipped: results.length - succeeded }, 200);
+  }),
+);
+
+// ── soft-delete (trash) / restore — reversible "remove from my view" ──────────
+adminOrders.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/orders/bulk-soft-delete', summary: 'Move orders to trash (reversible)',
+    request: { body: { content: J(z.object({ codes: z.array(z.string().min(1)).min(1).max(100) })) } },
+    responses: { 200: { description: 'OK', content: J(BulkResult) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireWrite(st);
+    const { codes } = c.req.valid('json');
+    const results: { code: string; ok: boolean; error?: string }[] = [];
+    for (const code of [...new Set(codes)] as string[]) {
+      const r = await withStore(st.storeId, async (tx): Promise<{ ok: true } | { ok: false; error: string }> => {
+        const [o] = await tx.select({ id: s.order.id, deletedAt: s.order.deletedAt }).from(s.order).where(eq(s.order.code, code)).limit(1);
+        if (!o) return { ok: false, error: 'order not found' };
+        if (o.deletedAt) return { ok: false, error: 'already trashed' };
+        await tx.update(s.order).set({ deletedAt: new Date(), updatedAt: new Date() }).where(eq(s.order.id, o.id));
+        await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: o.id, action: 'soft_delete' });
+        return { ok: true };
+      });
+      results.push(r.ok ? { code, ok: true } : { code, ok: false, error: r.error });
+    }
+    const succeeded = results.filter((r) => r.ok).length;
+    return c.json({ results, succeeded, skipped: results.length - succeeded }, 200);
+  }),
+);
+
+adminOrders.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/orders/bulk-restore', summary: 'Restore orders from trash',
+    request: { body: { content: J(z.object({ codes: z.array(z.string().min(1)).min(1).max(100) })) } },
+    responses: { 200: { description: 'OK', content: J(BulkResult) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireWrite(st);
+    const { codes } = c.req.valid('json');
+    const results: { code: string; ok: boolean; error?: string }[] = [];
+    for (const code of [...new Set(codes)] as string[]) {
+      const r = await withStore(st.storeId, async (tx): Promise<{ ok: true } | { ok: false; error: string }> => {
+        const [o] = await tx.select({ id: s.order.id, deletedAt: s.order.deletedAt }).from(s.order).where(eq(s.order.code, code)).limit(1);
+        if (!o) return { ok: false, error: 'order not found' };
+        if (!o.deletedAt) return { ok: false, error: 'not trashed' };
+        await tx.update(s.order).set({ deletedAt: null, updatedAt: new Date() }).where(eq(s.order.id, o.id));
+        await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: o.id, action: 'restore' });
+        return { ok: true };
+      });
+      results.push(r.ok ? { code, ok: true } : { code, ok: false, error: r.error });
+    }
+    const succeeded = results.filter((r) => r.ok).length;
+    return c.json({ results, succeeded, skipped: results.length - succeeded }, 200);
+  }),
+);
+
+// ── purge (permanent) — only trashed orders; paid orders need force + reason.
+//    Cascade order (children first): refund_line→refund, fulfillment_line→
+//    fulfillment, return_line→return_request, license_activation→license,
+//    promotion_usage, payment, order_line, order. The txn rolls back on any
+//    error, so a wrong cascade fails the purge safely (no partial deletion). ────
+adminOrders.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/orders/bulk-purge', summary: 'Permanently delete trashed orders (cascade)',
+    // Purge is the heavy op (cascade per order) — cap at 50 (vs 100 for the cheap
+    // ops) so one request can't hold locks too long. `reason` is trimmed + non-empty.
+    request: { body: { content: J(z.object({ codes: z.array(z.string().min(1)).min(1).max(50), force: z.boolean().default(false), reason: z.string().trim().min(1).optional() })) } },
+    responses: { 200: { description: 'OK', content: J(BulkResult) }, 401: { description: 'Unauthorized', ...errBody }, 403: { description: 'Forbidden', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireManage(st);
+    const { codes, force, reason } = c.req.valid('json');
+    const results: { code: string; ok: boolean; error?: string }[] = [];
+    for (const code of [...new Set(codes)] as string[]) {
+      const r = await withStore(st.storeId, async (tx): Promise<{ ok: true } | { ok: false; error: string }> => {
+        const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
+        if (!o) return { ok: false, error: 'order not found' };
+        if (!o.deletedAt) return { ok: false, error: 'trash the order first (purge only removes trashed orders)' };
+        const isPaid = o.state === 'Paid' || o.state === 'PartiallyRefunded' || o.state === 'Refunded';
+        if (isPaid && !force) return { ok: false, error: `paid order — purge requires force + reason (state ${o.state})` };
+        if (isPaid && force && !reason) return { ok: false, error: 'force-purging a paid order requires a reason' };
+
+        // Audit BEFORE the cascade so the record survives the row deletion.
+        await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: o.id, action: 'purge', data: { code, state: o.state, force, reason: reason ?? null } });
+
+        const refunds = await tx.select({ id: s.refund.id }).from(s.refund).where(eq(s.refund.orderId, o.id));
+        if (refunds.length) await tx.delete(s.refundLine).where(inArray(s.refundLine.refundId, refunds.map((x) => x.id)));
+        await tx.delete(s.refund).where(eq(s.refund.orderId, o.id));
+
+        const fulfillments = await tx.select({ id: s.fulfillment.id }).from(s.fulfillment).where(eq(s.fulfillment.orderId, o.id));
+        if (fulfillments.length) await tx.delete(s.fulfillmentLine).where(inArray(s.fulfillmentLine.fulfillmentId, fulfillments.map((x) => x.id)));
+        await tx.delete(s.fulfillment).where(eq(s.fulfillment.orderId, o.id));
+
+        const returns = await tx.select({ id: s.returnRequest.id }).from(s.returnRequest).where(eq(s.returnRequest.orderId, o.id));
+        if (returns.length) await tx.delete(s.returnLine).where(inArray(s.returnLine.returnId, returns.map((x) => x.id)));
+        await tx.delete(s.returnRequest).where(eq(s.returnRequest.orderId, o.id));
+
+        const lics = await tx.select({ id: s.license.id }).from(s.license).where(eq(s.license.orderId, o.id));
+        if (lics.length) {
+          await tx.delete(s.licenseActivation).where(inArray(s.licenseActivation.licenseId, lics.map((x) => x.id)));
+          await tx.delete(s.license).where(inArray(s.license.id, lics.map((x) => x.id)));
+        }
+        // gift_card_transaction + return_request also reference order; gift-card
+        // txns are a money ledger we keep, but they FK order — null is allowed via
+        // the optional reference, so detach them rather than delete the audit trail.
+        await tx.delete(s.promotionUsage).where(eq(s.promotionUsage.orderId, o.id));
+        await tx.update(s.giftCardTransaction).set({ orderId: null }).where(eq(s.giftCardTransaction.orderId, o.id));
+        await tx.update(s.stockMovement).set({ refOrderId: null }).where(eq(s.stockMovement.refOrderId, o.id));
+        // A converted cart points back at this order (nullable FK) — detach it so
+        // the order row can be deleted (the cart row itself is analytics, kept).
+        await tx.update(s.cart).set({ convertedOrderId: null }).where(eq(s.cart.convertedOrderId, o.id));
+        await tx.delete(s.payment).where(eq(s.payment.orderId, o.id));
+        await tx.delete(s.orderLine).where(eq(s.orderLine.orderId, o.id));
+        await tx.delete(s.order).where(eq(s.order.id, o.id));
+        return { ok: true };
+      });
+      results.push(r.ok ? { code, ok: true } : { code, ok: false, error: r.error });
+    }
+    const succeeded = results.filter((r) => r.ok).length;
+    return c.json({ results, succeeded, skipped: results.length - succeeded }, 200);
   }),
 );

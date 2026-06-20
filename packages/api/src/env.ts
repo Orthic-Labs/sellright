@@ -40,6 +40,10 @@ const EnvSchema = z.object({
   DOWNLOAD_URL_SECRET: z.string().optional(),
   // Public storefront URL used in email links (password reset, verify, etc.).
   STOREFRONT_URL: z.string().url().default('https://store.example.com'),
+  // Cart lifecycle: hard TTL (cleanup deletes past this) + inactivity window
+  // after which a cart with items is marked abandoned (analytics/recovery).
+  CART_TTL_DAYS: z.coerce.number().int().positive().default(30),
+  CART_ABANDON_HOURS: z.coerce.number().int().positive().default(4),
   // WP3: Stripe. Legacy single-key envs still work; optional test/live envs let
   // one deployment hold both credential sets at once for runtime mode toggles.
   STRIPE_SECRET_KEY: z.string().optional(),

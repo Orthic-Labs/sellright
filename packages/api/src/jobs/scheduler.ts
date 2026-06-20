@@ -21,6 +21,7 @@ import { env } from '../env.js';
 import { autoDeliver } from './auto-deliver.js';
 import { releaseStaleAllocations } from './release-stale-allocations.js';
 import { reapStuckWebhooks } from './webhook-reaper.js';
+import { abandonStaleCarts, cleanupExpiredCarts } from './cart-maintenance.js';
 import { deliverWebhooks } from '../webhooks/emit.js';
 
 const HOUR = 3_600_000;
@@ -50,10 +51,19 @@ export function startJobScheduler(): void {
   const releaseApply = env.JOBS_RELEASE_STALE_APPLY === '1';
   const releaseTtlMin = env.JOBS_RELEASE_STALE_TTL_MIN ?? 60;
 
-  console.log(`[jobs] scheduler on — auto-deliver(apply=${autoDeliverApply}, days=${autoDeliverDays}) hourly; release-stale(apply=${releaseApply}, ttl=${releaseTtlMin}m) every 15m`);
+  console.log(`[jobs] scheduler on — auto-deliver(apply=${autoDeliverApply}, days=${autoDeliverDays}) hourly; release-stale(apply=${releaseApply}, ttl=${releaseTtlMin}m) every 15m; cart-maintenance(abandon=${env.CART_ABANDON_HOURS}h, ttl=${env.CART_TTL_DAYS}d) every 15m`);
 
   every(HOUR, 'auto-deliver', () => autoDeliver({ apply: autoDeliverApply, days: autoDeliverDays, log }));
   every(15 * 60_000, 'release-stale', () => releaseStaleAllocations({ apply: releaseApply, ttlMin: releaseTtlMin, log }));
+  // Cart lifecycle: flag inactive non-empty carts abandoned (emits cart.abandoned
+  // for recovery) + hard-delete idle/empty carts past their TTL. Always applies
+  // (no dry-run flag): abandonment is reversible (a returning shopper re-activates
+  // the cart on the next mutation) and cleanup only removes empty active carts.
+  every(15 * 60_000, 'cart-maintenance', async () => {
+    const ab = await abandonStaleCarts(env.CART_ABANDON_HOURS);
+    const cl = await cleanupExpiredCarts();
+    if (ab.abandoned || cl.deleted) log(`[jobs:cart] abandoned=${ab.abandoned} purged=${cl.deleted}`);
+  });
   every(60_000, 'webhooks', () => deliverWebhooks({ log })); // push due webhook deliveries every minute
   // WP1.7 safety net: reset webhook_delivery rows stuck in 'processing' (a
   // crashed scheduler) back to 'pending' so the next pass re-claims them.

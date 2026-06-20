@@ -96,7 +96,6 @@ checkout.openapi(
     const body = c.req.valid('json');
     const idemKey = c.req.header('idempotency-key') || null;
     const token = customerToken(c);
-    const skus = [...new Set(body.items.map((i) => i.sku))];
     // Rate-limit: throttle anonymous checkout spam (an authenticated customer
     // is bound by the same window — login is the friction point if it's a
     // bot behind a credential-stuffing script).
@@ -105,7 +104,7 @@ checkout.openapi(
     const checkoutRetry = loginRetryAfter(ip, checkoutBucket);
     if (checkoutRetry > 0) return c.json({ error: `too many checkouts — try again in ${checkoutRetry}s` }, 429);
 
-    type Result = { blocked: string[] } | { shippingError: string } | { code: string; grandTotal: number; discountTotal: number; couponApplied: boolean; replay?: boolean; giftCardApplied?: number; paid?: boolean };
+    type Result = { blocked: string[] } | { shippingError: string } | { cartError: string } | { code: string; grandTotal: number; discountTotal: number; couponApplied: boolean; replay?: boolean; giftCardApplied?: number; paid?: boolean };
     const out = await withStore(st.id, async (tx): Promise<Result> => {
       // Idempotency: same key -> the same order (also guarded by a unique index).
       if (idemKey) {
@@ -117,17 +116,31 @@ checkout.openapi(
         if (existing) return { code: existing.code, grandTotal: existing.grandTotal, discountTotal: existing.discountTotal, couponApplied: existing.discountTotal > 0, replay: true };
       }
 
+      // Server-authoritative cart: when a cartToken is present the server cart is
+      // the source of truth — derive the items from it and NEVER fall back to the
+      // client item list (a fallback re-opens trust-the-client; council P1). With
+      // no token (legacy local-cart path) client items are used, still re-priced.
+      let items = body.items;
+      if (body.cartToken) {
+        const [row] = await tx.select({ id: s.cart.id, status: s.cart.status }).from(s.cart).where(eq(s.cart.token, body.cartToken)).limit(1);
+        if (!row || row.status === 'converted') return { cartError: 'cart is empty, invalid, or already checked out' };
+        const lines = await tx.select({ sku: s.cartLine.sku, quantity: s.cartLine.quantity }).from(s.cartLine).where(eq(s.cartLine.cartId, row.id));
+        if (!lines.length) return { cartError: 'cart is empty, invalid, or already checked out' };
+        items = lines.map((l) => ({ sku: l.sku, quantity: l.quantity })); // fail-closed
+      }
+      const skus = [...new Set(items.map((i) => i.sku))];
+
       const variants = await tx
         .select()
         .from(s.productVariant)
         .where(and(inArray(s.productVariant.sku, skus), isNull(s.productVariant.deletedAt)));
       const bySku = new Map(variants.map((v) => [v.sku, v]));
 
-      const blocked = validateReservableItems(body.items, bySku);
+      const blocked = validateReservableItems(items, bySku);
       if (blocked.length) return { blocked };
-      await reserveStockOrThrow(tx, st.id, body.items, bySku);
+      await reserveStockOrThrow(tx, st.id, items, bySku);
 
-      const priced = body.items.map((i) => {
+      const priced = items.map((i) => {
         const v = bySku.get(i.sku)!;
         return { v, qty: i.quantity, unitPrice: selectUnitPrice(v) };
       });
@@ -292,9 +305,11 @@ checkout.openapi(
         }
       }
 
-      // Cart → order conversion (atomic with the order): retire the cart.
+      // Cart → order conversion (atomic with the order): retire the cart + emit
+      // a lifecycle event so funnel analytics / recovery can mark it converted.
       if (body.cartToken) {
         await tx.update(s.cart).set({ status: 'converted', convertedOrderId: orderId, updatedAt: new Date() }).where(eq(s.cart.token, body.cartToken));
+        await emitEvent(tx, st.id, 'cart.converted', { token: body.cartToken, orderId, code });
       }
 
       // Webhook events (transactional outbox — enqueued in the same txn).
@@ -322,6 +337,7 @@ checkout.openapi(
     });
 
     if ('shippingError' in out) return c.json({ error: 'shipping unavailable', reason: out.shippingError }, 409);
+    if ('cartError' in out) return c.json({ error: out.cartError }, 409);
     if ('blocked' in out) return c.json({ error: 'unavailable or out of stock', skus: out.blocked }, 409);
 
     // WP2: best-effort order-confirmation email to the linked customer (or the

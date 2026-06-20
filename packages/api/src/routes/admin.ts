@@ -1,5 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { and, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
+import { and, desc, eq, ilike, inArray, isNull, or, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { bearer } from '../auth/session.js';
@@ -104,7 +104,7 @@ admin.openapi(
       const [agg] = await tx
         .select({ revenue: sql<number>`coalesce(sum(${s.order.grandTotal}),0)::int`, cnt: sql<number>`count(*)::int` })
         .from(s.order)
-        .where(sql`${s.order.state} = any(${PAID_STATES})`);
+        .where(sql`${s.order.state} = any(${PAID_STATES}) and ${s.order.deletedAt} is null`);
       const revenue = agg?.revenue ?? 0;
       const cnt = agg?.cnt ?? 0;
       // To-fulfill = Paid orders with no Shipped/Delivered fulfillment record yet.
@@ -113,7 +113,7 @@ admin.openapi(
       const [pf] = await tx
         .select({ n: sql<number>`count(*)::int` })
         .from(s.order)
-        .where(sql`${s.order.state} = 'Paid' and not exists (select 1 from fulfillment f where f.order_id = ${s.order.id} and f.state in ('Shipped','Delivered'))`);
+        .where(sql`${s.order.state} = 'Paid' and ${s.order.deletedAt} is null and not exists (select 1 from fulfillment f where f.order_id = ${s.order.id} and f.state in ('Shipped','Delivered'))`);
       const [cu] = await tx.select({ n: sql<number>`count(*)::int` }).from(s.customer);
       const [ls] = await tx
         .select({ n: sql<number>`count(*)::int` })
@@ -123,6 +123,7 @@ admin.openapi(
         .select({ code: s.order.code, state: s.order.state, grandTotal: s.order.grandTotal, currency: s.order.currency, placedAt: s.order.placedAt, email: s.customer.email })
         .from(s.order)
         .leftJoin(s.customer, eq(s.customer.id, s.order.customerId))
+        .where(isNull(s.order.deletedAt))
         .orderBy(desc(sql`coalesce(${s.order.placedAt}, ${s.order.createdAt})`))
         .limit(8);
       return {
@@ -139,15 +140,18 @@ admin.openapi(
 admin.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/orders', summary: 'List orders',
-    request: { query: z.object({ state: z.string().optional(), q: z.string().optional(), preOrder: z.coerce.boolean().optional(), page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(25) }) },
+    request: { query: z.object({ state: z.string().optional(), q: z.string().optional(), preOrder: z.coerce.boolean().optional(), trashed: z.coerce.boolean().default(false), page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(25) }) },
     responses: { 200: { description: 'OK', content: J(Page) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c);
-    const { state, q, preOrder, page, pageSize } = c.req.valid('query');
+    const { state, q, preOrder, trashed, page, pageSize } = c.req.valid('query');
     const out = await withStore(st.storeId, async (tx) => {
       const conds = [] as ReturnType<typeof eq>[];
+      // Trash filter FIRST: ?trashed=1 shows ONLY soft-deleted orders; default
+      // shows only live ones. Without this, trashed orders leak into every list.
+      conds.push((trashed ? sql`${s.order.deletedAt} is not null` : sql`${s.order.deletedAt} is null`) as never);
       if (state) conds.push(sql`${s.order.state} = ${state}` as never);
       if (preOrder) conds.push(eq(s.order.isPreOrder, true) as never);
       if (q) conds.push(or(ilike(s.order.code, `%${q}%`), ilike(s.customer.email, `%${q}%`)) as never);

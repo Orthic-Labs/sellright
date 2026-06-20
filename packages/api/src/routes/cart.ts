@@ -10,6 +10,8 @@ import { evaluateCoupon } from '../money/coupon.js';
 import { selectAutomaticPromotion } from '../money/auto-discount.js';
 import { customerToken, resolveCustomer } from '../auth/session.js';
 import { normalizeEmail } from '../auth/email.js';
+import { env } from '../env.js';
+import { cartExpiry } from '../cart/ttl.js';
 
 /** Price selection (rulebook §2): preorder > sale > base. */
 function selectUnitPrice(v: { price: number; salePrice: number | null; isPreOrder: boolean; preOrderPrice: number | null }): number {
@@ -206,7 +208,10 @@ async function applyLines(tx: Tx, st: StoreCtx, cartId: string, lines: Array<{ s
       .values({ storeId: st.id, cartId, sku: l.sku, variantId: vids.get(l.sku) ?? null, quantity: l.quantity })
       .onConflictDoUpdate({ target: [s.cartLine.cartId, s.cartLine.sku], set: { quantity: l.quantity, variantId: vids.get(l.sku) ?? null } });
   }
-  await tx.update(s.cart).set({ updatedAt: new Date() }).where(eq(s.cart.id, cartId));
+  // Touch activity, extend the TTL, and re-activate a cart the abandonment job
+  // may have flipped to 'abandoned' — the shopper just came back and edited it.
+  const now = new Date();
+  await tx.update(s.cart).set({ updatedAt: now, expiresAt: cartExpiry(now, env.CART_TTL_DAYS), status: 'active' }).where(eq(s.cart.id, cartId));
 }
 
 // POST /v1/shop/cart — create a cart, optionally seeded with lines.
@@ -225,7 +230,7 @@ cart.openapi(
       const token = randomUUID();
       const [row] = await tx
         .insert(s.cart)
-        .values({ storeId: st.id, token, customerId: customer?.id ?? null, email: body.email ? normalizeEmail(body.email) : null })
+        .values({ storeId: st.id, token, customerId: customer?.id ?? null, email: body.email ? normalizeEmail(body.email) : null, expiresAt: cartExpiry(new Date(), env.CART_TTL_DAYS) })
         .returning();
       const seed = (body.items ?? []).filter((l) => l.quantity > 0);
       if (seed.length) await applyLines(tx, st, row!.id, seed);

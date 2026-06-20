@@ -358,6 +358,10 @@ export const order = pgTable(
     // is indexable later if the email-match rate climbs.
     metadata: jsonb(),
     placedAt: timestamp({ withTimezone: true }),
+    // Soft-delete (trash). Null = live; non-null = trashed (hidden from every
+    // order read — list/dashboard/reports/export — but restorable). Purge hard-
+    // deletes. Mirrors the product/variant deletedAt convention. (migration 0033)
+    deletedAt: timestamp({ withTimezone: true }),
     createdAt: ts(),
     updatedAt: ts(),
   },
@@ -744,6 +748,10 @@ export const cart = pgTable('cart', {
   token: text().notNull().unique(), // device/guest cart token
   status: cartStatus().notNull().default('active'),
   convertedOrderId: uuid().references(() => order.id),
+  // Hard TTL: the cart-cleanup job deletes idle/empty carts past this instant.
+  // Set on create + extended on every line mutation (cartExpiry helper).
+  // (migration 0032)
+  expiresAt: timestamp({ withTimezone: true }),
   createdAt: ts(),
   updatedAt: ts(),
 });

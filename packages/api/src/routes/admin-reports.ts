@@ -70,7 +70,7 @@ adminReports.openapi(
         select to_char(date_trunc('day', coalesce(placed_at, created_at)), 'YYYY-MM-DD') as day,
                count(*)::int as orders, coalesce(sum(grand_total),0)::int as revenue
         from "order"
-        where state = any(${PAID_STATES}) and coalesce(placed_at, created_at) >= now() - (${days} || ' days')::interval
+        where state = any(${PAID_STATES}) and deleted_at is null and coalesce(placed_at, created_at) >= now() - (${days} || ' days')::interval
         group by 1 order by 1`);
       const rows = (series as unknown as { rows: Array<{ day: string; orders: number; revenue: number }> }).rows;
       return { series: rows, totalRevenue: rows.reduce((a, r) => a + Number(r.revenue), 0), totalOrders: rows.reduce((a, r) => a + Number(r.orders), 0) };
@@ -93,7 +93,7 @@ adminReports.openapi(
       const r = await tx.execute(sql`
         select ol.variant_name as name, ol.variant_sku as sku, sum(ol.quantity)::int as qty, sum(ol.line_total)::int as revenue
         from order_line ol join "order" o on o.id = ol.order_id
-        where o.state = any(${PAID_STATES}) and coalesce(o.placed_at, o.created_at) >= now() - (${days} || ' days')::interval
+        where o.state = any(${PAID_STATES}) and o.deleted_at is null and coalesce(o.placed_at, o.created_at) >= now() - (${days} || ' days')::interval
         group by 1,2 order by revenue desc limit 15`);
       return { items: (r as unknown as { rows: unknown[] }).rows };
     });
@@ -115,7 +115,7 @@ adminReports.openapi(
       const r = await tx.execute(sql`
         select cu.id, cu.email, sum(o.grand_total)::int as spent, count(*)::int as orders
         from "order" o join customer cu on cu.id = o.customer_id
-        where o.state = any(${PAID_STATES}) and coalesce(o.placed_at, o.created_at) >= now() - (${days} || ' days')::interval
+        where o.state = any(${PAID_STATES}) and o.deleted_at is null and coalesce(o.placed_at, o.created_at) >= now() - (${days} || ' days')::interval
         group by 1,2 order by spent desc limit 15`);
       return { items: (r as unknown as { rows: unknown[] }).rows };
     });
@@ -220,7 +220,7 @@ adminReports.openapi(
       const r = await tx.execute(sql`
         with paid as (
           select id, customer_id, grand_total from "order"
-          where state = any(${PAID_STATES}) and coalesce(placed_at, created_at) >= now() - (${days} || ' days')::interval
+          where state = any(${PAID_STATES}) and deleted_at is null and coalesce(placed_at, created_at) >= now() - (${days} || ' days')::interval
         ),
         per_cust as (select customer_id, count(*) as n from paid where customer_id is not null group by 1)
         select
