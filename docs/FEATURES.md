@@ -14,7 +14,7 @@ SellRight is a commerce backend for operators who want ownership, multi-store co
 | Catalog management | Built | Products, variants, collections, options, images, inventory, locations. |
 | Static catalog manifest | Built | Fast storefront browse path with generated JSON. |
 | Checkout | Built | Server-priced checkout with stock allocation, shipping, tax, coupons, gift-card tender. |
-| Payments layer | Partly built | Stripe scaffold exists; gateway live e2e needs keys; NMI/Sezzle are planned. |
+| Payments layer | Built (Stripe) | Stripe PaymentIntents, dual test/live mode, mode-bound webhook settlement, dashboard refund/dispute reconciliation. Storefront Stripe Elements checkout behind `VITE_SR_CHECKOUT` (pending one live test-card run). NMI/Sezzle dropped — SellRight settles via Stripe + gift-card tender. |
 | Refunds and returns | Built at backend level | Gateway-backed refund path exists for providers that implement it. |
 | Customer auth/account | Built | Register, login, Google auth, sessions, profile, addresses, password reset, email verification. |
 | Transactional email | Built | SMTP-backed event email flows. |
@@ -27,7 +27,10 @@ SellRight is a commerce backend for operators who want ownership, multi-store co
 | Blog/content | Built | Blog CMS routes and admin surface. |
 | App/software licensing | Built | License issuance, device activation, update manifests, licensed downloads. |
 | Reconciliation export | Built | SellRight-to-Vendure export for rollback/reconciliation workflows. |
-| Storefront migration | In progress | Qwik storefront still needs full provider rewire from Vendure GraphQL to SellRight REST. |
+| Subscriptions / recurring billing | Built | Stripe Billing; backing order → first invoice issues the license, renewals extend the entitlement; admin list + per-customer view + hosted Customer Portal. |
+| Order bulk ops | Built | Bulk cancel / trash (soft-delete) / restore / gated purge (cascade + FK-coverage guard test). |
+| Server cart lifecycle | Built | Server-authoritative cart, TTL + extend-on-activity, abandonment/cleanup jobs, checkout-reads-from-cart (fail-closed). |
+| Storefront migration | In progress | Catalog, collections, cart, auth, and account rewired to SellRight REST (runtime-verified vs the live API). Checkout (Stripe Elements) implemented behind `VITE_SR_CHECKOUT`, pending a live test-card transaction before default. |
 | Carrier labels/rates | Not built | Manual/flat-rate fulfillment exists; carrier integrations are later. |
 | NMI/Sezzle | Not built | Required before Damned Designs parity. |
 
