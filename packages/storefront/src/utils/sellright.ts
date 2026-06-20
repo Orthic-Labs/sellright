@@ -170,7 +170,12 @@ export const srCurrencies = () =>
 export const srNewsletterSignup = (email: string, name?: string) =>
   sr<{ ok: boolean }>('/v1/shop/newsletter-signup', { method: 'POST', body: JSON.stringify(name ? { email, name } : { email }) });
 
-export interface SrCreatedOrder { code: string; state: string; grandTotal: number; currency: string; }
+export interface SrCreatedOrder {
+  code: string; state: string; grandTotal: number; currency: string;
+  // Checkout-migration: discountTotal / coupon / gift-card / receipt token. The
+  // receiptToken scopes the public confirmation read (carried as ?rt=).
+  discountTotal?: number; couponApplied?: boolean; giftCardApplied?: number; receiptToken?: string;
+}
 export const srCreateOrder = (body: unknown) =>
   sr<SrCreatedOrder>('/v1/shop/checkout', { method: 'POST', body: JSON.stringify(body) });
 
@@ -179,13 +184,32 @@ export const srPayOrder = (code: string, method = 'cod') =>
     method: 'POST', body: JSON.stringify({ method }),
   });
 
+// ── Stripe checkout-migration (behind VITE_SR_CHECKOUT) ──────────────────────
+
+/** POST /v1/shop/orders/{code}/payment-intent → a Stripe PaymentIntent's
+ *  client_secret (idempotent server-side on the order). Mount the Payment
+ *  Element against this secret and confirm client-side. */
+export const srCreatePaymentIntent = (code: string) =>
+  sr<{ clientSecret: string; intentId: string }>(`/v1/shop/orders/${encodeURIComponent(code)}/payment-intent`, {
+    method: 'POST', body: JSON.stringify({}),
+  });
+
+/** GET /v1/shop/stripe-key → the mode-appropriate publishable key (public). */
+export const srStripePublishableKey = () =>
+  sr<{ publishableKey: string | null }>('/v1/shop/stripe-key');
+
 export interface SrOrder {
   code: string; state: string; currency: string;
   subtotal: number; shippingTotal: number; taxTotal: number; discountTotal: number; grandTotal: number;
   placedAt: string | null; shippingAddress: unknown;
   lines: { sku: string; name: string; quantity: number; unitPrice: number; lineTotal: number }[];
 }
-export const srGetOrder = (code: string) => sr<SrOrder>(`/v1/shop/orders/${encodeURIComponent(code)}`);
+/** GET /v1/shop/orders/{code} — receipt read. Scoped: pass the receipt token
+ *  (`rt`, from srCreateOrder) OR be the authed owner; a bare code is denied. */
+export const srGetOrder = (code: string, rt?: string) => {
+  const q = rt ? `?rt=${encodeURIComponent(rt)}` : '';
+  return sr<SrOrder>(`/v1/shop/orders/${encodeURIComponent(code)}${q}`);
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Catalog — raw REST shapes (mirrors packages/api/src/routes/catalog.ts)

@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, count, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
@@ -85,7 +85,7 @@ checkout.openapi(
     responses: {
       200: {
         description: 'Order created',
-        content: { 'application/json': { schema: z.object({ code: z.string(), state: z.string(), grandTotal: z.number().int(), discountTotal: z.number().int(), currency: z.string(), couponApplied: z.boolean(), giftCardApplied: z.number().int() }) } },
+        content: { 'application/json': { schema: z.object({ code: z.string(), state: z.string(), grandTotal: z.number().int(), discountTotal: z.number().int(), currency: z.string(), couponApplied: z.boolean(), giftCardApplied: z.number().int(), receiptToken: z.string() }) } },
       },
       409: { description: 'Out of stock / shipping unavailable', content: { 'application/json': { schema: z.object({ error: z.string(), skus: z.array(z.string()).optional(), reason: z.string().optional() }) } } },
       429: { description: 'Rate limited', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
@@ -104,16 +104,16 @@ checkout.openapi(
     const checkoutRetry = loginRetryAfter(ip, checkoutBucket);
     if (checkoutRetry > 0) return c.json({ error: `too many checkouts — try again in ${checkoutRetry}s` }, 429);
 
-    type Result = { blocked: string[] } | { shippingError: string } | { cartError: string } | { code: string; grandTotal: number; discountTotal: number; couponApplied: boolean; replay?: boolean; giftCardApplied?: number; paid?: boolean };
+    type Result = { blocked: string[] } | { shippingError: string } | { cartError: string } | { code: string; grandTotal: number; discountTotal: number; couponApplied: boolean; replay?: boolean; giftCardApplied?: number; paid?: boolean; receiptToken: string };
     const out = await withStore(st.id, async (tx): Promise<Result> => {
       // Idempotency: same key -> the same order (also guarded by a unique index).
       if (idemKey) {
         const [existing] = await tx
-          .select({ code: s.order.code, grandTotal: s.order.grandTotal, discountTotal: s.order.discountTotal })
+          .select({ code: s.order.code, grandTotal: s.order.grandTotal, discountTotal: s.order.discountTotal, receiptToken: s.order.receiptToken })
           .from(s.order)
           .where(eq(s.order.idempotencyKey, idemKey))
           .limit(1);
-        if (existing) return { code: existing.code, grandTotal: existing.grandTotal, discountTotal: existing.discountTotal, couponApplied: existing.discountTotal > 0, replay: true };
+        if (existing) return { code: existing.code, grandTotal: existing.grandTotal, discountTotal: existing.discountTotal, couponApplied: existing.discountTotal > 0, replay: true, receiptToken: existing.receiptToken ?? '' };
       }
 
       // Server-authoritative cart: when a cartToken is present the server cart is
@@ -252,9 +252,13 @@ checkout.openapi(
 
       const orderId = randomUUID();
       const code = orderCode();
+      // High-entropy receipt token (32 bytes, base64url) → scopes the public
+      // order-by-code read on the confirmation page (carried as ?rt=). Never
+      // bare-code (P1): the order code is ~enumerable.
+      const receiptToken = randomBytes(32).toString('base64url');
       await tx.insert(s.order).values({
         id: orderId, storeId: st.id, code, customerId, state: 'PendingPayment', currency: st.currency,
-        idempotencyKey: idemKey, promotionId: promoId,
+        idempotencyKey: idemKey, promotionId: promoId, receiptToken,
         subtotal: totals.subtotal, discountTotal: totals.discountTotal, shippingTotal: totals.shippingTotal,
         taxTotal: totals.taxTotal, grandTotal: totals.grandTotal,
         isPreOrder: priced.some((p) => p.v.isPreOrder),
@@ -315,7 +319,7 @@ checkout.openapi(
       // Webhook events (transactional outbox — enqueued in the same txn).
       await emitEvent(tx, st.id, 'order.created', { code, grandTotal: totals.grandTotal, currency: st.currency });
       if (paid) await emitEvent(tx, st.id, 'order.paid', { code, grandTotal: totals.grandTotal, currency: st.currency });
-      return { code, grandTotal: totals.grandTotal, discountTotal: totals.discountTotal, couponApplied: promoId != null, giftCardApplied, paid };
+      return { code, grandTotal: totals.grandTotal, discountTotal: totals.discountTotal, couponApplied: promoId != null, giftCardApplied, paid, receiptToken };
     }).catch(async (e: unknown): Promise<Result> => {
       // Concurrent double-submit with the same Idempotency-Key: the unique
       // (store, key) index rejected the loser; its txn (incl. allocation) rolled
@@ -323,11 +327,11 @@ checkout.openapi(
       if (idemKey && (e as { code?: string })?.code === '23505') {
         return withStore(st.id, async (tx): Promise<Result> => {
           const [o] = await tx
-            .select({ code: s.order.code, grandTotal: s.order.grandTotal, discountTotal: s.order.discountTotal })
+            .select({ code: s.order.code, grandTotal: s.order.grandTotal, discountTotal: s.order.discountTotal, receiptToken: s.order.receiptToken })
             .from(s.order)
             .where(eq(s.order.idempotencyKey, idemKey))
             .limit(1);
-          if (o) return { code: o.code, grandTotal: o.grandTotal, discountTotal: o.discountTotal, couponApplied: o.discountTotal > 0, replay: true };
+          if (o) return { code: o.code, grandTotal: o.grandTotal, discountTotal: o.discountTotal, couponApplied: o.discountTotal > 0, replay: true, receiptToken: o.receiptToken ?? '' };
           throw e;
         });
       }
@@ -361,6 +365,6 @@ checkout.openapi(
       if (email?.to) await sendOrderConfirmation({ name: st.name, currency: st.currency }, email.to, email.data);
     } catch (e) { console.error('[email:orderConfirmation] failed', e); }
 
-    return c.json({ code: out.code, state: out.paid ? 'Paid' : 'PendingPayment', grandTotal: out.grandTotal, discountTotal: out.discountTotal, currency: st.currency, couponApplied: out.couponApplied, giftCardApplied: out.giftCardApplied ?? 0 }, 200);
+    return c.json({ code: out.code, state: out.paid ? 'Paid' : 'PendingPayment', grandTotal: out.grandTotal, discountTotal: out.discountTotal, currency: st.currency, couponApplied: out.couponApplied, giftCardApplied: out.giftCardApplied ?? 0, receiptToken: out.receiptToken }, 200);
   },
 );

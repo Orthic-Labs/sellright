@@ -1,4 +1,5 @@
 import shippingMethods from '../data/shipping-methods.json';
+import { srShippingMethods } from '~/utils/sellright';
 
 export interface ShippingMethod {
   id: string;
@@ -25,5 +26,22 @@ export class ShippingService {
       return countryMatch && maxSubtotalMatch && minSubtotalMatch;
     });
     return methods;
+  }
+
+  /**
+   * SellRight path: server-priced shipping methods (GET /v1/shop/shipping-methods).
+   * Maps the REST shape onto the storefront ShippingMethod type (rates in cents).
+   */
+  static async getSellRightShippingMethods(countryCode: string, subtotal: number): Promise<ShippingMethod[]> {
+    const { methods } = await srShippingMethods(countryCode, subtotal);
+    return methods.map((m) => ({
+      id: m.code,
+      code: m.code,
+      name: m.name,
+      description: '',
+      price: m.rate,
+      priceWithTax: m.rate,
+      countryCodes: ['*'],
+    }));
   }
 }

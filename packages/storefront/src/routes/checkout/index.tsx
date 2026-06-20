@@ -20,7 +20,9 @@ import { CheckoutValidationProvider, useCheckoutValidation, useCheckoutValidatio
 import { OrderProcessingModal } from '~/components/OrderProcessingModal';
 
 import { useCheckout } from '~/hooks/useCheckout';
-import { transitionOrderToStateMutation } from '~/providers/shop/checkout/checkout';
+import { transitionOrderToStateMutation, SR_CHECKOUT_ENABLED } from '~/providers/shop/checkout/checkout';
+import { StripePaymentElement } from '~/components/checkout/StripePaymentElement';
+import { srStripePublishableKey } from '~/utils/sellright';
 
 import { LocalCartService } from '~/services/LocalCartService';
 import { srCreateOrder, srPayOrder } from '~/utils/sellright';
@@ -40,7 +42,7 @@ const CheckoutContent = component$(() => {
   const hasMixedPreOrder = useHasMixedPreOrder();
   const checkoutValidation = useCheckoutValidation();
   const validationActions = useCheckoutValidationActions();
-  const { checkoutState } = useCheckout();
+  const { checkoutState, srState, placeOrderStripe } = useCheckout();
 
   const state = useStore<CheckoutState>({
     loading: false,
@@ -50,6 +52,10 @@ const CheckoutContent = component$(() => {
   const nmiTriggerSignal = useSignal(0);
   const sezzleTriggerSignal = useSignal(0);
   const selectedPaymentMethod = useSignal<string>('nmi');
+
+  // ── Stripe path (VITE_SR_CHECKOUT) ──
+  const stripePublishableKey = useSignal<string>('');
+  const stripeConfirmTrigger = useSignal(0);
   const pageLoading = useSignal(true);
   const paymentComplete = useSignal(false);
   const promoExpanded = useSignal(false);
@@ -92,6 +98,14 @@ const CheckoutContent = component$(() => {
     if (pageLoading.value) {
       try {
         appState.showCart = false;
+
+        // Stripe path: fetch the publishable key up front so the Payment Element
+        // can mount the moment an order + PI exist.
+        if (SR_CHECKOUT_ENABLED) {
+          srStripePublishableKey()
+            .then((r) => { if (r.publishableKey) stripePublishableKey.value = r.publishableKey; })
+            .catch((e) => console.warn('[Checkout] stripe-key fetch failed:', e));
+        }
 
         const [customerData, orderData, countriesData] = await Promise.all([
           getActiveCustomerQuery().catch(() => null),
@@ -254,18 +268,51 @@ const CheckoutContent = component$(() => {
         }
       }
 
-      // ── SellRight: single create-order + COD pay (replaces the Vendure flow) ──
+      const items = (localCart.localCart.items || [])
+        .map((it: any) => ({ sku: it.productVariantId as string, quantity: it.quantity as number }))
+        .filter((i) => i.sku && i.quantity > 0);
+      if (!items.length) throw new Error('Your cart is empty.');
+      const sa: any = appState.shippingAddress || {};
+      const shippingAddress = {
+        fullName: `${appState.customer?.firstName || ''} ${appState.customer?.lastName || ''}`.trim(),
+        streetLine1: sa.streetLine1, streetLine2: sa.streetLine2, city: sa.city,
+        province: sa.province, postalCode: sa.postalCode, countryCode: sa.countryCode, phone: sa.phoneNumber,
+      };
+
+      if (SR_CHECKOUT_ENABLED) {
+        // ── SellRight + Stripe path ──
+        const phase = await placeOrderStripe({
+          items,
+          email: appState.customer?.emailAddress || undefined,
+          shippingAddress,
+          billingAddress: checkoutValidation.useDifferentBilling ? (appState.billingAddress as any) : undefined,
+        });
+        if (phase === 'paid') {
+          // Gift card covered the whole total — confirmation directly.
+          try { LocalCartService.clearCart(); } catch { /* ignore */ }
+          showProcessingModal.value = false;
+          isOrderProcessing.value = false;
+          const rt = srState.receiptToken ? `?rt=${encodeURIComponent(srState.receiptToken)}` : '';
+          navigate(`/checkout/confirmation/${srState.code}${rt}`);
+          return;
+        }
+        if (phase === 'paying') {
+          // PaymentIntent ready — reveal the Stripe Payment Element, then the
+          // shopper confirms (Stripe redirects to the confirmation page).
+          showProcessingModal.value = false;
+          isOrderProcessing.value = false;
+          state.error = null;
+          setTimeout(() => {
+            document.getElementById('stripe-payment-element-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }, 80);
+          return;
+        }
+        // error
+        throw new Error(srState.error || 'Checkout failed. Please try again.');
+      }
+
+      // ── Legacy default path (flag off): single create-order + COD pay ──
       {
-        const items = (localCart.localCart.items || [])
-          .map((it: any) => ({ sku: it.productVariantId as string, quantity: it.quantity as number }))
-          .filter((i) => i.sku && i.quantity > 0);
-        if (!items.length) throw new Error('Your cart is empty.');
-        const sa: any = appState.shippingAddress || {};
-        const shippingAddress = {
-          fullName: `${appState.customer?.firstName || ''} ${appState.customer?.lastName || ''}`.trim(),
-          streetLine1: sa.streetLine1, streetLine2: sa.streetLine2, city: sa.city,
-          province: sa.province, postalCode: sa.postalCode, countryCode: sa.countryCode, phone: sa.phoneNumber,
-        };
         const created = await srCreateOrder({
           items, shipping: 0,
           email: appState.customer?.emailAddress || undefined,
@@ -275,7 +322,8 @@ const CheckoutContent = component$(() => {
         try { LocalCartService.clearCart(); } catch { /* ignore */ }
         showProcessingModal.value = false;
         isOrderProcessing.value = false;
-        navigate(`/checkout/confirmation/${created.code}`);
+        const rt = created.receiptToken ? `?rt=${encodeURIComponent(created.receiptToken)}` : '';
+        navigate(`/checkout/confirmation/${created.code}${rt}`);
         return;
       }
     } catch (error) {
@@ -510,6 +558,46 @@ const CheckoutContent = component$(() => {
                       }}
                     >
                       <div class="overflow-hidden">
+                    {SR_CHECKOUT_ENABLED ? (
+                      <div id="stripe-payment-element-section" style="scroll-margin-top:16px;">
+                        {srState.phase === 'paying' && stripePublishableKey.value && srState.clientSecret ? (
+                          <>
+                            <StripePaymentElement
+                              publishableKey={stripePublishableKey.value}
+                              clientSecret={srState.clientSecret}
+                              returnUrl={`${typeof location !== 'undefined' ? location.origin : ''}/checkout/confirmation/${srState.code}${srState.receiptToken ? `?rt=${encodeURIComponent(srState.receiptToken)}` : ''}`}
+                              confirmTrigger={stripeConfirmTrigger}
+                              onError$={$(async (msg: string) => {
+                                state.error = msg;
+                                isOrderProcessing.value = false;
+                                state.loading = false;
+                              })}
+                              onProcessingChange$={$(async (p: boolean) => {
+                                state.loading = p;
+                                isOrderProcessing.value = p;
+                              })}
+                            />
+                            <button
+                              type="button"
+                              onClick$={$(() => { if (!state.loading) stripeConfirmTrigger.value = stripeConfirmTrigger.value + 1; })}
+                              disabled={state.loading}
+                              class="checkout-cta"
+                              style="margin-top:14px;"
+                            >
+                              {state.loading
+                                ? 'Processing…'
+                                : (formattedTotal.value ? `PAY — ${formattedTotal.value}` : 'PAY')}
+                            </button>
+                          </>
+                        ) : (
+                          <div class="payment-placeholder" style="padding:14px 0;">
+                            {srState.phase === 'placing'
+                              ? 'Preparing secure payment…'
+                              : 'Click PLACE ORDER to continue to secure card payment.'}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
                     <Payment
                       triggerNMISignal={nmiTriggerSignal}
                       triggerSezzleSignal={sezzleTriggerSignal}
@@ -589,6 +677,7 @@ const CheckoutContent = component$(() => {
                       })}
                       isDisabled={false}
                     />
+                    )}
                       </div>
                     </div>
                     {!(checkoutValidation.isCustomerValid && checkoutValidation.isShippingAddressValid) && (

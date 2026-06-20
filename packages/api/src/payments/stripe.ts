@@ -156,13 +156,17 @@ export const stripeProvider: PaymentProvider = {
  * row (never the client); orderCode + storeId go in metadata so the inbound
  * webhook and verifyIntent can bind the intent back to exactly this order.
  */
-export async function createPaymentIntent(opts: { orderCode: string; storeId: string; amount: number; currency: string; mode: StripeMode }): Promise<{ clientSecret: string; intentId: string }> {
+export async function createPaymentIntent(opts: { orderCode: string; storeId: string; amount: number; currency: string; mode: StripeMode; idempotencyKey?: string }): Promise<{ clientSecret: string; intentId: string }> {
+  // Idempotent on the order: Stripe returns the SAME PaymentIntent (same
+  // client_secret) for a repeated `idempotencyKey` within 24h, so a double-click
+  // / retry of /payment-intent reuses the order's open PI instead of minting a
+  // duplicate. The key is keyed on the order id by the caller.
   const pi = await stripeClient(opts.mode).paymentIntents.create({
     amount: opts.amount,
     currency: opts.currency.toLowerCase(),
     metadata: { orderCode: opts.orderCode, storeId: opts.storeId },
     automatic_payment_methods: { enabled: true },
-  });
+  }, opts.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : undefined);
   return { clientSecret: pi.client_secret ?? '', intentId: pi.id };
 }
 

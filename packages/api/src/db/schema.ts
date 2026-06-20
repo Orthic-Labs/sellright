@@ -356,6 +356,11 @@ export const order = pgTable(
     promotionId: uuid().references(() => promotion.id),
     shippingAddress: jsonb(),
     billingAddress: jsonb(),
+    // Checkout-migration: high-entropy receipt token returned by /checkout and
+    // carried (?rt=) to the confirmation page + Stripe return_url. The public
+    // order-by-code read grants access on a token match OR authed ownership —
+    // never bare-code (the order code is ~enumerable). (migration 0035)
+    receiptToken: text(),
     // WP9.5: provenance for the customer link (session | email_match) + future
     // freeform keys. Kept as a separate JSONB so a structured linked_via query
     // is indexable later if the email-match rate climbs.

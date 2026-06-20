@@ -124,7 +124,11 @@ pay.openapi(
     });
     if (!order) return c.json({ error: 'order not found' }, 404);
     if (order.state !== 'PendingPayment') return c.json({ error: 'order is not payable', state: order.state }, 409);
-    const intent = await createPaymentIntent({ orderCode: code, storeId: st.id, amount: order.grandTotal, currency: order.currency, mode });
+    // Idempotent: key the Stripe create on the order id so a double-submit/retry
+    // reuses the order's open PaymentIntent (same client_secret) instead of
+    // minting a second one (jury revision). amount is per-order, so the key is
+    // stable for the life of the order.
+    const intent = await createPaymentIntent({ orderCode: code, storeId: st.id, amount: order.grandTotal, currency: order.currency, mode, idempotencyKey: `pi:${order.id}` });
     return c.json(intent, 200);
   },
 );

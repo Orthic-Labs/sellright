@@ -15,6 +15,78 @@ import { requester } from '~/utils/api';
 import { CountryService } from '~/services/CountryService';
 import { ShippingService } from '~/services/ShippingService';
 import { PaymentService } from '~/services/PaymentService';
+import {
+	srCreateOrder,
+	srCreatePaymentIntent,
+	srPayOrder,
+	type SrCreatedOrder,
+} from '~/utils/sellright';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SellRight / Stripe checkout (behind VITE_SR_CHECKOUT). The Vendure NMI/Sezzle
+// exports above stay as the DEFAULT path (flag off); these supersede them only
+// when the flag is on. NMI/Sezzle are removed from THIS path only.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Strangler flag: when truthy, checkout settles via SellRight + Stripe. */
+export const SR_CHECKOUT_ENABLED =
+	String(import.meta.env.VITE_SR_CHECKOUT ?? '').toLowerCase() === '1' ||
+	String(import.meta.env.VITE_SR_CHECKOUT ?? '').toLowerCase() === 'true';
+
+const SR_CART_COOKIE = 'sr_cart';
+
+/** Read the server-cart token from the sr_cart cookie (set by ServerCartService). */
+const srCartToken = (): string | null => {
+	if (typeof document === 'undefined') return null;
+	const m = document.cookie.match(new RegExp(`(?:^|; )${SR_CART_COOKIE}=([^;]*)`));
+	return m ? decodeURIComponent(m[1]) : null;
+};
+
+export interface SrCheckoutForm {
+	items?: { sku: string; quantity: number }[]; // fallback when no cart token
+	email?: string;
+	shippingAddress?: Record<string, unknown>;
+	billingAddress?: Record<string, unknown>;
+	shippingMethodCode?: string;
+	couponCode?: string;
+	giftCardCode?: string;
+}
+
+/**
+ * Create the order (server-priced) from the sr_cart token. The server is
+ * authoritative — when a cartToken is present its lines win and the client item
+ * list is ignored. Returns the order code, totals, paid state, and the receipt
+ * token to carry to the confirmation page (?rt=).
+ */
+export const placeOrder = async (form: SrCheckoutForm): Promise<SrCreatedOrder> => {
+	const cartToken = srCartToken();
+	const body: Record<string, unknown> = {
+		shipping: 0,
+		email: form.email,
+		shippingAddress: form.shippingAddress,
+		billingAddress: form.billingAddress,
+		shippingMethodCode: form.shippingMethodCode,
+		couponCode: form.couponCode,
+		giftCardCode: form.giftCardCode,
+	};
+	if (cartToken) body.cartToken = cartToken;
+	// /checkout requires a non-empty items[] in its schema even when cartToken
+	// drives the actual lines; pass the client mirror as the bootstrap value.
+	body.items = (form.items && form.items.length ? form.items : [{ sku: '__cart__', quantity: 1 }]);
+	return srCreateOrder(body);
+};
+
+/** Mint (or reuse) the order's Stripe PaymentIntent → client_secret. */
+export const createPaymentIntent = async (code: string): Promise<{ clientSecret: string; intentId: string }> =>
+	srCreatePaymentIntent(code);
+
+/**
+ * Finalize a fully-gift-card-covered order (grandTotal == 0). When a gift card
+ * covers the whole total, /checkout already returns state 'Paid' — this is the
+ * fallback finalizer for the (rare) case it is still PendingPayment at 0 due.
+ */
+export const payWithGiftCardOnly = async (code: string): Promise<{ code: string; state: string; payment: string }> =>
+	srPayOrder(code, 'manual');
 
 // 🚀 CHECKOUT QUERY CACHE - Conservative 2-minute cache for checkout data
 const checkoutCache = new Map<string, { data: any; timestamp: number }>();

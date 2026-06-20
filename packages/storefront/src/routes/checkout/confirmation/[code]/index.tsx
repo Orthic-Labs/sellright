@@ -1,10 +1,14 @@
 import { component$, useContext, useStore, useVisibleTask$ } from '@qwik.dev/core';
 import { Link, useLocation } from '@qwik.dev/router';
 import { APP_STATE } from '~/constants';
-import { CartContextId, clearLocalCart } from '~/contexts/CartContext';
+import { CartContextId, clearLocalCart, SERVER_CART_ENABLED } from '~/contexts/CartContext';
 import { Order } from '~/generated/graphql-shop';
 import { getOrderByCodeQuery, verifySezzlePaymentMutation } from '~/providers/shop/orders/order';
 import { srGetOrder } from '~/utils/sellright';
+import { ServerCartService } from '~/services/ServerCartService';
+import { SR_CHECKOUT_ENABLED } from '~/providers/shop/checkout/checkout';
+
+const SR_CHECKOUT_PAYMENT_LABEL = SR_CHECKOUT_ENABLED ? 'card' : 'cod';
 import { createSEOHead } from '~/utils/seo';
 import { formatPrice } from '~/utils';
 import { OptimizedImage } from '~/components/ui';
@@ -33,9 +37,8 @@ const activeStepFromState = (state?: string): number => {
 };
 
 const ConfirmationPage = component$(() => {
-	const {
-		params: { code },
-	} = useLocation();
+	const loc = useLocation();
+	const { code } = loc.params;
 	const appState = useContext(APP_STATE);
 	const localCart = useContext(CartContextId);
 	const store = useStore<{
@@ -50,13 +53,23 @@ const ConfirmationPage = component$(() => {
 
 	useVisibleTask$(async () => {
 		try {
-			const sr = await srGetOrder(code);
+			// Receipt-token scoped read (or authed owner). The token is carried as
+			// ?rt= from the placing session + the Stripe return_url.
+			const rt = loc.url.searchParams.get('rt') || undefined;
+			// Tolerate webhook lag: Stripe redirects here the instant the card is
+			// confirmed, but `payment_intent.succeeded` (→ Paid + licenses) may land a
+			// moment later. Poll a few times while still PendingPayment.
+			let sr = await srGetOrder(code, rt);
+			for (let i = 0; i < 8 && sr.state === 'PendingPayment'; i++) {
+				await new Promise((r) => setTimeout(r, 1500));
+				sr = await srGetOrder(code, rt);
+			}
 			store.order = {
 				id: sr.code, code: sr.code, state: sr.state,
 				totalWithTax: sr.grandTotal, subTotal: sr.subtotal, subTotalWithTax: sr.subtotal + sr.taxTotal,
 				shippingWithTax: sr.shippingTotal,
 				customer: null, discounts: [], shippingLines: [],
-				payments: [{ method: 'cod', state: sr.state === 'Paid' ? 'Settled' : 'Created', amount: sr.grandTotal }],
+				payments: [{ method: SR_CHECKOUT_PAYMENT_LABEL, state: sr.state === 'Paid' ? 'Settled' : 'Created', amount: sr.grandTotal }],
 				shippingAddress: (sr.shippingAddress as any) || {}, billingAddress: {},
 				lines: sr.lines.map((l) => ({
 					id: l.sku, quantity: l.quantity, linePriceWithTax: l.lineTotal, priceWithTax: l.unitPrice,
@@ -107,6 +120,11 @@ const ConfirmationPage = component$(() => {
 					} as Order;
 
 					clearLocalCart(localCart);
+					// Server-authoritative cart: also retire the sr_cart mirror so the
+					// header badge + cart page reflect the converted (now empty) cart.
+					if (SERVER_CART_ENABLED) {
+						ServerCartService.clearCart().catch((e) => console.warn('[Confirmation] ServerCart clear failed:', e));
+					}
 				}
 
 				store.loading = false;
