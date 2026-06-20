@@ -19,6 +19,7 @@ import { shopExtra } from './routes/shop-extra.js';
 import { shopConfig } from './routes/shop-config.js';
 import { customerTokens } from './routes/customer-tokens.js';
 import { paymentWebhooks } from './routes/payment-webhooks.js';
+import { subscriptions } from './routes/subscriptions.js';
 import { apps } from './routes/apps.js';
 import { csrfValid, customerCsrfValid, getCustomerSessionToken } from './auth/cookies.js';
 
@@ -105,6 +106,7 @@ export function createApp(): OpenAPIHono {
   app.route('/', orders);
   app.route('/', paymentWebhooks); // WP3: inbound Stripe webhooks (signature-auth, no CSRF/cookie)
   app.route('/', apps); // software licenses, app update manifests, admin app releases
+  app.route('/', subscriptions); // recurring billing: shop subscribe/portal + admin list
 
   // Admin API — operator surface (auth, dashboard, orders, products, customers).
   app.route('/', admin);

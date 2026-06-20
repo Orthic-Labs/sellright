@@ -20,6 +20,10 @@ export default function CustomerDetailPage() {
     queryKey: ['customer', store?.slug, id],
     queryFn: () => api.get<CustomerDetail>(`/customers/${id}`),
   });
+  const { data: subs } = useQuery({
+    queryKey: ['customer-subs', store?.slug, id],
+    queryFn: () => api.get<{ items: { id: string; status: string; priceId: string | null; currentPeriodEnd: string | null; cancelAtPeriodEnd: boolean }[] }>(`/subscriptions?customerId=${id}`),
+  });
   const [edit, setEdit] = useState<{ firstName: string; lastName: string; phone: string; tags: string } | null>(null);
   const save = useMutation({
     mutationFn: () => api.patch(`/customers/${id}`, { firstName: edit!.firstName || null, lastName: edit!.lastName || null, phone: edit!.phone || null, tags: edit!.tags ? edit!.tags.split(',').map((t) => t.trim()).filter(Boolean) : null }),
@@ -98,6 +102,19 @@ export default function CustomerDetailPage() {
               <div className="flex items-center gap-1.5"><span className="text-gray-500">Verified:</span> {c.emailVerified ? <span className="text-success inline-flex items-center gap-1"><BadgeCheck size={13} /> Yes</span> : <span className="text-gray-500">No</span>}</div>
               <div><span className="text-gray-500">Joined:</span> <span className="font-medium">{date(c.createdAt)}</span></div>
             </div>
+          </FormSection>
+
+          <FormSection title="Subscriptions" description={subs?.items.length ? `${subs.items.length} on file` : 'recurring plans'}>
+            {!subs?.items.length ? <EmptyState title="No subscriptions" /> : subs.items.map((sub) => (
+              <div key={sub.id} className="text-sm mb-3 last:mb-0 pb-3 last:pb-0 border-b border-gray-100 last:border-0">
+                <div className="flex items-center justify-between">
+                  <StatusBadge value={sub.status} />
+                  {sub.cancelAtPeriodEnd && <span className="text-xs text-warning">cancels at period end</span>}
+                </div>
+                {sub.priceId && <div className="text-gray-500 mt-1 break-all">{sub.priceId}</div>}
+                {sub.currentPeriodEnd && <div className="text-gray-500">renews {date(sub.currentPeriodEnd)}</div>}
+              </div>
+            ))}
           </FormSection>
 
           <FormSection title="Addresses" description={`${c.addresses.length} on file`}>

@@ -14,7 +14,23 @@ import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { stripeConfigured, stripeCreds, stripeModeFromConfig, verifyStripeWebhook, verifyIntent, type IntentLike, type StripeMode } from '../payments/stripe.js';
 import { applyPaymentResult } from '../payments/settle.js';
-import { resolveStoreIdForStripeEvent, reconcileStripeRefund, recordStripeDispute, type StripeEventObj } from '../payments/webhook-reconcile.js';
+import { resolveStoreIdForStripeEvent, resolveStoreIdForSubscriptionEvent, reconcileStripeRefund, recordStripeDispute, type StripeEventObj } from '../payments/webhook-reconcile.js';
+import {
+  onCheckoutCompleted, onInvoicePaid, onInvoiceFailed, onSubscriptionUpdated, onSubscriptionDeleted,
+  type CheckoutSessionLike, type InvoiceLike, type SubscriptionObjLike,
+} from '../payments/subscriptions.js';
+
+// Subscription / invoice events resolve the tenant from OUR subscription row
+// (DB-primary), not from Stripe metadata propagation. An unresolvable one must
+// return 5xx so Stripe RETRIES (the retry resolves once checkout.session.completed
+// lands). Everything else resolves via resolveStoreIdForStripeEvent and acks.
+const SUBSCRIPTION_EVENT_TYPES = new Set([
+  'checkout.session.completed',
+  'invoice.paid',
+  'invoice.payment_failed',
+  'customer.subscription.updated',
+  'customer.subscription.deleted',
+]);
 
 export const paymentWebhooks = new OpenAPIHono();
 
@@ -46,8 +62,14 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
   // events fall back to a payment_intent → payment-ledger lookup. Unresolvable
   // (or a malformed id that'd blow the ::uuid RLS cast) → ack so Stripe stops
   // retrying. resolveStoreIdForStripeEvent only returns validated UUIDs.
-  const storeId = await resolveStoreIdForStripeEvent(event.data.object as StripeEventObj);
-  if (!storeId) return c.json({ received: true }, 200);
+  const isSubEvent = SUBSCRIPTION_EVENT_TYPES.has(event.type);
+  const storeId = isSubEvent
+    ? await resolveStoreIdForSubscriptionEvent(event.data.object as Parameters<typeof resolveStoreIdForSubscriptionEvent>[0])
+    : await resolveStoreIdForStripeEvent(event.data.object as StripeEventObj);
+  // Subscription/invoice events: unresolvable → 5xx so Stripe RETRIES (the row
+  // appears once checkout.session.completed lands; idempotency makes retry safe).
+  // One-time events: unresolvable → ack so Stripe stops retrying.
+  if (!storeId) return isSubEvent ? c.json({ error: 'tenant unresolved — retry' }, 503) : c.json({ received: true }, 200);
 
   await withStore(storeId, async (tx) => {
     // ra-sec: bind the verifying secret's mode to the store's configured mode. A
@@ -109,6 +131,22 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
         await recordStripeDispute(tx, storeId, { disputeId: d.id, amount: d.amount, reason: d.reason, status: d.status, piId: pi });
         return;
       }
+      // ── Subscriptions (Stripe Billing) ────────────────────────────────────
+      case 'checkout.session.completed':
+        await onCheckoutCompleted(tx, storeId, event.data.object as unknown as CheckoutSessionLike);
+        return;
+      case 'invoice.paid':
+        await onInvoicePaid(tx, storeId, event.data.object as unknown as InvoiceLike);
+        return;
+      case 'invoice.payment_failed':
+        await onInvoiceFailed(tx, storeId, event.data.object as unknown as InvoiceLike);
+        return;
+      case 'customer.subscription.updated':
+        await onSubscriptionUpdated(tx, storeId, event.data.object as unknown as SubscriptionObjLike);
+        return;
+      case 'customer.subscription.deleted':
+        await onSubscriptionDeleted(tx, storeId, event.data.object as unknown as SubscriptionObjLike);
+        return;
       default:
         return;
     }

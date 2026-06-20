@@ -34,6 +34,37 @@ export async function resolveStoreIdForStripeEvent(obj: StripeEventObj): Promise
   return row?.storeId && UUID.test(row.storeId) ? row.storeId : null;
 }
 
+/**
+ * Tenant resolver for subscription / invoice events. DB-PRIMARY, not
+ * metadata-dependent: the reliable anchor is OUR `subscription` row (linked by
+ * `checkout.session.completed` from session metadata WE set on a session WE
+ * created — no propagation assumption). Resolution order:
+ *   1. obj.metadata.storeId      (checkout.session — always present, our metadata)
+ *   2. our subscription row by stripeSubscriptionId = invoice.subscription
+ *   3. obj.subscription_details.metadata.storeId  (bonus, if Stripe propagated it)
+ * null → the caller returns 5xx so Stripe RETRIES (idempotency makes retry safe).
+ * UNSCOPED read is intentional here (we don't yet know the tenant).
+ */
+export async function resolveStoreIdForSubscriptionEvent(obj: {
+  metadata?: { storeId?: string | null } | null;
+  subscription?: string | { id?: string } | null;
+  subscription_details?: { metadata?: { storeId?: string | null } | null } | null;
+}): Promise<string | null> {
+  const m = obj.metadata?.storeId;
+  if (m && UUID.test(m)) return m;
+  const subId = typeof obj.subscription === 'string' ? obj.subscription : obj.subscription?.id ?? null;
+  if (subId) {
+    const [row] = await unsafeUnscopedDb
+      .select({ storeId: s.subscription.storeId })
+      .from(s.subscription)
+      .where(eq(s.subscription.stripeSubscriptionId, subId))
+      .limit(1);
+    if (row?.storeId && UUID.test(row.storeId)) return row.storeId;
+  }
+  const sm = obj.subscription_details?.metadata?.storeId;
+  return sm && UUID.test(sm) ? sm : null;
+}
+
 export const refundStateFromStripe = (status: string): 'Settled' | 'Pending' | 'Failed' =>
   status === 'succeeded' ? 'Settled' : status === 'pending' ? 'Pending' : 'Failed';
 

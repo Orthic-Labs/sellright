@@ -12,6 +12,7 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Orders from './pages/Orders';
 import OrderDetail from './pages/OrderDetail';
+import Subscriptions from './pages/Subscriptions';
 import Products from './pages/Products';
 import ProductDetail from './pages/ProductDetail';
 import ProductCreate from './pages/ProductCreate';
@@ -65,6 +66,7 @@ function App() {
         <Route path="/orders/new" element={<DraftOrder />} />
         <Route path="/orders/import-tracking" element={<ImportTracking />} />
         <Route path="/orders/:code" element={<OrderDetail />} />
+        <Route path="/subscriptions" element={<Subscriptions />} />
         <Route path="/abandoned-carts" element={<AbandonedCarts />} />
         <Route path="/affiliates" element={<Affiliates />} />
         <Route path="/affiliates/:id" element={<AffiliateDetail />} />

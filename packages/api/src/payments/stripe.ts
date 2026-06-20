@@ -165,3 +165,38 @@ export async function createPaymentIntent(opts: { orderCode: string; storeId: st
   });
   return { clientSecret: pi.client_secret ?? '', intentId: pi.id };
 }
+
+/**
+ * Create a Stripe Checkout Session in `subscription` mode for a recurring plan.
+ * The metadata ({storeId, orderCode, customerId?}) is set BOTH on the session
+ * (so `checkout.session.completed` can resolve our backing order + tenant) AND
+ * on `subscription_data.metadata` — Stripe copies the latter onto every
+ * invoice's `subscription_details.metadata`, a bonus path for invoice events.
+ * The primary tenant anchor is still OUR subscription row (see
+ * resolveStoreIdForSubscriptionEvent), so the implementation does not DEPEND on
+ * that propagation.
+ */
+export async function createSubscriptionCheckout(mode: StripeMode, args: {
+  priceId: string; successUrl: string; cancelUrl: string;
+  customerEmail?: string; metadata: Record<string, string>; // {storeId, orderCode, customerId?}
+}): Promise<{ url: string; sessionId: string }> {
+  const stripe = stripeClient(mode);
+  const session = await stripe.checkout.sessions.create({
+    mode: 'subscription',
+    line_items: [{ price: args.priceId, quantity: 1 }],
+    success_url: args.successUrl,
+    cancel_url: args.cancelUrl,
+    customer_email: args.customerEmail,
+    subscription_data: { metadata: args.metadata },
+    metadata: args.metadata,
+  });
+  if (!session.url) throw new Error('stripe did not return a checkout url');
+  return { url: session.url, sessionId: session.id };
+}
+
+/** Open a Stripe Customer Portal session for self-serve cancel / card update. */
+export async function createBillingPortal(mode: StripeMode, args: { customerId: string; returnUrl: string }): Promise<string> {
+  const stripe = stripeClient(mode);
+  const ps = await stripe.billingPortal.sessions.create({ customer: args.customerId, return_url: args.returnUrl });
+  return ps.url;
+}

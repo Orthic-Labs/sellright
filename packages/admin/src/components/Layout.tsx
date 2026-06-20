@@ -3,7 +3,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, ShoppingBag, Package, Layers, Boxes, Users, Settings, ChevronDown,
   LogOut, Store, Percent, Mail, BarChart3, Activity, Search, HandCoins, FileText,
-  RotateCcw, Gift, Webhook, Warehouse, Receipt, Coins, Shield, Menu, X,
+  RotateCcw, Gift, Webhook, Warehouse, Receipt, Coins, Shield, Menu, X, CreditCard,
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../auth';
@@ -20,6 +20,7 @@ const GROUPS: NavGroup[] = [
   { id: 'run', label: 'Run store', defaultOpen: true, items: [
     { to: '/', label: 'Home', icon: LayoutDashboard, end: true },
     { to: '/orders', label: 'Orders', icon: ShoppingBag },
+    { to: '/subscriptions', label: 'Subscriptions', icon: CreditCard },
     { to: '/returns', label: 'Returns', icon: RotateCcw },
     { to: '/customers', label: 'Customers', icon: Users },
   ]},
