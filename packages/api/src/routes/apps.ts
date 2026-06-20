@@ -6,7 +6,13 @@ import * as s from '../db/schema.js';
 import { activateLicenseOnDevice, findActivationByToken } from '../licensing/activations.js';
 import { canAccessDownload, canReceiveUpdate } from '../licensing/entitlements.js';
 import { bearerToken } from '../licensing/tokens.js';
+import { signedDownloadPath, verifyDownloadSig, downloadSigningConfigured } from '../licensing/download-url.js';
 import { J, errBody, guard, requireAdmin, requireStore, requireWrite } from './admin-helpers.js';
+import { createReadStream } from 'node:fs';
+import { stat } from 'node:fs/promises';
+import { resolve, sep } from 'node:path';
+import { Readable } from 'node:stream';
+import { env } from '../env.js';
 
 async function store(c: { req: { header: (k: string) => string | undefined } }): Promise<StoreCtx> {
   const slug = c.req.header('x-store-slug') ?? DEV_DEFAULT_STORE;
@@ -225,6 +231,7 @@ apps.openapi(
       401: { description: 'Missing or invalid license key', ...errBody },
       403: { description: 'Not entitled', ...errBody },
       404: { description: 'Not found', ...errBody },
+      503: { description: 'Downloads not configured (DOWNLOAD_URL_SECRET unset)', ...errBody },
     },
   }),
   async (c) => {
@@ -253,20 +260,59 @@ apps.openapi(
     });
     if (out.kind === 'forbidden') return c.json({ error: 'license is not active' }, 403);
     if (out.kind === 'notfound') return c.json({ error: 'download not found' }, 404);
-    // ra-005 (SAFE SUBSET): The artifact.path is a raw, permanent URL stored verbatim in
-    // the DB. We cannot issue a one-time signed URL here without knowing the storage
-    // backend (S3/CF vs local disk) — see findings_deferred. As an interim measure we
-    // prevent CDN/proxy caching of this response so the URL is not stored in any
-    // intermediate cache layer. The full fix (signed URL / one-time token) is deferred.
+    // ra-005: hand back a short-lived HMAC-signed URL (15 min) to the streaming
+    // /v1/dl route instead of the permanent artifact path. Fail loud if the signing
+    // secret isn't set — never emit an unsigned permanent link.
+    if (!downloadSigningConfigured()) return c.json({ error: 'downloads are not configured for this store' }, 503);
     c.header('Cache-Control', 'no-store');
     return c.json({
       artifactKey: out.artifact.artifactKey,
-      url: out.artifact.path,
+      url: signedDownloadPath(st.id, out.artifact.artifactKey),
       sha256: out.artifact.sha256,
       sizeBytes: out.artifact.sizeBytes,
     }, 200);
   },
 );
+
+// GET /v1/dl/{artifactKey} — fetch a signed, short-lived download. The signature
+// (issued by the license-gated /downloads endpoint above) IS the capability here,
+// so there is no license re-check. Streams from the PRIVATE DOWNLOAD_DIR — never
+// the nginx-served /assets path — so a leaked link expires in minutes and the
+// underlying file is not independently reachable.
+apps.get('/v1/dl/:artifactKey', async (c) => {
+  const artifactKey = c.req.param('artifactKey');
+  const storeId = c.req.query('store') ?? '';
+  const exp = Number(c.req.query('exp'));
+  const sig = c.req.query('sig') ?? '';
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(storeId) || !verifyDownloadSig(storeId, artifactKey, exp, sig)) {
+    return c.json({ error: 'invalid or expired download link' }, 403);
+  }
+  // storeId is signed, so trusting it for the RLS scope is safe.
+  const artifact = await withStore(storeId, async (tx) => {
+    const [a] = await tx.select({ path: s.downloadArtifact.path })
+      .from(s.downloadArtifact).where(eq(s.downloadArtifact.artifactKey, artifactKey)).limit(1);
+    return a ?? null;
+  });
+  if (!artifact) return c.json({ error: 'not found' }, 404);
+  c.header('Cache-Control', 'no-store');
+  // External storage (S3/CDN) can't be streamed by us — redirect (best-effort;
+  // prefer a local DOWNLOAD_DIR path for full protection).
+  if (/^https?:\/\//i.test(artifact.path)) return c.redirect(artifact.path, 302);
+  // Local file: resolve under DOWNLOAD_DIR with a traversal guard, then stream.
+  const baseDir = resolve(env.DOWNLOAD_DIR);
+  const filePath = resolve(baseDir, artifact.path);
+  if (filePath !== baseDir && !filePath.startsWith(baseDir + sep)) return c.json({ error: 'not found' }, 404);
+  try {
+    const info = await stat(filePath);
+    if (!info.isFile()) return c.json({ error: 'not found' }, 404);
+    c.header('Content-Type', 'application/octet-stream');
+    c.header('Content-Length', String(info.size));
+    c.header('Content-Disposition', `attachment; filename="${artifactKey.replace(/[^\w.\-]/g, '_')}"`);
+    return c.body(Readable.toWeb(createReadStream(filePath)) as unknown as ReadableStream);
+  } catch {
+    return c.json({ error: 'not found' }, 404);
+  }
+});
 
 apps.openapi(
   createRoute({

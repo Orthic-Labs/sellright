@@ -31,6 +31,13 @@ const EnvSchema = z.object({
   // (<checkout>/var/assets via the packages/api cwd) — never ~/sites root. Each
   // deployment sets ASSET_DIR explicitly in its env (dev vs rightapps prod).
   ASSET_DIR: z.string().default('var/assets'),
+  // WP-dl: licensed downloads. Artifacts live in a PRIVATE dir (NOT the
+  // nginx-served /assets path) and are streamed by the app behind short-lived
+  // HMAC-signed URLs. DOWNLOAD_URL_SECRET signs those URLs — set it in prod; when
+  // unset the licensed-download endpoint returns 503 (fail loud, never hand out an
+  // unsigned permanent link).
+  DOWNLOAD_DIR: z.string().default('var/downloads'),
+  DOWNLOAD_URL_SECRET: z.string().optional(),
   // Public storefront URL used in email links (password reset, verify, etc.).
   STOREFRONT_URL: z.string().url().default('https://store.example.com'),
   // WP3: Stripe. Legacy single-key envs still work; optional test/live envs let
