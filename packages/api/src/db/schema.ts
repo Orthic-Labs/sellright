@@ -10,6 +10,7 @@ import {
   uuid,
   text,
   integer,
+  bigint,
   boolean,
   timestamp,
   jsonb,
@@ -457,7 +458,10 @@ export const downloadArtifact = pgTable(
     artifactKey: text().notNull(),
     path: text().notNull(),
     sha256: text(),
-    sizeBytes: integer(),
+    // bigint: download artifacts (installers, game/app bundles) routinely exceed
+    // the 2 GB signed-int32 ceiling. mode:'number' is safe — JS numbers are exact
+    // to ~9 PB, far beyond any real file.
+    sizeBytes: bigint({ mode: 'number' }),
     createdAt: ts(),
   },
   (t) => [unique('download_artifact_key').on(t.storeId, t.artifactKey)],
