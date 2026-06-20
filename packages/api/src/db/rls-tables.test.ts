@@ -49,6 +49,25 @@ async function withStoreApp<T>(storeId: string, fn: (tx: AppTx) => Promise<T>): 
   }
 }
 
+// Assert a promise rejects specifically due to RLS. Drizzle wraps the pg error,
+// so the "row-level security" text is on the cause chain, not err.message. Walk
+// the chain so the check survives that wrapping while still proving it was RLS.
+function rlsErrorText(e: unknown): string {
+  const parts: string[] = [];
+  let cur = e as { message?: unknown; cause?: unknown } | null | undefined;
+  for (let i = 0; i < 5 && cur; i++) {
+    parts.push(String(cur.message ?? cur));
+    cur = cur.cause as { message?: unknown; cause?: unknown } | null | undefined;
+  }
+  return parts.join(' | ');
+}
+async function expectRlsRejection(p: Promise<unknown>): Promise<void> {
+  let err: unknown;
+  try { await p; } catch (e) { err = e; }
+  expect(err, 'expected RLS to reject the cross-tenant write').toBeDefined();
+  expect(rlsErrorText(err), 'expected a row-level-security rejection').toMatch(/row-level security/i);
+}
+
 // EXEMPT mirrors assert-force-rls.ts: the session/admin_user_store/store/
 // processed_event/staff_invite tables are intentionally non-RLS'd.
 const EXEMPT = new Set(['store', 'admin_user', 'admin_user_store', 'session', 'processed_event', 'staff_invite']);
@@ -156,9 +175,9 @@ describe('WP9.6 — RLS table-driven loop', () => {
       await tx.execute(sql`INSERT INTO store (id, slug, name) VALUES (${A}, 'a', 'A')`);
       await tx.execute(sql`INSERT INTO store (id, slug, name) VALUES (${B}, 'b', 'B')`);
     });
-    await expect(
+    await expectRlsRejection(
       withStoreApp(A, (tx) => tx.execute(sql`INSERT INTO product (id, store_id, slug, name) VALUES (gen_random_uuid(), ${B}, 'sneaky', 'Sneaky')`)),
-    ).rejects.toThrow(/row-level security/i);
+    );
   });
 
   // ra-013: verify WITH CHECK RLS also fires for the license table.
@@ -174,7 +193,7 @@ describe('WP9.6 — RLS table-driven loop', () => {
     // The license INSERT is what we test — no FK chain required because the
     // RLS WITH CHECK fires before any FK look-up when the store_id mismatch is
     // detected. We just need both store rows to exist.
-    await expect(
+    await expectRlsRejection(
       withStoreApp(A, (tx) =>
         tx.execute(sql`
           INSERT INTO license
@@ -185,6 +204,6 @@ describe('WP9.6 — RLS table-driven loop', () => {
              'viewright', 'LK-CROSS-TENANT-TEST', 'active', 1, now(), now())
         `),
       ),
-    ).rejects.toThrow(/row-level security/i);
+    );
   });
 });

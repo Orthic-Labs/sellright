@@ -52,6 +52,26 @@ async function withStoreApp<T>(storeId: string, fn: (tx: AppTx) => Promise<T>): 
   }
 }
 
+// Assert a promise rejects specifically due to RLS. Drizzle wraps the pg error,
+// so the "row-level security" text is on the cause chain, not err.message (which
+// is "Failed query: ..."). Walk the chain so the check is robust to that wrapping
+// while still proving the rejection was RLS (not some other failure).
+function rlsErrorText(e: unknown): string {
+  const parts: string[] = [];
+  let cur = e as { message?: unknown; cause?: unknown } | null | undefined;
+  for (let i = 0; i < 5 && cur; i++) {
+    parts.push(String(cur.message ?? cur));
+    cur = cur.cause as { message?: unknown; cause?: unknown } | null | undefined;
+  }
+  return parts.join(' | ');
+}
+async function expectRlsRejection(p: Promise<unknown>): Promise<void> {
+  let err: unknown;
+  try { await p; } catch (e) { err = e; }
+  expect(err, 'expected RLS to reject the cross-tenant write').toBeDefined();
+  expect(rlsErrorText(err), 'expected a row-level-security rejection').toMatch(/row-level security/i);
+}
+
 // Wipe uses the owner pool (needs TRUNCATE on store, which app role may not have for writes)
 async function wipe() {
   await withStore(A, async (tx) => {
@@ -100,11 +120,11 @@ describe('RLS tenant isolation', () => {
 
   it('a store cannot write into another store (WITH CHECK)', async () => {
     await seedBothStores();
-    await expect(
+    await expectRlsRejection(
       withStoreApp(A, (tx) =>
         tx.insert(product).values({ storeId: B, slug: 'sneaky', name: 'Sneaky A->B' }),
       ),
-    ).rejects.toThrow(/row-level security/i);
+    );
   });
 
   it('fails closed when no store context is set (zero rows, no error)', async () => {
