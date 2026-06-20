@@ -1,35 +1,35 @@
-import {
+/**
+ * Customer provider — migrated from Vendure GraphQL to the SellRight REST shop
+ * API (PASS 2). The exported function names + return shapes match what the
+ * account pages / checkout already consume (Vendure-ish Customer/Address/Order);
+ * the adapters in ~/utils/sellright-adapters do the shape mapping. The build
+ * guard (guard-graphql-customer.sh) requires this file carry no runtime
+ * graphql-tag — REST has none, so it passes.
+ */
+import type {
 	CreateAddressInput,
 	Customer,
 	UpdateAddressInput,
-	ActiveCustomerOrdersQueryVariables,
 } from '~/generated/graphql-shop';
 import {
-	ActiveCustomerDocument,
-	type ActiveCustomerQuery,
-	type ActiveCustomerQueryVariables,
-	ActiveCustomerAddressesDocument,
-	type ActiveCustomerAddressesQuery,
-	type ActiveCustomerAddressesQueryVariables,
-	UpdateCustomerPasswordMutationDocument,
-	type UpdateCustomerPasswordMutationMutation,
-	type UpdateCustomerPasswordMutationMutationVariables,
-	DeleteCustomerAddressDocument,
-	type DeleteCustomerAddressMutation,
-	type DeleteCustomerAddressMutationVariables,
-	ActiveCustomerOrdersDocument,
-	type ActiveCustomerOrdersQuery,
-	UpdateCustomerAddressMutationDocument,
-	type UpdateCustomerAddressMutationMutation,
-	type UpdateCustomerAddressMutationMutationVariables,
-	CreateCustomerAddressMutationDocument,
-	type CreateCustomerAddressMutationMutation,
-	type CreateCustomerAddressMutationMutationVariables,
-	LogoutDocument,
-	type LogoutMutation,
-	type LogoutMutationVariables,
-} from '~/generated/graphql-shop-typed';
-import { requester } from '~/utils/api';
+	srMe,
+	srGetAddresses,
+	srChangePassword,
+	srDeleteAddress,
+	srAccountOrders,
+	srAccountOrder,
+	srUpdateAddress,
+	srCreateAddress,
+	srLogout,
+	srErrorStatus,
+} from '~/utils/sellright';
+import type { Order } from '~/generated/graphql-shop';
+import {
+	adaptCustomer,
+	adaptAccountOrders,
+	adaptOrderDetail,
+	toAddressInput,
+} from '~/utils/sellright-adapters';
 
 // 🚀 CUSTOMER QUERY CACHE - 3-minute cache for customer data
 const customerCache = new Map<string, { data: any; timestamp: number }>();
@@ -59,93 +59,106 @@ const clearCustomerCache = () => {
 	customerCache.clear();
 };
 
-export const getActiveCustomerQuery = async () => {
-	const res = await requester<ActiveCustomerQuery, ActiveCustomerQueryVariables>(
-		ActiveCustomerDocument,
-		undefined
-	);
-	return res.activeCustomer as Customer;
+/** A 401 means "not logged in" — return null (the Vendure activeCustomer null). */
+const nullOn401 = (e: unknown): null => {
+	if (srErrorStatus(e) === 401) return null;
+	throw e;
 };
 
-export const getActiveCustomerAddressesQuery = async () => {
-	const res = await requester<ActiveCustomerAddressesQuery, ActiveCustomerAddressesQueryVariables>(
-		ActiveCustomerAddressesDocument,
-		undefined
-	);
-	return res.activeCustomer as Customer;
+export const getActiveCustomerQuery = async (): Promise<Customer> => {
+	try {
+		const me = await srMe();
+		return adaptCustomer(me) as unknown as Customer;
+	} catch (e) {
+		return nullOn401(e) as unknown as Customer;
+	}
+};
+
+export const getActiveCustomerAddressesQuery = async (): Promise<Customer> => {
+	try {
+		const [me, addrs] = await Promise.all([srMe(), srGetAddresses()]);
+		return adaptCustomer(me, addrs.items) as unknown as Customer;
+	} catch (e) {
+		return nullOn401(e) as unknown as Customer;
+	}
 };
 
 export const updateCustomerPasswordMutation = async (
 	currentPassword: string,
 	newPassword: string
 ) => {
-	const res = await requester<
-		UpdateCustomerPasswordMutationMutation,
-		UpdateCustomerPasswordMutationMutationVariables
-	>(UpdateCustomerPasswordMutationDocument, { currentPassword, newPassword });
-	return res.updateCustomerPassword;
+	try {
+		await srChangePassword(currentPassword, newPassword);
+		clearCustomerCacheAfterMutation();
+		return { __typename: 'Success', success: true } as { __typename: string; message?: string; success?: boolean };
+	} catch (e) {
+		// 401 → wrong current password (or unauthenticated). Map to the Vendure
+		// InvalidCredentialsError the password page switches on.
+		if (srErrorStatus(e) === 401) {
+			return { __typename: 'InvalidCredentialsError', message: 'Current password is incorrect' } as { __typename: string; message?: string; success?: boolean };
+		}
+		throw e;
+	}
 };
 
 export const deleteCustomerAddressMutation = async (id: string) => {
-	const result = await requester<
-		DeleteCustomerAddressMutation,
-		DeleteCustomerAddressMutationVariables
-	>(DeleteCustomerAddressDocument, { id });
+	const result = await srDeleteAddress(id);
 	clearCustomerCacheAfterMutation();
 	return result;
 };
 
-export const getActiveCustomerOrdersQuery = async () => {
-	const variables: ActiveCustomerOrdersQueryVariables = {
-		options: {
-			filter: {
-				active: {
-					eq: false,
-				},
-			},
-			sort: {
-				createdAt: 'DESC',
-			},
-		},
-	};
-	const res = await requester<ActiveCustomerOrdersQuery, ActiveCustomerOrdersQueryVariables>(
-		ActiveCustomerOrdersDocument,
-		variables
-	);
-	return res.activeCustomer as Customer;
+export const getActiveCustomerOrdersQuery = async (): Promise<Customer> => {
+	try {
+		const orders = await srAccountOrders();
+		// Shape like Vendure's activeCustomer.orders.items.
+		return { orders: { items: adaptAccountOrders(orders), totalItems: orders.items.length } } as unknown as Customer;
+	} catch (e) {
+		return nullOn401(e) as unknown as Customer;
+	}
+};
+
+/** Owned order detail by code (account history) — REST account-order endpoint.
+ *  Distinct from the checkout-confirmation getOrderByCodeQuery (still Vendure),
+ *  which needs payment/shipping detail this endpoint doesn't carry. */
+export const getAccountOrderByCodeQuery = async (code: string): Promise<Order | null> => {
+	try {
+		const o = await srAccountOrder(code);
+		return adaptOrderDetail(o) as unknown as Order;
+	} catch (e) {
+		if (srErrorStatus(e) === 404 || srErrorStatus(e) === 401) return null;
+		throw e;
+	}
 };
 
 export const updateCustomerAddressMutation = async (
 	input: UpdateAddressInput,
-	token: string | undefined
+	_token?: string | undefined
 ) => {
-	const result = await requester<
-		UpdateCustomerAddressMutationMutation,
-		UpdateCustomerAddressMutationMutationVariables
-	>(UpdateCustomerAddressMutationDocument, { input }, { token });
+	// UpdateAddressInput carries the Vendure address id + the changed fields.
+	const { id, ...rest } = input as UpdateAddressInput & { id: string };
+	await srUpdateAddress(id, toAddressInput(rest as any));
 	clearCustomerCacheAfterMutation();
-	return result;
+	// Callers read result.updateCustomerAddress; return the input echoed back.
+	return { updateCustomerAddress: { ...input } } as any;
 };
 
 export const createCustomerAddressMutation = async (
 	input: CreateAddressInput,
-	token: string | undefined
+	_token?: string | undefined
 ) => {
-	const result = await requester<
-		CreateCustomerAddressMutationMutation,
-		CreateCustomerAddressMutationMutationVariables
-	>(CreateCustomerAddressMutationDocument, { input }, { token });
+	const { id } = await srCreateAddress(toAddressInput(input as any));
 	clearCustomerCacheAfterMutation();
-	return result;
+	return { createCustomerAddress: { id, ...input } } as any;
 };
 
 export const logoutMutation = async () => {
-	const result = await requester<LogoutMutation, LogoutMutationVariables>(
-		LogoutDocument,
-		undefined
-	);
+	try {
+		await srLogout();
+	} catch {
+		// logout is best-effort — a 403 (stale CSRF) still clears client state.
+	}
 	clearCustomerCache();
-	return result;
+	return { success: true } as any;
 };
 
 // 🚀 CACHED CUSTOMER QUERIES - Better performance for account pages
@@ -155,16 +168,9 @@ export const getActiveCustomerCached = async () => {
 	const cached = getCachedCustomerQuery(cacheKey);
 	if (cached) return cached;
 
-	try {
-		const result = await getActiveCustomerQuery();
-		setCachedCustomerQuery(cacheKey, result);
-		return result;
-	} catch (error) {
-		console.warn('Customer cache failed, using fallback:', error);
-		const result = await getActiveCustomerQuery();
-		setCachedCustomerQuery(cacheKey, result);
-		return result;
-	}
+	const result = await getActiveCustomerQuery();
+	setCachedCustomerQuery(cacheKey, result);
+	return result;
 };
 
 export const getActiveCustomerAddressesCached = async () => {
@@ -172,16 +178,9 @@ export const getActiveCustomerAddressesCached = async () => {
 	const cached = getCachedCustomerQuery(cacheKey);
 	if (cached) return cached;
 
-	try {
-		const result = await getActiveCustomerAddressesQuery();
-		setCachedCustomerQuery(cacheKey, result);
-		return result;
-	} catch (error) {
-		console.warn('Customer addresses cache failed, using fallback:', error);
-		const result = await getActiveCustomerAddressesQuery();
-		setCachedCustomerQuery(cacheKey, result);
-		return result;
-	}
+	const result = await getActiveCustomerAddressesQuery();
+	setCachedCustomerQuery(cacheKey, result);
+	return result;
 };
 
 export const getActiveCustomerOrdersCached = async () => {
@@ -189,16 +188,9 @@ export const getActiveCustomerOrdersCached = async () => {
 	const cached = getCachedCustomerQuery(cacheKey);
 	if (cached) return cached;
 
-	try {
-		const result = await getActiveCustomerOrdersQuery();
-		setCachedCustomerQuery(cacheKey, result);
-		return result;
-	} catch (error) {
-		console.warn('Customer orders cache failed, using fallback:', error);
-		const result = await getActiveCustomerOrdersQuery();
-		setCachedCustomerQuery(cacheKey, result);
-		return result;
-	}
+	const result = await getActiveCustomerOrdersQuery();
+	setCachedCustomerQuery(cacheKey, result);
+	return result;
 };
 
 // Clear cache after mutations that change customer data

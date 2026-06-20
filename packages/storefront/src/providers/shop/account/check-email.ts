@@ -1,37 +1,20 @@
-import { requester } from '~/utils/api';
+import { srCheckEmail } from '~/utils/sellright';
 
-const CheckCustomerEmailDoc = {
-    toString() {
-        return `query checkCustomerEmail($email: String!, $turnstileToken: String, $honeypot: String) {
-  checkCustomerEmail(email: $email, turnstileToken: $turnstileToken, honeypot: $honeypot) {
-    exists
-  }
-}`;
-    },
-} as any;
-
-interface CheckEmailResult {
-    checkCustomerEmail: { exists: boolean };
-}
-
-interface CheckEmailVars {
-    email: string;
-    turnstileToken?: string;
-    honeypot?: string;
-}
-
+/**
+ * Pre-submit "is this email registered?" check — migrated to the SellRight REST
+ * shop API (GET /v1/shop/auth/check-email). The endpoint is rate-limited
+ * server-side; the turnstile/honeypot args are kept for call-site compatibility
+ * but the REST endpoint does not take them.
+ */
 export async function checkCustomerEmail(
-    email: string,
-    turnstileToken?: string,
-    honeypot?: string,
+	email: string,
+	_turnstileToken?: string,
+	_honeypot?: string,
 ): Promise<boolean> {
-    try {
-        const result = await requester<CheckEmailResult, CheckEmailVars>(
-            CheckCustomerEmailDoc,
-            { email, turnstileToken, honeypot },
-        );
-        return result.checkCustomerEmail?.exists ?? false;
-    } catch {
-        return false;
-    }
+	try {
+		const result = await srCheckEmail(email);
+		return result.exists ?? false;
+	} catch {
+		return false;
+	}
 }

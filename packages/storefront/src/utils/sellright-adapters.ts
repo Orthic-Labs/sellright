@@ -20,6 +20,10 @@ import type {
   SrStockResult,
   SrCollection,
   SrCollectionsResult,
+  SrCustomer,
+  SrAddress,
+  SrAccountOrderSummary,
+  SrAccountOrderDetail,
 } from './sellright';
 
 const IN_STOCK = '999';
@@ -213,4 +217,210 @@ export function adaptCollections(res: SrCollectionsResult): AdaptedCollection[] 
       products: [],
     }),
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Customer / Address / Order — SellRight REST → Vendure-ish shapes the account
+// + checkout components already read (firstName, emailAddress, addresses[].
+// streetLine1, country.code, orders.items[], totalWithTax, …). The providers
+// cast the adapter output to the generated Vendure types; the field names match
+// what the components actually read, so the components need no changes.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** A Vendure-ish Address (the subset the address book / checkout read). */
+export interface AdaptedAddress {
+  id: string;
+  fullName: string;
+  company: string;
+  streetLine1: string;
+  streetLine2: string;
+  city: string;
+  province: string;
+  postalCode: string;
+  country: { code: string; name: string };
+  phoneNumber: string;
+  defaultShippingAddress: boolean;
+  defaultBillingAddress: boolean;
+}
+
+/** A Vendure-ish Customer (the subset account pages read). `addresses` is
+ *  populated only when the caller fetched the address book (else []). */
+export interface AdaptedCustomer {
+  id: string;
+  title: string;
+  firstName: string;
+  lastName: string;
+  emailAddress: string;
+  phoneNumber: string;
+  // WP5: surfaced so the storefront can render the migrated-customer banner.
+  customFields: { isMigrated: boolean; emailVerified: boolean };
+  addresses: AdaptedAddress[];
+}
+
+export function adaptAddress(a: SrAddress): AdaptedAddress {
+  return {
+    id: a.id,
+    fullName: a.fullName ?? '',
+    company: '',
+    streetLine1: a.line1,
+    streetLine2: a.line2 ?? '',
+    city: a.city,
+    province: a.province ?? '',
+    postalCode: a.postalCode ?? '',
+    country: { code: a.country, name: a.country },
+    phoneNumber: a.phone ?? '',
+    defaultShippingAddress: a.isDefaultShipping,
+    defaultBillingAddress: a.isDefaultBilling,
+  };
+}
+
+export function adaptCustomer(c: SrCustomer, addresses: SrAddress[] = []): AdaptedCustomer {
+  return {
+    id: c.id,
+    title: '',
+    firstName: c.firstName ?? '',
+    lastName: c.lastName ?? '',
+    emailAddress: c.email,
+    phoneNumber: c.phone ?? '',
+    customFields: { isMigrated: c.isMigrated, emailVerified: c.emailVerified },
+    addresses: addresses.map(adaptAddress),
+  };
+}
+
+/** Map the storefront's Vendure-ish CreateAddressInput → the REST address body. */
+export function toAddressInput(input: {
+  fullName?: string | null;
+  streetLine1?: string | null;
+  streetLine2?: string | null;
+  city?: string | null;
+  province?: string | null;
+  postalCode?: string | null;
+  countryCode?: string | null;
+  phoneNumber?: string | null;
+  defaultShippingAddress?: boolean | null;
+  defaultBillingAddress?: boolean | null;
+}) {
+  return {
+    fullName: input.fullName ?? null,
+    line1: input.streetLine1 ?? '',
+    line2: input.streetLine2 ?? null,
+    city: input.city ?? '',
+    province: input.province ?? null,
+    postalCode: input.postalCode ?? null,
+    country: (input.countryCode ?? 'US').toUpperCase(),
+    phone: input.phoneNumber ?? null,
+    isDefaultShipping: input.defaultShippingAddress ?? undefined,
+    isDefaultBilling: input.defaultBillingAddress ?? undefined,
+  };
+}
+
+/** A Vendure-ish Order line (the subset order history reads). */
+export interface AdaptedOrderLine {
+  id: string;
+  quantity: number;
+  linePriceWithTax: number;
+  unitPriceWithTax: number;
+  featuredAsset: { preview: string } | null;
+  productVariant: { name: string; sku: string; product: { name: string }; options: never[]; customFields: Record<string, never> };
+  customFields: Record<string, never>;
+}
+
+/** A Vendure-ish Order (the subset account history + confirmation read). The
+ *  REST account-order endpoints carry far less than Vendure (no per-line tax,
+ *  no payments/fulfillments); the unread/zero fields keep the components from
+ *  crashing on missing properties. */
+export interface AdaptedOrder {
+  id: string;
+  code: string;
+  state: string;
+  createdAt: string | null;
+  totalWithTax: number;
+  total: number;
+  subTotalWithTax: number;
+  subTotal: number;
+  shippingWithTax: number;
+  shipping: number;
+  totalQuantity: number;
+  currencyCode: string;
+  lines: AdaptedOrderLine[];
+  discounts: never[];
+  couponCodes: never[];
+  surcharges: never[];
+  shippingLines: never[];
+  payments: never[];
+  fulfillments: never[];
+  shippingAddress: Record<string, unknown> | null;
+  billingAddress: Record<string, unknown> | null;
+  customer: { firstName: string; lastName: string; emailAddress: string } | null;
+  customFields: { isPreOrder: boolean };
+}
+
+/** Order-history list row (no lines, just a count + totals). */
+export function adaptOrderSummary(o: SrAccountOrderSummary): AdaptedOrder {
+  return {
+    id: o.code,
+    code: o.code,
+    state: o.state,
+    createdAt: o.placedAt,
+    totalWithTax: o.grandTotal,
+    total: o.grandTotal,
+    subTotalWithTax: o.grandTotal,
+    subTotal: o.grandTotal,
+    shippingWithTax: 0,
+    shipping: 0,
+    totalQuantity: o.lines,
+    currencyCode: 'USD',
+    lines: [],
+    discounts: [],
+    couponCodes: [],
+    surcharges: [],
+    shippingLines: [],
+    payments: [],
+    fulfillments: [],
+    shippingAddress: null,
+    billingAddress: null,
+    customer: null,
+    customFields: { isPreOrder: false },
+  };
+}
+
+/** Order detail (owned, by code) — has line snapshots. */
+export function adaptOrderDetail(o: SrAccountOrderDetail): AdaptedOrder {
+  return {
+    id: o.code,
+    code: o.code,
+    state: o.state,
+    createdAt: null,
+    totalWithTax: o.grandTotal,
+    total: o.grandTotal,
+    subTotalWithTax: o.grandTotal,
+    subTotal: o.grandTotal,
+    shippingWithTax: 0,
+    shipping: 0,
+    totalQuantity: o.lines.reduce((a, l) => a + l.quantity, 0),
+    currencyCode: 'USD',
+    lines: o.lines.map((l, i) => ({
+      id: `${o.code}-${i}`,
+      quantity: l.quantity,
+      linePriceWithTax: l.lineTotal,
+      unitPriceWithTax: l.quantity ? Math.round(l.lineTotal / l.quantity) : l.lineTotal,
+      featuredAsset: null,
+      productVariant: { name: l.name, sku: l.sku, product: { name: l.name }, options: [], customFields: {} },
+      customFields: {},
+    })),
+    discounts: [],
+    couponCodes: [],
+    surcharges: [],
+    shippingLines: [],
+    payments: [],
+    fulfillments: [],
+    shippingAddress: null,
+    billingAddress: null,
+    customer: null,
+    customFields: { isPreOrder: false },
+  };
+}
+
+export function adaptAccountOrders(res: { items: SrAccountOrderSummary[] }): AdaptedOrder[] {
+  return res.items.map(adaptOrderSummary);
 }

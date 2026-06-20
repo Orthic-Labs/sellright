@@ -12,11 +12,163 @@ async function sr<T>(path: string, init: RequestInit = {}): Promise<T> {
   const url = isServer ? `${API}${path}` : path;
   const res = await fetch(url, {
     ...init,
+    // credentials: 'include' so the auth/CSRF cookies the API sets (sr_session,
+    // sr_csrf) ride along on browser calls — auth, account, and the server cart
+    // are all cookie-authenticated.
+    credentials: 'include',
     headers: { 'content-type': 'application/json', 'x-store-slug': STORE_SLUG, ...(init.headers as Record<string, string> | undefined) },
   });
-  if (!res.ok) throw new Error(`SellRight ${path} ${res.status}: ${await res.text()}`);
+  if (!res.ok) {
+    const err = new Error(`SellRight ${path} ${res.status}: ${await res.text()}`) as Error & { status?: number };
+    err.status = res.status;
+    throw err;
+  }
   return (await res.json()) as T;
 }
+
+/** Status code carried on errors thrown by `sr` (for 401/409 branching). */
+export const srErrorStatus = (e: unknown): number | undefined =>
+  (e as { status?: number } | null)?.status;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Auth & account — mirrors packages/api/src/routes/{auth,account,customer-tokens}.ts
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Shared customer shape returned by register/login/google/me (CustomerOut). */
+export interface SrCustomer {
+  id: string;
+  email: string;
+  firstName: string | null;
+  lastName: string | null;
+  phone: string | null;
+  emailVerified: boolean;
+  isMigrated: boolean;
+}
+
+export interface SrAuthResult {
+  token: string;
+  customer: SrCustomer;
+}
+
+export const srRegister = (body: { email: string; password: string; firstName?: string; lastName?: string }) =>
+  sr<SrAuthResult>('/v1/shop/auth/register', { method: 'POST', body: JSON.stringify(body) });
+
+export const srLogin = (email: string, password: string) =>
+  sr<SrAuthResult>('/v1/shop/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
+
+export const srLogout = () =>
+  sr<{ ok: boolean }>('/v1/shop/auth/logout', { method: 'POST', body: JSON.stringify({}) });
+
+export const srMe = () => sr<SrCustomer>('/v1/shop/auth/me');
+
+export const srCheckEmail = (email: string) =>
+  sr<{ exists: boolean }>(`/v1/shop/auth/check-email?email=${encodeURIComponent(email)}`);
+
+export const srForgotPassword = (email: string) =>
+  sr<{ ok: boolean }>('/v1/shop/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email }) });
+
+export const srResetPassword = (token: string, password: string) =>
+  sr<{ ok: boolean }>('/v1/shop/auth/reset-password', { method: 'POST', body: JSON.stringify({ token, password }) });
+
+export const srVerifyEmail = (token: string) =>
+  sr<{ ok: boolean }>('/v1/shop/auth/verify-email', { method: 'POST', body: JSON.stringify({ token }) });
+
+/** PATCH /v1/shop/account/me — profile (firstName/lastName/phone). */
+export const srUpdateProfile = (body: { firstName?: string | null; lastName?: string | null; phone?: string | null }) =>
+  sr<{ id: string; email: string; firstName: string | null; lastName: string | null; phone: string | null }>(
+    '/v1/shop/account/me',
+    { method: 'PATCH', body: JSON.stringify(body) },
+  );
+
+/** POST /v1/shop/account/password — change password (verify current first). */
+export const srChangePassword = (currentPassword: string, newPassword: string) =>
+  sr<{ ok: boolean }>('/v1/shop/account/password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) });
+
+export interface SrAddress {
+  id: string;
+  fullName: string | null;
+  line1: string;
+  line2: string | null;
+  city: string;
+  province: string | null;
+  postalCode: string | null;
+  country: string;
+  phone: string | null;
+  isDefaultShipping: boolean;
+  isDefaultBilling: boolean;
+}
+
+/** The body for create/update address (id is server-assigned, omitted here). */
+export type SrAddressInput = {
+  fullName?: string | null;
+  line1: string;
+  line2?: string | null;
+  city: string;
+  province?: string | null;
+  postalCode?: string | null;
+  country: string; // ISO-2
+  phone?: string | null;
+  isDefaultShipping?: boolean;
+  isDefaultBilling?: boolean;
+};
+
+export const srGetAddresses = () => sr<{ items: SrAddress[] }>('/v1/shop/account/addresses');
+
+export const srCreateAddress = (body: SrAddressInput) =>
+  sr<{ id: string }>('/v1/shop/account/addresses', { method: 'POST', body: JSON.stringify(body) });
+
+export const srUpdateAddress = (id: string, body: Partial<SrAddressInput>) =>
+  sr<{ ok: boolean }>(`/v1/shop/account/addresses/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body) });
+
+export const srDeleteAddress = (id: string) =>
+  sr<{ ok: boolean }>(`/v1/shop/account/addresses/${encodeURIComponent(id)}`, { method: 'DELETE' });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Account orders — mirrors packages/api/src/routes/account.ts
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface SrAccountOrderSummary {
+  code: string;
+  state: string;
+  grandTotal: number;
+  placedAt: string | null;
+  lines: number;
+}
+
+export interface SrAccountOrderDetail {
+  code: string;
+  state: string;
+  grandTotal: number;
+  lines: { sku: string; name: string; quantity: number; lineTotal: number }[];
+}
+
+export const srAccountOrders = () => sr<{ items: SrAccountOrderSummary[] }>('/v1/shop/account/orders');
+
+export const srAccountOrder = (code: string) =>
+  sr<SrAccountOrderDetail>(`/v1/shop/account/orders/${encodeURIComponent(code)}`);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shipping / currencies / newsletter — shop-extra.ts + catalog.ts
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface SrShippingMethod {
+  code: string;
+  name: string;
+  rate: number;
+}
+
+export const srShippingMethods = (country?: string, subtotal = 0) => {
+  const q = new URLSearchParams();
+  if (country) q.set('country', country);
+  q.set('subtotal', String(subtotal));
+  return sr<{ methods: SrShippingMethod[] }>(`/v1/shop/shipping-methods?${q.toString()}`);
+};
+
+export const srCurrencies = () =>
+  sr<{ base: string; currencies: { currency: string; rate: number }[] }>('/v1/shop/currencies');
+
+export const srNewsletterSignup = (email: string, name?: string) =>
+  sr<{ ok: boolean }>('/v1/shop/newsletter-signup', { method: 'POST', body: JSON.stringify(name ? { email, name } : { email }) });
 
 export interface SrCreatedOrder { code: string; state: string; grandTotal: number; currency: string; }
 export const srCreateOrder = (body: unknown) =>

@@ -2,7 +2,7 @@ import { $, component$, useOnDocument, useSignal } from '@qwik.dev/core';
 import { useLocation } from '@qwik.dev/router';
 import { OptimizedImage } from '~/components/ui';
 import { Order } from '~/generated/graphql-shop';
-import { getOrderByCodeQuery } from '~/providers/shop/orders/order';
+import { getAccountOrderByCodeQuery } from '~/providers/shop/customer/customer';
 import { formatDateTime, formatPrice } from '~/utils';
 import { createSEOHead } from '~/utils/seo';
 
@@ -14,7 +14,7 @@ export default component$(() => {
 	// T17: Load order on qinit
 	useOnDocument('qinit', $(async () => {
 		try {
-			const result = await getOrderByCodeQuery(location.params.code);
+			const result = await getAccountOrderByCodeQuery(location.params.code);
 			order.value = result || undefined;
 		} catch (error) {
 			console.error('Failed to load order:', error);
