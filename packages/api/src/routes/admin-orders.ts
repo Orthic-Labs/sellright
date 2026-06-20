@@ -318,20 +318,28 @@ adminOrders.openapi(
 adminOrders.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/returns', summary: 'List return requests',
-    request: { query: z.object({ status: z.enum(['requested', 'approved', 'rejected', 'received', 'refunded']).optional() }) },
-    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.any()) })) }, 401: { description: 'Unauthorized', ...errBody } },
+    request: { query: z.object({
+      status: z.enum(['requested', 'approved', 'rejected', 'received', 'refunded']).optional(),
+      page: z.coerce.number().int().min(1).default(1),
+      pageSize: z.coerce.number().int().min(1).max(100).default(25),
+    }) },
+    responses: { 200: { description: 'OK', content: J(Page) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c);
-    const { status } = c.req.valid('query');
-    const items = await withStore(st.storeId, async (tx) => {
+    const { status, page, pageSize } = c.req.valid('query');
+    // Paginated (was a silent limit(200) that dropped older returns off the list).
+    const out = await withStore(st.storeId, async (tx) => {
+      const where = status ? eq(s.returnRequest.status, status) : undefined;
       const base = tx.select({ id: s.returnRequest.id, status: s.returnRequest.status, reason: s.returnRequest.reason, orderCode: s.order.code, createdAt: s.returnRequest.createdAt })
         .from(s.returnRequest).innerJoin(s.order, eq(s.order.id, s.returnRequest.orderId)).$dynamic();
-      const rows = await (status ? base.where(eq(s.returnRequest.status, status)) : base).orderBy(desc(s.returnRequest.createdAt)).limit(200);
-      return rows.map((r) => ({ ...r, createdAt: r.createdAt.toISOString() }));
+      const rows = await (where ? base.where(where) : base).orderBy(desc(s.returnRequest.createdAt)).limit(pageSize).offset((page - 1) * pageSize);
+      const cntQ = tx.select({ n: sql<number>`count(*)::int` }).from(s.returnRequest).$dynamic();
+      const cnt = await (where ? cntQ.where(where) : cntQ);
+      return { items: rows.map((r) => ({ ...r, createdAt: r.createdAt.toISOString() })), total: cnt[0]?.n ?? 0, page, pageSize };
     });
-    return c.json({ items }, 200);
+    return c.json(out, 200);
   }),
 );
 

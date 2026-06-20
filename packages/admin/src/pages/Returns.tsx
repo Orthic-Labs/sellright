@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
 import { useAuth } from '../auth';
-import { Loading, ErrorNote, PageHeader, EmptyState, Badge, Spinner } from '../components/ui';
+import { Loading, ErrorNote, PageHeader, EmptyState, Badge, Spinner, Pagination } from '../components/ui';
 import { date } from '../lib/format';
 
 interface ReturnRequest {
@@ -27,12 +27,12 @@ export default function ReturnsPage() {
   const [approveError, setApproveError] = useState<string | null>(null);
   const [rejectError, setRejectError] = useState<string | null>(null);
 
-  const key = ['returns', store?.slug];
+  const [page, setPage] = useState(1);
   const { data, isLoading, error } = useQuery({
-    queryKey: key,
-    queryFn: () => api.get<{ items: ReturnRequest[] }>('/returns'),
+    queryKey: ['returns', store?.slug, page],
+    queryFn: () => api.get<{ items: ReturnRequest[]; total: number; page: number; pageSize: number }>(`/returns?page=${page}`),
   });
-  const invalidate = () => qc.invalidateQueries({ queryKey: key });
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['returns', store?.slug] });
 
   const approve = useMutation({
     mutationFn: (s: ApproveState) =>
@@ -171,6 +171,7 @@ export default function ReturnsPage() {
           </table>
         )}
       </div>
+      {data && <Pagination page={page} total={data.total} pageSize={data.pageSize} onPage={setPage} />}
     </>
   );
 }
