@@ -128,7 +128,7 @@ let token = '';
 beforeEach(async () => { await wipe(); token = await seed(); vi.clearAllMocks(); });
 afterAll(async () => { await wipe(); });
 
-const auth = () => ({ authorization: `Bearer ${token}`, 'content-type': 'application/json', host: `${SLUG}.localhost` });
+const auth = () => ({ authorization: `Bearer ${token}`, 'content-type': 'application/json', 'x-store-slug': SLUG });
 
 describe('POST /v1/shop/subscribe', () => {
   it('creates a PendingPayment order and returns a checkout URL with metadata', async () => {
@@ -168,7 +168,7 @@ describe('POST /v1/shop/subscribe', () => {
 
   it('requires auth (401 without a session)', async () => {
     const res = await app.request('/v1/shop/subscribe', {
-      method: 'POST', headers: { 'content-type': 'application/json', host: `${SLUG}.localhost` }, body: JSON.stringify({ variantId: VARIANT }),
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-store-slug': SLUG }, body: JSON.stringify({ variantId: VARIANT }),
     });
     expect(res.status).toBe(401);
   });
