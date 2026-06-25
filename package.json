@@ -1,7 +1,7 @@
 {
   "name": "sellright",
   "private": true,
-  "packageManager": "pnpm@10.10.0",
+  "packageManager": "pnpm@10.34.1",
   "engines": {
     "node": ">=20"
   },
@@ -12,7 +12,11 @@
     "verify": "pnpm -r build && pnpm -r typecheck && pnpm --dir packages/admin typecheck && pnpm --dir packages/admin build && pnpm --filter @sellright/api test && pnpm --filter @sellright/api db:assert-rls && pnpm --filter @sellright/api assert:shop-isolation",
     "dev": "pnpm --filter @sellright/api dev",
     "admin:typecheck": "pnpm --dir packages/admin typecheck",
-    "admin:build": "pnpm --dir packages/admin build"
+    "admin:build": "pnpm --dir packages/admin build",
+    "deps:check": "node ../tools/right-release/deps.mjs --check",
+    "deps:audit": "node ../tools/right-release/deps.mjs --audit",
+    "deps:update": "node ../tools/right-release/deps.mjs --update",
+    "deps:update:latest": "node ../tools/right-release/deps.mjs --update --latest"
   },
   "pnpm": {
     "overrides": {
@@ -20,6 +24,6 @@
     }
   },
   "devDependencies": {
-    "typescript": "^5.5.4"
+    "typescript": "^6.0.3"
   }
 }
