@@ -1,0 +1,8 @@
+title = "SellRight gitleaks configuration"
+
+[[allowlists]]
+description = "Historical IndexNow key finding removed from the current tree; keep history scan focused on active leaks."
+condition = "AND"
+commits = ["77fba471b8afd0b40362a1b824f6a9d79e12367e"]
+paths = ['''packages/storefront/src/routes/indexnow/index\.ts''']
+regexes = ['''INDEXNOW_KEY\s*=\s*['"][^'"]+['"]''']

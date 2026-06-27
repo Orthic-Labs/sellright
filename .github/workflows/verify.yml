@@ -1,0 +1,73 @@
+name: Verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: sellright_dev
+          POSTGRES_PASSWORD: CHANGE_ME
+          POSTGRES_USER: sellright
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U sellright -d sellright_dev"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      CI: true
+      DATABASE_URL: postgres://sellright:CHANGE_ME@127.0.0.1:5433/sellright_dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.34.1 --activate
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install admin dependencies
+        working-directory: packages/admin
+        run: pnpm install --frozen-lockfile
+
+      - name: Install storefront dependencies
+        working-directory: packages/storefront
+        run: pnpm install --frozen-lockfile
+
+      - name: Migrate database
+        run: pnpm --filter @sellright/api db:migrate
+
+      - name: Audit dependencies
+        run: pnpm run deps:audit
+
+      - name: Audit admin dependencies
+        working-directory: packages/admin
+        run: pnpm audit
+
+      - name: Audit storefront dependencies
+        working-directory: packages/storefront
+        run: pnpm audit
+
+      - name: Check dependency policy
+        run: pnpm run deps:check
+
+      - name: Verify
+        run: pnpm run verify
+
+      - name: Storefront typecheck
+        working-directory: packages/storefront
+        run: pnpm run build.types

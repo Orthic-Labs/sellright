@@ -8,6 +8,7 @@ import { createHmac } from 'node:crypto';
 import { eq, lte, sql } from 'drizzle-orm';
 import { pool, withStore, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
+import { safeOutboundFetch } from '../security/outbound-url.js';
 
 /** Enqueue a delivery for every enabled endpoint subscribed to `topic` (or '*'). */
 export async function emitEvent(tx: Tx, storeId: string, topic: string, payload: unknown): Promise<void> {
@@ -19,11 +20,18 @@ export async function emitEvent(tx: Tx, storeId: string, topic: string, payload:
 
 const BACKOFF_S = [30, 120, 600, 3600, 21600]; // 30s, 2m, 10m, 1h, 6h
 const MAX_ATTEMPTS = 6;
+const DEFAULT_BATCH_LIMIT = 50;
+const MAX_BATCH_LIMIT = 500;
+
+export function normalizeWebhookBatchLimit(limit?: number): number {
+  if (!Number.isFinite(limit)) return DEFAULT_BATCH_LIMIT;
+  return Math.min(MAX_BATCH_LIMIT, Math.max(1, Math.floor(limit!)));
+}
 
 /** Deliver due pending webhooks across all stores (scheduler-driven). */
 export async function deliverWebhooks(opts: { limit?: number; log?: (m: string) => void } = {}): Promise<{ delivered: number; failed: number }> {
   const log = opts.log ?? (() => {});
-  const limit = opts.limit ?? 50;
+  const limit = normalizeWebhookBatchLimit(opts.limit);
   const stores = await pool.query<{ id: string }>('SELECT id FROM store');
   let delivered = 0;
   let failed = 0;
@@ -49,7 +57,7 @@ export async function deliverWebhooks(opts: { limit?: number; log?: (m: string) 
                 SELECT id FROM webhook_delivery
                 WHERE status = 'pending' AND next_attempt_at <= now()
                 ORDER BY next_attempt_at
-                LIMIT ${sql.raw(String(limit))}
+                LIMIT ${limit}
                 FOR UPDATE SKIP LOCKED
               )
             RETURNING wd.id, wd.topic, wd.payload, we.url, we.secret, wd.attempts`,
@@ -60,7 +68,7 @@ export async function deliverWebhooks(opts: { limit?: number; log?: (m: string) 
         const body = JSON.stringify({ id: d.id, topic: d.topic, payload: d.payload });
         const signature = createHmac('sha256', d.secret).update(body).digest('hex');
         try {
-          const res = await fetch(d.url, {
+          const res = await safeOutboundFetch(d.url, {
             method: 'POST',
             headers: { 'content-type': 'application/json', 'x-sr-topic': d.topic, 'x-sr-signature': signature },
             body,

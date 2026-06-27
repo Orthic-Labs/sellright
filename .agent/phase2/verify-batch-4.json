@@ -1,0 +1,91 @@
+{
+  "batch": 4,
+  "repo": "D:\\Claude\\sellright",
+  "claims": [
+    {
+      "claimId": "claim.docs-admin-theme-system-md.36",
+      "source": "docs/ADMIN-THEME-SYSTEM.md",
+      "line": 36,
+      "status": "implemented",
+      "text": "1. **~10 hardcoded semantic tints** (`bg-red-50`, `bg-amber-50`, `bg-emerald-50`, `bg-amber-100`) in low-traffic pages will look slightly washed in dark — swap to `bg-{danger,warning,success}-soft`. (High-traffic surfaces already done.)",
+      "candidateFiles": [
+        ".audit/themes/check.cjs",
+        ".audit/themes/selfhost-fonts.cjs",
+        ".audit/themes/gen-tokens.cjs"
+      ]
+    },
+    {
+      "claimId": "claim.docs-commerce-gap-analysis-md.35",
+      "source": "docs/COMMERCE-GAP-ANALYSIS.md",
+      "line": 35,
+      "status": "implemented",
+      "text": "Cursor/keyset pagination (Tier 2 #8) was scoped out for now (the codec was removed as YAGNI — re-add at the first list that needs it). The scorecard + roadmap rows below predate the above and are kept for the broader competitive picture; treat the items here as DONE.",
+      "candidateFiles": []
+    },
+    {
+      "claimId": "claim.docs-commerce-gap-analysis-md.120",
+      "source": "docs/COMMERCE-GAP-ANALYSIS.md",
+      "line": 120,
+      "status": "planned",
+      "text": "Tax: manual destination zones only. No Avalara/TaxJar, no automatic jurisdiction rates, no US economic-nexus tracking, **no EU VAT/MOSS for digital goods** (a real compliance gap if you sell software into the EU).",
+      "candidateFiles": []
+    },
+    {
+      "claimId": "claim.docs-features-md.34",
+      "source": "docs/FEATURES.md",
+      "line": 34,
+      "status": "planned",
+      "text": "| Carrier labels/rates | Not built | Manual/flat-rate fulfillment exists; carrier integrations are later. |",
+      "candidateFiles": []
+    },
+    {
+      "claimId": "claim.docs-plans-2026-06-20-cart-architecture-md.118",
+      "source": "docs/plans/2026-06-20-cart-architecture.md",
+      "line": 118,
+      "status": "partial",
+      "text": "Create the migration via the repo's `--custom` workflow (plain `generate` mis-fires — snapshot drift; see commit f23b7cc):",
+      "candidateFiles": [
+        "packages/api/src/routes/cart.ts",
+        "packages/api/drizzle/0032_cart_ttl.sql",
+        "packages/api/src/db/schema.ts",
+        "packages/api/src/env.ts",
+        "packages/api/src/cart/ttl.ts",
+        "packages/api/src/cart/ttl.test.ts",
+        "packages/api/src/routes/checkout.ts",
+        "packages/api/src/jobs/cart-maintenance.ts",
+        "packages/api/src/jobs/scheduler.ts",
+        "packages/storefront/src/services/ServerCartService.ts",
+        "packages/storefront/src/contexts/CartContext.tsx",
+        "packages/storefront/src/hooks/useCheckout.ts"
+      ]
+    },
+    {
+      "claimId": "claim.docs-plans-2026-06-20-order-management-bulk-ops-md.365",
+      "source": "docs/plans/2026-06-20-order-management-bulk-ops.md",
+      "line": 365,
+      "status": "unverifiable",
+      "text": "The test-order cleanup that motivated this is already done on the RightApps box; once this lands in SellRight and merges upstream, the **Trash → Delete permanently** flow replaces ad-hoc scripts for good.",
+      "candidateFiles": []
+    },
+    {
+      "claimId": "claim.docs-plans-2026-06-20-subscriptions-md.232",
+      "source": "docs/plans/2026-06-20-subscriptions.md",
+      "line": 232,
+      "status": "partial",
+      "text": "*amount drift no reconciliation* → `onInvoicePaid` writes an `auditLog` `subscription_amount_mismatch` row when `invoice.amount_paid !== order.grandTotal` (operator-visible; not silently trusted).",
+      "candidateFiles": [
+        "packages/api/src/db/schema.ts",
+        "packages/api/src/licensing/renewal.ts",
+        "packages/api/src/licensing/renewal.test.ts",
+        "packages/api/src/payments/stripe.ts",
+        "packages/api/src/payments/subscriptions.ts",
+        "packages/api/src/payments/webhook-reconcile.ts",
+        "packages/api/src/routes/payment-webhooks.ts",
+        "packages/api/src/routes/subscriptions.ts",
+        "packages/api/src/routes/subscriptions.test.ts",
+        "packages/admin/src/pages/Subscriptions.tsx",
+        "packages/admin/src/pages/CustomerDetail.tsx"
+      ]
+    }
+  ]
+}

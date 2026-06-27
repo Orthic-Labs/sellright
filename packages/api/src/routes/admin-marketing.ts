@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { and, desc, eq } from 'drizzle-orm';
 import { unsafeUnscopedDb as db, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
+import { assertSafeOutboundUrl, safeOutboundFetch } from '../security/outbound-url.js';
 import { HttpError, J, errBody, money, requireAdmin, requireStore, requireWrite, requireManage, requirePermission, guard } from './admin-helpers.js';
 
 export const adminMarketing = new OpenAPIHono();
@@ -158,7 +159,8 @@ async function getCfg(storeId: string): Promise<ListmonkCfg | null> {
 }
 async function lm(cfg: ListmonkCfg, path: string, init: RequestInit = {}): Promise<unknown> {
   const auth = Buffer.from(`${cfg.apiUser}:${cfg.apiToken}`).toString('base64');
-  const res = await fetch(`${cfg.url.replace(/\/$/, '')}${path}`, { ...init, headers: { authorization: `Basic ${auth}`, 'content-type': 'application/json', ...(init.headers as Record<string, string>) } });
+  const baseUrl = cfg.url.replace(/\/$/, '');
+  const res = await safeOutboundFetch(`${baseUrl}${path}`, { ...init, headers: { authorization: `Basic ${auth}`, 'content-type': 'application/json', ...(init.headers as Record<string, string>) } });
   const text = await res.text();
   if (!res.ok) throw new HttpError(409, `listmonk ${path} ${res.status}: ${text.slice(0, 200)}`);
   return text ? JSON.parse(text) : {};
@@ -187,11 +189,14 @@ adminMarketing.openapi(
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireManage(st);
     const cfg = c.req.valid('json');
+    const safeCfg = { ...cfg, url: await assertSafeOutboundUrl(cfg.url) };
     // Verify the connection before saving.
-    const lists = (await lm(cfg, '/api/lists')) as { data?: { total?: number } };
-    const [row] = await db.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1);
-    const config = { ...((row?.config as object) ?? {}), listmonk: cfg };
-    await db.update(s.store).set({ config }).where(eq(s.store.id, st.storeId));
+    const lists = (await lm(safeCfg, '/api/lists')) as { data?: { total?: number } };
+    await db.transaction(async (tx) => {
+      const [row] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1).for('update');
+      const config = { ...((row?.config as object) ?? {}), listmonk: safeCfg };
+      await tx.update(s.store).set({ config }).where(eq(s.store.id, st.storeId));
+    });
     return c.json({ ok: true, lists: lists.data?.total ?? 0 }, 200);
   }),
 );

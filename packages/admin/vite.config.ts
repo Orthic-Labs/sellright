@@ -6,6 +6,9 @@ import react from '@vitejs/plugin-react';
 // storefront dev proxy). In prod, nginx fronts both on the admin host.
 export default defineConfig({
   plugins: [react()],
+  build: {
+    target: 'es2022',
+  },
   // Port 4300 (NOT 4200 — that's the Stunning Strangers prod store on the box).
   server: {
     port: 4300,
