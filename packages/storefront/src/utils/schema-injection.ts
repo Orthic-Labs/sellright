@@ -148,7 +148,7 @@ export const debugJsonLdSchemas = (schemas: JsonLdSchema[], context: string = 'U
   if (import.meta.env.DEV && schemas.length > 0) {
     console.group(`🔍 JSON-LD Schemas (${context})`);
     schemas.forEach((schema, index) => {
-      console.log(`Schema ${index + 1} (${schema['@type']}):`, schema);
+      console.log('Schema:', index + 1, schema['@type'], schema);
     });
     console.groupEnd();
   }

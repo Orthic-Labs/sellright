@@ -12,8 +12,9 @@ export const auth = {
 };
 
 function readCookie(name: string): string | null {
-  const m = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
-  return m ? decodeURIComponent(m[1]!) : null;
+  const prefix = `${name}=`;
+  const found = document.cookie.split('; ').find((part) => part.startsWith(prefix));
+  return found ? decodeURIComponent(found.slice(prefix.length)) : null;
 }
 
 export class ApiError extends Error {

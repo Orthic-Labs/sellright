@@ -122,7 +122,7 @@ export const getProductBySlug = async (slug: string): Promise<any> => {
     return stock ? applyStock(product, stock) : product;
   } catch (error) {
     // 404 (and other transport errors) surface as null so the loader can fail(404)
-    console.error(`Failed to fetch product ${slug}:`, error);
+    console.error('Failed to fetch product:', slug, error);
     return null;
   }
 };
@@ -358,7 +358,7 @@ export const getProductStockLevelsOnly = async (slug: string) => {
     const stock = await srProductStock(slug);
     return adaptStockOnly(slug, stock);
   } catch (error) {
-    console.error(`Failed to load stock levels for ${slug}:`, error);
+    console.error('Failed to load stock levels for:', slug, error);
     throw error;
   }
 };

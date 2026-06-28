@@ -112,7 +112,7 @@ export default component$<Props>(({ appState }) => {
 				state.methods = methods;
 				state.lastCheckedCountry = appState.shippingAddress.countryCode;
 				
-				console.log(`📦 Found ${methods.length} shipping methods:`, methods.map((m: any) => `${m.name} - ${formatPrice(m.priceWithTax, currencyCode)}`));
+				console.log('Found shipping methods:', methods.length, methods.map((m: any) => `${m.name} - ${formatPrice(m.priceWithTax, currencyCode)}`));
 				
 				// Auto-select the first (and ideally only) available method
 				if (methods.length > 0) {

@@ -142,7 +142,7 @@ export default component$<{
 							};
 						}
 					} catch (error) {
-						console.error(`Error fetching product details for slug ${slug}:`, error);
+						console.error('Error fetching product details for slug:', slug, error);
 					}
 				}
 			}

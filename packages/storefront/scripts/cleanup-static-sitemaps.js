@@ -30,7 +30,7 @@ for (const file of sitemapFiles) {
       console.log(`   ✅ Removed static ${file}`);
       cleanedFiles++;
     } catch (error) {
-      console.warn(`   ⚠️  Could not remove ${file}:`, error.message);
+      console.warn('Could not remove static sitemap:', file, error.message);
     }
   }
 }

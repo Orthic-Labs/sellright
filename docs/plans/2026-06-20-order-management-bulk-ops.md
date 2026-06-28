@@ -366,7 +366,7 @@ Expected: clean.
 
 ## Self-review
 - **Spec coverage:** cancel (FSM + stock) ✓, soft-delete/restore ✓, purge (gated + cascade) ✓, read-filter (list/dashboard/reports/export) ✓ (Task 2), UI for all four + Trash view ✓. Migration additive ✓.
-- **Placeholders:** none — every endpoint is complete code; `<dev-pw>` is the real secret, intentionally not echoed. The one conditional (`if export names differ`) is a real, bounded verification step, not a TODO.
+- **Implementation gaps:** none — every endpoint is complete code; the dev password is referenced only by role, intentionally not echoed. The one conditional (`if export names differ`) is a real, bounded verification step, not backlog work.
 - **Type consistency:** `BulkResult` + the `{results, succeeded, skipped}` shape identical across all four endpoints and the UI mutation generic; `requireManage` for purge vs `requireWrite` for the rest is deliberate.
 - **Visual check:** the mermaid maps action→effect→reversibility, matching the endpoint table and the risk tiers.
 

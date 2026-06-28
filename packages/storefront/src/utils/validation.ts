@@ -126,7 +126,7 @@ export const validatePhone = (phone: string, countryCode: string, isOptional: bo
       return { isValid: false, message: `Invalid phone number format for ${countryName}. Please check the number format.` };
     }
   } catch (e) {
-    console.error(`Error validating phone number '${trimmedPhone}' for ${countryCode.toUpperCase()}:`, e);
+    console.error('Error validating phone number:', trimmedPhone, countryCode.toUpperCase(), e);
     const countryName = getCountryName(countryCode.toUpperCase());
     return { isValid: false, message: `Phone number format is not supported for ${countryName}. Please check the number and country.` };
   }
@@ -243,7 +243,7 @@ export const validatePostalCode = (postalCode: string, countryCode: string): Val
       return { isValid: false, message: `Please enter a valid ${getPostalCodeName(countryCode)}.` };
     }
   } catch (e: any) {
-    console.error(`[validatePostalCode] Error validating postal code '${cleanCode}' for country ${upperCaseCountryCode}:`, e.message);
+    console.error('[validatePostalCode] Error validating postal code:', cleanCode, upperCaseCountryCode, e.message);
     // Check if the error is due to an unsupported locale by validator.js
     if (e && e.message && e.message.toLowerCase().includes('invalid locale')) {
       // For unsupported locales, apply generic validation

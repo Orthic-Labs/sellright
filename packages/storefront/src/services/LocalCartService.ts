@@ -455,7 +455,7 @@ export class LocalCartService {
             const stockData = await getProductStockLevelsOnly(slug);
             return { slug, data: stockData?.product, error: null };
           } catch (error) {
-            console.error(`❌ Failed to fetch stock levels for ${slug}:`, error);
+            console.error('Failed to fetch stock levels for:', slug, error);
             return { slug, data: null, error };
           }
         })
@@ -641,7 +641,7 @@ export class LocalCartService {
             await removeAllOrderLinesMutation();
             console.log(`[${conversionId}] Removed all existing order lines in one batch`);
           } catch (removeError) {
-            console.warn(`[${conversionId}] Failed to remove all order lines:`, removeError);
+            console.warn('Failed to remove all order lines:', conversionId, removeError);
           }
           
           // Get the updated order after clearing
@@ -649,7 +649,7 @@ export class LocalCartService {
           console.log(`[${conversionId}] Order cleared. Remaining lines: ${order?.lines?.length || 0}`);
         }
       } catch (clearError) {
-        console.warn(`[${conversionId}] Failed to clear existing order items:`, clearError);
+        console.warn('Failed to clear existing order items:', conversionId, clearError);
         // Continue with conversion even if clearing fails
       }
 
@@ -671,7 +671,7 @@ export class LocalCartService {
           throw new Error('Invalid batch operation response');
         }
       } catch (batchError) {
-        console.warn(`Batch operation failed [${conversionId}], falling back to sequential processing:`, batchError);
+        console.warn('Batch operation failed, falling back to sequential processing:', conversionId, batchError);
         
         // Fallback to sequential processing
         let successfulItems = 0;
@@ -685,13 +685,13 @@ export class LocalCartService {
 	              successfulItems++;
 	              // console.log(`Successfully added item ${item.productVariantId} [${conversionId}]. Order now has ${order.lines?.length || 0} lines`);
 	            } else {
-	              console.error(`Failed to add item ${item.productVariantId} [${conversionId}], received:`, result);
+	              console.error('Failed to add item, received:', item.productVariantId, conversionId, result);
 	              const itemAddError = new Error(`Failed to add ${item.productVariant.name} to order`) as Error & { cause?: unknown };
 	              itemAddError.cause = batchError;
 	              throw itemAddError;
 	            }
           } catch (itemError) {
-            console.error(`Error adding item ${item.productVariantId} [${conversionId}]:`, itemError);
+            console.error('Error adding item:', item.productVariantId, conversionId, itemError);
             throw itemError; // Don't continue if any item fails - this prevents partial orders
           }
         }
@@ -713,7 +713,7 @@ export class LocalCartService {
             // console.log(`Successfully applied coupon ${appliedCoupon.code} [${conversionId}]`);
           }
         } catch (couponError) {
-          console.error(`Error applying coupon ${appliedCoupon.code} [${conversionId}]:`, couponError);
+          console.error('Error applying coupon:', appliedCoupon.code, conversionId, couponError);
           // Don't fail the entire order for coupon errors
         }
       }
@@ -729,7 +729,7 @@ export class LocalCartService {
 
       return order;
     } catch (error) {
-      console.error(`Failed to convert cart to Vendure order [${conversionId}]:`, error);
+      console.error('Failed to convert cart to Vendure order:', conversionId, error);
       throw error;
     } finally {
       // Always clear the conversion lock

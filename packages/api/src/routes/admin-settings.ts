@@ -9,9 +9,19 @@ import { normalizeEmail } from '../auth/email.js';
 import { sendStaffInvite } from '../email/dispatch.js';
 import { env } from '../env.js';
 import { stripeConfigured, stripeModeFromConfig } from '../payments/stripe.js';
+import { assertSafeOutboundUrl, type OutboundUrlLookup } from '../security/outbound-url.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireWrite, requireManage, requirePermission, guard } from './admin-helpers.js';
 
 export const adminSettings = new OpenAPIHono();
+
+export async function sanitizeWebhookEndpointPatch(
+  input: { url?: string; topics?: string[]; enabled?: boolean },
+  opts: { lookup?: OutboundUrlLookup } = {},
+): Promise<Record<string, unknown>> {
+  const patch: Record<string, unknown> = { ...input };
+  if (input.url !== undefined) patch.url = await assertSafeOutboundUrl(input.url, opts);
+  return patch;
+}
 
 async function storeRow(storeId: string) {
   const [row] = await db.select().from(s.store).where(eq(s.store.id, storeId)).limit(1);
@@ -378,9 +388,10 @@ adminSettings.openapi(
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requirePermission(st, 'webhooks');
     const b = c.req.valid('json');
+    const url = await assertSafeOutboundUrl(b.url);
     const secret = randomBytes(24).toString('hex');
     const id = await withStore(st.storeId, async (tx) => {
-      const [w] = await tx.insert(s.webhookEndpoint).values({ storeId: st.storeId, url: b.url, topics: b.topics, secret }).returning({ id: s.webhookEndpoint.id });
+      const [w] = await tx.insert(s.webhookEndpoint).values({ storeId: st.storeId, url, topics: b.topics, secret }).returning({ id: s.webhookEndpoint.id });
       return w!.id;
     });
     return c.json({ id, secret }, 200);
@@ -398,10 +409,11 @@ adminSettings.openapi(
     const st = requireStore(admin, c); requireManage(st);
     const { id } = c.req.valid('param');
     const b = c.req.valid('json');
+    const patch = await sanitizeWebhookEndpointPatch(b);
     const ok = await withStore(st.storeId, async (tx) => {
       const [w] = await tx.select({ id: s.webhookEndpoint.id }).from(s.webhookEndpoint).where(eq(s.webhookEndpoint.id, id)).limit(1);
       if (!w) return false;
-      await tx.update(s.webhookEndpoint).set(b).where(eq(s.webhookEndpoint.id, id));
+      await tx.update(s.webhookEndpoint).set(patch).where(eq(s.webhookEndpoint.id, id));
       return true;
     });
     if (!ok) throw new HttpError(404, 'webhook not found');

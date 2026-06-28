@@ -33,7 +33,7 @@ function every(ms: number, label: string, fn: () => Promise<unknown>): NodeJS.Ti
   const tick = async () => {
     if (running) return; // skip if the previous pass hasn't finished
     running = true;
-    try { await fn(); } catch (e) { console.error(`[jobs] ${label} failed:`, e); } finally { running = false; }
+    try { await fn(); } catch (e) { console.error('[jobs] failed:', label, e); } finally { running = false; }
   };
   const t = setInterval(tick, ms);
   t.unref?.(); // don't keep the event loop alive just for the scheduler

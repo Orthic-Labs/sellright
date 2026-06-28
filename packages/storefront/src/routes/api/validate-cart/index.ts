@@ -110,7 +110,7 @@ export const onPost: RequestHandler = async ({ request, json }) => {
         clientTotal += item.unitPrice * item.quantity;
 
       } catch (error) {
-        console.error(`Error validating item ${item.productVariantId}:`, error);
+        console.error('Error validating item:', item.productVariantId, error);
         errors.push({
           productVariantId: item.productVariantId,
           type: 'PRODUCT_NOT_FOUND',

@@ -112,7 +112,7 @@ The top-installed apps across all three ecosystems converge on the same categori
 ## Where competitors are AHEAD (the gaps, by domain)
 
 ### Payments
-- No PayPal, no Apple/Google Pay wallets, no Buy-Now-Pay-Later (Klarna/Afterpay/Sezzle), no accelerated/one-click checkout. (Provider abstraction exists; only Stripe + manual + COD implemented. NMI/Sezzle are TODO comments.)
+- No PayPal, no Apple/Google Pay wallets, no Buy-Now-Pay-Later (Klarna/Afterpay/Sezzle), no accelerated/one-click checkout. (Provider abstraction exists; only Stripe + manual + COD implemented. NMI/Sezzle are backlog notes.)
 - **Saved payment-method vault** has a full schema (`paymentMethod` table) but **zero routes** — no save/list/charge-saved-card.
 - Stripe `charge.refunded` / `charge.dispute.created` webhooks are **empty stubs** — dashboard refunds and chargebacks are not reconciled into the refund ledger.
 

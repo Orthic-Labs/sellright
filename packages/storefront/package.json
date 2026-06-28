@@ -35,14 +35,6 @@
 		"guard:no-graphql-tag": "bash scripts/guard-no-graphql-tag.sh",
 		"postinstall": "pnpm run ensure:qwik-service-worker"
 	},
-	"pnpm": {
-		"overrides": {
-			"esbuild": "0.28.1",
-			"launch-editor": "2.14.1",
-			"shell-quote": "1.8.4",
-			"uuid": "11.1.1"
-		}
-	},
 	"devDependencies": {
 		"@eslint/js": "^10.0.1",
 		"@graphql-codegen/cli": "^7.1.3",

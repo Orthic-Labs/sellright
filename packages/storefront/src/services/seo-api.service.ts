@@ -122,7 +122,7 @@ const makeApiRequest = async <T>(
     };
 
   } catch (error) {
-    console.warn(`SEO API request failed for ${endpoint}:`, error);
+    console.warn('SEO API request failed for endpoint:', endpoint, error);
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error',
@@ -377,7 +377,7 @@ export const fetchSitemap = server$(async (type: 'main' | 'products' | 'collecti
 
     return xmlData;
   } catch (error) {
-    console.warn(`Failed to fetch sitemap ${type}:`, error);
+    console.warn('Failed to fetch sitemap:', type, error);
     return null;
   }
 });

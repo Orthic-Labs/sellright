@@ -71,7 +71,7 @@ export const getBlogPostBySlug = async (slug: string): Promise<BlogPostFull | nu
         const data = await shopQuery<{ blogPost: BlogPostFull | null }>(POST_QUERY, { slug });
         return data.blogPost;
     } catch (error) {
-        console.error(`Failed to fetch blog post "${slug}":`, error);
+        console.error('Failed to fetch blog post:', slug, error);
         return null;
     }
 };

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isUiPermissionKey, mergeStaffPermissions } from './admin-settings.js';
+import { isUiPermissionKey, mergeStaffPermissions, sanitizeWebhookEndpointPatch } from './admin-settings.js';
 
 /**
  * Backward-compat contract for the PUT /staff/{id}/permissions handler:
@@ -60,5 +60,32 @@ describe('isUiPermissionKey', () => {
     expect(isUiPermissionKey('refunds')).toBe(false);
     expect(isUiPermissionKey('')).toBe(false);
     expect(isUiPermissionKey('GIFTCARDS')).toBe(false); // exact-match, not case-insensitive
+  });
+});
+
+describe('sanitizeWebhookEndpointPatch', () => {
+  it('normalizes a safe webhook url and preserves other patch fields', async () => {
+    await expect(sanitizeWebhookEndpointPatch({
+      url: 'https://merchant.example/hook#secret',
+      topics: ['order.created'],
+      enabled: true,
+    }, {
+      lookup: async () => [{ address: '93.184.216.34', family: 4 }],
+    })).resolves.toEqual({
+      url: 'https://merchant.example/hook',
+      topics: ['order.created'],
+      enabled: true,
+    });
+  });
+
+  it('rejects private webhook callback urls before they reach the database patch', async () => {
+    await expect(sanitizeWebhookEndpointPatch({
+      url: 'http://127.0.0.1:3300/internal',
+      enabled: true,
+    })).rejects.toThrow(/private/);
+  });
+
+  it('does not perform DNS validation when the patch does not include a url', async () => {
+    await expect(sanitizeWebhookEndpointPatch({ enabled: false })).resolves.toEqual({ enabled: false });
   });
 });

@@ -2,7 +2,7 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 
-const app = express();
+const app = express(); // nosemgrep: javascript.express.security.audit.express-check-csurf-middleware-usage.express-check-csurf-middleware-usage -- GET-only 503 maintenance server; no cookie auth or state-changing routes.
 const PORT = process.env.PORT || 4100;
 const HOST = process.env.HOST || '0.0.0.0';
 

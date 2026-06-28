@@ -43,9 +43,19 @@ function clear(keyOrPattern?: string): void {
     return;
   }
 
-  const prefix = keyOrPattern.replace('*', '');
+  const parts = keyOrPattern.split('*');
+  const first = parts[0] ?? '';
+  const last = parts[parts.length - 1] ?? '';
   for (const key of cache.keys()) {
-    if (key.startsWith(prefix)) cache.delete(key);
+    if (!key.startsWith(first) || !key.endsWith(last)) continue;
+    let position = first.length;
+    const matches = parts.slice(1, -1).every((part) => {
+      const next = key.indexOf(part, position);
+      if (next === -1) return false;
+      position = next + part.length;
+      return true;
+    });
+    if (matches) cache.delete(key);
   }
 }
 

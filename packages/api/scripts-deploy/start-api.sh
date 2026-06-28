@@ -7,12 +7,15 @@ cd ~/sites/sellright/packages/api
 
 ENV_FILE="$PWD/.env"
 [ -f "$ENV_FILE" ] && { set -a; . "$ENV_FILE"; set +a; }
-DBURL="${DATABASE_URL:-postgres://sellright:srdev_pX7k2Qm9Lw@127.0.0.1:5433/sellright_dev}"
+if [ -z "${DATABASE_URL:-}" ]; then
+  echo "FATAL: DATABASE_URL is required; set it in $ENV_FILE or the process environment." >&2
+  exit 1
+fi
 
 pkill -f 'src/index.ts' 2>/dev/null || true; sleep 2
 fuser -k 3300/tcp 2>/dev/null || true; sleep 1
 
-setsid nohup env DATABASE_URL="$DBURL" PORT="${PORT:-3300}" pnpm exec tsx src/index.ts > ~/sites/sellright/api.log 2>&1 < /dev/null &
+setsid nohup env DATABASE_URL="$DATABASE_URL" PORT="${PORT:-3300}" pnpm exec tsx src/index.ts > ~/sites/sellright/api.log 2>&1 < /dev/null &
 sleep 7
 
 echo "=== port ==="

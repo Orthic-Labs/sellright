@@ -7,3 +7,14 @@ packages:
   # admin is a standalone React+Vite SPA with its own lockfile/toolchain; it
   # installs independently so its React deps can't disturb the api/shared build.
   - "!packages/admin"
+
+allowBuilds:
+  esbuild: true
+  sharp: true
+
+onlyBuiltDependencies:
+  - esbuild
+  - sharp
+
+overrides:
+  esbuild: 0.28.1

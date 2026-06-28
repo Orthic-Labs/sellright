@@ -18,11 +18,6 @@
     "deps:update": "node ../tools/right-release/deps.mjs --update",
     "deps:update:latest": "node ../tools/right-release/deps.mjs --update --latest"
   },
-  "pnpm": {
-    "overrides": {
-      "esbuild": "0.28.1"
-    }
-  },
   "devDependencies": {
     "typescript": "^6.0.3"
   }
