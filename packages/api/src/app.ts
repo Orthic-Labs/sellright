@@ -13,6 +13,7 @@ import { adminProducts } from './routes/admin-products.js';
 import { adminOrders } from './routes/admin-orders.js';
 import { adminMarketing } from './routes/admin-marketing.js';
 import { adminSettings } from './routes/admin-settings.js';
+import { adminSettingsAdvanced } from './routes/admin-settings-advanced.js';
 import { adminReports } from './routes/admin-reports.js';
 import { adminAffiliate } from './routes/admin-affiliate.js';
 import { adminContent } from './routes/admin-content.js';
@@ -118,6 +119,7 @@ export function createApp(): OpenAPIHono {
   app.route('/', adminOrders); // orders++: refunds, draft orders, abandoned carts
   app.route('/', adminMarketing); // promotions manager + Listmonk integration
   app.route('/', adminSettings); // store/tax, payments, shipping, staff/roles, notifications
+  app.route('/', adminSettingsAdvanced); // webhooks, staff, currency rates
   app.route('/', adminReports); // customers write, reports, search, activity
   app.route('/', adminAffiliate); // affiliate program + public self-serve dashboard
   app.route('/', adminContent); // blog CMS admin
