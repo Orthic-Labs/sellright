@@ -1,5 +1,11 @@
 import { z } from 'zod';
 
+const emptyToUndefined = (value: unknown) => (
+  typeof value === 'string' && value.trim() === '' ? undefined : value
+);
+const optionalEnvString = z.preprocess(emptyToUndefined, z.string().optional());
+const optionalEnvEmail = z.preprocess(emptyToUndefined, z.string().email().optional());
+
 /** Fail-fast env validation. The server refuses to boot on missing/invalid config. */
 const EnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -20,13 +26,17 @@ const EnvSchema = z.object({
   PGPOOL_IDLE_TIMEOUT_MS: z.coerce.number().int().nonnegative().default(10000),
   PGPOOL_CONNECTION_TIMEOUT_MS: z.coerce.number().int().nonnegative().default(0),
   // WP2: SMTP (all optional — mailer no-ops with a log line when unconfigured).
-  SMTP_HOST: z.string().optional(),
+  SMTP_HOST: optionalEnvString,
   SMTP_PORT: z.coerce.number().int().positive().default(587),
-  SMTP_USER: z.string().optional(),
-  SMTP_PASS: z.string().optional(),
-  SMTP_FROM: z.string().email().default('noreply@sellright.local'),
+  SMTP_USER: optionalEnvString,
+  SMTP_PASS: optionalEnvString,
+  SMTP_FROM: optionalEnvEmail,
   // Force the no-op path even when SMTP_HOST is set (load tests, demos).
-  SMTP_ENABLED: z.enum(['true', 'false']).optional(),
+  SMTP_ENABLED: z.preprocess(emptyToUndefined, z.enum(['true', 'false']).optional()),
+  // Vendure Gmail aliases used by Damned/Rotten. Normalized below into SMTP_*.
+  GMAIL_USER: optionalEnvEmail,
+  EMAIL_PASS: optionalEnvString,
+  FROM_EMAIL: optionalEnvEmail,
   // WP8: asset storage directory. Default is contained INSIDE the checkout
   // (<checkout>/var/assets via the packages/api cwd) — never ~/sites root. Each
   // deployment sets ASSET_DIR explicitly in its env (dev vs rightapps prod).
@@ -85,6 +95,15 @@ const EnvSchema = z.object({
   JOBS_WEBHOOK_REAPER_APPLY: z.enum(['0', '1']).optional(),
   // webhook-reaper job: grace period in minutes before a processing row is considered stuck.
   JOBS_WEBHOOK_REAPER_GRACE_MIN: z.coerce.number().int().positive().optional(),
+}).transform((raw) => {
+  const smtpUser = raw.SMTP_USER ?? raw.GMAIL_USER;
+  return {
+    ...raw,
+    SMTP_HOST: raw.SMTP_HOST ?? (smtpUser ? 'smtp.gmail.com' : undefined),
+    SMTP_USER: smtpUser,
+    SMTP_PASS: raw.SMTP_PASS ?? raw.EMAIL_PASS,
+    SMTP_FROM: raw.SMTP_FROM ?? raw.FROM_EMAIL ?? raw.GMAIL_USER ?? 'noreply@sellright.local',
+  };
 });
 
 export type Env = z.infer<typeof EnvSchema>;
