@@ -9,30 +9,7 @@ import { formatPrice } from '~/utils';
 import { useLocalCart } from '~/contexts/CartContext';
 import { CountryService } from '~/services/CountryService';
 import { LocalCartService } from '~/services/LocalCartService';
-
-// Local shipping method definitions matching backend codes
-const SHIPPING_METHODS = {
-  US_PR_UNDER_100: {
-    id: 'usps',
-    name: 'USPS First Class',
-    description: 'Standard shipping',
-    price: 800,
-    priceWithTax: 800,
-  },
-  US_PR_OVER_100: {
-    id: 'free-shipping',
-    name: 'Free Shipping',
-    price: 0,
-    priceWithTax: 0,
-  },
-  INTERNATIONAL: {
-    id: 'usps-int',
-    name: 'USPS First Class International',
-    description: 'Flat rate international shipping',
-    price: 2000,
-    priceWithTax: 2000,
-  }
-};
+import { getCartShippingMethod } from './cart-shipping';
 
 export default component$(() => {
 	const location = useLocation();
@@ -129,19 +106,10 @@ export default component$(() => {
 			return;
 		}
 
-		let selectedShippingMethod;
-		if (countryCode === 'US' || countryCode === 'PR') {
-			if (orderTotalAfterDiscount >= 10000) {
-				selectedShippingMethod = SHIPPING_METHODS.US_PR_OVER_100;
-			} else {
-				selectedShippingMethod = SHIPPING_METHODS.US_PR_UNDER_100;
-			}
-		} else {
-			selectedShippingMethod = SHIPPING_METHODS.INTERNATIONAL;
-		}
+		const selectedShippingMethod = getCartShippingMethod(countryCode, orderTotalAfterDiscount);
 
-		shippingState.methods = [selectedShippingMethod as EligibleShippingMethods];
-		shippingState.selectedMethod = selectedShippingMethod as EligibleShippingMethods;
+		shippingState.methods = [selectedShippingMethod];
+		shippingState.selectedMethod = selectedShippingMethod;
 		shippingState.lastCheckedCountry = countryCode;
 		shippingState.error = null;
 	});
@@ -164,21 +132,10 @@ export default component$(() => {
 		shippingState.error = null;
 
 		try {
-			let selectedShippingMethod;
-			const isUSorPR = countryCode === 'US' || countryCode === 'PR';
+			const selectedShippingMethod = getCartShippingMethod(countryCode, orderTotalAfterDiscount);
 
-			if (isUSorPR) {
-				if (orderTotalAfterDiscount >= 10000) {
-					selectedShippingMethod = SHIPPING_METHODS.US_PR_OVER_100;
-				} else {
-					selectedShippingMethod = SHIPPING_METHODS.US_PR_UNDER_100;
-				}
-			} else {
-				selectedShippingMethod = SHIPPING_METHODS.INTERNATIONAL;
-			}
-
-			shippingState.methods = [selectedShippingMethod as EligibleShippingMethods];
-			shippingState.selectedMethod = selectedShippingMethod as EligibleShippingMethods;
+			shippingState.methods = [selectedShippingMethod];
+			shippingState.selectedMethod = selectedShippingMethod;
 			shippingState.lastCheckedCountry = countryCode;
 		} catch (error: any) {
 			console.error('Failed to apply shipping calculation:', error);
@@ -231,7 +188,6 @@ export default component$(() => {
 			{appState.showCart && (
 				<div class="fixed inset-0 z-[9999] flex">
 
-					{/* Backdrop */}
 					<div
 						class="absolute inset-0 bg-black/30 backdrop-blur-[2px]"
 						role="button"
@@ -241,7 +197,6 @@ export default component$(() => {
 						onKeyDown$={(e) => { if (e.key === 'Enter' || e.key === ' ') appState.showCart = false; }}
 					/>
 
-					{/* Panel */}
 					<div
 						ref={panelRef}
 						role="dialog"
@@ -261,7 +216,6 @@ export default component$(() => {
 							<span class="text-[10px] tracking-[0.06em] text-[#9A9288] truncate">Secure Checkout</span>
 						</div>
 
-						{/* Scrollable items */}
 						<div class="flex-1 overflow-y-auto overscroll-contain px-5 py-1 min-h-0">
 
 							{localCart.isRefreshingStock && (
@@ -336,7 +290,6 @@ export default component$(() => {
 									</div>
 								</div>
 
-								{/* Price rows */}
 								<div class="space-y-1 mb-2">
 									<div class="flex justify-between items-baseline">
 										<span class="text-[11px] tracking-[0.05em] text-[#9A9288] uppercase">Subtotal</span>
@@ -376,7 +329,6 @@ export default component$(() => {
 									)}
 								</div>
 
-								{/* Checkout CTA */}
 								<button
 									onClick$={$(async () => {
 										if (isNavigatingToCheckout.value) return;

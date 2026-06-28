@@ -27,8 +27,7 @@ export default component$<LoginModalProps>(({
   useStyles$(`body.login-modal-open { overflow: hidden !important; }`);
   const appState = useContext(APP_STATE);
 
-  const step = useSignal<Step>('email');
-  const email = useSignal(''), password = useSignal(''), confirmPassword = useSignal('');
+  const step = useSignal<Step>('email'), email = useSignal(''), password = useSignal(''), confirmPassword = useSignal('');
   const firstName = useSignal(''), lastName = useSignal('');
   const rememberMe = useSignal(true), error = useSignal(''), loading = useSignal(false);
   const turnstileToken = useSignal(''), honeypot = useSignal(''), turnstileLoaded = useSignal(false);
