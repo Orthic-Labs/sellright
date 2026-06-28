@@ -12,6 +12,7 @@ dist/
 
 # audit reports (local baseline diffing)
 .audit/
+.agent/
 
 # editor/tool backup artifacts — never commit these
 *.bak
