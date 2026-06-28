@@ -11,6 +11,7 @@ import { adminDashboard } from './routes/admin-dashboard.js';
 import { adminCatalog } from './routes/admin-catalog.js';
 import { adminProducts } from './routes/admin-products.js';
 import { adminOrders } from './routes/admin-orders.js';
+import { adminOrderOps } from './routes/admin-order-ops.js';
 import { adminMarketing } from './routes/admin-marketing.js';
 import { adminSettings } from './routes/admin-settings.js';
 import { adminSettingsAdvanced } from './routes/admin-settings-advanced.js';
@@ -117,6 +118,7 @@ export function createApp(): OpenAPIHono {
   app.route('/', adminProducts); // product list/detail/edit + variant pricing/stock
   app.route('/', adminCatalog); // catalog mgmt: product/variant create+delete, collections, inventory
   app.route('/', adminOrders); // orders++: refunds, draft orders, abandoned carts
+  app.route('/', adminOrderOps); // draft orders, tracking import, export, bulk order operations
   app.route('/', adminMarketing); // promotions manager + Listmonk integration
   app.route('/', adminSettings); // store/tax, payments, shipping, staff/roles, notifications
   app.route('/', adminSettingsAdvanced); // webhooks, staff, currency rates
