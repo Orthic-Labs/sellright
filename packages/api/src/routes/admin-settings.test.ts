@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isUiPermissionKey, mergeStaffPermissions, sanitizeWebhookEndpointPatch } from './admin-settings.js';
+import { isUiPermissionKey, mergeStaffPermissions, sanitizePaymentSettingsPatch, sanitizeWebhookEndpointPatch } from './admin-settings.js';
 
 /**
  * Backward-compat contract for the PUT /staff/{id}/permissions handler:
@@ -60,6 +60,18 @@ describe('isUiPermissionKey', () => {
     expect(isUiPermissionKey('refunds')).toBe(false);
     expect(isUiPermissionKey('')).toBe(false);
     expect(isUiPermissionKey('GIFTCARDS')).toBe(false); // exact-match, not case-insensitive
+  });
+});
+
+describe('sanitizePaymentSettingsPatch', () => {
+  it('accepts only implemented payment providers', () => {
+    expect(sanitizePaymentSettingsPatch({ cod: false, manual: true, stripe: true })).toEqual({
+      cod: false,
+      manual: true,
+      stripe: true,
+    });
+    expect(() => sanitizePaymentSettingsPatch({ paypal: true })).toThrow(/unsupported payment provider/);
+    expect(() => sanitizePaymentSettingsPatch({ nmi: true, sezzle: true })).toThrow(/unsupported payment provider/);
   });
 });
 

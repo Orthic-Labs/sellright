@@ -4,6 +4,7 @@ import { desc, eq } from 'drizzle-orm';
 import { unsafeUnscopedDb as db, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { newTotpSecret, verifyTotp, otpauthUri } from '../auth/totp.js';
+import { isSupportedPaymentMethod } from '../payments/provider.js';
 import { stripeConfigured, stripeModeFromConfig } from '../payments/stripe.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireManage, guard } from './admin-helpers.js';
 
@@ -14,6 +15,15 @@ async function storeRow(storeId: string) {
   return row!;
 }
 const cfg = (row: { config: unknown }) => (row.config as Record<string, unknown> | null) ?? {};
+
+export function sanitizePaymentSettingsPatch(input: Record<string, boolean>): Record<string, boolean> {
+  const out: Record<string, boolean> = {};
+  for (const [method, enabled] of Object.entries(input)) {
+    if (!isSupportedPaymentMethod(method)) throw new HttpError(400, `unsupported payment provider: ${method}`);
+    out[method] = enabled;
+  }
+  return out;
+}
 
 /** Atomic read-modify-write of store.config under a row lock. The config is a
  *  single JSONB blob touched by several setting endpoints; a plain
@@ -140,12 +150,12 @@ adminSettings.openapi(
   createRoute({
     method: 'patch', path: '/v1/admin/settings/payments', summary: 'Enable/disable payment providers',
     request: { body: { content: J(z.record(z.string(), z.boolean())) } },
-    responses: { 200: { description: 'OK', content: J(z.object({ payments: z.any() })) }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: { 200: { description: 'OK', content: J(z.object({ payments: z.any() })) }, 400: { description: 'Bad provider', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireManage(st);
-    const b = c.req.valid('json');
+    const b = sanitizePaymentSettingsPatch(c.req.valid('json'));
     let payments: Record<string, unknown> = {};
     await mutateStoreConfig(st.storeId, (config) => {
       // Seed the credential-free defaults so toggling a gateway never silently

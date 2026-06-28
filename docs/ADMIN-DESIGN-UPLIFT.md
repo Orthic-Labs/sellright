@@ -8,7 +8,7 @@ The admin is **not** "pieced together" — it's a competent, Shopify-Polaris-ins
 
 ## What I changed (shared layer — propagates to every screen)
 
-All in `packages/admin/{tailwind.config.js, src/index.css, src/components/ui.tsx}`:
+All in `packages/admin/tailwind.config.js`, `packages/admin/src/index.css`, and `packages/admin/src/components/ui.tsx`:
 
 | Change | Before | After | Why |
 |---|---|---|---|
@@ -33,9 +33,9 @@ All in `packages/admin/{tailwind.config.js, src/index.css, src/components/ui.tsx
 
 ## Recommended next — ready on your approval (per-page, so gated)
 
-1. **P1 · Orders double filter row** — the status `Tabs` pills + the saved-views row show overlapping labels. Merge into one control, or relabel the views row "Views" + make it a quieter segmented control. (`pages/Orders.tsx`)
-2. **Dashboard KPI tiles → `.card-interactive`** — they're already `<Link>`s; swap the hover-border for the lift affordance for a livelier, more tactile dashboard. (`pages/Dashboard.tsx`)
-3. **Badge refinement** — add a small status **dot** before the label (e.g. ● Paid) so state is legible without relying on color alone (accessibility `color-not-only`) and reads more designed. (`components/ui.tsx` Badge)
+1. **P1 · Orders double filter row** — the status `Tabs` pills + the saved-views row show overlapping labels. Merge into one control, or relabel the views row "Views" + make it a quieter segmented control. (`packages/admin/src/pages/Orders.tsx`)
+2. **Dashboard KPI tiles → `.card-interactive`** — they're already `<Link>`s; swap the hover-border for the lift affordance for a livelier, more tactile dashboard. (`packages/admin/src/pages/Dashboard.tsx`)
+3. **Badge refinement** — add a small status **dot** before the label (e.g. ● Paid) so state is legible without relying on color alone (accessibility `color-not-only`) and reads more designed. (`packages/admin/src/components/ui.tsx` Badge)
 4. **Real logo** — replace the green-square placeholder in the sidebar + login with the wordmark. (Right Suite identity is for the *RightApps* fork, not SellRight-the-product — keep SellRight brand-neutral.)
 5. **Sidebar polish** — tighten section-label rhythm, add a subtle active-item left accent bar, denser group spacing.
 6. **Settings/Marketing QA mocks** (from the frontend review F2) — add their scenarios to `qa-mocks.ts` so the config pages can be visually QA'd offline.

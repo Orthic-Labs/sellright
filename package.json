@@ -13,6 +13,7 @@
     "dev": "pnpm --filter @sellright/api dev",
     "admin:typecheck": "pnpm --dir packages/admin typecheck",
     "admin:build": "pnpm --dir packages/admin build",
+    "qa:browser": "pnpm --dir packages/admin qa:browser",
     "audit:lint": "eslint .",
     "audit:dead-code": "knip --reporter json",
     "audit:duplication": "jscpd . --reporters json --output .cache/jscpd --silent",
@@ -25,7 +26,7 @@
     "@typescript-eslint/parser": "8.62.0",
     "eslint": "10.6.0",
     "jscpd": "^5.0.11",
-    "knip": "^6.21.0",
+    "knip": "^6.22.0",
     "typescript": "^6.0.3"
   }
 }

@@ -4,9 +4,9 @@ import { Store, CreditCard, Truck, Receipt, LogIn, ShieldCheck, UsersRound, User
 import { api } from '../api';
 import { useAuth } from '../auth';
 import { PageHeader, Loading, Spinner, Badge, FormSection, Field, InlineAlert } from '../components/ui';
+import { ADMIN_PAYMENT_PROVIDERS } from '../lib/payment-providers';
 
-const PROVIDERS = ['cod', 'manual', 'stripe', 'paypal', 'nmi', 'sezzle'];
-const NEEDS_KEYS = new Set(['stripe', 'paypal', 'nmi', 'sezzle']);
+const NEEDS_KEYS = new Set(['stripe']);
 
 type SectionId = 'store' | 'payments' | 'shipping' | 'taxes' | 'signin' | 'security' | 'team' | 'account';
 const NAV: { group: string; items: { id: SectionId; label: string; icon: typeof Store }[] }[] = [
@@ -104,7 +104,7 @@ export default function SettingsPage() {
           {section === 'payments' && (
             <FormSection title="Payment providers" description="Enable the methods customers can pay with at checkout.">
               <div className="divide-y divide-gray-100">
-                {PROVIDERS.map((p) => {
+                {ADMIN_PAYMENT_PROVIDERS.map((p) => {
                   const on = !!cfg.payments?.[p];
                   return (
                     <div key={p} className="flex items-center justify-between py-2.5">

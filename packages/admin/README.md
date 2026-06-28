@@ -5,7 +5,7 @@ placeholder).
 
 ## Stack
 
-- React 18 + Vite 5 + TypeScript
+- React 18 + Vite 6 + TypeScript
 - Tailwind (light theme, copper-free; `brand` green `#008060` accent)
 - TanStack Query (data) + react-router-dom (routing)
 - **Hand-rolled fetch client** (`src/api.ts`) — NOT the hono `hc` client. The
@@ -64,6 +64,7 @@ and `/assets` → DD's image server).
 ```bash
 pnpm install --ignore-workspace
 pnpm dev          # vite dev server on :4300 (proxy-enabled)
+pnpm qa:browser   # vite dev server on :4300 with API mocks; open /?qa=1
 pnpm build        # tsc + vite build -> dist/
 ```
 

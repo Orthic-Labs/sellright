@@ -72,19 +72,27 @@ export const codProvider: PaymentProvider = {
   },
 };
 
-const PROVIDERS: Record<string, PaymentProvider> = {
+export const SUPPORTED_PAYMENT_METHODS = ['manual', 'cod', 'stripe'] as const;
+export type SupportedPaymentMethod = typeof SUPPORTED_PAYMENT_METHODS[number];
+
+const PROVIDERS: Record<SupportedPaymentMethod, PaymentProvider> = {
   manual: manualProvider,
   cod: codProvider,
   stripe: stripeProvider,
   // nmi / sezzle: implement against this interface (need credentials).
 };
 
+export function isSupportedPaymentMethod(method: string): method is SupportedPaymentMethod {
+  return (SUPPORTED_PAYMENT_METHODS as readonly string[]).includes(method);
+}
+
 export function isPaymentMethodEnabled(config: unknown, method: string): boolean {
+  if (!isSupportedPaymentMethod(method)) return false;
   const payments = (config as { payments?: Record<string, boolean> } | null | undefined)?.payments;
   if (payments && Object.prototype.hasOwnProperty.call(payments, method)) return payments[method] === true;
   return method === 'manual' || method === 'cod';
 }
 
 export function getProvider(method: string): PaymentProvider | null {
-  return PROVIDERS[method] ?? null;
+  return isSupportedPaymentMethod(method) ? PROVIDERS[method] : null;
 }
