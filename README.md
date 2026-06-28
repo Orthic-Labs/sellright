@@ -38,6 +38,7 @@ Examples live beside each package as `.env.example`. The old root-level
 ## Docs
 
 - [Architecture](docs/ARCHITECTURE.md)
+- [Email Delivery](docs/EMAIL.md)
 - [Features](docs/FEATURES.md)
 - [Competitors](docs/COMPETITORS.md)
 - [Market Placement](docs/MARKET-PLACEMENT.md)

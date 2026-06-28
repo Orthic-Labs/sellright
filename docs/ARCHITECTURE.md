@@ -15,6 +15,7 @@ SellRight is an owned, multi-tenant commerce backend. It is designed to replace 
 | Admin | React + Vite + Tailwind/shadcn-style components |
 | Storefront | Qwik SSR consumer; static catalog manifest plus dynamic REST |
 | Payments | `PaymentProvider` interface; Stripe provider scaffolded; NMI/Sezzle are planned for DD parity |
+| Email | Nodemailer SMTP with optional per-app sender and storefront URL routing |
 | Jobs | In-process scheduled jobs today; Redis/BullMQ is a later scaling option |
 
 ## Repository Layout
@@ -118,6 +119,9 @@ SellRight can run as one API process plus one static admin build. The current pr
 - nginx in front of API/admin;
 - Postgres on the native service port for SellRight databases;
 - backup scripts and restore drills as a launch gate.
+
+Email is configured in `packages/api/.env`; see [Email Delivery](EMAIL.md) for
+SMTP, Vendure Gmail aliases, and shared-store per-app sender routing.
 
 ## Verification Gate
 
