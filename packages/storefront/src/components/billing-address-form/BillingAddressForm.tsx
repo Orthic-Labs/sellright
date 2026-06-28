@@ -1,28 +1,24 @@
 import { component$, useContext, $, useSignal, type QRL, useOnDocument } from '@qwik.dev/core';
 import { APP_STATE } from '~/constants';
 import type { BillingAddress } from '~/types';
-import { 
-  validateAddress, 
-  validateName, 
-  validatePostalCode, 
-  validateStateProvince
-} from '~/utils/validation';
 import { ValidationIcon } from '~/components/checkout/ValidationIcon';
-import { validateBillingField, type ValidationErrors } from './billing-validation';
+import {
+  validateBillingField,
+  validateBillingFormValues,
+  type ValidationErrors,
+} from './billing-validation';
 
 interface BillingAddressFormProps {
   billingAddress: BillingAddress;
-  onUserInteraction$?: QRL<() => void>; // Callback for when user starts interacting
+  onUserInteraction$?: QRL<() => void>;
 }
 
 const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress, onUserInteraction$ }) => {
   const appState = useContext(APP_STATE);
   
-  // Add validation state
   const validationErrors = useSignal<ValidationErrors>({});
   const touchedFields = useSignal<Set<string>>(new Set());
   const validationTimer = useSignal<number | null>(null);
-   // Track if user has interacted with form
   const hasUserInteracted = useSignal(false);
 
   // Load billing address from localStorage — client-only init.
@@ -55,18 +51,11 @@ const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress
 
   // Handle field blur events
   const handleFieldBlur$ = $((fieldName: string, value: string) => {
-    // console.log(`[BillingAddressForm] Field blur-sm: ${fieldName}, value: ${value}`);
-
-    // Mark field as touched
     touchedFields.value = new Set([...touchedFields.value, fieldName]);
-    // console.log(`[BillingAddressForm] Touched fields: ${Array.from(touchedFields.value).join(', ')}`);
 
-    // Validate the field immediately - use current appState for most up-to-date country
     const safeCountryCode = appState.billingAddress?.countryCode || billingAddress?.countryCode || 'US';
-    // console.log(`[BillingAddressForm] Using country code for blur-sm validation: ${safeCountryCode}`);
     const currentErrors = validateBillingField(fieldName, value, safeCountryCode, validationErrors.value);
     
-    // Update validation errors
     validationErrors.value = currentErrors;
     
     // Trigger complete form validation (debounced to 300ms for consistency)
@@ -74,7 +63,6 @@ const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress
       clearTimeout(validationTimer.value);
     }
     validationTimer.value = setTimeout(() => {
-      // Run complete form validation
       const firstName = appState.billingAddress?.firstName ?? '';
       const lastName = appState.billingAddress?.lastName ?? '';
       const streetLine1 = appState.billingAddress?.streetLine1 ?? '';
@@ -83,43 +71,21 @@ const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress
       const postalCode = appState.billingAddress?.postalCode ?? '';
       const countryCode = appState.billingAddress?.countryCode ?? 'US';
       
-      const firstNameResult = validateName(firstName, 'First name');
-      const lastNameResult = validateName(lastName, 'Last name');
-      const streetResult = validateAddress(streetLine1, 'Street address');
-      const cityResult = validateName(city, 'City');
-      const provinceResult = validateStateProvince(province, countryCode, 'State/Province');
-      const postalResult = validatePostalCode(postalCode, countryCode);
-      
-      const errors = {...validationErrors.value};
-      
-      if (!firstNameResult.isValid) errors.firstName = firstNameResult.message ?? 'Invalid first name';
-      else errors.firstName = '';
-      
-      if (!lastNameResult.isValid) errors.lastName = lastNameResult.message ?? 'Invalid last name';
-      else errors.lastName = '';
-      
-      if (!streetResult.isValid) errors.streetLine1 = streetResult.message ?? 'Invalid address';
-      else errors.streetLine1 = '';
-      
-      if (!cityResult.isValid) errors.city = cityResult.message ?? 'Invalid city';
-      else errors.city = '';
-      
-      if (!provinceResult.isValid) errors.province = provinceResult.message ?? 'State/Province is required';
-      else errors.province = '';
-      
-      if (!postalResult.isValid) errors.postalCode = postalResult.message ?? 'Invalid postal code';
-      else errors.postalCode = '';
-      
-      validationErrors.value = errors;
-      // console.log(`[BillingAddressForm] Validation errors after blur-sm: `, validationErrors.value);
+      validationErrors.value = validateBillingFormValues({
+        firstName,
+        lastName,
+        streetLine1,
+        city,
+        province,
+        postalCode,
+        countryCode,
+      }, validationErrors.value);
     }, 300) as unknown as number;
   });
 
   // Individual field validation
   const validateField$ = $((fieldName: string, value: string, countryCode?: string) => {
-    // Ensure countryCode is a string, using appState first, then billingAddress, then fallback
     const safeCountryCode = countryCode ?? appState.billingAddress?.countryCode ?? billingAddress.countryCode ?? 'US';
-    // console.log(`[BillingAddressForm] validateField$ using country code: ${safeCountryCode}`);
     const currentErrors = validateBillingField(fieldName, value, safeCountryCode, validationErrors.value);
     
     // Only update if errors actually changed
@@ -130,7 +96,6 @@ const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress
 
   // Complete form validation
   const validateForm$ = $(() => {
-    // Ensure all values are strings, prioritizing appState over props
     const firstName = appState.billingAddress?.firstName ?? billingAddress?.firstName ?? '';
     const lastName = appState.billingAddress?.lastName ?? billingAddress?.lastName ?? '';
     const streetLine1 = appState.billingAddress?.streetLine1 ?? billingAddress?.streetLine1 ?? '';
@@ -139,42 +104,21 @@ const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress
     const postalCode = appState.billingAddress?.postalCode ?? billingAddress?.postalCode ?? '';
     const countryCode = appState.billingAddress?.countryCode ?? billingAddress?.countryCode ?? 'US';
     
-    const firstNameResult = validateName(firstName, 'First name');
-    const lastNameResult = validateName(lastName, 'Last name');
-    const streetResult = validateAddress(streetLine1, 'Street address');
-    const cityResult = validateName(city, 'City');
-    const provinceResult = validateStateProvince(province, countryCode, 'State/Province');
-    const postalResult = validatePostalCode(postalCode, countryCode);
-    
-    const errors = {...validationErrors.value};
-    
-    if (!firstNameResult.isValid) errors.firstName = firstNameResult.message ?? 'Invalid first name';
-    else errors.firstName = '';
-    
-    if (!lastNameResult.isValid) errors.lastName = lastNameResult.message ?? 'Invalid last name';
-    else errors.lastName = '';
-    
-    if (!streetResult.isValid) errors.streetLine1 = streetResult.message ?? 'Invalid address';
-    else errors.streetLine1 = '';
-    
-    if (!cityResult.isValid) errors.city = cityResult.message ?? 'Invalid city';
-    else errors.city = '';
-    
-    if (!provinceResult.isValid) errors.province = provinceResult.message ?? 'State/Province is required';
-    else errors.province = '';
-    
-    if (!postalResult.isValid) errors.postalCode = postalResult.message ?? 'Invalid postal code';
-    else errors.postalCode = '';
+    const errors = validateBillingFormValues({
+      firstName,
+      lastName,
+      streetLine1,
+      city,
+      province,
+      postalCode,
+      countryCode,
+    }, validationErrors.value);
     
     validationErrors.value = errors;
-    
-    // console.log('[BillingAddressForm] validateForm$ results:', errors);
     return Object.keys(errors).length === 0;
   });
   
   const handleInputChange$ = $((field: string, value: string) => {
-    // console.log(`[BillingAddressForm] Input change: ${field}, value: ${value}`);
-    
     // Notify parent component on first user interaction
     if (!hasUserInteracted.value && onUserInteraction$) {
       hasUserInteracted.value = true;
@@ -223,7 +167,6 @@ const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress
     
     // If the field has been touched, validate on change
     if (touchedFields.value.has(field)) {
-      // Ensure countryCode is a string, using appState first, then billingAddress, then fallback
       const countryCode = appState.billingAddress?.countryCode ?? billingAddress?.countryCode ?? 'US';
       validateField$(field, value, countryCode);
       
@@ -233,7 +176,6 @@ const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress
       }
       validationTimer.value = setTimeout(() => {
         validateForm$();
-        // console.log(`[BillingAddressForm] Validation errors after input: `, validationErrors.value);
       }, 300) as unknown as number;
     }
   });
@@ -247,10 +189,6 @@ const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress
       : "border-[rgba(140,107,58,0.18)] focus:border-[rgba(140,107,58,0.4)] focus:ring-[rgba(140,107,58,0.25)]";
     return `${baseClasses} ${errorClasses}`;
   };
-  
-  // Debug validation status
-  // console.log(`[BillingAddressForm] Current validation errors:`, validationErrors.value);
-  // console.log(`[BillingAddressForm] Touched fields:`, Array.from(touchedFields.value));
   
   const getSelectClasses = () => {
     return "block w-full px-[14px] py-[11px] text-[16px] rounded-[3px] border placeholder:text-[rgba(100,85,65,0.42)] focus:outline-hidden border-[rgba(140,107,58,0.18)] focus:border-[rgba(140,107,58,0.4)] focus:ring-[rgba(140,107,58,0.25)] transition-colors duration-200 bg-white appearance-none";

@@ -58,3 +58,28 @@ export function validateBillingField(
  errors[key] = result.isValid ? '' : (result.message ?? fieldFallbacks[key]);
  return errors;
 }
+
+export function validateBillingFormValues(
+ values: {
+  firstName?: string;
+  lastName?: string;
+  streetLine1?: string;
+  city?: string;
+  province?: string;
+  postalCode?: string;
+  countryCode?: string;
+ },
+ currentErrors: ValidationErrors,
+): ValidationErrors {
+ let errors = { ...currentErrors };
+ const countryCode = values.countryCode ?? 'US';
+
+ errors = validateBillingField('firstName', values.firstName ?? '', countryCode, errors);
+ errors = validateBillingField('lastName', values.lastName ?? '', countryCode, errors);
+ errors = validateBillingField('streetLine1', values.streetLine1 ?? '', countryCode, errors);
+ errors = validateBillingField('city', values.city ?? '', countryCode, errors);
+ errors = validateBillingField('province', values.province ?? '', countryCode, errors);
+ errors = validateBillingField('postalCode', values.postalCode ?? '', countryCode, errors);
+
+ return errors;
+}

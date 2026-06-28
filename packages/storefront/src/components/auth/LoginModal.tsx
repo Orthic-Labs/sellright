@@ -1,5 +1,4 @@
 import { $, component$, useSignal, useStyles$, QRL, useContext, useOnWindow, useVisibleTask$ } from '@qwik.dev/core';
-import XCircleIcon from '~/components/icons/XCircleIcon';
 import { loginMutation, registerCustomerAccountMutation, requestPasswordResetMutation } from '~/providers/shop/account/account';
 import { checkCustomerEmail } from '~/providers/shop/account/check-email';
 import { getActiveCustomerQuery } from '~/providers/shop/customer/customer';
@@ -8,6 +7,7 @@ import { ActiveCustomer } from '~/types';
 import { LocalAddressService } from '~/services/LocalAddressService';
 import { clearCustomerCacheAfterMutation } from '~/providers/shop/customer/customer';
 import { registerCustomerFromSignup } from './signup-flow';
+import { AuthError } from './AuthError';
 
 const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY || '';
 
@@ -28,24 +28,15 @@ export default component$<LoginModalProps>(({
   const appState = useContext(APP_STATE);
 
   const step = useSignal<Step>('email');
-  const email = useSignal('');
-  const password = useSignal('');
-  const confirmPassword = useSignal('');
-  const firstName = useSignal('');
-  const lastName = useSignal('');
-  const rememberMe = useSignal(true);
-  const error = useSignal('');
-  const loading = useSignal(false);
-  const turnstileToken = useSignal('');
-  const honeypot = useSignal('');
-  const turnstileLoaded = useSignal(false);
+  const email = useSignal(''), password = useSignal(''), confirmPassword = useSignal('');
+  const firstName = useSignal(''), lastName = useSignal('');
+  const rememberMe = useSignal(true), error = useSignal(''), loading = useSignal(false);
+  const turnstileToken = useSignal(''), honeypot = useSignal(''), turnstileLoaded = useSignal(false);
 
-  // Load Turnstile once
   useVisibleTask$(({ track }) => {
     track(() => isOpen);
     if (!isOpen || !TURNSTILE_SITE_KEY || turnstileLoaded.value) return;
     if ((window as any).turnstile) {
-      // Already loaded, just render
       setTimeout(() => {
         const container = document.getElementById('modal-turnstile');
         if (container && (window as any).turnstile) {
@@ -72,14 +63,12 @@ export default component$<LoginModalProps>(({
       }
       turnstileLoaded.value = true;
     };
-    // Check if script already exists (from /sign-in page)
     if (!document.querySelector('script[src*="challenges.cloudflare.com/turnstile"]')) {
       const script = document.createElement('script');
       script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onModalTurnstileLoad';
       script.async = true;
       document.head.appendChild(script);
     } else {
-      // Script exists but turnstile object may be ready
       setTimeout(() => {
         if ((window as any).turnstile) {
           (window as any).onModalTurnstileLoad();
@@ -127,7 +116,6 @@ export default component$<LoginModalProps>(({
     try {
       const { login } = await loginMutation(email.value.trim(), password.value, rememberMe.value);
       if (login.__typename === 'CurrentUser') {
-        // Update app state
         try {
           const customerData = await getActiveCustomerQuery();
           if (customerData) {
@@ -248,14 +236,12 @@ export default component$<LoginModalProps>(({
         <div class="bg-[#FDFAF6] rounded-[3px] border border-[#D8D1C7] shadow-none overflow-hidden">
           <div class="px-6 py-6">
 
-            {/* ── Step: Email ── */}
             {step.value === 'email' && (
               <div class="space-y-4 font-body">
                 <div class="text-center mb-2">
                   <h2 class="text-xl font-bold text-gray-900">Welcome</h2>
                   <p class="mt-1 text-sm text-gray-600">Enter your email to continue</p>
                 </div>
-                {/* Honeypot */}
                 <input
                   type="text" name="website" autoComplete="off" tabIndex={-1} aria-hidden="true"
                   class="!absolute !-left-[9999px] !top-0 !h-0 !w-0 !overflow-hidden"
@@ -272,12 +258,7 @@ export default component$<LoginModalProps>(({
                 />
                 <div id="modal-turnstile" class="min-h-[65px] flex justify-center"></div>
                 {error.value && (
-                  <div class="rounded-md bg-red-50 p-3">
-                    <div class="flex items-start gap-2">
-                      <div class="shrink-0 mt-0.5"><XCircleIcon /></div>
-                      <p class="text-sm text-red-700">{error.value}</p>
-                    </div>
-                  </div>
+                  <AuthError message={error.value} />
                 )}
                 <button
                   onClick$={handleEmailContinue} disabled={loading.value}
@@ -292,7 +273,6 @@ export default component$<LoginModalProps>(({
               </div>
             )}
 
-            {/* ── Step: Sign In ── */}
             {step.value === 'signin' && (
               <div class="space-y-4 font-body">
                 <div class="text-center mb-2">
@@ -322,12 +302,7 @@ export default component$<LoginModalProps>(({
                   </button>
                 </div>
                 {error.value && (
-                  <div class="rounded-md bg-red-50 p-3">
-                    <div class="flex items-start gap-2">
-                      <div class="shrink-0 mt-0.5"><XCircleIcon /></div>
-                      <p class="text-sm text-red-700">{error.value}</p>
-                    </div>
-                  </div>
+                  <AuthError message={error.value} />
                 )}
                 <button onClick$={handleSignIn} disabled={loading.value}
                   class="w-full flex justify-center py-3 px-4 border border-transparent rounded-[3px] text-sm font-medium text-[#FDFAF6] bg-[#141210] hover:opacity-90 transition-colors cursor-pointer disabled:opacity-50">
@@ -340,7 +315,6 @@ export default component$<LoginModalProps>(({
               </div>
             )}
 
-            {/* ── Step: Sign Up ── */}
             {step.value === 'signup' && (
               <div class="space-y-4 font-body">
                 <div class="text-center mb-2">
@@ -370,12 +344,7 @@ export default component$<LoginModalProps>(({
                   class="appearance-none block w-full px-4 py-3 border border-[#D8D1C7] rounded-[3px] placeholder-gray-400 focus:outline-hidden focus:ring-0 focus:border-[#141210] sm:text-base bg-white"
                   placeholder="Confirm password" />
                 {error.value && (
-                  <div class="rounded-md bg-red-50 p-3">
-                    <div class="flex items-start gap-2">
-                      <div class="shrink-0 mt-0.5"><XCircleIcon /></div>
-                      <p class="text-sm text-red-700">{error.value}</p>
-                    </div>
-                  </div>
+                  <AuthError message={error.value} />
                 )}
                 <button onClick$={handleSignUp} disabled={loading.value}
                   class="w-full flex justify-center py-3 px-4 border border-transparent rounded-[3px] text-sm font-medium text-[#FDFAF6] bg-[#141210] hover:opacity-90 transition-colors cursor-pointer disabled:opacity-50">
@@ -388,7 +357,6 @@ export default component$<LoginModalProps>(({
               </div>
             )}
 
-            {/* ── Step: Registration success ── */}
             {step.value === 'success' && (
               <div class="text-center py-4">
                 <div class="bg-[#F7F2EA] border border-[#D8D1C7] rounded-[3px] p-6">
@@ -407,7 +375,6 @@ export default component$<LoginModalProps>(({
               </div>
             )}
 
-            {/* ── Step: Password reset sent ── */}
             {step.value === 'reset-sent' && (
               <div class="text-center py-4">
                 <div class="bg-[#F7F2EA] border border-[#D8D1C7] rounded-[3px] p-6">
