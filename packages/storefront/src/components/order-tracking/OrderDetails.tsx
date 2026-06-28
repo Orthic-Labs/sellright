@@ -2,155 +2,23 @@ import { component$ } from '@qwik.dev/core';
 import { Order } from '~/generated/graphql-shop';
 import { formatPrice, formatDateTime } from '~/utils';
 import { OptimizedImage } from '~/components/ui';
+import {
+  formatShipDate,
+  getLatestPreOrderShipDate,
+  getMaskedTrackingCode,
+  getOrderStatus,
+  getTrackingInfo,
+  getTrackingUrl,
+  hasPreOrderItems,
+} from './order-details-utils';
 
 interface OrderDetailsProps {
   order: Order;
 }
 
 export const OrderDetails = component$<OrderDetailsProps>(({ order }) => {
-  // Helper function to check if order contains pre-order items
-  const hasPreOrderItems = (order: any) => {
-    if (!order?.lines) return false;
-    return order.lines.some((line: any) =>
-      line.productVariant?.customFields?.preOrderPrice
-    );
-  };
-
-  // Helper function to get the latest ship date from pre-order items
-  const getLatestPreOrderShipDate = (order: any) => {
-    if (!order?.lines) return null;
-
-    const preOrderDates = order.lines
-      .filter((line: any) => line.productVariant?.customFields?.preOrderPrice)
-      .map((line: any) => line.productVariant?.customFields?.shipDate)
-      .filter((date: any) => date) // Remove null/undefined dates
-      .map((date: any) => new Date(date))
-      .filter((date: Date) => !isNaN(date.getTime())); // Remove invalid dates
-
-    if (preOrderDates.length === 0) return null;
-
-    // Return the latest (farthest) date
-    const timestamps = preOrderDates.map((date: Date) => date.getTime());
-    const latestTimestamp = Math.max(...timestamps);
-    const latestDate = new Date(latestTimestamp);
-    return latestDate;
-  };
-
-  // Helper function to format ship date for display
-  const formatShipDate = (date: Date) => {
-    return date.toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric'
-    });
-  };
-
-  // Get tracking information from fulfillments
-  const getTrackingInfo = () => {
-    if (!order.fulfillments || order.fulfillments.length === 0) {
-      return { hasTracking: false };
-    }
-
-    const fulfillmentWithTracking = order.fulfillments.find(f => f.trackingCode);
-    if (fulfillmentWithTracking) {
-      return {
-        hasTracking: true,
-        trackingCode: fulfillmentWithTracking.trackingCode,
-        carrier: fulfillmentWithTracking.method || 'Standard Shipping',
-        status: fulfillmentWithTracking.state,
-        shipDate: fulfillmentWithTracking.updatedAt,
-      };
-    }
-
-    return { hasTracking: false };
-  };
-
-  const trackingInfo = getTrackingInfo();
-
-  // Get order status display info
-  const getOrderStatus = () => {
-    switch (order.state) {
-      case 'PaymentSettled': {
-        if ((order.customFields as any)?.isPreOrder) {
-          const latestShipDate = getLatestPreOrderShipDate(order);
-          const description = latestShipDate
-            ? `Expected to ship around ${formatShipDate(latestShipDate)}`
-            : 'Expected ship date to be announced';
-          return {
-            status: 'Pre-ordered',
-            description,
-            color: 'text-[#141210]',
-            bgColor: 'bg-[#F5F0E8]',
-            icon: '🎯'
-          };
-        }
-        return {
-          status: 'Processing',
-          description: 'Your payment has been processed and your order is being prepared.',
-          color: 'text-[#141210]',
-          bgColor: 'bg-[#F5F0E8]',
-          icon: '💳'
-        };
-      }
-      case 'Refunded':
-        return {
-          status: 'Refunded',
-          description: 'Your order has been refunded.',
-          color: 'text-[#141210]',
-          bgColor: 'bg-[#F5F0E8]',
-          icon: '↩️'
-        };
-      case 'PartiallyShipped':
-        return {
-          status: 'Partially Shipped',
-          description: 'Some items from your order have been shipped.',
-          color: 'text-[#141210]',
-          bgColor: 'bg-[#F5F0E8]',
-          icon: '📦'
-        };
-      case 'Shipped':
-        return {
-          status: 'Shipped',
-          description: 'Your order has been shipped and is on its way.',
-          color: 'text-[#141210]',
-          bgColor: 'bg-[#F5F0E8]',
-          icon: '🚛'
-        };
-      case 'Delivered':
-        return {
-          status: 'Delivered',
-          description: 'Your order has been delivered.',
-          color: 'text-[#141210]',
-          bgColor: 'bg-[#F5F0E8]',
-          icon: '✅'
-        };
-      case 'Cancelled':
-        return {
-          status: 'Cancelled',
-          description: 'This order has been cancelled.',
-          color: 'text-[#141210]',
-          bgColor: 'bg-[#F5F0E8]',
-          icon: '❌'
-        };
-      default:
-        return {
-          status: order.state.replace(/([A-Z])/g, ' $1').trim(),
-          description: 'Your order is being processed.',
-          color: 'text-[#141210]',
-          bgColor: 'bg-[#F5F0E8]',
-          icon: '⏳'
-        };
-    }
-  };
-
-  const orderStatus = getOrderStatus();
-
-  const getTrackingUrl = (trackingCode: string) => `https://tools.usps.com/go/TrackConfirmAction?qtc_tLabels1=${trackingCode}`;
-  const getMaskedTrackingCode = (trackingCode: string) => {
-    const normalized = trackingCode.trim();
-    const suffix = normalized.slice(-8);
-    return `...${suffix}`;
-  };
+  const trackingInfo = getTrackingInfo(order);
+  const orderStatus = getOrderStatus(order);
 
   return (
     <div class="space-y-8">
