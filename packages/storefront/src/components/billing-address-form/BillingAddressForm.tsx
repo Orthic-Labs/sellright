@@ -7,18 +7,13 @@ import {
   validatePostalCode, 
   validateStateProvince
 } from '~/utils/validation';
-import type { ValidationResult } from '~/utils/validation';
 import { ValidationIcon } from '~/components/checkout/ValidationIcon';
+import { validateBillingField, type ValidationErrors } from './billing-validation';
 
 interface BillingAddressFormProps {
   billingAddress: BillingAddress;
   onUserInteraction$?: QRL<() => void>; // Callback for when user starts interacting
 }
-
-// Helper type for validation errors
-type ValidationErrors = {
-  [key: string]: string;
-};
 
 const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress, onUserInteraction$ }) => {
   const appState = useContext(APP_STATE);
@@ -69,68 +64,7 @@ const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress
     // Validate the field immediately - use current appState for most up-to-date country
     const safeCountryCode = appState.billingAddress?.countryCode || billingAddress?.countryCode || 'US';
     // console.log(`[BillingAddressForm] Using country code for blur-sm validation: ${safeCountryCode}`);
-    const currentErrors = {...validationErrors.value};
-    let result: ValidationResult;
-    
-    // Ensure value is a string
-    const safeValue = value ?? '';
-
-    switch (fieldName) {
-      case 'firstName':
-        result = validateName(safeValue, 'First name');
-        if (!result.isValid) {
-          currentErrors.firstName = result.message ?? 'Invalid first name';
-        } else {
-          currentErrors.firstName = '';
-        }
-        break;
-        
-      case 'lastName':
-        result = validateName(safeValue, 'Last name');
-        if (!result.isValid) {
-          currentErrors.lastName = result.message ?? 'Invalid last name';
-        } else {
-          currentErrors.lastName = '';
-        }
-        break;
-        
-      case 'streetLine1':
-        result = validateAddress(safeValue, 'Street address');
-        if (!result.isValid) {
-          currentErrors.streetLine1 = result.message ?? 'Invalid address';
-        } else {
-          currentErrors.streetLine1 = '';
-        }
-        break;
-        
-      case 'city':
-        result = validateName(safeValue, 'City');
-        if (!result.isValid) {
-          currentErrors.city = result.message ?? 'Invalid city';
-        } else {
-          currentErrors.city = '';
-        }
-        break;
-        
-      case 'province':
-        result = validateStateProvince(safeValue, safeCountryCode, 'State/Province');
-        if (!result.isValid) {
-          currentErrors.province = result.message ?? 'State/Province is required';
-        } else {
-          currentErrors.province = '';
-        }
-        break;
-        
-      case 'postalCode':
-        result = validatePostalCode(safeValue, safeCountryCode);
-        // console.log(`[BillingAddressForm] BLUR Postal code validation for '${safeValue}' (${safeCountryCode}):`, result);
-        if (!result.isValid) {
-          currentErrors.postalCode = result.message ?? 'Invalid postal code';
-        } else {
-          currentErrors.postalCode = '';
-        }
-        break;
-    }
+    const currentErrors = validateBillingField(fieldName, value, safeCountryCode, validationErrors.value);
     
     // Update validation errors
     validationErrors.value = currentErrors;
@@ -186,68 +120,7 @@ const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress
     // Ensure countryCode is a string, using appState first, then billingAddress, then fallback
     const safeCountryCode = countryCode ?? appState.billingAddress?.countryCode ?? billingAddress.countryCode ?? 'US';
     // console.log(`[BillingAddressForm] validateField$ using country code: ${safeCountryCode}`);
-    const currentErrors = {...validationErrors.value};
-    let result: ValidationResult;
-    
-    // Ensure value is a string
-    const safeValue = value ?? '';
-
-    switch (fieldName) {
-      case 'firstName':
-        result = validateName(safeValue, 'First name');
-        if (!result.isValid) {
-          currentErrors.firstName = result.message ?? 'Invalid first name';
-        } else {
-          currentErrors.firstName = '';
-        }
-        break;
-        
-      case 'lastName':
-        result = validateName(safeValue, 'Last name');
-        if (!result.isValid) {
-          currentErrors.lastName = result.message ?? 'Invalid last name';
-        } else {
-          currentErrors.lastName = '';
-        }
-        break;
-        
-      case 'streetLine1':
-        result = validateAddress(safeValue, 'Street address');
-        if (!result.isValid) {
-          currentErrors.streetLine1 = result.message ?? 'Invalid address';
-        } else {
-          currentErrors.streetLine1 = '';
-        }
-        break;
-        
-      case 'city':
-        result = validateName(safeValue, 'City');
-        if (!result.isValid) {
-          currentErrors.city = result.message ?? 'Invalid city';
-        } else {
-          currentErrors.city = '';
-        }
-        break;
-        
-      case 'province':
-        result = validateStateProvince(safeValue, safeCountryCode, 'State/Province');
-        if (!result.isValid) {
-          currentErrors.province = result.message ?? 'State/Province is required';
-        } else {
-          currentErrors.province = '';
-        }
-        break;
-        
-      case 'postalCode':
-        result = validatePostalCode(safeValue, safeCountryCode);
-        // console.log(`[BillingAddressForm] Postal code validation for '${safeValue}' (${safeCountryCode}):`, result);
-        if (!result.isValid) {
-          currentErrors.postalCode = result.message ?? 'Invalid postal code';
-        } else {
-          currentErrors.postalCode = '';
-        }
-        break;
-    }
+    const currentErrors = validateBillingField(fieldName, value, safeCountryCode, validationErrors.value);
     
     // Only update if errors actually changed
     if (JSON.stringify(validationErrors.value) !== JSON.stringify(currentErrors)) {

@@ -1,10 +1,16 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { eq, sql } from 'drizzle-orm';
-import { drizzle } from 'drizzle-orm/node-postgres';
-import { Pool, type PoolClient } from 'pg';
+import { Pool } from 'pg';
 import { pool, withStore } from './client.js';
 import { product, store } from './schema.js';
 import { env } from '../env.js';
+import {
+  RLS_STORE_A as A,
+  RLS_STORE_B as B,
+  assertTestDatabase,
+  createStoreAppRunner,
+  expectRlsRejection,
+} from './rls-test-utils.js';
 
 /**
  * Tenant-isolation contract (RLS). Proves at the DB layer — not in app code —
@@ -21,56 +27,14 @@ import { env } from '../env.js';
  * but a dedicated *_test database — TRUNCATE would wipe real data.
  */
 const DB = process.env.DATABASE_URL ?? '';
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`RLS test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
-
-const A = '11111111-1111-1111-1111-111111111111';
-const B = '22222222-2222-2222-2222-222222222222';
+assertTestDatabase(DB, 'RLS test');
 
 // App-role pool: exercises FORCE ROW LEVEL SECURITY. Falls back to owner pool
 // when DATABASE_URL_NONOWNER is not set (single-role dev setup).
 const appPoolUrl = env.DATABASE_URL_NONOWNER ?? env.DATABASE_URL;
 const appPool = new Pool({ connectionString: appPoolUrl });
 const drizzleOpts = { schema: { product, store }, casing: 'snake_case' } as const;
-type AppTx = ReturnType<typeof drizzle<typeof drizzleOpts.schema, PoolClient>>;
-
-async function withStoreApp<T>(storeId: string, fn: (tx: AppTx) => Promise<T>): Promise<T> {
-  const client: PoolClient = await appPool.connect();
-  try {
-    await client.query('BEGIN');
-    await client.query("SELECT set_config('app.current_store', $1, true)", [storeId]);
-    const tx = drizzle(client, drizzleOpts);
-    const result = await fn(tx);
-    await client.query('COMMIT');
-    return result;
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
-  }
-}
-
-// Assert a promise rejects specifically due to RLS. Drizzle wraps the pg error,
-// so the "row-level security" text is on the cause chain, not err.message (which
-// is "Failed query: ..."). Walk the chain so the check is robust to that wrapping
-// while still proving the rejection was RLS (not some other failure).
-function rlsErrorText(e: unknown): string {
-  const parts: string[] = [];
-  let cur = e as { message?: unknown; cause?: unknown } | null | undefined;
-  for (let i = 0; i < 5 && cur; i++) {
-    parts.push(String(cur.message ?? cur));
-    cur = cur.cause as { message?: unknown; cause?: unknown } | null | undefined;
-  }
-  return parts.join(' | ');
-}
-async function expectRlsRejection(p: Promise<unknown>): Promise<void> {
-  let err: unknown;
-  try { await p; } catch (e) { err = e; }
-  expect(err, 'expected RLS to reject the cross-tenant write').toBeDefined();
-  expect(rlsErrorText(err), 'expected a row-level-security rejection').toMatch(/row-level security/i);
-}
+const withStoreApp = createStoreAppRunner(appPool, drizzleOpts);
 
 // Wipe uses the owner pool (needs TRUNCATE on store, which app role may not have for writes)
 async function wipe() {

@@ -13,60 +13,24 @@
  */
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { eq, sql } from 'drizzle-orm';
-import { drizzle } from 'drizzle-orm/node-postgres';
-import { Pool, type PoolClient } from 'pg';
+import { Pool } from 'pg';
 import { pool, withStore } from './client.js';
 import { env } from '../env.js';
+import {
+  RLS_STORE_A as A,
+  RLS_STORE_B as B,
+  assertTestDatabase,
+  createStoreAppRunner,
+  expectRlsRejection,
+} from './rls-test-utils.js';
 
 const DB = process.env.DATABASE_URL ?? '';
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`rls-tables test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
-
-// Two distinct store IDs we'll use as the two tenants.
-const A = '11111111-1111-1111-1111-111111111111';
-const B = '22222222-2222-2222-2222-222222222222';
+assertTestDatabase(DB, 'rls-tables test');
 
 // Owner-side pool (for seeding) + app-side pool (for isolation assertions).
 const appPool = new Pool({ connectionString: env.DATABASE_URL_NONOWNER ?? env.DATABASE_URL });
 const drizzleOpts = { casing: 'snake_case' } as const;
-type AppTx = ReturnType<typeof drizzle<Record<string, never>, PoolClient>>;
-
-async function withStoreApp<T>(storeId: string, fn: (tx: AppTx) => Promise<T>): Promise<T> {
-  const client: PoolClient = await appPool.connect();
-  try {
-    await client.query('BEGIN');
-    await client.query("SELECT set_config('app.current_store', $1, true)", [storeId]);
-    const tx = drizzle(client, drizzleOpts);
-    const result = await fn(tx);
-    await client.query('COMMIT');
-    return result;
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
-  }
-}
-
-// Assert a promise rejects specifically due to RLS. Drizzle wraps the pg error,
-// so the "row-level security" text is on the cause chain, not err.message. Walk
-// the chain so the check survives that wrapping while still proving it was RLS.
-function rlsErrorText(e: unknown): string {
-  const parts: string[] = [];
-  let cur = e as { message?: unknown; cause?: unknown } | null | undefined;
-  for (let i = 0; i < 5 && cur; i++) {
-    parts.push(String(cur.message ?? cur));
-    cur = cur.cause as { message?: unknown; cause?: unknown } | null | undefined;
-  }
-  return parts.join(' | ');
-}
-async function expectRlsRejection(p: Promise<unknown>): Promise<void> {
-  let err: unknown;
-  try { await p; } catch (e) { err = e; }
-  expect(err, 'expected RLS to reject the cross-tenant write').toBeDefined();
-  expect(rlsErrorText(err), 'expected a row-level-security rejection').toMatch(/row-level security/i);
-}
+const withStoreApp = createStoreAppRunner(appPool, drizzleOpts);
 
 // EXEMPT mirrors assert-force-rls.ts: the session/admin_user_store/store/
 // processed_event/staff_invite tables are intentionally non-RLS'd.

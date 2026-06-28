@@ -7,6 +7,7 @@ import { APP_STATE } from '~/constants';
 import { ActiveCustomer } from '~/types';
 import { LocalAddressService } from '~/services/LocalAddressService';
 import { clearCustomerCacheAfterMutation } from '~/providers/shop/customer/customer';
+import { registerCustomerFromSignup } from './signup-flow';
 
 const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY || '';
 
@@ -189,35 +190,17 @@ export default component$<LoginModalProps>(({
 
   const handleSignUp = $(async () => {
     error.value = '';
-    if (!firstName.value.trim()) { error.value = 'First name is required.'; return; }
-    if (!lastName.value.trim()) { error.value = 'Last name is required.'; return; }
-    if (!password.value || password.value.length < 6) { error.value = 'Password must be at least 6 characters.'; return; }
-    if (password.value !== confirmPassword.value) { error.value = 'Passwords do not match.'; return; }
     loading.value = true;
-    try {
-      const result = await registerCustomerAccountMutation({
-        input: {
-          emailAddress: email.value.trim(),
-          password: password.value,
-          firstName: firstName.value.trim(),
-          lastName: lastName.value.trim(),
-        },
-      });
-      const r = result?.registerCustomerAccount;
-      if (r?.__typename === 'Success' && r.success === true) {
-        step.value = 'success';
-      } else {
-        const ec = (r as any)?.errorCode;
-        if (ec === 'EMAIL_ADDRESS_CONFLICT_ERROR') {
-          step.value = 'signin';
-          error.value = 'An account with this email already exists. Please sign in.';
-        } else {
-          error.value = (r as any)?.message || 'Registration failed. Please try again.';
-        }
-      }
-    } catch {
-      error.value = 'An error occurred. Please try again.';
-    }
+    const result = await registerCustomerFromSignup({
+      email: email.value,
+      password: password.value,
+      confirmPassword: confirmPassword.value,
+      firstName: firstName.value,
+      lastName: lastName.value,
+      errorMessage: 'An error occurred. Please try again.',
+    });
+    if (result.step) step.value = result.step;
+    if (result.error) error.value = result.error;
     loading.value = false;
   });
 

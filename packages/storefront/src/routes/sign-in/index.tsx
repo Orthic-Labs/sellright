@@ -1,9 +1,10 @@
 import { $, component$, useSignal, useVisibleTask$ } from '@qwik.dev/core';
 import { useNavigate } from '@qwik.dev/router';
-import XCircleIcon from '~/components/icons/XCircleIcon';
+import { registerCustomerFromSignup } from '~/components/auth/signup-flow';
 import { loginMutation, registerCustomerAccountMutation, requestPasswordResetMutation } from '~/providers/shop/account/account';
 import { checkCustomerEmail } from '~/providers/shop/account/check-email';
-import { createSEOHead } from '~/utils/seo';
+import { SignInError } from './SignInError';
+export { head } from './seo';
 
 const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY || '';
 
@@ -94,42 +95,16 @@ export default component$(() => {
 
 	const handleSignUp = $(async () => {
 		error.value = '';
-		if (!firstName.value.trim()) { error.value = 'First name is required.'; return; }
-		if (!lastName.value.trim()) { error.value = 'Last name is required.'; return; }
-		if (!password.value || password.value.length < 6) {
-			error.value = 'Password must be at least 6 characters.';
-			return;
-		}
-		if (password.value !== confirmPassword.value) {
-			error.value = 'Passwords do not match.';
-			return;
-		}
 		loading.value = true;
-		try {
-			const result = await registerCustomerAccountMutation({
-				input: {
-					emailAddress: email.value.trim(),
-					password: password.value,
-					firstName: firstName.value.trim(),
-					lastName: lastName.value.trim(),
-				},
-			});
-			const r = result?.registerCustomerAccount;
-			if (r?.__typename === 'Success' && r.success === true) {
-				step.value = 'success';
-			} else {
-				const ec = (r as any)?.errorCode;
-				if (ec === 'EMAIL_ADDRESS_CONFLICT_ERROR') {
-					// Account exists and is verified — switch to sign-in
-					step.value = 'signin';
-					error.value = 'An account with this email already exists. Please sign in.';
-				} else {
-					error.value = (r as any)?.message || 'Registration failed. Please try again.';
-				}
-			}
-		} catch {
-			error.value = 'An unexpected error occurred. Please try again.';
-		}
+		const result = await registerCustomerFromSignup({
+			email: email.value,
+			password: password.value,
+			confirmPassword: confirmPassword.value,
+			firstName: firstName.value,
+			lastName: lastName.value,
+		});
+		if (result.step) step.value = result.step;
+		if (result.error) error.value = result.error;
 		loading.value = false;
 	});
 
@@ -176,7 +151,6 @@ export default component$(() => {
 			<div class="w-full max-w-md">
 				<div class="bg-[#F9F7F4] rounded-2xl p-8 shadow-sm">
 
-					{/* ── Step: Email ── */}
 					{step.value === 'email' && (
 						<div>
 							<div class="text-center mb-8">
@@ -212,12 +186,7 @@ export default component$(() => {
 								</div>
 								<div id="turnstile-container" class="min-h-[65px] flex justify-center"></div>
 								{error.value && (
-									<div class="rounded-md bg-red-50 p-3">
-										<div class="flex items-start gap-2">
-											<div class="shrink-0 mt-0.5"><XCircleIcon /></div>
-											<p class="text-sm text-red-700">{error.value}</p>
-										</div>
-									</div>
+									<SignInError message={error.value} />
 								)}
 								<button
 									onClick$={handleEmailContinue}
@@ -230,7 +199,6 @@ export default component$(() => {
 						</div>
 					)}
 
-					{/* ── Step: Sign In (account exists) ── */}
 					{step.value === 'signin' && (
 						<div>
 							<div class="text-center mb-8">
@@ -274,12 +242,7 @@ export default component$(() => {
 									</button>
 								</div>
 								{error.value && (
-									<div class="rounded-md bg-red-50 p-3">
-										<div class="flex items-start gap-2">
-											<div class="shrink-0 mt-0.5"><XCircleIcon /></div>
-											<p class="text-sm text-red-700">{error.value}</p>
-										</div>
-									</div>
+									<SignInError message={error.value} />
 								)}
 								<button
 									onClick$={handleSignIn}
@@ -350,12 +313,7 @@ export default component$(() => {
 									/>
 								</div>
 								{error.value && (
-									<div class="rounded-md bg-red-50 p-3">
-										<div class="flex items-start gap-2">
-											<div class="shrink-0 mt-0.5"><XCircleIcon /></div>
-											<p class="text-sm text-red-700">{error.value}</p>
-										</div>
-									</div>
+									<SignInError message={error.value} />
 								)}
 								<button
 									onClick$={handleSignUp}
@@ -414,11 +372,3 @@ export default component$(() => {
 		</div>
 	);
 });
-
-export const head = () => {
-	return createSEOHead({
-		title: 'Sign In',
-		description: 'Sign in to your Damned Designs account or create a new one to shop, track orders, and manage your profile.',
-		noindex: true,
-	});
-};

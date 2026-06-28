@@ -163,6 +163,7 @@
   --shell-active-text:255 185 64;
 }
 
+.dark,
 .dark[data-theme="vermillion"], [data-theme="vermillion"].dark {
   --bg:22 17 15;
   --surface:30 23 20;
@@ -293,37 +294,4 @@
   --gray-700:214 205 188;
   --gray-800:232 224 210;
   --gray-900:242 235 223;
-}
-
-.dark {
-  --bg:22 17 15;
-  --surface:30 23 20;
-  --surface-2:38 29 25;
-  --border:52 40 35;
-  --border-strong:70 54 46;
-  --text:244 236 231;
-  --text-muted:173 157 147;
-  --text-subtle:120 106 97;
-  --accent:255 98 66;
-  --accent-hover:255 124 97;
-  --on-accent:22 17 15;
-  --accent-soft:51 26 18;
-  --success:74 222 128;
-  --success-soft:22 39 26;
-  --warning:251 191 36;
-  --warning-soft:42 33 16;
-  --danger:248 113 113;
-  --danger-soft:42 20 19;
-  --info:96 165 250;
-  --info-soft:17 32 58;
-  --gray-50:30 23 20;
-  --gray-100:38 29 25;
-  --gray-200:52 40 35;
-  --gray-300:70 54 46;
-  --gray-400:120 106 97;
-  --gray-500:173 157 147;
-  --gray-600:194 179 168;
-  --gray-700:216 203 194;
-  --gray-800:234 224 217;
-  --gray-900:244 236 231;
 }

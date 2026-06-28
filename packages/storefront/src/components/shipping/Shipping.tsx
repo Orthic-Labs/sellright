@@ -126,23 +126,6 @@ export default component$<IProps>(({ onForward$, isReviewMode }) => {
 
 		const overallValid = shippingValid && customerValid && emailValid && firstNameValid && lastNameValid && phoneValid && phoneRequirementValid;
 
-		console.log('🔍 Form validation check:', {
-			shippingValid,
-			customerValid,
-			emailValid,
-			firstNameValid,
-			lastNameValid,
-			phoneValid,
-			phoneRequirementValid,
-			emailError: emailValidationError.value,
-			firstNameError: firstNameValidationError.value,
-			lastNameError: lastNameValidationError.value,
-			phoneError: phoneValidationError.value,
-			overallValid,
-			shippingAddress: appState.shippingAddress,
-			customer: appState.customer
-		});
-
 		// Update validation status
 		isFormValidSignal.value = overallValid;
 	});
@@ -225,16 +208,13 @@ export default component$<IProps>(({ onForward$, isReviewMode }) => {
 			phoneValidationError.value = phoneResult.isValid ? '' : (phoneResult.message || 'Invalid phone number');
 		}
 
-		// REMOVED onForward$ call from here
 	});
 
-	// New useTask$ to handle proceeding when form is valid
 	useTask$(async ({ track }) => {
 		track(() => isFormValidSignal.value);
 
 		if (isFormValidSignal.value && !hasProceeded.value) {
 			hasProceeded.value = true; // Set immediately to prevent race conditions / multiple calls
-			console.log('✅ Form is valid, automatically proceeding (calling onForward$ from useTask$)');
 
 			// Perform final safety checks before calling onForward$
 			const customerEmail = appState.customer?.emailAddress || '';
@@ -253,7 +233,6 @@ export default component$<IProps>(({ onForward$, isReviewMode }) => {
 
 			// Skip validation if no country code is set
 			if (!shippingCountryCode) {
-				console.log('❌ No country code set, cannot proceed');
 				hasProceeded.value = false;
 				return;
 			}
@@ -265,28 +244,24 @@ export default component$<IProps>(({ onForward$, isReviewMode }) => {
 			const phoneResultCheck = validatePhone(customerPhoneNumber, shippingCountryCode, currentIsPhoneOptional);
 
 			if (!emailResultCheck.isValid) {
-				console.log('❌ Email validation failed at auto-forward (useTask$):', emailResultCheck.message);
 				emailTouched.value = true;
 				emailValidationError.value = emailResultCheck.message || 'Invalid email address';
 				hasProceeded.value = false; // Allow retry if validation fails
 				return;
 			}
 			if (!firstNameResultCheck.isValid) {
-				console.log('❌ First name validation failed at auto-forward (useTask$):', firstNameResultCheck.message);
 				firstNameTouched.value = true;
 				firstNameValidationError.value = firstNameResultCheck.message || 'Invalid first name';
 				hasProceeded.value = false; // Allow retry
 				return;
 			}
 			if (!lastNameResultCheck.isValid) {
-				console.log('❌ Last name validation failed at auto-forward (useTask$):', lastNameResultCheck.message);
 				lastNameTouched.value = true;
 				lastNameValidationError.value = lastNameResultCheck.message || 'Invalid last name';
 				hasProceeded.value = false; // Allow retry
 				return;
 			}
 			if (!phoneResultCheck.isValid && !currentIsPhoneOptional) { // Only block if phone is required and invalid
-				console.log('❌ Phone validation failed at auto-forward (useTask$):', phoneResultCheck.message);
 				phoneTouched.value = true;
 				phoneValidationError.value = phoneResultCheck.message || 'Invalid phone number';
 				hasProceeded.value = false; // Allow retry
@@ -295,7 +270,6 @@ export default component$<IProps>(({ onForward$, isReviewMode }) => {
 			
 			// Ensure shipping address is also valid (it should be if isFormValidSignal is true, but double check)
 			if (!isShippingAddressValid(appState.shippingAddress)) {
-				console.log('❌ Shipping address validation failed at auto-forward (useTask$)');
 				hasProceeded.value = false; // Allow retry
 				return;
 			}
@@ -320,7 +294,6 @@ export default component$<IProps>(({ onForward$, isReviewMode }) => {
 				fullName: `${customerFirstName} ${customerLastName}`,
 			};
 			
-			// Call onForward$
 			await onForward$(customerData, shippingAddressData);
 		}
 	});
@@ -417,8 +390,6 @@ export default component$<IProps>(({ onForward$, isReviewMode }) => {
 				<AutoShippingSelector appState={appState} />
 			</div>
 
-			{/* Proceed to payment button removed */}
-			{/* The onForward$ logic is now triggered by the blur event of the last field if form is valid */}
 		</div>
 	);
 });
