@@ -7,7 +7,9 @@ import { auth } from './routes/auth.js';
 import { account } from './routes/account.js';
 import { orders } from './routes/orders.js';
 import { admin } from './routes/admin.js';
+import { adminDashboard } from './routes/admin-dashboard.js';
 import { adminCatalog } from './routes/admin-catalog.js';
+import { adminProducts } from './routes/admin-products.js';
 import { adminOrders } from './routes/admin-orders.js';
 import { adminMarketing } from './routes/admin-marketing.js';
 import { adminSettings } from './routes/admin-settings.js';
@@ -110,6 +112,8 @@ export function createApp(): OpenAPIHono {
 
   // Admin API — operator surface (auth, dashboard, orders, products, customers).
   app.route('/', admin);
+  app.route('/', adminDashboard); // store dashboard KPIs
+  app.route('/', adminProducts); // product list/detail/edit + variant pricing/stock
   app.route('/', adminCatalog); // catalog mgmt: product/variant create+delete, collections, inventory
   app.route('/', adminOrders); // orders++: refunds, draft orders, abandoned carts
   app.route('/', adminMarketing); // promotions manager + Listmonk integration

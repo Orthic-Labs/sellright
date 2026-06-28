@@ -2,7 +2,7 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, desc, eq, ilike, isNull, or, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
-import { HttpError, J, errBody, requireAdmin, requireStore, requireWrite, guard, PAID_STATES } from './admin-helpers.js';
+import { HttpError, J, errBody, requireAdmin, requireStore, requireWrite, guard, Page, PAID_STATES } from './admin-helpers.js';
 import { normalizeEmail } from '../auth/email.js';
 
 export const adminReports = new OpenAPIHono();
@@ -233,6 +233,73 @@ adminReports.openapi(
       const repeatRate = row.customers > 0 ? Number((row.repeat_customers / row.customers).toFixed(4)) : 0;
       return { aov, orders: row.orders, revenue: row.revenue, repeatRate, newCustomers: row.customers - row.repeat_customers, returningCustomers: row.repeat_customers };
     });
+    return c.json(out, 200);
+  }),
+);
+
+// ── customers: list / detail ─────────────────────────────────────────────────
+adminReports.openapi(
+  createRoute({
+    method: 'get', path: '/v1/admin/customers', summary: 'List customers',
+    request: { query: z.object({ q: z.string().optional(), page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(25) }) },
+    responses: { 200: { description: 'OK', content: J(Page) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    const { q, page, pageSize } = c.req.valid('query');
+    const out = await withStore(st.storeId, async (tx) => {
+      const conds = [sql`${s.customer.deletedAt} is null`] as never[];
+      if (q) conds.push(or(ilike(s.customer.email, `%${q}%`), ilike(s.customer.firstName, `%${q}%`), ilike(s.customer.lastName, `%${q}%`)) as never);
+      const where = and(...conds);
+      const rows = await tx
+        .select({
+          id: s.customer.id, email: s.customer.email, firstName: s.customer.firstName, lastName: s.customer.lastName, createdAt: s.customer.createdAt,
+          orders: sql<number>`(select count(*) from "order" o where o.customer_id = ${s.customer.id} and o.state = any(${PAID_STATES}))::int`,
+          spent: sql<number>`coalesce((select sum(o.grand_total) from "order" o where o.customer_id = ${s.customer.id} and o.state = any(${PAID_STATES})),0)::int`,
+        })
+        .from(s.customer)
+        .where(where)
+        .orderBy(desc(s.customer.createdAt))
+        .limit(pageSize).offset((page - 1) * pageSize);
+      const [cnt] = await tx.select({ n: sql<number>`count(*)::int` }).from(s.customer).where(where);
+      return { items: rows.map((r) => ({ ...r, createdAt: r.createdAt.toISOString() })), total: cnt?.n ?? 0, page, pageSize };
+    });
+    return c.json(out, 200);
+  }),
+);
+
+adminReports.openapi(
+  createRoute({
+    method: 'get', path: '/v1/admin/customers/{id}', summary: 'Customer detail',
+    request: { params: z.object({ id: z.string() }) },
+    responses: { 200: { description: 'OK', content: J(z.any()) }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    const { id } = c.req.valid('param');
+    const out = await withStore(st.storeId, async (tx) => {
+      const [cu] = await tx.select().from(s.customer).where(eq(s.customer.id, id)).limit(1);
+      if (!cu) return null;
+      const addresses = await tx.select().from(s.address).where(eq(s.address.customerId, id));
+      // Lifetime stats from the FULL order set (not the 50-row display window).
+      const [stats] = await tx
+        .select({
+          orderCount: sql<number>`count(*) filter (where ${s.order.state} = any(${PAID_STATES}))::int`,
+          spent: sql<number>`coalesce(sum(${s.order.grandTotal}) filter (where ${s.order.state} = any(${PAID_STATES})),0)::int`,
+        })
+        .from(s.order)
+        .where(eq(s.order.customerId, id));
+      const orders = await tx.select({ code: s.order.code, state: s.order.state, grandTotal: s.order.grandTotal, currency: s.order.currency, placedAt: s.order.placedAt, createdAt: s.order.createdAt }).from(s.order).where(eq(s.order.customerId, id)).orderBy(desc(s.order.createdAt)).limit(50);
+      return {
+        id: cu.id, email: cu.email, firstName: cu.firstName, lastName: cu.lastName, phone: cu.phone, emailVerified: cu.emailVerified, createdAt: cu.createdAt.toISOString(),
+        orderCount: stats?.orderCount ?? 0, spent: stats?.spent ?? 0,
+        addresses: addresses.map((a) => ({ fullName: a.fullName, line1: a.line1, line2: a.line2, city: a.city, province: a.province, postalCode: a.postalCode, country: a.country, phone: a.phone })),
+        orders: orders.map((o) => ({ ...o, placedAt: o.placedAt ? o.placedAt.toISOString() : null, createdAt: o.createdAt.toISOString() })),
+      };
+    });
+    if (!out) throw new HttpError(404, 'customer not found');
     return c.json(out, 200);
   }),
 );
