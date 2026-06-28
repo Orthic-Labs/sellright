@@ -1,6 +1,7 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { randomBytes, createHash } from 'node:crypto';
 import { and, desc, eq } from 'drizzle-orm';
+// eslint-disable-next-line no-restricted-imports -- This route manages global admin-user/session tables; store data access below uses withStore().
 import { unsafeUnscopedDb as db, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { hashPassword } from '../auth/password.js';
@@ -24,7 +25,7 @@ export async function sanitizeWebhookEndpointPatch(
 }
 
 async function storeRow(storeId: string) {
-  const [row] = await db.select().from(s.store).where(eq(s.store.id, storeId)).limit(1);
+  const [row] = await withStore(storeId, async (tx) => tx.select().from(s.store).where(eq(s.store.id, storeId)).limit(1));
   return row!;
 }
 const cfg = (row: { config: unknown }) => (row.config as Record<string, unknown> | null) ?? {};
@@ -38,7 +39,7 @@ async function mutateStoreConfig(
   storeId: string,
   mutate: (config: Record<string, unknown>) => Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  return db.transaction(async (tx) => {
+  return withStore(storeId, async (tx) => {
     const [row] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, storeId)).for('update').limit(1);
     const next = mutate((row?.config as Record<string, unknown> | null) ?? {});
     await tx.update(s.store).set({ config: next }).where(eq(s.store.id, storeId));
@@ -144,7 +145,7 @@ adminSettings.openapi(
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireManage(st);
     const b = c.req.valid('json');
-    await db.update(s.store).set({ ...b, updatedAt: new Date() }).where(eq(s.store.id, st.storeId));
+    await withStore(st.storeId, async (tx) => tx.update(s.store).set({ ...b, updatedAt: new Date() }).where(eq(s.store.id, st.storeId)));
     return c.json({ ok: true }, 200);
   }),
 );

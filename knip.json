@@ -1,0 +1,42 @@
+{
+  "$schema": "./node_modules/knip/schema.json",
+  "entry": ["eslint.config.mjs", "right-release.config.mjs"],
+  "project": ["eslint.config.mjs", "right-release.config.mjs"],
+  "ignore": [
+    ".agent/**",
+    ".audit/**",
+    "right-release.config.mjs",
+    "packages/api/drizzle/**",
+    "packages/storefront/src/generated/**"
+  ],
+  "ignoreFiles": ["right-release.config.mjs"],
+  "ignoreExportsUsedInFile": true,
+  "workspaces": {
+    "packages/api": {
+      "entry": [
+        "src/index.ts",
+        "src/admin/reconcile-export.ts",
+        "src/db/assert-force-rls.ts",
+        "src/import/catalog.ts",
+        "src/import/customers.ts",
+        "src/import/orders.ts",
+        "src/import/store.ts",
+        "src/manifest/generate.ts",
+        "src/scripts/provision-right-apps.ts",
+        "src/scripts/seed-admin.ts"
+      ],
+      "project": ["src/**/*.ts"],
+      "ignoreExportsUsedInFile": true
+    },
+    "packages/shared": {
+      "entry": ["src/index.ts"],
+      "project": ["src/**/*.ts"],
+      "ignoreExportsUsedInFile": true
+    },
+    "packages/storefront": {
+      "entry": ["codegen-shop.ts"],
+      "project": ["codegen-shop.ts"],
+      "ignoreExportsUsedInFile": true
+    }
+  }
+}

@@ -1,23 +1,26 @@
-/**
- * ESLint flat config (eslint v9). The single non-obvious rule is the
- * `no-restricted-imports` for `unsafeUnscopedDb` under `src/routes/` — that
- * is the belt-and-suspenders for WP1.3 (the app's RLS posture). A route file
- * that accidentally imports the unscoped client fails lint, which fails
- * `pnpm verify`. The migration and the seed scripts may import it (they run
- * as the owner role by design).
- *
- * Uses the TypeScript parser so route files with type-only imports and
- * annotations can be parsed. The no-restricted-imports rule is the
- * load-bearing piece.
- */
 import tsParser from '@typescript-eslint/parser';
 
 export default [
   {
-    ignores: ['dist/**', 'node_modules/**', 'drizzle/**', 'coverage/**', '*.cjs', '*.mjs'],
+    ignores: [
+      '**/node_modules/**',
+      '**/dist/**',
+      '**/.audit/**',
+      '**/.agent/**',
+      '**/.cache/**',
+      '**/drizzle/**',
+      '**/src/generated/**',
+      '**/*.config.*',
+      'packages/admin/**',
+      'packages/storefront/**',
+      'packages/shared/**',
+      'packages/api/scripts/**',
+      'packages/api/scripts-deploy/**',
+      'packages/api/src/**/*.test.ts',
+    ],
   },
   {
-    files: ['src/routes/**/*.ts'],
+    files: ['packages/api/src/**/*.ts'],
     languageOptions: {
       parser: tsParser,
       parserOptions: {
@@ -25,10 +28,10 @@ export default [
         sourceType: 'module',
       },
     },
+  },
+  {
+    files: ['packages/api/src/routes/**/*.ts'],
     rules: {
-      // WP1.3 seal: route handlers must use withStore() for tenant queries.
-      // `unsafeUnscopedDb` is allowed in migrations, seed, and the jobs/ that
-      // set their own per-store context, but never in a route file.
       'no-restricted-imports': [
         'error',
         {

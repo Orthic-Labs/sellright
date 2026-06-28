@@ -44,11 +44,6 @@ export const emailVerify = (store: StoreCtx, data: { url: string }) =>
     `<p>Welcome! Please confirm your email address:</p>
      <p><a href="${escape(data.url)}" style="display:inline-block;padding:10px 16px;background:#222;color:#fff;text-decoration:none;border-radius:6px">Verify email</a></p>`);
 
-export const setPassword = (store: StoreCtx, data: { url: string }) =>
-  wrap(store, 'Set your password',
-    `<p>You've been migrated to a new account. Set a password to log in:</p>
-     <p><a href="${escape(data.url)}" style="display:inline-block;padding:10px 16px;background:#222;color:#fff;text-decoration:none;border-radius:6px">Set password</a></p>`);
-
 export const staffInvite = (store: StoreCtx, data: { acceptUrl: string; role: string; inviterEmail: string }) =>
   wrap(store, `${data.inviterEmail} invited you to ${store.name}`,
     `<p>You've been invited to help manage <strong>${escape(store.name)}</strong> as a <strong>${escape(data.role)}</strong>.</p>

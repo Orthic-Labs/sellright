@@ -13,12 +13,19 @@
     "dev": "pnpm --filter @sellright/api dev",
     "admin:typecheck": "pnpm --dir packages/admin typecheck",
     "admin:build": "pnpm --dir packages/admin build",
+    "audit:lint": "eslint .",
+    "audit:dead-code": "knip --reporter json",
+    "audit:duplication": "jscpd . --reporters json --output .cache/jscpd --silent",
     "deps:check": "node ../tools/right-release/deps.mjs --check",
     "deps:audit": "node ../tools/right-release/deps.mjs --audit",
     "deps:update": "node ../tools/right-release/deps.mjs --update",
     "deps:update:latest": "node ../tools/right-release/deps.mjs --update --latest"
   },
   "devDependencies": {
+    "@typescript-eslint/parser": "8.62.0",
+    "eslint": "10.6.0",
+    "jscpd": "^5.0.11",
+    "knip": "^6.21.0",
     "typescript": "^6.0.3"
   }
 }

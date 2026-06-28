@@ -1,7 +1,7 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { randomBytes } from 'node:crypto';
 import { and, desc, eq } from 'drizzle-orm';
-import { unsafeUnscopedDb as db, withStore } from '../db/client.js';
+import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { assertSafeOutboundUrl, safeOutboundFetch } from '../security/outbound-url.js';
 import { HttpError, J, errBody, money, requireAdmin, requireStore, requireWrite, requireManage, requirePermission, guard } from './admin-helpers.js';
@@ -153,7 +153,9 @@ adminMarketing.openapi(
 // proxies to the Listmonk REST API server-side (creds never reach the browser).
 interface ListmonkCfg { url: string; apiUser: string; apiToken: string; }
 async function getCfg(storeId: string): Promise<ListmonkCfg | null> {
-  const [row] = await db.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, storeId)).limit(1);
+  const [row] = await withStore(storeId, async (tx) =>
+    tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, storeId)).limit(1),
+  );
   const lm = (row?.config as { listmonk?: ListmonkCfg } | null)?.listmonk;
   return lm?.url && lm?.apiToken ? lm : null;
 }
@@ -192,7 +194,7 @@ adminMarketing.openapi(
     const safeCfg = { ...cfg, url: await assertSafeOutboundUrl(cfg.url) };
     // Verify the connection before saving.
     const lists = (await lm(safeCfg, '/api/lists')) as { data?: { total?: number } };
-    await db.transaction(async (tx) => {
+    await withStore(st.storeId, async (tx) => {
       const [row] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1).for('update');
       const config = { ...((row?.config as object) ?? {}), listmonk: safeCfg };
       await tx.update(s.store).set({ config }).where(eq(s.store.id, st.storeId));

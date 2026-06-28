@@ -1,13 +1,4 @@
 import type { CodegenConfig } from '@graphql-codegen/cli';
-import { DEV_API, LOCAL_API, PROD_API } from './src/constants';
-
-let GRAPHQL_API = import.meta.env.IS_DEV
-	? DEV_API
-	: import.meta.env.IS_LOCAL
-		? LOCAL_API
-		: PROD_API;
-
-GRAPHQL_API = `${GRAPHQL_API}/shop-api`;
 
 const config: CodegenConfig = {
 	schema: 'src/generated/schema-shop.graphql',

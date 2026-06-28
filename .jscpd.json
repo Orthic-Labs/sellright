@@ -1,0 +1,17 @@
+{
+  "minLines": 80,
+  "minTokens": 250,
+  "ignore": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/.git/**",
+    "**/.audit/**",
+    "**/.agent/**",
+    "**/.cache/**",
+    "**/pnpm-lock.yaml",
+    "packages/api/drizzle/meta/**",
+    "packages/storefront/src/generated/**",
+    "packages/admin/dist/**",
+    "packages/storefront/server/**"
+  ]
+}
