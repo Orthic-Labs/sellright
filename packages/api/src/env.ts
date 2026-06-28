@@ -50,6 +50,12 @@ const EnvSchema = z.object({
   DOWNLOAD_URL_SECRET: z.string().optional(),
   // Public storefront URL used in email links (password reset, verify, etc.).
   STOREFRONT_URL: z.string().url().default('https://store.example.com'),
+  // Optional per-app overrides for shared stores, e.g.
+  // viewright=hello@viewright.cc,heardright=hello@heardright.app
+  EMAIL_FROM_BY_APP: optionalEnvString,
+  // Optional per-app storefront links for shared stores, e.g.
+  // viewright=https://viewright.cc,heardright=https://heardright.app
+  STOREFRONT_URL_BY_APP: optionalEnvString,
   // Cart lifecycle: hard TTL (cleanup deletes past this) + inactivity window
   // after which a cart with items is marked abandoned (analytics/recovery).
   CART_TTL_DAYS: z.coerce.number().int().positive().default(30),

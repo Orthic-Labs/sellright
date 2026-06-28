@@ -14,7 +14,7 @@ import { customerToken, resolveCustomer } from '../auth/session.js';
 import { normalizeEmail } from '../auth/email.js';
 import { reserveStockOrThrow, StockReservationError, validateReservableItems } from '../orders/stock-reservation.js';
 import { isMethodEligible, shippingRate, ShippingUnavailableError } from '../shipping/calculator.js';
-import { sendOrderConfirmation } from '../email/dispatch.js';
+import { pickEmailAppKey, sendOrderConfirmation } from '../email/dispatch.js';
 import { clientIp, loginRetryAfter } from '../auth/rate-limit.js';
 import { issueLicensesForPaidOrder } from '../licensing/issue.js';
 
@@ -357,12 +357,27 @@ checkout.openapi(
           .limit(1);
         if (!o) return null;
         const lines = await tx
-          .select({ name: s.orderLine.variantName, quantity: s.orderLine.quantity, lineTotal: s.orderLine.lineTotal })
+          .select({
+            name: s.orderLine.variantName,
+            quantity: s.orderLine.quantity,
+            lineTotal: s.orderLine.lineTotal,
+            appKey: s.productVariant.appKey,
+          })
           .from(s.orderLine)
+          .leftJoin(s.productVariant, eq(s.productVariant.id, s.orderLine.variantId))
           .where(eq(s.orderLine.orderId, o.id));
-        return { to: o.customerEmail ?? null, data: { code: out.code, grandTotal: out.grandTotal, currency: o.currency, lines } };
+        return {
+          to: o.customerEmail ?? null,
+          appKey: pickEmailAppKey(lines.map((line) => line.appKey)),
+          data: {
+            code: out.code,
+            grandTotal: out.grandTotal,
+            currency: o.currency,
+            lines: lines.map(({ name, quantity, lineTotal }) => ({ name, quantity, lineTotal })),
+          },
+        };
       });
-      if (email?.to) await sendOrderConfirmation({ name: st.name, currency: st.currency }, email.to, email.data);
+      if (email?.to) await sendOrderConfirmation({ name: st.name, currency: st.currency, appKey: email.appKey }, email.to, email.data);
     } catch (e) { console.error('[email:orderConfirmation] failed', e); }
 
     return c.json({ code: out.code, state: out.paid ? 'Paid' : 'PendingPayment', grandTotal: out.grandTotal, discountTotal: out.discountTotal, currency: st.currency, couponApplied: out.couponApplied, giftCardApplied: out.giftCardApplied ?? 0, receiptToken: out.receiptToken }, 200);

@@ -9,32 +9,56 @@ import { sendEmail } from './mailer.js';
 import { orderConfirmation, shippingNotification, staffInvite } from './templates.js';
 import { env } from '../env.js';
 
-export interface StoreEmailCtx { name: string; currency: string; }
+export interface StoreEmailCtx { name: string; currency: string; appKey?: string | null; }
+
+function parseAppMap(raw: string | undefined): Map<string, string> {
+  const out = new Map<string, string>();
+  if (!raw?.trim()) return out;
+  for (const entry of raw.split(/[,\n;]/)) {
+    const idx = entry.indexOf('=');
+    if (idx <= 0) continue;
+    const key = entry.slice(0, idx).trim().toLowerCase();
+    const value = entry.slice(idx + 1).trim();
+    if (key && value) out.set(key, value);
+  }
+  return out;
+}
+
+function appValue(raw: string | undefined, appKey: string | null | undefined): string | undefined {
+  const key = appKey?.trim().toLowerCase();
+  if (!key) return undefined;
+  return parseAppMap(raw).get(key);
+}
+
+export function pickEmailAppKey(appKeys: Array<string | null | undefined>): string | null {
+  const unique = [...new Set(appKeys.map((key) => key?.trim().toLowerCase()).filter(Boolean))] as string[];
+  return unique.length === 1 ? unique[0]! : null;
+}
+
+function emailCtx(store: StoreEmailCtx) {
+  const fromEmail = appValue(env.EMAIL_FROM_BY_APP, store.appKey) ?? env.SMTP_FROM;
+  const storefrontUrl = appValue(env.STOREFRONT_URL_BY_APP, store.appKey) ?? env.STOREFRONT_URL;
+  return { name: store.name, currency: store.currency, storefrontUrl, fromEmail };
+}
 
 export async function sendOrderConfirmation(store: StoreEmailCtx, to: string, data: {
   code: string; grandTotal: number; currency: string;
   lines: Array<{ name: string; quantity: number; lineTotal: number }>;
 }): Promise<void> {
-  await sendEmail({ to, ...orderConfirmation(
-    { name: store.name, currency: store.currency, storefrontUrl: env.STOREFRONT_URL, fromEmail: env.SMTP_FROM },
-    data,
-  ) });
+  const ctx = emailCtx(store);
+  await sendEmail({ to, from: ctx.fromEmail, ...orderConfirmation(ctx, data) });
 }
 
 export async function sendShippingNotification(store: StoreEmailCtx, to: string, data: {
   code: string; trackingCode: string | null; carrier: string | null;
 }): Promise<void> {
-  await sendEmail({ to, ...shippingNotification(
-    { name: store.name, currency: store.currency, storefrontUrl: env.STOREFRONT_URL, fromEmail: env.SMTP_FROM },
-    data,
-  ) });
+  const ctx = emailCtx(store);
+  await sendEmail({ to, from: ctx.fromEmail, ...shippingNotification(ctx, data) });
 }
 
 export async function sendStaffInvite(store: StoreEmailCtx, to: string, data: {
   acceptUrl: string; role: string; inviterEmail: string;
 }): Promise<void> {
-  await sendEmail({ to, ...staffInvite(
-    { name: store.name, currency: store.currency, storefrontUrl: env.STOREFRONT_URL, fromEmail: env.SMTP_FROM },
-    data,
-  ) });
+  const ctx = emailCtx(store);
+  await sendEmail({ to, from: ctx.fromEmail, ...staffInvite(ctx, data) });
 }
