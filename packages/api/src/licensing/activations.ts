@@ -81,7 +81,10 @@ export async function activateLicenseOnDevice(
     .where(and(eq(s.licenseActivation.licenseId, lic.id), eq(s.licenseActivation.deviceIdHash, deviceIdHash)))
     .limit(1);
 
-  if (!sameDevice && existing.length >= lic.seats) return { kind: 'full' as const };
+  // seats <= 0 means UNLIMITED devices (no device cap by policy; the license date is
+  // the only limit). A positive seats value still enforces the per-license device cap.
+  const unlimited = lic.seats <= 0;
+  if (!unlimited && !sameDevice && existing.length >= lic.seats) return { kind: 'full' as const };
 
   if (sameDevice) {
     await tx

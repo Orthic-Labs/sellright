@@ -137,6 +137,19 @@ describe('activateLicenseOnDevice', () => {
     expect(r3.kind).toBe('full');
   });
 
+  it('(1c) seats=0 means unlimited devices (no cap)', async () => {
+    const KEY = 'SR-VR-UNLIMITED-TEST-0001';
+    await seedLicense({ storeId: STORE_A, orderId: ORDER_A, lineId: LINE_A, licenseKey: KEY, seats: 0 });
+
+    // Many distinct devices all activate — seats=0 disables the cap.
+    for (const dev of ['device-1', 'device-2', 'device-3', 'device-4', 'device-5']) {
+      const r = await withStore(STORE_A, (tx) =>
+        activateLicenseOnDevice(tx, { storeId: STORE_A, appKey: 'viewright', licenseKey: KEY, deviceId: dev }),
+      );
+      expect(r.kind).toBe('ok');
+    }
+  });
+
   it('(1b) same-device re-activation does not consume an extra seat', async () => {
     const KEY = 'SR-VR-REACTIVATE-TEST-0001';
     await seedLicense({ storeId: STORE_A, orderId: ORDER_A, lineId: LINE_A, licenseKey: KEY, seats: 1 });
