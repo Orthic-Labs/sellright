@@ -27,6 +27,7 @@ import { env } from '../env.js';
 import { createAdminSession } from '../auth/admin-session.js';
 import { admin } from './admin.js';
 import { adminOrders } from './admin-orders.js';
+import { adminOrderOps } from './admin-order-ops.js';
 
 // Safety: refuse to run against anything but a *_test database.
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
@@ -41,11 +42,13 @@ const SLUG = 'bulk-test-store';
 const ADMIN = 'cccccccc-cccc-cccc-cccc-00000000000a';
 const VARIANT = 'cccccccc-cccc-cccc-cccc-00000000000b';
 
-// One app with both routers mounted so we can hit the list (admin) + bulk ops
-// (adminOrders) through the same request pipeline.
+// One app with the routers mounted so we can hit the list (adminOrders) + the
+// bulk ops (adminOrderOps — cancel/soft-delete/restore/purge live here after the
+// admin-order-ops split) through the same request pipeline.
 const app = new OpenAPIHono();
 app.route('/', admin);
 app.route('/', adminOrders);
+app.route('/', adminOrderOps);
 
 let token = '';
 
