@@ -7,6 +7,15 @@ import { AuthProvider, useAuth } from './auth';
 import { Loading } from './components/ui';
 import { ToastProvider } from './components/Toast';
 import { CommandPalette } from './components/CommandPalette';
+
+// QA-only a11y helper (ra-014). Side-effect import: attaches
+// window.__runA11yAudit() so a devtools session (or future Playwright suite)
+// can run an axe-core pass against the live DOM. Vite strips this in
+// production builds because the conditional is statically evaluated.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+if ((import.meta as any).env?.MODE === 'qa') {
+  void import('./qa-a11y.js');
+}
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';

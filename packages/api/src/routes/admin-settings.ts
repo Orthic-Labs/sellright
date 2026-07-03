@@ -1,9 +1,9 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { desc, eq } from 'drizzle-orm';
-// eslint-disable-next-line no-restricted-imports -- This route manages global admin-user/session tables; store data access below uses withStore().
-import { unsafeUnscopedDb as db, withStore } from '../db/client.js';
+import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { newTotpSecret, verifyTotp, otpauthUri } from '../auth/totp.js';
+import { clearAdminTotpSecret, getAdminTotpSecret, setAdminTotpSecret } from '../auth/admin-staff.js';
 import { isSupportedPaymentMethod } from '../payments/provider.js';
 import { stripeConfigured, stripeModeFromConfig } from '../payments/stripe.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireManage, guard } from './admin-helpers.js';
@@ -50,8 +50,8 @@ adminSettings.openapi(
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
-    const [u] = await db.select({ totpSecret: s.adminUser.totpSecret }).from(s.adminUser).where(eq(s.adminUser.id, admin.id)).limit(1);
-    return c.json({ enabled: !!u?.totpSecret }, 200);
+    const secret = await getAdminTotpSecret(admin.id);
+    return c.json({ enabled: !!secret }, 200);
   }),
 );
 
@@ -79,10 +79,10 @@ adminSettings.openapi(
     // ra-sec: refuse to overwrite an existing factor. /disable requires the current
     // code, so replacing 2FA always proves possession of the old device — otherwise
     // a hijacked session could silently swap in an attacker-controlled secret.
-    const [u] = await db.select({ totpSecret: s.adminUser.totpSecret }).from(s.adminUser).where(eq(s.adminUser.id, admin.id)).limit(1);
-    if (u?.totpSecret) throw new HttpError(409, '2FA already enabled — disable it first');
+    const existing = await getAdminTotpSecret(admin.id);
+    if (existing) throw new HttpError(409, '2FA already enabled — disable it first');
     if (!verifyTotp(secret, code)) throw new HttpError(409, 'code did not match — check your authenticator app');
-    await db.update(s.adminUser).set({ totpSecret: secret }).where(eq(s.adminUser.id, admin.id));
+    await setAdminTotpSecret(admin.id, secret);
     return c.json({ enabled: true }, 200);
   }),
 );
@@ -96,10 +96,10 @@ adminSettings.openapi(
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const { code } = c.req.valid('json');
-    const [u] = await db.select({ totpSecret: s.adminUser.totpSecret }).from(s.adminUser).where(eq(s.adminUser.id, admin.id)).limit(1);
-    if (!u?.totpSecret) return c.json({ enabled: false }, 200);
-    if (!verifyTotp(u.totpSecret, code)) throw new HttpError(409, 'invalid code');
-    await db.update(s.adminUser).set({ totpSecret: null }).where(eq(s.adminUser.id, admin.id));
+    const existing = await getAdminTotpSecret(admin.id);
+    if (!existing) return c.json({ enabled: false }, 200);
+    if (!verifyTotp(existing, code)) throw new HttpError(409, 'invalid code');
+    await clearAdminTotpSecret(admin.id);
     return c.json({ enabled: false }, 200);
   }),
 );

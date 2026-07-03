@@ -1,3 +1,8 @@
+-- HAND-WRITTEN: see docs/runbooks/migrations.md — do NOT regenerate via drizzle-kit.
+-- Drizzle's auto-generator emits a different snapshot for the subscription
+-- table than what's in this file (it lacks the FORCE RLS + tenant_isolation
+-- policy at the right ordinal, and would emit the ENUM on a different line).
+-- Regenerating produces a migration that fails to apply on a fresh DB.
 CREATE TYPE "public"."subscription_status" AS ENUM('incomplete', 'active', 'past_due', 'canceled');--> statement-breakpoint
 ALTER TABLE "product_variant" ADD COLUMN "stripe_price_id" text;--> statement-breakpoint
 ALTER TABLE "product_variant" ADD COLUMN "billing_interval" text;--> statement-breakpoint

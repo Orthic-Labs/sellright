@@ -1,11 +1,27 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { randomBytes, createHash } from 'node:crypto';
-import { and, desc, eq } from 'drizzle-orm';
-// eslint-disable-next-line no-restricted-imports -- Staff/session routes manage global admin-user/session tables; store data access below uses withStore().
-import { unsafeUnscopedDb as db, withStore } from '../db/client.js';
+import { desc, eq } from 'drizzle-orm';
+import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { hashPassword } from '../auth/password.js';
 import { normalizeEmail } from '../auth/email.js';
+import {
+  attachStaffToStore,
+  createAdminUser,
+  createStaffInvite,
+  findAdminIdByEmail,
+  findInviteByTokenHash,
+  getStaffPermissions,
+  isStaffInStore,
+  listStoreInvites,
+  listStoreStaff,
+  markInviteAccepted,
+  removeStaffFromStore,
+  revokeAllSessionsForAdmin,
+  setAdminPassword,
+  setStaffPermissions,
+  updateStaffRole,
+} from '../auth/admin-staff.js';
 import { sendStaffInvite } from '../email/dispatch.js';
 import { env } from '../env.js';
 import { assertSafeOutboundUrl, type OutboundUrlLookup } from '../security/outbound-url.js';
@@ -108,17 +124,7 @@ adminSettingsAdvanced.openapi(
     // Include `permissions` from admin_user_store so the UI can render the
     // existing grants without a second round-trip. Unknown keys are kept as-is
     // (they round-trip through PUT with the same preservation rule).
-    const items = await db
-      .select({
-        adminUserId: s.adminUser.id,
-        email: s.adminUser.email,
-        role: s.adminUserStore.role,
-        createdAt: s.adminUser.createdAt,
-        permissions: s.adminUserStore.permissions,
-      })
-      .from(s.adminUserStore)
-      .innerJoin(s.adminUser, eq(s.adminUser.id, s.adminUserStore.adminUserId))
-      .where(eq(s.adminUserStore.storeId, st.storeId));
+    const items = await listStoreStaff(st.storeId);
     return c.json({
       items: items.map((i) => ({
         adminUserId: i.adminUserId,
@@ -143,13 +149,11 @@ adminSettingsAdvanced.openapi(
     const st = requireStore(admin, c); requireManage(st);
     const { email: rawEmail, role, password } = c.req.valid('json');
     const email = normalizeEmail(rawEmail);
-    const [existing] = await db.select({ id: s.adminUser.id }).from(s.adminUser).where(eq(s.adminUser.email, email)).limit(1);
-    let adminUserId = existing?.id;
+    let adminUserId = await findAdminIdByEmail(email);
     if (!adminUserId) {
-      const [u] = await db.insert(s.adminUser).values({ email, passwordHash: await hashPassword(password) }).returning({ id: s.adminUser.id });
-      adminUserId = u!.id;
+      adminUserId = await createAdminUser(email, await hashPassword(password));
     }
-    await db.insert(s.adminUserStore).values({ adminUserId, storeId: st.storeId, role }).onConflictDoUpdate({ target: [s.adminUserStore.adminUserId, s.adminUserStore.storeId], set: { role } });
+    await attachStaffToStore(adminUserId, st.storeId, role);
     return c.json({ adminUserId }, 200);
   }),
 );
@@ -165,7 +169,7 @@ adminSettingsAdvanced.openapi(
     const st = requireStore(admin, c); requireManage(st);
     const { adminUserId } = c.req.valid('param');
     const { role } = c.req.valid('json');
-    await db.update(s.adminUserStore).set({ role }).where(and(eq(s.adminUserStore.adminUserId, adminUserId), eq(s.adminUserStore.storeId, st.storeId)));
+    await updateStaffRole(adminUserId, st.storeId, role);
     return c.json({ ok: true }, 200);
   }),
 );
@@ -181,7 +185,7 @@ adminSettingsAdvanced.openapi(
     const st = requireStore(admin, c); requireManage(st);
     const { adminUserId } = c.req.valid('param');
     if (adminUserId === admin.id) throw new HttpError(409, 'cannot remove your own access');
-    await db.delete(s.adminUserStore).where(and(eq(s.adminUserStore.adminUserId, adminUserId), eq(s.adminUserStore.storeId, st.storeId)));
+    await removeStaffFromStore(adminUserId, st.storeId);
     return c.json({ ok: true }, 200);
   }),
 );
@@ -201,12 +205,12 @@ adminSettingsAdvanced.openapi(
     const st = requireStore(admin, c); requireManage(st);
     const b = c.req.valid('json');
     const token = randomBytes(24).toString('hex');
-    const [inv] = await db.insert(s.staffInvite).values({ storeId: st.storeId, email: normalizeEmail(b.email), role: b.role, tokenHash: hashTok(token), expiresAt: new Date(Date.now() + INVITE_TTL_MS) }).returning({ id: s.staffInvite.id });
+    const invId = await createStaffInvite(st.storeId, b.email, b.role, hashTok(token), new Date(Date.now() + INVITE_TTL_MS));
     const acceptUrl = `/admin/accept-invite?token=${token}`;
     // WP2: best-effort invite email. If SMTP is unconfigured the dev log line
     // will surface the token; the response still includes it for the inviter.
     try { await sendStaffInvite({ name: st.name, currency: st.currency }, normalizeEmail(b.email), { acceptUrl: `${env.STOREFRONT_URL}${acceptUrl}`, role: b.role, inviterEmail: admin.email }); } catch (e) { console.error('[email:staffInvite] failed', e); }
-    return c.json({ id: inv!.id, token, acceptUrl }, 200);
+    return c.json({ id: invId, token, acceptUrl }, 200);
   }),
 );
 
@@ -218,7 +222,7 @@ adminSettingsAdvanced.openapi(
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireManage(st);
-    const items = await db.select({ id: s.staffInvite.id, email: s.staffInvite.email, role: s.staffInvite.role, acceptedAt: s.staffInvite.acceptedAt, expiresAt: s.staffInvite.expiresAt }).from(s.staffInvite).where(eq(s.staffInvite.storeId, st.storeId)).orderBy(desc(s.staffInvite.createdAt)).limit(100);
+    const items = await listStoreInvites(st.storeId);
     return c.json({ items: items.map((i) => ({ ...i, acceptedAt: i.acceptedAt?.toISOString() ?? null, expiresAt: i.expiresAt.toISOString() })) }, 200);
   }),
 );
@@ -232,14 +236,20 @@ adminSettingsAdvanced.openapi(
   }),
   async (c) => {
     const b = c.req.valid('json');
-    const [inv] = await db.select().from(s.staffInvite).where(eq(s.staffInvite.tokenHash, hashTok(b.token))).limit(1);
+    const inv = await findInviteByTokenHash(hashTok(b.token));
     if (!inv || inv.acceptedAt || inv.expiresAt.getTime() <= Date.now()) throw new HttpError(409, 'invite is invalid, already used, or expired');
     const passwordHash = await hashPassword(b.password);
-    const [existing] = await db.select({ id: s.adminUser.id }).from(s.adminUser).where(eq(s.adminUser.email, inv.email)).limit(1);
-    const adminId = existing?.id ?? (await db.insert(s.adminUser).values({ email: inv.email, passwordHash }).returning({ id: s.adminUser.id }))[0]!.id;
-    if (existing) await db.update(s.adminUser).set({ passwordHash }).where(eq(s.adminUser.id, adminId));
-    await db.insert(s.adminUserStore).values({ adminUserId: adminId, storeId: inv.storeId, role: inv.role }).onConflictDoUpdate({ target: [s.adminUserStore.adminUserId, s.adminUserStore.storeId], set: { role: inv.role } });
-    await db.update(s.staffInvite).set({ acceptedAt: new Date() }).where(eq(s.staffInvite.id, inv.id));
+    let adminId = await findAdminIdByEmail(inv.email);
+    if (adminId) {
+      // Existing admin accepting a new invite — refresh the password they
+      // just provided (gated by the invite token; the route doesn't require
+      // the prior password because the invite is the proof of intent).
+      await setAdminPassword(adminId, passwordHash);
+    } else {
+      adminId = await createAdminUser(inv.email, passwordHash);
+    }
+    await attachStaffToStore(adminId, inv.storeId, inv.role as 'owner' | 'manager' | 'staff' | 'read_only');
+    await markInviteAccepted(inv.id);
     return c.json({ ok: true }, 200);
   },
 );
@@ -257,10 +267,10 @@ adminSettingsAdvanced.openapi(
     // ra-sec: sessions are global (RLS-exempt), so scope the action here — confirm
     // the target is enrolled in the caller's store before force-logging them out,
     // or a manager could revoke a superadmin / another store's user by UUID (IDOR).
-    const [member] = await db.select({ id: s.adminUserStore.adminUserId }).from(s.adminUserStore).where(and(eq(s.adminUserStore.adminUserId, adminUserId), eq(s.adminUserStore.storeId, st.storeId))).limit(1);
-    if (!member) throw new HttpError(404, 'staff member not enrolled in this store');
-    const del = await db.delete(s.session).where(eq(s.session.adminUserId, adminUserId)).returning({ id: s.session.id });
-    return c.json({ revoked: del.length }, 200);
+    const enrolled = await isStaffInStore(adminUserId, st.storeId);
+    if (!enrolled) throw new HttpError(404, 'staff member not enrolled in this store');
+    const revoked = await revokeAllSessionsForAdmin(adminUserId);
+    return c.json({ revoked }, 200);
   }),
 );
 
@@ -348,10 +358,10 @@ adminSettingsAdvanced.openapi(
     // the value we just SELECTed — concurrent PUTs to the same member are rare
     // and the resolution is whichever landed last (acceptable: the UI serializes
     // edits from the same operator).
-    const [cur] = await db.select({ permissions: s.adminUserStore.permissions }).from(s.adminUserStore).where(and(eq(s.adminUserStore.adminUserId, adminUserId), eq(s.adminUserStore.storeId, st.storeId))).limit(1);
-    if (!cur) throw new HttpError(404, 'staff member not enrolled in this store');
-    const next = mergeStaffPermissions((cur.permissions ?? null) as Record<string, boolean> | null, b.permissions);
-    await db.update(s.adminUserStore).set({ permissions: next }).where(and(eq(s.adminUserStore.adminUserId, adminUserId), eq(s.adminUserStore.storeId, st.storeId)));
+    const cur = await getStaffPermissions(adminUserId, st.storeId);
+    if (cur === null) throw new HttpError(404, 'staff member not enrolled in this store');
+    const next = mergeStaffPermissions(cur, b.permissions);
+    await setStaffPermissions(adminUserId, st.storeId, next);
     return c.json({ adminUserId, permissions: next }, 200);
   }),
 );

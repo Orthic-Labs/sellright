@@ -1,6 +1,12 @@
 packages:
   - "."
 
+# Supply-chain hardening (ra-017). Mirrors the root pnpm-workspace.yaml so every
+# package workspace opts in to the same defense-in-depth defaults. See the
+# root pnpm-workspace.yaml for why trustPolicy + minimumReleaseAge are
+# deferred — the existing lockfile needs to be rebuilt first.
+blockExoticSubdeps: true
+
 allowBuilds:
   esbuild: true
   sharp: true

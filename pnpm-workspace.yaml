@@ -8,6 +8,21 @@ packages:
   # installs independently so its React deps can't disturb the api/shared build.
   - "!packages/admin"
 
+# Supply-chain hardening (ra-017). pnpm 10 settings: refuse to install packages
+# from non-trusted registries or via exotic transitive sources. The other two
+# candidates (minimumReleaseAge, trustPolicy: no-downgrade) would block the
+# existing lockfile (`semver@6.3.1` flags a trust-downgrade; several packages
+# were published within the last 7 days). Land those settings as a follow-up
+# once the lockfile is rebuilt from a clean state — add them here AND in
+# packages/{admin,storefront}/pnpm-workspace.yaml. The blockExoticSubdeps knob
+# already blocks packages from registries outside the trusted allowlist, which
+# is the highest-value supply-chain defense and works against the current
+# lockfile.
+#   https://pnpm.io/settings#blockexoticsubdeps
+#   https://pnpm.io/settings#trustpolicy
+#   https://pnpm.io/settings#minimumreleaseage
+blockExoticSubdeps: true
+
 allowBuilds:
   esbuild: true
   sharp: true

@@ -1,3 +1,9 @@
+-- HAND-WRITTEN: see docs/runbooks/migrations.md — do NOT regenerate via drizzle-kit.
+-- The snapshot drift between the live schema and what `drizzle-kit generate`
+-- would emit from the current schema is intentional (the cart table was
+-- reshaped after 0031_realign_snapshot). Regenerating produces a migration
+-- that double-ALTERs and breaks `pnpm db:migrate` on a fresh DB.
+
 -- Custom SQL migration file, put your code below! --
 
 -- Cart lifecycle (server-authoritative cart, Phase A): a hard TTL the cleanup

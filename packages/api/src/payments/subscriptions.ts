@@ -125,12 +125,12 @@ async function licenseForOrder(tx: Tx, orderId: string): Promise<{ id: string; o
 }
 
 /**
- * invoice.paid — CREATE-OR-FIND the subscription (events are unordered), then:
- *  - first cycle (no linked license): settle the backing order via the existing
- *    applyPaymentResult (issues the license), then link license → subscription.
- *  - renewal cycle (license linked): extend the license entitlement dates.
- * Always sets status=active + currentPeriodEnd. Writes an amount-mismatch audit
- * row when invoice.amount_paid != order.grandTotal (operator-visible, not trusted).
+ * invoice.paid — CREATE-OR-FIND the subscription (events are unordered), then
+ * dispatch to settleFirstCycle or extendRenewal based on whether a license is
+ * already linked. Always sets status=active + currentPeriodEnd. The
+ * create-or-find + dispatch coordinator stays here; the per-cycle work is
+ * extracted so the seam is unit-testable and future arms (paused, proration,
+ * dunning retry) don't pile on in one 70-line function.
  */
 export async function onInvoicePaid(tx: Tx, storeId: string, invoice: InvoiceLike): Promise<void> {
   const subId = idOf(invoice.subscription);
@@ -148,59 +148,100 @@ export async function onInvoicePaid(tx: Tx, storeId: string, invoice: InvoiceLik
     await audit(tx, storeId, 'subscription_created_from_invoice', subId, { orderId });
   }
 
-  const currentPeriodEnd = periodEndOfInvoice(invoice);
-  const priceId = priceOfInvoice(invoice) ?? sub.priceId;
-
   if (!sub.licenseId) {
-    // FIRST CYCLE — settle the backing order through the EXISTING settle path.
-    if (!sub.orderId) {
-      await audit(tx, storeId, 'subscription_invoice_no_order', subId, { invoiceId: invoice.id });
-      // No backing order to settle; still record period + status so renewals work.
-      await tx.update(s.subscription).set({ status: 'active', currentPeriodEnd, priceId, updatedAt: new Date() }).where(eq(s.subscription.id, sub.id));
-      return;
-    }
-    const [order] = await tx
-      .select({ id: s.order.id, state: s.order.state, grandTotal: s.order.grandTotal, currency: s.order.currency, customerId: s.order.customerId })
-      .from(s.order).where(eq(s.order.id, sub.orderId)).limit(1);
-    if (order) {
-      const result: PaymentResult = {
-        state: 'Settled',
-        providerRef: idOf(invoice.payment_intent) ?? invoice.id,
-        metadata: { stripeInvoiceId: invoice.id, amountPaid: invoice.amount_paid ?? null },
-      };
-      // applyPaymentResult no-ops the transition if the order is already Paid (a
-      // duplicate invoice.paid re-settle), and issueLicensesForPaidOrder's own
-      // per-orderLine guard prevents a double-issue.
-      await applyPaymentResult(tx, { storeId, order, method: 'stripe', result });
-      if (invoice.amount_paid != null && invoice.amount_paid !== order.grandTotal) {
-        await audit(tx, storeId, 'subscription_amount_mismatch', subId, { invoiceId: invoice.id, amountPaid: invoice.amount_paid, grandTotal: order.grandTotal });
-      }
-      const lic = await licenseForOrder(tx, order.id);
-      await tx.update(s.subscription).set({
-        licenseId: lic?.id ?? null, status: 'active', currentPeriodEnd, priceId, updatedAt: new Date(),
-      }).where(eq(s.subscription.id, sub.id));
-      await audit(tx, storeId, 'subscription_activated', subId, { orderId: order.id, licenseId: lic?.id ?? null });
-    }
+    await settleFirstCycle(tx, storeId, sub, invoice);
+  } else {
+    // sub.licenseId was just narrowed to string by the !sub.licenseId branch
+    // above; carry that contract into extendRenewal explicitly so the inner
+    // function's eq() doesn't need a `!` non-null assertion.
+    await extendRenewal(tx, storeId, sub, sub.licenseId, invoice);
+  }
+
+  // Common post-cycle write: mark active + sync the current period. Each arm
+  // is responsible for its own arm-specific audit (subscription_activated /
+  // subscription_renewed) so we can rebuild a per-event timeline from
+  // auditLog without parsing state diffs.
+  await tx.update(s.subscription).set({
+    status: 'active',
+    currentPeriodEnd: periodEndOfInvoice(invoice),
+    priceId: priceOfInvoice(invoice) ?? sub.priceId,
+    updatedAt: new Date(),
+  }).where(eq(s.subscription.id, sub.id));
+}
+
+/**
+ * First cycle (no linked license yet) — settle the backing order through the
+ * existing applyPaymentResult path, which transitions PendingPayment→Paid and
+ * issues the per-line license, then link the freshly-issued license back to
+ * the subscription. If the subscription has no backing order (orphaned
+ * invoice.paid), we still record period+status so renewals work for the next
+ * cycle. applyPaymentResult no-ops the transition if the order is already
+ * Paid (a duplicate invoice.paid re-settle), and issueLicensesForPaidOrder's
+ * own per-orderLine guard prevents a double-issue.
+ */
+async function settleFirstCycle(
+  tx: Tx,
+  storeId: string,
+  sub: typeof s.subscription.$inferSelect,
+  invoice: InvoiceLike,
+): Promise<void> {
+  const subId = sub.stripeSubscriptionId;
+  if (!sub.orderId) {
+    await audit(tx, storeId, 'subscription_invoice_no_order', subId, { invoiceId: invoice.id });
     return;
   }
+  const [order] = await tx
+    .select({ id: s.order.id, state: s.order.state, grandTotal: s.order.grandTotal, currency: s.order.currency, customerId: s.order.customerId })
+    .from(s.order).where(eq(s.order.id, sub.orderId)).limit(1);
+  if (!order) return;
 
-  // RENEWAL CYCLE — extend the linked license's entitlement dates.
+  const result: PaymentResult = {
+    state: 'Settled',
+    providerRef: idOf(invoice.payment_intent) ?? invoice.id,
+    metadata: { stripeInvoiceId: invoice.id, amountPaid: invoice.amount_paid ?? null },
+  };
+  await applyPaymentResult(tx, { storeId, order, method: 'stripe', result });
+
+  if (invoice.amount_paid != null && invoice.amount_paid !== order.grandTotal) {
+    await audit(tx, storeId, 'subscription_amount_mismatch', subId, { invoiceId: invoice.id, amountPaid: invoice.amount_paid, grandTotal: order.grandTotal });
+  }
+  const lic = await licenseForOrder(tx, order.id);
+  await tx.update(s.subscription).set({
+    licenseId: lic?.id ?? null,
+    updatedAt: new Date(),
+  }).where(eq(s.subscription.id, sub.id));
+  await audit(tx, storeId, 'subscription_activated', subId, { orderId: order.id, licenseId: lic?.id ?? null });
+}
+
+/**
+ * Renewal cycle (license already linked) — extend the license's expiresAt +
+ * updatesUntil by the variant's duration days, stacking on the later of
+ * current end or now (so renewing early adds time, renewing after a lapse
+ * restarts from now). extendEntitlement is pure and unit-tested; this
+ * function only does the tx wiring.
+ */
+async function extendRenewal(
+  tx: Tx,
+  storeId: string,
+  sub: typeof s.subscription.$inferSelect,
+  licenseId: string,
+  invoice: InvoiceLike,
+): Promise<void> {
+  const subId = sub.stripeSubscriptionId;
   const [lic] = await tx
     .select({ id: s.license.id, orderLineId: s.license.orderLineId, expiresAt: s.license.expiresAt, updatesUntil: s.license.updatesUntil })
-    .from(s.license).where(eq(s.license.id, sub.licenseId)).limit(1);
-  if (lic) {
-    const [variant] = await tx
-      .select({ licenseDurationDays: s.productVariant.licenseDurationDays, updatesDurationDays: s.productVariant.updatesDurationDays })
-      .from(s.orderLine)
-      .innerJoin(s.productVariant, eq(s.productVariant.id, s.orderLine.variantId))
-      .where(eq(s.orderLine.id, lic.orderLineId)).limit(1);
-    const now = new Date();
-    const expiresAt = extendEntitlement(lic.expiresAt, variant?.licenseDurationDays ?? null, now);
-    const updatesUntil = extendEntitlement(lic.updatesUntil, variant?.updatesDurationDays ?? null, now);
-    await tx.update(s.license).set({ expiresAt, updatesUntil, updatedAt: now }).where(eq(s.license.id, lic.id));
-    await audit(tx, storeId, 'subscription_renewed', subId, { licenseId: lic.id, expiresAt, updatesUntil });
-  }
-  await tx.update(s.subscription).set({ status: 'active', currentPeriodEnd, priceId, updatedAt: new Date() }).where(eq(s.subscription.id, sub.id));
+    .from(s.license).where(eq(s.license.id, licenseId)).limit(1);
+  if (!lic) return;
+  const [variant] = await tx
+    .select({ licenseDurationDays: s.productVariant.licenseDurationDays, updatesDurationDays: s.productVariant.updatesDurationDays })
+    .from(s.orderLine)
+    .innerJoin(s.productVariant, eq(s.productVariant.id, s.orderLine.variantId))
+    .where(eq(s.orderLine.id, lic.orderLineId)).limit(1);
+  const now = new Date();
+  const expiresAt = extendEntitlement(lic.expiresAt, variant?.licenseDurationDays ?? null, now);
+  const updatesUntil = extendEntitlement(lic.updatesUntil, variant?.updatesDurationDays ?? null, now);
+  await tx.update(s.license).set({ expiresAt, updatesUntil, updatedAt: now }).where(eq(s.license.id, lic.id));
+  await audit(tx, storeId, 'subscription_renewed', subId, { licenseId: lic.id, expiresAt, updatesUntil });
 }
 
 /** invoice.payment_failed — past_due (dunning). Do NOT revoke the license. */

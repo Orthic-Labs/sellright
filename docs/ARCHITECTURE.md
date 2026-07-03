@@ -33,14 +33,14 @@ docs/          product documentation
 
 Every store-scoped request resolves a store, then runs database work through `withStore(storeId, fn)`.
 
-`withStore` opens a transaction and sets `app.current_store` with `SET LOCAL`. RLS policies use that session value to confine reads and writes to one store. Route code must not import the unscoped database client for store-scoped tenant queries; the unscoped export is named `unsafeUnscopedDb`. An ESLint `no-restricted-imports` rule in `packages/api/eslint.config.js` is written to block it from route files, but ESLint is not yet installed or wired into `pnpm verify`, so that rule is currently advisory rather than enforced. The legitimate unscoped callsites are: the admin identity/config routes (`admin-settings`, `admin-marketing`) for tables like `store`/`admin_user`/`admin_user_store`/`staff_invite`/`session` with explicit `storeId` filtering; and the Stripe webhook tenant-resolver (`payments/webhook-reconcile.ts`), which must look up the owning store from a PaymentIntent/subscription id *before* any store context exists (it returns only validated UUIDs, and subscription/invoice events that can't be resolved are retried, not silently scoped).
+`withStore` opens a transaction and sets `app.current_store` with `SET LOCAL`. RLS policies use that session value to confine reads and writes to one store. Route code must not import the unscoped database client for store-scoped tenant queries; the unscoped export is named `unsafeUnscopedDb`. An ESLint `no-restricted-imports` rule in `eslint.config.mjs` blocks it from route files. The legitimate unscoped callsites are: the global admin/ACL/Session tables, which are deliberately NOT store-scoped (they gate access TO stores). Those reads live in `packages/api/src/auth/admin-staff.ts` so route files stay as thin shells that import only `withStore` and helper functions; the Stripe webhook tenant-resolver (`payments/webhook-reconcile.ts`), which must look up the owning store from a PaymentIntent/subscription id *before* any store context exists (it returns only validated UUIDs, and subscription/invoice events that can't be resolved are retried, not silently scoped).
 
 This gives SellRight two layers of tenant isolation:
 
 1. Route-level store resolution.
 2. Database-level RLS enforcement.
 
-The verification gate includes `db:assert-rls` and `assert:shop-isolation` so new store-scoped tables and public shop routes cannot silently bypass the model.
+The verification gate includes `db:assert-rls`, `db:assert-hand-written`, and `assert:shop-isolation` so new store-scoped tables, drift on hand-written migrations, and public shop routes cannot silently bypass the model.
 
 ## API Surface
 
@@ -130,4 +130,11 @@ After API changes, run:
 ```bash
 pnpm verify
 ```
-The gate builds all packages, type-checks, runs API tests, asserts FORCE RLS coverage, and checks shop-route isolation.
+The gate builds all packages, type-checks, runs API tests, asserts FORCE RLS coverage, asserts hand-written-migration markers, and checks shop-route isolation.
+
+## Migrations
+
+See [runbooks/migrations.md](runbooks/migrations.md) for the rule on
+hand-written migrations (currently `0032_cart_ttl.sql`,
+`0034_subscriptions.sql`, `0036_harden_subscription_rls.sql`). The
+`db:assert-hand-written` script enforces the rule in CI.

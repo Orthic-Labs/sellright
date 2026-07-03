@@ -14,6 +14,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:assert-rls": "tsx src/db/assert-force-rls.ts",
+    "db:assert-hand-written": "tsx src/db/assert-hand-written-migrations.ts",
     "assert:shop-isolation": "node scripts/assert-shop-route-isolation.mjs",
     "provision:right-apps": "tsx src/scripts/provision-right-apps.ts"
   },
