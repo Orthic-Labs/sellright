@@ -8,7 +8,7 @@ import { createAdminSession, deleteAdminSession, findAdminByEmail, resolveAdmin 
 import { canTransition, type OrderState } from '../money/fsm.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireWrite, guard, Page } from './admin-helpers.js';
 import { clientIp, loginRetryAfter, recordLoginFailure, clearLoginAttempts } from '../auth/rate-limit.js';
-import { setAuthCookies, clearAuthCookies, newCsrf, cookie, SESSION_COOKIE } from '../auth/cookies.js';
+import { setAuthCookies, clearAuthCookies, newCsrf, cookie, csrfValid, SESSION_COOKIE } from '../auth/cookies.js';
 import { verifyTotp } from '../auth/totp.js';
 import { normalizeEmail } from '../auth/email.js';
 import { sendShippingNotification } from '../email/dispatch.js';
@@ -59,9 +59,13 @@ admin.openapi(
 admin.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/logout', summary: 'Admin logout',
-    responses: { 200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) } },
+    responses: {
+      200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) },
+      403: { description: 'CSRF', ...errBody },
+    },
   }),
   async (c) => {
+    if (!csrfValid(c)) return c.json({ error: 'invalid CSRF token' }, 403);
     const token = bearer(c.req.header('authorization')) ?? cookie(c, SESSION_COOKIE);
     if (token) await deleteAdminSession(token);
     clearAuthCookies(c);

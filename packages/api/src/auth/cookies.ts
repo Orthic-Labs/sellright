@@ -20,6 +20,20 @@ function csrfEqual(header: string | undefined, cooked: string | undefined): bool
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+/**
+ * True only if the Authorization header parses to a non-empty Bearer token.
+ * Mirrors auth/session.ts's `bearer()` regex exactly (duplicated, not imported,
+ * to avoid a cookies.ts <-> session.ts circular import — session.ts already
+ * imports `cookie`/CUST_COOKIE from this module). A present-but-malformed or
+ * empty `authorization` header (e.g. `authorization: x`) must NOT waive CSRF —
+ * only a request that actually carries a usable bearer credential is exempt.
+ */
+function hasValidBearer(header: string | undefined): boolean {
+  if (!header) return false;
+  const m = /^Bearer\s+(.+)$/i.exec(header);
+  return !!m && m[1]!.trim().length > 0;
+}
+
 export const SESSION_COOKIE = 'sr_admin';
 export const CSRF_COOKIE = 'sr_csrf';
 const MAX_AGE = 14 * 24 * 3600;
@@ -76,7 +90,7 @@ export function clearAuthCookies(c: Ctx): void {
  *  explicit Authorization bearer header are NOT CSRF-vulnerable (not auto-sent),
  *  so they're exempt — keeping API clients working. */
 export function csrfValid(c: { req: { header: (k: string) => string | undefined } }): boolean {
-  if (c.req.header('authorization')) return true; // bearer client, not cookie
+  if (hasValidBearer(c.req.header('authorization'))) return true; // bearer client, not cookie
   const header = c.req.header('x-csrf-token');
   const cooked = cookie(c, CSRF_COOKIE);
   return csrfEqual(header, cooked);
@@ -100,7 +114,7 @@ export function clearCustomerCookies(c: Ctx): void {
 
 /** CSRF check for cookie-authenticated customer mutations (bearer is exempt). */
 export function customerCsrfValid(c: { req: { header: (k: string) => string | undefined } }): boolean {
-  if (c.req.header('authorization')) return true;
+  if (hasValidBearer(c.req.header('authorization'))) return true;
   const header = c.req.header('x-csrf-token');
   const cooked = cookie(c, CUST_CSRF_COOKIE);
   return csrfEqual(header, cooked);
