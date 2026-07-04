@@ -8,6 +8,7 @@ interface CheckoutOrderSummaryProps {
   localCart: any;
   pageLoading: Signal<boolean>;
   promoExpanded: Signal<boolean>;
+  shippingCents: Signal<number | null>;
 }
 
 export const CheckoutOrderSummary = component$<CheckoutOrderSummaryProps>((props) => (
@@ -98,6 +99,7 @@ export const CheckoutOrderSummary = component$<CheckoutOrderSummaryProps>((props
               localCart={props.localCart}
               promoPlacement="rows"
               promoExpandedSignal={props.promoExpanded}
+              serverShippingCents={props.shippingCents}
             />
           )}
         </div>

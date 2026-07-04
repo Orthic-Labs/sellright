@@ -24,6 +24,7 @@ interface CheckoutPageViewProps {
   promoExpanded: Signal<boolean>;
   selectedPaymentMethod: Signal<string>;
   sezzleTriggerSignal: Signal<number>;
+  shippingCents: Signal<number | null>;
   showProcessingModal: Signal<boolean>;
   srState: any;
   state: { loading: boolean; error: string | null };
@@ -52,6 +53,7 @@ export const CheckoutPageView = component$<CheckoutPageViewProps>((props) => (
               localCart={props.localCart}
               pageLoading={props.pageLoading}
               promoExpanded={props.promoExpanded}
+              shippingCents={props.shippingCents}
             />
             <CheckoutPaymentPanel {...props} />
           </div>
