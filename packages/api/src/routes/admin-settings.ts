@@ -239,7 +239,7 @@ adminSettings.openapi(
 adminSettings.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/shipping-methods', summary: 'List shipping methods',
-    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.any()) })) }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.unknown()) })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
@@ -308,7 +308,7 @@ adminSettings.openapi(
 adminSettings.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/tax-zones', summary: 'List tax zones',
-    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.any()) })) }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.unknown()) })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);

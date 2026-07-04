@@ -199,7 +199,7 @@ catalog.openapi(
     method: 'get', path: '/v1/shop/collections/{slug}', summary: 'Collection page (products + SEO)',
     request: { params: z.object({ slug: z.string() }) },
     responses: {
-      200: { description: 'Collection', content: { 'application/json': { schema: z.object({ slug: z.string(), name: z.string(), description: z.string().nullable(), seoTitle: z.string().nullable(), seoDescription: z.string().nullable(), products: z.array(z.any()) }) } } },
+      200: { description: 'Collection', content: { 'application/json': { schema: z.object({ slug: z.string(), name: z.string(), description: z.string().nullable(), seoTitle: z.string().nullable(), seoDescription: z.string().nullable(), products: z.array(z.unknown()) }) } } },
       404: { description: 'Not found', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
     },
   }),

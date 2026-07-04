@@ -214,7 +214,7 @@ adminCatalog.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/variants/{id}/movements', summary: 'Stock movement history',
     request: { params: z.object({ id: z.string() }) },
-    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.any()) })) }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.unknown()) })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
@@ -232,7 +232,7 @@ adminCatalog.openapi(
 adminCatalog.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/locations', summary: 'List inventory locations',
-    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.any()) })) }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.unknown()) })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
@@ -314,7 +314,7 @@ adminCatalog.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/products/{id}/options', summary: 'Option groups + values for a product',
     request: { params: z.object({ id: z.string() }) },
-    responses: { 200: { description: 'OK', content: J(z.object({ groups: z.array(z.any()) })) }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: { 200: { description: 'OK', content: J(z.object({ groups: z.array(z.unknown()) })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);

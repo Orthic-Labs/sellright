@@ -15,7 +15,7 @@ adminDashboard.openapi(
         store: z.object({ slug: z.string(), name: z.string(), currency: z.string() }),
         revenue: money, orders: z.number().int(), aov: money,
         pendingFulfillment: z.number().int(), customers: z.number().int(), lowStock: z.number().int(),
-        recentOrders: z.array(z.any()),
+        recentOrders: z.array(z.unknown()),
       })) },
       401: { description: 'Unauthorized', ...errBody }, 403: { description: 'Forbidden', ...errBody },
     },

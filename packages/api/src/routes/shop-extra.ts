@@ -43,7 +43,7 @@ shopExtra.openapi(
 shopExtra.openapi(
   createRoute({
     method: 'get', path: '/v1/shop/blog', summary: 'Published blog posts',
-    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.any()) })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.unknown()) })) } },
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
@@ -75,7 +75,7 @@ shopExtra.openapi(
   createRoute({
     method: 'get', path: '/v1/shop/shipping-methods', summary: 'Eligible shipping methods for a cart',
     request: { query: z.object({ country: z.string().optional(), subtotal: z.coerce.number().int().default(0) }) },
-    responses: { 200: { description: 'OK', content: J(z.object({ methods: z.array(z.any()) })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ methods: z.array(z.unknown()) })) } },
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
@@ -112,7 +112,7 @@ shopExtra.openapi(
 shopExtra.openapi(
   createRoute({
     method: 'post', path: '/v1/shop/newsletter-signup', summary: 'Subscribe an email to the newsletter',
-    request: { body: { content: J(z.object({ email: z.string().email(), name: z.string().optional() })) } },
+    request: { body: { content: J(z.object({ email: z.email(), name: z.string().optional() })) } },
     responses: {
       200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) },
       429: { description: 'Rate limited', content: J(z.object({ error: z.string() })) },
@@ -127,7 +127,10 @@ shopExtra.openapi(
     recordNewsletterAttempt(ip);
 
     const st = await resolveStoreFromCtx(c);
-    const { email, name } = c.req.valid('json');
+    // zod-openapi v1 fails to infer valid('json') for this one public POST
+    // (works elsewhere via the generic J helper); assert the validated shape —
+    // the request middleware has already parsed it against the route schema.
+    const { email, name } = c.req.valid('json') as { email: string; name?: string };
     // Store row read via withStore (the `store` registry table is RLS-exempt, but
     // routing it through the scoped client keeps shop routes free of the unscoped
     // DB import — the RLS-bypass seal, ra-003).

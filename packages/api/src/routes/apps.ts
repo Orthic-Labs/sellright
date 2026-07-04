@@ -373,7 +373,7 @@ apps.openapi(
     path: '/v1/admin/apps/releases',
     summary: 'List app releases',
     request: { query: z.object({ appKey: z.string().optional(), channel: z.string().optional() }) },
-    responses: { 200: { description: 'Releases', content: J(z.object({ items: z.array(z.any()) })) }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: { 200: { description: 'Releases', content: J(z.object({ items: z.array(z.unknown()) })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);

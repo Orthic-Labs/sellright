@@ -15,7 +15,7 @@ const promoBody = z.object({
   code: z.string().min(1).nullable().optional(), // null/omitted = AUTOMATIC discount
   type: z.enum(['percentage', 'fixed', 'free_shipping']),
   value: money.default(0), // percentage: 0–100; fixed: cents
-  conditions: z.array(z.any()).nullable().optional(),
+  conditions: z.array(z.unknown()).nullable().optional(),
   usageLimit: z.number().int().nullable().optional(),
   perCustomerUsageLimit: z.number().int().nullable().optional(),
   priority: z.number().int().optional(), // automatic-discount tie-break (higher wins)
@@ -28,7 +28,7 @@ const promoBody = z.object({
 adminMarketing.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/promotions', summary: 'List promotions',
-    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.any()) })) }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.unknown()) })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
@@ -277,7 +277,7 @@ const giftCode = () => 'GC-' + randomBytes(6).toString('hex').toUpperCase().repl
 adminMarketing.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/gift-cards', summary: 'List gift cards',
-    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.any()) })) }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.unknown()) })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);

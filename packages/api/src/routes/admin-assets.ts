@@ -72,7 +72,7 @@ adminAssets.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/assets', summary: 'List assets',
     request: { query: z.object({ page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(50) }) },
-    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.any()), total: z.number().int() })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.unknown()), total: z.number().int() })) } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);

@@ -9,7 +9,10 @@ import { bearer } from '../auth/session.js';
 import { cookie, SESSION_COOKIE } from '../auth/cookies.js';
 import { resolveAdmin, type AdminPrincipal, type AdminStoreAccess } from '../auth/admin-session.js';
 
-export const J = (schema: z.ZodTypeAny) => ({ 'application/json': { schema } });
+// Generic in the schema type so the concrete Zod type flows through to
+// createRoute — @hono/zod-openapi v1 infers `c.req.valid('json')` from it;
+// widening to z.ZodTypeAny (the old signature) collapses it to `unknown`.
+export const J = <T extends z.ZodTypeAny>(schema: T) => ({ 'application/json': { schema } });
 export const errBody = { content: J(z.object({ error: z.string() })) };
 
 export type HttpStatus = 400 | 401 | 403 | 404 | 409 | 413 | 415 | 429 | 502;
@@ -77,7 +80,7 @@ export async function guard<T>(c: { json: (b: unknown, status?: number) => Respo
 }
 
 export const money = z.number().int();
-export const Page = z.object({ items: z.array(z.any()), total: z.number().int(), page: z.number().int(), pageSize: z.number().int() });
+export const Page = z.object({ items: z.array(z.unknown()), total: z.number().int(), page: z.number().int(), pageSize: z.number().int() });
 
 /** URL-safe slug from a name (admin-created products/collections). */
 export function slugify(input: string): string {

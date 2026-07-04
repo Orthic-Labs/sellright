@@ -9,7 +9,7 @@ export function registerCollectionRoutes(adminCatalog: any) {
   adminCatalog.openapi(
     createRoute({
       method: 'get', path: '/v1/admin/collections', summary: 'List collections',
-      responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.any()) })) }, 401: { description: 'Unauthorized', ...errBody } },
+      responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.unknown()) })) }, 401: { description: 'Unauthorized', ...errBody } },
     }),
     async (c: any) => guard(c, async () => {
       const { admin } = await requireAdmin(c);

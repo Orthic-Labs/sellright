@@ -59,7 +59,7 @@ adminReports.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/reports/sales', summary: 'Sales over time',
     request: daysQuery,
-    responses: { 200: { description: 'OK', content: J(z.object({ totalRevenue: z.number().int(), totalOrders: z.number().int(), series: z.array(z.any()) })) }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: { 200: { description: 'OK', content: J(z.object({ totalRevenue: z.number().int(), totalOrders: z.number().int(), series: z.array(z.unknown()) })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
@@ -83,7 +83,7 @@ adminReports.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/reports/top-products', summary: 'Top products by revenue',
     request: daysQuery,
-    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.any()) })) }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.unknown()) })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
@@ -105,7 +105,7 @@ adminReports.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/reports/top-customers', summary: 'Top customers by spend',
     request: daysQuery,
-    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.any()) })) }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.unknown()) })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
@@ -128,7 +128,7 @@ adminReports.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/search', summary: 'Global search (orders, products, customers)',
     request: { query: z.object({ q: z.string().min(1) }) },
-    responses: { 200: { description: 'OK', content: J(z.object({ orders: z.array(z.any()), products: z.array(z.any()), customers: z.array(z.any()) })) }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: { 200: { description: 'OK', content: J(z.object({ orders: z.array(z.unknown()), products: z.array(z.unknown()), customers: z.array(z.unknown()) })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
@@ -154,7 +154,7 @@ adminReports.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/activity', summary: 'Recent admin activity (audit log)',
     request: { query: z.object({ entity: z.string().optional(), limit: z.coerce.number().int().min(1).max(200).default(100) }) },
-    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.any()) })) }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.unknown()) })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);

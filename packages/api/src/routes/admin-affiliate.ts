@@ -31,7 +31,7 @@ async function affiliateAmounts(tx: { execute: Function }, promotionId: string) 
 adminAffiliate.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/affiliates', summary: 'List affiliates',
-    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.any()), commissionPct: z.number() })) }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.unknown()), commissionPct: z.number() })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);

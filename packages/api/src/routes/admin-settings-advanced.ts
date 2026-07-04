@@ -43,7 +43,7 @@ export async function sanitizeWebhookEndpointPatch(
 adminSettingsAdvanced.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/webhooks', summary: 'List webhook endpoints',
-    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.any()) })) }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.unknown()) })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
@@ -117,7 +117,7 @@ const roleEnum = z.enum(['owner', 'manager', 'staff', 'read_only']);
 adminSettingsAdvanced.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/staff', summary: 'Staff with access to this store',
-    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.any()) })) }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.unknown()) })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
@@ -218,7 +218,7 @@ adminSettingsAdvanced.openapi(
 adminSettingsAdvanced.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/staff/invites', summary: 'List pending invites',
-    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.any()) })) }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.unknown()) })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
@@ -279,7 +279,7 @@ adminSettingsAdvanced.openapi(
 adminSettingsAdvanced.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/currency-rates', summary: 'List presentment currency rates',
-    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.any()) })) }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.unknown()) })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
