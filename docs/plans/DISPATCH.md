@@ -6,23 +6,27 @@
 
 **Scope discipline:** this repo is the SellRight **product** (`D:\Claude\sellright`), not the RightApps fork. Edit here, push `origin/main`, pull on the box. Every lane targets `packages/api` unless it says otherwise. No lane may touch `packages/storefront` payment code except S-CFG-flip (Lane P1) and only behind the flag.
 
-## Dispatch table — what runs when
+## Dispatch table — status (updated 2026-07-04)
 
-| # | Lane | Class | Mode | Blocked on |
-|---|---|---|---|---|
-| 1 | SEC-1 newsletter SSRF + rate-limit | security | **PARALLEL — dispatch now** | nothing |
-| 2 | SEC-2 admin-logout CSRF + bearer-validated CSRF | security | **PARALLEL — dispatch now** | nothing |
-| 3 | SEC-3 blog HTML sanitization | security | **PARALLEL — dispatch now** | nothing |
-| 4 | SEC-4 download open-redirect allowlist | security | **PARALLEL — dispatch now** | nothing |
-| 5 | SEC-5 trusted-proxy IP + Secure-from-scheme + always-sanitize errors | security/config | **PARALLEL — dispatch now** | nothing |
-| 6 | SEC-6 RBAC: gate refunds/cancel/releases | security | **PARALLEL — dispatch now** | nothing |
-| 7 | MONEY-1 payment idempotency: unique `(store_id,provider_ref)` + store-scoped claim | money integrity | **PARALLEL — dispatch now** | nothing |
-| 8 | MONEY-2 refund idempotency key + lock return-approve + gateway-out-of-txn | money integrity | SEQUENTIAL | MONEY-1 merged |
-| 9 | MONEY-3 draft `markPaid` issues licenses | money/fulfillment | **PARALLEL — dispatch now** | nothing |
-| 10 | OPS-1 host→store routing + CORS + pool connect-timeout | multi-tenant blocker | **PARALLEL — dispatch now** | nothing |
-| 11 | OPS-2 job leader-lock + release-stale batch/lock | multi-instance | **PARALLEL — dispatch now** | nothing |
-| 12 | PERF-1 `order(store_id,code)` index | perf | **PARALLEL — dispatch now** | nothing |
-| 13 | HYG-1 pnpm CI/local version match | hygiene | **PARALLEL — dispatch now** | nothing |
+Phase 1 (pure-code security) = **MERGED to `main`** (laptop-validated: typecheck + 169 unit tests + build + deps:audit). Phase 2 (DB/money) = **built + typechecked + pushed as branches, UNMERGED** pending box validation (no local test DB) — see `BOX-VALIDATION-CHECKLIST.md`.
+
+| # | Lane | Class | Status |
+|---|---|---|---|
+| 1 | SEC-1 newsletter SSRF + rate-limit | security | ✅ **MERGED** `3b71c58` |
+| 2 | SEC-2 admin-logout CSRF + bearer-validated CSRF | security | ✅ **MERGED** `4b421da` |
+| 3 | SEC-3 blog HTML sanitization | security | ✅ **MERGED** `8f50ae7` (adds `sanitize-html`) |
+| 4 | SEC-4 download open-redirect allowlist | security | ✅ **MERGED** `57548d4` |
+| 5 | SEC-5 trusted-proxy IP + Secure-from-scheme + sanitize errors | security/config | ✅ **MERGED** `5b6ecd9` |
+| 6 | HYG-1 pnpm CI/local version match | hygiene | ✅ **MERGED** `1204615` |
+| 7 | MONEY-1 payment idempotency: unique `(store_id,provider_ref)` + store-scoped claim | money integrity | 🟡 **branch pushed** `feat/money-payment-idempotency` `0b37c45` — box-validate |
+| 8 | MONEY-2 refund idempotency key + lock return-approve (+gateway-out-of-txn deferred) | money integrity | 🟡 **branch pushed** `fix/money-refund-idempotency` `11ee251` — stacked on MONEY-1; (3) deferred |
+| 9 | MONEY-3 draft `markPaid` issues licenses | money/fulfillment | 🟡 **branch pushed** `fix/money-draft-license` `b195602` |
+| 10 | OPS-1 host→store routing + CORS + pool connect-timeout | multi-tenant blocker | 🟡 **branch pushed** `feat/ops-host-routing-cors` `bd53f62` (host via `store.config`, CORS via `hono/cors`) |
+| 11 | OPS-2 job leader-lock + release-stale batch/lock | multi-instance | 🟡 **branch pushed** `fix/ops-job-leader-lock` `2bc2f69` |
+| 12 | SEC-6 RBAC: gate refunds/cancel/releases | security | 🟡 **branch pushed** `fix/sec-rbac-refunds` `bcd74c1` (deny-by-default — grant keys before deploy) |
+| 13 | PERF-1 `order(store_id,code)` index | perf | ⚪ **NO-OP** — index already exists (`order_store_code` unique, `0000`) |
+
+**Correction from the audit:** the perf audits claimed 4 missing indexes; PERF-1 verification found **all four already exist**. My own claim-18 ("only `order(store_id,code)` missing") was also too generous — it exists as the `order_store_code` unique constraint. Never add these.
 
 Security + money + ops lanes are independent files and run concurrently; only MONEY-2 waits (it edits the same `admin-orders.ts` refund seam MONEY-1 conventions establish). Never dispatch a lane before its "blocked on" is ON MAIN. Not included as lanes (correct-as-conditions, tracked in the audit but not a code fix here): multi-instance Redis rate-limiter migration (OPS-3, deferred until N≥2), observability floor (pino + `/readyz` — do as OBS-1 when you want it), storefront checkout flag-flip (needs a live test-card run, human gate — not an agent task).
 
