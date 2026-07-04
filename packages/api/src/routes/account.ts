@@ -350,6 +350,8 @@ account.openapi(
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
+    // Authenticate BEFORE CSRF so an unauthenticated request gets 401 (not 403).
+    if (!customerToken(c)) return c.json({ error: 'not authenticated' }, 401);
     if (!customerCsrfValid(c)) return c.json({ error: 'invalid CSRF token' }, 403);
     const out = await withStore(st.id, async (tx): Promise<'unauth' | 'active_subscription' | 'ok'> => {
       const cust = await me(tx, customerToken(c));
@@ -368,7 +370,7 @@ account.openapi(
           customerId: null,
           shippingAddress: null,
           billingAddress: null,
-          metadata: sql`coalesce(${s.order.metadata}, '{}'::jsonb) || '{"anonymized_at":"' || now()::text || '"}'::jsonb`,
+          metadata: sql`coalesce(${s.order.metadata}, '{}'::jsonb) || jsonb_build_object('anonymized_at', now())`,
         })
         .where(eq(s.order.customerId, cust.id));
 
