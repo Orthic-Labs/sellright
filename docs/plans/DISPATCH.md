@@ -522,7 +522,7 @@ Nothing from the audit is silently dropped. Each remaining finding is **BUILD** 
 | `TEST-1` | Route integration tests for `checkout.ts` / `auth.ts` / `payment-webhooks.ts` — highest-value untested revenue paths (the money lanes only chipped at these). | mimo P0#1 | M |
 | `TEST-2` | E2E checkout→pay→fulfill against Stripe test keys. | all | L |
 | `COMP-2` | Account deletion / hard-delete cascade (soft-delete only today) — GDPR + hygiene. | deepseek 903, kimi | M |
-| `DEPS-1` | **Breaking major-version migration** — safe in-range dep updates are DONE (2026-07-05, `5e611c6`); these majors were held because they need code, not a lockfile bump: **zod 3→4 + `@hono/zod-openapi` 0.19→1** (couple; `c.req.valid()` returns `unknown` → ~212 route errors), **typescript 5→6**, **`@stripe/stripe-js` 4→9** (storefront), **graphql 16→17** (storefront, tied to the Vendure-cutover FE-9). **Storefront vite stays on 7.x** (Vite 8/Rolldown breaks Qwik SSR — do NOT bump). Do zod+zod-openapi as one lane. | deps survey | L |
+| `DEPS-1` | **Major-version migrations.** DONE: safe in-range updates (`5e611c6`) + **zod 3→4 & `@hono/zod-openapi` 0.19→1** (`28bf87e`, api typecheck 0 — generic `J`, `z.array(z.unknown())`, `z.email()`). STILL DEFERRED (separate, each needs its own pass): **typescript 5→6**, **`@types/node` 25→26**, **api vite 7→8** (may break vitest), **`@stripe/stripe-js` 4→9** (storefront), **graphql 16→17** (storefront, tied to Vendure-cutover FE-9). **Storefront vite stays on 7.x** — Vite 8/Rolldown breaks Qwik SSR, do NOT bump. Minor cleanup: 16 `z.string().email()` deprecations → `z.email()`. | deps survey | M |
 
 ### 3b · DEFER — real, not now (reason each)
 
