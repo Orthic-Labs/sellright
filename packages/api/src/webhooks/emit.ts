@@ -28,6 +28,70 @@ export function normalizeWebhookBatchLimit(limit?: number): number {
   return Math.min(MAX_BATCH_LIMIT, Math.max(1, Math.floor(limit!)));
 }
 
+type ClaimedDelivery = { id: string; topic: string; payload: unknown; url: string; secret: string; attempts: number };
+
+/**
+ * PERF-14: claim a batch of due rows for one store and COMMIT immediately —
+ * releasing the pooled connection before any outbound HTTP happens. Mirrors
+ * the WP1.7/WP9 FOR UPDATE SKIP LOCKED claim (unchanged), just no longer
+ * shares a txn with the fetch below.
+ */
+async function claimDueWebhooks(storeId: string, limit: number): Promise<ClaimedDelivery[]> {
+  return withStore(storeId, async (tx) => {
+    // url + secret live on webhook_endpoint (delivery references it via
+    // endpoint_id) — join it in the UPDATE…FROM so RETURNING can surface
+    // them. (Earlier this RETURNed url/secret straight off webhook_delivery,
+    // which has neither column → the query threw at runtime and NO webhook
+    // ever delivered; the reaper then recycled every row forever.)
+    const claim = await tx.execute(
+      sql`UPDATE webhook_delivery wd
+          SET status = 'processing', attempts = wd.attempts + 1
+          FROM webhook_endpoint we
+          WHERE we.id = wd.endpoint_id
+            AND wd.id IN (
+              SELECT id FROM webhook_delivery
+              WHERE status = 'pending' AND next_attempt_at <= now()
+              ORDER BY next_attempt_at
+              LIMIT ${limit}
+              FOR UPDATE SKIP LOCKED
+            )
+          RETURNING wd.id, wd.topic, wd.payload, we.url, we.secret, wd.attempts`,
+    );
+    return (claim as unknown as { rows: ClaimedDelivery[] }).rows;
+  });
+}
+
+/**
+ * PERF-14: record the outcome of ONE already-claimed delivery in its own
+ * short txn — called AFTER safeOutboundFetch has already returned, so this
+ * never holds a connection across the outbound call. Crash-safe: if the
+ * process dies between claim and finalize, the row is stuck 'processing' and
+ * the webhook-reaper (jobs/webhook-reaper.ts) resets it back to 'pending'
+ * after its grace period, same as before this split.
+ */
+async function finalizeWebhookDelivery(
+  storeId: string,
+  d: ClaimedDelivery,
+  outcome: { ok: true } | { ok: false; error: unknown },
+): Promise<'delivered' | 'retry' | 'dead'> {
+  return withStore(storeId, async (tx) => {
+    if (outcome.ok) {
+      await tx.update(s.webhookDelivery).set({ status: 'delivered', deliveredAt: new Date() }).where(eq(s.webhookDelivery.id, d.id));
+      return 'delivered';
+    }
+    // `d.attempts` is the post-claim value (incremented at claim time); use it
+    // directly for the give-up decision so BACKOFF progresses.
+    const giveUp = d.attempts >= MAX_ATTEMPTS;
+    const backoff = BACKOFF_S[Math.min(d.attempts - 1, BACKOFF_S.length - 1)]!;
+    await tx.update(s.webhookDelivery).set({
+      lastError: String(outcome.error instanceof Error ? outcome.error.message : outcome.error),
+      status: giveUp ? 'failed' : 'pending',
+      nextAttemptAt: new Date(Date.now() + backoff * 1000),
+    }).where(eq(s.webhookDelivery.id, d.id));
+    return giveUp ? 'dead' : 'retry';
+  });
+}
+
 /** Deliver due pending webhooks across all stores (scheduler-driven). */
 export async function deliverWebhooks(opts: { limit?: number; log?: (m: string) => void } = {}): Promise<{ delivered: number; failed: number }> {
   const log = opts.log ?? (() => {});
@@ -37,57 +101,37 @@ export async function deliverWebhooks(opts: { limit?: number; log?: (m: string) 
   let failed = 0;
 
   for (const st of stores.rows) {
-    await withStore(st.id, async (tx) => {
-      // WP1.7 / WP9 (perf): claim a batch of due rows under FOR UPDATE SKIP
-      // LOCKED so concurrent scheduler passes (e.g. multi-instance deploys)
-      // don't double-deliver the same row. The claim is held for the duration
-      // of this txn, then marked status='processing' (so a crash mid-delivery
-      // leaves a recoverable row — reaper resets stuck 'processing' rows).
-      const claim = await tx.execute(
-        // url + secret live on webhook_endpoint (delivery references it via
-        // endpoint_id) — join it in the UPDATE…FROM so RETURNING can surface
-        // them. (Earlier this RETURNed url/secret straight off webhook_delivery,
-        // which has neither column → the query threw at runtime and NO webhook
-        // ever delivered; the reaper then recycled every row forever.)
-        sql`UPDATE webhook_delivery wd
-            SET status = 'processing', attempts = wd.attempts + 1
-            FROM webhook_endpoint we
-            WHERE we.id = wd.endpoint_id
-              AND wd.id IN (
-                SELECT id FROM webhook_delivery
-                WHERE status = 'pending' AND next_attempt_at <= now()
-                ORDER BY next_attempt_at
-                LIMIT ${limit}
-                FOR UPDATE SKIP LOCKED
-              )
-            RETURNING wd.id, wd.topic, wd.payload, we.url, we.secret, wd.attempts`,
-      );
-      const due = (claim as unknown as { rows: Array<{ id: string; topic: string; payload: unknown; url: string; secret: string; attempts: number }> }).rows;
+    // PERF-14: claim+release (txn #1, committed inside claimDueWebhooks) —
+    // no pooled connection is held past this point.
+    const due = await claimDueWebhooks(st.id, limit);
 
-      for (const d of due) {
-        const body = JSON.stringify({ id: d.id, topic: d.topic, payload: d.payload });
-        const signature = createHmac('sha256', d.secret).update(body).digest('hex');
-        try {
-          const res = await safeOutboundFetch(d.url, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json', 'x-sr-topic': d.topic, 'x-sr-signature': signature },
-            body,
-            signal: AbortSignal.timeout(10_000),
-          });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          await tx.update(s.webhookDelivery).set({ status: 'delivered', deliveredAt: new Date() }).where(eq(s.webhookDelivery.id, d.id));
-          delivered++;
-        } catch (e) {
-          // `d.attempts` is the post-claim value (incremented at claim time);
-          // use it directly for the give-up decision so BACKOFF progresses.
-          const giveUp = d.attempts >= MAX_ATTEMPTS;
-          const backoff = BACKOFF_S[Math.min(d.attempts - 1, BACKOFF_S.length - 1)]!;
-          await tx.update(s.webhookDelivery).set({ lastError: String(e instanceof Error ? e.message : e), status: giveUp ? 'failed' : 'pending', nextAttemptAt: new Date(Date.now() + backoff * 1000) }).where(eq(s.webhookDelivery.id, d.id));
-          if (giveUp) failed++;
-        }
+    for (const d of due) {
+      const body = JSON.stringify({ id: d.id, topic: d.topic, payload: d.payload });
+      const signature = createHmac('sha256', d.secret).update(body).digest('hex');
+      // PERF-14: the outbound fetch runs with NO db txn open — a slow or
+      // timing-out endpoint (up to the 10s AbortSignal) no longer pins a
+      // pooled connection. finalizeWebhookDelivery() below opens its own
+      // short txn only after the fetch has already settled.
+      let outcome: { ok: true } | { ok: false; error: unknown };
+      try {
+        const res = await safeOutboundFetch(d.url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-sr-topic': d.topic, 'x-sr-signature': signature },
+          body,
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        outcome = { ok: true };
+      } catch (e) {
+        outcome = { ok: false, error: e };
       }
-      if (due.length) log(`[webhooks] ${st.id}: ${due.length} attempted`);
-    });
+
+      // txn #2: short, record-only finalize.
+      const result = await finalizeWebhookDelivery(st.id, d, outcome);
+      if (result === 'delivered') delivered++;
+      else if (result === 'dead') failed++;
+    }
+    if (due.length) log(`[webhooks] ${st.id}: ${due.length} attempted`);
   }
   return { delivered, failed };
 }
