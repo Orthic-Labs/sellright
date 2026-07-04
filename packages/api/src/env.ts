@@ -48,6 +48,12 @@ const EnvSchema = z.object({
   // unsigned permanent link).
   DOWNLOAD_DIR: z.string().default('var/downloads'),
   DOWNLOAD_URL_SECRET: z.string().optional(),
+  // SEC-4: host allowlist for artifact.path values that are external http(s) URLs.
+  // Comma-separated list of host suffixes (e.g. "r2.dev,cloudfront.net"). An
+  // artifact URL is only redirected to when its hostname equals a listed suffix
+  // or is a subdomain of one. Empty (default) allows nothing — release artifacts
+  // pointing at an external URL are rejected until an operator opts in a host.
+  ARTIFACT_EXTERNAL_HOST_ALLOWLIST: z.string().default(''),
   // Public storefront URL used in email links (password reset, verify, etc.).
   STOREFRONT_URL: z.string().url().default('https://store.example.com'),
   // Optional per-app overrides for shared stores, e.g.
