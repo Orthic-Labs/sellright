@@ -8,12 +8,8 @@
 
 ## ⇒ NEXT-AGENT HANDOFF — start here (updated 2026-07-04)
 
-### ⛔ OPEN BLOCKER — MONEY-1 / `0037` is UNSAFE on real DD data (do not build payment work on it)
-Merged + green on the CLEAN test DB, but validating against `sellright_dev` (a **clone of Damned Designs, 13,544 payments**) exposed a design flaw the test DB could not: the DD import writes `provider_ref = 'imported'` as a **placeholder** on **12,674 distinct historical payments**, so they all collide on `(store_id, 'imported')`. Consequences:
-- `0037`'s `CREATE UNIQUE INDEX (store_id, provider_ref) WHERE provider_ref IS NOT NULL` **cannot apply to real DD data** (42P10 duplicate keys).
-- The de-dupe step I drafted for `0037` would **DELETE 12,673 legitimate imported payments** — do NOT ship it.
-- Root cause is the import, not the settle race. **Correct fix (TBD, needs decision):** make the importer write `provider_ref = NULL` (or a unique `imported:<orderCode>`) for placeholder rows, so real gateway refs stay unique and imports fall outside the partial index. Until then MONEY-1's index must not be deployed to any DB carrying imported payments (prod included).
-- **Status:** MONEY-1 code is on `main` but its migration is a no-go for prod as written. Treat MONEY-1 as **REOPENED**. No payment/migration lane should build on it yet.
+### ✅ RESOLVED — MONEY-1 / `0037` imported-placeholder blocker (2026-07-05, `c53bda2`)
+Validating against `sellright_dev` (a **clone of Damned Designs, 13,544 payments**) exposed that the 2024 Woo→Vendure import stamped `provider_ref = 'imported'` on **12,674 distinct historical payments** — they all collided on `(store_id, 'imported')`, and a prior de-dupe DELETE would have destroyed 12,673 real rows. **Fixed:** `0037` now `UPDATE payment SET provider_ref = NULL WHERE provider_ref = 'imported'` **before** the de-dupe (placeholders belong outside the partial index, like manual/COD — nulled, never deleted); the DELETE then only touches genuine settle-race duplicates. Migration is idempotent; validated applying clean on a fresh DB + full box `test:db` green. There is **no ongoing importer** to fix (one-time 2024 data). Deploying to `sellright_dev`/prod: the destructive migration steps (DROP/DELETE/ALTER) are hook-blocked from an agent — Adrian runs `pnpm db:migrate` against dev, or lifts the guard. MONEY-1 is code-complete + box-validated.
 
 ### The other 11 lanes
 On `origin/main` (`bff9e1d`), validated end-to-end on the box against real Postgres + RLS (`assert-rls` OK, typecheck + build ok, **187 non-DB + 88 DB tests green**). Box validation caught 5 defects every local typecheck missed. The security lanes (SEC-1..6) + OPS + MONEY-3 are sound.
