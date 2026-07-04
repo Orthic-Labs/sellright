@@ -12,6 +12,7 @@ import { resolveTaxRate } from '../money/tax.js';
 import { emitEvent } from '../webhooks/emit.js';
 import { sendShippingNotification } from '../email/dispatch.js';
 import { csvCell, inferCarrier, orderCode, unitPrice } from './admin-order-utils.js';
+import { issueLicensesForPaidOrder } from '../licensing/issue.js';
 
 export const adminOrderOps = new OpenAPIHono();
 
@@ -59,9 +60,18 @@ adminOrderOps.openapi(
       const customerId = body.email ? (await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, normalizeEmail(body.email))).limit(1))[0]?.id ?? null : null;
       const orderId = randomUUID(); const code = orderCode();
       const paid = body.markPaid;
-      await tx.insert(s.order).values({ id: orderId, storeId: st.storeId, code, customerId, state: paid ? 'Paid' : 'PendingPayment', currency: st.currency, subtotal: totals.subtotal, discountTotal: totals.discountTotal, shippingTotal: totals.shippingTotal, taxTotal: totals.taxTotal, grandTotal: totals.grandTotal, placedAt: paid ? new Date() : null, shippingAddress: body.shippingAddress ?? null });
+      const paidAt = paid ? new Date() : null;
+      await tx.insert(s.order).values({ id: orderId, storeId: st.storeId, code, customerId, state: paid ? 'Paid' : 'PendingPayment', currency: st.currency, subtotal: totals.subtotal, discountTotal: totals.discountTotal, shippingTotal: totals.shippingTotal, taxTotal: totals.taxTotal, grandTotal: totals.grandTotal, placedAt: paidAt, shippingAddress: body.shippingAddress ?? null });
       await tx.insert(s.orderLine).values(priced.map((p, idx) => ({ storeId: st.storeId, orderId, variantId: p.v.id, variantSku: p.v.sku, variantName: p.v.name, quantity: p.qty, unitPrice: p.unitPrice, lineSubtotal: totals.lines[idx]!.lineSubtotal, lineDiscount: totals.lines[idx]!.lineDiscount, lineTax: 0, lineTotal: totals.lines[idx]!.lineTotal })));
-      if (paid) await tx.insert(s.payment).values({ storeId: st.storeId, orderId, amount: totals.grandTotal, method: 'manual', providerRef: `admin-${code}`, state: 'Settled', metadata: { manual: true, by: admin.email } });
+      if (paid) {
+        await tx.insert(s.payment).values({ storeId: st.storeId, orderId, amount: totals.grandTotal, method: 'manual', providerRef: `admin-${code}`, state: 'Settled', metadata: { manual: true, by: admin.email } });
+        // Every other Paid transition (checkout settle, gift-card full-cover,
+        // Stripe webhook reconcile) issues licenses via this same function —
+        // a phone/manual order marked paid here must not be the one path that
+        // skips it. issueLicensesForPaidOrder is idempotent per orderLineId, so
+        // a later real settlement of this order will not double-issue.
+        await issueLicensesForPaidOrder(tx, { storeId: st.storeId, orderId, customerId, paidAt: paidAt ?? undefined });
+      }
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: orderId, action: 'draft_create', toState: paid ? 'Paid' : 'PendingPayment' });
       return { kind: 'ok' as const, code, state: paid ? 'Paid' : 'PendingPayment', grandTotal: totals.grandTotal };
     }).catch((e: unknown) => {
