@@ -6,18 +6,19 @@
 
 **Scope discipline:** this repo is the SellRight **product** (`D:\Claude\sellright`), not the RightApps fork. Edit here, push `origin/main`, pull on the box. Every lane targets `packages/api` unless it says otherwise. No lane may touch `packages/storefront` payment code except S-CFG-flip (Lane P1) and only behind the flag.
 
-## ⇒ NEXT-AGENT HANDOFF — start here (2026-07-04)
+## ⇒ NEXT-AGENT HANDOFF — start here (updated 2026-07-04)
 
-The audit is **not fully closed.** Two kinds of pending remain:
+**All 12 lanes are DONE and on `origin/main` (`bff9e1d`), validated end-to-end on the box** against real Postgres + RLS: `assert-rls` OK (51 FORCE-RLS tables), typecheck + build ok, **187 non-DB + 88 DB tests green**. Box validation caught **5 real defects that every local gate (typecheck) missed** — see the ledger. Nothing from the security+money blocker tier is left.
 
-1. **Validate + merge the 5 built branches** (MONEY-2, MONEY-3, OPS-1, OPS-2, SEC-6). They are typecheck-clean and pushed, but only MONEY-1 has passed `test:db` on the box — and MONEY-1 proved a typecheck-clean branch can still break every payment. **Do not merge any of them until it is box-green.** The exact, proven runbook (SSH, corepack pnpm, the already-provisioned `sellright_test`, the per-branch validation script, merge order, deploy + storefront smoke) is `BOX-VALIDATION-CHECKLIST.md`. Start there.
-2. **~45 audit findings not yet built** — reliability (`REL-1..6`), observability (`OBS-1..3`), scale (`SCALE-1`), performance (`PERF-2..17`), frontend/a11y/i18n (`FE-1..11`), compliance (`COMP-1..5`), testing (`TEST-1..2`). All enumerated with IDs + source refs in the **AUDIT COVERAGE LEDGER** at the end of this doc. These were correctly scoped OUT of the security+money blocker tier; pick them up as new lanes when ready. The migration-relevant ones to promote first: `REL-1` graceful shutdown, `OBS-2` `/readyz`, `TEST-1` checkout/auth route tests.
+**What remains = the audit backlog only** (~45 findings NOT built, correctly scoped out of the blocker tier): reliability (`REL-1..6`), observability (`OBS-1..3`), scale (`SCALE-1`), performance (`PERF-2..17`), frontend/a11y/i18n (`FE-1..11`), compliance (`COMP-1..5`), testing (`TEST-1..2`) — all enumerated with IDs + source refs in the **AUDIT COVERAGE LEDGER** at the end of this doc. Promote first, if you want migration-hardening: `REL-1` graceful shutdown, `OBS-2` `/readyz`, `TEST-1` checkout/auth route tests.
+
+**Not yet live.** `main` is merged + validated but **not deployed** — the box dev API (`sellright-api`) still runs the pre-merge `dist/`. Deploy steps + storefront smoke + the SEC-6 deny-by-default grant are in `BOX-VALIDATION-CHECKLIST.md` §Deploy. Confirm scope before restarting the service.
 
 Everything else in this doc (the fenced lane blocks) is the history of how the 12 lanes were built — reference, not new work.
 
 ## Dispatch table — status (updated 2026-07-04)
 
-Phase 1 (pure-code security) = **MERGED to `main`** (laptop-validated: typecheck + 169 unit tests + build + deps:audit). Phase 2 (DB/money) = **built + typechecked + pushed as branches, UNMERGED** pending box validation (no local test DB) — see `BOX-VALIDATION-CHECKLIST.md`.
+**ALL 12 lanes MERGED to `origin/main` (`bff9e1d`) and box-validated** (2026-07-04). Phase 1 (security) laptop-validated; phase 2 (DB/money) validated on the box against real Postgres + RLS. Not yet deployed — see `BOX-VALIDATION-CHECKLIST.md` §Deploy.
 
 | # | Lane | Class | Status |
 |---|---|---|---|
@@ -27,15 +28,15 @@ Phase 1 (pure-code security) = **MERGED to `main`** (laptop-validated: typecheck
 | 4 | SEC-4 download open-redirect allowlist | security | ✅ **MERGED** `57548d4` |
 | 5 | SEC-5 trusted-proxy IP + Secure-from-scheme + sanitize errors | security/config | ✅ **MERGED** `5b6ecd9` |
 | 6 | HYG-1 pnpm CI/local version match | hygiene | ✅ **MERGED** `1204615` |
-| 7 | MONEY-1 payment idempotency: unique `(store_id,provider_ref)` + store-scoped claim | money integrity | 🟢 **BOX-GREEN, branch** `feat/money-payment-idempotency` `2c75e9f` — box `test:db` **51/51** after fixing a real `42P10` bug it surfaced. NOT merged. |
-| 8 | MONEY-2 refund idempotency key + lock return-approve (+gateway-out-of-txn deferred) | money integrity | 🟡 **branch, rebased on fixed MONEY-1** — push pending (force-push approval); not box-validated |
-| 9 | MONEY-3 draft `markPaid` issues licenses | money/fulfillment | 🟡 **branch** `fix/money-draft-license` `b195602` — typecheck-clean; not box-validated |
-| 10 | OPS-1 host→store routing + CORS + pool connect-timeout | multi-tenant blocker | 🟡 **branch** `feat/ops-host-routing-cors` `bd53f62` — not box-validated (host via `store.config`, CORS via `hono/cors`) |
-| 11 | OPS-2 job leader-lock + release-stale batch/lock | multi-instance | 🟡 **branch** `fix/ops-job-leader-lock` `2bc2f69` — not box-validated |
-| 12 | SEC-6 RBAC: gate refunds/cancel/releases | security | 🟡 **branch** `fix/sec-rbac-refunds` `bcd74c1` — not box-validated (deny-by-default — grant keys before deploy) |
+| 7 | MONEY-1 payment idempotency: unique `(store_id,provider_ref)` + store-scoped claim | money integrity | ✅ **MERGED** `9a3bc7b` — box `test:db` 51/51 (fixed a `42P10` bug it surfaced) |
+| 8 | MONEY-2 refund idempotency key + lock return-approve (+gateway-out-of-txn deferred) | money integrity | ✅ **MERGED** `1947099` — box 56/56 (fixed a dropped test registration) |
+| 9 | MONEY-3 draft `markPaid` issues licenses | money/fulfillment | ✅ **MERGED** `5529ce6` — box 51/51 (fixed an orphaned test) |
+| 10 | OPS-1 host→store routing + CORS + pool connect-timeout | multi-tenant blocker | ✅ **MERGED** `b739ada` — box 62/62 (host via `store.config`, CORS via `hono/cors`) |
+| 11 | OPS-2 job leader-lock + release-stale batch/lock | multi-instance | ✅ **MERGED** `b9a20cc` — box 49/49 (fixed a flawed assertion) |
+| 12 | SEC-6 RBAC: gate refunds/cancel/releases | security | ✅ **MERGED** `8e87c65` — box 58/58 (deny-by-default — grant keys before deploy) |
 | 13 | PERF-1 `order(store_id,code)` index | perf | ⚪ **NO-OP** — index already exists (`order_store_code` unique, `0000`) |
 
-**Box validation (live, 2026-07-04):** `main` (phase-1) validated on the box against real Postgres + RLS — `assert-rls` OK (51 FORCE-RLS tables), **`test:db` 47/47**. MONEY-1 validated → **caught a real bug local gates missed** (partial-index `ON CONFLICT` without its `WHERE` predicate → `42P10` on every payment insert) → fixed → **51/51 green**. MONEY-2/3, OPS-1/2, SEC-6 still need their `test:db` run on the box. Full coverage ledger is at the end of this doc.
+**Box validation (live, 2026-07-04) — ALL 12 lanes on `origin/main` `bff9e1d`, validated against real Postgres + RLS:** `assert-rls` OK (51 FORCE-RLS tables), typecheck + build ok, **187 non-DB + 88 DB (13 files) tests green**. The box caught **5 defects every local typecheck passed**: MONEY-1's `42P10` (partial-index `ON CONFLICT` missing its `WHERE` predicate → would have 500'd **every payment**); MONEY-2 + MONEY-3 test files never registered in `test:db` (ran nowhere); OPS-2's leader-lock test asserted on a return value the winner didn't set; SEC-6 expanded `UI_PERMISSION_KEYS` and broke a pre-existing `admin-settings` test whose "unknown key" fixture was `refunds`. All fixed + re-validated. This is the proof that typecheck-clean ≠ correct for DB/money code.
 
 **Correction from the audit:** the perf audits claimed 4 missing indexes; PERF-1 verification found **all four already exist**. My own claim-18 ("only `order(store_id,code)` missing") was also too generous — it exists as the `order_store_code` unique constraint. Never add these.
 
@@ -462,14 +463,14 @@ Every distinct finding across the 8 audit sections (minimax, glm, deepseek, qwen
 | SEC-4 | licensed-download open redirect (qwen LOW-05, kimi) | ✅ | on `main` `57548d4`; unit tests |
 | SEC-5 | clientIp spoof (minimax H-2, deepseek M-01, qwen M-02); NODE_ENV cookie/error footgun (minimax M-5, deepseek, qwen M-04) | ✅ | on `main` `5b6ecd9`; unit tests |
 | HYG-1 | pnpm CI/local drift (Prod audit) | ✅ | on `main` `1204615`; **confirmed on box** (box pnpm was 10.34.1) |
-| MONEY-1 | duplicate payment-ledger race + no unique `(store_id,provider_ref)` (minimax M-1, deepseek "duplicate payment ledger"/High#1); cross-store idempotency-key collision | 🔵→🟢 | branch `feat/money-payment-idempotency` `2c75e9f`. **Box test:db surfaced a real bug** (partial-index `ON CONFLICT` missing its `WHERE` predicate → `42P10` on EVERY payment insert; 8 subscription tests failed). Fixed (`onConflictDoNothing` `where:`); **re-validated box green: 51/51**. NOT merged. |
-| MONEY-2 | refund double-spend + no Stripe idempotency key (minimax M-2, deepseek Critical#2); unlocked return-approve | 🟡 | branch `fix/money-refund-idempotency`; rebased onto fixed MONEY-1 locally, **push pending** (force-push to feature branch awaiting approval); not yet box-validated. Gateway-out-of-txn (item 3) **deferred** with rationale. |
-| MONEY-3 | draft `markPaid` issues no licenses (minimax, deepseek, kimi C2) | 🟡 | branch `fix/money-draft-license` `b195602`; typecheck-clean; **not box-validated** |
-| OPS-1 | host→store routing (minimax A1) + CORS (minimax A2) + pool connect-timeout 0→5000 (deepseek, mimo P0#7, kimi) | 🟡 | branch `feat/ops-host-routing-cors` `bd53f62`; typecheck-clean; **not box-validated**. Host via `store.config.hostnames`; CORS via `hono/cors` (no phantom dep). |
-| OPS-2 | jobs unsafe >1 instance + release-stale double-release (minimax A3, deepseek High#2, qwen, kimi P1, mimo P0#5) | 🟡 | branch `fix/ops-job-leader-lock` `2bc2f69`; typecheck-clean; **not box-validated**. Advisory leader-lock + SKIP LOCKED batched release. |
-| SEC-6 | RBAC only-2-of-N enforced; refunds/cancel/releases ungated (minimax H-3, qwen, kimi) | 🟡 | branch `fix/sec-rbac-refunds` `bcd74c1`; typecheck-clean (api+admin); **not box-validated**. Deny-by-default — grant keys before deploy. |
+| MONEY-1 | duplicate payment-ledger race + no unique `(store_id,provider_ref)` (minimax M-1, deepseek "duplicate payment ledger"/High#1); cross-store idempotency-key collision | ✅ | **MERGED** `9a3bc7b`. Box `test:db` surfaced a real bug (partial-index `ON CONFLICT` missing its `WHERE` predicate → `42P10` on EVERY payment insert; 8 subscription tests failed). Fixed (`onConflictDoNothing` `where:`) → box green **51/51**. |
+| MONEY-2 | refund double-spend + no Stripe idempotency key (minimax M-2, deepseek Critical#2); unlocked return-approve | ✅ | **MERGED** `1947099`. The MONEY-1 merge dropped its `test:db` registration → refund tests ran nowhere; re-registered → box green **56/56**. Gateway-out-of-txn (item 3) **deferred** with rationale. |
+| MONEY-3 | draft `markPaid` issues no licenses (minimax, deepseek, kimi C2) | ✅ | **MERGED** `5529ce6`. Test file was orphaned (in neither `test` nor `test:db`) → registered → box green **51/51**. |
+| OPS-1 | host→store routing (minimax A1) + CORS (minimax A2) + pool connect-timeout 0→5000 (deepseek, mimo P0#7, kimi) | ✅ | **MERGED** `b739ada`; box green **62/62**. Host via `store.config.hostnames`; CORS via `hono/cors` (no phantom dep). |
+| OPS-2 | jobs unsafe >1 instance + release-stale double-release (minimax A3, deepseek High#2, qwen, kimi P1, mimo P0#5) | ✅ | **MERGED** `b9a20cc`. Test asserted on a return value the leader didn't set → fixed (sentinel; `innerRuns===1` still proves the lock) → box green **49/49**. Advisory leader-lock + SKIP LOCKED batched release. |
+| SEC-6 | RBAC only-2-of-N enforced; refunds/cancel/releases ungated (minimax H-3, qwen, kimi) | ✅ | **MERGED** `8e87c65`; box green **58/58**. Expanding `UI_PERMISSION_KEYS` broke a pre-existing `admin-settings` test whose "unknown key" fixture was `refunds` → fixed. Deny-by-default — grant keys before deploy. |
 
-**Only phase-1 (SEC/HYG) is on `main`.** MONEY-1 is box-green on a branch; MONEY-2/3, OPS-1/2, SEC-6 are typecheck-clean branches **not yet box-validated or merged** (blocked on: force-push approval for MONEY-2, then per-branch `test:db` on the box). MONEY-1 is the proof that typecheck-clean ≠ correct — it passed every local gate and still broke all payments.
+**All 12 lanes are on `origin/main` (`bff9e1d`) and box-validated** (187 non-DB + 88 DB tests green against real Postgres + RLS). Box validation caught 5 defects that every local typecheck passed — the emphatic proof that typecheck-clean ≠ correct for DB/money code (MONEY-1 alone would have 500'd every payment). Remaining work is the audit backlog in §3, and deployment (not yet live).
 
 ## 2 · REFUTED (verified false — never action)
 

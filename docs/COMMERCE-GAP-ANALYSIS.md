@@ -20,6 +20,14 @@ Where competitors win is **not the engine** — it's (1) the **growth/retention 
 
 ---
 
+## ✅ Security + money-integrity hardening shipped (2026-07-04)
+
+From a 6-model migration-readiness audit (`rank.md`, `docs/plans/DISPATCH.md` ledger). 12 lanes on `main` `bff9e1d`, box-validated (187 non-DB + 88 DB tests, real Postgres + RLS):
+- **Payments:** unique `(store_id, provider_ref)` + `ON CONFLICT` settle (kills the `/pay`-vs-webhook duplicate-ledger race); store-scoped idempotency claim key; Stripe **idempotency-key on refunds** + locked return-approve (kills double-refund); draft `markPaid` now issues licenses.
+- **Multi-tenant/ops:** host→store routing (`store.config.hostnames`, 404 on unknown host in prod — no silent `damned` fallback); CORS (`hono/cors`, per-store origin allowlist); pool connect-timeout `0→5000`; advisory-lock single-leader scheduler + `SKIP LOCKED` batched stale-release.
+- **Security:** newsletter SSRF guard + rate-limit; admin-logout CSRF + bearer-validated CSRF; blog HTML sanitization; download open-redirect allowlist; trusted-proxy IP gating + Secure-from-scheme + always-sanitize errors; **per-action RBAC on refunds/cancel/releases** (deny-by-default — grant keys before deploy).
+- Migration `0037` (partial unique index) added. Not yet deployed to the box (still runs pre-merge `dist/`). Remaining audit backlog (reliability/observability/perf/frontend/compliance) tracked in the DISPATCH ledger §3.
+
 ## ✅ Shipped since this analysis (updated 2026-06-20)
 
 The 2026-06-19 snapshot below is now partly historical — these gaps have been closed (all committed; backend items box-verified):

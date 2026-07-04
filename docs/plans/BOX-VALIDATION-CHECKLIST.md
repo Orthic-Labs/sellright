@@ -1,6 +1,6 @@
-# Box validation runbook — phase-2 branches → merge → deploy (hand-off, 2026-07-04)
+# Box validation runbook → deploy (2026-07-04)
 
-**For the next agent.** Phase-1 (6 security + hygiene lanes) is on `main` and box-validated. Phase-2 is 6 branches; **MONEY-1 is box-green, the other 5 still need `test:db` on the box.** This is the concrete, already-proven procedure — not generic advice. The audit backlog (unbuilt findings) is the ledger at the end of `DISPATCH.md`, not this file.
+**Validation COMPLETE.** All 12 lanes are merged to `origin/main` (`bff9e1d`) and validated on the box: `assert-rls` OK (51 FORCE-RLS tables), typecheck + build ok, **187 non-DB + 88 DB tests green**. Box validation caught + fixed 5 defects local gates missed (see the DISPATCH ledger). **What remains is DEPLOY** (§Deploy below) — `main` is not yet live; the box dev API still runs the pre-merge `dist/`. The sections below are kept as the proven procedure (re-run if you touch these lanes) and the deploy runbook. The audit backlog (unbuilt findings) is the ledger at the end of `DISPATCH.md`.
 
 ## Current state (git)
 
