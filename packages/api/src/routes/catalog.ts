@@ -228,8 +228,8 @@ catalog.openapi(
       const parsed = parseRules(col.rules);
       if (parsed) {
         const baseWhere = and(eq(s.product.status, 'active'), isNull(s.product.deletedAt), compileRulesToSql(parsed));
-        const [{ count }] = await tx.select({ count: sql<number>`count(*)::int` }).from(s.product).where(baseWhere);
-        total = count;
+        const countRows = await tx.select({ count: sql<number>`count(*)::int` }).from(s.product).where(baseWhere);
+        total = countRows[0]?.count ?? 0;
         products = await tx
           .select({ slug: s.product.slug, name: s.product.name, minPrice: sql<number | null>`(select min(price) from product_variant pv where pv.product_id = ${s.product.id} and pv.deleted_at is null)` })
           .from(s.product)
@@ -239,11 +239,11 @@ catalog.openapi(
           .offset(offset);
       } else {
         const baseWhere = and(eq(s.collectionProduct.collectionId, col.id), eq(s.product.status, 'active'), isNull(s.product.deletedAt));
-        const [{ count }] = await tx
+        const countRows = await tx
           .select({ count: sql<number>`count(*)::int` })
           .from(s.collectionProduct).innerJoin(s.product, eq(s.product.id, s.collectionProduct.productId))
           .where(baseWhere);
-        total = count;
+        total = countRows[0]?.count ?? 0;
         products = await tx
           .select({ slug: s.product.slug, name: s.product.name, minPrice: sql<number | null>`(select min(price) from product_variant pv where pv.product_id = ${s.product.id} and pv.deleted_at is null)` })
           .from(s.collectionProduct).innerJoin(s.product, eq(s.product.id, s.collectionProduct.productId))

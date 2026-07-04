@@ -83,7 +83,7 @@ describe('smart collection browse — SQL-compiled rules + pagination (PERF-16)'
       headers: { 'x-store-slug': SLUG },
     });
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = await res.json() as { total: number; products: { slug: string }[] };
     expect(body.total).toBe(5);
     const slugs = body.products.map((p: { slug: string }) => p.slug).sort();
     expect(slugs).toEqual(['edc-item-0', 'edc-item-1', 'edc-item-2', 'edc-item-3', 'edc-item-4']);
@@ -93,8 +93,8 @@ describe('smart collection browse — SQL-compiled rules + pagination (PERF-16)'
 
   it('paginates: page 1 and page 2 return distinct, non-overlapping slugs', async () => {
     const app = createApp();
-    const page1 = await (await app.request('/v1/shop/collections/edc-smart?page=1&pageSize=2', { headers: { 'x-store-slug': SLUG } })).json();
-    const page2 = await (await app.request('/v1/shop/collections/edc-smart?page=2&pageSize=2', { headers: { 'x-store-slug': SLUG } })).json();
+    const page1 = (await (await app.request('/v1/shop/collections/edc-smart?page=1&pageSize=2', { headers: { 'x-store-slug': SLUG } })).json()) as { total: number; products: { slug: string }[] };
+    const page2 = (await (await app.request('/v1/shop/collections/edc-smart?page=2&pageSize=2', { headers: { 'x-store-slug': SLUG } })).json()) as { total: number; products: { slug: string }[] };
 
     expect(page1.total).toBe(5);
     expect(page2.total).toBe(5);

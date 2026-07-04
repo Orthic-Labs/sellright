@@ -319,7 +319,7 @@ account.openapi(
       }).from(s.order).where(eq(s.order.customerId, cust.id)).orderBy(desc(s.order.createdAt));
       return { profile, addresses, orders };
     });
-    if (out === null) return c.json({ error: 'not authenticated' }, 401);
+    if (out === null || !out.profile) return c.json({ error: 'not authenticated' }, 401);
     return c.json({
       exportedAt: new Date().toISOString(),
       profile: { ...out.profile, createdAt: out.profile.createdAt ? out.profile.createdAt.toISOString() : null },
