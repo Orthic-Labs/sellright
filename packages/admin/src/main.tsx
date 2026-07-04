@@ -17,6 +17,7 @@ if ((import.meta as any).env?.MODE === 'qa') {
   void import('./qa-a11y.js');
 }
 import Layout from './components/Layout';
+import { AppErrorBoundary } from './components/ErrorBoundary';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Orders from './pages/Orders';
@@ -112,7 +113,12 @@ createRoot(document.getElementById('root')!).render(
       <AuthProvider>
         <BrowserRouter>
           <ToastProvider>
-            <App />
+            {/* Root boundary — last-resort catch-all. Any error not isolated by
+                a section boundary surfaces here so the user still sees the
+                chrome (header, nav) and a Reload button instead of a blank tab. */}
+            <AppErrorBoundary>
+              <App />
+            </AppErrorBoundary>
           </ToastProvider>
         </BrowserRouter>
       </AuthProvider>
