@@ -23,3 +23,5 @@ dist/
 
 # Per-deployment runtime state (assets, catalog/manifest) — never committed.
 var/
+
+SR outside audit.md
