@@ -7,6 +7,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // mutating process.env (which the frozen singleton would never re-read).
 vi.mock('./env.js', () => ({ env: { DEBUG_ERRORS: '0' } }));
 
+// Each test dynamically imports the full app+route graph after resetModules();
+// under full-suite parallel load that cold import can exceed the 20s default.
+// Run alone it completes in ~8s — this is import latency, not a hang.
+vi.setConfig({ testTimeout: 60000 });
+
 const originalNodeEnv = process.env.NODE_ENV;
 
 afterEach(() => {
