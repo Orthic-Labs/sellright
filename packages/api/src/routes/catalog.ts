@@ -192,38 +192,67 @@ catalog.openapi(
 );
 
 // ── storefront collection browse (manual or smart; published only) ────────────
-import { productMatchesRules, parseRules } from '../catalog/collection-rules.js';
+// PERF-16: smart collections used to load every active product in the store
+// into JS and filter with productMatchesRules() in memory — dies at catalog
+// scale. The rule DSL is now compiled to a SQL predicate (collection-rules-sql.ts)
+// and applied in the WHERE clause, with the same page/pageSize pagination shape
+// (cap 100) used by the rest of this file, instead of loading + filtering all rows.
+import { parseRules } from '../catalog/collection-rules.js';
+import { compileRulesToSql } from '../catalog/collection-rules-sql.js';
 
 catalog.openapi(
   createRoute({
     method: 'get', path: '/v1/shop/collections/{slug}', summary: 'Collection page (products + SEO)',
-    request: { params: z.object({ slug: z.string() }) },
+    request: {
+      params: z.object({ slug: z.string() }),
+      query: z.object({
+        page: z.coerce.number().int().min(1).default(1),
+        pageSize: z.coerce.number().int().min(1).max(100).default(24),
+      }),
+    },
     responses: {
-      200: { description: 'Collection', content: { 'application/json': { schema: z.object({ slug: z.string(), name: z.string(), description: z.string().nullable(), seoTitle: z.string().nullable(), seoDescription: z.string().nullable(), products: z.array(z.unknown()) }) } } },
+      200: { description: 'Collection', content: { 'application/json': { schema: z.object({ slug: z.string(), name: z.string(), description: z.string().nullable(), seoTitle: z.string().nullable(), seoDescription: z.string().nullable(), products: z.array(z.unknown()), total: z.number().int(), page: z.number().int(), pageSize: z.number().int() }) } } },
       404: { description: 'Not found', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
     },
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
     const { slug } = c.req.valid('param');
+    const { page, pageSize } = c.req.valid('query');
+    const offset = (page - 1) * pageSize;
     const out = await withStore(st.id, async (tx) => {
       const [col] = await tx.select().from(s.collection).where(eq(s.collection.slug, slug)).limit(1);
       if (!col || !col.published) return null;
-      let products;
+      let products: { slug: string; name: string; minPrice: number | null }[];
+      let total: number;
       const parsed = parseRules(col.rules);
       if (parsed) {
-        const rows = await tx
-          .select({ id: s.product.id, slug: s.product.slug, name: s.product.name, vendor: s.product.vendor, productType: s.product.productType, tags: s.product.tags, minPrice: sql<number | null>`(select min(price) from product_variant pv where pv.product_id = ${s.product.id} and pv.deleted_at is null)` })
-          .from(s.product).where(and(eq(s.product.status, 'active'), isNull(s.product.deletedAt)));
-        products = rows.filter((r) => productMatchesRules({ name: r.name, vendor: r.vendor, productType: r.productType, tags: r.tags, minPrice: r.minPrice }, parsed)).map((r) => ({ slug: r.slug, name: r.name, minPrice: r.minPrice }));
+        const baseWhere = and(eq(s.product.status, 'active'), isNull(s.product.deletedAt), compileRulesToSql(parsed));
+        const [{ count }] = await tx.select({ count: sql<number>`count(*)::int` }).from(s.product).where(baseWhere);
+        total = count;
+        products = await tx
+          .select({ slug: s.product.slug, name: s.product.name, minPrice: sql<number | null>`(select min(price) from product_variant pv where pv.product_id = ${s.product.id} and pv.deleted_at is null)` })
+          .from(s.product)
+          .where(baseWhere)
+          .orderBy(asc(s.product.name))
+          .limit(pageSize)
+          .offset(offset);
       } else {
+        const baseWhere = and(eq(s.collectionProduct.collectionId, col.id), eq(s.product.status, 'active'), isNull(s.product.deletedAt));
+        const [{ count }] = await tx
+          .select({ count: sql<number>`count(*)::int` })
+          .from(s.collectionProduct).innerJoin(s.product, eq(s.product.id, s.collectionProduct.productId))
+          .where(baseWhere);
+        total = count;
         products = await tx
           .select({ slug: s.product.slug, name: s.product.name, minPrice: sql<number | null>`(select min(price) from product_variant pv where pv.product_id = ${s.product.id} and pv.deleted_at is null)` })
           .from(s.collectionProduct).innerJoin(s.product, eq(s.product.id, s.collectionProduct.productId))
-          .where(and(eq(s.collectionProduct.collectionId, col.id), eq(s.product.status, 'active'), isNull(s.product.deletedAt)))
-          .orderBy(asc(s.collectionProduct.position), s.product.name);
+          .where(baseWhere)
+          .orderBy(asc(s.collectionProduct.position), s.product.name)
+          .limit(pageSize)
+          .offset(offset);
       }
-      return { slug: col.slug, name: col.name, description: col.description, seoTitle: col.seoTitle, seoDescription: col.seoDescription, products };
+      return { slug: col.slug, name: col.name, description: col.description, seoTitle: col.seoTitle, seoDescription: col.seoDescription, products, total, page, pageSize };
     });
     if (!out) return c.json({ error: 'collection not found' }, 404);
     return c.json(out, 200);
