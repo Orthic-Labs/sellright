@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import sharp from 'sharp';
+import type { Metadata } from 'sharp';
 import { sql, eq } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import { env } from '../env.js';
@@ -45,7 +46,7 @@ adminAssets.openapi(
     if (!(file instanceof File)) throw new HttpError(400, 'file required (multipart field "file")');
     if (file.size > MAX_BYTES) throw new HttpError(413, `max ${MAX_BYTES / 1024 / 1024}MB`);
     const buf = Buffer.from(await file.arrayBuffer());
-    let meta: sharp.Metadata;
+    let meta: Metadata;
     try { meta = await sharp(buf).metadata(); } catch { throw new HttpError(415, 'unsupported format — could not parse image'); }
     const fmt = (meta.format ?? '').toLowerCase();
     if (!ALLOWED.has(fmt)) throw new HttpError(415, `unsupported format: ${fmt || 'unknown'}`);
