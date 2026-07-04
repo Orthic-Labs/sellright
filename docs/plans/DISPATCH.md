@@ -6,6 +6,15 @@
 
 **Scope discipline:** this repo is the SellRight **product** (`D:\Claude\sellright`), not the RightApps fork. Edit here, push `origin/main`, pull on the box. Every lane targets `packages/api` unless it says otherwise. No lane may touch `packages/storefront` payment code except S-CFG-flip (Lane P1) and only behind the flag.
 
+## ⇒ NEXT-AGENT HANDOFF — start here (2026-07-04)
+
+The audit is **not fully closed.** Two kinds of pending remain:
+
+1. **Validate + merge the 5 built branches** (MONEY-2, MONEY-3, OPS-1, OPS-2, SEC-6). They are typecheck-clean and pushed, but only MONEY-1 has passed `test:db` on the box — and MONEY-1 proved a typecheck-clean branch can still break every payment. **Do not merge any of them until it is box-green.** The exact, proven runbook (SSH, corepack pnpm, the already-provisioned `sellright_test`, the per-branch validation script, merge order, deploy + storefront smoke) is `BOX-VALIDATION-CHECKLIST.md`. Start there.
+2. **~45 audit findings not yet built** — reliability (`REL-1..6`), observability (`OBS-1..3`), scale (`SCALE-1`), performance (`PERF-2..17`), frontend/a11y/i18n (`FE-1..11`), compliance (`COMP-1..5`), testing (`TEST-1..2`). All enumerated with IDs + source refs in the **AUDIT COVERAGE LEDGER** at the end of this doc. These were correctly scoped OUT of the security+money blocker tier; pick them up as new lanes when ready. The migration-relevant ones to promote first: `REL-1` graceful shutdown, `OBS-2` `/readyz`, `TEST-1` checkout/auth route tests.
+
+Everything else in this doc (the fenced lane blocks) is the history of how the 12 lanes were built — reference, not new work.
+
 ## Dispatch table — status (updated 2026-07-04)
 
 Phase 1 (pure-code security) = **MERGED to `main`** (laptop-validated: typecheck + 169 unit tests + build + deps:audit). Phase 2 (DB/money) = **built + typechecked + pushed as branches, UNMERGED** pending box validation (no local test DB) — see `BOX-VALIDATION-CHECKLIST.md`.
