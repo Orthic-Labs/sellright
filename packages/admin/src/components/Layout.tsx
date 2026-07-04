@@ -1,4 +1,4 @@
-import { useEffect, useState, type ComponentType } from 'react';
+import { useEffect, useState, type ComponentType, type ReactNode } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, ShoppingBag, Package, Layers, Boxes, Users, Settings, ChevronDown,
@@ -10,6 +10,7 @@ import { useAuth } from '../auth';
 import { api } from '../api';
 import { initials } from '../lib/format';
 import { ThemeMenu } from '../theme';
+import { AppErrorBoundary } from './ErrorBoundary';
 
 type IconType = ComponentType<{ size?: number | string; className?: string }>;
 interface NavItem { to: string; label: string; icon: IconType; end?: boolean }
@@ -52,6 +53,58 @@ const GROUPS: NavGroup[] = [
 
 const groupContainsPath = (g: NavGroup, path: string) =>
   g.items.some((i) => (i.end ? path === i.to : path === i.to || path.startsWith(i.to + '/')));
+
+/**
+ * Map a path to its admin section. Order matters — first match wins. The
+ * sections correspond to the major groups in DISPATCH.md §3a row FE-8:
+ * orders, products, customers, settings. Anything that doesn't match falls
+ * through to the root boundary (which still catches, just with generic copy).
+ */
+const SECTION_PREFIXES: ReadonlyArray<readonly [string, string]> = [
+  ['/orders', 'Orders'],
+  ['/subscriptions', 'Subscriptions'],
+  ['/returns', 'Returns'],
+  ['/customers', 'Customers'],
+  ['/products', 'Products'],
+  ['/collections', 'Collections'],
+  ['/inventory', 'Inventory'],
+  ['/locations', 'Locations'],
+  ['/discounts', 'Discounts'],
+  ['/gift-cards', 'Gift cards'],
+  ['/affiliates', 'Affiliates'],
+  ['/marketing', 'Marketing'],
+  ['/blog', 'Blog'],
+  ['/reports', 'Reports'],
+  ['/activity', 'Activity'],
+  ['/settings', 'Settings'],
+  ['/staff', 'Staff'],
+  ['/tax-zones', 'Tax zones'],
+  ['/currency-rates', 'Currencies'],
+  ['/webhooks', 'Webhooks'],
+];
+
+function sectionLabelFor(path: string): string {
+  for (const [prefix, label] of SECTION_PREFIXES) {
+    if (path === prefix || path.startsWith(prefix + '/')) return label;
+  }
+  return '';
+}
+
+/**
+ * Wraps <Outlet /> in a per-section error boundary keyed by pathname. A render
+ * error in /admin/orders shows a fallback there while /admin/products still
+ * loads normally. Keying by pathname means React unmounts/remounts the child
+ * on navigation, which gives each section its own boundary instance.
+ */
+function SectionedOutlet({ children }: { children?: ReactNode }) {
+  const loc = useLocation();
+  const label = sectionLabelFor(loc.pathname);
+  return (
+    <AppErrorBoundary key={loc.pathname} sectionLabel={label || undefined}>
+      {children ?? <Outlet />}
+    </AppErrorBoundary>
+  );
+}
 
 function GlobalSearch() {
   const [q, setQ] = useState('');
@@ -264,7 +317,7 @@ export default function Layout() {
         </header>
         <main key={loc.pathname} className="flex-1 overflow-auto">
           <div className="mx-auto max-w-7xl px-4 md:px-6 py-6 md:py-7">
-            <Outlet />
+            <SectionedOutlet />
           </div>
         </main>
       </div>
