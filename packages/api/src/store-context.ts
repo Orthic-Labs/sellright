@@ -12,6 +12,94 @@ export interface StoreCtx {
   config: unknown | null;
 }
 
+/**
+ * PERF-2: in-process TTL cache for resolveStore / resolveStoreByHost.
+ *
+ * Hot path: every request resolves the store before RLS-scoped work runs, so the
+ * two functions below hit Postgres on EVERY call. With a CDN/edge in front, the
+ * per-store cache hit ratio is ~1 — same slug or same host keeps returning the
+ * same StoreCtx until config changes.
+ *
+ * - Plain JS Map keyed by slug / host. No extra dep.
+ * - 60s TTL: long enough to absorb a request burst, short enough that any drift
+ *   between cache and DB resolves inside a minute even if an invalidate call
+ *   is missed (admin-only paths; out of band).
+ * - Cap 1000 entries per map (see MAX_ENTRIES). eviction is lazy on read
+ *   (expired), and opportunistic on write (when size > MAX_ENTRIES we drop the
+ *   oldest by insertion order — JS Map preserves insertion order; no separate
+ *   timestamp walk needed for the cap path).
+ * - Per-process only — matches the in-proc login throttle (auth/rate-limit.ts).
+ *   When running N>=2 API instances, move to Redis via SCALE-1.
+ */
+const CACHE_TTL_MS = 60 * 1000;
+const MAX_ENTRIES = 1000;
+
+interface CacheEntry<T> { value: T; expiresAt: number; }
+
+const slugCache = new Map<string, CacheEntry<StoreCtx>>();
+const hostCache = new Map<string, CacheEntry<StoreCtx>>();
+
+function readCache<T>(m: Map<string, CacheEntry<T>>, key: string): T | undefined {
+  const e = m.get(key);
+  if (!e) return undefined;
+  if (e.expiresAt <= Date.now()) {
+    m.delete(key);
+    return undefined;
+  }
+  return e.value;
+}
+
+function writeCache<T>(m: Map<string, CacheEntry<T>>, key: string, value: T): void {
+  m.set(key, { value, expiresAt: Date.now() + CACHE_TTL_MS });
+  // Opportunistic cap: if we just exceeded MAX_ENTRIES, drop from the oldest end
+  // (insertion order is the iteration order on JS Map) until back at limit.
+  if (m.size > MAX_ENTRIES) {
+    const drop = m.size - MAX_ENTRIES;
+    let removed = 0;
+    for (const k of m.keys()) {
+      if (removed >= drop) break;
+      m.delete(k);
+      removed++;
+    }
+  }
+}
+
+/**
+ * Drop cached entries for a slug and/or host. Called by settings-save handlers
+ * after they mutate store config (admin-settings.ts) so the next request sees
+ * fresh values instead of the stale 60s TTL.
+ *
+ * - `invalidateStoreCache('damned')` → drop the slug entry AND scan all host
+ *   entries' config.hostnames for a match against this slug. A slug's
+ *   hostnames live inside the store.config JSONB blob the settings endpoints
+ *   can edit, and a positive host match invalidates the host cache too —
+ *   otherwise a hostname change would leave a 60s window where host routing
+ *   used the stale hostnames.
+ * - `invalidateStoreCache(undefined, 'foo.example')` → drop just that host.
+ * - `invalidateStoreCache()` → flush everything (process-wide flush; tests).
+ */
+export function invalidateStoreCache(slug?: string, host?: string): void {
+  if (slug === undefined && host === undefined) {
+    slugCache.clear();
+    hostCache.clear();
+    return;
+  }
+  if (slug !== undefined) {
+    slugCache.delete(slug);
+    // Drop any host cache entry whose cached store matches this slug: its
+    // config (which holds the hostnames) just changed.
+    for (const [k, v] of hostCache) {
+      if (v.value.slug === slug) hostCache.delete(k);
+    }
+  }
+  if (host !== undefined) hostCache.delete(host);
+}
+
+/** Test-only: peek at current cache sizes. Not part of the public surface. */
+export function _cacheSizeForTest(): { slug: number; host: number } {
+  return { slug: slugCache.size, host: hostCache.size };
+}
+
 /** Slug shape: lowercase, 1-64 chars, alnum + dash/underscore, must start+end alnum. */
 const SLUG_RE = /^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$/;
 
@@ -45,11 +133,14 @@ export class HostRoutingError extends Error {
  */
 export async function resolveStore(slug: string): Promise<StoreCtx> {
   assertValidSlug(slug);
+  const cached = readCache(slugCache, slug);
+  if (cached) return cached;
   const r = await pool.query<StoreCtx>(
     'SELECT id, slug, name, currency, tax_rate AS "taxRate", tax_inclusive AS "taxInclusive", shipping_taxable AS "shippingTaxable", config FROM store WHERE slug = $1 LIMIT 1',
     [slug],
   );
   if (!r.rows[0]) throw new StoreSlugError(`unknown store: ${slug}`);
+  writeCache(slugCache, slug, r.rows[0]);
   return r.rows[0];
 }
 
@@ -98,12 +189,21 @@ function hostnamesFromConfig(config: unknown): string[] {
  * yet at this point in the request lifecycle.
  */
 export async function resolveStoreByHost(host: string): Promise<StoreCtx | null> {
+  const cached = readCache(hostCache, host);
+  if (cached) return cached;
   const r = await pool.query<StoreCtx>(
     'SELECT id, slug, name, currency, tax_rate AS "taxRate", tax_inclusive AS "taxInclusive", shipping_taxable AS "shippingTaxable", config FROM store',
   );
   for (const row of r.rows) {
-    if (hostMatchesAny(host, hostnamesFromConfig(row.config))) return row;
+    if (hostMatchesAny(host, hostnamesFromConfig(row.config))) {
+      writeCache(hostCache, host, row);
+      return row;
+    }
   }
+  // Don't cache negative lookups — config.hostnames changes invalidate the
+  // hostCache via the slug path on next settings save, but a stale "no match"
+  // entry would defeat that. Negative cache is bounded by traffic to the
+  // unmatched host, which is naturally a small set.
   return null;
 }
 

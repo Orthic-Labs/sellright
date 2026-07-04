@@ -4,6 +4,7 @@ import { and, desc, eq } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { assertSafeOutboundUrl, safeOutboundFetch } from '../security/outbound-url.js';
+import { invalidateStoreCache } from '../store-context.js';
 import { HttpError, J, errBody, money, requireAdmin, requireStore, requireWrite, requireManage, requirePermission, guard } from './admin-helpers.js';
 
 export const adminMarketing = new OpenAPIHono();
@@ -199,6 +200,7 @@ adminMarketing.openapi(
       const config = { ...((row?.config as object) ?? {}), listmonk: safeCfg };
       await tx.update(s.store).set({ config }).where(eq(s.store.id, st.storeId));
     });
+    invalidateStoreCache(st.slug); // PERF-2 — match admin-settings.ts pattern
     return c.json({ ok: true, lists: lists.data?.total ?? 0 }, 200);
   }),
 );

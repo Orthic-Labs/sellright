@@ -6,6 +6,7 @@ import { newTotpSecret, verifyTotp, otpauthUri } from '../auth/totp.js';
 import { clearAdminTotpSecret, getAdminTotpSecret, setAdminTotpSecret } from '../auth/admin-staff.js';
 import { isSupportedPaymentMethod } from '../payments/provider.js';
 import { stripeConfigured, stripeModeFromConfig } from '../payments/stripe.js';
+import { invalidateStoreCache } from '../store-context.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireManage, guard } from './admin-helpers.js';
 
 export const adminSettings = new OpenAPIHono();
@@ -29,17 +30,30 @@ export function sanitizePaymentSettingsPatch(input: Record<string, boolean>): Re
  *  single JSONB blob touched by several setting endpoints; a plain
  *  read-then-write races (two concurrent saves each read the same value and the
  *  second clobbers the first's keys). FOR UPDATE serialises them. Returns the
- *  persisted config. */
+ *  persisted config.
+ *
+ *  PERF-2: also invalidates the in-process resolveStore / resolveStoreByHost
+ *  cache (60s TTL — see store-context.ts) so the next request sees fresh
+ *  values without waiting for TTL. Slug + config are read in one locked txn so
+ *  the lock guarantees the slug is consistent with the row we just mutated —
+ *  a stale slug could leave a host cache entry pointed at the wrong store. */
 async function mutateStoreConfig(
   storeId: string,
   mutate: (config: Record<string, unknown>) => Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  return withStore(storeId, async (tx) => {
-    const [row] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, storeId)).for('update').limit(1);
-    const next = mutate((row?.config as Record<string, unknown> | null) ?? {});
-    await tx.update(s.store).set({ config: next }).where(eq(s.store.id, storeId));
-    return next;
+  const { slug, next } = await withStore(storeId, async (tx) => {
+    const [row] = await tx
+      .select({ slug: s.store.slug, config: s.store.config })
+      .from(s.store)
+      .where(eq(s.store.id, storeId))
+      .for('update')
+      .limit(1);
+    const v = mutate((row?.config as Record<string, unknown> | null) ?? {});
+    await tx.update(s.store).set({ config: v }).where(eq(s.store.id, storeId));
+    return { slug: row!.slug, next: v };
   });
+  invalidateStoreCache(slug);
+  return next;
 }
 
 // ── admin 2FA (TOTP) ─────────────────────────────────────────────────────────
@@ -141,6 +155,7 @@ adminSettings.openapi(
     const st = requireStore(admin, c); requireManage(st);
     const b = c.req.valid('json');
     await withStore(st.storeId, async (tx) => tx.update(s.store).set({ ...b, updatedAt: new Date() }).where(eq(s.store.id, st.storeId)));
+    invalidateStoreCache(st.slug);
     return c.json({ ok: true }, 200);
   }),
 );
