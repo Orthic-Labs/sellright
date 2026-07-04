@@ -74,10 +74,13 @@ export const CheckoutAddressesView = component$<CheckoutAddressesViewProps>((pro
           {/* Email and Phone side-by-side */}
           <div class="grid grid-cols-2 gap-4">
             <div class="relative">
+              <label for="checkout-email" class="sr-only">Email address</label>
               <input
+                id="checkout-email"
                 type="email"
                 value={appState.customer?.emailAddress}
                 placeholder="Email address"
+                aria-label="Email address"
                 onChange$={(_, el) => handleEmailChange$(el.value)}
                 onBlur$={handleEmailBlur$}
                 class={`block w-full px-[14px] py-[11px] pr-10 text-[16px] rounded-[3px] border placeholder:text-[rgba(100,85,65,0.42)] focus:outline-hidden transition-colors duration-200 bg-white ${
@@ -93,10 +96,13 @@ export const CheckoutAddressesView = component$<CheckoutAddressesViewProps>((pro
               />
             </div>
             <div class="relative">
+              <label for="checkout-phone" class="sr-only">Phone number</label>
               <input
+                id="checkout-phone"
                 type="tel"
                 value={sanitizePhoneNumber(appState.shippingAddress?.phoneNumber)}
                 placeholder={phonePlaceholder.value}
+                aria-label="Phone number"
                 onChange$={(_, el) => handlePhoneChange$(el.value)}
                 onBlur$={handlePhoneBlur$}
                 class={`block w-full px-[14px] py-[11px] pr-10 text-[16px] rounded-[3px] border placeholder:text-[rgba(100,85,65,0.42)] focus:outline-hidden transition-colors duration-200 bg-white ${
@@ -115,10 +121,13 @@ export const CheckoutAddressesView = component$<CheckoutAddressesViewProps>((pro
 
           <div class="grid grid-cols-2 gap-4">
             <div class="relative">
+              <label for="checkout-first-name" class="sr-only">First name</label>
               <input
+                id="checkout-first-name"
                 type="text"
                 value={appState.customer?.firstName}
                 placeholder="First name"
+                aria-label="First name"
                 onChange$={(_, el) => handleFirstNameChange$(el.value)}
                 onBlur$={handleFirstNameBlur$}
                 class={`block w-full px-[14px] py-[11px] pr-10 text-[16px] rounded-[3px] border placeholder:text-[rgba(100,85,65,0.42)] focus:outline-hidden transition-colors duration-200 bg-white ${
@@ -135,10 +144,13 @@ export const CheckoutAddressesView = component$<CheckoutAddressesViewProps>((pro
             </div>
 
             <div class="relative">
+              <label for="checkout-last-name" class="sr-only">Last name</label>
               <input
+                id="checkout-last-name"
                 type="text"
                 value={appState.customer?.lastName}
                 placeholder="Last name"
+                aria-label="Last name"
                 onChange$={(_, el) => handleLastNameChange$(el.value)}
                 onBlur$={handleLastNameBlur$}
                 class={`block w-full px-[14px] py-[11px] pr-10 text-[16px] rounded-[3px] border placeholder:text-[rgba(100,85,65,0.42)] focus:outline-hidden transition-colors duration-200 bg-white ${

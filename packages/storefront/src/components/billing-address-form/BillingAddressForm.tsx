@@ -198,6 +198,7 @@ const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress
     <div class="grid grid-cols-2 gap-4">
       {/* First Name and Last Name (2 fields on 1 line) */}
       <div class="relative">
+        <label for="billingFirstName" class="sr-only">First name</label>
         <input
           type="text"
           name="firstName"
@@ -217,6 +218,7 @@ const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress
       </div>
 
       <div class="relative">
+        <label for="billingLastName" class="sr-only">Last name</label>
         <input
           type="text"
           name="lastName"
@@ -237,6 +239,7 @@ const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress
 
       {/* Street Address and Address Line 2 (on same line) */}
       <div class="relative">
+        <label for="billingStreetLine1" class="sr-only">Street address</label>
         <input
           type="text"
           name="streetLine1"
@@ -256,6 +259,7 @@ const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress
       </div>
 
       <div>
+        <label for="billingStreetLine2" class="sr-only">Apt, building, etc.</label>
         <input
           type="text"
           name="streetLine2"
@@ -269,6 +273,7 @@ const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress
 
       {/* City */}
       <div class="relative">
+        <label for="billingCity" class="sr-only">City</label>
         <input
           type="text"
           name="city"
@@ -289,6 +294,7 @@ const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress
 
       {/* State/Province */}
       <div class="relative">
+        <label for="billingProvince" class="sr-only">State / Province</label>
         <input
           type="text"
           name="province"
@@ -309,6 +315,7 @@ const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress
 
       {/* Postal Code */}
       <div class="relative">
+        <label for="billingPostalCode" class="sr-only">Postal code</label>
         <input
           type="text"
           inputMode="numeric"
@@ -330,6 +337,7 @@ const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress
 
       {/* Country */}
       <div class="relative">
+        <label for="billingCountryCode" class="sr-only">Country</label>
         <select
           id="billingCountryCode"
           name="countryCode"
