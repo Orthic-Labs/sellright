@@ -37,7 +37,7 @@ export const subscriptions = new OpenAPIHono();
 subscriptions.openapi(
   createRoute({
     method: 'post', path: '/v1/shop/subscribe', summary: 'Subscribe to a recurring plan',
-    request: { body: { content: { 'application/json': { schema: z.object({ variantId: z.string().uuid() }) } } } },
+    request: { body: { content: { 'application/json': { schema: z.object({ variantId: z.guid() }) } } } },
     responses: {
       200: { description: 'Checkout URL', content: { 'application/json': { schema: z.object({ url: z.string() }) } } },
       400: { description: 'Not a recurring variant', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
@@ -137,7 +137,7 @@ subscriptions.openapi(
 subscriptions.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/subscriptions', summary: 'List subscriptions',
-    request: { query: z.object({ status: z.string().optional(), customerId: z.string().uuid().optional(), page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(25) }) },
+    request: { query: z.object({ status: z.string().optional(), customerId: z.guid().optional(), page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(25) }) },
     responses: { 200: { description: 'OK', content: J(Page) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {

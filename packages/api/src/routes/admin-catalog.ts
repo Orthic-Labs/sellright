@@ -34,7 +34,7 @@ adminCatalog.openapi(
 adminCatalog.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/products/{id}/assets', summary: 'Attach a gallery image',
-    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ assetId: z.string().uuid(), position: z.number().int().min(0).optional() })) } },
+    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ assetId: z.guid(), position: z.number().int().min(0).optional() })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {

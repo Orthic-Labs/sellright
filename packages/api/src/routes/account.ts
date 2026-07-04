@@ -222,7 +222,7 @@ account.openapi(
 account.openapi(
   createRoute({
     method: 'patch', path: '/v1/shop/account/addresses/{id}', summary: 'Update address',
-    request: { params: z.object({ id: z.string().uuid() }), body: { content: { 'application/json': { schema: Address.partial() } } } },
+    request: { params: z.object({ id: z.guid() }), body: { content: { 'application/json': { schema: Address.partial() } } } },
     responses: {
       200: { description: 'Updated', content: { 'application/json': { schema: z.object({ ok: z.boolean() }) } } },
       401: { description: 'Unauthenticated', content: { 'application/json': { schema: errSchema } } },
@@ -256,7 +256,7 @@ account.openapi(
 account.openapi(
   createRoute({
     method: 'delete', path: '/v1/shop/account/addresses/{id}', summary: 'Delete address',
-    request: { params: z.object({ id: z.string().uuid() }) },
+    request: { params: z.object({ id: z.guid() }) },
     responses: {
       200: { description: 'Deleted', content: { 'application/json': { schema: z.object({ ok: z.boolean() }) } } },
       401: { description: 'Unauthenticated', content: { 'application/json': { schema: errSchema } } },
