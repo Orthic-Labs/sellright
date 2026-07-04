@@ -8,7 +8,7 @@
  * Caller owns the transaction (and any idempotency claim). This function only
  * writes the payment row + the order transition.
  */
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
@@ -47,7 +47,15 @@ export async function applyPaymentResult(
       metadata: (result.metadata ?? null) as object | null,
       errorMessage: result.errorMessage ?? null,
     })
-    .onConflictDoNothing({ target: [s.payment.storeId, s.payment.providerRef] })
+    // The arbiter is the PARTIAL unique index (migration 0037), so the ON
+    // CONFLICT target MUST carry the same `WHERE provider_ref IS NOT NULL`
+    // predicate — without it Postgres cannot infer the arbiter index and every
+    // payment insert fails with 42P10 (infer_arbiter_indexes). Null provider_ref
+    // rows (manual/cod) fall outside the index and never conflict.
+    .onConflictDoNothing({
+      target: [s.payment.storeId, s.payment.providerRef],
+      where: sql`${s.payment.providerRef} is not null`,
+    })
     .returning({ id: s.payment.id });
   if (inserted.length === 0) {
     // Already settled by the other caller (webhook vs /pay race). Skip the FSM
