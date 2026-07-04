@@ -4,12 +4,19 @@ import {
 } from"@qwik.dev/router/middleware/node";
 import"dotenv/config";
 import express from"express";
+import { randomBytes } from"node:crypto";
 import { join } from"node:path";
 import { fileURLToPath } from"node:url";
 import render from"./entry.ssr";
 
 declare global {
  interface QwikRouterPlatform extends PlatformNode {}
+}
+
+declare module"express-serve-static-core" {
+ interface Locals {
+  nonce?: string;
+ }
 }
 
 // Directories where the static assets are located
@@ -29,8 +36,25 @@ const { router, notFound } = createQwikRouter({
 // Create the express server
 const app = express();
 
+// API / payment-provider origins the storefront legitimately talks to.
+// Pulled from env so dev (127.0.0.1:3300) and prod (the real API host) both
+// work without editing this file. 'self' always covers same-origin SSR calls.
+const apiOrigin = (process.env.VITE_SELLRIGHT_API_URL || process.env.VENDURE_API_URL || '')
+	.replace(/\/(shop-api)?\/?$/, '')
+	.trim();
+const connectSrcExtra = apiOrigin ? ` ${apiOrigin}` : '';
+
 // Set security headers
 app.use((req, res, next) => {
+	// Per-request CSP nonce. Threaded to Qwik's SSR render via
+	// res.locals.nonce -> entry.ssr.tsx -> <Root nonce> -> <Head nonce> ->
+	// the inline <script nonce=...> tags Qwik/this app emit. Must match the
+	// nonce declared in script-src below, or Qwik's inline bootstrap script
+	// (and the iOS service-worker registration script in head.tsx) will be
+	// blocked by the browser.
+	const nonce = randomBytes(16).toString('base64');
+	res.locals.nonce = nonce;
+
 	// Security Headers - PCI DSS Compliance
 	// XSS Protection
 	res.setHeader('X-XSS-Protection', '0');
@@ -47,20 +71,45 @@ app.use((req, res, next) => {
 	// Permissions Policy - disable unnecessary browser features
 	res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
 
-	// Content Security Policy - More permissive for functionality
+	// Content Security Policy — tightened (FE-6). Per-directive allowlist
+	// instead of the previous `default-src 'self' 'unsafe-inline' data:
+	// https: blob:` catch-all, which was effectively no CSP at all (any
+	// HTTPS origin + any inline script/style was allowed).
+	//
+	// Final policy:
+	//   default-src 'self'                                    — safe fallback
+	//   script-src  'self' 'nonce-<per-request>' https://js.stripe.com
+	//                                                          — Qwik's inline
+	//               bootstrap + this app's inline scripts use the SSR nonce;
+	//               Stripe.js (loadStripe) is loaded from js.stripe.com
+	//   style-src   'self' 'unsafe-inline'                    — Qwik/Tailwind
+	//               emit inline <style> tags per-component with no nonce
+	//               support today; unsafe-inline is scoped to STYLE only
+	//   img-src     'self' data: https:                       — product/CDN images
+	//   font-src    'self'                                    — self-hosted webfonts only
+	//   connect-src 'self' https://api.stripe.com <api origin>
+	//                                                          — SellRight API + Stripe
+	//   frame-src   https://js.stripe.com https://hooks.stripe.com
+	//                                                          — Stripe Payment
+	//               Element / 3DS iframes
+	//   object-src  'none'
+	//   base-uri    'self'
+	//   form-action 'self'
+	//   frame-ancestors 'none'
+	//   upgrade-insecure-requests
 	const cspDirectives = [
-		`default-src 'self' 'unsafe-inline' data: https: blob:`,
-		`img-src 'self' data: https: blob:`,
-		`font-src 'self' data: https:`,
-		`style-src 'self' 'unsafe-inline' https:`,
-		`script-src 'self' 'unsafe-inline' https:`,
-		`connect-src 'self' https: wss: ws:`,
-		`frame-src 'self' https:`,
+		`default-src 'self'`,
+		`script-src 'self' 'nonce-${nonce}' https://js.stripe.com`,
+		`style-src 'self' 'unsafe-inline'`,
+		`img-src 'self' data: https:`,
+		`font-src 'self'`,
+		`connect-src 'self' https://api.stripe.com${connectSrcExtra}`,
+		`frame-src https://js.stripe.com https://hooks.stripe.com`,
 		`object-src 'none'`,
 		`base-uri 'self'`,
-		`worker-src 'self' blob: https:`,
+		`worker-src 'self'`,
 		`form-action 'self'`,
-		`frame-ancestors 'self'`,
+		`frame-ancestors 'none'`,
 		`upgrade-insecure-requests`
 	].join('; ');
 
