@@ -4,6 +4,7 @@ interface ValidationIconProps {
   touched: boolean;
   error: string;
   valid: boolean;
+  errorId?: string;
 }
 
 /**
@@ -11,8 +12,10 @@ interface ValidationIconProps {
  * - Untouched: nothing
  * - Touched + valid: green check
  * - Touched + error: red x — hover (desktop) shows tooltip, tap (mobile) shows inline text below
+ * - Also renders an sr-only role="alert" element with the error text so screen readers
+ *   announce it via aria-describedby on the parent input.
  */
-export const ValidationIcon = component$<ValidationIconProps>(({ touched, error, valid }) => {
+export const ValidationIcon = component$<ValidationIconProps>(({ touched, error, valid, errorId }) => {
   const showTooltip = useSignal(false);
   const showInlineError = useSignal(false);
 
@@ -51,6 +54,12 @@ export const ValidationIcon = component$<ValidationIconProps>(({ touched, error,
             </div>
           )}
         </div>
+
+        {/* Screen-reader-only alert — always present in DOM when error exists so
+            aria-describedby on the parent input resolves. */}
+        {errorId && (
+          <p id={errorId} role="alert" class="sr-only">{error}</p>
+        )}
 
         {/* Mobile inline error — shown on tap */}
         {showInlineError.value && (

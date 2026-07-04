@@ -248,16 +248,18 @@ export default component$<LoginModalProps>(({
                   onInput$={(_, el) => (honeypot.value = el.value)}
                 />
                 <input
-                  type="email" autoComplete="email" autoFocus
+                  type="email" id="login-modal-email" autoComplete="email" autoFocus
                   value={email.value}
                   onInput$={(_, el) => (email.value = el.value)}
                   onKeyUp$={(ev) => { if (ev.key === 'Enter') handleEmailContinue(); }}
+                  aria-invalid={!!error.value}
+                  aria-describedby={error.value ? 'login-modal-error' : undefined}
                   class="appearance-none block w-full px-4 py-3 border border-[#D8D1C7] rounded-[3px] placeholder-gray-400 focus:outline-hidden focus:ring-0 focus:border-[#141210] sm:text-base bg-white"
                   placeholder="you@example.com"
                 />
                 <div id="modal-turnstile" class="min-h-[65px] flex justify-center"></div>
                 {error.value && (
-                  <AuthError message={error.value} />
+                  <AuthError id="login-modal-error" message={error.value} />
                 )}
                 <button
                   onClick$={handleEmailContinue} disabled={loading.value}

@@ -209,11 +209,14 @@ const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress
           onBlur$={(_, el) => handleFieldBlur$('firstName', el.value)}
           class={getFieldClasses('firstName')}
           required
+          aria-invalid={!!(touchedFields.value.has('firstName') && validationErrors.value.firstName)}
+          aria-describedby={(touchedFields.value.has('firstName') && validationErrors.value.firstName) ? 'billingFirstName-error' : undefined}
         />
         <ValidationIcon
           touched={touchedFields.value.has('firstName')}
           error={validationErrors.value.firstName || ''}
           valid={touchedFields.value.has('firstName') && !validationErrors.value.firstName && !!(billingAddress?.firstName)}
+          errorId={(touchedFields.value.has('firstName') && validationErrors.value.firstName) ? 'billingFirstName-error' : undefined}
         />
       </div>
 
@@ -229,11 +232,14 @@ const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress
           onBlur$={(_, el) => handleFieldBlur$('lastName', el.value)}
           class={getFieldClasses('lastName')}
           required
+          aria-invalid={!!(touchedFields.value.has('lastName') && validationErrors.value.lastName)}
+          aria-describedby={(touchedFields.value.has('lastName') && validationErrors.value.lastName) ? 'billingLastName-error' : undefined}
         />
         <ValidationIcon
           touched={touchedFields.value.has('lastName')}
           error={validationErrors.value.lastName || ''}
           valid={touchedFields.value.has('lastName') && !validationErrors.value.lastName && !!(billingAddress?.lastName)}
+          errorId={(touchedFields.value.has('lastName') && validationErrors.value.lastName) ? 'billingLastName-error' : undefined}
         />
       </div>
 
@@ -250,11 +256,14 @@ const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress
           onBlur$={(_, el) => handleFieldBlur$('streetLine1', el.value)}
           class={getFieldClasses('streetLine1')}
           required
+          aria-invalid={!!(touchedFields.value.has('streetLine1') && validationErrors.value.streetLine1)}
+          aria-describedby={(touchedFields.value.has('streetLine1') && validationErrors.value.streetLine1) ? 'billingStreetLine1-error' : undefined}
         />
         <ValidationIcon
           touched={touchedFields.value.has('streetLine1')}
           error={validationErrors.value.streetLine1 || ''}
           valid={touchedFields.value.has('streetLine1') && !validationErrors.value.streetLine1 && !!(billingAddress?.streetLine1)}
+          errorId={(touchedFields.value.has('streetLine1') && validationErrors.value.streetLine1) ? 'billingStreetLine1-error' : undefined}
         />
       </div>
 
@@ -284,11 +293,14 @@ const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress
           onBlur$={(_, el) => handleFieldBlur$('city', el.value)}
           class={getFieldClasses('city')}
           required
+          aria-invalid={!!(touchedFields.value.has('city') && validationErrors.value.city)}
+          aria-describedby={(touchedFields.value.has('city') && validationErrors.value.city) ? 'billingCity-error' : undefined}
         />
         <ValidationIcon
           touched={touchedFields.value.has('city')}
           error={validationErrors.value.city || ''}
           valid={touchedFields.value.has('city') && !validationErrors.value.city && !!(billingAddress?.city)}
+          errorId={(touchedFields.value.has('city') && validationErrors.value.city) ? 'billingCity-error' : undefined}
         />
       </div>
 
@@ -305,11 +317,14 @@ const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress
           onBlur$={(_, el) => handleFieldBlur$('province', el.value)}
           class={getFieldClasses('province')}
           required
+          aria-invalid={!!(touchedFields.value.has('province') && validationErrors.value.province)}
+          aria-describedby={(touchedFields.value.has('province') && validationErrors.value.province) ? 'billingProvince-error' : undefined}
         />
         <ValidationIcon
           touched={touchedFields.value.has('province')}
           error={validationErrors.value.province || ''}
           valid={touchedFields.value.has('province') && !validationErrors.value.province && !!(billingAddress?.province)}
+          errorId={(touchedFields.value.has('province') && validationErrors.value.province) ? 'billingProvince-error' : undefined}
         />
       </div>
 
@@ -327,11 +342,14 @@ const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress
           onBlur$={(_, el) => handleFieldBlur$('postalCode', el.value)}
           class={getFieldClasses('postalCode')}
           required
+          aria-invalid={!!(touchedFields.value.has('postalCode') && validationErrors.value.postalCode)}
+          aria-describedby={(touchedFields.value.has('postalCode') && validationErrors.value.postalCode) ? 'billingPostalCode-error' : undefined}
         />
         <ValidationIcon
           touched={touchedFields.value.has('postalCode')}
           error={validationErrors.value.postalCode || ''}
           valid={touchedFields.value.has('postalCode') && !validationErrors.value.postalCode && !!(billingAddress?.postalCode)}
+          errorId={(touchedFields.value.has('postalCode') && validationErrors.value.postalCode) ? 'billingPostalCode-error' : undefined}
         />
       </div>
 
@@ -348,24 +366,26 @@ const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress
           }}
           class={getSelectClasses()}
           required
+          aria-invalid={!!(touchedFields.value.has('countryCode') && validationErrors.value.countryCode)}
+          aria-describedby={(touchedFields.value.has('countryCode') && validationErrors.value.countryCode) ? 'billingCountryCode-error' : undefined}
           onMount$={() => {
             // console.log(`📍 [BillingAddressForm] Billing dropdown mounted`);
           }}
         >
           <option value="" disabled>Select a country</option>
-          {(appState.availableCountries && appState.availableCountries.length > 0) ? 
+          {(appState.availableCountries && appState.availableCountries.length > 0) ?
             appState.availableCountries.map((country) => {
               const currentCountryCode = billingAddress?.countryCode || appState.billingAddress?.countryCode || appState.shippingAddress?.countryCode || 'US';
               return (
-                <option 
-                  key={country.code} 
+                <option
+                  key={country.code}
                   value={country.code}
                   selected={country.code === currentCountryCode}
                 >
                   {country.name}
                 </option>
               );
-            }) : 
+            }) :
             <option value="US" selected={true}>United States</option>
           }
         </select>
@@ -376,7 +396,7 @@ const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress
           </svg>
         </div>
         {touchedFields.value.has('countryCode') && validationErrors.value.countryCode && (
-          <p class="mt-1 text-sm text-red-600">{validationErrors.value.countryCode}</p>
+          <p id="billingCountryCode-error" role="alert" class="mt-1 text-sm text-red-600">{validationErrors.value.countryCode}</p>
         )}
       </div>
     </div>
