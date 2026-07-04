@@ -66,7 +66,7 @@ async function enqueueRow(recipient: string, subject: string): Promise<string> {
 
 async function rowStatus(id: string): Promise<{ status: string; attempts: number; sentAt: Date | null; lastError: string | null; nextAttemptAt: Date }> {
   return withStore(STORE, async (tx) => {
-    const r = await tx.execute(sql`SELECT status, attempts, sent_at, last_error, next_attempt_at FROM email_outbox WHERE id = ${id}`);
+    const r = await tx.execute(sql`SELECT status, attempts, sent_at AS "sentAt", last_error AS "lastError", next_attempt_at AS "nextAttemptAt" FROM email_outbox WHERE id = ${id}`);
     return r.rows[0] as { status: string; attempts: number; sentAt: Date | null; lastError: string | null; nextAttemptAt: Date };
   });
 }
