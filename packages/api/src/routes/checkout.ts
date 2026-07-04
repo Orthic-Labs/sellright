@@ -14,15 +14,30 @@ import { customerToken, resolveCustomer } from '../auth/session.js';
 import { normalizeEmail } from '../auth/email.js';
 import { reserveStockOrThrow, StockReservationError, validateReservableItems } from '../orders/stock-reservation.js';
 import { isMethodEligible, shippingRate, ShippingUnavailableError } from '../shipping/calculator.js';
-import { pickEmailAppKey, sendOrderConfirmation } from '../email/dispatch.js';
+import { pickEmailAppKey } from '../email/dispatch.js';
+import { orderConfirmation as orderConfirmationTpl } from '../email/templates.js';
+import { enqueueEmail } from '../email/outbox.js';
+import { env } from '../env.js';
 import { clientIp, loginRetryAfter } from '../auth/rate-limit.js';
 import { issueLicensesForPaidOrder } from '../licensing/issue.js';
-import { err as logErr } from '../lib/logger.js';
 
 function selectUnitPrice(v: { price: number; salePrice: number | null; isPreOrder: boolean; preOrderPrice: number | null }): number {
   if (v.isPreOrder && v.preOrderPrice != null) return v.preOrderPrice;
   if (v.salePrice != null) return v.salePrice;
   return v.price;
+}
+
+/** Mirror of email/dispatch.ts::parseAppMap — duplicated here to avoid an
+ * internal export just for the outbox enqueue path. */
+function parseAppFromMap(raw: string | undefined, appKey: string | null | undefined): string | undefined {
+  const key = appKey?.trim().toLowerCase();
+  if (!key || !raw?.trim()) return undefined;
+  for (const entry of raw.split(/[,\n;]/)) {
+    const idx = entry.indexOf('=');
+    if (idx <= 0) continue;
+    if (entry.slice(0, idx).trim().toLowerCase() === key) return entry.slice(idx + 1).trim();
+  }
+  return undefined;
 }
 
 /**
@@ -320,6 +335,50 @@ checkout.openapi(
       // Webhook events (transactional outbox — enqueued in the same txn).
       await emitEvent(tx, st.id, 'order.created', { code, grandTotal: totals.grandTotal, currency: st.currency });
       if (paid) await emitEvent(tx, st.id, 'order.paid', { code, grandTotal: totals.grandTotal, currency: st.currency });
+
+      // REL-4: order-confirmation email goes through the email outbox. Enqueue
+      // inside this txn so a rollback drops the email too — never send for an
+      // order that didn't actually pay. Best-effort recipient: the customer's
+      // email if linked, else the guest email on the request. No SMTP at this
+      // call site — the scheduler (jobs/scheduler.ts) delivers with retry +
+      // dead-letter, mirroring the webhook_outbox claim.
+      if (paid) {
+        const [cust] = customerId
+          ? await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, customerId)).limit(1)
+          : [];
+        const recipient = normalizeEmail(cust?.email ?? body.email ?? '');
+        if (recipient) {
+          const lines = await tx
+            .select({
+              name: s.orderLine.variantName,
+              quantity: s.orderLine.quantity,
+              lineTotal: s.orderLine.lineTotal,
+              appKey: s.productVariant.appKey,
+            })
+            .from(s.orderLine)
+            .leftJoin(s.productVariant, eq(s.productVariant.id, s.orderLine.variantId))
+            .where(eq(s.orderLine.orderId, orderId));
+          const appKey = pickEmailAppKey(lines.map((line) => line.appKey));
+          // Mirror dispatch.ts's emailCtx() — derive the same per-store sender
+          // and storefront URL the inline path produced, so the rendered email
+          // is byte-identical to before (constraint: do NOT change the body).
+          const fromEmail = env.EMAIL_FROM_BY_APP
+            ? parseAppFromMap(env.EMAIL_FROM_BY_APP, appKey) ?? env.SMTP_FROM
+            : env.SMTP_FROM;
+          const storefrontUrl = env.STOREFRONT_URL_BY_APP
+            ? parseAppFromMap(env.STOREFRONT_URL_BY_APP, appKey) ?? env.STOREFRONT_URL
+            : env.STOREFRONT_URL;
+          const rendered = orderConfirmationTpl(
+            { name: st.name, currency: st.currency, storefrontUrl, fromEmail },
+            { code, grandTotal: totals.grandTotal, currency: st.currency, lines: lines.map(({ name, quantity, lineTotal }) => ({ name, quantity, lineTotal })) },
+          );
+          await enqueueEmail(tx, st.id, {
+            kind: 'order_confirmation',
+            recipient,
+            payload: { to: recipient, from: fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },
+          });
+        }
+      }
       return { code, grandTotal: totals.grandTotal, discountTotal: totals.discountTotal, couponApplied: promoId != null, giftCardApplied, paid, receiptToken };
     }).catch(async (e: unknown): Promise<Result> => {
       // Concurrent double-submit with the same Idempotency-Key: the unique
@@ -344,42 +403,6 @@ checkout.openapi(
     if ('shippingError' in out) return c.json({ error: 'shipping unavailable', reason: out.shippingError }, 409);
     if ('cartError' in out) return c.json({ error: out.cartError }, 409);
     if ('blocked' in out) return c.json({ error: 'unavailable or out of stock', skus: out.blocked }, 409);
-
-    // WP2: best-effort order-confirmation email to the linked customer (or the
-    // guest email on the request). Not blocking — a failed send must not roll
-    // back the order the user just paid for.
-    try {
-      const email = await withStore(st.id, async (tx) => {
-        const [o] = await tx
-          .select({ id: s.order.id, customerEmail: s.customer.email, code: s.order.code, grandTotal: s.order.grandTotal, currency: s.order.currency })
-          .from(s.order)
-          .leftJoin(s.customer, eq(s.customer.id, s.order.customerId))
-          .where(eq(s.order.code, out.code))
-          .limit(1);
-        if (!o) return null;
-        const lines = await tx
-          .select({
-            name: s.orderLine.variantName,
-            quantity: s.orderLine.quantity,
-            lineTotal: s.orderLine.lineTotal,
-            appKey: s.productVariant.appKey,
-          })
-          .from(s.orderLine)
-          .leftJoin(s.productVariant, eq(s.productVariant.id, s.orderLine.variantId))
-          .where(eq(s.orderLine.orderId, o.id));
-        return {
-          to: o.customerEmail ?? null,
-          appKey: pickEmailAppKey(lines.map((line) => line.appKey)),
-          data: {
-            code: out.code,
-            grandTotal: out.grandTotal,
-            currency: o.currency,
-            lines: lines.map(({ name, quantity, lineTotal }) => ({ name, quantity, lineTotal })),
-          },
-        };
-      });
-      if (email?.to) await sendOrderConfirmation({ name: st.name, currency: st.currency, appKey: email.appKey }, email.to, email.data);
-    } catch (e) { logErr.error('email orderConfirmation failed', e); }
 
     return c.json({ code: out.code, state: out.paid ? 'Paid' : 'PendingPayment', grandTotal: out.grandTotal, discountTotal: out.discountTotal, currency: st.currency, couponApplied: out.couponApplied, giftCardApplied: out.giftCardApplied ?? 0, receiptToken: out.receiptToken }, 200);
   },

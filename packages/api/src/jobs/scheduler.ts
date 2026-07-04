@@ -23,6 +23,7 @@ import { releaseStaleAllocations } from './release-stale-allocations.js';
 import { reapStuckWebhooks } from './webhook-reaper.js';
 import { abandonStaleCarts, cleanupExpiredCarts } from './cart-maintenance.js';
 import { deliverWebhooks } from '../webhooks/emit.js';
+import { deliverEmails } from '../email/outbox.js';
 import { withLeaderLock, type LeaderLockedJob } from './leader-lock.js';
 import { log, err as logErr } from '../lib/logger.js';
 
@@ -89,6 +90,10 @@ export function startJobScheduler(): void {
     if (ab.abandoned || cl.deleted) jobLog(`[jobs:cart] abandoned=${ab.abandoned} purged=${cl.deleted}`);
   });
   every(60_000, 'webhooks', 'webhooks', () => deliverWebhooks({ log: jobLog })); // push due webhook deliveries every minute
+  // REL-4: push due email_outbox rows every minute — retry/dead-letter the
+  // order-confirmation path. Mirrors the webhook claim pattern (FOR UPDATE
+  // SKIP LOCKED, exponential backoff, dead-letter after MAX_ATTEMPTS).
+  every(60_000, 'emails', 'emails', () => deliverEmails({ log: jobLog }));
   // WP1.7 safety net: reset webhook_delivery rows stuck in 'processing' (a
   // crashed scheduler) back to 'pending' so the next pass re-claims them.
   // 10-min grace = a crashed worker is recovered within 15 min.

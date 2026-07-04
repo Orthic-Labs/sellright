@@ -267,6 +267,13 @@
       "when": 1782000500000,
       "tag": "0037_payment_provider_ref_unique",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1782000600000,
+      "tag": "0038_email_outbox",
+      "breakpoints": true
     }
   ]
 }
