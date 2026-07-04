@@ -5,6 +5,7 @@
  *
  * Keyed by ip+identifier. Failures count; a successful login clears the key.
  */
+import { env } from '../env.js';
 const WINDOW_MS = 15 * 60 * 1000; // 15 min
 const MAX_FAILURES = 8;
 
@@ -42,11 +43,37 @@ export function clearLoginAttempts(ip: string, identifier: string): void {
   store.delete(`${ip}|${identifier.toLowerCase()}`);
 }
 
+/**
+ * Pure decision logic for client-IP resolution, unit-testable without a Hono
+ * context. `cf-connecting-ip` is ONLY trusted when the deployment is actually
+ * behind Cloudflare's edge (`behindCloudflare: true`) — otherwise it is a
+ * client-forgeable header like any other and honoring it unconditionally lets
+ * anyone spoof a distinct IP per request and defeat the login rate limiter.
+ * When not behind Cloudflare, fall back to `trustedHeader` (set by a proxy the
+ * deployment actually controls, e.g. our own nginx's X-Real-IP) then the raw
+ * socket address. X-Forwarded-For is INTENTIONALLY never read anywhere in this
+ * chain because it's trivially forgeable and multi-hop. See WP1.4 / SEC-5.
+ */
+export function pickClientIp(
+  headers: { get: (k: string) => string | undefined },
+  opts: { behindCloudflare: boolean; trustedHeader: string; remoteAddr?: string },
+): string {
+  if (opts.behindCloudflare) {
+    const cf = headers.get('cf-connecting-ip');
+    if (cf) return cf;
+  }
+  return headers.get(opts.trustedHeader) ?? opts.remoteAddr ?? 'unknown';
+}
+
 /** Best-effort client IP from proxy headers (Cloudflare / nginx) or fallback.
- *  Priority: CF-Connecting-IP (set by the Cloudflare edge, unspoofable) >
- *  X-Real-IP (set by our own nginx) > socket. X-Forwarded-For is INTENTIONALLY
- *  ignored because anyone on the public internet can forge it and use it to
- *  bypass rate limits. See WP1.4. */
+ *  See {@link pickClientIp} for the trust rules. */
 export function clientIp(c: { req: { header: (k: string) => string | undefined }; env?: { remoteAddr?: string } }): string {
-  return c.req.header('cf-connecting-ip') ?? c.req.header('x-real-ip') ?? c.env?.remoteAddr ?? 'unknown';
+  return pickClientIp(
+    { get: (k) => c.req.header(k) },
+    {
+      behindCloudflare: env.BEHIND_CLOUDFLARE === '1',
+      trustedHeader: env.TRUSTED_PROXY_HEADER,
+      remoteAddr: c.env?.remoteAddr,
+    },
+  );
 }
