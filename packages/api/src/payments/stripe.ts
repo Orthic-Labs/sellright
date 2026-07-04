@@ -142,7 +142,13 @@ export const stripeProvider: PaymentProvider = {
     if (!input.providerRef) return { state: 'Failed', providerRef: null, errorMessage: 'no payment_intent to refund' };
     if (!input.stripeMode) return { state: 'Failed', providerRef: null, errorMessage: 'stripeMode is required for Stripe refunds' };
     try {
-      const r = await stripeClient(input.stripeMode).refunds.create({ payment_intent: input.providerRef, amount: input.amount });
+      // Idempotency key: a retry of the SAME logical refund (admin double-click,
+      // or a retry after a transient network failure) reuses the key, so Stripe
+      // returns the SAME re_... instead of issuing a second refund. Callers derive
+      // the key from stable identifiers (order id / return request id + amount) —
+      // see admin-orders.ts.
+      const opts = input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : undefined;
+      const r = await stripeClient(input.stripeMode).refunds.create({ payment_intent: input.providerRef, amount: input.amount }, opts);
       const state: RefundResult['state'] = r.status === 'succeeded' ? 'Settled' : r.status === 'pending' ? 'Pending' : 'Failed';
       return { state, providerRef: r.id, errorMessage: state === 'Failed' ? `refund status: ${r.status}` : null };
     } catch (e) {

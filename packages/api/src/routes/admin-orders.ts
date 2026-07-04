@@ -199,9 +199,14 @@ adminOrders.openapi(
       // WP3: reverse the money at the gateway BEFORE writing the ledger row, so a
       // gateway failure aborts the whole refund (txn rolls back, no orphan ledger
       // row). manual/cod refundPayment is a no-op Settled; stripe actually refunds.
+      // Deterministic per logical refund: identical across a retry of THIS same
+      // refund (admin double-click, or retry after a transient failure), distinct
+      // from any other refund on this order (a genuinely new partial refund has a
+      // different amount). Stripe dedupes on this key for 24h — no double-refund.
+      const idempotencyKey = `refund:${o.id}:${amount}`;
       let gatewayResult: { state: 'Settled' | 'Pending'; providerRef: string | null };
       try {
-        gatewayResult = await executeGatewayRefund(tx, st.storeId, pay.method, pay.providerRef, amount, o.currency);
+        gatewayResult = await executeGatewayRefund(tx, st.storeId, pay.method, pay.providerRef, amount, o.currency, idempotencyKey);
       } catch (e: unknown) {
         const err = e as { kind?: string; message?: string };
         if (err.kind === 'providerfail') return { kind: 'providerfail' as const, message: err.message ?? 'gateway refund failed' };
@@ -306,10 +311,15 @@ adminOrders.openapi(
     const st = requireStore(admin, c); requireWrite(st);
     const { id } = c.req.valid('param');
     const res = await withStore(st.storeId, async (tx) => {
-      const [rr] = await tx.select().from(s.returnRequest).where(eq(s.returnRequest.id, id)).limit(1);
+      // FOR UPDATE on BOTH rows: two concurrent approves of the same return must
+      // not both read 'requested' and both pass the balance check (over-refund) —
+      // mirrors the direct refund path's order lock above. The returnRequest lock
+      // serializes concurrent approvals of the SAME return; the order lock
+      // serializes against a concurrent direct refund on the same order.
+      const [rr] = await tx.select().from(s.returnRequest).where(eq(s.returnRequest.id, id)).limit(1).for('update');
       if (!rr) return { kind: 'notfound' as const };
       if (rr.status !== 'requested' && rr.status !== 'approved') return { kind: 'badstate' as const, status: rr.status };
-      const [o] = await tx.select().from(s.order).where(eq(s.order.id, rr.orderId)).limit(1);
+      const [o] = await tx.select().from(s.order).where(eq(s.order.id, rr.orderId)).limit(1).for('update');
       if (!o) return { kind: 'notfound' as const };
       const [pay] = await tx.select().from(s.payment).where(and(eq(s.payment.orderId, o.id), eq(s.payment.state, 'Settled'))).orderBy(desc(s.payment.createdAt)).limit(1);
       if (!pay) return { kind: 'nopayment' as const };
@@ -331,9 +341,13 @@ adminOrders.openapi(
       // manual/cod (no provider.refundPayment) this is a no-op returning Settled.
       // A gateway failure throws { kind: 'providerfail' } which propagates up and
       // causes the withStore() txn to roll back — no orphan refund row.
+      // Idempotency key is keyed on the return request (not the order) since a
+      // return-approve retry must dedupe against ITSELF, not against an unrelated
+      // direct refund on the same order for the same amount.
+      const idempotencyKey = `refund:return:${rr.id}:${amount}`;
       let gatewayResult: { state: 'Settled' | 'Pending'; providerRef: string | null };
       try {
-        gatewayResult = await executeGatewayRefund(tx, st.storeId, pay.method, pay.providerRef, amount, o.currency);
+        gatewayResult = await executeGatewayRefund(tx, st.storeId, pay.method, pay.providerRef, amount, o.currency, idempotencyKey);
       } catch (e: unknown) {
         const err = e as { kind?: string; message?: string };
         if (err.kind === 'providerfail') return { kind: 'providerfail' as const, message: err.message ?? 'gateway refund failed' };
