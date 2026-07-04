@@ -4,6 +4,9 @@ import { withStore } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
 import { isMethodEligible, shippingRate } from '../shipping/calculator.js';
+import { safeOutboundFetch } from '../security/outbound-url.js';
+import { clientIp } from '../auth/rate-limit.js';
+import { newsletterRetryAfter, recordNewsletterAttempt } from './shop-extra.newsletter-limit.js';
 
 export const shopExtra = new OpenAPIHono();
 
@@ -109,9 +112,19 @@ shopExtra.openapi(
   createRoute({
     method: 'post', path: '/v1/shop/newsletter-signup', summary: 'Subscribe an email to the newsletter',
     request: { body: { content: J(z.object({ email: z.string().email(), name: z.string().optional() })) } },
-    responses: { 200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) } },
+    responses: {
+      200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) },
+      429: { description: 'Rate limited', content: J(z.object({ error: z.string() })) },
+    },
   }),
   async (c) => {
+    // Public + unauthenticated: throttle per-IP before doing any work, same
+    // "count every attempt" shape as auth.ts's check-email probe throttle.
+    const ip = clientIp(c);
+    const retry = newsletterRetryAfter(ip);
+    if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
+    recordNewsletterAttempt(ip);
+
     const st = await resolveStoreFromCtx(c);
     const { email, name } = c.req.valid('json');
     // Store row read via withStore (the `store` registry table is RLS-exempt, but
@@ -125,7 +138,12 @@ shopExtra.openapi(
     if (lm?.url && lm?.apiToken) {
       try {
         const auth = Buffer.from(`${lm.apiUser}:${lm.apiToken}`).toString('base64');
-        await fetch(`${lm.url.replace(/\/$/, '')}/api/subscribers`, { method: 'POST', headers: { authorization: `Basic ${auth}`, 'content-type': 'application/json' }, body: JSON.stringify({ email, name: name || email, status: 'enabled' }) });
+        // SSRF guard: the Listmonk URL is admin-supplied config, not hardcoded,
+        // so it must go through the same DNS-pinned, private-IP-blocking fetch
+        // as admin-marketing.ts's Listmonk client (a guard-block throw is
+        // caught below and logged like any other Listmonk error — never
+        // surfaced to the caller, never leaks the Basic-auth credential).
+        await safeOutboundFetch(`${lm.url.replace(/\/$/, '')}/api/subscribers`, { method: 'POST', headers: { authorization: `Basic ${auth}`, 'content-type': 'application/json' }, body: JSON.stringify({ email, name: name || email, status: 'enabled' }) });
       } catch (e) { console.error('[newsletter] listmonk error', e); }
     }
     return c.json({ ok: true }, 200);
