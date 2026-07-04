@@ -8,11 +8,20 @@
 
 ## ⇒ NEXT-AGENT HANDOFF — start here (updated 2026-07-04)
 
-**All 12 lanes are DONE and on `origin/main` (`bff9e1d`), validated end-to-end on the box** against real Postgres + RLS: `assert-rls` OK (51 FORCE-RLS tables), typecheck + build ok, **187 non-DB + 88 DB tests green**. Box validation caught **5 real defects that every local gate (typecheck) missed** — see the ledger. Nothing from the security+money blocker tier is left.
+### ⛔ OPEN BLOCKER — MONEY-1 / `0037` is UNSAFE on real DD data (do not build payment work on it)
+Merged + green on the CLEAN test DB, but validating against `sellright_dev` (a **clone of Damned Designs, 13,544 payments**) exposed a design flaw the test DB could not: the DD import writes `provider_ref = 'imported'` as a **placeholder** on **12,674 distinct historical payments**, so they all collide on `(store_id, 'imported')`. Consequences:
+- `0037`'s `CREATE UNIQUE INDEX (store_id, provider_ref) WHERE provider_ref IS NOT NULL` **cannot apply to real DD data** (42P10 duplicate keys).
+- The de-dupe step I drafted for `0037` would **DELETE 12,673 legitimate imported payments** — do NOT ship it.
+- Root cause is the import, not the settle race. **Correct fix (TBD, needs decision):** make the importer write `provider_ref = NULL` (or a unique `imported:<orderCode>`) for placeholder rows, so real gateway refs stay unique and imports fall outside the partial index. Until then MONEY-1's index must not be deployed to any DB carrying imported payments (prod included).
+- **Status:** MONEY-1 code is on `main` but its migration is a no-go for prod as written. Treat MONEY-1 as **REOPENED**. No payment/migration lane should build on it yet.
 
-**What remains = the audit backlog**, and **every finding is dispositioned** in the ledger §3 — `BUILD` (21 ready-to-dispatch lanes with scope, §3a), `DEFER` (15, each with a reason, §3b), or `DECIDE` (needs a product/jurisdiction call, §3c). Nothing is unaccounted. To hand off: pick any §3a row and dispatch it the way the phase-1/2 lanes were run (worktree → build → box `test:db` → merge, per `BOX-VALIDATION-CHECKLIST.md`). Highest-value first: `REL-1` graceful shutdown, `OBS-1`/`OBS-2` logging + `/readyz`, `TEST-1` checkout/auth route tests, `FE-1..4` WCAG quick wins.
+### The other 11 lanes
+On `origin/main` (`bff9e1d`), validated end-to-end on the box against real Postgres + RLS (`assert-rls` OK, typecheck + build ok, **187 non-DB + 88 DB tests green**). Box validation caught 5 defects every local typecheck missed. The security lanes (SEC-1..6) + OPS + MONEY-3 are sound.
 
-**Not yet live.** `main` is merged + validated but **not deployed** — the box dev API (`sellright-api`) still runs the pre-merge `dist/`. Deploy steps + storefront smoke + the SEC-6 deny-by-default grant are in `BOX-VALIDATION-CHECKLIST.md` §Deploy. Confirm scope before restarting the service.
+### Backlog (hand-off ready)
+Every audit finding is dispositioned in ledger §3 — `BUILD` (21 lanes w/ scope, §3a), `DEFER` (15 w/ reason, §3b), `DECIDE` (5 need a product/jurisdiction call, §3c). Pick any §3a row; dispatch it worktree → build → box `test:db` → merge (`BOX-VALIDATION-CHECKLIST.md`). Safe first picks: `REL-2`, `REL-5`, `OBS-2` `/readyz`, `PERF-2`, `FE-1..4`. **Do NOT hand out payment/migration lanes until the `0037`/`imported` blocker above is resolved.**
+
+**Not deployed / dev DB open item.** `main` is not live — the box `sellright-api` runs pre-merge `dist/` (I wired its missing `DATABASE_URL` so DB routes work, but `0037` is NOT applied and `sellright_dev`'s migration journal has a stray `0037` marker + out-of-band `0035/0036` records I introduced while diagnosing — needs cleanup, no payment rows were deleted). See `BOX-VALIDATION-CHECKLIST.md` §Deploy; resolve the `0037` blocker before deploying.
 
 Everything else in this doc (the fenced lane blocks) is the history of how the 12 lanes were built — reference, not new work.
 
@@ -28,7 +37,7 @@ Everything else in this doc (the fenced lane blocks) is the history of how the 1
 | 4 | SEC-4 download open-redirect allowlist | security | ✅ **MERGED** `57548d4` |
 | 5 | SEC-5 trusted-proxy IP + Secure-from-scheme + sanitize errors | security/config | ✅ **MERGED** `5b6ecd9` |
 | 6 | HYG-1 pnpm CI/local version match | hygiene | ✅ **MERGED** `1204615` |
-| 7 | MONEY-1 payment idempotency: unique `(store_id,provider_ref)` + store-scoped claim | money integrity | ✅ **MERGED** `9a3bc7b` — box `test:db` 51/51 (fixed a `42P10` bug it surfaced) |
+| 7 | MONEY-1 payment idempotency: unique `(store_id,provider_ref)` + store-scoped claim | money integrity | ⛔ **REOPENED** — code on `main` (`9a3bc7b`), green on clean test DB, but the `0037` unique index is **unsafe on real DD data** (import uses `provider_ref='imported'` on 12,674 payments → collides). Migration must not deploy; fix the importer first. See handoff blocker. |
 | 8 | MONEY-2 refund idempotency key + lock return-approve (+gateway-out-of-txn deferred) | money integrity | ✅ **MERGED** `1947099` — box 56/56 (fixed a dropped test registration) |
 | 9 | MONEY-3 draft `markPaid` issues licenses | money/fulfillment | ✅ **MERGED** `5529ce6` — box 51/51 (fixed an orphaned test) |
 | 10 | OPS-1 host→store routing + CORS + pool connect-timeout | multi-tenant blocker | ✅ **MERGED** `b739ada` — box 62/62 (host via `store.config`, CORS via `hono/cors`) |
@@ -463,7 +472,7 @@ Every distinct finding across the 8 audit sections (minimax, glm, deepseek, qwen
 | SEC-4 | licensed-download open redirect (qwen LOW-05, kimi) | ✅ | on `main` `57548d4`; unit tests |
 | SEC-5 | clientIp spoof (minimax H-2, deepseek M-01, qwen M-02); NODE_ENV cookie/error footgun (minimax M-5, deepseek, qwen M-04) | ✅ | on `main` `5b6ecd9`; unit tests |
 | HYG-1 | pnpm CI/local drift (Prod audit) | ✅ | on `main` `1204615`; **confirmed on box** (box pnpm was 10.34.1) |
-| MONEY-1 | duplicate payment-ledger race + no unique `(store_id,provider_ref)` (minimax M-1, deepseek "duplicate payment ledger"/High#1); cross-store idempotency-key collision | ✅ | **MERGED** `9a3bc7b`. Box `test:db` surfaced a real bug (partial-index `ON CONFLICT` missing its `WHERE` predicate → `42P10` on EVERY payment insert; 8 subscription tests failed). Fixed (`onConflictDoNothing` `where:`) → box green **51/51**. |
+| MONEY-1 | duplicate payment-ledger race + no unique `(store_id,provider_ref)` (minimax M-1, deepseek "duplicate payment ledger"/High#1); cross-store idempotency-key collision | ⛔ REOPENED | Code on `main` `9a3bc7b`, green on the CLEAN test DB (fixed a `42P10` `ON CONFLICT` predicate bug there). **But the `0037` unique index is incompatible with real DD data:** the import sets `provider_ref='imported'` on 12,674 distinct payments → they collide. The index can't apply and the drafted de-dupe would delete real payments. FIX: importer must write NULL/unique refs for placeholders. Do not deploy `0037` as-is. See handoff §OPEN BLOCKER. |
 | MONEY-2 | refund double-spend + no Stripe idempotency key (minimax M-2, deepseek Critical#2); unlocked return-approve | ✅ | **MERGED** `1947099`. The MONEY-1 merge dropped its `test:db` registration → refund tests ran nowhere; re-registered → box green **56/56**. Gateway-out-of-txn (item 3) **deferred** with rationale. |
 | MONEY-3 | draft `markPaid` issues no licenses (minimax, deepseek, kimi C2) | ✅ | **MERGED** `5529ce6`. Test file was orphaned (in neither `test` nor `test:db`) → registered → box green **51/51**. |
 | OPS-1 | host→store routing (minimax A1) + CORS (minimax A2) + pool connect-timeout 0→5000 (deepseek, mimo P0#7, kimi) | ✅ | **MERGED** `b739ada`; box green **62/62**. Host via `store.config.hostnames`; CORS via `hono/cors` (no phantom dep). |
