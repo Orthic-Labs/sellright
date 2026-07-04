@@ -24,6 +24,15 @@
 -- part of the key, so this never merges across tenants regardless of RLS.
 ALTER TABLE "payment" NO FORCE ROW LEVEL SECURITY;
 --> statement-breakpoint
+-- FIRST null out the Woo→Vendure import placeholder. The original 2024 migration
+-- stamped provider_ref='imported' on thousands of DISTINCT historical payments
+-- (different orders/amounts/methods) that have no real gateway ref. They are NOT
+-- duplicates of one charge — deleting all-but-one would destroy real payment
+-- history. A placeholder ref belongs OUTSIDE the partial unique index (exactly
+-- like manual/COD, which are NULL), so null it here. Then the de-dupe below only
+-- ever touches genuine settle-race rows (a real gateway ref appearing twice).
+UPDATE "payment" SET provider_ref = NULL WHERE provider_ref = 'imported';
+--> statement-breakpoint
 DELETE FROM "payment" p
   USING "payment" q
   WHERE p.store_id = q.store_id
