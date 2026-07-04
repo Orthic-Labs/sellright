@@ -8,7 +8,7 @@ import { canAccessDownload, canReceiveUpdate } from '../licensing/entitlements.j
 import { bearerToken } from '../licensing/tokens.js';
 import { signedDownloadPath, verifyDownloadSig, downloadSigningConfigured } from '../licensing/download-url.js';
 import { isAllowedRedirectHost } from '../lib/redirect-allowlist.js';
-import { J, errBody, guard, requireAdmin, requireStore, requireWrite } from './admin-helpers.js';
+import { J, errBody, guard, requireAdmin, requireStore, requireWrite, requirePermission } from './admin-helpers.js';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
@@ -339,7 +339,7 @@ apps.openapi(
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
-    const st = requireStore(admin, c); requireWrite(st);
+    const st = requireStore(admin, c); requireWrite(st); requirePermission(st, 'releases');
     const body = c.req.valid('json') as CreateReleaseBody;
     const id = await withStore(st.storeId, async (tx) => {
       const [row] = await tx.insert(s.appRelease).values({

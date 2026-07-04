@@ -17,6 +17,9 @@ export const ROLE_DESC: Record<Role, string> = {
 export const PERMISSION_ACTIONS: { key: string; label: string; hint: string }[] = [
   { key: 'giftcards', label: 'Gift cards', hint: 'Create and manage gift card codes' },
   { key: 'webhooks', label: 'Webhooks', hint: 'Create, update and delete webhook endpoints' },
+  { key: 'refunds', label: 'Refunds', hint: 'Refund orders and approve return requests' },
+  { key: 'cancel_orders', label: 'Cancel orders', hint: 'Cancel orders and release reserved stock' },
+  { key: 'releases', label: 'App releases', hint: 'Create and publish app release manifests' },
 ];
 
 const UI_PERMISSION_KEYS = PERMISSION_ACTIONS.map((p) => p.key);

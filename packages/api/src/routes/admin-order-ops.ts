@@ -3,7 +3,7 @@ import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
-import { HttpError, J, errBody, money, Page, requireAdmin, requireStore, requireWrite, requireManage, guard } from './admin-helpers.js';
+import { HttpError, J, errBody, money, Page, requireAdmin, requireStore, requireWrite, requireManage, requirePermission, guard } from './admin-helpers.js';
 import { calculateOrderTotals } from '../money/totals.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
 import { reserveStockOrThrow, StockReservationError, validateReservableItems } from '../orders/stock-reservation.js';
@@ -219,7 +219,7 @@ adminOrderOps.openapi(
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
-    const st = requireStore(admin, c); requireWrite(st);
+    const st = requireStore(admin, c); requireWrite(st); requirePermission(st, 'cancel_orders');
     const { codes } = c.req.valid('json');
     const results: { code: string; ok: boolean; error?: string }[] = [];
     for (const code of [...new Set(codes)] as string[]) {

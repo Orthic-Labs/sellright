@@ -315,7 +315,7 @@ adminSettingsAdvanced.openapi(
 // erase those unknown keys when the UI saves a partial update — that was the
 // long-standing bug where opening the editor + saving wiped a `giftcards: true`
 // grant. The merge: start from the stored value, overlay the known UI keys.
-const UI_PERMISSION_KEYS = ['giftcards', 'webhooks'] as const;
+const UI_PERMISSION_KEYS = ['giftcards', 'webhooks', 'refunds', 'cancel_orders', 'releases'] as const;
 type UiPermissionKey = typeof UI_PERMISSION_KEYS[number];
 
 export function isUiPermissionKey(k: string): k is UiPermissionKey {

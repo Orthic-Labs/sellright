@@ -3,7 +3,7 @@ import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
-import { HttpError, J, errBody, money, Page, requireAdmin, requireStore, requireWrite, guard } from './admin-helpers.js';
+import { HttpError, J, errBody, money, Page, requireAdmin, requireStore, requireWrite, requirePermission, guard } from './admin-helpers.js';
 import { calculateOrderTotals } from '../money/totals.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
 import { reserveStockOrThrow, StockReservationError, validateReservableItems } from '../orders/stock-reservation.js';
@@ -164,7 +164,7 @@ adminOrders.openapi(
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
-    const st = requireStore(admin, c); requireWrite(st);
+    const st = requireStore(admin, c); requireWrite(st); requirePermission(st, 'refunds');
     const { code } = c.req.valid('param');
     const body = c.req.valid('json');
     const res = await withStore(st.storeId, async (tx) => {
@@ -308,7 +308,7 @@ adminOrders.openapi(
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
-    const st = requireStore(admin, c); requireWrite(st);
+    const st = requireStore(admin, c); requireWrite(st); requirePermission(st, 'refunds');
     const { id } = c.req.valid('param');
     const res = await withStore(st.storeId, async (tx) => {
       // FOR UPDATE on BOTH rows: two concurrent approves of the same return must
