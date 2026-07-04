@@ -24,7 +24,10 @@ const EnvSchema = z.object({
   // is backwards-compatible; raise PGPOOL_MAX under load. Timeouts are in ms.
   PGPOOL_MAX: z.coerce.number().int().positive().default(10),
   PGPOOL_IDLE_TIMEOUT_MS: z.coerce.number().int().nonnegative().default(10000),
-  PGPOOL_CONNECTION_TIMEOUT_MS: z.coerce.number().int().nonnegative().default(0),
+  // OPS-1: was 0 (infinite wait) — under pool saturation, a request would hang
+  // forever instead of failing fast. 5000ms gives pg time to acquire a client
+  // under normal load while still bounding worst-case request latency.
+  PGPOOL_CONNECTION_TIMEOUT_MS: z.coerce.number().int().nonnegative().default(5000),
   // WP2: SMTP (all optional — mailer no-ops with a log line when unconfigured).
   SMTP_HOST: optionalEnvString,
   SMTP_PORT: z.coerce.number().int().positive().default(587),
