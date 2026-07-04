@@ -125,7 +125,8 @@ describe('email outbox (REL-4)', () => {
     expect(after.lastError).toContain('smtp 421');
     // Backoff for attempts=1 → 60s (BACKOFF_S[0]). next_attempt_at must be at
     // least ~55s in the future so the row is NOT immediately re-claimed.
-    const dueSec = (after.nextAttemptAt.getTime() - Date.now()) / 1000;
+    // raw SQL execute() returns the timestamp as a string, not a Date — coerce.
+    const dueSec = (new Date(after.nextAttemptAt).getTime() - Date.now()) / 1000;
     expect(dueSec).toBeGreaterThanOrEqual(50);
     expect(dueSec).toBeLessThanOrEqual(120);
   });
