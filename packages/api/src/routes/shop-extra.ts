@@ -7,6 +7,7 @@ import { isMethodEligible, shippingRate } from '../shipping/calculator.js';
 import { safeOutboundFetch } from '../security/outbound-url.js';
 import { clientIp } from '../auth/rate-limit.js';
 import { newsletterRetryAfter, recordNewsletterAttempt } from './shop-extra.newsletter-limit.js';
+import { err as logErr } from '../lib/logger.js';
 
 export const shopExtra = new OpenAPIHono();
 
@@ -144,7 +145,7 @@ shopExtra.openapi(
         // caught below and logged like any other Listmonk error — never
         // surfaced to the caller, never leaks the Basic-auth credential).
         await safeOutboundFetch(`${lm.url.replace(/\/$/, '')}/api/subscribers`, { method: 'POST', headers: { authorization: `Basic ${auth}`, 'content-type': 'application/json' }, body: JSON.stringify({ email, name: name || email, status: 'enabled' }) });
-      } catch (e) { console.error('[newsletter] listmonk error', e); }
+      } catch (e) { logErr.error('newsletter listmonk error', e); }
     }
     return c.json({ ok: true }, 200);
   },

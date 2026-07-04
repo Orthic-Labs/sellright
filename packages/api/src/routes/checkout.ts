@@ -17,6 +17,7 @@ import { isMethodEligible, shippingRate, ShippingUnavailableError } from '../shi
 import { pickEmailAppKey, sendOrderConfirmation } from '../email/dispatch.js';
 import { clientIp, loginRetryAfter } from '../auth/rate-limit.js';
 import { issueLicensesForPaidOrder } from '../licensing/issue.js';
+import { err as logErr } from '../lib/logger.js';
 
 function selectUnitPrice(v: { price: number; salePrice: number | null; isPreOrder: boolean; preOrderPrice: number | null }): number {
   if (v.isPreOrder && v.preOrderPrice != null) return v.preOrderPrice;
@@ -378,7 +379,7 @@ checkout.openapi(
         };
       });
       if (email?.to) await sendOrderConfirmation({ name: st.name, currency: st.currency, appKey: email.appKey }, email.to, email.data);
-    } catch (e) { console.error('[email:orderConfirmation] failed', e); }
+    } catch (e) { logErr.error('email orderConfirmation failed', e); }
 
     return c.json({ code: out.code, state: out.paid ? 'Paid' : 'PendingPayment', grandTotal: out.grandTotal, discountTotal: out.discountTotal, currency: st.currency, couponApplied: out.couponApplied, giftCardApplied: out.giftCardApplied ?? 0, receiptToken: out.receiptToken }, 200);
   },

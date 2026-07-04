@@ -24,9 +24,12 @@ import { reapStuckWebhooks } from './webhook-reaper.js';
 import { abandonStaleCarts, cleanupExpiredCarts } from './cart-maintenance.js';
 import { deliverWebhooks } from '../webhooks/emit.js';
 import { withLeaderLock, type LeaderLockedJob } from './leader-lock.js';
+import { log, err as logErr } from '../lib/logger.js';
 
 const HOUR = 3_600_000;
-const log = (m: string) => console.log(m);
+// OBS-1: job-level log line passes through the structured logger so it carries
+// the same shape as the per-request logs and stays greppable by job label.
+const jobLog = (m: string) => log.info(m);
 
 /**
  * Run `fn` now and on an interval; never let an overlap or a throw kill the
@@ -44,7 +47,7 @@ function every(ms: number, label: string, leaderJob: LeaderLockedJob, fn: () => 
     try {
       await withLeaderLock(leaderJob, fn); // skip if another instance is leader for this tick
     } catch (e) {
-      console.error('[jobs] failed:', label, e);
+      logErr.error('job failed', e, { job: label });
     } finally {
       running = false;
     }
@@ -57,7 +60,7 @@ function every(ms: number, label: string, leaderJob: LeaderLockedJob, fn: () => 
 
 export function startJobScheduler(): void {
   if (env.JOBS_ENABLED !== '1' || env.NODE_ENV === 'test') {
-    console.log('[jobs] scheduler disabled (set JOBS_ENABLED=1 to enable)');
+    log.info('scheduler disabled', { hint: 'set JOBS_ENABLED=1 to enable' });
     return;
   }
   const autoDeliverApply = env.JOBS_AUTO_DELIVER_APPLY === '1';
@@ -65,10 +68,17 @@ export function startJobScheduler(): void {
   const releaseApply = env.JOBS_RELEASE_STALE_APPLY === '1';
   const releaseTtlMin = env.JOBS_RELEASE_STALE_TTL_MIN ?? 60;
 
-  console.log(`[jobs] scheduler on — auto-deliver(apply=${autoDeliverApply}, days=${autoDeliverDays}) hourly; release-stale(apply=${releaseApply}, ttl=${releaseTtlMin}m) every 15m; cart-maintenance(abandon=${env.CART_ABANDON_HOURS}h, ttl=${env.CART_TTL_DAYS}d) every 15m`);
+  log.info('scheduler on', {
+    autoDeliverApply,
+    autoDeliverDays,
+    releaseApply,
+    releaseTtlMin,
+    cartAbandonHours: env.CART_ABANDON_HOURS,
+    cartTtlDays: env.CART_TTL_DAYS,
+  });
 
-  every(HOUR, 'auto-deliver', 'auto-deliver', () => autoDeliver({ apply: autoDeliverApply, days: autoDeliverDays, log }));
-  every(15 * 60_000, 'release-stale', 'release-stale', () => releaseStaleAllocations({ apply: releaseApply, ttlMin: releaseTtlMin, log }));
+  every(HOUR, 'auto-deliver', 'auto-deliver', () => autoDeliver({ apply: autoDeliverApply, days: autoDeliverDays, log: jobLog }));
+  every(15 * 60_000, 'release-stale', 'release-stale', () => releaseStaleAllocations({ apply: releaseApply, ttlMin: releaseTtlMin, log: jobLog }));
   // Cart lifecycle: flag inactive non-empty carts abandoned (emits cart.abandoned
   // for recovery) + hard-delete idle/empty carts past their TTL. Always applies
   // (no dry-run flag): abandonment is reversible (a returning shopper re-activates
@@ -76,13 +86,13 @@ export function startJobScheduler(): void {
   every(15 * 60_000, 'cart-maintenance', 'cart-maintenance', async () => {
     const ab = await abandonStaleCarts(env.CART_ABANDON_HOURS);
     const cl = await cleanupExpiredCarts();
-    if (ab.abandoned || cl.deleted) log(`[jobs:cart] abandoned=${ab.abandoned} purged=${cl.deleted}`);
+    if (ab.abandoned || cl.deleted) jobLog(`[jobs:cart] abandoned=${ab.abandoned} purged=${cl.deleted}`);
   });
-  every(60_000, 'webhooks', 'webhooks', () => deliverWebhooks({ log })); // push due webhook deliveries every minute
+  every(60_000, 'webhooks', 'webhooks', () => deliverWebhooks({ log: jobLog })); // push due webhook deliveries every minute
   // WP1.7 safety net: reset webhook_delivery rows stuck in 'processing' (a
   // crashed scheduler) back to 'pending' so the next pass re-claims them.
   // 10-min grace = a crashed worker is recovered within 15 min.
   const webhookReaperApply = env.JOBS_WEBHOOK_REAPER_APPLY === '1';
   const webhookReaperGraceMin = env.JOBS_WEBHOOK_REAPER_GRACE_MIN ?? 10;
-  every(5 * 60_000, 'webhook-reaper', 'webhook-reaper', () => reapStuckWebhooks({ apply: webhookReaperApply, graceMin: webhookReaperGraceMin, log }));
+  every(5 * 60_000, 'webhook-reaper', 'webhook-reaper', () => reapStuckWebhooks({ apply: webhookReaperApply, graceMin: webhookReaperGraceMin, log: jobLog }));
 }

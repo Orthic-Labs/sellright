@@ -5,6 +5,7 @@ import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { assertSafeOutboundUrl, safeOutboundFetch } from '../security/outbound-url.js';
 import { HttpError, J, errBody, money, requireAdmin, requireStore, requireWrite, requireManage, requirePermission, guard } from './admin-helpers.js';
+import { err as logErr } from '../lib/logger.js';
 
 export const adminMarketing = new OpenAPIHono();
 
@@ -245,7 +246,7 @@ adminMarketing.openapi(
         failures.push(e instanceof Error ? e.message : String(e));
       }
     }
-    if (failures.length) console.error(`[listmonk:sync] ${failures.length}/${customers.length} failed; first: ${failures[0]}`);
+    if (failures.length) logErr.error('listmonk sync partial failure', undefined, { failed: failures.length, total: customers.length, firstError: failures[0] });
     await withStore(st.storeId, async (tx) => { await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'marketing', entityId: String(listId), action: 'listmonk_sync', data: { synced, failed: failures.length } }); });
     return c.json({ synced, failed: failures.length }, 200);
   }),

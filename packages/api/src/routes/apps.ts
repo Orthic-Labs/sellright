@@ -9,6 +9,7 @@ import { bearerToken } from '../licensing/tokens.js';
 import { signedDownloadPath, verifyDownloadSig, downloadSigningConfigured } from '../licensing/download-url.js';
 import { isAllowedRedirectHost } from '../lib/redirect-allowlist.js';
 import { J, errBody, guard, requireAdmin, requireStore, requireWrite, requirePermission } from './admin-helpers.js';
+import { err as logErr } from '../lib/logger.js';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
@@ -305,7 +306,7 @@ apps.get('/v1/dl/:artifactKey', async (c) => {
     if (isAllowedRedirectHost(artifact.path, env.ARTIFACT_EXTERNAL_HOST_ALLOWLIST)) {
       return c.redirect(artifact.path, 302);
     }
-    console.error(`[SEC-4] rejected redirect to non-allowlisted artifact host: ${artifact.path}`);
+    logErr.error('SEC-4 rejected redirect', undefined, { artifactHost: artifact.path });
     return c.json({ error: 'download is not available' }, 502);
   }
   // Local file: resolve under DOWNLOAD_DIR with a traversal guard, then stream.
