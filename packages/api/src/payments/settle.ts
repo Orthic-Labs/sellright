@@ -54,7 +54,7 @@ export async function applyPaymentResult(
     // rows (manual/cod) fall outside the index and never conflict.
     .onConflictDoNothing({
       target: [s.payment.storeId, s.payment.providerRef],
-      targetWhere: sql`${s.payment.providerRef} is not null`,
+      where: sql`${s.payment.providerRef} is not null`,
     })
     .returning({ id: s.payment.id });
   if (inserted.length === 0) {
