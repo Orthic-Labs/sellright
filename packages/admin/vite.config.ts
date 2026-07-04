@@ -1,9 +1,14 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { CSP_PROD, cspFor } from './src/lib/csp';
 
 // The admin SPA talks to the SellRight API. In dev, /v1 is proxied to the API
 // (same-origin, no CORS) and /assets to DD's image server (parity with the
 // storefront dev proxy). In prod, nginx fronts both on the admin host.
+//
+// Content Security Policy for the admin SPA lives in src/lib/csp.ts
+// (DISPATCH FE-7) — dev/prod variants + the cspFor(mode) helper. nginx
+// mirrors CSP_PROD verbatim — see src/lib/csp-headers.test.ts.
 export default defineConfig(({ mode }) => ({
   plugins: [react()],
   define: mode === 'qa' ? {
@@ -27,6 +32,25 @@ export default defineConfig(({ mode }) => ({
       '/v1': { target: 'http://127.0.0.1:3300', changeOrigin: true },
       '/assets': { target: 'https://www.damneddesigns.com', changeOrigin: true, secure: true },
     },
+    // Emit CSP in dev so violations surface in the browser console immediately,
+    // not only after a prod deploy. See CSP_DEV for why 'unsafe-inline'.
+    headers: {
+      'Content-Security-Policy': cspFor(mode),
+      'X-Content-Type-Options': 'nosniff',
+      'Referrer-Policy': 'strict-origin-when-cross-origin',
+      'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+    },
   },
-  preview: { port: 4300, host: '0.0.0.0' },
+  // `vite preview` (pnpm preview, used by the QA harness against the built
+  // bundle) must serve the prod CSP, not the dev one.
+  preview: {
+    port: 4300,
+    host: '0.0.0.0',
+    headers: {
+      'Content-Security-Policy': CSP_PROD,
+      'X-Content-Type-Options': 'nosniff',
+      'Referrer-Policy': 'strict-origin-when-cross-origin',
+      'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+    },
+  },
 }));
