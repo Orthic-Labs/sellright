@@ -53,16 +53,26 @@ pay.openapi(
       | { kind: 'ok'; state: string; payment: string };
 
     const out: R = await withStore(st.id, async (tx): Promise<R> => {
-      const [order] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
+      // FOR UPDATE: lock the order row so a concurrent second /pay (or the
+      // webhook reconcile racing in via applyPaymentResult) re-reads committed
+      // state rather than the stale PendingPayment snapshot the first waiter saw.
+      const [order] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
       if (!order) return { kind: 'notfound' };
       if (order.state !== 'PendingPayment') return { kind: 'badstate', state: order.state };
 
       // WP1.2: idempotency is MANDATORY. If the client didn't send a key we
-      // derive a deterministic one keyed on (orderCode, method) so the claim
-      // ALWAYS runs and a concurrent double-submit can't double-charge. The
-      // derived key is per-(order, method), so a deliberate retry of a Declined
-      // payment must clear the claim first (handled below in the Declined branch).
-      const claimKey = idemKey ?? `pay:${code}:${method}`;
+      // derive a deterministic one keyed on (storeId, orderCode, method) so the
+      // claim ALWAYS runs and a concurrent double-submit can't double-charge.
+      // MONEY-2: storeId is part of the key because processed_event.id is a
+      // GLOBAL text primary key with no store scoping (and is RLS-exempt) — two
+      // different stores whose order codes happen to share a suffix (or collide
+      // outright) would otherwise contend for the exact same claim row, and
+      // whichever store loses becomes permanently unpayable (onConflictDoNothing
+      // silently no-ops for the second store forever, since nothing ever deletes
+      // a *foreign* store's claim). The derived key is per-(store, order, method),
+      // so a deliberate retry of a Declined payment must clear the claim first
+      // (handled below in the Declined branch).
+      const claimKey = idemKey ?? `pay:${st.id}:${code}:${method}`;
       const claimed = await tx
         .insert(s.processedEvent)
         .values({ id: claimKey, storeId: st.id, type: 'payment' })
