@@ -101,6 +101,18 @@ const EnvSchema = z.object({
   JOBS_WEBHOOK_REAPER_APPLY: z.enum(['0', '1']).optional(),
   // webhook-reaper job: grace period in minutes before a processing row is considered stuck.
   JOBS_WEBHOOK_REAPER_GRACE_MIN: z.coerce.number().int().positive().optional(),
+  // SEC-5: only honor CF-Connecting-IP for rate-limit/audit IP resolution when the
+  // deployment is actually behind Cloudflare's edge. Without this, any store not
+  // behind Cloudflare lets a client set that header itself and defeat rate limiting.
+  // '1' opts in; default '0' (off) is the safe posture for a fresh deployment.
+  BEHIND_CLOUDFLARE: z.enum(['0', '1']).default('0'),
+  // Header trusted for client IP when NOT behind Cloudflare (e.g. our own nginx's
+  // X-Real-IP). Must be set by a proxy the deployment actually controls.
+  TRUSTED_PROXY_HEADER: z.string().default('x-real-ip'),
+  // SEC-5: expose raw error messages to clients regardless of NODE_ENV. Only ever
+  // set '1' for local debugging — a staging box left without NODE_ENV=production
+  // must NOT leak internal error text by default.
+  DEBUG_ERRORS: z.enum(['0', '1']).default('0'),
 }).transform((raw) => {
   const smtpUser = raw.SMTP_USER ?? raw.GMAIL_USER;
   return {

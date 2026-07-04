@@ -26,6 +26,7 @@ import { paymentWebhooks } from './routes/payment-webhooks.js';
 import { subscriptions } from './routes/subscriptions.js';
 import { apps } from './routes/apps.js';
 import { csrfValid, customerCsrfValid, getCustomerSessionToken } from './auth/cookies.js';
+import { env } from './env.js';
 
 /**
  * The API is typed REST: every route declares a zod schema, which generates
@@ -94,7 +95,10 @@ export function createApp(): OpenAPIHono {
   app.onError((err, c) => {
     // eslint-disable-next-line no-console
     console.error('[api error]', err);
-    const expose = process.env.NODE_ENV !== 'production';
+    // SEC-5: gated on an explicit DEBUG_ERRORS opt-in, not NODE_ENV — a staging
+    // box booted without NODE_ENV=production must still sanitize error bodies
+    // by default. Server-side logging above still captures the real error.
+    const expose = env.DEBUG_ERRORS === '1';
     return c.json({ error: expose && err instanceof Error ? err.message : 'internal error' }, 500);
   });
 
