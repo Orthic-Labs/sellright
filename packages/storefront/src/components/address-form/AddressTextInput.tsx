@@ -20,6 +20,8 @@ type AddressTextInputProps = {
 };
 
 export const AddressTextInput = component$<AddressTextInputProps>((props) => {
+ const showError = !!(props.touched && props.error);
+ const errorId = showError && props.id ? `${props.id}-error` : undefined;
  return (
   <div class="relative">
    <input
@@ -38,12 +40,15 @@ export const AddressTextInput = component$<AddressTextInputProps>((props) => {
     }}
     required={props.required}
     disabled={props.disabled}
+    aria-invalid={showError}
+    aria-describedby={errorId}
    />
    {props.touched !== undefined && (
     <ValidationIcon
      touched={props.touched}
      error={props.error || ''}
      valid={!!props.valid}
+     errorId={errorId}
     />
    )}
   </div>

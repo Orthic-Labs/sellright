@@ -307,11 +307,14 @@ export default component$<IProps>(({ onForward$, isReviewMode }) => {
 						<div>
 							<input
 								type="email"
+								id="shipping-email"
 								value={appState.customer?.emailAddress}
 								disabled={appState.customer?.id !== CUSTOMER_NOT_DEFINED_ID || isReviewMode}
 								placeholder={`Email address *`}
 								onChange$={(_, el) => handleEmailChange$(el.value)}
 								onBlur$={handleEmailBlur$}
+								aria-invalid={!!(emailTouched.value && emailValidationError.value)}
+								aria-describedby={emailTouched.value && emailValidationError.value ? 'shipping-email-error' : undefined}
 								class={`block w-full rounded-md shadow-xs sm:text-sm transition-colors duration-200 ${
 									emailTouched.value && emailValidationError.value
 										? 'border-red-300 focus:ring-red-500 focus:border-red-500'
@@ -319,17 +322,20 @@ export default component$<IProps>(({ onForward$, isReviewMode }) => {
 								}`}
 							/>
 							{emailTouched.value && emailValidationError.value && (
-								<p class="mt-1 text-sm text-red-600">{emailValidationError.value}</p>
+								<p id="shipping-email-error" role="alert" class="mt-1 text-sm text-red-600">{emailValidationError.value}</p>
 							)}
 						</div>
 						<div>
 							<input
 								type="tel"
+								id="shipping-phone"
 								value={appState.customer?.phoneNumber}
 								placeholder={`${`Phone number`}${ (appState.shippingAddress.countryCode === 'US' || appState.shippingAddress.countryCode === 'PR') ? ` (${`optional`})` : ' *'}`}
 								onChange$={(_, el) => handlePhoneChange$(el.value)}
 								onBlur$={handlePhoneBlur$}
 								disabled={isReviewMode} // Disable if in review mode
+								aria-invalid={!!(phoneTouched.value && phoneValidationError.value)}
+								aria-describedby={phoneTouched.value && phoneValidationError.value ? 'shipping-phone-error' : undefined}
 								class={`block w-full rounded-md shadow-xs sm:text-sm transition-colors duration-200 ${
 									phoneTouched.value && phoneValidationError.value
 										? 'border-red-300 focus:ring-red-500 focus:border-red-500'
@@ -337,7 +343,7 @@ export default component$<IProps>(({ onForward$, isReviewMode }) => {
 								}`}
 							/>
 							{phoneTouched.value && phoneValidationError.value && (
-								<p class="mt-1 text-sm text-red-600">{phoneValidationError.value}</p>
+								<p id="shipping-phone-error" role="alert" class="mt-1 text-sm text-red-600">{phoneValidationError.value}</p>
 							)}
 						</div>
 					</div>
@@ -346,11 +352,14 @@ export default component$<IProps>(({ onForward$, isReviewMode }) => {
 						<div>
 							<input
 								type="text"
+								id="shipping-firstName"
 								value={appState.customer?.firstName}
 								disabled={appState.customer?.id !== CUSTOMER_NOT_DEFINED_ID || isReviewMode}
 								placeholder={`First name *`}
 								onChange$={(_, el) => handleFirstNameChange$(el.value)}
 								onBlur$={handleFirstNameBlur$}
+								aria-invalid={!!(firstNameTouched.value && firstNameValidationError.value)}
+								aria-describedby={firstNameTouched.value && firstNameValidationError.value ? 'shipping-firstName-error' : undefined}
 								class={`block w-full rounded-md shadow-xs sm:text-sm transition-colors duration-200 ${
 									firstNameTouched.value && firstNameValidationError.value
 										? 'border-red-300 focus:ring-red-500 focus:border-red-500'
@@ -358,18 +367,21 @@ export default component$<IProps>(({ onForward$, isReviewMode }) => {
 								}`}
 							/>
 							{firstNameTouched.value && firstNameValidationError.value && (
-								<p class="mt-1 text-sm text-red-600">{firstNameValidationError.value}</p>
+								<p id="shipping-firstName-error" role="alert" class="mt-1 text-sm text-red-600">{firstNameValidationError.value}</p>
 							)}
 						</div>
 
 						<div>
 							<input
 								type="text"
+								id="shipping-lastName"
 								value={appState.customer?.lastName}
 								disabled={appState.customer?.id !== CUSTOMER_NOT_DEFINED_ID || isReviewMode}
 								placeholder={`Last name *`}
 								onChange$={(_, el) => handleLastNameChange$(el.value)}
 								onBlur$={handleLastNameBlur$}
+								aria-invalid={!!(lastNameTouched.value && lastNameValidationError.value)}
+								aria-describedby={lastNameTouched.value && lastNameValidationError.value ? 'shipping-lastName-error' : undefined}
 								class={`block w-full rounded-md shadow-xs sm:text-sm transition-colors duration-200 ${
 									lastNameTouched.value && lastNameValidationError.value
 										? 'border-red-300 focus:ring-red-500 focus:border-red-500'
@@ -377,7 +389,7 @@ export default component$<IProps>(({ onForward$, isReviewMode }) => {
 								}`}
 							/>
 							{lastNameTouched.value && lastNameValidationError.value && (
-								<p class="mt-1 text-sm text-red-600">{lastNameValidationError.value}</p>
+								<p id="shipping-lastName-error" role="alert" class="mt-1 text-sm text-red-600">{lastNameValidationError.value}</p>
 							)}
 						</div>
 					</div>

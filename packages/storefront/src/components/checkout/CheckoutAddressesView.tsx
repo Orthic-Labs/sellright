@@ -76,10 +76,13 @@ export const CheckoutAddressesView = component$<CheckoutAddressesViewProps>((pro
             <div class="relative">
               <input
                 type="email"
+                id="checkout-email"
                 value={appState.customer?.emailAddress}
                 placeholder="Email address"
                 onChange$={(_, el) => handleEmailChange$(el.value)}
                 onBlur$={handleEmailBlur$}
+                aria-invalid={!!(emailTouched.value && emailValidationError.value)}
+                aria-describedby={emailTouched.value && emailValidationError.value ? 'checkout-email-error' : undefined}
                 class={`block w-full px-[14px] py-[11px] pr-10 text-[16px] rounded-[3px] border placeholder:text-[rgba(100,85,65,0.42)] focus:outline-hidden transition-colors duration-200 bg-white ${
                   emailTouched.value && emailValidationError.value
                     ? 'border-red-300 focus:border-red-500 focus:ring-red-500'
@@ -90,15 +93,19 @@ export const CheckoutAddressesView = component$<CheckoutAddressesViewProps>((pro
                 touched={emailTouched.value}
                 error={emailValidationError.value}
                 valid={emailTouched.value && !emailValidationError.value && !!(appState.customer?.emailAddress)}
+                errorId={emailTouched.value && emailValidationError.value ? 'checkout-email-error' : undefined}
               />
             </div>
             <div class="relative">
               <input
                 type="tel"
+                id="checkout-phone"
                 value={sanitizePhoneNumber(appState.shippingAddress?.phoneNumber)}
                 placeholder={phonePlaceholder.value}
                 onChange$={(_, el) => handlePhoneChange$(el.value)}
                 onBlur$={handlePhoneBlur$}
+                aria-invalid={!!(phoneTouched.value && phoneValidationError.value)}
+                aria-describedby={phoneTouched.value && phoneValidationError.value ? 'checkout-phone-error' : undefined}
                 class={`block w-full px-[14px] py-[11px] pr-10 text-[16px] rounded-[3px] border placeholder:text-[rgba(100,85,65,0.42)] focus:outline-hidden transition-colors duration-200 bg-white ${
                   phoneTouched.value && phoneValidationError.value
                     ? 'border-red-300 focus:border-red-500 focus:ring-red-500'
@@ -109,6 +116,7 @@ export const CheckoutAddressesView = component$<CheckoutAddressesViewProps>((pro
                 touched={phoneTouched.value}
                 error={phoneValidationError.value}
                 valid={phoneTouched.value && !phoneValidationError.value && !!(appState.shippingAddress?.phoneNumber)}
+                errorId={phoneTouched.value && phoneValidationError.value ? 'checkout-phone-error' : undefined}
               />
             </div>
           </div>
@@ -117,10 +125,13 @@ export const CheckoutAddressesView = component$<CheckoutAddressesViewProps>((pro
             <div class="relative">
               <input
                 type="text"
+                id="checkout-firstName"
                 value={appState.customer?.firstName}
                 placeholder="First name"
                 onChange$={(_, el) => handleFirstNameChange$(el.value)}
                 onBlur$={handleFirstNameBlur$}
+                aria-invalid={!!(firstNameTouched.value && firstNameValidationError.value)}
+                aria-describedby={firstNameTouched.value && firstNameValidationError.value ? 'checkout-firstName-error' : undefined}
                 class={`block w-full px-[14px] py-[11px] pr-10 text-[16px] rounded-[3px] border placeholder:text-[rgba(100,85,65,0.42)] focus:outline-hidden transition-colors duration-200 bg-white ${
                   firstNameTouched.value && firstNameValidationError.value
                     ? 'border-red-300 focus:border-red-500 focus:ring-red-500'
@@ -131,16 +142,20 @@ export const CheckoutAddressesView = component$<CheckoutAddressesViewProps>((pro
                 touched={firstNameTouched.value}
                 error={firstNameValidationError.value}
                 valid={firstNameTouched.value && !firstNameValidationError.value && !!(appState.customer?.firstName)}
+                errorId={firstNameTouched.value && firstNameValidationError.value ? 'checkout-firstName-error' : undefined}
               />
             </div>
 
             <div class="relative">
               <input
                 type="text"
+                id="checkout-lastName"
                 value={appState.customer?.lastName}
                 placeholder="Last name"
                 onChange$={(_, el) => handleLastNameChange$(el.value)}
                 onBlur$={handleLastNameBlur$}
+                aria-invalid={!!(lastNameTouched.value && lastNameValidationError.value)}
+                aria-describedby={lastNameTouched.value && lastNameValidationError.value ? 'checkout-lastName-error' : undefined}
                 class={`block w-full px-[14px] py-[11px] pr-10 text-[16px] rounded-[3px] border placeholder:text-[rgba(100,85,65,0.42)] focus:outline-hidden transition-colors duration-200 bg-white ${
                   lastNameTouched.value && lastNameValidationError.value
                     ? 'border-red-300 focus:border-red-500 focus:ring-red-500'
@@ -151,6 +166,7 @@ export const CheckoutAddressesView = component$<CheckoutAddressesViewProps>((pro
                 touched={lastNameTouched.value}
                 error={lastNameValidationError.value}
                 valid={lastNameTouched.value && !lastNameValidationError.value && !!(appState.customer?.lastName)}
+                errorId={lastNameTouched.value && lastNameValidationError.value ? 'checkout-lastName-error' : undefined}
               />
             </div>
           </div>

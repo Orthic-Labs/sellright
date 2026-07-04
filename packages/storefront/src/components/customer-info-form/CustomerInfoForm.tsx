@@ -182,11 +182,14 @@ export const CustomerInfoForm = component$<CustomerInfoFormProps>(({ updateValid
           <div>
             <input
               type="email"
+              id="customer-info-email"
               value={appState.customer?.emailAddress}
               disabled={appState.customer?.id !== CUSTOMER_NOT_DEFINED_ID}
               placeholder="Email address *"
               onChange$={(_, el) => handleEmailChange$(el.value)}
               onBlur$={handleEmailBlur$}
+              aria-invalid={!!(emailTouched.value && emailValidationError.value)}
+              aria-describedby={emailTouched.value && emailValidationError.value ? 'customer-info-email-error' : undefined}
               class={`block w-full rounded-md shadow-xs sm:text-sm transition-colors duration-200 ${
                 emailTouched.value && emailValidationError.value
                   ? 'border-red-300 focus:ring-red-500 focus:border-red-500'
@@ -194,16 +197,19 @@ export const CustomerInfoForm = component$<CustomerInfoFormProps>(({ updateValid
               }`}
             />
             {emailTouched.value && emailValidationError.value && (
-              <p class="mt-1 text-sm text-red-600">{emailValidationError.value}</p>
+              <p id="customer-info-email-error" role="alert" class="mt-1 text-sm text-red-600">{emailValidationError.value}</p>
             )}
           </div>
           <div>
             <input
               type="tel"
+              id="customer-info-phone"
               value={sanitizePhoneNumber(appState.customer?.phoneNumber)}
               placeholder={`Phone number${(appState.shippingAddress.countryCode === 'US' || appState.shippingAddress.countryCode === 'PR') ? ' (optional)' : ' *'}`}
               onChange$={(_, el) => handlePhoneChange$(el.value)}
               onBlur$={handlePhoneBlur$}
+              aria-invalid={!!(phoneTouched.value && phoneValidationError.value)}
+              aria-describedby={phoneTouched.value && phoneValidationError.value ? 'customer-info-phone-error' : undefined}
               class={`block w-full rounded-md shadow-xs sm:text-sm transition-colors duration-200 ${
                 phoneTouched.value && phoneValidationError.value
                   ? 'border-red-300 focus:ring-red-500 focus:border-red-500'
@@ -211,7 +217,7 @@ export const CustomerInfoForm = component$<CustomerInfoFormProps>(({ updateValid
               }`}
             />
             {phoneTouched.value && phoneValidationError.value && (
-              <p class="mt-1 text-sm text-red-600">{phoneValidationError.value}</p>
+              <p id="customer-info-phone-error" role="alert" class="mt-1 text-sm text-red-600">{phoneValidationError.value}</p>
             )}
           </div>
         </div>
@@ -220,11 +226,14 @@ export const CustomerInfoForm = component$<CustomerInfoFormProps>(({ updateValid
           <div>
             <input
               type="text"
+              id="customer-info-firstName"
               value={appState.customer?.firstName}
               disabled={appState.customer?.id !== CUSTOMER_NOT_DEFINED_ID}
               placeholder="First name *"
               onChange$={(_, el) => handleFirstNameChange$(el.value)}
               onBlur$={handleFirstNameBlur$}
+              aria-invalid={!!(firstNameTouched.value && firstNameValidationError.value)}
+              aria-describedby={firstNameTouched.value && firstNameValidationError.value ? 'customer-info-firstName-error' : undefined}
               class={`block w-full rounded-md shadow-xs sm:text-sm transition-colors duration-200 ${
                 firstNameTouched.value && firstNameValidationError.value
                   ? 'border-red-300 focus:ring-red-500 focus:border-red-500'
@@ -232,18 +241,21 @@ export const CustomerInfoForm = component$<CustomerInfoFormProps>(({ updateValid
               }`}
             />
             {firstNameTouched.value && firstNameValidationError.value && (
-              <p class="mt-1 text-sm text-red-600">{firstNameValidationError.value}</p>
+              <p id="customer-info-firstName-error" role="alert" class="mt-1 text-sm text-red-600">{firstNameValidationError.value}</p>
             )}
           </div>
 
           <div>
             <input
               type="text"
+              id="customer-info-lastName"
               value={appState.customer?.lastName}
               disabled={appState.customer?.id !== CUSTOMER_NOT_DEFINED_ID}
               placeholder="Last name *"
               onChange$={(_, el) => handleLastNameChange$(el.value)}
               onBlur$={handleLastNameBlur$}
+              aria-invalid={!!(lastNameTouched.value && lastNameValidationError.value)}
+              aria-describedby={lastNameTouched.value && lastNameValidationError.value ? 'customer-info-lastName-error' : undefined}
               class={`block w-full rounded-md shadow-xs sm:text-sm transition-colors duration-200 ${
                 lastNameTouched.value && lastNameValidationError.value
                   ? 'border-red-300 focus:ring-red-500 focus:border-red-500'
@@ -251,7 +263,7 @@ export const CustomerInfoForm = component$<CustomerInfoFormProps>(({ updateValid
               }`}
             />
             {lastNameTouched.value && lastNameValidationError.value && (
-              <p class="mt-1 text-sm text-red-600">{lastNameValidationError.value}</p>
+              <p id="customer-info-lastName-error" role="alert" class="mt-1 text-sm text-red-600">{lastNameValidationError.value}</p>
             )}
           </div>
         </div>
