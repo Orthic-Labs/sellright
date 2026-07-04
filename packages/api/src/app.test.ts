@@ -70,3 +70,23 @@ describe('app error handling', () => {
     expect(body.error).toBe('database password leaked in stack');
   });
 });
+
+describe('request-id propagation through the full app', () => {
+  // OBS-1: the request-id middleware must run BEFORE every other middleware
+  // and route handler — so even the /v1/health route (which lives inside the
+  // createApp() return value, no custom route mounting) carries the header.
+  it('responds with x-request-id on every route (including /v1/health)', async () => {
+    const { createApp } = await import('./app.js');
+    const app = createApp();
+
+    // No inbound header → middleware must mint one.
+    const res = await app.request('/v1/health');
+    const id = res.headers.get('x-request-id');
+    expect(id).toBeTruthy();
+    expect(id).toMatch(/^[0-9a-f-]{36}$/i);
+
+    // Inbound header → middleware trusts it and echoes it back.
+    const res2 = await app.request('/v1/health', { headers: { 'x-request-id': 'app-test-id-1' } });
+    expect(res2.headers.get('x-request-id')).toBe('app-test-id-1');
+  });
+});

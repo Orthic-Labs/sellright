@@ -5,6 +5,7 @@
  */
 import nodemailer, { type Transporter } from 'nodemailer';
 import { env } from '../env.js';
+import { log, err as logErr } from '../lib/logger.js';
 
 export interface SendEmailInput {
   to: string;
@@ -40,16 +41,14 @@ function transport(): Transporter | null {
 export async function sendEmail(input: SendEmailInput): Promise<{ delivered: boolean; reason?: string }> {
   const tx = transport();
   if (!tx) {
-    // eslint-disable-next-line no-console
-    console.log(`[email:skipped] to=${input.to} subject="${input.subject}"`);
+    log.info('email skipped', { reason: 'smtp_not_configured', to: input.to, subject: input.subject });
     return { delivered: false, reason: 'smtp_not_configured' };
   }
   try {
     await tx.sendMail({ from: input.from ?? env.SMTP_FROM, ...input });
     return { delivered: true };
   } catch (e) {
-    // eslint-disable-next-line no-console
-    console.error('[email:error]', e);
+    logErr.error('email error', e, { to: input.to, subject: input.subject });
     return { delivered: false, reason: String(e instanceof Error ? e.message : e) };
   }
 }

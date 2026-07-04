@@ -30,6 +30,8 @@ import { csrfValid, customerCsrfValid, getCustomerSessionToken } from './auth/co
 import { env } from './env.js';
 import { isAllowedCorsOrigin } from './cors-origins.js';
 import { pool } from './db/client.js';
+import { requestIdMiddleware, accessLogMiddleware } from './lib/request-id.js';
+import { err as logErr } from './lib/logger.js';
 
 /**
  * The API is typed REST: every route declares a zod schema, which generates
@@ -38,6 +40,17 @@ import { pool } from './db/client.js';
  */
 export function createApp(): OpenAPIHono {
   const app = new OpenAPIHono();
+
+  // OBS-1: request-id FIRST so every downstream middleware (CORS, CSRF, route
+  // handlers, onError) sees the same id, and so the access log + error log
+  // share one correlatable token. Trust inbound `x-request-id` if it looks
+  // safe, otherwise mint a uuid. Always echo the header back on the response.
+  app.use('*', requestIdMiddleware());
+
+  // OBS-1: per-request access log. One JSON line per request with method,
+  // path, status, duration_ms — emitted at the end so all three values are
+  // known. Stays behind the request-id middleware so the line carries it.
+  app.use('*', accessLogMiddleware());
 
   // OPS-1: per-store CORS allowlist. No wildcard-with-credentials (browsers
   // reject that combination anyway, but we never even offer it). An origin is
@@ -182,8 +195,11 @@ export function createApp(): OpenAPIHono {
   });
 
   app.onError((err, c) => {
-    // eslint-disable-next-line no-console
-    console.error('[api error]', err);
+    // OBS-1: structured error log — pino's stdErrorSerializer formats the
+    // stack + cause chain, which a raw `console.error(err)` can't. The
+    // requestId (set by requestIdMiddleware) lets you grep one failing
+    // request and see the full handler log story too.
+    logErr.error('api error', err, { requestId: c.var?.requestId });
     // SEC-5: gated on an explicit DEBUG_ERRORS opt-in, not NODE_ENV — a staging
     // box booted without NODE_ENV=production must still sanitize error bodies
     // by default. Server-side logging above still captures the real error.

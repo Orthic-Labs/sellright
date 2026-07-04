@@ -5,6 +5,7 @@ import { env } from './env.js';
 import { registerProcessErrorHandlers } from './lib/process-error-handlers.js';
 import { pool } from './db/client.js';
 import { startJobScheduler } from './jobs/scheduler.js';
+import { log } from './lib/logger.js';
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
@@ -16,9 +17,9 @@ registerProcessErrorHandlers();
 const app = createApp();
 
 const server = serve({ fetch: app.fetch, port: env.PORT }, (info) => {
-  // eslint-disable-next-line no-console
-  console.log(`[api] listening on http://localhost:${info.port}  (env=${env.NODE_ENV})`);
-  console.log(`[api] OpenAPI:  http://localhost:${info.port}/v1/openapi.json`);
+  // OBS-1: structured startup logs so log collectors index port + env as fields.
+  log.info('api listening', { url: `http://localhost:${info.port}`, env: env.NODE_ENV, port: info.port });
+  log.info('openapi published', { url: `http://localhost:${info.port}/v1/openapi.json` });
   startJobScheduler();
 });
 

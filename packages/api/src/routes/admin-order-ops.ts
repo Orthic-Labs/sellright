@@ -13,6 +13,7 @@ import { emitEvent } from '../webhooks/emit.js';
 import { sendShippingNotification } from '../email/dispatch.js';
 import { csvCell, inferCarrier, orderCode, unitPrice } from './admin-order-utils.js';
 import { issueLicensesForPaidOrder } from '../licensing/issue.js';
+import { err as logErr } from '../lib/logger.js';
 
 export const adminOrderOps = new OpenAPIHono();
 
@@ -199,7 +200,7 @@ adminOrderOps.openapi(
     });
     // WP2: fire-and-forget emails (failure here doesn't fail the import).
     for (const n of result.notifications) {
-      try { await sendShippingNotification({ name: st.name, currency: st.currency }, n.email, { code: n.code, trackingCode: n.tracking, carrier: n.carrier }); } catch (e) { console.error('[email:shipping] failed', e); }
+      try { await sendShippingNotification({ name: st.name, currency: st.currency }, n.email, { code: n.code, trackingCode: n.tracking, carrier: n.carrier }); } catch (e) { logErr.error('email shipping failed', e, { orderCode: n.code }); }
     }
     return c.json({ updated: result.updated, errors: result.errors }, 200);
   }),

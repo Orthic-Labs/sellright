@@ -16,23 +16,22 @@
 -- no-op. Without this step the CREATE UNIQUE INDEX below fails with 42P10
 -- "Duplicate keys exist" on exactly the databases that carry the bug it fixes.
 --
--- `payment` is under FORCE ROW LEVEL SECURITY, so even the owner sees zero rows
--- without a store context; de-dupe per store with app.current_store set (the same
--- tenant scoping the app uses), so this never touches another tenant's rows and
--- never has to weaken RLS.
-DO $$
-DECLARE s_id uuid;
-BEGIN
-  FOR s_id IN SELECT id FROM store LOOP
-    PERFORM set_config('app.current_store', s_id::text, true);
-    DELETE FROM payment p
-      USING payment q
-      WHERE p.store_id = q.store_id
-        AND p.provider_ref = q.provider_ref
-        AND p.provider_ref IS NOT NULL
-        AND (p.created_at, p.id) > (q.created_at, q.id);
-  END LOOP;
-END $$;
+-- `payment` is under FORCE ROW LEVEL SECURITY, so even the table owner sees zero
+-- rows from a bare query. Briefly drop FORCE for the owner-run de-dupe (this is a
+-- cross-tenant data reconciliation the owner is entitled to make), then restore
+-- it. Kept as separate statements so it is correct whether the migration runner
+-- wraps the file in one transaction or autocommits each statement. store_id is
+-- part of the key, so this never merges across tenants regardless of RLS.
+ALTER TABLE "payment" NO FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+DELETE FROM "payment" p
+  USING "payment" q
+  WHERE p.store_id = q.store_id
+    AND p.provider_ref = q.provider_ref
+    AND p.provider_ref IS NOT NULL
+    AND (p.created_at, p.id) > (q.created_at, q.id);
+--> statement-breakpoint
+ALTER TABLE "payment" FORCE ROW LEVEL SECURITY;
 --> statement-breakpoint
 CREATE UNIQUE INDEX IF NOT EXISTS payment_store_provider_ref_uidx
   ON payment (store_id, provider_ref)

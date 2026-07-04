@@ -13,6 +13,7 @@ import { verifyTotp } from '../auth/totp.js';
 import { normalizeEmail } from '../auth/email.js';
 import { sendShippingNotification } from '../email/dispatch.js';
 import { emitEvent } from '../webhooks/emit.js';
+import { err as logErr } from '../lib/logger.js';
 
 export const admin = new OpenAPIHono();
 
@@ -236,7 +237,7 @@ admin.openapi(
     // WP2: best-effort email AFTER the txn commits (failure doesn't roll back
     // the Shipped state). Webhook is already in the outbox via the txn above.
     if (res.emailTo) {
-      try { await sendShippingNotification({ name: st.name, currency: st.currency }, res.emailTo, { code, trackingCode: res.trackingCode, carrier: res.carrier }); } catch (e) { console.error('[email:shipping] failed', e); }
+      try { await sendShippingNotification({ name: st.name, currency: st.currency }, res.emailTo, { code, trackingCode: res.trackingCode, carrier: res.carrier }); } catch (e) { logErr.error('email shipping failed', e, { orderCode: code }); }
     }
     return c.json({ code, fulfillment: res.state }, 200);
   }),
@@ -330,7 +331,7 @@ admin.openapi(
       if (res.kind === 'ok') {
         results.push({ code: o.code, ok: true, fulfillment: res.state });
         if (res.emailTo) {
-          try { await sendShippingNotification({ name: st.name, currency: st.currency }, res.emailTo, { code: o.code, trackingCode: res.trackingCode ?? null, carrier: res.carrier ?? null }); } catch (e) { console.error('[email:shipping] failed', e); }
+          try { await sendShippingNotification({ name: st.name, currency: st.currency }, res.emailTo, { code: o.code, trackingCode: res.trackingCode ?? null, carrier: res.carrier ?? null }); } catch (e) { logErr.error('email shipping failed', e, { orderCode: o.code }); }
         }
       } else if (res.kind === 'notfound') {
         results.push({ code: o.code, ok: false, error: 'not found' });

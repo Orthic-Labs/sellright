@@ -23,6 +23,7 @@ import {
   updateStaffRole,
 } from '../auth/admin-staff.js';
 import { sendStaffInvite } from '../email/dispatch.js';
+import { err as logErr } from '../lib/logger.js';
 import { env } from '../env.js';
 import { assertSafeOutboundUrl, type OutboundUrlLookup } from '../security/outbound-url.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireManage, requirePermission, guard } from './admin-helpers.js';
@@ -209,7 +210,7 @@ adminSettingsAdvanced.openapi(
     const acceptUrl = `/admin/accept-invite?token=${token}`;
     // WP2: best-effort invite email. If SMTP is unconfigured the dev log line
     // will surface the token; the response still includes it for the inviter.
-    try { await sendStaffInvite({ name: st.name, currency: st.currency }, normalizeEmail(b.email), { acceptUrl: `${env.STOREFRONT_URL}${acceptUrl}`, role: b.role, inviterEmail: admin.email }); } catch (e) { console.error('[email:staffInvite] failed', e); }
+    try { await sendStaffInvite({ name: st.name, currency: st.currency }, normalizeEmail(b.email), { acceptUrl: `${env.STOREFRONT_URL}${acceptUrl}`, role: b.role, inviterEmail: admin.email }); } catch (e) { logErr.error('email staffInvite failed', e, { inviteEmail: b.email }); }
     return c.json({ id: invId, token, acceptUrl }, 200);
   }),
 );
