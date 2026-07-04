@@ -18,13 +18,15 @@ Phase 1 (pure-code security) = **MERGED to `main`** (laptop-validated: typecheck
 | 4 | SEC-4 download open-redirect allowlist | security | ✅ **MERGED** `57548d4` |
 | 5 | SEC-5 trusted-proxy IP + Secure-from-scheme + sanitize errors | security/config | ✅ **MERGED** `5b6ecd9` |
 | 6 | HYG-1 pnpm CI/local version match | hygiene | ✅ **MERGED** `1204615` |
-| 7 | MONEY-1 payment idempotency: unique `(store_id,provider_ref)` + store-scoped claim | money integrity | 🟡 **branch pushed** `feat/money-payment-idempotency` `0b37c45` — box-validate |
-| 8 | MONEY-2 refund idempotency key + lock return-approve (+gateway-out-of-txn deferred) | money integrity | 🟡 **branch pushed** `fix/money-refund-idempotency` `11ee251` — stacked on MONEY-1; (3) deferred |
-| 9 | MONEY-3 draft `markPaid` issues licenses | money/fulfillment | 🟡 **branch pushed** `fix/money-draft-license` `b195602` |
-| 10 | OPS-1 host→store routing + CORS + pool connect-timeout | multi-tenant blocker | 🟡 **branch pushed** `feat/ops-host-routing-cors` `bd53f62` (host via `store.config`, CORS via `hono/cors`) |
-| 11 | OPS-2 job leader-lock + release-stale batch/lock | multi-instance | 🟡 **branch pushed** `fix/ops-job-leader-lock` `2bc2f69` |
-| 12 | SEC-6 RBAC: gate refunds/cancel/releases | security | 🟡 **branch pushed** `fix/sec-rbac-refunds` `bcd74c1` (deny-by-default — grant keys before deploy) |
+| 7 | MONEY-1 payment idempotency: unique `(store_id,provider_ref)` + store-scoped claim | money integrity | 🟢 **BOX-GREEN, branch** `feat/money-payment-idempotency` `2c75e9f` — box `test:db` **51/51** after fixing a real `42P10` bug it surfaced. NOT merged. |
+| 8 | MONEY-2 refund idempotency key + lock return-approve (+gateway-out-of-txn deferred) | money integrity | 🟡 **branch, rebased on fixed MONEY-1** — push pending (force-push approval); not box-validated |
+| 9 | MONEY-3 draft `markPaid` issues licenses | money/fulfillment | 🟡 **branch** `fix/money-draft-license` `b195602` — typecheck-clean; not box-validated |
+| 10 | OPS-1 host→store routing + CORS + pool connect-timeout | multi-tenant blocker | 🟡 **branch** `feat/ops-host-routing-cors` `bd53f62` — not box-validated (host via `store.config`, CORS via `hono/cors`) |
+| 11 | OPS-2 job leader-lock + release-stale batch/lock | multi-instance | 🟡 **branch** `fix/ops-job-leader-lock` `2bc2f69` — not box-validated |
+| 12 | SEC-6 RBAC: gate refunds/cancel/releases | security | 🟡 **branch** `fix/sec-rbac-refunds` `bcd74c1` — not box-validated (deny-by-default — grant keys before deploy) |
 | 13 | PERF-1 `order(store_id,code)` index | perf | ⚪ **NO-OP** — index already exists (`order_store_code` unique, `0000`) |
+
+**Box validation (live, 2026-07-04):** `main` (phase-1) validated on the box against real Postgres + RLS — `assert-rls` OK (51 FORCE-RLS tables), **`test:db` 47/47**. MONEY-1 validated → **caught a real bug local gates missed** (partial-index `ON CONFLICT` without its `WHERE` predicate → `42P10` on every payment insert) → fixed → **51/51 green**. MONEY-2/3, OPS-1/2, SEC-6 still need their `test:db` run on the box. Full coverage ledger is at the end of this doc.
 
 **Correction from the audit:** the perf audits claimed 4 missing indexes; PERF-1 verification found **all four already exist**. My own claim-18 ("only `order(store_id,code)` missing") was also too generous — it exists as the `order_store_code` unique constraint. Never add these.
 
@@ -435,9 +437,105 @@ WHEN DONE: commit, `git push -u origin chore/pnpm-ci-version`, VERIFY with `git 
 2. Re-gate the merge result in a clean checkout: full `pnpm run verify` (+ `pnpm test:db` against sellright_test when a money/db lane). Judge by exit codes, never a wrapper's echo. Money lanes: read the db-test output proving single-row / single-refund yourself.
 3. Merge `--no-ff`, push, delete branch + worktree, mark the lane DONE in THIS doc, and sync `docs/FEATURES.md` / `docs/COMMERCE-GAP-ANALYSIS.md` rows in the same turn.
 
-## Explicitly NOT lanes (verified out or human-gated)
-- **Cross-tenant customer session (qwen HIGH-04)** — REFUTED: `resolveCustomer` (`session.ts:41`) has no storeId filter but its `innerJoin` to the RLS-scoped customer table (`:54`) blocks the exploit; a wrong-store token resolves to guest, not another tenant. No fix needed.
-- **"Missing" cart/customer/variant indexes** — REFUTED: all three exist (`0005`, `0000`, `0000`). `customer_token_hash_idx` was re-added in `0023`. Do not add them.
-- **Multi-instance Redis rate-limiter** — real, but deferred until you actually run N≥2 instances (the in-process Map is fine single-instance). Not a code lane yet.
-- **Observability floor (pino + request-id + /readyz)** — real gap; make it OBS-1 when you want it. Not security/money-critical.
-- **Storefront `VITE_SR_CHECKOUT` flag-flip** — needs a live Stripe test-card run + side-by-side (a human gate per FEATURES.md), not an agent lane.
+# AUDIT COVERAGE LEDGER — source of truth
+
+Every distinct finding across the 8 audit sections (minimax, glm, deepseek, qwen, kimi, the two unlabeled Production-Readiness + Frontend audits, mimo) is recorded here with exactly one status. The dispatch above deliberately closed only the **security + money blocker tier**; this ledger accounts for the rest so nothing is silently dropped. ~150 distinct findings after de-dup; the lanes close/refute ~25, the remainder are enumerated as PENDING with a tracked ID.
+
+**Status legend:** ✅ ACTIONED — on `main`, box-validated · 🟢 ACTIONED — branch, box-validated green · 🟡 ACTIONED — branch, typecheck-clean, **not yet box-validated** · 🔵 ACTIONED — branch, box-validated FAILED then fixed (see note) · ⚪ REFUTED — verified false against code · ⏳ PENDING — real, not yet a lane · 🚫 OUT — deliberately out of scope (breadth, not migration-blocker) · 👤 HUMAN-GATED.
+
+## 1 · ACTIONED (the 12 lanes)
+
+| Lane | Finding(s) closed | Status | Validation |
+|---|---|---|---|
+| SEC-1 | newsletter SSRF + no rate-limit (minimax H-1, glm H-1, qwen HIGH-01) | ✅ | on `main` `3b71c58`; box `test:db` on main green |
+| SEC-2 | admin-logout CSRF (qwen CRIT-01), CSRF bearer-exemption (qwen, deepseek) | ✅ | on `main` `4b421da`; unit tests |
+| SEC-3 | blog stored XSS (qwen CRIT-02/MEDIUM-08, kimi) | ✅ | on `main` `8f50ae7`; unit tests |
+| SEC-4 | licensed-download open redirect (qwen LOW-05, kimi) | ✅ | on `main` `57548d4`; unit tests |
+| SEC-5 | clientIp spoof (minimax H-2, deepseek M-01, qwen M-02); NODE_ENV cookie/error footgun (minimax M-5, deepseek, qwen M-04) | ✅ | on `main` `5b6ecd9`; unit tests |
+| HYG-1 | pnpm CI/local drift (Prod audit) | ✅ | on `main` `1204615`; **confirmed on box** (box pnpm was 10.34.1) |
+| MONEY-1 | duplicate payment-ledger race + no unique `(store_id,provider_ref)` (minimax M-1, deepseek "duplicate payment ledger"/High#1); cross-store idempotency-key collision | 🔵→🟢 | branch `feat/money-payment-idempotency` `2c75e9f`. **Box test:db surfaced a real bug** (partial-index `ON CONFLICT` missing its `WHERE` predicate → `42P10` on EVERY payment insert; 8 subscription tests failed). Fixed (`onConflictDoNothing` `where:`); **re-validated box green: 51/51**. NOT merged. |
+| MONEY-2 | refund double-spend + no Stripe idempotency key (minimax M-2, deepseek Critical#2); unlocked return-approve | 🟡 | branch `fix/money-refund-idempotency`; rebased onto fixed MONEY-1 locally, **push pending** (force-push to feature branch awaiting approval); not yet box-validated. Gateway-out-of-txn (item 3) **deferred** with rationale. |
+| MONEY-3 | draft `markPaid` issues no licenses (minimax, deepseek, kimi C2) | 🟡 | branch `fix/money-draft-license` `b195602`; typecheck-clean; **not box-validated** |
+| OPS-1 | host→store routing (minimax A1) + CORS (minimax A2) + pool connect-timeout 0→5000 (deepseek, mimo P0#7, kimi) | 🟡 | branch `feat/ops-host-routing-cors` `bd53f62`; typecheck-clean; **not box-validated**. Host via `store.config.hostnames`; CORS via `hono/cors` (no phantom dep). |
+| OPS-2 | jobs unsafe >1 instance + release-stale double-release (minimax A3, deepseek High#2, qwen, kimi P1, mimo P0#5) | 🟡 | branch `fix/ops-job-leader-lock` `2bc2f69`; typecheck-clean; **not box-validated**. Advisory leader-lock + SKIP LOCKED batched release. |
+| SEC-6 | RBAC only-2-of-N enforced; refunds/cancel/releases ungated (minimax H-3, qwen, kimi) | 🟡 | branch `fix/sec-rbac-refunds` `bcd74c1`; typecheck-clean (api+admin); **not box-validated**. Deny-by-default — grant keys before deploy. |
+
+**Only phase-1 (SEC/HYG) is on `main`.** MONEY-1 is box-green on a branch; MONEY-2/3, OPS-1/2, SEC-6 are typecheck-clean branches **not yet box-validated or merged** (blocked on: force-push approval for MONEY-2, then per-branch `test:db` on the box). MONEY-1 is the proof that typecheck-clean ≠ correct — it passed every local gate and still broke all payments.
+
+## 2 · REFUTED (verified false — never action)
+
+| Finding | Source | Why false (code) |
+|---|---|---|
+| Cross-tenant customer session access | qwen HIGH-04 | `resolveCustomer` (`session.ts:41`) has no storeId filter, but its `innerJoin` to the RLS-scoped `customer` table (`:54`) returns 0 rows under the wrong store → token resolves to guest, not another tenant. |
+| `cart(token)` index missing | perf audits, kimi 1260 | Exists — `0005_cart_tables.sql`. |
+| `customer(store_id,email)` index missing | perf audits | Exists — `0000`. |
+| `product_variant(store_id,sku)` index missing | perf audits | Exists — `0000`. |
+| `order(store_id,code)` index missing (PERF-1) | claim-18, perf audits | Exists — `order_store_code` UNIQUE (`schema-orders.ts:72`, `0000`), B-tree-backed. PERF-1 = **no-op**. |
+| `customer_token_hash_idx` commented out | mimo P0#6 | Re-added in `0023_customer_tokens.sql`. |
+| Production runs `tsx` not compiled `dist/` | Prod audit #1911, mimo | REFUTED **on this box**: pm2 `sellright-api` runs `node …/packages/api/dist/index`. (Keep it that way.) |
+
+## 3 · PENDING — real gaps, not yet lanes (tracked IDs)
+
+Correctly scoped OUT of the migration-blocker work order; enumerated here so they're not mistaken for "audited, nothing found." Proposed lane IDs for when they're picked up.
+
+**Reliability / ops** (Prod-Readiness audit + mimo + deepseek):
+- `REL-1` graceful shutdown — SIGTERM drain in-flight + close pool (Prod #1876, mimo P0#2, deepseek). **Highest-value pending; every deploy currently drops in-flight requests.**
+- `REL-2` `process.on('unhandledRejection')` handler (Prod #1937).
+- `REL-3` circuit breaker for Stripe/SMTP (Prod #1878, deepseek Tier-2#4, mimo P2).
+- `REL-4` SMTP fire-and-forget → retry / dead-letter (Prod #1880, mimo P1#4).
+- `REL-5` `pool.on('error')` health handler (Prod #1862).
+- `REL-6` migration runner doesn't wrap files in BEGIN/COMMIT (Prod #1863; low risk — PG DDL is transactional).
+- `OBS-1` structured logging (pino) + request-id (Prod #1934, mimo P1#3).
+- `OBS-2` readiness probe `/readyz` (DB ping, distinct from liveness) (Prod #1936, mimo P0#3).
+- `OBS-3` metrics/APM — Prometheus or Sentry (Prod, mimo P2).
+- `SCALE-1` Redis-backed rate-limiter + TOTP replay store — **only when N≥2 instances** (minimax A3 remainder).
+
+**Performance** (kimi + deepseek + mimo — optimizations, not blockers at current scale):
+- `PERF-2` no server-side cache / `resolveStore()` per-request DB hit → LRU (kimi 1317, mimo P0#4, deepseek 494).
+- `PERF-3` dashboard full-table aggregations per load → rollup/window (deepseek 478).
+- `PERF-4` OFFSET pagination → cursor/keyset (Prod #1928, deepseek, kimi).
+- `PERF-5` two-query COUNT pattern → `count(*) OVER()` (kimi 1274).
+- `PERF-6` ILIKE-OR two-column search → FTS/`to_tsvector` (kimi 1284).
+- `PERF-7` `withStore` wraps read-only work in a txn → `withStoreRead` (kimi 1298).
+- `PERF-8` checkout re-reads order in a 2nd txn for email (kimi 1341).
+- `PERF-9` checkout txn too wide (kimi 1355).
+- `PERF-10` cart-merge N+1 (kimi 1365).
+- `PERF-11` sequential stock-reservation loop → batched UPDATE (kimi 1385).
+- `PERF-12` **auto-deliver N+1** — OPS-2 batched release-stale but NOT auto-deliver (kimi 1253).
+- `PERF-13` bulk ops = N transactions (mimo P1#1).
+- `PERF-14` webhook delivery holds a connection across the outbound HTTP (mimo P1#2, kimi) — same class as MONEY-2 item 3.
+- `PERF-15` no image pipeline; sharp runs in the API process (kimi 1441, Prod #1930).
+- `PERF-16` smart-collection browse loads ALL products into JS (mimo P0#5, deepseek).
+- `PERF-17` CSV export buffers everything in memory → stream (mimo).
+
+**Frontend / a11y / i18n** (unlabeled Frontend audit + qwen — the entire storefront/admin UI tier, untouched by dispatch):
+- `FE-1` broken skip-link (`#main-content` target missing) — WCAG (2092).
+- `FE-2` checkout inputs placeholder-only, no `<label>` — WCAG (2094).
+- `FE-3` no `aria-describedby` on validation errors (2095).
+- `FE-4` breadcrumbs missing `aria-label` (2093).
+- `FE-5` i18n entirely stubbed; currency hardcoded USD — a multi-tenant store can't localize (2107-2108).
+- `FE-6` CSP `default-src` includes `unsafe-inline data: blob:` — effectively no CSP (2116).
+- `FE-7` admin SPA has no CSP headers (2174).
+- `FE-8` no React error boundary in admin — one render error white-screens it (qwen).
+- `FE-9` storefront still carries dual API layer (Vendure GraphQL + REST) (kimi 1460).
+- `FE-10` hardcoded client-side shipping calc disagrees with server (kimi 1469, qwen).
+- `FE-11` cart in `localStorage` unencrypted + no expiry (qwen).
+
+**Compliance** (deepseek GDPR/PCI — legal, not just quality):
+- `COMP-1` self-service data export — GDPR (901).
+- `COMP-2` account deletion / hard-delete cascade — GDPR (903, kimi).
+- `COMP-3` consent tracking (905) · `COMP-4` cookie-consent banner (907) — GDPR/CCPA.
+- `COMP-5` PCI SAQ-A attestation — required even with Stripe Elements (913).
+
+**Testing** (mimo + all):
+- `TEST-1` route-level integration tests for `checkout.ts` / `auth.ts` / `payment-webhooks.ts` — the highest-value untested revenue paths (mimo P0#1). Partially chipped at by the money lanes' new `test:db` files, not closed.
+- `TEST-2` E2E checkout→pay→fulfill (no automated end-to-end coverage anywhere).
+
+## 4 · OUT of scope (breadth — tracked in `COMMERCE-GAP-ANALYSIS.md`, not this work order)
+Payment breadth (PayPal/wallets/BNPL), automatic tax (Avalara/TaxJar/EU-VAT-MOSS), live carrier shipping, reviews/loyalty/subscriptions-upsell/bundles/wishlist, multi-currency **settlement**, POS/multi-channel. These are product-roadmap items, not migration-readiness gates — see `COMMERCE-GAP-ANALYSIS.md` §"Where competitors are AHEAD".
+
+## 5 · HUMAN-GATED
+- Storefront `VITE_SR_CHECKOUT` flag-flip → default — needs a live Stripe test-card run + side-by-side vs Vendure (FEATURES.md launch gap #2). Not an agent lane.
+
+---
+_Coverage math: ~150 distinct findings · 12 lanes actioned (6 on main, 1 box-green, 5 branch-only) · 7 refuted · ~45 pending with tracked IDs · breadth + human-gated referenced out. The security+money blocker tier is exhaustively closed or refuted; reliability/perf/frontend/compliance are enumerated PENDING, not silently omitted._
