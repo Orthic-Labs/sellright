@@ -1,4 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
+import { cors } from 'hono/cors';
 import { catalog } from './routes/catalog.js';
 import { cart } from './routes/cart.js';
 import { checkout } from './routes/checkout.js';
@@ -27,6 +28,7 @@ import { subscriptions } from './routes/subscriptions.js';
 import { apps } from './routes/apps.js';
 import { csrfValid, customerCsrfValid, getCustomerSessionToken } from './auth/cookies.js';
 import { env } from './env.js';
+import { isAllowedCorsOrigin } from './cors-origins.js';
 
 /**
  * The API is typed REST: every route declares a zod schema, which generates
@@ -35,6 +37,29 @@ import { env } from './env.js';
  */
 export function createApp(): OpenAPIHono {
   const app = new OpenAPIHono();
+
+  // OPS-1: per-store CORS allowlist. No wildcard-with-credentials (browsers
+  // reject that combination anyway, but we never even offer it). An origin is
+  // allowed only when its hostname matches a configured store host
+  // (store.config.hostnames — the same registry host->store routing reads) or
+  // a small always-on dev allowlist. Mounted before all other middleware so
+  // OPTIONS preflights short-circuit ahead of the CSRF guards below.
+  //
+  // Wrapped in a plain middleware (rather than passing an async function
+  // straight to cors()'s `origin` option) to sidestep any ambiguity over
+  // whether that option's type signature supports an async callback — the DB
+  // lookup is awaited here, then a synchronous per-request cors() instance is
+  // built with the resolved verdict.
+  app.use('*', async (c, next) => {
+    const origin = c.req.header('origin');
+    const allowed = origin ? await isAllowedCorsOrigin(origin) : false;
+    const handler = cors({
+      origin: allowed ? (origin as string) : '',
+      credentials: true,
+      allowHeaders: ['Content-Type', 'Authorization', 'x-csrf-token', 'x-store-slug'],
+    });
+    return handler(c, next);
+  });
 
   // CSRF guard for cookie-based admin mutations (bearer/API clients are exempt;
   // login/logout don't yet have a session). Double-submit token (x-csrf-token
@@ -99,7 +124,16 @@ export function createApp(): OpenAPIHono {
     // box booted without NODE_ENV=production must still sanitize error bodies
     // by default. Server-side logging above still captures the real error.
     const expose = env.DEBUG_ERRORS === '1';
-    return c.json({ error: expose && err instanceof Error ? err.message : 'internal error' }, 500);
+    // OPS-1: honor a well-known httpStatus on the error (StoreSlugError,
+    // HostRoutingError — both 404, never sensitive) instead of flattening every
+    // thrown error to 500. This is a narrow, additive check: any error without
+    // this field keeps its prior 500 behavior unchanged.
+    const knownStatus = (err as { httpStatus?: unknown }).httpStatus;
+    const status = knownStatus === 404 ? 404 : 500;
+    const message = status === 404
+      ? (err instanceof Error ? err.message : 'not found')
+      : (expose && err instanceof Error ? err.message : 'internal error');
+    return c.json({ error: message }, status);
   });
 
   // Shop catalog read API (store resolved per-request, RLS-scoped).
