@@ -11,6 +11,14 @@ export const pool = new Pool({
   connectionTimeoutMillis: env.PGPOOL_CONNECTION_TIMEOUT_MS,
 });
 
+// 'error' fires on IDLE pooled clients (network blip, server kill, idle timeout)
+// — NOT on in-flight queries. Without this handler Node throws an EventEmitter
+// "unhandled error" and exits; in-flight queries keep returning whatever they
+// were doing, masking the silent-failure footgun. See DISPATCH.md §3a REL-5.
+pool.on('error', (err) => {
+  console.error('[pg pool error]', err);
+});
+
 // MUST match drizzle.config.ts `casing: 'snake_case'` — otherwise runtime queries
 // emit camelCase column names the snake_case DB doesn't have.
 const drizzleOpts = { schema, casing: 'snake_case' } as const;
