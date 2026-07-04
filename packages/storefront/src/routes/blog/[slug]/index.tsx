@@ -175,7 +175,7 @@ export default component$(() => {
         <div class="dd-post">
             <div class="dd-post__inner">
                 <nav class="dd-post__crumbs" aria-label="Breadcrumb">
-                    <Link href="/">Home</Link> / <Link href="/blog/">Journal</Link> / {post.title}
+                    <Link href="/">Home</Link> / <Link href="/blog/">Journal</Link> / <span aria-current="page">{post.title}</span>
                 </nav>
                 <Link href="/blog/" class="dd-post__back">&larr; Lore</Link>
                 <div class="dd-post__meta">
