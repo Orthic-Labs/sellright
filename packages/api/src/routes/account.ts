@@ -1,10 +1,11 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, ne, sql } from 'drizzle-orm';
 import { withStore, type Tx } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
 import { customerToken, resolveCustomer, type SessionCustomer } from '../auth/session.js';
 import { hashPassword, verifyPassword } from '../auth/password.js';
+import { customerCsrfValid, clearCustomerCookies } from '../auth/cookies.js';
 import { createHash } from 'node:crypto';
 
 const hashToken = (t: string) => createHash('sha256').update(t).digest('hex');
@@ -275,5 +276,122 @@ account.openapi(
     if (out === 'unauth') return c.json({ error: 'not authenticated' }, 401);
     if (out === 'notfound') return c.json({ error: 'address not found' }, 404);
     return c.json({ ok: true }, 200);
+  },
+);
+
+// GET /v1/shop/account/export — GDPR data portability: the customer's own
+// profile, addresses, and an order-history summary as a single JSON export.
+// Order line detail is intentionally excluded (the /account/orders/{code}
+// route already exposes it); this is a portable snapshot, not a full re-dump
+// of every relational table.
+account.openapi(
+  createRoute({
+    method: 'get', path: '/v1/shop/account/export', summary: 'Export my data (GDPR)',
+    responses: {
+      200: {
+        description: 'Export', content: { 'application/json': { schema: z.object({
+          exportedAt: z.string(),
+          profile: z.object({ id: z.string(), email: z.string(), firstName: z.string().nullable(), lastName: z.string().nullable(), phone: z.string().nullable(), createdAt: z.string().nullable() }),
+          addresses: z.array(z.object({ id: z.string(), fullName: z.string().nullable(), line1: z.string(), line2: z.string().nullable(), city: z.string(), province: z.string().nullable(), postalCode: z.string().nullable(), country: z.string(), phone: z.string().nullable(), isDefaultShipping: z.boolean(), isDefaultBilling: z.boolean() })),
+          orders: z.array(z.object({ code: z.string(), state: z.string(), grandTotal: z.number().int(), placedAt: z.string().nullable() })),
+        }) } },
+      },
+      401: { description: 'Unauthenticated', content: { 'application/json': { schema: errSchema } } },
+    },
+  }),
+  async (c) => {
+    const st = await resolveStoreFromCtx(c);
+    const out = await withStore(st.id, async (tx) => {
+      const cust = await me(tx, customerToken(c));
+      if (!cust) return null;
+      const [profile] = await tx.select({
+        id: s.customer.id, email: s.customer.email, firstName: s.customer.firstName,
+        lastName: s.customer.lastName, phone: s.customer.phone, createdAt: s.customer.createdAt,
+      }).from(s.customer).where(eq(s.customer.id, cust.id)).limit(1);
+      const addresses = await tx.select({
+        id: s.address.id, fullName: s.address.fullName, line1: s.address.line1, line2: s.address.line2,
+        city: s.address.city, province: s.address.province, postalCode: s.address.postalCode,
+        country: s.address.country, phone: s.address.phone,
+        isDefaultShipping: s.address.isDefaultShipping, isDefaultBilling: s.address.isDefaultBilling,
+      }).from(s.address).where(eq(s.address.customerId, cust.id));
+      const orders = await tx.select({
+        code: s.order.code, state: s.order.state, grandTotal: s.order.grandTotal, placedAt: s.order.placedAt,
+      }).from(s.order).where(eq(s.order.customerId, cust.id)).orderBy(desc(s.order.createdAt));
+      return { profile, addresses, orders };
+    });
+    if (out === null) return c.json({ error: 'not authenticated' }, 401);
+    return c.json({
+      exportedAt: new Date().toISOString(),
+      profile: { ...out.profile, createdAt: out.profile.createdAt ? out.profile.createdAt.toISOString() : null },
+      addresses: out.addresses,
+      orders: out.orders.map((o) => ({ ...o, placedAt: o.placedAt ? o.placedAt.toISOString() : null })),
+    }, 200);
+  },
+);
+
+// DELETE /v1/shop/account — GDPR erasure (COMP-2). Hard-deletes the customer
+// row and every PII-bearing table that references it; ORDERS are financial
+// records so they are ANONYMIZED (customerId + snapshot email/name nulled/
+// scrubbed) rather than deleted — order history/accounting must survive an
+// erasure request. Refuses (409) if the customer has a non-canceled
+// subscription: an active Stripe subscription needs to be cancelled first so
+// billing doesn't keep firing against a customer row that no longer exists
+// (safer than silently cancelling on the customer's behalf inside a delete
+// call — cancellation has its own confirmation UX elsewhere).
+account.openapi(
+  createRoute({
+    method: 'delete', path: '/v1/shop/account', summary: 'Delete my account (GDPR erasure)',
+    responses: {
+      200: { description: 'Deleted', content: { 'application/json': { schema: z.object({ deleted: z.boolean() }) } } },
+      401: { description: 'Unauthenticated', content: { 'application/json': { schema: errSchema } } },
+      403: { description: 'CSRF', content: { 'application/json': { schema: errSchema } } },
+      409: { description: 'Active subscription must be cancelled first', content: { 'application/json': { schema: errSchema } } },
+    },
+  }),
+  async (c) => {
+    const st = await resolveStoreFromCtx(c);
+    if (!customerCsrfValid(c)) return c.json({ error: 'invalid CSRF token' }, 403);
+    const out = await withStore(st.id, async (tx): Promise<'unauth' | 'active_subscription' | 'ok'> => {
+      const cust = await me(tx, customerToken(c));
+      if (!cust) return 'unauth';
+
+      const activeSub = await tx.select({ id: s.subscription.id })
+        .from(s.subscription)
+        .where(and(eq(s.subscription.customerId, cust.id), ne(s.subscription.status, 'canceled')))
+        .limit(1);
+      if (activeSub.length) return 'active_subscription';
+
+      // Anonymize orders FIRST (order rows are kept — financial records — but
+      // scrubbed of the PII that links them back to this person).
+      await tx.update(s.order)
+        .set({
+          customerId: null,
+          shippingAddress: null,
+          billingAddress: null,
+          metadata: sql`coalesce(${s.order.metadata}, '{}'::jsonb) || '{"anonymized_at":"' || now()::text || '"}'::jsonb`,
+        })
+        .where(eq(s.order.customerId, cust.id));
+
+      // Null customer refs that are allowed to be null (kept for reporting/
+      // audit shape) before deleting rows that hard-require the FK.
+      await tx.update(s.giftCard).set({ customerId: null }).where(eq(s.giftCard.customerId, cust.id));
+      await tx.update(s.promotionUsage).set({ customerId: null }).where(eq(s.promotionUsage.customerId, cust.id));
+      await tx.update(s.subscription).set({ customerId: null }).where(eq(s.subscription.customerId, cust.id));
+      await tx.update(s.license).set({ customerId: null }).where(eq(s.license.customerId, cust.id));
+
+      // Hard-delete PII-bearing / access-granting rows.
+      await tx.delete(s.paymentMethod).where(eq(s.paymentMethod.customerId, cust.id));
+      await tx.delete(s.customerToken).where(eq(s.customerToken.customerId, cust.id));
+      await tx.delete(s.session).where(eq(s.session.customerId, cust.id));
+      await tx.update(s.cart).set({ customerId: null }).where(eq(s.cart.customerId, cust.id)); // cart TTL job reaps it
+      await tx.delete(s.address).where(eq(s.address.customerId, cust.id));
+
+      await tx.delete(s.customer).where(eq(s.customer.id, cust.id));
+      return 'ok';
+    });
+    if (out === 'unauth') return c.json({ error: 'not authenticated' }, 401);
+    if (out === 'active_subscription') return c.json({ error: 'cancel your active subscription before deleting your account' }, 409);
+    clearCustomerCookies(c);
+    return c.json({ deleted: true }, 200);
   },
 );
