@@ -293,6 +293,27 @@ export const webhookDelivery = pgTable('webhook_delivery', {
   createdAt: ts(),
 });
 
+// REL-4 (DISPATCH.md): email outbox mirroring the webhook pattern. Enqueued
+// transactionally at the Paid transition; a scheduler pass (deliverEmails in
+// email/outbox.ts) claims due rows under FOR UPDATE SKIP LOCKED and pushes
+// them with exponential backoff + dead-letter after MAX_ATTEMPTS. Mirrors
+// webhook_delivery shape but drops the endpoint FK — emails are addressed to
+// a recipient, not a subscribed endpoint. Hand-written migration 0038.
+export const emailOutbox = pgTable('email_outbox', {
+  id: uuid().primaryKey().defaultRandom(),
+  storeId: uuid().notNull().references(() => store.id),
+  kind: text().notNull(), // e.g. 'order_confirmation'
+  recipient: text().notNull(),
+  payload: jsonb().notNull(), // serialized sendEmail input (to, subject, html, text, from?)
+  status: text().notNull().default('pending'), // pending | processing | sent | dead
+  attempts: integer().notNull().default(0),
+  lastError: text(),
+  nextAttemptAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  sentAt: timestamp({ withTimezone: true }),
+  createdAt: ts(),
+  updatedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+});
+
 // Gift cards / store credit. A code carries a redeemable cent balance; checkout
 // draws it down as a 'gift_card' tender. Store-scoped (RLS).
 export const giftCard = pgTable('gift_card', {
