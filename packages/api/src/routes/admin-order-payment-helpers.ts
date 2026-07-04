@@ -18,6 +18,11 @@ export async function alreadyRefunded(tx: Tx, orderId: string): Promise<number> 
  * provider-resolved state + ref. For manual/cod (no provider.refundPayment)
  * this is a no-op that returns { state: 'Settled', providerRef: null }.
  *
+ * `idempotencyKey` MUST be deterministic per logical refund (same across a
+ * retry, distinct across different refunds) — see callers in admin-orders.ts
+ * for the derivation. Passed straight through to the provider; manual/cod
+ * ignore it (no gateway call to dedupe).
+ *
  * Throws { kind: 'providerfail', message } on gateway failure so the caller
  * can exit the withStore() txn cleanly without writing any ledger rows.
  */
@@ -28,6 +33,7 @@ export async function executeGatewayRefund(
   payProviderRef: string | null,
   amount: number,
   currency: string,
+  idempotencyKey: string,
 ): Promise<{ state: 'Settled' | 'Pending'; providerRef: string | null }> {
   const provider = getProvider(payMethod);
   if (!provider?.refundPayment) {
@@ -38,7 +44,7 @@ export async function executeGatewayRefund(
     const [row] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, storeId)).limit(1);
     stripeMode = stripeModeFromConfig(row?.config);
   }
-  const r = await provider.refundPayment({ providerRef: payProviderRef, amount, currency, stripeMode });
+  const r = await provider.refundPayment({ providerRef: payProviderRef, amount, currency, stripeMode, idempotencyKey });
   if (r.state === 'Failed') {
     throw Object.assign(new Error(r.errorMessage ?? 'gateway refund failed'), { kind: 'providerfail' as const, message: r.errorMessage ?? 'gateway refund failed' });
   }

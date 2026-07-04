@@ -28,6 +28,12 @@ export interface RefundInput {
   amount: number; // cents
   currency: string;
   stripeMode?: 'test' | 'live';
+  /** Deterministic key for this logical refund — identical across a retry of
+   *  the SAME refund, distinct across different refunds. Stripe returns the
+   *  same `re_...` for a repeated key within 24h, so an admin retry after a
+   *  transient failure cannot double-refund. Optional so manual/cod (no
+   *  gateway call) don't need one. */
+  idempotencyKey?: string;
 }
 
 export interface RefundResult {
