@@ -13,7 +13,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { pool, withStore } from './db/client.js';
 import { env } from './env.js';
-import { HostRoutingError, resolveStoreByHost, resolveStoreForRequest } from './store-context.js';
+import { HostRoutingError, invalidateStoreCache, resolveStoreByHost, resolveStoreForRequest } from './store-context.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
 if (!/_test(\b|$|\?)/.test(DB)) {
@@ -48,6 +48,9 @@ async function seed() {
 }
 
 beforeEach(async () => {
+  // PERF-2: process-wide cache flush — TRUNCATE wipes the rows that the
+  // in-proc slug/host cache would otherwise keep alive for 60s.
+  invalidateStoreCache();
   await wipe();
   await seed();
 });
