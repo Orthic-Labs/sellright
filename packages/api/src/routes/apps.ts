@@ -7,6 +7,7 @@ import { activateLicenseOnDevice, findActivationByToken } from '../licensing/act
 import { canAccessDownload, canReceiveUpdate } from '../licensing/entitlements.js';
 import { bearerToken } from '../licensing/tokens.js';
 import { signedDownloadPath, verifyDownloadSig, downloadSigningConfigured } from '../licensing/download-url.js';
+import { isAllowedRedirectHost } from '../lib/redirect-allowlist.js';
 import { J, errBody, guard, requireAdmin, requireStore, requireWrite } from './admin-helpers.js';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
@@ -296,8 +297,17 @@ apps.get('/v1/dl/:artifactKey', async (c) => {
   if (!artifact) return c.json({ error: 'not found' }, 404);
   c.header('Cache-Control', 'no-store');
   // External storage (S3/CDN) can't be streamed by us — redirect (best-effort;
-  // prefer a local DOWNLOAD_DIR path for full protection).
-  if (/^https?:\/\//i.test(artifact.path)) return c.redirect(artifact.path, 302);
+  // prefer a local DOWNLOAD_DIR path for full protection). SEC-4: only redirect
+  // to an operator-allowlisted host — artifact.path is admin/staff-supplied, and
+  // without this check a release could point a signed download link from the
+  // legitimate domain at an attacker-controlled host (malware-delivery phishing).
+  if (/^https?:\/\//i.test(artifact.path)) {
+    if (isAllowedRedirectHost(artifact.path, env.ARTIFACT_EXTERNAL_HOST_ALLOWLIST)) {
+      return c.redirect(artifact.path, 302);
+    }
+    console.error(`[SEC-4] rejected redirect to non-allowlisted artifact host: ${artifact.path}`);
+    return c.json({ error: 'download is not available' }, 502);
+  }
   // Local file: resolve under DOWNLOAD_DIR with a traversal guard, then stream.
   const baseDir = resolve(env.DOWNLOAD_DIR);
   const filePath = resolve(baseDir, artifact.path);
