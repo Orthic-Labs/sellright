@@ -297,98 +297,116 @@ export default component$<IProps>(({ shippingAddress, formApi, isReviewMode, onU
 	return (
 		<div class="space-y-4">
 					<div class="grid grid-cols-2 gap-4">
-						<AddressCountrySelect
-							id="countryCode"
-							value={localCountryCode.value}
-							countries={appState.availableCountries}
-							className={getSelectClasses()}
-							disabled={isReviewMode}
-							onChange$={$((value: string) => {
-								handleInputChange$('countryCode', value);
-								if (localFormData.value.postalCode) {
-									runPostalLookup$(localFormData.value.postalCode, value);
-								}
-							})}
-						/>
+						<div>
+							<label for="countryCode" class="sr-only">Country</label>
+							<AddressCountrySelect
+								id="countryCode"
+								value={localCountryCode.value}
+								countries={appState.availableCountries}
+								className={getSelectClasses()}
+								disabled={isReviewMode}
+								onChange$={$((value: string) => {
+									handleInputChange$('countryCode', value);
+									if (localFormData.value.postalCode) {
+										runPostalLookup$(localFormData.value.postalCode, value);
+									}
+								})}
+							/>
+						</div>
 
+						<div>
+							<label for="postalCode" class="sr-only">Postal code</label>
+							<AddressTextInput
+								fieldName="postalCode"
+								id="postalCode"
+								value={localFormData.value.postalCode}
+								autoComplete="postal-code"
+								placeholder="Postal code"
+								className={getFieldClasses('postalCode')}
+								inputMode="numeric"
+								onInput$={handleInputChange$}
+								onBlur$={handleFieldBlur$}
+								afterBlur$={$((value: string) => runPostalLookup$(value, localCountryCode.value))}
+								required
+								disabled={isReviewMode}
+								touched={touchedFields.value.has('postalCode')}
+								error={validationErrors.value.postalCode || ''}
+								valid={touchedFields.value.has('postalCode') && !validationErrors.value.postalCode && !!(localFormData.value.postalCode)}
+							/>
+						</div>
+					</div>
+
+					<div>
+						<label for="streetLine1" class="sr-only">Street address</label>
 						<AddressTextInput
-							fieldName="postalCode"
-							id="postalCode"
-							value={localFormData.value.postalCode}
-							autoComplete="postal-code"
-							placeholder="Postal code"
-							className={getFieldClasses('postalCode')}
-							inputMode="numeric"
+							fieldName="streetLine1"
+							id="streetLine1"
+							value={localFormData.value.streetLine1}
+							autoComplete="street-address"
+							placeholder="Street address"
+							className={getFieldClasses('streetLine1')}
 							onInput$={handleInputChange$}
 							onBlur$={handleFieldBlur$}
-							afterBlur$={$((value: string) => runPostalLookup$(value, localCountryCode.value))}
 							required
 							disabled={isReviewMode}
-							touched={touchedFields.value.has('postalCode')}
-							error={validationErrors.value.postalCode || ''}
-							valid={touchedFields.value.has('postalCode') && !validationErrors.value.postalCode && !!(localFormData.value.postalCode)}
+							touched={touchedFields.value.has('streetLine1')}
+							error={validationErrors.value.streetLine1 || ''}
+							valid={touchedFields.value.has('streetLine1') && !validationErrors.value.streetLine1 && !!(localFormData.value.streetLine1)}
 						/>
 					</div>
 
-					<AddressTextInput
-						fieldName="streetLine1"
-						id="streetLine1"
-						value={localFormData.value.streetLine1}
-						autoComplete="street-address"
-						placeholder="Street address"
-						className={getFieldClasses('streetLine1')}
-						onInput$={handleInputChange$}
-						onBlur$={handleFieldBlur$}
-						required
-						disabled={isReviewMode}
-						touched={touchedFields.value.has('streetLine1')}
-						error={validationErrors.value.streetLine1 || ''}
-						valid={touchedFields.value.has('streetLine1') && !validationErrors.value.streetLine1 && !!(localFormData.value.streetLine1)}
-					/>
-
-					<AddressTextInput
-						fieldName="streetLine2"
-						id="streetLine2"
-						value={localFormData.value.streetLine2}
-						autoComplete="address-line2"
-						placeholder="Apt, suite, unit (optional)"
-						className={getFieldClasses('streetLine2')}
-						onInput$={handleInputChange$}
-						disabled={isReviewMode}
-					/>
+					<div>
+						<label for="streetLine2" class="sr-only">Apt, suite, unit (optional)</label>
+						<AddressTextInput
+							fieldName="streetLine2"
+							id="streetLine2"
+							value={localFormData.value.streetLine2}
+							autoComplete="address-line2"
+							placeholder="Apt, suite, unit (optional)"
+							className={getFieldClasses('streetLine2')}
+							onInput$={handleInputChange$}
+							disabled={isReviewMode}
+						/>
+					</div>
 
 					<div class="grid grid-cols-2 gap-4">
-						<AddressTextInput
-							fieldName="city"
-							id="city"
-							value={localFormData.value.city}
-							autoComplete="address-level2"
-							placeholder="City"
-							className={getFieldClasses('city')}
-							onInput$={handleInputChange$}
-							onBlur$={handleFieldBlur$}
-							required
-							disabled={isReviewMode}
-							touched={touchedFields.value.has('city')}
-							error={validationErrors.value.city || ''}
-							valid={touchedFields.value.has('city') && !validationErrors.value.city && !!(localFormData.value.city)}
-						/>
+						<div>
+							<label for="city" class="sr-only">City</label>
+							<AddressTextInput
+								fieldName="city"
+								id="city"
+								value={localFormData.value.city}
+								autoComplete="address-level2"
+								placeholder="City"
+								className={getFieldClasses('city')}
+								onInput$={handleInputChange$}
+								onBlur$={handleFieldBlur$}
+								required
+								disabled={isReviewMode}
+								touched={touchedFields.value.has('city')}
+								error={validationErrors.value.city || ''}
+								valid={touchedFields.value.has('city') && !validationErrors.value.city && !!(localFormData.value.city)}
+							/>
+						</div>
 
-						<AddressTextInput
-							fieldName="province"
-							id="province"
-							value={localFormData.value.province}
-							autoComplete="address-level1"
-							placeholder="State / Province"
-							className={getFieldClasses('province')}
-							onInput$={handleInputChange$}
-							onBlur$={handleFieldBlur$}
-							required
-							disabled={isReviewMode}
-							touched={touchedFields.value.has('province')}
-							error={validationErrors.value.province || ''}
-							valid={touchedFields.value.has('province') && !validationErrors.value.province && !!(localFormData.value.province)}
-						/>
+						<div>
+							<label for="province" class="sr-only">State / Province</label>
+							<AddressTextInput
+								fieldName="province"
+								id="province"
+								value={localFormData.value.province}
+								autoComplete="address-level1"
+								placeholder="State / Province"
+								className={getFieldClasses('province')}
+								onInput$={handleInputChange$}
+								onBlur$={handleFieldBlur$}
+								required
+								disabled={isReviewMode}
+								touched={touchedFields.value.has('province')}
+								error={validationErrors.value.province || ''}
+								valid={touchedFields.value.has('province') && !validationErrors.value.province && !!(localFormData.value.province)}
+							/>
+						</div>
 					</div>
 
 					<input type="hidden" name="defaultShippingAddress" value="true" />
