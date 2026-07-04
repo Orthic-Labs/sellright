@@ -127,6 +127,9 @@ describe('releaseStaleAllocations concurrency (OPS-2)', () => {
       // overlap window the race would be too narrow to reliably exercise).
       await releaseStaleAllocations({ apply: true, ttlMin: 60 });
       await new Promise((r) => setTimeout(r, 50));
+      return 'ran'; // sentinel: withLeaderLock returns fn()'s value for the leader,
+      // undefined for the skipped tick — the fn must return something non-undefined
+      // for the two to be distinguishable by return value.
     });
 
     const [first, second] = await Promise.all([tick(), tick()]);
