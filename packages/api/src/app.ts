@@ -29,6 +29,7 @@ import { apps } from './routes/apps.js';
 import { csrfValid, customerCsrfValid, getCustomerSessionToken } from './auth/cookies.js';
 import { env } from './env.js';
 import { isAllowedCorsOrigin } from './cors-origins.js';
+import { pool } from './db/client.js';
 
 /**
  * The API is typed REST: every route declares a zod schema, which generates
@@ -116,6 +117,69 @@ export function createApp(): OpenAPIHono {
   });
 
   app.openapi(healthRoute, (c) => c.json({ status: 'ok' as const, version: '0.0.0' }));
+
+  // OBS-2: readiness probe distinct from /v1/health. Cheaper probes (LB /
+  // deploy) can hit /v1/health; the readiness probe actually asks the DB
+  // "can you serve traffic right now?" via SELECT 1 with a short timeout so
+  // a hung DB doesn't stall the probe. Failures are sanitized — we never
+  // leak credentials, query text, or driver error strings to the client.
+  const readyzRoute = createRoute({
+    method: 'get',
+    path: '/v1/readyz',
+    summary: 'Readiness probe (DB ping)',
+    responses: {
+      200: {
+        description: 'Service is ready',
+        content: {
+          'application/json': {
+            schema: z.object({
+              status: z.literal('ok'),
+              db: z.literal('ok'),
+            }),
+          },
+        },
+      },
+      503: {
+        description: 'Service is not ready',
+        content: {
+          'application/json': {
+            schema: z.object({
+              status: z.literal('unavailable'),
+              db: z.literal('error'),
+            }),
+          },
+        },
+      },
+    },
+  });
+
+  app.openapi(readyzRoute, async (c) => {
+    try {
+      // Race SELECT 1 against a 1500ms ceiling — we never want a hung DB to
+      // make the readiness probe hang. The pool's connection timeout is a
+      // separate knob; this is the probe-level deadline.
+      const result = await Promise.race([
+        pool.query('SELECT 1'),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('readiness probe timeout')), 1500),
+        ),
+      ]);
+      // pg.Result rowCount sanity — a healthy round-trip returns exactly
+      // one row. Cheap canary against a buggy driver that resolves 0 rows.
+      const rowCount = (result as { rowCount?: number | null }).rowCount ?? 0;
+      if (rowCount < 1) {
+        // eslint-disable-next-line no-console
+        console.error('[readyz] SELECT 1 returned no rows');
+        return c.json({ status: 'unavailable' as const, db: 'error' as const }, 503);
+      }
+      return c.json({ status: 'ok' as const, db: 'ok' as const }, 200);
+    } catch (err) {
+      // SEC-5 parity: log full detail server-side, never echo to client.
+      // eslint-disable-next-line no-console
+      console.error('[readyz] db ping failed', err);
+      return c.json({ status: 'unavailable' as const, db: 'error' as const }, 503);
+    }
+  });
 
   app.onError((err, c) => {
     // eslint-disable-next-line no-console
