@@ -6,7 +6,7 @@ import { bearer } from '../auth/session.js';
 import { verifyPassword } from '../auth/password.js';
 import { createAdminSession, deleteAdminSession, findAdminByEmail, resolveAdmin } from '../auth/admin-session.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
-import { HttpError, J, errBody, requireAdmin, requireStore, requireWrite, guard, Page } from './admin-helpers.js';
+import { HttpError, J, errBody, requireAdmin, requireStore, requireWrite, requirePermission, guard, Page } from './admin-helpers.js';
 import { clientIp, loginRetryAfter, recordLoginFailure, clearLoginAttempts } from '../auth/rate-limit.js';
 import { setAuthCookies, clearAuthCookies, newCsrf, cookie, csrfValid, SESSION_COOKIE } from '../auth/cookies.js';
 import { verifyTotp } from '../auth/totp.js';
@@ -356,6 +356,7 @@ admin.openapi(
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c);
     requireWrite(st);
+    requirePermission(st, 'cancel_orders');
     const { code } = c.req.valid('param');
     const res = await withStore(st.storeId, async (tx) => {
       const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
