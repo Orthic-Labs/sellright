@@ -10,7 +10,7 @@
 
 **All 12 lanes are DONE and on `origin/main` (`bff9e1d`), validated end-to-end on the box** against real Postgres + RLS: `assert-rls` OK (51 FORCE-RLS tables), typecheck + build ok, **187 non-DB + 88 DB tests green**. Box validation caught **5 real defects that every local gate (typecheck) missed** — see the ledger. Nothing from the security+money blocker tier is left.
 
-**What remains = the audit backlog only** (~45 findings NOT built, correctly scoped out of the blocker tier): reliability (`REL-1..6`), observability (`OBS-1..3`), scale (`SCALE-1`), performance (`PERF-2..17`), frontend/a11y/i18n (`FE-1..11`), compliance (`COMP-1..5`), testing (`TEST-1..2`) — all enumerated with IDs + source refs in the **AUDIT COVERAGE LEDGER** at the end of this doc. Promote first, if you want migration-hardening: `REL-1` graceful shutdown, `OBS-2` `/readyz`, `TEST-1` checkout/auth route tests.
+**What remains = the audit backlog**, and **every finding is dispositioned** in the ledger §3 — `BUILD` (21 ready-to-dispatch lanes with scope, §3a), `DEFER` (15, each with a reason, §3b), or `DECIDE` (needs a product/jurisdiction call, §3c). Nothing is unaccounted. To hand off: pick any §3a row and dispatch it the way the phase-1/2 lanes were run (worktree → build → box `test:db` → merge, per `BOX-VALIDATION-CHECKLIST.md`). Highest-value first: `REL-1` graceful shutdown, `OBS-1`/`OBS-2` logging + `/readyz`, `TEST-1` checkout/auth route tests, `FE-1..4` WCAG quick wins.
 
 **Not yet live.** `main` is merged + validated but **not deployed** — the box dev API (`sellright-api`) still runs the pre-merge `dist/`. Deploy steps + storefront smoke + the SEC-6 deny-by-default grant are in `BOX-VALIDATION-CHECKLIST.md` §Deploy. Confirm scope before restarting the service.
 
@@ -484,62 +484,64 @@ Every distinct finding across the 8 audit sections (minimax, glm, deepseek, qwen
 | `customer_token_hash_idx` commented out | mimo P0#6 | Re-added in `0023_customer_tokens.sql`. |
 | Production runs `tsx` not compiled `dist/` | Prod audit #1911, mimo | REFUTED **on this box**: pm2 `sellright-api` runs `node …/packages/api/dist/index`. (Keep it that way.) |
 
-## 3 · PENDING — real gaps, not yet lanes (tracked IDs)
+## 3 · BACKLOG — every remaining finding, dispositioned
 
-Correctly scoped OUT of the migration-blocker work order; enumerated here so they're not mistaken for "audited, nothing found." Proposed lane IDs for when they're picked up.
+Nothing from the audit is silently dropped. Each remaining finding is **BUILD** (dispatch it — one-line scope given, priced roughly by effort), **DEFER** (real, but not worth doing now — reason given), or **DECIDE** (needs a product/business call before an agent can act). These were held out of the phase-1/2 blocker work order — that scoping was the operator's call, recorded here so the next agent (or Adrian) can override any row.
 
-**Reliability / ops** (Prod-Readiness audit + mimo + deepseek):
-- `REL-1` graceful shutdown — SIGTERM drain in-flight + close pool (Prod #1876, mimo P0#2, deepseek). **Highest-value pending; every deploy currently drops in-flight requests.**
-- `REL-2` `process.on('unhandledRejection')` handler (Prod #1937).
-- `REL-3` circuit breaker for Stripe/SMTP (Prod #1878, deepseek Tier-2#4, mimo P2).
-- `REL-4` SMTP fire-and-forget → retry / dead-letter (Prod #1880, mimo P1#4).
-- `REL-5` `pool.on('error')` health handler (Prod #1862).
-- `REL-6` migration runner doesn't wrap files in BEGIN/COMMIT (Prod #1863; low risk — PG DDL is transactional).
-- `OBS-1` structured logging (pino) + request-id (Prod #1934, mimo P1#3).
-- `OBS-2` readiness probe `/readyz` (DB ping, distinct from liveness) (Prod #1936, mimo P0#3).
-- `OBS-3` metrics/APM — Prometheus or Sentry (Prod, mimo P2).
-- `SCALE-1` Redis-backed rate-limiter + TOTP replay store — **only when N≥2 instances** (minimax A3 remainder).
+### 3a · BUILD — ready to dispatch (each is a lane an agent can pick up)
 
-**Performance** (kimi + deepseek + mimo — optimizations, not blockers at current scale):
-- `PERF-2` no server-side cache / `resolveStore()` per-request DB hit → LRU (kimi 1317, mimo P0#4, deepseek 494).
-- `PERF-3` dashboard full-table aggregations per load → rollup/window (deepseek 478).
-- `PERF-4` OFFSET pagination → cursor/keyset (Prod #1928, deepseek, kimi).
-- `PERF-5` two-query COUNT pattern → `count(*) OVER()` (kimi 1274).
-- `PERF-6` ILIKE-OR two-column search → FTS/`to_tsvector` (kimi 1284).
-- `PERF-7` `withStore` wraps read-only work in a txn → `withStoreRead` (kimi 1298).
-- `PERF-8` checkout re-reads order in a 2nd txn for email (kimi 1341).
-- `PERF-9` checkout txn too wide (kimi 1355).
-- `PERF-10` cart-merge N+1 (kimi 1365).
-- `PERF-11` sequential stock-reservation loop → batched UPDATE (kimi 1385).
-- `PERF-12` **auto-deliver N+1** — OPS-2 batched release-stale but NOT auto-deliver (kimi 1253).
-- `PERF-13` bulk ops = N transactions (mimo P1#1).
-- `PERF-14` webhook delivery holds a connection across the outbound HTTP (mimo P1#2, kimi) — same class as MONEY-2 item 3.
-- `PERF-15` no image pipeline; sharp runs in the API process (kimi 1441, Prod #1930).
-- `PERF-16` smart-collection browse loads ALL products into JS (mimo P0#5, deepseek).
-- `PERF-17` CSV export buffers everything in memory → stream (mimo).
+| ID | Finding → scope | Source | Effort |
+|---|---|---|---|
+| `REL-1` | **Graceful shutdown** — SIGTERM/SIGINT: stop accepting, drain in-flight, `pool.end()`. Every deploy currently drops in-flight requests. | Prod #1876, mimo P0#2, deepseek | S |
+| `REL-2` | `process.on('unhandledRejection'/'uncaughtException')` — log + exit cleanly (Node's default is throw→crash). | Prod #1937 | XS |
+| `REL-4` | Order-confirmation email is fire-and-forget → add a retry/dead-letter (reuse the webhook-outbox pattern). Lost emails today vanish silently. | Prod #1880, mimo P1#4 | M |
+| `REL-5` | `pool.on('error', …)` handler — a dead pooled connection is currently handed out silently. | Prod #1862 | XS |
+| `OBS-1` | **Structured logging** — `pino` + request-id middleware (method/path/status/ms + storeId). Unblocks all prod debugging. | Prod #1934, mimo P1#3 | M |
+| `OBS-2` | Readiness probe `/readyz` — DB ping + config check, distinct from liveness `/v1/health`. Deploy/LB safety. | Prod #1936, mimo P0#3 | S |
+| `PERF-2` | Cache `resolveStore()` — in-proc LRU (60s TTL), invalidate on settings save. It's a DB hit on **every** request. | kimi 1317, mimo P0#4 | S |
+| `PERF-12` | **auto-deliver N+1** — apply OPS-2's SKIP-LOCKED + batched-update treatment to `auto-deliver.ts` (OPS-2 only did release-stale). | kimi 1253 | S |
+| `PERF-14` | Move `deliverWebhooks` outbound HTTP **outside** the DB txn (claim→release→fetch→short txn). Same class as MONEY-2 item 3. | mimo P1#2, kimi | M |
+| `PERF-16` | Smart-collection browse loads ALL products into JS → push the rule filter into SQL + paginate. Real death-at-scale for browse. | mimo P0#5, deepseek | M |
+| `FE-1` | Fix broken skip-link (`#main-content` target missing) — WCAG. | Frontend 2092 | XS |
+| `FE-2` | Checkout inputs get real `<label>`s (placeholder-only today) — WCAG + conversion. | Frontend 2094 | S |
+| `FE-3` | `aria-describedby` linking inputs→validation errors — WCAG. | Frontend 2095 | S |
+| `FE-4` | Breadcrumb `<nav aria-label>` — WCAG. | Frontend 2093 | XS |
+| `FE-6` | Tighten storefront CSP — drop `unsafe-inline`/`data:`/`blob:` from `default-src` (scope per directive; Qwik needs a nonce). | Frontend 2116 | M |
+| `FE-7` | Add CSP headers to the admin SPA (none today). | Frontend 2174 | S |
+| `FE-8` | React error boundary in admin — one render error white-screens the whole app. | qwen | S |
+| `FE-10` | Remove the hardcoded client-side shipping calc in checkout — use server-authoritative pricing (client currently disagrees with server). | kimi 1469, qwen | S |
+| `TEST-1` | Route integration tests for `checkout.ts` / `auth.ts` / `payment-webhooks.ts` — highest-value untested revenue paths (the money lanes only chipped at these). | mimo P0#1 | M |
+| `TEST-2` | E2E checkout→pay→fulfill against Stripe test keys. | all | L |
+| `COMP-2` | Account deletion / hard-delete cascade (soft-delete only today) — GDPR + hygiene. | deepseek 903, kimi | M |
 
-**Frontend / a11y / i18n** (unlabeled Frontend audit + qwen — the entire storefront/admin UI tier, untouched by dispatch):
-- `FE-1` broken skip-link (`#main-content` target missing) — WCAG (2092).
-- `FE-2` checkout inputs placeholder-only, no `<label>` — WCAG (2094).
-- `FE-3` no `aria-describedby` on validation errors (2095).
-- `FE-4` breadcrumbs missing `aria-label` (2093).
-- `FE-5` i18n entirely stubbed; currency hardcoded USD — a multi-tenant store can't localize (2107-2108).
-- `FE-6` CSP `default-src` includes `unsafe-inline data: blob:` — effectively no CSP (2116).
-- `FE-7` admin SPA has no CSP headers (2174).
-- `FE-8` no React error boundary in admin — one render error white-screens it (qwen).
-- `FE-9` storefront still carries dual API layer (Vendure GraphQL + REST) (kimi 1460).
-- `FE-10` hardcoded client-side shipping calc disagrees with server (kimi 1469, qwen).
-- `FE-11` cart in `localStorage` unencrypted + no expiry (qwen).
+### 3b · DEFER — real, not now (reason each)
 
-**Compliance** (deepseek GDPR/PCI — legal, not just quality):
-- `COMP-1` self-service data export — GDPR (901).
-- `COMP-2` account deletion / hard-delete cascade — GDPR (903, kimi).
-- `COMP-3` consent tracking (905) · `COMP-4` cookie-consent banner (907) — GDPR/CCPA.
-- `COMP-5` PCI SAQ-A attestation — required even with Stripe Elements (913).
+| ID | Finding | Why deferred |
+|---|---|---|
+| `REL-3` | Circuit breaker for Stripe/SMTP | Single-instance, low outage frequency; revisit with OBS-1 once you can see failure rates. |
+| `REL-6` | Migration runner doesn't wrap files in BEGIN/COMMIT | Postgres DDL is transactional per statement; near-zero real risk. |
+| `OBS-3` | Metrics/APM (Prometheus/Sentry) | Do after `OBS-1` (logging is the prerequisite); bigger lift, lower marginal value now. |
+| `SCALE-1` | Redis rate-limiter + TOTP replay store | Only matters at **N≥2 instances**; you run one. The in-process Map is correct single-instance. |
+| `PERF-3` | Dashboard full-table aggregations | Fine at current order volume; revisit with a rollup table when the dashboard feels slow. |
+| `PERF-4` | OFFSET → cursor pagination | Degrades only at deep pages; not felt yet. |
+| `PERF-5` | Two-query COUNT | Micro-optimization. |
+| `PERF-6` | ILIKE search → FTS | Trigram index is fine below ~50k products/store. |
+| `PERF-7` | `withStoreRead` for read-only txns | Marginal MVCC overhead; not measurable at current load. |
+| `PERF-8`/`PERF-9` | Checkout 2nd-txn email read / wide checkout txn | Works correctly; refactor carries real money-path risk for a latency win — do only with a benchmark justifying it. |
+| `PERF-10`/`PERF-11`/`PERF-13` | Cart-merge N+1 / stock-reservation loop / bulk-ops N txns | All fine at real cart sizes + admin batch sizes; revisit at volume. |
+| `PERF-15` | Image pipeline (sharp in API process) | nginx + pre-generated `avif`/`webp` cover the storefront; a digital store barely uploads. |
+| `PERF-17` | CSV export buffers in memory | Only OOMs on very large catalogs; stream when a store gets there. |
+| `FE-11` | Cart `localStorage` unencrypted | Cart contents are low-sensitivity (no PII/payment); encryption adds little. |
+| `COMP-5` | PCI SAQ-A attestation | A paperwork/compliance task, not code — Adrian files it; nothing to dispatch. |
 
-**Testing** (mimo + all):
-- `TEST-1` route-level integration tests for `checkout.ts` / `auth.ts` / `payment-webhooks.ts` — the highest-value untested revenue paths (mimo P0#1). Partially chipped at by the money lanes' new `test:db` files, not closed.
-- `TEST-2` E2E checkout→pay→fulfill (no automated end-to-end coverage anywhere).
+### 3c · DECIDE — needs a product/business call first (not an agent's to make)
+
+| ID | Finding | The decision |
+|---|---|---|
+| `FE-5` | i18n stubbed; currency hardcoded USD | Do you sell in non-English / non-USD markets? If no → close as WON'T-DO. If yes → it's a large lane (schema `*_translation` tables + `Intl` + locale routing). |
+| `FE-9` | Storefront still carries the dual Vendure-GraphQL + REST layer | Bound to the storefront-cutover decision (the `VITE_SR_CHECKOUT` flip). Remove the GraphQL layer once checkout is default. |
+| `COMP-1` | Self-service data export (GDPR) | Required **iff** you serve EU/UK/California consumers. Jurisdiction call → then BUILD. |
+| `COMP-3`/`COMP-4` | Consent tracking / cookie-consent banner | Same jurisdiction call as COMP-1; also a design/legal choice, not pure code. |
 
 ## 4 · OUT of scope (breadth — tracked in `COMMERCE-GAP-ANALYSIS.md`, not this work order)
 Payment breadth (PayPal/wallets/BNPL), automatic tax (Avalara/TaxJar/EU-VAT-MOSS), live carrier shipping, reviews/loyalty/subscriptions-upsell/bundles/wishlist, multi-currency **settlement**, POS/multi-channel. These are product-roadmap items, not migration-readiness gates — see `COMMERCE-GAP-ANALYSIS.md` §"Where competitors are AHEAD".
@@ -548,4 +550,11 @@ Payment breadth (PayPal/wallets/BNPL), automatic tax (Avalara/TaxJar/EU-VAT-MOSS
 - Storefront `VITE_SR_CHECKOUT` flag-flip → default — needs a live Stripe test-card run + side-by-side vs Vendure (FEATURES.md launch gap #2). Not an agent lane.
 
 ---
-_Coverage math: ~150 distinct findings · 12 lanes actioned (6 on main, 1 box-green, 5 branch-only) · 7 refuted · ~45 pending with tracked IDs · breadth + human-gated referenced out. The security+money blocker tier is exhaustively closed or refuted; reliability/perf/frontend/compliance are enumerated PENDING, not silently omitted._
+_Coverage math (~150 distinct findings, every one dispositioned):_
+_· **§1 DONE** — 12 lanes on `main` `bff9e1d`, box-validated (187 non-DB + 88 DB tests)._
+_· **§2 REFUTED** — 7 (verified false against code)._
+_· **§3a BUILD** — 21 ready-to-dispatch lanes (scope + effort each)._
+_· **§3b DEFER** — 15 (explicit reason each)._
+_· **§3c DECIDE** — 5 (need a product/jurisdiction call)._
+_· **§4 breadth** + **§5 human-gated** — referenced out with reasons._
+_Nothing is silently omitted — every audit finding is DONE, refuted, a BUILD lane, or deferred/gated with a stated reason._
