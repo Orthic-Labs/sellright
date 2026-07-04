@@ -2,7 +2,13 @@ import 'dotenv/config';
 import { serve } from '@hono/node-server';
 import { createApp } from './app.js';
 import { env } from './env.js';
+import { registerProcessErrorHandlers } from './lib/process-error-handlers.js';
 import { startJobScheduler } from './jobs/scheduler.js';
+
+// REL-2: install process-level error handlers BEFORE the server starts so
+// nothing in `serve()` / `startJobScheduler()` can crash the process
+// without a logged, intentional exit.
+registerProcessErrorHandlers();
 
 const app = createApp();
 
