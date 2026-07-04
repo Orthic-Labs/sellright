@@ -17,10 +17,10 @@ import { isUiPermissionKey, mergeStaffPermissions, sanitizePaymentSettingsPatch,
 describe('mergeStaffPermissions', () => {
   it('preserves unknown keys when saving the UI allow-list', () => {
     const next = mergeStaffPermissions(
-      { giftcards: true, webhooks: true, refunds: true, discounts: true },
+      { giftcards: true, webhooks: true, analytics: true, discounts: true },
       { giftcards: false, webhooks: true },
     );
-    expect(next).toEqual({ refunds: true, discounts: true, webhooks: true });
+    expect(next).toEqual({ analytics: true, discounts: true, webhooks: true });
     // Unknown keys survive, even when we tried to "unset" them by omitting them
     // from the UI payload (false is implicit for UI keys, not destructive).
     expect(next).not.toHaveProperty('giftcards');
@@ -43,10 +43,10 @@ describe('mergeStaffPermissions', () => {
 
   it('preserves multiple unknown keys and overlays UI keys together', () => {
     const next = mergeStaffPermissions(
-      { refunds: true, discounts: true, giftcards: true },
+      { analytics: true, discounts: true, giftcards: true },
       { giftcards: false, webhooks: true },
     );
-    expect(next).toEqual({ refunds: true, discounts: true, webhooks: true });
+    expect(next).toEqual({ analytics: true, discounts: true, webhooks: true });
   });
 });
 
@@ -57,7 +57,7 @@ describe('isUiPermissionKey', () => {
   });
 
   it('rejects unknown keys (server throws 400 on these)', () => {
-    expect(isUiPermissionKey('refunds')).toBe(false);
+    expect(isUiPermissionKey('analytics')).toBe(false); // genuinely not a permission key (refunds IS one now, SEC-6)
     expect(isUiPermissionKey('')).toBe(false);
     expect(isUiPermissionKey('GIFTCARDS')).toBe(false); // exact-match, not case-insensitive
   });
