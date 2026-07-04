@@ -15,7 +15,15 @@ export default component$<{
 	/** 'rows' = dark sidebar inline rows, 'default' = original style */
 	promoPlacement?: 'rows' | 'default';
 	promoExpandedSignal?: Signal<boolean>;
-}>(({ order, readonly = false, localCart, promoPlacement = 'default', promoExpandedSignal }) => {
+	/**
+	 * Server-authoritative shipping cost in cents (from the shipping-methods
+	 * quote or the checkout total). `null` = not yet known (no destination
+	 * country entered) — renders a placeholder instead of a guessed number.
+	 * When omitted entirely, falls back to `activeOrder.shippingWithTax` only
+	 * (legacy Vendure-order callers).
+	 */
+	serverShippingCents?: Signal<number | null> | undefined;
+}>(({ order, readonly = false, localCart, promoPlacement = 'default', promoExpandedSignal, serverShippingCents }) => {
 	const appState = useContext(APP_STATE);
 	const localCartContext = useLocalCart();
 	const couponCodeSignal = useSignal('');
@@ -45,25 +53,23 @@ export default component$<{
 		return total;
 	});
 
+	// Server-authoritative shipping only. `undefined` = caller didn't pass a
+	// quote signal (legacy Vendure-order display) → fall back to the order's
+	// own shippingWithTax. `null` = quote signal exists but hasn't resolved yet
+	// (e.g. no destination country) → unknown, show a placeholder, never a guess.
 	const shipping = useComputed$(() => {
-		if (appState.shippingAddress && appState.shippingAddress.countryCode) {
-			if (localCartContext.appliedCoupon?.freeShipping) {
-				return 0;
-			}
-
-			const countryCode = appState.shippingAddress.countryCode;
-			const orderTotal = orderTotalAfterDiscount.value;
-			if (countryCode === 'US' || countryCode === 'PR') {
-				const ship = orderTotal >= 10000 ? 0 : 800;
-				return ship;
-			}
-			return 2000; // International shipping $20
+		if (localCartContext.appliedCoupon?.freeShipping) {
+			return 0;
 		}
-		const ship = activeOrder.value?.shippingWithTax || 0;
-		return ship;
+		if (serverShippingCents !== undefined) {
+			return serverShippingCents.value;
+		}
+		return activeOrder.value?.shippingWithTax || 0;
 	});
+	const shippingKnown = useComputed$(() => shipping.value !== null);
 	const total = useComputed$(() => {
-		const localTotal = orderTotalAfterDiscount.value + shipping.value;
+		const shippingAmount = shipping.value || 0;
+		const localTotal = orderTotalAfterDiscount.value + shippingAmount;
 		const tot = localTotal || activeOrder.value?.totalWithTax || 0;
 		return tot;
 	});
@@ -291,7 +297,9 @@ export default component$<{
 
 				<div class="flex items-center justify-between text-[12px] text-[rgba(253,250,246,0.4)]">
 					<dt>Shipping</dt>
-					<dd class="font-medium text-[rgba(253,250,246,0.6)]">{formatPrice(shipping.value, currencyCode)}</dd>
+					<dd class="font-medium text-[rgba(253,250,246,0.6)]">
+						{shippingKnown.value ? formatPrice(shipping.value || 0, currencyCode) : 'Calculated at next step'}
+					</dd>
 				</div>
 			</dl>
 		);
@@ -307,7 +315,9 @@ export default component$<{
 
       <div class="flex items-center justify-between">
         <dt>Shipping fee</dt>
-        <dd class="font-medium text-gray-900">{formatPrice(shipping.value, currencyCode)}</dd>
+        <dd class="font-medium text-gray-900">
+          {shippingKnown.value ? formatPrice(shipping.value || 0, currencyCode) : 'Calculated at next step'}
+        </dd>
       </div>
 
       {!readonly && (

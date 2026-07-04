@@ -14,9 +14,8 @@ import { useLocalCart, refreshCartStock, loadCartIfNeeded, useHasMixedPreOrder }
 import { CheckoutValidationProvider, useCheckoutValidation, useCheckoutValidationActions } from '~/contexts/CheckoutValidationContext';
 import { useCheckout } from '~/hooks/useCheckout';
 import { SR_CHECKOUT_ENABLED } from '~/providers/shop/checkout/checkout';
-import { srStripePublishableKey } from '~/utils/sellright';
+import { srStripePublishableKey, srCreateOrder, srPayOrder, srShippingMethods } from '~/utils/sellright';
 import { LocalCartService } from '~/services/LocalCartService';
-import { srCreateOrder, srPayOrder } from '~/utils/sellright';
 import { validateBillingSection, validateCustomerSection, validateShippingSection } from '~/utils/checkout-section-validation';
 import { CheckoutPageView } from '~/components/checkout/CheckoutPageView';
 import { CHECKOUT_STYLES } from './checkout-styles';
@@ -57,22 +56,56 @@ const CheckoutContent = component$(() => {
   const isOrderProcessing = useSignal(false);
   const showProcessingModal = useSignal(false);
 
+  // Server-authoritative shipping quote (cents). `null` = not yet known — the
+  // server hasn't been asked (no destination country yet) or the request is
+  // in flight. Never fall back to a client-guessed rate here: whatever the
+  // server returns is what the order will actually be charged (FE-10).
+  const shippingCents = useSignal<number | null>(null);
+
+  useTask$(async ({ track, cleanup }) => {
+    const countryCode = track(() => appState.shippingAddress?.countryCode);
+    const subtotal = track(() => localCart.localCart.subTotal || 0);
+    const discount = track(() => localCart.appliedCoupon?.discountAmount || 0);
+    const freeShipping = track(() => !!localCart.appliedCoupon?.freeShipping);
+
+    if (freeShipping) {
+      shippingCents.value = 0;
+      return;
+    }
+
+    if (!countryCode) {
+      shippingCents.value = null;
+      return;
+    }
+
+    const discountedSubtotal = Math.max(subtotal - discount, 0);
+    let cancelled = false;
+    cleanup(() => { cancelled = true; });
+
+    try {
+      const { methods } = await srShippingMethods(countryCode, discountedSubtotal);
+      if (cancelled) return;
+      if (!methods.length) {
+        shippingCents.value = null;
+        return;
+      }
+      shippingCents.value = Math.min(...methods.map((m) => m.rate));
+    } catch (e) {
+      if (cancelled) return;
+      console.warn('[Checkout] Failed to fetch server shipping quote:', e);
+      shippingCents.value = null;
+    }
+  });
+
   const checkoutTotalCents = useComputed$(() => {
     const subtotal = localCart.localCart.subTotal || 0;
     const discount = localCart.appliedCoupon?.discountAmount || 0;
     const discountedSubtotal = Math.max(subtotal - discount, 0);
-    const countryCode = appState.shippingAddress?.countryCode;
 
-    let shipping = 0;
-    if (localCart.appliedCoupon?.freeShipping) {
-      shipping = 0;
-    } else if (countryCode) {
-      if (countryCode === 'US' || countryCode === 'PR') {
-        shipping = discountedSubtotal >= 10000 ? 0 : 800;
-      } else {
-        shipping = 2000;
-      }
-    }
+    // Shipping unknown (no destination yet, or quote still loading/failed) —
+    // don't guess. The displayed total reflects subtotal only until the
+    // server-priced shipping quote resolves.
+    const shipping = shippingCents.value ?? 0;
 
     return discountedSubtotal + shipping;
   });
@@ -365,6 +398,7 @@ const CheckoutContent = component$(() => {
       promoExpanded={promoExpanded}
       selectedPaymentMethod={selectedPaymentMethod}
       sezzleTriggerSignal={sezzleTriggerSignal}
+      shippingCents={shippingCents}
       showProcessingModal={showProcessingModal}
       srState={srState}
       state={state}
