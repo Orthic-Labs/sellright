@@ -1,0 +1,2804 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "gen:6ba44a5f0796de3c",
+  "sourceSignature": "6ba44a5f0796de3cad3c4896f78d9458781dc4f5",
+  "configHash": "79783666ada5d91cdff2c6e39a76bab6f00836c9",
+  "files": [
+    {
+      "path": ".gitattributes",
+      "isDoc": false
+    },
+    {
+      "path": ".github/workflows/verify.yml",
+      "isDoc": false
+    },
+    {
+      "path": ".gitignore",
+      "isDoc": false
+    },
+    {
+      "path": ".gitleaks.toml",
+      "isDoc": false
+    },
+    {
+      "path": ".jscpd.json",
+      "isDoc": false
+    },
+    {
+      "path": ".nvmrc",
+      "isDoc": false
+    },
+    {
+      "path": "AGENTS.md",
+      "isDoc": true
+    },
+    {
+      "path": "CLAUDE.md",
+      "isDoc": true
+    },
+    {
+      "path": "LICENSE",
+      "isDoc": false
+    },
+    {
+      "path": "README.md",
+      "isDoc": true
+    },
+    {
+      "path": "docs/ADMIN-DESIGN-UPLIFT.md",
+      "isDoc": true
+    },
+    {
+      "path": "docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+      "isDoc": true
+    },
+    {
+      "path": "docs/ADMIN-THEME-SYSTEM.md",
+      "isDoc": true
+    },
+    {
+      "path": "docs/ADMIN-VALIDATION-FIX-PLAN-2026-06-17.md",
+      "isDoc": true
+    },
+    {
+      "path": "docs/ARCHITECTURE.md",
+      "isDoc": true
+    },
+    {
+      "path": "docs/COMMERCE-GAP-ANALYSIS.md",
+      "isDoc": true
+    },
+    {
+      "path": "docs/COMPETITORS.md",
+      "isDoc": true
+    },
+    {
+      "path": "docs/EMAIL.md",
+      "isDoc": true
+    },
+    {
+      "path": "docs/FEATURES.md",
+      "isDoc": true
+    },
+    {
+      "path": "docs/GTM.md",
+      "isDoc": true
+    },
+    {
+      "path": "docs/MARKET-PLACEMENT.md",
+      "isDoc": true
+    },
+    {
+      "path": "docs/MOAT-AND-DISRUPTION.md",
+      "isDoc": true
+    },
+    {
+      "path": "docs/SUBSCRIPTIONS-DESIGN.md",
+      "isDoc": true
+    },
+    {
+      "path": "docs/plans/2026-06-20-cart-architecture.md",
+      "isDoc": true
+    },
+    {
+      "path": "docs/plans/2026-06-20-checkout-migration.md",
+      "isDoc": true
+    },
+    {
+      "path": "docs/plans/2026-06-20-order-management-bulk-ops.md",
+      "isDoc": true
+    },
+    {
+      "path": "docs/plans/2026-06-20-subscriptions.md",
+      "isDoc": true
+    },
+    {
+      "path": "docs/plans/BOX-VALIDATION-CHECKLIST.md",
+      "isDoc": true
+    },
+    {
+      "path": "docs/plans/DISPATCH.md",
+      "isDoc": true
+    },
+    {
+      "path": "docs/plans/REMAINING-WORK.md",
+      "isDoc": true
+    },
+    {
+      "path": "docs/runbooks/admin-a11y.md",
+      "isDoc": true
+    },
+    {
+      "path": "docs/runbooks/migrations.md",
+      "isDoc": true
+    },
+    {
+      "path": "eslint.config.mjs",
+      "isDoc": false
+    },
+    {
+      "path": "knip.json",
+      "isDoc": false
+    },
+    {
+      "path": "package.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/.env.example",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/.gitignore",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/README.md",
+      "isDoc": true
+    },
+    {
+      "path": "packages/admin/index.html",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/package.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/pnpm-lock.yaml",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/pnpm-workspace.yaml",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/postcss.config.js",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/api.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/auth.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/components/CommandPalette.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/components/ErrorBoundary.test.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/components/ErrorBoundary.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/components/Layout.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/components/Toast.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/components/ui-forms.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/components/ui.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/fonts.css",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/fonts/hanken-grotesk-latin-ext.woff2",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/fonts/hanken-grotesk-latin.woff2",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/fonts/jetbrains-mono-latin-ext.woff2",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/fonts/jetbrains-mono-latin.woff2",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/fonts/schibsted-grotesk-latin-ext.woff2",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/fonts/schibsted-grotesk-latin.woff2",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/index.css",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/lib/csp-headers.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/lib/csp.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/lib/format.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/lib/payment-providers.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/lib/payment-providers.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/lib/report-deltas.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/lib/report-deltas.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/main.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/pages/AbandonedCarts.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/pages/Activity.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/pages/AffiliateDetail.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/pages/Affiliates.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/pages/Blog.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/pages/CollectionDetail.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/pages/Collections.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/pages/CurrencyRates.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/pages/CustomerDetail.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/pages/Customers.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/pages/Dashboard.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/pages/Discounts.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/pages/DraftOrder.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/pages/GiftCards.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/pages/ImportTracking.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/pages/Inventory.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/pages/Locations.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/pages/Login.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/pages/Marketing.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/pages/OrderDetail.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/pages/Orders.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/pages/ProductCreate.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/pages/ProductDetail.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/pages/Products.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/pages/Reports.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/pages/Returns.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/pages/Settings.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/pages/Staff.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/pages/Subscriptions.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/pages/TaxZones.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/pages/Webhooks.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/pages/staff-permissions.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/qa-a11y.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/qa-mocks.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/qa-mocks.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/theme-tokens.css",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/src/theme.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/tailwind.config.js",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/tsconfig.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/vite.config.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/vitest.config.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/.env.example",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle.config.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0000_conscious_black_widow.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0001_rls_policies.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0002_harden_rls_nullif.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0003_order_line_snapshot.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0004_store_registry_no_rls.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0005_cart_tables.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0006_admin_store_no_force.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0007_order_idempotency_and_indexes.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0008_admin_store_registry_disable_rls.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0009_model_completeness.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0010_customer_tags.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0011_cart_email.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0012_tax_zones.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0013_product_merchandising.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0014_smart_collections.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0015_returns.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0016_gift_cards.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0017_webhooks.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0018_staff_invites.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0019_locations.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0020_currency_rates.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0021_staff_permissions.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0022_indexes.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0023_customer_tokens.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0024_order_metadata.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0025_rls_stance_session_admin_user_store.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0026_refund_provider_ref.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0027_software_entitlements.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0028_licensing_indexes.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0029_product_search_trgm.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0030_download_artifact_bigint.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0031_realign_snapshot.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0032_cart_ttl.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0033_order_soft_delete.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0034_subscriptions.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0035_order_receipt_token.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0036_harden_subscription_rls.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0037_payment_provider_ref_unique.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0038_email_outbox.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/meta/0000_snapshot.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/meta/0001_snapshot.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/meta/0002_snapshot.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/meta/0003_snapshot.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/meta/0004_snapshot.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/meta/0005_snapshot.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/meta/0011_snapshot.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/meta/0012_snapshot.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/meta/0013_snapshot.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/meta/0014_snapshot.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/meta/0015_snapshot.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/meta/0016_snapshot.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/meta/0017_snapshot.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/meta/0018_snapshot.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/meta/0019_snapshot.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/meta/0020_snapshot.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/meta/0021_snapshot.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/meta/0029_snapshot.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/meta/0030_snapshot.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/meta/0031_snapshot.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/meta/_journal.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/eslint.config.js",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/package.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/scripts-deploy/affiliate-commission-test.sh",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/scripts-deploy/auth-verify.sh",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/scripts-deploy/backup-db.sh",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/scripts-deploy/create-app-role.sh",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/scripts-deploy/create-tenant-db.sh",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/scripts-deploy/dd-parity-verify.sh",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/scripts-deploy/deploy-admin.sh",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/scripts-deploy/deploy-rightapps-tls.sh",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/scripts-deploy/grant-app-role.sh",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/scripts-deploy/inspect-rls.sh",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/scripts-deploy/migrate-and-cutover.sh",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/scripts-deploy/nginx-admin.conf",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/scripts-deploy/nginx-rightapps.conf",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/scripts-deploy/phase1-verify.sh",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/scripts-deploy/phase2345-verify.sh",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/scripts-deploy/restart-and-test.sh",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/scripts-deploy/sellright-api.service",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/scripts-deploy/start-admin.sh",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/scripts-deploy/start-api.sh",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/scripts-deploy/start-rightapps.sh",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/scripts-deploy/test-coupon.sh",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/scripts/assert-shop-route-isolation.mjs",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/admin/reconcile-export.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/app.cors.db.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/app.readyz.db.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/app.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/app.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/auth/admin-session.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/auth/admin-staff.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/auth/cookies.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/auth/cookies.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/auth/email.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/auth/email.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/auth/password.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/auth/rate-limit.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/auth/rate-limit.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/auth/session.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/auth/totp.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/cart/ttl.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/cart/ttl.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/catalog/collection-rules-sql.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/catalog/collection-rules.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/catalog/collection-rules.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/cors-origins.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/cors-origins.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/db/assert-force-rls.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/db/assert-hand-written-migrations.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/db/client.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/db/rls-tables.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/db/rls-test-utils.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/db/rls.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/db/schema-content.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/db/schema-core.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/db/schema-orders.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/db/schema.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/email/dispatch.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/email/dispatch.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/email/mailer.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/email/mailer.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/email/outbox.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/email/outbox.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/email/templates.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/env.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/import/catalog.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/import/customers.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/import/orders.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/import/store.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/index.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/jobs/auto-deliver.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/jobs/auto-deliver.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/jobs/cart-maintenance.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/jobs/leader-lock.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/jobs/release-stale-allocations.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/jobs/release-stale-allocations.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/jobs/scheduler.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/jobs/webhook-reaper.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/lib/logger.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/lib/logger.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/lib/process-error-handlers.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/lib/process-error-handlers.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/lib/redirect-allowlist.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/lib/redirect-allowlist.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/lib/request-id.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/lib/request-id.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/lib/sanitize-html.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/lib/sanitize-html.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/licensing/activations.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/licensing/activations.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/licensing/download-url.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/licensing/download-url.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/licensing/entitlements.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/licensing/entitlements.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/licensing/issue.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/licensing/renewal.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/licensing/renewal.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/licensing/tokens.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/licensing/tokens.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/manifest/generate.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/money/auto-discount.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/money/auto-discount.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/money/coupon.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/money/currency.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/money/currency.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/money/fsm.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/money/fsm.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/money/gift-card.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/money/gift-card.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/money/tax.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/money/tax.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/money/totals-property.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/money/totals.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/money/totals.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/orders/invoice.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/orders/invoice.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/orders/stock-reservation.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/orders/stock-reservation.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/payments/provider.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/payments/provider.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/payments/settle.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/payments/stripe.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/payments/stripe.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/payments/subscriptions.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/payments/webhook-reconcile.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/payments/webhook-reconcile.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/account-deletion.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/account.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/admin-affiliate.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/admin-assets.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/admin-catalog-collections.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/admin-catalog-utils.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/admin-catalog.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/admin-content.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/admin-dashboard.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/admin-helpers.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/admin-marketing.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/admin-order-draft-license.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/admin-order-ops.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/admin-order-payment-helpers.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/admin-order-utils.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/admin-orders.bulk.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/admin-orders.refund.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/admin-orders.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/admin-products.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/admin-rbac-sensitive.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/admin-reports.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/admin-settings-advanced.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/admin-settings.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/admin-settings.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/admin.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/apps.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/auth.route.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/auth.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/cart.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/catalog-collection-sql.db.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/catalog.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/checkout-migration.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/checkout.route.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/checkout.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/customer-tokens.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/e2e-checkout-stripe.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/orders.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/pay-idempotency.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/pay.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/payment-webhooks.route.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/payment-webhooks.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/shop-config.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/shop-extra.newsletter-limit.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/shop-extra.newsletter.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/shop-extra.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/store-context.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/subscriptions.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/subscriptions.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/scripts/provision-right-apps.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/scripts/seed-admin.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/security/outbound-url.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/security/outbound-url.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/shipping/calculator.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/shipping/calculator.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/shutdown.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/store-context.cache.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/store-context.db.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/store-context.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/store-context.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/webhooks/emit.db.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/webhooks/emit.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/webhooks/emit.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/tsconfig.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/vitest.config.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/shared/package.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/shared/src/index.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/shared/src/money.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/shared/tsconfig.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/.env.example",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/.gitignore",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/.graphql-tag-allowlist",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/.node-version",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/.prettierignore",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/.prettierrc",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/README.md",
+      "isDoc": true
+    },
+    {
+      "path": "packages/storefront/SECURITY-FIX-XSS.md",
+      "isDoc": true
+    },
+    {
+      "path": "packages/storefront/adapters/express/vite.config.mts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/codegen-shop.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/design-system/damned-designs/MASTER.md",
+      "isDoc": true
+    },
+    {
+      "path": "packages/storefront/ecosystem.config.cjs",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/eslint.config.js",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/maintenance-server.js",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/package.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/pnpm-lock.yaml",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/pnpm-workspace.yaml",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/postcss.config.cjs",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/public/.well-known/apple-developer-merchantid-domain-association",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/public/.well-known/security.txt",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/public/asset_placeholder.webp",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/public/c7f8a2b4e91d3f6a.txt",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/public/favicon.ico",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/public/favicon.png",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/public/favicon/apple-touch-icon.png",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/public/favicon/favicon-192x192.png",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/public/favicon/favicon-32x32.png",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/public/favicon/favicon-512x512.png",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/public/favicon/favicon-dark.svg",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/public/favicon/favicon-light.svg",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/public/favicon/favicon.ico",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/public/favicon/favicon.svg",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/public/fonts/cormorant-garamond-v21-latin/cormorant-garamond-v21-latin-600.woff2",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/public/fonts/cormorant-garamond-v21-latin/cormorant-garamond-v21-latin-700.woff2",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/public/fonts/cormorant-garamond-v21-latin/cormorant-garamond-v21-latin-700italic.woff2",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/public/fonts/ibm-plex-mono-v20-latin/ibm-plex-mono-v20-latin-regular.woff2",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/public/fonts/ibm-plex-sans-v23-latin/ibm-plex-sans-v23-latin-500.woff2",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/public/fonts/ibm-plex-sans-v23-latin/ibm-plex-sans-v23-latin-700.woff2",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/public/fonts/ibm-plex-sans-v23-latin/ibm-plex-sans-v23-latin-regular.woff2",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/public/humans.txt",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/public/ios-privacy-sw.js",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/public/llms-full.txt",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/public/llms.txt",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/public/logo.png",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/public/logo.svg",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/public/manifest.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/public/security.txt",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/public/sezzle-color.svg",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/public/sezzle-white.svg",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/public/sheerid-loader.js",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/public/social-image.jpg",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/scripts/cleanup-static-sitemaps.js",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/scripts/guard-graphql-customer.sh",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/scripts/guard-no-graphql-tag.sh",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/scripts/purge-cloudflare-cache.js",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/scripts/tsconfig.scripts.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/scripts/update-trustpilot.js",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/Filters.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/OrderProcessingModal.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/account/AccountNav.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/account/AddressCard.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/account/OrderCard.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/account/Tab.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/account/TabsContainer.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/address-form/AddressCountrySelect.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/address-form/AddressForm.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/address-form/AddressTextInput.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/address-form/address-form-utils.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/address-form/address-guest-storage.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/alert/Alert.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/alert/StockError.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/auth/AuthError.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/auth/LoginModal.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/auth/signup-flow.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/auto-shipping-selector/AutoShippingSelector.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/billing-address-form/BillingAddressForm.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/billing-address-form/billing-validation.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/breadcrumbs/Breadcrumbs.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/buttons/Button.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/buttons/HighlightedButton.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/cart-contents/CartContents.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/cart-totals/CartPrice.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/cart-totals/CartTotals.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/cart/Cart.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/cart/ConditionalCart.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/cart/StockWarning.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/cart/cart-shipping.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/checkout/CheckoutAddresses.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/checkout/CheckoutAddressesView.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/checkout/CheckoutCta.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/checkout/CheckoutEmptyCart.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/checkout/CheckoutOrderSummary.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/checkout/CheckoutPageView.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/checkout/CheckoutPaymentPanel.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/checkout/OrderProcessingModal.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/checkout/StripePaymentElement.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/checkout/ValidationIcon.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/checkout/checkout-address-submit.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/customer-info-form/CustomerInfoForm.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/error-boundary/CheckoutErrorBoundary.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/error-boundary/ErrorBoundary.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/error-message/ErrorMessage.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/facet-filter-controls/Filters.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/filters-button/FiltersButton.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/footer/footer.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/free-shipping-progress/FreeShippingProgress.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/head/head.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/header/header-styles.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/header/header.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/home/HomeHero.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/home/HomeSocialSections.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/home/HomeTeeSection.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/home/homepage-styles.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/icons/CheckCircleIcon.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/icons/CheckIcon.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/icons/ChevronDownIcon.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/icons/CloseIcon.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/icons/CreditCardIcon.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/icons/EyeIcon.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/icons/EyeSlashIcon.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/icons/FilterIcon.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/icons/HashtagIcon.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/icons/HeartIcon.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/icons/HomeIcon.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/icons/LockClosedIcon.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/icons/LogoutIcon.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/icons/MapPinIcon.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/icons/MenuIcon.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/icons/MinusIcon.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/icons/PencilIcon.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/icons/PencilSquareIcon.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/icons/PlusIcon.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/icons/ShieldCheckIcon.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/icons/ShoppingBagIcon.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/icons/SlashIcon.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/icons/StarIcon.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/icons/TrashIcon.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/icons/UserCircleIcon.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/icons/UserIcon.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/icons/XCircleIcon.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/icons/XMarkIcon.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/loading-spinner/loading-spinner.css",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/loading-spinner/loading-spinner.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/menu/Menu.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/modal/Modal.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/order-tracking/OrderDetails.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/order-tracking/OrderTracking.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/order-tracking/index.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/order-tracking/order-details-utils.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/payment/AcceptedCards.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/payment/LazyPayment.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/payment/NMI.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/payment/Payment.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/payment/Sezzle.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/payment/nmi-field-helpers.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/product/ImageModal.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/products/Price.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/products/ProductCard.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/search-bar/SearchBar.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/shipping-method-selector/ShippingMethodSelector.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/shipping/Shipping.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/stock-level-label/StockLevelLabel.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/success/Success.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/ui/LazyImage.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/ui/ProductSkeleton.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/ui/QuantityDropdown.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/ui/Skeleton.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/ui/index.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/verification/SheerIdModal.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/verification/SheerIdService.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/verification/VerificationButton.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/verification/VerificationModal.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/components/verification/types.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/config/route-cache-policy.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/constants.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/contexts/CartContext.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/contexts/CheckoutAddressContext.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/contexts/CheckoutValidationContext.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/contexts/LoginModalContext.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/data/countries.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/data/payment-methods.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/data/shipping-methods.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/data/trustpilot.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/entry.dev.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/entry.express.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/entry.preview.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/entry.ssr.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/env.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/generated/graphql-shop-typed.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/generated/graphql-shop.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/generated/schema-shop.graphql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/global.css",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/hooks/useCheckout.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/media/2.png",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/media/hero.jpg",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/media/homelast.png",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/media/logo.svg",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/media/sec2.jpg",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/media/slider 3.jpg",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/media/slider2.png",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/media/visa.png",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/providers/shop/account/account.graphql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/providers/shop/account/account.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/providers/shop/account/check-email.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/providers/shop/affiliate/affiliate.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/providers/shop/blog/blog.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/providers/shop/checkout/checkout.graphql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/providers/shop/checkout/checkout.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/providers/shop/checkout/eligiblePaymentMethods.graphql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/providers/shop/checkout/transitionOrderToState.graphql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/providers/shop/collections/collections.graphql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/providers/shop/collections/collections.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/providers/shop/contact/contact.graphql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/providers/shop/contact/contact.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/providers/shop/customer/customer.graphql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/providers/shop/customer/customer.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/providers/shop/orders/order.graphql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/providers/shop/orders/order.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/providers/shop/products/product.graphql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/providers/shop/products/products.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/root.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/[...catchall]/index.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/about/index.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/account/address-book/[id]/index.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/account/address-book/index.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/account/index.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/account/layout.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/account/orders/OrdersSkeleton.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/account/orders/[code]/index.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/account/orders/index.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/account/orders/order-display.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/account/orders/seo.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/account/password/index.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/affiliate/index.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/affiliate/layout.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/api/validate-cart/index.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/blog/[slug]/index.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/blog/index.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/cache-admin/purge/index.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/cache-admin/warm/index.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/cache/index.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/checkout/checkout-payment-recovery.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/checkout/checkout-styles.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/checkout/confirmation/[code]/confirmation-data.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/checkout/confirmation/[code]/index.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/checkout/index.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/checkout/payment/index.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/contact/index.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/forgot-password/index.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/index.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/indexnow/index.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/layout.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/newsletter/confirm/[subscriber]/index.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/newsletter/unsubscribe/[subscriber]/index.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/password-reset/index.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/press/index.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/privacy/index.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/products/[...slug]/ProductContent.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/products/[...slug]/ProductImageModal.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/products/[...slug]/ProductMobileBar.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/products/[...slug]/ProductPageView.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/products/[...slug]/ProductTrustBar.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/products/[...slug]/index.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/products/[...slug]/product-options.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/products/[...slug]/product-styles.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/returns/index.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/robots.txt/index.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/search/index.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/service-worker.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/shop/index.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/shop/seo.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/sign-in/SignInError.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/sign-in/index.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/sign-in/seo.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/sitemap-blog.xml/index.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/sitemap-collections.xml/index.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/sitemap-main.xml/index.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/sitemap-products.xml/index.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/sitemap.xml/index.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/terms/index.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/track-order/index.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/verify-email-address-change/index.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/routes/verify/index.tsx",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/services/CountryService.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/services/ListmonkService.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/services/LocalAddressService.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/services/LocalCartService.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/services/PaymentService.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/services/ProductCacheService.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/services/ServerCartService.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/services/ShippingService.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/services/local-address-sync.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/services/local-address-types.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/services/local-cart-conversion.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/services/local-cart-stock.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/services/local-cart-types.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/services/seo-api.service.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/services/seo-schemas.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/services/track-order.graphql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/services/track-order.service.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/types.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/types/lottie.d.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/types/order.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/types/seo.types.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/utils/addressStorage.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/utils/api.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/utils/cache-admin-auth.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/utils/card-validation.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/utils/checkout-section-validation.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/utils/customer-validators.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/utils/effective-price.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/utils/geolocation.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/utils/i18n.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/utils/image-cache.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/utils/index.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/utils/optimized-touch-handling.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/utils/postal-lookup.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/utils/route-helpers.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/utils/sanitize.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/utils/schema-injection.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/utils/sellright-adapters.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/utils/sellright.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/utils/seo.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/utils/validation.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/src/vite-env.d.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/tailwind.config.mjs",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/tsconfig.json",
+      "isDoc": false
+    },
+    {
+      "path": "packages/storefront/vite.config.ts",
+      "isDoc": false
+    },
+    {
+      "path": "pnpm-lock.yaml",
+      "isDoc": false
+    },
+    {
+      "path": "pnpm-workspace.yaml",
+      "isDoc": false
+    },
+    {
+      "path": "rank.md",
+      "isDoc": true
+    },
+    {
+      "path": "right-release.config.mjs",
+      "isDoc": false
+    },
+    {
+      "path": "tsconfig.base.json",
+      "isDoc": false
+    },
+    {
+      "path": "tsconfig.json",
+      "isDoc": false
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+# Blueprint graph — committed generated artifacts (travel for tool-less agents).
+.agent/graph/graph.json -diff merge=ours linguist-generated=true eol=lf
+.agent/graph/manifest.json -diff merge=ours linguist-generated=true eol=lf
+.agent/map.json -diff merge=ours linguist-generated=true eol=lf
+.agent/claims.json -diff merge=ours linguist-generated=true eol=lf
+.agent/stale.json -diff merge=ours linguist-generated=true eol=lf
+.agent/index.json -diff merge=ours linguist-generated=true eol=lf
+.agent/queue.json -diff merge=ours linguist-generated=true eol=lf
+.agent/flows.json -diff merge=ours linguist-generated=true eol=lf
