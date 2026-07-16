@@ -61,6 +61,9 @@ import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
 import { createAdminSession } from '../auth/admin-session.js';
 import { adminOrders } from './admin-orders.js';
+// The order-detail route (GET /v1/admin/orders/{code}) lives in the `admin`
+// router — mounted here so the line-id contract can be asserted end to end.
+import { admin as adminRoutes } from './admin.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
 if (!/_test(\b|$|\?)/.test(DB)) {
@@ -76,6 +79,7 @@ const VARIANT = 'dddddddd-dddd-dddd-dddd-00000000000b';
 
 const app = new OpenAPIHono();
 app.route('/', adminOrders);
+app.route('/', adminRoutes);
 
 async function wipe() {
   await pool.query('TRUNCATE store CASCADE');
@@ -172,6 +176,30 @@ beforeEach(async () => {
   token = await seedStoreAndAdmin();
 });
 afterAll(async () => { await wipe(); });
+
+describe('GET /v1/admin/orders/{code} — line ids feed per-line refunds', () => {
+  it('returns each order line id, and that id is accepted as refund lines[].orderLineId', async () => {
+    const { orderId, lineId } = await seedPaidOrder('SR-LINEID-1', 2000);
+
+    const res = await app.request('/v1/admin/orders/SR-LINEID-1', {
+      headers: { authorization: `Bearer ${token}`, 'x-store-slug': SLUG },
+    });
+    expect(res.status).toBe(200);
+    const detail = (await res.json()) as { lines: Array<{ id: string; quantity: number }> };
+    // The contract that makes per-line refunds constructible by any consumer:
+    // detail.lines[].id IS the order_line id the refund endpoint keys on.
+    expect(detail.lines[0]!.id).toBe(lineId);
+
+    const refund = await refundOrder('SR-LINEID-1', {
+      lines: [{ orderLineId: detail.lines[0]!.id, quantity: 1 }],
+      restock: true,
+    });
+    expect(refund.status).toBe(200);
+    // Amount derived from the line (1 × 2000), not passed in by the caller.
+    expect(refund.body).toMatchObject({ refunded: 2000, state: 'Refunded' });
+    expect(await refundRowCount(orderId)).toBe(1);
+  });
+});
 
 describe('POST /v1/admin/orders/{code}/refund — idempotency key', () => {
   it('passes a deterministic idempotencyKey keyed on order id + amount', async () => {

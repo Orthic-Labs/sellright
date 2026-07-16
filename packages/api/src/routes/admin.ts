@@ -155,7 +155,10 @@ admin.openapi(
         placedAt: o.placedAt ? o.placedAt.toISOString() : null, createdAt: o.createdAt.toISOString(),
         shippingAddress: o.shippingAddress ?? null, billingAddress: o.billingAddress ?? null,
         customer,
-        lines: lines.map((l) => ({ sku: l.variantSku, name: l.variantName, quantity: l.quantity, unitPrice: l.unitPrice, lineTotal: l.lineTotal, fulfilledQty: l.fulfilledQty, refundedQty: l.refundedQty })),
+        // `id` is the order_line id the refund/return endpoints key their
+        // `lines[].orderLineId` on — without it no consumer of this response can
+        // build a per-line refund.
+        lines: lines.map((l) => ({ id: l.id, sku: l.variantSku, name: l.variantName, quantity: l.quantity, unitPrice: l.unitPrice, lineTotal: l.lineTotal, fulfilledQty: l.fulfilledQty, refundedQty: l.refundedQty })),
         payments: payments.map((p) => ({ method: p.method, amount: p.amount, state: p.state, providerRef: p.providerRef, createdAt: p.createdAt.toISOString() })),
         fulfillments: fulfillments.map((f) => ({ id: f.id, state: f.state, trackingCode: f.trackingCode, carrier: f.carrier, createdAt: f.createdAt.toISOString() })),
         events: events.map((e) => ({ action: e.action, fromState: e.fromState, toState: e.toState, actor: e.actor, at: e.at.toISOString() })),
