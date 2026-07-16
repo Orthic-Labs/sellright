@@ -100,7 +100,7 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
         if (!order || order.state !== 'PendingPayment') return;
         const result = verifyIntent(pi, { orderCode: code, amount: order.grandTotal, currency: order.currency });
         if (result.state === 'Settled') {
-          await applyPaymentResult(tx, { storeId, order, method: 'stripe', result });
+          await applyPaymentResult(tx, { storeId, order: { ...order, code }, method: 'stripe', result });
         }
         return;
       }

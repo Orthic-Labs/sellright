@@ -274,6 +274,13 @@
       "when": 1782000600000,
       "tag": "0038_email_outbox",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1782000700000,
+      "tag": "0039_push_notifications",
+      "breakpoints": true
     }
   ]
 }

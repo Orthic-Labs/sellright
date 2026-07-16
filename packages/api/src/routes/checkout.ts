@@ -17,6 +17,7 @@ import { isMethodEligible, shippingRate, ShippingUnavailableError } from '../shi
 import { pickEmailAppKey } from '../email/dispatch.js';
 import { orderConfirmation as orderConfirmationTpl } from '../email/templates.js';
 import { enqueueEmail } from '../email/outbox.js';
+import { enqueuePush, buildOrderPushPayload, buildOrderLiveActivityPayload } from '../push/outbox.js';
 import { env } from '../env.js';
 import { clientIp, loginRetryAfter } from '../auth/rate-limit.js';
 import { issueLicensesForPaidOrder } from '../licensing/issue.js';
@@ -335,6 +336,35 @@ checkout.openapi(
       // Webhook events (transactional outbox — enqueued in the same txn).
       await emitEvent(tx, st.id, 'order.created', { code, grandTotal: totals.grandTotal, currency: st.currency });
       if (paid) await emitEvent(tx, st.id, 'order.paid', { code, grandTotal: totals.grandTotal, currency: st.currency });
+
+      // Mobile push, same txn / same reasoning as the email outbox below: a
+      // rolled-back order must not ding anyone's phone. Only the money-real
+      // event pushes — 'order.created' fires for unpaid/pending orders too, and
+      // an alert per abandoned checkout attempt would train operators to ignore
+      // the app. No-ops when no device is registered for the store.
+      if (paid) {
+        await enqueuePush(tx, st.id, {
+          topic: 'order.paid',
+          payload: buildOrderPushPayload({ topic: 'order.paid', code, grandTotal: totals.grandTotal, currency: st.currency }),
+        });
+        // Live Activity (Dynamic Island) for the same order — a separate token
+        // family, so a device registered for both gets one alert AND one
+        // activity. No-ops for devices below iOS 17.2 (they never register a
+        // push-to-start token).
+        await enqueuePush(tx, st.id, {
+          topic: 'order.paid',
+          kind: 'live_activity',
+          payload: buildOrderLiveActivityPayload({
+            code,
+            grandTotal: totals.grandTotal,
+            currency: st.currency,
+            // `priced` is the server-repriced line set the order was actually
+            // built from — body lines are client-supplied and may not exist on
+            // the cart-token path at all.
+            itemCount: priced.reduce((n, p) => n + p.qty, 0),
+          }),
+        });
+      }
 
       // REL-4: order-confirmation email goes through the email outbox. Enqueue
       // inside this txn so a rollback drops the email too — never send for an

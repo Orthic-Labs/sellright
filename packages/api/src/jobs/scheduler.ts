@@ -3,6 +3,7 @@
  * housekeeping passes). DISABLED BY DEFAULT and fail-safe:
  *
  *   JOBS_ENABLED=1                  master switch (default off → no-op)
+ *   JOBS_PUSH_ENABLED=1             deliver queued APNs pushes (default off)
  *   JOBS_AUTO_DELIVER_APPLY=1       actually transition (default: dry-run log)
  *   JOBS_AUTO_DELIVER_DAYS=10       Shipped→Delivered age threshold
  *   JOBS_RELEASE_STALE_APPLY=1      actually cancel + release (default: dry-run)
@@ -24,6 +25,7 @@ import { reapStuckWebhooks } from './webhook-reaper.js';
 import { abandonStaleCarts, cleanupExpiredCarts } from './cart-maintenance.js';
 import { deliverWebhooks } from '../webhooks/emit.js';
 import { deliverEmails } from '../email/outbox.js';
+import { deliverPushes } from '../push/outbox.js';
 import { withLeaderLock, type LeaderLockedJob } from './leader-lock.js';
 import { log, err as logErr } from '../lib/logger.js';
 
@@ -94,6 +96,13 @@ export function startJobScheduler(): void {
   // order-confirmation path. Mirrors the webhook claim pattern (FOR UPDATE
   // SKIP LOCKED, exponential backoff, dead-letter after MAX_ATTEMPTS).
   every(60_000, 'emails', 'emails', () => deliverEmails({ log: jobLog }));
+  // Mobile push (0039): same cadence + claim pattern as emails. Gated on its own
+  // switch so a deployment can queue pushes before the APNs key exists — the
+  // outbox fills either way and drains when this flips on. deliverPushes also
+  // self-no-ops when APNS_* is unconfigured, so this is belt-and-braces.
+  if (env.JOBS_PUSH_ENABLED === '1') {
+    every(60_000, 'push', 'push', () => deliverPushes({}));
+  }
   // WP1.7 safety net: reset webhook_delivery rows stuck in 'processing' (a
   // crashed scheduler) back to 'pending' so the next pass re-claims them.
   // 10-min grace = a crashed worker is recovered within 15 min.

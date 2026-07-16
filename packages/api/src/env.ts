@@ -95,8 +95,27 @@ const EnvSchema = z.object({
   CATALOG_DIR: z.string().optional(),
   // Manifest generator / multi-store: which store to generate for.
   STORE_SLUG: z.string().optional(),
+  // APNs (mobile push for the admin app). ALL optional — with any of them unset
+  // the push sender no-ops with a log line, exactly like the SMTP mailer. A
+  // deployment without a mobile app never has to think about these.
+  //   APNS_KEY_P8 — contents of the .p8 token key from the Apple developer
+  //   account (BEGIN PRIVATE KEY block). Accepts literal newlines or \n-escaped.
+  //   NEVER commit it; it signs pushes for every app under the team.
+  APNS_KEY_P8: optionalEnvString,
+  APNS_KEY_ID: optionalEnvString,
+  APNS_TEAM_ID: optionalEnvString,
+  APNS_BUNDLE_ID: optionalEnvString, // e.g. app.sellright.ios.admin
+  // Which APNs host to use for tokens registered without an explicit
+  // environment. TestFlight/App Store builds are 'production'; a Debug build
+  // signed with a development profile mints SANDBOX tokens — pushing those to
+  // the production host silently fails with BadDeviceToken. The app reports its
+  // own environment at registration; this is only the fallback.
+  APNS_DEFAULT_ENVIRONMENT: z.enum(['production', 'sandbox']).default('production'),
   // Job scheduler: master on/off switch (default off — safe for dev/test).
   JOBS_ENABLED: z.enum(['0', '1']).optional(),
+  // push sender: deliver queued pushes (default off — the outbox still fills,
+  // so enabling it later doesn't lose the alerts already queued).
+  JOBS_PUSH_ENABLED: z.enum(['0', '1']).optional(),
   // auto-deliver job: actually transition Shipped→Delivered (default: dry-run log only).
   JOBS_AUTO_DELIVER_APPLY: z.enum(['0', '1']).optional(),
   // auto-deliver job: age threshold in days before Shipped becomes Delivered.

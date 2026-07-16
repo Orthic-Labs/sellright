@@ -12,6 +12,7 @@ import {
   primaryKey,
 } from 'drizzle-orm/pg-core';
 import {
+  adminUser,
   customer,
   fulfillmentState,
   fulfillmentType,
@@ -305,6 +306,43 @@ export const emailOutbox = pgTable('email_outbox', {
   kind: text().notNull(), // e.g. 'order_confirmation'
   recipient: text().notNull(),
   payload: jsonb().notNull(), // serialized sendEmail input (to, subject, html, text, from?)
+  status: text().notNull().default('pending'), // pending | processing | sent | dead
+  attempts: integer().notNull().default(0),
+  lastError: text(),
+  nextAttemptAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  sentAt: timestamp({ withTimezone: true }),
+  createdAt: ts(),
+  updatedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+});
+
+// APNs device tokens for the admin iOS app (0039). One row per physical device;
+// `token` is unique, so re-registering rebinds the device to whoever is signed
+// in now rather than leaving the previous operator subscribed. Deleted on
+// logout, on APNs 410 Unregistered, and by cascade when the admin is removed.
+export const adminDeviceToken = pgTable('admin_device_token', {
+  id: uuid().primaryKey().defaultRandom(),
+  storeId: uuid().notNull().references(() => store.id, { onDelete: 'cascade' }),
+  adminUserId: uuid().notNull().references(() => adminUser.id, { onDelete: 'cascade' }),
+  token: text().notNull(),
+  // 'apns' (alert pushes) | 'live_activity' (push-to-start token, iOS 17.2+).
+  // Different APNs topic + push-type — see 0039.
+  kind: text().notNull().default('apns'),
+  environment: text().notNull().default('production'), // production | sandbox (APNs host)
+  topics: text().array().notNull().default(['order.paid']),
+  lastSeenAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  createdAt: ts(),
+});
+
+// Transactional push outbox (0039) — same lifecycle as emailOutbox above.
+// Enqueued in the txn that produced the event; the scheduler delivers with
+// backoff and dead-letters after MAX_ATTEMPTS. No APNs call at the call site.
+export const pushOutbox = pgTable('push_outbox', {
+  id: uuid().primaryKey().defaultRandom(),
+  storeId: uuid().notNull().references(() => store.id),
+  topic: text().notNull(), // 'order.paid' | 'order.created' | ...
+  deviceToken: text().notNull(),
+  environment: text().notNull().default('production'),
+  payload: jsonb().notNull(), // serialized APNs payload (aps + custom keys)
   status: text().notNull().default('pending'), // pending | processing | sent | dead
   attempts: integer().notNull().default(0),
   lastError: text(),

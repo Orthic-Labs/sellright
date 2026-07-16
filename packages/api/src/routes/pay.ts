@@ -82,7 +82,7 @@ pay.openapi(
 
       const result = await provider.createPayment({ orderCode: code, amount: order.grandTotal, currency: order.currency, token, stripeMode: stripeModeFromConfig(st.config) });
       // Shared with the Stripe webhook reconcile path (payments/settle.ts).
-      const applied = await applyPaymentResult(tx, { storeId: st.id, order, method: provider.method, result });
+      const applied = await applyPaymentResult(tx, { storeId: st.id, order: { ...order, code }, method: provider.method, result });
       if (applied.orderState === 'Paid') return { kind: 'ok', state: 'Paid', payment: 'Settled' };
       // Declined / Failed: release the deterministic claim so the customer can
       // retry. The order STAYS in PendingPayment — auto-cancelling on a

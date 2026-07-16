@@ -37,6 +37,7 @@ const JOB_KEYS = {
   webhooks: NAMESPACE | 4n,
   'webhook-reaper': NAMESPACE | 5n,
   emails: NAMESPACE | 6n,
+  push: NAMESPACE | 7n,
 } as const satisfies Record<string, bigint>;
 
 export type LeaderLockedJob = keyof typeof JOB_KEYS;

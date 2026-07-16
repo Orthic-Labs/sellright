@@ -14,6 +14,7 @@ import * as s from '../db/schema.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
 import type { PaymentResult } from './provider.js';
 import { issueLicensesForPaidOrder } from '../licensing/issue.js';
+import { enqueuePush, buildOrderPushPayload } from '../push/outbox.js';
 
 export interface SettleOrderRef {
   id: string;
@@ -21,6 +22,9 @@ export interface SettleOrderRef {
   grandTotal: number;
   currency: string;
   customerId?: string | null;
+  /** Human order code. Optional: only the push payload needs it, and a caller
+   *  that doesn't have it simply doesn't get the mobile alert (never a throw). */
+  code?: string;
 }
 
 export async function applyPaymentResult(
@@ -69,6 +73,17 @@ export async function applyPaymentResult(
     const paidAt = new Date();
     await tx.update(s.order).set({ state: 'Paid', placedAt: paidAt }).where(eq(s.order.id, order.id));
     await issueLicensesForPaidOrder(tx, { storeId, orderId: order.id, customerId: order.customerId ?? null, paidAt });
+    // Mobile push for the ASYNC paid paths (Stripe webhook, /pay, subscription
+    // renewal). The synchronous checkout enqueues its own — it never calls this
+    // function, so there's no double-ding. Guarded by the processed-event claim
+    // above, so a webhook/pay race pushes exactly once. Same txn: a rollback
+    // takes the alert with it.
+    if (order.code) {
+      await enqueuePush(tx, storeId, {
+        topic: 'order.paid',
+        payload: buildOrderPushPayload({ topic: 'order.paid', code: order.code, grandTotal: order.grandTotal, currency: order.currency }),
+      });
+    }
     return { orderState: 'Paid', paymentState: 'Settled' };
   }
   return { orderState: order.state as OrderState, paymentState: result.state };

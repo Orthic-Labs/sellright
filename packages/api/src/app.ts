@@ -20,6 +20,7 @@ import { adminReports } from './routes/admin-reports.js';
 import { adminAffiliate } from './routes/admin-affiliate.js';
 import { adminContent } from './routes/admin-content.js';
 import { adminAssets } from './routes/admin-assets.js';
+import { adminPush } from './routes/admin-push.js';
 import { shopExtra } from './routes/shop-extra.js';
 import { shopConfig } from './routes/shop-config.js';
 import { customerTokens } from './routes/customer-tokens.js';
@@ -244,6 +245,7 @@ export function createApp(): OpenAPIHono {
   app.route('/', adminAffiliate); // affiliate program + public self-serve dashboard
   app.route('/', adminContent); // blog CMS admin
   app.route('/', adminAssets); // WP8: asset upload + management
+  app.route('/', adminPush); // mobile push: device registration (0039)
   app.route('/', shopExtra); // shop: guest tracking, public blog, shipping eligibility, newsletter
 
   // Published API contract — the product surface (versioned under /v1).
