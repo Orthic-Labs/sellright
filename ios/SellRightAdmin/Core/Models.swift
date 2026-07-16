@@ -196,6 +196,21 @@ struct CancelResponse: Decodable {
     let state: String
 }
 
+// MARK: - Push
+
+struct DeviceRegistration: Encodable {
+    let token: String
+    /// "apns" (alert token) or "live_activity" (push-to-start token).
+    let kind: String
+    let environment: String
+    var topics: [String]?
+}
+
+struct DeviceRegistrationResponse: Decodable {
+    let ok: Bool
+    let topics: [String]
+}
+
 // MARK: - Customers
 
 struct CustomerSummary: Decodable, Identifiable {

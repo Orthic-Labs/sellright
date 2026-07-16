@@ -11,6 +11,7 @@ struct RefundSheet: View {
         case amount = "Amount"
     }
 
+    @Environment(\.palette) private var palette
     @Environment(AppSession.self) private var session
     @Environment(\.dismiss) private var dismiss
     let code: String
@@ -76,7 +77,7 @@ struct RefundSheet: View {
                 }
 
                 if let errorMessage {
-                    Text(errorMessage).foregroundStyle(.red)
+                    Text(errorMessage).foregroundStyle(palette.danger)
                 }
             }
             .navigationTitle("Refund \(code)")

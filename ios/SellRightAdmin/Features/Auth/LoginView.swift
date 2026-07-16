@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct LoginView: View {
+    @Environment(\.palette) private var palette
     @Environment(AppSession.self) private var session
 
     @State private var email = ""
@@ -33,7 +34,7 @@ struct LoginView: View {
                 }
                 if let errorMessage {
                     Section {
-                        Text(errorMessage).foregroundStyle(.red)
+                        Text(errorMessage).foregroundStyle(palette.danger)
                     }
                 }
                 Section {

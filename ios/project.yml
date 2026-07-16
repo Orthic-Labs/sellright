@@ -2,7 +2,11 @@ name: SellRightAdmin
 options:
   bundleIdPrefix: app.sellright
   deploymentTarget:
-    iOS: "17.0"
+    # 17.2 (not 17.0) is the floor for Live Activity push-to-start: starting an
+    # activity from a server push, rather than only from the foreground app,
+    # arrived in 17.2. Without it a new order could never light up the Dynamic
+    # Island unless the operator already had the app open — which defeats it.
+    iOS: "17.2"
 settings:
   base:
     ALWAYS_SEARCH_USER_PATHS: "NO"
@@ -19,10 +23,12 @@ targets:
     platform: iOS
     sources:
       - path: SellRightAdmin
+      - path: Shared
     dependencies:
       - package: RightKitSwift
         products:
           - RightKitDiagnostics
+      - target: SellRightWidgets
     info:
       path: SellRightAdmin/Info.plist
       properties:
@@ -50,11 +56,36 @@ targets:
         com.apple.developer.associated-domains:
           - webcredentials:api.spoares.com?mode=developer
           - webcredentials:admin.spoares.com?mode=developer
+        # 'development' routes to the APNs SANDBOX host, which is what a
+        # Debug/dev-signed build's token is valid for. TestFlight/App Store
+        # builds need this flipped to 'production' (see docs/IOS-PUSH-SETUP.md);
+        # the app reports its own environment at registration so the server picks
+        # the matching APNs host either way.
+        aps-environment: development
     settings:
       base:
         PRODUCT_NAME: SellRightAdmin
         PRODUCT_BUNDLE_IDENTIFIER: app.sellright.ios.admin
         TARGETED_DEVICE_FAMILY: "1,2"
+  SellRightWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: SellRightWidgets
+      - path: Shared
+    info:
+      path: SellRightWidgets/Info.plist
+      properties:
+        CFBundleDisplayName: SellRight
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_NAME: SellRightWidgets
+        PRODUCT_BUNDLE_IDENTIFIER: app.sellright.ios.admin.widgets
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SKIP_INSTALL: "YES"
+
   SellRightAdminTests:
     type: bundle.unit-test
     platform: iOS

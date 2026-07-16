@@ -63,6 +63,10 @@ struct APIClient: Sendable {
         try await send(path: path, method: "PATCH", query: [], body: body)
     }
 
+    func delete<Out: Decodable>(_ path: String) async throws -> Out {
+        try await send(path: path, method: "DELETE", query: [], body: nil as Never?)
+    }
+
     private func send<In: Encodable, Out: Decodable>(
         path: String, method: String, query: [URLQueryItem], body: In?
     ) async throws -> Out {

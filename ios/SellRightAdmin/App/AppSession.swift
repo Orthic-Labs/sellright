@@ -20,6 +20,10 @@ final class AppSession {
         didSet { UserDefaults.standard.set(activeStore?.slug, forKey: "storeSlug") }
     }
 
+    /// Order code from a tapped notification, awaiting navigation. RootView
+    /// consumes it; lives here because this is the @Observable the views watch.
+    var pendingOrderCode: String?
+
     var serverURLString: String =
         UserDefaults.standard.string(forKey: "serverURL") ?? "http://localhost:3300"
 
@@ -72,14 +76,44 @@ final class AppSession {
 
     func logout() async {
         let client = api
+        let device = PushManager.shared.deviceToken
         token = nil
         Keychain.delete("adminToken")
         admin = nil
         stores = []
         activeStore = nil
         phase = .loggedOut
-        // Best-effort server-side session revoke; local state is already gone.
-        Task { let _: EmptyResponse? = try? await client.post("/v1/admin/logout") }
+        // Unregister the device BEFORE revoking the session — both calls need the
+        // token that's about to die, and a signed-out phone must stop receiving
+        // this store's orders. Best-effort: local state is already cleared, and
+        // the server also prunes on the next APNs 410.
+        PushManager.shared.stopObservingPushToStart()
+        Task {
+            // Don't leave a signed-out phone with an order pinned to its lock screen.
+            await PushManager.shared.endAllActivities()
+            if let device {
+                let _: DeviceRegistrationResponse? = try? await client.delete("/v1/admin/devices/\(device)")
+            }
+            let _: EmptyResponse? = try? await client.post("/v1/admin/logout")
+        }
+    }
+
+    /// Register this device for push against the active store. Called after login
+    /// and on store switch; also the callback APNs-token arrival routes into, so
+    /// whichever of (token, login) completes last triggers the registration.
+    func registerForPush(token deviceToken: String, environment: String, kind: String = "apns") async {
+        guard phase == .loggedIn, activeStore != nil else { return }
+        do {
+            let _: DeviceRegistrationResponse = try await api.post(
+                "/v1/admin/devices",
+                body: DeviceRegistration(token: deviceToken, kind: kind, environment: environment, topics: nil)
+            )
+            Diagnostics.record("push_registered", ["store": activeStore?.slug ?? "", "kind": kind])
+        } catch {
+            // Never block the operator on push wiring — worst case they get no
+            // alerts and the next launch retries.
+            Diagnostics.record("push_register_error", ["message": error.localizedDescription])
+        }
     }
 
     private func apply(admin: AdminIdentity, stores: [StoreAccess]) {
@@ -88,5 +122,33 @@ final class AppSession {
         let lastSlug = UserDefaults.standard.string(forKey: "storeSlug")
         self.activeStore = stores.first(where: { $0.slug == lastSlug }) ?? stores.first
         phase = .loggedIn
+
+        // Push setup runs after auth, never before: registration needs a session,
+        // and prompting for notifications on the login screen (before the
+        // operator has seen anything work) is how you get a permanent "Don't
+        // Allow". The APNs token can arrive before or after this, so both paths
+        // funnel through registerForPush.
+        PushManager.shared.registrar = { [weak self] token, environment in
+            await self?.registerForPush(token: token, environment: environment)
+        }
+        PushManager.shared.onOrderOpened = { [weak self] code in
+            self?.pendingOrderCode = code
+        }
+        // Live Activity push-to-start: a separate token family from the alert
+        // token, so it registers separately (kind: live_activity).
+        PushManager.shared.observePushToStartToken { [weak self] token in
+            await self?.registerForPush(token: token, environment: PushManager.shared.apnsEnvironment, kind: "live_activity")
+        }
+        Task {
+            // Drain a notification tapped from a cold launch, now that there's
+            // somewhere to put it.
+            PushManager.shared.flushBufferedOrderCode()
+            await PushManager.shared.requestAuthorization()
+            // Token already in hand from an earlier launch: register it for THIS
+            // store, since the operator may have switched stores since.
+            if let existing = PushManager.shared.deviceToken {
+                await registerForPush(token: existing, environment: PushManager.shared.apnsEnvironment)
+            }
+        }
     }
 }

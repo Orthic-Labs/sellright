@@ -47,6 +47,30 @@ makes xcodebuild use system git instead of Xcode's own SCM store.
   local networking is allowed by the Info.plist ATS exception; production
   servers must be https).
 
+## Push + Live Activity
+
+Order lands → banner + sound → the Dynamic Island tracks it Paid → Shipped →
+Delivered → tap to open the order. The server side is a transactional outbox
+(`packages/api/src/push/`) enqueued in the same txn as the paid transition, so a
+rolled-back order never dings anyone.
+
+**Requires an APNs key that only Adrian can mint** — see
+[docs/IOS-PUSH-SETUP.md](../docs/IOS-PUSH-SETUP.md). Without it everything runs;
+it just never dings (the outbox fills and drains once the key lands).
+
+Two token families register separately: `apns` (alert) and `live_activity`
+(push-to-start, iOS 17.2+). A Debug build's token is **sandbox**; a TestFlight
+build's is **production** — mixing them up is the classic silent failure, so the
+app reports its own environment at registration.
+
+## Themes
+
+Four themes (Vermillion default, Graphite, Porcelain, Carbon) × light/dark/system,
+switchable in Settings and persisted. Values are transcribed verbatim from
+`packages/admin/src/theme-tokens.css` so web and mobile can't drift; `ThemeTests`
+re-verifies WCAG AA contrast on all 8 palettes independently of the web checker.
+Don't hand-tune colors here — fix the web generator and re-transcribe.
+
 ## Status / next steps
 
 Wired: auth + session restore (Keychain), Password AutoFill (webcredentials
@@ -58,8 +82,7 @@ variant price/sale-price/enabled
 editing, on-hand stock for physical variants), customers (list, detail with
 lifetime stats/addresses/orders), multi-store switching.
 
-Not yet built: draft orders, returns approve/reject,
-marketing/promotions, reports, blog CMS, licenses/subscriptions admin, asset
-upload, push notifications for new orders, and the SellRight visual identity
-(placeholder theme until the brand locks; wordmark will be Tanker per Right
-Suite rules).
+Not yet built: draft orders, returns approve/reject, marketing/promotions,
+reports, blog CMS, licenses/subscriptions admin, asset upload, and the SellRight
+brand identity (the theme system is ported from the web admin, but the Right
+Suite wordmark/typography is still TBD — Tanker per suite rules once locked).

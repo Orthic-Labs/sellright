@@ -57,6 +57,7 @@ struct ProductDetailView: View {
 }
 
 private struct VariantRow: View {
+    @Environment(\.palette) private var palette
     let variant: VariantDetail
     let currency: String
 
@@ -81,7 +82,7 @@ private struct VariantRow: View {
                 }
                 Text(variant.fulfillmentType == "physical" ? "\(variant.available) available" : variant.fulfillmentType.replacingOccurrences(of: "_", with: " "))
                     .font(.caption)
-                    .foregroundStyle(variant.enabled ? Color.secondary : Color.red)
+                    .foregroundStyle(variant.enabled ? palette.textMuted : palette.danger)
             }
         }
         .opacity(variant.enabled ? 1 : 0.5)
@@ -90,6 +91,7 @@ private struct VariantRow: View {
 }
 
 struct VariantEditSheet: View {
+    @Environment(\.palette) private var palette
     @Environment(AppSession.self) private var session
     @Environment(\.dismiss) private var dismiss
     let variant: VariantDetail
@@ -140,7 +142,7 @@ struct VariantEditSheet: View {
                         : Text("Fulfillment: \(variant.fulfillmentType.replacingOccurrences(of: "_", with: " ")) — no stock tracking.")
                 }
                 if let errorMessage {
-                    Text(errorMessage).foregroundStyle(.red)
+                    Text(errorMessage).foregroundStyle(palette.danger)
                 }
             }
             .navigationTitle(variant.sku)

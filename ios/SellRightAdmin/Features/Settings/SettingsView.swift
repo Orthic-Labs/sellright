@@ -2,10 +2,22 @@ import SwiftUI
 
 struct SettingsView: View {
     @Environment(AppSession.self) private var session
+    @Environment(ThemeStore.self) private var theme
 
     var body: some View {
         @Bindable var session = session
+        @Bindable var theme = theme
         Form {
+            Section("Appearance") {
+                Picker("Theme", selection: $theme.name) {
+                    ForEach(ThemeName.allCases) { Text($0.label).tag($0) }
+                }
+                Picker("Mode", selection: $theme.mode) {
+                    ForEach(ThemeMode.allCases) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.segmented)
+            }
+
             if session.stores.count > 1 {
                 Section("Store") {
                     Picker("Active store", selection: $session.activeStore) {

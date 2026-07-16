@@ -59,34 +59,37 @@ struct DashboardView: View {
 }
 
 private struct KPICard: View {
+    @Environment(\.palette) private var palette
     let title: String
     let value: String
     var highlight = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(title).font(.caption).foregroundStyle(palette.textMuted)
             Text(value)
                 .font(.title3.weight(.semibold))
-                .foregroundStyle(highlight ? Theme.accent : .primary)
+                .foregroundStyle(highlight ? palette.accent : palette.text)
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
+        .background(palette.surface2, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(palette.border, lineWidth: 1))
     }
 }
 
 struct OrderRow: View {
+    @Environment(\.palette) private var palette
     let order: OrderSummary
 
     var body: some View {
         HStack {
             VStack(alignment: .leading, spacing: 3) {
-                Text(order.code).font(.subheadline.weight(.medium))
+                Text(order.code).font(.subheadline.weight(.medium)).foregroundStyle(palette.text)
                 if let email = order.email {
-                    Text(email).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Text(email).font(.caption).foregroundStyle(palette.textMuted).lineLimit(1)
                 }
             }
             Spacer()

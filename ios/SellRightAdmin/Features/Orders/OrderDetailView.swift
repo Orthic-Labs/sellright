@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct OrderDetailView: View {
+    @Environment(\.palette) private var palette
     @Environment(AppSession.self) private var session
     let code: String
 
@@ -26,7 +27,7 @@ struct OrderDetailView: View {
                     }
                     if order.isPreOrder {
                         Label("Pre-order", systemImage: "clock.badge.exclamationmark")
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(palette.warning)
                     }
                 }
 
@@ -193,6 +194,8 @@ struct OrderDetailView: View {
                 "/v1/admin/orders/\(code)/cancel", body: CancelRequest(reason: nil)
             )
             Diagnostics.record("order_cancelled")
+            // Cancelled is terminal — take it off the lock screen.
+            await OrderActivityController.update(orderCode: code, status: "Cancelled", trackingCode: nil)
             await load()
         } catch {
             actionError = error.localizedDescription
@@ -217,6 +220,7 @@ struct OrderDetailView: View {
 }
 
 struct FulfillSheet: View {
+    @Environment(\.palette) private var palette
     @Environment(AppSession.self) private var session
     @Environment(\.dismiss) private var dismiss
     let code: String
@@ -243,7 +247,7 @@ struct FulfillSheet: View {
                     TextField("Carrier", text: $carrier)
                 }
                 if let errorMessage {
-                    Text(errorMessage).foregroundStyle(.red)
+                    Text(errorMessage).foregroundStyle(palette.danger)
                 }
             }
             .navigationTitle("Fulfill \(code)")
@@ -275,6 +279,13 @@ struct FulfillSheet: View {
                 )
             )
             Diagnostics.record("order_fulfilled", ["state": state])
+            // Move this order's Live Activity forward (or end it on Delivered) so
+            // the Island reflects what the operator just did.
+            await OrderActivityController.update(
+                orderCode: code,
+                status: state,
+                trackingCode: trackingCode.isEmpty ? nil : trackingCode
+            )
             await onDone()
             dismiss()
         } catch {
