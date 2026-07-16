@@ -1,0 +1,76 @@
+name: SellRightAdmin
+options:
+  bundleIdPrefix: app.sellright
+  deploymentTarget:
+    iOS: "17.0"
+settings:
+  base:
+    ALWAYS_SEARCH_USER_PATHS: "NO"
+    SWIFT_VERSION: "5.0"
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: 6KLGD3LLKF
+packages:
+  RightKitSwift:
+    url: https://github.com/bogusyogi/rightkit-swift
+    from: 0.1.0
+targets:
+  SellRightAdmin:
+    type: application
+    platform: iOS
+    sources:
+      - path: SellRightAdmin
+    dependencies:
+      - package: RightKitSwift
+        products:
+          - RightKitDiagnostics
+    info:
+      path: SellRightAdmin/Info.plist
+      properties:
+        CFBundleDisplayName: SellRight
+        CFBundleShortVersionString: 0.1.0
+        CFBundleVersion: "0.1.0"
+        ITSAppUsesNonExemptEncryption: false
+        LSRequiresIPhoneOS: true
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        # Dev convenience only: allows http://localhost / LAN dev servers.
+        # Production builds talk to https and this exception never applies.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    entitlements:
+      path: SellRightAdmin/SellRightAdmin.entitlements
+      properties:
+        # Password AutoFill: iOS fetches /.well-known/apple-app-site-association
+        # from these domains to offer saved admin credentials on the login form.
+        # ?mode=developer applies to dev-signed builds on Developer Mode devices;
+        # release builds need the plain entries + Apple CDN visibility.
+        com.apple.developer.associated-domains:
+          - webcredentials:api.spoares.com?mode=developer
+          - webcredentials:admin.spoares.com?mode=developer
+    settings:
+      base:
+        PRODUCT_NAME: SellRightAdmin
+        PRODUCT_BUNDLE_IDENTIFIER: app.sellright.ios.admin
+        TARGETED_DEVICE_FAMILY: "1,2"
+  SellRightAdminTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: SellRightAdmin
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: "YES"
+schemes:
+  SellRightAdmin:
+    build:
+      targets:
+        SellRightAdmin: all
+        SellRightAdminTests: [test]
+    test:
+      targets:
+        - SellRightAdminTests

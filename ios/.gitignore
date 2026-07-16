@@ -1,0 +1,8 @@
+# XcodeGen output — regenerate with `xcodegen` from project.yml, which is the
+# single source of truth for the project, Info.plist keys, and entitlements.
+*.xcodeproj
+SellRightAdmin/Info.plist
+SellRightAdmin/SellRightAdmin.entitlements
+DerivedData/
+.build/
+xcuserdata/
