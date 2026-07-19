@@ -27,6 +27,10 @@ must update the matching changelog in the same push.
 
 ### Operations
 
+- Postgres operations now enable `pg_stat_statements`, log queries over one
+  second, and expose a repeatable top-query inspection loop before further
+  tuning. The update-heavy email and push outboxes use lower per-table
+  autovacuum thresholds to prevent queue bloat.
 - Postgres connections now carry a deployment-specific `application_name`.
   The operator runbook defines database-qualified statement, lock, and
   idle-in-transaction timeouts and their verification queries.
