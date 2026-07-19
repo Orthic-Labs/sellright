@@ -49,6 +49,45 @@ export const auditLog = pgTable('audit_log', {
   at: ts(),
 });
 
+// ── newsletter + waitlist subscribers (SUBSCRIBER-1, migration 0041) ────────
+// One table for both newsletter and waitlist signups, discriminated by
+// `kind` + `topic`. `topic` is NOT NULL DEFAULT '' so the (store_id, email,
+// kind, topic) UNIQUE works for the general newsletter (Postgres treats NULL
+// as distinct in unique constraints). Confirmation + unsubscribe use a
+// per-row `token` (gen_random_uuid()); never derived from the email.
+// `last_sent_at` is the mailbomb guard: at most one confirmation per address
+// per hour, checked inside the signup transaction.
+// `listmonk_synced_at` is the downstream marker — the listmonk-sync job
+// claims confirmed + unsynced rows and pushes them to Listmonk, the same
+// outbox-shaped pattern email_outbox (0038) and webhook_delivery (0031) use.
+export const subscriber = pgTable(
+  'subscriber',
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    storeId: uuid().notNull().references(() => store.id),
+    email: text().notNull(),
+    name: text(),
+    kind: text({ enum: ['newsletter', 'waitlist'] }).notNull(),
+    topic: text().notNull().default(''),
+    status: text({ enum: ['pending', 'confirmed', 'unsubscribed', 'bounced'] }).notNull().default('pending'),
+    token: uuid().notNull().defaultRandom(),
+    confirmedAt: timestamp({ withTimezone: true }),
+    unsubscribedAt: timestamp({ withTimezone: true }),
+    lastSentAt: timestamp({ withTimezone: true }),
+    source: text({ enum: ['storefront', 'checkout', 'import', 'api'] }),
+    meta: jsonb(),
+    listmonkSyncedAt: timestamp({ withTimezone: true }),
+    createdAt: ts(),
+    updatedAt: ts(),
+  },
+  (t) => [
+    // One row per (store, email, kind, topic). The migration marks `topic`
+    // NOT NULL DEFAULT '' so empty-string matches collapse correctly.
+    unique('subscriber_store_email_kind_topic_key').on(t.storeId, t.email, t.kind, t.topic),
+    unique('subscriber_token_key').on(t.token),
+  ],
+);
+
 // ── DD-parity: affiliate + blog ─────────────────────────────────────────────
 export const affiliate = pgTable('affiliate', {
   id: uuid().primaryKey().defaultRandom(),

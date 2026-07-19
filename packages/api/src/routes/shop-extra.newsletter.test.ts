@@ -8,6 +8,13 @@ import { newsletterRetryAfter, recordNewsletterAttempt } from './shop-extra.news
  * through the SSRF guard instead of a raw fetch(), and (b) is rate-limited
  * per IP. Both are exercised here without a database or a live network
  * endpoint — see shop-extra.ts for the wiring.
+ *
+ * SUBSCRIBER-1: the inline Listmonk fetch was deleted from the request path
+ * (persist + enqueueEmail in one transaction is now the contract — covered in
+ * shop-extra.subscriber.test.ts against a real DB). The SSRF + rate-limit
+ * tests below remain valid: the rate-limit bucket is still the first gate,
+ * and the safeOutboundFetch import is kept available for the per-IP throttle
+ * unit test even though the route no longer calls fetch() inline.
  */
 describe('newsletter-signup SSRF guard', () => {
   it('refuses a loopback/private Listmonk URL the same way admin-marketing does', async () => {

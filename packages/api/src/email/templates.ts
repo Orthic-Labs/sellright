@@ -48,3 +48,36 @@ export const staffInvite = (store: StoreCtx, data: { acceptUrl: string; role: st
   wrap(store, `${data.inviterEmail} invited you to ${store.name}`,
     `<p>You've been invited to help manage <strong>${escape(store.name)}</strong> as a <strong>${escape(data.role)}</strong>.</p>
      <p><a href="${escape(data.acceptUrl)}" style="display:inline-block;padding:10px 16px;background:#222;color:#fff;text-decoration:none;border-radius:6px">Accept invite</a></p>`);
+
+// SUBSCRIBER-1: double opt-in confirmation. Topic-aware copy so the waitlist
+// template can read "you're on the ScrapeRight waitlist" without inventing a
+// second template class for every product name. Topic = '' = the general
+// newsletter (fallback wording).
+export const subscriberConfirm = (store: StoreCtx, data: {
+  confirmUrl: string;
+  unsubscribeUrl: string;
+  topic: string;
+  topicLabel?: string;
+}) => {
+  const label = data.topicLabel ?? (data.topic ? `the ${data.topic} waitlist` : 'the newsletter');
+  return wrap(store, `Confirm your subscription`,
+    `<p>Thanks for signing up for <strong>${escape(label)}</strong> from ${escape(store.name)}. Please confirm your email to finish subscribing:</p>
+     <p><a href="${escape(data.confirmUrl)}" style="display:inline-block;padding:10px 16px;background:#222;color:#fff;text-decoration:none;border-radius:6px">Confirm subscription</a></p>
+     <p>Or paste this link into your browser:<br><span style="color:#666;font-size:12px;word-break:break-all">${escape(data.confirmUrl)}</span></p>
+     <p>If you didn't sign up, you can safely ignore this email — no subscription will be created. Or <a href="${escape(data.unsubscribeUrl)}">unsubscribe</a>.</p>`);
+};
+
+// SUBSCRIBER-1: a separate template for the waitlist to make the marketing copy
+// product-aware. Kept tiny on purpose — the existing subscriberConfirm is the
+// canonical template; this only exists so the body copy can say "ScrapeRight"
+// instead of "the scraperight waitlist" when we know the human-readable label.
+export const waitlistConfirm = (store: StoreCtx, data: {
+  confirmUrl: string;
+  unsubscribeUrl: string;
+  productName: string;
+}) =>
+  wrap(store, `Confirm your spot on the ${data.productName} waitlist`,
+    `<p>Thanks for joining the <strong>${escape(data.productName)}</strong> waitlist at ${escape(store.name)}. We'll email you the moment it's ready.</p>
+     <p><a href="${escape(data.confirmUrl)}" style="display:inline-block;padding:10px 16px;background:#222;color:#fff;text-decoration:none;border-radius:6px">Confirm my spot</a></p>
+     <p>Or paste this link into your browser:<br><span style="color:#666;font-size:12px;word-break:break-all">${escape(data.confirmUrl)}</span></p>
+     <p>Changed your mind? <a href="${escape(data.unsubscribeUrl)}">Unsubscribe</a>.</p>`);

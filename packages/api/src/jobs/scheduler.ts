@@ -26,6 +26,7 @@ import { abandonStaleCarts, cleanupExpiredCarts } from './cart-maintenance.js';
 import { deliverWebhooks } from '../webhooks/emit.js';
 import { deliverEmails } from '../email/outbox.js';
 import { deliverPushes } from '../push/outbox.js';
+import { listmonkSync } from './listmonk-sync.js';
 import { withLeaderLock, type LeaderLockedJob } from './leader-lock.js';
 import { log, err as logErr } from '../lib/logger.js';
 
@@ -103,6 +104,12 @@ export function startJobScheduler(): void {
   if (env.JOBS_PUSH_ENABLED === '1') {
     every(60_000, 'push', 'push', () => deliverPushes({}));
   }
+  // SUBSCRIBER-1: push confirmed + unsynced subscribers to Listmonk every 5
+  // minutes. Slower than email/webhook because it's a best-effort downstream
+  // sync, not a real-time deliverability path — a 5-min lag is fine, and the
+  // smaller cadence costs less when a store has hundreds of thousands of
+  // subscribers (Listmonk's /api/subscribers is rate-limited upstream).
+  every(5 * 60_000, 'listmonk-sync', 'listmonk-sync', () => listmonkSync({ log: jobLog }));
   // WP1.7 safety net: reset webhook_delivery rows stuck in 'processing' (a
   // crashed scheduler) back to 'pending' so the next pass re-claims them.
   // 10-min grace = a crashed worker is recovered within 15 min.

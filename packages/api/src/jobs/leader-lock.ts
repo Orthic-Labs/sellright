@@ -38,6 +38,10 @@ const JOB_KEYS = {
   'webhook-reaper': NAMESPACE | 5n,
   emails: NAMESPACE | 6n,
   push: NAMESPACE | 7n,
+  // SUBSCRIBER-1: claims confirmed + unsynced subscriber rows and pushes them
+  // to Listmonk. Same shape as emails/webhooks — best-effort, retryable, no
+  // request-path dependency.
+  'listmonk-sync': NAMESPACE | 8n,
 } as const satisfies Record<string, bigint>;
 
 export type LeaderLockedJob = keyof typeof JOB_KEYS;

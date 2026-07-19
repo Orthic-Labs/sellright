@@ -165,6 +165,40 @@ lost, which is the fix.
 Only `confirmed` subscribers sync. Pending, unconfirmed addresses must never
 reach the mailing list.
 
+## Decisions made during implementation
+
+These resolve gaps this spec left open. They are settled, not proposals.
+
+- **Cooldown vs re-consent precedence.** The spec required both "unsubscribed →
+  re-send confirmation" and "one confirmation per address per hour" without
+  saying which wins when both apply. Resolved: `unsubscribed → pending` is
+  EXEMPT from the cooldown. The cooldown exists to stop an attacker replaying
+  signup for a victim's address, and that attack drives `pending → pending`,
+  which is still rate-limited. Reaching `unsubscribed` requires the capability
+  token, which only ever went to the address owner, so re-consent is
+  necessarily user-initiated. Without the exemption, someone who unsubscribes
+  by accident and immediately resubscribes gets silence and never lands on the
+  list.
+- **Trim before validation.** `z.email()` rejects `"  a@b.com "` outright, so a
+  handler-side `.trim()` never sees it. The schema is
+  `z.string().trim().pipe(z.email())` so a 400 is reserved for genuinely
+  malformed addresses.
+- **CSV formula injection (CWE-1236) on the admin export.** `name` arrives on
+  the public unauthenticated endpoint and lands in a file an admin opens in
+  Excel, where a leading `=`, `+`, `-`, `@`, TAB or CR makes the cell a live
+  formula. Cells matching that are prefixed with an apostrophe before RFC 4180
+  quoting.
+- **Migration journal.** A hand-written migration must ALSO be registered in
+  `drizzle/meta/_journal.json`. drizzle-kit applies only what the journal
+  lists — an unregistered file is silently skipped while
+  `drizzle-kit migrate` still reports "migrations applied successfully", and
+  `pnpm db:assert-hand-written` still passes because the marker is present.
+  Verify a migration by checking the table exists, never by trusting that
+  output.
+- **DB-backed tests must be registered in `package.json` twice**: excluded from
+  `test` and listed in `test:db`. A new DB test in neither list breaks
+  `pnpm test`.
+
 ## Security
 
 - **Mailbomb guard.** The current per-IP limit does not stop a distributed

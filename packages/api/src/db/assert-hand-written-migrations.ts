@@ -25,6 +25,7 @@ const HAND_WRITTEN = [
   '0038_email_outbox.sql',
   '0039_push_notifications.sql',
   '0040_outbox_autovacuum.sql',
+  '0041_subscriber.sql',
 ];
 
 const MARKER = '-- HAND-WRITTEN: see docs/runbooks/migrations.md';

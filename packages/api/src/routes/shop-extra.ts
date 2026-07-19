@@ -1,13 +1,13 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
 import { isMethodEligible, shippingRate } from '../shipping/calculator.js';
-import { safeOutboundFetch } from '../security/outbound-url.js';
 import { clientIp } from '../auth/rate-limit.js';
 import { newsletterRetryAfter, recordNewsletterAttempt } from './shop-extra.newsletter-limit.js';
-import { err as logErr } from '../lib/logger.js';
+import { enqueueEmail } from '../email/outbox.js';
+import { sendSubscriberConfirmation } from './shop-extra.subscriber.js';
 
 export const shopExtra = new OpenAPIHono();
 
@@ -108,48 +108,173 @@ shopExtra.openapi(
   },
 );
 
-// ── newsletter signup (Listmonk, if configured) ──────────────────────────────
+// ── newsletter signup ────────────────────────────────────────────────────────
+// SUBSCRIBER-1 (docs/plans/2026-07-19-subscriber-newsletter-waitlist.md):
+// persist + enqueue a confirmation email in ONE transaction. The address and
+// the email that proves it are committed atomically; the email scheduler owns
+// delivery with retry + dead-letter (REL-4). The previous inline Listmonk
+// call was silently dropping addresses on every failure mode (no Listmonk
+// configured, Listmonk down, DNS-pinned fetch blocked); Listmonk is now a
+// best-effort downstream sync pushed by the listmonk-sync job.
+//
+// Mailbomb guard: a per-IP limit does not stop a distributed attacker from
+// repeatedly signing up a victim's address to make us send them confirmation
+// emails. The cooldown is checked INSIDE the transaction against
+// `last_sent_at` — at most one confirmation per address per hour, in
+// addition to the per-IP throttle above.
 shopExtra.openapi(
   createRoute({
     method: 'post', path: '/v1/shop/newsletter-signup', summary: 'Subscribe an email to the newsletter',
-    request: { body: { content: J(z.object({ email: z.email(), name: z.string().optional() })) } },
+    request: { body: { content: J(z.object({
+      // Trim BEFORE validating: a browser text field routinely submits
+      // "  user@example.com " and z.email() would reject it outright, so the
+      // handler's own .trim() would never see the value. Normalizing at the
+      // schema boundary means the 400 is reserved for genuinely malformed
+      // addresses.
+      email: z.string().trim().pipe(z.email()),
+      name: z.string().optional(),
+      // Waitlist vs newsletter (default). Both share this endpoint and the
+      // confirmation/unsubscribe plumbing — only `topic` differs.
+      kind: z.enum(['newsletter', 'waitlist']).optional(),
+      // App key for waitlist (e.g. 'scraperight'); empty string for the
+      // general newsletter. Migration 0041 marks topic NOT NULL DEFAULT ''
+      // so this collides correctly with the UNIQUE constraint.
+      topic: z.string().optional(),
+      // Source for analytics + audit. Defaults to 'storefront' for the
+      // public route. Other callers (checkout, import) can override.
+      source: z.enum(['storefront', 'checkout', 'import', 'api']).optional(),
+      meta: z.record(z.string(), z.unknown()).optional(),
+    })) } },
     responses: {
       200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) },
       429: { description: 'Rate limited', content: J(z.object({ error: z.string() })) },
     },
   }),
   async (c) => {
-    // Public + unauthenticated: throttle per-IP before doing any work, same
-    // "count every attempt" shape as auth.ts's check-email probe throttle.
+    // 1. Per-IP throttle (gate 1). Same shape as auth.ts's check-email probe.
     const ip = clientIp(c);
     const retry = newsletterRetryAfter(ip);
     if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
     recordNewsletterAttempt(ip);
 
     const st = await resolveStoreFromCtx(c);
-    // zod-openapi v1 fails to infer valid('json') for this one public POST
-    // (works elsewhere via the generic J helper); assert the validated shape —
-    // the request middleware has already parsed it against the route schema.
-    const { email, name } = c.req.valid('json') as { email: string; name?: string };
-    // Store row read via withStore (the `store` registry table is RLS-exempt, but
-    // routing it through the scoped client keeps shop routes free of the unscoped
-    // DB import — the RLS-bypass seal, ra-003).
-    const row = await withStore(st.id, async (tx) => {
-      const [r] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.id)).limit(1);
-      return r ?? null;
+    // zod-openapi v1 fails to infer valid('json') for this public POST — same
+    // shape as the original comment above the inline-Listmonk block. Cast to
+    // the validated schema; the request middleware has already parsed it.
+    const { email, name, kind = 'newsletter', topic = '', source = 'storefront', meta } = c.req.valid('json') as {
+      email: string; name?: string; kind?: 'newsletter' | 'waitlist'; topic?: string;
+      source?: 'storefront' | 'checkout' | 'import' | 'api'; meta?: Record<string, unknown>;
+    };
+    const normalizedEmail = email.trim().toLowerCase();
+    const normalizedTopic = topic ?? '';
+
+    // 2. Persist + enqueue in ONE transaction (the whole point — see file
+    // header). The upsert semantics by existing status are:
+    //   - no row              → insert pending, enqueue confirm
+    //   - pending             → do NOT duplicate; re-enqueue only if
+    //                           last_sent_at is older than the cooldown
+    //   - confirmed           → no-op, no email (don't reveal they're on)
+    //   - unsubscribed        → back to pending + re-send confirmation
+    //                           (they asked again; re-consent is correct)
+    //
+    // We do NOT reveal status to the caller — every path returns the same
+    // `{ok: true}`. The per-row work is silent; the public response is
+    // enumeration-neutral.
+    const CONFIRM_COOLDOWN_MS = 60 * 60 * 1000; // 1 hour
+    const enqueued = await withStore(st.id, async (tx) => {
+      const [existing] = await tx
+        .select({
+          id: s.subscriber.id,
+          status: s.subscriber.status,
+          token: s.subscriber.token,
+          lastSentAt: s.subscriber.lastSentAt,
+        })
+        .from(s.subscriber)
+        .where(and(
+          eq(s.subscriber.storeId, st.id),
+          eq(s.subscriber.email, normalizedEmail),
+          eq(s.subscriber.kind, kind),
+          eq(s.subscriber.topic, normalizedTopic),
+        ))
+        .limit(1);
+
+      const now = new Date();
+      if (!existing) {
+        const [row] = await tx.insert(s.subscriber).values({
+          storeId: st.id,
+          email: normalizedEmail,
+          name: name ?? null,
+          kind,
+          topic: normalizedTopic,
+          status: 'pending',
+          source,
+          meta: meta ?? null,
+          lastSentAt: now,
+        })
+          // The SELECT above is not atomic with this INSERT: two concurrent
+          // signups for the same (store, email, kind, topic) both see no row
+          // and both insert, and the loser violates
+          // `subscriber_store_email_kind_topic_key`. A double-clicked subscribe
+          // button is enough to hit it — the per-IP throttle allows 5 attempts
+          // per 15 min, so it does not serialize them. onConflictDoNothing
+          // turns that 500 into the correct outcome: the winner created the row
+          // and enqueued the confirmation, so the loser is a no-op and no
+          // second email goes out (the mailbomb guard holds under races too).
+          .onConflictDoNothing()
+          .returning({ id: s.subscriber.id, token: s.subscriber.token });
+        if (!row) return false; // lost the insert race — winner already enqueued.
+        await sendSubscriberConfirmation(tx, st, { email: normalizedEmail, name: name ?? null, kind, topic: normalizedTopic, token: row.token });
+        return true;
+      }
+
+      if (existing.status === 'confirmed') {
+        // No-op, no email. Do not leak that they're already on the list.
+        return false;
+      }
+
+      // Cooldown vs re-consent precedence. The cooldown exists to stop an
+      // attacker mailbombing a victim by replaying signup for their address —
+      // that attack drives the row pending → pending, which IS rate-limited
+      // below. Reaching `unsubscribed` requires the capability token, which
+      // only ever went to the address owner, so an unsubscribed → pending
+      // re-consent is necessarily user-initiated and is exempt: someone who
+      // unsubscribes by accident and immediately resubscribes must not be met
+      // with silence (they would just retry, and never land on the list). The
+      // residual abuse is one extra email per unsubscribe the victim performs,
+      // which is bounded by a victim action each time.
+      const isReconsent = existing.status === 'unsubscribed';
+      const lastSent = existing.lastSentAt?.getTime() ?? 0;
+      if (!isReconsent && now.getTime() - lastSent < CONFIRM_COOLDOWN_MS) {
+        return false; // within cooldown — silently drop the re-send (mailbomb guard).
+      }
+
+      // Flip unsubscribed back to pending; clear unsubscribed_at; bump
+      // last_sent_at. Re-use the existing token so unsubscribe links from
+      // prior emails stay valid; rotate on confirmed→pending if needed (none here).
+      const nextStatus = existing.status === 'unsubscribed' ? 'pending' : existing.status;
+      await tx.update(s.subscriber)
+        .set({
+          status: nextStatus,
+          unsubscribedAt: null,
+          lastSentAt: now,
+          // Re-record the source on every signup attempt — useful when an
+          // address resubscribes from a different surface (e.g. they
+          // originally came in via 'checkout', now from 'storefront').
+          source,
+          meta: meta ?? undefined,
+          updatedAt: now,
+        })
+        .where(eq(s.subscriber.id, existing.id));
+      await sendSubscriberConfirmation(tx, st, { email: normalizedEmail, name: name ?? null, kind, topic: normalizedTopic, token: existing.token });
+      return true;
     });
-    const lm = (row?.config as { listmonk?: { url: string; apiUser: string; apiToken: string } } | null)?.listmonk;
-    if (lm?.url && lm?.apiToken) {
-      try {
-        const auth = Buffer.from(`${lm.apiUser}:${lm.apiToken}`).toString('base64');
-        // SSRF guard: the Listmonk URL is admin-supplied config, not hardcoded,
-        // so it must go through the same DNS-pinned, private-IP-blocking fetch
-        // as admin-marketing.ts's Listmonk client (a guard-block throw is
-        // caught below and logged like any other Listmonk error — never
-        // surfaced to the caller, never leaks the Basic-auth credential).
-        await safeOutboundFetch(`${lm.url.replace(/\/$/, '')}/api/subscribers`, { method: 'POST', headers: { authorization: `Basic ${auth}`, 'content-type': 'application/json' }, body: JSON.stringify({ email, name: name || email, status: 'enabled' }) });
-      } catch (e) { logErr.error('newsletter listmonk error', e); }
-    }
+
+    // `enqueued` is true when a confirmation actually entered the outbox and
+    // false on every no-op path (already confirmed, within the cooldown, lost
+    // the insert race). It is deliberately NOT surfaced to the caller —
+    // returning it would turn this endpoint into a subscription oracle, which
+    // is the enumeration leak the constant `{ok: true}` exists to prevent.
+    void enqueued;
     return c.json({ ok: true }, 200);
   },
 );

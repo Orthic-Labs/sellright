@@ -1,11 +1,11 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { randomBytes } from 'node:crypto';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { assertSafeOutboundUrl, safeOutboundFetch } from '../security/outbound-url.js';
 import { invalidateStoreCache } from '../store-context.js';
-import { HttpError, J, errBody, money, requireAdmin, requireStore, requireWrite, requireManage, requirePermission, guard } from './admin-helpers.js';
+import { HttpError, J, errBody, money, requireAdmin, requireStore, requireWrite, requireManage, requirePermission, guard, Page } from './admin-helpers.js';
 import { err as logErr } from '../lib/logger.js';
 
 export const adminMarketing = new OpenAPIHono();
@@ -268,6 +268,135 @@ adminMarketing.openapi(
     if (!cfg) throw new HttpError(409, 'Listmonk not configured');
     const out = (await lm(cfg, '/api/campaigns', { method: 'POST', body: JSON.stringify({ name: b.name, subject: b.subject, lists: [b.listId], type: 'regular', content_type: 'html', body: b.body || '<p></p>' }) })) as { data?: { id?: number } };
     return c.json({ id: out.data?.id ?? null, name: b.name }, 200);
+  }),
+);
+
+// ── subscriber list (SUBSCRIBER-1) ──────────────────────────────────────────
+// The `subscriber` table is the source of truth for newsletter + waitlist
+// signups. The endpoints here are operator-facing — listing for inspection,
+// exporting to CSV for migrations, and counts for dashboard tiles.
+
+adminMarketing.openapi(
+  createRoute({
+    method: 'get', path: '/v1/admin/subscribers', summary: 'List subscribers',
+    request: {
+      query: z.object({
+        kind: z.enum(['newsletter', 'waitlist']).optional(),
+        topic: z.string().optional(),
+        status: z.enum(['pending', 'confirmed', 'unsubscribed', 'bounced']).optional(),
+        page: z.coerce.number().int().positive().default(1),
+        pageSize: z.coerce.number().int().positive().max(500).default(50),
+      }),
+    },
+    responses: { 200: { description: 'OK', content: J(Page) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    const q = c.req.valid('query');
+    const whereParts = [];
+    if (q.kind) whereParts.push(sql`kind = ${q.kind}`);
+    if (q.topic !== undefined) whereParts.push(sql`topic = ${q.topic}`);
+    if (q.status) whereParts.push(sql`status = ${q.status}`);
+    const where = whereParts.length ? sql`WHERE ${sql.join(whereParts, sql` AND `)}` : sql``;
+    const offset = (q.page - 1) * q.pageSize;
+    const items = await withStore(st.storeId, async (tx) =>
+      tx.execute(
+        sql`SELECT id, email, name, kind, topic, status, source, listmonk_synced_at AS "listmonkSyncedAt", confirmed_at AS "confirmedAt", created_at AS "createdAt"
+            FROM subscriber ${where}
+            ORDER BY created_at DESC
+            LIMIT ${q.pageSize} OFFSET ${offset}`,
+      ).then((r) => r.rows as Array<Record<string, unknown>>),
+    );
+    const totalRow = await withStore(st.storeId, async (tx) =>
+      tx.execute(sql`SELECT count(*)::int AS n FROM subscriber ${where}`).then((r) => (r.rows[0] as { n: number })),
+    );
+    return c.json({ items, total: totalRow.n, page: q.page, pageSize: q.pageSize }, 200);
+  }),
+);
+
+// Export is a bulk PII read — we audit-log it the same way `marketing/sync`
+// does above. CSV is plain text; the column order matches the list endpoint.
+adminMarketing.openapi(
+  createRoute({
+    method: 'get', path: '/v1/admin/subscribers/export', summary: 'Export subscribers as CSV',
+    request: {
+      query: z.object({
+        kind: z.enum(['newsletter', 'waitlist']).optional(),
+        topic: z.string().optional(),
+        status: z.enum(['pending', 'confirmed', 'unsubscribed', 'bounced']).optional(),
+      }),
+    },
+    responses: { 200: { description: 'OK', content: { 'text/csv': { schema: z.string() } } }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    const q = c.req.valid('query');
+    const whereParts = [];
+    if (q.kind) whereParts.push(sql`kind = ${q.kind}`);
+    if (q.topic !== undefined) whereParts.push(sql`topic = ${q.topic}`);
+    if (q.status) whereParts.push(sql`status = ${q.status}`);
+    const where = whereParts.length ? sql`WHERE ${sql.join(whereParts, sql` AND `)}` : sql``;
+    const rows = await withStore(st.storeId, async (tx) =>
+      tx.execute(
+        sql`SELECT email, name, kind, topic, status, source, confirmed_at AS "confirmedAt", unsubscribed_at AS "unsubscribedAt", created_at AS "createdAt"
+            FROM subscriber ${where}
+            ORDER BY created_at DESC`,
+      ).then((r) => r.rows as Array<Record<string, unknown>>),
+    );
+    // Audit: this is bulk PII access. Pattern matches `marketing/sync` at
+    // line 252 — operator + filters, no row bodies (they're in the CSV).
+    await withStore(st.storeId, async (tx) => {
+      await tx.insert(s.auditLog).values({
+        storeId: st.storeId,
+        actor: admin.email,
+        entity: 'subscriber',
+        entityId: null,
+        action: 'export',
+        data: { kind: q.kind ?? null, topic: q.topic ?? null, status: q.status ?? null, rows: rows.length },
+      });
+    });
+    const header = 'email,name,kind,topic,status,source,confirmed_at,unsubscribed_at,created_at';
+    const escape = (v: unknown) => {
+      if (v === null || v === undefined) return '';
+      let s = v instanceof Date ? v.toISOString() : String(v);
+      // CSV formula injection (CWE-1236). `name` is attacker-controlled: it
+      // arrives on the PUBLIC, unauthenticated /v1/shop/newsletter-signup and
+      // lands here in a file an admin opens in Excel/LibreOffice, where a
+      // leading =, +, -, @, TAB or CR makes the cell a live formula
+      // (=cmd|'/c calc'!A1 and friends). Prefix with an apostrophe so the
+      // spreadsheet renders it as literal text. Do this BEFORE the RFC 4180
+      // quoting below so the apostrophe is inside any quotes we add.
+      if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+      // RFC 4180 minimal quoting — only what a real email/name/topic can hit.
+      return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const body = rows.map((r) => [r.email, r.name, r.kind, r.topic, r.status, r.source, r.confirmedAt, r.unsubscribedAt, r.createdAt].map(escape).join(',')).join('\n');
+    const csv = `${header}\n${body}\n`;
+    return new Response(csv, { status: 200, headers: { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="subscribers-${st.slug}.csv"` } });
+  }),
+);
+
+// Per-app waitlist number on the dashboard. Counts grouped by (kind, topic,
+// status) so the UI can render a single grid without per-cell round-trips.
+adminMarketing.openapi(
+  createRoute({
+    method: 'get', path: '/v1/admin/subscribers/stats', summary: 'Subscriber counts by kind/topic/status',
+    responses: { 200: { description: 'OK', content: J(z.object({ counts: z.array(z.object({ kind: z.string(), topic: z.string(), status: z.string(), n: z.number().int() })) })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    const counts = await withStore(st.storeId, async (tx) =>
+      tx.execute(
+        sql`SELECT kind, topic, status, count(*)::int AS n
+            FROM subscriber
+            GROUP BY kind, topic, status
+            ORDER BY kind, topic, status`,
+      ).then((r) => r.rows as Array<{ kind: string; topic: string; status: string; n: number }>),
+    );
+    return c.json({ counts }, 200);
   }),
 );
 

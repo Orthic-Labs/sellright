@@ -288,6 +288,13 @@
       "when": 1782000800000,
       "tag": "0040_outbox_autovacuum",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1782001200000,
+      "tag": "0041_subscriber",
+      "breakpoints": true
     }
   ]
 }
