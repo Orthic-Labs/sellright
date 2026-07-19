@@ -10,6 +10,11 @@ must update the matching changelog in the same push.
 
 ## [Unreleased]
 
+### Changed
+
+- Web/admin favicons, touch icons, and manifest artwork now use the selected
+  SellRight mark from the verified cross-platform asset kit.
+
 ### Fixed
 
 - Postgres transactions no longer stay open while Stripe, SMTP, or APNs calls

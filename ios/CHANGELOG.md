@@ -9,7 +9,10 @@ push.
 
 ## [Unreleased]
 
-- No unreleased iOS changes recorded.
+### Changed
+
+- The app icon catalog now ships the complete RGB iOS icon set generated from
+  the selected SellRight mark.
 
 ## 2026-07-17
 
