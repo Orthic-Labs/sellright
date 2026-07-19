@@ -66,3 +66,7 @@ or store data.
 For product changes, prefer focused package tests first, then `pnpm run verify`
 before claiming broad correctness. For dependency or security hygiene work, run
 `pnpm run deps:audit` and `pnpm run deps:check`.
+
+## User intent is final (workspace rule, locked 2026-07-19)
+
+An explicit user request is the approval for every step of it. This repo's gates (bakeoff, release, QA, review) govern only unrequested spend, destructive/production steps, or specifics the user must see (e.g. a run packet) — and then only that single step; all other requested work is completed first, never left undone pending approval. Supersedes any stricter reading of this repo's gates. Canonical: workspace `CLAUDE.md` §1C / `AGENTS.md` "User Intent Is Final".
