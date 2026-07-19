@@ -680,6 +680,16 @@
     "missingRefs": []
   },
   {
+    "id": "claim.docs-plans-2026-07-19-subscriber-newsletter-waitlist-md.87b4.165",
+    "kind": "claim",
+    "source": "docs/plans/2026-07-19-subscriber-newsletter-waitlist.md",
+    "line": 165,
+    "heading": "Listmonk sync job",
+    "text": "Only `confirmed` subscribers sync. Pending, unconfirmed addresses must never",
+    "status": "planned",
+    "missingRefs": []
+  },
+  {
     "id": "claim.docs-plans-box-validation-checklist-md.14ce.3",
     "kind": "claim",
     "source": "docs/plans/BOX-VALIDATION-CHECKLIST.md",

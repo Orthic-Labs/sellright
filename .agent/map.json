@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "repo": "sellright",
-  "generatedAt": "gen:2acb40efaef4e0a9",
+  "generatedAt": "gen:4a93d291e3ab3ab1",
   "entrypoint": ".blueprint/manifest.json",
   "precedence": [
     "code",
@@ -12,10 +12,10 @@
     "archive"
   ],
   "stats": {
-    "files": 836,
-    "docs": 36,
-    "claims": 124,
-    "codeRefs": 117
+    "files": 837,
+    "docs": 37,
+    "claims": 125,
+    "codeRefs": 126
   },
   "nodes": [
     {
@@ -1624,6 +1624,79 @@
           "line": 237,
           "level": 3,
           "text": "Critical Files for Implementation"
+        }
+      ]
+    },
+    {
+      "id": "doc.docs-plans-2026-07-19-subscriber-newsletter-waitlist-md.87b4d4b5",
+      "kind": "doc",
+      "path": "docs/plans/2026-07-19-subscriber-newsletter-waitlist.md",
+      "title": "Subscriber System — Newsletter + Waitlist (2026-07-19)",
+      "sha1": "ea481b92e93cf0f8b67ab0726aea37b3d1883684",
+      "searchText": "# Subscriber System — Newsletter + Waitlist (2026-07-19) Status: SPEC — ready to implement. ## Why this exists SellRight already has a newsletter endpoint. It loses data. `POST /v1/shop/newsletter-signup` (`packages/api/src/routes/shop-extra.ts:112-155`) resolves the store, reads `store.config.listmonk`, and POSTs the address to Listmonk's `/api/subscribers`. It persists **nothing**. Two paths silently drop the signup while returning `{ok: true}` to the browser: 1. Listmonk not configured (`lm?.url && lm?.apiToken` false) — the whole block is skipped, the address is discarded, the caller is told it worked. 2. Listmonk configured but failing — the `fetch` throws, the `catch` logs it, and the handler still returns `{ok: true}`. So the current newsletter is only as durable as an unmonitored third-party HTTP call made inside a request that reports success either way. Three further gaps: - **Single opt-in.** The signup sends `status: 'enabled'`, subscribing the address with no confirmation, while `packages/storefront/src/routes/newsletter/confirm/[subscriber]/` exists and is never reached by this path. Consent is asserted, not proven. - **Two integration paths.** The storefront's confirm/unsubscribe routes call Listmonk directly from SSR via `ListmonkService`; the API calls it separately. Two credential surfaces, two failure modes, no shared state. - **No waitlist.** Pre-launch interest lives in five standalone Cloudflare Workers (HeardRight, MailRight, ViewRight, CodeRight, ScrapeRight), each with its own KV namespace and Resend integration, none joined to `customer`. At launch you cannot tell who converted. ## Decision **The `subscriber` table becomes the source of truth. Listmonk is demoted to a best-effort downstream sync target.** This is the outbox pattern the repo already applies to email and webhooks (`0038_email_outbox.sql`, `0031`/`webhook_delivery`): commit locally in the request transaction, push to the outside world in a background job with retry. The existing newsletter endpoint is the one place that still does the outbound call inline and treats its failure as success. **One table serves both newsletter and waitlist**, discriminated by `kind` + `topic`. A waitlist is a newsletter whose list happens to be named after an unreleased product; modelling them separately would duplicate confirmation, unsubscribe, rate limiting, and admin export twice....",
+      "lifecycle": {
+        "status": "current"
+      },
+      "headings": [
+        {
+          "line": 1,
+          "level": 1,
+          "text": "Subscriber System — Newsletter + Waitlist (2026-07-19)"
+        },
+        {
+          "line": 5,
+          "level": 2,
+          "text": "Why this exists"
+        },
+        {
+          "line": 35,
+          "level": 2,
+          "text": "Decision"
+        },
+        {
+          "line": 51,
+          "level": 2,
+          "text": "Schema"
+        },
+        {
+          "line": 97,
+          "level": 2,
+          "text": "Endpoints"
+        },
+        {
+          "line": 99,
+          "level": 3,
+          "text": "Public"
+        },
+        {
+          "line": 140,
+          "level": 3,
+          "text": "Admin"
+        },
+        {
+          "line": 152,
+          "level": 2,
+          "text": "Listmonk sync job"
+        },
+        {
+          "line": 168,
+          "level": 2,
+          "text": "Security"
+        },
+        {
+          "line": 186,
+          "level": 2,
+          "text": "Files"
+        },
+        {
+          "line": 202,
+          "level": 2,
+          "text": "Out of scope"
+        },
+        {
+          "line": 209,
+          "level": 2,
+          "text": "Verification"
         }
       ]
     },
@@ -3297,6 +3370,16 @@
       "missingRefs": []
     },
     {
+      "id": "claim.docs-plans-2026-07-19-subscriber-newsletter-waitlist-md.87b4.165",
+      "kind": "claim",
+      "source": "docs/plans/2026-07-19-subscriber-newsletter-waitlist.md",
+      "line": 165,
+      "heading": "Listmonk sync job",
+      "text": "Only `confirmed` subscribers sync. Pending, unconfirmed addresses must never",
+      "status": "planned",
+      "missingRefs": []
+    },
+    {
       "id": "claim.docs-plans-box-validation-checklist-md.14ce.3",
       "kind": "claim",
       "source": "docs/plans/BOX-VALIDATION-CHECKLIST.md",
@@ -4445,6 +4528,72 @@
       "exists": true
     },
     {
+      "id": "code.packages-api-src-routes-shop-extra-ts.3a0bf9d6",
+      "kind": "code_ref",
+      "path": "packages/api/src/routes/shop-extra.ts",
+      "exists": true
+    },
+    {
+      "id": "code.packages-api-drizzle-0041-subscriber-sql.e7a26b95",
+      "kind": "code_ref",
+      "path": "packages/api/drizzle/0041_subscriber.sql",
+      "exists": false
+    },
+    {
+      "id": "code.docs-runbooks-migrations-md.46d9999f",
+      "kind": "code_ref",
+      "path": "docs/runbooks/migrations.md",
+      "exists": true
+    },
+    {
+      "id": "code.packages-api-src-db-assert-hand-written-migrations-ts.f4f7fc28",
+      "kind": "code_ref",
+      "path": "packages/api/src/db/assert-hand-written-migrations.ts",
+      "exists": true
+    },
+    {
+      "id": "code.packages-api-src-db-schema-content-ts.133ab129",
+      "kind": "code_ref",
+      "path": "packages/api/src/db/schema-content.ts",
+      "exists": true
+    },
+    {
+      "id": "code.packages-api-src-routes-admin-marketing-ts.6768e79b",
+      "kind": "code_ref",
+      "path": "packages/api/src/routes/admin-marketing.ts",
+      "exists": true
+    },
+    {
+      "id": "code.packages-api-src-routes-shop-extra-subscriber-ts.63ab5961",
+      "kind": "code_ref",
+      "path": "packages/api/src/routes/shop-extra.subscriber.ts",
+      "exists": false
+    },
+    {
+      "id": "code.packages-api-src-email-templates-ts.29181110",
+      "kind": "code_ref",
+      "path": "packages/api/src/email/templates.ts",
+      "exists": true
+    },
+    {
+      "id": "code.packages-api-src-jobs-listmonk-sync-ts.9e0566bb",
+      "kind": "code_ref",
+      "path": "packages/api/src/jobs/listmonk-sync.ts",
+      "exists": false
+    },
+    {
+      "id": "code.packages-api-src-routes-shop-extra-newsletter-test-ts.a3c6ae5c",
+      "kind": "code_ref",
+      "path": "packages/api/src/routes/shop-extra.newsletter.test.ts",
+      "exists": true
+    },
+    {
+      "id": "code.packages-api-src-routes-shop-extra-subscriber-test-ts.4552518e",
+      "kind": "code_ref",
+      "path": "packages/api/src/routes/shop-extra.subscriber.test.ts",
+      "exists": false
+    },
+    {
       "id": "code.claude-rules-ssh-server-access-md.46247782",
       "kind": "code_ref",
       "path": ".claude/rules/ssh-server-access.md",
@@ -4460,18 +4609,6 @@
       "id": "code.packages-api-package-json.8ce7e262",
       "kind": "code_ref",
       "path": "packages/api/package.json",
-      "exists": true
-    },
-    {
-      "id": "code.docs-runbooks-migrations-md.46d9999f",
-      "kind": "code_ref",
-      "path": "docs/runbooks/migrations.md",
-      "exists": true
-    },
-    {
-      "id": "code.packages-api-src-db-assert-hand-written-migrations-ts.f4f7fc28",
-      "kind": "code_ref",
-      "path": "packages/api/src/db/assert-hand-written-migrations.ts",
       "exists": true
     },
     {
@@ -5528,6 +5665,81 @@
     {
       "from": "doc.docs-plans-2026-06-20-subscriptions-md.071babd1",
       "to": "code.packages-admin-src-pages-customerdetail-tsx.e5a9fba1",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-plans-2026-07-19-subscriber-newsletter-waitlist-md.87b4d4b5",
+      "to": "claim.docs-plans-2026-07-19-subscriber-newsletter-waitlist-md.87b4.165",
+      "type": "contains"
+    },
+    {
+      "from": "doc.docs-plans-2026-07-19-subscriber-newsletter-waitlist-md.87b4d4b5",
+      "to": "code.packages-api-src-routes-shop-extra-ts.3a0bf9d6",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-plans-2026-07-19-subscriber-newsletter-waitlist-md.87b4d4b5",
+      "to": "code.packages-api-drizzle-0041-subscriber-sql.e7a26b95",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-plans-2026-07-19-subscriber-newsletter-waitlist-md.87b4d4b5",
+      "to": "code.docs-runbooks-migrations-md.46d9999f",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-plans-2026-07-19-subscriber-newsletter-waitlist-md.87b4d4b5",
+      "to": "code.packages-api-src-db-assert-hand-written-migrations-ts.f4f7fc28",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-plans-2026-07-19-subscriber-newsletter-waitlist-md.87b4d4b5",
+      "to": "code.packages-api-src-db-schema-content-ts.133ab129",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-plans-2026-07-19-subscriber-newsletter-waitlist-md.87b4d4b5",
+      "to": "code.packages-storefront-src-utils-sellright-ts.d04f1ab3",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-plans-2026-07-19-subscriber-newsletter-waitlist-md.87b4d4b5",
+      "to": "code.packages-api-src-routes-admin-marketing-ts.6768e79b",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-plans-2026-07-19-subscriber-newsletter-waitlist-md.87b4d4b5",
+      "to": "code.jobs-leader-lock-ts.5e1a7302",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-plans-2026-07-19-subscriber-newsletter-waitlist-md.87b4d4b5",
+      "to": "code.packages-api-src-routes-shop-extra-subscriber-ts.63ab5961",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-plans-2026-07-19-subscriber-newsletter-waitlist-md.87b4d4b5",
+      "to": "code.packages-api-src-email-templates-ts.29181110",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-plans-2026-07-19-subscriber-newsletter-waitlist-md.87b4d4b5",
+      "to": "code.packages-api-src-jobs-listmonk-sync-ts.9e0566bb",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-plans-2026-07-19-subscriber-newsletter-waitlist-md.87b4d4b5",
+      "to": "code.packages-api-src-jobs-scheduler-ts.0fdbc582",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-plans-2026-07-19-subscriber-newsletter-waitlist-md.87b4d4b5",
+      "to": "code.packages-api-src-routes-shop-extra-newsletter-test-ts.a3c6ae5c",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-plans-2026-07-19-subscriber-newsletter-waitlist-md.87b4d4b5",
+      "to": "code.packages-api-src-routes-shop-extra-subscriber-test-ts.4552518e",
       "type": "mentions-code"
     },
     {

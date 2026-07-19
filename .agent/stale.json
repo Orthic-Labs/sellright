@@ -105,6 +105,26 @@
       "path": "licensing/activations.test.ts"
     },
     {
+      "source": "docs/plans/2026-07-19-subscriber-newsletter-waitlist.md",
+      "path": "packages/api/drizzle/0041_subscriber.sql"
+    },
+    {
+      "source": "docs/plans/2026-07-19-subscriber-newsletter-waitlist.md",
+      "path": "jobs/leader-lock.ts"
+    },
+    {
+      "source": "docs/plans/2026-07-19-subscriber-newsletter-waitlist.md",
+      "path": "packages/api/src/routes/shop-extra.subscriber.ts"
+    },
+    {
+      "source": "docs/plans/2026-07-19-subscriber-newsletter-waitlist.md",
+      "path": "packages/api/src/jobs/listmonk-sync.ts"
+    },
+    {
+      "source": "docs/plans/2026-07-19-subscriber-newsletter-waitlist.md",
+      "path": "packages/api/src/routes/shop-extra.subscriber.test.ts"
+    },
+    {
       "source": "docs/plans/BOX-VALIDATION-CHECKLIST.md",
       "path": ".claude/rules/ssh-server-access.md"
     },

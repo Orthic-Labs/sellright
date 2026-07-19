@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "gen:2acb40efaef4e0a9",
-  "sourceSignature": "2acb40efaef4e0a9b1239b71bff9d5d1fc2b390d",
+  "generatedAt": "gen:4a93d291e3ab3ab1",
+  "sourceSignature": "4a93d291e3ab3ab143e960aa128c14cb7e0db6e3",
   "configHash": "79783666ada5d91cdff2c6e39a76bab6f00836c9",
   "files": [
     {
@@ -370,6 +370,10 @@
     },
     {
       "path": "docs/plans/2026-06-20-subscriptions.md",
+      "isDoc": true
+    },
+    {
+      "path": "docs/plans/2026-07-19-subscriber-newsletter-waitlist.md",
       "isDoc": true
     },
     {

@@ -12,19 +12,19 @@
       "version": "repo-local-deterministic-v3",
       "license": "workspace-owned"
     },
-    "generatedAt": "gen:6f158fa8e95c8172",
-    "generationId": "sha256:6f158fa8e95c817214ae5aca0920c8925da2800097e4f8c74e58352191132034",
+    "generatedAt": "gen:09aa8dbd99ccfdee",
+    "generationId": "sha256:09aa8dbd99ccfdee96ab7e2d2fc7cf843eed2b774ea1eb55c4bb97bc6b4a438f",
     "complete": true,
     "fileLimit": 0,
     "truncated": false,
     "truncationReasons": [],
     "repo": {
       "rootName": "sellright",
-      "sourceHash": "sha256:46c1bef64970acebe4c699b4573ea3bbfca0934b200ba331aeebbf2cdfc4d231",
-      "fileCount": 835
+      "sourceHash": "sha256:bacd0f71ecb6b3a8d2ddfb012048c85f819bdb6ddf9224a1d11dc7a7da032ee5",
+      "fileCount": 836
     },
     "counts": {
-      "nodes": 7733,
+      "nodes": 7734,
       "edges": 2314,
       "joins": 374,
       "supersedes": 2
@@ -1719,6 +1719,25 @@
           "startLine": 1,
           "endLine": 243,
           "contentHash": "eff47769b20105b7b3412ea928f1a019695069efb861049b4a9b96caeb4bf078"
+        }
+      ]
+    },
+    {
+      "id": "file:docs/plans/2026-07-19-subscriber-newsletter-waitlist.md",
+      "kind": "file",
+      "labels": [
+        "File"
+      ],
+      "name": "2026-07-19-subscriber-newsletter-waitlist.md",
+      "qualifiedName": "docs/plans/2026-07-19-subscriber-newsletter-waitlist.md",
+      "path": "docs/plans/2026-07-19-subscriber-newsletter-waitlist.md",
+      "confidence": 1,
+      "evidence": [
+        {
+          "path": "docs/plans/2026-07-19-subscriber-newsletter-waitlist.md",
+          "startLine": 1,
+          "endLine": 221,
+          "contentHash": "1a61be2af8fb10977e8f5e7812f5a4a350ef62c5098869bde059139b474e1481"
         }
       ]
     },
@@ -190766,9 +190785,9 @@
     ],
     "truncated": false,
     "sourceDocMap": {
-      "docs": 36,
-      "claims": 124,
-      "generatedAt": "gen:2acb40efaef4e0a9"
+      "docs": 37,
+      "claims": 125,
+      "generatedAt": "gen:4a93d291e3ab3ab1"
     }
   },
   "repoRoot": "D:\\Claude\\sellright"
