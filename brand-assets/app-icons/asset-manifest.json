@@ -1,0 +1,16 @@
+{
+  "brand": "SellRight",
+  "source": "Content/Brand Identity/Right Suite/identity/logos/sellright-green-thick-studies-2026-07-18/sellright-option-1-vertical.svg",
+  "source_sha256": "f88809a2d3bf287d56ae9221374f92fd06b9941cf59f4993d57e8db1e04afd13",
+  "favicon_source": "Content/Brand Identity/Right Suite/identity/logos/sellright-green-thick-studies-2026-07-18/sellright-favicon.svg",
+  "favicon_source_sha256": "d4794766daaafa6649bdae586b22cc24a948b4ba25a75f8972c0a0da9583556f",
+  "background": "#101A14",
+  "generated_by": "Content/Brand Identity/Right Suite/identity/logos/generate-platform-assets.mjs",
+  "platforms": [
+    "macOS",
+    "Windows",
+    "iOS",
+    "Android",
+    "web"
+  ]
+}
