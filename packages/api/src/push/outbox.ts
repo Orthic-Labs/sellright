@@ -5,7 +5,7 @@
  * token cleanup: APNs 410/BadDeviceToken means the device is gone, so the row is
  * marked dead AND the device token is deleted rather than retried into the void.
  */
-import { eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { pool, withStore, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { sendApns, apnsConfigured, type ApnsEnvironment } from './apns.js';
@@ -17,6 +17,15 @@ const BACKOFF_S = [60, 300, 1800, 7200, 43200];
 const MAX_ATTEMPTS = 5;
 const DEFAULT_BATCH_LIMIT = 50;
 const MAX_BATCH_LIMIT = 500;
+
+type ClaimedPush = {
+  id: string;
+  topic: string;
+  device_token: string;
+  environment: string;
+  payload: unknown;
+  attempts: number;
+};
 
 export function normalizePushBatchLimit(limit?: number): number {
   if (!Number.isFinite(limit)) return DEFAULT_BATCH_LIMIT;
@@ -126,6 +135,81 @@ export async function enqueuePush(tx: Tx, storeId: string, args: {
   return matched.length;
 }
 
+async function claimDuePushes(storeId: string, limit: number): Promise<ClaimedPush[]> {
+  return withStore(storeId, async (tx) => {
+    const claim = await tx.execute(
+      sql`UPDATE push_outbox po
+          SET status = 'processing', attempts = po.attempts + 1, updated_at = now()
+          WHERE po.id IN (
+            SELECT id FROM push_outbox
+            WHERE (status = 'pending' AND next_attempt_at <= now())
+               OR (status = 'processing' AND updated_at < now() - interval '10 minutes')
+            ORDER BY next_attempt_at
+            LIMIT ${limit}
+            FOR UPDATE SKIP LOCKED
+          )
+          RETURNING po.id, po.topic, po.device_token, po.environment, po.payload, po.attempts`,
+    );
+    return (claim as unknown as { rows: ClaimedPush[] }).rows;
+  });
+}
+
+type PushOutcome =
+  | { kind: 'sent' }
+  | { kind: 'unregistered'; error: string }
+  | { kind: 'failed'; error: unknown };
+
+async function finalizePush(
+  storeId: string,
+  delivery: ClaimedPush,
+  outcome: PushOutcome,
+): Promise<{ result: 'sent' | 'retry' | 'dead' | 'stale'; pruned: number }> {
+  return withStore(storeId, async (tx) => {
+    const currentAttempt = and(
+      eq(s.pushOutbox.id, delivery.id),
+      eq(s.pushOutbox.status, 'processing'),
+      eq(s.pushOutbox.attempts, delivery.attempts),
+    );
+    if (outcome.kind === 'sent') {
+      const rows = await tx
+        .update(s.pushOutbox)
+        .set({ status: 'sent', sentAt: new Date(), updatedAt: new Date(), lastError: null })
+        .where(currentAttempt)
+        .returning({ id: s.pushOutbox.id });
+      return { result: rows.length ? 'sent' : 'stale', pruned: 0 };
+    }
+
+    if (outcome.kind === 'unregistered') {
+      const rows = await tx
+        .update(s.pushOutbox)
+        .set({ status: 'dead', lastError: outcome.error, updatedAt: new Date() })
+        .where(currentAttempt)
+        .returning({ id: s.pushOutbox.id });
+      if (!rows.length) return { result: 'stale', pruned: 0 };
+      const removed = await tx
+        .delete(s.adminDeviceToken)
+        .where(eq(s.adminDeviceToken.token, delivery.device_token))
+        .returning({ id: s.adminDeviceToken.id });
+      return { result: 'dead', pruned: removed.length };
+    }
+
+    const giveUp = delivery.attempts >= MAX_ATTEMPTS;
+    const backoff = BACKOFF_S[Math.min(delivery.attempts - 1, BACKOFF_S.length - 1)]!;
+    const rows = await tx
+      .update(s.pushOutbox)
+      .set({
+        lastError: String(outcome.error instanceof Error ? outcome.error.message : outcome.error),
+        status: giveUp ? 'dead' : 'pending',
+        nextAttemptAt: new Date(Date.now() + backoff * 1000),
+        updatedAt: new Date(),
+      })
+      .where(currentAttempt)
+      .returning({ id: s.pushOutbox.id });
+    if (!rows.length) return { result: 'stale', pruned: 0 };
+    return { result: giveUp ? 'dead' : 'retry', pruned: 0 };
+  });
+}
+
 /** Deliver due pending pushes across all stores (scheduler-driven). */
 export async function deliverPushes(opts: { limit?: number } = {}): Promise<{ sent: number; failed: number; pruned: number }> {
   let sent = 0;
@@ -140,83 +224,39 @@ export async function deliverPushes(opts: { limit?: number } = {}): Promise<{ se
   const stores = await pool.query<{ id: string }>('SELECT id FROM store');
 
   for (const st of stores.rows) {
-    await withStore(st.id, async (tx) => {
-      const claim = await tx.execute(
-        sql`UPDATE push_outbox po
-            SET status = 'processing', attempts = po.attempts + 1, updated_at = now()
-            WHERE po.id IN (
-              SELECT id FROM push_outbox
-              WHERE status = 'pending' AND next_attempt_at <= now()
-              ORDER BY next_attempt_at
-              LIMIT ${limit}
-              FOR UPDATE SKIP LOCKED
-            )
-            RETURNING po.id, po.topic, po.device_token, po.environment, po.payload, po.attempts`,
-      );
-      const due = (claim as unknown as {
-        rows: Array<{ id: string; topic: string; device_token: string; environment: string; payload: unknown; attempts: number }>;
-      }).rows;
-
-      const deadTokens: string[] = [];
-
-      for (const d of due) {
-        try {
-          // A Live Activity push goes to a DIFFERENT apns-topic (bundle id +
-          // '.push-type.liveactivity') with push-type 'liveactivity'. Sending it
-          // to the plain topic is rejected; sending an alert to the liveactivity
-          // topic is too. The '#live' suffix set at enqueue time is what tells
-          // them apart here.
-          const isLive = d.topic.endsWith('#live');
-          const res = await sendApns({
-            deviceToken: d.device_token,
-            environment: d.environment as ApnsEnvironment,
-            payload: d.payload,
-            ...(isLive
-              ? {
-                  pushType: 'liveactivity' as const,
-                  topic: `${env.APNS_BUNDLE_ID}.push-type.liveactivity`,
-                }
-              : {}),
-          });
-
-          if (res.ok) {
-            await tx.update(s.pushOutbox).set({ status: 'sent', sentAt: new Date(), updatedAt: new Date(), lastError: null }).where(eq(s.pushOutbox.id, d.id));
-            sent++;
-            continue;
-          }
-
-          if (res.unregistered) {
-            // Terminal: the app is gone from that device. Don't burn 5 attempts
-            // on it, and drop the token so nothing else queues for it either.
-            deadTokens.push(d.device_token);
-            await tx.update(s.pushOutbox).set({
-              status: 'dead',
-              lastError: `unregistered (${res.status} ${res.reason ?? ''})`.trim(),
-              updatedAt: new Date(),
-            }).where(eq(s.pushOutbox.id, d.id));
-            failed++;
-            continue;
-          }
-
-          throw new Error(`apns ${res.status} ${res.reason ?? ''}`.trim());
-        } catch (e) {
-          const giveUp = d.attempts >= MAX_ATTEMPTS;
-          const backoff = BACKOFF_S[Math.min(d.attempts - 1, BACKOFF_S.length - 1)]!;
-          await tx.update(s.pushOutbox).set({
-            lastError: String(e instanceof Error ? e.message : e),
-            status: giveUp ? 'dead' : 'pending',
-            nextAttemptAt: new Date(Date.now() + backoff * 1000),
-            updatedAt: new Date(),
-          }).where(eq(s.pushOutbox.id, d.id));
-          failed++;
+    const due = await claimDuePushes(st.id, limit);
+    for (const d of due) {
+      let outcome: PushOutcome;
+      try {
+        const isLive = d.topic.endsWith('#live');
+        const res = await sendApns({
+          deviceToken: d.device_token,
+          environment: d.environment as ApnsEnvironment,
+          payload: d.payload,
+          ...(isLive
+            ? {
+                pushType: 'liveactivity' as const,
+                topic: `${env.APNS_BUNDLE_ID}.push-type.liveactivity`,
+              }
+            : {}),
+        });
+        if (res.ok) outcome = { kind: 'sent' };
+        else if (res.unregistered) {
+          outcome = {
+            kind: 'unregistered',
+            error: `unregistered (${res.status} ${res.reason ?? ''})`.trim(),
+          };
+        } else {
+          outcome = { kind: 'failed', error: new Error(`apns ${res.status} ${res.reason ?? ''}`.trim()) };
         }
+      } catch (error) {
+        outcome = { kind: 'failed', error };
       }
-
-      if (deadTokens.length) {
-        await tx.delete(s.adminDeviceToken).where(inArray(s.adminDeviceToken.token, deadTokens));
-        pruned += deadTokens.length;
-      }
-    });
+      const finalized = await finalizePush(st.id, d, outcome);
+      if (finalized.result === 'sent') sent++;
+      else if (finalized.result === 'retry' || finalized.result === 'dead') failed++;
+      pruned += finalized.pruned;
+    }
   }
 
   if (sent || failed || pruned) log.info('push outbox pass', { sent, failed, pruned });

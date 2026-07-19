@@ -138,3 +138,6 @@ See [runbooks/migrations.md](runbooks/migrations.md) for the rule on
 hand-written migrations (currently `0032_cart_ttl.sql`,
 `0034_subscriptions.sql`, `0036_harden_subscription_rls.sql`). The
 `db:assert-hand-written` script enforces the rule in CI.
+
+Postgres runtime-role timeouts and per-service `application_name` configuration
+are maintained in [runbooks/postgres-app-role.md](runbooks/postgres-app-role.md).

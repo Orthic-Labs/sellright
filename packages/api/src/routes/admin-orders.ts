@@ -1,7 +1,7 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
-import { withStore } from '../db/client.js';
+import { withAdvisoryLock, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { HttpError, J, errBody, money, Page, requireAdmin, requireStore, requireWrite, requirePermission, guard } from './admin-helpers.js';
 import { calculateOrderTotals } from '../money/totals.js';
@@ -167,65 +167,84 @@ adminOrders.openapi(
     const st = requireStore(admin, c); requireWrite(st); requirePermission(st, 'refunds');
     const { code } = c.req.valid('param');
     const body = c.req.valid('json');
-    const res = await withStore(st.storeId, async (tx) => {
-      // FOR UPDATE: lock the order so two concurrent refund requests can't both
-      // read the same priorRefunded and both pass the balance check (over-refund).
-      const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
-      if (!o) return { kind: 'notfound' as const };
-      if (o.state !== 'Paid' && o.state !== 'PartiallyRefunded') return { kind: 'badstate' as const, state: o.state };
-      const [pay] = await tx.select().from(s.payment).where(and(eq(s.payment.orderId, o.id), eq(s.payment.state, 'Settled'))).orderBy(desc(s.payment.createdAt)).limit(1);
-      if (!pay) return { kind: 'nopayment' as const };
-      const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
-      const byId = new Map(lines.map((l) => [l.id, l]));
+    const [orderRef] = await withStore(st.storeId, (tx) =>
+      tx.select({ id: s.order.id }).from(s.order).where(eq(s.order.code, code)).limit(1));
+    if (!orderRef) throw new HttpError(404, 'order not found');
 
-      // Determine amount + which lines/qty.
-      const reqLines = (body.lines ?? []) as Array<{ orderLineId: string; quantity: number }>;
-      const refundLines = reqLines.map((rl) => ({ ...rl, line: byId.get(rl.orderLineId) })).filter((x) => x.line);
-      let amount = body.amount ?? 0;
-      if (body.amount == null) {
-        if (refundLines.length) amount = refundLines.reduce((a, x) => a + Math.round((x.line!.lineTotal / x.line!.quantity) * x.quantity), 0);
-        else amount = o.grandTotal - (await alreadyRefunded(tx, o.id)); // full remaining
-      }
-      const priorRefunded = await alreadyRefunded(tx, o.id);
-      if (amount <= 0 || amount > o.grandTotal - priorRefunded) return { kind: 'badamount' as const, max: o.grandTotal - priorRefunded };
+    const res = await withAdvisoryLock(`refund:${st.storeId}:${orderRef.id}`, async () => {
+      const prepared = await withStore(st.storeId, async (tx) => {
+        const [o] = await tx.select().from(s.order).where(eq(s.order.id, orderRef.id)).limit(1).for('update');
+        if (!o) return { kind: 'notfound' as const };
+        if (o.state !== 'Paid' && o.state !== 'PartiallyRefunded') return { kind: 'badstate' as const, state: o.state };
+        const [pay] = await tx.select().from(s.payment).where(and(eq(s.payment.orderId, o.id), eq(s.payment.state, 'Settled'))).orderBy(desc(s.payment.createdAt)).limit(1);
+        if (!pay) return { kind: 'nopayment' as const };
+        const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
+        const byId = new Map(lines.map((line) => [line.id, line]));
+        const reqLines = (body.lines ?? []) as Array<{ orderLineId: string; quantity: number }>;
+        const refundLines = reqLines.map((line) => ({ ...line, row: byId.get(line.orderLineId) })).filter((line) => line.row);
+        let amount = body.amount ?? 0;
+        const priorRefunded = await alreadyRefunded(tx, o.id);
+        if (body.amount == null) {
+          amount = refundLines.length
+            ? refundLines.reduce((sum, line) => sum + Math.round((line.row!.lineTotal / line.row!.quantity) * line.quantity), 0)
+            : o.grandTotal - priorRefunded;
+        }
+        if (amount <= 0 || amount > o.grandTotal - priorRefunded) return { kind: 'badamount' as const, max: o.grandTotal - priorRefunded };
+        const newState: OrderState = priorRefunded + amount >= o.grandTotal ? 'Refunded' : 'PartiallyRefunded';
+        if (!canTransition(o.state as OrderState, newState)) return { kind: 'badstate' as const, state: o.state };
+        const [store] = pay.method === 'stripe'
+          ? await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1)
+          : [undefined];
+        return {
+          kind: 'ready' as const,
+          order: o,
+          payment: pay,
+          refundLines,
+          amount,
+          stripeMode: pay.method === 'stripe' ? stripeModeFromConfig(store?.config) : undefined,
+          idempotencyKey: `refund:${o.id}:${amount}`,
+        };
+      });
+      if (prepared.kind !== 'ready') return prepared;
 
-      // ra-022: check the target state transition is valid BEFORE writing any
-      // ledger rows — an invalid transition returns badstate so the txn rolls
-      // back with no orphan refund row.
-      const totalRefunded = priorRefunded + amount;
-      const newState: OrderState = totalRefunded >= o.grandTotal ? 'Refunded' : 'PartiallyRefunded';
-      if (!canTransition(o.state as OrderState, newState)) return { kind: 'badstate' as const, state: o.state };
-
-      // WP3: reverse the money at the gateway BEFORE writing the ledger row, so a
-      // gateway failure aborts the whole refund (txn rolls back, no orphan ledger
-      // row). manual/cod refundPayment is a no-op Settled; stripe actually refunds.
-      // Deterministic per logical refund: identical across a retry of THIS same
-      // refund (admin double-click, or retry after a transient failure), distinct
-      // from any other refund on this order (a genuinely new partial refund has a
-      // different amount). Stripe dedupes on this key for 24h — no double-refund.
-      const idempotencyKey = `refund:${o.id}:${amount}`;
       let gatewayResult: { state: 'Settled' | 'Pending'; providerRef: string | null };
       try {
-        gatewayResult = await executeGatewayRefund(tx, st.storeId, pay.method, pay.providerRef, amount, o.currency, idempotencyKey);
+        gatewayResult = await executeGatewayRefund(
+          prepared.payment.method,
+          prepared.payment.providerRef,
+          prepared.amount,
+          prepared.order.currency,
+          prepared.stripeMode,
+          prepared.idempotencyKey,
+        );
       } catch (e: unknown) {
         const err = e as { kind?: string; message?: string };
         if (err.kind === 'providerfail') return { kind: 'providerfail' as const, message: err.message ?? 'gateway refund failed' };
         throw e;
       }
 
-      const [refund] = await tx.insert(s.refund).values({ storeId: st.storeId, paymentId: pay.id, orderId: o.id, amount, reason: body.reason ?? null, state: gatewayResult.state, providerRef: gatewayResult.providerRef }).returning({ id: s.refund.id });
-      for (const x of refundLines) {
-        await tx.insert(s.refundLine).values({ storeId: st.storeId, refundId: refund!.id, orderLineId: x.line!.id, quantity: x.quantity, amount: Math.round((x.line!.lineTotal / x.line!.quantity) * x.quantity), restock: body.restock });
-        await tx.update(s.orderLine).set({ refundedQty: Math.min(x.line!.quantity, x.line!.refundedQty + x.quantity) }).where(eq(s.orderLine.id, x.line!.id));
-        if (body.restock && x.line!.variantId) {
-          await tx.update(s.stock).set({ onHand: sql`${s.stock.onHand} + ${x.quantity}` }).where(and(eq(s.stock.variantId, x.line!.variantId), eq(s.stock.storeId, st.storeId)));
-          await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: x.line!.variantId, delta: x.quantity, reason: 'refund_restock', refOrderId: o.id });
+      return withStore(st.storeId, async (tx) => {
+        const [o] = await tx.select().from(s.order).where(eq(s.order.id, prepared.order.id)).limit(1).for('update');
+        if (!o) return { kind: 'notfound' as const };
+        const priorRefunded = await alreadyRefunded(tx, o.id);
+        if (prepared.amount <= 0 || prepared.amount > o.grandTotal - priorRefunded) return { kind: 'badamount' as const, max: o.grandTotal - priorRefunded };
+        const newState: OrderState = priorRefunded + prepared.amount >= o.grandTotal ? 'Refunded' : 'PartiallyRefunded';
+        if (!canTransition(o.state as OrderState, newState)) return { kind: 'badstate' as const, state: o.state };
+        const [refund] = await tx.insert(s.refund).values({ storeId: st.storeId, paymentId: prepared.payment.id, orderId: o.id, amount: prepared.amount, reason: body.reason ?? null, state: gatewayResult.state, providerRef: gatewayResult.providerRef }).returning({ id: s.refund.id });
+        for (const line of prepared.refundLines) {
+          const row = line.row!;
+          await tx.insert(s.refundLine).values({ storeId: st.storeId, refundId: refund!.id, orderLineId: row.id, quantity: line.quantity, amount: Math.round((row.lineTotal / row.quantity) * line.quantity), restock: body.restock });
+          await tx.update(s.orderLine).set({ refundedQty: Math.min(row.quantity, row.refundedQty + line.quantity) }).where(eq(s.orderLine.id, row.id));
+          if (body.restock && row.variantId) {
+            await tx.update(s.stock).set({ onHand: sql`${s.stock.onHand} + ${line.quantity}` }).where(and(eq(s.stock.variantId, row.variantId), eq(s.stock.storeId, st.storeId)));
+            await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: row.variantId, delta: line.quantity, reason: 'refund_restock', refOrderId: o.id });
+          }
         }
-      }
-      await tx.update(s.order).set({ state: newState, updatedAt: new Date() }).where(eq(s.order.id, o.id));
-      await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: o.id, action: 'refund', fromState: o.state, toState: newState, data: { amount, restock: body.restock } });
-      await emitEvent(tx, st.storeId, 'order.refunded', { code: o.code, amount, state: newState });
-      return { kind: 'ok' as const, state: newState, refunded: amount };
+        await tx.update(s.order).set({ state: newState, updatedAt: new Date() }).where(eq(s.order.id, o.id));
+        await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: o.id, action: 'refund', fromState: o.state, toState: newState, data: { amount: prepared.amount, restock: body.restock } });
+        await emitEvent(tx, st.storeId, 'order.refunded', { code: o.code, amount: prepared.amount, state: newState });
+        return { kind: 'ok' as const, state: newState, refunded: prepared.amount };
+      });
     });
     if (res.kind === 'notfound') throw new HttpError(404, 'order not found');
     if (res.kind === 'badstate') throw new HttpError(409, `order not refundable in state ${res.state} — transition to Refunded/PartiallyRefunded not allowed`);
@@ -310,64 +329,85 @@ adminOrders.openapi(
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireWrite(st); requirePermission(st, 'refunds');
     const { id } = c.req.valid('param');
-    const res = await withStore(st.storeId, async (tx) => {
-      // FOR UPDATE on BOTH rows: two concurrent approves of the same return must
-      // not both read 'requested' and both pass the balance check (over-refund) —
-      // mirrors the direct refund path's order lock above. The returnRequest lock
-      // serializes concurrent approvals of the SAME return; the order lock
-      // serializes against a concurrent direct refund on the same order.
-      const [rr] = await tx.select().from(s.returnRequest).where(eq(s.returnRequest.id, id)).limit(1).for('update');
-      if (!rr) return { kind: 'notfound' as const };
-      if (rr.status !== 'requested' && rr.status !== 'approved') return { kind: 'badstate' as const, status: rr.status };
-      const [o] = await tx.select().from(s.order).where(eq(s.order.id, rr.orderId)).limit(1).for('update');
-      if (!o) return { kind: 'notfound' as const };
-      const [pay] = await tx.select().from(s.payment).where(and(eq(s.payment.orderId, o.id), eq(s.payment.state, 'Settled'))).orderBy(desc(s.payment.createdAt)).limit(1);
-      if (!pay) return { kind: 'nopayment' as const };
-      const rLines = await tx.select().from(s.returnLine).where(eq(s.returnLine.returnId, rr.id));
-      const oLines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
-      const byId = new Map(oLines.map((l) => [l.id, l]));
+    const [returnRef] = await withStore(st.storeId, (tx) =>
+      tx.select({ orderId: s.returnRequest.orderId }).from(s.returnRequest).where(eq(s.returnRequest.id, id)).limit(1));
+    if (!returnRef) throw new HttpError(404, 'return not found');
 
-      let amount = 0;
-      for (const rl of rLines) { const ol = byId.get(rl.orderLineId); if (ol) amount += Math.round((ol.lineTotal / ol.quantity) * rl.quantity); }
-      const priorRefunded = await alreadyRefunded(tx, o.id);
-      if (amount <= 0 || amount > o.grandTotal - priorRefunded) return { kind: 'badamount' as const };
+    const res = await withAdvisoryLock(`refund:${st.storeId}:${returnRef.orderId}`, async () => {
+      const prepared = await withStore(st.storeId, async (tx) => {
+        const [rr] = await tx.select().from(s.returnRequest).where(eq(s.returnRequest.id, id)).limit(1).for('update');
+        if (!rr) return { kind: 'notfound' as const };
+        if (rr.status !== 'requested' && rr.status !== 'approved') return { kind: 'badstate' as const, status: rr.status };
+        const [o] = await tx.select().from(s.order).where(eq(s.order.id, rr.orderId)).limit(1).for('update');
+        if (!o) return { kind: 'notfound' as const };
+        const [pay] = await tx.select().from(s.payment).where(and(eq(s.payment.orderId, o.id), eq(s.payment.state, 'Settled'))).orderBy(desc(s.payment.createdAt)).limit(1);
+        if (!pay) return { kind: 'nopayment' as const };
+        const returnLines = await tx.select().from(s.returnLine).where(eq(s.returnLine.returnId, rr.id));
+        const orderLines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
+        const byId = new Map(orderLines.map((line) => [line.id, line]));
+        const lines = returnLines.map((line) => ({ ...line, row: byId.get(line.orderLineId) })).filter((line) => line.row);
+        const amount = lines.reduce((sum, line) => sum + Math.round((line.row!.lineTotal / line.row!.quantity) * line.quantity), 0);
+        const priorRefunded = await alreadyRefunded(tx, o.id);
+        if (amount <= 0 || amount > o.grandTotal - priorRefunded) return { kind: 'badamount' as const };
+        const newState: OrderState = priorRefunded + amount >= o.grandTotal ? 'Refunded' : 'PartiallyRefunded';
+        if (!canTransition(o.state as OrderState, newState)) return { kind: 'badstate' as const, status: o.state };
+        const [store] = pay.method === 'stripe'
+          ? await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1)
+          : [undefined];
+        return {
+          kind: 'ready' as const,
+          returnRequest: rr,
+          order: o,
+          payment: pay,
+          lines,
+          amount,
+          stripeMode: pay.method === 'stripe' ? stripeModeFromConfig(store?.config) : undefined,
+          idempotencyKey: `refund:return:${rr.id}:${amount}`,
+        };
+      });
+      if (prepared.kind !== 'ready') return prepared;
 
-      // ra-022: validate the FSM transition BEFORE writing any ledger rows so an
-      // invalid transition rolls back without leaving an orphan Settled refund.
-      const newState: OrderState = priorRefunded + amount >= o.grandTotal ? 'Refunded' : 'PartiallyRefunded';
-      if (!canTransition(o.state as OrderState, newState)) return { kind: 'badstate' as const, status: o.state };
-
-      // ra-002: call the payment gateway BEFORE writing the ledger row. For
-      // manual/cod (no provider.refundPayment) this is a no-op returning Settled.
-      // A gateway failure throws { kind: 'providerfail' } which propagates up and
-      // causes the withStore() txn to roll back — no orphan refund row.
-      // Idempotency key is keyed on the return request (not the order) since a
-      // return-approve retry must dedupe against ITSELF, not against an unrelated
-      // direct refund on the same order for the same amount.
-      const idempotencyKey = `refund:return:${rr.id}:${amount}`;
       let gatewayResult: { state: 'Settled' | 'Pending'; providerRef: string | null };
       try {
-        gatewayResult = await executeGatewayRefund(tx, st.storeId, pay.method, pay.providerRef, amount, o.currency, idempotencyKey);
+        gatewayResult = await executeGatewayRefund(
+          prepared.payment.method,
+          prepared.payment.providerRef,
+          prepared.amount,
+          prepared.order.currency,
+          prepared.stripeMode,
+          prepared.idempotencyKey,
+        );
       } catch (e: unknown) {
         const err = e as { kind?: string; message?: string };
         if (err.kind === 'providerfail') return { kind: 'providerfail' as const, message: err.message ?? 'gateway refund failed' };
         throw e;
       }
 
-      const [refund] = await tx.insert(s.refund).values({ storeId: st.storeId, paymentId: pay.id, orderId: o.id, amount, reason: rr.reason ?? 'return', state: gatewayResult.state, providerRef: gatewayResult.providerRef }).returning({ id: s.refund.id });
-      for (const rl of rLines) {
-        const ol = byId.get(rl.orderLineId); if (!ol) continue;
-        await tx.insert(s.refundLine).values({ storeId: st.storeId, refundId: refund!.id, orderLineId: ol.id, quantity: rl.quantity, amount: Math.round((ol.lineTotal / ol.quantity) * rl.quantity), restock: rl.restock });
-        await tx.update(s.orderLine).set({ refundedQty: Math.min(ol.quantity, ol.refundedQty + rl.quantity) }).where(eq(s.orderLine.id, ol.id));
-        if (rl.restock && ol.variantId) {
-          await tx.update(s.stock).set({ onHand: sql`${s.stock.onHand} + ${rl.quantity}` }).where(and(eq(s.stock.variantId, ol.variantId), eq(s.stock.storeId, st.storeId)));
-          await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: ol.variantId, delta: rl.quantity, reason: 'return_restock', refOrderId: o.id });
+      return withStore(st.storeId, async (tx) => {
+        const [rr] = await tx.select().from(s.returnRequest).where(eq(s.returnRequest.id, id)).limit(1).for('update');
+        if (!rr) return { kind: 'notfound' as const };
+        if (rr.status !== 'requested' && rr.status !== 'approved') return { kind: 'badstate' as const, status: rr.status };
+        const [o] = await tx.select().from(s.order).where(eq(s.order.id, prepared.order.id)).limit(1).for('update');
+        if (!o) return { kind: 'notfound' as const };
+        const priorRefunded = await alreadyRefunded(tx, o.id);
+        if (prepared.amount <= 0 || prepared.amount > o.grandTotal - priorRefunded) return { kind: 'badamount' as const };
+        const newState: OrderState = priorRefunded + prepared.amount >= o.grandTotal ? 'Refunded' : 'PartiallyRefunded';
+        if (!canTransition(o.state as OrderState, newState)) return { kind: 'badstate' as const, status: o.state };
+        const [refund] = await tx.insert(s.refund).values({ storeId: st.storeId, paymentId: prepared.payment.id, orderId: o.id, amount: prepared.amount, reason: rr.reason ?? 'return', state: gatewayResult.state, providerRef: gatewayResult.providerRef }).returning({ id: s.refund.id });
+        for (const line of prepared.lines) {
+          const row = line.row!;
+          await tx.insert(s.refundLine).values({ storeId: st.storeId, refundId: refund!.id, orderLineId: row.id, quantity: line.quantity, amount: Math.round((row.lineTotal / row.quantity) * line.quantity), restock: line.restock });
+          await tx.update(s.orderLine).set({ refundedQty: Math.min(row.quantity, row.refundedQty + line.quantity) }).where(eq(s.orderLine.id, row.id));
+          if (line.restock && row.variantId) {
+            await tx.update(s.stock).set({ onHand: sql`${s.stock.onHand} + ${line.quantity}` }).where(and(eq(s.stock.variantId, row.variantId), eq(s.stock.storeId, st.storeId)));
+            await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: row.variantId, delta: line.quantity, reason: 'return_restock', refOrderId: o.id });
+          }
         }
-      }
-      await tx.update(s.order).set({ state: newState, updatedAt: new Date() }).where(eq(s.order.id, o.id));
-      await tx.update(s.returnRequest).set({ status: 'refunded', refundId: refund!.id, updatedAt: new Date() }).where(eq(s.returnRequest.id, rr.id));
-      await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'return', entityId: rr.id, action: 'approve', toState: newState, data: { amount } });
-      return { kind: 'ok' as const, refunded: amount, state: newState };
+        await tx.update(s.order).set({ state: newState, updatedAt: new Date() }).where(eq(s.order.id, o.id));
+        await tx.update(s.returnRequest).set({ status: 'refunded', refundId: refund!.id, updatedAt: new Date() }).where(eq(s.returnRequest.id, rr.id));
+        await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'return', entityId: rr.id, action: 'approve', toState: newState, data: { amount: prepared.amount } });
+        return { kind: 'ok' as const, refunded: prepared.amount, state: newState };
+      });
     });
     if (res.kind === 'notfound') throw new HttpError(404, 'return not found');
     if (res.kind === 'badstate') throw new HttpError(409, `return cannot be approved — order is in state ${res.status} which does not allow transition`);

@@ -2,7 +2,6 @@ import { and, eq, sql } from 'drizzle-orm';
 import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { getProvider } from '../payments/provider.js';
-import { stripeModeFromConfig } from '../payments/stripe.js';
 
 export async function alreadyRefunded(tx: Tx, orderId: string): Promise<number> {
   // Drizzle's typed query builder — no `as any`. `tx` is the withStore() txn
@@ -23,26 +22,21 @@ export async function alreadyRefunded(tx: Tx, orderId: string): Promise<number> 
  * for the derivation. Passed straight through to the provider; manual/cod
  * ignore it (no gateway call to dedupe).
  *
- * Throws { kind: 'providerfail', message } on gateway failure so the caller
- * can exit the withStore() txn cleanly without writing any ledger rows.
+ * This function performs external I/O and therefore must never be called from
+ * inside `withStore`. Callers prepare in one transaction, invoke this with no
+ * transaction open, then finalize in a second transaction.
  */
 export async function executeGatewayRefund(
-  tx: Tx,
-  storeId: string,
   payMethod: string,
   payProviderRef: string | null,
   amount: number,
   currency: string,
+  stripeMode: 'test' | 'live' | undefined,
   idempotencyKey: string,
 ): Promise<{ state: 'Settled' | 'Pending'; providerRef: string | null }> {
   const provider = getProvider(payMethod);
   if (!provider?.refundPayment) {
     return { state: 'Settled', providerRef: null };
-  }
-  let stripeMode: 'test' | 'live' | undefined;
-  if (payMethod === 'stripe') {
-    const [row] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, storeId)).limit(1);
-    stripeMode = stripeModeFromConfig(row?.config);
   }
   const r = await provider.refundPayment({ providerRef: payProviderRef, amount, currency, stripeMode, idempotencyKey });
   if (r.state === 'Failed') {

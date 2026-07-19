@@ -6,6 +6,7 @@ import { env } from '../env.js';
 
 export const pool = new Pool({
   connectionString: env.DATABASE_URL,
+  application_name: env.PGAPPNAME,
   max: env.PGPOOL_MAX,
   idleTimeoutMillis: env.PGPOOL_IDLE_TIMEOUT_MS,
   connectionTimeoutMillis: env.PGPOOL_CONNECTION_TIMEOUT_MS,
@@ -40,6 +41,34 @@ export const unsafeUnscopedDb = drizzle(pool, drizzleOpts);
 
 export type Tx = NodePgDatabase<typeof schema> & { $client: Pool | PoolClient };
 
+type TxFactory = (client: PoolClient) => Tx;
+
+/** Transaction core extracted so rollback-failure behavior is unit-testable. */
+export async function runStoreTransaction<T>(
+  client: PoolClient,
+  storeId: string,
+  fn: (tx: Tx) => Promise<T>,
+  makeTx: TxFactory = (c) => drizzle(c, drizzleOpts),
+): Promise<T> {
+  let broken = false;
+  try {
+    await client.query('BEGIN');
+    await client.query("SELECT set_config('app.current_store', $1, true)", [storeId]);
+    const result = await fn(makeTx(client));
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {
+      broken = true;
+    }
+    throw err;
+  } finally {
+    client.release(broken);
+  }
+}
+
 /**
  * Run `fn` inside a transaction scoped to one store. Sets `app.current_store`
  * transaction-locally so Postgres RLS (see drizzle/0001+0002) confines every
@@ -48,18 +77,29 @@ export type Tx = NodePgDatabase<typeof schema> & { $client: Pool | PoolClient };
  */
 export async function withStore<T>(storeId: string, fn: (tx: Tx) => Promise<T>): Promise<T> {
   const client: PoolClient = await pool.connect();
+  return runStoreTransaction(client, storeId, fn);
+}
+
+/**
+ * Serialize a short transaction → external I/O → short transaction workflow
+ * without holding an open Postgres transaction across the external call.
+ */
+export async function withAdvisoryLock<T>(lockKey: string, fn: () => Promise<T>): Promise<T> {
+  const client = await pool.connect();
+  let locked = false;
+  let broken = false;
   try {
-    await client.query('BEGIN');
-    // set_config(..., is_local=true) === SET LOCAL — scoped to this transaction only.
-    await client.query("SELECT set_config('app.current_store', $1, true)", [storeId]);
-    const tx = drizzle(client, drizzleOpts);
-    const result = await fn(tx);
-    await client.query('COMMIT');
-    return result;
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
+    await client.query('SELECT pg_advisory_lock(hashtextextended($1, 0))', [lockKey]);
+    locked = true;
+    return await fn();
   } finally {
-    client.release();
+    if (locked) {
+      try {
+        await client.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [lockKey]);
+      } catch {
+        broken = true;
+      }
+    }
+    client.release(broken);
   }
 }

@@ -1,6 +1,6 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, eq } from 'drizzle-orm';
-import { withStore } from '../db/client.js';
+import { withAdvisoryLock, withStore } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
 import { getProvider, isPaymentMethodEnabled } from '../payments/provider.js';
@@ -52,47 +52,56 @@ pay.openapi(
       | { kind: 'noop'; state: string }
       | { kind: 'ok'; state: string; payment: string };
 
-    const out: R = await withStore(st.id, async (tx): Promise<R> => {
-      // FOR UPDATE: lock the order row so a concurrent second /pay (or the
-      // webhook reconcile racing in via applyPaymentResult) re-reads committed
-      // state rather than the stale PendingPayment snapshot the first waiter saw.
-      const [order] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
-      if (!order) return { kind: 'notfound' };
-      if (order.state !== 'PendingPayment') return { kind: 'badstate', state: order.state };
+    const claimKey = idemKey ?? `pay:${st.id}:${code}:${method}`;
+    const out: R = await withAdvisoryLock(`payment:${st.id}:${code}:${method}`, async () => {
+      const prepared = await withStore(st.id, async (tx) => {
+        const [order] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
+        if (!order) return { kind: 'notfound' as const };
+        if (order.state !== 'PendingPayment') return { kind: 'badstate' as const, state: order.state };
+        const [existing] = await tx
+          .select({ id: s.processedEvent.id })
+          .from(s.processedEvent)
+          .where(and(eq(s.processedEvent.id, claimKey), eq(s.processedEvent.type, 'payment')))
+          .limit(1);
+        if (existing) return { kind: 'noop' as const, state: order.state };
+        return { kind: 'ready' as const, order };
+      });
+      if (prepared.kind !== 'ready') return prepared;
 
-      // WP1.2: idempotency is MANDATORY. If the client didn't send a key we
-      // derive a deterministic one keyed on (storeId, orderCode, method) so the
-      // claim ALWAYS runs and a concurrent double-submit can't double-charge.
-      // MONEY-2: storeId is part of the key because processed_event.id is a
-      // GLOBAL text primary key with no store scoping (and is RLS-exempt) — two
-      // different stores whose order codes happen to share a suffix (or collide
-      // outright) would otherwise contend for the exact same claim row, and
-      // whichever store loses becomes permanently unpayable (onConflictDoNothing
-      // silently no-ops for the second store forever, since nothing ever deletes
-      // a *foreign* store's claim). The derived key is per-(store, order, method),
-      // so a deliberate retry of a Declined payment must clear the claim first
-      // (handled below in the Declined branch).
-      const claimKey = idemKey ?? `pay:${st.id}:${code}:${method}`;
-      const claimed = await tx
-        .insert(s.processedEvent)
-        .values({ id: claimKey, storeId: st.id, type: 'payment' })
-        .onConflictDoNothing()
-        .returning({ id: s.processedEvent.id });
-      if (claimed.length === 0) return { kind: 'noop', state: order.state };
+      // No transaction is open while the provider verifies or settles payment.
+      // The session-level advisory lock serializes concurrent /pay calls for this
+      // order; Stripe/webhook reconciliation remains DB-idempotent.
+      const result = await provider.createPayment({
+        orderCode: code,
+        amount: prepared.order.grandTotal,
+        currency: prepared.order.currency,
+        token,
+        stripeMode: stripeModeFromConfig(st.config),
+      });
 
-      const result = await provider.createPayment({ orderCode: code, amount: order.grandTotal, currency: order.currency, token, stripeMode: stripeModeFromConfig(st.config) });
-      // Shared with the Stripe webhook reconcile path (payments/settle.ts).
-      const applied = await applyPaymentResult(tx, { storeId: st.id, order: { ...order, code }, method: provider.method, result });
-      if (applied.orderState === 'Paid') return { kind: 'ok', state: 'Paid', payment: 'Settled' };
-      // Declined / Failed: release the deterministic claim so the customer can
-      // retry. The order STAYS in PendingPayment — auto-cancelling on a
-      // transient decline would make recovery impossible (a real provider's
-      // 3DS/network blip would leave the customer stuck). For client-supplied
-      // keys, the caller can rotate by sending a new key.
-      if ((result.state === 'Declined' || result.state === 'Failed') && !idemKey) {
-        await tx.delete(s.processedEvent).where(and(eq(s.processedEvent.id, claimKey), eq(s.processedEvent.type, 'payment')));
-      }
-      return { kind: 'ok', state: applied.orderState, payment: result.state };
+      return withStore(st.id, async (tx): Promise<R> => {
+        const [order] = await tx.select().from(s.order).where(eq(s.order.id, prepared.order.id)).limit(1).for('update');
+        if (!order) return { kind: 'notfound' };
+        if (order.state !== 'PendingPayment') return { kind: 'badstate', state: order.state };
+        const claimed = await tx
+          .insert(s.processedEvent)
+          .values({ id: claimKey, storeId: st.id, type: 'payment' })
+          .onConflictDoNothing()
+          .returning({ id: s.processedEvent.id });
+        if (claimed.length === 0) return { kind: 'noop', state: order.state };
+
+        const applied = await applyPaymentResult(tx, {
+          storeId: st.id,
+          order: { ...order, code },
+          method: provider.method,
+          result,
+        });
+        if (applied.orderState === 'Paid') return { kind: 'ok', state: 'Paid', payment: 'Settled' };
+        if ((result.state === 'Declined' || result.state === 'Failed') && !idemKey) {
+          await tx.delete(s.processedEvent).where(and(eq(s.processedEvent.id, claimKey), eq(s.processedEvent.type, 'payment')));
+        }
+        return { kind: 'ok', state: applied.orderState, payment: result.state };
+      });
     });
 
     if (out.kind === 'notfound') return c.json({ error: 'order not found' }, 404);

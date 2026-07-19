@@ -28,6 +28,7 @@ const EnvSchema = z.object({
   // forever instead of failing fast. 5000ms gives pg time to acquire a client
   // under normal load while still bounding worst-case request latency.
   PGPOOL_CONNECTION_TIMEOUT_MS: z.coerce.number().int().nonnegative().default(5000),
+  PGAPPNAME: z.string().trim().min(1).default('sellright-api'),
   // WP2: SMTP (all optional — mailer no-ops with a log line when unconfigured).
   SMTP_HOST: optionalEnvString,
   SMTP_PORT: z.coerce.number().int().positive().default(587),

@@ -41,14 +41,15 @@ customerTokens.openapi(
     const ip = clientIp(c);
     const retry = loginRetryAfter(ip, `forgot:${email}`);
     if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
-    await withStore(st.id, async (tx) => {
+    const emailArgs = await withStore(st.id, async (tx) => {
       const [cust] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, email)).limit(1);
-      if (!cust) return; // enumeration-safe: no email if no account
+      if (!cust) return null; // enumeration-safe: no email if no account
       const raw = randomBytes(32).toString('base64url');
       await tx.insert(s.customerToken).values({ storeId: st.id, customerId: cust.id, kind: 'password_reset', tokenHash: hashToken(raw), expiresAt: new Date(Date.now() + TTL_HOURS * 3600 * 1000) });
       const url = `${env.STOREFRONT_URL}/password-reset?token=${raw}`;
-      await sendEmail({ to: email, ...passwordReset(storeCtxForEmail(st), { url, ttlHours: TTL_HOURS }) });
+      return { to: email, ...passwordReset(storeCtxForEmail(st), { url, ttlHours: TTL_HOURS }) };
     });
+    if (emailArgs) await sendEmail(emailArgs);
     recordLoginFailure(ip, `forgot:${email}`); // throttle: per-IP+email bucket, not per-account,
     // so an attacker can't lock a real customer out by spamming forgot-password,
     // but the attacker themselves is throttled.
