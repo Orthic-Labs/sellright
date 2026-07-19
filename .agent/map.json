@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "repo": "sellright",
-  "generatedAt": "gen:6ba44a5f0796de3c",
+  "generatedAt": "gen:66b03883ed187dbb",
   "entrypoint": ".blueprint/manifest.json",
   "precedence": [
     "code",
@@ -15,7 +15,7 @@
     "files": 699,
     "docs": 30,
     "claims": 111,
-    "codeRefs": 97
+    "codeRefs": 99
   },
   "nodes": [
     {
@@ -519,8 +519,8 @@
       "kind": "doc",
       "path": "docs/ARCHITECTURE.md",
       "title": "SellRight Architecture",
-      "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9",
-      "searchText": "# SellRight Architecture Last reviewed (Blueprint Phase 1-3): 2026-07-14 · HEAD `6848789` · 58 commits since last reconcile state (bff9e1d). > ## ⚠️ RECONCILE — 11 DECISIONS NEEDED (blocker) > The code and the docs disagree on 11 things. You decide how to reconcile each. Nothing else here matters until these are settled. > > | # | The doc says | The code actually does | Verdict | Proposed fix | Your call | > |---|---|---|---|---|---| > | 1 | \"All 12 lanes are merged to origin/main (bff9e1d) and validated on the box: assert-rls OK (\" — `docs/plans/BOX-VALIDATION-CHECKLIST.md:3` | git rev-parse HEAD = 6848789. bff9e1d → HEAD has 58 commits. Many §3a BUILD lanes beyond t | **SUPERSEDED-BY** | Mark BOX-VALIDATION-CHECKLIST.md §Validation COMPLETE line as a 2026-07-04 snapshot; add a | ☐ | > | 2 | \"§1 DONE — 12 lanes on main bff9e1d, box-validated (187 non-DB + 88 DB tests).\" — `docs/plans/DISPATCH.md:560` | git rev-parse HEAD = 6848789. test:db script lists 23 files. Most §3a BUILD lanes have mer | **SUPERSEDED-BY** | Update the §1 DONE trailer (line 560) to reflect the actual current state (HEAD + lane cou | ☐ | > | 3 | \"Nothing is silently omitted — every audit finding is DONE, refuted, a BUILD lane, or defer\" — `docs/plans/DISPATCH.md:566` | Many §3a 'BUILD' rows have actually MERGED: PERF-2 (2c09de3/fbb761d), PERF-12 (c71a24b/654 | **CODE-IS-BETTER** | Recount §3a BUILD: move the merged lanes to the §1 ACTIONED table with their SHAs and box- | ☐ | > | 4 | \"PERF-12 auto-deliver N+1 — apply OPS-2's SKIP-LOCKED + batched-update treatment to auto-de\" — `docs/plans/DISPATCH.md:507` | PERF-12 merged: c71a24b perf(jobs): SKIP LOCKED + batched UPDATE for auto-deliver (PERF-12 | **CODE-IS-BETTER** | Move PERF-12 from §3a BUILD to §1 ACTIONED with SHA c71a24b / merge 654d5c4, box-validated | ☐ | > | 5 | \"OPS-2 row in §1 ACTIONED table: MERGED b9a20cc; box 49/49. The row is accurate at line lev\" — `docs/plans/DISPATCH.md:475` | OPS-2 correctly listed as MERGED at line 475. The §3a row 'PERF-12 auto-deliver N+1 — appl | **CODE-IS-BETTER** | Recount §3a — both PERF-12 and PERF-14 (OPS-2 follow-ups) should be promoted from BUILD to | ☐ | > | 6 | \"Row 11: OPS-2 job leader-lock + release-stale batch/lock \\| multi-instance \\| ✅ MERGED b9a\" — `docs/plans/DISPATCH.md:40` | OPS-2 SHA b9a20cc is in HEAD; box 49/49 confirmed. The cell itself is accurate; the broade |...",
+      "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e",
+      "searchText": "# SellRight Architecture Last reviewed (Blueprint Phase 1-3): 2026-07-14 · HEAD `6848789` · 58 commits since last reconcile state (bff9e1d). > ## ⚠️ RECONCILE — 23 DECISIONS NEEDED (blocker) > The code and the docs disagree on 23 things. You decide how to reconcile each. Nothing else here matters until these are settled. > > | # | The doc says | The code actually does | Verdict | Proposed fix | Your call | > |---|---|---|---|---|---| > | 1 | \"All 12 lanes are merged to origin/main (bff9e1d) and validated on the box: assert-rls OK (\" — `docs/plans/BOX-VALIDATION-CHECKLIST.md:3` | git rev-parse HEAD = 6848789. bff9e1d → HEAD has 58 commits. Many §3a BUILD lanes beyond t | **SUPERSEDED-BY** | Mark BOX-VALIDATION-CHECKLIST.md §Validation COMPLETE line as a 2026-07-04 snapshot; add a | ☐ | > | 2 | \"§1 DONE — 12 lanes on main bff9e1d, box-validated (187 non-DB + 88 DB tests).\" — `docs/plans/DISPATCH.md:560` | git rev-parse HEAD = 6848789. test:db script lists 23 files. Most §3a BUILD lanes have mer | **SUPERSEDED-BY** | Update the §1 DONE trailer (line 560) to reflect the actual current state (HEAD + lane cou | ☐ | > | 3 | \"Nothing is silently omitted — every audit finding is DONE, refuted, a BUILD lane, or defer\" — `docs/plans/DISPATCH.md:566` | Many §3a 'BUILD' rows have actually MERGED: PERF-2 (2c09de3/fbb761d), PERF-12 (c71a24b/654 | **CODE-IS-BETTER** | Recount §3a BUILD: move the merged lanes to the §1 ACTIONED table with their SHAs and box- | ☐ | > | 4 | \"PERF-12 auto-deliver N+1 — apply OPS-2's SKIP-LOCKED + batched-update treatment to auto-de\" — `docs/plans/DISPATCH.md:507` | PERF-12 merged: c71a24b perf(jobs): SKIP LOCKED + batched UPDATE for auto-deliver (PERF-12 | **CODE-IS-BETTER** | Move PERF-12 from §3a BUILD to §1 ACTIONED with SHA c71a24b / merge 654d5c4, box-validated | ☐ | > | 5 | \"OPS-2 row in §1 ACTIONED table: MERGED b9a20cc; box 49/49. The row is accurate at line lev\" — `docs/plans/DISPATCH.md:475` | OPS-2 correctly listed as MERGED at line 475. The §3a row 'PERF-12 auto-deliver N+1 — appl | **CODE-IS-BETTER** | Recount §3a — both PERF-12 and PERF-14 (OPS-2 follow-ups) should be promoted from BUILD to | ☐ | > | 6 | \"Row 11: OPS-2 job leader-lock + release-stale batch/lock \\| multi-instance \\| ✅ MERGED b9a\" — `docs/plans/DISPATCH.md:40` | OPS-2 SHA b9a20cc is in HEAD; box 49/49 confirmed. The cell itself is accurate; the broade |...",
       "lifecycle": {
         "status": "current"
       },
@@ -531,132 +531,132 @@
           "text": "SellRight Architecture"
         },
         {
-          "line": 27,
+          "line": 39,
           "level": 2,
           "text": "Core Shape"
         },
         {
-          "line": 41,
+          "line": 53,
           "level": 2,
           "text": "Repository Layout"
         },
         {
-          "line": 52,
+          "line": 64,
           "level": 2,
           "text": "Request Model"
         },
         {
-          "line": 65,
+          "line": 77,
           "level": 2,
           "text": "API Surface"
         },
         {
-          "line": 82,
+          "line": 94,
           "level": 2,
           "text": "Data Model"
         },
         {
-          "line": 96,
+          "line": 108,
           "level": 2,
           "text": "Money Path"
         },
         {
-          "line": 108,
+          "line": 120,
           "level": 2,
           "text": "Catalog Read Path"
         },
         {
-          "line": 118,
+          "line": 130,
           "level": 2,
           "text": "Security Model"
         },
         {
-          "line": 132,
+          "line": 144,
           "level": 2,
           "text": "Deployment Model"
         },
         {
-          "line": 146,
+          "line": 158,
           "level": 2,
           "text": "Verification Gate"
         },
         {
-          "line": 155,
+          "line": 167,
           "level": 2,
           "text": "Migrations"
         },
         {
-          "line": 165,
+          "line": 177,
           "level": 1,
           "text": "Blueprint Phase 2-3 Output"
         },
         {
-          "line": 167,
+          "line": 179,
           "level": 2,
           "text": "Verified Facts (Phase 2)"
         },
         {
-          "line": 171,
+          "line": 183,
           "level": 3,
           "text": "docs/ADMIN-REDESIGN-PLAN-2026-06.md"
         },
         {
-          "line": 175,
+          "line": 187,
           "level": 3,
           "text": "docs/ADMIN-THEME-SYSTEM.md"
         },
         {
-          "line": 180,
+          "line": 192,
           "level": 3,
           "text": "docs/ARCHITECTURE.md"
         },
         {
-          "line": 184,
+          "line": 196,
           "level": 3,
           "text": "docs/plans/2026-06-20-cart-architecture.md"
         },
         {
-          "line": 188,
+          "line": 200,
           "level": 3,
           "text": "docs/plans/2026-06-20-checkout-migration.md"
         },
         {
-          "line": 192,
+          "line": 204,
           "level": 3,
           "text": "docs/plans/2026-06-20-order-management-bulk-ops.md"
         },
         {
-          "line": 198,
+          "line": 210,
           "level": 3,
           "text": "docs/plans/2026-06-20-subscriptions.md"
         },
         {
-          "line": 206,
+          "line": 218,
           "level": 3,
           "text": "docs/runbooks/admin-a11y.md"
         },
         {
-          "line": 213,
+          "line": 225,
           "level": 2,
           "text": "Contradictions (Doc-vs-Code Traps)"
         },
         {
-          "line": 223,
+          "line": 235,
           "level": 2,
           "text": "Coverage Gaps (missing or partial flows)"
         },
         {
-          "line": 230,
+          "line": 242,
           "level": 2,
           "text": "Top Health Findings"
         },
         {
-          "line": 246,
+          "line": 258,
           "level": 2,
           "text": "Security Synthesis"
         },
         {
-          "line": 258,
+          "line": 270,
           "level": 2,
           "text": "Maturity Verdict"
         }
@@ -2344,92 +2344,52 @@
       "missingRefs": []
     },
     {
-      "id": "claim.docs-architecture-md.fd45.37",
+      "id": "claim.docs-architecture-md.fd45.49",
       "kind": "claim",
       "source": "docs/ARCHITECTURE.md",
-      "line": 37,
+      "line": 49,
       "heading": "Core Shape",
       "text": "| Payments | `PaymentProvider` interface; Stripe provider scaffolded; NMI/Sezzle are planned for DD parity |",
       "status": "planned",
       "missingRefs": []
     },
     {
-      "id": "claim.docs-architecture-md.fd45.63",
+      "id": "claim.docs-architecture-md.fd45.75",
       "kind": "claim",
       "source": "docs/ARCHITECTURE.md",
-      "line": 63,
+      "line": 75,
       "heading": "Request Model",
       "text": "The verification gate includes `db:assert-rls`, `db:assert-hand-written`, and `assert:shop-isolation` so new store-scoped tables, drift on hand-written migrations, and public shop routes cannot silently bypass the model.",
       "status": "partial",
       "missingRefs": []
     },
     {
-      "id": "claim.docs-architecture-md.fd45.186",
+      "id": "claim.docs-architecture-md.fd45.198",
       "kind": "claim",
       "source": "docs/ARCHITECTURE.md",
-      "line": 186,
+      "line": 198,
       "heading": "docs/plans/2026-06-20-cart-architecture.md",
       "text": "L118: 0032 is a custom hand-written migration with the required marker and documented snapshot-drift rationale.",
       "status": "partial",
       "missingRefs": []
     },
     {
-      "id": "claim.docs-architecture-md.fd45.190",
+      "id": "claim.docs-architecture-md.fd45.202",
       "kind": "claim",
       "source": "docs/ARCHITECTURE.md",
-      "line": 190,
+      "line": 202,
       "heading": "docs/plans/2026-06-20-checkout-migration.md",
       "text": "L33: Server-priced cart-token checkout, Stripe Payment Element, idempotent PI, and webhook-authoritative flow are implemented.",
       "status": "implemented",
       "missingRefs": []
     },
     {
-      "id": "claim.docs-architecture-md.fd45.195",
+      "id": "claim.docs-architecture-md.fd45.207",
       "kind": "claim",
       "source": "docs/ARCHITECTURE.md",
-      "line": 195,
+      "line": 207,
       "heading": "docs/plans/2026-06-20-order-management-bulk-ops.md",
       "text": "L36: All four layered operations exist; order.deletedAt is implemented in schema-orders.ts:67.",
-      "status": "implemented",
-      "missingRefs": []
-    },
-    {
-      "id": "claim.docs-architecture-md.fd45.215",
-      "kind": "claim",
-      "source": "docs/ARCHITECTURE.md",
-      "line": 215,
-      "heading": "Contradictions (Doc-vs-Code Traps)",
-      "text": "_4 stale findings — the highest-value signal blueprint produces. These are docs that claim X while the code does Y; the next agent that reads the doc and trusts it will get it wrong._",
-      "status": "stale",
-      "missingRefs": []
-    },
-    {
-      "id": "claim.docs-architecture-md.fd45.218",
-      "kind": "claim",
-      "source": "docs/ARCHITECTURE.md",
-      "line": 218,
-      "heading": "Contradictions (Doc-vs-Code Traps)",
-      "text": "**docs/ARCHITECTURE.md:17** — PaymentProvider and Stripe are fully implemented, not merely scaffolded; NMI/Sezzle remain absent.",
-      "status": "implemented",
-      "missingRefs": []
-    },
-    {
-      "id": "claim.docs-architecture-md.fd45.219",
-      "kind": "claim",
-      "source": "docs/ARCHITECTURE.md",
-      "line": 219,
-      "heading": "Contradictions (Doc-vs-Code Traps)",
-      "text": "**docs/plans/2026-06-20-cart-architecture.md:255** — Both phases now exist: backend Phase A and flagged Phase B server-cart UX swap are implemented.",
-      "status": "implemented",
-      "missingRefs": []
-    },
-    {
-      "id": "claim.docs-architecture-md.fd45.220",
-      "kind": "claim",
-      "source": "docs/ARCHITECTURE.md",
-      "line": 220,
-      "heading": "Contradictions (Doc-vs-Code Traps)",
-      "text": "**docs/plans/2026-06-20-order-management-bulk-ops.md:369** — Implementation is complete, but endpoints moved to admin-order-ops.ts and purge now also handles subscription; the plan's file claim is outdated.",
       "status": "implemented",
       "missingRefs": []
     },
@@ -2438,48 +2398,58 @@
       "kind": "claim",
       "source": "docs/ARCHITECTURE.md",
       "line": 227,
+      "heading": "Contradictions (Doc-vs-Code Traps)",
+      "text": "_4 stale findings — the highest-value signal blueprint produces. These are docs that claim X while the code does Y; the next agent that reads the doc and trusts it will get it wrong._",
+      "status": "stale",
+      "missingRefs": []
+    },
+    {
+      "id": "claim.docs-architecture-md.fd45.230",
+      "kind": "claim",
+      "source": "docs/ARCHITECTURE.md",
+      "line": 230,
+      "heading": "Contradictions (Doc-vs-Code Traps)",
+      "text": "**docs/ARCHITECTURE.md:17** — PaymentProvider and Stripe are fully implemented, not merely scaffolded; NMI/Sezzle remain absent.",
+      "status": "implemented",
+      "missingRefs": []
+    },
+    {
+      "id": "claim.docs-architecture-md.fd45.231",
+      "kind": "claim",
+      "source": "docs/ARCHITECTURE.md",
+      "line": 231,
+      "heading": "Contradictions (Doc-vs-Code Traps)",
+      "text": "**docs/plans/2026-06-20-cart-architecture.md:255** — Both phases now exist: backend Phase A and flagged Phase B server-cart UX swap are implemented.",
+      "status": "implemented",
+      "missingRefs": []
+    },
+    {
+      "id": "claim.docs-architecture-md.fd45.232",
+      "kind": "claim",
+      "source": "docs/ARCHITECTURE.md",
+      "line": 232,
+      "heading": "Contradictions (Doc-vs-Code Traps)",
+      "text": "**docs/plans/2026-06-20-order-management-bulk-ops.md:369** — Implementation is complete, but endpoints moved to admin-order-ops.ts and purge now also handles subscription; the plan's file claim is outdated.",
+      "status": "implemented",
+      "missingRefs": []
+    },
+    {
+      "id": "claim.docs-architecture-md.fd45.239",
+      "kind": "claim",
+      "source": "docs/ARCHITECTURE.md",
+      "line": 239,
       "heading": "Coverage Gaps (missing or partial flows)",
       "text": "| cart-add (server-cart UX) | partial | Cart UX does not always reflect server authoritative price/stock until checkout; potential pre-checkout price drift | packages/storefront/src/services/ServerCartService.ts; routes/cart.ts priceCart | architect |",
       "status": "partial",
       "missingRefs": []
     },
     {
-      "id": "claim.docs-architecture-md.fd45.243",
+      "id": "claim.docs-architecture-md.fd45.255",
       "kind": "claim",
       "source": "docs/ARCHITECTURE.md",
-      "line": 243,
+      "line": 255,
       "heading": "Top Health Findings",
       "text": "| 10 | performance | Missing partial indexes on webhook_delivery + email_outbox scheduler tables (perf-04) â€” outbox pattern degrades linearly | packages/api/src/db/schema-orders.ts:282 + :302 |",
-      "status": "planned",
-      "missingRefs": []
-    },
-    {
-      "id": "claim.docs-architecture-md.fd45.266",
-      "kind": "claim",
-      "source": "docs/ARCHITECTURE.md",
-      "line": 266,
-      "heading": "Maturity Verdict",
-      "text": "| observability | 5 | 4 | pino + requestId + readyz + audit_log are all wired and gate-covered; only gap is multi-instance in-memory throttles. |",
-      "status": "planned",
-      "missingRefs": []
-    },
-    {
-      "id": "claim.docs-architecture-md.fd45.267",
-      "kind": "claim",
-      "source": "docs/ARCHITECTURE.md",
-      "line": 267,
-      "heading": "Maturity Verdict",
-      "text": "| resilience | 5 | 5 | FORCE RLS + withStore txn + idempotency keys + SKIP-LOCKED + advisory lock + partial unique index = the money path is hardened end-to-end. |",
-      "status": "partial",
-      "missingRefs": []
-    },
-    {
-      "id": "claim.docs-architecture-md.fd45.271",
-      "kind": "claim",
-      "source": "docs/ARCHITECTURE.md",
-      "line": 271,
-      "heading": "Maturity Verdict",
-      "text": "| performance | 3 | 4 | Static manifest + PERF-2 cache + SKIP-LOCKED batching + pinned DNS lookup; cursor pagination deliberately YAGNI. CDN/signed-URL gap is produ |",
       "status": "planned",
       "missingRefs": []
     },
@@ -2489,15 +2459,45 @@
       "source": "docs/ARCHITECTURE.md",
       "line": 278,
       "heading": "Maturity Verdict",
+      "text": "| observability | 5 | 4 | pino + requestId + readyz + audit_log are all wired and gate-covered; only gap is multi-instance in-memory throttles. |",
+      "status": "planned",
+      "missingRefs": []
+    },
+    {
+      "id": "claim.docs-architecture-md.fd45.279",
+      "kind": "claim",
+      "source": "docs/ARCHITECTURE.md",
+      "line": 279,
+      "heading": "Maturity Verdict",
+      "text": "| resilience | 5 | 5 | FORCE RLS + withStore txn + idempotency keys + SKIP-LOCKED + advisory lock + partial unique index = the money path is hardened end-to-end. |",
+      "status": "partial",
+      "missingRefs": []
+    },
+    {
+      "id": "claim.docs-architecture-md.fd45.283",
+      "kind": "claim",
+      "source": "docs/ARCHITECTURE.md",
+      "line": 283,
+      "heading": "Maturity Verdict",
+      "text": "| performance | 3 | 4 | Static manifest + PERF-2 cache + SKIP-LOCKED batching + pinned DNS lookup; cursor pagination deliberately YAGNI. CDN/signed-URL gap is produ |",
+      "status": "planned",
+      "missingRefs": []
+    },
+    {
+      "id": "claim.docs-architecture-md.fd45.290",
+      "kind": "claim",
+      "source": "docs/ARCHITECTURE.md",
+      "line": 290,
+      "heading": "Maturity Verdict",
       "text": "**Human gates remaining:** box deploy (sellright_dev 0037 + journal drift), RightApps merge (10 conflicts)",
       "status": "partial",
       "missingRefs": []
     },
     {
-      "id": "claim.docs-architecture-md.fd45.280",
+      "id": "claim.docs-architecture-md.fd45.292",
       "kind": "claim",
       "source": "docs/ARCHITECTURE.md",
-      "line": 280,
+      "line": 292,
       "heading": "Maturity Verdict",
       "text": "_All 5 Phase-2 dimensions complete. 14 flows classified, 1 coverage gap, 8 capability coverage rows. Last refreshed: 2026-07-14T13:55:00Z_",
       "status": "planned",
@@ -3540,6 +3540,18 @@
       "exists": true
     },
     {
+      "id": "code.payments-stripe-ts.e5a79c2c",
+      "kind": "code_ref",
+      "path": "payments/stripe.ts",
+      "exists": false
+    },
+    {
+      "id": "code.docs-admin-redesign-plan-2026-06-md.4888779e",
+      "kind": "code_ref",
+      "path": "docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+      "exists": true
+    },
+    {
       "id": "code.packages-api-src-auth-admin-staff-ts.685dc8d6",
       "kind": "code_ref",
       "path": "packages/api/src/auth/admin-staff.ts",
@@ -4159,47 +4171,27 @@
     },
     {
       "from": "doc.docs-architecture-md.fd45feca",
-      "to": "claim.docs-architecture-md.fd45.37",
+      "to": "claim.docs-architecture-md.fd45.49",
       "type": "contains"
     },
     {
       "from": "doc.docs-architecture-md.fd45feca",
-      "to": "claim.docs-architecture-md.fd45.63",
+      "to": "claim.docs-architecture-md.fd45.75",
       "type": "contains"
     },
     {
       "from": "doc.docs-architecture-md.fd45feca",
-      "to": "claim.docs-architecture-md.fd45.186",
+      "to": "claim.docs-architecture-md.fd45.198",
       "type": "contains"
     },
     {
       "from": "doc.docs-architecture-md.fd45feca",
-      "to": "claim.docs-architecture-md.fd45.190",
+      "to": "claim.docs-architecture-md.fd45.202",
       "type": "contains"
     },
     {
       "from": "doc.docs-architecture-md.fd45feca",
-      "to": "claim.docs-architecture-md.fd45.195",
-      "type": "contains"
-    },
-    {
-      "from": "doc.docs-architecture-md.fd45feca",
-      "to": "claim.docs-architecture-md.fd45.215",
-      "type": "contains"
-    },
-    {
-      "from": "doc.docs-architecture-md.fd45feca",
-      "to": "claim.docs-architecture-md.fd45.218",
-      "type": "contains"
-    },
-    {
-      "from": "doc.docs-architecture-md.fd45feca",
-      "to": "claim.docs-architecture-md.fd45.219",
-      "type": "contains"
-    },
-    {
-      "from": "doc.docs-architecture-md.fd45feca",
-      "to": "claim.docs-architecture-md.fd45.220",
+      "to": "claim.docs-architecture-md.fd45.207",
       "type": "contains"
     },
     {
@@ -4209,22 +4201,27 @@
     },
     {
       "from": "doc.docs-architecture-md.fd45feca",
-      "to": "claim.docs-architecture-md.fd45.243",
+      "to": "claim.docs-architecture-md.fd45.230",
       "type": "contains"
     },
     {
       "from": "doc.docs-architecture-md.fd45feca",
-      "to": "claim.docs-architecture-md.fd45.266",
+      "to": "claim.docs-architecture-md.fd45.231",
       "type": "contains"
     },
     {
       "from": "doc.docs-architecture-md.fd45feca",
-      "to": "claim.docs-architecture-md.fd45.267",
+      "to": "claim.docs-architecture-md.fd45.232",
       "type": "contains"
     },
     {
       "from": "doc.docs-architecture-md.fd45feca",
-      "to": "claim.docs-architecture-md.fd45.271",
+      "to": "claim.docs-architecture-md.fd45.239",
+      "type": "contains"
+    },
+    {
+      "from": "doc.docs-architecture-md.fd45feca",
+      "to": "claim.docs-architecture-md.fd45.255",
       "type": "contains"
     },
     {
@@ -4234,7 +4231,22 @@
     },
     {
       "from": "doc.docs-architecture-md.fd45feca",
-      "to": "claim.docs-architecture-md.fd45.280",
+      "to": "claim.docs-architecture-md.fd45.279",
+      "type": "contains"
+    },
+    {
+      "from": "doc.docs-architecture-md.fd45feca",
+      "to": "claim.docs-architecture-md.fd45.283",
+      "type": "contains"
+    },
+    {
+      "from": "doc.docs-architecture-md.fd45feca",
+      "to": "claim.docs-architecture-md.fd45.290",
+      "type": "contains"
+    },
+    {
+      "from": "doc.docs-architecture-md.fd45feca",
+      "to": "claim.docs-architecture-md.fd45.292",
       "type": "contains"
     },
     {
@@ -4255,6 +4267,21 @@
     {
       "from": "doc.docs-architecture-md.fd45feca",
       "to": "code.docs-plans-remaining-work-md.ced9c006",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-architecture-md.fd45feca",
+      "to": "code.docs-architecture-md.fd45feca",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-architecture-md.fd45feca",
+      "to": "code.payments-stripe-ts.e5a79c2c",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-architecture-md.fd45feca",
+      "to": "code.docs-admin-redesign-plan-2026-06-md.4888779e",
       "type": "mentions-code"
     },
     {

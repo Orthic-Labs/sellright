@@ -10,6 +10,10 @@
     },
     {
       "source": "docs/ARCHITECTURE.md",
+      "path": "payments/stripe.ts"
+    },
+    {
+      "source": "docs/ARCHITECTURE.md",
       "path": "payments/webhook-reconcile.ts"
     },
     {
@@ -87,10 +91,10 @@
   ],
   "staleClaims": [
     {
-      "id": "claim.docs-architecture-md.fd45.215",
+      "id": "claim.docs-architecture-md.fd45.227",
       "kind": "claim",
       "source": "docs/ARCHITECTURE.md",
-      "line": 215,
+      "line": 227,
       "heading": "Contradictions (Doc-vs-Code Traps)",
       "text": "_4 stale findings — the highest-value signal blueprint produces. These are docs that claim X while the code does Y; the next agent that reads the doc and trusts it will get it wrong._",
       "status": "stale",

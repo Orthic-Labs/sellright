@@ -12,25 +12,44 @@
       "version": "repo-local-deterministic-v3",
       "license": "workspace-owned"
     },
-    "generatedAt": "gen:de49234ccce2d5e4",
-    "generationId": "sha256:de49234ccce2d5e479785cce6fb5b5c2a7009a4190e724165ec3af7bdb30401e",
+    "generatedAt": "gen:8c06b713e5f9d872",
+    "generationId": "sha256:8c06b713e5f9d87246880a81d67b56bc39d00cf3a05aabaf271e7497a15cabb9",
     "complete": true,
     "fileLimit": 0,
     "truncated": false,
     "truncationReasons": [],
     "repo": {
       "rootName": "sellright",
-      "sourceHash": "sha256:50fe5b9f70f3b82bb7f776f02b6a82a342523dd493263c2ce487b459e2aad524",
-      "fileCount": 696
+      "sourceHash": "sha256:a62343abe18876d989aafb27484e0a43969430bfe95c4a8f46a4bce7cbc37bd9",
+      "fileCount": 698
     },
     "counts": {
-      "nodes": 7315,
+      "nodes": 7317,
       "edges": 2211,
-      "joins": 340,
+      "joins": 362,
       "supersedes": 0
     }
   },
   "nodes": [
+    {
+      "id": "file:.gitattributes",
+      "kind": "file",
+      "labels": [
+        "File"
+      ],
+      "name": ".gitattributes",
+      "qualifiedName": ".gitattributes",
+      "path": ".gitattributes",
+      "confidence": 1,
+      "evidence": [
+        {
+          "path": ".gitattributes",
+          "startLine": 1,
+          "endLine": 1,
+          "contentHash": "size:625"
+        }
+      ]
+    },
     {
       "id": "file:.github/workflows/verify.yml",
       "kind": "file",
@@ -237,6 +256,25 @@
           "startLine": 1,
           "endLine": 282,
           "contentHash": "0553992429a11cfde1e7e152a030d3156b2ea82bd3b8d0a5f4238f1d23b353b6"
+        }
+      ]
+    },
+    {
+      "id": "file:docs/ARCHITECTURE.md",
+      "kind": "file",
+      "labels": [
+        "File"
+      ],
+      "name": "ARCHITECTURE.md",
+      "qualifiedName": "docs/ARCHITECTURE.md",
+      "path": "docs/ARCHITECTURE.md",
+      "confidence": 1,
+      "evidence": [
+        {
+          "path": "docs/ARCHITECTURE.md",
+          "startLine": 1,
+          "endLine": 293,
+          "contentHash": "a354b76421329545d7a721194ce1925b0c1278d643c75b6556a5b42ea20dab54"
         }
       ]
     },
@@ -172822,8 +172860,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 63,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 75,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/plans/BOX-VALIDATION-CHECKLIST.md",
@@ -172846,8 +172884,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 63,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 75,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/plans/DISPATCH.md",
@@ -172870,8 +172908,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 63,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 75,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/COMMERCE-GAP-ANALYSIS.md",
@@ -172894,8 +172932,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 63,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 75,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/plans/REMAINING-WORK.md",
@@ -172911,6 +172949,54 @@
       {
         "kind": "contradicts",
         "source": "doc:docs/ARCHITECTURE.md",
+        "target": "file:docs/ARCHITECTURE.md",
+        "confidence": 0.85,
+        "confidenceClass": "EXTRACTED",
+        "reason": "claim status=partial mentions stale/drift/missing/contradict; code node exists",
+        "evidence": {
+          "docRef": {
+            "path": "docs/ARCHITECTURE.md",
+            "line": 75,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
+          },
+          "codeRef": {
+            "path": "docs/ARCHITECTURE.md",
+            "exists": true
+          },
+          "codeNode": {
+            "id": "file:docs/ARCHITECTURE.md",
+            "path": "docs/ARCHITECTURE.md",
+            "contentHash": "a354b76421329545d7a721194ce1925b0c1278d643c75b6556a5b42ea20dab54"
+          }
+        }
+      },
+      {
+        "kind": "contradicts",
+        "source": "doc:docs/ARCHITECTURE.md",
+        "target": "file:docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+        "confidence": 0.85,
+        "confidenceClass": "EXTRACTED",
+        "reason": "claim status=partial mentions stale/drift/missing/contradict; code node exists",
+        "evidence": {
+          "docRef": {
+            "path": "docs/ARCHITECTURE.md",
+            "line": 75,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
+          },
+          "codeRef": {
+            "path": "docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+            "exists": true
+          },
+          "codeNode": {
+            "id": "file:docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+            "path": "docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+            "contentHash": "b33c0179fad15daee9d924f96a339105e54979ff4c896e72b89a83f028be57c5"
+          }
+        }
+      },
+      {
+        "kind": "contradicts",
+        "source": "doc:docs/ARCHITECTURE.md",
         "target": "file:packages/api/src/auth/admin-staff.ts",
         "confidence": 0.85,
         "confidenceClass": "EXTRACTED",
@@ -172918,8 +173004,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 63,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 75,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/auth/admin-staff.ts",
@@ -172942,8 +173028,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 63,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 75,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/storefront/src/services/ServerCartService.ts",
@@ -172966,8 +173052,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 63,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 75,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/checkout.ts",
@@ -172990,8 +173076,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 63,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 75,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/admin-orders.ts",
@@ -173014,8 +173100,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 63,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 75,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/storefront/src/components/address-form/AddressForm.tsx",
@@ -173038,8 +173124,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 63,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 75,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/admin.ts",
@@ -173062,8 +173148,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 63,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 75,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/money/coupon.ts",
@@ -173086,8 +173172,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 63,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 75,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/money/auto-discount.test.ts",
@@ -173110,8 +173196,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 63,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 75,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/payments/stripe.ts",
@@ -173134,8 +173220,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 63,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 75,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/apps.ts",
@@ -173158,8 +173244,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 63,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 75,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/licensing/issue.ts",
@@ -173182,8 +173268,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 63,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 75,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/admin-catalog.ts",
@@ -173206,8 +173292,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 63,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 75,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/db/schema-orders.ts",
@@ -173230,8 +173316,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 186,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 198,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/plans/BOX-VALIDATION-CHECKLIST.md",
@@ -173254,8 +173340,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 186,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 198,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/plans/DISPATCH.md",
@@ -173278,8 +173364,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 186,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 198,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/COMMERCE-GAP-ANALYSIS.md",
@@ -173302,8 +173388,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 186,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 198,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/plans/REMAINING-WORK.md",
@@ -173319,6 +173405,54 @@
       {
         "kind": "contradicts",
         "source": "doc:docs/ARCHITECTURE.md",
+        "target": "file:docs/ARCHITECTURE.md",
+        "confidence": 0.85,
+        "confidenceClass": "EXTRACTED",
+        "reason": "claim status=partial mentions stale/drift/missing/contradict; code node exists",
+        "evidence": {
+          "docRef": {
+            "path": "docs/ARCHITECTURE.md",
+            "line": 198,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
+          },
+          "codeRef": {
+            "path": "docs/ARCHITECTURE.md",
+            "exists": true
+          },
+          "codeNode": {
+            "id": "file:docs/ARCHITECTURE.md",
+            "path": "docs/ARCHITECTURE.md",
+            "contentHash": "a354b76421329545d7a721194ce1925b0c1278d643c75b6556a5b42ea20dab54"
+          }
+        }
+      },
+      {
+        "kind": "contradicts",
+        "source": "doc:docs/ARCHITECTURE.md",
+        "target": "file:docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+        "confidence": 0.85,
+        "confidenceClass": "EXTRACTED",
+        "reason": "claim status=partial mentions stale/drift/missing/contradict; code node exists",
+        "evidence": {
+          "docRef": {
+            "path": "docs/ARCHITECTURE.md",
+            "line": 198,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
+          },
+          "codeRef": {
+            "path": "docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+            "exists": true
+          },
+          "codeNode": {
+            "id": "file:docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+            "path": "docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+            "contentHash": "b33c0179fad15daee9d924f96a339105e54979ff4c896e72b89a83f028be57c5"
+          }
+        }
+      },
+      {
+        "kind": "contradicts",
+        "source": "doc:docs/ARCHITECTURE.md",
         "target": "file:packages/api/src/auth/admin-staff.ts",
         "confidence": 0.85,
         "confidenceClass": "EXTRACTED",
@@ -173326,8 +173460,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 186,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 198,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/auth/admin-staff.ts",
@@ -173350,8 +173484,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 186,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 198,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/storefront/src/services/ServerCartService.ts",
@@ -173374,8 +173508,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 186,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 198,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/checkout.ts",
@@ -173398,8 +173532,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 186,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 198,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/admin-orders.ts",
@@ -173422,8 +173556,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 186,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 198,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/storefront/src/components/address-form/AddressForm.tsx",
@@ -173446,8 +173580,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 186,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 198,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/admin.ts",
@@ -173470,8 +173604,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 186,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 198,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/money/coupon.ts",
@@ -173494,8 +173628,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 186,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 198,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/money/auto-discount.test.ts",
@@ -173518,8 +173652,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 186,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 198,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/payments/stripe.ts",
@@ -173542,8 +173676,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 186,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 198,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/apps.ts",
@@ -173566,8 +173700,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 186,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 198,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/licensing/issue.ts",
@@ -173590,8 +173724,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 186,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 198,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/admin-catalog.ts",
@@ -173614,8 +173748,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 186,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 198,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/db/schema-orders.ts",
@@ -173638,8 +173772,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 190,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 202,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/plans/BOX-VALIDATION-CHECKLIST.md",
@@ -173662,8 +173796,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 190,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 202,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/plans/DISPATCH.md",
@@ -173686,8 +173820,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 190,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 202,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/COMMERCE-GAP-ANALYSIS.md",
@@ -173710,8 +173844,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 190,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 202,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/plans/REMAINING-WORK.md",
@@ -173727,6 +173861,54 @@
       {
         "kind": "supports",
         "source": "doc:docs/ARCHITECTURE.md",
+        "target": "file:docs/ARCHITECTURE.md",
+        "confidence": 0.85,
+        "confidenceClass": "EXTRACTED",
+        "reason": "claim status=implemented; code node exists",
+        "evidence": {
+          "docRef": {
+            "path": "docs/ARCHITECTURE.md",
+            "line": 202,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
+          },
+          "codeRef": {
+            "path": "docs/ARCHITECTURE.md",
+            "exists": true
+          },
+          "codeNode": {
+            "id": "file:docs/ARCHITECTURE.md",
+            "path": "docs/ARCHITECTURE.md",
+            "contentHash": "a354b76421329545d7a721194ce1925b0c1278d643c75b6556a5b42ea20dab54"
+          }
+        }
+      },
+      {
+        "kind": "supports",
+        "source": "doc:docs/ARCHITECTURE.md",
+        "target": "file:docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+        "confidence": 0.85,
+        "confidenceClass": "EXTRACTED",
+        "reason": "claim status=implemented; code node exists",
+        "evidence": {
+          "docRef": {
+            "path": "docs/ARCHITECTURE.md",
+            "line": 202,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
+          },
+          "codeRef": {
+            "path": "docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+            "exists": true
+          },
+          "codeNode": {
+            "id": "file:docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+            "path": "docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+            "contentHash": "b33c0179fad15daee9d924f96a339105e54979ff4c896e72b89a83f028be57c5"
+          }
+        }
+      },
+      {
+        "kind": "supports",
+        "source": "doc:docs/ARCHITECTURE.md",
         "target": "file:packages/api/src/auth/admin-staff.ts",
         "confidence": 0.85,
         "confidenceClass": "EXTRACTED",
@@ -173734,8 +173916,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 190,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 202,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/auth/admin-staff.ts",
@@ -173758,8 +173940,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 190,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 202,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/storefront/src/services/ServerCartService.ts",
@@ -173782,8 +173964,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 190,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 202,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/checkout.ts",
@@ -173806,8 +173988,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 190,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 202,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/admin-orders.ts",
@@ -173830,8 +174012,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 190,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 202,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/storefront/src/components/address-form/AddressForm.tsx",
@@ -173854,8 +174036,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 190,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 202,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/admin.ts",
@@ -173878,8 +174060,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 190,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 202,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/money/coupon.ts",
@@ -173902,8 +174084,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 190,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 202,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/money/auto-discount.test.ts",
@@ -173926,8 +174108,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 190,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 202,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/payments/stripe.ts",
@@ -173950,8 +174132,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 190,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 202,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/apps.ts",
@@ -173974,8 +174156,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 190,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 202,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/licensing/issue.ts",
@@ -173998,8 +174180,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 190,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 202,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/admin-catalog.ts",
@@ -174022,8 +174204,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 190,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 202,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/db/schema-orders.ts",
@@ -174046,8 +174228,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 195,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 207,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/plans/BOX-VALIDATION-CHECKLIST.md",
@@ -174070,8 +174252,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 195,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 207,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/plans/DISPATCH.md",
@@ -174094,8 +174276,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 195,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 207,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/COMMERCE-GAP-ANALYSIS.md",
@@ -174118,8 +174300,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 195,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 207,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/plans/REMAINING-WORK.md",
@@ -174135,6 +174317,54 @@
       {
         "kind": "supports",
         "source": "doc:docs/ARCHITECTURE.md",
+        "target": "file:docs/ARCHITECTURE.md",
+        "confidence": 0.85,
+        "confidenceClass": "EXTRACTED",
+        "reason": "claim status=implemented; code node exists",
+        "evidence": {
+          "docRef": {
+            "path": "docs/ARCHITECTURE.md",
+            "line": 207,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
+          },
+          "codeRef": {
+            "path": "docs/ARCHITECTURE.md",
+            "exists": true
+          },
+          "codeNode": {
+            "id": "file:docs/ARCHITECTURE.md",
+            "path": "docs/ARCHITECTURE.md",
+            "contentHash": "a354b76421329545d7a721194ce1925b0c1278d643c75b6556a5b42ea20dab54"
+          }
+        }
+      },
+      {
+        "kind": "supports",
+        "source": "doc:docs/ARCHITECTURE.md",
+        "target": "file:docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+        "confidence": 0.85,
+        "confidenceClass": "EXTRACTED",
+        "reason": "claim status=implemented; code node exists",
+        "evidence": {
+          "docRef": {
+            "path": "docs/ARCHITECTURE.md",
+            "line": 207,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
+          },
+          "codeRef": {
+            "path": "docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+            "exists": true
+          },
+          "codeNode": {
+            "id": "file:docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+            "path": "docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+            "contentHash": "b33c0179fad15daee9d924f96a339105e54979ff4c896e72b89a83f028be57c5"
+          }
+        }
+      },
+      {
+        "kind": "supports",
+        "source": "doc:docs/ARCHITECTURE.md",
         "target": "file:packages/api/src/auth/admin-staff.ts",
         "confidence": 0.85,
         "confidenceClass": "EXTRACTED",
@@ -174142,8 +174372,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 195,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 207,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/auth/admin-staff.ts",
@@ -174166,8 +174396,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 195,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 207,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/storefront/src/services/ServerCartService.ts",
@@ -174190,8 +174420,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 195,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 207,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/checkout.ts",
@@ -174214,8 +174444,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 195,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 207,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/admin-orders.ts",
@@ -174238,8 +174468,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 195,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 207,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/storefront/src/components/address-form/AddressForm.tsx",
@@ -174262,8 +174492,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 195,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 207,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/admin.ts",
@@ -174286,8 +174516,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 195,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 207,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/money/coupon.ts",
@@ -174310,8 +174540,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 195,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 207,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/money/auto-discount.test.ts",
@@ -174334,8 +174564,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 195,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 207,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/payments/stripe.ts",
@@ -174358,8 +174588,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 195,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 207,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/apps.ts",
@@ -174382,8 +174612,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 195,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 207,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/licensing/issue.ts",
@@ -174406,8 +174636,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 195,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 207,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/admin-catalog.ts",
@@ -174430,8 +174660,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 195,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 207,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/db/schema-orders.ts",
@@ -174454,8 +174684,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 215,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 227,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/plans/BOX-VALIDATION-CHECKLIST.md",
@@ -174478,8 +174708,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 215,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 227,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/plans/DISPATCH.md",
@@ -174502,8 +174732,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 215,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 227,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/COMMERCE-GAP-ANALYSIS.md",
@@ -174526,8 +174756,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 215,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 227,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/plans/REMAINING-WORK.md",
@@ -174543,6 +174773,54 @@
       {
         "kind": "contradicts",
         "source": "doc:docs/ARCHITECTURE.md",
+        "target": "file:docs/ARCHITECTURE.md",
+        "confidence": 0.85,
+        "confidenceClass": "EXTRACTED",
+        "reason": "claim status=stale mentions stale/drift/missing/contradict; code node exists",
+        "evidence": {
+          "docRef": {
+            "path": "docs/ARCHITECTURE.md",
+            "line": 227,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
+          },
+          "codeRef": {
+            "path": "docs/ARCHITECTURE.md",
+            "exists": true
+          },
+          "codeNode": {
+            "id": "file:docs/ARCHITECTURE.md",
+            "path": "docs/ARCHITECTURE.md",
+            "contentHash": "a354b76421329545d7a721194ce1925b0c1278d643c75b6556a5b42ea20dab54"
+          }
+        }
+      },
+      {
+        "kind": "contradicts",
+        "source": "doc:docs/ARCHITECTURE.md",
+        "target": "file:docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+        "confidence": 0.85,
+        "confidenceClass": "EXTRACTED",
+        "reason": "claim status=stale mentions stale/drift/missing/contradict; code node exists",
+        "evidence": {
+          "docRef": {
+            "path": "docs/ARCHITECTURE.md",
+            "line": 227,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
+          },
+          "codeRef": {
+            "path": "docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+            "exists": true
+          },
+          "codeNode": {
+            "id": "file:docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+            "path": "docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+            "contentHash": "b33c0179fad15daee9d924f96a339105e54979ff4c896e72b89a83f028be57c5"
+          }
+        }
+      },
+      {
+        "kind": "contradicts",
+        "source": "doc:docs/ARCHITECTURE.md",
         "target": "file:packages/api/src/auth/admin-staff.ts",
         "confidence": 0.85,
         "confidenceClass": "EXTRACTED",
@@ -174550,8 +174828,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 215,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 227,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/auth/admin-staff.ts",
@@ -174574,8 +174852,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 215,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 227,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/storefront/src/services/ServerCartService.ts",
@@ -174598,8 +174876,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 215,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 227,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/checkout.ts",
@@ -174622,8 +174900,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 215,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 227,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/admin-orders.ts",
@@ -174646,8 +174924,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 215,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 227,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/storefront/src/components/address-form/AddressForm.tsx",
@@ -174670,8 +174948,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 215,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 227,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/admin.ts",
@@ -174694,8 +174972,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 215,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 227,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/money/coupon.ts",
@@ -174718,8 +174996,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 215,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 227,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/money/auto-discount.test.ts",
@@ -174742,8 +175020,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 215,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 227,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/payments/stripe.ts",
@@ -174766,8 +175044,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 215,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 227,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/apps.ts",
@@ -174790,8 +175068,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 215,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 227,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/licensing/issue.ts",
@@ -174814,8 +175092,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 215,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 227,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/admin-catalog.ts",
@@ -174838,8 +175116,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 215,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 227,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/db/schema-orders.ts",
@@ -174862,8 +175140,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 218,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 230,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/plans/BOX-VALIDATION-CHECKLIST.md",
@@ -174886,8 +175164,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 218,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 230,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/plans/DISPATCH.md",
@@ -174910,8 +175188,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 218,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 230,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/COMMERCE-GAP-ANALYSIS.md",
@@ -174934,8 +175212,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 218,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 230,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/plans/REMAINING-WORK.md",
@@ -174951,6 +175229,54 @@
       {
         "kind": "supports",
         "source": "doc:docs/ARCHITECTURE.md",
+        "target": "file:docs/ARCHITECTURE.md",
+        "confidence": 0.85,
+        "confidenceClass": "EXTRACTED",
+        "reason": "claim status=implemented; code node exists",
+        "evidence": {
+          "docRef": {
+            "path": "docs/ARCHITECTURE.md",
+            "line": 230,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
+          },
+          "codeRef": {
+            "path": "docs/ARCHITECTURE.md",
+            "exists": true
+          },
+          "codeNode": {
+            "id": "file:docs/ARCHITECTURE.md",
+            "path": "docs/ARCHITECTURE.md",
+            "contentHash": "a354b76421329545d7a721194ce1925b0c1278d643c75b6556a5b42ea20dab54"
+          }
+        }
+      },
+      {
+        "kind": "supports",
+        "source": "doc:docs/ARCHITECTURE.md",
+        "target": "file:docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+        "confidence": 0.85,
+        "confidenceClass": "EXTRACTED",
+        "reason": "claim status=implemented; code node exists",
+        "evidence": {
+          "docRef": {
+            "path": "docs/ARCHITECTURE.md",
+            "line": 230,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
+          },
+          "codeRef": {
+            "path": "docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+            "exists": true
+          },
+          "codeNode": {
+            "id": "file:docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+            "path": "docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+            "contentHash": "b33c0179fad15daee9d924f96a339105e54979ff4c896e72b89a83f028be57c5"
+          }
+        }
+      },
+      {
+        "kind": "supports",
+        "source": "doc:docs/ARCHITECTURE.md",
         "target": "file:packages/api/src/auth/admin-staff.ts",
         "confidence": 0.85,
         "confidenceClass": "EXTRACTED",
@@ -174958,8 +175284,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 218,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 230,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/auth/admin-staff.ts",
@@ -174982,8 +175308,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 218,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 230,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/storefront/src/services/ServerCartService.ts",
@@ -175006,8 +175332,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 218,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 230,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/checkout.ts",
@@ -175030,8 +175356,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 218,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 230,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/admin-orders.ts",
@@ -175054,8 +175380,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 218,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 230,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/storefront/src/components/address-form/AddressForm.tsx",
@@ -175078,8 +175404,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 218,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 230,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/admin.ts",
@@ -175102,8 +175428,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 218,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 230,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/money/coupon.ts",
@@ -175126,8 +175452,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 218,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 230,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/money/auto-discount.test.ts",
@@ -175150,8 +175476,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 218,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 230,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/payments/stripe.ts",
@@ -175174,8 +175500,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 218,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 230,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/apps.ts",
@@ -175198,8 +175524,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 218,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 230,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/licensing/issue.ts",
@@ -175222,8 +175548,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 218,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 230,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/admin-catalog.ts",
@@ -175246,8 +175572,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 218,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 230,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/db/schema-orders.ts",
@@ -175270,8 +175596,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 219,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 231,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/plans/BOX-VALIDATION-CHECKLIST.md",
@@ -175294,8 +175620,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 219,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 231,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/plans/DISPATCH.md",
@@ -175318,8 +175644,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 219,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 231,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/COMMERCE-GAP-ANALYSIS.md",
@@ -175342,8 +175668,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 219,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 231,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/plans/REMAINING-WORK.md",
@@ -175359,6 +175685,54 @@
       {
         "kind": "supports",
         "source": "doc:docs/ARCHITECTURE.md",
+        "target": "file:docs/ARCHITECTURE.md",
+        "confidence": 0.85,
+        "confidenceClass": "EXTRACTED",
+        "reason": "claim status=implemented; code node exists",
+        "evidence": {
+          "docRef": {
+            "path": "docs/ARCHITECTURE.md",
+            "line": 231,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
+          },
+          "codeRef": {
+            "path": "docs/ARCHITECTURE.md",
+            "exists": true
+          },
+          "codeNode": {
+            "id": "file:docs/ARCHITECTURE.md",
+            "path": "docs/ARCHITECTURE.md",
+            "contentHash": "a354b76421329545d7a721194ce1925b0c1278d643c75b6556a5b42ea20dab54"
+          }
+        }
+      },
+      {
+        "kind": "supports",
+        "source": "doc:docs/ARCHITECTURE.md",
+        "target": "file:docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+        "confidence": 0.85,
+        "confidenceClass": "EXTRACTED",
+        "reason": "claim status=implemented; code node exists",
+        "evidence": {
+          "docRef": {
+            "path": "docs/ARCHITECTURE.md",
+            "line": 231,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
+          },
+          "codeRef": {
+            "path": "docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+            "exists": true
+          },
+          "codeNode": {
+            "id": "file:docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+            "path": "docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+            "contentHash": "b33c0179fad15daee9d924f96a339105e54979ff4c896e72b89a83f028be57c5"
+          }
+        }
+      },
+      {
+        "kind": "supports",
+        "source": "doc:docs/ARCHITECTURE.md",
         "target": "file:packages/api/src/auth/admin-staff.ts",
         "confidence": 0.85,
         "confidenceClass": "EXTRACTED",
@@ -175366,8 +175740,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 219,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 231,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/auth/admin-staff.ts",
@@ -175390,8 +175764,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 219,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 231,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/storefront/src/services/ServerCartService.ts",
@@ -175414,8 +175788,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 219,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 231,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/checkout.ts",
@@ -175438,8 +175812,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 219,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 231,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/admin-orders.ts",
@@ -175462,8 +175836,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 219,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 231,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/storefront/src/components/address-form/AddressForm.tsx",
@@ -175486,8 +175860,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 219,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 231,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/admin.ts",
@@ -175510,8 +175884,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 219,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 231,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/money/coupon.ts",
@@ -175534,8 +175908,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 219,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 231,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/money/auto-discount.test.ts",
@@ -175558,8 +175932,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 219,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 231,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/payments/stripe.ts",
@@ -175582,8 +175956,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 219,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 231,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/apps.ts",
@@ -175606,8 +175980,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 219,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 231,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/licensing/issue.ts",
@@ -175630,8 +176004,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 219,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 231,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/admin-catalog.ts",
@@ -175654,8 +176028,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 219,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 231,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/db/schema-orders.ts",
@@ -175678,8 +176052,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 220,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 232,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/plans/BOX-VALIDATION-CHECKLIST.md",
@@ -175702,8 +176076,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 220,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 232,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/plans/DISPATCH.md",
@@ -175726,8 +176100,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 220,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 232,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/COMMERCE-GAP-ANALYSIS.md",
@@ -175750,8 +176124,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 220,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 232,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/plans/REMAINING-WORK.md",
@@ -175767,6 +176141,54 @@
       {
         "kind": "supports",
         "source": "doc:docs/ARCHITECTURE.md",
+        "target": "file:docs/ARCHITECTURE.md",
+        "confidence": 0.85,
+        "confidenceClass": "EXTRACTED",
+        "reason": "claim status=implemented; code node exists",
+        "evidence": {
+          "docRef": {
+            "path": "docs/ARCHITECTURE.md",
+            "line": 232,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
+          },
+          "codeRef": {
+            "path": "docs/ARCHITECTURE.md",
+            "exists": true
+          },
+          "codeNode": {
+            "id": "file:docs/ARCHITECTURE.md",
+            "path": "docs/ARCHITECTURE.md",
+            "contentHash": "a354b76421329545d7a721194ce1925b0c1278d643c75b6556a5b42ea20dab54"
+          }
+        }
+      },
+      {
+        "kind": "supports",
+        "source": "doc:docs/ARCHITECTURE.md",
+        "target": "file:docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+        "confidence": 0.85,
+        "confidenceClass": "EXTRACTED",
+        "reason": "claim status=implemented; code node exists",
+        "evidence": {
+          "docRef": {
+            "path": "docs/ARCHITECTURE.md",
+            "line": 232,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
+          },
+          "codeRef": {
+            "path": "docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+            "exists": true
+          },
+          "codeNode": {
+            "id": "file:docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+            "path": "docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+            "contentHash": "b33c0179fad15daee9d924f96a339105e54979ff4c896e72b89a83f028be57c5"
+          }
+        }
+      },
+      {
+        "kind": "supports",
+        "source": "doc:docs/ARCHITECTURE.md",
         "target": "file:packages/api/src/auth/admin-staff.ts",
         "confidence": 0.85,
         "confidenceClass": "EXTRACTED",
@@ -175774,8 +176196,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 220,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 232,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/auth/admin-staff.ts",
@@ -175798,8 +176220,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 220,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 232,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/storefront/src/services/ServerCartService.ts",
@@ -175822,8 +176244,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 220,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 232,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/checkout.ts",
@@ -175846,8 +176268,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 220,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 232,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/admin-orders.ts",
@@ -175870,8 +176292,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 220,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 232,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/storefront/src/components/address-form/AddressForm.tsx",
@@ -175894,8 +176316,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 220,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 232,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/admin.ts",
@@ -175918,8 +176340,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 220,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 232,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/money/coupon.ts",
@@ -175942,8 +176364,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 220,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 232,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/money/auto-discount.test.ts",
@@ -175966,8 +176388,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 220,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 232,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/payments/stripe.ts",
@@ -175990,8 +176412,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 220,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 232,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/apps.ts",
@@ -176014,8 +176436,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 220,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 232,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/licensing/issue.ts",
@@ -176038,8 +176460,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 220,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 232,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/admin-catalog.ts",
@@ -176062,8 +176484,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 220,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 232,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/db/schema-orders.ts",
@@ -176086,8 +176508,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 227,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 239,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/plans/BOX-VALIDATION-CHECKLIST.md",
@@ -176110,8 +176532,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 227,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 239,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/plans/DISPATCH.md",
@@ -176134,8 +176556,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 227,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 239,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/COMMERCE-GAP-ANALYSIS.md",
@@ -176158,8 +176580,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 227,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 239,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/plans/REMAINING-WORK.md",
@@ -176175,6 +176597,54 @@
       {
         "kind": "contradicts",
         "source": "doc:docs/ARCHITECTURE.md",
+        "target": "file:docs/ARCHITECTURE.md",
+        "confidence": 0.85,
+        "confidenceClass": "EXTRACTED",
+        "reason": "claim status=partial mentions stale/drift/missing/contradict; code node exists",
+        "evidence": {
+          "docRef": {
+            "path": "docs/ARCHITECTURE.md",
+            "line": 239,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
+          },
+          "codeRef": {
+            "path": "docs/ARCHITECTURE.md",
+            "exists": true
+          },
+          "codeNode": {
+            "id": "file:docs/ARCHITECTURE.md",
+            "path": "docs/ARCHITECTURE.md",
+            "contentHash": "a354b76421329545d7a721194ce1925b0c1278d643c75b6556a5b42ea20dab54"
+          }
+        }
+      },
+      {
+        "kind": "contradicts",
+        "source": "doc:docs/ARCHITECTURE.md",
+        "target": "file:docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+        "confidence": 0.85,
+        "confidenceClass": "EXTRACTED",
+        "reason": "claim status=partial mentions stale/drift/missing/contradict; code node exists",
+        "evidence": {
+          "docRef": {
+            "path": "docs/ARCHITECTURE.md",
+            "line": 239,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
+          },
+          "codeRef": {
+            "path": "docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+            "exists": true
+          },
+          "codeNode": {
+            "id": "file:docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+            "path": "docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+            "contentHash": "b33c0179fad15daee9d924f96a339105e54979ff4c896e72b89a83f028be57c5"
+          }
+        }
+      },
+      {
+        "kind": "contradicts",
+        "source": "doc:docs/ARCHITECTURE.md",
         "target": "file:packages/api/src/auth/admin-staff.ts",
         "confidence": 0.85,
         "confidenceClass": "EXTRACTED",
@@ -176182,8 +176652,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 227,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 239,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/auth/admin-staff.ts",
@@ -176206,8 +176676,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 227,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 239,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/storefront/src/services/ServerCartService.ts",
@@ -176230,8 +176700,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 227,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 239,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/checkout.ts",
@@ -176254,8 +176724,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 227,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 239,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/admin-orders.ts",
@@ -176278,8 +176748,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 227,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 239,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/storefront/src/components/address-form/AddressForm.tsx",
@@ -176302,8 +176772,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 227,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 239,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/admin.ts",
@@ -176326,8 +176796,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 227,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 239,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/money/coupon.ts",
@@ -176350,8 +176820,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 227,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 239,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/money/auto-discount.test.ts",
@@ -176374,8 +176844,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 227,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 239,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/payments/stripe.ts",
@@ -176398,8 +176868,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 227,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 239,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/apps.ts",
@@ -176422,8 +176892,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 227,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 239,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/licensing/issue.ts",
@@ -176446,8 +176916,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 227,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 239,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/admin-catalog.ts",
@@ -176470,8 +176940,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 227,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 239,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/db/schema-orders.ts",
@@ -176494,8 +176964,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 243,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 255,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/plans/BOX-VALIDATION-CHECKLIST.md",
@@ -176518,8 +176988,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 243,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 255,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/plans/DISPATCH.md",
@@ -176542,8 +177012,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 243,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 255,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/COMMERCE-GAP-ANALYSIS.md",
@@ -176566,8 +177036,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 243,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 255,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/plans/REMAINING-WORK.md",
@@ -176583,6 +177053,54 @@
       {
         "kind": "contradicts",
         "source": "doc:docs/ARCHITECTURE.md",
+        "target": "file:docs/ARCHITECTURE.md",
+        "confidence": 0.85,
+        "confidenceClass": "EXTRACTED",
+        "reason": "claim status=planned mentions stale/drift/missing/contradict; code node exists",
+        "evidence": {
+          "docRef": {
+            "path": "docs/ARCHITECTURE.md",
+            "line": 255,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
+          },
+          "codeRef": {
+            "path": "docs/ARCHITECTURE.md",
+            "exists": true
+          },
+          "codeNode": {
+            "id": "file:docs/ARCHITECTURE.md",
+            "path": "docs/ARCHITECTURE.md",
+            "contentHash": "a354b76421329545d7a721194ce1925b0c1278d643c75b6556a5b42ea20dab54"
+          }
+        }
+      },
+      {
+        "kind": "contradicts",
+        "source": "doc:docs/ARCHITECTURE.md",
+        "target": "file:docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+        "confidence": 0.85,
+        "confidenceClass": "EXTRACTED",
+        "reason": "claim status=planned mentions stale/drift/missing/contradict; code node exists",
+        "evidence": {
+          "docRef": {
+            "path": "docs/ARCHITECTURE.md",
+            "line": 255,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
+          },
+          "codeRef": {
+            "path": "docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+            "exists": true
+          },
+          "codeNode": {
+            "id": "file:docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+            "path": "docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+            "contentHash": "b33c0179fad15daee9d924f96a339105e54979ff4c896e72b89a83f028be57c5"
+          }
+        }
+      },
+      {
+        "kind": "contradicts",
+        "source": "doc:docs/ARCHITECTURE.md",
         "target": "file:packages/api/src/auth/admin-staff.ts",
         "confidence": 0.85,
         "confidenceClass": "EXTRACTED",
@@ -176590,8 +177108,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 243,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 255,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/auth/admin-staff.ts",
@@ -176614,8 +177132,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 243,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 255,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/storefront/src/services/ServerCartService.ts",
@@ -176638,8 +177156,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 243,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 255,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/checkout.ts",
@@ -176662,8 +177180,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 243,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 255,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/admin-orders.ts",
@@ -176686,8 +177204,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 243,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 255,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/storefront/src/components/address-form/AddressForm.tsx",
@@ -176710,8 +177228,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 243,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 255,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/admin.ts",
@@ -176734,8 +177252,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 243,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 255,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/money/coupon.ts",
@@ -176758,8 +177276,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 243,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 255,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/money/auto-discount.test.ts",
@@ -176782,8 +177300,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 243,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 255,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/payments/stripe.ts",
@@ -176806,8 +177324,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 243,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 255,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/apps.ts",
@@ -176830,8 +177348,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 243,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 255,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/licensing/issue.ts",
@@ -176854,8 +177372,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 243,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 255,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/admin-catalog.ts",
@@ -176878,8 +177396,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 243,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 255,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/db/schema-orders.ts",
@@ -176902,8 +177420,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 278,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 290,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/plans/BOX-VALIDATION-CHECKLIST.md",
@@ -176926,8 +177444,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 278,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 290,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/plans/DISPATCH.md",
@@ -176950,8 +177468,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 278,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 290,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/COMMERCE-GAP-ANALYSIS.md",
@@ -176974,8 +177492,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 278,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 290,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "docs/plans/REMAINING-WORK.md",
@@ -176991,6 +177509,54 @@
       {
         "kind": "contradicts",
         "source": "doc:docs/ARCHITECTURE.md",
+        "target": "file:docs/ARCHITECTURE.md",
+        "confidence": 0.85,
+        "confidenceClass": "EXTRACTED",
+        "reason": "claim status=partial mentions stale/drift/missing/contradict; code node exists",
+        "evidence": {
+          "docRef": {
+            "path": "docs/ARCHITECTURE.md",
+            "line": 290,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
+          },
+          "codeRef": {
+            "path": "docs/ARCHITECTURE.md",
+            "exists": true
+          },
+          "codeNode": {
+            "id": "file:docs/ARCHITECTURE.md",
+            "path": "docs/ARCHITECTURE.md",
+            "contentHash": "a354b76421329545d7a721194ce1925b0c1278d643c75b6556a5b42ea20dab54"
+          }
+        }
+      },
+      {
+        "kind": "contradicts",
+        "source": "doc:docs/ARCHITECTURE.md",
+        "target": "file:docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+        "confidence": 0.85,
+        "confidenceClass": "EXTRACTED",
+        "reason": "claim status=partial mentions stale/drift/missing/contradict; code node exists",
+        "evidence": {
+          "docRef": {
+            "path": "docs/ARCHITECTURE.md",
+            "line": 290,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
+          },
+          "codeRef": {
+            "path": "docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+            "exists": true
+          },
+          "codeNode": {
+            "id": "file:docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+            "path": "docs/ADMIN-REDESIGN-PLAN-2026-06.md",
+            "contentHash": "b33c0179fad15daee9d924f96a339105e54979ff4c896e72b89a83f028be57c5"
+          }
+        }
+      },
+      {
+        "kind": "contradicts",
+        "source": "doc:docs/ARCHITECTURE.md",
         "target": "file:packages/api/src/auth/admin-staff.ts",
         "confidence": 0.85,
         "confidenceClass": "EXTRACTED",
@@ -176998,8 +177564,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 278,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 290,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/auth/admin-staff.ts",
@@ -177022,8 +177588,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 278,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 290,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/storefront/src/services/ServerCartService.ts",
@@ -177046,8 +177612,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 278,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 290,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/checkout.ts",
@@ -177070,8 +177636,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 278,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 290,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/admin-orders.ts",
@@ -177094,8 +177660,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 278,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 290,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/storefront/src/components/address-form/AddressForm.tsx",
@@ -177118,8 +177684,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 278,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 290,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/admin.ts",
@@ -177142,8 +177708,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 278,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 290,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/money/coupon.ts",
@@ -177166,8 +177732,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 278,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 290,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/money/auto-discount.test.ts",
@@ -177190,8 +177756,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 278,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 290,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/payments/stripe.ts",
@@ -177214,8 +177780,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 278,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 290,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/apps.ts",
@@ -177238,8 +177804,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 278,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 290,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/licensing/issue.ts",
@@ -177262,8 +177828,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 278,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 290,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/routes/admin-catalog.ts",
@@ -177286,8 +177852,8 @@
         "evidence": {
           "docRef": {
             "path": "docs/ARCHITECTURE.md",
-            "line": 278,
-            "sha1": "1f26a81b3d98c2cd813fbfe9d17f3acb59f973b9"
+            "line": 290,
+            "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e"
           },
           "codeRef": {
             "path": "packages/api/src/db/schema-orders.ts",
@@ -180354,7 +180920,7 @@
     "sourceDocMap": {
       "docs": 30,
       "claims": 111,
-      "generatedAt": "gen:6ba44a5f0796de3c"
+      "generatedAt": "gen:66b03883ed187dbb"
     }
   },
   "repoRoot": "D:\\Claude\\sellright"
