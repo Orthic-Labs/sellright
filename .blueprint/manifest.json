@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "repo": "sellright",
-  "generatedAt": "gen:66b03883ed187dbb",
+  "generatedAt": "gen:2acb40efaef4e0a9",
   "entrypoint": ".agent/",
   "humanDocs": [
     "docs/product.md",
@@ -18,9 +18,11 @@
   },
   "generation": {
     "schemaVersion": 1,
-    "id": "sha256:8c06b713e5f9d87246880a81d67b56bc39d00cf3a05aabaf271e7497a15cabb9",
-    "revision": "sha256:8c06b713e5f9d87246880a81d67b56bc39d00cf3a05aabaf271e7497a15cabb9",
-    "indexedAt": "gen:8c06b713e5f9d872",
+    "id": "sha256:6f158fa8e95c817214ae5aca0920c8925da2800097e4f8c74e58352191132034",
+    "revision": "sha256:6f158fa8e95c817214ae5aca0920c8925da2800097e4f8c74e58352191132034",
+    "baseCommit": "eb7200536c1cbb7199af2fbe763c70d448c1ff74",
+    "sourceState": "clean",
+    "indexedAt": "gen:6f158fa8e95c8172",
     "stale": false,
     "sourceKind": "blueprint",
     "toolVersions": {
@@ -35,8 +37,8 @@
     ],
     "supportedEdgeTypes": [],
     "supportedLanguages": [],
-    "fileCount": 699,
-    "contentHash": "sha256:a62343abe18876d989aafb27484e0a43969430bfe95c4a8f46a4bce7cbc37bd9",
+    "fileCount": 836,
+    "contentHash": "sha256:46c1bef64970acebe4c699b4573ea3bbfca0934b200ba331aeebbf2cdfc4d231",
     "frozen": true
   },
   "capabilities": {
@@ -172,17 +174,17 @@
     ]
   },
   "stats": {
-    "files": 699,
-    "docs": 30,
-    "claims": 111,
-    "codeRefs": 99,
+    "files": 836,
+    "docs": 36,
+    "claims": 124,
+    "codeRefs": 117,
     "flows": 200,
-    "graphNodes": 7317,
-    "graphEdges": 2211
+    "graphNodes": 7733,
+    "graphEdges": 2314
   },
   "docs": "docs_conflict",
   "docsConflict": [
     "docs/architecture.md"
   ],
-  "sourceSignature": "66b03883ed187dbbf25c75ea11924e14e12db4c4"
+  "sourceSignature": "2acb40efaef4e0a9b1239b71bff9d5d1fc2b390d"
 }

@@ -5,21 +5,21 @@
     "version": "repo-local-deterministic-v3",
     "license": "workspace-owned"
   },
-  "generatedAt": "gen:8c06b713e5f9d872",
-  "generationId": "sha256:8c06b713e5f9d87246880a81d67b56bc39d00cf3a05aabaf271e7497a15cabb9",
+  "generatedAt": "gen:6f158fa8e95c8172",
+  "generationId": "sha256:6f158fa8e95c817214ae5aca0920c8925da2800097e4f8c74e58352191132034",
   "complete": true,
   "fileLimit": 0,
   "truncated": false,
   "truncationReasons": [],
   "repo": {
     "rootName": "sellright",
-    "sourceHash": "sha256:a62343abe18876d989aafb27484e0a43969430bfe95c4a8f46a4bce7cbc37bd9",
-    "fileCount": 698
+    "sourceHash": "sha256:46c1bef64970acebe4c699b4573ea3bbfca0934b200ba331aeebbf2cdfc4d231",
+    "fileCount": 835
   },
   "counts": {
-    "nodes": 7317,
-    "edges": 2211,
-    "joins": 362,
-    "supersedes": 0
+    "nodes": 7733,
+    "edges": 2314,
+    "joins": 374,
+    "supersedes": 2
   }
 }

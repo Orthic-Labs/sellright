@@ -22,6 +22,10 @@
     },
     {
       "source": "docs/ARCHITECTURE.md",
+      "path": "runbooks/postgres-app-role.md"
+    },
+    {
+      "source": "docs/ARCHITECTURE.md",
       "path": "routes/subscriptions.ts"
     },
     {
@@ -39,6 +43,50 @@
     {
       "source": "docs/ARCHITECTURE.md",
       "path": "licensing/issue.ts"
+    },
+    {
+      "source": "docs/OPEN-SOURCE-READINESS-2026-07-17.md",
+      "path": "src/data/trustpilot.json"
+    },
+    {
+      "source": "docs/OPEN-SOURCE-READINESS-2026-07-17.md",
+      "path": "../README.md"
+    },
+    {
+      "source": "docs/OPEN-SOURCE-READINESS-2026-07-17.md",
+      "path": "../tools/right-release/deps.mjs"
+    },
+    {
+      "source": "docs/OPEN-SOURCE-READINESS-2026-07-17.md",
+      "path": "auth/password.ts"
+    },
+    {
+      "source": "docs/OPEN-SOURCE-READINESS-2026-07-17.md",
+      "path": "auth/admin-session.ts"
+    },
+    {
+      "source": "docs/OPEN-SOURCE-READINESS-2026-07-17.md",
+      "path": "routes/admin.ts"
+    },
+    {
+      "source": "docs/OPEN-SOURCE-READINESS-2026-07-17.md",
+      "path": "auth/rate-limit.ts"
+    },
+    {
+      "source": "docs/OPEN-SOURCE-READINESS-2026-07-17.md",
+      "path": "routes/payment-webhooks.ts"
+    },
+    {
+      "source": "docs/OPEN-SOURCE-READINESS-2026-07-17.md",
+      "path": "security/outbound-url.ts"
+    },
+    {
+      "source": "docs/OPEN-SOURCE-READINESS-2026-07-17.md",
+      "path": "jobs/leader-lock.ts"
+    },
+    {
+      "source": "docs/OPEN-SOURCE-READINESS-2026-07-17.md",
+      "path": "routes/admin-orders.ts"
     },
     {
       "source": "docs/plans/2026-06-20-cart-architecture.md",
@@ -63,6 +111,14 @@
     {
       "source": "docs/plans/DISPATCH.md",
       "path": "../../rank.md"
+    },
+    {
+      "source": "docs/runbooks/migrations.md",
+      "path": "meta/_journal.json"
+    },
+    {
+      "source": "ios/README.md",
+      "path": "../docs/IOS-PUSH-SETUP.md"
     },
     {
       "source": "packages/admin/README.md",
@@ -91,10 +147,10 @@
   ],
   "staleClaims": [
     {
-      "id": "claim.docs-architecture-md.fd45.227",
+      "id": "claim.docs-architecture-md.fd45.229",
       "kind": "claim",
       "source": "docs/ARCHITECTURE.md",
-      "line": 227,
+      "line": 229,
       "heading": "Contradictions (Doc-vs-Code Traps)",
       "text": "_4 stale findings — the highest-value signal blueprint produces. These are docs that claim X while the code does Y; the next agent that reads the doc and trusts it will get it wrong._",
       "status": "stale",

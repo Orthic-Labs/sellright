@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "gen:66b03883ed187dbb",
-  "sourceSignature": "66b03883ed187dbbf25c75ea11924e14e12db4c4",
+  "generatedAt": "gen:2acb40efaef4e0a9",
+  "sourceSignature": "2acb40efaef4e0a9b1239b71bff9d5d1fc2b390d",
   "configHash": "79783666ada5d91cdff2c6e39a76bab6f00836c9",
   "files": [
     {
@@ -33,6 +33,10 @@
       "isDoc": true
     },
     {
+      "path": "CHANGELOG.md",
+      "isDoc": true
+    },
+    {
       "path": "CLAUDE.md",
       "isDoc": true
     },
@@ -43,6 +47,254 @@
     {
       "path": "README.md",
       "isDoc": true
+    },
+    {
+      "path": "brand-assets/app-icons/android/mipmap-anydpi-v26/ic_launcher.xml",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/android/mipmap-hdpi/ic_launcher.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/android/mipmap-hdpi/ic_launcher_foreground.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/android/mipmap-hdpi/ic_launcher_round.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/android/mipmap-mdpi/ic_launcher.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/android/mipmap-mdpi/ic_launcher_foreground.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/android/mipmap-mdpi/ic_launcher_round.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/android/mipmap-xhdpi/ic_launcher.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/android/mipmap-xhdpi/ic_launcher_foreground.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/android/mipmap-xhdpi/ic_launcher_round.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/android/mipmap-xxhdpi/ic_launcher.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/android/mipmap-xxhdpi/ic_launcher_foreground.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/android/mipmap-xxhdpi/ic_launcher_round.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/android/mipmap-xxxhdpi/ic_launcher.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/android/mipmap-xxxhdpi/ic_launcher_foreground.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/android/mipmap-xxxhdpi/ic_launcher_round.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/android/values/ic_launcher_background.xml",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/asset-manifest.json",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/ios/AppIcon.appiconset/AppIcon-20x20@1x.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/ios/AppIcon.appiconset/AppIcon-20x20@2x-1.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/ios/AppIcon.appiconset/AppIcon-20x20@2x.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/ios/AppIcon.appiconset/AppIcon-20x20@3x.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/ios/AppIcon.appiconset/AppIcon-29x29@1x.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/ios/AppIcon.appiconset/AppIcon-29x29@2x-1.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/ios/AppIcon.appiconset/AppIcon-29x29@2x.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/ios/AppIcon.appiconset/AppIcon-29x29@3x.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/ios/AppIcon.appiconset/AppIcon-40x40@1x.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/ios/AppIcon.appiconset/AppIcon-40x40@2x-1.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/ios/AppIcon.appiconset/AppIcon-40x40@2x.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/ios/AppIcon.appiconset/AppIcon-40x40@3x.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/ios/AppIcon.appiconset/AppIcon-512@2x.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/ios/AppIcon.appiconset/AppIcon-60x60@2x.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/ios/AppIcon.appiconset/AppIcon-60x60@3x.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/ios/AppIcon.appiconset/AppIcon-76x76@1x.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/ios/AppIcon.appiconset/AppIcon-76x76@2x.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/ios/AppIcon.appiconset/AppIcon-83.5x83.5@2x.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/ios/AppIcon.appiconset/Contents.json",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/macos/icon.icns",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/source.svg",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/web/app-icon-1024.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/web/app-icon-256.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/web/app-icon-512.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/web/apple-touch-icon.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/web/favicon-16.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/web/favicon-32.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/web/favicon.ico",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/web/favicon.svg",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/web/icon-192.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/web/icon-512.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/web/icon.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/web/site.webmanifest",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/windows/Square107x107Logo.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/windows/Square142x142Logo.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/windows/Square150x150Logo.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/windows/Square284x284Logo.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/windows/Square30x30Logo.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/windows/Square310x310Logo.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/windows/Square44x44Logo.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/windows/Square71x71Logo.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/windows/Square89x89Logo.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/windows/StoreLogo.png",
+      "isDoc": false
+    },
+    {
+      "path": "brand-assets/app-icons/windows/icon.ico",
+      "isDoc": false
     },
     {
       "path": "docs/ADMIN-DESIGN-UPLIFT.md",
@@ -85,11 +337,19 @@
       "isDoc": true
     },
     {
+      "path": "docs/IOS-PUSH-SETUP.md",
+      "isDoc": true
+    },
+    {
       "path": "docs/MARKET-PLACEMENT.md",
       "isDoc": true
     },
     {
       "path": "docs/MOAT-AND-DISRUPTION.md",
+      "isDoc": true
+    },
+    {
+      "path": "docs/OPEN-SOURCE-READINESS-2026-07-17.md",
       "isDoc": true
     },
     {
@@ -133,7 +393,211 @@
       "isDoc": true
     },
     {
+      "path": "docs/runbooks/postgres-app-role.md",
+      "isDoc": true
+    },
+    {
       "path": "eslint.config.mjs",
+      "isDoc": false
+    },
+    {
+      "path": "ios/.gitignore",
+      "isDoc": false
+    },
+    {
+      "path": "ios/CHANGELOG.md",
+      "isDoc": true
+    },
+    {
+      "path": "ios/README.md",
+      "isDoc": true
+    },
+    {
+      "path": "ios/SellRightAdmin/App/AppSession.swift",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/App/SellRightAdminApp.swift",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/App/Theme.swift",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Assets.xcassets/AppIcon.appiconset/AppIcon-20x20@1x.png",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Assets.xcassets/AppIcon.appiconset/AppIcon-20x20@2x-1.png",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Assets.xcassets/AppIcon.appiconset/AppIcon-20x20@2x.png",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Assets.xcassets/AppIcon.appiconset/AppIcon-20x20@3x.png",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Assets.xcassets/AppIcon.appiconset/AppIcon-29x29@1x.png",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Assets.xcassets/AppIcon.appiconset/AppIcon-29x29@2x-1.png",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Assets.xcassets/AppIcon.appiconset/AppIcon-29x29@2x.png",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Assets.xcassets/AppIcon.appiconset/AppIcon-29x29@3x.png",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Assets.xcassets/AppIcon.appiconset/AppIcon-40x40@1x.png",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Assets.xcassets/AppIcon.appiconset/AppIcon-40x40@2x-1.png",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Assets.xcassets/AppIcon.appiconset/AppIcon-40x40@2x.png",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Assets.xcassets/AppIcon.appiconset/AppIcon-40x40@3x.png",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Assets.xcassets/AppIcon.appiconset/AppIcon-60x60@2x.png",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Assets.xcassets/AppIcon.appiconset/AppIcon-60x60@3x.png",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Assets.xcassets/AppIcon.appiconset/AppIcon-76x76@1x.png",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Assets.xcassets/AppIcon.appiconset/AppIcon-76x76@2x.png",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Assets.xcassets/AppIcon.appiconset/AppIcon-83.5x83.5@2x.png",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Assets.xcassets/AppIcon.appiconset/Contents.json",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Core/APIClient.swift",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Core/Diagnostics.swift",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Core/Keychain.swift",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Core/Models.swift",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Core/OrderActivityController.swift",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Core/PushManager.swift",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Features/Auth/LoginView.swift",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Features/Customers/CustomerDetailView.swift",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Features/Customers/CustomersListView.swift",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Features/Dashboard/DashboardView.swift",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Features/Orders/OrderDetailView.swift",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Features/Orders/OrdersListView.swift",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Features/Orders/RefundSheet.swift",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Features/Products/ProductDetailView.swift",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Features/Products/ProductsListView.swift",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Features/RootView.swift",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightAdmin/Features/Settings/SettingsView.swift",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightWidgets/Info.plist",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightWidgets/OrderLiveActivity.swift",
+      "isDoc": false
+    },
+    {
+      "path": "ios/SellRightWidgets/SellRightWidgetsBundle.swift",
+      "isDoc": false
+    },
+    {
+      "path": "ios/Shared/Money.swift",
+      "isDoc": false
+    },
+    {
+      "path": "ios/Shared/OrderActivityAttributes.swift",
+      "isDoc": false
+    },
+    {
+      "path": "ios/Tests/ModelsTests.swift",
+      "isDoc": false
+    },
+    {
+      "path": "ios/Tests/ThemeTests.swift",
+      "isDoc": false
+    },
+    {
+      "path": "ios/project.yml",
       "isDoc": false
     },
     {
@@ -174,6 +638,54 @@
     },
     {
       "path": "packages/admin/postcss.config.js",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/public/app-icon-1024.png",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/public/app-icon-256.png",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/public/app-icon-512.png",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/public/apple-touch-icon.png",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/public/favicon-16.png",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/public/favicon-32.png",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/public/favicon.ico",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/public/favicon.svg",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/public/icon-192.png",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/public/icon-512.png",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/public/icon.png",
+      "isDoc": false
+    },
+    {
+      "path": "packages/admin/public/site.webmanifest",
       "isDoc": false
     },
     {
@@ -605,6 +1117,14 @@
       "isDoc": false
     },
     {
+      "path": "packages/api/drizzle/0039_push_notifications.sql",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/drizzle/0040_outbox_autovacuum.sql",
+      "isDoc": false
+    },
+    {
       "path": "packages/api/drizzle/meta/0000_snapshot.json",
       "isDoc": false
     },
@@ -885,7 +1405,15 @@
       "isDoc": false
     },
     {
+      "path": "packages/api/src/db/client.test.ts",
+      "isDoc": false
+    },
+    {
       "path": "packages/api/src/db/client.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/db/no-external-io-in-transaction.test.ts",
       "isDoc": false
     },
     {
@@ -1193,6 +1721,22 @@
       "isDoc": false
     },
     {
+      "path": "packages/api/src/push/apns.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/push/apns.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/push/outbox.db.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/push/outbox.ts",
+      "isDoc": false
+    },
+    {
       "path": "packages/api/src/routes/account-deletion.test.ts",
       "isDoc": false
     },
@@ -1266,6 +1810,10 @@
     },
     {
       "path": "packages/api/src/routes/admin-products.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/admin-push.ts",
       "isDoc": false
     },
     {

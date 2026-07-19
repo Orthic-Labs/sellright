@@ -1,6 +1,22 @@
 {
-  "generatedAt": "gen:66b03883ed187dbb",
+  "generatedAt": "gen:2acb40efaef4e0a9",
   "claims": [
+    {
+      "id": "claim.agents-md.37dd.72",
+      "source": "AGENTS.md",
+      "line": 72,
+      "status": "planned",
+      "text": "An explicit user request is the approval for every step of it. This repo's gates (bakeoff, release, QA, review) govern only unrequested spend, destructive/production steps, or specifics the user must see (e.g. a run packet) — and then only that single step; all other requested work is completed first, never left undone pending approval. Supersedes any...",
+      "candidateFiles": []
+    },
+    {
+      "id": "claim.claude-md.2d5d.72",
+      "source": "CLAUDE.md",
+      "line": 72,
+      "status": "planned",
+      "text": "An explicit user request is the approval for every step of it. This repo's gates (bakeoff, release, QA, review) govern only unrequested spend, destructive/production steps, or specifics the user must see (e.g. a run packet) — and then only that single step; all other requested work is completed first, never left undone pending approval. Supersedes any...",
+      "candidateFiles": []
+    },
     {
       "id": "claim.docs-admin-redesign-plan-2026-06-md.4888.59",
       "source": "docs/ADMIN-REDESIGN-PLAN-2026-06.md",
@@ -138,9 +154,9 @@
       ]
     },
     {
-      "id": "claim.docs-architecture-md.fd45.198",
+      "id": "claim.docs-architecture-md.fd45.200",
       "source": "docs/ARCHITECTURE.md",
-      "line": 198,
+      "line": 200,
       "status": "partial",
       "text": "L118: 0032 is a custom hand-written migration with the required marker and documented snapshot-drift rationale.",
       "candidateFiles": [
@@ -160,9 +176,9 @@
       ]
     },
     {
-      "id": "claim.docs-architecture-md.fd45.202",
+      "id": "claim.docs-architecture-md.fd45.204",
       "source": "docs/ARCHITECTURE.md",
-      "line": 202,
+      "line": 204,
       "status": "implemented",
       "text": "L33: Server-priced cart-token checkout, Stripe Payment Element, idempotent PI, and webhook-authoritative flow are implemented.",
       "candidateFiles": [
@@ -182,9 +198,9 @@
       ]
     },
     {
-      "id": "claim.docs-architecture-md.fd45.207",
+      "id": "claim.docs-architecture-md.fd45.209",
       "source": "docs/ARCHITECTURE.md",
-      "line": 207,
+      "line": 209,
       "status": "implemented",
       "text": "L36: All four layered operations exist; order.deletedAt is implemented in schema-orders.ts:67.",
       "candidateFiles": [
@@ -204,55 +220,11 @@
       ]
     },
     {
-      "id": "claim.docs-architecture-md.fd45.227",
+      "id": "claim.docs-architecture-md.fd45.229",
       "source": "docs/ARCHITECTURE.md",
-      "line": 227,
+      "line": 229,
       "status": "stale",
       "text": "_4 stale findings — the highest-value signal blueprint produces. These are docs that claim X while the code does Y; the next agent that reads the doc and trusts it will get it wrong._",
-      "candidateFiles": [
-        "packages/api/src/auth/admin-staff.ts",
-        "packages/storefront/src/services/ServerCartService.ts",
-        "packages/api/src/routes/checkout.ts",
-        "packages/api/src/routes/admin-orders.ts",
-        "packages/storefront/src/components/address-form/AddressForm.tsx",
-        "packages/api/src/routes/admin.ts",
-        "packages/api/src/money/coupon.ts",
-        "packages/api/src/money/auto-discount.test.ts",
-        "packages/api/src/payments/stripe.ts",
-        "packages/api/src/routes/apps.ts",
-        "packages/api/src/licensing/issue.ts",
-        "packages/api/src/routes/admin-catalog.ts",
-        "packages/api/src/db/schema-orders.ts"
-      ]
-    },
-    {
-      "id": "claim.docs-architecture-md.fd45.230",
-      "source": "docs/ARCHITECTURE.md",
-      "line": 230,
-      "status": "implemented",
-      "text": "**docs/ARCHITECTURE.md:17** — PaymentProvider and Stripe are fully implemented, not merely scaffolded; NMI/Sezzle remain absent.",
-      "candidateFiles": [
-        "packages/api/src/auth/admin-staff.ts",
-        "packages/storefront/src/services/ServerCartService.ts",
-        "packages/api/src/routes/checkout.ts",
-        "packages/api/src/routes/admin-orders.ts",
-        "packages/storefront/src/components/address-form/AddressForm.tsx",
-        "packages/api/src/routes/admin.ts",
-        "packages/api/src/money/coupon.ts",
-        "packages/api/src/money/auto-discount.test.ts",
-        "packages/api/src/payments/stripe.ts",
-        "packages/api/src/routes/apps.ts",
-        "packages/api/src/licensing/issue.ts",
-        "packages/api/src/routes/admin-catalog.ts",
-        "packages/api/src/db/schema-orders.ts"
-      ]
-    },
-    {
-      "id": "claim.docs-architecture-md.fd45.231",
-      "source": "docs/ARCHITECTURE.md",
-      "line": 231,
-      "status": "implemented",
-      "text": "**docs/plans/2026-06-20-cart-architecture.md:255** — Both phases now exist: backend Phase A and flagged Phase B server-cart UX swap are implemented.",
       "candidateFiles": [
         "packages/api/src/auth/admin-staff.ts",
         "packages/storefront/src/services/ServerCartService.ts",
@@ -274,6 +246,50 @@
       "source": "docs/ARCHITECTURE.md",
       "line": 232,
       "status": "implemented",
+      "text": "**docs/ARCHITECTURE.md:17** — PaymentProvider and Stripe are fully implemented, not merely scaffolded; NMI/Sezzle remain absent.",
+      "candidateFiles": [
+        "packages/api/src/auth/admin-staff.ts",
+        "packages/storefront/src/services/ServerCartService.ts",
+        "packages/api/src/routes/checkout.ts",
+        "packages/api/src/routes/admin-orders.ts",
+        "packages/storefront/src/components/address-form/AddressForm.tsx",
+        "packages/api/src/routes/admin.ts",
+        "packages/api/src/money/coupon.ts",
+        "packages/api/src/money/auto-discount.test.ts",
+        "packages/api/src/payments/stripe.ts",
+        "packages/api/src/routes/apps.ts",
+        "packages/api/src/licensing/issue.ts",
+        "packages/api/src/routes/admin-catalog.ts",
+        "packages/api/src/db/schema-orders.ts"
+      ]
+    },
+    {
+      "id": "claim.docs-architecture-md.fd45.233",
+      "source": "docs/ARCHITECTURE.md",
+      "line": 233,
+      "status": "implemented",
+      "text": "**docs/plans/2026-06-20-cart-architecture.md:255** — Both phases now exist: backend Phase A and flagged Phase B server-cart UX swap are implemented.",
+      "candidateFiles": [
+        "packages/api/src/auth/admin-staff.ts",
+        "packages/storefront/src/services/ServerCartService.ts",
+        "packages/api/src/routes/checkout.ts",
+        "packages/api/src/routes/admin-orders.ts",
+        "packages/storefront/src/components/address-form/AddressForm.tsx",
+        "packages/api/src/routes/admin.ts",
+        "packages/api/src/money/coupon.ts",
+        "packages/api/src/money/auto-discount.test.ts",
+        "packages/api/src/payments/stripe.ts",
+        "packages/api/src/routes/apps.ts",
+        "packages/api/src/licensing/issue.ts",
+        "packages/api/src/routes/admin-catalog.ts",
+        "packages/api/src/db/schema-orders.ts"
+      ]
+    },
+    {
+      "id": "claim.docs-architecture-md.fd45.234",
+      "source": "docs/ARCHITECTURE.md",
+      "line": 234,
+      "status": "implemented",
       "text": "**docs/plans/2026-06-20-order-management-bulk-ops.md:369** — Implementation is complete, but endpoints moved to admin-order-ops.ts and purge now also handles subscription; the plan's file claim is outdated.",
       "candidateFiles": [
         "packages/api/src/auth/admin-staff.ts",
@@ -292,9 +308,9 @@
       ]
     },
     {
-      "id": "claim.docs-architecture-md.fd45.239",
+      "id": "claim.docs-architecture-md.fd45.241",
       "source": "docs/ARCHITECTURE.md",
-      "line": 239,
+      "line": 241,
       "status": "partial",
       "text": "| cart-add (server-cart UX) | partial | Cart UX does not always reflect server authoritative price/stock until checkout; potential pre-checkout price drift | packages/storefront/src/services/ServerCartService.ts; routes/cart.ts priceCart | architect |",
       "candidateFiles": [
@@ -314,9 +330,9 @@
       ]
     },
     {
-      "id": "claim.docs-architecture-md.fd45.255",
+      "id": "claim.docs-architecture-md.fd45.257",
       "source": "docs/ARCHITECTURE.md",
-      "line": 255,
+      "line": 257,
       "status": "planned",
       "text": "| 10 | performance | Missing partial indexes on webhook_delivery + email_outbox scheduler tables (perf-04) â€” outbox pattern degrades linearly | packages/api/src/db/schema-orders.ts:282 + :302 |",
       "candidateFiles": [
@@ -336,9 +352,9 @@
       ]
     },
     {
-      "id": "claim.docs-architecture-md.fd45.278",
+      "id": "claim.docs-architecture-md.fd45.280",
       "source": "docs/ARCHITECTURE.md",
-      "line": 278,
+      "line": 280,
       "status": "planned",
       "text": "| observability | 5 | 4 | pino + requestId + readyz + audit_log are all wired and gate-covered; only gap is multi-instance in-memory throttles. |",
       "candidateFiles": [
@@ -358,9 +374,9 @@
       ]
     },
     {
-      "id": "claim.docs-architecture-md.fd45.279",
+      "id": "claim.docs-architecture-md.fd45.281",
       "source": "docs/ARCHITECTURE.md",
-      "line": 279,
+      "line": 281,
       "status": "partial",
       "text": "| resilience | 5 | 5 | FORCE RLS + withStore txn + idempotency keys + SKIP-LOCKED + advisory lock + partial unique index = the money path is hardened end-to-end. |",
       "candidateFiles": [
@@ -380,33 +396,11 @@
       ]
     },
     {
-      "id": "claim.docs-architecture-md.fd45.283",
+      "id": "claim.docs-architecture-md.fd45.285",
       "source": "docs/ARCHITECTURE.md",
-      "line": 283,
+      "line": 285,
       "status": "planned",
       "text": "| performance | 3 | 4 | Static manifest + PERF-2 cache + SKIP-LOCKED batching + pinned DNS lookup; cursor pagination deliberately YAGNI. CDN/signed-URL gap is produ |",
-      "candidateFiles": [
-        "packages/api/src/auth/admin-staff.ts",
-        "packages/storefront/src/services/ServerCartService.ts",
-        "packages/api/src/routes/checkout.ts",
-        "packages/api/src/routes/admin-orders.ts",
-        "packages/storefront/src/components/address-form/AddressForm.tsx",
-        "packages/api/src/routes/admin.ts",
-        "packages/api/src/money/coupon.ts",
-        "packages/api/src/money/auto-discount.test.ts",
-        "packages/api/src/payments/stripe.ts",
-        "packages/api/src/routes/apps.ts",
-        "packages/api/src/licensing/issue.ts",
-        "packages/api/src/routes/admin-catalog.ts",
-        "packages/api/src/db/schema-orders.ts"
-      ]
-    },
-    {
-      "id": "claim.docs-architecture-md.fd45.290",
-      "source": "docs/ARCHITECTURE.md",
-      "line": 290,
-      "status": "partial",
-      "text": "**Human gates remaining:** box deploy (sellright_dev 0037 + journal drift), RightApps merge (10 conflicts)",
       "candidateFiles": [
         "packages/api/src/auth/admin-staff.ts",
         "packages/storefront/src/services/ServerCartService.ts",
@@ -427,6 +421,28 @@
       "id": "claim.docs-architecture-md.fd45.292",
       "source": "docs/ARCHITECTURE.md",
       "line": 292,
+      "status": "partial",
+      "text": "**Human gates remaining:** box deploy (sellright_dev 0037 + journal drift), RightApps merge (10 conflicts)",
+      "candidateFiles": [
+        "packages/api/src/auth/admin-staff.ts",
+        "packages/storefront/src/services/ServerCartService.ts",
+        "packages/api/src/routes/checkout.ts",
+        "packages/api/src/routes/admin-orders.ts",
+        "packages/storefront/src/components/address-form/AddressForm.tsx",
+        "packages/api/src/routes/admin.ts",
+        "packages/api/src/money/coupon.ts",
+        "packages/api/src/money/auto-discount.test.ts",
+        "packages/api/src/payments/stripe.ts",
+        "packages/api/src/routes/apps.ts",
+        "packages/api/src/licensing/issue.ts",
+        "packages/api/src/routes/admin-catalog.ts",
+        "packages/api/src/db/schema-orders.ts"
+      ]
+    },
+    {
+      "id": "claim.docs-architecture-md.fd45.294",
+      "source": "docs/ARCHITECTURE.md",
+      "line": 294,
       "status": "planned",
       "text": "_All 5 Phase-2 dimensions complete. 14 flows classified, 1 coverage gap, 8 capability coverage rows. Last refreshed: 2026-07-14T13:55:00Z_",
       "candidateFiles": [
@@ -598,11 +614,93 @@
       "candidateFiles": []
     },
     {
+      "id": "claim.docs-ios-push-setup-md.9150.3",
+      "source": "docs/IOS-PUSH-SETUP.md",
+      "line": 3,
+      "status": "implemented",
+      "text": "Everything in the code is done and tested. What remains is **credential and",
+      "candidateFiles": [
+        "ios/Shared/OrderActivityAttributes.swift"
+      ]
+    },
+    {
+      "id": "claim.docs-ios-push-setup-md.9150.7",
+      "source": "docs/IOS-PUSH-SETUP.md",
+      "line": 7,
+      "status": "implemented",
+      "text": "Nothing here is a code change. Until step 1 is done, the app runs fine and simply",
+      "candidateFiles": [
+        "ios/Shared/OrderActivityAttributes.swift"
+      ]
+    },
+    {
+      "id": "claim.docs-ios-push-setup-md.9150.108",
+      "source": "docs/IOS-PUSH-SETUP.md",
+      "line": 108,
+      "status": "planned",
+      "text": "the app updates it immediately (local `Activity.update`). Closing that gap needs",
+      "candidateFiles": [
+        "ios/Shared/OrderActivityAttributes.swift"
+      ]
+    },
+    {
+      "id": "claim.docs-ios-push-setup-md.9150.109",
+      "source": "docs/IOS-PUSH-SETUP.md",
+      "line": 109,
+      "status": "planned",
+      "text": "per-activity update tokens registered server-side; deliberately not built,",
+      "candidateFiles": [
+        "ios/Shared/OrderActivityAttributes.swift"
+      ]
+    },
+    {
+      "id": "claim.docs-ios-push-setup-md.9150.114",
+      "source": "docs/IOS-PUSH-SETUP.md",
+      "line": 114,
+      "status": "implemented",
+      "text": "Once step 1–3 are done:",
+      "candidateFiles": [
+        "ios/Shared/OrderActivityAttributes.swift"
+      ]
+    },
+    {
       "id": "claim.docs-moat-and-disruption-md.c394.86",
       "source": "docs/MOAT-AND-DISRUPTION.md",
       "line": 86,
       "status": "implemented",
       "text": "| Unsupported operators | Do not sell before dogfooding is complete. |",
+      "candidateFiles": []
+    },
+    {
+      "id": "claim.docs-open-source-readiness-2026-07-17-md.a769.23",
+      "source": "docs/OPEN-SOURCE-READINESS-2026-07-17.md",
+      "line": 23,
+      "status": "claim",
+      "text": "**Decision required (Adrian's, not automatable):** permissive (MIT / Apache-2.0)",
+      "candidateFiles": []
+    },
+    {
+      "id": "claim.docs-open-source-readiness-2026-07-17-md.a769.27",
+      "source": "docs/OPEN-SOURCE-READINESS-2026-07-17.md",
+      "line": 27,
+      "status": "claim",
+      "text": "license choice here is a product decision, not a formality.",
+      "candidateFiles": []
+    },
+    {
+      "id": "claim.docs-open-source-readiness-2026-07-17-md.a769.56",
+      "source": "docs/OPEN-SOURCE-READINESS-2026-07-17.md",
+      "line": 56,
+      "status": "planned",
+      "text": "| [`docs/COMMERCE-GAP-ANALYSIS.md`](COMMERCE-GAP-ANALYSIS.md) | gap/roadmap analysis |",
+      "candidateFiles": []
+    },
+    {
+      "id": "claim.docs-open-source-readiness-2026-07-17-md.a769.90",
+      "source": "docs/OPEN-SOURCE-READINESS-2026-07-17.md",
+      "line": 90,
+      "status": "planned",
+      "text": "| Login 2FA | TOTP; a 2FA-enabled account with missing code returns a generic 401 — no password-validity enumeration (`routes/admin.ts:40-50`) |",
       "candidateFiles": []
     },
     {
@@ -1196,19 +1294,35 @@
       ]
     },
     {
-      "id": "claim.docs-runbooks-migrations-md.46d9.13",
+      "id": "claim.docs-runbooks-migrations-md.46d9.25",
       "source": "docs/runbooks/migrations.md",
-      "line": 13,
+      "line": 25,
       "status": "planned",
       "text": "| `0037_payment_provider_ref_unique.sql` | Partial unique index (`WHERE provider_ref IS NOT NULL`) — drizzle-kit does not model partial indexes (same class of gap as the `license_activation_token_hash` index from migration 0027) and can never generate or safely diff this file. |",
       "candidateFiles": []
     },
     {
-      "id": "claim.docs-runbooks-migrations-md.46d9.23",
+      "id": "claim.docs-runbooks-migrations-md.46d9.37",
       "source": "docs/runbooks/migrations.md",
-      "line": 23,
+      "line": 37,
       "status": "planned",
       "text": "hand-written migration and fails CI if it's missing or has been silently",
+      "candidateFiles": []
+    },
+    {
+      "id": "claim.ios-changelog-md.d3ec.14",
+      "source": "ios/CHANGELOG.md",
+      "line": 14,
+      "status": "implemented",
+      "text": "The app icon catalog now ships the complete RGB iOS icon set generated from",
+      "candidateFiles": []
+    },
+    {
+      "id": "claim.ios-readme-md.3dab.70",
+      "source": "ios/README.md",
+      "line": 70,
+      "status": "partial",
+      "text": "`packages/admin/src/theme-tokens.css` so web and mobile can't drift; `ThemeTests`",
       "candidateFiles": []
     },
     {
@@ -1322,8 +1436,8 @@
     "packages/api/src/routes/admin-orders.ts",
     "packages/api/drizzle/0000_conscious_black_widow.sql",
     "packages/api/src/routes/admin-order-ops.ts",
-    "packages/api/src/routes/admin.ts",
     "packages/api/src/routes/checkout.ts",
+    "packages/api/src/routes/admin.ts",
     "packages/api/src/routes/admin-catalog.ts",
     "packages/api/src/routes/account.ts",
     "packages/admin/src/pages/ProductDetail.tsx",

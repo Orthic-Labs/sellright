@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "repo": "sellright",
-  "generatedAt": "gen:66b03883ed187dbb",
+  "generatedAt": "gen:2acb40efaef4e0a9",
   "entrypoint": ".blueprint/manifest.json",
   "precedence": [
     "code",
@@ -12,10 +12,10 @@
     "archive"
   ],
   "stats": {
-    "files": 699,
-    "docs": 30,
-    "claims": 111,
-    "codeRefs": 99
+    "files": 836,
+    "docs": 36,
+    "claims": 124,
+    "codeRefs": 117
   },
   "nodes": [
     {
@@ -28,8 +28,8 @@
       "kind": "doc",
       "path": "AGENTS.md",
       "title": "SellRight Agent Instructions",
-      "sha1": "3b5def3c58e397c487e7bea5eccf579872de1360",
-      "searchText": "# SellRight Agent Instructions ## Workspace Rules This repo lives inside Adrian's `D:\\Claude` workspace. For Codex, read and apply `D:\\Claude\\AGENTS.md` before substantial work; this file adds SellRight-specific rules and does not replace the studio rules. Claude Code should use the sibling `CLAUDE.md`, which points at `D:\\Claude\\CLAUDE.md` and mirrors these local rules. ## Repo Identity SellRight (`github.com/adrdsouza/sellright`) is the commerce product. RightApps (`github.com/adrdsouza/rightapps`) is a fork of it for the Right Suite app stores. They are separate repos and separate directories. - SellRight laptop path: `D:\\Claude\\sellright` - SellRight server path: `~/sites/sellright` - Dev API: `tsx` on `:3300` - Dev DB: `sellright_dev` Edit on the laptop, push `origin/main`, then pull on the box. Do not make product code edits directly on the server. ## Split Rule Changes that ship with SellRight belong here first. RightApps-specific code such as storefront apps, Right Suite catalog scripts, app-store theming, and license-gate wiring belongs in `D:\\Claude\\rightapps`. When RightApps needs product changes, sync from SellRight with upstream fetch and merge rather than editing the fork first. ## Standard Tooling Use `pnpm`, not npm, for package management unless a legacy script explicitly says otherwise. SellRight has no desktop installer release. Its standardized Right tooling is for dependency hygiene: ```powershell pnpm run deps:audit pnpm run deps:check pnpm run verify pnpm run build pnpm run typecheck ``` The dependency scripts use shared tooling at `../tools/right-release/deps.mjs` plus `right-release.config.mjs`. Do not remove `packageManager`, `deps:*`, or pnpm lockfile changes. ## Database Safety Use the dev/test databases for local work. Do not write production data from a local session unless Adrian explicitly asks for a production operation and the target database has been named in the command/handoff. API tests should target the test database and must not depend on live customer or store data. ## Verification For product changes, prefer focused package tests first, then `pnpm run verify` before claiming broad correctness. For dependency or security hygiene work, run `pnpm run deps:audit` and `pnpm run deps:check`. ",
+      "sha1": "f018da248ca35006c2d223d6d7fa9866c638d051",
+      "searchText": "# SellRight Agent Instructions ## Workspace Rules This repo lives inside Adrian's `D:\\Claude` workspace. For Codex, read and apply `D:\\Claude\\AGENTS.md` before substantial work; this file adds SellRight-specific rules and does not replace the studio rules. Claude Code should use the sibling `CLAUDE.md`, which points at `D:\\Claude\\CLAUDE.md` and mirrors these local rules. ## Repo Identity SellRight (`github.com/adrdsouza/sellright`) is the commerce product. RightApps (`github.com/adrdsouza/rightapps`) is a fork of it for the Right Suite app stores. They are separate repos and separate directories. - SellRight laptop path: `D:\\Claude\\sellright` - SellRight server path: `~/sites/sellright` - Dev API: `tsx` on `:3300` - Dev DB: `sellright_dev` Edit on the laptop, push `origin/main`, then pull on the box. Do not make product code edits directly on the server. ## Split Rule Changes that ship with SellRight belong here first. RightApps-specific code such as storefront apps, Right Suite catalog scripts, app-store theming, and license-gate wiring belongs in `D:\\Claude\\rightapps`. When RightApps needs product changes, sync from SellRight with upstream fetch and merge rather than editing the fork first. ## Standard Tooling Use `pnpm`, not npm, for package management unless a legacy script explicitly says otherwise. SellRight has no desktop installer release. Its standardized Right tooling is for dependency hygiene: ```powershell pnpm run deps:audit pnpm run deps:check pnpm run verify pnpm run build pnpm run typecheck ``` The dependency scripts use shared tooling at `../tools/right-release/deps.mjs` plus `right-release.config.mjs`. Do not remove `packageManager`, `deps:*`, or pnpm lockfile changes. ## Database Safety Use the dev/test databases for local work. Do not write production data from a local session unless Adrian explicitly asks for a production operation and the target database has been named in the command/handoff. API tests should target the test database and must not depend on live customer or store data. ## Verification For product changes, prefer focused package tests first, then `pnpm run verify` before claiming broad correctness. For dependency or security hygiene work, run `pnpm run deps:audit` and `pnpm run deps:check`. ## User intent is final (workspace rule, locked 2026-07-19) An explicit user request is the approval for every step of it. This...",
       "lifecycle": {
         "status": "current"
       },
@@ -68,6 +68,74 @@
           "line": 64,
           "level": 2,
           "text": "Verification"
+        },
+        {
+          "line": 70,
+          "level": 2,
+          "text": "User intent is final (workspace rule, locked 2026-07-19)"
+        }
+      ]
+    },
+    {
+      "id": "doc.changelog-md.ab09011f",
+      "kind": "doc",
+      "path": "CHANGELOG.md",
+      "title": "Changelog — SellRight web, API, and admin",
+      "sha1": "1c70f9aeb0d323307e1a9cbcdddfb07b4a65a2ad",
+      "searchText": "# Changelog — SellRight web, API, and admin Notable changes to the SellRight commerce API, storefront, and desktop-browser admin. The native iOS admin ships separately and is tracked in [`ios/CHANGELOG.md`](ios/CHANGELOG.md). Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Every user-facing feature, fix, security change, or operational contract change must update the matching changelog in the same push. ## [Unreleased] ### Changed - Web/admin favicons, touch icons, and manifest artwork now use the selected SellRight mark from the verified cross-platform asset kit. ### Fixed - Postgres transactions no longer stay open while Stripe, SMTP, or APNs calls wait on the network. Payments and refunds use a cross-process advisory lock around short prepare/result transactions; outboxes use claim → send → conditional-finalize. This prevents the idle-transaction timeout from killing live commerce requests and keeps retry/idempotency behavior intact. - Broken Postgres clients are evicted when rollback fails, while the original request error is preserved for diagnosis. ### Operations - Postgres operations now enable `pg_stat_statements`, log queries over one second, and expose a repeatable top-query inspection loop before further tuning. The update-heavy email and push outboxes use lower per-table autovacuum thresholds to prevent queue bloat. - Postgres connections now carry a deployment-specific `application_name`. The operator runbook defines database-qualified statement, lock, and idle-in-transaction timeouts and their verification queries. ## 2026-07-17 ### Added - Mobile-admin push delivery, including APNs device-token ownership and Live Activity payload support (`383b53c`, `bfac16a`). - Order detail now exposes line IDs needed to construct per-line refunds (`7be6ad6`). ## 2026-07-05 ### Added - Self-service account deletion and export, SQL-compiled smart collections, server-authoritative shipping, and DB-backed route integration coverage. ### Security - Stored HTML sanitization, newsletter and artifact-host SSRF defenses, CSRF/RBAC hardening, tenant RLS coverage, and safer error disclosure. ",
+      "lifecycle": {
+        "status": "current"
+      },
+      "headings": [
+        {
+          "line": 1,
+          "level": 1,
+          "text": "Changelog — SellRight web, API, and admin"
+        },
+        {
+          "line": 11,
+          "level": 2,
+          "text": "[Unreleased]"
+        },
+        {
+          "line": 13,
+          "level": 3,
+          "text": "Changed"
+        },
+        {
+          "line": 18,
+          "level": 3,
+          "text": "Fixed"
+        },
+        {
+          "line": 28,
+          "level": 3,
+          "text": "Operations"
+        },
+        {
+          "line": 38,
+          "level": 2,
+          "text": "2026-07-17"
+        },
+        {
+          "line": 40,
+          "level": 3,
+          "text": "Added"
+        },
+        {
+          "line": 47,
+          "level": 2,
+          "text": "2026-07-05"
+        },
+        {
+          "line": 49,
+          "level": 3,
+          "text": "Added"
+        },
+        {
+          "line": 54,
+          "level": 3,
+          "text": "Security"
         }
       ]
     },
@@ -76,8 +144,8 @@
       "kind": "doc",
       "path": "CLAUDE.md",
       "title": "SellRight Claude Instructions",
-      "sha1": "3e61d61840c7b440fbd26ab42d44defb5059d9cd",
-      "searchText": "# SellRight Claude Instructions ## Workspace Rules This repo lives inside Adrian's `D:\\Claude` workspace. For Claude Code, read and apply `D:\\Claude\\CLAUDE.md` before substantial work; this file adds SellRight-specific rules and does not replace the studio rules. Codex should use the sibling `AGENTS.md`, which points at `D:\\Claude\\AGENTS.md` and mirrors these local rules. ## Repo Identity SellRight (`github.com/adrdsouza/sellright`) is the commerce product. RightApps (`github.com/adrdsouza/rightapps`) is a fork of it for the Right Suite app stores. They are separate repos and separate directories. - SellRight laptop path: `D:\\Claude\\sellright` - SellRight server path: `~/sites/sellright` - Dev API: `tsx` on `:3300` - Dev DB: `sellright_dev` Edit on the laptop, push `origin/main`, then pull on the box. Do not make product code edits directly on the server. ## Split Rule Changes that ship with SellRight belong here first. RightApps-specific code such as storefront apps, Right Suite catalog scripts, app-store theming, and license-gate wiring belongs in `D:\\Claude\\rightapps`. When RightApps needs product changes, sync from SellRight with upstream fetch and merge rather than editing the fork first. ## Standard Tooling Use `pnpm`, not npm, for package management unless a legacy script explicitly says otherwise. SellRight has no desktop installer release. Its standardized Right tooling is for dependency hygiene: ```powershell pnpm run deps:audit pnpm run deps:check pnpm run verify pnpm run build pnpm run typecheck ``` The dependency scripts use shared tooling at `../tools/right-release/deps.mjs` plus `right-release.config.mjs`. Do not remove `packageManager`, `deps:*`, or pnpm lockfile changes. ## Database Safety Use the dev/test databases for local work. Do not write production data from a local session unless Adrian explicitly asks for a production operation and the target database has been named in the command/handoff. API tests should target the test database and must not depend on live customer or store data. ## Verification For product changes, prefer focused package tests first, then `pnpm run verify` before claiming broad correctness. For dependency or security hygiene work, run `pnpm run deps:audit` and `pnpm run deps:check`. ",
+      "sha1": "d3f3872cb5316883c26acc1365c6ed698c9139b3",
+      "searchText": "# SellRight Claude Instructions ## Workspace Rules This repo lives inside Adrian's `D:\\Claude` workspace. For Claude Code, read and apply `D:\\Claude\\CLAUDE.md` before substantial work; this file adds SellRight-specific rules and does not replace the studio rules. Codex should use the sibling `AGENTS.md`, which points at `D:\\Claude\\AGENTS.md` and mirrors these local rules. ## Repo Identity SellRight (`github.com/adrdsouza/sellright`) is the commerce product. RightApps (`github.com/adrdsouza/rightapps`) is a fork of it for the Right Suite app stores. They are separate repos and separate directories. - SellRight laptop path: `D:\\Claude\\sellright` - SellRight server path: `~/sites/sellright` - Dev API: `tsx` on `:3300` - Dev DB: `sellright_dev` Edit on the laptop, push `origin/main`, then pull on the box. Do not make product code edits directly on the server. ## Split Rule Changes that ship with SellRight belong here first. RightApps-specific code such as storefront apps, Right Suite catalog scripts, app-store theming, and license-gate wiring belongs in `D:\\Claude\\rightapps`. When RightApps needs product changes, sync from SellRight with upstream fetch and merge rather than editing the fork first. ## Standard Tooling Use `pnpm`, not npm, for package management unless a legacy script explicitly says otherwise. SellRight has no desktop installer release. Its standardized Right tooling is for dependency hygiene: ```powershell pnpm run deps:audit pnpm run deps:check pnpm run verify pnpm run build pnpm run typecheck ``` The dependency scripts use shared tooling at `../tools/right-release/deps.mjs` plus `right-release.config.mjs`. Do not remove `packageManager`, `deps:*`, or pnpm lockfile changes. ## Database Safety Use the dev/test databases for local work. Do not write production data from a local session unless Adrian explicitly asks for a production operation and the target database has been named in the command/handoff. API tests should target the test database and must not depend on live customer or store data. ## Verification For product changes, prefer focused package tests first, then `pnpm run verify` before claiming broad correctness. For dependency or security hygiene work, run `pnpm run deps:audit` and `pnpm run deps:check`. ## User intent is final (workspace rule, locked 2026-07-19) An explicit user request is the approval for every step of it. This...",
       "lifecycle": {
         "status": "current"
       },
@@ -116,6 +184,11 @@
           "line": 64,
           "level": 2,
           "text": "Verification"
+        },
+        {
+          "line": 70,
+          "level": 2,
+          "text": "User intent is final (workspace rule, locked 2026-07-19)"
         }
       ]
     },
@@ -519,7 +592,7 @@
       "kind": "doc",
       "path": "docs/ARCHITECTURE.md",
       "title": "SellRight Architecture",
-      "sha1": "aa09a8459aa7523596dfc6d803be9451bf94cd6e",
+      "sha1": "c24b1220f7c0fe85d1f54eb0289881a6afc5048e",
       "searchText": "# SellRight Architecture Last reviewed (Blueprint Phase 1-3): 2026-07-14 · HEAD `6848789` · 58 commits since last reconcile state (bff9e1d). > ## ⚠️ RECONCILE — 23 DECISIONS NEEDED (blocker) > The code and the docs disagree on 23 things. You decide how to reconcile each. Nothing else here matters until these are settled. > > | # | The doc says | The code actually does | Verdict | Proposed fix | Your call | > |---|---|---|---|---|---| > | 1 | \"All 12 lanes are merged to origin/main (bff9e1d) and validated on the box: assert-rls OK (\" — `docs/plans/BOX-VALIDATION-CHECKLIST.md:3` | git rev-parse HEAD = 6848789. bff9e1d → HEAD has 58 commits. Many §3a BUILD lanes beyond t | **SUPERSEDED-BY** | Mark BOX-VALIDATION-CHECKLIST.md §Validation COMPLETE line as a 2026-07-04 snapshot; add a | ☐ | > | 2 | \"§1 DONE — 12 lanes on main bff9e1d, box-validated (187 non-DB + 88 DB tests).\" — `docs/plans/DISPATCH.md:560` | git rev-parse HEAD = 6848789. test:db script lists 23 files. Most §3a BUILD lanes have mer | **SUPERSEDED-BY** | Update the §1 DONE trailer (line 560) to reflect the actual current state (HEAD + lane cou | ☐ | > | 3 | \"Nothing is silently omitted — every audit finding is DONE, refuted, a BUILD lane, or defer\" — `docs/plans/DISPATCH.md:566` | Many §3a 'BUILD' rows have actually MERGED: PERF-2 (2c09de3/fbb761d), PERF-12 (c71a24b/654 | **CODE-IS-BETTER** | Recount §3a BUILD: move the merged lanes to the §1 ACTIONED table with their SHAs and box- | ☐ | > | 4 | \"PERF-12 auto-deliver N+1 — apply OPS-2's SKIP-LOCKED + batched-update treatment to auto-de\" — `docs/plans/DISPATCH.md:507` | PERF-12 merged: c71a24b perf(jobs): SKIP LOCKED + batched UPDATE for auto-deliver (PERF-12 | **CODE-IS-BETTER** | Move PERF-12 from §3a BUILD to §1 ACTIONED with SHA c71a24b / merge 654d5c4, box-validated | ☐ | > | 5 | \"OPS-2 row in §1 ACTIONED table: MERGED b9a20cc; box 49/49. The row is accurate at line lev\" — `docs/plans/DISPATCH.md:475` | OPS-2 correctly listed as MERGED at line 475. The §3a row 'PERF-12 auto-deliver N+1 — appl | **CODE-IS-BETTER** | Recount §3a — both PERF-12 and PERF-14 (OPS-2 follow-ups) should be promoted from BUILD to | ☐ | > | 6 | \"Row 11: OPS-2 job leader-lock + release-stale batch/lock \\| multi-instance \\| ✅ MERGED b9a\" — `docs/plans/DISPATCH.md:40` | OPS-2 SHA b9a20cc is in HEAD; box 49/49 confirmed. The cell itself is accurate; the broade |...",
       "lifecycle": {
         "status": "current"
@@ -586,77 +659,77 @@
           "text": "Migrations"
         },
         {
-          "line": 177,
+          "line": 179,
           "level": 1,
           "text": "Blueprint Phase 2-3 Output"
         },
         {
-          "line": 179,
+          "line": 181,
           "level": 2,
           "text": "Verified Facts (Phase 2)"
         },
         {
-          "line": 183,
+          "line": 185,
           "level": 3,
           "text": "docs/ADMIN-REDESIGN-PLAN-2026-06.md"
         },
         {
-          "line": 187,
+          "line": 189,
           "level": 3,
           "text": "docs/ADMIN-THEME-SYSTEM.md"
         },
         {
-          "line": 192,
+          "line": 194,
           "level": 3,
           "text": "docs/ARCHITECTURE.md"
         },
         {
-          "line": 196,
+          "line": 198,
           "level": 3,
           "text": "docs/plans/2026-06-20-cart-architecture.md"
         },
         {
-          "line": 200,
+          "line": 202,
           "level": 3,
           "text": "docs/plans/2026-06-20-checkout-migration.md"
         },
         {
-          "line": 204,
+          "line": 206,
           "level": 3,
           "text": "docs/plans/2026-06-20-order-management-bulk-ops.md"
         },
         {
-          "line": 210,
+          "line": 212,
           "level": 3,
           "text": "docs/plans/2026-06-20-subscriptions.md"
         },
         {
-          "line": 218,
+          "line": 220,
           "level": 3,
           "text": "docs/runbooks/admin-a11y.md"
         },
         {
-          "line": 225,
+          "line": 227,
           "level": 2,
           "text": "Contradictions (Doc-vs-Code Traps)"
         },
         {
-          "line": 235,
+          "line": 237,
           "level": 2,
           "text": "Coverage Gaps (missing or partial flows)"
         },
         {
-          "line": 242,
+          "line": 244,
           "level": 2,
           "text": "Top Health Findings"
         },
         {
-          "line": 258,
+          "line": 260,
           "level": 2,
           "text": "Security Synthesis"
         },
         {
-          "line": 270,
+          "line": 272,
           "level": 2,
           "text": "Maturity Verdict"
         }
@@ -983,6 +1056,64 @@
       ]
     },
     {
+      "id": "doc.docs-ios-push-setup-md.9150c490",
+      "kind": "doc",
+      "path": "docs/IOS-PUSH-SETUP.md",
+      "title": "iOS Push + Live Activity — setup runbook (2026-07-17)",
+      "sha1": "0b8181010d1823ed51d146f5e74f221748239dc9",
+      "searchText": "# iOS Push + Live Activity — setup runbook (2026-07-17) Everything in the code is done and tested. What remains is **credential and account work that only Adrian can perform** (Apple developer portal, App Store Connect) plus one env block on the box. This runbook is the whole list. Nothing here is a code change. Until step 1 is done, the app runs fine and simply never dings: `deliverPushes()` no-ops when `APNS_*` is unset, the outbox still fills, and queued alerts drain once the key lands. --- ## 1. Mint the APNs key (Apple developer portal) — BLOCKING developer.apple.com → Certificates, Identifiers & Profiles → **Keys** → `+` - Name: `SellRight Admin Push` (anything) - Enable **Apple Push Notifications service (APNs)** - Download the `.p8` **once** — Apple will not let you download it again. Take note of three values: | Value | Where | |---|---| | **Key ID** | shown on the key page, e.g. `ABC123DEFG` | | **Team ID** | top-right of the portal — `6KLGD3LLKF` for this account | | **`.p8` contents** | the downloaded file | One token key works for **every app under the team** and never expires. Do not create a per-app key, and do not use the legacy certificate-based auth. **Storage:** the `.p8` is a signing key — it can push to any app on the team. Treat it like the updater key: never in the repo, never in a chat, never in a screenshot. It belongs in the box's `packages/api/.env` (gitignored) only. ## 2. Enable the Push Notifications capability on the App ID Same portal → **Identifiers** → `app.sellright.ios.admin` → tick **Push Notifications**. Xcode's automatic signing already added the entitlement to the dev build (verified: the device build signs with `iOS Team Provisioning Profile: app.sellright.ios.admin`), but the App ID itself must have the capability for production/TestFlight builds to receive anything. ## 3. Set the env on the box `~/sites/sellright/packages/api/.env` (and the RightApps equivalent if that deployment should push too): ```sh APNS_KEY_ID=ABC123DEFG APNS_TEAM_ID=6KLGD3LLKF APNS_BUNDLE_ID=app.sellright.ios.admin APNS_KEY_P8=\"-----BEGIN PRIVATE KEY-----\\nMIGT...\\n-----END PRIVATE KEY-----\" JOBS_ENABLED=1 JOBS_PUSH_ENABLED=1 ``` `APNS_KEY_P8` accepts either literal newlines or `\\n`-escaped (the loader normalizes both — `apns.ts`). Then `pm2 restart sellright-api --update-env`. **`JOBS_PUSH_ENABLED` is separate from `JOBS_ENABLED` on...",
+      "lifecycle": {
+        "status": "current"
+      },
+      "headings": [
+        {
+          "line": 1,
+          "level": 1,
+          "text": "iOS Push + Live Activity — setup runbook (2026-07-17)"
+        },
+        {
+          "line": 13,
+          "level": 2,
+          "text": "1. Mint the APNs key (Apple developer portal) — BLOCKING"
+        },
+        {
+          "line": 36,
+          "level": 2,
+          "text": "2. Enable the Push Notifications capability on the App ID"
+        },
+        {
+          "line": 44,
+          "level": 2,
+          "text": "3. Set the env on the box"
+        },
+        {
+          "line": 65,
+          "level": 2,
+          "text": "4. The sandbox/production trap (read this before debugging \"push is broken\")"
+        },
+        {
+          "line": 79,
+          "level": 2,
+          "text": "5. TestFlight (needed for real-world use)"
+        },
+        {
+          "line": 93,
+          "level": 2,
+          "text": "6. Live Activity notes"
+        },
+        {
+          "line": 112,
+          "level": 2,
+          "text": "7. Verifying it works, end to end"
+        },
+        {
+          "line": 117,
+          "level": 1,
+          "text": "On the box: watch the push outbox drain."
+        }
+      ]
+    },
+    {
       "id": "doc.docs-market-placement-md.56304c04",
       "kind": "doc",
       "path": "docs/MARKET-PLACEMENT.md",
@@ -1085,6 +1216,74 @@
           "line": 89,
           "level": 2,
           "text": "Moat Scorecard"
+        }
+      ]
+    },
+    {
+      "id": "doc.docs-open-source-readiness-2026-07-17-md.a769ba1d",
+      "kind": "doc",
+      "path": "docs/OPEN-SOURCE-READINESS-2026-07-17.md",
+      "title": "Open-Source Readiness Audit — 2026-07-17",
+      "sha1": "b689b3dd6024e338571fb2f46831a3d7ba0c09f8",
+      "searchText": "# Open-Source Readiness Audit — 2026-07-17 Scope: lifecycle, performance, security, scalability of `adrdsouza/sellright` at commit `74b6eae`, assessed against the question \"what must be fixed before this repo is published publicly?\" Verdict: **the code is not the problem — the packaging is.** No tracked secrets, no secrets in git history, zero known dependency CVEs, and the security wiring (auth, CSRF, RLS, webhooks) holds up. Every blocker below is repo hygiene: a contradictory license, another brand's storefront, internal strategy docs, and personal ops scripts that would ship with the product. --- ## Blockers — fix before publishing ### 1. LICENSE contradicts open-sourcing [`LICENSE`](../LICENSE) reads \"All rights reserved… proprietary and confidential. No permission is granted to copy, modify, distribute…\". Publishing the repo under this text tells every reader they may not use it. **Decision required (Adrian's, not automatable):** permissive (MIT / Apache-2.0) if the goal is adoption, or source-available (BSL / Elastic-style) if the goal is adoption *without* a hosted competitor reselling it. Context worth weighing: the whole reason SellRight exists is that Vendure's GPLv3 was unacceptable, so the license choice here is a product decision, not a formality. ### 2. `packages/storefront` is the Damned Designs storefront, not a demo Evidence: - `packages/storefront/package.json` → `\"name\": \"damned-designs-storefront\"`, `\"homepage\": \"https://damneddesigns.com/\"`, `\"license\": \"UNLICENSED\"`, description still says \"built with Vendure & Qwik\" - DD brand assets and copy throughout `src/` (`constants.ts`, `header.tsx`, `footer.tsx`, `ProductCard.tsx`, `seo-schemas.ts`, `HomeTeeSection.tsx`) - `src/data/trustpilot.json` — real DD review data - `src/generated/graphql-shop*.ts` — Vendure-era generated GraphQL clients, dead weight in a REST-first product Publishing as-is ships DD's brand inside an OSS codebase and hands readers a storefront that can't be a starting point. Either genericize it into a neutral demo storefront or exclude the package from the public repo. ### 3. Internal strategy docs are tracked and linked from the README Business/competitive material, currently public-facing the moment the repo is: | Path | Why it shouldn't ship | |---|---| | [`docs/MOAT-AND-DISRUPTION.md`](MOAT-AND-DISRUPTION.md) | competitive strategy | | [`docs/GTM.md`](GTM.md) |...",
+      "lifecycle": {
+        "status": "current"
+      },
+      "headings": [
+        {
+          "line": 1,
+          "level": 1,
+          "text": "Open-Source Readiness Audit — 2026-07-17"
+        },
+        {
+          "line": 15,
+          "level": 2,
+          "text": "Blockers — fix before publishing"
+        },
+        {
+          "line": 17,
+          "level": 3,
+          "text": "1. LICENSE contradicts open-sourcing"
+        },
+        {
+          "line": 29,
+          "level": 3,
+          "text": "2. `packages/storefront` is the Damned Designs storefront, not a demo"
+        },
+        {
+          "line": 46,
+          "level": 3,
+          "text": "3. Internal strategy docs are tracked and linked from the README"
+        },
+        {
+          "line": 63,
+          "level": 3,
+          "text": "4. `packages/api/scripts-deploy/` is personal infrastructure"
+        },
+        {
+          "line": 71,
+          "level": 3,
+          "text": "5. Dependency scripts point outside the repo"
+        },
+        {
+          "line": 82,
+          "level": 2,
+          "text": "Clean — verified, not assumed"
+        },
+        {
+          "line": 104,
+          "level": 2,
+          "text": "Scalability — document, don't block"
+        },
+        {
+          "line": 124,
+          "level": 2,
+          "text": "Fixed in this pass"
+        },
+        {
+          "line": 131,
+          "level": 2,
+          "text": "Known gaps (not blockers)"
         }
       ]
     },
@@ -1785,8 +1984,8 @@
       "kind": "doc",
       "path": "docs/runbooks/migrations.md",
       "title": "Migrations runbook",
-      "sha1": "182b4f59926ec1b57ae4515b0194d6399c8b6792",
-      "searchText": "# Migrations runbook ## Hand-written migrations (ra-006) Five migrations in `packages/api/drizzle/` are hand-written and MUST NOT be regenerated by `drizzle-kit generate`: | File | Why hand-written | | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | | `0032_cart_ttl.sql` | `drizzle-kit generate` misfires on the cart table — emits ALTERs that don't match the post-0031 schema and break fresh-DB migrate. | | `0034_subscriptions.sql` | Auto-generator places the FORCE RLS / tenant policy at a different ordinal; ENUM placement also drifts. | | `0036_harden_subscription_rls.sql` | `ALTER POLICY` in place; auto-generator prefers DROP + CREATE which races with concurrent connections. | | `0037_payment_provider_ref_unique.sql` | Partial unique index (`WHERE provider_ref IS NOT NULL`) — drizzle-kit does not model partial indexes (same class of gap as the `license_activation_token_hash` index from migration 0027) and can never generate or safely diff this file. | | `0038_email_outbox.sql` | REL-4 email outbox for the order-confirmation retry/dead-letter pattern (DISPATCH.md lane REL-4). Schema mirrors `webhook_delivery` but with no endpoint FK — auto-generator would either reuse the webhook table or emit the FORCE RLS policy at the wrong ordinal. Hand-authored to land the table + index + tenant policy atomically. | Each file starts with a marker comment: ```sql -- HAND-WRITTEN: see docs/runbooks/migrations.md — do NOT regenerate via drizzle-kit. ``` The `pnpm db:assert-hand-written` script greps for this marker in every hand-written migration and fails CI if it's missing or has been silently replaced. Run it locally before opening a migration-touching PR: ```bash pnpm --filter @sellright/api db:assert-hand-written ``` ## When to use the custom workflow Default workflow (use 99% of the time): ```bash # 1. Edit schema in packages/api/src/db/schema*.ts # 2. Generate the migration pnpm --filter @sellright/api db:generate # 3. Review the diff in packages/api/drizzle/<auto>.sql — sanity-check that # it doesn't touch any of the hand-written file's tables / policies. # 4. Apply to dev DB pnpm --filter @sellright/api db:migrate ``` Custom workflow (only for the three hand-written files): 1. Open the existing `<NNNN_*.sql>` file directly. 2. Edit the SQL in...",
+      "sha1": "a39f6c33fa304582d4b49c76bf99f488f2fbf6d9",
+      "searchText": "# Migrations runbook ## A hand-written migration must be added to `meta/_journal.json` `drizzle-kit migrate` runs the journal, not the directory. Dropping a `.sql` file into `packages/api/drizzle/` without appending an entry to `meta/_journal.json` means migrate prints **\"migrations applied successfully\" and does nothing** — the table simply never exists, and the failure surfaces later as `relation \"x\" does not exist`. Append: ```json { \"idx\": <next>, \"version\": \"7\", \"when\": <epoch-ms>, \"tag\": \"<filename-without-.sql>\", \"breakpoints\": true } ``` ## Hand-written migrations (ra-006) Six migrations in `packages/api/drizzle/` are hand-written and MUST NOT be regenerated by `drizzle-kit generate`: | File | Why hand-written | | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | | `0032_cart_ttl.sql` | `drizzle-kit generate` misfires on the cart table — emits ALTERs that don't match the post-0031 schema and break fresh-DB migrate. | | `0034_subscriptions.sql` | Auto-generator places the FORCE RLS / tenant policy at a different ordinal; ENUM placement also drifts. | | `0036_harden_subscription_rls.sql` | `ALTER POLICY` in place; auto-generator prefers DROP + CREATE which races with concurrent connections. | | `0037_payment_provider_ref_unique.sql` | Partial unique index (`WHERE provider_ref IS NOT NULL`) — drizzle-kit does not model partial indexes (same class of gap as the `license_activation_token_hash` index from migration 0027) and can never generate or safely diff this file. | | `0039_push_notifications.sql` | Mobile push (APNs): `admin_device_token` + `push_outbox`. Needs a `text[]` column with a default, `ON DELETE cascade` on two FKs, a unique index on `token`, and the FORCE RLS policy at a specific ordinal — the auto-generator drifts on all four. | | `0040_outbox_autovacuum.sql` | Per-table autovacuum thresholds for the update-heavy email and push queues. These storage parameters are operational tuning, not Drizzle schema fields, so regeneration would silently drop them. | | `0038_email_outbox.sql` | REL-4 email outbox for the order-confirmation retry/dead-letter pattern (DISPATCH.md lane REL-4). Schema mirrors `webhook_delivery` but with no endpoint FK — auto-generator would either reuse the webhook table or emit the FORCE RLS policy at...",
       "lifecycle": {
         "status": "current"
       },
@@ -1799,47 +1998,191 @@
         {
           "line": 3,
           "level": 2,
+          "text": "A hand-written migration must be added to `meta/_journal.json`"
+        },
+        {
+          "line": 15,
+          "level": 2,
           "text": "Hand-written migrations (ra-006)"
         },
         {
-          "line": 30,
+          "line": 44,
           "level": 2,
           "text": "When to use the custom workflow"
         },
         {
-          "line": 35,
+          "line": 49,
           "level": 1,
           "text": "1. Edit schema in packages/api/src/db/schema*.ts"
         },
         {
-          "line": 36,
+          "line": 50,
           "level": 1,
           "text": "2. Generate the migration"
         },
         {
-          "line": 38,
+          "line": 52,
           "level": 1,
           "text": "3. Review the diff in packages/api/drizzle/<auto>.sql — sanity-check that"
         },
         {
-          "line": 39,
+          "line": 53,
           "level": 1,
           "text": "it doesn't touch any of the hand-written file's tables / policies."
         },
         {
-          "line": 40,
+          "line": 54,
           "level": 1,
           "text": "4. Apply to dev DB"
         },
         {
-          "line": 53,
+          "line": 67,
           "level": 2,
           "text": "What \"do not regenerate\" actually means"
         },
         {
-          "line": 60,
+          "line": 74,
           "level": 2,
           "text": "If a future schema change is incompatible with a hand-written file"
+        }
+      ]
+    },
+    {
+      "id": "doc.docs-runbooks-postgres-app-role-md.5a8de5da",
+      "kind": "doc",
+      "path": "docs/runbooks/postgres-app-role.md",
+      "title": "Postgres application-role hardening",
+      "sha1": "c0f52d46c5e33a2ef6232710fc7d73ffc4e78092",
+      "searchText": "# Postgres application-role hardening Apply these settings as a Postgres operator. They are deliberately not a migration: the database owner used by migrations may not own the runtime role, and role policy belongs to deployment operations. ## Runtime identities Set a distinct application name in each deployment: ```dotenv # SellRight PGAPPNAME=sellright-api # RightSites production API PGAPPNAME=rightapps-api ``` The API passes this value to Postgres as `application_name`, so activity and slow-query views identify the correct service. ## Query observability Run this once per Postgres cluster as an administrator, before making further query or memory tuning decisions: ```sql SHOW shared_preload_libraries; ALTER SYSTEM SET shared_preload_libraries = 'pg_stat_statements'; ALTER SYSTEM SET log_min_duration_statement = '1000ms'; ``` `ALTER SYSTEM SET shared_preload_libraries` replaces the whole list. If `SHOW` returns other modules, preserve them in the comma-separated value alongside `pg_stat_statements`. Restart Postgres after changing `shared_preload_libraries`, then enable the extension in each application database: ```sql CREATE EXTENSION IF NOT EXISTS pg_stat_statements; ``` Verify after the restart, once per database: ```sql SHOW log_min_duration_statement; SELECT count(*) FROM pg_stat_statements; SELECT query, calls, total_exec_time, mean_exec_time, rows FROM pg_stat_statements ORDER BY total_exec_time DESC LIMIT 20; ``` The first result must be `1s`; the count and top-query query must execute without an extension/preload error. The cluster on port 5433 is shared, so do not change `shared_buffers`, `work_mem`, or `effective_cache_size` without measuring this data first. ## Role settings Run as a Postgres administrator for each database used by the application. The 15-second idle-in-transaction timeout is safe only after the external-I/O transaction-boundary regression test is present and green. ```sql ALTER ROLE sellright_app IN DATABASE rightapps SET statement_timeout = '30s'; ALTER ROLE sellright_app IN DATABASE rightapps SET idle_in_transaction_session_timeout = '15s'; ALTER ROLE sellright_app IN DATABASE rightapps SET lock_timeout = '5s'; ALTER ROLE sellright_app IN DATABASE sellright_dev SET statement_timeout = '30s'; ALTER ROLE sellright_app IN DATABASE sellright_dev SET idle_in_transaction_session_timeout = '15s'; ALTER ROLE sellright_app IN...",
+      "lifecycle": {
+        "status": "current"
+      },
+      "headings": [
+        {
+          "line": 1,
+          "level": 1,
+          "text": "Postgres application-role hardening"
+        },
+        {
+          "line": 7,
+          "level": 2,
+          "text": "Runtime identities"
+        },
+        {
+          "line": 12,
+          "level": 1,
+          "text": "SellRight"
+        },
+        {
+          "line": 15,
+          "level": 1,
+          "text": "RightSites production API"
+        },
+        {
+          "line": 22,
+          "level": 2,
+          "text": "Query observability"
+        },
+        {
+          "line": 60,
+          "level": 2,
+          "text": "Role settings"
+        },
+        {
+          "line": 85,
+          "level": 2,
+          "text": "Verify"
+        }
+      ]
+    },
+    {
+      "id": "doc.ios-changelog-md.d3ecafc2",
+      "kind": "doc",
+      "path": "ios/CHANGELOG.md",
+      "title": "Changelog — SellRight Admin iOS",
+      "sha1": "312f4e4a0bfcf23bc90a5ce65237916afc5c71d3",
+      "searchText": "# Changelog — SellRight Admin iOS Notable changes to the native iOS admin app only. The SellRight API, storefront, and browser admin use the repository-root changelog. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Every iOS feature, fix, or security change must update this file in the same push. ## [Unreleased] ### Changed - The app icon catalog now ships the complete RGB iOS icon set generated from the selected SellRight mark. ## 2026-07-17 ### Added - The first native SellRight Admin app: mobile order operations backed by the production admin API (`2a7f53c`). - Push notifications and Dynamic Island Live Activities for order events, plus the four-theme system (`bfac16a`). ### Fixed - Per-line refund construction now receives the order-line identifiers exposed by the API (`7be6ad6`). ",
+      "lifecycle": {
+        "status": "current"
+      },
+      "headings": [
+        {
+          "line": 1,
+          "level": 1,
+          "text": "Changelog — SellRight Admin iOS"
+        },
+        {
+          "line": 10,
+          "level": 2,
+          "text": "[Unreleased]"
+        },
+        {
+          "line": 12,
+          "level": 3,
+          "text": "Changed"
+        },
+        {
+          "line": 17,
+          "level": 2,
+          "text": "2026-07-17"
+        },
+        {
+          "line": 19,
+          "level": 3,
+          "text": "Added"
+        },
+        {
+          "line": 26,
+          "level": 3,
+          "text": "Fixed"
+        }
+      ]
+    },
+    {
+      "id": "doc.ios-readme-md.3dab3f8e",
+      "kind": "doc",
+      "path": "ios/README.md",
+      "title": "SellRight Admin — iOS",
+      "sha1": "0afcdc7522638dff18165dd0a11f7f604550967f",
+      "searchText": "# SellRight Admin — iOS Run your SellRight store from your phone: dashboard KPIs, orders (search, filter, detail, fulfill with tracking), products, multi-store switching. Shopify-mobile-style companion to the web admin, speaking the same `/v1/admin/*` REST API with a bearer token (CSRF-exempt API-client path). ## Layout ``` ios/ project.yml XcodeGen spec (app + unit tests, RightKitSwift pinned) SellRightAdmin/ App/ entry point, session/auth state, theme tokens Core/ API client, Codable models, Keychain, money, diagnostics Features/ Auth/ server URL + email/password/TOTP login Dashboard/ KPI grid + recent orders Orders/ list (search/filter/paginate), detail, fulfill sheet Products/ list with stock + min price Settings/ store switcher, account, sign out Tests/ model decoding + money formatting checks ``` ## Build ```sh brew install xcodegen # once cd ios xcodegen # generates SellRightAdmin.xcodeproj from project.yml xcodebuild -project SellRightAdmin.xcodeproj -scheme SellRightAdmin \\ -destination 'generic/platform=iOS Simulator' -scmProvider system build ``` Or open the generated `SellRightAdmin.xcodeproj` in Xcode and run. The `RightKitSwift` package (`github.com/bogusyogi/rightkit-swift`, pinned `from: 0.1.0`) resolves over your git credentials — `-scmProvider system` makes xcodebuild use system git instead of Xcode's own SCM store. ## Server contract - `POST /v1/admin/login` `{email, password, totp?}` → `{token, admin, stores}`; the token goes in `Authorization: Bearer` and is stored in the Keychain. - Store selection is the `x-store-slug` header (same as the web admin). - All money values are integer cents; `Money.format` divides only at display. - Point the login screen at any SellRight API (`http://localhost:3300` in dev — local networking is allowed by the Info.plist ATS exception; production servers must be https). ## Push + Live Activity Order lands → banner + sound → the Dynamic Island tracks it Paid → Shipped → Delivered → tap to open the order. The server side is a transactional outbox (`packages/api/src/push/`) enqueued in the same txn as the paid transition, so a rolled-back order never dings anyone. **Requires an APNs key that only Adrian can mint** — see [docs/IOS-PUSH-SETUP.md](../docs/IOS-PUSH-SETUP.md). Without it everything runs; it just never dings (the outbox fills and drains once the key lands). Two token families register...",
+      "lifecycle": {
+        "status": "current"
+      },
+      "headings": [
+        {
+          "line": 1,
+          "level": 1,
+          "text": "SellRight Admin — iOS"
+        },
+        {
+          "line": 8,
+          "level": 2,
+          "text": "Layout"
+        },
+        {
+          "line": 25,
+          "level": 2,
+          "text": "Build"
+        },
+        {
+          "line": 40,
+          "level": 2,
+          "text": "Server contract"
+        },
+        {
+          "line": 50,
+          "level": 2,
+          "text": "Push + Live Activity"
+        },
+        {
+          "line": 66,
+          "level": 2,
+          "text": "Themes"
+        },
+        {
+          "line": 74,
+          "level": 2,
+          "text": "Status / next steps"
         }
       ]
     },
@@ -2274,6 +2617,26 @@
       ]
     },
     {
+      "id": "claim.agents-md.37dd.72",
+      "kind": "claim",
+      "source": "AGENTS.md",
+      "line": 72,
+      "heading": "User intent is final (workspace rule, locked 2026-07-19)",
+      "text": "An explicit user request is the approval for every step of it. This repo's gates (bakeoff, release, QA, review) govern only unrequested spend, destructive/production steps, or specifics the user must see (e.g. a run packet) — and then only that single step; all other requested work is completed first, never left undone pending approval. Supersedes any...",
+      "status": "planned",
+      "missingRefs": []
+    },
+    {
+      "id": "claim.claude-md.2d5d.72",
+      "kind": "claim",
+      "source": "CLAUDE.md",
+      "line": 72,
+      "heading": "User intent is final (workspace rule, locked 2026-07-19)",
+      "text": "An explicit user request is the approval for every step of it. This repo's gates (bakeoff, release, QA, review) govern only unrequested spend, destructive/production steps, or specifics the user must see (e.g. a run packet) — and then only that single step; all other requested work is completed first, never left undone pending approval. Supersedes any...",
+      "status": "planned",
+      "missingRefs": []
+    },
+    {
       "id": "claim.docs-admin-redesign-plan-2026-06-md.4888.59",
       "kind": "claim",
       "source": "docs/ADMIN-REDESIGN-PLAN-2026-06.md",
@@ -2364,63 +2727,43 @@
       "missingRefs": []
     },
     {
-      "id": "claim.docs-architecture-md.fd45.198",
+      "id": "claim.docs-architecture-md.fd45.200",
       "kind": "claim",
       "source": "docs/ARCHITECTURE.md",
-      "line": 198,
+      "line": 200,
       "heading": "docs/plans/2026-06-20-cart-architecture.md",
       "text": "L118: 0032 is a custom hand-written migration with the required marker and documented snapshot-drift rationale.",
       "status": "partial",
       "missingRefs": []
     },
     {
-      "id": "claim.docs-architecture-md.fd45.202",
+      "id": "claim.docs-architecture-md.fd45.204",
       "kind": "claim",
       "source": "docs/ARCHITECTURE.md",
-      "line": 202,
+      "line": 204,
       "heading": "docs/plans/2026-06-20-checkout-migration.md",
       "text": "L33: Server-priced cart-token checkout, Stripe Payment Element, idempotent PI, and webhook-authoritative flow are implemented.",
       "status": "implemented",
       "missingRefs": []
     },
     {
-      "id": "claim.docs-architecture-md.fd45.207",
+      "id": "claim.docs-architecture-md.fd45.209",
       "kind": "claim",
       "source": "docs/ARCHITECTURE.md",
-      "line": 207,
+      "line": 209,
       "heading": "docs/plans/2026-06-20-order-management-bulk-ops.md",
       "text": "L36: All four layered operations exist; order.deletedAt is implemented in schema-orders.ts:67.",
       "status": "implemented",
       "missingRefs": []
     },
     {
-      "id": "claim.docs-architecture-md.fd45.227",
+      "id": "claim.docs-architecture-md.fd45.229",
       "kind": "claim",
       "source": "docs/ARCHITECTURE.md",
-      "line": 227,
+      "line": 229,
       "heading": "Contradictions (Doc-vs-Code Traps)",
       "text": "_4 stale findings — the highest-value signal blueprint produces. These are docs that claim X while the code does Y; the next agent that reads the doc and trusts it will get it wrong._",
       "status": "stale",
-      "missingRefs": []
-    },
-    {
-      "id": "claim.docs-architecture-md.fd45.230",
-      "kind": "claim",
-      "source": "docs/ARCHITECTURE.md",
-      "line": 230,
-      "heading": "Contradictions (Doc-vs-Code Traps)",
-      "text": "**docs/ARCHITECTURE.md:17** — PaymentProvider and Stripe are fully implemented, not merely scaffolded; NMI/Sezzle remain absent.",
-      "status": "implemented",
-      "missingRefs": []
-    },
-    {
-      "id": "claim.docs-architecture-md.fd45.231",
-      "kind": "claim",
-      "source": "docs/ARCHITECTURE.md",
-      "line": 231,
-      "heading": "Contradictions (Doc-vs-Code Traps)",
-      "text": "**docs/plans/2026-06-20-cart-architecture.md:255** — Both phases now exist: backend Phase A and flagged Phase B server-cart UX swap are implemented.",
-      "status": "implemented",
       "missingRefs": []
     },
     {
@@ -2429,68 +2772,78 @@
       "source": "docs/ARCHITECTURE.md",
       "line": 232,
       "heading": "Contradictions (Doc-vs-Code Traps)",
+      "text": "**docs/ARCHITECTURE.md:17** — PaymentProvider and Stripe are fully implemented, not merely scaffolded; NMI/Sezzle remain absent.",
+      "status": "implemented",
+      "missingRefs": []
+    },
+    {
+      "id": "claim.docs-architecture-md.fd45.233",
+      "kind": "claim",
+      "source": "docs/ARCHITECTURE.md",
+      "line": 233,
+      "heading": "Contradictions (Doc-vs-Code Traps)",
+      "text": "**docs/plans/2026-06-20-cart-architecture.md:255** — Both phases now exist: backend Phase A and flagged Phase B server-cart UX swap are implemented.",
+      "status": "implemented",
+      "missingRefs": []
+    },
+    {
+      "id": "claim.docs-architecture-md.fd45.234",
+      "kind": "claim",
+      "source": "docs/ARCHITECTURE.md",
+      "line": 234,
+      "heading": "Contradictions (Doc-vs-Code Traps)",
       "text": "**docs/plans/2026-06-20-order-management-bulk-ops.md:369** — Implementation is complete, but endpoints moved to admin-order-ops.ts and purge now also handles subscription; the plan's file claim is outdated.",
       "status": "implemented",
       "missingRefs": []
     },
     {
-      "id": "claim.docs-architecture-md.fd45.239",
+      "id": "claim.docs-architecture-md.fd45.241",
       "kind": "claim",
       "source": "docs/ARCHITECTURE.md",
-      "line": 239,
+      "line": 241,
       "heading": "Coverage Gaps (missing or partial flows)",
       "text": "| cart-add (server-cart UX) | partial | Cart UX does not always reflect server authoritative price/stock until checkout; potential pre-checkout price drift | packages/storefront/src/services/ServerCartService.ts; routes/cart.ts priceCart | architect |",
       "status": "partial",
       "missingRefs": []
     },
     {
-      "id": "claim.docs-architecture-md.fd45.255",
+      "id": "claim.docs-architecture-md.fd45.257",
       "kind": "claim",
       "source": "docs/ARCHITECTURE.md",
-      "line": 255,
+      "line": 257,
       "heading": "Top Health Findings",
       "text": "| 10 | performance | Missing partial indexes on webhook_delivery + email_outbox scheduler tables (perf-04) â€” outbox pattern degrades linearly | packages/api/src/db/schema-orders.ts:282 + :302 |",
       "status": "planned",
       "missingRefs": []
     },
     {
-      "id": "claim.docs-architecture-md.fd45.278",
+      "id": "claim.docs-architecture-md.fd45.280",
       "kind": "claim",
       "source": "docs/ARCHITECTURE.md",
-      "line": 278,
+      "line": 280,
       "heading": "Maturity Verdict",
       "text": "| observability | 5 | 4 | pino + requestId + readyz + audit_log are all wired and gate-covered; only gap is multi-instance in-memory throttles. |",
       "status": "planned",
       "missingRefs": []
     },
     {
-      "id": "claim.docs-architecture-md.fd45.279",
+      "id": "claim.docs-architecture-md.fd45.281",
       "kind": "claim",
       "source": "docs/ARCHITECTURE.md",
-      "line": 279,
+      "line": 281,
       "heading": "Maturity Verdict",
       "text": "| resilience | 5 | 5 | FORCE RLS + withStore txn + idempotency keys + SKIP-LOCKED + advisory lock + partial unique index = the money path is hardened end-to-end. |",
       "status": "partial",
       "missingRefs": []
     },
     {
-      "id": "claim.docs-architecture-md.fd45.283",
+      "id": "claim.docs-architecture-md.fd45.285",
       "kind": "claim",
       "source": "docs/ARCHITECTURE.md",
-      "line": 283,
+      "line": 285,
       "heading": "Maturity Verdict",
       "text": "| performance | 3 | 4 | Static manifest + PERF-2 cache + SKIP-LOCKED batching + pinned DNS lookup; cursor pagination deliberately YAGNI. CDN/signed-URL gap is produ |",
       "status": "planned",
-      "missingRefs": []
-    },
-    {
-      "id": "claim.docs-architecture-md.fd45.290",
-      "kind": "claim",
-      "source": "docs/ARCHITECTURE.md",
-      "line": 290,
-      "heading": "Maturity Verdict",
-      "text": "**Human gates remaining:** box deploy (sellright_dev 0037 + journal drift), RightApps merge (10 conflicts)",
-      "status": "partial",
       "missingRefs": []
     },
     {
@@ -2498,6 +2851,16 @@
       "kind": "claim",
       "source": "docs/ARCHITECTURE.md",
       "line": 292,
+      "heading": "Maturity Verdict",
+      "text": "**Human gates remaining:** box deploy (sellright_dev 0037 + journal drift), RightApps merge (10 conflicts)",
+      "status": "partial",
+      "missingRefs": []
+    },
+    {
+      "id": "claim.docs-architecture-md.fd45.294",
+      "kind": "claim",
+      "source": "docs/ARCHITECTURE.md",
+      "line": 294,
       "heading": "Maturity Verdict",
       "text": "_All 5 Phase-2 dimensions complete. 14 flows classified, 1 coverage gap, 8 capability coverage rows. Last refreshed: 2026-07-14T13:55:00Z_",
       "status": "planned",
@@ -2694,6 +3057,56 @@
       "missingRefs": []
     },
     {
+      "id": "claim.docs-ios-push-setup-md.9150.3",
+      "kind": "claim",
+      "source": "docs/IOS-PUSH-SETUP.md",
+      "line": 3,
+      "heading": "iOS Push + Live Activity — setup runbook (2026-07-17)",
+      "text": "Everything in the code is done and tested. What remains is **credential and",
+      "status": "implemented",
+      "missingRefs": []
+    },
+    {
+      "id": "claim.docs-ios-push-setup-md.9150.7",
+      "kind": "claim",
+      "source": "docs/IOS-PUSH-SETUP.md",
+      "line": 7,
+      "heading": "iOS Push + Live Activity — setup runbook (2026-07-17)",
+      "text": "Nothing here is a code change. Until step 1 is done, the app runs fine and simply",
+      "status": "implemented",
+      "missingRefs": []
+    },
+    {
+      "id": "claim.docs-ios-push-setup-md.9150.108",
+      "kind": "claim",
+      "source": "docs/IOS-PUSH-SETUP.md",
+      "line": 108,
+      "heading": "6. Live Activity notes",
+      "text": "the app updates it immediately (local `Activity.update`). Closing that gap needs",
+      "status": "planned",
+      "missingRefs": []
+    },
+    {
+      "id": "claim.docs-ios-push-setup-md.9150.109",
+      "kind": "claim",
+      "source": "docs/IOS-PUSH-SETUP.md",
+      "line": 109,
+      "heading": "6. Live Activity notes",
+      "text": "per-activity update tokens registered server-side; deliberately not built,",
+      "status": "planned",
+      "missingRefs": []
+    },
+    {
+      "id": "claim.docs-ios-push-setup-md.9150.114",
+      "kind": "claim",
+      "source": "docs/IOS-PUSH-SETUP.md",
+      "line": 114,
+      "heading": "7. Verifying it works, end to end",
+      "text": "Once step 1–3 are done:",
+      "status": "implemented",
+      "missingRefs": []
+    },
+    {
       "id": "claim.docs-moat-and-disruption-md.c394.86",
       "kind": "claim",
       "source": "docs/MOAT-AND-DISRUPTION.md",
@@ -2701,6 +3114,46 @@
       "heading": "Risks",
       "text": "| Unsupported operators | Do not sell before dogfooding is complete. |",
       "status": "implemented",
+      "missingRefs": []
+    },
+    {
+      "id": "claim.docs-open-source-readiness-2026-07-17-md.a769.23",
+      "kind": "claim",
+      "source": "docs/OPEN-SOURCE-READINESS-2026-07-17.md",
+      "line": 23,
+      "heading": "1. LICENSE contradicts open-sourcing",
+      "text": "**Decision required (Adrian's, not automatable):** permissive (MIT / Apache-2.0)",
+      "status": "claim",
+      "missingRefs": []
+    },
+    {
+      "id": "claim.docs-open-source-readiness-2026-07-17-md.a769.27",
+      "kind": "claim",
+      "source": "docs/OPEN-SOURCE-READINESS-2026-07-17.md",
+      "line": 27,
+      "heading": "1. LICENSE contradicts open-sourcing",
+      "text": "license choice here is a product decision, not a formality.",
+      "status": "claim",
+      "missingRefs": []
+    },
+    {
+      "id": "claim.docs-open-source-readiness-2026-07-17-md.a769.56",
+      "kind": "claim",
+      "source": "docs/OPEN-SOURCE-READINESS-2026-07-17.md",
+      "line": 56,
+      "heading": "3. Internal strategy docs are tracked and linked from the README",
+      "text": "| [`docs/COMMERCE-GAP-ANALYSIS.md`](COMMERCE-GAP-ANALYSIS.md) | gap/roadmap analysis |",
+      "status": "planned",
+      "missingRefs": []
+    },
+    {
+      "id": "claim.docs-open-source-readiness-2026-07-17-md.a769.90",
+      "kind": "claim",
+      "source": "docs/OPEN-SOURCE-READINESS-2026-07-17.md",
+      "line": 90,
+      "heading": "Clean — verified, not assumed",
+      "text": "| Login 2FA | TOTP; a 2FA-enabled account with missing code returns a generic 401 — no password-validity enumeration (`routes/admin.ts:40-50`) |",
+      "status": "planned",
       "missingRefs": []
     },
     {
@@ -3234,23 +3687,43 @@
       "missingRefs": []
     },
     {
-      "id": "claim.docs-runbooks-migrations-md.46d9.13",
+      "id": "claim.docs-runbooks-migrations-md.46d9.25",
       "kind": "claim",
       "source": "docs/runbooks/migrations.md",
-      "line": 13,
+      "line": 25,
       "heading": "Hand-written migrations (ra-006)",
       "text": "| `0037_payment_provider_ref_unique.sql` | Partial unique index (`WHERE provider_ref IS NOT NULL`) — drizzle-kit does not model partial indexes (same class of gap as the `license_activation_token_hash` index from migration 0027) and can never generate or safely diff this file. |",
       "status": "planned",
       "missingRefs": []
     },
     {
-      "id": "claim.docs-runbooks-migrations-md.46d9.23",
+      "id": "claim.docs-runbooks-migrations-md.46d9.37",
       "kind": "claim",
       "source": "docs/runbooks/migrations.md",
-      "line": 23,
+      "line": 37,
       "heading": "Hand-written migrations (ra-006)",
       "text": "hand-written migration and fails CI if it's missing or has been silently",
       "status": "planned",
+      "missingRefs": []
+    },
+    {
+      "id": "claim.ios-changelog-md.d3ec.14",
+      "kind": "claim",
+      "source": "ios/CHANGELOG.md",
+      "line": 14,
+      "heading": "Changed",
+      "text": "The app icon catalog now ships the complete RGB iOS icon set generated from",
+      "status": "implemented",
+      "missingRefs": []
+    },
+    {
+      "id": "claim.ios-readme-md.3dab.70",
+      "kind": "claim",
+      "source": "ios/README.md",
+      "line": 70,
+      "heading": "Themes",
+      "text": "`packages/admin/src/theme-tokens.css` so web and mobile can't drift; `ThemeTests`",
+      "status": "partial",
       "missingRefs": []
     },
     {
@@ -3388,6 +3861,12 @@
       "kind": "code_ref",
       "path": "../tools/right-release/deps.mjs",
       "exists": false
+    },
+    {
+      "id": "code.ios-changelog-md.d3ecafc2",
+      "kind": "code_ref",
+      "path": "ios/CHANGELOG.md",
+      "exists": true
     },
     {
       "id": "code.docs-architecture-md.fd45feca",
@@ -3570,6 +4049,12 @@
       "exists": false
     },
     {
+      "id": "code.runbooks-postgres-app-role-md.b24f4af2",
+      "kind": "code_ref",
+      "path": "runbooks/postgres-app-role.md",
+      "exists": false
+    },
+    {
       "id": "code.routes-subscriptions-ts.c6f38192",
       "kind": "code_ref",
       "path": "routes/subscriptions.ts",
@@ -3678,6 +4163,96 @@
       "exists": true
     },
     {
+      "id": "code.ios-shared-orderactivityattributes-swift.64bdee28",
+      "kind": "code_ref",
+      "path": "ios/Shared/OrderActivityAttributes.swift",
+      "exists": true
+    },
+    {
+      "id": "code.packages-storefront-package-json.bb8ac00e",
+      "kind": "code_ref",
+      "path": "packages/storefront/package.json",
+      "exists": true
+    },
+    {
+      "id": "code.src-data-trustpilot-json.62063df4",
+      "kind": "code_ref",
+      "path": "src/data/trustpilot.json",
+      "exists": false
+    },
+    {
+      "id": "code.readme-md.56ba1eef",
+      "kind": "code_ref",
+      "path": "../README.md",
+      "exists": false
+    },
+    {
+      "id": "code.claude-md.7ab6c223",
+      "kind": "code_ref",
+      "path": "../CLAUDE.md",
+      "exists": true
+    },
+    {
+      "id": "code.agents-md.831bc3ba",
+      "kind": "code_ref",
+      "path": "../AGENTS.md",
+      "exists": true
+    },
+    {
+      "id": "code.auth-password-ts.ab0c8d2f",
+      "kind": "code_ref",
+      "path": "auth/password.ts",
+      "exists": false
+    },
+    {
+      "id": "code.auth-admin-session-ts.9c610294",
+      "kind": "code_ref",
+      "path": "auth/admin-session.ts",
+      "exists": false
+    },
+    {
+      "id": "code.routes-admin-ts.41b2eda8",
+      "kind": "code_ref",
+      "path": "routes/admin.ts",
+      "exists": false
+    },
+    {
+      "id": "code.auth-rate-limit-ts.96518cf2",
+      "kind": "code_ref",
+      "path": "auth/rate-limit.ts",
+      "exists": false
+    },
+    {
+      "id": "code.routes-payment-webhooks-ts.785071d1",
+      "kind": "code_ref",
+      "path": "routes/payment-webhooks.ts",
+      "exists": false
+    },
+    {
+      "id": "code.security-outbound-url-ts.a2bab387",
+      "kind": "code_ref",
+      "path": "security/outbound-url.ts",
+      "exists": false
+    },
+    {
+      "id": "code.github-workflows-verify-yml.00920853",
+      "kind": "code_ref",
+      "path": ".github/workflows/verify.yml",
+      "exists": true
+    },
+    {
+      "id": "code.jobs-leader-lock-ts.5e1a7302",
+      "kind": "code_ref",
+      "path": "jobs/leader-lock.ts",
+      "exists": false
+    },
+    {
+      "id": "code.routes-admin-orders-ts.f631a69f",
+      "kind": "code_ref",
+      "path": "routes/admin-orders.ts",
+      "exists": false
+    },
+    {
       "id": "code.packages-api-src-routes-cart-ts.98e640a4",
       "kind": "code_ref",
       "path": "packages/api/src/routes/cart.ts",
@@ -3742,12 +4317,6 @@
       "kind": "code_ref",
       "path": "src/cart/ttl.test.ts",
       "exists": false
-    },
-    {
-      "id": "code.packages-storefront-package-json.bb8ac00e",
-      "kind": "code_ref",
-      "path": "packages/storefront/package.json",
-      "exists": true
     },
     {
       "id": "code.packages-storefront-src-utils-sellright-ts.d04f1ab3",
@@ -3942,6 +4511,18 @@
       "exists": true
     },
     {
+      "id": "code.meta-journal-json.3db1fe40",
+      "kind": "code_ref",
+      "path": "meta/_journal.json",
+      "exists": false
+    },
+    {
+      "id": "code.docs-ios-push-setup-md.a7cd9a19",
+      "kind": "code_ref",
+      "path": "../docs/IOS-PUSH-SETUP.md",
+      "exists": false
+    },
+    {
       "id": "code.src-api-ts.62c9fedb",
       "kind": "code_ref",
       "path": "src/api.ts",
@@ -3981,8 +4562,23 @@
   "edges": [
     {
       "from": "doc.agents-md.37dd6836",
+      "to": "claim.agents-md.37dd.72",
+      "type": "contains"
+    },
+    {
+      "from": "doc.agents-md.37dd6836",
       "to": "code.tools-right-release-deps-mjs.2972c8df",
       "type": "mentions-code"
+    },
+    {
+      "from": "doc.changelog-md.ab09011f",
+      "to": "code.ios-changelog-md.d3ecafc2",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.claude-md.2d5d10cf",
+      "to": "claim.claude-md.2d5d.72",
+      "type": "contains"
     },
     {
       "from": "doc.claude-md.2d5d10cf",
@@ -4181,32 +4777,22 @@
     },
     {
       "from": "doc.docs-architecture-md.fd45feca",
-      "to": "claim.docs-architecture-md.fd45.198",
+      "to": "claim.docs-architecture-md.fd45.200",
       "type": "contains"
     },
     {
       "from": "doc.docs-architecture-md.fd45feca",
-      "to": "claim.docs-architecture-md.fd45.202",
+      "to": "claim.docs-architecture-md.fd45.204",
       "type": "contains"
     },
     {
       "from": "doc.docs-architecture-md.fd45feca",
-      "to": "claim.docs-architecture-md.fd45.207",
+      "to": "claim.docs-architecture-md.fd45.209",
       "type": "contains"
     },
     {
       "from": "doc.docs-architecture-md.fd45feca",
-      "to": "claim.docs-architecture-md.fd45.227",
-      "type": "contains"
-    },
-    {
-      "from": "doc.docs-architecture-md.fd45feca",
-      "to": "claim.docs-architecture-md.fd45.230",
-      "type": "contains"
-    },
-    {
-      "from": "doc.docs-architecture-md.fd45feca",
-      "to": "claim.docs-architecture-md.fd45.231",
+      "to": "claim.docs-architecture-md.fd45.229",
       "type": "contains"
     },
     {
@@ -4216,37 +4802,47 @@
     },
     {
       "from": "doc.docs-architecture-md.fd45feca",
-      "to": "claim.docs-architecture-md.fd45.239",
+      "to": "claim.docs-architecture-md.fd45.233",
       "type": "contains"
     },
     {
       "from": "doc.docs-architecture-md.fd45feca",
-      "to": "claim.docs-architecture-md.fd45.255",
+      "to": "claim.docs-architecture-md.fd45.234",
       "type": "contains"
     },
     {
       "from": "doc.docs-architecture-md.fd45feca",
-      "to": "claim.docs-architecture-md.fd45.278",
+      "to": "claim.docs-architecture-md.fd45.241",
       "type": "contains"
     },
     {
       "from": "doc.docs-architecture-md.fd45feca",
-      "to": "claim.docs-architecture-md.fd45.279",
+      "to": "claim.docs-architecture-md.fd45.257",
       "type": "contains"
     },
     {
       "from": "doc.docs-architecture-md.fd45feca",
-      "to": "claim.docs-architecture-md.fd45.283",
+      "to": "claim.docs-architecture-md.fd45.280",
       "type": "contains"
     },
     {
       "from": "doc.docs-architecture-md.fd45feca",
-      "to": "claim.docs-architecture-md.fd45.290",
+      "to": "claim.docs-architecture-md.fd45.281",
+      "type": "contains"
+    },
+    {
+      "from": "doc.docs-architecture-md.fd45feca",
+      "to": "claim.docs-architecture-md.fd45.285",
       "type": "contains"
     },
     {
       "from": "doc.docs-architecture-md.fd45feca",
       "to": "claim.docs-architecture-md.fd45.292",
+      "type": "contains"
+    },
+    {
+      "from": "doc.docs-architecture-md.fd45feca",
+      "to": "claim.docs-architecture-md.fd45.294",
       "type": "contains"
     },
     {
@@ -4297,6 +4893,11 @@
     {
       "from": "doc.docs-architecture-md.fd45feca",
       "to": "code.runbooks-migrations-md.a25ced81",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-architecture-md.fd45feca",
+      "to": "code.runbooks-postgres-app-role-md.b24f4af2",
       "type": "mentions-code"
     },
     {
@@ -4490,9 +5091,159 @@
       "type": "contains"
     },
     {
+      "from": "doc.docs-ios-push-setup-md.9150c490",
+      "to": "claim.docs-ios-push-setup-md.9150.3",
+      "type": "contains"
+    },
+    {
+      "from": "doc.docs-ios-push-setup-md.9150c490",
+      "to": "claim.docs-ios-push-setup-md.9150.7",
+      "type": "contains"
+    },
+    {
+      "from": "doc.docs-ios-push-setup-md.9150c490",
+      "to": "claim.docs-ios-push-setup-md.9150.108",
+      "type": "contains"
+    },
+    {
+      "from": "doc.docs-ios-push-setup-md.9150c490",
+      "to": "claim.docs-ios-push-setup-md.9150.109",
+      "type": "contains"
+    },
+    {
+      "from": "doc.docs-ios-push-setup-md.9150c490",
+      "to": "claim.docs-ios-push-setup-md.9150.114",
+      "type": "contains"
+    },
+    {
+      "from": "doc.docs-ios-push-setup-md.9150c490",
+      "to": "code.ios-shared-orderactivityattributes-swift.64bdee28",
+      "type": "mentions-code"
+    },
+    {
       "from": "doc.docs-moat-and-disruption-md.c3948f7e",
       "to": "claim.docs-moat-and-disruption-md.c394.86",
       "type": "contains"
+    },
+    {
+      "from": "doc.docs-open-source-readiness-2026-07-17-md.a769ba1d",
+      "to": "claim.docs-open-source-readiness-2026-07-17-md.a769.23",
+      "type": "contains"
+    },
+    {
+      "from": "doc.docs-open-source-readiness-2026-07-17-md.a769ba1d",
+      "to": "claim.docs-open-source-readiness-2026-07-17-md.a769.27",
+      "type": "contains"
+    },
+    {
+      "from": "doc.docs-open-source-readiness-2026-07-17-md.a769ba1d",
+      "to": "claim.docs-open-source-readiness-2026-07-17-md.a769.56",
+      "type": "contains"
+    },
+    {
+      "from": "doc.docs-open-source-readiness-2026-07-17-md.a769ba1d",
+      "to": "claim.docs-open-source-readiness-2026-07-17-md.a769.90",
+      "type": "contains"
+    },
+    {
+      "from": "doc.docs-open-source-readiness-2026-07-17-md.a769ba1d",
+      "to": "code.packages-storefront-package-json.bb8ac00e",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-open-source-readiness-2026-07-17-md.a769ba1d",
+      "to": "code.src-data-trustpilot-json.62063df4",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-open-source-readiness-2026-07-17-md.a769ba1d",
+      "to": "code.docs-moat-and-disruption-md.c3948f7e",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-open-source-readiness-2026-07-17-md.a769ba1d",
+      "to": "code.docs-gtm-md.15ba606a",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-open-source-readiness-2026-07-17-md.a769ba1d",
+      "to": "code.docs-competitors-md.313982c9",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-open-source-readiness-2026-07-17-md.a769ba1d",
+      "to": "code.docs-market-placement-md.56304c04",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-open-source-readiness-2026-07-17-md.a769ba1d",
+      "to": "code.docs-commerce-gap-analysis-md.38be39d1",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-open-source-readiness-2026-07-17-md.a769ba1d",
+      "to": "code.readme-md.56ba1eef",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-open-source-readiness-2026-07-17-md.a769ba1d",
+      "to": "code.tools-right-release-deps-mjs.2972c8df",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-open-source-readiness-2026-07-17-md.a769ba1d",
+      "to": "code.claude-md.7ab6c223",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-open-source-readiness-2026-07-17-md.a769ba1d",
+      "to": "code.agents-md.831bc3ba",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-open-source-readiness-2026-07-17-md.a769ba1d",
+      "to": "code.auth-password-ts.ab0c8d2f",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-open-source-readiness-2026-07-17-md.a769ba1d",
+      "to": "code.auth-admin-session-ts.9c610294",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-open-source-readiness-2026-07-17-md.a769ba1d",
+      "to": "code.routes-admin-ts.41b2eda8",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-open-source-readiness-2026-07-17-md.a769ba1d",
+      "to": "code.auth-rate-limit-ts.96518cf2",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-open-source-readiness-2026-07-17-md.a769ba1d",
+      "to": "code.routes-payment-webhooks-ts.785071d1",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-open-source-readiness-2026-07-17-md.a769ba1d",
+      "to": "code.security-outbound-url-ts.a2bab387",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-open-source-readiness-2026-07-17-md.a769ba1d",
+      "to": "code.github-workflows-verify-yml.00920853",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-open-source-readiness-2026-07-17-md.a769ba1d",
+      "to": "code.jobs-leader-lock-ts.5e1a7302",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.docs-open-source-readiness-2026-07-17-md.a769ba1d",
+      "to": "code.routes-admin-orders-ts.f631a69f",
+      "type": "mentions-code"
     },
     {
       "from": "doc.docs-subscriptions-design-md.43ddca21",
@@ -5051,13 +5802,38 @@
     },
     {
       "from": "doc.docs-runbooks-migrations-md.46d9999f",
-      "to": "claim.docs-runbooks-migrations-md.46d9.13",
+      "to": "claim.docs-runbooks-migrations-md.46d9.25",
       "type": "contains"
     },
     {
       "from": "doc.docs-runbooks-migrations-md.46d9999f",
-      "to": "claim.docs-runbooks-migrations-md.46d9.23",
+      "to": "claim.docs-runbooks-migrations-md.46d9.37",
       "type": "contains"
+    },
+    {
+      "from": "doc.docs-runbooks-migrations-md.46d9999f",
+      "to": "code.meta-journal-json.3db1fe40",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.ios-changelog-md.d3ecafc2",
+      "to": "claim.ios-changelog-md.d3ec.14",
+      "type": "contains"
+    },
+    {
+      "from": "doc.ios-readme-md.3dab3f8e",
+      "to": "claim.ios-readme-md.3dab.70",
+      "type": "contains"
+    },
+    {
+      "from": "doc.ios-readme-md.3dab3f8e",
+      "to": "code.docs-ios-push-setup-md.a7cd9a19",
+      "type": "mentions-code"
+    },
+    {
+      "from": "doc.ios-readme-md.3dab3f8e",
+      "to": "code.packages-admin-src-theme-tokens-css.9ec21ecb",
+      "type": "mentions-code"
     },
     {
       "from": "doc.packages-admin-readme-md.38924293",
