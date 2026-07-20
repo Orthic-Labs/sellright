@@ -24,7 +24,7 @@ function parseAppMap(raw: string | undefined): Map<string, string> {
   return out;
 }
 
-function appValue(raw: string | undefined, appKey: string | null | undefined): string | undefined {
+export function appValue(raw: string | undefined, appKey: string | null | undefined): string | undefined {
   const key = appKey?.trim().toLowerCase();
   if (!key) return undefined;
   return parseAppMap(raw).get(key);

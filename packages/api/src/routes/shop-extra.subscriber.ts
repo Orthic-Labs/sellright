@@ -24,6 +24,7 @@ import * as s from '../db/schema.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import { enqueueEmail } from '../email/outbox.js';
 import { subscriberConfirm, waitlistConfirm } from '../email/templates.js';
+import { appValue } from '../email/dispatch.js';
 import { env } from '../env.js';
 
 export const subscriberRoutes = new OpenAPIHono();
@@ -59,13 +60,24 @@ function waitlistLabelFromConfig(storeId: string, topic: string): Promise<string
  * subscription" link the templates want. Public surfaces must use a public
  * host — STOREFRONT_URL is the canonical per-app URL with a sane default.
  */
-export function buildSubscriberLinks(token: string): { confirmUrl: string; unsubscribeUrl: string } {
+export function buildSubscriberLinks(token: string, appKey?: string): { confirmUrl: string; unsubscribeUrl: string } {
   // The storefront helper srNewsletterSignup calls this API via the same
   // public host; the confirmation link is the SAME public host so an email
   // client (or a corporate link-follower) reaches the API. If you front
   // this with a CDN, set PUBLIC_API_URL or proxy /v1/shop/subscriber/* to
-  // the API; until then STOREFRONT_URL is the only sane default.
-  const base = env.STOREFRONT_URL.replace(/\/$/, '');
+  // the API; until then STOREFRONT_URL is the fallback.
+  //
+  // On a multi-tenant store (one store row serving several branded sites) a
+  // single global STOREFRONT_URL sends every brand's confirmation to whichever
+  // host that variable happens to name — a ScrapeRight signup was emailing a
+  // viewright.cc confirm link. Resolve per app first, exactly as
+  // dispatch.ts::emailCtx does, keyed by the subscriber's topic.
+  //
+  // Deliberately NOT derived from the request Host header: that is
+  // attacker-controlled, and building an emailed capability URL from it is
+  // host-header injection (POST with Host: evil.com and the victim gets an
+  // evil.com confirm link). Config is the only trusted source here.
+  const base = (appValue(env.STOREFRONT_URL_BY_APP, appKey) ?? env.STOREFRONT_URL).replace(/\/$/, '');
   return {
     confirmUrl: `${base}/v1/shop/subscriber/confirm/${token}`,
     unsubscribeUrl: `${base}/v1/shop/subscriber/unsubscribe/${token}`,
@@ -86,11 +98,19 @@ export async function sendSubscriberConfirmation(
   store: { id: string; name: string; currency: string },
   data: { email: string; name: string | null; kind: 'newsletter' | 'waitlist'; topic: string; token: string },
 ): Promise<void> {
-  const { confirmUrl, unsubscribeUrl } = buildSubscriberLinks(data.token);
-  // We resolve `from` via the per-app env override the same way dispatch.ts
-  // does — that's the canonical place, mirror its shape here. (Most installs
-  // use SMTP_FROM directly; per-app overrides are rare.)
-  const ctx = { name: store.name, currency: store.currency, storefrontUrl: env.STOREFRONT_URL, fromEmail: env.SMTP_FROM ?? 'noreply@sellright.local' };
+  // `topic` IS the app key for a multi-tenant store (viewright, scraperight, …)
+  // and empty for the general newsletter, in which case every lookup below
+  // falls back to the global value.
+  const appKey = data.topic || undefined;
+  const { confirmUrl, unsubscribeUrl } = buildSubscriberLinks(data.token, appKey);
+  // Resolve `from` and the storefront link via the per-app env overrides the
+  // same way dispatch.ts::emailCtx does. This previously used the globals
+  // unconditionally despite the comment claiming otherwise, so a ScrapeRight
+  // waitlist confirmation went out from hello@heardright.app pointing at
+  // viewright.cc — wrong brand on both the envelope and the link.
+  const storefrontUrl = appValue(env.STOREFRONT_URL_BY_APP, appKey) ?? env.STOREFRONT_URL;
+  const fromEmail = appValue(env.EMAIL_FROM_BY_APP, appKey) ?? env.SMTP_FROM ?? 'noreply@sellright.local';
+  const ctx = { name: store.name, currency: store.currency, storefrontUrl, fromEmail };
   const rendered = data.kind === 'waitlist'
     ? waitlistConfirm(ctx, {
         confirmUrl,
