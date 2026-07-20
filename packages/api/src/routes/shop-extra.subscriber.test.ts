@@ -78,7 +78,7 @@ async function rowByEmail(email: string): Promise<{ id: string; status: string; 
   });
 }
 
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 
 // The per-IP throttle in shop-extra.newsletter-limit.ts is a module-level Map
 // that lives for the whole vitest process — 5 attempts per 15 min per IP. These
@@ -195,6 +195,28 @@ describe('subscriber (SUBSCRIBER-1) — signup persistence', () => {
     );
     expect(newsRow.find((r) => r.topic === '')).toBeDefined();
     expect(newsRow.find((r) => r.topic === 'scraperight')).toBeDefined();
+  });
+
+  it('rejects a waitlist signup with no topic, and writes no row', async () => {
+    // An empty topic is legitimate for the general newsletter, but a waitlist with
+    // no topic cannot be counted per app or addressed in a confirmation email.
+    for (const body of [
+      { email: 'notopic@example.com', kind: 'waitlist' },
+      { email: 'blanktopic@example.com', kind: 'waitlist', topic: '   ' },
+    ]) {
+      const res = await signup(body);
+      expect(res.status).toBe(400);
+    }
+    const rows = await withStore(STORE, async (tx) =>
+      (await tx.select({ email: s.subscriber.email }).from(s.subscriber)
+        .where(inArray(s.subscriber.email, ['notopic@example.com', 'blanktopic@example.com']))),
+    );
+    expect(rows).toHaveLength(0);
+  });
+
+  it('still accepts the general newsletter with no topic', async () => {
+    const res = await signup({ email: 'general@example.com', kind: 'newsletter' });
+    expect(res.status).toBe(200);
   });
 
   it('lower-cases and trims the email before persisting', async () => {

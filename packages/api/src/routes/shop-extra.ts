@@ -144,7 +144,15 @@ shopExtra.openapi(
       // public route. Other callers (checkout, import) can override.
       source: z.enum(['storefront', 'checkout', 'import', 'api']).optional(),
       meta: z.record(z.string(), z.unknown()).optional(),
-    })) } },
+    }).refine(
+      // An empty `topic` is the intended value for the general newsletter, but a
+      // waitlist with no topic is a waitlist for nothing: it cannot be counted per
+      // app, cannot pick a sender or confirm host, and renders "our product" in the
+      // confirmation email. Caught here so the row is never written, rather than
+      // surfacing later as an untagged entry an operator has to guess about.
+      (v) => v.kind !== 'waitlist' || (v.topic ?? '').trim().length > 0,
+      { path: ['topic'], message: 'topic is required when kind is "waitlist"' },
+    )) } },
     responses: {
       200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) },
       429: { description: 'Rate limited', content: J(z.object({ error: z.string() })) },
