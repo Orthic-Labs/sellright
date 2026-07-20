@@ -32,6 +32,27 @@ license-gate wiring belongs in `D:\Claude\rightapps`.
 When RightApps needs product changes, sync from SellRight with upstream fetch
 and merge rather than editing the fork first.
 
+### Run product changes past Adrian (locked 2026-07-20)
+
+**SellRight is the product, not a website.** Anything changed here is inherited
+by the e-commerce backend and every store built on it — DD, RH, SS, RightSites,
+and future stores. Before editing anything in this repo, classify the change:
+
+1. **Genuinely product-level** (every store wants it) — still run it past Adrian
+   before committing. Do not self-certify.
+2. **Right-apps-only** — it does not belong here. Use the RightSites process, or
+   ask.
+
+Deciding *which* of those a change is, is Adrian's call, not the agent's. The
+failure this rule exists to prevent: a Right Suite-shaped problem gets fixed in
+SellRight because the surrounding feature already lives here, so the change
+*looks* product-level and the agent classifies it itself. That is the whole
+mistake — the feature already being here is not evidence that a new constraint
+on it is product-level.
+
+This applies to behaviour changes, schema changes, and validation. It does not
+apply to fixing a doc to match what Adrian has already stated.
+
 ## Standard Tooling
 
 Use `pnpm`, not npm, for package management unless a legacy script explicitly
