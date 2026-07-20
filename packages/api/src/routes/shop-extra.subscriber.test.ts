@@ -141,6 +141,23 @@ describe('subscriber (SUBSCRIBER-1) — signup persistence', () => {
     expect(after).toBe(before); // 1/hr cooldown: silently dropped.
   });
 
+  it('still persists meta on a repeat signup inside the cooldown (cooldown gates the email, not the data)', async () => {
+    // A multi-step form posts the address first and survey answers seconds
+    // later. Both requests are inside the 1hr cooldown, so the second sends no
+    // email — but dropping its `meta` while returning {ok:true} would lose the
+    // answers silently. The row must be updated either way.
+    await signup({ email: 'twostep@example.com' });
+    const before = await outboxCount('subscriber_newsletter_confirm');
+    const res = await signup({ email: 'twostep@example.com', meta: { role: 'staff-eng', teamSize: '12' } });
+    expect(res.status).toBe(200);
+    const after = await outboxCount('subscriber_newsletter_confirm');
+    expect(after).toBe(before); // no second email — cooldown still holds
+    const row = await withStore(STORE, async (tx) =>
+      (await tx.select({ meta: s.subscriber.meta }).from(s.subscriber).where(eq(s.subscriber.email, 'twostep@example.com')).limit(1))[0],
+    );
+    expect(row?.meta).toEqual({ role: 'staff-eng', teamSize: '12' }); // ...but the data landed
+  });
+
   it('does not duplicate for an already-confirmed row (mailbomb guard, status-aware)', async () => {
     await signup({ email: 'confirmed@example.com' });
     // Force into confirmed without going through the token — we're testing

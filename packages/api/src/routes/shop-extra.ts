@@ -242,21 +242,27 @@ shopExtra.openapi(
       // with silence (they would just retry, and never land on the list). The
       // residual abuse is one extra email per unsubscribe the victim performs,
       // which is bounded by a victim action each time.
+      // The cooldown gates the EMAIL, never the row update. A legitimate repeat
+      // signup can carry new data — a multi-step form posts the address first
+      // and survey answers second, seconds apart — and returning early here
+      // would silently discard that `meta`/`name`/`source` while still
+      // reporting {ok:true}. Update the row unconditionally, then decide
+      // whether an email is due.
       const isReconsent = existing.status === 'unsubscribed';
       const lastSent = existing.lastSentAt?.getTime() ?? 0;
-      if (!isReconsent && now.getTime() - lastSent < CONFIRM_COOLDOWN_MS) {
-        return false; // within cooldown — silently drop the re-send (mailbomb guard).
-      }
+      const withinCooldown = !isReconsent && now.getTime() - lastSent < CONFIRM_COOLDOWN_MS;
 
-      // Flip unsubscribed back to pending; clear unsubscribed_at; bump
-      // last_sent_at. Re-use the existing token so unsubscribe links from
-      // prior emails stay valid; rotate on confirmed→pending if needed (none here).
+      // Flip unsubscribed back to pending; clear unsubscribed_at. `last_sent_at`
+      // only moves when we actually send, otherwise a burst of repeat posts
+      // would keep pushing the cooldown window forward and starve the send.
+      // Re-use the existing token so unsubscribe links from prior emails stay
+      // valid; rotate on confirmed→pending if needed (none here).
       const nextStatus = existing.status === 'unsubscribed' ? 'pending' : existing.status;
       await tx.update(s.subscriber)
         .set({
           status: nextStatus,
           unsubscribedAt: null,
-          lastSentAt: now,
+          ...(withinCooldown ? {} : { lastSentAt: now }),
           // Re-record the source on every signup attempt — useful when an
           // address resubscribes from a different surface (e.g. they
           // originally came in via 'checkout', now from 'storefront').
@@ -265,6 +271,8 @@ shopExtra.openapi(
           updatedAt: now,
         })
         .where(eq(s.subscriber.id, existing.id));
+      // Row is updated either way; the email is what the cooldown suppresses.
+      if (withinCooldown) return false;
       await sendSubscriberConfirmation(tx, st, { email: normalizedEmail, name: name ?? null, kind, topic: normalizedTopic, token: existing.token });
       return true;
     });
