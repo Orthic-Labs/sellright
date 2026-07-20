@@ -1,6 +1,7 @@
 # Subscriber System — Newsletter + Waitlist (2026-07-19)
 
-Status: SPEC — ready to implement.
+Status: **SHIPPED** — live in RightSites production (2026-07-20). See "As built"
+at the bottom for what changed during implementation and what is still open.
 
 ## Why this exists
 
@@ -252,3 +253,90 @@ pnpm verify
 
 Tests must target `sellright_test`. The RLS suite TRUNCATEs and refuses any
 database whose name does not end in `_test`.
+
+---
+
+## As built (2026-07-20)
+
+Shipped to RightSites production. Five brand sites post to
+`/v1/shop/newsletter-signup` same-origin (nginx proxies `/v1/` to
+`rightapps-api` on every brand vhost), so there is no CORS surface and no
+per-app Cloudflare Worker in the path.
+
+| site | kind | topic |
+|---|---|---|
+| heardright.app | `newsletter` | `heardright` |
+| viewright.cc | `newsletter` | `viewright` |
+| mailright.cc | `waitlist` | `mailright` |
+| coderight.cc | `waitlist` | `coderight` |
+| scraperight.cc | `waitlist` | `scraperight` |
+
+Released apps are `newsletter`, unreleased are `waitlist`. Shipping an app is a
+`kind` flip on its rows — nothing moves between lists.
+
+### Defects found and fixed during implementation
+
+- **Cooldown discarded data.** The signup handler returned before the row
+  update when a repeat signup landed inside the 1-hour cooldown, so a
+  multi-step form's second request (CodeRight posts the address, then survey
+  answers) had its `meta` silently dropped while still returning `{ok:true}`.
+  The cooldown now suppresses the *email* only; the row updates either way, and
+  `last_sent_at` advances only on an actual send so repeat posts cannot starve
+  the send by pushing the window forward.
+- **Confirm links and sender ignored the app.** On a multi-tenant store every
+  confirmation used the global `STOREFRONT_URL`/`SMTP_FROM`, so a ScrapeRight
+  signup mailed from `hello@heardright.app` with a `viewright.cc` link. Both now
+  resolve through `STOREFRONT_URL_BY_APP` / `EMAIL_FROM_BY_APP` keyed by
+  `topic`, via the same `appValue()` helper `dispatch.ts` already used.
+  Deliberately NOT derived from the `Host` header — building an emailed
+  capability URL from attacker-controlled input is host-header injection.
+- **Three migrations were permanently stranded.** `email_outbox`,
+  `push_outbox` and `admin_device_token` did not exist in the production
+  database even though code wrote to them; the signup was simply the first path
+  to hit `email_outbox`, and it 500'd. drizzle-kit picks pending work from a
+  timestamp cursor, so once RightSites' own `0041_runtime_artifact_promotion`
+  (`when=1784045400000`) applied, every upstream-merged entry near
+  `1782000000000` became unreachable forever. **This is a structural hazard of
+  the fork:** merging upstream appends entries carrying the upstream author's
+  timestamps, which are older than anything RightSites has applied recently.
+  After any `git merge upstream/main` that brings migrations, re-stamp their
+  `when` above the newest applied `created_at` before running `db:migrate`, and
+  verify by checking the tables exist — `drizzle-kit` prints "migrations applied
+  successfully" either way.
+- **CSV formula injection** in the admin export (CWE-1236): `name` arrives on
+  the public unauthenticated endpoint and lands in a file an admin opens in
+  Excel. Cells leading with `=`, `+`, `-`, `@`, TAB or CR are apostrophe-prefixed.
+- **Signup race.** SELECT-then-INSERT let two concurrent signups for one address
+  both insert, and the loser violated the unique index — a 500 on a
+  double-clicked button. Now `onConflictDoNothing`, matching repo convention.
+
+### Operational notes
+
+- **`JOBS_ENABLED=1` is required.** The scheduler is a single master switch for
+  all background jobs including `emails` and `listmonk-sync`. It was `0` in
+  RightSites production, so confirmations were enqueued and never sent —
+  subscribers would have been captured and left `pending` forever, with double
+  opt-in silently inert. Enabled 2026-07-20 (`.env.bak-jobs-20260720` holds the
+  previous file). `autoDeliverApply` and `releaseApply` remain `false`.
+- **Listmonk is optional and non-blocking.** With it unconfigured the sync job
+  logs `skipped` and rows simply stay `listmonk_synced_at IS NULL`. Nothing is
+  lost — that is the whole point of demoting it to a downstream target.
+- Only `confirmed` rows ever sync to Listmonk. Pending addresses never reach a
+  mailing list.
+
+### Verified in production
+
+Signup (200) → `subscriber` row with correct `kind`/`topic`/`source`/`meta` →
+`email_outbox` entry → scheduler delivers (`sent`) → confirm token flips the row
+to `confirmed` and is idempotent on a second call. Per-app routing confirmed:
+ScrapeRight from `hello@scraperight.cc` linking `scraperight.cc`, HeardRight
+from `hello@heardright.app` linking `heardright.app`.
+
+### Still open
+
+- The storefront's own `newsletter/confirm` and `newsletter/unsubscribe` pages
+  still call Listmonk directly from SSR (defect D3 in "Why this exists"). The
+  API path above does not use them.
+- The five Cloudflare Workers are orphaned but still deployed.
+- HeardRight's signup was added in RightSites (`heardright/src/routes/index.tsx`);
+  it has no equivalent in SellRight, which ships no brand sites.
