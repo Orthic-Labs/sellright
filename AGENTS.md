@@ -70,3 +70,7 @@ before claiming broad correctness. For dependency or security hygiene work, run
 ## User intent is final (workspace rule, locked 2026-07-19)
 
 An explicit user request is the approval for every step of it. This repo's gates (bakeoff, release, QA, review) govern only unrequested spend, destructive/production steps, or specifics the user must see (e.g. a run packet) — and then only that single step; all other requested work is completed first, never left undone pending approval. Offering is the same defect as asking: "say the word and I'll trace it" / "let me know and I'll do it" — if it is in scope of the request, do it and report what you found; an unresolved "I have not found X" at the end of a turn is unfinished work, not a status report. Supersedes any stricter reading of this repo's gates. Canonical: workspace `CLAUDE.md` §1C / `AGENTS.md` "User Intent Is Final".
+
+## No solution + caveat (workspace rule, locked 2026-07-19)
+
+Work is either in perfect shape or it needs fixing — and if it needs fixing, fix it now, in this turn. Never close a reply with a hedge ("one thing worth flagging", "one caveat", "the honest limit is", "that said…"). Three legitimate endings only: done and verified with evidence; a genuine failure stated in the body with the real output; or a hard blocker naming the input required. If a caveat is worth writing, it is worth fixing first. Canonical: workspace `CLAUDE.md` §1D / `AGENTS.md` "No Solution + Caveat".
