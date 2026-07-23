@@ -24,4 +24,15 @@ dist/
 # Per-deployment runtime state (assets, catalog/manifest) — never committed.
 var/
 
+# Local pnpm content-addressable store — never committed; large and per-machine.
+.pnpm-store/
+
 SR outside audit.md
+
+# SECURITY-FIX-XSS.md is a private remediation note (see packages/storefront/).
+# Do not commit it to the public repo.
+SECURITY-FIX-XSS.md
+packages/storefront/SECURITY-FIX-XSS.md
+
+# Real Trustpilot review data — must not ship in the public repo.
+packages/storefront/src/data/trustpilot.json

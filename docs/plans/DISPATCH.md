@@ -81,7 +81,7 @@ WHEN DONE: commit, `git push -u origin fix/sec-newsletter-ssrf`, VERIFY with `gi
 
 ---
 
-## 2. Lane SEC-2 — admin-logout CSRF + bearer-validated CSRF exemption  `[security · PARALLEL, dispatch now]`
+## 2. Lane SEC-2 — admin-logout CSRF + bearer-validated CSRF exemption  `[security · ✅ MERGED 4b421da]`
 
 ```
 WORKTREE: cd D:/Claude/sellright && git fetch origin && git worktree add ../sr-sec-csrf -b fix/sec-admin-logout-csrf origin/main && cd ../sr-sec-csrf

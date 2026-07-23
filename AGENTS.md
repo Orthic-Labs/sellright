@@ -27,7 +27,7 @@ product code edits directly on the server.
 
 Changes that ship with SellRight belong here first. RightApps-specific code
 such as storefront apps, Right Suite catalog scripts, app-store theming, and
-license-gate wiring belongs in `D:\Claude\rightapps`.
+license-gate wiring belongs in `D:\Claude\rightsites`.
 
 When RightApps needs product changes, sync from SellRight with upstream fetch
 and merge rather than editing the fork first.

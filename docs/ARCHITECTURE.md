@@ -167,8 +167,10 @@ The gate builds all packages, type-checks, runs API tests, asserts FORCE RLS cov
 ## Migrations
 
 See [runbooks/migrations.md](runbooks/migrations.md) for the rule on
-hand-written migrations (currently `0032_cart_ttl.sql`,
-`0034_subscriptions.sql`, `0036_harden_subscription_rls.sql`). The
+hand-written migrations (currently seven: `0032_cart_ttl.sql`,
+`0034_subscriptions.sql`, `0036_harden_subscription_rls.sql`,
+`0037_payment_provider_ref_unique.sql`, `0038_email_outbox.sql`,
+`0039_push_notifications.sql`, `0040_outbox_autovacuum.sql`). The
 `db:assert-hand-written` script enforces the rule in CI.
 
 Postgres runtime-role timeouts and per-service `application_name` configuration
