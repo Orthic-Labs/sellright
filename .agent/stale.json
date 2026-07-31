@@ -106,23 +106,15 @@
     },
     {
       "source": "docs/plans/2026-07-19-subscriber-newsletter-waitlist.md",
-      "path": "packages/api/drizzle/0041_subscriber.sql"
-    },
-    {
-      "source": "docs/plans/2026-07-19-subscriber-newsletter-waitlist.md",
       "path": "jobs/leader-lock.ts"
     },
     {
       "source": "docs/plans/2026-07-19-subscriber-newsletter-waitlist.md",
-      "path": "packages/api/src/routes/shop-extra.subscriber.ts"
+      "path": "drizzle/meta/_journal.json"
     },
     {
       "source": "docs/plans/2026-07-19-subscriber-newsletter-waitlist.md",
-      "path": "packages/api/src/jobs/listmonk-sync.ts"
-    },
-    {
-      "source": "docs/plans/2026-07-19-subscriber-newsletter-waitlist.md",
-      "path": "packages/api/src/routes/shop-extra.subscriber.test.ts"
+      "path": "heardright/src/routes/index.tsx"
     },
     {
       "source": "docs/plans/BOX-VALIDATION-CHECKLIST.md",
@@ -167,10 +159,10 @@
   ],
   "staleClaims": [
     {
-      "id": "claim.docs-architecture-md.fd45.229",
+      "id": "claim.docs-architecture-md.fd45.231",
       "kind": "claim",
       "source": "docs/ARCHITECTURE.md",
-      "line": 229,
+      "line": 231,
       "heading": "Contradictions (Doc-vs-Code Traps)",
       "text": "_4 stale findings — the highest-value signal blueprint produces. These are docs that claim X while the code does Y; the next agent that reads the doc and trusts it will get it wrong._",
       "status": "stale",

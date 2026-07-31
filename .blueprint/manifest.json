@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "repo": "sellright",
-  "generatedAt": "gen:4a93d291e3ab3ab1",
+  "generatedAt": "gen:86fc25ccdf3b0919",
   "entrypoint": ".agent/",
   "humanDocs": [
     "docs/product.md",
@@ -14,15 +14,16 @@
     "index": ".agent/index.json",
     "queue": ".agent/queue.json",
     "flows": ".agent/flows.json",
+    "phase2Plan": ".agent/phase2-plan.json",
     "graph": ".agent/graph/manifest.json"
   },
   "generation": {
     "schemaVersion": 1,
-    "id": "sha256:09aa8dbd99ccfdee96ab7e2d2fc7cf843eed2b774ea1eb55c4bb97bc6b4a438f",
-    "revision": "sha256:09aa8dbd99ccfdee96ab7e2d2fc7cf843eed2b774ea1eb55c4bb97bc6b4a438f",
-    "baseCommit": "848270434c02b6c1a1f8e20bcaf8c71fc929819c",
+    "id": "sha256:2383b54dc7321cdcc772e20e7e59420ca044158b8b31c5940e200ea09dfdc6d0",
+    "revision": "sha256:2383b54dc7321cdcc772e20e7e59420ca044158b8b31c5940e200ea09dfdc6d0",
+    "baseCommit": "603706527b3aff9520c61fcbee0c431469e1301b",
     "sourceState": "clean",
-    "indexedAt": "gen:09aa8dbd99ccfdee",
+    "indexedAt": "gen:2383b54dc7321cdc",
     "stale": false,
     "sourceKind": "blueprint",
     "toolVersions": {
@@ -37,8 +38,8 @@
     ],
     "supportedEdgeTypes": [],
     "supportedLanguages": [],
-    "fileCount": 837,
-    "contentHash": "sha256:bacd0f71ecb6b3a8d2ddfb012048c85f819bdb6ddf9224a1d11dc7a7da032ee5",
+    "fileCount": 841,
+    "contentHash": "sha256:1ddf5f3bc0d240e1446947c6539f24b5f5fef03cbde0ed04918bebc3862bcab2",
     "frozen": true
   },
   "capabilities": {
@@ -174,17 +175,22 @@
     ]
   },
   "stats": {
-    "files": 837,
+    "files": 841,
     "docs": 37,
-    "claims": 125,
-    "codeRefs": 126,
+    "claims": 129,
+    "codeRefs": 127,
     "flows": 200,
-    "graphNodes": 7734,
-    "graphEdges": 2314
+    "graphNodes": 7820,
+    "graphEdges": 2332
   },
   "docs": "docs_conflict",
   "docsConflict": [
     "docs/architecture.md"
   ],
-  "sourceSignature": "4a93d291e3ab3ab143e960aa128c14cb7e0db6e3"
+  "phase2": {
+    "complete": false,
+    "verify": 71,
+    "synthesize": 6
+  },
+  "sourceSignature": "86fc25ccdf3b0919a35223034c57f12a87df04db"
 }
