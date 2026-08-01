@@ -15,7 +15,7 @@
  * NOT ordered, so onInvoicePaid CREATE-OR-FINDs the subscription rather than
  * assuming checkout.session.completed ran first.
  */
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { applyPaymentResult } from './settle.js';
@@ -241,6 +241,46 @@ async function extendRenewal(
   const expiresAt = extendEntitlement(lic.expiresAt, variant?.licenseDurationDays ?? null, now);
   const updatesUntil = extendEntitlement(lic.updatesUntil, variant?.updatesDurationDays ?? null, now);
   await tx.update(s.license).set({ expiresAt, updatesUntil, updatedAt: now }).where(eq(s.license.id, lic.id));
+
+  // FIX (renewal never writes a payment ledger row): before this, ONLY
+  // settleFirstCycle ever called applyPaymentResult / inserted into s.payment —
+  // a renewal only extended the license. So on cycle 4+, admin-orders.ts's
+  // refund route (which targets the most recent Settled s.payment for the
+  // order) still pointed at the CYCLE-1 charge, and every later cycle's money
+  // was effectively unrefundable. Every settled renewal invoice now inserts
+  // its own payment row (this cycle's amount + providerRef), same shape as
+  // applyPaymentResult's insert in payments/settle.ts, so refunds can target
+  // the correct cycle. Idempotent via the SAME partial unique index
+  // (storeId, providerRef) WHERE providerRef IS NOT NULL that settle.ts
+  // relies on — a redelivered invoice.paid is a no-op insert, not a
+  // duplicate ledger row.
+  if (sub.orderId) {
+    const providerRef = idOf(invoice.payment_intent) ?? invoice.id;
+    const inserted = await tx
+      .insert(s.payment)
+      .values({
+        storeId,
+        orderId: sub.orderId,
+        amount: invoice.amount_paid ?? 0,
+        method: 'stripe',
+        providerRef,
+        state: 'Settled',
+        metadata: { stripeInvoiceId: invoice.id, renewal: true },
+      })
+      .onConflictDoNothing({
+        target: [s.payment.storeId, s.payment.providerRef],
+        where: sql`${s.payment.providerRef} is not null`,
+      })
+      .returning({ id: s.payment.id });
+    if (inserted.length === 0) {
+      await audit(tx, storeId, 'subscription_renewal_payment_duplicate', subId, { invoiceId: invoice.id, providerRef });
+    }
+  } else {
+    // Orphaned subscription (no backing order) — nothing to attach a payment
+    // row to; still record that the cycle happened for the audit trail.
+    await audit(tx, storeId, 'subscription_renewal_no_order', subId, { invoiceId: invoice.id });
+  }
+
   await audit(tx, storeId, 'subscription_renewed', subId, { licenseId: lic.id, expiresAt, updatesUntil });
 }
 

@@ -143,6 +143,71 @@ describe('POST /v1/webhooks/stripe — settle + idempotency', () => {
   });
 });
 
+describe('POST /v1/webhooks/stripe — MONEY-3: verifies against amountDue, not raw grandTotal', () => {
+  it('settles the order when the intent amount matches grandTotal minus a prior Settled gift-card tender', async () => {
+    const { code, orderId } = await seed('test');
+    // grandTotal is 2500 (seed()); a partial gift-card draw-down already
+    // covered 1000 of it at checkout, same as checkout.ts's gift_card tender.
+    await withStore(STORE, (tx) => tx.insert(s.payment).values({ storeId: STORE, orderId, amount: 1000, method: 'gift_card', state: 'Settled' }));
+
+    // The gateway (Stripe) was only ever asked to capture the REMAINING 1500 —
+    // that's what /payment-intent would have minted for. The webhook's
+    // verification must accept THAT amount, not reject it for not matching the
+    // raw 2500 grandTotal.
+    const payload = JSON.stringify(piSucceededEvent({ id: `evt_partial_${code}`, orderCode: code, storeId: STORE, amount: 1500 }));
+    const sig = sign(payload, TEST_WEBHOOK_SECRET);
+    const res = await app.request('/v1/webhooks/stripe', { method: 'POST', headers: hdr(sig), body: payload });
+    expect(res.status).toBe(200);
+
+    const order = await withStore(STORE, async (tx) => {
+      const [o] = await tx.select().from(s.order).where(eq(s.order.id, orderId)).limit(1);
+      return o;
+    });
+    expect(order!.state).toBe('Paid');
+
+    const payments = await withStore(STORE, (tx) => tx.select().from(s.payment).where(eq(s.payment.orderId, orderId)));
+    const stripeRow = payments.find((p) => p.method === 'stripe');
+    // The bug this guards against: recording/expecting 2500 (grandTotal) here
+    // instead of the 1500 actually captured.
+    expect(stripeRow!.amount).toBe(1500);
+    const settledTotal = payments.filter((p) => p.state === 'Settled').reduce((a, p) => a + p.amount, 0);
+    expect(settledTotal).toBe(2500);
+  });
+});
+
+describe('POST /v1/webhooks/stripe — MONEY-4: settlement after auto-cancel is recorded + audited, never dropped', () => {
+  it('a payment_intent.succeeded event for a Cancelled order still records the payment row and an audit_log flag', async () => {
+    const { code, orderId } = await seed('test');
+    // Simulate jobs/release-stale-allocations.ts auto-cancelling the order
+    // purely on age, WHILE a real Stripe capture was already in flight.
+    await withStore(STORE, (tx) => tx.update(s.order).set({ state: 'Cancelled' }).where(eq(s.order.id, orderId)));
+
+    const payload = JSON.stringify(piSucceededEvent({ id: `evt_after_cancel_${code}`, orderCode: code, storeId: STORE }));
+    const sig = sign(payload, TEST_WEBHOOK_SECRET);
+    const res = await app.request('/v1/webhooks/stripe', { method: 'POST', headers: hdr(sig), body: payload });
+    expect(res.status).toBe(200); // ack — Stripe must not retry a valid, processed event
+
+    const order = await withStore(STORE, async (tx) => {
+      const [o] = await tx.select().from(s.order).where(eq(s.order.id, orderId)).limit(1);
+      return o;
+    });
+    // Never silently auto-un-cancel — that is a separate product decision.
+    expect(order!.state).toBe('Cancelled');
+
+    // The money must NEVER go invisible: the payment row is recorded even
+    // though the order stayed Cancelled.
+    const payments = await withStore(STORE, (tx) => tx.select().from(s.payment).where(eq(s.payment.orderId, orderId)));
+    expect(payments).toHaveLength(1);
+    expect(payments[0]!.state).toBe('Settled');
+    expect(payments[0]!.amount).toBe(2500);
+
+    const audits = await withStore(STORE, (tx) => tx.select().from(s.auditLog).where(eq(s.auditLog.entityId, orderId)));
+    const flag = audits.find((a) => a.action === 'payment_after_cancel');
+    expect(flag).toBeDefined();
+    expect((flag!.data as { needsReconciliation?: boolean })?.needsReconciliation).toBe(true);
+  });
+});
+
 describe('POST /v1/webhooks/stripe — mode-bind guard', () => {
   it('a webhook signed with the TEST secret cannot settle a LIVE-mode store', async () => {
     const { code, orderId } = await seed('live');

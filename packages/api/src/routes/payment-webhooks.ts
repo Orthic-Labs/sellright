@@ -13,7 +13,7 @@ import type Stripe from 'stripe';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { stripeConfigured, stripeCreds, stripeModeFromConfig, verifyStripeWebhook, verifyIntent, type IntentLike, type StripeMode } from '../payments/stripe.js';
-import { applyPaymentResult } from '../payments/settle.js';
+import { applyPaymentResult, amountDueForOrder } from '../payments/settle.js';
 import { resolveStoreIdForStripeEvent, resolveStoreIdForSubscriptionEvent, reconcileStripeRefund, recordStripeDispute, type StripeEventObj } from '../payments/webhook-reconcile.js';
 import {
   onCheckoutCompleted, onInvoicePaid, onInvoiceFailed, onSubscriptionUpdated, onSubscriptionDeleted,
@@ -97,10 +97,24 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
         // Safety net for a client that died before calling /pay. If /pay already
         // settled it the order is Paid → skip (no duplicate payment row). Re-run
         // the same server-side verification before trusting the event.
-        if (!order || order.state !== 'PendingPayment') return;
-        const result = verifyIntent(pi, { orderCode: code, amount: order.grandTotal, currency: order.currency });
+        //
+        // MONEY-4: the order may have been auto-cancelled (stale-allocation TTL
+        // job, purely on created_at age) by the time this event lands, even
+        // though Stripe genuinely captured the money. Don't silently drop that —
+        // still verify + record it (applyPaymentResult flags a non-payable state
+        // with an audit_log entry instead of transitioning to Paid). Any OTHER
+        // terminal state (Paid/Refunded/PartiallyRefunded) is left alone — those
+        // are legitimate no-ops, not the money-goes-invisible bug.
+        if (!order) return;
+        if (order.state !== 'PendingPayment' && order.state !== 'Cancelled') return;
+        // MONEY-3: verify against what's actually still owed (grandTotal minus
+        // any Settled tenders already recorded, e.g. a partial gift-card
+        // draw-down), not the raw order total.
+        const amountDue = await amountDueForOrder(tx, storeId, order.id, order.grandTotal);
+        if (amountDue <= 0) return; // already fully covered by other tenders — nothing to verify/record
+        const result = verifyIntent(pi, { orderCode: code, amount: amountDue, currency: order.currency });
         if (result.state === 'Settled') {
-          await applyPaymentResult(tx, { storeId, order: { ...order, code }, method: 'stripe', result });
+          await applyPaymentResult(tx, { storeId, order: { ...order, code }, method: 'stripe', result, amount: amountDue });
         }
         return;
       }

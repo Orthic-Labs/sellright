@@ -22,6 +22,7 @@ import { env } from '../env.js';
 import { autoDeliver } from './auto-deliver.js';
 import { releaseStaleAllocations } from './release-stale-allocations.js';
 import { reapStuckWebhooks } from './webhook-reaper.js';
+import { reapProcessedEvents } from './processed-event-reaper.js';
 import { abandonStaleCarts, cleanupExpiredCarts } from './cart-maintenance.js';
 import { deliverWebhooks } from '../webhooks/emit.js';
 import { deliverEmails } from '../email/outbox.js';
@@ -116,4 +117,13 @@ export function startJobScheduler(): void {
   const webhookReaperApply = env.JOBS_WEBHOOK_REAPER_APPLY === '1';
   const webhookReaperGraceMin = env.JOBS_WEBHOOK_REAPER_GRACE_MIN ?? 10;
   every(5 * 60_000, 'webhook-reaper', 'webhook-reaper', () => reapStuckWebhooks({ apply: webhookReaperApply, graceMin: webhookReaperGraceMin, log: jobLog }));
+  // processed_event never had a reaper — it gets one row per Stripe webhook id
+  // plus one per payment idempotency claim and neither writer ever deletes it,
+  // so the table grows forever. Retention defaults to 30 days, well past any
+  // realistic idempotency/replay window. Runs hourly (this table is low-churn
+  // compared to webhooks/emails, so a tighter cadence isn't needed).
+  const processedEventReaperApply = env.JOBS_PROCESSED_EVENT_REAPER_APPLY === '1';
+  const processedEventReaperRetentionDays = env.JOBS_PROCESSED_EVENT_REAPER_RETENTION_DAYS ?? 30;
+  every(HOUR, 'processed-event-reaper', 'processed-event-reaper', () =>
+    reapProcessedEvents({ apply: processedEventReaperApply, retentionDays: processedEventReaperRetentionDays, log: jobLog }));
 }

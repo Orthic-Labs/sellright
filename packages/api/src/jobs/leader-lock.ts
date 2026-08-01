@@ -42,6 +42,9 @@ const JOB_KEYS = {
   // to Listmonk. Same shape as emails/webhooks — best-effort, retryable, no
   // request-path dependency.
   'listmonk-sync': NAMESPACE | 8n,
+  // processed_event never had a reaper before; batched-delete pass, same
+  // leader-locked shape as webhook-reaper.
+  'processed-event-reaper': NAMESPACE | 9n,
 } as const satisfies Record<string, bigint>;
 
 export type LeaderLockedJob = keyof typeof JOB_KEYS;

@@ -11,7 +11,7 @@ import { err as logErr } from '../lib/logger.js';
 export const adminMarketing = new OpenAPIHono();
 
 // ── promotions / discounts manager ───────────────────────────────────────────
-const promoBody = z.object({
+const promoBodyBase = z.object({
   code: z.string().min(1).nullable().optional(), // null/omitted = AUTOMATIC discount
   type: z.enum(['percentage', 'fixed', 'free_shipping']),
   value: money.default(0), // percentage: 0–100; fixed: cents
@@ -24,6 +24,14 @@ const promoBody = z.object({
   endsAt: z.string().nullable().optional(),
   enabled: z.boolean().default(true),
 });
+// Percentage promotions must stay within 0–100; anything higher (or negative)
+// can drive a negative order total downstream (money/totals.ts).
+function checkPromoValueBound(type: string | undefined, value: number | undefined, ctx: z.RefinementCtx): void {
+  if (type === 'percentage' && value !== undefined && (value < 0 || value > 100)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['value'], message: 'percentage promotion value must be between 0 and 100' });
+  }
+}
+const promoBody = promoBodyBase.superRefine((val, ctx) => checkPromoValueBound(val.type, val.value, ctx));
 
 adminMarketing.openapi(
   createRoute({
@@ -104,25 +112,33 @@ adminMarketing.openapi(
 adminMarketing.openapi(
   createRoute({
     method: 'patch', path: '/v1/admin/promotions/{id}', summary: 'Update a promotion',
-    request: { params: z.object({ id: z.string() }), body: { content: J(promoBody.partial()) } },
-    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
+    request: { params: z.object({ id: z.string() }), body: { content: J(promoBodyBase.partial()) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 404: { description: 'Not found', ...errBody }, 400: { description: 'Invalid value', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireWrite(st);
     const { id } = c.req.valid('param');
     const b = c.req.valid('json');
-    const ok = await withStore(st.storeId, async (tx) => {
-      const [p] = await tx.select({ id: s.promotion.id }).from(s.promotion).where(eq(s.promotion.id, id)).limit(1);
-      if (!p) return false;
+    const res = await withStore(st.storeId, async (tx) => {
+      const [p] = await tx.select({ id: s.promotion.id, type: s.promotion.type, value: s.promotion.value }).from(s.promotion).where(eq(s.promotion.id, id)).limit(1);
+      if (!p) return { kind: 'notfound' as const };
+      // A PATCH can change value without type (or vice versa) — validate the
+      // EFFECTIVE (merged) type/value pair, not just whatever fields were sent.
+      const effectiveType = b.type ?? p.type;
+      const effectiveValue = b.value ?? p.value;
+      if (effectiveType === 'percentage' && (effectiveValue < 0 || effectiveValue > 100)) {
+        return { kind: 'invalid' as const };
+      }
       const patch: Record<string, unknown> = {};
       for (const k of ['code', 'type', 'value', 'conditions', 'usageLimit', 'perCustomerUsageLimit', 'priority', 'exclusionGroup', 'enabled'] as const) if (b[k] !== undefined) patch[k] = b[k];
       if (b.startsAt !== undefined) patch.startsAt = b.startsAt ? new Date(b.startsAt) : null;
       if (b.endsAt !== undefined) patch.endsAt = b.endsAt ? new Date(b.endsAt) : null;
       await tx.update(s.promotion).set(patch).where(eq(s.promotion.id, id));
-      return true;
+      return { kind: 'ok' as const };
     });
-    if (!ok) throw new HttpError(404, 'promotion not found');
+    if (res.kind === 'notfound') throw new HttpError(404, 'promotion not found');
+    if (res.kind === 'invalid') throw new HttpError(400, 'percentage promotion value must be between 0 and 100');
     return c.json({ id }, 200);
   }),
 );

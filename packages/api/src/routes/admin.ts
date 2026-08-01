@@ -365,6 +365,10 @@ admin.openapi(
     const res = await withStore(st.storeId, async (tx) => {
       const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
       if (!o) return { kind: 'notfound' as const };
+      // Only unpaid orders can be cancelled directly — cancelling releases stock
+      // but does not touch money. A Paid order must go through Refund so the
+      // payment (and any issued licenses) are handled explicitly.
+      if (o.state !== 'PendingPayment') return { kind: 'paid' as const, state: o.state };
       if (!canTransition(o.state as OrderState, 'Cancelled')) return { kind: 'badstate' as const, state: o.state };
       // Release stock still reserved for unshipped units. Shipped units already
       // had their allocation released (see fulfill), so release = unfulfilled qty.
@@ -381,6 +385,7 @@ admin.openapi(
       return { kind: 'ok' as const };
     });
     if (res.kind === 'notfound') throw new HttpError(404, 'order not found');
+    if (res.kind === 'paid') throw new HttpError(409, `paid order — use Refund (state ${res.state})`);
     if (res.kind === 'badstate') throw new HttpError(409, `cannot cancel order in state ${res.state}`);
     return c.json({ code, state: 'Cancelled' }, 200);
   }),

@@ -130,6 +130,14 @@ const EnvSchema = z.object({
   JOBS_WEBHOOK_REAPER_APPLY: z.enum(['0', '1']).optional(),
   // webhook-reaper job: grace period in minutes before a processing row is considered stuck.
   JOBS_WEBHOOK_REAPER_GRACE_MIN: z.coerce.number().int().positive().optional(),
+  // processed-event-reaper job: actually delete aged rows (default: dry-run).
+  JOBS_PROCESSED_EVENT_REAPER_APPLY: z.enum(['0', '1']).optional(),
+  // processed-event-reaper job: retention window in days before a
+  // processed_event row (webhook id / payment idempotency claim) is reaped.
+  // Kept well above any realistic idempotency window on purpose (see
+  // jobs/processed-event-reaper.ts) — never lower this without checking the
+  // longest replay/retry window the payment provider guarantees.
+  JOBS_PROCESSED_EVENT_REAPER_RETENTION_DAYS: z.coerce.number().int().positive().optional(),
   // SEC-5: only honor CF-Connecting-IP for rate-limit/audit IP resolution when the
   // deployment is actually behind Cloudflare's edge. Without this, any store not
   // behind Cloudflare lets a client set that header itself and defeat rate limiting.

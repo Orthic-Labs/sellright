@@ -84,7 +84,12 @@ export function createApp(): OpenAPIHono {
     const m = c.req.method;
     if (m === 'POST' || m === 'PUT' || m === 'PATCH' || m === 'DELETE') {
       const p = c.req.path;
-      const exempt = p === '/v1/admin/login' || p === '/v1/admin/logout';
+      // SEC-OWNER-2: /v1/admin/staff/accept is deliberately public (see
+      // admin-settings-advanced.ts) — a brand-new invitee has no admin session
+      // yet, so no sr_csrf cookie exists to double-submit. The invite token
+      // itself (hashed, single-use, expiry-checked in the handler) is the
+      // isolation there, exactly like login/logout before a session exists.
+      const exempt = p === '/v1/admin/login' || p === '/v1/admin/logout' || p === '/v1/admin/staff/accept';
       if (!exempt && !csrfValid(c)) return c.json({ error: 'CSRF token missing or invalid' }, 403);
     }
     await next();
@@ -253,7 +258,7 @@ export function createApp(): OpenAPIHono {
   // Published API contract — the product surface (versioned under /v1).
   app.doc('/v1/openapi.json', {
     openapi: '3.0.0',
-    info: { title: 'Commerce Platform API', version: '0.0.0' },
+    info: { title: 'SellRight API', version: '0.1.0' },
   });
 
   return app;

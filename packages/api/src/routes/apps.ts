@@ -1,7 +1,7 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, desc, eq, isNull, or } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
-import { resolveStore, DEV_DEFAULT_STORE, type StoreCtx } from '../store-context.js';
+import { resolveStore, resolveStoreForRequest, DEV_DEFAULT_STORE, type StoreCtx } from '../store-context.js';
 import * as s from '../db/schema.js';
 import { activateLicenseOnDevice, findActivationByToken } from '../licensing/activations.js';
 import { canAccessDownload, canReceiveUpdate } from '../licensing/entitlements.js';
@@ -16,9 +16,18 @@ import { resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
 import { env } from '../env.js';
 
+// SEC-2: licensing/download/update routes previously fell back silently to
+// DEV_DEFAULT_STORE ('damned') whenever x-store-slug was absent, bypassing
+// the production host-routing guard enforced everywhere else. Route through
+// the same production-guarded resolver: dev/CI keep working via its
+// non-production DEV_DEFAULT_STORE fallback; production 404s instead of
+// silently serving the default store.
 async function store(c: { req: { header: (k: string) => string | undefined } }): Promise<StoreCtx> {
-  const slug = c.req.header('x-store-slug') ?? DEV_DEFAULT_STORE;
-  return resolveStore(slug);
+  return resolveStoreForRequest({
+    storeSlugHeader: c.req.header('x-store-slug'),
+    host: c.req.header('host'),
+    forwardedHost: c.req.header('x-forwarded-host'),
+  });
 }
 
 export const apps = new OpenAPIHono();

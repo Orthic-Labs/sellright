@@ -7,11 +7,13 @@ import { hashPassword } from '../auth/password.js';
 import { normalizeEmail } from '../auth/email.js';
 import {
   attachStaffToStore,
+  countStoreOwners,
   createAdminUser,
   createStaffInvite,
   findAdminIdByEmail,
   findInviteByTokenHash,
   getStaffPermissions,
+  getStaffRole,
   isStaffInStore,
   listStoreInvites,
   listStoreStaff,
@@ -26,7 +28,7 @@ import { sendStaffInvite } from '../email/dispatch.js';
 import { err as logErr } from '../lib/logger.js';
 import { env } from '../env.js';
 import { assertSafeOutboundUrl, type OutboundUrlLookup } from '../security/outbound-url.js';
-import { HttpError, J, errBody, requireAdmin, requireStore, requireManage, requirePermission, guard } from './admin-helpers.js';
+import { HttpError, J, errBody, requireAdmin, requireStore, requireManage, requireOwner, requirePermission, guard } from './admin-helpers.js';
 
 export const adminSettingsAdvanced = new OpenAPIHono();
 
@@ -149,6 +151,8 @@ adminSettingsAdvanced.openapi(
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireManage(st);
     const { email: rawEmail, role, password } = c.req.valid('json');
+    // SEC-OWNER-1: only an existing owner may grant the 'owner' role.
+    if (role === 'owner') requireOwner(st);
     const email = normalizeEmail(rawEmail);
     let adminUserId = await findAdminIdByEmail(email);
     if (!adminUserId) {
@@ -163,13 +167,23 @@ adminSettingsAdvanced.openapi(
   createRoute({
     method: 'patch', path: '/v1/admin/staff/{adminUserId}', summary: 'Change a staff member role',
     request: { params: z.object({ adminUserId: z.string() }), body: { content: J(z.object({ role: roleEnum })) } },
-    responses: { 200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: { 200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) }, 403: { description: 'Owner-only', ...errBody }, 409: { description: 'Would remove the last owner', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireManage(st);
     const { adminUserId } = c.req.valid('param');
     const { role } = c.req.valid('json');
+    // SEC-OWNER-1: a manager passes requireManage() above but must not be able
+    // to grant themselves (or anyone) 'owner', nor to demote the real owner —
+    // either direction requires the CALLER to already be an owner.
+    const currentRole = await getStaffRole(adminUserId, st.storeId);
+    if (role === 'owner' || currentRole === 'owner') requireOwner(st);
+    // Even an owner can't demote the last remaining owner — that would leave
+    // the store with nobody able to grant owner access again.
+    if (currentRole === 'owner' && role !== 'owner' && (await countStoreOwners(st.storeId)) <= 1) {
+      throw new HttpError(409, 'cannot demote the last remaining owner');
+    }
     await updateStaffRole(adminUserId, st.storeId, role);
     return c.json({ ok: true }, 200);
   }),
@@ -186,6 +200,13 @@ adminSettingsAdvanced.openapi(
     const st = requireStore(admin, c); requireManage(st);
     const { adminUserId } = c.req.valid('param');
     if (adminUserId === admin.id) throw new HttpError(409, 'cannot remove your own access');
+    // SEC-OWNER-1: removing an owner requires the CALLER to be an owner, and
+    // even an owner can't remove the last remaining owner.
+    const targetRole = await getStaffRole(adminUserId, st.storeId);
+    if (targetRole === 'owner') {
+      requireOwner(st);
+      if ((await countStoreOwners(st.storeId)) <= 1) throw new HttpError(409, 'cannot remove the last remaining owner');
+    }
     await removeStaffFromStore(adminUserId, st.storeId);
     return c.json({ ok: true }, 200);
   }),
@@ -205,6 +226,8 @@ adminSettingsAdvanced.openapi(
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireManage(st);
     const b = c.req.valid('json');
+    // SEC-OWNER-1: same owner-only gate as direct staff creation.
+    if (b.role === 'owner') requireOwner(st);
     const token = randomBytes(24).toString('hex');
     const invId = await createStaffInvite(st.storeId, b.email, b.role, hashTok(token), new Date(Date.now() + INVITE_TTL_MS));
     const acceptUrl = `/admin/accept-invite?token=${token}`;
