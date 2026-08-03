@@ -1,4 +1,4 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, lt, sql } from 'drizzle-orm';
 import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { getProvider } from '../payments/provider.js';
@@ -35,7 +35,13 @@ export async function executeGatewayRefund(
   idempotencyKey: string,
 ): Promise<{ state: 'Settled' | 'Pending'; providerRef: string | null }> {
   const provider = getProvider(payMethod);
-  if (!provider?.refundPayment) {
+  if (!provider) {
+    throw Object.assign(
+      new Error(`refund not supported for payment method '${payMethod}'`),
+      { kind: 'providerfail' as const, message: `refund not supported for payment method '${payMethod}'` },
+    );
+  }
+  if (!provider.refundPayment) {
     return { state: 'Settled', providerRef: null };
   }
   const r = await provider.refundPayment({ providerRef: payProviderRef, amount, currency, stripeMode, idempotencyKey });
@@ -43,4 +49,22 @@ export async function executeGatewayRefund(
     throw Object.assign(new Error(r.errorMessage ?? 'gateway refund failed'), { kind: 'providerfail' as const, message: r.errorMessage ?? 'gateway refund failed' });
   }
   return { state: r.state as 'Settled' | 'Pending', providerRef: r.providerRef };
+}
+
+export async function creditGiftCardRefund(tx: Tx, storeId: string, orderId: string, amount: number): Promise<void> {
+  const [redemption] = await tx
+    .select({ giftCardId: s.giftCardTransaction.giftCardId })
+    .from(s.giftCardTransaction)
+    .where(and(eq(s.giftCardTransaction.orderId, orderId), lt(s.giftCardTransaction.amount, 0)))
+    .orderBy(desc(s.giftCardTransaction.createdAt))
+    .limit(1);
+  if (!redemption) {
+    throw new Error(`gift_card refund on order ${orderId}: no gift-card redemption found to credit back`);
+  }
+  await tx.update(s.giftCard)
+    .set({ balance: sql`${s.giftCard.balance} + ${amount}`, updatedAt: new Date() })
+    .where(eq(s.giftCard.id, redemption.giftCardId));
+  await tx.insert(s.giftCardTransaction).values({
+    storeId, giftCardId: redemption.giftCardId, orderId, amount,
+  });
 }

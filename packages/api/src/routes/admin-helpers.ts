@@ -53,6 +53,15 @@ export function requireManage(st: AdminStoreAccess): void {
   if (!ADMIN_ROLES.has(st.role)) throw new HttpError(403, `role '${st.role}' cannot manage settings/staff`);
 }
 
+// SEC-OWNER-1: owner-only gate. requireManage() intentionally admits 'manager'
+// too, which is correct for ordinary staff administration but is NOT
+// sufficient for anything that grants, holds, or removes the 'owner' role
+// itself — otherwise a manager could self-elevate to owner or strip the real
+// owner's access. Call this in addition to requireManage() for those cases.
+export function requireOwner(st: AdminStoreAccess): void {
+  if (st.role !== 'owner') throw new HttpError(403, `role '${st.role}' cannot manage owner-level access`);
+}
+
 /**
  * Per-action permission gate (composes with roles). owner/manager always pass.
  * Otherwise the action must be explicitly granted via the staff member's

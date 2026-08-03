@@ -110,18 +110,23 @@ describe('POST /v1/shop/orders/{code}/payment-intent', () => {
     expect(body.intentId).toMatch(/^pi_/);
   });
 
-  it('is idempotent — a retry passes the SAME idempotencyKey (keyed on order id) → same client_secret', async () => {
+  // MONEY-3: the key is (order id, amountDue), not order id alone. Keying on the
+  // order alone meant a retry after the amount changed — a gift card applied
+  // between attempts — silently reused the PaymentIntent minted for the OLD
+  // amount. Same order at the same amountDue still dedupes, which is what
+  // idempotency has to guarantee.
+  it('is idempotent — a retry at the same amountDue passes the SAME idempotencyKey → same client_secret', async () => {
     const { code } = await makeOrder();
     const orderId = await withStore(STORE, async (tx) => {
-      const [o] = await tx.select({ id: s.order.id }).from(s.order).where(eq(s.order.code, code)).limit(1);
+      const [o] = await tx.select({ id: s.order.id, grandTotal: s.order.grandTotal }).from(s.order).where(eq(s.order.code, code)).limit(1);
       return o!.id;
     });
     const first = await (await app.request(`/v1/shop/orders/${code}/payment-intent`, { method: 'POST', headers: hdr() })).json() as { clientSecret: string };
     const second = await (await app.request(`/v1/shop/orders/${code}/payment-intent`, { method: 'POST', headers: hdr() })).json() as { clientSecret: string };
     expect(second.clientSecret).toBe(first.clientSecret);
     expect(piCalls).toHaveLength(2);
-    expect(piCalls[0]!.idempotencyKey).toBe(`pi:${orderId}`);
-    expect(piCalls[1]!.idempotencyKey).toBe(`pi:${orderId}`);
+    expect(piCalls[0]!.idempotencyKey).toBe(piCalls[1]!.idempotencyKey);
+    expect(piCalls[0]!.idempotencyKey).toMatch(new RegExp(`^pi:${orderId}:\\d+$`));
   });
 
   it('404 for an unknown order code', async () => {

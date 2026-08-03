@@ -11,7 +11,7 @@ import { normalizeEmail } from '../auth/email.js';
 import { buildInvoice, buildPackingSlip, renderInvoiceHtml } from '../orders/invoice.js';
 import { evaluateCoupon } from '../money/coupon.js';
 import { resolveTaxRate } from '../money/tax.js';
-import { alreadyRefunded, executeGatewayRefund } from './admin-order-payment-helpers.js';
+import { alreadyRefunded, creditGiftCardRefund, executeGatewayRefund } from './admin-order-payment-helpers.js';
 import { unitPrice } from './admin-order-utils.js';
 import { emitEvent } from '../webhooks/emit.js';
 import { sendShippingNotification } from '../email/dispatch.js';
@@ -202,7 +202,7 @@ adminOrders.openapi(
           refundLines,
           amount,
           stripeMode: pay.method === 'stripe' ? stripeModeFromConfig(store?.config) : undefined,
-          idempotencyKey: `refund:${o.id}:${amount}`,
+          idempotencyKey: `refund:${o.id}:${priorRefunded}:${amount}`,
         };
       });
       if (prepared.kind !== 'ready') return prepared;
@@ -231,6 +231,9 @@ adminOrders.openapi(
         const newState: OrderState = priorRefunded + prepared.amount >= o.grandTotal ? 'Refunded' : 'PartiallyRefunded';
         if (!canTransition(o.state as OrderState, newState)) return { kind: 'badstate' as const, state: o.state };
         const [refund] = await tx.insert(s.refund).values({ storeId: st.storeId, paymentId: prepared.payment.id, orderId: o.id, amount: prepared.amount, reason: body.reason ?? null, state: gatewayResult.state, providerRef: gatewayResult.providerRef }).returning({ id: s.refund.id });
+        if (prepared.payment.method === 'gift_card') {
+          await creditGiftCardRefund(tx, st.storeId, o.id, prepared.amount);
+        }
         for (const line of prepared.refundLines) {
           const row = line.row!;
           await tx.insert(s.refundLine).values({ storeId: st.storeId, refundId: refund!.id, orderLineId: row.id, quantity: line.quantity, amount: Math.round((row.lineTotal / row.quantity) * line.quantity), restock: body.restock });
@@ -394,6 +397,9 @@ adminOrders.openapi(
         const newState: OrderState = priorRefunded + prepared.amount >= o.grandTotal ? 'Refunded' : 'PartiallyRefunded';
         if (!canTransition(o.state as OrderState, newState)) return { kind: 'badstate' as const, status: o.state };
         const [refund] = await tx.insert(s.refund).values({ storeId: st.storeId, paymentId: prepared.payment.id, orderId: o.id, amount: prepared.amount, reason: rr.reason ?? 'return', state: gatewayResult.state, providerRef: gatewayResult.providerRef }).returning({ id: s.refund.id });
+        if (prepared.payment.method === 'gift_card') {
+          await creditGiftCardRefund(tx, st.storeId, o.id, prepared.amount);
+        }
         for (const line of prepared.lines) {
           const row = line.row!;
           await tx.insert(s.refundLine).values({ storeId: st.storeId, refundId: refund!.id, orderLineId: row.id, quantity: line.quantity, amount: Math.round((row.lineTotal / row.quantity) * line.quantity), restock: line.restock });

@@ -133,6 +133,43 @@ async function seedPaidOrder(code: string, grandTotal = 2000): Promise<{ orderId
   return { orderId, lineId };
 }
 
+/** Seed a Paid order settled with a gift-card tender: a gift_card `payment` row
+ *  with NO provider_ref (mirrors routes/checkout.ts, which applies the tender
+ *  directly rather than through createPayment) + the original redemption
+ *  `gift_card_transaction` row (negative amount) that creditGiftCardRefund
+ *  must find to know which card to credit back. Returns the gift card's id so
+ *  tests can assert its balance after a refund. */
+async function seedGiftCardPaidOrder(code: string, grandTotal = 2000): Promise<{ orderId: string; lineId: string; giftCardId: string }> {
+  const { orderId, lineId } = await seedPaidOrder(code, grandTotal);
+  // Replace the stripe payment row seeded above with a gift_card one (no provider_ref).
+  await withStore(STORE, async (tx) => {
+    await tx.execute(sql`DELETE FROM payment WHERE order_id = ${orderId}`);
+    await tx.execute(sql`
+      INSERT INTO payment (id, store_id, order_id, amount, method, state)
+      VALUES (gen_random_uuid(), ${STORE}, ${orderId}, ${grandTotal}, 'gift_card', 'Settled')`);
+  });
+  const giftCardId = await withStore(STORE, async (tx) => {
+    const r = await tx.execute(sql`
+      INSERT INTO gift_card (id, store_id, code, initial_balance, balance, currency)
+      VALUES (gen_random_uuid(), ${STORE}, ${'GC-' + code}, ${grandTotal}, 0, 'USD')
+      RETURNING id`);
+    return (r.rows[0] as { id: string }).id;
+  });
+  await withStore(STORE, async (tx) => {
+    await tx.execute(sql`
+      INSERT INTO gift_card_transaction (id, store_id, gift_card_id, order_id, amount)
+      VALUES (gen_random_uuid(), ${STORE}, ${giftCardId}, ${orderId}, ${-grandTotal})`);
+  });
+  return { orderId, lineId, giftCardId };
+}
+
+async function giftCardBalance(giftCardId: string): Promise<number> {
+  return withStore(STORE, async (tx) => {
+    const r = await tx.execute(sql`SELECT balance FROM gift_card WHERE id = ${giftCardId}`);
+    return (r.rows[0] as { balance: number }).balance;
+  });
+}
+
 async function refundOrder(code: string, body: Record<string, unknown> = {}): Promise<{ status: number; body: unknown }> {
   const res = await app.request(`/v1/admin/orders/${code}/refund`, {
     method: 'POST',
@@ -202,12 +239,41 @@ describe('GET /v1/admin/orders/{code} — line ids feed per-line refunds', () =>
 });
 
 describe('POST /v1/admin/orders/{code}/refund — idempotency key', () => {
-  it('passes a deterministic idempotencyKey keyed on order id + amount', async () => {
+  it('passes a deterministic idempotencyKey keyed on order id + STARTING balance (priorRefunded) + amount', async () => {
     const { orderId } = await seedPaidOrder('SR-REF-1');
     const res = await refundOrder('SR-REF-1', { amount: 2000 });
     expect(res.status).toBe(200);
     expect(refundCalls).toHaveLength(1);
-    expect(refundCalls[0]!.idempotencyKey).toBe(`refund:${orderId}:2000`);
+    // priorRefunded is 0 on a fresh order — this is the first refund attempt.
+    expect(refundCalls[0]!.idempotencyKey).toBe(`refund:${orderId}:0:2000`);
+  });
+
+  // MONEY-2 regression: this is the exact collision the old
+  // `refund:${o.id}:${amount}` key produced. Two DISTINCT refunds of the
+  // SAME amount on the SAME order (a partial refund followed by a second
+  // refund that completes it) used to compute the IDENTICAL idempotencyKey,
+  // so Stripe's 24h dedupe window would have replayed the first refund's
+  // response for the second call — moving no new money — while our code
+  // still inserted a second `s.refund` ledger row and double-counted
+  // alreadyRefunded(). Keying on priorRefunded (the order's refunded-so-far
+  // balance, which only advances after a refund actually commits, and this
+  // whole route runs under a per-order advisory lock so nothing can
+  // interleave) makes the two keys provably distinct.
+  it('two DISTINCT sequential refunds of the SAME amount on the SAME order get DIFFERENT idempotencyKeys', async () => {
+    const { orderId } = await seedPaidOrder('SR-REF-COLLIDE', 2000);
+    const first = await refundOrder('SR-REF-COLLIDE', { amount: 1000 });
+    expect(first.status).toBe(200);
+    expect(first.body).toMatchObject({ state: 'PartiallyRefunded' });
+
+    const second = await refundOrder('SR-REF-COLLIDE', { amount: 1000 });
+    expect(second.status).toBe(200);
+    expect(second.body).toMatchObject({ state: 'Refunded' });
+
+    expect(refundCalls).toHaveLength(2);
+    expect(refundCalls[0]!.idempotencyKey).toBe(`refund:${orderId}:0:1000`);
+    expect(refundCalls[1]!.idempotencyKey).toBe(`refund:${orderId}:1000:1000`);
+    expect(refundCalls[0]!.idempotencyKey).not.toBe(refundCalls[1]!.idempotencyKey);
+    expect(await refundRowCount(orderId)).toBe(2);
   });
 
   it('a retried refund attempt after the order is already Refunded is rejected by the balance check — no second gateway call, no second ledger row', async () => {
@@ -241,7 +307,11 @@ describe('POST /v1/admin/orders/{code}/refund — idempotency key', () => {
     const statuses = [a.status, b.status].sort();
     expect(statuses.filter((s) => s === 200)).toHaveLength(1); // lock prevents a real double-refund at our layer
     expect(refundCalls.length).toBeGreaterThanOrEqual(1);
-    for (const call of refundCalls) expect(call.idempotencyKey).toBe(`refund:${orderId}:1500`);
+    // Only the winner reaches the gateway (the loser's `prepared` step 409s on
+    // canTransition before ever calling executeGatewayRefund — see the FSM's
+    // lack of a PartiallyRefunded self-edge), so priorRefunded is 0 for the
+    // one call that happens.
+    for (const call of refundCalls) expect(call.idempotencyKey).toBe(`refund:${orderId}:0:1500`);
     expect(await refundRowCount(orderId)).toBe(1);
   });
 });
@@ -278,5 +348,41 @@ describe('POST /v1/admin/returns/{id}/approve — row lock + idempotency key', (
     expect(statuses.filter((s) => s === 200)).toHaveLength(1);
     expect(refundCalls).toHaveLength(1);
     expect(await refundRowCount(orderId)).toBe(1);
+  });
+});
+
+// Money-critical regression: refunding a gift-card-paid order used to report
+// success (`{ state: 'Settled' }`) while moving ZERO money back to the
+// customer — 'gift_card' had no entry in payments/provider.ts's PROVIDERS
+// map, so `getProvider('gift_card')` was null and executeGatewayRefund's old
+// `!provider?.refundPayment` branch treated "no provider" exactly like
+// "provider has nothing to do". Fixed by (1) registering a real (no-op)
+// gift_card provider so the branch is reachable only for genuinely
+// unsupported methods, and (2) admin-orders.ts crediting the gift card's
+// balance back + inserting a compensating gift_card_transaction row in the
+// SAME transaction as the refund ledger write.
+describe('POST /v1/admin/orders/{code}/refund — gift_card tender', () => {
+  it('credits the gift card balance back and records a compensating gift_card_transaction on a full refund', async () => {
+    const { orderId, giftCardId } = await seedGiftCardPaidOrder('SR-GC-1', 2000);
+    expect(await giftCardBalance(giftCardId)).toBe(0); // fully redeemed at checkout
+
+    const res = await refundOrder('SR-GC-1', { amount: 2000 });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ state: 'Refunded', refunded: 2000 });
+
+    expect(await giftCardBalance(giftCardId)).toBe(2000); // money is back on the card
+    expect(await refundRowCount(orderId)).toBe(1);
+    const txCount = await withStore(STORE, async (tx) => {
+      const r = await tx.execute(sql`SELECT count(*)::int AS n FROM gift_card_transaction WHERE gift_card_id = ${giftCardId} AND amount > 0`);
+      return (r.rows[0] as { n: number }).n;
+    });
+    expect(txCount).toBe(1); // exactly one compensating (positive) transaction
+  });
+
+  it('credits a partial gift-card refund proportionally, not the full balance', async () => {
+    const { giftCardId } = await seedGiftCardPaidOrder('SR-GC-2', 2000);
+    const res = await refundOrder('SR-GC-2', { amount: 500 });
+    expect(res.status).toBe(200);
+    expect(await giftCardBalance(giftCardId)).toBe(500);
   });
 });

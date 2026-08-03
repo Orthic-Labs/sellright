@@ -23,6 +23,7 @@ import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
 import * as s from '../db/schema.js';
 import { checkout } from './checkout.js';
+import { cart } from './cart.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
 if (!/_test(\b|$|\?)/.test(DB)) {
@@ -38,6 +39,7 @@ const PRICE = 5000; // cents — the true server price; a tampered client price 
 
 const app = new OpenAPIHono();
 app.route('/', checkout);
+app.route('/', cart);
 
 async function wipe() {
   await pool.query('TRUNCATE store CASCADE');
@@ -196,5 +198,67 @@ describe('POST /v1/shop/checkout — empty/invalid cart', () => {
       method: 'POST', headers: hdr(), body: JSON.stringify({ items: [{ sku: SKU, quantity: 1 }], cartToken: token }),
     });
     expect(res.status).toBe(409);
+  });
+});
+
+// MONEY-5: cart.ts priced tax with the store's flat rate only; checkout.ts
+// additionally resolves a destination tax_zone (money/tax.ts::resolveTaxRate).
+// Cart never consulted tax zones, so the price shown pre-checkout disagreed
+// with what checkout actually charged whenever a tax zone existed. Fixed by
+// threading an optional shipCountry into cart.ts::priceCart.
+describe('MONEY-5: cart estimate tax matches checkout tax for the same destination', () => {
+  const ZONE_RATE = 1300; // 13% — deliberately different from the store's flat rate (0, per seed())
+
+  async function seedZone(): Promise<void> {
+    await withStore(STORE, async (tx) => {
+      await tx.execute(sql`INSERT INTO tax_zone (id, store_id, name, countries, rate, priority, enabled) VALUES (gen_random_uuid(), ${STORE}, 'Canada', ARRAY['CA'], ${ZONE_RATE}, 0, true)`);
+    });
+  }
+
+  it('without a shipCountry, cart falls back to the store flat rate (documented, unchanged behaviour)', async () => {
+    await seedZone();
+    const res = await app.request('/v1/shop/cart/estimate', {
+      method: 'POST', headers: hdr(), body: JSON.stringify({ items: [{ sku: SKU, quantity: 1 }] }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { taxTotal: number };
+    expect(body.taxTotal).toBe(0); // seed() sets tax_rate=0
+  });
+
+  it('with a shipCountry matching a zone, cart resolves the zone rate — and agrees EXACTLY with checkout for the same destination', async () => {
+    await seedZone();
+    const estRes = await app.request('/v1/shop/cart/estimate', {
+      method: 'POST', headers: hdr(), body: JSON.stringify({ items: [{ sku: SKU, quantity: 1 }], shipCountry: 'CA' }),
+    });
+    expect(estRes.status).toBe(200);
+    const est = await estRes.json() as { taxTotal: number; grandTotal: number };
+    // The bug this guards against: before the fix this would be 0 (the flat
+    // rate), identical to the no-shipCountry case above, regardless of country.
+    expect(est.taxTotal).toBe(Math.round((PRICE * ZONE_RATE) / 10000));
+
+    const checkoutRes = await app.request('/v1/shop/checkout', {
+      method: 'POST',
+      headers: hdr(),
+      body: JSON.stringify({
+        items: [{ sku: SKU, quantity: 1 }],
+        shippingAddress: { line1: '1 Test St', city: 'Toronto', country: 'CA', postalCode: 'M5H2N2' },
+        email: 'tax-parity@example.com',
+      }),
+    });
+    expect(checkoutRes.status).toBe(200);
+    const order = await checkoutRes.json() as { grandTotal: number };
+    // The actual parity assertion: what the shopper saw in the cart estimate
+    // is EXACTLY what checkout charged for the identical destination.
+    expect(order.grandTotal).toBe(est.grandTotal);
+  });
+
+  it('a shipCountry with no matching zone falls back to the flat rate, same as checkout', async () => {
+    await seedZone();
+    const res = await app.request('/v1/shop/cart/estimate', {
+      method: 'POST', headers: hdr(), body: JSON.stringify({ items: [{ sku: SKU, quantity: 1 }], shipCountry: 'FR' }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { taxTotal: number };
+    expect(body.taxTotal).toBe(0);
   });
 });

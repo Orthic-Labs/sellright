@@ -65,7 +65,10 @@ function distributeLargestRemainder(target: number, weights: number[]): number[]
 
 export function calculateOrderTotals(input: TotalsInput): OrderTotals {
   const promo = input.promotion ?? null;
-  const pct = promo?.type === 'percentage' ? promo.value : 0;
+  // Defensive clamp: percentage should already be validated 0–100 at the admin
+  // API boundary (admin-marketing.ts), but a pre-existing bad DB row must never
+  // be able to drive a negative order total here.
+  const pct = promo?.type === 'percentage' ? Math.min(100, Math.max(0, promo.value)) : 0;
 
   // Compute line subtotals first (needed for both pct and fixed-distribution math).
   const lineSubtotals = input.lines.map((l) => l.unitPrice * l.quantity);
@@ -101,7 +104,10 @@ export function calculateOrderTotals(input: TotalsInput): OrderTotals {
       ? taxableBase - roundHalfUp((taxableBase * 10000) / (10000 + input.taxRate))
       : roundHalfUp((taxableBase * input.taxRate) / 10000);
   }
-  const grandTotal = input.taxInclusive ? discountedSubtotal + shippingTotal : discountedSubtotal + shippingTotal + taxTotal;
+  const grandTotalRaw = input.taxInclusive ? discountedSubtotal + shippingTotal : discountedSubtotal + shippingTotal + taxTotal;
+  // Final floor: grandTotal must never be negative, no matter what upstream
+  // discount/tax inputs produced it.
+  const grandTotal = Math.max(0, grandTotalRaw);
 
   return { lines, subtotal, discountTotal, shippingTotal, taxTotal, grandTotal };
 }

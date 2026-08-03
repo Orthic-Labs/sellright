@@ -8,6 +8,7 @@ import * as s from '../db/schema.js';
 import { calculateOrderTotals, type Promotion } from '../money/totals.js';
 import { evaluateCoupon } from '../money/coupon.js';
 import { selectAutomaticPromotion } from '../money/auto-discount.js';
+import { resolveTaxRate } from '../money/tax.js';
 import { customerToken, resolveCustomer } from '../auth/session.js';
 import { normalizeEmail } from '../auth/email.js';
 import { env } from '../env.js';
@@ -38,7 +39,7 @@ async function priceCart(
   tx: Tx,
   st: StoreCtx,
   items: Array<{ sku: string; quantity: number }>,
-  opts: { couponCode?: string; shipping?: number; token?: string | null } = {},
+  opts: { couponCode?: string; shipping?: number; token?: string | null; shipCountry?: string | null } = {},
 ): Promise<PricedCart> {
   const skus = [...new Set(items.map((i) => i.sku))];
   const variants = skus.length
@@ -94,9 +95,23 @@ async function priceCart(
     if (best) promotion = { type: best.type, value: best.value };
   }
 
+  // Destination tax parity with checkout (checkout.ts): the ship-to country's
+  // zone overrides the store flat rate. When the cart doesn't know a
+  // shipCountry yet (no address captured pre-checkout), fall back to the flat
+  // store rate — same as before this fix — so the estimate is still a number,
+  // just not destination-final until an address is known.
+  let taxRate = st.taxRate;
+  if (opts.shipCountry) {
+    const taxZones = await tx
+      .select({ countries: s.taxZone.countries, rate: s.taxZone.rate, priority: s.taxZone.priority })
+      .from(s.taxZone)
+      .where(eq(s.taxZone.enabled, true));
+    taxRate = resolveTaxRate(taxZones, opts.shipCountry, st.taxRate);
+  }
+
   const totals = calculateOrderTotals({
     lines: priced.filter((p) => p.available).map((p) => ({ unitPrice: p.unitPrice, quantity: p.quantity })),
-    shipping: opts.shipping ?? 0, taxRate: st.taxRate, taxInclusive: st.taxInclusive, shippingTaxable: st.shippingTaxable, promotion,
+    shipping: opts.shipping ?? 0, taxRate, taxInclusive: st.taxInclusive, shippingTaxable: st.shippingTaxable, promotion,
   });
 
   let idx = 0;
@@ -140,7 +155,7 @@ cart.openapi(
       body: {
         content: {
           'application/json': {
-            schema: z.object({ items: z.array(EstimateItem).min(1), shipping: z.number().int().min(0).default(0), couponCode: z.string().optional() }),
+            schema: z.object({ items: z.array(EstimateItem).min(1), shipping: z.number().int().min(0).default(0), couponCode: z.string().optional(), shipCountry: z.string().optional() }),
           },
         },
       },
@@ -151,9 +166,9 @@ cart.openapi(
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
-    const { items, shipping, couponCode } = c.req.valid('json');
+    const { items, shipping, couponCode, shipCountry } = c.req.valid('json');
     const token = customerToken(c);
-    const result = await withStore(st.id, (tx) => priceCart(tx, st, items, { couponCode, shipping, token }));
+    const result = await withStore(st.id, (tx) => priceCart(tx, st, items, { couponCode, shipping, token, shipCountry }));
     return c.json(result, 200);
   },
 );
@@ -189,9 +204,9 @@ async function cartItems(tx: Tx, cartId: string): Promise<Array<{ sku: string; q
 }
 
 /** Build the full cart response (meta + server-priced lines). */
-async function cartResponse(tx: Tx, st: StoreCtx, cartRow: CartRow, couponCode?: string, token?: string | null): Promise<z.infer<typeof CartOut>> {
+async function cartResponse(tx: Tx, st: StoreCtx, cartRow: CartRow, couponCode?: string, token?: string | null, shipCountry?: string | null): Promise<z.infer<typeof CartOut>> {
   const items = await cartItems(tx, cartRow.id);
-  const priced = await priceCart(tx, st, items, { couponCode, token });
+  const priced = await priceCart(tx, st, items, { couponCode, token, shipCountry });
   return { ...priced, token: cartRow.token, status: cartRow.status, email: cartRow.email, customerId: cartRow.customerId };
 }
 
@@ -244,18 +259,18 @@ cart.openapi(
 cart.openapi(
   createRoute({
     method: 'get', path: '/v1/shop/cart/{token}', summary: 'Get a cart',
-    request: { params: z.object({ token: z.string() }), query: z.object({ couponCode: z.string().optional() }) },
+    request: { params: z.object({ token: z.string() }), query: z.object({ couponCode: z.string().optional(), shipCountry: z.string().optional() }) },
     responses: { 200: { description: 'Cart', content: { 'application/json': { schema: CartOut } } }, 404: { description: 'Not found', content: { 'application/json': { schema: z.object({ error: z.string() }) } } } },
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
     const { token } = c.req.valid('param');
-    const { couponCode } = c.req.valid('query');
+    const { couponCode, shipCountry } = c.req.valid('query');
     const authTok = customerToken(c);
     const out = await withStore(st.id, async (tx) => {
       const [row] = await tx.select().from(s.cart).where(eq(s.cart.token, token)).limit(1);
       if (!row) return null;
-      return cartResponse(tx, st, row, couponCode, authTok);
+      return cartResponse(tx, st, row, couponCode, authTok, shipCountry);
     });
     if (!out) return c.json({ error: 'cart not found' }, 404);
     return c.json(out, 200);
@@ -266,7 +281,7 @@ cart.openapi(
 cart.openapi(
   createRoute({
     method: 'patch', path: '/v1/shop/cart/{token}/lines', summary: 'Update cart lines',
-    request: { params: z.object({ token: z.string() }), body: { content: { 'application/json': { schema: z.object({ lines: z.array(CartLineIn).min(1), couponCode: z.string().optional() }) } } } },
+    request: { params: z.object({ token: z.string() }), body: { content: { 'application/json': { schema: z.object({ lines: z.array(CartLineIn).min(1), couponCode: z.string().optional(), shipCountry: z.string().optional() }) } } } },
     responses: { 200: { description: 'Cart', content: { 'application/json': { schema: CartOut } } }, 404: { description: 'Not found', content: { 'application/json': { schema: z.object({ error: z.string() }) } } } },
   }),
   async (c) => {
@@ -278,7 +293,7 @@ cart.openapi(
       const [row] = await tx.select().from(s.cart).where(eq(s.cart.token, token)).limit(1);
       if (!row) return null;
       await applyLines(tx, st, row.id, body.lines);
-      return cartResponse(tx, st, row, body.couponCode, authTok);
+      return cartResponse(tx, st, row, body.couponCode, authTok, body.shipCountry);
     });
     if (!out) return c.json({ error: 'cart not found' }, 404);
     return c.json(out, 200);

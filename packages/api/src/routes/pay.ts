@@ -4,7 +4,7 @@ import { withAdvisoryLock, withStore } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
 import { getProvider, isPaymentMethodEnabled } from '../payments/provider.js';
-import { applyPaymentResult } from '../payments/settle.js';
+import { applyPaymentResult, amountDueForOrder } from '../payments/settle.js';
 import { createPaymentIntent, stripeUsable, stripeModeFromConfig } from '../payments/stripe.js';
 import { clientIp, loginRetryAfter } from '../auth/rate-limit.js';
 
@@ -23,6 +23,7 @@ pay.openapi(
     },
     responses: {
       200: { description: 'Paid', content: { 'application/json': { schema: z.object({ code: z.string(), state: z.string(), payment: z.string() }) } } },
+      400: { description: 'Already covered', content: { 'application/json': { schema: z.object({ error: z.string(), state: z.string() }) } } },
       404: { description: 'Not found', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
       409: { description: 'Not payable', content: { 'application/json': { schema: z.object({ error: z.string(), state: z.string() }) } } },
       429: { description: 'Rate limited', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
@@ -49,6 +50,7 @@ pay.openapi(
     type R =
       | { kind: 'notfound' }
       | { kind: 'badstate'; state: string }
+      | { kind: 'nodue'; state: string }
       | { kind: 'noop'; state: string }
       | { kind: 'ok'; state: string; payment: string };
 
@@ -58,13 +60,19 @@ pay.openapi(
         const [order] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
         if (!order) return { kind: 'notfound' as const };
         if (order.state !== 'PendingPayment') return { kind: 'badstate' as const, state: order.state };
+        // MONEY-3: charge only what's still owed. A partial tender already
+        // recorded against this order (e.g. a gift card draw-down at checkout
+        // that didn't fully cover grandTotal) must NOT be re-charged in full —
+        // that is a real customer overcharge.
+        const amountDue = await amountDueForOrder(tx, st.id, order.id, order.grandTotal);
+        if (amountDue <= 0) return { kind: 'nodue' as const, state: order.state };
         const [existing] = await tx
           .select({ id: s.processedEvent.id })
           .from(s.processedEvent)
           .where(and(eq(s.processedEvent.id, claimKey), eq(s.processedEvent.type, 'payment')))
           .limit(1);
         if (existing) return { kind: 'noop' as const, state: order.state };
-        return { kind: 'ready' as const, order };
+        return { kind: 'ready' as const, order, amountDue };
       });
       if (prepared.kind !== 'ready') return prepared;
 
@@ -73,7 +81,7 @@ pay.openapi(
       // order; Stripe/webhook reconciliation remains DB-idempotent.
       const result = await provider.createPayment({
         orderCode: code,
-        amount: prepared.order.grandTotal,
+        amount: prepared.amountDue,
         currency: prepared.order.currency,
         token,
         stripeMode: stripeModeFromConfig(st.config),
@@ -82,7 +90,14 @@ pay.openapi(
       return withStore(st.id, async (tx): Promise<R> => {
         const [order] = await tx.select().from(s.order).where(eq(s.order.id, prepared.order.id)).limit(1).for('update');
         if (!order) return { kind: 'notfound' };
-        if (order.state !== 'PendingPayment') return { kind: 'badstate', state: order.state };
+        // MONEY-4: the order may have been auto-cancelled (stale-allocation TTL
+        // job) between the pre-charge check above and the gateway call actually
+        // completing. If real money just settled, do NOT silently drop it —
+        // fall through so applyPaymentResult records the ledger row + audit
+        // flag. Any other non-payable state, or a non-Settled result, still
+        // short-circuits as before (nothing was actually charged).
+        const cancelledButSettled = order.state === 'Cancelled' && result.state === 'Settled';
+        if (order.state !== 'PendingPayment' && !cancelledButSettled) return { kind: 'badstate', state: order.state };
         const claimed = await tx
           .insert(s.processedEvent)
           .values({ id: claimKey, storeId: st.id, type: 'payment' })
@@ -95,16 +110,19 @@ pay.openapi(
           order: { ...order, code },
           method: provider.method,
           result,
+          amount: prepared.amountDue,
         });
         if (applied.orderState === 'Paid') return { kind: 'ok', state: 'Paid', payment: 'Settled' };
         if ((result.state === 'Declined' || result.state === 'Failed') && !idemKey) {
           await tx.delete(s.processedEvent).where(and(eq(s.processedEvent.id, claimKey), eq(s.processedEvent.type, 'payment')));
         }
+        if (cancelledButSettled) return { kind: 'badstate', state: 'Cancelled' };
         return { kind: 'ok', state: applied.orderState, payment: result.state };
       });
     });
 
     if (out.kind === 'notfound') return c.json({ error: 'order not found' }, 404);
+    if (out.kind === 'nodue') return c.json({ error: 'order already fully paid', state: out.state }, 400);
     if (out.kind === 'badstate') return c.json({ error: 'order is not payable', state: out.state }, 409);
     return c.json({ code, state: out.state, payment: out.kind === 'noop' ? 'already-processed' : out.payment }, 200);
   },
@@ -122,6 +140,7 @@ pay.openapi(
     request: { params: z.object({ code: z.string() }) },
     responses: {
       200: { description: 'Intent', content: { 'application/json': { schema: z.object({ clientSecret: z.string(), intentId: z.string() }) } } },
+      400: { description: 'Already covered', content: { 'application/json': { schema: z.object({ error: z.string(), state: z.string() }) } } },
       404: { description: 'Not found', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
       409: { description: 'Not payable', content: { 'application/json': { schema: z.object({ error: z.string(), state: z.string() }) } } },
       503: { description: 'Stripe not configured', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
@@ -136,18 +155,27 @@ pay.openapi(
     // advertises, so the storefront never shows Stripe then gets a 503 here (and
     // vice-versa). Needs a mode-matched sk_ AND a mode-matched pk_.
     if (!stripeUsable(mode)) return c.json({ error: `stripe is not configured (${mode} mode)` }, 503);
-    const order = await withStore(st.id, async (tx) => {
+    const prepared = await withStore(st.id, async (tx) => {
       const [o] = await tx.select({ id: s.order.id, state: s.order.state, grandTotal: s.order.grandTotal, currency: s.order.currency })
         .from(s.order).where(eq(s.order.code, code)).limit(1);
-      return o ?? null;
+      if (!o) return null;
+      // MONEY-3: mint the intent for what's actually still owed (grandTotal
+      // minus any Settled tenders already recorded, e.g. a partial gift-card
+      // draw-down at checkout) — never the raw order total, or the gateway
+      // would capture the full amount on top of what's already been paid.
+      const amountDue = await amountDueForOrder(tx, st.id, o.id, o.grandTotal);
+      return { order: o, amountDue };
     });
-    if (!order) return c.json({ error: 'order not found' }, 404);
+    if (!prepared) return c.json({ error: 'order not found' }, 404);
+    const { order, amountDue } = prepared;
     if (order.state !== 'PendingPayment') return c.json({ error: 'order is not payable', state: order.state }, 409);
-    // Idempotent: key the Stripe create on the order id so a double-submit/retry
-    // reuses the order's open PaymentIntent (same client_secret) instead of
-    // minting a second one (jury revision). amount is per-order, so the key is
-    // stable for the life of the order.
-    const intent = await createPaymentIntent({ orderCode: code, storeId: st.id, amount: order.grandTotal, currency: order.currency, mode, idempotencyKey: `pi:${order.id}` });
+    if (amountDue <= 0) return c.json({ error: 'order already fully paid', state: order.state }, 400);
+    // Idempotent: key the Stripe create on the order id AND the amount so a
+    // double-submit/retry reuses the order's open PaymentIntent (same
+    // client_secret) instead of minting a second one (jury revision) — but a
+    // later call after the amount due CHANGES (e.g. a gift card was applied in
+    // between) mints a fresh intent rather than reusing a stale-amount one.
+    const intent = await createPaymentIntent({ orderCode: code, storeId: st.id, amount: amountDue, currency: order.currency, mode, idempotencyKey: `pi:${order.id}:${amountDue}` });
     return c.json(intent, 200);
   },
 );

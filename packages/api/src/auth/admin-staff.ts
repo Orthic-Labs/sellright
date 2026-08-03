@@ -125,6 +125,28 @@ export async function removeStaffFromStore(adminUserId: string, storeId: string)
     .where(and(eq(s.adminUserStore.adminUserId, adminUserId), eq(s.adminUserStore.storeId, storeId)));
 }
 
+/** Current role of one staff member within a store, or null if not enrolled.
+ *  SEC-OWNER-1: used by the staff PATCH/DELETE routes to check the TARGET's
+ *  role before allowing a mutation, not just the caller's. */
+export async function getStaffRole(adminUserId: string, storeId: string): Promise<string | null> {
+  const [m] = await db
+    .select({ role: s.adminUserStore.role })
+    .from(s.adminUserStore)
+    .where(and(eq(s.adminUserStore.adminUserId, adminUserId), eq(s.adminUserStore.storeId, storeId)))
+    .limit(1);
+  return m?.role ?? null;
+}
+
+/** Count how many admins hold the 'owner' role in a store. SEC-OWNER-1: used
+ *  to block demoting/removing the last remaining owner. */
+export async function countStoreOwners(storeId: string): Promise<number> {
+  const rows = await db
+    .select({ adminUserId: s.adminUserStore.adminUserId })
+    .from(s.adminUserStore)
+    .where(and(eq(s.adminUserStore.storeId, storeId), eq(s.adminUserStore.role, 'owner')));
+  return rows.length;
+}
+
 /** True iff the admin is enrolled in this store (used as an IDOR guard before
  *  any cross-store action: revoke-sessions, change-role, etc.). */
 export async function isStaffInStore(adminUserId: string, storeId: string): Promise<boolean> {

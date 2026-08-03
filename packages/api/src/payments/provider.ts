@@ -78,13 +78,25 @@ export const codProvider: PaymentProvider = {
   },
 };
 
-export const SUPPORTED_PAYMENT_METHODS = ['manual', 'cod', 'stripe'] as const;
+export const giftCardProvider: PaymentProvider = {
+  method: 'gift_card',
+  requiresRedirect: false,
+  async createPayment(input) {
+    return { state: 'Settled', providerRef: `gift_card-${input.orderCode}` };
+  },
+  async refundPayment() {
+    return { state: 'Settled', providerRef: null };
+  },
+};
+
+export const SUPPORTED_PAYMENT_METHODS = ['manual', 'cod', 'stripe', 'gift_card'] as const;
 export type SupportedPaymentMethod = typeof SUPPORTED_PAYMENT_METHODS[number];
 
 const PROVIDERS: Record<SupportedPaymentMethod, PaymentProvider> = {
   manual: manualProvider,
   cod: codProvider,
   stripe: stripeProvider,
+  gift_card: giftCardProvider,
   // nmi / sezzle: implement against this interface (need credentials).
 };
 

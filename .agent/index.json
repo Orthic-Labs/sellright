@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "gen:4a93d291e3ab3ab1",
-  "sourceSignature": "4a93d291e3ab3ab143e960aa128c14cb7e0db6e3",
+  "generatedAt": "gen:86fc25ccdf3b0919",
+  "sourceSignature": "86fc25ccdf3b0919a35223034c57f12a87df04db",
   "configHash": "79783666ada5d91cdff2c6e39a76bab6f00836c9",
   "files": [
     {
@@ -1129,6 +1129,10 @@
       "isDoc": false
     },
     {
+      "path": "packages/api/drizzle/0041_subscriber.sql",
+      "isDoc": false
+    },
+    {
       "path": "packages/api/drizzle/meta/0000_snapshot.json",
       "isDoc": false
     },
@@ -1514,6 +1518,10 @@
     },
     {
       "path": "packages/api/src/jobs/leader-lock.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/jobs/listmonk-sync.ts",
       "isDoc": false
     },
     {
@@ -1918,6 +1926,14 @@
     },
     {
       "path": "packages/api/src/routes/shop-extra.newsletter.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/shop-extra.subscriber.test.ts",
+      "isDoc": false
+    },
+    {
+      "path": "packages/api/src/routes/shop-extra.subscriber.ts",
       "isDoc": false
     },
     {

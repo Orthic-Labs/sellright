@@ -159,3 +159,106 @@ describe('MONEY-2: store-scoped /pay claim key', () => {
     expect(claim.rows.map((r: { id: string }) => r.id)).toContain(`pay:${STORE_A}:${code}:manual`);
   });
 });
+
+describe('MONEY-3: partial-tender charge amount (no overcharge on top of a gift card)', () => {
+  it('a gateway settle after a partial gift-card tender records only the REMAINING amount, not grandTotal', async () => {
+    await seedStore(STORE_A, SLUG_A);
+    const { id: orderId } = await makeOrder(STORE_A, { grandTotal: 10000 });
+    // Simulate checkout.ts's gift-card draw-down: a Settled 'gift_card' tender
+    // for PART of the order, order stays PendingPayment (grandTotal unchanged).
+    await withStore(STORE_A, (tx) =>
+      tx.insert(s.payment).values({ storeId: STORE_A, orderId, amount: 3000, method: 'gift_card', state: 'Settled' }));
+
+    const orderRef = { id: orderId, state: 'PendingPayment', grandTotal: 10000, currency: 'USD', customerId: null };
+    const gatewayResult: PaymentResult = { state: 'Settled', providerRef: 'pi_partial_remainder', metadata: null };
+    // The caller (pay.ts / payment-webhooks.ts) computes this via
+    // amountDueForOrder BEFORE calling the gateway — 10000 - 3000 = 7000.
+    const applied = await withStore(STORE_A, (tx) =>
+      applyPaymentResult(tx, { storeId: STORE_A, order: orderRef, method: 'stripe', result: gatewayResult, amount: 7000 }));
+
+    expect(applied.orderState).toBe('Paid');
+
+    const rows = await withStore(STORE_A, (tx) => tx.select().from(s.payment).where(eq(s.payment.orderId, orderId)));
+    expect(rows).toHaveLength(2);
+    const gatewayRow = rows.find((r) => r.method === 'stripe');
+    // The bug this guards against: charging/recording the FULL grandTotal
+    // (10000) on top of the 3000 already covered by the gift card.
+    expect(gatewayRow!.amount).toBe(7000);
+    const total = rows.filter((r) => r.state === 'Settled').reduce((a, r) => a + r.amount, 0);
+    expect(total).toBe(10000);
+  });
+
+  it('a partial settle that does NOT yet cover grandTotal leaves the order PendingPayment', async () => {
+    await seedStore(STORE_A, SLUG_A);
+    const { id: orderId } = await makeOrder(STORE_A, { grandTotal: 10000 });
+    const orderRef = { id: orderId, state: 'PendingPayment', grandTotal: 10000, currency: 'USD', customerId: null };
+    const result: PaymentResult = { state: 'Settled', providerRef: 'pi_only_part', metadata: null };
+
+    const applied = await withStore(STORE_A, (tx) =>
+      applyPaymentResult(tx, { storeId: STORE_A, order: orderRef, method: 'stripe', result, amount: 4000 }));
+
+    expect(applied.orderState).toBe('PendingPayment');
+    const [order] = await withStore(STORE_A, (tx) => tx.select().from(s.order).where(eq(s.order.id, orderId)));
+    expect(order!.state).toBe('PendingPayment');
+  });
+
+  it('/pay charges only the remaining amount when a prior Settled tender already covers part of the order', async () => {
+    await seedStore(STORE_A, SLUG_A);
+    const { code, id: orderId } = await makeOrder(STORE_A, { grandTotal: 10000 });
+    await withStore(STORE_A, (tx) =>
+      tx.insert(s.payment).values({ storeId: STORE_A, orderId, amount: 3000, method: 'gift_card', state: 'Settled' }));
+
+    const res = await app.request(`/v1/shop/orders/${code}/pay`, { method: 'POST', headers: hdr(SLUG_A), body: JSON.stringify({ method: 'manual' }) });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { state: string; payment: string };
+    expect(body.state).toBe('Paid');
+
+    const rows = await withStore(STORE_A, (tx) => tx.select().from(s.payment).where(eq(s.payment.orderId, orderId)));
+    const manualRow = rows.find((r) => r.method === 'manual');
+    // manualProvider always reports Settled for whatever `amount` /pay passes it
+    // — this proves /pay computed amountDue (7000), not order.grandTotal (10000).
+    expect(manualRow!.amount).toBe(7000);
+  });
+
+  it('/pay rejects with 400 when the order is already fully covered by prior tenders', async () => {
+    await seedStore(STORE_A, SLUG_A);
+    const { code, id: orderId } = await makeOrder(STORE_A, { grandTotal: 5000 });
+    await withStore(STORE_A, (tx) =>
+      tx.insert(s.payment).values({ storeId: STORE_A, orderId, amount: 5000, method: 'gift_card', state: 'Settled' }));
+
+    const res = await app.request(`/v1/shop/orders/${code}/pay`, { method: 'POST', headers: hdr(SLUG_A), body: JSON.stringify({ method: 'manual' }) });
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toMatch(/fully paid/);
+  });
+});
+
+describe('MONEY-4: a settled payment on a non-payable order is recorded + audited, never dropped', () => {
+  it('applyPaymentResult on a Cancelled order still inserts the payment row and writes a payment_after_cancel audit_log entry', async () => {
+    await seedStore(STORE_A, SLUG_A);
+    const { id: orderId } = await makeOrder(STORE_A, { grandTotal: 5000 });
+    await withStore(STORE_A, (tx) => tx.update(s.order).set({ state: 'Cancelled' }).where(eq(s.order.id, orderId)));
+
+    const cancelledOrderRef = { id: orderId, state: 'Cancelled', grandTotal: 5000, currency: 'USD', customerId: null };
+    const result: PaymentResult = { state: 'Settled', providerRef: 'pi_settled_after_cancel', metadata: null };
+
+    const applied = await withStore(STORE_A, (tx) =>
+      applyPaymentResult(tx, { storeId: STORE_A, order: cancelledOrderRef, method: 'stripe', result, amount: 5000 }));
+
+    // Never silently auto-un-cancel — that is a product decision, not this fix's job.
+    expect(applied.orderState).toBe('Cancelled');
+
+    const rows = await withStore(STORE_A, (tx) => tx.select().from(s.payment).where(eq(s.payment.orderId, orderId)));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.amount).toBe(5000);
+    expect(rows[0]!.state).toBe('Settled');
+
+    const [order] = await withStore(STORE_A, (tx) => tx.select().from(s.order).where(eq(s.order.id, orderId)));
+    expect(order!.state).toBe('Cancelled'); // untouched — money is recorded, order is not auto-revived
+
+    const audits = await withStore(STORE_A, (tx) => tx.select().from(s.auditLog).where(eq(s.auditLog.entityId, orderId)));
+    const flag = audits.find((a) => a.action === 'payment_after_cancel');
+    expect(flag).toBeDefined();
+    expect((flag!.data as { needsReconciliation?: boolean })?.needsReconciliation).toBe(true);
+  });
+});

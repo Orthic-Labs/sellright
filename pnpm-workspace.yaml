@@ -33,3 +33,9 @@ onlyBuiltDependencies:
 
 overrides:
   esbuild: 0.28.1
+  # GHSA-r28c-9q8g-f849 (path traversal) — postcss is pulled in transitively
+  # (sanitize-html) as well as directly by admin/storefront; force >= 8.5.18
+  # workspace-wide rather than editing each package.json.
+  postcss: ^8.5.18
+  # brace-expansion via @typescript-eslint devDependency — fix >= 5.0.8.
+  brace-expansion: ^5.0.8

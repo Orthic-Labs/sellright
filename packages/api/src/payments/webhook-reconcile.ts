@@ -83,7 +83,31 @@ export interface RefundDescriptor { reId: string; amount: number; status: string
 export async function reconcileStripeRefund(tx: Tx, storeId: string, r: RefundDescriptor): Promise<void> {
   const [pay] = await tx.select({ id: s.payment.id, orderId: s.payment.orderId })
     .from(s.payment).where(and(eq(s.payment.providerRef, r.piId), eq(s.payment.method, 'stripe'))).limit(1);
-  if (!pay) return; // unknown payment — nothing to reconcile against
+  if (!pay) {
+    // FIX (unmatched refund silently dropped): Stripe does not guarantee
+    // delivery order, so refund.* can arrive before payment_intent.succeeded —
+    // the matching `payment` row doesn't exist YET, not never. The old code
+    // silently `return`ed here and the caller still returned 200, but the
+    // caller (routes/payment-webhooks.ts) claims the event id (INSERT INTO
+    // processed_event) in the SAME `withStore` transaction as this call, so a
+    // silent return left the event marked processed forever — the refund was
+    // lost, with no retry and no record of it ever having arrived.
+    //
+    // Throwing instead: this function runs inside that same transaction, so
+    // the throw rolls back the processed_event claim too (the event becomes
+    // reprocessable) and the uncaught error propagates past the route's
+    // `return c.json(...,200)` to app.onError, which answers non-2xx —
+    // Stripe's own retry/backoff redelivers the event later, by which point
+    // payment_intent.succeeded will normally have landed. This mirrors the
+    // existing pattern for subscription events with an unresolved tenant
+    // (payment-webhooks.ts: unresolved subscription store → 503 → retry)
+    // rather than inventing a new outbox table for what is, in practice, a
+    // transient ordering race that self-heals on redelivery.
+    throw Object.assign(
+      new Error(`refund ${r.reId} references payment_intent ${r.piId} with no matching payment row yet — retrying`),
+      { kind: 'unmatched_refund' as const },
+    );
+  }
   const state = refundStateFromStripe(r.status);
   const [existing] = await tx.select({ id: s.refund.id, state: s.refund.state }).from(s.refund).where(eq(s.refund.providerRef, r.reId)).limit(1);
   if (existing) {
@@ -102,8 +126,20 @@ async function recomputeOrderRefundState(tx: Tx, storeId: string, orderId: strin
     .from(s.refund).where(and(eq(s.refund.orderId, orderId), eq(s.refund.state, 'Settled')));
   const refunded = agg?.total ?? 0;
   const target = refundTargetState(refunded, ord.grandTotal);
-  if (!target || !canTransition(ord.state as OrderState, target)) return;
-  await tx.update(s.order).set({ state: target, updatedAt: new Date() }).where(eq(s.order.id, orderId));
+  if (!target) return; // nothing settled yet — no state write, no event
+  // FIX (second partial refund suppresses order.refunded): the FSM has no
+  // PartiallyRefunded->PartiallyRefunded self-edge (canTransition(X, X) is
+  // deliberately false for every state), so a SECOND still-partial dashboard
+  // refund computes target === ord.state and the old combined guard
+  // (`!target || !canTransition(...)`) skipped BOTH the (correctly a no-op)
+  // state write AND the event emission — downstream email/analytics/sync
+  // never learned the ledger row was recorded. Emit for every refund that
+  // reconcileStripeRefund actually recorded; only gate the state WRITE on
+  // canTransition (writing a state the order is already in would be a
+  // meaningless no-op update, not an error).
+  if (canTransition(ord.state as OrderState, target)) {
+    await tx.update(s.order).set({ state: target, updatedAt: new Date() }).where(eq(s.order.id, orderId));
+  }
   await emitEvent(tx, storeId, 'order.refunded', { code: ord.code, amount: refunded, state: target, source: 'stripe_dashboard' });
 }
 

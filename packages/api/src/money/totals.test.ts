@@ -67,4 +67,30 @@ describe('calculateOrderTotals', () => {
     expect(taxedShipping.taxTotal).toBe(1100);
     expect(taxedShipping.grandTotal).toBe(12100);
   });
+
+  // HARDENING FIX 2: percentage promotion value must never be able to drive a
+  // negative order total. The admin API boundary (admin-marketing.ts) should
+  // reject a >100% percentage promo before it ever reaches the DB, but this is
+  // the defensive floor for a bad pre-existing row.
+  it('a 150% percentage promo does not produce a negative total (defensive clamp)', () => {
+    const t = calculateOrderTotals({
+      lines: [{ unitPrice: 5000, quantity: 1 }],
+      shipping: 0, taxRate: 0,
+      promotion: { type: 'percentage', value: 150 },
+    });
+    // Clamped to 100%: full line discount, never more than the subtotal.
+    expect(t.discountTotal).toBe(5000);
+    expect(t.grandTotal).toBe(0);
+    expect(t.grandTotal).toBeGreaterThanOrEqual(0);
+  });
+
+  it('a negative percentage promo value is clamped to 0 (no discount, no negative total)', () => {
+    const t = calculateOrderTotals({
+      lines: [{ unitPrice: 5000, quantity: 1 }],
+      shipping: 0, taxRate: 0,
+      promotion: { type: 'percentage', value: -50 },
+    });
+    expect(t.discountTotal).toBe(0);
+    expect(t.grandTotal).toBe(5000);
+  });
 });
