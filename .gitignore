@@ -36,3 +36,7 @@ packages/storefront/SECURITY-FIX-XSS.md
 
 # Real Trustpilot review data — must not ship in the public repo.
 packages/storefront/src/data/trustpilot.json
+
+# Cortex repo map: generated graph/caches/logs stay out; the authored config is repo content.
+.agent/*
+!.agent/config.json
