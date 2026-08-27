@@ -1,7 +1,7 @@
 {
   "name": "sellright",
   "private": true,
-  "packageManager": "pnpm@11.18.0",
+  "packageManager": "pnpm@11.24.0",
   "engines": {
     "node": ">=20"
   },
@@ -17,10 +17,10 @@
     "audit:lint": "eslint .",
     "audit:dead-code": "knip --reporter json",
     "audit:duplication": "jscpd . --reporters json --output .cache/jscpd --silent",
-    "deps:check": "node ../tools/right-release/deps.mjs --check",
-    "deps:audit": "node ../tools/right-release/deps.mjs --audit",
-    "deps:update": "node ../tools/right-release/deps.mjs --update",
-    "deps:update:latest": "node ../tools/right-release/deps.mjs --update --latest"
+    "deps:check": "node ../tools/rightkit/packages/release/deps.mjs --check",
+    "deps:audit": "node ../tools/rightkit/packages/release/deps.mjs --audit",
+    "deps:update": "node ../tools/rightkit/packages/release/deps.mjs --update",
+    "deps:update:latest": "node ../tools/rightkit/packages/release/deps.mjs --update --latest"
   },
   "devDependencies": {
     "@typescript-eslint/parser": "8.62.1",
