@@ -61,9 +61,6 @@ export const CheckoutAddresses = component$<CheckoutAddressesProps>(({ onAddress
     if (useDifferentBilling.value) {
       validationActions.updateBillingAddressValidation(billingSection.isValid, billingSection.errors, true);
     }
-    if (overallValid) {
-    } else {
-    }
   });
   const phonePlaceholder = useComputed$(() => {
     const countryCode = appState.shippingAddress.countryCode || 'US';
