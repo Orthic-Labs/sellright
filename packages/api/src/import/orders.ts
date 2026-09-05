@@ -4,11 +4,10 @@
  * orders (DD's stale-order-cleanup already purged carts, so every row is real).
  *
  * Links: order->customer by email, order_line->variant by SKU (null + snapshot
- * when the product was since deleted). order.state = payment lifecycle
- * (Refunded -> Refunded, else Paid); fulfillment state (Shipped/Delivered) is a
- * later slice on fulfillment records. Totals taken from Vendure's stored figures
- * (DD has no tax); discounts are folded into Vendure subTotal (not reconstructed
- * per line). grand_total = subTotalWithTax + shippingWithTax = what was paid.
+ * when the product was since deleted). Order lifecycle mapping is deliberately
+ * fail-closed: only captured/fulfilled Vendure states become Paid; authorization
+ * or unknown/custom states remain PendingPayment. Fulfillment records are a
+ * later migration slice. Totals come from Vendure's stored order figures.
  *
  *   SOURCE_DATABASE_URL=...damned_vendure DATABASE_URL=...sellright_dev \
  *   corepack pnpm tsx src/import/orders.ts
@@ -19,6 +18,7 @@ import { pool, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { env } from '../env.js';
 import { DD_STORE_ID, ensureDdStore, chunk, parseDate, parseJson } from './store.js';
+import { mapVendureOrderState, mapVendurePaymentState } from './vendure-order.js';
 
 const SOURCE_URL = env.SOURCE_DATABASE_URL;
 if (!SOURCE_URL) throw new Error('SOURCE_DATABASE_URL is required (the damned_vendure clone)');
@@ -39,10 +39,6 @@ if (!allowedTarget && !(forceFlag && forceEnv)) {
 const src = new Pool({ connectionString: SOURCE_URL });
 const q = async (sql: string, params: unknown[] = []) => (await src.query(sql, params)).rows;
 
-const ORDER_STATE = (v: string) => (v === 'Refunded' ? 'Refunded' : 'Paid') as 'Refunded' | 'Paid';
-const PAY_STATE: Record<string, 'Pending' | 'Authorized' | 'Settled' | 'Declined' | 'Failed'> = {
-  Authorized: 'Authorized', Settled: 'Settled', Declined: 'Declined', Error: 'Failed',
-};
 const asJson = (v: unknown) => (typeof v === 'string' ? parseJson(v) : (v ?? null));
 const n = (v: unknown) => (typeof v === 'number' ? v : Number(v ?? 0)) || 0;
 
@@ -84,7 +80,7 @@ async function main() {
       return {
         id, storeId: DD_STORE_ID, code: o.code,
         customerId: o.email ? custByEmail.get(String(o.email).toLowerCase()) ?? null : null,
-        state: ORDER_STATE(o.state), currency: o.cur ?? 'USD',
+        state: mapVendureOrderState(String(o.state)), currency: o.cur ?? 'USD',
         subtotal: sub, discountTotal: 0, shippingTotal: ship,
         taxTotal: subt - sub + (shipt - ship), grandTotal: subt + shipt,
         isPreOrder: o.ispre ?? false,
@@ -128,7 +124,7 @@ async function main() {
         if (!orderId) return null;
         return {
           storeId: DD_STORE_ID, orderId, amount: n(p.amount), method: p.method,
-          providerRef: p.txn ?? null, state: PAY_STATE[p.state] ?? 'Pending',
+          providerRef: p.txn ?? null, state: mapVendurePaymentState(String(p.state)),
           metadata: asJson(p.metadata), errorMessage: p.err ?? null,
         };
       })
