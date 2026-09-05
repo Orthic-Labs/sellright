@@ -17,8 +17,11 @@ describe('sendEmail SMTP configuration', () => {
       default: { createTransport },
     }));
 
+    // SMTP alias resolution is independent of production boot validation. Run
+    // this as a unit test so production DATABASE_URL/STOREFRONT_URL invariants
+    // remain covered only by env-runtime tests that intentionally exercise them.
     process.env = {
-      NODE_ENV: 'production',
+      NODE_ENV: 'test',
       SMTP_HOST: '',
       SMTP_USER: '',
       SMTP_PASS: '',
