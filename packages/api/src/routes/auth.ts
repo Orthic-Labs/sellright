@@ -4,7 +4,7 @@ import { withStore } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import { type StoreCtx } from '../store-context.js';
 import * as s from '../db/schema.js';
-import { hashPassword, verifyPassword } from '../auth/password.js';
+import { hashPassword, passwordNeedsRehash, verifyPassword } from '../auth/password.js';
 import { customerToken, createSession, deleteSession, resolveCustomer } from '../auth/session.js';
 import { setCustomerCookies, clearCustomerCookies, customerCsrfValid, newCsrf } from '../auth/cookies.js';
 import { clientIp, loginRetryAfter, recordLoginFailure, clearLoginAttempts } from '../auth/rate-limit.js';
@@ -39,10 +39,9 @@ async function verifyGoogleIdToken(credential: string, clientId: string): Promis
   return { sub: p.sub, email: normalizeEmail(p.email), emailVerified, firstName: p.given_name ?? null, lastName: p.family_name ?? null };
 }
 
-// WP5: isMigrated is true for customers imported from Vendure with no password
-// hash. The storefront reads it to render the "set your password" banner. The
-// shape is intentionally identical across register / login / google / me so
-// the storefront doesn't need to know which endpoint produced the customer.
+// isMigrated is true for a credential-less account imported from another
+// system. The storefront reads it to render the "set your password" banner.
+// The shape is intentionally identical across register / login / google / me.
 const CustomerOut = z.object({ id: z.string(), email: z.string(), firstName: z.string().nullable(), lastName: z.string().nullable(), phone: z.string().nullable(), emailVerified: z.boolean(), isMigrated: z.boolean() });
 
 export const auth = new OpenAPIHono();
@@ -89,7 +88,6 @@ auth.openapi(
     // log line in dev/without SMTP; the storefront link wiring is WP4.
     const verifyUrl = `${env.STOREFRONT_URL}/verify-email?token=${out.verifyRaw}`;
     await sendEmail({ to: email, ...emailVerify(emailStoreCtx(st), { url: verifyUrl }) });
-    // Fresh register: passwordHash was just set, isMigrated = false.
     return c.json({ token: out.token, customer: { id: out.id, email, firstName: out.firstName, lastName: out.lastName, phone: null, emailVerified: false, isMigrated: false } }, 200);
   },
 );
@@ -117,12 +115,16 @@ auth.openapi(
     const out = await withStore(st.id, async (tx): Promise<{ ok: false } | { ok: true; token: string; customer: z.infer<typeof CustomerOut> }> => {
       const [cust] = await tx.select({ id: s.customer.id, email: s.customer.email, firstName: s.customer.firstName, lastName: s.customer.lastName, phone: s.customer.phone, emailVerified: s.customer.emailVerified, passwordHash: s.customer.passwordHash }).from(s.customer).where(eq(s.customer.email, email)).limit(1);
       if (!cust || !(await verifyPassword(password, cust.passwordHash))) return { ok: false };
-      // A migrated customer who set a password via the forgot-password flow
-      // (WP2d) has passwordHash != null here, so isMigrated will be false from
-      // then on. The flag is intentionally a snapshot of the current state,
-      // not a sticky "migrated" bit.
+
+      // Keep the native password format on the current Argon2id work factor.
+      // This upgrades SellRight's pre-Argon2 scrypt hashes and future lower-cost
+      // Argon2 hashes only after the supplied password has been verified.
+      if (passwordNeedsRehash(cust.passwordHash)) {
+        await tx.update(s.customer).set({ passwordHash: await hashPassword(password), updatedAt: new Date() }).where(eq(s.customer.id, cust.id));
+      }
+
       const token = await createSession(tx, st.id, cust.id);
-      return { ok: true, token, customer: { id: cust.id, email: cust.email, firstName: cust.firstName, lastName: cust.lastName, phone: cust.phone, emailVerified: cust.emailVerified, isMigrated: cust.passwordHash == null } };
+      return { ok: true, token, customer: { id: cust.id, email: cust.email, firstName: cust.firstName, lastName: cust.lastName, phone: cust.phone, emailVerified: cust.emailVerified, isMigrated: false } };
     });
     if (!out.ok) { recordLoginFailure(ip, email); return c.json({ error: 'invalid email or password' }, 401); }
     clearLoginAttempts(ip, email);
