@@ -1,6 +1,7 @@
 import {
   component$,
   createContextId,
+  useComputed$,
   useContext,
   useContextProvider,
   useStore,
@@ -133,31 +134,26 @@ export const CartProvider = component$(() => {
 export const useLocalCart = () => {
   return useContext(CartContextId);
 };
-// Hook: detect if cart contains any pre-order item
-export const useHasPreOrder = () => {
-  const cart = useContext(CartContextId);
-  const has = { value: false } as { value: boolean };
-  try {
-    const items = cart.localCart.items || [];
-    has.value = items.some((it) => !!(it as any)?.isPreOrder || !!(it as any)?.productVariant?.customFields?.isPreOrder);
-  } catch {
-    has.value = false;
-  }
-  return has;
+
+const isPreOrderCartItem = (item: unknown): boolean => {
+  const it = item as any;
+  return !!it?.isPreOrder || !!it?.productVariant?.customFields?.isPreOrder;
 };
 
-// Hook: detect MIXED cart — at least one pre-order AND at least one regular item
+// Hook: detect if cart contains any pre-order item. Keep this as a real Qwik
+// computed signal so checkout consumers react when cart contents change.
+export const useHasPreOrder = () => {
+  const cart = useContext(CartContextId);
+  return useComputed$(() => (cart.localCart.items || []).some(isPreOrderCartItem));
+};
+
+// Hook: detect MIXED cart — at least one pre-order AND at least one regular item.
 export const useHasMixedPreOrder = () => {
   const cart = useContext(CartContextId);
-  const has = { value: false } as { value: boolean };
-  try {
+  return useComputed$(() => {
     const items = cart.localCart.items || [];
-    const isPre = (it: any) => !!it?.isPreOrder || !!it?.productVariant?.customFields?.isPreOrder;
-    has.value = items.some(isPre) && items.some((it: any) => !isPre(it));
-  } catch {
-    has.value = false;
-  }
-  return has;
+    return items.some(isPreOrderCartItem) && items.some((item) => !isPreOrderCartItem(item));
+  });
 };
 
 
