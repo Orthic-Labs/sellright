@@ -45,7 +45,7 @@ jobs:
         run: pnpm --dir packages/admin install --frozen-lockfile
 
       - name: Verify core and admin
-        run: pnpm verify
+        run: pnpm verify:static
 
       - name: Password hashing contract
         run: pnpm --filter @sellright/api test -- src/auth/password.test.ts
@@ -114,6 +114,9 @@ jobs:
 
       - name: Run DB integration suite
         run: pnpm --filter @sellright/api test:db
+
+      - name: Verify database isolation invariants
+        run: pnpm verify:db
 
   storefront:
     name: Storefront build / Node 24 LTS
