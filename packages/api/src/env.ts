@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { productionEnvErrors, resolveFileBackedEnv } from './env-runtime.js';
 
 const emptyToUndefined = (value: unknown) => (
   typeof value === 'string' && value.trim() === '' ? undefined : value
@@ -163,4 +164,11 @@ const EnvSchema = z.object({
 
 export type Env = z.infer<typeof EnvSchema>;
 
-export const env: Env = EnvSchema.parse(process.env);
+const resolvedEnvSource = resolveFileBackedEnv(process.env);
+const parsedEnv: Env = EnvSchema.parse(resolvedEnvSource);
+const productionErrors = productionEnvErrors(parsedEnv, resolvedEnvSource);
+if (productionErrors.length) {
+  throw new Error(`Invalid production environment:\n- ${productionErrors.join('\n- ')}`);
+}
+
+export const env: Env = parsedEnv;
