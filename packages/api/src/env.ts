@@ -84,9 +84,15 @@ const EnvSchema = z.object({
   STRIPE_PUBLISHABLE_KEY_LIVE: z.string().optional(),
   // Google OAuth — consumed by routes/auth.ts (lane G).
   GOOGLE_CLIENT_ID: z.string().optional(),
-  // Admin bootstrap scripts (seed-admin, provision-right-apps).
+  // First-run admin + store bootstrap. All optional so existing deployments are
+  // unaffected. bootstrap.ts treats a partially configured set as an error and
+  // never resets an existing admin password on restart.
   ADMIN_EMAIL: z.string().email().optional(),
   ADMIN_PASSWORD: z.string().optional(),
+  BOOTSTRAP_STORE_SLUG: optionalEnvString,
+  BOOTSTRAP_STORE_NAME: optionalEnvString,
+  BOOTSTRAP_STORE_CURRENCY: z.preprocess(emptyToUndefined, z.string().regex(/^[A-Za-z]{3}$/).transform((v) => v.toUpperCase()).optional()),
+  BOOTSTRAP_STORE_HOSTNAMES: optionalEnvString,
   // Import scripts: Vendure source DB (read-only clone used by catalog/customers/orders importers).
   SOURCE_DATABASE_URL: z.string().url().optional(),
   // Import scripts: TRUNCATE guard override — BOTH --force argv AND ALLOW_FORCE_TRUNCATE=1
