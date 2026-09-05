@@ -35,6 +35,8 @@ import { pool } from './db/client.js';
 import { requestIdMiddleware, accessLogMiddleware } from './lib/request-id.js';
 import { err as logErr } from './lib/logger.js';
 
+export const SELLRIGHT_VERSION = '0.1.0';
+
 /**
  * The API is typed REST: every route declares a zod schema, which generates
  * both the OpenAPI contract (/v1/openapi.json) and typed clients for consumers.
@@ -136,7 +138,7 @@ export function createApp(): OpenAPIHono {
     },
   });
 
-  app.openapi(healthRoute, (c) => c.json({ status: 'ok' as const, version: '0.0.0' }));
+  app.openapi(healthRoute, (c) => c.json({ status: 'ok' as const, version: SELLRIGHT_VERSION }));
 
   // OBS-2: readiness probe distinct from /v1/health. Cheaper probes (LB /
   // deploy) can hit /v1/health; the readiness probe actually asks the DB
@@ -258,7 +260,7 @@ export function createApp(): OpenAPIHono {
   // Published API contract — the product surface (versioned under /v1).
   app.doc('/v1/openapi.json', {
     openapi: '3.0.0',
-    info: { title: 'SellRight API', version: '0.1.0' },
+    info: { title: 'SellRight API', version: SELLRIGHT_VERSION },
   });
 
   return app;
