@@ -38,9 +38,9 @@ const IN_CITY_MAP: Record<string, string> = {
 
 const capitalizeFirst = (value: string) => value.charAt(0).toUpperCase() + value.slice(1);
 
-export const normalizeShippingAddress = (address: ShippingAddress): ShippingAddress => {
+export const normalizeShippingAddress = <T extends ShippingAddress>(address: T): T => {
  if (address.countryCode !== 'IN') return address;
- const normalized = { ...address };
+ const normalized = { ...address } as T;
  const cityKey = (normalized.city || '').trim().toLowerCase();
  const provinceKey = (normalized.province || '').trim().toLowerCase();
 
