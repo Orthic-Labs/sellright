@@ -43,10 +43,11 @@ server {
         try_files $uri =404;
     }
 
-    # React Router SPA fallback. index.html must not be immutable: each deploy
-    # may point at a different set of hashed admin-static chunks.
+    # React Router SPA fallback. `expires -1` emits no-cache semantics without
+    # an add_header directive, so nginx still inherits the server-level CSP and
+    # security headers in this location.
     location = /index.html {
-        add_header Cache-Control "no-cache";
+        expires -1;
         try_files $uri =404;
     }
 
