@@ -49,8 +49,9 @@ EXPOSE 3300
 HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3300)+'/v1/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
 
-# Single-instance/default deployment: migrate to the exact image schema before
-# accepting traffic, then exec the compiled server so signals reach Node. At
-# multi-instance scale, run the same migrate command once as a release job and
-# override this CMD with `node dist/index.js` for the application replicas.
-CMD ["sh", "-c", "node dist/scripts/migrate.js && exec node dist/index.js"]
+# Single-instance/default deployment: migrate to the exact image schema, run
+# create-only first-store bootstrap when BOOTSTRAP_STORE_SLUG is configured,
+# then exec the compiled server so signals reach Node. At multi-instance scale,
+# run migrate/bootstrap once as a release job and override this CMD with
+# `node dist/index.js` for application replicas.
+CMD ["sh", "-c", "node dist/scripts/migrate.js && node dist/scripts/bootstrap.js && exec node dist/index.js"]
