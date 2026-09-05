@@ -1,0 +1,108 @@
+name: sellright
+
+services:
+  postgres:
+    image: postgres:17-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sellright
+      POSTGRES_USER: sellright
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sellright -d sellright"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    networks: [private]
+
+  api:
+    image: sellright-api:local
+    build:
+      context: ..
+      dockerfile: packages/api/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3300
+      DATABASE_URL: postgresql://sellright:${POSTGRES_PASSWORD}@postgres:5432/sellright
+      STOREFRONT_URL: ${STOREFRONT_URL:?set STOREFRONT_URL in deploy/.env}
+      ASSET_DIR: /app/var/assets
+      DOWNLOAD_DIR: /app/var/downloads
+      DOWNLOAD_URL_SECRET: ${DOWNLOAD_URL_SECRET:?set DOWNLOAD_URL_SECRET in deploy/.env}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?set ADMIN_EMAIL in deploy/.env}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in deploy/.env}
+      BOOTSTRAP_STORE_SLUG: ${BOOTSTRAP_STORE_SLUG:?set BOOTSTRAP_STORE_SLUG in deploy/.env}
+      BOOTSTRAP_STORE_NAME: ${BOOTSTRAP_STORE_NAME:-}
+      BOOTSTRAP_STORE_CURRENCY: ${BOOTSTRAP_STORE_CURRENCY:-USD}
+      BOOTSTRAP_STORE_HOSTNAMES: ${BOOTSTRAP_STORE_HOSTNAMES:-}
+      STRIPE_SECRET_KEY_TEST: ${STRIPE_SECRET_KEY_TEST:-}
+      STRIPE_PUBLISHABLE_KEY_TEST: ${STRIPE_PUBLISHABLE_KEY_TEST:-}
+      STRIPE_WEBHOOK_SECRET_TEST: ${STRIPE_WEBHOOK_SECRET_TEST:-}
+      STRIPE_SECRET_KEY_LIVE: ${STRIPE_SECRET_KEY_LIVE:-}
+      STRIPE_PUBLISHABLE_KEY_LIVE: ${STRIPE_PUBLISHABLE_KEY_LIVE:-}
+      STRIPE_WEBHOOK_SECRET_LIVE: ${STRIPE_WEBHOOK_SECRET_LIVE:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      JOBS_ENABLED: ${JOBS_ENABLED:-1}
+      JOBS_PUSH_ENABLED: ${JOBS_PUSH_ENABLED:-0}
+      BEHIND_CLOUDFLARE: ${BEHIND_CLOUDFLARE:-0}
+      TRUSTED_PROXY_HEADER: x-real-ip
+      PGPOOL_MAX: ${PGPOOL_MAX:-10}
+      PGPOOL_CONNECTION_TIMEOUT_MS: ${PGPOOL_CONNECTION_TIMEOUT_MS:-5000}
+    volumes:
+      - assets:/app/var/assets
+      - downloads:/app/var/downloads
+    networks: [private]
+
+  admin:
+    image: sellright-admin:local
+    build:
+      context: ../packages/admin
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      API_UPSTREAM: http://api:3300
+    volumes:
+      - assets:/assets:ro
+    networks: [private]
+
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    depends_on:
+      admin:
+        condition: service_healthy
+    environment:
+      SELLRIGHT_DOMAIN: ${SELLRIGHT_DOMAIN:?set SELLRIGHT_DOMAIN in deploy/.env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [private]
+
+volumes:
+  postgres_data:
+  assets:
+  downloads:
+  caddy_data:
+  caddy_config:
+
+networks:
+  private:
+    driver: bridge
