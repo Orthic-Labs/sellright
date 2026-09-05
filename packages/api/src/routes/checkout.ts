@@ -127,11 +127,11 @@ checkout.openapi(
       // Idempotency: same key -> the same order (also guarded by a unique index).
       if (idemKey) {
         const [existing] = await tx
-          .select({ code: s.order.code, grandTotal: s.order.grandTotal, discountTotal: s.order.discountTotal, receiptToken: s.order.receiptToken })
+          .select({ code: s.order.code, state: s.order.state, grandTotal: s.order.grandTotal, discountTotal: s.order.discountTotal, receiptToken: s.order.receiptToken })
           .from(s.order)
           .where(eq(s.order.idempotencyKey, idemKey))
           .limit(1);
-        if (existing) return { code: existing.code, grandTotal: existing.grandTotal, discountTotal: existing.discountTotal, couponApplied: existing.discountTotal > 0, replay: true, receiptToken: existing.receiptToken ?? '' };
+        if (existing) return { code: existing.code, grandTotal: existing.grandTotal, discountTotal: existing.discountTotal, couponApplied: existing.discountTotal > 0, replay: true, paid: existing.state === 'Paid', receiptToken: existing.receiptToken ?? '' };
       }
 
       // Server-authoritative cart: when a cartToken is present the server cart is
@@ -309,14 +309,23 @@ checkout.openapi(
         await tx.update(s.promotion).set({ usedCount: sql`${s.promotion.usedCount} + 1` }).where(eq(s.promotion.id, promoId));
       }
 
-      // Gift card / store credit: drawn down as a 'gift_card' tender (not a
-      // discount). Fully covers → order goes Paid; otherwise the rest is owed.
       let giftCardApplied = 0;
       let paid = false;
-      if (body.giftCardCode) {
-        // FOR UPDATE: lock the gift-card row so two concurrent checkouts using the
-        // same code can't both read the same balance and double-spend it (the
-        // coupon path above already locks the promotion row the same way).
+
+      // A server-computed zero-total order has no payment operation to perform.
+      // Settle it atomically here so the browser never has to invent a Paid
+      // state and digital/license fulfillment follows the same issuance path as
+      // a real settled tender. No synthetic zero-value payment ledger row is
+      // created because no money moved.
+      if (totals.grandTotal === 0) {
+        const paidAt = new Date();
+        await tx.update(s.order).set({ state: 'Paid', placedAt: paidAt, updatedAt: paidAt }).where(eq(s.order.id, orderId));
+        await issueLicensesForPaidOrder(tx, { storeId: st.id, orderId, customerId, paidAt });
+        paid = true;
+      } else if (body.giftCardCode) {
+        // Gift card / store credit is a tender, not a discount. The launch
+        // invariant requires it to cover the full amount due; applyGiftCard
+        // returns inapplicable without drawing when the balance is insufficient.
         const [gc] = await tx.select().from(s.giftCard).where(eq(s.giftCard.code, body.giftCardCode)).limit(1).for('update');
         if (gc) {
           const appn = applyGiftCard({ balance: gc.balance, enabled: gc.enabled, expiresAt: gc.expiresAt }, totals.grandTotal, new Date());
@@ -426,11 +435,11 @@ checkout.openapi(
       if (idemKey && (e as { code?: string })?.code === '23505') {
         return withStore(st.id, async (tx): Promise<Result> => {
           const [o] = await tx
-            .select({ code: s.order.code, grandTotal: s.order.grandTotal, discountTotal: s.order.discountTotal, receiptToken: s.order.receiptToken })
+            .select({ code: s.order.code, state: s.order.state, grandTotal: s.order.grandTotal, discountTotal: s.order.discountTotal, receiptToken: s.order.receiptToken })
             .from(s.order)
             .where(eq(s.order.idempotencyKey, idemKey))
             .limit(1);
-          if (o) return { code: o.code, grandTotal: o.grandTotal, discountTotal: o.discountTotal, couponApplied: o.discountTotal > 0, replay: true, receiptToken: o.receiptToken ?? '' };
+          if (o) return { code: o.code, grandTotal: o.grandTotal, discountTotal: o.discountTotal, couponApplied: o.discountTotal > 0, replay: true, paid: o.state === 'Paid', receiptToken: o.receiptToken ?? '' };
           throw e;
         });
       }
