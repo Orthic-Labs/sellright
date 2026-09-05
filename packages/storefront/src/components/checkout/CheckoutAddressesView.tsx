@@ -41,20 +41,17 @@ export const CheckoutAddressesView = component$<CheckoutAddressesViewProps>((pro
 
   return (
     <div class="space-y-4 CheckoutAddresses">
-      {/* Error Display */}
       {error.value && (
         <div class="p-4 bg-red-50 border border-red-200 rounded-md">
           <p class="text-sm text-red-800">{error.value}</p>
         </div>
       )}
 
-      {/* Title with Clean Sign-in Option */}
       <div class="flex items-center justify-between mb-4">
         <h3 class="text-[30px] leading-none md:text-[34px] font-heading font-normal tracking-wide text-[#1A1A1A] flex-1 text-center md:text-left md:flex-none">
           Shipping Details
         </h3>
 
-        {/* Simple Login Option for Guest Users */}
         {appState.customer?.id === CUSTOMER_NOT_DEFINED_ID && (
           <div class="flex items-center text-sm">
             <span class="text-gray-600 mr-2">Have an account?</span>
@@ -67,18 +64,15 @@ export const CheckoutAddressesView = component$<CheckoutAddressesViewProps>((pro
           </div>
         )}
       </div>
-      
-      {/* Customer Information - Direct implementation without title */}
+
       <section>
         <div class="space-y-4">
-          {/* Email and Phone side-by-side */}
           <div class="grid grid-cols-2 gap-4">
             <div class="relative">
               <label for="checkout-email" class="sr-only">Email address</label>
               <input
                 id="checkout-email"
                 type="email"
-                id="checkout-email"
                 value={appState.customer?.emailAddress}
                 placeholder="Email address"
                 aria-label="Email address"
@@ -104,7 +98,6 @@ export const CheckoutAddressesView = component$<CheckoutAddressesViewProps>((pro
               <input
                 id="checkout-phone"
                 type="tel"
-                id="checkout-phone"
                 value={sanitizePhoneNumber(appState.shippingAddress?.phoneNumber)}
                 placeholder={phonePlaceholder.value}
                 aria-label="Phone number"
@@ -133,14 +126,13 @@ export const CheckoutAddressesView = component$<CheckoutAddressesViewProps>((pro
               <input
                 id="checkout-first-name"
                 type="text"
-                id="checkout-firstName"
                 value={appState.customer?.firstName}
                 placeholder="First name"
                 aria-label="First name"
                 onChange$={(_, el) => handleFirstNameChange$(el.value)}
                 onBlur$={handleFirstNameBlur$}
                 aria-invalid={!!(firstNameTouched.value && firstNameValidationError.value)}
-                aria-describedby={firstNameTouched.value && firstNameValidationError.value ? 'checkout-firstName-error' : undefined}
+                aria-describedby={firstNameTouched.value && firstNameValidationError.value ? 'checkout-first-name-error' : undefined}
                 class={`block w-full px-[14px] py-[11px] pr-10 text-[16px] rounded-[3px] border placeholder:text-[rgba(100,85,65,0.42)] focus:outline-hidden transition-colors duration-200 bg-white ${
                   firstNameTouched.value && firstNameValidationError.value
                     ? 'border-red-300 focus:border-red-500 focus:ring-red-500'
@@ -151,7 +143,7 @@ export const CheckoutAddressesView = component$<CheckoutAddressesViewProps>((pro
                 touched={firstNameTouched.value}
                 error={firstNameValidationError.value}
                 valid={firstNameTouched.value && !firstNameValidationError.value && !!(appState.customer?.firstName)}
-                errorId={firstNameTouched.value && firstNameValidationError.value ? 'checkout-firstName-error' : undefined}
+                errorId={firstNameTouched.value && firstNameValidationError.value ? 'checkout-first-name-error' : undefined}
               />
             </div>
 
@@ -160,14 +152,13 @@ export const CheckoutAddressesView = component$<CheckoutAddressesViewProps>((pro
               <input
                 id="checkout-last-name"
                 type="text"
-                id="checkout-lastName"
                 value={appState.customer?.lastName}
                 placeholder="Last name"
                 aria-label="Last name"
                 onChange$={(_, el) => handleLastNameChange$(el.value)}
                 onBlur$={handleLastNameBlur$}
                 aria-invalid={!!(lastNameTouched.value && lastNameValidationError.value)}
-                aria-describedby={lastNameTouched.value && lastNameValidationError.value ? 'checkout-lastName-error' : undefined}
+                aria-describedby={lastNameTouched.value && lastNameValidationError.value ? 'checkout-last-name-error' : undefined}
                 class={`block w-full px-[14px] py-[11px] pr-10 text-[16px] rounded-[3px] border placeholder:text-[rgba(100,85,65,0.42)] focus:outline-hidden transition-colors duration-200 bg-white ${
                   lastNameTouched.value && lastNameValidationError.value
                     ? 'border-red-300 focus:border-red-500 focus:ring-red-500'
@@ -178,22 +169,20 @@ export const CheckoutAddressesView = component$<CheckoutAddressesViewProps>((pro
                 touched={lastNameTouched.value}
                 error={lastNameValidationError.value}
                 valid={lastNameTouched.value && !lastNameValidationError.value && !!(appState.customer?.lastName)}
-                errorId={lastNameTouched.value && lastNameValidationError.value ? 'checkout-lastName-error' : undefined}
+                errorId={lastNameTouched.value && lastNameValidationError.value ? 'checkout-last-name-error' : undefined}
               />
             </div>
           </div>
         </div>
       </section>
 
-      {/* Shipping Address */}
       <section>
-        <AddressForm 
+        <AddressForm
           shippingAddress={appState.shippingAddress}
           isReviewMode={false}
         />
       </section>
 
-      {/* Billing Toggle */}
       <section>
         <button
           type="button"
@@ -203,7 +192,6 @@ export const CheckoutAddressesView = component$<CheckoutAddressesViewProps>((pro
             if (!next) {
               billingHasBeenActivated.value = false;
             }
-            // validation runs automatically via useVisibleTask$ tracking useDifferentBilling.value
           })}
           class="inline-flex items-center gap-2 py-1 text-[13px] text-[rgba(100,85,65,0.6)] hover:text-[rgba(100,85,65,0.9)] transition-colors cursor-pointer bg-transparent border-none mb-0"
         >
@@ -218,7 +206,6 @@ export const CheckoutAddressesView = component$<CheckoutAddressesViewProps>((pro
           </svg>
         </button>
 
-        {/* Billing Address Form — smooth reveal */}
         <div
           class="grid transition-all duration-400 ease-out"
           style={{
@@ -244,10 +231,6 @@ export const CheckoutAddressesView = component$<CheckoutAddressesViewProps>((pro
           </div>
         </div>
       </section>
-
-      {/* LoginModal moved to parent checkout component for proper full-screen rendering */}
-      
-
     </div>
   );
 });
