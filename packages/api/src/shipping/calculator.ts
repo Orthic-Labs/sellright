@@ -58,7 +58,7 @@ export function shippingRate(calculator: unknown): number {
 
 /** Thrown inside the checkout txn when no valid shipping rate can be resolved. */
 export class ShippingUnavailableError extends Error {
-  constructor(public reason: 'method_not_found' | 'not_eligible' | 'method_required') {
+  constructor(public reason: 'method_not_found' | 'not_eligible' | 'method_required' | 'not_configured') {
     super(`shipping unavailable: ${reason}`);
     this.name = 'ShippingUnavailableError';
   }
