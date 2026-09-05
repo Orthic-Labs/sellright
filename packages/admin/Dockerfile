@@ -4,7 +4,10 @@ FROM node:24.20.0-bookworm-slim AS build
 RUN npm install --global pnpm@11.25.0
 WORKDIR /src
 
-COPY package.json pnpm-lock.yaml ./
+# The admin is a standalone pnpm workspace. Its workspace file contains the
+# supply-chain/build policy and overrides captured by pnpm-lock.yaml, so frozen
+# installs must see all three files.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
 COPY . .
