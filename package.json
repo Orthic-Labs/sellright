@@ -1,9 +1,10 @@
 {
   "name": "sellright",
   "private": true,
-  "packageManager": "pnpm@11.24.0",
+  "packageManager": "pnpm@11.25.0",
   "engines": {
-    "node": ">=24.7 <25"
+    "node": ">=24.7 <27",
+    "pnpm": ">=11.25 <12"
   },
   "scripts": {
     "build": "pnpm -r build && pnpm --dir packages/admin build",
@@ -17,10 +18,10 @@
     "audit:lint": "eslint .",
     "audit:dead-code": "knip --reporter json",
     "audit:duplication": "jscpd . --reporters json --output .cache/jscpd --silent",
-    "deps:check": "node ../tools/rightkit/packages/release/deps.mjs --check",
-    "deps:audit": "node ../tools/rightkit/packages/release/deps.mjs --audit",
-    "deps:update": "node ../tools/rightkit/packages/release/deps.mjs --update",
-    "deps:update:latest": "node ../tools/rightkit/packages/release/deps.mjs --update --latest"
+    "deps:check": "pnpm outdated -r || true; pnpm --dir packages/admin outdated || true; pnpm --dir packages/storefront outdated || true",
+    "deps:audit": "pnpm audit --prod && pnpm --dir packages/admin audit --prod && pnpm --dir packages/storefront audit --prod",
+    "deps:update": "pnpm up -r && pnpm --dir packages/admin up && pnpm --dir packages/storefront up",
+    "deps:update:latest": "pnpm up -r --latest && pnpm --dir packages/admin up --latest && pnpm --dir packages/storefront up --latest"
   },
   "devDependencies": {
     "@typescript-eslint/parser": "8.62.1",
