@@ -12,6 +12,7 @@ import { buildInvoice, buildPackingSlip, renderInvoiceHtml } from '../orders/inv
 import { evaluateCoupon } from '../money/coupon.js';
 import { resolveTaxRate } from '../money/tax.js';
 import { alreadyRefunded, creditGiftCardRefund, executeGatewayRefund } from './admin-order-payment-helpers.js';
+import { selectSingleSettledPayment } from './refund-payment-selection.js';
 import { unitPrice } from './admin-order-utils.js';
 import { emitEvent } from '../webhooks/emit.js';
 import { sendShippingNotification } from '../email/dispatch.js';
@@ -176,8 +177,12 @@ adminOrders.openapi(
         const [o] = await tx.select().from(s.order).where(eq(s.order.id, orderRef.id)).limit(1).for('update');
         if (!o) return { kind: 'notfound' as const };
         if (o.state !== 'Paid' && o.state !== 'PartiallyRefunded') return { kind: 'badstate' as const, state: o.state };
-        const [pay] = await tx.select().from(s.payment).where(and(eq(s.payment.orderId, o.id), eq(s.payment.state, 'Settled'))).orderBy(desc(s.payment.createdAt)).limit(1);
-        if (!pay) return { kind: 'nopayment' as const };
+        const selectedPayment = selectSingleSettledPayment(
+          await tx.select().from(s.payment).where(and(eq(s.payment.orderId, o.id), eq(s.payment.state, 'Settled'))).orderBy(desc(s.payment.createdAt)).limit(2),
+        );
+        if (selectedPayment.kind === 'none') return { kind: 'nopayment' as const };
+        if (selectedPayment.kind === 'multiple') return { kind: 'multipayment' as const };
+        const pay = selectedPayment.payment;
         const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
         const byId = new Map(lines.map((line) => [line.id, line]));
         const reqLines = (body.lines ?? []) as Array<{ orderLineId: string; quantity: number }>;
@@ -252,6 +257,7 @@ adminOrders.openapi(
     if (res.kind === 'notfound') throw new HttpError(404, 'order not found');
     if (res.kind === 'badstate') throw new HttpError(409, `order not refundable in state ${res.state} — transition to Refunded/PartiallyRefunded not allowed`);
     if (res.kind === 'nopayment') throw new HttpError(409, 'no settled payment to refund');
+    if (res.kind === 'multipayment') throw new HttpError(409, 'order has multiple settled payments; explicit tender allocation is required before refunding');
     if (res.kind === 'badamount') throw new HttpError(409, `refund amount must be 1..${res.max} cents`);
     if (res.kind === 'providerfail') throw new HttpError(502, res.message);
     return c.json({ code, state: res.state, refunded: res.refunded }, 200);
@@ -343,8 +349,12 @@ adminOrders.openapi(
         if (rr.status !== 'requested' && rr.status !== 'approved') return { kind: 'badstate' as const, status: rr.status };
         const [o] = await tx.select().from(s.order).where(eq(s.order.id, rr.orderId)).limit(1).for('update');
         if (!o) return { kind: 'notfound' as const };
-        const [pay] = await tx.select().from(s.payment).where(and(eq(s.payment.orderId, o.id), eq(s.payment.state, 'Settled'))).orderBy(desc(s.payment.createdAt)).limit(1);
-        if (!pay) return { kind: 'nopayment' as const };
+        const selectedPayment = selectSingleSettledPayment(
+          await tx.select().from(s.payment).where(and(eq(s.payment.orderId, o.id), eq(s.payment.state, 'Settled'))).orderBy(desc(s.payment.createdAt)).limit(2),
+        );
+        if (selectedPayment.kind === 'none') return { kind: 'nopayment' as const };
+        if (selectedPayment.kind === 'multiple') return { kind: 'multipayment' as const };
+        const pay = selectedPayment.payment;
         const returnLines = await tx.select().from(s.returnLine).where(eq(s.returnLine.returnId, rr.id));
         const orderLines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
         const byId = new Map(orderLines.map((line) => [line.id, line]));
@@ -418,6 +428,7 @@ adminOrders.openapi(
     if (res.kind === 'notfound') throw new HttpError(404, 'return not found');
     if (res.kind === 'badstate') throw new HttpError(409, `return cannot be approved — order is in state ${res.status} which does not allow transition`);
     if (res.kind === 'nopayment') throw new HttpError(409, 'no settled payment to refund against');
+    if (res.kind === 'multipayment') throw new HttpError(409, 'order has multiple settled payments; explicit tender allocation is required before approving this return');
     if (res.kind === 'badamount') throw new HttpError(409, 'return amount exceeds the refundable balance');
     if (res.kind === 'providerfail') throw new HttpError(502, res.message);
     return c.json({ id, refunded: res.refunded, state: res.state }, 200);
