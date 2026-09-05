@@ -23,6 +23,10 @@ export default defineConfig(({ mode }) => ({
   },
   build: {
     target: 'es2022',
+    // Product/media assets are served under /assets. Keep Vite's own immutable
+    // JS/CSS chunks in a distinct namespace so a single static/admin origin can
+    // never shadow storefront media or vice versa.
+    assetsDir: 'admin-static',
   },
   // Port 4300 (NOT 4200 — that's the Stunning Strangers prod store on the box).
   server: {
