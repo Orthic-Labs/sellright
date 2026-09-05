@@ -1,0 +1,43 @@
+server {
+    listen 8080;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https:; frame-ancestors 'none'; base-uri 'self'; object-src 'none'" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+    add_header X-Frame-Options "DENY" always;
+
+    # Same-origin API keeps cookie auth + CSRF simple and removes production
+    # CORS from the admin/browser path. The official nginx image substitutes
+    # API_UPSTREAM at container start (default supplied by Dockerfile/Compose).
+    location /v1/ {
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Request-ID $request_id;
+        proxy_pass ${API_UPSTREAM};
+    }
+
+    # Vite hashes these files, so they are safe to cache forever.
+    location /admin-static/ {
+        expires 1y;
+        try_files $uri =404;
+    }
+
+    # React Router SPA fallback. index.html must not be immutable: each deploy
+    # may point at a different set of hashed admin-static chunks.
+    location = /index.html {
+        add_header Cache-Control "no-cache";
+        try_files $uri =404;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
