@@ -15,20 +15,47 @@
  *      partial index (`WHERE provider_ref IS NOT NULL`) must never block it,
  *      including a second manual payment on a second order in the same store.
  *
+ * Shopper-facing /pay tests use a deterministic mocked Stripe provider. The
+ * public route intentionally accepts Stripe only; manual/COD remain internal
+ * ledger/accounting tenders and are covered directly through applyPaymentResult.
+ *
  * Runs against sellright_test ONLY (these wipe data). Mirrors
  * checkout-migration.test.ts: _test-DB guard + TRUNCATE store CASCADE wipe +
  * seed helpers under withStore(). vitest runs files serially
  * (fileParallelism: false), so the shared DB is safe between files.
  */
-import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { eq, and, sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
 import * as s from '../db/schema.js';
+import { clearLoginAttempts } from '../auth/rate-limit.js';
 import { applyPaymentResult } from '../payments/settle.js';
-import { pay } from './pay.js';
 import type { PaymentResult } from '../payments/provider.js';
+
+vi.mock('../payments/provider.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../payments/provider.js')>();
+  const stripeTestProvider = {
+    method: 'stripe',
+    requiresRedirect: false,
+    async createPayment(input: { orderCode: string; amount: number }) {
+      return {
+        state: 'Settled' as const,
+        providerRef: `pi_test_${input.orderCode}_${input.amount}`,
+        metadata: { test: true },
+      };
+    },
+  };
+  return {
+    ...actual,
+    getProvider(method: string) {
+      return method === 'stripe' ? stripeTestProvider : actual.getProvider(method);
+    },
+  };
+});
+
+import { pay } from './pay.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
 if (!/_test(\b|$|\?)/.test(DB)) {
@@ -47,7 +74,7 @@ async function wipe() {
   await pool.query('TRUNCATE store CASCADE');
 }
 
-async function seedStore(storeId: string, slug: string, config: unknown = { payments: { manual: true, cod: true } }) {
+async function seedStore(storeId: string, slug: string, config: unknown = { payments: { stripe: true } }) {
   await withStore(storeId, async (tx) => {
     await tx.execute(sql`INSERT INTO store (id, slug, name, currency, config) VALUES (${storeId}, ${slug}, ${slug}, 'USD', ${JSON.stringify(config)}::jsonb) ON CONFLICT (id) DO NOTHING`);
   });
@@ -65,7 +92,12 @@ async function makeOrder(storeId: string, opts: { code?: string; grandTotal?: nu
   return { id, code };
 }
 
-beforeEach(async () => { await wipe(); });
+beforeEach(async () => {
+  // Route tests share the synthetic `unknown` client IP. Keep the production
+  // attempt-counted limiter intact and reset only this test bucket per case.
+  clearLoginAttempts('unknown', 'pay:unknown');
+  await wipe();
+});
 afterAll(async () => { await wipe(); });
 
 const hdr = (slug: string, extra: Record<string, string> = {}) => ({ 'content-type': 'application/json', 'x-store-slug': slug, ...extra });
@@ -128,19 +160,17 @@ describe('MONEY-2: store-scoped /pay claim key', () => {
     await makeOrder(STORE_A, { code: sharedCode });
     await makeOrder(STORE_B, { code: sharedCode });
 
-    const resA = await app.request(`/v1/shop/orders/${sharedCode}/pay`, { method: 'POST', headers: hdr(SLUG_A), body: JSON.stringify({ method: 'manual' }) });
+    const resA = await app.request(`/v1/shop/orders/${sharedCode}/pay`, { method: 'POST', headers: hdr(SLUG_A), body: JSON.stringify({ method: 'stripe' }) });
     expect(resA.status).toBe(200);
     const bodyA = await resA.json() as { state: string; payment: string };
     expect(bodyA.state).toBe('Paid');
     expect(bodyA.payment).toBe('Settled');
 
-    const resB = await app.request(`/v1/shop/orders/${sharedCode}/pay`, { method: 'POST', headers: hdr(SLUG_B), body: JSON.stringify({ method: 'manual' }) });
+    const resB = await app.request(`/v1/shop/orders/${sharedCode}/pay`, { method: 'POST', headers: hdr(SLUG_B), body: JSON.stringify({ method: 'stripe' }) });
     expect(resB.status).toBe(200);
     const bodyB = await resB.json() as { state: string; payment: string };
-    // MONEY-2 regression check: before the store-scoped claim key, store B's
-    // claim insert would conflict with store A's already-claimed global
-    // processed_event row (`pay:${code}:${method}`) and store B would get
-    // stuck reporting 'already-processed' with state still PendingPayment.
+    // MONEY-2 regression check: the store-scoped claim key ensures store B's
+    // claim cannot collide with store A's global processed_event primary key.
     expect(bodyB.state).toBe('Paid');
     expect(bodyB.payment).toBe('Settled');
 
@@ -153,10 +183,10 @@ describe('MONEY-2: store-scoped /pay claim key', () => {
   it('derives the claim key as pay:<storeId>:<code>:<method>', async () => {
     await seedStore(STORE_A, SLUG_A);
     const { code } = await makeOrder(STORE_A);
-    const res = await app.request(`/v1/shop/orders/${code}/pay`, { method: 'POST', headers: hdr(SLUG_A), body: JSON.stringify({ method: 'manual' }) });
+    const res = await app.request(`/v1/shop/orders/${code}/pay`, { method: 'POST', headers: hdr(SLUG_A), body: JSON.stringify({ method: 'stripe' }) });
     expect(res.status).toBe(200);
     const claim = await pool.query('SELECT id FROM processed_event WHERE store_id = $1', [STORE_A]);
-    expect(claim.rows.map((r: { id: string }) => r.id)).toContain(`pay:${STORE_A}:${code}:manual`);
+    expect(claim.rows.map((r: { id: string }) => r.id)).toContain(`pay:${STORE_A}:${code}:stripe`);
   });
 });
 
@@ -208,16 +238,16 @@ describe('MONEY-3: partial-tender charge amount (no overcharge on top of a gift 
     await withStore(STORE_A, (tx) =>
       tx.insert(s.payment).values({ storeId: STORE_A, orderId, amount: 3000, method: 'gift_card', state: 'Settled' }));
 
-    const res = await app.request(`/v1/shop/orders/${code}/pay`, { method: 'POST', headers: hdr(SLUG_A), body: JSON.stringify({ method: 'manual' }) });
+    const res = await app.request(`/v1/shop/orders/${code}/pay`, { method: 'POST', headers: hdr(SLUG_A), body: JSON.stringify({ method: 'stripe' }) });
     expect(res.status).toBe(200);
     const body = await res.json() as { state: string; payment: string };
     expect(body.state).toBe('Paid');
 
     const rows = await withStore(STORE_A, (tx) => tx.select().from(s.payment).where(eq(s.payment.orderId, orderId)));
-    const manualRow = rows.find((r) => r.method === 'manual');
-    // manualProvider always reports Settled for whatever `amount` /pay passes it
-    // — this proves /pay computed amountDue (7000), not order.grandTotal (10000).
-    expect(manualRow!.amount).toBe(7000);
+    const stripeRow = rows.find((r) => r.method === 'stripe');
+    // The deterministic test provider settles exactly the amount /pay passes it,
+    // proving /pay computed amountDue (7000), not grandTotal (10000).
+    expect(stripeRow!.amount).toBe(7000);
   });
 
   it('/pay rejects with 400 when the order is already fully covered by prior tenders', async () => {
@@ -226,7 +256,7 @@ describe('MONEY-3: partial-tender charge amount (no overcharge on top of a gift 
     await withStore(STORE_A, (tx) =>
       tx.insert(s.payment).values({ storeId: STORE_A, orderId, amount: 5000, method: 'gift_card', state: 'Settled' }));
 
-    const res = await app.request(`/v1/shop/orders/${code}/pay`, { method: 'POST', headers: hdr(SLUG_A), body: JSON.stringify({ method: 'manual' }) });
+    const res = await app.request(`/v1/shop/orders/${code}/pay`, { method: 'POST', headers: hdr(SLUG_A), body: JSON.stringify({ method: 'stripe' }) });
     expect(res.status).toBe(400);
     const body = await res.json() as { error: string };
     expect(body.error).toMatch(/fully paid/);
