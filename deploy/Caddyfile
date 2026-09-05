@@ -1,0 +1,10 @@
+{$SELLRIGHT_DOMAIN} {
+    encode zstd gzip
+
+    # The edge owns the untrusted socket and overwrites X-Real-IP before the
+    # request enters the private admin/API network. Caddy also supplies the
+    # normal X-Forwarded-Proto/Host chain used by nginx and the application.
+    reverse_proxy admin:8080 {
+        header_up X-Real-IP {remote_host}
+    }
+}
