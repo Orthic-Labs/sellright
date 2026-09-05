@@ -37,6 +37,7 @@ const PRODUCT = 'aaaaaaaa-1111-1111-1111-1111111111a1';
 const VARIANT = 'aaaaaaaa-1111-1111-1111-1111111111b1';
 const SKU = 'CKR-SKU-1';
 const PRICE = 5000; // cents — the true server price; a tampered client price must be ignored
+const SHIPPING_CODE = 'test-standard';
 
 const app = new OpenAPIHono();
 app.route('/', checkout);
@@ -46,16 +47,33 @@ async function wipe() {
   await pool.query('TRUNCATE store CASCADE');
 }
 
-/** Seed store + one DIGITAL variant with stock. These route tests exercise
- * pricing/reservation/idempotency/coupon/tax, not physical-shipping selection.
- * Physical shipping has its own fail-closed coverage, so keeping this fixture
- * digital prevents that independent policy from masking the behavior under test. */
+/** Seed store + one DIGITAL variant with stock. Most route tests exercise
+ * pricing/idempotency/coupon/tax, not physical-shipping selection. The two
+ * explicit stock-reservation cases opt the fixture into a physical variant
+ * below so we preserve real inventory-allocation coverage as well. */
 async function seed(opts: { onHand?: number } = {}): Promise<void> {
   await withStore(STORE, async (tx) => {
     await tx.execute(sql`INSERT INTO store (id, slug, name, currency, tax_rate) VALUES (${STORE}, ${SLUG}, ${SLUG}, 'USD', 0) ON CONFLICT (id) DO NOTHING`);
     await tx.execute(sql`INSERT INTO product (id, store_id, slug, name, status) VALUES (${PRODUCT}, ${STORE}, 'ckr-prod', 'CKR Product', 'active') ON CONFLICT (id) DO NOTHING`);
     await tx.execute(sql`INSERT INTO product_variant (id, store_id, product_id, sku, name, price, fulfillment_type) VALUES (${VARIANT}, ${STORE}, ${PRODUCT}, ${SKU}, 'CKR Variant', ${PRICE}, 'digital_download') ON CONFLICT (id) DO NOTHING`);
     await tx.execute(sql`INSERT INTO stock (variant_id, store_id, on_hand, allocated) VALUES (${VARIANT}, ${STORE}, ${opts.onHand ?? 10}, 0) ON CONFLICT (variant_id) DO UPDATE SET on_hand = ${opts.onHand ?? 10}, allocated = 0`);
+  });
+}
+
+/** Switch the seeded variant to physical and add a valid zero-cost shipping
+ * method. Stock reservation is intentionally only meaningful for shippable
+ * inventory; the server-authoritative shipping rule still remains exercised. */
+async function makePhysical(onHand: number): Promise<void> {
+  await withStore(STORE, async (tx) => {
+    await tx.update(s.productVariant).set({ fulfillmentType: 'physical' }).where(eq(s.productVariant.id, VARIANT));
+    await tx.update(s.stock).set({ onHand, allocated: 0 }).where(eq(s.stock.variantId, VARIANT));
+    await tx.insert(s.shippingMethod).values({
+      storeId: STORE,
+      code: SHIPPING_CODE,
+      name: 'Test Standard',
+      calculator: { flat: 0 },
+      enabled: true,
+    });
   });
 }
 
@@ -107,11 +125,11 @@ describe('POST /v1/shop/checkout — server pricing', () => {
 
 describe('POST /v1/shop/checkout — stock reservation', () => {
   it('oversell returns 409 with the blocked SKU and reserves nothing', async () => {
-    await seed({ onHand: 1 });
+    await makePhysical(1);
     const res = await app.request('/v1/shop/checkout', {
       method: 'POST',
       headers: hdr(),
-      body: JSON.stringify({ items: [{ sku: SKU, quantity: 5 }] }),
+      body: JSON.stringify({ items: [{ sku: SKU, quantity: 5 }], shippingMethodCode: SHIPPING_CODE }),
     });
     expect(res.status).toBe(409);
     const body = await res.json() as { error: string; skus?: string[] };
@@ -126,8 +144,9 @@ describe('POST /v1/shop/checkout — stock reservation', () => {
   });
 
   it('a successful checkout reserves (allocates) the purchased quantity', async () => {
+    await makePhysical(10);
     const res = await app.request('/v1/shop/checkout', {
-      method: 'POST', headers: hdr(), body: JSON.stringify({ items: [{ sku: SKU, quantity: 3 }] }),
+      method: 'POST', headers: hdr(), body: JSON.stringify({ items: [{ sku: SKU, quantity: 3 }], shippingMethodCode: SHIPPING_CODE }),
     });
     expect(res.status).toBe(200);
     const allocated = await withStore(STORE, async (tx) => {
