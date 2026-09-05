@@ -64,7 +64,7 @@
 		"tailwindcss": "^4.3.2",
 		"terser": "^5.48.0",
 		"typescript": "^5.9.3",
-		"vite": "^7.3.5",
+		"vite": "^8.2.2",
 		"vite-imagetools": "^10.0.1",
 		"vite-plugin-compression": "^0.5.1",
 		"vite-tsconfig-paths": "^6.1.1"
