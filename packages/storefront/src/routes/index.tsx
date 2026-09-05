@@ -36,12 +36,13 @@ const TP_FALLBACK = {
     { text: '"Outstanding products. Already bought three items and will definitely be ordering again."', name: 'Taylor R.' },
   ],
 };
+type TrustpilotData = typeof TP_FALLBACK;
 
 // In-memory cache — loaded once on first request, auto-refreshes when cron updates file
-let _tpCache: any = null;
+let _tpCache: TrustpilotData | null = null;
 let _tpWatching = false;
 
-async function getTrustpilotData() {
+async function getTrustpilotData(): Promise<TrustpilotData> {
   if (_tpCache) return _tpCache;
   try {
     const { readFileSync, watch } = await import('node:fs');
@@ -49,14 +50,14 @@ async function getTrustpilotData() {
     const { fileURLToPath } = await import('node:url');
     const dir = dirname(fileURLToPath(import.meta.url));
     const filePath = join(dir, '..', '..', 'src', 'data', 'trustpilot.json');
-    _tpCache = JSON.parse(readFileSync(filePath, 'utf-8'));
+    _tpCache = JSON.parse(readFileSync(filePath, 'utf-8')) as TrustpilotData;
 
     // Watch for changes — re-read only when cron updates the file
     if (!_tpWatching) {
       _tpWatching = true;
       try {
         watch(filePath, () => {
-          try { _tpCache = JSON.parse(readFileSync(filePath, 'utf-8')); }
+          try { _tpCache = JSON.parse(readFileSync(filePath, 'utf-8')) as TrustpilotData; }
           catch { /* keep existing cache */ }
         });
       } catch { /* fs.watch not available */ }
@@ -68,7 +69,7 @@ async function getTrustpilotData() {
   }
 }
 
-export const useTrustpilotData = routeLoader$(async () => {
+export const useTrustpilotData = routeLoader$<TrustpilotData>(async () => {
   return getTrustpilotData();
 });
 
