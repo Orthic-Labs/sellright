@@ -12,12 +12,30 @@ export const pool = new Pool({
   connectionTimeoutMillis: env.PGPOOL_CONNECTION_TIMEOUT_MS,
 });
 
+// Session-level advisory locks intentionally live on a separate, very small
+// pool. Payment/refund workflows hold these locks across external gateway I/O;
+// if they borrowed from the main transaction pool, enough concurrent gateway
+// calls could occupy every connection and starve the nested withStore() work.
+// Keeping lock waiters isolated preserves transaction capacity while retaining
+// the existing cross-process serialization semantics.
+const advisoryLockPool = new Pool({
+  connectionString: env.DATABASE_URL,
+  application_name: `${env.PGAPPNAME}-locks`,
+  max: Math.max(1, Math.min(4, Math.ceil(env.PGPOOL_MAX / 4))),
+  idleTimeoutMillis: env.PGPOOL_IDLE_TIMEOUT_MS,
+  connectionTimeoutMillis: env.PGPOOL_CONNECTION_TIMEOUT_MS,
+  allowExitOnIdle: true,
+});
+
 // 'error' fires on IDLE pooled clients (network blip, server kill, idle timeout)
 // — NOT on in-flight queries. Without this handler Node throws an EventEmitter
 // "unhandled error" and exits; in-flight queries keep returning whatever they
 // were doing, masking the silent-failure footgun. See DISPATCH.md §3a REL-5.
 pool.on('error', (err) => {
   console.error('[pg pool error]', err);
+});
+advisoryLockPool.on('error', (err) => {
+  console.error('[pg advisory-lock pool error]', err);
 });
 
 // MUST match drizzle.config.ts `casing: 'snake_case'` — otherwise runtime queries
@@ -83,9 +101,13 @@ export async function withStore<T>(storeId: string, fn: (tx: Tx) => Promise<T>):
 /**
  * Serialize a short transaction → external I/O → short transaction workflow
  * without holding an open Postgres transaction across the external call.
+ *
+ * The advisory-lock connection comes from a dedicated pool so gateway latency
+ * can never exhaust the application's normal transaction pool. The lock remains
+ * session-scoped and therefore works across API processes sharing Postgres.
  */
 export async function withAdvisoryLock<T>(lockKey: string, fn: () => Promise<T>): Promise<T> {
-  const client = await pool.connect();
+  const client = await advisoryLockPool.connect();
   let locked = false;
   let broken = false;
   try {
