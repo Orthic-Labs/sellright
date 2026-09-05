@@ -2,6 +2,8 @@
 
 Owned, from-scratch commerce backend for multi-brand operators. SellRight is a REST-first, Postgres-backed alternative to running separate Shopify/Vendure/WooCommerce-style backends per brand.
 
+> **Pre-1.0:** SellRight is under active launch hardening. The public repository is suitable for evaluation and development; production operators should track release notes and required migrations closely until the first stable release.
+
 ## Stack
 
 TypeScript · Hono + zod-openapi · REST/OpenAPI · Drizzle + Postgres · multi-tenant `store` model + RLS · static catalog manifest read path · `PaymentProvider` interface · Qwik storefront consumer · React/Vite admin.
@@ -34,6 +36,10 @@ Keep env files with the package that uses them:
 
 Examples live beside each package as `.env.example`. The old root-level
 `.env.example` is retired.
+
+## License
+
+SellRight is source-available under the Business Source License 1.1. Production use is free for organizations with no more than 25 covered people, as defined in [LICENSE](LICENSE). Organizations above that threshold require a commercial license. Each version converts to Apache-2.0 on its Change Date.
 
 ## Docs
 
