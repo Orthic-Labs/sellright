@@ -37,10 +37,16 @@ export async function activateLicenseOnDevice(
   // the seat-cap check. The unique(licenseId, deviceIdHash) index still handles
   // same-device re-activation idempotently even if two requests arrive for the
   // same device at the same time.
+  //
+  // Tenant ownership must be explicit here. This raw lock query is a security
+  // boundary, not merely a lookup: a license key/app pair from another store must
+  // never be activatable from the current store context even if database/RLS
+  // configuration is incomplete or accidentally bypassed in a test/admin path.
   const licResult = await tx.execute(sql`
     SELECT id, status, seats, expires_at, updates_until, app_key, license_key, store_id
     FROM license
-    WHERE license_key = ${input.licenseKey}
+    WHERE store_id    = ${input.storeId}
+      AND license_key = ${input.licenseKey}
       AND app_key     = ${input.appKey}
     LIMIT 1
     FOR UPDATE
