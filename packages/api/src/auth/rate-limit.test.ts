@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { pickClientIp } from './rate-limit.js';
+import { attemptRetryAfter, clearLoginAttempts, loginRetryAfter, pickClientIp, recordLoginFailure } from './rate-limit.js';
 
 /**
  * SEC-5: cf-connecting-ip must only be trusted when the deployment declares
@@ -11,6 +11,36 @@ import { pickClientIp } from './rate-limit.js';
 function headers(map: Record<string, string>) {
   return { get: (k: string) => map[k] };
 }
+
+describe('rate limiting semantics', () => {
+  it('keeps login checks failure-counted rather than consuming successful checks', () => {
+    const ip = '198.51.100.10';
+    const id = 'login:user@example.com';
+    clearLoginAttempts(ip, id);
+    for (let i = 0; i < 20; i++) expect(loginRetryAfter(ip, id)).toBe(0);
+    for (let i = 0; i < 8; i++) recordLoginFailure(ip, id);
+    expect(loginRetryAfter(ip, id)).toBeGreaterThan(0);
+    clearLoginAttempts(ip, id);
+  });
+
+  it('consumes checkout attempts so the ninth request in the window is blocked', () => {
+    const ip = '198.51.100.11';
+    const id = 'checkout:anonymous';
+    clearLoginAttempts(ip, id);
+    for (let i = 0; i < 8; i++) expect(loginRetryAfter(ip, id)).toBe(0);
+    expect(loginRetryAfter(ip, id)).toBeGreaterThan(0);
+    clearLoginAttempts(ip, id);
+  });
+
+  it('consumes payment attempts directly through the generic attempt helper', () => {
+    const ip = '198.51.100.12';
+    const id = 'pay:198.51.100.12:stripe';
+    clearLoginAttempts(ip, id);
+    for (let i = 0; i < 8; i++) expect(attemptRetryAfter(ip, id)).toBe(0);
+    expect(attemptRetryAfter(ip, id)).toBeGreaterThan(0);
+    clearLoginAttempts(ip, id);
+  });
+});
 
 describe('pickClientIp', () => {
   it('ignores a spoofed cf-connecting-ip when not behind Cloudflare', () => {

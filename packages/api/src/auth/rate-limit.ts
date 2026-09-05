@@ -1,9 +1,12 @@
 /**
- * In-memory sliding-window login throttle (admin + customer). Blocks brute-force
- * / credential-stuffing without external infra. Per-process — fine for a single
- * instance; move the store to Redis when running multiple API instances.
+ * In-memory sliding-window throttle for auth failures and high-risk shopper
+ * actions. Per-process — appropriate for a single API instance; move the state
+ * to Redis (or another shared limiter) before running multiple API instances.
  *
- * Keyed by ip+identifier. Failures count; a successful login clears the key.
+ * Login/auth buckets remain failure-counted: callers explicitly record a failed
+ * authentication and a successful login clears the key. Checkout/payment
+ * buckets are attempt-counted because those routes do not have an equivalent
+ * authentication-failure signal and every request is abuse-relevant.
  */
 import { env } from '../env.js';
 const WINDOW_MS = 15 * 60 * 1000; // 15 min
@@ -12,35 +15,78 @@ const MAX_FAILURES = 8;
 interface Entry { fails: number[]; }
 const store = new Map<string, Entry>();
 
+function keyFor(ip: string, identifier: string): string {
+  return `${ip}|${identifier.toLowerCase()}`;
+}
+
 function prune(e: Entry, now: number): void {
   e.fails = e.fails.filter((t) => now - t < WINDOW_MS);
 }
 
-/** Throw-free check: returns retryAfterSeconds>0 if currently locked out. */
+function retryAfterFor(e: Entry, now: number): number {
+  if (e.fails.length < MAX_FAILURES) return 0;
+  const oldest = e.fails[0]!;
+  return Math.max(1, Math.ceil((WINDOW_MS - (now - oldest)) / 1000));
+}
+
+function cleanup(now: number): void {
+  // Opportunistic cleanup so the map cannot grow unbounded on a long-lived
+  // process receiving one-off identifiers/IPs.
+  if (store.size <= 5000) return;
+  for (const [k, v] of store) {
+    prune(v, now);
+    if (!v.fails.length) store.delete(k);
+  }
+}
+
+/**
+ * Consume one request from an attempt-counted bucket. Returns retry-after
+ * seconds when the request must be rejected; otherwise records the attempt and
+ * returns 0. Exactly MAX_FAILURES attempts are allowed in a window.
+ */
+export function attemptRetryAfter(ip: string, identifier: string): number {
+  const key = keyFor(ip, identifier);
+  const e = store.get(key) ?? { fails: [] };
+  const now = Date.now();
+  prune(e, now);
+  const retry = retryAfterFor(e, now);
+  if (retry > 0) return retry;
+  e.fails.push(now);
+  store.set(key, e);
+  cleanup(now);
+  return 0;
+}
+
+/**
+ * Throw-free check used by the existing auth call sites. Login/auth identifiers
+ * are check-only and are incremented by recordLoginFailure(). Historical
+ * checkout/pay call sites also use this function; recognize those explicit
+ * namespaces and consume an attempt so their limiter cannot remain inert.
+ */
 export function loginRetryAfter(ip: string, identifier: string): number {
-  const key = `${ip}|${identifier.toLowerCase()}`;
-  const e = store.get(key);
+  if (identifier.startsWith('checkout:') || identifier.startsWith('pay:')) {
+    return attemptRetryAfter(ip, identifier);
+  }
+
+  const e = store.get(keyFor(ip, identifier));
   if (!e) return 0;
   const now = Date.now();
   prune(e, now);
-  if (e.fails.length < MAX_FAILURES) return 0;
-  const oldest = e.fails[0]!;
-  return Math.ceil((WINDOW_MS - (now - oldest)) / 1000);
+  return retryAfterFor(e, now);
 }
 
 export function recordLoginFailure(ip: string, identifier: string): void {
-  const key = `${ip}|${identifier.toLowerCase()}`;
+  const key = keyFor(ip, identifier);
   const e = store.get(key) ?? { fails: [] };
   const now = Date.now();
   prune(e, now);
   e.fails.push(now);
   store.set(key, e);
-  // opportunistic cleanup so the map can't grow unbounded
-  if (store.size > 5000) for (const [k, v] of store) { prune(v, now); if (!v.fails.length) store.delete(k); }
+  cleanup(now);
 }
 
 export function clearLoginAttempts(ip: string, identifier: string): void {
-  store.delete(`${ip}|${identifier.toLowerCase()}`);
+  store.delete(keyFor(ip, identifier));
 }
 
 /**
