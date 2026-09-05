@@ -24,10 +24,10 @@
     "deps:update:latest": "pnpm up -r --latest && pnpm --dir packages/admin up --latest && pnpm --dir packages/storefront up --latest"
   },
   "devDependencies": {
-    "@typescript-eslint/parser": "8.62.1",
-    "eslint": "10.6.0",
-    "jscpd": "^5.0.11",
-    "knip": "^6.24.0",
+    "@typescript-eslint/parser": "8.69.0",
+    "eslint": "10.9.1",
+    "jscpd": "^5.1.1",
+    "knip": "^6.34.0",
     "typescript": "^6.0.3"
   }
 }

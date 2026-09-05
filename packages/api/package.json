@@ -22,28 +22,28 @@
     "provision:right-apps": "tsx src/scripts/provision-right-apps.ts"
   },
   "dependencies": {
-    "@hono/node-server": "^2.0.10",
-    "@hono/zod-openapi": "^1.4.0",
+    "@hono/node-server": "^2.1.1",
+    "@hono/zod-openapi": "^1.6.2",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
-    "hono": "^4.12.27",
-    "nodemailer": "^9.0.3",
-    "pg": "^8.22.0",
+    "hono": "^4.13.5",
+    "nodemailer": "^9.1.1",
+    "pg": "^8.23.0",
     "pino": "^10.3.1",
-    "sanitize-html": "^2.17.5",
-    "sharp": "^0.35.3",
-    "stripe": "^22.3.0",
-    "zod": "^4.4.3"
+    "sanitize-html": "^2.17.7",
+    "sharp": "^0.35.4",
+    "stripe": "^22.6.1",
+    "zod": "^4.5.4"
   },
   "devDependencies": {
     "@types/node": "^25.9.4",
     "@types/nodemailer": "^8.0.1",
-    "@types/pg": "^8.20.0",
+    "@types/pg": "^8.23.1",
     "@types/sanitize-html": "^2.16.1",
     "drizzle-kit": "^0.31.10",
-    "tsx": "^4.23.0",
+    "tsx": "^4.23.13",
     "typescript": "^5.9.3",
     "vite": "7.3.5",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.11"
   }
 }
