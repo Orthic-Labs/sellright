@@ -81,7 +81,7 @@ checkout.openapi(
         content: {
           'application/json': {
             schema: z.object({
-              items: z.array(z.object({ sku: z.string(), quantity: z.number().int().min(1) })).min(1),
+              items: z.array(z.object({ sku: z.string(), quantity: z.number().int().min(1) })).min(1).max(200),
               // Server-authoritative shipping. The legacy numeric `shipping`
               // field remains accepted for client compatibility but is ignored:
               // physical carts require a configured method; non-physical carts
