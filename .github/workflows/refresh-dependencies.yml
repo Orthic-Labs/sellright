@@ -1,0 +1,77 @@
+name: Refresh dependencies
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/refresh-dependencies.yml
+
+permissions:
+  contents: write
+
+env:
+  PNPM_VERSION: 11.25.0
+  NODE_VERSION: 26.8.1
+
+jobs:
+  refresh:
+    name: Update every JS dependency to latest and verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          install: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            packages/admin/pnpm-lock.yaml
+            packages/storefront/pnpm-lock.yaml
+
+      - name: Refresh core workspace
+        run: pnpm up -r --latest
+
+      - name: Refresh admin
+        run: pnpm --dir packages/admin up --latest
+
+      - name: Refresh storefront
+        run: pnpm --dir packages/storefront up --latest
+
+      - name: Show dependency diff
+        run: git diff -- package.json pnpm-lock.yaml packages/api/package.json packages/shared/package.json packages/admin/package.json packages/admin/pnpm-lock.yaml packages/storefront/package.json packages/storefront/pnpm-lock.yaml
+
+      - name: Verify core and admin
+        run: |
+          pnpm --dir packages/admin install --frozen-lockfile
+          pnpm verify
+          pnpm --dir packages/admin test
+
+      - name: Verify storefront
+        run: |
+          pnpm --dir packages/storefront install --frozen-lockfile
+          pnpm --dir packages/storefront build
+
+      - name: Audit production dependencies
+        run: pnpm deps:audit
+
+      - name: Commit refreshed manifests and lockfiles
+        if: github.event_name == 'workflow_dispatch' || github.event.head_commit.message == 'ci: add verified dependency refresh'
+        run: |
+          if git diff --quiet; then
+            echo 'Dependencies are already current.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add package.json pnpm-lock.yaml packages/api/package.json packages/shared/package.json packages/admin/package.json packages/admin/pnpm-lock.yaml packages/storefront/package.json packages/storefront/pnpm-lock.yaml
+          git commit -m 'chore(deps): refresh dependencies to latest verified versions'
+          git push
