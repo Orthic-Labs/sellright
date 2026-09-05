@@ -12,22 +12,30 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  PNPM_VERSION: 11.25.0
+  NODE_CURRENT: 26.8.1
+
 jobs:
   verify:
-    name: Core + admin
+    name: Core + admin / Node ${{ matrix.node }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [24.20.0, 26.8.1]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/setup@v2
         with:
-          version: 11.24.0
-          run_install: false
+          version: ${{ env.PNPM_VERSION }}
+          install: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version: ${{ matrix.node }}
           cache: pnpm
           cache-dependency-path: |
             pnpm-lock.yaml
@@ -42,24 +50,89 @@ jobs:
       - name: Verify core and admin
         run: pnpm verify
 
+      - name: Password hashing contract
+        run: pnpm --filter @sellright/api test -- src/auth/password.test.ts
+
       - name: Admin tests
         run: pnpm --dir packages/admin test
 
-  storefront:
-    name: Storefront build
+  database:
+    name: PostgreSQL 17 integration
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: sellright_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d sellright_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/sellright_test
+      DATABASE_URL_NONOWNER: postgres://sellright_app:sellright_app@127.0.0.1:5432/sellright_test
+      STOREFRONT_URL: https://shop.example.net
+      DOWNLOAD_URL_SECRET: abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/setup@v2
         with:
-          version: 11.24.0
-          run_install: false
+          version: ${{ env.PNPM_VERSION }}
+          install: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version: ${{ env.NODE_CURRENT }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: Build API migration runtime
+        run: pnpm --filter @sellright/shared build && pnpm --filter @sellright/api build
+
+      - name: Apply migrations
+        run: pnpm --filter @sellright/api db:migrate:runtime
+
+      - name: Create non-owner RLS test role
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h 127.0.0.1 -U postgres -d sellright_test <<'SQL'
+          CREATE ROLE sellright_app LOGIN PASSWORD 'sellright_app' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+          GRANT CONNECT ON DATABASE sellright_test TO sellright_app;
+          GRANT USAGE ON SCHEMA public TO sellright_app;
+          GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO sellright_app;
+          GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO sellright_app;
+          SQL
+
+      - name: Run DB integration suite
+        run: pnpm --filter @sellright/api test:db
+
+  storefront:
+    name: Storefront build / Node 26.8.1
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          install: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_CURRENT }}
           cache: pnpm
           cache-dependency-path: packages/storefront/pnpm-lock.yaml
 
@@ -70,9 +143,9 @@ jobs:
         run: pnpm --dir packages/storefront build
 
   packaging:
-    name: Production container smoke
+    name: Production container smoke / Node 26.8.1
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     env:
       POSTGRES_PASSWORD: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
       STOREFRONT_URL: https://shop.example.net
@@ -85,7 +158,7 @@ jobs:
       BOOTSTRAP_STORE_HOSTNAMES: shop.example.net
       SELLRIGHT_DOMAIN: sellright.example.net
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Validate Compose model
         run: docker compose -f deploy/compose.yaml config --quiet
