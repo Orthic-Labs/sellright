@@ -5,19 +5,18 @@ import { convertLocalCartToVendureOrder as _convertLocalCartToVendureOrder } fro
 import {
   placeOrder as srPlaceOrder,
   createPaymentIntent as srCreatePI,
-  payWithGiftCardOnly as srGiftCardPay,
   type SrCheckoutForm,
 } from '~/providers/shop/checkout/checkout';
 
 /**
  * @description
  * Checkout flow hook. The legacy Vendure path
- * (`convertLocalCartToVendureOrder`) is preserved as the default; the SellRight
- * + Stripe path (behind VITE_SR_CHECKOUT) is the new state machine below.
+ * (`convertLocalCartToVendureOrder`) is preserved behind the explicit fallback;
+ * the SellRight + Stripe path (behind VITE_SR_CHECKOUT) is the new state machine.
  *
  * SR flow (state machine):
  *   idle → placing (POST /checkout) → either
- *     - paid       (gift card covered the whole total → confirmation), or
+ *     - paid       (server already settled a zero-due/gift-card-covered order), or
  *     - paying     (PaymentIntent client_secret → Stripe Payment Element confirm)
  *   → confirming (Stripe redirect to /checkout/confirmation/{code}?rt=…)
  *   any step → error (recoverable; order stays PendingPayment)
@@ -74,10 +73,9 @@ export const useCheckout = () => {
   });
 
   /**
-   * SR/Stripe path — create the order, then resolve either the gift-card-paid
-   * short-circuit OR a Stripe PaymentIntent. Returns the resulting phase so the
-   * caller can mount the Payment Element (phase 'paying') or navigate to the
-   * confirmation (phase 'paid').
+   * SR/Stripe path — create the order, then resolve either the already-paid
+   * short-circuit OR a Stripe PaymentIntent. A zero-total order is only treated
+   * as paid when the server says Paid; the client must never invent settlement.
    */
   const placeOrderStripe = $(async (form: SrCheckoutForm): Promise<SrCheckoutPhase> => {
     srState.phase = 'placing';
@@ -89,14 +87,16 @@ export const useCheckout = () => {
       srState.receiptToken = created.receiptToken ?? '';
       srState.grandTotal = created.grandTotal;
 
-      // Gift card covered the whole total (server already settled to Paid), or a
-      // zero-due order — finalize without Stripe.
-      if (created.state === 'Paid' || created.grandTotal === 0) {
-        if (created.state !== 'Paid') {
-          try { await srGiftCardPay(created.code); } catch { /* server may have already settled */ }
-        }
+      if (created.state === 'Paid') {
         srState.phase = 'paid';
         return 'paid';
+      }
+
+      // Never let the browser reinterpret PendingPayment as Paid merely because
+      // the displayed total is zero. That previously swallowed a failed manual
+      // payment call and navigated to confirmation while the ledger stayed open.
+      if (created.grandTotal === 0) {
+        throw new Error('The order has no amount due but was not settled by the server. Please retry checkout.');
       }
 
       // Card path — mint the PaymentIntent and hand the client_secret to the
