@@ -1,8 +1,8 @@
 {
-	"name": "damned-designs-storefront",
-	"description": "A headless commerce storefront for Damned Designs built with Vendure & Qwik",
-	"homepage": "https://damneddesigns.com/",
-	"license": "UNLICENSED",
+	"name": "@sellright/storefront",
+	"description": "SellRight's reference headless commerce storefront built with Qwik",
+	"homepage": "https://github.com/Orthic-Labs/sellright",
+	"license": "BUSL-1.1",
 	"private": true,
 	"type": "module",
 	"_comments": {
@@ -11,7 +11,7 @@
 		"vite": "Vite 8 must pass Qwik SSR validation before adoption; prior builds did not generate run-ssg.js"
 	},
 	"engines": {
-		"node": ">=24.7 <27",
+		"node": ">=24.7 <25",
 		"pnpm": ">=11.25 <12"
 	},
 	"scripts": {
