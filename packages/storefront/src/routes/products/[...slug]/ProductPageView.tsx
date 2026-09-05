@@ -2,12 +2,56 @@ import { component$ } from '@qwik.dev/core';
 import { OptimizedImage } from '~/components/ui';
 import Alert from '~/components/alert/Alert';
 import CheckIcon from '~/components/icons/CheckIcon';
+import type { Variant } from '~/types';
 import { sanitizeProductDescription } from '~/utils/sanitize';
 import { availableForGroup, enhanceDescription, priceDeltaLabel, swatchColor, titleCase } from './product-options';
-import { ProductImageModal } from './ProductImageModal';import { ProductMobileBar } from './ProductMobileBar';
+import { ProductImageModal } from './ProductImageModal';
+import { ProductMobileBar } from './ProductMobileBar';
 import { ProductTrustBar } from './ProductTrustBar';
+
 export const ProductPageView = component$((props: Record<string, any>) => {
-  const { addItemToOrderErrorSignal, allVariantsSoldOut, changeImage, closeImageModal, ctaClass, ctaDisabled, ctaTooltipFading, currentImageIndex, displayPrice, galleryRef, groups, handleAddToCart, handleDotClick$, handleGalleryItemClick$, handleGalleryScroll, handleThumbClick$, handleTouchEnd$, handleTouchMove$, handleTouchStart$, hasSale, isAddingToCart, isImageLoading, isOutOfStock, isPreOrder, modalImageIndex, modalImageSrc, navigateModal, orderedAssets, preOrderConsent, product, quantitySignal, selectedValues, selectedVariant, selectedVariantIdSignal, showCtaTooltip, showFromPrefix, showImageModal } = props;
+  const {
+    addItemToOrderErrorSignal,
+    allVariantsSoldOut,
+    changeImage,
+    closeImageModal,
+    ctaClass,
+    ctaDisabled,
+    ctaTooltipFading,
+    currentImageIndex,
+    currentImageSig,
+    displayPrice,
+    galleryRef,
+    groups,
+    handleAddToCart,
+    handleDotClick$,
+    handleGalleryItemClick$,
+    handleGalleryScroll,
+    handleGroupSelect$,
+    handleThumbClick$,
+    handleTouchEnd$,
+    handleTouchMove$,
+    handleTouchStart$,
+    hasSale,
+    isAddingToCart,
+    isImageLoading,
+    isOutOfStock,
+    isPreOrder,
+    modalImageIndex,
+    modalImageSrc,
+    navigateModal,
+    openImageModal,
+    orderedAssets,
+    preOrderConsent,
+    product,
+    quantitySignal,
+    selectedValues,
+    selectedVariant,
+    selectedVariantIdSignal,
+    showCtaTooltip,
+    showFromPrefix,
+    showImageModal,
+  } = props;
   return (
     <div class="dd-pdp">
       <div class="dd-layout">
