@@ -14,28 +14,23 @@ concurrency:
 
 env:
   PNPM_VERSION: 11.25.0
-  NODE_CURRENT: 26.8.1
+  NODE_LTS: 24.20.0
 
 jobs:
   verify:
-    name: Core + admin / Node ${{ matrix.node }}
+    name: Core + admin / Node 24 LTS
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        node: [24.20.0, 26.8.1]
     steps:
       - uses: actions/checkout@v6
 
       - uses: pnpm/setup@v2
         with:
           version: ${{ env.PNPM_VERSION }}
-          install: false
 
       - uses: actions/setup-node@v6
         with:
-          node-version: ${{ matrix.node }}
+          node-version: ${{ env.NODE_LTS }}
           cache: pnpm
           cache-dependency-path: |
             pnpm-lock.yaml
@@ -86,11 +81,10 @@ jobs:
       - uses: pnpm/setup@v2
         with:
           version: ${{ env.PNPM_VERSION }}
-          install: false
 
       - uses: actions/setup-node@v6
         with:
-          node-version: ${{ env.NODE_CURRENT }}
+          node-version: ${{ env.NODE_LTS }}
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
@@ -119,7 +113,7 @@ jobs:
         run: pnpm --filter @sellright/api test:db
 
   storefront:
-    name: Storefront build / Node 26.8.1
+    name: Storefront build / Node 24 LTS
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -128,11 +122,10 @@ jobs:
       - uses: pnpm/setup@v2
         with:
           version: ${{ env.PNPM_VERSION }}
-          install: false
 
       - uses: actions/setup-node@v6
         with:
-          node-version: ${{ env.NODE_CURRENT }}
+          node-version: ${{ env.NODE_LTS }}
           cache: pnpm
           cache-dependency-path: packages/storefront/pnpm-lock.yaml
 
@@ -143,7 +136,7 @@ jobs:
         run: pnpm --dir packages/storefront build
 
   packaging:
-    name: Production container smoke / Node 26.8.1
+    name: Production container smoke / Node 24 LTS
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
