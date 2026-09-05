@@ -1,0 +1,66 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '05:00'
+      timezone: Asia/Kolkata
+    open-pull-requests-limit: 10
+    groups:
+      core-runtime:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
+    labels:
+      - dependencies
+
+  - package-ecosystem: npm
+    directory: /packages/admin
+    schedule:
+      interval: weekly
+      day: monday
+      time: '05:15'
+      timezone: Asia/Kolkata
+    open-pull-requests-limit: 10
+    groups:
+      admin-runtime:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
+    labels:
+      - dependencies
+
+  - package-ecosystem: npm
+    directory: /packages/storefront
+    schedule:
+      interval: weekly
+      day: monday
+      time: '05:30'
+      timezone: Asia/Kolkata
+    open-pull-requests-limit: 10
+    groups:
+      storefront-runtime:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
+    labels:
+      - dependencies
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '05:45'
+      timezone: Asia/Kolkata
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
