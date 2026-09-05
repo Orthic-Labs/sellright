@@ -8,10 +8,11 @@
 	"_comments": {
 		"zod": "v4 with classic compat layer — drop-in replacement for v3, zero code changes needed",
 		"qwik": "2.0.0-beta.32 — migrated 2026-04-06, icons inlined, manualChunks removed",
-		"vite": "Stay on 7.x — Vite 8/Rolldown breaks Qwik SSR (run-ssg.js not generated)"
+		"vite": "Vite 8 must pass Qwik SSR validation before adoption; prior builds did not generate run-ssg.js"
 	},
 	"engines": {
-		"node": ">=16"
+		"node": ">=24.7 <27",
+		"pnpm": ">=11.25 <12"
 	},
 	"scripts": {
 		"clean": "node -e \"const fs=require('fs');for(const p of ['dist','server','.cache'])fs.rmSync(p,{recursive:true,force:true});\"",
