@@ -28,6 +28,7 @@ import { customerTokens } from './routes/customer-tokens.js';
 import { paymentWebhooks } from './routes/payment-webhooks.js';
 import { subscriptions } from './routes/subscriptions.js';
 import { apps } from './routes/apps.js';
+import { HttpError } from './routes/admin-helpers.js';
 import { csrfValid, customerCsrfValid, getCustomerSessionToken } from './auth/cookies.js';
 import { env } from './env.js';
 import { isAllowedCorsOrigin } from './cors-origins.js';
@@ -209,14 +210,21 @@ export function createApp(): OpenAPIHono {
     // requestId (set by requestIdMiddleware) lets you grep one failing
     // request and see the full handler log story too.
     logErr.error('api error', err, { requestId: c.var?.requestId });
+
+    // HttpError is the explicit route-level contract for safe client errors.
+    // Honor it even when a route is not wrapped in guard(); otherwise a route
+    // that correctly throws 400/409/etc. is silently flattened to 500.
+    if (err instanceof HttpError) {
+      return c.json({ error: err.message }, err.status);
+    }
+
     // SEC-5: gated on an explicit DEBUG_ERRORS opt-in, not NODE_ENV — a staging
     // box booted without NODE_ENV=production must still sanitize error bodies
     // by default. Server-side logging above still captures the real error.
     const expose = env.DEBUG_ERRORS === '1';
-    // OPS-1: honor a well-known httpStatus on the error (StoreSlugError,
+    // OPS-1: honor a well-known httpStatus on routing errors (StoreSlugError,
     // HostRoutingError — both 404, never sensitive) instead of flattening every
-    // thrown error to 500. This is a narrow, additive check: any error without
-    // this field keeps its prior 500 behavior unchanged.
+    // thrown error to 500. Any error without this field keeps 500 behavior.
     const knownStatus = (err as { httpStatus?: unknown }).httpStatus;
     const status = knownStatus === 404 ? 404 : 500;
     const message = status === 404
