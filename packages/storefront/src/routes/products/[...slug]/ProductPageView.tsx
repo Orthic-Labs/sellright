@@ -9,6 +9,8 @@ import { ProductImageModal } from './ProductImageModal';
 import { ProductMobileBar } from './ProductMobileBar';
 import { ProductTrustBar } from './ProductTrustBar';
 
+type ProductOptionGroup = { groupName: string; values: string[] };
+
 export const ProductPageView = component$((props: Record<string, any>) => {
   const {
     addItemToOrderErrorSignal,
@@ -216,7 +218,7 @@ export const ProductPageView = component$((props: Record<string, any>) => {
             );
           })()}
           <div class="dd-rule" />
-          {groups.value.map((group, groupIdx) => {
+          {groups.value.map((group: ProductOptionGroup, groupIdx: number) => {
             const isMulti = groups.value.length > 1;
             const isLocked = groupIdx > 0 && !selectedValues.value[groupIdx - 1];
             const available = isLocked
@@ -238,7 +240,7 @@ export const ProductPageView = component$((props: Record<string, any>) => {
                   </div>
                   {isBladeGroup && (
                     <div class="dd-blade-grid" style={`grid-template-columns: repeat(${group.values.length}, 1fr)`}>
-                      {group.values.map(val => {
+                      {group.values.map((val: string) => {
                         const isAvail = available.has(val);
                         const delta = priceDeltaLabel(product.variants, groups.value, val);
                         return (
@@ -259,7 +261,7 @@ export const ProductPageView = component$((props: Record<string, any>) => {
                   )}
                   {(isHandleGroup || isColorSingle) && (
                     <div class="dd-swatch-grid">
-                      {group.values.map(val => {
+                      {group.values.map((val: string) => {
                         const isAvail = available.has(val);
                         const color = swatchColor(val);
                         return (
@@ -290,7 +292,7 @@ export const ProductPageView = component$((props: Record<string, any>) => {
                     const pricesVary = new Set(prices).size > 1;
                     return (
                     <div class="dd-pill-grid">
-                      {group.values.map(val => {
+                      {group.values.map((val: string) => {
                         const isAvail = available.has(val);
                         const matchingVariant = product.variants.find((v: Variant) =>
                           v.options?.some(o => o.name === val)
