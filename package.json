@@ -1,5 +1,6 @@
 {
   "name": "sellright",
+  "version": "0.1.0",
   "private": true,
   "packageManager": "pnpm@11.25.0",
   "engines": {
