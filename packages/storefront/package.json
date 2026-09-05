@@ -70,7 +70,7 @@
 		"vite-tsconfig-paths": "^6.1.1"
 	},
 	"dependencies": {
-		"@stripe/stripe-js": "^4.10.0",
+		"@stripe/stripe-js": "^9.15.0",
 		"card-validator": "^10.0.4",
 		"graphql": "^16.14.2",
 		"graphql-tag": "^2.12.7",
