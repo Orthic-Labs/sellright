@@ -5,7 +5,7 @@ type AddressCountrySelectProps = {
  id: string;
  value: string;
  countries: Country[];
- className: string;
+ class: string;
  disabled?: boolean;
  onChange$: QRL<(value: string) => void>;
 };
@@ -16,7 +16,7 @@ export const AddressCountrySelect = component$<AddressCountrySelectProps>((props
    id={props.id}
    name={props.id}
    autocomplete="country"
-   class={props.className}
+   class={props.class}
    value={props.value}
    onChange$={(_, el) => props.onChange$(el.value)}
    aria-label="Country"
