@@ -82,9 +82,10 @@ checkout.openapi(
           'application/json': {
             schema: z.object({
               items: z.array(z.object({ sku: z.string(), quantity: z.number().int().min(1) })).min(1),
-              // Server-authoritative: when a method is selected (or any method is
-              // configured) the rate is computed server-side. `shipping` is only a
-              // bootstrap fallback for stores with zero configured methods.
+              // Server-authoritative shipping. The legacy numeric `shipping`
+              // field remains accepted for client compatibility but is ignored:
+              // physical carts require a configured method; non-physical carts
+              // are always zero-shipping.
               shippingMethodCode: z.string().optional(),
               shipping: z.number().int().min(0).default(0),
               couponCode: z.string().optional(),
@@ -162,13 +163,20 @@ checkout.openapi(
         return { v, qty: i.quantity, unitPrice: selectUnitPrice(v) };
       });
 
-      // ── Shipping: server-authoritative rate (never trust body.shipping once a
-      //    method is configured) ─────────────────────────────────────────────
+      // ── Shipping: always server-authoritative. Physical carts MUST use a
+      // configured method; software/digital carts never need a shipping method
+      // and are deterministically zero-shipping. Client-supplied body.shipping
+      // is accepted for backwards wire compatibility but intentionally ignored.
       const subtotalCents = priced.reduce((a, p) => a + p.unitPrice * p.qty, 0);
       const shipCountry = (normalizeAddress(body.shippingAddress) as { country?: string } | null)?.country ?? null;
-      const methods = await tx.select().from(s.shippingMethod).where(eq(s.shippingMethod.enabled, true));
+      const requiresShipping = priced.some((p) => p.v.fulfillmentType === 'physical');
+      const methods = requiresShipping
+        ? await tx.select().from(s.shippingMethod).where(eq(s.shippingMethod.enabled, true))
+        : [];
       let shippingAmount: number;
-      if (body.shippingMethodCode) {
+      if (!requiresShipping) {
+        shippingAmount = 0;
+      } else if (body.shippingMethodCode) {
         const m = methods.find((x) => x.code === body.shippingMethodCode);
         if (!m) throw new ShippingUnavailableError('method_not_found');
         if (!isMethodEligible(m.calculator, { subtotal: subtotalCents, country: shipCountry })) throw new ShippingUnavailableError('not_eligible');
@@ -177,8 +185,9 @@ checkout.openapi(
         // Methods exist but none chosen — force an explicit, validated selection.
         throw new ShippingUnavailableError('method_required');
       } else {
-        // Bootstrap: store hasn't configured shipping yet; trust the request.
-        shippingAmount = body.shipping;
+        // A physical order with no server shipping configuration is a store
+        // misconfiguration, not permission for the shopper to choose the price.
+        throw new ShippingUnavailableError('not_configured');
       }
 
       // Verification BENEFITS require an authenticated session — a guest can't
