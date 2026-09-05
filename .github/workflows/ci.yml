@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Core + admin
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.24.0
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            packages/admin/pnpm-lock.yaml
+
+      - name: Install core workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: Install admin
+        run: pnpm --dir packages/admin install --frozen-lockfile
+
+      - name: Verify core and admin
+        run: pnpm verify
+
+      - name: Admin tests
+        run: pnpm --dir packages/admin test
+
+  storefront:
+    name: Storefront build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.24.0
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: packages/storefront/pnpm-lock.yaml
+
+      - name: Install storefront
+        run: pnpm --dir packages/storefront install --frozen-lockfile
+
+      - name: Build storefront
+        run: pnpm --dir packages/storefront build
