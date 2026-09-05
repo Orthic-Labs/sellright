@@ -2,33 +2,29 @@ name: Refresh dependencies
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - .github/workflows/refresh-dependencies.yml
 
 permissions:
   contents: write
 
 env:
   PNPM_VERSION: 11.25.0
-  NODE_VERSION: 26.8.1
+  NODE_VERSION: 24.20.0
 
 jobs:
   refresh:
-    name: Update every JS dependency to latest and verify
+    name: Update JS dependencies to latest verified versions
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - uses: pnpm/setup@v2
         with:
           version: ${{ env.PNPM_VERSION }}
-          install: false
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
@@ -64,7 +60,6 @@ jobs:
         run: pnpm deps:audit
 
       - name: Commit refreshed manifests and lockfiles
-        if: github.event_name == 'workflow_dispatch' || github.event.head_commit.message == 'ci: add verified dependency refresh'
         run: |
           if git diff --quiet; then
             echo 'Dependencies are already current.'
