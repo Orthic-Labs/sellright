@@ -22,6 +22,7 @@ import { eq, sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
 import * as s from '../db/schema.js';
+import { clearLoginAttempts } from '../auth/rate-limit.js';
 import { checkout } from './checkout.js';
 import { cart } from './cart.js';
 
@@ -45,13 +46,15 @@ async function wipe() {
   await pool.query('TRUNCATE store CASCADE');
 }
 
-/** Seed store + one variant with stock. Fresh promo/variant ids per test via suffix
- *  keeps assertions independent even though wipe() runs beforeEach. */
+/** Seed store + one DIGITAL variant with stock. These route tests exercise
+ * pricing/reservation/idempotency/coupon/tax, not physical-shipping selection.
+ * Physical shipping has its own fail-closed coverage, so keeping this fixture
+ * digital prevents that independent policy from masking the behavior under test. */
 async function seed(opts: { onHand?: number } = {}): Promise<void> {
   await withStore(STORE, async (tx) => {
     await tx.execute(sql`INSERT INTO store (id, slug, name, currency, tax_rate) VALUES (${STORE}, ${SLUG}, ${SLUG}, 'USD', 0) ON CONFLICT (id) DO NOTHING`);
     await tx.execute(sql`INSERT INTO product (id, store_id, slug, name, status) VALUES (${PRODUCT}, ${STORE}, 'ckr-prod', 'CKR Product', 'active') ON CONFLICT (id) DO NOTHING`);
-    await tx.execute(sql`INSERT INTO product_variant (id, store_id, product_id, sku, name, price) VALUES (${VARIANT}, ${STORE}, ${PRODUCT}, ${SKU}, 'CKR Variant', ${PRICE}) ON CONFLICT (id) DO NOTHING`);
+    await tx.execute(sql`INSERT INTO product_variant (id, store_id, product_id, sku, name, price, fulfillment_type) VALUES (${VARIANT}, ${STORE}, ${PRODUCT}, ${SKU}, 'CKR Variant', ${PRICE}, 'digital_download') ON CONFLICT (id) DO NOTHING`);
     await tx.execute(sql`INSERT INTO stock (variant_id, store_id, on_hand, allocated) VALUES (${VARIANT}, ${STORE}, ${opts.onHand ?? 10}, 0) ON CONFLICT (variant_id) DO UPDATE SET on_hand = ${opts.onHand ?? 10}, allocated = 0`);
   });
 }
@@ -65,7 +68,14 @@ async function insertPromo(opts: { code: string; usageLimit?: number | null; use
   });
 }
 
-beforeEach(async () => { await wipe(); await seed(); });
+beforeEach(async () => {
+  // The production checkout limiter is intentionally attempt-counted. Tests in
+  // this file share the synthetic `unknown` client IP, so clear that one bucket
+  // between cases rather than weakening or bypassing the limiter in production.
+  clearLoginAttempts('unknown', 'checkout:unknown');
+  await wipe();
+  await seed();
+});
 afterAll(async () => { await wipe(); await pool.end(); });
 
 const hdr = (extra: Record<string, string> = {}) => ({ 'content-type': 'application/json', 'x-store-slug': SLUG, ...extra });
