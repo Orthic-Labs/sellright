@@ -2,18 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { getProvider, isPaymentMethodEnabled, isSupportedPaymentMethod, SUPPORTED_PAYMENT_METHODS } from './provider.js';
 
 describe('isPaymentMethodEnabled', () => {
-  it('defaults manual and cod on when store config is missing', () => {
-    expect(isPaymentMethodEnabled(null, 'manual')).toBe(true);
-    expect(isPaymentMethodEnabled(undefined, 'cod')).toBe(true);
+  it('fails closed when store payment config is missing', () => {
+    expect(isPaymentMethodEnabled(null, 'manual')).toBe(false);
+    expect(isPaymentMethodEnabled(undefined, 'cod')).toBe(false);
+    expect(isPaymentMethodEnabled({}, 'stripe')).toBe(false);
   });
 
-  it('honors explicit store payment toggles', () => {
+  it('honors explicit store payment toggles for supported methods', () => {
     expect(isPaymentMethodEnabled({ payments: { cod: false, manual: true } }, 'cod')).toBe(false);
     expect(isPaymentMethodEnabled({ payments: { cod: false, manual: true } }, 'manual')).toBe(true);
-  });
-
-  it('does not implicitly enable real gateways before credentials/config exist', () => {
-    expect(isPaymentMethodEnabled({}, 'stripe')).toBe(false);
     expect(isPaymentMethodEnabled({ payments: { stripe: true } }, 'stripe')).toBe(true);
   });
 
@@ -21,6 +18,15 @@ describe('isPaymentMethodEnabled', () => {
     expect(SUPPORTED_PAYMENT_METHODS).toEqual(['manual', 'cod', 'stripe', 'gift_card']);
     expect(isSupportedPaymentMethod('paypal')).toBe(false);
     expect(isPaymentMethodEnabled({ payments: { paypal: true, nmi: true, sezzle: true } }, 'paypal')).toBe(false);
+  });
+});
+
+describe('shopper settlement safety', () => {
+  it.each(['manual', 'cod', 'gift_card'] as const)('%s cannot self-settle through the generic provider', async (method) => {
+    const provider = getProvider(method)!;
+    const result = await provider.createPayment({ orderCode: 'T-1', amount: 500, currency: 'USD' });
+    expect(result.state).toBe('Failed');
+    expect(result.providerRef).toBeNull();
   });
 });
 

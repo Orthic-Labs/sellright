@@ -2,7 +2,9 @@
  * PaymentProvider interface (rulebook §12). The order total is computed by
  * SellRight; the provider only confirms payment for that exact amount. Real
  * gateways (NMI tokenized / Sezzle redirect / Stripe intents) implement this
- * and need credentials; `manual` is the credential-free test/admin path.
+ * and need credentials. Offline/internal tenders stay in the registry for
+ * refund/accounting purposes but MUST NOT be able to self-settle a shopper
+ * payment simply because a public client named the method.
  */
 import { stripeProvider } from './stripe.js';
 
@@ -52,12 +54,22 @@ export interface PaymentProvider {
   refundPayment?(input: RefundInput): Promise<RefundResult>;
 }
 
-/** Manual / test provider — records a settled payment with no external call. */
+function internalTenderFailure(method: string): PaymentResult {
+  return {
+    state: 'Failed',
+    providerRef: null,
+    errorMessage: `${method} is an internal/offline tender and cannot be settled from shopper checkout`,
+  };
+}
+
+/** Manual settlement is admin/offline only. It must never mint paid orders from
+ *  a customer-controlled /pay request. Admin accounting can still record manual
+ *  payments directly and refunds remain ledger-only below. */
 export const manualProvider: PaymentProvider = {
   method: 'manual',
   requiresRedirect: false,
-  async createPayment(input) {
-    return { state: 'Settled', providerRef: `manual-${input.orderCode}`, metadata: { manual: true } };
+  async createPayment() {
+    return internalTenderFailure('manual');
   },
   async refundPayment() {
     // No gateway — the ledger row records it; money is returned offline.
@@ -65,24 +77,30 @@ export const manualProvider: PaymentProvider = {
   },
 };
 
-/** Cash on delivery — order is confirmed now, cash collected at delivery.
- *  Settles the order so it's fulfillable; the actual cash is handled offline. */
+/** Cash on delivery needs a distinct order/fulfillment state machine: promising
+ *  to collect cash later is not equivalent to settled money. Until that model
+ *  exists, fail closed instead of marking the order Paid (which can issue
+ *  digital licenses and make fulfillment eligible immediately). */
 export const codProvider: PaymentProvider = {
   method: 'cod',
   requiresRedirect: false,
-  async createPayment(input) {
-    return { state: 'Settled', providerRef: `cod-${input.orderCode}`, metadata: { cod: true, collectOnDelivery: input.amount } };
+  async createPayment() {
+    return internalTenderFailure('cod');
   },
   async refundPayment() {
     return { state: 'Settled', providerRef: null };
   },
 };
 
+/** Gift cards are validated and debited atomically in checkout.ts. The generic
+ *  provider registry exists only so refund routing can identify gift-card
+ *  tenders; it must not create a synthetic Settled payment without validating
+ *  a card and balance. */
 export const giftCardProvider: PaymentProvider = {
   method: 'gift_card',
   requiresRedirect: false,
-  async createPayment(input) {
-    return { state: 'Settled', providerRef: `gift_card-${input.orderCode}` };
+  async createPayment() {
+    return internalTenderFailure('gift_card');
   },
   async refundPayment() {
     return { state: 'Settled', providerRef: null };
@@ -104,11 +122,14 @@ export function isSupportedPaymentMethod(method: string): method is SupportedPay
   return (SUPPORTED_PAYMENT_METHODS as readonly string[]).includes(method);
 }
 
+/** Payment methods are fail-closed. A store must explicitly opt a supported
+ *  method in; missing config never enables a credential-free tender. Note that
+ *  internal/offline providers still refuse shopper settlement even if a legacy
+ *  store config happens to contain `manual`, `cod`, or `gift_card: true`. */
 export function isPaymentMethodEnabled(config: unknown, method: string): boolean {
   if (!isSupportedPaymentMethod(method)) return false;
   const payments = (config as { payments?: Record<string, boolean> } | null | undefined)?.payments;
-  if (payments && Object.prototype.hasOwnProperty.call(payments, method)) return payments[method] === true;
-  return method === 'manual' || method === 'cod';
+  return payments?.[method] === true;
 }
 
 export function getProvider(method: string): PaymentProvider | null {
