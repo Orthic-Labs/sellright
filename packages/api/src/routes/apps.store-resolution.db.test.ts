@@ -87,10 +87,12 @@ describe.skipIf(!isTestDb)('GET /v1/apps/{appKey}/updates/latest — store resol
     const res = await app.request('/v1/apps/some-app/updates/latest', {
       headers: { host: 'apps-store-resolution.example', authorization: 'Bearer whatever-license-key' },
     });
-    // Store resolves fine; the 401 comes from the (deliberately garbage)
-    // license key, proving we got past store resolution into the route body
-    // rather than 404ing on the store.
-    expect(res.status).toBe(401);
+    // Store resolution succeeded. A garbage license key is intentionally
+    // indistinguishable from a missing license, so the route now fails closed
+    // with 404 rather than exposing a separate authentication oracle.
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/license not found/i);
   });
 
   it('an explicit x-store-slug still resolves normally in production (bypasses host routing, as documented)', async () => {
@@ -99,7 +101,9 @@ describe.skipIf(!isTestDb)('GET /v1/apps/{appKey}/updates/latest — store resol
     const res = await app.request('/v1/apps/some-app/updates/latest', {
       headers: { 'x-store-slug': SLUG, authorization: 'Bearer whatever-license-key' },
     });
-    expect(res.status).toBe(401); // past store resolution, into the license check
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/license not found/i);
   });
 
   it('outside production, an unmatched host still falls back to DEV_DEFAULT_STORE (dev/CI keep working)', async () => {
@@ -108,6 +112,8 @@ describe.skipIf(!isTestDb)('GET /v1/apps/{appKey}/updates/latest — store resol
     const res = await app.request('/v1/apps/some-app/updates/latest', {
       headers: { host: 'unregistered.example', authorization: 'Bearer whatever-license-key' },
     });
-    expect(res.status).toBe(401); // resolved to 'damned', then failed on the license key — not a 404
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/license not found/i);
   });
 });
