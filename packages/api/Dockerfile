@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM node:26.8.1-bookworm-slim AS build
+FROM node:24.20.0-bookworm-slim AS build
 
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
@@ -26,7 +26,7 @@ RUN pnpm --filter @sellright/shared build \
 # that setting or legacy deploy mode for a portable deployment directory.
 RUN pnpm --filter @sellright/api deploy --legacy --prod /runtime
 
-FROM node:26.8.1-bookworm-slim AS runtime
+FROM node:24.20.0-bookworm-slim AS runtime
 
 ENV NODE_ENV=production
 ENV PORT=3300
