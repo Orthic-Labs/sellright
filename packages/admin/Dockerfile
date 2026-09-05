@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
-FROM node:24-bookworm-slim AS build
-RUN npm install --global pnpm@11.24.0
+FROM node:26.8.1-bookworm-slim AS build
+RUN npm install --global pnpm@11.25.0
 WORKDIR /src
 
 COPY package.json pnpm-lock.yaml ./
