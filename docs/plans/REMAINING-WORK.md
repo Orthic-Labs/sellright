@@ -1,35 +1,71 @@
-# Remaining work — SellRight goal (2026-07-05)
+# Remaining work — SellRight
 
-SellRight is **code-complete and box-validated**: all 12 original lanes + all 21 §3a BUILD lanes + the zod 4 / `@hono/zod-openapi` 1 migration + the MONEY-1 `0037` fix are merged to `main` and green on the box (`test:db` 131 pass, non-DB 215 pass, typecheck + build OK). **Laptop = origin = box `~/sites/sellright` all at the same `main`.** DEFER (§3b) and DECIDE (§3c) items in `DISPATCH.md` remain intentionally deferred with reasons; the dependency majors are `DEPS-1` (ts6/@types/node26/api-vite8/@stripe/stripe-js9/graphql17 — each its own migration).
+Last reconciled: 2026-09-06 · baseline `1b5042a`
 
-Two things are NOT done, both requiring steps an agent cannot safely take alone:
+This is the canonical current backlog. Historical audit/dispatch documents remain evidence, not execution truth. When they disagree, current code + current CI + this file win.
 
-## 1. Deploy to the box (hook-gated DB ops → Adrian runs)
-`main` is validated but **not live** — the box `sellright-api` still runs pre-merge `dist/`, and `sellright_dev` (a Damned clone, 13,544 payments) is behind + has a migration-journal drift I introduced while diagnosing (0035/0036 applied out-of-band; a stray journal marker). The migration to current `main` includes `0037` (which now nulls the `'imported'` placeholders, safe) + `0038` (email outbox). The destructive steps (DROP/DELETE/ALTER, `dropdb`) are **hard-blocked by the `prod-db-guard` hook** (correctly — it protects the Damned clone), human-bypass only. Adrian, from your own terminal on the box:
-```bash
-cd ~/sites/sellright && git pull --ff-only origin main
-corepack pnpm@11.9.0 install --frozen-lockfile && corepack pnpm@11.9.0 -r build
-(cd packages/admin && corepack pnpm@11.9.0 install --ignore-workspace && corepack pnpm@11.9.0 build)
-# reconcile sellright_dev journal (it's mid-drift): easiest is to confirm which of 0035..0038
-#   are physically applied, then `DATABASE_URL=<owner @ sellright_dev> corepack pnpm@11.9.0 db:migrate`
-#   (0037 nulls 'imported' → indexes; 0038 adds email_outbox). Verify payment count stays 13,544.
-pm2 restart sellright-api
-```
-Then storefront smoke (health, catalog, a Stripe **test**-key cart→checkout→pay) + grant the SEC-6 permission keys (`refunds`/`cancel_orders`/`releases`) to staff who need them. Full runbook: `BOX-VALIDATION-CHECKLIST.md` §Deploy.
+## Current release posture
 
-## 2. Merge SellRight → RightApps (needs careful hand-merge on a live fork)
-RA (`~/sites/rightapps`, DB `rightapps`, pm2 `rightapps-api :3301`) forked from sellright at `25c4b35`; it is now **94 behind / 81 ahead**. `git merge upstream/main` produces **10 conflicts** — I aborted (RA is clean at `3bfb08d`) rather than rush load-bearing app-store code at the tail of a long session. Resolution plan:
+SellRight has no known critical release-blocking correctness defect at this baseline. The public GitHub pipeline is green on Node 24 LTS across:
 
-**Mechanical (union / small):**
-- `pnpm-lock.yaml` → regenerate with `pnpm install` after resolving package.json.
-- `packages/api/package.json` → union deps (take zod 4 + all upstream) + union the `test`/`test:db` lists + keep RA-specific scripts.
-- `docs/runbooks/migrations.md`, `packages/api/src/db/assert-hand-written-migrations.ts` → union the hand-written-migration registrations (0037/0038 from upstream + any RA-specific).
-- `packages/api/src/routes/admin-assets.ts` (2 lines) → take upstream (sharp `Metadata` import fix).
-- `packages/api/src/store-context.ts` → take upstream's OPS-1 host-routing block, but **keep RA's `DEV_DEFAULT_STORE = 'rightapps'`** (not `'damned'`).
+- core + admin build/typecheck/unit tests;
+- PostgreSQL 17 migrations + DB integration + RLS/isolation assertions;
+- storefront production build;
+- production API/admin container smoke + bootstrap/readiness/CSP;
+- CodeQL JavaScript/TypeScript analysis.
 
-**Needs judgment (both sides changed real logic):**
-- `packages/api/src/routes/store-context.ts` (RA +26/-5: RA's `appKey`-by-Host resolution for the app stores) vs upstream's OPS-1 `resolveStoreForRequest`. **Combine** — RA's per-app appKey resolution must survive; graft upstream's host→store lookup around it. This is the riskiest file (drives which app store a request hits).
-- `packages/api/src/routes/account.ts` (RA +59: RA-specific account features) vs upstream's COMP-2 (GDPR delete + export). Additive on both sides — keep both, verify no duplicate route paths.
-- `packages/api/src/app.ts` (RA +5) + `app.test.ts` (RA +16) vs upstream OBS-1/OBS-2/CORS. Additive — keep both middleware/route registrations.
+The remaining launch work is dependency hygiene, bounded abuse/performance hardening, public-repo hygiene, real external-service smoke, and operator runbooks. Product-breadth work follows separately and must not be mistaken for a release blocker.
 
-**After merge:** RA validates against DB **`rightapps`** (not `sellright_test`) — run `pnpm build` + RA's own tests, smoke the app-store host resolution, then `pm2 restart rightapps-api`. Push `origin/main` (rightapps) and pull on the laptop so RA also matches box=laptop=remote. RA also carries the zod 4 migration now, so expect the same `z.string().uuid()`→`z.guid()` / `J`-generic patterns already applied upstream to flow in via the merge.
+## P0 — close before calling 0.1.0 a launch candidate
+
+- [ ] **DEP-1 — production dependency audit clean.** Resolve current `pnpm audit --prod` advisories (Hono/@hono/node-server, sanitize-html, nanoid or their current equivalents), then make `pnpm deps:audit` agree with the green CI signal.
+- [ ] **PERF-1 — cap checkout line count.** Add a bounded maximum to public checkout items (target 200 unless code evidence argues lower) so one request cannot hold a transaction across thousands of sequential stock operations.
+- [ ] **CI-1 — include dependency audit in CI.** Run production dependency audit after frozen installs; dependency changes must not produce a green launch pipeline with a red audit.
+- [ ] **REPO-1 — public/source-available hygiene.** Remove accidental runtime/log/scratch artifacts from tracked source; keep useful engineering docs intentionally. Ensure README consistently says source-available/BSL 1.1 rather than OSI open source.
+- [ ] **REPO-2 — contribution/license guidance.** Add concise contribution guidance explaining BSL 1.1, the <=25 Covered Persons production grant, and that contributions are accepted under the repository license unless separately agreed.
+- [ ] **OPS-1 — protect `main`.** Require the proven CI + CodeQL checks, block force-push/deletion, and use PRs for normal future changes. Enable only after the required check names are confirmed from green runs.
+- [ ] **PAY-1 — real Stripe test-key E2E.** Against a disposable/test store: cart -> checkout -> PaymentIntent/3DS-capable confirmation -> webhook -> Paid -> refund. This requires configured test credentials; never use live customer data.
+- [ ] **OPS-2 — backup/restore drill.** Prove a fresh Postgres backup restores into a disposable database and passes `/v1/readyz`/basic reads after migration.
+- [ ] **OPS-3 — installation/reboot smoke.** From the production Compose path, prove first-run bootstrap is idempotent and the stack returns healthy after a full down/up cycle with persistent volumes.
+
+## P1 — first product-completeness work after launch candidate
+
+- [ ] **CAT-1 — variant matrix generator.** Generate variant combinations from option groups in admin; schema already supports the links.
+- [ ] **OPS-4 — order/customer notes.** Add operator notes with author/timestamp and surface them in the relevant admin timelines.
+- [ ] **GROW-1 — abandoned-cart recovery.** Reuse the existing cart lifecycle, scheduler, email outbox and templates; add an opt-in admin/store setting and idempotent recovery job.
+- [ ] **PAY-2 — second shopper payment provider only on demonstrated demand.** Keep Stripe as the default. Add PayPal/COD/other provider when a concrete target deployment requires it; do not distort the core for historical Vendure/DD parity.
+
+## P2 — architecture seams when the second implementation exists
+
+- [ ] **TAX-1 — `TaxProvider` seam.** Keep country/zone tax as the built-in provider; add tax classes before external compliance providers.
+- [ ] **SHIP-1 — formal shipping provider/calculator seam + weight tiers.** Reuse existing variant weight/dimensions; carrier APIs remain later.
+- [ ] **ASSET-1 — `AssetStorage` seam.** Keep disk as default; add S3/R2-compatible storage before multi-replica deployment.
+- [ ] **SEARCH-1 — search provider/index seam.** Preserve Postgres as default; add a denormalized index/provider boundary only when catalog scale justifies it.
+
+## Explicitly deferred — not launch blockers
+
+- Generic plugin SDK/framework.
+- Redis/distributed rate limiting until horizontal API scaling is planned.
+- Keyset pagination until a list actually reaches offset-pain scale.
+- Faceted/typo-tolerant external search.
+- True multi-currency settlement/region model.
+- Full i18n/translation system.
+- OpenTelemetry integration.
+- Multi-tender refund allocation beyond the currently supported safe cases.
+- Broad carrier/label ecosystem.
+
+## Known good / do not re-open without contrary evidence
+
+- Server-authoritative pricing and shipping totals.
+- Store-scoped payment idempotency and settled-tender amount-due accounting.
+- Settle-after-cancel reconciliation behavior.
+- Gift-card redemption/refund ledger integrity.
+- Refund ambiguity fails closed.
+- FORCE RLS / non-owner isolation assertions.
+- Argon2id native password format with legacy SellRight scrypt upgrade path.
+- Node 24 LTS + pnpm 11 launch toolchain.
+- Production API/admin images, first-run bootstrap, readiness and CSP smoke.
+
+## Completion rule
+
+P0 is the 0.1.0 launch-candidate gate. P1/P2 are roadmap work and may ship incrementally after 0.1.0. Every item closes only with executable evidence (test/CI/runtime receipt), not by documentation claim.
