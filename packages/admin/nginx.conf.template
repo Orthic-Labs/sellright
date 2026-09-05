@@ -24,6 +24,16 @@ server {
         proxy_pass ${API_UPSTREAM};
     }
 
+    # Uploaded product/media assets live on a shared read-only volume in the
+    # appliance. API writes <ASSET_DIR>/<store>/<yyyy-mm>/<uuid>.webp and returns
+    # /assets/... URLs; nginx serves exactly that namespace without involving
+    # Node on browse/render paths.
+    location /assets/ {
+        alias /assets/;
+        autoindex off;
+        expires 1y;
+    }
+
     # Vite hashes these files, so they are safe to cache forever.
     location /admin-static/ {
         expires 1y;
