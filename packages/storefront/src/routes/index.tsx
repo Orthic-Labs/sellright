@@ -12,6 +12,7 @@ import { STYLES } from '~/components/home/homepage-styles';
 import { HomeHero } from '~/components/home/HomeHero';
 import { HomeTeeSection } from '~/components/home/HomeTeeSection';
 import { HomeReviewsSection, HomeServiceSection, HomeTrustBar } from '~/components/home/HomeSocialSections';
+import HeroImage_1024 from '~/media/hero.jpg?format=avif&w=1024&quality=75&url';
 
 // Pre-order section image — 65: decorative/lifestyle, not a purchase decision image
 import PreorderImage_480 from '~/media/sec2.jpg?format=avif&w=480&quality=65&url';
@@ -212,7 +213,6 @@ export default component$(() => {
       isAddingToCart.value = false;
     }
   });
-
 
   // T10: Scroll reveal via CSS animation-timeline (no UVT needed)
   // Elements with [data-reveal] animate via @keyframes hp-fade-reveal in global.css
