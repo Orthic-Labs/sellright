@@ -11,6 +11,9 @@ import { clientIp, loginRetryAfter } from '../auth/rate-limit.js';
 export const pay = new OpenAPIHono();
 
 // POST /v1/shop/orders/{code}/pay — take payment for an order, idempotent.
+// At launch Stripe is the only shopper-capable gateway. Offline/internal
+// tenders (manual, COD, gift_card) have separate lifecycle/accounting semantics
+// and are deliberately excluded at the public API boundary.
 pay.openapi(
   createRoute({
     method: 'post',
@@ -19,11 +22,11 @@ pay.openapi(
     request: {
       params: z.object({ code: z.string() }),
       headers: z.object({ 'idempotency-key': z.string().optional() }),
-      body: { content: { 'application/json': { schema: z.object({ method: z.string().default('manual'), token: z.unknown().optional() }) } } },
+      body: { content: { 'application/json': { schema: z.object({ method: z.literal('stripe'), token: z.unknown().optional() }) } } },
     },
     responses: {
       200: { description: 'Paid', content: { 'application/json': { schema: z.object({ code: z.string(), state: z.string(), payment: z.string() }) } } },
-      400: { description: 'Already covered', content: { 'application/json': { schema: z.object({ error: z.string(), state: z.string() }) } } },
+      400: { description: 'Already covered / invalid request', content: { 'application/json': { schema: z.object({ error: z.string(), state: z.string().optional() }) } } },
       404: { description: 'Not found', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
       409: { description: 'Not payable', content: { 'application/json': { schema: z.object({ error: z.string(), state: z.string() }) } } },
       429: { description: 'Rate limited', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
@@ -44,6 +47,8 @@ pay.openapi(
     if (payRetry > 0) return c.json({ error: `too many payment attempts — try again in ${payRetry}s` }, 429);
 
     const provider = getProvider(method);
+    // z.literal above makes this unreachable for a well-formed request, but keep
+    // the provider guard fail-closed in case the route contract changes later.
     if (!provider) return c.json({ error: `unknown payment method: ${method}` }, 404);
     if (!isPaymentMethodEnabled(st.config, method)) return c.json({ error: `payment method disabled: ${method}`, state: 'Disabled' }, 409);
 
@@ -60,10 +65,8 @@ pay.openapi(
         const [order] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
         if (!order) return { kind: 'notfound' as const };
         if (order.state !== 'PendingPayment') return { kind: 'badstate' as const, state: order.state };
-        // MONEY-3: charge only what's still owed. A partial tender already
-        // recorded against this order (e.g. a gift card draw-down at checkout
-        // that didn't fully cover grandTotal) must NOT be re-charged in full —
-        // that is a real customer overcharge.
+        // MONEY-3: charge only what's still owed. Any settled tender already
+        // recorded against this order is deducted before gateway capture.
         const amountDue = await amountDueForOrder(tx, st.id, order.id, order.grandTotal);
         if (amountDue <= 0) return { kind: 'nodue' as const, state: order.state };
         const [existing] = await tx
@@ -159,10 +162,8 @@ pay.openapi(
       const [o] = await tx.select({ id: s.order.id, state: s.order.state, grandTotal: s.order.grandTotal, currency: s.order.currency })
         .from(s.order).where(eq(s.order.code, code)).limit(1);
       if (!o) return null;
-      // MONEY-3: mint the intent for what's actually still owed (grandTotal
-      // minus any Settled tenders already recorded, e.g. a partial gift-card
-      // draw-down at checkout) — never the raw order total, or the gateway
-      // would capture the full amount on top of what's already been paid.
+      // MONEY-3: mint the intent for what's actually still owed, never the raw
+      // order total, so an existing settled tender cannot be charged twice.
       const amountDue = await amountDueForOrder(tx, st.id, o.id, o.grandTotal);
       return { order: o, amountDue };
     });
@@ -172,9 +173,8 @@ pay.openapi(
     if (amountDue <= 0) return c.json({ error: 'order already fully paid', state: order.state }, 400);
     // Idempotent: key the Stripe create on the order id AND the amount so a
     // double-submit/retry reuses the order's open PaymentIntent (same
-    // client_secret) instead of minting a second one (jury revision) — but a
-    // later call after the amount due CHANGES (e.g. a gift card was applied in
-    // between) mints a fresh intent rather than reusing a stale-amount one.
+    // client_secret) instead of minting a second one — but a later call after
+    // the amount due changes mints a fresh intent rather than reusing a stale one.
     const intent = await createPaymentIntent({ orderCode: code, storeId: st.id, amount: amountDue, currency: order.currency, mode, idempotencyKey: `pi:${order.id}:${amountDue}` });
     return c.json(intent, 200);
   },
