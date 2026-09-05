@@ -6,7 +6,7 @@ type AddressTextInputProps = {
  id: string;
  value: string;
  placeholder: string;
- className: string;
+ class: string;
  disabled?: boolean;
  required?: boolean;
  inputMode?: 'numeric';
@@ -32,7 +32,7 @@ export const AddressTextInput = component$<AddressTextInputProps>((props) => {
     value={props.value}
     autoComplete={props.autoComplete}
     placeholder={props.placeholder}
-    class={props.className}
+    class={props.class}
     onInput$={(_, el) => props.onInput$(props.fieldName, el.value)}
     onBlur$={async (_, el) => {
      if (props.onBlur$) await props.onBlur$(props.fieldName, el.value);
