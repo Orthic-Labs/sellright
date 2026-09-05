@@ -23,8 +23,11 @@ describe('email dispatch app routing', () => {
     const sendEmail = vi.fn().mockResolvedValue({ delivered: true });
     vi.doMock('./mailer.js', () => ({ sendEmail }));
 
+    // This is an email-routing unit test, not a production-environment boot
+    // test. Keep NODE_ENV=test so the independent production invariant checks
+    // do not require a real-looking database/deployment URL fixture here.
     process.env = {
-      NODE_ENV: 'production',
+      NODE_ENV: 'test',
       SMTP_FROM: 'hello@rightapps.test',
       STOREFRONT_URL: 'https://store.example.com',
       EMAIL_FROM_BY_APP: [
