@@ -14,7 +14,7 @@ import { useLocalCart, refreshCartStock, loadCartIfNeeded, useHasMixedPreOrder }
 import { CheckoutValidationProvider, useCheckoutValidation, useCheckoutValidationActions } from '~/contexts/CheckoutValidationContext';
 import { useCheckout } from '~/hooks/useCheckout';
 import { SR_CHECKOUT_ENABLED } from '~/providers/shop/checkout/checkout';
-import { srStripePublishableKey, srCreateOrder, srPayOrder, srShippingMethods } from '~/utils/sellright';
+import { srStripePublishableKey, srShippingMethods } from '~/utils/sellright';
 import { LocalCartService } from '~/services/LocalCartService';
 import { validateBillingSection, validateCustomerSection, validateShippingSection } from '~/utils/checkout-section-validation';
 import { CheckoutPageView } from '~/components/checkout/CheckoutPageView';
@@ -34,7 +34,7 @@ const CheckoutContent = component$(() => {
   const hasMixedPreOrder = useHasMixedPreOrder();
   const checkoutValidation = useCheckoutValidation();
   const validationActions = useCheckoutValidationActions();
-  const { checkoutState, srState, placeOrderStripe } = useCheckout();
+  const { checkoutState, convertLocalCartToVendureOrder, srState, placeOrderStripe } = useCheckout();
 
   const state = useStore<CheckoutState>({
     loading: false,
@@ -322,20 +322,20 @@ const CheckoutContent = component$(() => {
         throw new Error(srState.error || 'Checkout failed. Please try again.');
       }
 
-      {
-        const created = await srCreateOrder({
-          items, shipping: 0,
-          email: appState.customer?.emailAddress || undefined,
-          shippingAddress,
-        });
-        await srPayOrder(created.code, 'cod');
-        try { LocalCartService.clearCart(); } catch { /* ignore */ }
-        showProcessingModal.value = false;
-        isOrderProcessing.value = false;
-        const rt = created.receiptToken ? `?rt=${encodeURIComponent(created.receiptToken)}` : '';
-        navigate(`/checkout/confirmation/${created.code}${rt}`);
-        return;
+      // Explicit legacy mode must stay on Vendure end-to-end. Creating a
+      // SellRight order and then calling its public /pay endpoint with COD mixed
+      // two payment state machines and, after offline tenders were hardened,
+      // simply failed. Build the Vendure order, then trigger the selected legacy
+      // NMI/Sezzle component against that active Vendure order.
+      const legacyOrder = await convertLocalCartToVendureOrder();
+      if (!legacyOrder) throw new Error('Failed to create the checkout order. Please try again.');
+      showProcessingModal.value = false;
+      if (selectedPaymentMethod.value === 'sezzle') {
+        sezzleTriggerSignal.value += 1;
+      } else {
+        nmiTriggerSignal.value += 1;
       }
+      return;
     } catch (error) {
       state.error = error instanceof Error ? error.message : 'An unknown error occurred. Please check your information and try again.';
       showProcessingModal.value = false;
