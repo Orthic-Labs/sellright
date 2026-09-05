@@ -56,7 +56,7 @@
 		"@typescript-eslint/parser": "^8.62.1",
 		"dotenv": "^17.4.2",
 		"eslint": "^10.6.0",
-		"eslint-plugin-qwik": "2.0.0-beta.30",
+		"eslint-plugin-qwik": "2.0.0-beta.43",
 		"express": "^5.2.1",
 		"globals": "^17.7.0",
 		"postcss": "^8.5.16",
