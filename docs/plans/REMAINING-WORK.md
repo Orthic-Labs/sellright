@@ -14,7 +14,7 @@ SellRight has no known critical release-blocking correctness defect at head `4eb
 - production API/admin container smoke + bootstrap/readiness/CSP;
 - CodeQL JavaScript/TypeScript analysis.
 
-The remaining P0 launch work is branch protection plus one real Stripe test-key end-to-end payment receipt. Product-breadth work follows separately and must not be mistaken for a release blocker.
+The remaining P0 launch work is one real Stripe test-key end-to-end payment receipt. Product-breadth work follows separately and must not be mistaken for a release blocker.
 
 ## P0 — close before calling 0.1.0 a launch candidate
 
@@ -23,7 +23,7 @@ The remaining P0 launch work is branch protection plus one real Stripe test-key 
 - [x] **CI-1 — include dependency audit in CI.** Landed in `e9b1b67`; CI run `34030599548` proves the production dependency audit executes after frozen installs and passes.
 - [x] **REPO-1 — public/source-available hygiene.** Explicit tracked-file hygiene scan at `4eb150d` found no accidental runtime/log/scratch artifacts; tracked env files are examples. README, CONTRIBUTING and LICENSE consistently identify SellRight as BSL 1.1 source-available rather than OSI Open Source before the Change Date. Historical audit/readiness docs remain intentional evidence.
 - [x] **REPO-2 — contribution/license guidance.** Landed in `224d11e`; CONTRIBUTING documents BSL 1.1, the <=25 Covered Persons production grant, and contribution licensing.
-- [ ] **OPS-1 — protect `main`.** Require the proven CI + CodeQL checks, block force-push/deletion, and use PRs for normal future changes. Enable only after the required check names are confirmed from green runs.
+- [x] **OPS-1 — protect `main`.** Enabled after green head `c71a7c6`: strict branch protection requires `Core + admin / Node 24 LTS`, `Storefront build / Node 24 LTS`, `PostgreSQL 17 integration`, `Production container smoke / Node 24 LTS`, and `JavaScript / TypeScript security analysis`; pull requests are required for normal changes, force-push/deletion are disabled, and conversation resolution is required.
 - [ ] **PAY-1 — real Stripe test-key E2E.** Against a disposable/test store: cart -> checkout -> PaymentIntent/3DS-capable confirmation -> webhook -> Paid -> refund. This requires configured test credentials; never use live customer data.
 - [x] **OPS-2 — backup/restore drill.** Production-container CI proves backup and restore into a disposable database; run `34030599548` passed the `Prove database backup and restore` step.
 - [x] **OPS-3 — installation/reboot smoke.** Production-container CI run `34030599548` passed first-run/startup checks plus `Prove persistent-volume reboot and idempotent bootstrap`.
@@ -68,4 +68,4 @@ The remaining P0 launch work is branch protection plus one real Stripe test-key 
 
 ## Completion rule
 
-P0 is the 0.1.0 launch-candidate gate. P1/P2 are roadmap work and may ship incrementally after 0.1.0. Every item closes only with executable or repository evidence, not by documentation claim. P0 is not complete while OPS-1 and PAY-1 remain open, so SellRight is not yet a 0.1.0 launch candidate.
+P0 is the 0.1.0 launch-candidate gate. P1/P2 are roadmap work and may ship incrementally after 0.1.0. Every item closes only with executable or repository evidence, not by documentation claim. P0 is not complete while PAY-1 remains open, so SellRight is not yet a 0.1.0 launch candidate.
