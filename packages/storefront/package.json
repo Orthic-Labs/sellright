@@ -74,9 +74,9 @@
 		"card-validator": "^10.0.4",
 		"graphql": "^16.14.2",
 		"graphql-tag": "^2.12.7",
-		"isomorphic-dompurify": "^3.18.0",
+		"isomorphic-dompurify": "^4.1.0",
 		"libphonenumber-js": "^1.13.8",
-		"qwik-image": "^2.0.3",
+		"qwik-image": "2.0.3",
 		"us-state-converter": "^1.0.8",
 		"validator": "^13.15.35"
 	}
