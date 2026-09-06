@@ -192,6 +192,52 @@ jobs:
           docker compose -f deploy/compose.yaml exec -T admin \
             sh -c "wget -S -O /dev/null http://127.0.0.1:8080/index.html 2>&1 | grep -qi 'Content-Security-Policy:'"
 
+      - name: Prove database backup and restore
+        shell: bash
+        run: |
+          dump="$RUNNER_TEMP/sellright.dump"
+          docker compose -f deploy/compose.yaml exec -T postgres \
+            pg_dump -U sellright -d sellright -Fc > "$dump"
+          test -s "$dump"
+          docker compose -f deploy/compose.yaml exec -T postgres \
+            createdb -U sellright sellright_restore
+          cat "$dump" | docker compose -f deploy/compose.yaml exec -T postgres \
+            pg_restore -U sellright -d sellright_restore --no-owner --no-privileges
+          docker compose -f deploy/compose.yaml exec -T \
+            -e DATABASE_URL="postgresql://sellright:${POSTGRES_PASSWORD}@postgres:5432/sellright_restore" \
+            api node dist/scripts/migrate.js
+          docker compose -f deploy/compose.yaml exec -T postgres \
+            psql -U sellright -d sellright_restore -Atc "SELECT count(*) FROM store WHERE slug = 'ci'" \
+            | grep -qx '1'
+
+      - name: Prove persistent-volume reboot and idempotent bootstrap
+        shell: bash
+        run: |
+          before_id=$(docker compose -f deploy/compose.yaml exec -T postgres \
+            psql -U sellright -d sellright -Atc "SELECT id FROM store WHERE slug = 'ci'")
+          test -n "$before_id"
+          docker compose -f deploy/compose.yaml exec -T api sh -c \
+            "printf 'persistence-ok\n' > /app/var/assets/.ci-persistence && printf 'persistence-ok\n' > /app/var/downloads/.ci-persistence"
+          docker compose -f deploy/compose.yaml down
+          docker compose -f deploy/compose.yaml up -d postgres api admin
+          for attempt in {1..60}; do
+            if docker compose -f deploy/compose.yaml exec -T admin \
+              wget -qO- http://127.0.0.1:8080/v1/readyz 2>/dev/null \
+              | grep -q '"status":"ok"'; then
+              break
+            fi
+            test "$attempt" -lt 60 || exit 1
+            sleep 2
+          done
+          after_id=$(docker compose -f deploy/compose.yaml exec -T postgres \
+            psql -U sellright -d sellright -Atc "SELECT id FROM store WHERE slug = 'ci'")
+          test "$before_id" = "$after_id"
+          docker compose -f deploy/compose.yaml exec -T postgres \
+            psql -U sellright -d sellright -Atc "SELECT count(*) FROM store WHERE slug = 'ci'" \
+            | grep -qx '1'
+          docker compose -f deploy/compose.yaml exec -T api sh -c \
+            "grep -qx persistence-ok /app/var/assets/.ci-persistence && grep -qx persistence-ok /app/var/downloads/.ci-persistence"
+
       - name: Tear down smoke stack
         if: always()
         run: docker compose -f deploy/compose.yaml down -v --remove-orphans
