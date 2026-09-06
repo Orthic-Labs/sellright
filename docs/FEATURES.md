@@ -1,6 +1,6 @@
 # SellRight Features
 
-Last reviewed: 2026-06-13
+Last reviewed: 2026-09-06
 
 SellRight is a commerce backend for operators who want ownership, multi-store control, and a standard REST contract without building every commerce primitive from zero.
 
@@ -14,7 +14,7 @@ SellRight is a commerce backend for operators who want ownership, multi-store co
 | Catalog management | Built | Products, variants, collections, options, images, inventory, locations. |
 | Static catalog manifest | Built | Fast storefront browse path with generated JSON. |
 | Checkout | Built | Server-priced checkout with stock allocation, shipping, tax, coupons, gift-card tender. |
-| Payments layer | Built (Stripe) | Stripe PaymentIntents, dual test/live mode, mode-bound webhook settlement, dashboard refund/dispute reconciliation. Storefront Stripe Elements checkout behind `VITE_SR_CHECKOUT` (pending one live test-card run). NMI/Sezzle dropped — SellRight settles via Stripe + gift-card tender. |
+| Payments layer | Built (Stripe) | Stripe PaymentIntents, dual test/live mode, mode-bound webhook settlement, dashboard refund/dispute reconciliation. Storefront Stripe Elements checkout is implemented; the release gate is one real test-key E2E run. Additional shopper gateways are demand-driven, not launch requirements. |
 | Refunds and returns | Built at backend level | Gateway-backed refund path exists for providers that implement it. |
 | Customer auth/account | Built | Register, login, Google auth, sessions, profile, addresses, password reset, email verification. |
 | Transactional email | Built | SMTP-backed event email flows. |
@@ -26,13 +26,13 @@ SellRight is a commerce backend for operators who want ownership, multi-store co
 | Affiliates | Built | Affiliate tracking and admin surfaces. |
 | Blog/content | Built | Blog CMS routes and admin surface. |
 | App/software licensing | Built | License issuance, device activation, update manifests, licensed downloads. |
-| Reconciliation export | Built | SellRight-to-Vendure export for rollback/reconciliation workflows. |
+| Reconciliation export | Built | SellRight-to-Vendure export retained as migration/rollback tooling; it does not define SellRight core architecture. |
 | Subscriptions / recurring billing | Built | Stripe Billing; backing order → first invoice issues the license, renewals extend the entitlement; admin list + per-customer view + hosted Customer Portal. |
 | Order bulk ops | Built | Bulk cancel / trash (soft-delete) / restore / gated purge (cascade + FK-coverage guard test). |
 | Server cart lifecycle | Built | Server-authoritative cart, TTL + extend-on-activity, abandonment/cleanup jobs, checkout-reads-from-cart (fail-closed). |
-| Storefront migration | In progress | Catalog, collections, cart, auth, and account rewired to SellRight REST (runtime-verified vs the live API). Checkout (Stripe Elements) implemented behind `VITE_SR_CHECKOUT`, pending a live test-card transaction before default. |
+| Storefront migration | In progress | Catalog, collections, cart, auth, account and checkout use the SellRight REST path; real Stripe test-key E2E remains a release receipt. |
 | Carrier labels/rates | Not built | Manual/flat-rate fulfillment exists; carrier integrations are later. |
-| NMI/Sezzle | Not built | Required before Damned Designs parity. |
+| Additional shopper payment providers | Deferred | Add PayPal/COD/other providers only when a concrete deployment requires them. |
 
 ## Admin Surface
 
@@ -89,13 +89,6 @@ The software-sales subsystem supports catalog products that issue app licenses:
 
 This is distinct from licensing SellRight itself as a backend product.
 
-## Launch Gaps
+## Launch status
 
-Before SellRight should process live brand orders, close these:
-
-1. Complete storefront provider rewire.
-2. Run live Stripe sandbox e2e with real test keys.
-3. Build NMI and Sezzle providers before DD migration.
-4. Confirm backup and restore drill.
-5. Verify production admin hosting and reboot survival.
-6. Run a final security and payments audit.
+The canonical launch-candidate gate is [`docs/plans/REMAINING-WORK.md`](plans/REMAINING-WORK.md). This feature inventory intentionally does not maintain a second launch checklist; historical migration requirements such as NMI/Sezzle parity are not SellRight release requirements.
