@@ -1,12 +1,12 @@
 # Remaining work — SellRight
 
-Last reconciled: 2026-09-06 · baseline `1b5042a`
+Last reconciled: 2026-09-06 · head `4eb150d` · CI `34030599548` · CodeQL `34030599564`
 
 This is the canonical current backlog. Historical audit/dispatch documents remain evidence, not execution truth. When they disagree, current code + current CI + this file win.
 
 ## Current release posture
 
-SellRight has no known critical release-blocking correctness defect at this baseline. The public GitHub pipeline is green on Node 24 LTS across:
+SellRight has no known critical release-blocking correctness defect at head `4eb150d`. CI run `34030599548` and CodeQL run `34030599564` are green on Node 24 LTS across:
 
 - core + admin build/typecheck/unit tests;
 - PostgreSQL 17 migrations + DB integration + RLS/isolation assertions;
@@ -14,19 +14,19 @@ SellRight has no known critical release-blocking correctness defect at this base
 - production API/admin container smoke + bootstrap/readiness/CSP;
 - CodeQL JavaScript/TypeScript analysis.
 
-The remaining launch work is dependency hygiene, bounded abuse/performance hardening, public-repo hygiene, real external-service smoke, and operator runbooks. Product-breadth work follows separately and must not be mistaken for a release blocker.
+The remaining P0 launch work is branch protection plus one real Stripe test-key end-to-end payment receipt. Product-breadth work follows separately and must not be mistaken for a release blocker.
 
 ## P0 — close before calling 0.1.0 a launch candidate
 
-- [ ] **DEP-1 — production dependency audit clean.** Resolve current `pnpm audit --prod` advisories (Hono/@hono/node-server, sanitize-html, nanoid or their current equivalents), then make `pnpm deps:audit` agree with the green CI signal.
-- [ ] **PERF-1 — cap checkout line count.** Add a bounded maximum to public checkout items (target 200 unless code evidence argues lower) so one request cannot hold a transaction across thousands of sequential stock operations.
-- [ ] **CI-1 — include dependency audit in CI.** Run production dependency audit after frozen installs; dependency changes must not produce a green launch pipeline with a red audit.
-- [ ] **REPO-1 — public/source-available hygiene.** Remove accidental runtime/log/scratch artifacts from tracked source; keep useful engineering docs intentionally. Ensure README consistently says source-available/BSL 1.1 rather than OSI open source.
-- [ ] **REPO-2 — contribution/license guidance.** Add concise contribution guidance explaining BSL 1.1, the <=25 Covered Persons production grant, and that contributions are accepted under the repository license unless separately agreed.
+- [x] **DEP-1 — production dependency audit clean.** `pnpm deps:audit` passed in CI run `34030599548` on head `4eb150d`, after the admin React Router advisory fix (`bb54899`) and storefront transitive security floors (`4eb150d`).
+- [x] **PERF-1 — cap checkout line count.** Landed in `39a97e4`; the public checkout now rejects an excessive cart-line count before entering the stock-operation path.
+- [x] **CI-1 — include dependency audit in CI.** Landed in `e9b1b67`; CI run `34030599548` proves the production dependency audit executes after frozen installs and passes.
+- [x] **REPO-1 — public/source-available hygiene.** Explicit tracked-file hygiene scan at `4eb150d` found no accidental runtime/log/scratch artifacts; tracked env files are examples. README, CONTRIBUTING and LICENSE consistently identify SellRight as BSL 1.1 source-available rather than OSI Open Source before the Change Date. Historical audit/readiness docs remain intentional evidence.
+- [x] **REPO-2 — contribution/license guidance.** Landed in `224d11e`; CONTRIBUTING documents BSL 1.1, the <=25 Covered Persons production grant, and contribution licensing.
 - [ ] **OPS-1 — protect `main`.** Require the proven CI + CodeQL checks, block force-push/deletion, and use PRs for normal future changes. Enable only after the required check names are confirmed from green runs.
 - [ ] **PAY-1 — real Stripe test-key E2E.** Against a disposable/test store: cart -> checkout -> PaymentIntent/3DS-capable confirmation -> webhook -> Paid -> refund. This requires configured test credentials; never use live customer data.
-- [ ] **OPS-2 — backup/restore drill.** Prove a fresh Postgres backup restores into a disposable database and passes `/v1/readyz`/basic reads after migration.
-- [ ] **OPS-3 — installation/reboot smoke.** From the production Compose path, prove first-run bootstrap is idempotent and the stack returns healthy after a full down/up cycle with persistent volumes.
+- [x] **OPS-2 — backup/restore drill.** Production-container CI proves backup and restore into a disposable database; run `34030599548` passed the `Prove database backup and restore` step.
+- [x] **OPS-3 — installation/reboot smoke.** Production-container CI run `34030599548` passed first-run/startup checks plus `Prove persistent-volume reboot and idempotent bootstrap`.
 
 ## P1 — first product-completeness work after launch candidate
 
@@ -68,4 +68,4 @@ The remaining launch work is dependency hygiene, bounded abuse/performance harde
 
 ## Completion rule
 
-P0 is the 0.1.0 launch-candidate gate. P1/P2 are roadmap work and may ship incrementally after 0.1.0. Every item closes only with executable evidence (test/CI/runtime receipt), not by documentation claim.
+P0 is the 0.1.0 launch-candidate gate. P1/P2 are roadmap work and may ship incrementally after 0.1.0. Every item closes only with executable or repository evidence, not by documentation claim. P0 is not complete while OPS-1 and PAY-1 remain open, so SellRight is not yet a 0.1.0 launch candidate.
