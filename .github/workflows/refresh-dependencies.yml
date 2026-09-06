@@ -12,7 +12,7 @@ env:
 
 jobs:
   refresh:
-    name: Update JS dependencies to latest verified versions
+    name: Update JS dependencies within declared compatibility ranges
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -35,13 +35,13 @@ jobs:
             packages/storefront/pnpm-lock.yaml
 
       - name: Refresh core workspace
-        run: pnpm up -r --latest
+        run: pnpm up -r
 
       - name: Refresh admin
-        run: pnpm --dir packages/admin up --latest
+        run: pnpm --dir packages/admin up
 
       - name: Refresh storefront
-        run: pnpm --dir packages/storefront up --latest
+        run: pnpm --dir packages/storefront up
 
       - name: Show dependency diff
         run: git diff -- package.json pnpm-lock.yaml packages/api/package.json packages/shared/package.json packages/admin/package.json packages/admin/pnpm-lock.yaml packages/storefront/package.json packages/storefront/pnpm-lock.yaml
@@ -69,5 +69,5 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add package.json pnpm-lock.yaml packages/api/package.json packages/shared/package.json packages/admin/package.json packages/admin/pnpm-lock.yaml packages/storefront/package.json packages/storefront/pnpm-lock.yaml
-          git commit -m 'chore(deps): refresh dependencies to latest verified versions'
+          git commit -m 'chore(deps): refresh compatible dependency versions'
           git push

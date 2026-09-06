@@ -44,6 +44,9 @@ jobs:
       - name: Install admin
         run: pnpm --dir packages/admin install --frozen-lockfile
 
+      - name: Audit production dependencies
+        run: pnpm deps:audit
+
       - name: Verify core and admin
         run: pnpm verify:static
 
