@@ -37,5 +37,7 @@ overrides:
   # (sanitize-html) as well as directly by admin/storefront; force >= 8.5.18
   # workspace-wide rather than editing each package.json.
   postcss: ^8.5.18
+  # GHSA-2v37-7h3g-55p8 — sanitize-html/postcss permits vulnerable nanoid 3.x.
+  nanoid: ^3.3.18
   # brace-expansion via @typescript-eslint devDependency â€” fix >= 5.0.8.
   brace-expansion: ^5.0.8
