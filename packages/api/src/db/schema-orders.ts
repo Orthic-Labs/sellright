@@ -199,6 +199,9 @@ export const payment = pgTable('payment', {
   storeId: uuid().notNull().references(() => store.id),
   orderId: uuid().notNull().references(() => order.id),
   amount: integer().notNull(), // cents
+  gatewayAccount: text(),
+  gatewayMode: text(),
+  currency: text(),
   method: text().notNull(), // nmi | sezzle | stripe
   providerRef: text(), // payment_intent / transactionId / sezzleOrderUuid
   state: paymentState().notNull().default('Pending'),
