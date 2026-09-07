@@ -7,6 +7,7 @@ import { amountDueForOrder, applyPaymentResult } from './settle.js';
 import { getProvider, isPaymentMethodEnabled, type PaymentResult } from './provider.js';
 import { configuredGatewayAccount, gatewayAccount, gatewayIdentity, type GatewayMethod } from './gateway-account.js';
 import { sezzleProvider } from './sezzle.js';
+import { prepareSezzleSession } from './session-input.js';
 
 export class GatewayPaymentError extends Error {
   constructor(public status: 400 | 404 | 409 | 503, message: string) { super(message); }
@@ -62,51 +63,34 @@ export async function startGatewayPayment(input: {
       const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, order.id));
       const [customer] = order.customerId
         ? await tx.select().from(s.customer).where(eq(s.customer.id, order.customerId)).limit(1) : [];
+      const attemptId = randomUUID();
+      let session;
+      if (input.method === 'sezzle') {
+        try {
+          session = prepareSezzleSession({ order, lines, account, amount, attemptId, customer,
+            storefrontUrl: (input.config as { storefrontUrl?: string } | null)?.storefrontUrl });
+        } catch (error) {
+          throw new GatewayPaymentError(400, error instanceof Error ? error.message : 'Invalid checkout details');
+        }
+      }
       const context = gatewayIdentity(account);
       const fingerprint = createHash('sha256').update(JSON.stringify({
         orderId: order.id, operation, amount, currency: order.currency, ...context,
       })).digest('hex');
       const [attempt] = await tx.insert(s.paymentAttempt).values({
-        id: randomUUID(), storeId: input.storeId, orderId: order.id, operation, method: input.method,
+        id: attemptId, storeId: input.storeId, orderId: order.id, operation, method: input.method,
         accountId: account.accountId, mode: account.mode, amount, currency: order.currency,
         idempotencyKey: input.idempotencyKey, fingerprint, context,
       }).returning();
-      return { attempt: attempt!, order, lines, customer };
+      return { attempt: attempt!, order, session };
     });
     if ('existing' in prepared) return view(prepared.existing!);
-    const { attempt, order, lines, customer } = prepared;
+    const { attempt, order, session } = prepared;
     const common = { storeId: input.storeId, orderCode: input.code, amount: attempt.amount,
       currency: attempt.currency, attemptId: attempt.id, gateway: account };
     if (input.method === 'sezzle') {
       try {
-        const configuredUrl = (input.config as { storefrontUrl?: string } | null)?.storefrontUrl;
-        if (!configuredUrl) throw new Error('Storefront URL required');
-        const origin = new URL(configuredUrl);
-        if (origin.protocol !== 'https:' && !(account.mode === 'test' && ['localhost','127.0.0.1'].includes(origin.hostname))) {
-          throw new Error('Invalid storefront URL');
-        }
-        if (!customer?.email) throw new Error('Customer email required');
-        const complete = new URL('/checkout/confirmation/' + encodeURIComponent(order.code), origin);
-        complete.searchParams.set('rt', order.receiptToken!);
-        complete.searchParams.set('paymentAttempt', attempt.id);
-        const cancel = new URL('/checkout', origin);
-        const shipping = (order.shippingAddress ?? {}) as Record<string, unknown>;
-        const billing = (order.billingAddress ?? shipping) as Record<string, unknown>;
-        const address = (a: Record<string, unknown>) => ({
-          name: a.fullName, street: a.streetLine1 ?? a.line1, street2: a.streetLine2 ?? a.line2,
-          city: a.city, state: a.province, postal_code: a.postalCode, country_code: a.countryCode ?? a.country,
-        });
-        const result = await sezzleProvider.createSession({
-          ...common, completeUrl: complete.href, cancelUrl: cancel.href,
-          customer: { email: customer.email, first_name: customer.firstName, last_name: customer.lastName,
-            billing_address: address(billing), shipping_address: address(shipping) },
-          items: lines.map(line => ({
-            name: line.variantName, sku: line.variantSku, quantity: line.quantity,
-            price: { amount_in_cents: line.unitPrice, currency: order.currency },
-          })),
-          shipping: order.shippingTotal, tax: order.taxTotal,
-          discount: order.discountTotal + (order.grandTotal - attempt.amount),
-        });
+        const result = await sezzleProvider.createSession(session!);
         return withStore(input.storeId, async tx => {
           const [updated] = await tx.update(s.paymentAttempt).set({
             status: 'pending', providerRef: result.providerRef,
@@ -150,7 +134,7 @@ export async function finishAttempt(storeId: string, id: string, result: Payment
     });
     const status = result.state === 'Settled' ? 'settled'
       : result.state === 'Failed' || result.state === 'Declined' ? 'failed'
-      : metadata.needsReconciliation ? 'unknown' : 'pending';
+      : (result.metadata as Record<string, unknown> | null)?.needsReconciliation ? 'unknown' : 'pending';
     const [updated] = await tx.update(s.paymentAttempt).set({
       status, providerRef: result.providerRef,
       result: { state: applied.orderState, payment: result.state,

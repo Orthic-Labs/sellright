@@ -61,7 +61,9 @@ export function createNmiProvider(transport: GatewayFetch = fetch): PaymentProvi
         return { state: 'Failed', providerRef: null, errorMessage: 'NMI requires a payment token and trusted attempt' };
       }
       const account = input.gateway!;
-      const billing = input.billingAddress ?? {};
+      const source = input.billingAddress ?? {};
+      const billing: Record<string, unknown> = { ...source, streetLine1: source.streetLine1 ?? source.line1,
+        streetLine2: source.streetLine2 ?? source.line2, countryCode: source.countryCode ?? source.country };
       const fields: Record<string, string> = {
         type: 'sale', payment_token: input.token, orderid: input.attemptId,
         amount: (input.amount / 100).toFixed(2), currency: input.currency,

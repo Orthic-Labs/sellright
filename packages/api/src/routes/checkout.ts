@@ -292,7 +292,9 @@ checkout.openapi(
         // WP9.5: attach the link provenance to the order metadata. The account
         // order-list endpoint reads this to suppress email_match-linked orders
         // until the customer verifies the email.
-        metadata: linkedVia ? { linked_via: linkedVia } : null,
+        metadata: { ...(linkedVia ? { linked_via: linkedVia } : {}),
+          contact: { email: normalizeEmail(sessionCustomer?.email ?? body.email ?? '') },
+          taxInclusive: st.taxInclusive },
       });
       await tx.insert(s.orderLine).values(
         priced.map((p, idx) => ({

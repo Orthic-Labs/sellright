@@ -60,7 +60,7 @@ pay.openapi(
       | { kind: 'ok'; state: string; payment: string };
 
     const claimKey = idemKey ?? `pay:${st.id}:${code}`;
-    const out: R = await withAdvisoryLock(`payment:${st.id}:${code}:${method}`, async () => {
+    const out: R = await withAdvisoryLock(`pay:${st.id}:${code}`, async () => {
       const prepared = await withStore(st.id, async (tx) => {
         const [order] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
         if (!order) return { kind: 'notfound' as const };
