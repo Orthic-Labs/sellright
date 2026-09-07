@@ -3,7 +3,10 @@ import { and, desc, eq, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
-import { isMethodEligible, shippingRate } from '../shipping/calculator.js';
+import { priceCart } from './cart.js';
+import { customerToken } from '../auth/session.js';
+import { calculateOrderTotals } from '../money/totals.js';
+import { isMethodEligible, shippingRate, type ShippingCalculator } from '../shipping/calculator.js';
 import { clientIp } from '../auth/rate-limit.js';
 import { newsletterRetryAfter, recordNewsletterAttempt } from './shop-extra.newsletter-limit.js';
 import { enqueueEmail } from '../email/outbox.js';
@@ -294,3 +297,28 @@ shopExtra.openapi(
     return c.json({ ok: true }, 200);
   },
 );
+
+// Quote from server-priced items so DD shipping thresholds include discounts and tax.
+shopExtra.openapi(createRoute({
+  method: 'post', path: '/v1/shop/shipping-methods', summary: 'Quote shipping from cart items',
+  request: { body: { content: J(z.object({ country: z.string().length(2),
+    items: z.array(z.object({ sku: z.string().min(1), quantity: z.number().int().min(1).max(10000) })).min(1).max(500),
+    couponCode: z.string().optional(),
+  })) } }, responses: { 200: { description: 'Quoted methods', content: J(z.any()) } },
+}), async c => {
+  const st = await resolveStoreFromCtx(c), body = c.req.valid('json');
+  const methods = await withStore(st.id, async tx => {
+    const quote = await priceCart(tx, st, body.items, { shipCountry: body.country, couponCode: body.couponCode, token: customerToken(c) });
+    if (quote.unavailable.length) return [];
+    const methods = await tx.select().from(s.shippingMethod).where(eq(s.shippingMethod.enabled, true));
+    return methods.filter(method => isMethodEligible(method.calculator, { country: body.country,
+      subtotal: quote.subtotal, discountedSubtotalWithTax: quote.grandTotal })).map(method => {
+      const calc = method.calculator as ShippingCalculator;
+      const total = calculateOrderTotals({ lines: [], shipping: shippingRate(calc), taxRate: st.taxRate,
+        taxInclusive: st.taxInclusive, shippingTaxable: st.shippingTaxable,
+        shippingTaxRate: calc.taxRate, shippingTaxInclusive: calc.taxInclusive });
+      return { code: method.code, name: method.name, rate: shippingRate(calc), priceWithTax: total.grandTotal };
+    });
+  });
+  return c.json({ methods }, 200);
+});

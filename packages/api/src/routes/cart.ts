@@ -35,7 +35,7 @@ type PricedCart = {
  * trusts client-supplied prices: re-reads each variant, re-selects the price,
  * re-validates the coupon. Must run inside a withStore tx.
  */
-async function priceCart(
+export async function priceCart(
   tx: Tx,
   st: StoreCtx,
   items: Array<{ sku: string; quantity: number }>,
