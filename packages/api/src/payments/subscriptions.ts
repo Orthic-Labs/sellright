@@ -267,10 +267,7 @@ async function extendRenewal(
         state: 'Settled',
         metadata: { stripeInvoiceId: invoice.id, renewal: true },
       })
-      .onConflictDoNothing({
-        target: [s.payment.storeId, s.payment.providerRef],
-        where: sql`${s.payment.providerRef} is not null`,
-      })
+      .onConflictDoNothing()
       .returning({ id: s.payment.id });
     if (inserted.length === 0) {
       await audit(tx, storeId, 'subscription_renewal_payment_duplicate', subId, { invoiceId: invoice.id, providerRef });
