@@ -34,7 +34,7 @@ describe('Sezzle session preflight', () => {
     expect(() => prepareSezzleSession({ ...base, order: { ...order, metadata: null } })).toThrow('email');
   });
   it('rejects unreconciled totals before external I/O', () => {
-    expect(() => prepareSezzleSession({ ...base, order: { ...order, grandTotal: 1137 } })).toThrow('reconcile');
+    expect(() => prepareSezzleSession({ ...base, order: { ...order, grandTotal: 1237 } })).toThrow('reconcile');
   });
   it('rejects insecure production and credential-bearing return URLs', () => {
     for (const storefrontUrl of ['http://example.com', 'https://user:password@example.com']) {

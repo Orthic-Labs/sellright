@@ -19,7 +19,9 @@
     "db:assert-hand-written": "tsx src/db/assert-hand-written-migrations.ts",
     "assert:shop-isolation": "node scripts/assert-shop-route-isolation.mjs",
     "import:preflight": "tsx src/import/preflight.ts",
-    "provision:right-apps": "tsx src/scripts/provision-right-apps.ts"
+    "provision:right-apps": "tsx src/scripts/provision-right-apps.ts",
+    "import:vendure": "tsx src/import/run.ts",
+    "import:restore": "tsx src/import/restore.ts"
   },
   "dependencies": {
     "@hono/node-server": "^2.0.10",

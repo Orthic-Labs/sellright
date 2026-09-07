@@ -74,15 +74,15 @@ shopExtra.openapi(
 shopExtra.openapi(
   createRoute({
     method: 'get', path: '/v1/shop/shipping-methods', summary: 'Eligible shipping methods for a cart',
-    request: { query: z.object({ country: z.string().optional(), subtotal: z.coerce.number().int().default(0) }) },
+    request: { query: z.object({ country: z.string().optional(), subtotal: z.coerce.number().int().default(0), discountedSubtotalWithTax: z.coerce.number().int().nonnegative().optional() }) },
     responses: { 200: { description: 'OK', content: J(z.object({ methods: z.array(z.unknown()) })) } },
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
-    const { country, subtotal } = c.req.valid('query');
+    const { country, subtotal, discountedSubtotalWithTax } = c.req.valid('query');
     const methods = await withStore(st.id, async (tx) => tx.select().from(s.shippingMethod).where(eq(s.shippingMethod.enabled, true)));
     const eligible = methods
-      .filter((m) => isMethodEligible(m.calculator, { subtotal, country }))
+      .filter((m) => isMethodEligible(m.calculator, { subtotal, country, discountedSubtotalWithTax }))
       .map((m) => ({ code: m.code, name: m.name, rate: shippingRate(m.calculator) }));
     return c.json({ methods: eligible }, 200);
   },

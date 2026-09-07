@@ -65,3 +65,11 @@ ALTER TABLE gateway_event FORCE ROW LEVEL SECURITY;
 CREATE POLICY store_isolation ON gateway_event
   USING (store_id = nullif(current_setting('app.current_store', true), '')::uuid)
   WITH CHECK (store_id = nullif(current_setting('app.current_store', true), '')::uuid);
+
+--> statement-breakpoint
+ALTER TYPE fulfillment_state ADD VALUE IF NOT EXISTS 'Cancelled';
+ALTER TABLE fulfillment ADD COLUMN metadata jsonb;
+ALTER TABLE refund ADD COLUMN metadata jsonb;
+ALTER TABLE refund ADD COLUMN items_amount integer;
+ALTER TABLE refund ADD COLUMN shipping_amount integer;
+ALTER TABLE refund ADD COLUMN adjustment_amount integer;

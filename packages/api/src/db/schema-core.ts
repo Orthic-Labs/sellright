@@ -28,7 +28,7 @@ export const orderState = pgEnum('order_state', [
   'Refunded',
   'Cancelled',
 ]);
-export const fulfillmentState = pgEnum('fulfillment_state', ['Pending', 'Shipped', 'Delivered']);
+export const fulfillmentState = pgEnum('fulfillment_state', ['Pending', 'Shipped', 'Delivered', 'Cancelled']);
 export const fulfillmentType = pgEnum('fulfillment_type', ['physical', 'digital_download', 'license', 'update_pass']);
 export const paymentState = pgEnum('payment_state', [
   'Pending',

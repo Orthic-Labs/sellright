@@ -45,7 +45,7 @@ export function prepareSezzleSession(input: {
   // Inclusive prices already contain tax. Only add the tax not included in the
   // stored line/shipping amounts; never infer this from today's store settings.
   const tax = order.grandTotal - (subtotal - order.discountTotal + order.shippingTotal);
-  if (subtotal !== order.subtotal || !Number.isSafeInteger(tax) || (tax !== 0 && tax !== order.taxTotal)) {
+  if (subtotal !== order.subtotal || !Number.isSafeInteger(tax) || (tax < 0 || tax > order.taxTotal)) {
     throw new Error('Order totals do not reconcile');
   }
   return { storeId: account.storeId, gateway: account, attemptId, orderCode: order.code,
