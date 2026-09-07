@@ -8,6 +8,7 @@ import { getProvider, isPaymentMethodEnabled, type PaymentResult } from './provi
 import { configuredGatewayAccount, gatewayAccount, gatewayIdentity, type GatewayMethod } from './gateway-account.js';
 import { sezzleProvider } from './sezzle.js';
 import { prepareSezzleSession } from './session-input.js';
+import { queryNmiPayment } from './nmi-query.js';
 
 export class GatewayPaymentError extends Error {
   constructor(public status: 400 | 404 | 409 | 503, message: string) { super(message); }
@@ -17,7 +18,7 @@ export function receiptMatches(given: string | undefined, expected: string | nul
   const a = Buffer.from(given), b = Buffer.from(expected);
   return a.length === b.length && timingSafeEqual(a, b);
 }
-async function ownedOrder(tx: Tx, code: string, receipt?: string, customerSession?: string | null) {
+export async function ownedOrder(tx: Tx, code: string, receipt?: string, customerSession?: string | null) {
   const [order] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
   if (!order || order.deletedAt) throw new GatewayPaymentError(404, 'Order not found');
   let granted = receiptMatches(receipt, order.receiptToken);
@@ -129,9 +130,9 @@ export async function finishAttempt(storeId: string, id: string, result: Payment
       ...(result.metadata as Record<string, unknown> | null ?? {}),
       gateway: { accountId: attempt.accountId, storeId, method: attempt.method, mode: attempt.mode },
     };
-    const applied = await applyPaymentResult(tx, {
+    const applied = result.providerRef ? await applyPaymentResult(tx, {
       storeId, order, method: attempt.method, result: { ...result, metadata }, amount: attempt.amount,
-    });
+    }) : { orderState: order.state, paymentState: result.state };
     const status = result.state === 'Settled' ? 'settled'
       : result.state === 'Failed' || result.state === 'Declined' ? 'failed'
       : (result.metadata as Record<string, unknown> | null)?.needsReconciliation ? 'unknown' : 'pending';
@@ -155,7 +156,8 @@ export async function verifySezzleAttempt(storeId: string, id: string) {
   return withAdvisoryLock('pay:' + storeId + ':' + order.code, async () => {
     const account = gatewayAccount(storeId, 'sezzle', attempt.accountId, attempt.mode as 'test' | 'live');
     const result = await sezzleProvider.createPayment({
-      storeId, orderCode: order.code, attemptId: id, amount: attempt.amount,
+      storeId, orderCode: order.code,
+      attemptId: (attempt.context as { orderReference?: string } | null)?.orderReference ?? id, amount: attempt.amount,
       currency: attempt.currency, gateway: account, token: attempt.providerRef,
     });
     return finishAttempt(storeId, id, result);
@@ -171,5 +173,25 @@ export async function readGatewayAttempt(input: {
       .where(and(eq(s.paymentAttempt.id, input.id), eq(s.paymentAttempt.orderId, order.id))).limit(1);
     if (!attempt) throw new GatewayPaymentError(404, 'Payment not found');
     return { ...view(attempt), method: attempt.method };
+  });
+}
+
+export async function verifyGatewayAttempt(storeId: string, id: string) {
+  const [attempt] = await withStore(storeId, tx => tx.select().from(s.paymentAttempt)
+    .where(eq(s.paymentAttempt.id, id)).limit(1));
+  if (!attempt) throw new GatewayPaymentError(404, 'Payment not found');
+  if (attempt.method === 'sezzle') return verifySezzleAttempt(storeId, id);
+  if (attempt.method !== 'nmi' || attempt.operation !== 'charge') {
+    throw new GatewayPaymentError(409, 'This operation requires separate reconciliation');
+  }
+  const [order] = await withStore(storeId, tx => tx.select().from(s.order)
+    .where(eq(s.order.id, attempt.orderId)).limit(1));
+  if (!order) throw new GatewayPaymentError(404, 'Order not found');
+  return withAdvisoryLock('pay:' + storeId + ':' + order.code, async () => {
+    const account = gatewayAccount(storeId, 'nmi', attempt.accountId, attempt.mode as 'test' | 'live');
+    const result = await queryNmiPayment({ account, amount: attempt.amount, currency: attempt.currency,
+      orderReference: (attempt.context as { orderReference?: string } | null)?.orderReference ?? attempt.id,
+      providerRef: attempt.providerRef });
+    return finishAttempt(storeId, id, result);
   });
 }

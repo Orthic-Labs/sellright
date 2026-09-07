@@ -9,7 +9,7 @@ import { resolveStoreFromCtx } from './store-context.js';
 import { gatewayAccount } from '../payments/gateway-account.js';
 import { verifySezzleSignature } from '../payments/sezzle.js';
 import {
-  GatewayPaymentError, startGatewayPayment, readGatewayAttempt, verifySezzleAttempt,
+  GatewayPaymentError, startGatewayPayment, readGatewayAttempt, verifyGatewayAttempt,
 } from '../payments/gateway-payment.js';
 
 export const gatewayPayments = new OpenAPIHono();
@@ -48,9 +48,8 @@ gatewayPayments.post('/v1/shop/orders/:code/gateway-payment/:attempt/verify', as
     const input = { storeId: st.id, code: c.req.param('code'), id: c.req.param('attempt'),
       receiptToken: c.req.header('x-receipt-token'), customerSession: customerToken(c) };
     if (!z.string().uuid().safeParse(input.id).success) return c.json({ error: 'Payment not found' }, 404);
-    const current = await readGatewayAttempt(input);
-    return c.json(current.method === 'sezzle'
-      ? await verifySezzleAttempt(st.id, input.id) : current, 200);
+    await readGatewayAttempt(input);
+    return c.json(await verifyGatewayAttempt(st.id, input.id), 200);
   } catch (error) {
     if (error instanceof GatewayPaymentError) return c.json({ error: error.message }, error.status);
     throw error;
