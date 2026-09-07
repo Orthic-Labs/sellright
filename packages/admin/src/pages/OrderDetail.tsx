@@ -52,7 +52,8 @@ export default function OrderDetailPage() {
     onError: (e) => toast.error('Cancel failed', getErrorMessage(e)),
   });
   const [refundAmt, setRefundAmt] = useState('');
-  const [restock, setRestock] = useState(true);
+  const [restock, setRestock] = useState(false);
+  const [refundKey, setRefundKey] = useState(() => crypto.randomUUID());
   const refund = useMutation({
     mutationFn: () => {
       let amount: number | undefined;
@@ -61,9 +62,14 @@ export default function OrderDetailPage() {
         if (!Number.isFinite(parsed) || parsed < 0) throw new Error('Invalid refund amount');
         amount = Math.round(parsed * 100);
       }
-      return api.post(`/orders/${encodeURIComponent(code)}/refund`, { amount, restock });
+      return api.post<{ refundState: string }>(`/orders/${encodeURIComponent(code)}/refund`, { amount, restock, idempotencyKey: refundKey });
     },
-    onSuccess: () => { setRefundAmt(''); invalidate(); toast.success('Refund issued'); },
+    onSuccess: (result) => {
+      invalidate();
+      if (result.refundState === 'Settled') { setRefundAmt(''); setRefundKey(crypto.randomUUID()); toast.success('Refund issued'); }
+      else if (result.refundState === 'Pending') toast.success('Refund pending confirmation');
+      else { setRefundKey(crypto.randomUUID()); toast.error('Refund declined'); }
+    },
     onError: (e) => toast.error('Refund failed', getErrorMessage(e)),
   });
 

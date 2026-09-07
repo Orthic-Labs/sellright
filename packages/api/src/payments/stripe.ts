@@ -152,7 +152,7 @@ export const stripeProvider: PaymentProvider = {
       const state: RefundResult['state'] = r.status === 'succeeded' ? 'Settled' : r.status === 'pending' ? 'Pending' : 'Failed';
       return { state, providerRef: r.id, errorMessage: state === 'Failed' ? `refund status: ${r.status}` : null };
     } catch (e) {
-      return { state: 'Failed', providerRef: null, errorMessage: e instanceof Error ? e.message : 'refund failed' };
+      return { state: 'Pending', providerRef: null, errorMessage: 'Stripe refund outcome requires reconciliation' };
     }
   },
 };

@@ -206,9 +206,9 @@ admin.openapi(
       if (advancingToShipped) {
         const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
         for (const l of lines) {
-          const ship = l.quantity - l.fulfilledQty;
+          const ship = l.quantity - l.fulfilledQty - l.cancelledQty;
           if (ship <= 0) continue;
-          await tx.update(s.orderLine).set({ fulfilledQty: l.quantity }).where(eq(s.orderLine.id, l.id));
+          await tx.update(s.orderLine).set({ fulfilledQty: l.quantity - l.cancelledQty }).where(eq(s.orderLine.id, l.id));
           if (l.variantId) {
             await tx.update(s.stock).set({
               onHand: sql`greatest(${s.stock.onHand} - ${ship}, 0)`,
@@ -309,9 +309,9 @@ admin.openapi(
         if (advancingToShipped) {
           const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, order.id));
           for (const l of lines) {
-            const ship = l.quantity - l.fulfilledQty;
+            const ship = l.quantity - l.fulfilledQty - l.cancelledQty;
             if (ship <= 0) continue;
-            await tx.update(s.orderLine).set({ fulfilledQty: l.quantity }).where(eq(s.orderLine.id, l.id));
+            await tx.update(s.orderLine).set({ fulfilledQty: l.quantity - l.cancelledQty }).where(eq(s.orderLine.id, l.id));
             if (l.variantId) {
               await tx.update(s.stock).set({
                 onHand: sql`greatest(${s.stock.onHand} - ${ship}, 0)`,
@@ -376,7 +376,7 @@ admin.openapi(
       // had their allocation released (see fulfill), so release = unfulfilled qty.
       const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
       for (const l of lines) {
-        const release = l.quantity - l.fulfilledQty;
+        const release = l.quantity - l.fulfilledQty - l.cancelledQty;
         if (release > 0 && l.variantId) {
           await tx.update(s.stock).set({ allocated: sql`greatest(${s.stock.allocated} - ${release}, 0)` })
             .where(and(eq(s.stock.variantId, l.variantId), eq(s.stock.storeId, st.storeId)));

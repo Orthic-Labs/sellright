@@ -180,6 +180,7 @@ export async function verifyGatewayAttempt(storeId: string, id: string) {
   const [attempt] = await withStore(storeId, tx => tx.select().from(s.paymentAttempt)
     .where(eq(s.paymentAttempt.id, id)).limit(1));
   if (!attempt) throw new GatewayPaymentError(404, 'Payment not found');
+  if (attempt.operation === 'refund') throw new GatewayPaymentError(409, 'Use refund reconciliation for this attempt');
   if (attempt.method === 'sezzle') return verifySezzleAttempt(storeId, id);
   if (attempt.method !== 'nmi' || attempt.operation !== 'charge') {
     throw new GatewayPaymentError(409, 'This operation requires separate reconciliation');

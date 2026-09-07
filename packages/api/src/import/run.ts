@@ -109,9 +109,9 @@ export async function runMigration(input: {
       const copied = await stageVendureAssets(config.sourceAssetRoot, config.targetAssetRoot, config.storeId,
         assetRows as Array<{ id: unknown; source: string; preview: string | null }>, true);
       if (digest(copied) !== digest(assets)) throw new Error('Source assets changed during migration');
+      await source.query('COMMIT');
       await target.query('COMMIT');
-    } else await target.query('ROLLBACK');
-    await source.query('COMMIT');
+    } else { await source.query('COMMIT'); await target.query('ROLLBACK'); }
     return { applied: !!input.apply, sourceDigest, counts: Object.fromEntries(Object.entries(after).map(([table, rows]) => [table, rows.length])) };
   } catch (error) {
     await target?.query('ROLLBACK').catch(() => undefined);
@@ -134,7 +134,7 @@ export async function migrationCli() {
     config: migrationConfig.parse(await readPrivateJson(configPath)), manifestPath,
     apply: process.argv.includes('--apply'), expectedDigest: process.argv.includes('--expected-digest') ? arg('--expected-digest') : undefined,
   }).then(result => console.log(JSON.stringify(result))).catch(() => {
-    console.error('Migration aborted. Target transaction rolled back; inspect the source/configuration with private diagnostics.');
+    console.error('Migration stopped. Verify the destination against any prepared manifest before retrying; a lost commit response requires reconciliation.');
     process.exitCode = 1;
   });
 }

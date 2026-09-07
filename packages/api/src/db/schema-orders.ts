@@ -84,6 +84,7 @@ export const orderLine = pgTable('order_line', {
   variantId: uuid().references(() => productVariant.id),
   variantSku: text().notNull(), // snapshot at order time
   variantName: text().notNull(), // snapshot at order time
+  metadata: jsonb(),
   quantity: integer().notNull(),
   unitPrice: integer().notNull(), // cents, snapshot at add
   lineSubtotal: integer().notNull(),
@@ -91,6 +92,7 @@ export const orderLine = pgTable('order_line', {
   lineTax: integer().notNull().default(0),
   lineTotal: integer().notNull(),
   fulfilledQty: integer().notNull().default(0),
+  cancelledQty: integer().notNull().default(0),
   refundedQty: integer().notNull().default(0),
 });
 
@@ -213,6 +215,7 @@ export const payment = pgTable('payment', {
 export const refund = pgTable('refund', {
   id: uuid().primaryKey().defaultRandom(),
   storeId: uuid().notNull().references(() => store.id),
+  attemptId: uuid(),
   paymentId: uuid().notNull().references(() => payment.id),
   orderId: uuid().notNull().references(() => order.id),
   amount: integer().notNull(), // cents

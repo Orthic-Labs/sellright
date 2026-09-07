@@ -73,3 +73,10 @@ ALTER TABLE refund ADD COLUMN metadata jsonb;
 ALTER TABLE refund ADD COLUMN items_amount integer;
 ALTER TABLE refund ADD COLUMN shipping_amount integer;
 ALTER TABLE refund ADD COLUMN adjustment_amount integer;
+
+ALTER TABLE order_line ADD COLUMN metadata jsonb;
+
+ALTER TABLE refund ADD COLUMN attempt_id uuid;
+CREATE UNIQUE INDEX refund_store_attempt ON refund(store_id, attempt_id) WHERE attempt_id IS NOT NULL;
+
+ALTER TABLE order_line ADD COLUMN cancelled_qty integer NOT NULL DEFAULT 0;

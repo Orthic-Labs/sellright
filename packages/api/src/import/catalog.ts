@@ -88,11 +88,12 @@ export async function importCatalog(ctx: ImportContext): Promise<void> {
       await tx.insert(s.productOption).values({ id, storeId, groupId, value: o.name });
     }
 
+    const [global] = await q('SELECT "trackInventory", "outOfStockThreshold" FROM global_settings');
     const variantFacets = await q('SELECT "productVariantId" AS vid, "facetValueId" AS fid FROM product_variant_facet_values_facet_value');
     const productFacets = await q('SELECT "productId" AS pid, "facetValueId" AS fid FROM product_facet_values_facet_value');
     // --- variants (en name, price, custom fields) ---
     for (const v of await q(
-      `SELECT v.id, v."productId" AS pid, v.sku, v.enabled,
+      `SELECT v.id, v."productId" AS pid, v.sku, v.enabled, v."trackInventory", v."useGlobalOutOfStockThreshold", v."outOfStockThreshold",
               vt.name, pvp.price,
               v."customFieldsSaleprice" AS sale, v."customFieldsPreorderprice" AS preprice,
               v."customFieldsIspreorder" AS ispre, v."customFieldsShipdate" AS shipdate
@@ -103,6 +104,9 @@ export async function importCatalog(ctx: ImportContext): Promise<void> {
     )) {
       const productId = productMap.get(v.pid);
       if (!productId) continue; // variant of a deleted product
+      const tracked = v.trackInventory === 'INHERIT' ? global?.trackInventory : v.trackInventory === 'TRUE';
+      const threshold = v.useGlobalOutOfStockThreshold ? global?.outOfStockThreshold : v.outOfStockThreshold;
+      if (tracked !== true || Number(threshold) !== 0) throw new Error('Source inventory tracking/threshold needs explicit mapping: ' + v.id);
       if (v.price == null) throw new Error('Missing channel/currency price for source variant ' + v.id);
       const id = ctx.id('variant', v.id);
       variantMap.set(v.id, id);
@@ -134,7 +138,7 @@ export async function importCatalog(ctx: ImportContext): Promise<void> {
       if (variantId && optionId) await tx.insert(s.variantOption).values({ storeId, variantId, optionId });
     }
 
-    // --- stock levels (sum across locations; fresh system starts allocated=0) ---
+    // --- stock levels (preserve on-hand and allocated across locations) ---
     const vids = [...variantMap.keys()];
     if (vids.length) {
       const stockRows = (
@@ -180,7 +184,7 @@ export async function importCatalog(ctx: ImportContext): Promise<void> {
     const rootRows = await q(`SELECT id FROM collection WHERE "isRoot"=true`);
     const rootIds = new Set<number>(rootRows.map((r) => r.id));
     const cols = await q(
-      `SELECT c.id, c."parentId" AS parent, c.position, ct.name, ct.slug, ct.description
+      `SELECT c.id, c."parentId" AS parent, c.position, c."isPrivate", c."featuredAssetId", ct.name, ct.slug, ct.description
        FROM collection c JOIN collection_translation ct ON ct."baseId"=c.id AND ct."languageCode"=$1
        WHERE c."isRoot"=false ORDER BY c.position`, [LANG],
     );
@@ -201,7 +205,7 @@ export async function importCatalog(ctx: ImportContext): Promise<void> {
     for (const c of cols) {
       const parentId = c.parent && !rootIds.has(c.parent) ? collectionMap.get(c.parent) ?? null : null;
       await tx.insert(s.collection).values({
-        id: collectionMap.get(c.id)!, storeId, slug: c.slug, name: c.name, description: c.description ?? null, parentId,
+        id: collectionMap.get(c.id)!, storeId, slug: c.slug, name: c.name, description: c.description ?? null, parentId, published: !c.isPrivate, imageAssetId: assetMap.get(c.featuredAssetId) ?? null,
       });
     }
 

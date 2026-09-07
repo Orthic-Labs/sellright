@@ -44,7 +44,7 @@ export function createSezzleProvider(transport: GatewayFetch = fetch): PaymentPr
   const base = (account: GatewayAccount) =>
     account.mode === 'test' ? 'https://sandbox.gateway.sezzle.com' : 'https://gateway.sezzle.com';
 
-  async function request<T>(account: GatewayAccount, method: string, path: string, body?: unknown): Promise<T> {
+  async function request<T>(account: GatewayAccount, method: string, path: string, body?: unknown, requestId?: string): Promise<T> {
     if (account.method !== 'sezzle' || !account.publicKey || !account.privateKey) {
       throw new Error('Sezzle account is not configured');
     }
@@ -56,7 +56,7 @@ export function createSezzleProvider(transport: GatewayFetch = fetch): PaymentPr
     const credentials = JSON.parse(await boundedGatewayResponse(auth)) as { token?: string };
     if (!credentials.token) throw new Error('Sezzle authentication failed');
     const response = await transport(base(account) + '/v2' + path, {
-      method, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + credentials.token },
+      method, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + credentials.token, ...(requestId ? { 'Sezzle-Request-Id': requestId } : {}) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       signal: AbortSignal.timeout(20_000), redirect: 'error',
     });
@@ -149,7 +149,7 @@ export function createSezzleProvider(transport: GatewayFetch = fetch): PaymentPr
       try {
         const result = await request<{ uuid?: string }>(input.gateway!, 'POST',
           '/order/' + encodeURIComponent(input.providerRef) + '/refund',
-          { amount_in_cents: input.amount, currency: input.currency });
+          { amount_in_cents: input.amount, currency: input.currency }, input.idempotencyKey);
         if (!result.uuid) return { state: 'Pending', providerRef: null, errorMessage: 'Sezzle refund requires reconciliation' };
         return { state: 'Settled', providerRef: result.uuid };
       } catch {

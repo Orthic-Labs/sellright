@@ -9,6 +9,12 @@ const jsonArray = (v: unknown): Array<Record<string, unknown>> => {
   const parsed = asJson(v);
   return Array.isArray(parsed) ? parsed as Array<Record<string, unknown>> : [];
 };
+function address(value: unknown) {
+  const raw = asJson(value) as Record<string, unknown> | null;
+  if (!raw) return null;
+  return { ...raw, line1: raw.streetLine1 ?? raw.line1, line2: raw.streetLine2 ?? raw.line2,
+    phone: raw.phoneNumber ?? raw.phone, country: raw.countryCode ?? raw.country };
+}
 const n = (v: unknown) => (typeof v === 'number' ? v : Number(v ?? 0)) || 0;
 
 import type { ImportContext } from './context.js';
@@ -50,6 +56,9 @@ export async function importOrders(ctx: ImportContext): Promise<void> {
     );
 
     const orderRows = sourceOrders.map((o) => {
+      if (!['Cancelled','Refunded','PartiallyRefunded','PaymentSettled','PartiallyShipped','Shipped','PartiallyDelivered','Delivered','PaymentAuthorized'].includes(o.state)) {
+        throw new Error('Unsupported source order state: ' + o.state);
+      }
       const id = ctx.id('order', o.id);
       const sourceSubTotalWithTax = n(o.subt);
       orderMap.set(o.id, { id, sourceSubTotalWithTax });
@@ -66,7 +75,7 @@ export async function importOrders(ctx: ImportContext): Promise<void> {
         subtotal: sub, discountTotal: 0, shippingTotal: ship,
         taxTotal: sourceSubTotalWithTax - sub + (shipt - ship), grandTotal: sourceSubTotalWithTax + shipt,
         isPreOrder: o.ispre ?? false,
-        shippingAddress: asJson(o.shipaddr), billingAddress: asJson(o.billaddr),
+        shippingAddress: address(o.shipaddr), billingAddress: address(o.billaddr),
         placedAt: parseDate(o.placed),
       };
     });
@@ -108,6 +117,9 @@ export async function importOrders(ctx: ImportContext): Promise<void> {
           variantId: l.vid && variantIds.has(ctx.id('variant', l.vid)) ? ctx.id('variant', l.vid) : null,
           variantSku: l.sku ?? '(unknown)', variantName: l.pname ?? l.sku ?? '(unknown)',
           quantity, ...money,
+          metadata: { vendure: { id: l.id, variantId: l.vid, quantity,
+            placedQuantity: n(l.placed_qty) || quantity, listPrice: n(l.price),
+            listPriceIncludesTax: Boolean(l.includes_tax), adjustments: jsonArray(l.adjustments), taxLines: jsonArray(l.tax_lines) } },
         };
       })
       .filter((x): x is NonNullable<typeof x> => x !== null);

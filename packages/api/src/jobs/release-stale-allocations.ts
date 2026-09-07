@@ -75,7 +75,7 @@ export async function releaseStaleAllocations(opts: ReleaseStaleOpts): Promise<{
 
       const orderIds = stale.map((o) => o.id);
       const lines = await tx
-        .select({ orderId: s.orderLine.orderId, variantId: s.orderLine.variantId, quantity: s.orderLine.quantity, fulfilledQty: s.orderLine.fulfilledQty })
+        .select({ orderId: s.orderLine.orderId, variantId: s.orderLine.variantId, quantity: s.orderLine.quantity, fulfilledQty: s.orderLine.fulfilledQty, cancelledQty: s.orderLine.cancelledQty })
         .from(s.orderLine)
         .where(sql`${s.orderLine.orderId} IN ${orderIds}`);
 
@@ -85,7 +85,7 @@ export async function releaseStaleAllocations(opts: ReleaseStaleOpts): Promise<{
       const releaseByVariant = new Map<string, number>();
       let released = 0;
       for (const l of lines) {
-        const rel = l.quantity - l.fulfilledQty;
+        const rel = l.quantity - l.fulfilledQty - l.cancelledQty;
         if (rel > 0 && l.variantId) {
           releaseByVariant.set(l.variantId, (releaseByVariant.get(l.variantId) ?? 0) + rel);
           released += rel;

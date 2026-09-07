@@ -51,24 +51,18 @@ export async function importSettings(ctx: ImportContext) {
   });
   if (!methods.length) throw new Error('No physical shipping methods in source');
   const rates = await q('SELECT * FROM tax_rate WHERE enabled=true ORDER BY id');
-  const categories = new Set(rates.map(rate => String(rate.categoryId)));
-  if (categories.size > 1 || rates.some(rate => rate.customerGroupId != null)) {
-    throw new Error('Source tax categories or customer-group taxes require explicit mapping');
-  }
-  const members = rates.length ? await q(`SELECT z."zoneId", r.code, r.type FROM zone_members_region z
-    JOIN region r ON r.id=z."regionId" ORDER BY z."zoneId", r.code`) : [];
-  const countryRates = new Map<string, number>();
-  for (const rate of rates) {
-    const countries = members.filter(member => member.zoneId === rate.zoneId);
-    if (!countries.length || countries.some(member => member.type !== 'country')) throw new Error('Unsupported tax zone geography');
-    const basisPoints = Math.round(Number(rate.value) * 100);
-    for (const country of countries) {
-      if (countryRates.has(country.code) && countryRates.get(country.code) !== basisPoints) throw new Error('Ambiguous country tax rates');
-      countryRates.set(country.code, basisPoints);
-    }
-    await tx.insert(s.taxZone).values({ id: ctx.id('tax-rate', rate.id), storeId,
-      name: rate.name, countries: countries.map(country => country.code), rate: basisPoints, enabled: true });
-  }
+  // DD uses Vendure DefaultTaxZoneStrategy: channel default zone, not ship-to country.
+  const [channel] = await q('SELECT "defaultTaxZoneId" FROM channel WHERE id=$1', [ctx.channelId]);
+  const categories = await q('SELECT DISTINCT "taxCategoryId" FROM product_variant WHERE "deletedAt" IS NULL');
+  const effective = categories.map(category => {
+    const matches = rates.filter(rate => rate.zoneId === channel?.defaultTaxZoneId && rate.categoryId === category.taxCategoryId);
+    if (matches.some(rate => rate.customerGroupId != null) || matches.length > 1) throw new Error('Unsupported source tax rule');
+    const rate = Number(matches[0]?.value ?? 0);
+    if (!Number.isFinite(rate) || rate < 0) throw new Error('Invalid source tax rate');
+    return Math.round(rate * 100);
+  });
+  if (new Set(effective).size > 1) throw new Error('Product-specific tax rates require explicit mapping');
+  await tx.update(s.store).set({ taxRate: effective[0] ?? 0 }).where(eq(s.store.id, storeId));
   const locations = await q('SELECT * FROM stock_location ORDER BY id');
   for (const [index, location] of locations.entries()) await tx.insert(s.location).values({
     id: ctx.id('location', location.id), storeId, code: 'vendure-' + location.id,
