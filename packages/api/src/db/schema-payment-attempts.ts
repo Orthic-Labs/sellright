@@ -23,3 +23,21 @@ export const paymentAttempt = pgTable('payment_attempt', {
   createdAt: ts(),
   updatedAt: ts(),
 }, (t) => [unique('payment_attempt_store_key').on(t.storeId, t.idempotencyKey)]);
+
+/** Authenticated inbound events survive retries, reordering and API restarts. */
+export const gatewayEvent = pgTable('gateway_event', {
+  id: uuid().primaryKey().defaultRandom(),
+  storeId: uuid().notNull().references(() => store.id),
+  method: text().notNull(),
+  accountId: text().notNull(),
+  mode: text().notNull(),
+  eventId: text().notNull(),
+  eventType: text().notNull(),
+  providerRef: text().notNull(),
+  status: text().notNull().default('pending'),
+  attempts: integer().notNull().default(0),
+  details: jsonb(),
+  lastError: text(),
+  createdAt: ts(),
+  updatedAt: ts(),
+}, t => [unique('gateway_event_identity').on(t.storeId, t.method, t.accountId, t.mode, t.eventId)]);

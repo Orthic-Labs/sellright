@@ -14,6 +14,7 @@ import * as s from '../db/schema.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
 import type { PaymentResult } from './provider.js';
 import { issueLicensesForPaidOrder } from '../licensing/issue.js';
+import { enqueuePaidEffects } from './paid-effects.js';
 import { enqueuePush, buildOrderPushPayload } from '../push/outbox.js';
 
 /**
@@ -54,7 +55,11 @@ export async function applyPaymentResult(
   // gift-card draw-down at checkout) can leave less than grandTotal owed.
   opts: { storeId: string; order: SettleOrderRef; method: string; result: PaymentResult; amount?: number },
 ): Promise<{ orderState: OrderState; paymentState: PaymentResult['state'] }> {
-  const { storeId, order, method, result } = opts;
+  const { storeId, method, result } = opts;
+  const [current] = await tx.select().from(s.order)
+    .where(and(eq(s.order.id, opts.order.id), eq(s.order.storeId, storeId))).limit(1).for('update');
+  if (!current) throw new Error('Payment order is missing');
+  const order = current;
   const amount = opts.amount ?? order.grandTotal;
   const identity = (result.metadata as { gateway?: { accountId?: string; mode?: string } } | null)?.gateway;
   const gatewayAccount = identity?.accountId ?? null;
@@ -101,6 +106,7 @@ export async function applyPaymentResult(
         const paidAt = new Date();
         await tx.update(s.order).set({ state: 'Paid', placedAt: paidAt }).where(eq(s.order.id, order.id));
         await issueLicensesForPaidOrder(tx, { storeId, orderId: order.id, customerId: order.customerId ?? null, paidAt });
+        await enqueuePaidEffects(tx, storeId, order.id);
         // Mobile push for the ASYNC paid paths (Stripe webhook, /pay, subscription
         // renewal). The synchronous checkout enqueues its own — it never calls this
         // function, so there's no double-ding. Guarded by the processed-event claim

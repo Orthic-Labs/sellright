@@ -76,7 +76,7 @@ export function createApp(): OpenAPIHono {
     const handler = cors({
       origin: allowed ? (origin as string) : '',
       credentials: true,
-      allowHeaders: ['Content-Type', 'Authorization', 'x-csrf-token', 'x-store-slug'],
+      allowHeaders: ['Content-Type', 'Authorization', 'x-csrf-token', 'x-store-slug', 'x-receipt-token', 'idempotency-key'],
     });
     return handler(c, next);
   });

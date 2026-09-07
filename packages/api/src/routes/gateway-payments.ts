@@ -1,6 +1,6 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { z } from 'zod';
-import { and, eq } from 'drizzle-orm';
+import { bodyLimit } from 'hono/body-limit';
 import { customerToken } from '../auth/session.js';
 import { clientIp, attemptRetryAfter } from '../auth/rate-limit.js';
 import { withStore } from '../db/client.js';
@@ -13,6 +13,7 @@ import {
 } from '../payments/gateway-payment.js';
 
 export const gatewayPayments = new OpenAPIHono();
+gatewayPayments.use('/v1/webhooks/sezzle/*', bodyLimit({ maxSize: 262144 }));
 const requestSchema = z.object({
   method: z.enum(['nmi', 'sezzle']),
   token: z.string().min(1).max(4096).optional(),
@@ -76,27 +77,11 @@ gatewayPayments.post('/v1/webhooks/sezzle/:storeId/:accountId', async c => {
     data: z.object({ uuid: z.string() }).passthrough(),
   }).safeParse(payload);
   if (!body.success) return c.json({ error: 'Invalid event' }, 400);
-  const [attempt] = await withStore(storeId, tx => tx.select().from(s.paymentAttempt).where(and(
-    eq(s.paymentAttempt.accountId, account.accountId), eq(s.paymentAttempt.mode, account.mode),
-    eq(s.paymentAttempt.method, 'sezzle'), eq(s.paymentAttempt.providerRef, body.data.data.uuid),
-    eq(s.paymentAttempt.operation, 'session'),
-  )).limit(1));
-  // The event can beat the session response commit. Return retryable failure;
-  // never acknowledge an event for which no durable association exists yet.
-  if (!attempt) return c.json({ error: 'Payment association pending' }, 503);
-  const eventId = 'sezzle:' + account.accountId + ':' + body.data.uuid;
-  const [seen] = await withStore(storeId, tx => tx.select({ id: s.processedEvent.id }).from(s.processedEvent)
-    .where(and(eq(s.processedEvent.id, eventId), eq(s.processedEvent.storeId, storeId))).limit(1));
-  if (seen) return c.json({ received: true }, 200);
-  if (!['order.authorized', 'order.captured'].includes(body.data.event)) {
-    return c.json({ error: 'Event requires operator reconciliation' }, 503);
-  }
-  try {
-    const result = await verifySezzleAttempt(storeId, attempt.id);
-    if (result.status === 'unknown') return c.json({ error: 'Verification unavailable' }, 503);
-    await withStore(storeId, tx => tx.insert(s.processedEvent).values({
-      id: eventId, storeId, type: 'sezzle-webhook',
-    }).onConflictDoNothing());
-    return c.json({ received: true }, 200);
-  } catch { return c.json({ error: 'Reconciliation unavailable' }, 503); }
+  await withStore(storeId, tx => tx.insert(s.gatewayEvent).values({
+    storeId, method: 'sezzle', accountId: account.accountId, mode: account.mode,
+    eventId: body.data.uuid, eventType: body.data.event, providerRef: body.data.data.uuid,
+    // Persist identity only; provider GET is authoritative for money and status.
+    details: { receivedAt: new Date().toISOString() },
+  }).onConflictDoNothing());
+  return c.json({ received: true }, 200);
 });

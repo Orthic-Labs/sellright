@@ -12,7 +12,7 @@ type Line = { variantName: string; variantSku: string; quantity: number; unitPri
 export function prepareSezzleSession(input: {
   order: Snapshot; lines: Line[]; account: GatewayAccount; amount: number;
   attemptId: string; storefrontUrl?: string;
-  customer?: { email: string; firstName: string; lastName: string };
+  customer?: { email: string; firstName: string | null; lastName: string | null };
 }): SezzleSessionInput {
   const { order, account, amount, attemptId } = input;
   if (!input.storefrontUrl) throw new Error('Storefront URL required');

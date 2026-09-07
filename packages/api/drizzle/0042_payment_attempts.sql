@@ -40,3 +40,28 @@ ALTER TABLE payment_attempt FORCE ROW LEVEL SECURITY;
 CREATE POLICY store_isolation ON payment_attempt
   USING (store_id = nullif(current_setting('app.current_store', true), '')::uuid)
   WITH CHECK (store_id = nullif(current_setting('app.current_store', true), '')::uuid);
+
+--> statement-breakpoint
+CREATE TABLE gateway_event (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  store_id uuid NOT NULL REFERENCES store(id),
+  method text NOT NULL,
+  account_id text NOT NULL,
+  mode text NOT NULL CHECK (mode IN ('test','live')),
+  event_id text NOT NULL,
+  event_type text NOT NULL,
+  provider_ref text NOT NULL,
+  status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','processed','manual')),
+  attempts integer NOT NULL DEFAULT 0,
+  details jsonb,
+  last_error text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT gateway_event_identity UNIQUE (store_id, method, account_id, mode, event_id)
+);
+CREATE INDEX gateway_event_pending ON gateway_event(store_id, status, updated_at);
+ALTER TABLE gateway_event ENABLE ROW LEVEL SECURITY;
+ALTER TABLE gateway_event FORCE ROW LEVEL SECURITY;
+CREATE POLICY store_isolation ON gateway_event
+  USING (store_id = nullif(current_setting('app.current_store', true), '')::uuid)
+  WITH CHECK (store_id = nullif(current_setting('app.current_store', true), '')::uuid);

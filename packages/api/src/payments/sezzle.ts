@@ -12,7 +12,8 @@ interface SezzleOrder {
   reference_id: string;
   order_amount: Money;
   checkout_status?: string;
-  authorization?: { approved?: boolean; captures?: Event[]; refunds?: Event[] };
+  authorization?: { approved?: boolean; expiration?: string; captures?: Event[]; refunds?: Event[]; releases?: Event[] };
+  dispute?: { id?: number; status?: string };
 }
 
 export interface SezzleSessionInput extends CreatePaymentInput {
@@ -122,6 +123,19 @@ export function createSezzleProvider(transport: GatewayFetch = fetch): PaymentPr
           captured += capture.amount.amount_in_cents;
         }
         if (captured !== 0 && captured !== input.amount) return pending(input.token, 'partial_or_excess_capture');
+        if (order.dispute?.id || order.authorization?.refunds?.length) {
+          return { ...pending(input.token, 'refund_or_dispute_requires_reconciliation'),
+            metadata: { needsReconciliation: true, reason: 'refund_or_dispute_requires_reconciliation',
+              captureRefs: [...refs], refunds: order.authorization?.refunds ?? [], dispute: order.dispute ?? null } };
+        }
+        if (!captured && ['denied', 'deleted'].includes(order.checkout_status ?? '')) {
+          return { state: 'Declined', providerRef: input.token,
+            metadata: { gateway: gatewayIdentity(input.gateway!), checkoutStatus: order.checkout_status } };
+        }
+        if (!captured && order.authorization?.approved && order.authorization.expiration &&
+            Date.parse(order.authorization.expiration) < Date.now()) {
+          return pending(input.token, 'authorization_expired_requires_reconciliation');
+        }
         return {
           state: captured === input.amount ? 'Settled' : order.authorization?.approved ? 'Authorized' : 'Pending',
           providerRef: input.token, metadata: { gateway: gatewayIdentity(input.gateway!), captureRefs: [...refs] },

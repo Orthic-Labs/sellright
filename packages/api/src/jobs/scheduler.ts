@@ -21,6 +21,7 @@
 import { env } from '../env.js';
 import { autoDeliver } from './auto-deliver.js';
 import { releaseStaleAllocations } from './release-stale-allocations.js';
+import { reconcileGatewayEvents } from './reconcile-gateway-events.js';
 import { reapStuckWebhooks } from './webhook-reaper.js';
 import { reapProcessedEvents } from './processed-event-reaper.js';
 import { abandonStaleCarts, cleanupExpiredCarts } from './cart-maintenance.js';
@@ -82,6 +83,7 @@ export function startJobScheduler(): void {
     cartTtlDays: env.CART_TTL_DAYS,
   });
 
+  every(60_000, 'gateway-events', 'gateway-events', reconcileGatewayEvents);
   every(HOUR, 'auto-deliver', 'auto-deliver', () => autoDeliver({ apply: autoDeliverApply, days: autoDeliverDays, log: jobLog }));
   every(15 * 60_000, 'release-stale', 'release-stale', () => releaseStaleAllocations({ apply: releaseApply, ttlMin: releaseTtlMin, log: jobLog }));
   // Cart lifecycle: flag inactive non-empty carts abandoned (emits cart.abandoned
