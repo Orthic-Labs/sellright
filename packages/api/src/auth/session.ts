@@ -45,7 +45,11 @@ export interface SessionCustomer {
   isMigrated: boolean;
 }
 
-export async function resolveCustomer(tx: Tx, token: string): Promise<SessionCustomer | null> {
+export async function resolveCustomer(
+  tx: Tx,
+  token: string,
+  forceRenew = false,
+): Promise<SessionCustomer | null> {
   const rows = await tx
     .select({
       id: s.customer.id,
@@ -65,7 +69,9 @@ export async function resolveCustomer(tx: Tx, token: string): Promise<SessionCus
     .limit(1);
   const row = rows[0];
   if (!row) return null;
-  const renewedExpiry = renewedSessionExpiry(row.sessionExpiresAt);
+  const renewedExpiry = forceRenew
+    ? new Date(Date.now() + CUSTOMER_SESSION_TTL_MS)
+    : renewedSessionExpiry(row.sessionExpiresAt);
   if (renewedExpiry) {
     await tx
       .update(s.session)
