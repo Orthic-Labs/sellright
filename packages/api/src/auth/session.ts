@@ -4,7 +4,14 @@ import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { cookie, CUST_COOKIE } from './cookies.js';
 
-const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+export const CUSTOMER_SESSION_TTL_MS = 365 * 24 * 60 * 60 * 1000; // 1 year
+export const CUSTOMER_SESSION_RENEW_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+
+export function renewedSessionExpiry(expiresAt: Date, nowMs = Date.now()): Date | null {
+  return expiresAt.getTime() <= nowMs + CUSTOMER_SESSION_RENEW_WINDOW_MS
+    ? new Date(nowMs + CUSTOMER_SESSION_TTL_MS)
+    : null;
+}
 const hashToken = (t: string) => createHash('sha256').update(t).digest('hex');
 
 /** Create a customer session, return the raw token (only the hash is stored). */
@@ -14,7 +21,7 @@ export async function createSession(tx: Tx, storeId: string, customerId: string)
     storeId,
     customerId,
     tokenHash: hashToken(token),
-    expiresAt: new Date(Date.now() + SESSION_TTL_MS),
+    expiresAt: new Date(Date.now() + CUSTOMER_SESSION_TTL_MS),
   });
   return token;
 }
@@ -49,6 +56,8 @@ export async function resolveCustomer(tx: Tx, token: string): Promise<SessionCus
       emailVerified: s.customer.emailVerified,
       activeVerifications: s.customer.activeVerifications,
       passwordHash: s.customer.passwordHash,
+      sessionId: s.session.id,
+      sessionExpiresAt: s.session.expiresAt,
     })
     .from(s.session)
     .innerJoin(s.customer, eq(s.customer.id, s.session.customerId))
@@ -56,7 +65,15 @@ export async function resolveCustomer(tx: Tx, token: string): Promise<SessionCus
     .limit(1);
   const row = rows[0];
   if (!row) return null;
-  return { ...row, activeVerifications: row.activeVerifications ?? [], isMigrated: row.passwordHash == null };
+  const renewedExpiry = renewedSessionExpiry(row.sessionExpiresAt);
+  if (renewedExpiry) {
+    await tx
+      .update(s.session)
+      .set({ expiresAt: renewedExpiry })
+      .where(eq(s.session.id, row.sessionId));
+  }
+  const { sessionId: _sessionId, sessionExpiresAt: _sessionExpiresAt, ...customer } = row;
+  return { ...customer, activeVerifications: customer.activeVerifications ?? [], isMigrated: customer.passwordHash == null };
 }
 
 export async function deleteSession(tx: Tx, token: string): Promise<void> {
