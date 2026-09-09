@@ -160,13 +160,13 @@ describe('POST /v1/shop/auth/login', () => {
 });
 
 describe('GET /v1/shop/auth/me — native session renewal', () => {
-  it('extends a valid near-expiry bearer session for one year', async () => {
+  it('extends any valid bearer session for one year', async () => {
     const reg = await app.request('/v1/shop/auth/register', {
       method: 'POST', headers: hdr(), body: JSON.stringify({ email: 'renew@auth.test', password: 'renewpassword1' }),
     });
     const body = await reg.json() as { token: string };
     await withStore(STORE, async (tx) => {
-      await tx.update(s.session).set({ expiresAt: new Date(Date.now() + 86_400_000) });
+      await tx.update(s.session).set({ expiresAt: new Date(Date.now() + 180 * 86_400_000) });
     });
 
     const res = await app.request('/v1/shop/auth/me', {

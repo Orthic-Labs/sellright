@@ -189,7 +189,9 @@ auth.openapi(
     const st = await resolveStoreFromCtx(c);
     const token = customerToken(c);
     if (!token) return c.json({ error: 'not authenticated' }, 401);
-    const cust = await withStore(st.id, (tx) => resolveCustomer(tx, token));
+    // Account clients call /auth/me explicitly when Account settings opens;
+    // make that refresh authoritative so their one-year display is exact.
+    const cust = await withStore(st.id, (tx) => resolveCustomer(tx, token, true));
     if (!cust) return c.json({ error: 'not authenticated' }, 401);
     return c.json({ id: cust.id, email: cust.email, firstName: cust.firstName, lastName: cust.lastName, phone: cust.phone, emailVerified: cust.emailVerified, isMigrated: cust.isMigrated }, 200);
   },
