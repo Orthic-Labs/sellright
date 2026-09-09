@@ -6,7 +6,7 @@ import { resolveStoreFromCtx } from './store-context.js';
 import { type StoreCtx } from '../store-context.js';
 import * as s from '../db/schema.js';
 import { calculateOrderTotals, type Promotion } from '../money/totals.js';
-import { evaluateCoupon } from '../money/coupon.js';
+import { evaluateCoupon, productFacetIds } from '../money/coupon.js';
 import { selectAutomaticPromotion } from '../money/auto-discount.js';
 import { resolveTaxRate } from '../money/tax.js';
 import { customerToken, resolveCustomer } from '../auth/session.js';
@@ -35,7 +35,7 @@ type PricedCart = {
  * trusts client-supplied prices: re-reads each variant, re-selects the price,
  * re-validates the coupon. Must run inside a withStore tx.
  */
-async function priceCart(
+export async function priceCart(
   tx: Tx,
   st: StoreCtx,
   items: Array<{ sku: string; quantity: number }>,
@@ -45,7 +45,7 @@ async function priceCart(
   const variants = skus.length
     ? await tx
         .select({
-          sku: s.productVariant.sku, name: s.productVariant.name, price: s.productVariant.price,
+          sku: s.productVariant.sku, name: s.productVariant.name, price: s.productVariant.price, metafields: s.productVariant.metafields,
           salePrice: s.productVariant.salePrice, isPreOrder: s.productVariant.isPreOrder,
           preOrderPrice: s.productVariant.preOrderPrice, enabled: s.productVariant.enabled,
         })
@@ -77,7 +77,7 @@ async function priceCart(
     if (!promo) {
       coupon = { code: opts.couponCode, applied: false, reason: 'invalid or expired code' };
     } else {
-      const ev = evaluateCoupon({ type: promo.type, value: promo.value, conditions: promo.conditions }, { subtotal: availSubtotal, activeVerifications });
+      const ev = evaluateCoupon({ type: promo.type, value: promo.value, conditions: promo.conditions }, { subtotal: availSubtotal, activeVerifications, items: items.filter(i => bySku.has(i.sku)).map(i => ({ quantity: i.quantity, facetValueIds: productFacetIds(bySku.get(i.sku)?.metafields) })) });
       if (ev.valid && ev.promotion) { promotion = ev.promotion; coupon = { code: opts.couponCode, applied: true }; }
       else coupon = { code: opts.couponCode, applied: false, reason: ev.reason };
     }
@@ -90,7 +90,7 @@ async function priceCart(
       .where(and(isNull(s.promotion.code), eq(s.promotion.enabled, true), timeValid));
     const best = selectAutomaticPromotion(
       autos.map((a) => ({ id: a.id, type: a.type, value: a.value, conditions: a.conditions, priority: a.priority })),
-      { subtotal: availSubtotal, activeVerifications },
+      { subtotal: availSubtotal, activeVerifications, items: items.filter(i => bySku.has(i.sku)).map(i => ({ quantity: i.quantity, facetValueIds: productFacetIds(bySku.get(i.sku)?.metafields) })) },
     );
     if (best) promotion = { type: best.type, value: best.value };
   }

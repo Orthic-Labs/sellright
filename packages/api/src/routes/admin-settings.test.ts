@@ -71,7 +71,7 @@ describe('sanitizePaymentSettingsPatch', () => {
       stripe: true,
     });
     expect(() => sanitizePaymentSettingsPatch({ paypal: true })).toThrow(/unsupported payment provider/);
-    expect(() => sanitizePaymentSettingsPatch({ nmi: true, sezzle: true })).toThrow(/unsupported payment provider/);
+    expect(sanitizePaymentSettingsPatch({ nmi: true, sezzle: true })).toEqual({ nmi: true, sezzle: true });
   });
 });
 

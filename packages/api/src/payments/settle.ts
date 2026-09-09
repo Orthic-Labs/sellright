@@ -14,6 +14,7 @@ import * as s from '../db/schema.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
 import type { PaymentResult } from './provider.js';
 import { issueLicensesForPaidOrder } from '../licensing/issue.js';
+import { enqueuePaidEffects } from './paid-effects.js';
 import { enqueuePush, buildOrderPushPayload } from '../push/outbox.js';
 
 /**
@@ -54,49 +55,44 @@ export async function applyPaymentResult(
   // gift-card draw-down at checkout) can leave less than grandTotal owed.
   opts: { storeId: string; order: SettleOrderRef; method: string; result: PaymentResult; amount?: number },
 ): Promise<{ orderState: OrderState; paymentState: PaymentResult['state'] }> {
-  const { storeId, order, method, result } = opts;
+  const { storeId, method, result } = opts;
+  const [current] = await tx.select().from(s.order)
+    .where(and(eq(s.order.id, opts.order.id), eq(s.order.storeId, storeId))).limit(1).for('update');
+  if (!current) throw new Error('Payment order is missing');
+  const order = current;
   const amount = opts.amount ?? order.grandTotal;
-  // MONEY-1: /pay and the Stripe webhook reconcile path both call this function
-  // for the same capture — a concurrent settle race (client's /pay call and the
-  // webhook landing at nearly the same instant) can reach here twice for the
-  // same (storeId, providerRef). The partial unique index (migration 0037;
-  // WHERE provider_ref IS NOT NULL, so manual/cod rows never collide) makes the
-  // second insert a no-op instead of a duplicate ledger row. onConflictDoNothing
-  // + .returning() lets us detect that no-op (0 rows) without a separate SELECT.
-  //
-  // MONEY-3: `amount` is the amount ACTUALLY charged for this capture — the
-  // caller computes it via amountDueForOrder (grandTotal minus prior Settled
-  // tenders), never order.grandTotal. Recording anything else here would make
-  // the ledger lie about what the customer was charged.
-  const inserted = await tx
-    .insert(s.payment)
-    .values({
-      storeId,
-      orderId: order.id,
-      amount,
-      method,
-      providerRef: result.providerRef,
-      state: result.state, // PaymentResult states are all members of the payment_state enum
-      metadata: (result.metadata ?? null) as object | null,
-      errorMessage: result.errorMessage ?? null,
-    })
-    // The arbiter is the PARTIAL unique index (migration 0037), so the ON
-    // CONFLICT target MUST carry the same `WHERE provider_ref IS NOT NULL`
-    // predicate — without it Postgres cannot infer the arbiter index and every
-    // payment insert fails with 42P10 (infer_arbiter_indexes). Null provider_ref
-    // rows (manual/cod) fall outside the index and never conflict.
-    .onConflictDoNothing({
-      target: [s.payment.storeId, s.payment.providerRef],
-      where: sql`${s.payment.providerRef} is not null`,
-    })
-    .returning({ id: s.payment.id });
-  if (inserted.length === 0) {
-    // Already settled by the other caller (webhook vs /pay race). Skip the FSM
-    // transition + license issuance — they already ran (or are about to run) on
-    // whichever call won the insert. Report the order's CURRENT state rather
-    // than re-deriving from `result`, since the winning call may have already
-    // moved it to Paid.
-    return { orderState: order.state as OrderState, paymentState: result.state };
+  const identity = (result.metadata as { gateway?: { accountId?: string; mode?: string } } | null)?.gateway;
+  const gatewayAccount = identity?.accountId ?? null;
+  const gatewayMode = identity?.mode ?? null;
+  const row = {
+    storeId, orderId: order.id, amount, method,
+    providerRef: result.providerRef, state: result.state,
+    gatewayAccount, gatewayMode, currency: order.currency,
+    metadata: (result.metadata ?? null) as object | null,
+    errorMessage: result.errorMessage ?? null,
+  };
+  const inserted = await tx.insert(s.payment).values(row)
+    .onConflictDoNothing().returning({ id: s.payment.id });
+  if (!inserted.length) {
+    const [existing] = await tx.select().from(s.payment).where(and(
+      eq(s.payment.storeId, storeId), eq(s.payment.method, method),
+      eq(s.payment.providerRef, result.providerRef!),
+      sql`coalesce(${s.payment.gatewayAccount}, '') = ${gatewayAccount ?? ''}`,
+      sql`coalesce(${s.payment.gatewayMode}, '') = ${gatewayMode ?? ''}`,
+    )).limit(1).for('update');
+    if (!existing || existing.orderId !== order.id || existing.amount !== amount ||
+        (existing.currency && existing.currency !== order.currency)) {
+      throw new Error('Payment reference does not match the order and amount');
+    }
+    // A duplicate or delayed webhook must never downgrade captured funds.
+    if (existing.state === 'Settled' ||
+        (existing.state === 'Authorized' && result.state === 'Pending') ||
+        (existing.state !== 'Pending' && result.state !== 'Settled' && existing.state === result.state)) {
+      return { orderState: order.state as OrderState, paymentState: existing.state };
+    }
+    await tx.update(s.payment).set({
+      state: result.state, metadata: row.metadata, errorMessage: row.errorMessage,
+    }).where(eq(s.payment.id, existing.id));
   }
   if (result.state === 'Settled') {
     if (canTransition(order.state as OrderState, 'Paid')) {
@@ -110,6 +106,7 @@ export async function applyPaymentResult(
         const paidAt = new Date();
         await tx.update(s.order).set({ state: 'Paid', placedAt: paidAt }).where(eq(s.order.id, order.id));
         await issueLicensesForPaidOrder(tx, { storeId, orderId: order.id, customerId: order.customerId ?? null, paidAt });
+        await enqueuePaidEffects(tx, storeId, order.id);
         // Mobile push for the ASYNC paid paths (Stripe webhook, /pay, subscription
         // renewal). The synchronous checkout enqueues its own — it never calls this
         // function, so there's no double-ding. Guarded by the processed-event claim

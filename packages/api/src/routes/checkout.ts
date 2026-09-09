@@ -5,7 +5,7 @@ import { withStore } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
 import { calculateOrderTotals, type Promotion } from '../money/totals.js';
-import { evaluateCoupon } from '../money/coupon.js';
+import { evaluateCoupon, productFacetIds } from '../money/coupon.js';
 import { selectAutomaticPromotion } from '../money/auto-discount.js';
 import { resolveTaxRate } from '../money/tax.js';
 import { applyGiftCard } from '../money/gift-card.js';
@@ -174,12 +174,13 @@ checkout.openapi(
         ? await tx.select().from(s.shippingMethod).where(eq(s.shippingMethod.enabled, true))
         : [];
       let shippingAmount: number;
+      let shippingCalculator: import('../shipping/calculator.js').ShippingCalculator | undefined;
       if (!requiresShipping) {
         shippingAmount = 0;
       } else if (body.shippingMethodCode) {
         const m = methods.find((x) => x.code === body.shippingMethodCode);
         if (!m) throw new ShippingUnavailableError('method_not_found');
-        if (!isMethodEligible(m.calculator, { subtotal: subtotalCents, country: shipCountry })) throw new ShippingUnavailableError('not_eligible');
+        shippingCalculator = m.calculator as import('../shipping/calculator.js').ShippingCalculator;
         shippingAmount = shippingRate(m.calculator);
       } else if (methods.length > 0) {
         // Methods exist but none chosen — force an explicit, validated selection.
@@ -234,7 +235,7 @@ checkout.openapi(
             .where(and(isNull(s.promotion.code), eq(s.promotion.enabled, true), timeValid));
           const best = selectAutomaticPromotion(
             autos.map((a) => ({ id: a.id, type: a.type, value: a.value, conditions: a.conditions, priority: a.priority })),
-            { subtotal: subtotalCents, activeVerifications },
+            { subtotal: subtotalCents, activeVerifications, items: priced.map(p => ({ quantity: p.qty, facetValueIds: productFacetIds(p.v.metafields) })) },
           );
           promo = best ? autos.find((a) => a.id === best.id) : undefined;
         }
@@ -256,7 +257,7 @@ checkout.openapi(
           }
           const ev = evaluateCoupon(
             { type: promo.type, value: promo.value, conditions: promo.conditions },
-            { subtotal: subtotalCents, activeVerifications },
+            { subtotal: subtotalCents, activeVerifications, items: priced.map(p => ({ quantity: p.qty, facetValueIds: productFacetIds(p.v.metafields) })) },
           );
           // Apply only if valid AND within limits; else proceed at full price
           // (server is authoritative — the returned grandTotal is the truth).
@@ -271,7 +272,12 @@ checkout.openapi(
         .where(eq(s.taxZone.enabled, true));
       const taxRate = resolveTaxRate(taxZones, shipCountry, st.taxRate);
 
+      const discounted = calculateOrderTotals({ lines: priced.map(p => ({ unitPrice: p.unitPrice, quantity: p.qty })),
+        shipping: 0, taxRate, taxInclusive: st.taxInclusive, promotion });
+      if (shippingCalculator && !isMethodEligible(shippingCalculator, { subtotal: subtotalCents, country: shipCountry,
+        discountedSubtotalWithTax: discounted.grandTotal })) throw new ShippingUnavailableError('not_eligible');
       const totals = calculateOrderTotals({
+        shippingTaxRate: shippingCalculator?.taxRate, shippingTaxInclusive: shippingCalculator?.taxInclusive,
         lines: priced.map((p) => ({ unitPrice: p.unitPrice, quantity: p.qty })),
         shipping: shippingAmount, taxRate, taxInclusive: st.taxInclusive, shippingTaxable: st.shippingTaxable, promotion,
       });
@@ -292,7 +298,9 @@ checkout.openapi(
         // WP9.5: attach the link provenance to the order metadata. The account
         // order-list endpoint reads this to suppress email_match-linked orders
         // until the customer verifies the email.
-        metadata: linkedVia ? { linked_via: linkedVia } : null,
+        metadata: { ...(linkedVia ? { linked_via: linkedVia } : {}),
+          contact: { email: normalizeEmail(sessionCustomer?.email ?? body.email ?? '') },
+          taxInclusive: st.taxInclusive },
       });
       await tx.insert(s.orderLine).values(
         priced.map((p, idx) => ({

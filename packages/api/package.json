@@ -19,11 +19,15 @@
     "db:assert-hand-written": "tsx src/db/assert-hand-written-migrations.ts",
     "assert:shop-isolation": "node scripts/assert-shop-route-isolation.mjs",
     "import:preflight": "tsx src/import/preflight.ts",
-    "provision:right-apps": "tsx src/scripts/provision-right-apps.ts"
+    "provision:right-apps": "tsx src/scripts/provision-right-apps.ts",
+    "import:vendure": "tsx src/import/run.ts",
+    "import:restore": "tsx src/import/restore.ts"
   },
   "dependencies": {
     "@hono/node-server": "^2.0.10",
     "@hono/zod-openapi": "^1.4.0",
+    "@xmldom/xmldom": "0.9.12",
+    "bcryptjs": "3.0.3",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.13.5",

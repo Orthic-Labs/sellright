@@ -15,7 +15,7 @@ describe('isPaymentMethodEnabled', () => {
   });
 
   it('does not treat unsupported persisted gateway toggles as enabled', () => {
-    expect(SUPPORTED_PAYMENT_METHODS).toEqual(['manual', 'cod', 'stripe', 'gift_card']);
+    expect(SUPPORTED_PAYMENT_METHODS).toEqual(['manual', 'cod', 'stripe', 'gift_card', 'nmi', 'sezzle']);
     expect(isSupportedPaymentMethod('paypal')).toBe(false);
     expect(isPaymentMethodEnabled({ payments: { paypal: true, nmi: true, sezzle: true } }, 'paypal')).toBe(false);
   });
@@ -53,6 +53,7 @@ describe('gift_card provider', () => {
 
   it('a genuinely unsupported method (no provider at all) is still null — the fix only closes the gift_card gap', () => {
     expect(getProvider('paypal')).toBeNull();
-    expect(getProvider('nmi')).toBeNull();
+    expect(getProvider('nmi')?.method).toBe('nmi');
+    expect(getProvider('sezzle')?.method).toBe('sezzle');
   });
 });

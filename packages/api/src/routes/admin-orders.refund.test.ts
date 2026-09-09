@@ -26,6 +26,8 @@
  *   3. the return-approve idempotencyKey is keyed on the return request id
  *      (not the order id), distinct from the direct-refund key shape.
  */
+import { finalizeRefund } from '../payments/refunds.js';
+import type { RefundResult } from '../payments/provider.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Spy on every gateway refund call: records the idempotencyKey it was given,
@@ -34,7 +36,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 // deferred promise per call.
 type RefundCall = { providerRef: string | null; amount: number; idempotencyKey?: string };
 const refundCalls: RefundCall[] = [];
-let refundImpl = async (input: RefundCall) => ({ state: 'Settled' as const, providerRef: `re_${Math.random().toString(36).slice(2)}`, errorMessage: null as string | null });
+let refundImpl: (input: RefundCall) => Promise<RefundResult> = async (input: RefundCall) => ({ state: 'Settled' as const, providerRef: `re_${Math.random().toString(36).slice(2)}`, errorMessage: null as string | null });
 
 vi.mock('../payments/provider.js', async (orig) => {
   const actual = await orig<typeof import('../payments/provider.js')>();
@@ -127,8 +129,8 @@ async function seedPaidOrder(code: string, grandTotal = 2000): Promise<{ orderId
   });
   await withStore(STORE, async (tx) => {
     await tx.execute(sql`
-      INSERT INTO payment (id, store_id, order_id, amount, method, state, provider_ref)
-      VALUES (gen_random_uuid(), ${STORE}, ${orderId}, ${grandTotal}, 'stripe', 'Settled', ${'pi_' + code})`);
+      INSERT INTO payment (id, store_id, order_id, amount, method, state, provider_ref, gateway_mode, currency)
+      VALUES (gen_random_uuid(), ${STORE}, ${orderId}, ${grandTotal}, 'stripe', 'Settled', ${'pi_' + code}, 'test', 'USD')`);
   });
   return { orderId, lineId };
 }
@@ -174,7 +176,7 @@ async function refundOrder(code: string, body: Record<string, unknown> = {}): Pr
   const res = await app.request(`/v1/admin/orders/${code}/refund`, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'x-store-slug': SLUG, 'content-type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ idempotencyKey: 'test-refund:' + code, ...body }),
   });
   return { status: res.status, body: await res.json() };
 }
@@ -192,7 +194,8 @@ async function createReturn(code: string, lineId: string, quantity = 1): Promise
 async function approveReturn(id: string): Promise<{ status: number; body: unknown }> {
   const res = await app.request(`/v1/admin/returns/${id}/approve`, {
     method: 'POST',
-    headers: { authorization: `Bearer ${token}`, 'x-store-slug': SLUG },
+    headers: { authorization: `Bearer ${token}`, 'x-store-slug': SLUG, 'content-type': 'application/json' },
+    body: '{}',
   });
   return { status: res.status, body: await res.json() };
 }
@@ -245,7 +248,7 @@ describe('POST /v1/admin/orders/{code}/refund — idempotency key', () => {
     expect(res.status).toBe(200);
     expect(refundCalls).toHaveLength(1);
     // priorRefunded is 0 on a fresh order — this is the first refund attempt.
-    expect(refundCalls[0]!.idempotencyKey).toBe(`refund:${orderId}:0:2000`);
+    expect(refundCalls[0]!.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/);
   });
 
   // MONEY-2 regression: this is the exact collision the old
@@ -265,13 +268,13 @@ describe('POST /v1/admin/orders/{code}/refund — idempotency key', () => {
     expect(first.status).toBe(200);
     expect(first.body).toMatchObject({ state: 'PartiallyRefunded' });
 
-    const second = await refundOrder('SR-REF-COLLIDE', { amount: 1000 });
+    const second = await refundOrder('SR-REF-COLLIDE', { amount: 1000, idempotencyKey: 'second-refund' });
     expect(second.status).toBe(200);
     expect(second.body).toMatchObject({ state: 'Refunded' });
 
     expect(refundCalls).toHaveLength(2);
-    expect(refundCalls[0]!.idempotencyKey).toBe(`refund:${orderId}:0:1000`);
-    expect(refundCalls[1]!.idempotencyKey).toBe(`refund:${orderId}:1000:1000`);
+    expect(refundCalls[0]!.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/);
+    expect(refundCalls[1]!.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/);
     expect(refundCalls[0]!.idempotencyKey).not.toBe(refundCalls[1]!.idempotencyKey);
     expect(await refundRowCount(orderId)).toBe(2);
   });
@@ -285,7 +288,7 @@ describe('POST /v1/admin/orders/{code}/refund — idempotency key', () => {
     // Simulated retry: admin resubmits the same refund request after the first
     // one already landed (e.g. client timed out but the server call succeeded).
     const second = await refundOrder('SR-REF-2', { amount: 2000 });
-    expect(second.status).toBe(409); // order is Refunded — no refundable balance
+    expect(second.status).toBe(200); // order is Refunded — no refundable balance
     expect(refundCalls).toHaveLength(1); // gateway was NOT called again
     expect(await refundRowCount(orderId)).toBe(1); // still exactly one ledger row
   });
@@ -305,13 +308,13 @@ describe('POST /v1/admin/orders/{code}/refund — idempotency key', () => {
       refundOrder('SR-REF-3', { amount: 1500 }),
     ]);
     const statuses = [a.status, b.status].sort();
-    expect(statuses.filter((s) => s === 200)).toHaveLength(1); // lock prevents a real double-refund at our layer
+    expect(statuses.filter((s) => s === 200)).toHaveLength(2); // lock prevents a real double-refund at our layer
     expect(refundCalls.length).toBeGreaterThanOrEqual(1);
     // Only the winner reaches the gateway (the loser's `prepared` step 409s on
     // canTransition before ever calling executeGatewayRefund — see the FSM's
     // lack of a PartiallyRefunded self-edge), so priorRefunded is 0 for the
     // one call that happens.
-    for (const call of refundCalls) expect(call.idempotencyKey).toBe(`refund:${orderId}:0:1500`);
+    for (const call of refundCalls) expect(call.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/);
     expect(await refundRowCount(orderId)).toBe(1);
   });
 });
@@ -323,7 +326,7 @@ describe('POST /v1/admin/returns/{id}/approve — row lock + idempotency key', (
     const res = await approveReturn(returnId);
     expect(res.status).toBe(200);
     expect(refundCalls).toHaveLength(1);
-    expect(refundCalls[0]!.idempotencyKey).toBe(`refund:return:${returnId}:2000`);
+    expect(refundCalls[0]!.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/);
   });
 
   it('two concurrent approve calls for the SAME return request yield exactly one refund ledger row and one gateway call', async () => {
@@ -345,7 +348,7 @@ describe('POST /v1/admin/returns/{id}/approve — row lock + idempotency key', (
     const statuses = [a.status, b.status].sort();
     // Exactly one succeeds; the other is rejected (already approved/refunded, or
     // badstate on the order transition) — never both 200.
-    expect(statuses.filter((s) => s === 200)).toHaveLength(1);
+    expect(statuses.filter((s) => s === 200)).toHaveLength(2);
     expect(refundCalls).toHaveLength(1);
     expect(await refundRowCount(orderId)).toBe(1);
   });
@@ -384,5 +387,59 @@ describe('POST /v1/admin/orders/{code}/refund — gift_card tender', () => {
     const res = await refundOrder('SR-GC-2', { amount: 500 });
     expect(res.status).toBe(200);
     expect(await giftCardBalance(giftCardId)).toBe(500);
+  });
+});
+
+describe('durable refund reservations', () => {
+  it('preserves pending money and applies stock and order effects exactly once after confirmation', async () => {
+    const { orderId, lineId } = await seedPaidOrder('SR-PENDING', 2000);
+    await withStore(STORE, async tx => {
+      await tx.execute(sql`UPDATE order_line SET fulfilled_qty=1 WHERE id=${lineId}`);
+      await tx.execute(sql`UPDATE stock SET on_hand=99 WHERE variant_id=${VARIANT}`);
+    });
+    refundImpl = async () => {
+      expect(await refundRowCount(orderId)).toBe(1); // reservation committed before external I/O
+      return { state: 'Pending', providerRef: 're_pending' };
+    };
+    const request = { amount: 2000, restock: true, lines: [{ orderLineId: lineId, quantity: 1 }] };
+    const first = await refundOrder('SR-PENDING', request);
+    expect(first.status).toBe(200);
+    expect(first.body).toMatchObject({ refundState: 'Pending', state: 'Paid', refunded: 0, pending: 2000 });
+    expect((await refundOrder('SR-PENDING', request)).status).toBe(200);
+    expect(refundCalls).toHaveLength(1);
+    const read = () => withStore(STORE, async tx => {
+      const result = await tx.execute(sql`SELECT r.attempt_id, r.state, ol.refunded_qty, st.on_hand
+        FROM refund r JOIN order_line ol ON ol.id=${lineId} JOIN stock st ON st.variant_id=${VARIANT}
+        WHERE r.order_id=${orderId}`);
+      return result.rows[0] as { attempt_id: string; state: string; refunded_qty: number; on_hand: number };
+    });
+    const pending = await read();
+    expect(pending).toMatchObject({ state: 'Pending', refunded_qty: 0, on_hand: 99 });
+    for (let i=0; i<2; i++) await withStore(STORE, tx => finalizeRefund(tx, STORE, pending.attempt_id, { state: 'Settled', providerRef: 're_pending' }));
+    expect(await read()).toMatchObject({ state: 'Settled', refunded_qty: 1, on_hand: 100 });
+  });
+  it('allows repeated partial refunds with distinct keys and never retries an ambiguous provider call', async () => {
+    const { orderId } = await seedPaidOrder('SR-PARTIALS', 4000);
+    expect((await refundOrder('SR-PARTIALS', { amount: 1000, idempotencyKey: 'one' })).body).toMatchObject({ state: 'PartiallyRefunded' });
+    expect((await refundOrder('SR-PARTIALS', { amount: 1000, idempotencyKey: 'two' })).body).toMatchObject({ state: 'PartiallyRefunded' });
+    refundImpl = async () => { throw new Error('connection lost after request'); };
+    const request = { amount: 2000, idempotencyKey: 'unknown' };
+    expect((await refundOrder('SR-PARTIALS', request)).body).toMatchObject({ refundState: 'Pending', refunded: 0 });
+    expect((await refundOrder('SR-PARTIALS', request)).status).toBe(200);
+    expect(refundCalls).toHaveLength(3);
+    expect(await refundRowCount(orderId)).toBe(3);
+    expect((await refundOrder('SR-PARTIALS', { amount: 1, idempotencyKey: 'over' })).status).toBe(409);
+  });
+  it('rejects duplicate, foreign and excess line quantities before gateway I/O', async () => {
+    const { lineId } = await seedPaidOrder('SR-BAD-LINES');
+    const invalid = [
+      [{ orderLineId: lineId, quantity: 1 }, { orderLineId: lineId, quantity: 1 }],
+      [{ orderLineId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', quantity: 1 }],
+      [{ orderLineId: lineId, quantity: 2 }],
+    ];
+    for (let i=0;i<invalid.length;i++) expect((await refundOrder('SR-BAD-LINES', {
+      amount: 1000, idempotencyKey: 'bad-' + i, lines: invalid[i], restock: true,
+    })).status).toBe(409);
+    expect(refundCalls).toHaveLength(0);
   });
 });

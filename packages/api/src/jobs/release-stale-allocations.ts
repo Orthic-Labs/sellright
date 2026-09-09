@@ -60,6 +60,12 @@ export async function releaseStaleAllocations(opts: ReleaseStaleOpts): Promise<{
         sql`SELECT id, code, created_at
             FROM "order"
             WHERE state = 'PendingPayment' AND created_at < ${cutoff} AND store_id = ${st.id}
+              AND NOT EXISTS (SELECT 1 FROM payment_attempt pa
+                WHERE pa.order_id = "order".id AND pa.store_id = "order".store_id
+                  AND pa.status IN ('processing', 'unknown', 'pending'))
+              AND NOT EXISTS (SELECT 1 FROM payment p
+                WHERE p.order_id = "order".id AND p.store_id = "order".store_id
+                  AND p.state IN ('Pending', 'Authorized'))
             ORDER BY created_at
             LIMIT ${batchLimit}
             FOR UPDATE SKIP LOCKED`,
@@ -69,7 +75,7 @@ export async function releaseStaleAllocations(opts: ReleaseStaleOpts): Promise<{
 
       const orderIds = stale.map((o) => o.id);
       const lines = await tx
-        .select({ orderId: s.orderLine.orderId, variantId: s.orderLine.variantId, quantity: s.orderLine.quantity, fulfilledQty: s.orderLine.fulfilledQty })
+        .select({ orderId: s.orderLine.orderId, variantId: s.orderLine.variantId, quantity: s.orderLine.quantity, fulfilledQty: s.orderLine.fulfilledQty, cancelledQty: s.orderLine.cancelledQty })
         .from(s.orderLine)
         .where(sql`${s.orderLine.orderId} IN ${orderIds}`);
 
@@ -79,7 +85,7 @@ export async function releaseStaleAllocations(opts: ReleaseStaleOpts): Promise<{
       const releaseByVariant = new Map<string, number>();
       let released = 0;
       for (const l of lines) {
-        const rel = l.quantity - l.fulfilledQty;
+        const rel = l.quantity - l.fulfilledQty - l.cancelledQty;
         if (rel > 0 && l.variantId) {
           releaseByVariant.set(l.variantId, (releaseByVariant.get(l.variantId) ?? 0) + rel);
           released += rel;

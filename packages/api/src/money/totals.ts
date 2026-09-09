@@ -18,6 +18,8 @@ export interface TotalsInput {
   shipping: number; // cents
   taxRate: number; // basis points (875 = 8.75%); 0 = no tax
   shippingTaxable?: boolean;
+  shippingTaxRate?: number; // explicit method-specific rate, basis points
+  shippingTaxInclusive?: boolean;
   taxInclusive?: boolean; // true = line/shipping prices already include tax (extract, don't add)
   promotion?: Promotion | null;
 }
@@ -104,7 +106,18 @@ export function calculateOrderTotals(input: TotalsInput): OrderTotals {
       ? taxableBase - roundHalfUp((taxableBase * 10000) / (10000 + input.taxRate))
       : roundHalfUp((taxableBase * input.taxRate) / 10000);
   }
-  const grandTotalRaw = input.taxInclusive ? discountedSubtotal + shippingTotal : discountedSubtotal + shippingTotal + taxTotal;
+  let grandTotalRaw = input.taxInclusive ? discountedSubtotal + shippingTotal : discountedSubtotal + shippingTotal + taxTotal;
+  if (input.shippingTaxRate != null) {
+    const itemTax = input.taxRate <= 0 ? 0 : input.taxInclusive
+      ? discountedSubtotal - roundHalfUp(discountedSubtotal * 10000 / (10000 + input.taxRate))
+      : roundHalfUp(discountedSubtotal * input.taxRate / 10000);
+    const shippingInclusive = input.shippingTaxInclusive ?? input.taxInclusive;
+    const shippingTax = input.shippingTaxRate <= 0 ? 0 : shippingInclusive
+      ? shippingTotal - roundHalfUp(shippingTotal * 10000 / (10000 + input.shippingTaxRate))
+      : roundHalfUp(shippingTotal * input.shippingTaxRate / 10000);
+    taxTotal = itemTax + shippingTax;
+    grandTotalRaw = discountedSubtotal + shippingTotal + (input.taxInclusive ? 0 : itemTax) + (shippingInclusive ? 0 : shippingTax);
+  }
   // Final floor: grandTotal must never be negative, no matter what upstream
   // discount/tax inputs produced it.
   const grandTotal = Math.max(0, grandTotalRaw);

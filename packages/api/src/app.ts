@@ -4,6 +4,8 @@ import { catalog } from './routes/catalog.js';
 import { cart } from './routes/cart.js';
 import { checkout } from './routes/checkout.js';
 import { pay } from './routes/pay.js';
+import { gatewayPayments } from './routes/gateway-payments.js';
+import { adminGatewayPayments } from './routes/admin-gateway-payments.js';
 import { auth } from './routes/auth.js';
 import { account } from './routes/account.js';
 import { orders } from './routes/orders.js';
@@ -75,7 +77,7 @@ export function createApp(): OpenAPIHono {
     const handler = cors({
       origin: allowed ? (origin as string) : '',
       credentials: true,
-      allowHeaders: ['Content-Type', 'Authorization', 'x-csrf-token', 'x-store-slug'],
+      allowHeaders: ['Content-Type', 'Authorization', 'x-csrf-token', 'x-store-slug', 'x-receipt-token', 'idempotency-key'],
     });
     return handler(c, next);
   });
@@ -238,6 +240,8 @@ export function createApp(): OpenAPIHono {
   app.route('/', cart);
   app.route('/', checkout);
   app.route('/', pay);
+  app.route('/', gatewayPayments);
+  app.route('/', adminGatewayPayments);
   app.route('/', auth);
   app.route('/', shopConfig);
   app.route('/', customerTokens);

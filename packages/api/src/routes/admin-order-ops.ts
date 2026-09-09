@@ -1,4 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
+import { hasUnresolvedPayment } from '../payments/hold.js';
 import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { withStore } from '../db/client.js';
@@ -175,9 +176,9 @@ adminOrderOps.openapi(
           await tx.insert(s.fulfillment).values({ storeId: st.storeId, orderId: o.id, state: 'Shipped', trackingCode: row.tracking, carrier });
           const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
           for (const l of lines) {
-            const ship = l.quantity - l.fulfilledQty;
+            const ship = l.quantity - l.fulfilledQty - l.cancelledQty;
             if (ship <= 0) continue;
-            await tx.update(s.orderLine).set({ fulfilledQty: l.quantity }).where(eq(s.orderLine.id, l.id));
+            await tx.update(s.orderLine).set({ fulfilledQty: l.quantity - l.cancelledQty }).where(eq(s.orderLine.id, l.id));
             if (l.variantId) {
               await tx.update(s.stock).set({ onHand: sql`greatest(${s.stock.onHand} - ${ship}, 0)`, allocated: sql`greatest(${s.stock.allocated} - ${ship}, 0)` }).where(and(eq(s.stock.variantId, l.variantId), eq(s.stock.storeId, st.storeId)));
               await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: l.variantId, delta: -ship, reason: 'fulfillment', refOrderId: o.id });
@@ -227,12 +228,13 @@ adminOrderOps.openapi(
       const r = await withStore(st.storeId, async (tx): Promise<{ ok: true } | { ok: false; error: string }> => {
         const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
         if (!o) return { ok: false, error: 'order not found' };
+        if (await hasUnresolvedPayment(tx, o.id)) return { ok: false, error: 'Resolve the pending payment before cancelling' };
         if (o.state === 'Cancelled') return { ok: false, error: 'already cancelled' };
         if (o.state !== 'PendingPayment') return { ok: false, error: `paid order — use Refund (state ${o.state})` };
         if (!canTransition(o.state as OrderState, 'Cancelled')) return { ok: false, error: `cannot cancel from ${o.state}` };
         const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
         for (const l of lines) {
-          const rel = l.quantity - l.fulfilledQty;
+          const rel = l.quantity - l.fulfilledQty - l.cancelledQty;
           if (rel > 0 && l.variantId) {
             await tx.update(s.stock).set({ allocated: sql`greatest(${s.stock.allocated} - ${rel}, 0)` })
               .where(and(eq(s.stock.variantId, l.variantId), eq(s.stock.storeId, st.storeId)));
@@ -327,6 +329,7 @@ adminOrderOps.openapi(
         const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
         if (!o) return { ok: false, error: 'order not found' };
         if (!o.deletedAt) return { ok: false, error: 'trash the order first (purge only removes trashed orders)' };
+        if (await hasUnresolvedPayment(tx, o.id)) return { ok: false, error: 'Resolve the pending payment before purging' };
         const isPaid = o.state === 'Paid' || o.state === 'PartiallyRefunded' || o.state === 'Refunded';
         if (isPaid && !force) return { ok: false, error: `paid order — purge requires force + reason (state ${o.state})` };
         if (isPaid && force && !reason) return { ok: false, error: 'force-purging a paid order requires a reason' };
@@ -363,6 +366,10 @@ adminOrderOps.openapi(
         // A subscription's backing order (nullable FK) — detach so the order can be
         // purged; the subscription row (Stripe link) is kept.
         await tx.update(s.subscription).set({ orderId: null }).where(eq(s.subscription.orderId, o.id));
+        const attempts = await tx.select().from(s.paymentAttempt).where(eq(s.paymentAttempt.orderId, o.id));
+        if (attempts.length) await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email,
+          entity: 'order', entityId: o.id, action: 'archive_payment_attempts', data: { attempts } });
+        await tx.delete(s.paymentAttempt).where(eq(s.paymentAttempt.orderId, o.id));
         await tx.delete(s.payment).where(eq(s.payment.orderId, o.id));
         await tx.delete(s.orderLine).where(eq(s.orderLine.orderId, o.id));
         await tx.delete(s.order).where(eq(s.order.id, o.id));

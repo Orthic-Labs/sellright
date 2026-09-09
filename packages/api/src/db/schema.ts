@@ -1,5 +1,6 @@
 export * from './schema-core.js';
 export * from './schema-orders.js';
+export * from './schema-payment-attempts.js';
 export * from './schema-content.js';
 
 import { store, productVariant } from './schema-core.js';

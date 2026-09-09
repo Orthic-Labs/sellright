@@ -1,52 +1,26 @@
-/**
- * Order importer: Vendure (damned_vendure) -> SellRight. Run AFTER catalog +
- * customers. Imports order header + lines + payments for all placed orders.
- *
- * Money is reconstructed from Vendure's persisted order-line adjustments and
- * tax lines, using the same prorated-line economics Vendure uses for refunds.
- * The importer reconciles every reconstructed line sum against Vendure's stored
- * subTotalWithTax and aborts the transaction on any mismatch rather than
- * importing lossy financial history.
- *
- *   SOURCE_DATABASE_URL=...damned_vendure DATABASE_URL=...sellright_dev \
- *   corepack pnpm tsx src/import/orders.ts
- */
-import { randomUUID } from 'node:crypto';
-import { Pool } from 'pg';
-import { pool, withStore } from '../db/client.js';
+/** Atomic Vendure migration phase. Invoke through import/run.ts. */
 import * as s from '../db/schema.js';
-import { env } from '../env.js';
-import { DD_STORE_ID, ensureDdStore, chunk, parseDate, parseJson } from './store.js';
+import { chunk, parseDate, parseJson } from './store.js';
 import { mapVendureOrderState, mapVendurePaymentState } from './vendure-order.js';
 import { vendureLineMoney } from './vendure-money.js';
-
-const SOURCE_URL = env.SOURCE_DATABASE_URL;
-if (!SOURCE_URL) throw new Error('SOURCE_DATABASE_URL is required (the damned_vendure clone)');
-
-// WP9.4: TRUNCATE guard (mirrors catalog.ts) — requires BOTH --force and
-// ALLOW_FORCE_TRUNCATE=1 to override.
-const TARGET_URL = env.DATABASE_URL;
-const forceFlag = process.argv.includes('--force');
-const forceEnv = env.ALLOW_FORCE_TRUNCATE === '1';
-const allowedTarget = /[/_](dev|test)(\b|$|\?)/.test(TARGET_URL);
-if (!allowedTarget && !(forceFlag && forceEnv)) {
-  throw new Error(
-    `REFUSING to TRUNCATE: DATABASE_URL does not look like a dev/test instance. ` +
-    `Override requires BOTH --force and ALLOW_FORCE_TRUNCATE=1. url=${TARGET_URL.replace(/:[^:@/]+@/, ':***@')}`,
-  );
-}
-
-const src = new Pool({ connectionString: SOURCE_URL });
-const q = async (sql: string, params: unknown[] = []) => (await src.query(sql, params)).rows;
 
 const asJson = (v: unknown) => (typeof v === 'string' ? parseJson(v) : (v ?? null));
 const jsonArray = (v: unknown): Array<Record<string, unknown>> => {
   const parsed = asJson(v);
   return Array.isArray(parsed) ? parsed as Array<Record<string, unknown>> : [];
 };
+function address(value: unknown) {
+  const raw = asJson(value) as Record<string, unknown> | null;
+  if (!raw) return null;
+  return { ...raw, line1: raw.streetLine1 ?? raw.line1, line2: raw.streetLine2 ?? raw.line2,
+    phone: raw.phoneNumber ?? raw.phone, country: raw.countryCode ?? raw.country };
+}
 const n = (v: unknown) => (typeof v === 'number' ? v : Number(v ?? 0)) || 0;
 
-async function main() {
+import type { ImportContext } from './context.js';
+
+export async function importOrders(ctx: ImportContext): Promise<void> {
+  const { tx, q } = ctx;
   // Source-schema preflight. These fields have existed on Vendure OrderLine for
   // years and are required for exact historical refund economics. If a source
   // database lacks them, stop rather than falling back to listPrice * quantity.
@@ -64,45 +38,36 @@ async function main() {
     ? `ol."orderPlacedQuantity"`
     : 'ol.quantity';
 
-  // eslint-disable-next-line no-console
-  console.log(`[import:orders] about to TRUNCATE payment, order_line, "order". 5s to abort with Ctrl-C…`);
-  await new Promise<void>((r) => setTimeout(r, 5_000));
-  await pool.query(`TRUNCATE "payment", "order_line", "order" CASCADE`);
-
   type OrderRef = { id: string; sourceSubTotalWithTax: number };
   const orderMap = new Map<number, OrderRef>();
 
-  await withStore(DD_STORE_ID, async (tx) => {
-    await ensureDdStore(tx);
+  {
 
-    // Target lookup maps (RLS-scoped to DD).
-    const custByEmail = new Map<string, string>();
-    for (const c of await tx.select({ id: s.customer.id, email: s.customer.email }).from(s.customer)) {
-      custByEmail.set(c.email.toLowerCase(), c.id);
-    }
-    const variantBySku = new Map<string, string>();
-    for (const v of await tx.select({ id: s.productVariant.id, sku: s.productVariant.sku }).from(s.productVariant)) {
-      variantBySku.set(v.sku, v.id);
-    }
-
+    const customerIds = new Set((await tx.select({ id: s.customer.id }).from(s.customer)).map(row => row.id));
+    const variantIds = new Set((await tx.select({ id: s.productVariant.id }).from(s.productVariant)).map(row => row.id));
     // --- orders: source header is the reconciliation authority ---
     const sourceOrders = await q(
       `SELECT o.id, o.code, o.state, o."currencyCode" AS cur, o."orderPlacedAt" AS placed,
               o."subTotal" AS sub, o."subTotalWithTax" AS subt, o.shipping AS ship, o."shippingWithTax" AS shipt,
               o."shippingAddress" AS shipaddr, o."billingAddress" AS billaddr,
-              o."customFieldsIspreorder" AS ispre, c."emailAddress" AS email
+              o."couponCodes" AS coupons, o."customFieldsIspreorder" AS ispre, o."customerId" AS cid, c."emailAddress" AS email, o."createdAt" AS created, o."updatedAt" AS updated
        FROM "order" o LEFT JOIN customer c ON c.id = o."customerId"
        WHERE o.state NOT IN ('AddingItems','ArrangingPayment')`,
     );
 
     const orderRows = sourceOrders.map((o) => {
-      const id = randomUUID();
+      if (!['Cancelled','Refunded','PartiallyRefunded','PaymentSettled','PartiallyShipped','Shipped','PartiallyDelivered','Delivered','PaymentAuthorized'].includes(o.state)) {
+        throw new Error('Unsupported source order state: ' + o.state);
+      }
+      const id = ctx.id('order', o.id);
       const sourceSubTotalWithTax = n(o.subt);
       orderMap.set(o.id, { id, sourceSubTotalWithTax });
       const sub = n(o.sub), ship = n(o.ship), shipt = n(o.shipt);
       return {
-        id, storeId: DD_STORE_ID, code: o.code,
-        customerId: o.email ? custByEmail.get(String(o.email).toLowerCase()) ?? null : null,
+        id, storeId: ctx.storeId, code: o.code,
+        customerId: o.cid && customerIds.has(ctx.id('customer', o.cid)) ? ctx.id('customer', o.cid) : null,
+        createdAt: parseDate(o.created) ?? undefined, updatedAt: parseDate(o.updated) ?? undefined,
+        metadata: { vendure: { id: o.id, state: o.state, sourceKey: ctx.sourceKey, customerId: o.cid, couponCodes: o.coupons }, contact: { email: o.email } },
         state: mapVendureOrderState(String(o.state)), currency: o.cur ?? 'USD',
         // Replaced below with line-derived pre-discount subtotal/discount/tax
         // after exact line reconciliation. Initialize from source header so the
@@ -110,14 +75,14 @@ async function main() {
         subtotal: sub, discountTotal: 0, shippingTotal: ship,
         taxTotal: sourceSubTotalWithTax - sub + (shipt - ship), grandTotal: sourceSubTotalWithTax + shipt,
         isPreOrder: o.ispre ?? false,
-        shippingAddress: asJson(o.shipaddr), billingAddress: asJson(o.billaddr),
+        shippingAddress: address(o.shipaddr), billingAddress: address(o.billaddr),
         placedAt: parseDate(o.placed),
       };
     });
 
     // --- order lines: reconstruct Vendure's prorated economic line values ---
     const sourceLines = await q(
-      `SELECT ol."orderId" AS oid, ol.quantity AS qty, ${placedQtySql} AS placed_qty,
+      `SELECT ol.id, ol."productVariantId" AS vid, ol."orderId" AS oid, ol.quantity AS qty, ${placedQtySql} AS placed_qty,
               ol."listPrice" AS price, ol."listPriceIncludesTax" AS includes_tax,
               ol.adjustments, ol."taxLines" AS tax_lines,
               pv.sku, pt.name AS pname
@@ -148,10 +113,13 @@ async function main() {
         agg.total += money.lineTotal;
         lineAggByOrder.set(orderRef.id, agg);
         return {
-          storeId: DD_STORE_ID, orderId: orderRef.id,
-          variantId: variantBySku.get(l.sku) ?? null,
+          id: ctx.id('order-line', l.id), storeId: ctx.storeId, orderId: orderRef.id,
+          variantId: l.vid && variantIds.has(ctx.id('variant', l.vid)) ? ctx.id('variant', l.vid) : null,
           variantSku: l.sku ?? '(unknown)', variantName: l.pname ?? l.sku ?? '(unknown)',
           quantity, ...money,
+          metadata: { vendure: { id: l.id, variantId: l.vid, quantity,
+            placedQuantity: n(l.placed_qty) || quantity, listPrice: n(l.price),
+            listPriceIncludesTax: Boolean(l.includes_tax), adjustments: jsonArray(l.adjustments), taxLines: jsonArray(l.tax_lines) } },
         };
       })
       .filter((x): x is NonNullable<typeof x> => x !== null);
@@ -187,14 +155,21 @@ async function main() {
 
     // --- payments ---
     const payRows = (
-      await q(`SELECT p."orderId" AS oid, p.method, p.state, p.amount, p."transactionId" AS txn, p.metadata, p."errorMessage" AS err FROM payment p`)
+      await q(`SELECT p.id, p."createdAt" AS created, p."orderId" AS oid, p.method, p.state, p.amount, p."transactionId" AS txn, p.metadata, p."errorMessage" AS err FROM payment p`)
     )
       .map((p) => {
         const orderRef = orderMap.get(p.oid);
         if (!orderRef) return null;
+        const method = String(p.method).toLowerCase().replace(/-payment$/, '');
+        if (!['nmi', 'sezzle', 'stripe', 'gift_card', 'manual', 'cod'].includes(method)) throw new Error('Unsupported payment method: ' + method);
+        const account = ctx.gatewayAccounts[method];
+        if (['nmi', 'sezzle'].includes(method) && !account) throw new Error('Original gateway account is required: ' + method);
+        const metadata = asJson(p.metadata) as Record<string, unknown> | null;
         return {
-          storeId: DD_STORE_ID, orderId: orderRef.id, amount: n(p.amount), method: p.method,
-          providerRef: p.txn ?? null, state: mapVendurePaymentState(String(p.state)),
+          id: ctx.id('payment', p.id), storeId: ctx.storeId, orderId: orderRef.id, amount: n(p.amount), method,
+          gatewayAccount: account?.accountId ?? null, gatewayMode: account?.mode ?? null,
+          currency: ctx.currency, createdAt: parseDate(p.created) ?? undefined,
+          providerRef: method === 'sezzle' ? String(metadata?.sezzleOrderUuid ?? p.txn ?? '') || null : p.txn ?? null, state: mapVendurePaymentState(String(p.state)),
           metadata: asJson(p.metadata), errorMessage: p.err ?? null,
         };
       })
@@ -202,20 +177,7 @@ async function main() {
     for (const part of chunk(payRows, 1000)) await tx.insert(s.payment).values(part);
 
     // eslint-disable-next-line no-console
-    console.log(JSON.stringify({ store: DD_STORE_ID, orders: orderRows.length, lines: lineRows.length, payments: payRows.length, moneyReconciled: true }, null, 2));
-  });
+    console.log(JSON.stringify({ store: ctx.storeId, orders: orderRows.length, lines: lineRows.length, payments: payRows.length, moneyReconciled: true }, null, 2));
+  }
 
-  await src.end();
-  await pool.end();
 }
-
-main()
-  .catch((e) => {
-    // eslint-disable-next-line no-console
-    console.error(e);
-    process.exitCode = 1;
-  })
-  .finally(async () => {
-    try { await src.end(); } catch { /* noop */ }
-    try { await pool.end(); } catch { /* noop */ }
-  });

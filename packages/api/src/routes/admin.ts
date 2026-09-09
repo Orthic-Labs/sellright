@@ -1,4 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
+import { hasUnresolvedPayment } from '../payments/hold.js';
 import { and, desc, eq, ilike, or, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
@@ -205,9 +206,9 @@ admin.openapi(
       if (advancingToShipped) {
         const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
         for (const l of lines) {
-          const ship = l.quantity - l.fulfilledQty;
+          const ship = l.quantity - l.fulfilledQty - l.cancelledQty;
           if (ship <= 0) continue;
-          await tx.update(s.orderLine).set({ fulfilledQty: l.quantity }).where(eq(s.orderLine.id, l.id));
+          await tx.update(s.orderLine).set({ fulfilledQty: l.quantity - l.cancelledQty }).where(eq(s.orderLine.id, l.id));
           if (l.variantId) {
             await tx.update(s.stock).set({
               onHand: sql`greatest(${s.stock.onHand} - ${ship}, 0)`,
@@ -308,9 +309,9 @@ admin.openapi(
         if (advancingToShipped) {
           const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, order.id));
           for (const l of lines) {
-            const ship = l.quantity - l.fulfilledQty;
+            const ship = l.quantity - l.fulfilledQty - l.cancelledQty;
             if (ship <= 0) continue;
-            await tx.update(s.orderLine).set({ fulfilledQty: l.quantity }).where(eq(s.orderLine.id, l.id));
+            await tx.update(s.orderLine).set({ fulfilledQty: l.quantity - l.cancelledQty }).where(eq(s.orderLine.id, l.id));
             if (l.variantId) {
               await tx.update(s.stock).set({
                 onHand: sql`greatest(${s.stock.onHand} - ${ship}, 0)`,
@@ -363,18 +364,19 @@ admin.openapi(
     requirePermission(st, 'cancel_orders');
     const { code } = c.req.valid('param');
     const res = await withStore(st.storeId, async (tx) => {
-      const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
+      const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
       if (!o) return { kind: 'notfound' as const };
       // Only unpaid orders can be cancelled directly — cancelling releases stock
       // but does not touch money. A Paid order must go through Refund so the
       // payment (and any issued licenses) are handled explicitly.
+      if (await hasUnresolvedPayment(tx, o.id)) throw new HttpError(409, 'Resolve the pending payment before cancelling');
       if (o.state !== 'PendingPayment') return { kind: 'paid' as const, state: o.state };
       if (!canTransition(o.state as OrderState, 'Cancelled')) return { kind: 'badstate' as const, state: o.state };
       // Release stock still reserved for unshipped units. Shipped units already
       // had their allocation released (see fulfill), so release = unfulfilled qty.
       const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
       for (const l of lines) {
-        const release = l.quantity - l.fulfilledQty;
+        const release = l.quantity - l.fulfilledQty - l.cancelledQty;
         if (release > 0 && l.variantId) {
           await tx.update(s.stock).set({ allocated: sql`greatest(${s.stock.allocated} - ${release}, 0)` })
             .where(and(eq(s.stock.variantId, l.variantId), eq(s.stock.storeId, st.storeId)));

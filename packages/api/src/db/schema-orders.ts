@@ -84,6 +84,7 @@ export const orderLine = pgTable('order_line', {
   variantId: uuid().references(() => productVariant.id),
   variantSku: text().notNull(), // snapshot at order time
   variantName: text().notNull(), // snapshot at order time
+  metadata: jsonb(),
   quantity: integer().notNull(),
   unitPrice: integer().notNull(), // cents, snapshot at add
   lineSubtotal: integer().notNull(),
@@ -91,6 +92,7 @@ export const orderLine = pgTable('order_line', {
   lineTax: integer().notNull().default(0),
   lineTotal: integer().notNull(),
   fulfilledQty: integer().notNull().default(0),
+  cancelledQty: integer().notNull().default(0),
   refundedQty: integer().notNull().default(0),
 });
 
@@ -199,6 +201,9 @@ export const payment = pgTable('payment', {
   storeId: uuid().notNull().references(() => store.id),
   orderId: uuid().notNull().references(() => order.id),
   amount: integer().notNull(), // cents
+  gatewayAccount: text(),
+  gatewayMode: text(),
+  currency: text(),
   method: text().notNull(), // nmi | sezzle | stripe
   providerRef: text(), // payment_intent / transactionId / sezzleOrderUuid
   state: paymentState().notNull().default('Pending'),
@@ -210,12 +215,17 @@ export const payment = pgTable('payment', {
 export const refund = pgTable('refund', {
   id: uuid().primaryKey().defaultRandom(),
   storeId: uuid().notNull().references(() => store.id),
+  attemptId: uuid(),
   paymentId: uuid().notNull().references(() => payment.id),
   orderId: uuid().notNull().references(() => order.id),
   amount: integer().notNull(), // cents
   reason: text(),
   state: refundState().notNull().default('Pending'),
   providerRef: text(), // WP3: gateway refund id (e.g. Stripe re_...); null for manual/cod
+  metadata: jsonb(),
+  itemsAmount: integer(),
+  shippingAmount: integer(),
+  adjustmentAmount: integer(),
   createdAt: ts(),
 });
 
@@ -406,6 +416,7 @@ export const fulfillment = pgTable('fulfillment', {
   state: fulfillmentState().notNull().default('Pending'),
   trackingCode: text(),
   carrier: text(),
+  metadata: jsonb(),
   createdAt: ts(),
   updatedAt: ts(),
 });
