@@ -37,6 +37,7 @@ function hasValidBearer(header: string | undefined): boolean {
 export const SESSION_COOKIE = 'sr_admin';
 export const CSRF_COOKIE = 'sr_csrf';
 const MAX_AGE = 14 * 24 * 3600;
+export const CUSTOMER_COOKIE_MAX_AGE_SECONDS = 365 * 24 * 3600;
 
 export function parseCookies(header: string | undefined): Record<string, string> {
   const out: Record<string, string> = {};
@@ -102,7 +103,7 @@ export const CUST_CSRF_COOKIE = 'sr_cust_csrf';
 
 export function setCustomerCookies(c: Ctx, token: string, csrf: string): void {
   const secure = secureFlag(c);
-  const base = `Path=/; Max-Age=${MAX_AGE}; SameSite=Lax${secure}`;
+  const base = `Path=/; Max-Age=${CUSTOMER_COOKIE_MAX_AGE_SECONDS}; SameSite=Lax${secure}`;
   c.header('Set-Cookie', `${CUST_COOKIE}=${token}; HttpOnly; ${base}`, { append: true });
   c.header('Set-Cookie', `${CUST_CSRF_COOKIE}=${csrf}; ${base}`, { append: true });
 }

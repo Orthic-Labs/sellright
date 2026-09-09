@@ -90,6 +90,7 @@ describe('POST /v1/shop/auth/register', () => {
     const cookies = parseSetCookies(res);
     expect(cookies[CUST_COOKIE]).toBe(body.token);
     expect(cookies[CUST_CSRF_COOKIE]).toBeTruthy();
+    expect(res.headers.get('set-cookie')).toContain('Max-Age=31536000');
 
     const dbCustomer = await withStore(STORE, async (tx) => {
       const [c] = await tx.select().from(s.customer).where(eq(s.customer.email, 'newbuyer@auth.test')).limit(1);
@@ -155,6 +156,28 @@ describe('POST /v1/shop/auth/login', () => {
     expect(res.status).toBe(401);
     const body = await res.json() as { error: string };
     expect(body.error).toBe('invalid email or password');
+  });
+});
+
+describe('GET /v1/shop/auth/me — native session renewal', () => {
+  it('extends a valid near-expiry bearer session for one year', async () => {
+    const reg = await app.request('/v1/shop/auth/register', {
+      method: 'POST', headers: hdr(), body: JSON.stringify({ email: 'renew@auth.test', password: 'renewpassword1' }),
+    });
+    const body = await reg.json() as { token: string };
+    await withStore(STORE, async (tx) => {
+      await tx.update(s.session).set({ expiresAt: new Date(Date.now() + 86_400_000) });
+    });
+
+    const res = await app.request('/v1/shop/auth/me', {
+      headers: hdr({ authorization: `Bearer ${body.token}` }),
+    });
+    expect(res.status).toBe(200);
+    const renewed = await withStore(STORE, async (tx) => {
+      const [row] = await tx.select({ expiresAt: s.session.expiresAt }).from(s.session).limit(1);
+      return row?.expiresAt;
+    });
+    expect(renewed?.getTime()).toBeGreaterThan(Date.now() + 360 * 86_400_000);
   });
 });
 
