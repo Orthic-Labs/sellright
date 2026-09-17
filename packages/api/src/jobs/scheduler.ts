@@ -29,6 +29,8 @@ import { deliverWebhooks } from '../webhooks/emit.js';
 import { deliverEmails } from '../email/outbox.js';
 import { deliverPushes } from '../push/outbox.js';
 import { listmonkSync } from './listmonk-sync.js';
+import { sheeridExpirySweep } from './sheerid-expiry.js';
+import { sweepRestockEvents } from '../routes/restock.js';
 import { withLeaderLock, type LeaderLockedJob } from './leader-lock.js';
 import { log, err as logErr } from '../lib/logger.js';
 
@@ -113,6 +115,17 @@ export function startJobScheduler(): void {
   // smaller cadence costs less when a store has hundreds of thousands of
   // subscribers (Listmonk's /api/subscribers is rate-limited upstream).
   every(5 * 60_000, 'listmonk-sync', 'listmonk-sync', () => listmonkSync({ log: jobLog }));
+  // PAR-4: flip stale 'success' SheerID rows to 'expired' and recompute the
+  // customers' active_verifications — drops verified_customer coupon
+  // eligibility for lapsed verifications. Hourly: expiry granularity is days.
+  every(HOUR, 'sheerid-expiry', 'sheerid-expiry', () => sheeridExpirySweep({ log: jobLog }));
+  // PAR-5: the stock trigger queues restock_event rows on <=0→>0 transitions;
+  // this drains them into one-shot customer notifications (claim inside the
+  // txn — crash-safe, no double-notify).
+  every(60_000, 'restock-notify', 'restock-notify', async () => {
+    const r = await sweepRestockEvents();
+    if (r.events || r.notified) jobLog(`[jobs:restock] events=${r.events} notified=${r.notified}`);
+  });
   // WP1.7 safety net: reset webhook_delivery rows stuck in 'processing' (a
   // crashed scheduler) back to 'pending' so the next pass re-claims them.
   // 10-min grace = a crashed worker is recovered within 15 min.

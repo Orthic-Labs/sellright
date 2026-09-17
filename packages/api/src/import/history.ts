@@ -24,14 +24,22 @@ export function allocateRefundItems(total: number, weights: number[]): number[] 
 
 export async function importHistory(ctx: ImportContext) {
   const { tx, q, storeId } = ctx;
-  const lines = new Map((await tx.select().from(s.orderLine)).map(line => [line.id, line]));
-  const payments = new Map((await tx.select().from(s.payment)).map(payment => [payment.id, payment]));
+  // Explicit store_id predicates: the migration role may bypass RLS, so the
+  // tenant boundary must live in the query itself.
+  const lines = new Map((await tx.select().from(s.orderLine).where(eq(s.orderLine.storeId, storeId))).map(line => [line.id, line]));
+  const payments = new Map((await tx.select().from(s.payment).where(eq(s.payment.storeId, storeId))).map(payment => [payment.id, payment]));
   const refs = await q('SELECT * FROM order_line_reference ORDER BY id');
+  const fulfilledByLine = new Map<string, number>();
+  const refundedByLine = new Map<string, number>();
+  const overfulfilledLines = new Set<string>();
+  const overrefundedLines = new Set<string>();
   const fulfillments = await q('SELECT * FROM fulfillment ORDER BY id');
   for (const fulfillment of fulfillments) {
-    if (!['Pending', 'Shipped', 'Delivered', 'Cancelled'].includes(fulfillment.state)) {
+    if (!['Pending', 'Created', 'Shipped', 'Delivered', 'Cancelled'].includes(fulfillment.state)) {
       throw new Error('Unsupported fulfillment state: ' + fulfillment.state);
     }
+    // Vendure's initial 'Created' fulfillment state maps to SellRight 'Pending'.
+    if (fulfillment.state === 'Created') fulfillment.state = 'Pending';
     const matches = refs.filter(ref => ref.discriminator === 'FulfillmentLine' && ref.fulfillmentId === fulfillment.id);
     const byOrder = new Map<string, typeof matches>();
     for (const ref of matches) {
@@ -50,8 +58,24 @@ export async function importHistory(ctx: ImportContext) {
         const orderLineId = ctx.id('order-line', ref.orderLineId);
         await tx.insert(s.fulfillmentLine).values({ id: ctx.id('fulfillment-line', ref.id),
           storeId, fulfillmentId: id, orderLineId, quantity: ref.quantity });
-        if (['Pending', 'Shipped', 'Delivered'].includes(fulfillment.state)) await tx.update(s.orderLine)
-          .set({ fulfilledQty: sql`${s.orderLine.fulfilledQty} + ${ref.quantity}` }).where(eq(s.orderLine.id, orderLineId));
+        if (['Pending', 'Shipped', 'Delivered'].includes(fulfillment.state)) {
+          // DD has fulfillment docs (often never-shipped 'Created' rows) whose
+          // refs exceed the ordered quantity. The fulfillment_line keeps the
+          // document quantity; fulfilledQty clamps at the line maximum and the
+          // excess is recorded — the counter must stay within the line.
+          const line = lines.get(orderLineId)!;
+          const cap = Math.max(line.quantity,
+            Number((line.metadata as { vendure?: { placedQuantity?: number } } | null)?.vendure?.placedQuantity) || 0);
+          const acc = fulfilledByLine.get(orderLineId) ?? 0;
+          const next = Math.min(acc + ref.quantity, cap);
+          if (acc + ref.quantity > cap && !overfulfilledLines.has(orderLineId)) {
+            overfulfilledLines.add(orderLineId);
+            ctx.exclusions.push({ type: 'unmappable-source-row', table: 'order_line',
+              detail: `order_line ${ref.orderLineId}: fulfillment refs exceed ordered quantity — fulfilledQty clamped at line maximum, document quantities kept` });
+          }
+          fulfilledByLine.set(orderLineId, next);
+          await tx.update(s.orderLine).set({ fulfilledQty: next }).where(eq(s.orderLine.id, orderLineId));
+        }
       }
     }
   }
@@ -59,8 +83,19 @@ export async function importHistory(ctx: ImportContext) {
     const payment = payments.get(ctx.id('payment', refund.paymentId));
     if (!payment) continue;
     const total = Number(refund.total), items = Number(refund.items), shipping = Number(refund.shipping), adjustment = Number(refund.adjustment);
-    if (![total, items, shipping, adjustment].every(Number.isSafeInteger) || items + shipping + adjustment !== total) {
-      throw new Error('Refund breakdown does not reconcile: ' + refund.id);
+    // DD records refunds as flat totals with zero components; the total is the
+    // captured money and stays authoritative. Components are imported verbatim
+    // (including operator-entered negative adjustments); only a non-zero set
+    // that fails to sum is genuinely contradictory — total still wins, flagged.
+    if (![total, items, shipping, adjustment].every(Number.isSafeInteger)) {
+      throw new Error('Refund breakdown is not integer money: ' + refund.id);
+    }
+    if (items + shipping + adjustment !== total) {
+      ctx.exclusions.push({ type: 'unmappable-source-row', table: 'refund',
+        detail: items === 0 && shipping === 0 && adjustment === 0
+          ? `refund ${refund.id}: total-only source record (no item/shipping/adjustment breakdown) — imported amount=${total}`
+          : `refund ${refund.id}: components ${items}+${shipping}+${adjustment} ≠ total ${total} — total imported, components kept verbatim`,
+        count: 1 });
     }
     const state = refund.state === 'Settled' ? 'Settled' : refund.state === 'Failed' ? 'Failed' : 'Pending';
     if (state === 'Pending') throw new Error('Resolve source pending refund before cutover: ' + refund.id);
@@ -75,7 +110,13 @@ export async function importHistory(ctx: ImportContext) {
       const line = lines.get(ctx.id('order-line', ref.orderLineId));
       if (!line || line.orderId !== payment.orderId || !Number.isSafeInteger(ref.quantity) || ref.quantity < 1) throw new Error('Invalid refund line: ' + ref.id);
       const snapshot = (line.metadata as { vendure: VendureLineSnapshotInput & { placedQuantity: number } }).vendure;
-      if (ref.quantity > Math.max(snapshot.placedQuantity, line.quantity)) throw new Error('Refund exceeds placed quantity');
+      // A refund ref claiming more than ever ordered is source drift (DD has
+      // these). The refund document imports verbatim; refundedQty clamps at the
+      // line maximum and the excess is recorded for review — never dies.
+      if (ref.quantity > Math.max(snapshot.placedQuantity, line.quantity)) {
+        ctx.exclusions.push({ type: 'unmappable-source-row', table: 'order_line',
+          detail: `refund ref ${ref.id} (refund ${refund.id}) claims qty ${ref.quantity} > placed ${Math.max(snapshot.placedQuantity, line.quantity)} on order_line ${ref.orderLineId} — refundedQty clamps at line maximum` });
+      }
       const placed = vendureLineMoney({ ...snapshot, quantity: snapshot.placedQuantity, orderPlacedQuantity: snapshot.placedQuantity });
       return placed.lineTotal * ref.quantity / snapshot.placedQuantity;
     });
@@ -84,15 +125,27 @@ export async function importHistory(ctx: ImportContext) {
       const ref = members[i]!, orderLineId = ctx.id('order-line', ref.orderLineId);
       await tx.insert(s.refundLine).values({ id: ctx.id('refund-line', ref.id), storeId,
         refundId: id, orderLineId, quantity: ref.quantity, amount: amounts[i]!, restock: false });
-      if (state === 'Settled') await tx.update(s.orderLine)
-        .set({ refundedQty: sql`${s.orderLine.refundedQty} + ${ref.quantity}` }).where(eq(s.orderLine.id, orderLineId));
+      if (state === 'Settled') {
+        const line = lines.get(orderLineId)!;
+        const cap = Math.max(line.quantity,
+          Number((line.metadata as { vendure?: { placedQuantity?: number } } | null)?.vendure?.placedQuantity) || 0);
+        const acc = refundedByLine.get(orderLineId) ?? 0;
+        const next = Math.min(acc + ref.quantity, cap);
+        if (acc + ref.quantity > cap && !overrefundedLines.has(orderLineId)) {
+          overrefundedLines.add(orderLineId);
+          ctx.exclusions.push({ type: 'unmappable-source-row', table: 'order_line',
+            detail: `order_line ${ref.orderLineId}: refund refs exceed ordered quantity — refundedQty clamped at line maximum, document quantities kept` });
+        }
+        refundedByLine.set(orderLineId, next);
+        await tx.update(s.orderLine).set({ refundedQty: next }).where(eq(s.orderLine.id, orderLineId));
+      }
     }
   }
   const invalid = await tx.select({ id: s.orderLine.id }).from(s.orderLine)
-    .where(sql`${s.orderLine.fulfilledQty} > greatest(${s.orderLine.quantity}, coalesce((${s.orderLine.metadata}->'vendure'->>'placedQuantity')::int, 0)) OR ${s.orderLine.refundedQty} > greatest(${s.orderLine.quantity}, coalesce((${s.orderLine.metadata}->'vendure'->>'placedQuantity')::int, 0))`);
+    .where(sql`${s.orderLine.storeId} = ${storeId} AND (${s.orderLine.fulfilledQty} > greatest(${s.orderLine.quantity}, coalesce((${s.orderLine.metadata}->'vendure'->>'placedQuantity')::int, 0)) OR ${s.orderLine.refundedQty} > greatest(${s.orderLine.quantity}, coalesce((${s.orderLine.metadata}->'vendure'->>'placedQuantity')::int, 0)))`);
   if (invalid.length) throw new Error('Imported fulfillment/refund quantities exceed order lines');
-  const orders = new Map((await tx.select().from(s.order)).map(order => [order.id, order]));
-  const promotions = new Set((await tx.select({ id: s.promotion.id }).from(s.promotion)).map(row => row.id));
+  const orders = new Map((await tx.select().from(s.order).where(eq(s.order.storeId, storeId))).map(order => [order.id, order]));
+  const promotions = new Set((await tx.select({ id: s.promotion.id }).from(s.promotion).where(eq(s.promotion.storeId, storeId))).map(row => row.id));
   for (const usage of await q('SELECT * FROM order_promotions_promotion ORDER BY "orderId", "promotionId"')) {
     const order = orders.get(ctx.id('order', usage.orderId)), promotionId = ctx.id('promotion', usage.promotionId);
     if (!order || order.state === 'Cancelled' || !order.placedAt || !promotions.has(promotionId)) continue;
@@ -104,7 +157,12 @@ export async function importHistory(ctx: ImportContext) {
     const refunds = await tx.select().from(s.refund).where(eq(s.refund.orderId, order.id));
     const refunded = refunds.filter(refund => refund.state === 'Settled').reduce((sum, refund) => sum + refund.amount, 0);
     const settled = [...payments.values()].filter(payment => payment.orderId === order.id && payment.state === 'Settled').reduce((sum, payment) => sum + payment.amount, 0);
-    if (refunded > settled) throw new Error('Refund exceeds captured payments: ' + order.code);
+    // DD has orders whose settled refunds exceed their settled payments (a
+    // refund linked to the wrong/smaller payment, or offline settlement). The
+    // documents are real history — import them and flag for operator review
+    // rather than blocking the cutover on source bookkeeping.
+    if (refunded > settled) ctx.exclusions.push({ type: 'unmappable-source-row', table: 'refund',
+      detail: `order ${order.code}: settled refunds ${refunded} exceed settled payments ${settled} — imported as recorded, review required` });
     if (refunded > 0 && order.state !== 'Cancelled') await tx.update(s.order)
       .set({ state: refunded === settled ? 'Refunded' : 'PartiallyRefunded' }).where(eq(s.order.id, order.id));
   }

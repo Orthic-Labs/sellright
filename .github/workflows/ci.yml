@@ -51,7 +51,7 @@ jobs:
         run: pnpm verify:static
 
       - name: Password hashing contract
-        run: pnpm --filter @sellright/api test -- src/auth/password.test.ts
+        run: pnpm --filter @sellright/api test src/auth/password.test.ts
 
       - name: Admin tests
         run: pnpm --dir packages/admin test
@@ -115,35 +115,19 @@ jobs:
           GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO sellright_app;
           SQL
 
+      # SR-11: both lanes run with the service database — the unit lane must
+      # stay green with a DB present (self-skipping suites execute their DB
+      # cases here), and the db lane covers every suite that declares a
+      # *_test-database guard (selected by vitest.config.ts's content scan,
+      # not a hand-maintained file list).
+      - name: Run unit lane
+        run: pnpm --filter @sellright/api test
+
       - name: Run DB integration suite
         run: pnpm --filter @sellright/api test:db
 
       - name: Verify database isolation invariants
         run: pnpm verify:db
-
-  storefront:
-    name: Storefront build / Node 24 LTS
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
-        with:
-          version: ${{ env.PNPM_VERSION }}
-          install: false
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: ${{ env.NODE_LTS }}
-          cache: pnpm
-          cache-dependency-path: packages/storefront/pnpm-lock.yaml
-
-      - name: Install storefront
-        run: pnpm --dir packages/storefront install --frozen-lockfile
-
-      - name: Build storefront
-        run: pnpm --dir packages/storefront build
 
   packaging:
     name: Production container smoke / Node 24 LTS

@@ -125,6 +125,9 @@ describe('POST /v1/webhooks/stripe — settle + idempotency', () => {
 
     const payments1 = await withStore(STORE, async (tx) => tx.select().from(s.payment).where(eq(s.payment.orderId, order1!.id)));
     expect(payments1).toHaveLength(1);
+    // SR-03: the signature-verified mode is persisted at settlement — a later
+    // refund must never infer mode from the store's CURRENT config.
+    expect(payments1[0]!.gatewayMode).toBe('test');
 
     // Replay the IDENTICAL event (same id + payload + signature) — the
     // processed_event dedup must make this a pure no-op: still 200, still
@@ -262,5 +265,65 @@ describe('POST /v1/webhooks/stripe — signature rejection', () => {
       body: payload,
     });
     expect(res.status).toBe(400);
+  });
+});
+
+describe('POST /v1/webhooks/stripe — SR-02 tenant resolution under RLS', () => {
+  it('an unresolved one-time event is retried (503), never acked-and-dropped', async () => {
+    await seed('test');
+    // No metadata.storeId and no payment/subscription row the seam can bind —
+    // under FORCE RLS the old unscoped lookups returned zero rows and this
+    // event was acknowledged with 200 (lost forever). Now: 503 → Stripe retry.
+    const payload = JSON.stringify({
+      id: 'evt_unresolved_1', object: 'event', api_version: '2024-06-20',
+      created: Math.floor(Date.now() / 1000), type: 'refund.created',
+      data: { object: { id: 're_never', object: 'refund', amount: 500, status: 'succeeded', payment_intent: 'pi_not_ours' } },
+    });
+    const res = await app.request('/v1/webhooks/stripe', { method: 'POST', headers: hdr(sign(payload, TEST_WEBHOOK_SECRET)), body: payload });
+    expect(res.status).toBe(503);
+  });
+
+  it('a refund event resolves the tenant through the seam (no metadata.storeId) and reconciles', async () => {
+    const { orderId } = await seed('test');
+    // Settled payment row carrying the provider ref — the seam's payment
+    // lookup is what binds this event to the store under the nonowner role.
+    await withStore(STORE, (tx) => tx.execute(sql`
+      INSERT INTO payment (id, store_id, order_id, amount, method, state, provider_ref, gateway_mode, currency)
+      VALUES (gen_random_uuid(), ${STORE}, ${orderId}, 2500, 'stripe', 'Settled', 'pi_seam_1', 'test', 'USD')`));
+    const payload = JSON.stringify({
+      id: 'evt_seam_1', object: 'event', api_version: '2024-06-20',
+      created: Math.floor(Date.now() / 1000), type: 'refund.created',
+      data: { object: { id: 're_seam_1', object: 'refund', amount: 500, status: 'succeeded', payment_intent: 'pi_seam_1' } },
+    });
+    const res = await app.request('/v1/webhooks/stripe', { method: 'POST', headers: hdr(sign(payload, TEST_WEBHOOK_SECRET)), body: payload });
+    expect(res.status).toBe(200);
+    const refunds = await withStore(STORE, (tx) => tx.execute(sql`SELECT provider_ref, state FROM refund WHERE order_id = ${orderId}`));
+    expect(refunds.rows).toEqual([{ provider_ref: 're_seam_1', state: 'Settled' }]);
+  });
+});
+
+describe('POST /v1/webhooks/stripe — SR-03 subscription settlement persists mode', () => {
+  it('invoice.paid backfills the verified mode onto the minted payment row', async () => {
+    const { orderId } = await seed('test');
+    await withStore(STORE, (tx) => tx.execute(sql`
+      INSERT INTO subscription (id, store_id, stripe_subscription_id, order_id, status)
+      VALUES (gen_random_uuid(), ${STORE}, 'sub_mode_1', ${orderId}, 'incomplete')`));
+    const payload = JSON.stringify({
+      id: 'evt_inv_mode_1', object: 'event', api_version: '2024-06-20',
+      created: Math.floor(Date.now() / 1000), type: 'invoice.paid',
+      data: {
+        object: {
+          id: 'in_mode_1', object: 'invoice', subscription: 'sub_mode_1',
+          payment_intent: 'pi_inv_mode_1', amount_paid: 2500,
+          billing_reason: 'subscription_create',
+        },
+      },
+    });
+    const res = await app.request('/v1/webhooks/stripe', { method: 'POST', headers: hdr(sign(payload, TEST_WEBHOOK_SECRET)), body: payload });
+    expect(res.status).toBe(200);
+    const payments = await withStore(STORE, (tx) => tx.select().from(s.payment).where(eq(s.payment.orderId, orderId)));
+    expect(payments).toHaveLength(1);
+    expect(payments[0]!.providerRef).toBe('pi_inv_mode_1');
+    expect(payments[0]!.gatewayMode).toBe('test');
   });
 });

@@ -437,9 +437,11 @@ describe('durable refund reservations', () => {
       [{ orderLineId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', quantity: 1 }],
       [{ orderLineId: lineId, quantity: 2 }],
     ];
-    for (let i=0;i<invalid.length;i++) expect((await refundOrder('SR-BAD-LINES', {
+    const statuses = [];
+    for (let i=0;i<invalid.length;i++) statuses.push((await refundOrder('SR-BAD-LINES', {
       amount: 1000, idempotencyKey: 'bad-' + i, lines: invalid[i], restock: true,
-    })).status).toBe(409);
+    })).status);
+    expect(statuses).toEqual([409, 400, 409]);
     expect(refundCalls).toHaveLength(0);
   });
 });

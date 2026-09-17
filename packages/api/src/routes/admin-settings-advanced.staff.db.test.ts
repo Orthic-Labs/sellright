@@ -77,10 +77,14 @@ async function roleOf(adminUserId: string): Promise<string | null> {
 let owner = '';
 let manager = '';
 beforeEach(async () => {
+  if (!isTestDb) return;
   await wipe();
   ({ ownerToken: owner, managerToken: manager } = await seed());
 });
-afterAll(async () => { await wipe(); await pool.end(); });
+// Guard the teardown wipe too: under the `unit` lane (no *_test DATABASE_URL)
+// every describe is skipped but afterAll still runs — an unguarded TRUNCATE
+// would wipe whatever DATABASE_URL happens to point at.
+afterAll(async () => { if (isTestDb) await wipe(); await pool.end(); });
 
 describe.skipIf(!isTestDb)('POST /v1/admin/staff — owner grant gate', () => {
   it('a manager cannot create a new staff row with role owner (self or otherwise)', async () => {

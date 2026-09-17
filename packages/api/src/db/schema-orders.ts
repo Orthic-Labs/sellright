@@ -99,17 +99,29 @@ export const orderLine = pgTable('order_line', {
 // Software entitlements issued from paid order lines. Store-scoped: Right Apps
 // can host ViewRight/CodeRight/etc. in one instance, while Damned/RH remain
 // separate DB/API instances with their own license rows.
+//
+// STOREKIT (0066): order_id / order_line_id are nullable — a license minted
+// from a verified Apple In-App Purchase has no order row; `source`
+// distinguishes those ('order' | 'admin' | 'storekit' — plain text by design,
+// so future provenance values don't need a migration to land).
 export const license = pgTable(
   'license',
   {
     id: uuid().primaryKey().defaultRandom(),
     storeId: uuid().notNull().references(() => store.id),
     customerId: uuid().references(() => customer.id),
-    orderId: uuid().notNull().references(() => order.id),
-    orderLineId: uuid().notNull().references(() => orderLine.id),
+    orderId: uuid().references(() => order.id),
+    orderLineId: uuid().references(() => orderLine.id),
     appKey: text().notNull(),
-    licenseKey: text().notNull().unique(),
+    // License keys are unique PER APP, not globally — an admin-fixed key (e.g.
+    // a creator code) only has to be unique within its app namespace.
+    licenseKey: text().notNull(),
     status: licenseStatus().notNull().default('active'),
+    source: text().notNull().default('order'),
+    // Provenance for non-order issuance (source != 'order'): the authorizing
+    // actor and the reason the license exists. Required by mintLicense.
+    issuedBy: text(),
+    issueReason: text(),
     seats: integer().notNull().default(1),
     updatesUntil: timestamp({ withTimezone: true }),
     expiresAt: timestamp({ withTimezone: true }),
@@ -117,6 +129,7 @@ export const license = pgTable(
     createdAt: ts(),
     updatedAt: ts(),
   },
+  (t) => [unique('license_app_key_unique').on(t.appKey, t.licenseKey)],
 );
 
 // A subscription links our order/license/customer to a Stripe Billing subscription.
@@ -156,6 +169,36 @@ export const licenseActivation = pgTable(
     // spurious DROP INDEX on license_activation_token_hash_unique.
     activationTokenHash: text(),
     deviceLabel: text(),
+    // Licensing-engine delta (migration 0064): server-derived class+pool device
+    // accounting, renewable lease fields, tombstone state, and canonical
+    // entitlement-issuance markers.
+    // `deviceClass` is the legacy courtesy label; `platform`/`pool` are
+    // authoritative for the lease path. `pool` is ALWAYS server-derived from a
+    // trusted source (platform for leases, activationSource for the legacy
+    // activate route) — never accepted from a client.
+    deviceClass: text(),
+    platform: text(),
+    pool: text(),
+    // 'active' | 'removed' | 'revoked'. Remote revoke and offline removal both
+    // keep the row as a tombstone (never hard-delete) so the generation/audit
+    // trail survives; pool/seat counting filters to state='active' so a
+    // tombstoned row frees its slot immediately.
+    state: text().notNull().default('active'),
+    // Bumped on every revoke/removal. A lease/entitlement carrying a stale
+    // generation is rejected by the renew path — replay rejection +
+    // "prevents stale reactivation".
+    generation: integer().notNull().default(0),
+    revokedAt: timestamp({ withTimezone: true }),
+    removedAt: timestamp({ withTimezone: true }),
+    leaseId: uuid(),
+    leaseIssuedAt: timestamp({ withTimezone: true }),
+    leaseExpiresAt: timestamp({ withTimezone: true }),
+    leaseGraceSeconds: integer(),
+    updatedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    // Canonical signed-entitlement issuance inventory: null = legacy/unknown,
+    // 2 = the signer-issued v2 token was recorded (activationId + appKey).
+    entitlementTokenVersion: integer(),
+    entitlementTokenIssuedAt: timestamp({ withTimezone: true }),
     activatedAt: ts(),
     lastSeenAt: ts(),
   },

@@ -31,11 +31,52 @@
  * side from sending a confirmation email we already sent.
  */
 import { and, eq, isNull, sql } from 'drizzle-orm';
-import { pool, withStore } from '../db/client.js';
+import { pool, withStore, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { safeOutboundFetch } from '../security/outbound-url.js';
+import { normalizeEmail } from '../auth/email.js';
 
 const DEFAULT_BATCH_LIMIT = 200;
+
+/**
+ * Paid-order enrollment (DD parity — listmonk.event-handler.ts enrolled
+ * customers on OrderPlaced, not just newsletter signups).
+ *
+ * The durable unit of work is a `kind='order'` subscriber row: inserting it
+ * inside the settlement transaction is the entire enqueue — the existing
+ * sync pass below claims confirmed+unsynced rows and pushes them to Listmonk
+ * with retry. Deduplication is the table's own unique index on
+ * (store_id, email, kind, topic): a replayed settlement / second order for
+ * the same address is a silent no-op, and a Listmonk-side 409 is already
+ * treated as success by the sync pass. `topic` distinguishes stores' lists
+ * the same way waitlist topics do; '' is the default list.
+ *
+ * Call-site (payments lane owns paid-effects.ts): inside
+ * enqueuePaidEffects(), after recipient resolution —
+ *
+ *   await enrollOnPaidOrder(tx, storeId, { orderId: order.id, email: recipient, name: order customer name });
+ *
+ * It never throws: a bad address is logged and skipped, Listmonk
+ * unconfiguration just leaves the row unsynced for the next tick.
+ */
+export async function enrollOnPaidOrder(
+  tx: Tx, storeId: string,
+  input: { orderId: string; orderCode?: string | null; email: string; name?: string | null },
+): Promise<boolean> {
+  const email = normalizeEmail(input.email);
+  if (!email || !email.includes('@')) return false;
+  // Raw SQL for two reasons: `kind='order'` is intentionally outside the
+  // drizzle enum ['newsletter','waitlist'] (schema-content.ts is another
+  // lane's file — the DB column is plain text, no CHECK), and ON CONFLICT
+  // DO NOTHING on the unique index is the dedupe mechanism.
+  const r = await tx.execute(sql`
+    INSERT INTO subscriber (store_id, email, name, kind, topic, status, confirmed_at, source, meta)
+    VALUES (${storeId}, ${email}, ${input.name ?? null}, 'order', '', 'confirmed', now(), 'checkout',
+            ${JSON.stringify({ orderId: input.orderId, orderCode: input.orderCode ?? null })}::jsonb)
+    ON CONFLICT (store_id, email, kind, topic) DO NOTHING
+    RETURNING id`);
+  return r.rows.length > 0;
+}
 
 interface ListmonkCfg { url: string; apiUser: string; apiToken: string; }
 

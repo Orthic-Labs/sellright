@@ -12,9 +12,8 @@ import { clientIp, loginRetryAfter, recordLoginFailure, clearLoginAttempts } fro
 import { setAuthCookies, clearAuthCookies, newCsrf, cookie, csrfValid, SESSION_COOKIE } from '../auth/cookies.js';
 import { verifyTotp } from '../auth/totp.js';
 import { normalizeEmail } from '../auth/email.js';
-import { sendShippingNotification } from '../email/dispatch.js';
+import { enqueueShippingNotification } from '../email/dispatch.js';
 import { emitEvent } from '../webhooks/emit.js';
-import { err as logErr } from '../lib/logger.js';
 
 export const admin = new OpenAPIHono();
 
@@ -219,30 +218,33 @@ admin.openapi(
         }
       }
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: o.id, action: 'fulfill', toState: state });
-      // WP2: emit order.shipped (existing webhook pattern) + best-effort email
-      // to the linked customer. Only on the first Shipped transition so we
-      // don't double-email a re-fulfill that just refreshes tracking. Both the
-      // webhook emit and the Shipped state commit in the same txn.
+      // WP2: emit order.shipped (existing webhook pattern) + durable customer
+      // email via the outbox. Only on the first Shipped transition so we don't
+      // double-email a re-fulfill that just refreshes tracking. Webhook emit,
+      // email enqueue and the Shipped state all commit in the same txn — SR-12:
+      // the notification can no longer be lost to an SMTP blip after the state
+      // committed (the old inline send failed silently).
       // Webhook fires for ALL orders (3rd-party fulfillment/analytics subscribers);
       // the customer email is gated on customerId (nullable FK → eq() needs guard).
-      let emailTo: string | null = null;
       if (state === 'Shipped' && advancingToShipped) {
         await emitEvent(tx, st.storeId, 'order.shipped', { code, trackingCode: trackingCode ?? null, carrier: carrier ?? null });
         if (o.customerId) {
           const [cust] = await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, o.customerId)).limit(1);
-          if (cust?.email) emailTo = cust.email;
+          if (cust?.email) {
+            const [storeRow] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1);
+            // SR-05: per-store sender + storefront URL from store.config.
+            await enqueueShippingNotification(tx, st.storeId,
+              { name: st.name, currency: st.currency, config: storeRow?.config ?? null },
+              cust.email,
+              { code, trackingCode: trackingCode ?? null, carrier: carrier ?? null, dedupeKey: `shipping_notification:${o.id}:Shipped` });
+          }
         }
       }
-      return { kind: 'ok' as const, fid, state, emailTo, trackingCode: trackingCode ?? null, carrier: carrier ?? null };
+      return { kind: 'ok' as const, fid, state };
     });
     if (res.kind === 'notfound') throw new HttpError(404, 'order not found');
     if (res.kind === 'badstate') throw new HttpError(409, `order not fulfillable in state ${res.state}`);
     if (res.kind === 'regress') throw new HttpError(409, `cannot move fulfillment from ${res.state} back to Shipped`);
-    // WP2: best-effort email AFTER the txn commits (failure doesn't roll back
-    // the Shipped state). Webhook is already in the outbox via the txn above.
-    if (res.emailTo) {
-      try { await sendShippingNotification({ name: st.name, currency: st.currency }, res.emailTo, { code, trackingCode: res.trackingCode, carrier: res.carrier }); } catch (e) { logErr.error('email shipping failed', e, { orderCode: code }); }
-    }
     return c.json({ code, fulfillment: res.state }, 200);
   }),
 );
@@ -293,7 +295,7 @@ admin.openapi(
     for (const o of orders) seen.set(o.code, o);
     const deduped = [...seen.values()];
     for (const o of deduped) {
-      const res = await withStore(st.storeId, async (tx): Promise<{ kind: 'ok' | 'notfound' | 'badstate' | 'regress'; state?: string; emailTo?: string | null; trackingCode?: string | null; carrier?: string | null }> => {
+      const res = await withStore(st.storeId, async (tx): Promise<{ kind: 'ok' | 'notfound' | 'badstate' | 'regress'; state?: string }> => {
         const [order] = await tx.select().from(s.order).where(eq(s.order.code, o.code)).limit(1);
         if (!order) return { kind: 'notfound' };
         if (order.state !== 'Paid' && order.state !== 'PartiallyRefunded') return { kind: 'badstate', state: order.state };
@@ -322,21 +324,25 @@ admin.openapi(
           }
         }
         await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: order.id, action: 'fulfill', toState: o.state });
-        let emailTo: string | null = null;
+        // SR-12: shipping notification is enqueued in the SAME txn as the
+        // Shipped transition (durable retry, no post-commit silent drop).
         if (o.state === 'Shipped' && advancingToShipped) {
           await emitEvent(tx, st.storeId, 'order.shipped', { code: o.code, trackingCode: o.trackingCode ?? null, carrier: o.carrier ?? null });
           if (order.customerId) {
             const [cust] = await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, order.customerId)).limit(1);
-            if (cust?.email) emailTo = cust.email;
+            if (cust?.email) {
+              const [storeRow] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1);
+              await enqueueShippingNotification(tx, st.storeId,
+                { name: st.name, currency: st.currency, config: storeRow?.config ?? null },
+                cust.email,
+                { code: o.code, trackingCode: o.trackingCode ?? null, carrier: o.carrier ?? null, dedupeKey: `shipping_notification:${order.id}:Shipped` });
+            }
           }
         }
-        return { kind: 'ok', state: o.state, emailTo, trackingCode: o.trackingCode ?? null, carrier: o.carrier ?? null };
+        return { kind: 'ok', state: o.state };
       });
       if (res.kind === 'ok') {
         results.push({ code: o.code, ok: true, fulfillment: res.state });
-        if (res.emailTo) {
-          try { await sendShippingNotification({ name: st.name, currency: st.currency }, res.emailTo, { code: o.code, trackingCode: res.trackingCode ?? null, carrier: res.carrier ?? null }); } catch (e) { logErr.error('email shipping failed', e, { orderCode: o.code }); }
-        }
       } else if (res.kind === 'notfound') {
         results.push({ code: o.code, ok: false, error: 'not found' });
       } else if (res.kind === 'badstate') {

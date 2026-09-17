@@ -23,11 +23,16 @@ import { adminAffiliate } from './routes/admin-affiliate.js';
 import { adminContent } from './routes/admin-content.js';
 import { adminAssets } from './routes/admin-assets.js';
 import { adminPush } from './routes/admin-push.js';
+import { adminLicenses } from './routes/admin-licenses.js';
 import { shopExtra } from './routes/shop-extra.js';
 import { subscriberRoutes } from './routes/shop-extra.subscriber.js';
+import { feeds } from './routes/feeds.js';
+import { sheeridRoutes } from './routes/sheerid.js';
+import { disputeRoutes } from './routes/disputes.js';
 import { shopConfig } from './routes/shop-config.js';
 import { customerTokens } from './routes/customer-tokens.js';
 import { paymentWebhooks } from './routes/payment-webhooks.js';
+import { storeKitWebhooks } from './routes/storekit-webhooks.js';
 import { subscriptions } from './routes/subscriptions.js';
 import { apps } from './routes/apps.js';
 import { HttpError } from './routes/admin-helpers.js';
@@ -248,6 +253,10 @@ export function createApp(): OpenAPIHono {
   app.route('/', account);
   app.route('/', orders);
   app.route('/', paymentWebhooks); // WP3: inbound Stripe webhooks (signature-auth, no CSRF/cookie)
+  app.route('/', storeKitWebhooks); // Apple StoreKit: App Store Server Notifications + pro/link-storekit
+  app.route('/', feeds); // PAR-2: public per-store merchant feeds (google/facebook/pinterest CSV)
+  app.route('/', sheeridRoutes); // PAR-4: SheerID verification lifecycle + webhook + admin config
+  app.route('/', disputeRoutes); // PAR-7: NMI chargeback webhook + admin dispute list
   app.route('/', apps); // software licenses, app update manifests, admin app releases
   app.route('/', subscriptions); // recurring billing: shop subscribe/portal + admin list
 
@@ -266,6 +275,7 @@ export function createApp(): OpenAPIHono {
   app.route('/', adminContent); // blog CMS admin
   app.route('/', adminAssets); // WP8: asset upload + management
   app.route('/', adminPush); // mobile push: device registration (0039)
+  app.route('/', adminLicenses); // mint/list software licenses (comp/support/creator, audited)
   app.route('/', shopExtra); // shop: guest tracking, public blog, shipping eligibility, newsletter
   app.route('/', subscriberRoutes); // subscriber confirm + unsubscribe (SUBSCRIBER-1)
 

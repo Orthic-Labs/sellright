@@ -13,7 +13,7 @@ import { resolveTaxRate } from '../money/tax.js';
 import { requestRefund, RefundError } from '../payments/refunds.js';
 import { unitPrice } from './admin-order-utils.js';
 import { emitEvent } from '../webhooks/emit.js';
-import { sendShippingNotification } from '../email/dispatch.js';
+import { variantPriceRuleFromConfig } from '../money/pricing.js';
 import { getProvider } from '../payments/provider.js';
 
 export const adminOrders = new OpenAPIHono();
@@ -113,9 +113,9 @@ adminOrders.openapi(
       if (blocked.length) throw new StockReservationError(blocked);
       await reserveStockOrThrow(tx, st.storeId, reqLines, bySku);
 
-      const priced = reqLines.map((i) => { const v = bySku.get(i.sku)!; return { v, qty: i.quantity, unitPrice: unitPrice(v) }; });
+      const [storeRow] = await tx.select({ taxRate: s.store.taxRate, taxInclusive: s.store.taxInclusive, shippingTaxable: s.store.shippingTaxable, config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1);
+      const priced = reqLines.map((i) => { const v = bySku.get(i.sku)!; return { v, qty: i.quantity, unitPrice: unitPrice(v, variantPriceRuleFromConfig(storeRow?.config)) }; });
       const subtotalCents = priced.reduce((a, p) => a + p.unitPrice * p.qty, 0);
-      const [storeRow] = await tx.select({ taxRate: s.store.taxRate, taxInclusive: s.store.taxInclusive, shippingTaxable: s.store.shippingTaxable }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1);
       const shipCountry = (o.shippingAddress as { country?: string } | null)?.country ?? null;
       const zones = await tx.select({ countries: s.taxZone.countries, rate: s.taxZone.rate, priority: s.taxZone.priority }).from(s.taxZone).where(eq(s.taxZone.enabled, true));
       const taxRate = resolveTaxRate(zones, shipCountry, storeRow!.taxRate);

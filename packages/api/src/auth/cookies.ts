@@ -11,6 +11,7 @@
  * served session cookies without Secure over HTTP.
  */
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { env } from '../env.js';
 
 /** Constant-time double-submit token compare (mirrors the password compare in auth/password.ts). */
 function csrfEqual(header: string | undefined, cooked: string | undefined): boolean {
@@ -100,9 +101,19 @@ export function csrfValid(c: { req: { header: (k: string) => string | undefined 
 export const CUST_COOKIE = 'sr_cust';
 export const CUST_CSRF_COOKIE = 'sr_cust_csrf';
 
-export function setCustomerCookies(c: Ctx, token: string, csrf: string): void {
+/**
+ * Customer-cookie lifetime. The cookie must live at least as long as the
+ * session it carries (Max-Age is the browser's hard cap — a shorter cookie
+ * silently logs customers out while their DB session is still valid), so it
+ * tracks the session TTL: routes pass the resolved per-store policy's
+ * ttlMs/1000; the default is the env SESSION_TTL_DAYS. (Was the shared 14-day
+ * admin MAX_AGE, which expired cookies 16 days before the 30-day session.)
+ */
+export const CUSTOMER_COOKIE_MAX_AGE_SECONDS = Math.ceil(env.SESSION_TTL_DAYS * 24 * 3600);
+
+export function setCustomerCookies(c: Ctx, token: string, csrf: string, maxAgeSeconds = CUSTOMER_COOKIE_MAX_AGE_SECONDS): void {
   const secure = secureFlag(c);
-  const base = `Path=/; Max-Age=${MAX_AGE}; SameSite=Lax${secure}`;
+  const base = `Path=/; Max-Age=${maxAgeSeconds}; SameSite=Lax${secure}`;
   c.header('Set-Cookie', `${CUST_COOKIE}=${token}; HttpOnly; ${base}`, { append: true });
   c.header('Set-Cookie', `${CUST_CSRF_COOKIE}=${csrf}; ${base}`, { append: true });
 }

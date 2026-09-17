@@ -91,7 +91,7 @@ async function createDraft(token: string, body: unknown): Promise<{ status: numb
   return { status: res.status, body: (await res.json()) as DraftBody };
 }
 
-async function licensesForCode(code: string): Promise<Array<{ id: string; appKey: string; orderLineId: string }>> {
+async function licensesForCode(code: string): Promise<Array<{ id: string; appKey: string; orderLineId: string | null }>> {
   return withStore(STORE, async (tx) => {
     const [o] = await tx.select({ id: s.order.id }).from(s.order).where(eq(s.order.code, code)).limit(1);
     if (!o) return [];

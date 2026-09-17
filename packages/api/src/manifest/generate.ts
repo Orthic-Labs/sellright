@@ -12,13 +12,14 @@ import { pool, withStore } from '../db/client.js';
 import { resolveStore, DEV_DEFAULT_STORE } from '../store-context.js';
 import { env } from '../env.js';
 import * as s from '../db/schema.js';
+import { selectUnitPrice, variantPriceRuleFromConfig, type VariantPriceRule } from '../money/pricing.js';
 
 // Default stays INSIDE the checkout (<checkout>/var/catalog), never ~/sites root.
 const OUT = env.CATALOG_DIR ?? 'var/catalog';
 const STORE_SLUG = env.STORE_SLUG ?? DEV_DEFAULT_STORE;
 const assetUrl = (path: string | null | undefined) => (path ? `/assets/${path}` : null);
-const selectPrice = (v: { price: number; salePrice: number | null; isPreOrder: boolean; preOrderPrice: number | null }) =>
-  v.isPreOrder && v.preOrderPrice != null ? v.preOrderPrice : v.salePrice ?? v.price;
+const selectPrice = (v: { price: number; salePrice: number | null; isPreOrder: boolean; preOrderPrice: number | null }, rule: VariantPriceRule) =>
+  selectUnitPrice(v, rule);
 
 function group<T, K>(arr: T[], key: (t: T) => K): Map<K, T[]> {
   const m = new Map<K, T[]>();
@@ -34,6 +35,7 @@ async function main() {
   const now = new Date().toISOString();
 
   const store = await resolveStore(STORE_SLUG);
+  const priceRule = variantPriceRuleFromConfig(store.config);
   const { manifest, details } = await withStore(store.id, async (tx) => {
     const products = await tx.select().from(s.product)
       .where(and(eq(s.product.status, 'active'), isNull(s.product.deletedAt))).orderBy(asc(s.product.name));
@@ -54,7 +56,7 @@ async function main() {
     const details = [];
     for (const p of products) {
       const vs = variantsByProduct.get(p.id) ?? [];
-      const prices = vs.map(selectPrice);
+      const prices = vs.map((v) => selectPrice(v, priceRule));
       const min = prices.length ? Math.min(...prices) : 0;
       const max = prices.length ? Math.max(...prices) : 0;
       const inStock = vs.some((v) => v.fulfillmentType !== 'physical' || v.isPreOrder || (stockByVariant.get(v.id) ?? 0) > 0);
@@ -72,7 +74,7 @@ async function main() {
         assets: (assetsByProduct.get(p.id) ?? []).map((a) => ({ preview: assetUrl(a.path) })),
         priceRange: { min, max }, facetValues: [], hasMultiplePrices: min !== max, hasVariantAssets: false,
         variants: vs.map((v) => ({
-          id: v.sku, name: v.name, sku: v.sku, priceWithTax: selectPrice(v),
+          id: v.sku, name: v.name, sku: v.sku, priceWithTax: selectPrice(v, priceRule),
           options: (optsByVariant.get(v.id) ?? []).map((o) => ({ group: o.groupName, code: o.groupName.toLowerCase(), name: o.value })),
           assets: [],
           customFields: { salePrice: v.salePrice, preOrderPrice: v.preOrderPrice, shipDate: v.shipDate, isPreOrder: v.isPreOrder },

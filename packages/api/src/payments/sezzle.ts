@@ -32,6 +32,88 @@ export function verifySezzleSignature(raw: string, signature: string | undefined
   return timingSafeEqual(expected, Buffer.from(signature, 'hex'));
 }
 
+/**
+ * SR-06: event-specific normalization for inbound Sezzle webhooks. The
+ * documented dispute payload keys its ORDER identity on `data.order_uuid`
+ * (there is no `data.uuid` on dispute events) — a single universal schema
+ * requiring data.uuid rejected every signed dispute with a 400, which made
+ * Sezzle retry then give up: chargebacks arrived invisible.
+ *
+ * Returns null only when the payload isn't a Sezzle event envelope at all
+ * (not an object, or neither an event id nor an event name). Everything else
+ * normalizes — a malformed `data` block still yields a durable record so the
+ * reconcile worker can park it for operator review instead of losing it.
+ */
+export interface NormalizedSezzleEvent {
+  /** Envelope event id (data.uuid of the EVENT, not the order). Empty when the
+   *  payload carried none — the caller substitutes a body-hash fallback. */
+  eventId: string | null;
+  /** e.g. 'order.captured', 'dispute.merchant_input_requested'. */
+  eventType: string;
+  /** Provider ORDER identity for ledger correlation: data.uuid for order
+   *  events, data.order_uuid for dispute events. Falls back to the event id
+   *  so an unidentifiable signed event is still recorded durably. */
+  providerRef: string;
+  orderUuid: string | null;
+  disputeId: string | null;
+  details: Record<string, unknown>;
+}
+
+export function normalizeSezzleEvent(payload: unknown): NormalizedSezzleEvent | null {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  const body = payload as Record<string, unknown>;
+  const str = (v: unknown): string | null =>
+    typeof v === 'string' && v.trim() ? v.trim().slice(0, 200) : null;
+  const num = (v: unknown): number | null =>
+    typeof v === 'number' && Number.isSafeInteger(v) ? v : null;
+  const eventId = str(body.uuid);
+  const eventType = str(body.event);
+  if (!eventId && !eventType) return null;
+  const data = (body.data && typeof body.data === 'object' && !Array.isArray(body.data))
+    ? body.data as Record<string, unknown> : null;
+  const dataType = str(body.data_type);
+  const isDispute = eventType?.startsWith('dispute.') === true || dataType === 'dispute' ||
+    data?.order_uuid !== undefined;
+  // Order identity: order events use data.uuid; dispute events use
+  // data.order_uuid (documented Sezzle shape). Prefer the explicit
+  // order-scoped keys either way — a dispute's data.uuid would be the
+  // DISPUTE's id, not the order's.
+  const orderUuid = str(data?.order_uuid) ?? (isDispute ? null : str(data?.uuid)) ??
+    str(data?.sezzle_order_uuid);
+  const disputeId = isDispute
+    ? str(data?.dispute_id) ?? (num(data?.dispute_id)?.toString() ?? null) ?? str(data?.id)
+    : null;
+  const details: Record<string, unknown> = {
+    receivedAt: new Date().toISOString(),
+    dataType,
+    orderUuid,
+    malformed: data ? undefined : true,
+  };
+  if (isDispute) {
+    // Preserve the normalized dispute identities + operator fields verbatim —
+    // the reconcile worker parks dispute events for manual review; nothing
+    // here auto-refunds or cancels.
+    details.dispute = {
+      disputeId,
+      orderUuid,
+      orderReferenceId: str(data?.order_reference_id),
+      disputeType: str(data?.dispute_type),
+      disputeStatus: str(data?.dispute_status),
+      amountInCents: num(data?.dispute_amount_in_cents),
+      currency: str(data?.dispute_currency),
+      dueDate: str(data?.dispute_due_date) ?? str(data?.due_date),
+    };
+  }
+  return {
+    eventId,
+    eventType: eventType ?? 'unrecognized',
+    providerRef: orderUuid ?? disputeId ?? eventId ?? 'unidentified',
+    orderUuid,
+    disputeId,
+    details,
+  };
+}
+
 function pending(ref: string | null, reason: string): PaymentResult {
   return { state: 'Pending', providerRef: ref, errorMessage: 'Sezzle payment requires reconciliation',
     metadata: { needsReconciliation: true, reason } };

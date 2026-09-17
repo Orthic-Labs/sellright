@@ -38,7 +38,7 @@ if (!/_test(\b|$|\?)/.test(DB)) {
 }
 
 import { sendEmail } from './mailer.js';
-import { deliverEmails } from './outbox.js';
+import { deliverEmails, enqueueEmail } from './outbox.js';
 
 const STORE = 'dddddddd-dddd-dddd-dddd-dddddddddddd';
 
@@ -147,5 +147,51 @@ describe('email outbox (REL-4)', () => {
     expect(after.status).toBe('dead');
     expect(after.attempts).toBe(5);
     expect(after.lastError).toContain('smtp 550');
+  });
+
+  it('dedupeKey makes a second enqueue a no-op (SR-12/PAR-03 replay suppression)', async () => {
+    const payload = { to: 'buyer@example.com', subject: 'Refund', html: '<p>refund</p>', text: 'refund' };
+    const first = await withStore(STORE, (tx) => enqueueEmail(tx, STORE, { kind: 'order-refund-confirmation', recipient: 'buyer@example.com', payload, dedupeKey: 'order-refund-confirmation:ref-9' }));
+    const dupe = await withStore(STORE, (tx) => enqueueEmail(tx, STORE, { kind: 'order-refund-confirmation', recipient: 'buyer@example.com', payload, dedupeKey: 'order-refund-confirmation:ref-9' }));
+    const other = await withStore(STORE, (tx) => enqueueEmail(tx, STORE, { kind: 'order-refund-confirmation', recipient: 'buyer@example.com', payload, dedupeKey: 'order-refund-confirmation:ref-10' }));
+    expect(first).toBe(true);
+    expect(dupe).toBe(false);
+    expect(other).toBe(true);
+    const n = await withStore(STORE, async (tx) => {
+      const r = await tx.execute(sql`SELECT count(*)::int AS n FROM email_outbox`);
+      return (r.rows[0] as { n: number }).n;
+    });
+    expect(n).toBe(2);
+  });
+
+  it('a dead-lettered email emits an operator-visible signal (audit + email.dead event)', async () => {
+    // Subscribe a webhook endpoint so the 'email.dead' emit produces a delivery row.
+    await withStore(STORE, async (tx) => {
+      await tx.execute(sql`INSERT INTO webhook_endpoint (store_id, url, topics, secret) VALUES (${STORE}, 'https://ops.example/hook', '{email.dead}', 's3cret')`);
+    });
+    vi.mocked(sendEmail).mockResolvedValue({ delivered: false, reason: 'smtp 550 permanent' });
+
+    const id = await enqueueRow('buyer@example.com', 'Order confirmed — SR-DEAD2');
+    for (let i = 0; i < 5; i++) {
+      await makeDue(id);
+      await deliverEmails({ log: () => {} });
+    }
+
+    const audit = await withStore(STORE, async (tx) => {
+      const r = await tx.execute(sql`SELECT action, entity_id AS "entityId", data FROM audit_log WHERE entity = 'email_outbox'`);
+      return r.rows as Array<{ action: string; entityId: string; data: { kind?: string; recipient?: string; attempts?: number } }>;
+    });
+    expect(audit).toHaveLength(1);
+    expect(audit[0]!.action).toBe('delivery_dead');
+    expect(audit[0]!.entityId).toBe(id);
+    expect(audit[0]!.data.recipient).toBe('buyer@example.com');
+
+    const deliveries = await withStore(STORE, async (tx) => {
+      const r = await tx.execute(sql`SELECT topic, payload FROM webhook_delivery`);
+      return r.rows as Array<{ topic: string; payload: { id?: string; kind?: string } }>;
+    });
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0]!.topic).toBe('email.dead');
+    expect(deliveries[0]!.payload.id).toBe(id);
   });
 });

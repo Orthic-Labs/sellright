@@ -1,14 +1,17 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, ne, sql } from 'drizzle-orm';
 import { withAdvisoryLock, withStore, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { resolveCustomer } from '../auth/session.js';
 import { amountDueForOrder, applyPaymentResult } from './settle.js';
-import { getProvider, isPaymentMethodEnabled, type PaymentResult } from './provider.js';
+import { getProvider, isPaymentMethodEnabled, type PaymentResult, type RefundResult } from './provider.js';
 import { configuredGatewayAccount, gatewayAccount, gatewayIdentity, type GatewayMethod } from './gateway-account.js';
 import { sezzleProvider } from './sezzle.js';
 import { prepareSezzleSession } from './session-input.js';
 import { queryNmiPayment } from './nmi-query.js';
+import { listStripeRefunds, STRIPE_REFUND_ATTEMPT_KEY } from './stripe.js';
+import { finalizeRefund } from './refunds.js';
+import { refundStateFromStripe } from './webhook-reconcile.js';
 
 export class GatewayPaymentError extends Error {
   constructor(public status: 400 | 404 | 409 | 503, message: string) { super(message); }
@@ -176,11 +179,149 @@ export async function readGatewayAttempt(input: {
   });
 }
 
+/**
+ * SR-04: provider-verified reconciliation for a REFUND attempt — the operator
+ * recovery path behind POST /v1/admin/payment-reconciliation/:id/verify.
+ * Generic verification must not silently reject refund attempts: the provider
+ * is queried read-only for the refund's real outcome, then the SAME
+ * finalizeRefund the request path and webhook path share applies it — so
+ * stock/RMA/gift-card/order/email effects still run exactly once.
+ *
+ * Correlation mirrors the webhook path: a stamped attempt id (Stripe refund
+ * metadata), an operator-bound providerRef, or a unique unclaimed provider
+ * refund matching the reserved amount. Anything ambiguous stays unresolved
+ * (the attempt remains operator-visible in the reconciliation list) rather
+ * than guessing — a wrong bind would apply another refund's stock effects.
+ */
+async function reconcileRefundAttempt(storeId: string, id: string) {
+  const first = await withStore(storeId, async tx => {
+    const [attempt] = await tx.select().from(s.paymentAttempt).where(eq(s.paymentAttempt.id, id)).limit(1);
+    const [refund] = await tx.select().from(s.refund).where(eq(s.refund.attemptId, id)).limit(1);
+    const [payment] = refund ? await tx.select().from(s.payment).where(eq(s.payment.id, refund.paymentId)).limit(1) : [];
+    return { attempt, refund, payment };
+  });
+  if (!first.attempt) throw new GatewayPaymentError(404, 'Refund attempt not found');
+  if (first.refund?.state === 'Settled') {
+    return { attemptId: id, status: 'settled', refundId: first.refund.id, refundState: 'Settled' };
+  }
+  return withAdvisoryLock('refund:' + storeId + ':' + first.attempt.orderId, async () => {
+    // Re-read inside the lock — a concurrent finalize (request retry or
+    // webhook) may have settled the reservation while we waited.
+    const fresh = await withStore(storeId, async tx => {
+      const [attempt] = await tx.select().from(s.paymentAttempt).where(eq(s.paymentAttempt.id, id)).limit(1).for('update');
+      const [refund] = await tx.select().from(s.refund).where(eq(s.refund.attemptId, id)).limit(1);
+      const [payment] = refund ? await tx.select().from(s.payment).where(eq(s.payment.id, refund.paymentId)).limit(1) : [];
+      // Provider refs already claimed by OTHER refund rows on this payment —
+      // they can never be ours (exactly-once guard against double-binding).
+      const claimed = refund ? (await tx.select({ providerRef: s.refund.providerRef }).from(s.refund)
+        .where(and(eq(s.refund.paymentId, refund.paymentId), ne(s.refund.id, refund.id), sql`${s.refund.providerRef} IS NOT NULL`)))
+        .map((row) => row.providerRef!) : [];
+      return { attempt, refund, payment, claimed: new Set(claimed) };
+    });
+    const { attempt, refund, payment, claimed } = fresh;
+    if (!attempt || !refund) throw new GatewayPaymentError(409, 'Refund reservation is incomplete');
+    if (refund.state === 'Settled') {
+      return { attemptId: id, status: 'settled', refundId: refund.id, refundState: 'Settled' };
+    }
+    let result: RefundResult;
+    try {
+      result = await discoverRefundOutcome(storeId, attempt, refund, payment, claimed);
+    } catch (error) {
+      if (error instanceof GatewayPaymentError) throw error;
+      result = { state: 'Pending', providerRef: refund.providerRef ?? attempt.providerRef,
+        errorMessage: 'Provider verification unavailable' };
+    }
+    const finalized = await withStore(storeId, tx => finalizeRefund(tx, storeId, id, result));
+    return { attemptId: id,
+      status: result.state === 'Settled' ? 'settled' : result.state === 'Failed' ? 'failed' : (result.providerRef ? 'pending' : 'unknown'),
+      ...finalized };
+  });
+}
+
+/** Read-only provider outcome for a pending/unknown refund attempt. */
+async function discoverRefundOutcome(
+  storeId: string,
+  attempt: typeof s.paymentAttempt.$inferSelect,
+  refund: typeof s.refund.$inferSelect,
+  payment: typeof s.payment.$inferSelect | undefined,
+  claimed: Set<string>,
+): Promise<RefundResult> {
+  const bound = refund.providerRef ?? attempt.providerRef;
+  if (attempt.method === 'stripe') {
+    const mode = attempt.mode === 'live' ? 'live' as const : 'test' as const;
+    if (!payment?.providerRef) {
+      return { state: 'Pending', providerRef: bound, errorMessage: 'Original payment has no provider reference' };
+    }
+    const refunds = await listStripeRefunds(mode, payment.providerRef);
+    if (bound) {
+      const found = refunds.find((r) => r.id === bound);
+      if (!found) return { state: 'Pending', providerRef: bound, errorMessage: 'Bound provider refund not found' };
+      if (found.amount !== attempt.amount) throw new GatewayPaymentError(409, 'Bound provider refund amount does not match the reservation');
+      return { state: refundStateFromStripe(found.status), providerRef: found.id };
+    }
+    // The provider refund we created carries our attempt id in metadata.
+    const stamped = refunds.filter((r) => r.metadata?.[STRIPE_REFUND_ATTEMPT_KEY] === attempt.id);
+    if (stamped.length > 1) throw new GatewayPaymentError(409, 'Multiple provider refunds claim this attempt');
+    if (stamped.length === 1) {
+      const r = stamped[0]!;
+      if (claimed.has(r.id)) throw new GatewayPaymentError(409, 'Provider refund already bound to another refund row');
+      if (r.amount !== attempt.amount) throw new GatewayPaymentError(409, 'Provider refund amount does not match the reservation');
+      return { state: refundStateFromStripe(r.status), providerRef: r.id };
+    }
+    // Pre-metadata refund whose response was lost: a unique unclaimed,
+    // unstamped provider refund matching the reserved amount is the bind.
+    const free = refunds.filter((r) => !claimed.has(r.id) && !r.metadata?.[STRIPE_REFUND_ATTEMPT_KEY] && r.amount === attempt.amount);
+    if (free.length > 1) throw new GatewayPaymentError(409, 'Ambiguous provider refunds — bind the provider reference explicitly');
+    if (free.length === 1) return { state: refundStateFromStripe(free[0]!.status), providerRef: free[0]!.id };
+    return { state: 'Pending', providerRef: null, errorMessage: 'No matching provider refund found' };
+  }
+  if (attempt.method === 'sezzle') {
+    if (!payment?.providerRef) {
+      return { state: 'Pending', providerRef: bound, errorMessage: 'Original payment has no provider reference' };
+    }
+    const account = gatewayAccount(storeId, 'sezzle', attempt.accountId, attempt.mode as 'test' | 'live');
+    const order = await sezzleProvider.getOrder(account, payment.providerRef);
+    const refunds = (order.authorization?.refunds ?? []).filter((r) => r?.uuid);
+    if (bound) {
+      const found = refunds.find((r) => r.uuid === bound);
+      if (!found) return { state: 'Pending', providerRef: bound, errorMessage: 'Bound provider refund not found' };
+      if (found.amount?.amount_in_cents !== attempt.amount || found.amount?.currency !== attempt.currency) {
+        throw new GatewayPaymentError(409, 'Bound provider refund amount does not match the reservation');
+      }
+      return { state: 'Settled', providerRef: found.uuid };
+    }
+    const free = refunds.filter((r) => !claimed.has(r.uuid) &&
+      r.amount?.amount_in_cents === attempt.amount && r.amount?.currency === attempt.currency);
+    if (free.length > 1) throw new GatewayPaymentError(409, 'Ambiguous provider refunds — bind the provider reference explicitly');
+    if (free.length === 1) return { state: 'Settled', providerRef: free[0]!.uuid };
+    return { state: 'Pending', providerRef: null, errorMessage: 'No matching provider refund found' };
+  }
+  if (attempt.method === 'nmi') {
+    const account = gatewayAccount(storeId, 'nmi', attempt.accountId, attempt.mode as 'test' | 'live');
+    const res = await queryNmiPayment({ account, amount: attempt.amount, currency: attempt.currency,
+      // The refund transact call keyed orderid by the refund attempt id —
+      // query.php therefore answers on the attempt's own reference.
+      orderReference: attempt.id, providerRef: bound });
+    const reason = (res.metadata as { reason?: string } | null)?.reason;
+    // For a refund op the existence of a matching provider transaction IS the
+    // settlement proof — identity/order mismatches and a missing transaction
+    // remain unresolved.
+    if (res.providerRef && !['missing_or_duplicate_transaction', 'identity_mismatch'].includes(reason ?? '')) {
+      return { state: 'Settled', providerRef: res.providerRef };
+    }
+    return { state: 'Pending', providerRef: bound, errorMessage: res.errorMessage ?? 'NMI refund requires reconciliation' };
+  }
+  // Internal tenders (manual/cod/gift_card) have no gateway call — a stuck
+  // Pending row means the process died between the synchronous provider
+  // result and finalize; settle it now.
+  return { state: 'Settled', providerRef: bound };
+}
+
 export async function verifyGatewayAttempt(storeId: string, id: string) {
   const [attempt] = await withStore(storeId, tx => tx.select().from(s.paymentAttempt)
     .where(eq(s.paymentAttempt.id, id)).limit(1));
   if (!attempt) throw new GatewayPaymentError(404, 'Payment not found');
-  if (attempt.operation === 'refund') throw new GatewayPaymentError(409, 'Use refund reconciliation for this attempt');
+  if (attempt.operation === 'refund') return reconcileRefundAttempt(storeId, id);
   if (attempt.method === 'sezzle') return verifySezzleAttempt(storeId, id);
   if (attempt.method !== 'nmi' || attempt.operation !== 'charge') {
     throw new GatewayPaymentError(409, 'This operation requires separate reconciliation');

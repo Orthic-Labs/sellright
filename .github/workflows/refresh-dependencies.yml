@@ -32,7 +32,6 @@ jobs:
           cache-dependency-path: |
             pnpm-lock.yaml
             packages/admin/pnpm-lock.yaml
-            packages/storefront/pnpm-lock.yaml
 
       - name: Refresh core workspace
         run: pnpm up -r
@@ -40,22 +39,14 @@ jobs:
       - name: Refresh admin
         run: pnpm --dir packages/admin up
 
-      - name: Refresh storefront
-        run: pnpm --dir packages/storefront up
-
       - name: Show dependency diff
-        run: git diff -- package.json pnpm-lock.yaml packages/api/package.json packages/shared/package.json packages/admin/package.json packages/admin/pnpm-lock.yaml packages/storefront/package.json packages/storefront/pnpm-lock.yaml
+        run: git diff -- package.json pnpm-lock.yaml packages/api/package.json packages/shared/package.json packages/admin/package.json packages/admin/pnpm-lock.yaml
 
       - name: Verify core and admin
         run: |
           pnpm --dir packages/admin install --frozen-lockfile
           pnpm verify
           pnpm --dir packages/admin test
-
-      - name: Verify storefront
-        run: |
-          pnpm --dir packages/storefront install --frozen-lockfile
-          pnpm --dir packages/storefront build
 
       - name: Audit production dependencies
         run: pnpm deps:audit
@@ -68,6 +59,6 @@ jobs:
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add package.json pnpm-lock.yaml packages/api/package.json packages/shared/package.json packages/admin/package.json packages/admin/pnpm-lock.yaml packages/storefront/package.json packages/storefront/pnpm-lock.yaml
+          git add package.json pnpm-lock.yaml packages/api/package.json packages/shared/package.json packages/admin/package.json packages/admin/pnpm-lock.yaml
           git commit -m 'chore(deps): refresh compatible dependency versions'
           git push

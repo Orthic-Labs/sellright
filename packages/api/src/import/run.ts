@@ -5,12 +5,14 @@ import { resolve } from 'node:path';
 import { z } from 'zod';
 import * as schema from '../db/schema.js';
 import type { Tx } from '../db/client.js';
-import { migrationId, type ImportContext } from './context.js';
+import { migrationId, type ImportContext, type ManifestExclusion } from './context.js';
 import { importCatalog } from './catalog.js';
 import { importCustomers } from './customers.js';
 import { importOrders } from './orders.js';
 import { importHistory } from './history.js';
 import { importSettings } from './settings.js';
+import { importBusiness } from './business.js';
+import { assertSourceSchema, introspectSource, unmappedCustomFields } from './source-schema.js';
 import { canonical, digest, readPrivateJson, writePrivateJson, stageVendureAssets } from './artifacts.js';
 
 export const migrationConfig = z.object({
@@ -18,13 +20,20 @@ export const migrationConfig = z.object({
   sourceKey: z.string().min(1), channelId: z.number().int().positive(), currency: z.literal('USD'),
   sourceAssetRoot: z.string().min(1), targetAssetRoot: z.string().min(1),
   storefrontUrl: z.string().url(),
-  gatewayAccounts: z.record(z.string(), z.object({ accountId: z.string().min(1), mode: z.enum(['test', 'live']) })),
+  // mode is optional: an account mapping WITHOUT a declared mode is not a
+  // verified historical mapping — affected payments quarantine (SR-03).
+  gatewayAccounts: z.record(z.string(), z.object({ accountId: z.string().min(1), mode: z.enum(['test', 'live']).optional() })),
 }).strict();
 type Config = z.infer<typeof migrationConfig>;
 export const MIGRATION_TABLES = ['asset', 'product', 'product_option_group', 'product_option', 'product_variant', 'variant_option',
   'stock', 'location', 'stock_location', 'promotion', 'collection', 'collection_product', 'product_asset', 'variant_asset',
   'customer', 'address', 'order', 'order_line', 'payment', 'fulfillment', 'fulfillment_line', 'refund', 'refund_line',
-  'promotion_usage', 'shipping_method', 'tax_zone'] as const;
+  'promotion_usage', 'shipping_method', 'tax_zone', 'blog_post', 'affiliate', 'affiliate_settle', 'subscriber',
+  // Trigger-written during import: a stock insert that takes a variant from
+  // unavailable to available enqueues a pending restock_event (migration 0049
+  // stock_restock_event trigger). It is part of the migration's written
+  // output — captured in `after`, removed by restore.
+  'restock_event'] as const;
 
 /** One source snapshot, one target transaction. No table-wide delete/truncate. */
 export async function runMigration(input: {
@@ -62,6 +71,11 @@ export async function runMigration(input: {
       sourceReads.push({ sql, values, rows: [...rows].sort((a, b) => canonical(a).localeCompare(canonical(b))) });
       return rows;
     };
+    // SR-08: classify every source column before any phase selects it. Required
+    // fields missing = clear failure; per-store custom fields are optional.
+    // The introspection read participates in the reviewed source digest.
+    const sourceColumns = await introspectSource(q);
+    assertSourceSchema(sourceColumns);
     const channels = await q('SELECT id, "defaultCurrencyCode", "pricesIncludeTax" FROM channel ORDER BY id');
     if (channels.length !== 1 || Number(channels[0]!.id) !== config.channelId ||
         channels[0]!.defaultCurrencyCode !== config.currency) {
@@ -71,19 +85,35 @@ export async function runMigration(input: {
     if (unresolved.length) throw new Error('Resolve source pending/authorized payments before cutover');
     const invalidCurrency = await q('SELECT id FROM "order" WHERE "currencyCode" <> $1 LIMIT 1', [config.currency]);
     if (invalidCurrency.length) throw new Error('Source contains orders in another currency');
+    const exclusions: ManifestExclusion[] = [
+      { type: 'not-imported', table: 'session', detail: 'Source sessions and carts are not imported; customers re-authenticate and rebuild carts after cutover' },
+      ...unmappedCustomFields(sourceColumns).map(field => ({
+        type: 'unmapped-source-field' as const, table: field.table,
+        detail: `custom field "${field.column}" has no target mapping`, count: 1,
+      })),
+    ];
     const tx = drizzle(target, { schema, casing: 'snake_case' }) as Tx;
     const configBefore = beforeStore[0]?.config ?? {};
     const storeConfig = { ...configBefore, storefrontUrl: config.storefrontUrl,
       payments: Object.fromEntries(Object.keys(config.gatewayAccounts).map(method => [method, true])),
-      paymentAccounts: Object.fromEntries(Object.entries(config.gatewayAccounts).map(([method, account]) => [method, account.accountId])) };
+      paymentAccounts: Object.fromEntries(Object.entries(config.gatewayAccounts).map(([method, account]) => [method, account.accountId])),
+      // SR-03: the migrated store's Stripe mode is the reviewed account profile's
+      // mode — explicit, never the default-test fallback, and the same mode the
+      // imported payment rows carry as original-mode provenance.
+      ...(config.gatewayAccounts.stripe
+        ? { stripe: { ...((configBefore as { stripe?: Record<string, unknown> } | null)?.stripe ?? {}), mode: config.gatewayAccounts.stripe.mode } }
+        : {}) };
     if (beforeStore[0] && beforeStore[0].slug !== config.slug) throw new Error('Target store identity differs');
     await tx.insert(schema.store).values({ id: config.storeId, slug: config.slug, name: config.name,
       currency: config.currency, taxInclusive: channels[0]!.pricesIncludeTax,
       config: storeConfig,
     }).onConflictDoUpdate({ target: schema.store.id, set: { taxInclusive: channels[0]!.pricesIncludeTax, config: storeConfig } });
-    const ctx: ImportContext = { tx, source, q, ...config,
+    const ctx: ImportContext = { tx, source, q, ...config, sourceColumns, exclusions,
       id: (entity, id) => migrationId(config.storeId, config.sourceKey, entity, id) };
     await importCatalog(ctx);
+    // Business records run before orders so affiliate-linked source promotions
+    // disabled in the source are backfilled before order coupon attribution.
+    await importBusiness(ctx);
     await importCustomers(ctx);
     await importOrders(ctx);
     await importHistory(ctx);
@@ -99,7 +129,7 @@ export async function runMigration(input: {
     }
     after.store = (await target.query('SELECT * FROM store WHERE id=$1', [config.storeId])).rows;
     const manifest = { version: 1, storeId: config.storeId, sourceKey: config.sourceKey, sourceDigest,
-      mode: input.apply ? 'apply' : 'dry-run', commitStatus: 'prepared', createdAt: new Date().toISOString(), before: { store: beforeStore }, after,
+      mode: input.apply ? 'apply' : 'dry-run', commitStatus: 'prepared', createdAt: new Date().toISOString(), before: { store: beforeStore }, after, exclusions,
       afterDigest: digest(Object.fromEntries(Object.entries(after).map(([table, rows]) =>
         [table, [...rows].sort((a, b) => canonical(a).localeCompare(canonical(b)))]))), assets };
     // Exclusive private file creation must succeed before COMMIT. This manifest
@@ -112,7 +142,8 @@ export async function runMigration(input: {
       await source.query('COMMIT');
       await target.query('COMMIT');
     } else { await source.query('COMMIT'); await target.query('ROLLBACK'); }
-    return { applied: !!input.apply, sourceDigest, counts: Object.fromEntries(Object.entries(after).map(([table, rows]) => [table, rows.length])) };
+    return { applied: !!input.apply, sourceDigest, exclusions,
+      counts: Object.fromEntries(Object.entries(after).map(([table, rows]) => [table, rows.length])) };
   } catch (error) {
     await target?.query('ROLLBACK').catch(() => undefined);
     await source?.query('ROLLBACK').catch(() => undefined);

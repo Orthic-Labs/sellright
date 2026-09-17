@@ -21,10 +21,10 @@
     "audit:lint": "eslint .",
     "audit:dead-code": "knip --reporter json",
     "audit:duplication": "jscpd . --reporters json --output .cache/jscpd --silent",
-    "deps:check": "pnpm outdated -r || true; pnpm --dir packages/admin outdated || true; pnpm --dir packages/storefront outdated || true",
-    "deps:audit": "pnpm audit --prod && pnpm --dir packages/admin audit --prod && pnpm --dir packages/storefront audit --prod",
-    "deps:update": "pnpm up -r && pnpm --dir packages/admin up && pnpm --dir packages/storefront up",
-    "deps:update:latest": "pnpm up -r --latest && pnpm --dir packages/admin up --latest && pnpm --dir packages/storefront up --latest"
+    "deps:check": "pnpm outdated -r || true; pnpm --dir packages/admin outdated || true",
+    "deps:audit": "pnpm audit --prod && pnpm --dir packages/admin audit --prod",
+    "deps:update": "pnpm up -r && pnpm --dir packages/admin up",
+    "deps:update:latest": "pnpm up -r --latest && pnpm --dir packages/admin up --latest"
   },
   "devDependencies": {
     "@typescript-eslint/parser": "8.62.1",

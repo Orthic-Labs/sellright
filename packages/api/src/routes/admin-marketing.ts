@@ -7,6 +7,7 @@ import { assertSafeOutboundUrl, safeOutboundFetch } from '../security/outbound-u
 import { invalidateStoreCache } from '../store-context.js';
 import { HttpError, J, errBody, money, requireAdmin, requireStore, requireWrite, requireManage, requirePermission, guard, Page } from './admin-helpers.js';
 import { err as logErr } from '../lib/logger.js';
+import { syncPromotionAffiliate } from '../affiliate/onboarding.js';
 
 export const adminMarketing = new OpenAPIHono();
 
@@ -23,6 +24,9 @@ const promoBodyBase = z.object({
   startsAt: z.string().nullable().optional(),
   endsAt: z.string().nullable().optional(),
   enabled: z.boolean().default(true),
+  // PAR affiliate parity: binding a recipient email auto-onboards the affiliate
+  // (welcome mail) and rotates the access token on recipient change.
+  affiliateEmail: z.string().email().nullable().optional(),
 });
 // Percentage promotions must stay within 0–100; anything higher (or negative)
 // can drive a negative order total downstream (money/totals.ts).
@@ -69,8 +73,10 @@ adminMarketing.openapi(
         conditions: b.conditions ?? null, usageLimit: b.usageLimit ?? null, perCustomerUsageLimit: b.perCustomerUsageLimit ?? null,
         priority: b.priority ?? 0, exclusionGroup: b.exclusionGroup ?? null,
         startsAt: b.startsAt ? new Date(b.startsAt) : null, endsAt: b.endsAt ? new Date(b.endsAt) : null, enabled: b.enabled,
+        affiliateEmail: b.affiliateEmail ?? null,
       }).returning({ id: s.promotion.id });
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'promotion', entityId: p!.id, action: 'create', data: { code: b.code } });
+      await syncPromotionAffiliate(tx, st.storeId, p!.id, admin.email);
       return { id: p!.id };
     });
     if ('dupe' in res) throw new HttpError(409, `promotion code already exists: ${b.code}`);
@@ -131,10 +137,11 @@ adminMarketing.openapi(
         return { kind: 'invalid' as const };
       }
       const patch: Record<string, unknown> = {};
-      for (const k of ['code', 'type', 'value', 'conditions', 'usageLimit', 'perCustomerUsageLimit', 'priority', 'exclusionGroup', 'enabled'] as const) if (b[k] !== undefined) patch[k] = b[k];
+      for (const k of ['code', 'type', 'value', 'conditions', 'usageLimit', 'perCustomerUsageLimit', 'priority', 'exclusionGroup', 'enabled', 'affiliateEmail'] as const) if (b[k] !== undefined) patch[k] = b[k];
       if (b.startsAt !== undefined) patch.startsAt = b.startsAt ? new Date(b.startsAt) : null;
       if (b.endsAt !== undefined) patch.endsAt = b.endsAt ? new Date(b.endsAt) : null;
       await tx.update(s.promotion).set(patch).where(eq(s.promotion.id, id));
+      await syncPromotionAffiliate(tx, st.storeId, id, admin.email);
       return { kind: 'ok' as const };
     });
     if (res.kind === 'notfound') throw new HttpError(404, 'promotion not found');

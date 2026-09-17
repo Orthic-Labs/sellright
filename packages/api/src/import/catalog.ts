@@ -1,6 +1,7 @@
 /** Atomic Vendure migration phase. Invoke through import/run.ts. */
 import * as s from '../db/schema.js';
 import { parseDate } from './store.js';
+import { optionalColumn } from './source-schema.js';
 
 const lower = (v: string | null) => (v ?? 'image').toLowerCase();
 
@@ -91,12 +92,16 @@ export async function importCatalog(ctx: ImportContext): Promise<void> {
     const [global] = await q('SELECT "trackInventory", "outOfStockThreshold" FROM global_settings');
     const variantFacets = await q('SELECT "productVariantId" AS vid, "facetValueId" AS fid FROM product_variant_facet_values_facet_value');
     const productFacets = await q('SELECT "productId" AS pid, "facetValueId" AS fid FROM product_facet_values_facet_value');
+    // SR-08: per-store variant custom fields (DD declares salePrice,
+    // isPreOrder, preOrderPrice, shipDate; RH declares salePrice only). Select
+    // NULL for the fields a source does not declare.
+    const vf = (column: string, alias: string) => optionalColumn(ctx.sourceColumns, 'product_variant', column, 'v', alias);
     // --- variants (en name, price, custom fields) ---
     for (const v of await q(
       `SELECT v.id, v."productId" AS pid, v.sku, v.enabled, v."trackInventory", v."useGlobalOutOfStockThreshold", v."outOfStockThreshold",
               vt.name, pvp.price,
-              v."customFieldsSaleprice" AS sale, v."customFieldsPreorderprice" AS preprice,
-              v."customFieldsIspreorder" AS ispre, v."customFieldsShipdate" AS shipdate
+              ${vf('customFieldsSaleprice', 'sale')}, ${vf('customFieldsPreorderprice', 'preprice')},
+              ${vf('customFieldsIspreorder', 'ispre')}, ${vf('customFieldsShipdate', 'shipdate')}
        FROM product_variant v
        LEFT JOIN product_variant_translation vt ON vt."baseId"=v.id AND vt."languageCode"=$1
        LEFT JOIN product_variant_price pvp ON pvp."variantId"=v.id AND pvp."channelId"=$2 AND pvp."currencyCode"=$3

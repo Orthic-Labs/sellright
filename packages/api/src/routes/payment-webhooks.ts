@@ -8,11 +8,11 @@
  * parse for the signature to verify.
  */
 import { OpenAPIHono } from '@hono/zod-openapi';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import type Stripe from 'stripe';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
-import { stripeConfigured, stripeCreds, stripeModeFromConfig, verifyStripeWebhook, verifyIntent, type IntentLike, type StripeMode } from '../payments/stripe.js';
+import { stripeConfigured, stripeCreds, stripeModeFromConfig, verifyStripeWebhook, verifyIntent, STRIPE_REFUND_ATTEMPT_KEY, type IntentLike, type StripeMode } from '../payments/stripe.js';
 import { applyPaymentResult, amountDueForOrder } from '../payments/settle.js';
 import { resolveStoreIdForStripeEvent, resolveStoreIdForSubscriptionEvent, reconcileStripeRefund, recordStripeDispute, type StripeEventObj } from '../payments/webhook-reconcile.js';
 import {
@@ -21,9 +21,11 @@ import {
 } from '../payments/subscriptions.js';
 
 // Subscription / invoice events resolve the tenant from OUR subscription row
-// (DB-primary), not from Stripe metadata propagation. An unresolvable one must
-// return 5xx so Stripe RETRIES (the retry resolves once checkout.session.completed
-// lands). Everything else resolves via resolveStoreIdForStripeEvent and acks.
+// (via the RLS-safe seam), not from Stripe metadata propagation. An
+// unresolvable one must return 5xx so Stripe RETRIES (the retry resolves once
+// checkout.session.completed lands). SR-02: the same now applies to one-time
+// events (refund/dispute/payment_intent) — acking an unresolved event drops
+// it forever, so every unresolved event returns 503 for provider retry.
 const SUBSCRIPTION_EVENT_TYPES = new Set([
   'checkout.session.completed',
   'invoice.paid',
@@ -57,19 +59,27 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
   }
   if (!event || !verifiedMode) return c.json({ error: 'bad signature' }, 400);
 
-  // Resolve the tenant: PaymentIntent-derived events carry storeId in metadata
-  // (Stripe copies PI metadata onto the Charge at confirmation); refund/dispute
-  // events fall back to a payment_intent → payment-ledger lookup. Unresolvable
-  // (or a malformed id that'd blow the ::uuid RLS cast) → ack so Stripe stops
-  // retrying. resolveStoreIdForStripeEvent only returns validated UUIDs.
+  // Resolve the tenant: signed metadata.storeId is the fast-path; the DB
+  // anchor goes through resolveStoreForGatewayEvent (the SECURITY DEFINER
+  // seam — the only lookup that works under the RLS nonowner role before
+  // app.current_store exists). Unresolvable → 503 so Stripe retries: an
+  // unresolved event can NEVER be safely acked — it would be dropped forever
+  // (a refund/dispute whose payment row simply hasn't landed yet is the
+  // common transient case; ordering races self-heal on redelivery).
+  //
+  // STRICT resolution (0060): the seam fails closed on any multi-store ref
+  // match, and we bind `mode: verifiedMode` — the webhook secret that
+  // verified the signature is the event's cryptographically-proven mode, the
+  // only pre-resolution fact worth trusting (Stripe payloads carry no usable
+  // account ref). A test-signed event therefore can't resolve a live-mode
+  // payment row's tenant at all; it 503s rather than reaching the in-tx
+  // mode check below — the same outcome the ra-sec check enforces, earlier.
   const isSubEvent = SUBSCRIPTION_EVENT_TYPES.has(event.type);
+  const binding = { mode: verifiedMode };
   const storeId = isSubEvent
-    ? await resolveStoreIdForSubscriptionEvent(event.data.object as Parameters<typeof resolveStoreIdForSubscriptionEvent>[0])
-    : await resolveStoreIdForStripeEvent(event.data.object as StripeEventObj);
-  // Subscription/invoice events: unresolvable → 5xx so Stripe RETRIES (the row
-  // appears once checkout.session.completed lands; idempotency makes retry safe).
-  // One-time events: unresolvable → ack so Stripe stops retrying.
-  if (!storeId) return isSubEvent ? c.json({ error: 'tenant unresolved — retry' }, 503) : c.json({ received: true }, 200);
+    ? await resolveStoreIdForSubscriptionEvent(event.data.object as Parameters<typeof resolveStoreIdForSubscriptionEvent>[0], binding)
+    : await resolveStoreIdForStripeEvent(event.data.object as StripeEventObj, binding);
+  if (!storeId) return c.json({ error: 'tenant unresolved — retry' }, 503);
 
   await withStore(storeId, async (tx) => {
     // ra-sec: bind the verifying secret's mode to the store's configured mode. A
@@ -112,29 +122,39 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
         // draw-down), not the raw order total.
         const amountDue = await amountDueForOrder(tx, storeId, order.id, order.grandTotal);
         if (amountDue <= 0) return; // already fully covered by other tenders — nothing to verify/record
-        const result = verifyIntent(pi, { orderCode: code, amount: amountDue, currency: order.currency });
+        // SR-03: the verifying signature's mode IS the trusted original mode —
+        // persist it on the payment row (via verifyIntent's metadata.gateway)
+        // so a later refund never has to infer it from current store config.
+        const result = verifyIntent(pi, { orderCode: code, amount: amountDue, currency: order.currency, stripeMode: verifiedMode });
         if (result.state === 'Settled') {
           await applyPaymentResult(tx, { storeId, order: { ...order, code }, method: 'stripe', result, amount: amountDue });
         }
         return;
       }
-      // Dashboard/API refunds → record in our ledger idempotently (dedup by the
-      // Stripe refund id) and recompute order refund state. refund.* is the
-      // primary path (Acacia 2024-10-28+ fires it for all refunds); charge.refunded
-      // is kept for pre-Acacia / belt-and-suspenders — both dedup on re_id.
+      // Dashboard/API refunds → converge on the durable refund attempt when one
+      // exists (SR-04: stamped attempt id, else a unique unbound reservation),
+      // else record a provider-initiated refund row. refund.* is the primary
+      // path (Acacia 2024-10-28+ fires it for all refunds); charge.refunded is
+      // kept for pre-Acacia / belt-and-suspenders — both dedup on re_id.
       case 'refund.created':
       case 'refund.updated': {
-        const r = event.data.object as unknown as { id: string; amount: number; status: string; payment_intent?: string | { id?: string } };
+        const r = event.data.object as unknown as { id: string; amount: number; status: string; payment_intent?: string | { id?: string }; metadata?: Record<string, string> | null };
         const pi = typeof r.payment_intent === 'string' ? r.payment_intent : r.payment_intent?.id;
-        if (pi && r.id) await reconcileStripeRefund(tx, storeId, { reId: r.id, amount: r.amount, status: r.status, piId: pi });
+        if (pi && r.id) await reconcileStripeRefund(tx, storeId, {
+          reId: r.id, amount: r.amount, status: r.status, piId: pi,
+          attemptId: r.metadata?.[STRIPE_REFUND_ATTEMPT_KEY] ?? null,
+        }, { mode: verifiedMode });
         return;
       }
       case 'charge.refunded': {
-        const ch = event.data.object as unknown as { payment_intent?: string | { id?: string }; refunds?: { data?: Array<{ id: string; amount: number; status: string; payment_intent?: string | { id?: string } }> } };
+        const ch = event.data.object as unknown as { payment_intent?: string | { id?: string }; refunds?: { data?: Array<{ id: string; amount: number; status: string; payment_intent?: string | { id?: string }; metadata?: Record<string, string> | null }> } };
         const chPi = typeof ch.payment_intent === 'string' ? ch.payment_intent : ch.payment_intent?.id;
         for (const r of ch.refunds?.data ?? []) {
           const pi = (typeof r.payment_intent === 'string' ? r.payment_intent : r.payment_intent?.id) ?? chPi;
-          if (pi && r.id) await reconcileStripeRefund(tx, storeId, { reId: r.id, amount: r.amount, status: r.status, piId: pi });
+          if (pi && r.id) await reconcileStripeRefund(tx, storeId, {
+            reId: r.id, amount: r.amount, status: r.status, piId: pi,
+            attemptId: r.metadata?.[STRIPE_REFUND_ATTEMPT_KEY] ?? null,
+          }, { mode: verifiedMode });
         }
         return;
       }
@@ -149,9 +169,22 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
       case 'checkout.session.completed':
         await onCheckoutCompleted(tx, storeId, event.data.object as unknown as CheckoutSessionLike);
         return;
-      case 'invoice.paid':
-        await onInvoicePaid(tx, storeId, event.data.object as unknown as InvoiceLike);
+      case 'invoice.paid': {
+        const invoice = event.data.object as unknown as InvoiceLike;
+        await onInvoicePaid(tx, storeId, invoice);
+        // SR-03: subscription payments are minted inside subscriptions.ts
+        // (settleFirstCycle + renewal insert) with no gateway metadata — the
+        // verifying signature's mode is the only trusted source. Backfill it
+        // on the ledger row this invoice settled; the (store, provider_ref)
+        // stripe dedupe index makes a redelivery a no-op, and the IS NULL
+        // guard never overwrites an already-persisted identity.
+        const invoiceRef = (typeof invoice.payment_intent === 'string' ? invoice.payment_intent : invoice.payment_intent?.id) ?? invoice.id;
+        if (invoiceRef) {
+          await tx.update(s.payment).set({ gatewayMode: verifiedMode })
+            .where(and(eq(s.payment.providerRef, invoiceRef), eq(s.payment.method, 'stripe'), isNull(s.payment.gatewayMode)));
+        }
         return;
+      }
       case 'invoice.payment_failed':
         await onInvoiceFailed(tx, storeId, event.data.object as unknown as InvoiceLike);
         return;

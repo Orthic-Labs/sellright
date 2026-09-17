@@ -1,9 +1,11 @@
 # SellRight Architecture
 
-Last reviewed (Blueprint Phase 1-3): 2026-07-14 · HEAD `6848789` · 58 commits since last reconcile state (bff9e1d).
+Last reviewed: 2026-09-17 · working tree on `eedf4f3` + launch-remediation lanes (uncommitted). Storefront package retired — storefronts are downstream consumers (RightSites). Stripe, NMI, and Sezzle are all implemented providers.
 
 > ## ⚠️ RECONCILE — 23 DECISIONS NEEDED (blocker)
 > The code and the docs disagree on 23 things. You decide how to reconcile each. Nothing else here matters until these are settled.
+>
+> **Update 2026-09-17:** rows 12, 17, and 22 flagged stale claims in this file's own body — those claims are corrected below (Payments row, unscoped-callsites paragraph, migrations count). The remaining rows concern historical plan snapshots under `docs/plans/` and `rank.md`; they are point-in-time documents and the open decision is whether to annotate them, not whether the code changed.
 >
 > | # | The doc says | The code actually does | Verdict | Proposed fix | Your call |
 > |---|---|---|---|---|---|
@@ -45,10 +47,10 @@ SellRight is an owned, multi-tenant commerce backend. It is designed to replace 
 | Data | Postgres + Drizzle, integer cents for money |
 | Tenancy | `store` root entity, store-scoped tables, Postgres RLS via `app.current_store` |
 | Admin | React + Vite + Tailwind/shadcn-style components |
-| Storefront | Qwik SSR consumer; static catalog manifest plus dynamic REST |
-| Payments | `PaymentProvider` interface; Stripe provider scaffolded; NMI/Sezzle are planned for DD parity |
-| Email | Nodemailer SMTP with optional per-app sender and storefront URL routing |
-| Jobs | In-process scheduled jobs today; Redis/BullMQ is a later scaling option |
+| Storefront | No in-repo storefront; static catalog manifest plus merchant feeds for downstream consumers (RightSites) |
+| Payments | `PaymentProvider` interface; Stripe, NMI, and Sezzle implemented; per-store gateway accounts with persisted mode/test provenance |
+| Email | Nodemailer SMTP; all transactional mail goes through the durable `email_outbox` with dedupe keys, retries, and dead-letter |
+| Jobs | Leader-locked in-process scheduler (advisory lock) for sweeps: outbox, restock, SheerID expiry, cart maintenance, Listmonk sync |
 
 ## Repository Layout
 
@@ -57,7 +59,6 @@ packages/
   api/         Hono API, Drizzle schema, migrations, jobs, imports, OpenAPI
   admin/       React admin SPA
   shared/      shared money primitives and types
-  storefront/  Qwik SSR storefront consumer
 docs/          product documentation
 ```
 
@@ -65,7 +66,7 @@ docs/          product documentation
 
 Every store-scoped request resolves a store, then runs database work through `withStore(storeId, fn)`.
 
-`withStore` opens a transaction and sets `app.current_store` with `SET LOCAL`. RLS policies use that session value to confine reads and writes to one store. Route code must not import the unscoped database client for store-scoped tenant queries; the unscoped export is named `unsafeUnscopedDb`. An ESLint `no-restricted-imports` rule in `eslint.config.mjs` blocks it from route files. The legitimate unscoped callsites are: the global admin/ACL/Session tables, which are deliberately NOT store-scoped (they gate access TO stores). Those reads live in `packages/api/src/auth/admin-staff.ts` so route files stay as thin shells that import only `withStore` and helper functions; the Stripe webhook tenant-resolver (`payments/webhook-reconcile.ts`), which must look up the owning store from a PaymentIntent/subscription id *before* any store context exists (it returns only validated UUIDs, and subscription/invoice events that can't be resolved are retried, not silently scoped).
+`withStore` opens a transaction and sets `app.current_store` with `SET LOCAL`. RLS policies use that session value to confine reads and writes to one store. Route code must not import the unscoped database client for store-scoped tenant queries; the unscoped export is named `unsafeUnscopedDb`. An ESLint `no-restricted-imports` rule in `eslint.config.mjs` blocks it from route files. The legitimate unscoped callsites are: the global admin/ACL/Session tables, which are deliberately NOT store-scoped (they gate access TO stores). Those reads live in `packages/api/src/auth/admin-staff.ts` so route files stay as thin shells that import only `withStore` and helper functions. Pre-context tenant lookup for payment webhooks (which must find the owning store from a provider reference *before* any store context exists) goes through the `resolve_store_for_gateway_event` SECURITY DEFINER function (`payments/tenant-resolution.ts`, migrations `0053`/`0060`), which returns only a validated `store_id` — the runtime role never receives BYPASSRLS. Resolution is strict: the distinct store set across all matching refs must be a singleton, and caller-supplied account/mode bind the match — ambiguity returns NULL rather than picking a winner.
 
 This gives SellRight two layers of tenant isolation:
 
@@ -101,6 +102,7 @@ The schema is a full commerce schema rather than a thin catalog API. It includes
 - Orders: order snapshots, lines, payments, refunds, returns, fulfillments.
 - Commerce rules: promotions, gift cards, shipping methods, tax zones, currency rates.
 - Operator tools: blog posts, webhooks, affiliates, reports, staff invites, activity.
+- Customer-facing flows: contact submissions, restock requests/events, SheerID verifications, disputes, email-change tokens, durable email outbox.
 - Software sales: licenses, activations, app releases, download artifacts.
 
 Most business tables are store-scoped. Shared registry tables that intentionally cross stores are documented and excluded from FORCE RLS only when needed.
@@ -132,12 +134,15 @@ This keeps storefront browsing cheap and fast while preserving a transactional b
 Built-in controls:
 
 - Postgres RLS with FORCE assertions.
-- Dedicated non-owner app role support.
+- Dedicated non-owner app role (NOBYPASSRLS) for runtime; `assertRuntimeRoleUnprivileged` fails boot on a privileged role; migrations/bootstrap use a separate privileged identity.
 - Admin and shop CSRF guards for cookie-backed mutation requests.
 - Rate limiting for sensitive auth and checkout paths.
-- Password reset and email verification token tables.
+- Password reset, email verification, and email-change token tables.
 - TOTP replay guard.
-- Webhook idempotency.
+- Webhook idempotency plus narrow SECURITY DEFINER tenant resolution for pre-context gateway events.
+- Durable, deduplicated dispute records with signed provider webhooks and operator alerting.
+- Turnstile anti-bot (fail-closed when configured) on contact, register, login, and reset paths.
+- Transactional `audit_log` records for sensitive staff/settings/payment mutations.
 - Import TRUNCATE guard.
 - No raw card handling in the intended payment architecture.
 
@@ -150,6 +155,7 @@ SellRight can run as one API process plus one static admin build. The current pr
 - PM2 or systemd-compatible scripts;
 - nginx in front of API/admin;
 - Postgres on the native service port for SellRight databases;
+- a non-owner runtime DB role (`sellright_app` in `deploy/compose.yaml`, provisioned by the `db-init` one-shot) with migrations/bootstrap on the separate privileged identity;
 - backup scripts and restore drills as a launch gate.
 
 Email is configured in `packages/api/.env`; see [Email Delivery](EMAIL.md) for
@@ -167,10 +173,9 @@ The gate builds all packages, type-checks, runs API tests, asserts FORCE RLS cov
 ## Migrations
 
 See [runbooks/migrations.md](runbooks/migrations.md) for the rule on
-hand-written migrations (currently seven: `0032_cart_ttl.sql`,
-`0034_subscriptions.sql`, `0036_harden_subscription_rls.sql`,
-`0037_payment_provider_ref_unique.sql`, `0038_email_outbox.sql`,
-`0039_push_notifications.sql`, `0040_outbox_autovacuum.sql`). The
+hand-written migrations (currently eighteen — see the enforced list in
+`packages/api/src/db/assert-hand-written-migrations.ts`, which spans
+`0032_cart_ttl.sql` through `0057_email_change_outbox_dedupe.sql`). The
 `db:assert-hand-written` script enforces the rule in CI.
 
 Postgres runtime-role timeouts and per-service `application_name` configuration

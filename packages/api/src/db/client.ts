@@ -38,6 +38,48 @@ advisoryLockPool.on('error', (err) => {
   console.error('[pg advisory-lock pool error]', err);
 });
 
+/**
+ * SR-01: the request-serving role must never be a superuser or BYPASSRLS —
+ * both bypass even FORCE ROW LEVEL SECURITY and silently void tenant
+ * isolation. Migration/bootstrap scripts legitimately connect as the
+ * privileged owner role; `DATABASE_URL` in a serving process must point at
+ * the dedicated NOSUPERUSER NOBYPASSRLS app role (see
+ * docs/runbooks/postgres-app-role.md). The queryable parameter defaults to
+ * the runtime pool but is injectable so tests can check either side.
+ */
+interface RoleAttrs { rolsuper: boolean; rolbypassrls: boolean }
+interface RoleQueryable { query(text: string): Promise<{ rows: RoleAttrs[] }> }
+
+export async function assertRuntimeRoleUnprivileged(
+  db: RoleQueryable = pool,
+): Promise<void> {
+  const { rows } = await db.query(
+    'SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user',
+  );
+  const role = rows[0];
+  if (role?.rolsuper || role?.rolbypassrls) {
+    throw new Error(
+      `Refusing to serve requests as a privileged Postgres role ` +
+      `(rolsuper=${role.rolsuper}, rolbypassrls=${role.rolbypassrls}). ` +
+      `Point DATABASE_URL at the dedicated NOSUPERUSER NOBYPASSRLS app role; ` +
+      `keep the privileged role for migrate/bootstrap only (SR-01).`,
+    );
+  }
+}
+
+// Fail fast at boot: only the HTTP server entrypoint asserts — scripts
+// (dist/scripts/migrate.js, bootstrap.js, seed-admin.js, job CLIs) and the
+// test runner connect privileged on purpose and never reach index.*.
+if (/(^|[/\\])index\.(js|ts|mts|cts)$/.test(process.argv[1] ?? '')) {
+  try {
+    await assertRuntimeRoleUnprivileged();
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('[db] fatal:', err instanceof Error ? err.message : err);
+    process.exit(1);
+  }
+}
+
 // MUST match drizzle.config.ts `casing: 'snake_case'` — otherwise runtime queries
 // emit camelCase column names the snake_case DB doesn't have.
 const drizzleOpts = { schema, casing: 'snake_case' } as const;

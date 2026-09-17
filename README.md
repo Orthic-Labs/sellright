@@ -6,7 +6,7 @@ Owned, from-scratch commerce backend for multi-brand operators. SellRight is a R
 
 ## Stack
 
-TypeScript · Hono + zod-openapi · REST/OpenAPI · Drizzle + Postgres · multi-tenant `store` model + RLS · static catalog manifest read path · `PaymentProvider` interface · Qwik storefront consumer · React/Vite admin.
+TypeScript · Hono + zod-openapi · REST/OpenAPI · Drizzle + Postgres · multi-tenant `store` model + RLS · static catalog manifest read path · `PaymentProvider` interface (Stripe, NMI, Sezzle) · React/Vite admin · storefronts are downstream consumers (RightSites).
 
 ## Layout
 ```text
@@ -14,7 +14,6 @@ packages/
   shared/      zod + integer-cents money primitives (money-core foundation)
   api/         Hono API, Drizzle schema, OpenAPI at /v1/openapi.json
   admin/       React admin SPA
-  storefront/  Qwik SSR storefront
 docs/          product docs
 ```
 
@@ -31,7 +30,6 @@ pnpm build
 Keep env files with the package that uses them:
 
 - `packages/api/.env`
-- `packages/storefront/.env`
 - `packages/admin/.env`
 
 Examples live beside each package as `.env.example`. The old root-level `.env.example` is retired.

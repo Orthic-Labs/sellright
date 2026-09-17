@@ -1,6 +1,7 @@
 /** Atomic Vendure migration phase. Invoke through import/run.ts. */
 import * as s from '../db/schema.js';
 import { chunk, parseDate, parseJson, parseStrArray } from './store.js';
+import { optionalColumn } from './source-schema.js';
 
 import { isLegacyBcryptHash } from '../auth/password.js';
 import { normalizeEmail } from '../auth/email.js';
@@ -13,13 +14,20 @@ export async function importCustomers(ctx: ImportContext): Promise<void> {
   {
 
     // --- customers ---
+    // SR-08: customFields* columns are per-store declarations (DD has the
+    // SheerID verification fields and the Stripe customer ref, RH has neither).
+    // Required core columns are already preflight-verified; each optional
+    // column selects NULL when absent so the row shape stays constant.
+    const cf = (column: string, alias: string) => optionalColumn(ctx.sourceColumns, 'customer', column, 'c', alias);
     const custRows = (
       await q(
         `SELECT c.id, c."emailAddress" AS email, c."firstName" AS fn, c."lastName" AS ln,
-                c."phoneNumber" AS phone, c."customFieldsListmonksubscribedat" AS listmonk,
-                c."customFieldsSheeridverifications" AS sheerid,
-                c."customFieldsActiveverifications" AS active,
-                c."customFieldsVerificationmetadata" AS vmeta, u.verified, am."passwordHash" AS password, c."createdAt" AS created, c."updatedAt" AS updated
+                c."phoneNumber" AS phone, ${cf('customFieldsListmonksubscribedat', 'listmonk')},
+                ${cf('customFieldsSheeridverifications', 'sheerid')},
+                ${cf('customFieldsActiveverifications', 'active')},
+                ${cf('customFieldsVerificationmetadata', 'vmeta')},
+                ${cf('customFieldsStripecustomerid', 'stripecid')},
+                u.verified, am."passwordHash" AS password, c."createdAt" AS created, c."updatedAt" AS updated
          FROM customer c LEFT JOIN "user" u ON u.id = c."userId"
          LEFT JOIN authentication_method am ON am."userId"=c."userId" AND am.type='NativeAuthenticationMethod'
          WHERE c."deletedAt" IS NULL`,
@@ -37,6 +45,7 @@ export async function importCustomers(ctx: ImportContext): Promise<void> {
         lastName: c.ln ?? null,
         phone: c.phone ?? null,
         listmonkSubscribedAt: parseDate(c.listmonk),
+        stripeCustomerId: c.stripecid ?? null,
         emailVerified: c.verified ?? false,
         sheeridVerifications: parseJson(c.sheerid),
         activeVerifications: parseStrArray(c.active),
@@ -58,7 +67,15 @@ export async function importCustomers(ctx: ImportContext): Promise<void> {
       .map((a) => {
         const customerId = customerMap.get(a.cid);
         if (!customerId) return null;
-        if (!a.l1 || !a.city || !a.country) throw new Error('Missing required address fields: ' + a.id);
+        // Incomplete source address-book rows are excluded, not fabricated: the
+        // manifest records each one for operator review (real DD data has a
+        // handful — e.g. a school address with no city). Orders carry their own
+        // shipping snapshot, so skipping a book entry loses no order data.
+        if (!a.l1 || !a.city || !a.country) {
+          ctx.exclusions.push({ type: 'unmappable-source-row', table: 'address',
+            detail: `address ${a.id} (customer ${a.cid}) missing required streetLine1/city/country` });
+          return null;
+        }
         return {
           id: ctx.id('address', a.id), storeId: ctx.storeId,
           customerId,

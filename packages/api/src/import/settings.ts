@@ -67,7 +67,8 @@ export async function importSettings(ctx: ImportContext) {
   for (const [index, location] of locations.entries()) await tx.insert(s.location).values({
     id: ctx.id('location', location.id), storeId, code: 'vendure-' + location.id,
     name: location.name, isDefault: index === 0, enabled: true });
-  const variantIds = new Set((await tx.select({ id: s.productVariant.id }).from(s.productVariant)).map(row => row.id));
+  const variantIds = new Set((await tx.select({ id: s.productVariant.id }).from(s.productVariant)
+    .where(eq(s.productVariant.storeId, storeId))).map(row => row.id));
   for (const level of await q('SELECT * FROM stock_level ORDER BY id')) {
     const variantId = ctx.id('variant', level.productVariantId);
     if (variantIds.has(variantId)) await tx.insert(s.stockLocation).values({

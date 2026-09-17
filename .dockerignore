@@ -16,7 +16,6 @@ node_modules
 var
 **/var
 packages/admin
-packages/storefront
 docs
 *.md
 !packages/api/**/*.md

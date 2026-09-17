@@ -2,21 +2,10 @@ import { eq } from 'drizzle-orm';
 import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { emitEvent } from '../webhooks/emit.js';
-import { pickEmailAppKey } from '../email/dispatch.js';
-import { orderConfirmation } from '../email/templates.js';
-import { enqueueEmail } from '../email/outbox.js';
+import { pickEmailAppKey, enqueueOrderConfirmation } from '../email/dispatch.js';
 import { normalizeEmail } from '../auth/email.js';
-import { env } from '../env.js';
-
-function appValue(raw: string | undefined, appKey: string | null | undefined) {
-  const key = appKey?.trim().toLowerCase();
-  if (!key || !raw) return undefined;
-  for (const entry of raw.split(/[,\n;]/)) {
-    const i = entry.indexOf('=');
-    if (i > 0 && entry.slice(0, i).trim().toLowerCase() === key) return entry.slice(i + 1).trim();
-  }
-  return undefined;
-}
+import { enrollOnPaidOrder } from '../jobs/listmonk-sync.js';
+import { bootstrapAccountAndQueueAccessMail } from '../licensing/account-bootstrap.js';
 
 /** Called only by the transaction that wins the PendingPayment -> Paid transition. */
 export async function enqueuePaidEffects(tx: Tx, storeId: string, orderId: string) {
@@ -25,6 +14,15 @@ export async function enqueuePaidEffects(tx: Tx, storeId: string, orderId: strin
   if (!order || !store) throw new Error('Paid order context is missing');
   await emitEvent(tx, storeId, 'order.paid', {
     code: order.code, grandTotal: order.grandTotal, currency: order.currency,
+  });
+  // Purchase → account bootstrap: a software-account-flagged purchase attaches
+  // or creates a passwordless customer account and queues the one-time claim
+  // mail through the same durable outbox (dedupeKey'd per order). Idempotent —
+  // no-op once the order carries a customerId — so every settlement path that
+  // reaches this function (gateway settle, webhook reconcile, subscription
+  // settle) gets exactly-once coverage for free.
+  await bootstrapAccountAndQueueAccessMail(tx, {
+    storeId, orderId: order.id, existingCustomerId: order.customerId,
   });
   const [customer] = order.customerId
     ? await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, order.customerId)).limit(1) : [];
@@ -37,11 +35,20 @@ export async function enqueuePaidEffects(tx: Tx, storeId: string, orderId: strin
   }).from(s.orderLine).leftJoin(s.productVariant, eq(s.productVariant.id, s.orderLine.variantId))
     .where(eq(s.orderLine.orderId, order.id));
   const appKey = pickEmailAppKey(lines.map(line => line.appKey));
-  const from = appValue(env.EMAIL_FROM_BY_APP, appKey) ?? env.SMTP_FROM;
-  const storefrontUrl = appValue(env.STOREFRONT_URL_BY_APP, appKey) ?? env.STOREFRONT_URL;
-  const rendered = orderConfirmation({ name: store.name, currency: order.currency, storefrontUrl, fromEmail: from },
+  // SR-05: the store's own canonical storefront URL + sender (store.config)
+  // resolve inside enqueueOrderConfirmation; a per-app env override still wins
+  // for shared stores whose order lines all carry one appKey.
+  // dedupeKey makes the enqueue idempotent — a settlement path that runs twice
+  // (e.g. webhook racing the return-path settle) cannot double-send.
+  await enqueueOrderConfirmation(tx, storeId,
+    { name: store.name, currency: order.currency, appKey, config: store.config },
+    recipient,
     { code: order.code, grandTotal: order.grandTotal, currency: order.currency,
-      lines: lines.map(({ name, quantity, lineTotal }) => ({ name, quantity, lineTotal })) });
-  await enqueueEmail(tx, storeId, { kind: 'order_confirmation', recipient,
-    payload: { to: recipient, from, subject: rendered.subject, html: rendered.html, text: rendered.text } });
+      lines: lines.map(({ name, quantity, lineTotal }) => ({ name, quantity, lineTotal })),
+      dedupeKey: `order_confirmation:${order.id}` });
+
+  // Listmonk parity: a paid order enrolls the customer as a confirmed 'order'
+  // subscriber (dedupe on store+email+kind+topic; never throws — a bad address
+  // is logged and skipped inside enrollOnPaidOrder).
+  await enrollOnPaidOrder(tx, storeId, { orderId: order.id, orderCode: order.code, email: recipient });
 }

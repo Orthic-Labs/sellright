@@ -9,6 +9,16 @@ export function migrationId(storeId: string, sourceKey: string, entity: string, 
   const hex = hash.subarray(0, 16).toString('hex');
   return [hex.slice(0,8), hex.slice(8,12), hex.slice(12,16), hex.slice(16,20), hex.slice(20)].join('-');
 }
+/** A record type that could not be mapped faithfully into the target schema.
+ * Entries land on the manifest `exclusions` list — a reviewed decision, never
+ * a silent drop. */
+export interface ManifestExclusion {
+  type: 'source-extension-absent' | 'unmapped-source-field' | 'unmappable-source-row' | 'merged-duplicate' | 'not-imported';
+  table: string;
+  detail: string;
+  count?: number;
+}
+
 export interface ImportContext {
   tx: Tx;
   source: PoolClient;
@@ -18,5 +28,9 @@ export interface ImportContext {
   currency: string;
   id(entity: string, sourceId: unknown): string;
   q(sql: string, values?: unknown[]): Promise<QueryResultRow[]>;
-  gatewayAccounts: Record<string, { accountId: string; mode: 'test' | 'live' }>;
+  gatewayAccounts: Record<string, { accountId: string; mode?: 'test' | 'live' }>;
+  /** Source-schema preflight result (SR-08): table -> actual column names. */
+  sourceColumns: ReadonlyMap<string, ReadonlySet<string>>;
+  /** Business records that could not be mapped faithfully (SR-09). */
+  exclusions: ManifestExclusion[];
 }

@@ -33,6 +33,35 @@ export const shippingNotification = (store: StoreCtx, data: { code: string; trac
     `<p>${data.carrier ? `Carrier: <strong>${escape(data.carrier)}</strong><br>` : ''}${data.trackingCode ? `Tracking: <strong>${escape(data.trackingCode)}</strong>` : ''}</p>
      <p>Track at <a href="${escape(store.storefrontUrl)}/orders/${escape(data.code)}">${escape(store.storefrontUrl)}/orders/${escape(data.code)}</a></p>`);
 
+// PAR-03: refund confirmation. Enqueued ONLY at definitive settlement (the
+// caller's job — see payments/refunds finalize); the copy always describes a
+// completed refund, so it must never be rendered for a Pending/unknown result.
+// `refundedTotal` is the cumulative settled amount vs the order's grandTotal,
+// which is what distinguishes a partial refund from a full one in the copy.
+export const orderRefundConfirmation = (store: StoreCtx, data: {
+  code: string;
+  amount: number;        // this refund, cents
+  currency: string;
+  refundedTotal: number; // cumulative settled refunds on the order, cents
+  grandTotal: number;    // order grand total, cents
+}) => {
+  const full = data.refundedTotal >= data.grandTotal;
+  return wrap(store, `Refund issued for order ${data.code}`,
+    `<p>A refund of <strong>${(data.amount / 100).toFixed(2)} ${escape(data.currency)}</strong> has been issued for your order <strong>${escape(data.code)}</strong>.</p>
+     <p>${full
+       ? `This fully refunds the order total of ${(data.grandTotal / 100).toFixed(2)} ${escape(data.currency)}.`
+       : `Total refunded so far: ${(data.refundedTotal / 100).toFixed(2)} ${escape(data.currency)} of ${(data.grandTotal / 100).toFixed(2)} ${escape(data.currency)}.`}</p>
+     <p>View your order at <a href="${escape(store.storefrontUrl)}/orders/${escape(data.code)}">${escape(store.storefrontUrl)}/orders/${escape(data.code)}</a></p>`);
+};
+
+// emailAddressChangeHandler parity: the verification link goes to the NEW
+// address (proving the customer controls it) and is single-use + TTL'd.
+export const emailAddressChange = (store: StoreCtx, data: { url: string; newEmail: string; ttlHours: number }) =>
+  wrap(store, 'Confirm your new email address',
+    `<p>You asked to change the email address on your ${escape(store.name)} account to <strong>${escape(data.newEmail)}</strong>. Confirm within ${data.ttlHours} hours:</p>
+     <p><a href="${escape(data.url)}" style="display:inline-block;padding:10px 16px;background:#222;color:#fff;text-decoration:none;border-radius:6px">Confirm new email</a></p>
+     <p>If you didn't request this, ignore this email — your sign-in address stays the same.</p>`);
+
 export const passwordReset = (store: StoreCtx, data: { url: string; ttlHours: number }) =>
   wrap(store, 'Reset your password',
     `<p>Someone (hopefully you) asked to reset your password. Click below within ${data.ttlHours} hours:</p>
@@ -43,6 +72,17 @@ export const emailVerify = (store: StoreCtx, data: { url: string }) =>
   wrap(store, 'Verify your email',
     `<p>Welcome! Please confirm your email address:</p>
      <p><a href="${escape(data.url)}" style="display:inline-block;padding:10px 16px;background:#222;color:#fff;text-decoration:none;border-radius:6px">Verify email</a></p>`);
+
+// Passwordless sign-in (ported from RightSites). Sent when a customer asks for
+// a sign-in link — and downstream flows may pass isNewAccount when the account
+// was created implicitly (e.g. by a purchase), so the copy can say so.
+export const magicLinkAccess = (store: StoreCtx, data: { url: string; ttlMinutes: number; isNewAccount: boolean }) =>
+  wrap(store, data.isNewAccount ? `Your ${store.name} account is ready` : 'Sign in to your account',
+    `<p>${data.isNewAccount
+      ? `Your ${escape(store.name)} account is ready — no password needed. Use the link below within ${data.ttlMinutes} minutes to access your account.`
+      : `Use this link within ${data.ttlMinutes} minutes to sign in to your ${escape(store.name)} account. No password needed.`}</p>
+     <p><a href="${escape(data.url)}" style="display:inline-block;padding:10px 16px;background:#222;color:#fff;text-decoration:none;border-radius:6px">Sign in</a></p>
+     <p>If you didn't request this, you can ignore this email.</p>`);
 
 export const staffInvite = (store: StoreCtx, data: { acceptUrl: string; role: string; inviterEmail: string }) =>
   wrap(store, `${data.inviterEmail} invited you to ${store.name}`,

@@ -11,6 +11,8 @@ import { clientIp } from '../auth/rate-limit.js';
 import { newsletterRetryAfter, recordNewsletterAttempt } from './shop-extra.newsletter-limit.js';
 import { enqueueEmail } from '../email/outbox.js';
 import { sendSubscriberConfirmation } from './shop-extra.subscriber.js';
+import { contactRoutes } from './contact.js';
+import { restockRoutes } from './restock.js';
 
 export const shopExtra = new OpenAPIHono();
 
@@ -298,15 +300,20 @@ shopExtra.openapi(
   },
 );
 
-// Quote from server-priced items so DD shipping thresholds include discounts and tax.
+const ShippingQuoteIn = z.object({
+  country: z.string().length(2),
+  items: z.array(z.object({ sku: z.string().min(1), quantity: z.number().int().min(1).max(10000) })).min(1).max(500),
+  couponCode: z.string().optional(),
+});
+
+// Quote from server-priced items so shipping thresholds include discounts and tax.
 shopExtra.openapi(createRoute({
   method: 'post', path: '/v1/shop/shipping-methods', summary: 'Quote shipping from cart items',
-  request: { body: { content: J(z.object({ country: z.string().length(2),
-    items: z.array(z.object({ sku: z.string().min(1), quantity: z.number().int().min(1).max(10000) })).min(1).max(500),
-    couponCode: z.string().optional(),
-  })) } }, responses: { 200: { description: 'Quoted methods', content: J(z.any()) } },
+  request: { body: { content: J(ShippingQuoteIn) } },
+  responses: { 200: { description: 'Quoted methods', content: J(z.any()) } },
 }), async c => {
-  const st = await resolveStoreFromCtx(c), body = c.req.valid('json');
+  const st = await resolveStoreFromCtx(c);
+  const body = c.req.valid('json') as z.infer<typeof ShippingQuoteIn>;
   const methods = await withStore(st.id, async tx => {
     const quote = await priceCart(tx, st, body.items, { shipCountry: body.country, couponCode: body.couponCode, token: customerToken(c) });
     if (quote.unavailable.length) return [];
@@ -322,3 +329,9 @@ shopExtra.openapi(createRoute({
   });
   return c.json({ methods }, 200);
 });
+
+// PAR-01 / PAR-05: contact form (signed confirm-before-deliver) and the
+// back-in-stock request endpoints. Mounted here so app.ts needs no edit —
+// shopExtra is already on the app.
+shopExtra.route('/', contactRoutes);
+shopExtra.route('/', restockRoutes);

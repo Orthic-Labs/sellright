@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { CSP_DEV, CSP_PROD } from './csp';
+import { CSP_DEV, CSP_PROD, cspFor } from './csp';
 
 /**
  * DISPATCH FE-7 — assert the admin SPA ships a Content-Security-Policy
- * in BOTH dev (vite.config.ts `server.headers`) and prod (nginx-admin.conf).
+ * in BOTH dev (vite.config.ts `server.headers`) and prod (nginx.conf.template).
  *
  * The dev/prod literals live in src/lib/csp.ts (one source of truth). The
  * nginx prod directive is duplicated by hand into the conf — `NGINX_CSP_PROD`
@@ -49,15 +49,31 @@ describe('admin SPA CSP (DISPATCH FE-7)', () => {
     expect(CSP_DEV).toContain("connect-src 'self' https: ws: wss:");
   });
 
+  it('qa mode serves the dev CSP — the dev server injects the inline react preamble (SR-13)', () => {
+    // `pnpm qa:browser` runs `vite --mode qa` — still the DEV server, which
+    // injects @vitejs/plugin-react's inline refresh preamble + the HMR
+    // websocket client. Serving CSP_PROD here blocked the preamble and
+    // rendered a blank page ("can't detect preamble"). This is the
+    // config-level smoke guard for "QA mode renders nonblank content".
+    expect(cspFor('qa')).toBe(CSP_DEV);
+    expect(cspFor('qa')).toMatch(/script-src[^;]*'unsafe-inline'/);
+    expect(cspFor('qa')).toContain('ws:');
+  });
+
+  it('non-dev-server modes keep the strict prod CSP (fail-closed)', () => {
+    expect(cspFor('production')).toBe(CSP_PROD);
+    expect(cspFor('staging')).toBe(CSP_PROD); // unknown mode → strict
+  });
+
   it('dev and prod CSP differ (preview must serve prod)', () => {
     // Sanity: dev and prod differ on script-src — if preview accidentally
     // serves the dev CSP, prod parity testing is meaningless.
     expect(CSP_PROD).not.toBe(CSP_DEV);
   });
 
-  it('nginx-admin.conf prod CSP directive is byte-identical to CSP_PROD', () => {
+  it('nginx.conf.template prod CSP directive is byte-identical to CSP_PROD', () => {
     // If you change CSP_PROD, change NGINX_CSP_PROD above AND the
-    // add_header Content-Security-Policy line in nginx-admin.conf.
+    // add_header Content-Security-Policy line in nginx.conf.template.
     // All three must agree — the test is the trip wire.
     expect(NGINX_CSP_PROD).toBe(CSP_PROD);
   });

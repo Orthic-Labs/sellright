@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { selectUnitPrice, DEFAULT_VARIANT_PRICE_RULE, type VariantPriceRule } from '../money/pricing.js';
 
 export const orderCode = () => ('SR' + randomUUID().replace(/-/g, '').slice(0, 10)).toUpperCase();
 
@@ -15,8 +16,9 @@ export const csvCell = (v: unknown) => {
   return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 };
 
-export function unitPrice(v: { price: number; salePrice: number | null; isPreOrder: boolean; preOrderPrice: number | null }): number {
-  if (v.isPreOrder && v.preOrderPrice != null) return v.preOrderPrice;
-  if (v.salePrice != null) return v.salePrice;
-  return v.price;
+export function unitPrice(
+  v: { price: number; salePrice: number | null; isPreOrder: boolean; preOrderPrice: number | null },
+  rule: VariantPriceRule = DEFAULT_VARIANT_PRICE_RULE,
+): number {
+  return selectUnitPrice(v, rule);
 }

@@ -20,6 +20,31 @@ export interface GatewayIdentity {
   mode: GatewayMode;
 }
 
+const GatewayAccountSchema = z.object({
+  accountId: z.string().trim().min(1).max(128),
+  storeId: z.string().uuid(),
+  method: z.enum(['nmi', 'sezzle']),
+  mode: z.enum(['test', 'live']),
+  securityKey: z.string().min(1).optional(),
+  tokenizationKey: z.string().min(1).optional(),
+  publicKey: z.string().min(1).optional(),
+  privateKey: z.string().min(1).optional(),
+}).strict();
+
+function parseGatewayAccounts(source: string): GatewayAccount[] {
+  let raw: unknown;
+  try { raw = JSON.parse(source); } catch { throw new Error('Invalid gateway account configuration'); }
+  const parsed = z.array(GatewayAccountSchema).safeParse(raw);
+  if (!parsed.success) throw new Error('Invalid gateway account configuration');
+  const identities = new Set<string>();
+  for (const account of parsed.data) {
+    const identity = `${account.storeId}:${account.method}:${account.accountId}:${account.mode}`;
+    if (identities.has(identity)) throw new Error('Duplicate gateway account identity');
+    identities.add(identity);
+  }
+  return parsed.data;
+}
+
 export function gatewayIdentity(account: GatewayAccount): GatewayIdentity {
   return {
     accountId: account.accountId, storeId: account.storeId,
@@ -33,11 +58,9 @@ export function gatewayAccount(
   method: GatewayMethod,
   accountId: string,
   mode?: GatewayMode,
-  source = process.env.GATEWAY_ACCOUNTS_JSON,
+  source = env.GATEWAY_ACCOUNTS_JSON,
 ): GatewayAccount {
-  let profiles: unknown;
-  try { profiles = JSON.parse(source ?? '[]'); } catch { throw new Error('Invalid gateway account configuration'); }
-  if (!Array.isArray(profiles)) throw new Error('Invalid gateway account configuration');
+  const profiles = parseGatewayAccounts(source);
   const matches = profiles.filter((p): p is GatewayAccount =>
     !!p && p.accountId === accountId && p.storeId === storeId && p.method === method &&
     (p.mode === 'test' || p.mode === 'live') && (!mode || p.mode === mode));
@@ -83,3 +106,5 @@ export async function boundedGatewayResponse(response: Response): Promise<string
   } finally { await reader.cancel().catch(() => undefined); }
   return Buffer.concat(chunks).toString('utf8');
 }
+import { z } from 'zod';
+import { env } from '../env.js';

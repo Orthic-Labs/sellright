@@ -74,15 +74,40 @@ export async function applyPaymentResult(
   const inserted = await tx.insert(s.payment).values(row)
     .onConflictDoNothing().returning({ id: s.payment.id });
   if (!inserted.length) {
+    // SR-03: a Stripe provider ref (pi_...) is bound to exactly one
+    // account+mode at the provider — a payment_intent id can never exist in
+    // both test and live. The dedupe index for stripe therefore keys on
+    // (store_id, provider_ref) alone (migration 0055), and this lookup is
+    // mode/account-tolerant for the same reason: a row first written before
+    // its trusted mode was known (e.g. a subscription invoice settle) must
+    // still be FOUND here rather than mistaken for a different payment —
+    // its missing identity is then backfilled below. nmi/sezzle keep the
+    // strict account+mode match: their transaction ids can collide across
+    // accounts/modes, so identity is part of the key.
     const [existing] = await tx.select().from(s.payment).where(and(
       eq(s.payment.storeId, storeId), eq(s.payment.method, method),
       eq(s.payment.providerRef, result.providerRef!),
-      sql`coalesce(${s.payment.gatewayAccount}, '') = ${gatewayAccount ?? ''}`,
-      sql`coalesce(${s.payment.gatewayMode}, '') = ${gatewayMode ?? ''}`,
+      ...(method === 'stripe' ? [] : [
+        sql`coalesce(${s.payment.gatewayAccount}, '') = ${gatewayAccount ?? ''}`,
+        sql`coalesce(${s.payment.gatewayMode}, '') = ${gatewayMode ?? ''}`,
+      ]),
     )).limit(1).for('update');
     if (!existing || existing.orderId !== order.id || existing.amount !== amount ||
-        (existing.currency && existing.currency !== order.currency)) {
+        (existing.currency && existing.currency !== order.currency) ||
+        (existing.gatewayMode != null && gatewayMode != null && existing.gatewayMode !== gatewayMode) ||
+        (existing.gatewayAccount != null && gatewayAccount != null && existing.gatewayAccount !== gatewayAccount)) {
       throw new Error('Payment reference does not match the order and amount');
+    }
+    // Backfill the trusted gateway identity on rows recorded before it was
+    // persisted (never overwrite — a stored identity wins; conflicts were
+    // rejected above).
+    if ((gatewayMode && !existing.gatewayMode) || (gatewayAccount && !existing.gatewayAccount)) {
+      await tx.update(s.payment).set({
+        gatewayMode: existing.gatewayMode ?? gatewayMode,
+        gatewayAccount: existing.gatewayAccount ?? gatewayAccount,
+      }).where(eq(s.payment.id, existing.id));
+      existing.gatewayMode = existing.gatewayMode ?? gatewayMode;
+      existing.gatewayAccount = existing.gatewayAccount ?? gatewayAccount;
     }
     // A duplicate or delayed webhook must never downgrade captured funds.
     if (existing.state === 'Settled' ||

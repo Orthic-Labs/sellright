@@ -133,13 +133,13 @@ afterAll(() => pool.end());
 describe('refunds permission gate', () => {
   it('owner passes the refund route without any explicit grant', async () => {
     await seedOrder({ code: 'O-REF-OWNER', state: 'Paid', settledPayment: true });
-    const { status } = await call(ownerToken, '/orders/O-REF-OWNER/refund', { restock: false });
+    const { status } = await call(ownerToken, '/orders/O-REF-OWNER/refund', { restock: false, idempotencyKey: 'rbac-owner-refund' });
     expect(status).toBe(200);
   });
 
   it('staff WITHOUT refunds permission gets 403 on refund', async () => {
     await seedOrder({ code: 'O-REF-DENY', state: 'Paid', settledPayment: true });
-    const { status, body } = await call(staffToken, '/orders/O-REF-DENY/refund', { restock: false });
+    const { status, body } = await call(staffToken, '/orders/O-REF-DENY/refund', { restock: false, idempotencyKey: 'rbac-deny-refund' });
     expect(status).toBe(403);
     expect(String(body.error)).toMatch(/refunds/);
   });
@@ -147,7 +147,7 @@ describe('refunds permission gate', () => {
   it('staff WITH refunds permission gets 200 on refund', async () => {
     await grantStaffPermission('refunds');
     await seedOrder({ code: 'O-REF-GRANT', state: 'Paid', settledPayment: true });
-    const { status } = await call(staffToken, '/orders/O-REF-GRANT/refund', { restock: false });
+    const { status } = await call(staffToken, '/orders/O-REF-GRANT/refund', { restock: false, idempotencyKey: 'rbac-grant-refund' });
     expect(status).toBe(200);
   });
 

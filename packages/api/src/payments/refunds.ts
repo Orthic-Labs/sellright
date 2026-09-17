@@ -6,6 +6,8 @@ import { gatewayAccount } from './gateway-account.js';
 import { getProvider, type RefundResult } from './provider.js';
 import { creditGiftCardRefund } from '../routes/admin-order-payment-helpers.js';
 import { emitEvent } from '../webhooks/emit.js';
+import { enqueueRefundConfirmation, pickEmailAppKey } from '../email/dispatch.js';
+import { normalizeEmail } from '../auth/email.js';
 
 export class RefundError extends Error {
   constructor(public status: 400 | 404 | 409 | 503, message: string) { super(message); }
@@ -119,7 +121,45 @@ export async function requestRefund(input: RefundRequest) {
   });
 }
 
-/** Transactional and monotonic: money, stock, RMA, audit and outbox commit together. */
+/**
+ * SR-04/PAR-03: enqueue the customer refund-confirmation email at DEFINITIVE
+ * settlement. Shared by the request-path finalizer (finalizeRefund) and the
+ * webhook reconcile path for provider-initiated refunds — both run inside the
+ * settlement transaction so a rollback drops the email, and the per-refund
+ * dedupeKey makes replayed/double settlement a no-op (migration 0057). Missing
+ * recipient (guest order, no contact email) skips the send silently — the
+ * ledger row + audit trail still commit.
+ */
+export async function enqueueRefundSettledEmail(
+  tx: Tx, storeId: string, refundRow: { id: string; orderId: string; amount: number },
+): Promise<void> {
+  const [order] = await tx.select().from(s.order).where(eq(s.order.id, refundRow.orderId)).limit(1);
+  const [store] = await tx.select({ name: s.store.name, currency: s.store.currency, config: s.store.config })
+    .from(s.store).where(eq(s.store.id, storeId)).limit(1);
+  if (!order || !store) return;
+  const [customer] = order.customerId
+    ? await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, order.customerId)).limit(1) : [];
+  const contact = (order.metadata as { contact?: { email?: string } } | null)?.contact;
+  const recipient = normalizeEmail(contact?.email || customer?.email || '');
+  if (!recipient) return;
+  const lines = await tx.select({ appKey: s.productVariant.appKey })
+    .from(s.orderLine).leftJoin(s.productVariant, eq(s.productVariant.id, s.orderLine.variantId))
+    .where(eq(s.orderLine.orderId, order.id));
+  const [agg] = await tx.select({ total: sql<number>`coalesce(sum(${s.refund.amount}), 0)::int` })
+    .from(s.refund).where(and(eq(s.refund.orderId, order.id), eq(s.refund.state, 'Settled')));
+  await enqueueRefundConfirmation(tx, storeId,
+    { name: store.name, currency: order.currency, appKey: pickEmailAppKey(lines.map((l) => l.appKey)), config: store.config },
+    recipient,
+    { code: order.code, amount: refundRow.amount, currency: order.currency,
+      refundedTotal: agg?.total ?? refundRow.amount, grandTotal: order.grandTotal,
+      dedupeKey: `refund_confirmation:${refundRow.id}` });
+}
+
+/** Transactional and monotonic: money, stock, RMA, audit and outbox commit together.
+ *  THE shared finalizer (SR-04): the synchronous request path and the inbound
+ *  webhook reconcile path both converge here, so stock/RMA/gift-card/order-state/
+ *  audit/event/email effects run exactly once per refund attempt — whichever
+ *  caller settles it first wins; later calls are observed no-ops. */
 export async function finalizeRefund(tx: Tx, storeId: string, attemptId: string, result: RefundResult) {
   const [ref] = await tx.select().from(s.paymentAttempt).where(eq(s.paymentAttempt.id, attemptId));
   if (!ref || ref.operation !== 'refund') throw new RefundError(404, 'Refund attempt not found');
@@ -127,14 +167,26 @@ export async function finalizeRefund(tx: Tx, storeId: string, attemptId: string,
   const [attempt] = await tx.select().from(s.paymentAttempt).where(eq(s.paymentAttempt.id, attemptId)).for('update');
   const [refund] = await tx.select().from(s.refund).where(eq(s.refund.attemptId, attemptId)).for('update');
   if (!order || !attempt || !refund) throw new RefundError(409, 'Refund reservation is incomplete');
-  if (refund.state === 'Settled') return refundView(tx, refund);
+  // Already settled: never downgrade on a delayed/out-of-order status. A late
+  // providerRef (e.g. internal tender reconciled by webhook) is still adopted.
+  if (refund.state === 'Settled') {
+    if (!refund.providerRef && result.providerRef) {
+      await tx.update(s.refund).set({ providerRef: result.providerRef }).where(eq(s.refund.id, refund.id));
+      await tx.update(s.paymentAttempt).set({ providerRef: result.providerRef, updatedAt: new Date() })
+        .where(eq(s.paymentAttempt.id, attempt.id));
+    }
+    return refundView(tx, refund);
+  }
   if (refund.providerRef && result.providerRef && refund.providerRef !== result.providerRef) throw new RefundError(409, 'Refund reference mismatch');
   if (refund.state === 'Failed' && result.state !== 'Settled') return refundView(tx, refund);
   const providerRef = result.providerRef ?? refund.providerRef;
   await tx.update(s.refund).set({ state: result.state, providerRef }).where(eq(s.refund.id, refund.id));
-  await tx.update(s.paymentAttempt).set({ status: result.state === 'Settled' ? 'settled' : result.state === 'Failed' ? 'failed' : 'unknown',
+  // 'pending' vs 'unknown' tells operators whether a provider reference exists
+  // at all: 'pending' = provider acknowledged a ref (awaiting settlement),
+  // 'unknown' = the response was lost before any ref was persisted.
+  await tx.update(s.paymentAttempt).set({ status: result.state === 'Settled' ? 'settled' : result.state === 'Failed' ? 'failed' : providerRef ? 'pending' : 'unknown',
     providerRef, result: { state: result.state }, updatedAt: new Date() }).where(eq(s.paymentAttempt.id, attempt.id));
-  if (result.state !== 'Settled') return refundView(tx, { ...refund, state: result.state });
+  if (result.state !== 'Settled') return refundView(tx, { ...refund, state: result.state, providerRef });
   const details = refund.metadata as { actor?: string; returnId?: string | null } | null;
   const lines = await tx.select().from(s.refundLine).where(eq(s.refundLine.refundId, refund.id));
   for (const line of lines) {
@@ -164,5 +216,9 @@ export async function finalizeRefund(tx: Tx, storeId: string, attemptId: string,
   await tx.insert(s.auditLog).values({ storeId, actor: details?.actor ?? 'gateway:reconciliation', entity: 'order', entityId: order.id,
     action: 'refund', fromState: order.state, toState: state, data: { refundId: refund.id, amount: refund.amount } });
   await emitEvent(tx, storeId, 'order.refunded', { code: order.code, amount: refund.amount, state, refundId: refund.id });
+  // PAR-03: definitive settlement — customer refund-confirmation email in the
+  // same transaction, deduped by refund id (a replayed finalize can never
+  // send twice; the early-return above already covered already-settled rows).
+  await enqueueRefundSettledEmail(tx, storeId, refund);
   return { refundId: refund.id, refundState: 'Settled' as const, state, refunded: refund.amount, pending: 0 };
 }

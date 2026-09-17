@@ -27,6 +27,21 @@ const HAND_WRITTEN = [
   '0040_outbox_autovacuum.sql',
   '0041_subscriber.sql',
   '0042_payment_attempts.sql',
+  '0043_cart_revision.sql',
+  '0048_contact_submission.sql',
+  '0049_restock_notify.sql',
+  '0050_sheerid_verification.sql',
+  '0051_dispute.sql',
+  '0052_promotion_affiliate_email.sql',
+  '0053_gateway_tenant_resolution.sql',
+  '0055_payment_refund_identity.sql',
+  '0057_email_change_outbox_dedupe.sql',
+  '0058_cart_merged_status.sql',
+  '0059_subscriber_signup_group.sql',
+  '0060_gateway_tenant_resolution_strict.sql',
+  '0061_passwordless_signin.sql',
+  '0064_licensing_engine.sql',
+  '0066_storekit.sql',
 ];
 
 const MARKER = '-- HAND-WRITTEN: see docs/runbooks/migrations.md';
