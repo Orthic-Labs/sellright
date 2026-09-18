@@ -2,7 +2,7 @@
 
 A self-hosted, multi-store commerce backend with a REST API and browser-based admin.
 
-SellRight keeps catalog, carts, checkout, payments and order operations in one PostgreSQL-backed system. Storefronts consume its API independently; there is no bundled customer storefront in this repository.
+SellRight keeps catalog, carts, checkout, payments and order operations in one PostgreSQL-backed system. Production storefronts consume its API independently. An isolated, synthetic demo storefront is included for evaluation, not merchant deployment.
 
 **Status: pre-1.0.** Suitable for development and evaluation. Production adoption requires gateway acceptance, migration rehearsal, backups and rollback verification. Implemented adapters are not a claim that every merchant deployment has passed acceptance.
 
