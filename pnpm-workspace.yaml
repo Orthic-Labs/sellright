@@ -28,6 +28,9 @@ onlyBuiltDependencies:
   - sharp
 
 overrides:
+  # GHSA-82fw-gwwq-j7x9: keep the test runner and its mocker on the patched release.
+  vitest: 4.1.11
+  '@vitest/mocker': 4.1.11
   esbuild: 0.28.1
   # GHSA-r28c-9q8g-f849 (path traversal) â€” postcss is pulled in transitively
   # (sanitize-html) as well as directly by admin; force >= 8.5.18

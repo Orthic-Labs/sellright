@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>SellRight Demo Store</title>
+  <link rel="stylesheet" href="/shop/shop.css">
+  <script src="/shop/shop.js" defer></script>
+</head>
+<body>
+  <div class="notice">DEMO STORE <span>No real payments or shipments</span></div>
+  <header>
+    <a class="brand" href="/shop">SellRight<span>Everyday goods</span></a>
+    <nav><a href="/enter">Open admin</a><button id="cart-toggle" aria-controls="cart" aria-expanded="false">Cart <span id="count">0</span></button></nav>
+  </header>
+  <main>
+    <section class="catalog" aria-labelledby="title">
+      <div class="section-heading"><div><p class="eyebrow">THE DEMO COLLECTION</p><h1>Good things, daily.</h1></div><span id="product-count"></span></div>
+      <p id="error" role="alert" hidden></p>
+      <div id="products" class="products" aria-live="polite"><p>Loading collection...</p></div>
+    </section>
+    <aside id="cart" aria-labelledby="cart-title">
+      <div class="cart-heading"><h2 id="cart-title">Your cart</h2><button id="cart-close" class="icon" aria-label="Close cart">X</button></div>
+      <div id="cart-lines"><p class="empty">Your cart is empty.</p></div>
+      <div class="totals"><span>Subtotal</span><strong id="subtotal">$0.00</strong></div>
+      <p class="cart-note">Demo only. Checkout is disabled.</p>
+    </aside>
+  </main>
+  <footer><strong>SellRight</strong><a href="/enter">Explore the read-only admin</a><a href="https://github.com/Orthic-Labs/sellright">Source &amp; documentation</a></footer>
+</body>
+</html>

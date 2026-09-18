@@ -1,6 +1,6 @@
 import type { PaymentProvider, PaymentResult, RefundInput } from './provider.js';
 import {
-  boundedGatewayResponse, gatewayIdentity, validGatewayInput,
+  boundedGatewayResponse, gatewayIdentity, validGatewayInput, nmiEnvironment,
   type GatewayAccount, type GatewayFetch,
 } from './gateway-account.js';
 
@@ -18,8 +18,12 @@ function unknownPayment(providerRef: string | null, reason: string): PaymentResu
 export function createNmiProvider(transport: GatewayFetch = fetch): PaymentProvider {
   async function transact(account: GatewayAccount, values: Record<string, string>): Promise<URLSearchParams> {
     if (!account.securityKey) throw new Error('NMI security key is not configured');
-    const base = account.mode === 'test' ? 'https://sandbox.nmi.com' : 'https://secure.nmi.com';
+    const environment = nmiEnvironment(account);
+    if (account.mode === 'live' && environment !== 'production') throw new Error('Invalid NMI live environment');
+    const base = environment === 'sandbox' ? 'https://sandbox.nmi.com' : 'https://secure.nmi.com';
     const body = new URLSearchParams({ ...values, security_key: account.securityKey });
+    // Existing merchant accounts support per-transaction testing on the production host.
+    if (account.mode === 'test' && environment === 'production') body.set('test_mode', 'enabled');
     const response = await transport(base + '/api/transact.php', {
       method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: body.toString(), signal: AbortSignal.timeout(15_000), redirect: 'error',

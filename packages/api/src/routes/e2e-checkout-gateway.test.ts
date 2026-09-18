@@ -1,5 +1,5 @@
 /**
- * E2E checkout → gateway-payment (NMI + Sezzle) against REAL gateway sandboxes.
+ * E2E checkout → gateway-payment (NMI + Sezzle) against REAL test-mode gateways.
  * The gateway-mode analogue of e2e-checkout-stripe.test.ts: drives the full
  * Hono app through the required journey with no transport mocks —
  *
@@ -14,16 +14,18 @@
  * What is and isn't provable headless (by gateway design, not our choice):
  *   - NMI `payment_token` can only be minted by Collect.js in a browser (the
  *     tokenization key "will not work with any other APIs" — NMI docs). So the
- *     no-token leg asserts the real sandbox round-trip + structured terminal
- *     handling; a full sale needs a real Collect.js token — supply one via
- *     NMI_TEST_PAYMENT_TOKEN and the settle leg runs too.
+ *     no-token control does not prove settlement. Supply a real Collect.js
+ *     token via NMI_TEST_PAYMENT_TOKEN for settlement and a different token
+ *     via NMI_REFUND_TEST_PAYMENT_TOKEN for the refund leg.
  *   - Sezzle checkout requires interactive shopper approval on the hosted
  *     page. Headless coverage ends at session creation + verify reporting the
  *     pending order — the browser approval leg is the human step.
  *
- * Runs against *_test ONLY (TRUNCATEs data). Self-skips unless ALL of:
+ * Runs against *_test ONLY (TRUNCATEs data), requiring the exact database
+ * name in SR_GATEWAY_E2E_RESET_DATABASE. Provider legs require ALL of:
  *   SR_GATEWAY_E2E=1
- *   NMI_TEST_SECURITY_KEY      — sandbox-capable NMI security key
+ *   NMI_TEST_SECURITY_KEY      — key for the selected NMI environment
+ *   NMI_TEST_ENVIRONMENT       — sandbox (default) or production with test_mode
  *   SEZZLE_TEST_PUBLIC_KEY / SEZZLE_TEST_PRIVATE_KEY — sandbox Sezzle pair
  */
 import { createHmac } from 'node:crypto';
@@ -36,21 +38,24 @@ import * as s from '../db/schema.js';
 import { dispute as disputeTable } from '../db/schema-ops.js';
 import { createAdminSession } from '../auth/admin-session.js';
 import { reconcileGatewayEvents } from '../jobs/reconcile-gateway-events.js';
+import { assertGatewayTestTarget as assertTestDatabase } from '../payments/gateway-e2e-safety.js';
 
 const NMI_KEY = process.env.NMI_TEST_SECURITY_KEY ?? '';
 const SEZZLE_PUB = process.env.SEZZLE_TEST_PUBLIC_KEY ?? '';
 const SEZZLE_PRIV = process.env.SEZZLE_TEST_PRIVATE_KEY ?? '';
 const NMI_TOKEN = process.env.NMI_TEST_PAYMENT_TOKEN ?? '';
+const NMI_REFUND_TOKEN = process.env.NMI_REFUND_TEST_PAYMENT_TOKEN ?? '';
+const NMI_ENVIRONMENT = process.env.NMI_TEST_ENVIRONMENT ?? 'sandbox';
 const ENABLED = process.env.SR_GATEWAY_E2E === '1' && !!NMI_KEY && !!SEZZLE_PUB && !!SEZZLE_PRIV;
 // Webhook ingress is self-contained: the signature is HMAC over whatever
 // privateKey is configured, so these legs produce real evidence even with
 // placeholder keys — they never call Sezzle.
 const INGRESS_ENABLED = process.env.SR_GATEWAY_E2E === '1' && !!SEZZLE_PRIV;
+const RUN_ENABLED = ENABLED || INGRESS_ENABLED;
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`e2e gateway test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+if (RUN_ENABLED) assertTestDatabase(DB, process.env.SR_GATEWAY_E2E_RESET_DATABASE);
+if (RUN_ENABLED && !['sandbox', 'production'].includes(NMI_ENVIRONMENT)) throw new Error('Invalid NMI_TEST_ENVIRONMENT');
 
 const STORE = 'e2e00000-0000-4000-8000-000000000001';
 const SLUG = 'e2e-gateway-test-store';
@@ -131,6 +136,7 @@ async function cartToPendingOrder(): Promise<{ code: string; receiptToken: strin
 }
 
 beforeEach(async () => {
+  if (!RUN_ENABLED) return;
   await wipe();
   await seed();
   // Test-mode gateway accounts are injected into the mutable env object the
@@ -139,17 +145,21 @@ beforeEach(async () => {
     // Key material must be non-empty to pass account schema validation —
     // placeholders keep identities resolvable when real keys aren't supplied;
     // provider legs gate on ENABLED so they never run on placeholder secrets.
-    { accountId: NMI_ACCT, storeId: STORE, method: 'nmi', mode: 'test',
+    { accountId: NMI_ACCT, storeId: STORE, method: 'nmi', mode: 'test', nmiEnvironment: NMI_ENVIRONMENT,
       securityKey: NMI_KEY || 'placeholder-nmi-key', tokenizationKey: 'e2e-tok-key' },
     { accountId: SEZZLE_ACCT, storeId: STORE, method: 'sezzle', mode: 'test',
       publicKey: SEZZLE_PUB || 'placeholder-sezzle-pub', privateKey: SEZZLE_PRIV || 'placeholder-sezzle-priv' },
   ]);
 });
-afterAll(async () => { await wipe(); await pool.end(); });
+afterAll(async () => {
+  if (!RUN_ENABLED) return;
+  await wipe();
+  await pool.end();
+});
 
 (ENABLED ? describe : describe.skip)('E2E checkout → gateway-payment (real NMI/Sezzle sandboxes)', () => {
 
-  it('NMI: gateway-payment hits sandbox.nmi.com and the attempt resolves to a structured terminal state', async () => {
+  it.skipIf(!NMI_TOKEN)('NMI: a real token settles and the same attempt replays without another charge', async () => {
     const { code, receiptToken, grandTotal } = await cartToPendingOrder();
     expect(grandTotal).toBe(3300); // 2500 + 800 flat shipping
 
@@ -160,18 +170,11 @@ afterAll(async () => { await wipe(); await pool.end(); });
     expect(payRes.status).toBe(200);
     const attempt = await payRes.json() as { attemptId: string; status: string };
     expect(attempt.attemptId).toBeTruthy();
-    if (NMI_TOKEN) {
-      // Real Collect.js token → full sale: settled attempt + Paid order.
-      expect(attempt.status).toBe('settled');
-      const [order] = await withStore(STORE, async tx =>
-        tx.select().from(s.order).where(eq(s.order.code, code)).limit(1));
-      expect(order!.state).toBe('Paid');
-    } else {
-      // Bogus token still proves the sandbox round-trip: the request reached
-      // NMI and came back as a structured decline/error, not a crash or a
-      // locally-faked failure. Terminal states only — never 'processing'.
-      expect(['declined', 'failed', 'unknown']).toContain(attempt.status);
-    }
+    // Unknown/auth failures are not provider acceptance evidence.
+    expect(attempt.status).toBe('settled');
+    const [order] = await withStore(STORE, async tx =>
+      tx.select().from(s.order).where(eq(s.order.code, code)).limit(1));
+    expect(order!.state).toBe('Paid');
 
     // Idempotency: same key replays the same attempt view, never double-charges.
     const replay = await app.request(`/v1/shop/orders/${code}/gateway-payment`, {
@@ -323,12 +326,12 @@ afterAll(async () => { await wipe(); await pool.end(); });
 
 // ── NMI refund leg — only runs when NMI_TEST_PAYMENT_TOKEN produces a real
 // sale; refund calls the live sandbox transact API (synchronous, no webhook).
-(ENABLED && NMI_TOKEN ? describe : describe.skip)('NMI refund (requires settled sale)', () => {
+(ENABLED && NMI_REFUND_TOKEN && NMI_REFUND_TOKEN !== NMI_TOKEN ? describe : describe.skip)('NMI refund (requires a separate single-use token)', () => {
   it('settled sale → admin refund → provider refund + ledger row', async () => {
     const { code, receiptToken } = await cartToPendingOrder();
     const payRes = await app.request(`/v1/shop/orders/${code}/gateway-payment`, {
       method: 'POST', headers: hdr({ 'idempotency-key': `e2e-nmi-ref-${code}`, 'x-receipt-token': receiptToken }),
-      body: JSON.stringify({ method: 'nmi', token: NMI_TOKEN }),
+      body: JSON.stringify({ method: 'nmi', token: NMI_REFUND_TOKEN }),
     });
     expect((await payRes.json() as { status: string }).status).toBe('settled');
 

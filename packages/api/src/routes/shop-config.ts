@@ -4,7 +4,7 @@
  */
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { resolveStoreFromCtx } from './store-context.js';
-import { configuredGatewayAccount } from '../payments/gateway-account.js';
+import { configuredGatewayAccount, nmiEnvironment } from '../payments/gateway-account.js';
 import { isPaymentMethodEnabled } from '../payments/provider.js';
 import { stripeModeFromConfig, stripePublishableForClient, stripeUsable } from '../payments/stripe.js';
 
@@ -22,7 +22,7 @@ shopConfig.openapi(
           stripeMode: z.enum(['test', 'live']),
           stripePublishableKey: z.string().nullable(),
           stripeConfigured: z.boolean(),
-          gateways: z.object({ nmi: z.object({ tokenizationKey: z.string(), mode: z.enum(['test','live']) }).nullable(), sezzle: z.boolean() }),
+          gateways: z.object({ nmi: z.object({ tokenizationKey: z.string(), mode: z.enum(['test','live']), environment: z.enum(['sandbox', 'production']) }).nullable(), sezzle: z.boolean() }),
         }) } },
       },
     },
@@ -30,11 +30,11 @@ shopConfig.openapi(
   async (c) => {
     const st = await resolveStoreFromCtx(c);
     const mode = stripeModeFromConfig(st.config);
-    let nmi: { tokenizationKey: string; mode: 'test'|'live' } | null = null;
+    let nmi: { tokenizationKey: string; mode: 'test'|'live'; environment: 'sandbox'|'production' } | null = null;
     let sezzle = false;
     try { if (isPaymentMethodEnabled(st.config, 'nmi')) {
       const account = configuredGatewayAccount(st.id, 'nmi', st.config);
-      if (account.tokenizationKey) nmi = { tokenizationKey: account.tokenizationKey, mode: account.mode };
+      if (account.tokenizationKey) nmi = { tokenizationKey: account.tokenizationKey, mode: account.mode, environment: nmiEnvironment(account) };
     } } catch { /* An unavailable account is not advertised to shoppers. */ }
     try { if (isPaymentMethodEnabled(st.config, 'sezzle')) { configuredGatewayAccount(st.id, 'sezzle', st.config); sezzle = true; } } catch { /* fail closed */ }
     return c.json({

@@ -21,8 +21,20 @@ import { restoreMigration } from './restore.js';
 import { migrationId } from './context.js';
 import { assertTestDatabase } from '../db/rls-test-utils.js';
 
-const SOURCE_URL = 'postgres://vendure@127.0.0.1:55440/sr_imp_src_test';
-const TARGET_URL = 'postgres://vendure@127.0.0.1:55440/sr_imp_dst_test';
+function fixtureUrl(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`Set ${name} to a separately provisioned disposable *_test database`);
+  const url = new URL(value);
+  if (!['postgres:', 'postgresql:'].includes(url.protocol) || !/^\/[a-zA-Z0-9_]+_test$/.test(url.pathname)) {
+    throw new Error(`${name} must name a disposable *_test PostgreSQL database`);
+  }
+  return value;
+}
+const SOURCE_URL = fixtureUrl('IMPORT_SOURCE_DATABASE_URL');
+const TARGET_URL = fixtureUrl('IMPORT_TARGET_DATABASE_URL');
+if (new URL(SOURCE_URL).pathname === new URL(TARGET_URL).pathname) {
+  throw new Error('Import source and target fixture databases must have different names');
+}
 assertTestDatabase(SOURCE_URL, 'import source fixture');
 assertTestDatabase(TARGET_URL, 'import target fixture');
 

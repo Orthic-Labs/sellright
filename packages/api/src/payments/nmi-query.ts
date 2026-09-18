@@ -1,8 +1,8 @@
 import { DOMParser, type Element } from '@xmldom/xmldom';
-import { boundedGatewayResponse, gatewayIdentity, type GatewayAccount, type GatewayFetch } from './gateway-account.js';
+import { boundedGatewayResponse, gatewayIdentity, nmiEnvironment, type GatewayAccount, type GatewayFetch } from './gateway-account.js';
 import type { PaymentResult } from './provider.js';
 
-type Query = { account: GatewayAccount; orderReference: string; providerRef?: string | null; amount: number; currency: string };
+type Query = { account: GatewayAccount; orderReference: string; providerRef?: string | null; amount: number; currency: string; operation?: 'charge' | 'refund' };
 const unresolved = (ref: string | null, reason: string): PaymentResult => ({
   state: 'Pending', providerRef: ref, metadata: { needsReconciliation: true, reason },
   errorMessage: 'NMI transaction requires reconciliation',
@@ -44,6 +44,14 @@ export function verifyNmiQuery(xml: string, input: Query): PaymentResult {
     }));
     const charged = actions.filter(a => a.success && ['sale', 'capture'].includes(a.type));
     const reversals = actions.filter(a => a.success && ['refund', 'void', 'return', 'credit'].includes(a.type));
+    if (input.operation === 'refund') {
+      const refunds = actions.filter(a => a.success && ['refund', 'return', 'credit'].includes(a.type));
+      if (refunds.length !== 1 || refunds[0]!.amount !== input.amount || charged.length ||
+          !['complete', 'pendingsettlement'].includes(value(transaction, 'condition'))) {
+        return unresolved(ref, 'refund_not_confirmed');
+      }
+      return { state: 'Settled', providerRef: ref, metadata: { gateway: gatewayIdentity(input.account) } };
+    }
     if (reversals.length) return unresolved(ref, 'reversal_requires_ledger_reconciliation');
     const condition = value(transaction, 'condition');
     if (charged.length === 0 && ['failed', 'abandoned', 'canceled'].includes(condition)) {
@@ -63,7 +71,9 @@ export async function queryNmiPayment(input: Query, transport: GatewayFetch = fe
     const body = new URLSearchParams({ security_key: input.account.securityKey,
       order_id: input.orderReference, result_limit: '2',
       ...(input.providerRef ? { transaction_id: input.providerRef } : {}) });
-    const host = input.account.mode === 'test' ? 'https://sandbox.nmi.com' : 'https://secure.nmi.com';
+    const environment = nmiEnvironment(input.account);
+    if (input.account.mode === 'live' && environment !== 'production') throw new Error('Invalid NMI live environment');
+    const host = environment === 'sandbox' ? 'https://sandbox.nmi.com' : 'https://secure.nmi.com';
     const response = await transport(host + '/api/query.php', {
       method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: body.toString(), signal: AbortSignal.timeout(15000), redirect: 'error',

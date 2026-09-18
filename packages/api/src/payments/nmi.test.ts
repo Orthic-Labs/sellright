@@ -12,6 +12,24 @@ const input = {
 const reply = (body: string) => new Response(body, { status: 200 });
 
 describe('NMI port', () => {
+  it('uses the existing account endpoint with an explicit test-only flag', async () => {
+    const transport = vi.fn().mockResolvedValue(reply('response=1&transactionid=test-123'));
+    await createNmiProvider(transport).createPayment({
+      ...input, gateway: { ...gateway, nmiEnvironment: 'production' },
+    });
+    expect(transport.mock.calls[0]![0]).toBe('https://secure.nmi.com/api/transact.php');
+    expect(new URLSearchParams(transport.mock.calls[0]![1].body).get('test_mode')).toBe('enabled');
+  });
+
+  it('retains the test-only flag when refunding an existing-account test payment', async () => {
+    const transport = vi.fn().mockResolvedValue(reply('response=1&transactionid=test-refund'));
+    await createNmiProvider(transport).refundPayment!({
+      providerRef: 'test-123', amount: 100, currency: 'USD', idempotencyKey: 'test-refund',
+      gateway: { ...gateway, nmiEnvironment: 'production' },
+    });
+    expect(new URLSearchParams(transport.mock.calls[0]![1].body).get('test_mode')).toBe('enabled');
+  });
+
   it('sends a token and exact server amount, never card fields', async () => {
     const transport = vi.fn().mockResolvedValue(reply('response=1&transactionid=123&avsresponse=Y&cvvresponse=M'));
     const result = await createNmiProvider(transport).createPayment(input);

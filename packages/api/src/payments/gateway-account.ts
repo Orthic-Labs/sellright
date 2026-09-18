@@ -7,6 +7,7 @@ export interface GatewayAccount {
   storeId: string;
   method: GatewayMethod;
   mode: GatewayMode;
+  nmiEnvironment?: 'sandbox' | 'production';
   securityKey?: string;
   tokenizationKey?: string;
   publicKey?: string;
@@ -18,6 +19,7 @@ export interface GatewayIdentity {
   storeId: string;
   method: GatewayMethod;
   mode: GatewayMode;
+  nmiEnvironment?: 'sandbox' | 'production';
 }
 
 const GatewayAccountSchema = z.object({
@@ -25,11 +27,33 @@ const GatewayAccountSchema = z.object({
   storeId: z.string().uuid(),
   method: z.enum(['nmi', 'sezzle']),
   mode: z.enum(['test', 'live']),
+  nmiEnvironment: z.enum(['sandbox', 'production']).optional(),
   securityKey: z.string().min(1).optional(),
   tokenizationKey: z.string().min(1).optional(),
   publicKey: z.string().min(1).optional(),
   privateKey: z.string().min(1).optional(),
-}).strict();
+}).strict().refine((account) => !account.nmiEnvironment ||
+  (account.method === 'nmi' && (account.mode === 'test' || account.nmiEnvironment === 'production')),
+{ message: 'NMI environment must match the account method and mode' });
+
+export function nmiEnvironment(account: GatewayAccount): 'sandbox' | 'production' {
+  return account.nmiEnvironment ?? (account.mode === 'test' ? 'sandbox' : 'production');
+}
+
+export function recordedNmiEnvironment(identity: unknown, mode: string): 'sandbox' | 'production' {
+  if (mode !== 'test' && mode !== 'live') throw new Error('Invalid original NMI mode');
+  const recorded = (identity as { nmiEnvironment?: unknown } | null)?.nmiEnvironment;
+  if (recorded == null) return mode === 'test' ? 'sandbox' : 'production';
+  if (recorded !== 'sandbox' && recorded !== 'production') throw new Error('Invalid original NMI environment');
+  return recorded;
+}
+
+/** Refuse to move historical operations when an operator edits the current profile. */
+export function assertGatewayEnvironment(account: GatewayAccount, originalIdentity: unknown): void {
+  if (account.method === 'nmi' && nmiEnvironment(account) !== recordedNmiEnvironment(originalIdentity, account.mode)) {
+    throw new Error('Original NMI environment does not match the configured account');
+  }
+}
 
 function parseGatewayAccounts(source: string): GatewayAccount[] {
   let raw: unknown;
@@ -49,6 +73,7 @@ export function gatewayIdentity(account: GatewayAccount): GatewayIdentity {
   return {
     accountId: account.accountId, storeId: account.storeId,
     method: account.method, mode: account.mode,
+    ...(account.method === 'nmi' ? { nmiEnvironment: nmiEnvironment(account) } : {}),
   };
 }
 

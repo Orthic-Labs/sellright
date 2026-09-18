@@ -5,7 +5,7 @@ import * as s from '../db/schema.js';
 import { resolveCustomer } from '../auth/session.js';
 import { amountDueForOrder, applyPaymentResult } from './settle.js';
 import { getProvider, isPaymentMethodEnabled, type PaymentResult, type RefundResult } from './provider.js';
-import { configuredGatewayAccount, gatewayAccount, gatewayIdentity, type GatewayMethod } from './gateway-account.js';
+import { configuredGatewayAccount, gatewayAccount, gatewayIdentity, assertGatewayEnvironment, recordedNmiEnvironment, type GatewayMethod } from './gateway-account.js';
 import { sezzleProvider } from './sezzle.js';
 import { prepareSezzleSession } from './session-input.js';
 import { queryNmiPayment } from './nmi-query.js';
@@ -55,6 +55,8 @@ export async function startGatewayPayment(input: {
             existing.accountId !== account.accountId || existing.mode !== account.mode) {
           throw new GatewayPaymentError(409, 'Idempotency key belongs to a different payment');
         }
+        try { assertGatewayEnvironment(account, existing.context); }
+        catch { throw new GatewayPaymentError(409, 'Payment gateway environment changed; restore the original account configuration'); }
         return { existing };
       }
       if (order.state !== 'PendingPayment') throw new GatewayPaymentError(409, 'Order is not payable');
@@ -131,7 +133,8 @@ export async function finishAttempt(storeId: string, id: string, result: Payment
     if (!order) throw new GatewayPaymentError(404, 'Order not found');
     const metadata = {
       ...(result.metadata as Record<string, unknown> | null ?? {}),
-      gateway: { accountId: attempt.accountId, storeId, method: attempt.method, mode: attempt.mode },
+      gateway: { accountId: attempt.accountId, storeId, method: attempt.method, mode: attempt.mode,
+        ...(attempt.method === 'nmi' ? { nmiEnvironment: recordedNmiEnvironment(attempt.context, attempt.mode) } : {}) },
     };
     const applied = result.providerRef ? await applyPaymentResult(tx, {
       storeId, order, method: attempt.method, result: { ...result, metadata }, amount: attempt.amount,
@@ -298,15 +301,13 @@ async function discoverRefundOutcome(
   }
   if (attempt.method === 'nmi') {
     const account = gatewayAccount(storeId, 'nmi', attempt.accountId, attempt.mode as 'test' | 'live');
-    const res = await queryNmiPayment({ account, amount: attempt.amount, currency: attempt.currency,
+    assertGatewayEnvironment(account, attempt.context);
+    const res = await queryNmiPayment({ account, amount: attempt.amount, currency: attempt.currency, operation: 'refund',
       // The refund transact call keyed orderid by the refund attempt id —
       // query.php therefore answers on the attempt's own reference.
       orderReference: attempt.id, providerRef: bound });
-    const reason = (res.metadata as { reason?: string } | null)?.reason;
-    // For a refund op the existence of a matching provider transaction IS the
-    // settlement proof — identity/order mismatches and a missing transaction
-    // remain unresolved.
-    if (res.providerRef && !['missing_or_duplicate_transaction', 'identity_mismatch'].includes(reason ?? '')) {
+    // A known reference alone is not proof of refund settlement.
+    if (res.state === 'Settled' && res.providerRef) {
       return { state: 'Settled', providerRef: res.providerRef };
     }
     return { state: 'Pending', providerRef: bound, errorMessage: res.errorMessage ?? 'NMI refund requires reconciliation' };
@@ -331,6 +332,8 @@ export async function verifyGatewayAttempt(storeId: string, id: string) {
   if (!order) throw new GatewayPaymentError(404, 'Order not found');
   return withAdvisoryLock('pay:' + storeId + ':' + order.code, async () => {
     const account = gatewayAccount(storeId, 'nmi', attempt.accountId, attempt.mode as 'test' | 'live');
+    try { assertGatewayEnvironment(account, attempt.context); }
+    catch { throw new GatewayPaymentError(409, 'Payment gateway environment changed; restore the original account configuration'); }
     const result = await queryNmiPayment({ account, amount: attempt.amount, currency: attempt.currency,
       orderReference: (attempt.context as { orderReference?: string } | null)?.orderReference ?? attempt.id,
       providerRef: attempt.providerRef });

@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
 import { withAdvisoryLock, withStore, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
-import { gatewayAccount } from './gateway-account.js';
+import { gatewayAccount, assertGatewayEnvironment, recordedNmiEnvironment } from './gateway-account.js';
 import { getProvider, type RefundResult } from './provider.js';
 import { creditGiftCardRefund } from '../routes/admin-order-payment-helpers.js';
 import { emitEvent } from '../webhooks/emit.js';
@@ -61,7 +61,10 @@ export async function requestRefund(input: RefundRequest) {
       if (['nmi','sezzle','stripe'].includes(payment.method) && (mode !== 'test' && mode !== 'live')) throw new RefundError(409, 'Original payment mode is missing; reconcile it before refunding');
       if (payment.method === 'nmi' || payment.method === 'sezzle') {
         if (!payment.gatewayAccount) throw new RefundError(409, 'Original merchant account is missing');
-        try { gatewayAccount(input.storeId, payment.method, payment.gatewayAccount, mode as 'test'|'live'); }
+        try {
+          const account = gatewayAccount(input.storeId, payment.method, payment.gatewayAccount, mode as 'test'|'live');
+          assertGatewayEnvironment(account, (payment.metadata as { gateway?: unknown } | null)?.gateway);
+        }
         catch { throw new RefundError(503, 'Original merchant account is unavailable'); }
       }
       const refunds = await tx.select().from(s.refund).where(eq(s.refund.orderId, order.id));
@@ -96,7 +99,8 @@ export async function requestRefund(input: RefundRequest) {
       await tx.insert(s.paymentAttempt).values({ id: attemptId, storeId: input.storeId, orderId: order.id, paymentId: payment.id,
         operation: 'refund', method: payment.method, accountId: payment.gatewayAccount ?? 'internal',
         mode: mode === 'test' ? 'test' : 'live', amount, currency: payment.currency ?? order.currency,
-        idempotencyKey: key, fingerprint, context: { originalProviderRef: payment.providerRef, refundId, actor: input.actor, returnId: input.returnId ?? null } });
+        idempotencyKey: key, fingerprint, context: { originalProviderRef: payment.providerRef, refundId, actor: input.actor, returnId: input.returnId ?? null,
+          ...(payment.method === 'nmi' ? { nmiEnvironment: recordedNmiEnvironment((payment.metadata as { gateway?: unknown } | null)?.gateway, mode as 'test'|'live') } : {}) } });
       await tx.insert(s.refund).values({ id: refundId, storeId: input.storeId, orderId: order.id, paymentId: payment.id,
         attemptId, amount, itemsAmount: snapshots.reduce((n,l) => n+l.amount,0), shippingAmount: 0,
         adjustmentAmount: amount - snapshots.reduce((n,l) => n+l.amount,0), state: 'Pending', reason: input.reason ?? rma?.reason ?? null,
@@ -111,6 +115,7 @@ export async function requestRefund(input: RefundRequest) {
     try {
       const gateway = p.method === 'nmi' || p.method === 'sezzle'
         ? gatewayAccount(input.storeId, p.method, p.gatewayAccount!, p.gatewayMode as 'test'|'live') : undefined;
+      if (gateway) assertGatewayEnvironment(gateway, (p.metadata as { gateway?: unknown } | null)?.gateway);
       const provider = getProvider(p.method)!;
       result = provider.refundPayment ? await provider.refundPayment({
         providerRef: p.providerRef, amount: prepared.amount, currency: prepared.currency,
