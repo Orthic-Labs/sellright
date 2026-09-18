@@ -12,6 +12,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { generateKeyPairSync, sign as cryptoSign } from 'node:crypto';
 import { _resetAppleJwksCache, appleClientIds, verifyAppleIdentityToken } from './apple.js';
+import { env } from '../env.js';
 
 const AUD = 'com.example.app';
 const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -112,5 +113,16 @@ describe('appleClientIds', () => {
 
   it('trims and drops empties', () => {
     expect(appleClientIds({ auth: { appleClientId: ['  a.b  ', '', 'c.d'] } })).toEqual(['a.b', 'c.d']);
+  });
+
+  it('appleClientId: false opts the store out even when a fleet env default exists', () => {
+    const prior = env.APPLE_CLIENT_IDS;
+    env.APPLE_CLIENT_IDS = 'com.fleet.default';
+    try {
+      expect(appleClientIds({ auth: { appleClientId: false } })).toEqual([]);
+      expect(appleClientIds({})).toEqual(['com.fleet.default']);
+    } finally {
+      env.APPLE_CLIENT_IDS = prior;
+    }
   });
 });

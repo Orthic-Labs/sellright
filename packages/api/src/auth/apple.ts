@@ -54,6 +54,9 @@ export interface AppleIdentity {
 export function appleClientIds(config: unknown): string[] {
   const auth = storeAuthConfig(config);
   const v = auth.appleClientId;
+  // `appleClientId: false` is an explicit per-store opt-out — without it a
+  // fleet-wide APPLE_CLIENT_IDS default would be undisableable per tenant.
+  if (v === false) return [];
   const fromConfig = Array.isArray(v) ? v : typeof v === 'string' ? [v] : [];
   const source = fromConfig.length ? fromConfig : (env.APPLE_CLIENT_IDS ?? '').split(',');
   return source.map((x) => String(x).trim()).filter(Boolean);
