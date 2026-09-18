@@ -31,13 +31,35 @@ shopExtra.openapi(
     const out = await withStore(st.id, async (tx) => {
       const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
       if (!o) return null;
-      // email must match the order's customer or the shipping snapshot.
-      let ok = false;
-      if (o.customerId) { const [cu] = await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, o.customerId)).limit(1); ok = cu?.email?.toLowerCase() === email.toLowerCase(); }
+      // email must match the order's customer or the checkout contact snapshot.
+      let ok = (o.metadata as { contact?: { email?: string } } | null)?.contact?.email?.toLowerCase() === email.toLowerCase();
+      if (!ok && o.customerId) { const [cu] = await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, o.customerId)).limit(1); ok = cu?.email?.toLowerCase() === email.toLowerCase(); }
       if (!ok) return null;
-      const [ful] = await tx.select().from(s.fulfillment).where(eq(s.fulfillment.orderId, o.id)).orderBy(desc(s.fulfillment.createdAt)).limit(1);
-      const lines = await tx.select({ name: s.orderLine.variantName, quantity: s.orderLine.quantity }).from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
-      return { code: o.code, state: o.state, placedAt: o.placedAt?.toISOString() ?? null, grandTotal: o.grandTotal, currency: o.currency, fulfillment: ful ? { state: ful.state, trackingCode: ful.trackingCode, carrier: ful.carrier } : null, lines };
+      const fuls = await tx.select().from(s.fulfillment).where(eq(s.fulfillment.orderId, o.id)).orderBy(desc(s.fulfillment.createdAt));
+      const lines = await tx
+        .select({
+          sku: s.orderLine.variantSku, name: s.orderLine.variantName, quantity: s.orderLine.quantity,
+          unitPrice: s.orderLine.unitPrice, lineTotal: s.orderLine.lineTotal,
+          isPreOrder: s.productVariant.isPreOrder, shipDate: s.productVariant.shipDate,
+        })
+        .from(s.orderLine)
+        .leftJoin(s.productVariant, eq(s.orderLine.variantId, s.productVariant.id))
+        .where(eq(s.orderLine.orderId, o.id));
+      return {
+        code: o.code, state: o.state, placedAt: o.placedAt?.toISOString() ?? null,
+        currency: o.currency,
+        subtotal: o.subtotal, shippingTotal: o.shippingTotal, taxTotal: o.taxTotal,
+        discountTotal: o.discountTotal, grandTotal: o.grandTotal,
+        shippingAddress: o.shippingAddress ?? null,
+        fulfillments: fuls.map(f => ({
+          state: f.state, trackingCode: f.trackingCode, carrier: f.carrier,
+          updatedAt: f.updatedAt?.toISOString() ?? null,
+        })),
+        lines: lines.map(l => ({
+          ...l, isPreOrder: l.isPreOrder ?? false,
+          shipDate: l.shipDate?.toISOString() ?? null,
+        })),
+      };
     });
     if (!out) return c.json({ error: 'order not found for that code + email' }, 404);
     return c.json(out, 200);
