@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve, extname, sep } from 'node:path';
-import { allowedDemoRequest, allowedDemoBody } from './policy.mjs';
+import { allowedDemoRequest, allowedDemoBody, demoBindHost } from './policy.mjs';
 import { assertDemoData, cleanDemo, demoCounts } from './safety.mjs';
 import { createHash } from 'node:crypto';
 
@@ -37,6 +37,7 @@ const directory = resolve(fileURLToPath(new URL('.', import.meta.url)));
 const adminRoot = resolve(directory, '../../packages/admin/dist');
 const allowedHosts = new Set(['127.0.0.1', 'localhost', 'demo.sellright.cc']);
 const port = Number(process.env.DEMO_PORT ?? 4310);
+const bindHost = demoBindHost(process.env.DEMO_BIND_HOST);
 const buckets = new Map();
 const mime = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.woff2': 'font/woff2', '.png': 'image/png', '.svg': 'image/svg+xml', '.webp': 'image/webp' };
 let creatingCarts = 0;
@@ -156,7 +157,7 @@ const server = createServer(async (req, res) => {
 });
 server.requestTimeout = 15000;
 server.headersTimeout = 10000;
-server.listen(port, '127.0.0.1', () => console.log('SellRight isolated demo: http://127.0.0.1:' + port + '/shop'));
+server.listen(port, bindHost, () => console.log('SellRight isolated demo listening on ' + bindHost + ':' + port));
 const cleanup = setInterval(async () => {
   try {
     await cleanDemo(pool);

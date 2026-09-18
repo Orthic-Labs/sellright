@@ -2,7 +2,7 @@
 
 This is a real SellRight deployment with a small reference shop, the existing admin and synthetic catalog/order rows. It is not merchant acceptance evidence. No real payments, shipments or customer information belong here.
 
-The reference deployment uses a separate PostgreSQL 17 cluster, private Unix socket and non-owner runtime role. Nothing connects to an existing merchant or development-clone database. The public service binds only to localhost:4310; the reverse proxy must route a dedicated demo hostname to it.
+The reference deployment uses a separate PostgreSQL 17 cluster, private Unix socket and non-owner runtime role. Nothing connects to an existing merchant or development-clone database. The service defaults to localhost:4310. The only alternate binding is the designated private nginx Docker bridge, `172.22.0.1`; public and wildcard bindings are rejected.
 
 ## Safety Contract
 
@@ -69,6 +69,27 @@ Browse `http://127.0.0.1:4310/shop`; `/enter` creates a short-lived read-only ad
 Route only `demo.sellright.cc` through an authenticated, TLS-enabled origin proxy. Preserve Host and scheme, use Cloudflare origin locking when Cloudflare fronts it, and keep the backend/database ports off the public network. Do not reuse a merchant vhost, customer database, gateway account or mail configuration.
 
 On the server's Dockerized nginx, add the vhost to the Dockerfile COPY list as well as the configuration directory. Validate the new image/config before switching it. DNS/TLS/proxy setup and a public HTTPS browser check are required before calling the demo public.
+
+`nginx.conf.example` is the dedicated vhost template. Provision its matching
+certificate using the existing certificate-management workflow first. Configure
+Cloudflare's proxied DNS record and Full (strict) TLS; do not reuse a different
+hostname's certificate or weaken TLS verification. The nginx build must include
+`COPY sellright-demo.conf /etc/nginx/conf.d/sellright-demo.conf` and retain the
+existing origin-lock configuration. Privileged certificate/proxy commands follow
+the host's operator access rules.
+
+When the private proxy path is ready, switch only the demo listener:
+
+```sh
+DEMO_BIND_HOST=172.22.0.1 pm2 restart sellright-demo --update-env
+curl --fail -H 'Host: demo.sellright.cc' http://172.22.0.1:4310/v1/readyz
+pm2 save
+```
+
+Confirm the listener is on the private bridge only, validate/rebuild the nginx
+image, then verify `https://demo.sellright.cc/v1/readyz`, `/shop` and `/enter`
+through Cloudflare. Direct-origin requests must remain forbidden. Loopback
+rollback is `DEMO_BIND_HOST=127.0.0.1 pm2 restart sellright-demo --update-env`.
 
 The apex product domain is deliberately not accepted by the demo wrapper. Route it explicitly to product documentation or a separately reviewed product page.
 

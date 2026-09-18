@@ -1,6 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { allowedDemoRequest, allowedDemoBody } from './policy.mjs';
+import { allowedDemoRequest, allowedDemoBody, demoBindHost } from './policy.mjs';
+
+test('demo listener rejects wildcard and public interface binding', () => {
+  assert.equal(demoBindHost(), '127.0.0.1');
+  assert.equal(demoBindHost('172.22.0.1'), '172.22.0.1');
+  for (const host of ['0.0.0.0', '::', '203.0.113.10', 'localhost']) {
+    assert.throws(() => demoBindHost(host));
+  }
+});
 
 test('demo blocks payment, identity, export, secrets and admin mutations', () => {
   for (const path of ['/v1/admin/settings', '/v1/admin/staff', '/v1/admin/orders/export',

@@ -3,6 +3,13 @@ const adminReads = new Set([
   'customers', 'reports', 'activity', 'locations', 'promotions', 'returns',
 ]);
 
+export function demoBindHost(host = '127.0.0.1') {
+  if (!['127.0.0.1', '172.22.0.1'].includes(host)) {
+    throw new Error('Demo listener must use loopback or the designated private nginx bridge');
+  }
+  return host;
+}
+
 export function allowedDemoRequest(method, pathname) {
   if (method === 'GET' || method === 'HEAD') {
     if (['/v1/health', '/v1/readyz', '/v1/shop/config'].includes(pathname)) return true;

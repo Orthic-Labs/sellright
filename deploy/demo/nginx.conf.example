@@ -1,0 +1,34 @@
+# Requires a certificate naming demo.sellright.cc before activation.
+# Copy as sellright-demo.conf and add its COPY to the nginx image Dockerfile.
+# Never reuse another site's certificate or disable TLS hostname validation.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name demo.sellright.cc;
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+    location / { return 301 https://demo.sellright.cc$request_uri; }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name demo.sellright.cc;
+    include /etc/nginx/conf.d/cf-enforce.inc;
+    ssl_certificate /etc/letsencrypt/live/demo.sellright.cc/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/demo.sellright.cc/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    client_max_body_size 16k;
+    add_header Strict-Transport-Security "max-age=86400" always;
+    location / {
+        proxy_pass http://172.22.0.1:4310;
+        proxy_http_version 1.1;
+        proxy_set_header Host demo.sellright.cc;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 20s;
+        proxy_send_timeout 20s;
+        proxy_hide_header X-Powered-By;
+    }
+}
