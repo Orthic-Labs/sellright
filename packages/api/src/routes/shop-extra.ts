@@ -3,11 +3,16 @@ import { and, desc, eq, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
-import { isMethodEligible, shippingRate } from '../shipping/calculator.js';
+import { priceCart } from './cart.js';
+import { customerToken } from '../auth/session.js';
+import { calculateOrderTotals } from '../money/totals.js';
+import { isMethodEligible, shippingRate, type ShippingCalculator } from '../shipping/calculator.js';
 import { clientIp } from '../auth/rate-limit.js';
 import { newsletterRetryAfter, recordNewsletterAttempt } from './shop-extra.newsletter-limit.js';
 import { enqueueEmail } from '../email/outbox.js';
 import { sendSubscriberConfirmation } from './shop-extra.subscriber.js';
+import { contactRoutes } from './contact.js';
+import { restockRoutes } from './restock.js';
 
 export const shopExtra = new OpenAPIHono();
 
@@ -26,13 +31,35 @@ shopExtra.openapi(
     const out = await withStore(st.id, async (tx) => {
       const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
       if (!o) return null;
-      // email must match the order's customer or the shipping snapshot.
-      let ok = false;
-      if (o.customerId) { const [cu] = await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, o.customerId)).limit(1); ok = cu?.email?.toLowerCase() === email.toLowerCase(); }
+      // email must match the order's customer or the checkout contact snapshot.
+      let ok = (o.metadata as { contact?: { email?: string } } | null)?.contact?.email?.toLowerCase() === email.toLowerCase();
+      if (!ok && o.customerId) { const [cu] = await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, o.customerId)).limit(1); ok = cu?.email?.toLowerCase() === email.toLowerCase(); }
       if (!ok) return null;
-      const [ful] = await tx.select().from(s.fulfillment).where(eq(s.fulfillment.orderId, o.id)).orderBy(desc(s.fulfillment.createdAt)).limit(1);
-      const lines = await tx.select({ name: s.orderLine.variantName, quantity: s.orderLine.quantity }).from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
-      return { code: o.code, state: o.state, placedAt: o.placedAt?.toISOString() ?? null, grandTotal: o.grandTotal, currency: o.currency, fulfillment: ful ? { state: ful.state, trackingCode: ful.trackingCode, carrier: ful.carrier } : null, lines };
+      const fuls = await tx.select().from(s.fulfillment).where(eq(s.fulfillment.orderId, o.id)).orderBy(desc(s.fulfillment.createdAt));
+      const lines = await tx
+        .select({
+          sku: s.orderLine.variantSku, name: s.orderLine.variantName, quantity: s.orderLine.quantity,
+          unitPrice: s.orderLine.unitPrice, lineTotal: s.orderLine.lineTotal,
+          isPreOrder: s.productVariant.isPreOrder, shipDate: s.productVariant.shipDate,
+        })
+        .from(s.orderLine)
+        .leftJoin(s.productVariant, eq(s.orderLine.variantId, s.productVariant.id))
+        .where(eq(s.orderLine.orderId, o.id));
+      return {
+        code: o.code, state: o.state, placedAt: o.placedAt?.toISOString() ?? null,
+        currency: o.currency,
+        subtotal: o.subtotal, shippingTotal: o.shippingTotal, taxTotal: o.taxTotal,
+        discountTotal: o.discountTotal, grandTotal: o.grandTotal,
+        shippingAddress: o.shippingAddress ?? null,
+        fulfillments: fuls.map(f => ({
+          state: f.state, trackingCode: f.trackingCode, carrier: f.carrier,
+          updatedAt: f.updatedAt?.toISOString() ?? null,
+        })),
+        lines: lines.map(l => ({
+          ...l, isPreOrder: l.isPreOrder ?? false,
+          shipDate: l.shipDate?.toISOString() ?? null,
+        })),
+      };
     });
     if (!out) return c.json({ error: 'order not found for that code + email' }, 404);
     return c.json(out, 200);
@@ -74,15 +101,15 @@ shopExtra.openapi(
 shopExtra.openapi(
   createRoute({
     method: 'get', path: '/v1/shop/shipping-methods', summary: 'Eligible shipping methods for a cart',
-    request: { query: z.object({ country: z.string().optional(), subtotal: z.coerce.number().int().default(0) }) },
+    request: { query: z.object({ country: z.string().optional(), subtotal: z.coerce.number().int().default(0), discountedSubtotalWithTax: z.coerce.number().int().nonnegative().optional() }) },
     responses: { 200: { description: 'OK', content: J(z.object({ methods: z.array(z.unknown()) })) } },
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
-    const { country, subtotal } = c.req.valid('query');
+    const { country, subtotal, discountedSubtotalWithTax } = c.req.valid('query');
     const methods = await withStore(st.id, async (tx) => tx.select().from(s.shippingMethod).where(eq(s.shippingMethod.enabled, true)));
     const eligible = methods
-      .filter((m) => isMethodEligible(m.calculator, { subtotal, country }))
+      .filter((m) => isMethodEligible(m.calculator, { subtotal, country, discountedSubtotalWithTax }))
       .map((m) => ({ code: m.code, name: m.name, rate: shippingRate(m.calculator) }));
     return c.json({ methods: eligible }, 200);
   },
@@ -294,3 +321,39 @@ shopExtra.openapi(
     return c.json({ ok: true }, 200);
   },
 );
+
+const ShippingQuoteIn = z.object({
+  country: z.string().length(2),
+  items: z.array(z.object({ sku: z.string().min(1), quantity: z.number().int().min(1).max(10000) })).min(1).max(500),
+  couponCode: z.string().optional(),
+});
+
+// Quote from server-priced items so shipping thresholds include discounts and tax.
+shopExtra.openapi(createRoute({
+  method: 'post', path: '/v1/shop/shipping-methods', summary: 'Quote shipping from cart items',
+  request: { body: { content: J(ShippingQuoteIn) } },
+  responses: { 200: { description: 'Quoted methods', content: J(z.any()) } },
+}), async c => {
+  const st = await resolveStoreFromCtx(c);
+  const body = c.req.valid('json') as z.infer<typeof ShippingQuoteIn>;
+  const methods = await withStore(st.id, async tx => {
+    const quote = await priceCart(tx, st, body.items, { shipCountry: body.country, couponCode: body.couponCode, token: customerToken(c) });
+    if (quote.unavailable.length) return [];
+    const methods = await tx.select().from(s.shippingMethod).where(eq(s.shippingMethod.enabled, true));
+    return methods.filter(method => isMethodEligible(method.calculator, { country: body.country,
+      subtotal: quote.subtotal, discountedSubtotalWithTax: quote.grandTotal })).map(method => {
+      const calc = method.calculator as ShippingCalculator;
+      const total = calculateOrderTotals({ lines: [], shipping: shippingRate(calc), taxRate: st.taxRate,
+        taxInclusive: st.taxInclusive, shippingTaxable: st.shippingTaxable,
+        shippingTaxRate: calc.taxRate, shippingTaxInclusive: calc.taxInclusive });
+      return { code: method.code, name: method.name, rate: shippingRate(calc), priceWithTax: total.grandTotal };
+    });
+  });
+  return c.json({ methods }, 200);
+});
+
+// PAR-01 / PAR-05: contact form (signed confirm-before-deliver) and the
+// back-in-stock request endpoints. Mounted here so app.ts needs no edit —
+// shopExtra is already on the app.
+shopExtra.route('/', contactRoutes);
+shopExtra.route('/', restockRoutes);

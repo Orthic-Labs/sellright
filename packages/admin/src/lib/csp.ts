@@ -6,7 +6,7 @@
  * script in index.html, so dev relaxes `script-src` with 'unsafe-inline'
  * to avoid dev-only console errors. The PROD bundle ships neither.
  *
- * `nginx-admin.conf` mirrors CSP_PROD verbatim — see csp-headers.test.ts.
+ * `nginx.conf.template` mirrors CSP_PROD verbatim — see csp-headers.test.ts.
  */
 
 export const CSP_PROD = [
@@ -33,5 +33,15 @@ export const CSP_DEV = [
   "object-src 'none'",
 ].join('; ');
 
+/**
+ * Modes served by the Vite DEV server (`vite`, `vite --mode qa`) get CSP_DEV:
+ * the dev server always injects @vitejs/plugin-react's inline refresh preamble
+ * and the HMR client over ws://, both of which CSP_PROD forbids — serving the
+ * prod CSP under `--mode qa` blanked the page (SR-13). Unknown modes stay on
+ * CSP_PROD (fail-closed). The strict CSP is exercised against the built bundle
+ * via `vite preview` + nginx instead.
+ */
+const DEV_SERVER_MODES = new Set(['development', 'qa']);
+
 export const cspFor = (mode: string): string =>
-  mode === 'development' ? CSP_DEV : CSP_PROD;
+  DEV_SERVER_MODES.has(mode) ? CSP_DEV : CSP_PROD;

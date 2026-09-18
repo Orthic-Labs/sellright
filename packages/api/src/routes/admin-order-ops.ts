@@ -1,8 +1,10 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
+import { hasUnresolvedPayment } from '../payments/hold.js';
 import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
+import { dispute } from '../db/schema-ops.js';
 import { HttpError, J, errBody, money, Page, requireAdmin, requireStore, requireWrite, requireManage, requirePermission, guard } from './admin-helpers.js';
 import { calculateOrderTotals } from '../money/totals.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
@@ -10,8 +12,9 @@ import { reserveStockOrThrow, StockReservationError, validateReservableItems } f
 import { normalizeEmail } from '../auth/email.js';
 import { resolveTaxRate } from '../money/tax.js';
 import { emitEvent } from '../webhooks/emit.js';
-import { sendShippingNotification } from '../email/dispatch.js';
+import { enqueueShippingNotification } from '../email/dispatch.js';
 import { csvCell, inferCarrier, orderCode, unitPrice } from './admin-order-utils.js';
+import { variantPriceRuleFromConfig } from '../money/pricing.js';
 import { issueLicensesForPaidOrder } from '../licensing/issue.js';
 import { err as logErr } from '../lib/logger.js';
 
@@ -48,12 +51,12 @@ adminOrderOps.openapi(
       const blocked = validateReservableItems(items, bySku);
       if (blocked.length) return { kind: 'blocked' as const, skus: blocked };
       await reserveStockOrThrow(tx, st.storeId, items, bySku);
-      const priced = items.map((i) => { const v = bySku.get(i.sku)!; return { v, qty: i.quantity, unitPrice: unitPrice(v) }; });
       // Mirror the edit-lines path: resolve the destination tax zone and honour the
       // store's tax-inclusive flag. Omitting taxInclusive here mispriced every
       // tax-inclusive store's manual/phone orders.
-      const [storeRow] = await tx.select({ taxRate: s.store.taxRate, taxInclusive: s.store.taxInclusive, shippingTaxable: s.store.shippingTaxable }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1);
+      const [storeRow] = await tx.select({ taxRate: s.store.taxRate, taxInclusive: s.store.taxInclusive, shippingTaxable: s.store.shippingTaxable, config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1);
       if (!storeRow) throw new HttpError(404, 'store not found');
+      const priced = items.map((i) => { const v = bySku.get(i.sku)!; return { v, qty: i.quantity, unitPrice: unitPrice(v, variantPriceRuleFromConfig(storeRow.config)) }; });
       const shipCountry = (body.shippingAddress as { country?: string } | null | undefined)?.country ?? null;
       const zones = await tx.select({ countries: s.taxZone.countries, rate: s.taxZone.rate, priority: s.taxZone.priority }).from(s.taxZone).where(eq(s.taxZone.enabled, true));
       const taxRate = resolveTaxRate(zones, shipCountry, storeRow.taxRate);
@@ -160,7 +163,8 @@ adminOrderOps.openapi(
     const { rows } = c.req.valid('json');
     const result = await withStore(st.storeId, async (tx) => {
       let updated = 0; const errors: { code: string; error: string }[] = [];
-      const notifications: Array<{ email: string; code: string; tracking: string; carrier: string | null }> = [];
+      const [storeRow] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1);
+      const storeCtx = { name: st.name, currency: st.currency, config: storeRow?.config ?? null };
       for (const row of rows) {
         const [o] = await tx.select().from(s.order).where(eq(s.order.code, row.code)).limit(1);
         if (!o) { errors.push({ code: row.code, error: 'order not found' }); continue; }
@@ -175,9 +179,9 @@ adminOrderOps.openapi(
           await tx.insert(s.fulfillment).values({ storeId: st.storeId, orderId: o.id, state: 'Shipped', trackingCode: row.tracking, carrier });
           const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
           for (const l of lines) {
-            const ship = l.quantity - l.fulfilledQty;
+            const ship = l.quantity - l.fulfilledQty - l.cancelledQty;
             if (ship <= 0) continue;
-            await tx.update(s.orderLine).set({ fulfilledQty: l.quantity }).where(eq(s.orderLine.id, l.id));
+            await tx.update(s.orderLine).set({ fulfilledQty: l.quantity - l.cancelledQty }).where(eq(s.orderLine.id, l.id));
             if (l.variantId) {
               await tx.update(s.stock).set({ onHand: sql`greatest(${s.stock.onHand} - ${ship}, 0)`, allocated: sql`greatest(${s.stock.allocated} - ${ship}, 0)` }).where(and(eq(s.stock.variantId, l.variantId), eq(s.stock.storeId, st.storeId)));
               await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: l.variantId, delta: -ship, reason: 'fulfillment', refOrderId: o.id });
@@ -192,16 +196,15 @@ adminOrderOps.openapi(
         await emitEvent(tx, st.storeId, 'order.shipped', { code: o.code, trackingCode: row.tracking, carrier });
         if (o.customerId) {
           const [cust] = await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, o.customerId)).limit(1);
-          if (cust?.email) notifications.push({ email: cust.email, code: o.code, tracking: row.tracking, carrier });
+          // SR-05/SR-12: durable outbox send inside the same txn (per-store
+          // sender/links, dedupe on first Shipped transition) — never an
+          // inline post-commit send that can be lost to an SMTP blip.
+          if (cust?.email) await enqueueShippingNotification(tx, st.storeId, storeCtx, cust.email, { code: o.code, trackingCode: row.tracking, carrier, dedupeKey: `shipping_notification:${o.id}:Shipped` });
         }
         updated++;
       }
-      return { updated, errors, notifications };
+      return { updated, errors };
     });
-    // WP2: fire-and-forget emails (failure here doesn't fail the import).
-    for (const n of result.notifications) {
-      try { await sendShippingNotification({ name: st.name, currency: st.currency }, n.email, { code: n.code, trackingCode: n.tracking, carrier: n.carrier }); } catch (e) { logErr.error('email shipping failed', e, { orderCode: n.code }); }
-    }
     return c.json({ updated: result.updated, errors: result.errors }, 200);
   }),
 );
@@ -227,12 +230,13 @@ adminOrderOps.openapi(
       const r = await withStore(st.storeId, async (tx): Promise<{ ok: true } | { ok: false; error: string }> => {
         const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
         if (!o) return { ok: false, error: 'order not found' };
+        if (await hasUnresolvedPayment(tx, o.id)) return { ok: false, error: 'Resolve the pending payment before cancelling' };
         if (o.state === 'Cancelled') return { ok: false, error: 'already cancelled' };
         if (o.state !== 'PendingPayment') return { ok: false, error: `paid order — use Refund (state ${o.state})` };
         if (!canTransition(o.state as OrderState, 'Cancelled')) return { ok: false, error: `cannot cancel from ${o.state}` };
         const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
         for (const l of lines) {
-          const rel = l.quantity - l.fulfilledQty;
+          const rel = l.quantity - l.fulfilledQty - l.cancelledQty;
           if (rel > 0 && l.variantId) {
             await tx.update(s.stock).set({ allocated: sql`greatest(${s.stock.allocated} - ${rel}, 0)` })
               .where(and(eq(s.stock.variantId, l.variantId), eq(s.stock.storeId, st.storeId)));
@@ -327,6 +331,7 @@ adminOrderOps.openapi(
         const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
         if (!o) return { ok: false, error: 'order not found' };
         if (!o.deletedAt) return { ok: false, error: 'trash the order first (purge only removes trashed orders)' };
+        if (await hasUnresolvedPayment(tx, o.id)) return { ok: false, error: 'Resolve the pending payment before purging' };
         const isPaid = o.state === 'Paid' || o.state === 'PartiallyRefunded' || o.state === 'Refunded';
         if (isPaid && !force) return { ok: false, error: `paid order — purge requires force + reason (state ${o.state})` };
         if (isPaid && force && !reason) return { ok: false, error: 'force-purging a paid order requires a reason' };
@@ -363,6 +368,17 @@ adminOrderOps.openapi(
         // A subscription's backing order (nullable FK) — detach so the order can be
         // purged; the subscription row (Stripe link) is kept.
         await tx.update(s.subscription).set({ orderId: null }).where(eq(s.subscription.orderId, o.id));
+        // Dispute rows are an operator/compliance ledger — dispute.order_id and
+        // dispute.payment_id are nullable back-refs, so detach rather than delete
+        // the dispute record itself (a chargeback must survive order purge).
+        await tx.update(dispute).set({ orderId: null }).where(eq(dispute.orderId, o.id));
+        const pays = await tx.select({ id: s.payment.id }).from(s.payment).where(eq(s.payment.orderId, o.id));
+        if (pays.length) await tx.update(dispute).set({ paymentId: null })
+          .where(inArray(dispute.paymentId, pays.map((p) => p.id)));
+        const attempts = await tx.select().from(s.paymentAttempt).where(eq(s.paymentAttempt.orderId, o.id));
+        if (attempts.length) await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email,
+          entity: 'order', entityId: o.id, action: 'archive_payment_attempts', data: { attempts } });
+        await tx.delete(s.paymentAttempt).where(eq(s.paymentAttempt.orderId, o.id));
         await tx.delete(s.payment).where(eq(s.payment.orderId, o.id));
         await tx.delete(s.orderLine).where(eq(s.orderLine.orderId, o.id));
         await tx.delete(s.order).where(eq(s.order.id, o.id));

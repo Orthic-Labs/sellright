@@ -1,5 +1,6 @@
 import { argon2, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
+import { compare as compareBcrypt } from 'bcryptjs';
 
 const scryptA = promisify(scrypt);
 
@@ -100,10 +101,17 @@ async function verifyLegacyScrypt(password: string, stored: string): Promise<boo
   return timingSafeEqual(derived, expected);
 }
 
+/** Vendure customer hashes only; cap work factors before invoking bcrypt. */
+export function isLegacyBcryptHash(stored: string): boolean {
+  const match = /^\$2[aby]\$(\d{2})\$[./A-Za-z0-9]{53}$/.exec(stored);
+  return !!match && Number(match[1]) >= 4 && Number(match[1]) <= 14;
+}
+
 export async function verifyPassword(password: string, stored: string | null): Promise<boolean> {
   if (!stored) return false;
 
   try {
+    if (isLegacyBcryptHash(stored)) return compareBcrypt(password, stored.replace(/^\$2y\$/, '$2b$'));
     const parsed = parseArgon2(stored);
     if (parsed) {
       const derived = await argon2id(
@@ -132,7 +140,7 @@ export async function verifyPassword(password: string, stored: string | null): P
 export function passwordNeedsRehash(stored: string | null): boolean {
   if (!stored) return false;
   const parsed = parseArgon2(stored);
-  if (!parsed) return stored.startsWith('scrypt$');
+  if (!parsed) return stored.startsWith('scrypt$') || isLegacyBcryptHash(stored);
   return parsed.memory !== ARGON2_MEMORY_KIB ||
     parsed.passes !== ARGON2_PASSES ||
     parsed.parallelism !== ARGON2_PARALLELISM ||

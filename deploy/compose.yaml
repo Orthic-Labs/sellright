@@ -18,6 +18,47 @@ services:
       start_period: 10s
     networks: [private]
 
+  # SR-01: one-shot role provisioning. The POSTGRES_USER bootstrap superuser
+  # (sellright) owns schema + migrations; request serving must run as a
+  # dedicated NOSUPERUSER NOBYPASSRLS role so FORCE RLS tenant isolation holds
+  # at runtime. Idempotent: re-runs on every `up`, converges the role, grants,
+  # and default privileges for future tables created by migrations.
+  db-init:
+    image: postgres:17-bookworm
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      APP_ROLE_PASSWORD: ${POSTGRES_APP_PASSWORD:?set POSTGRES_APP_PASSWORD in deploy/.env}
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        psql -v ON_ERROR_STOP=1 -v app_pass="$${APP_ROLE_PASSWORD}" \
+          "postgresql://sellright:${POSTGRES_PASSWORD}@postgres:5432/sellright" <<'SQL'
+        DO $$$$
+        BEGIN
+          IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'sellright_app') THEN
+            CREATE ROLE sellright_app LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+          END IF;
+        END
+        $$$$;
+        ALTER ROLE sellright_app WITH LOGIN PASSWORD :'app_pass';
+        GRANT CONNECT ON DATABASE sellright TO sellright_app;
+        GRANT USAGE ON SCHEMA public TO sellright_app;
+        GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO sellright_app;
+        GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO sellright_app;
+        ALTER DEFAULT PRIVILEGES FOR ROLE sellright IN SCHEMA public
+          GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO sellright_app;
+        ALTER DEFAULT PRIVILEGES FOR ROLE sellright IN SCHEMA public
+          GRANT USAGE, SELECT ON SEQUENCES TO sellright_app;
+        ALTER DEFAULT PRIVILEGES FOR ROLE sellright IN SCHEMA public
+          GRANT EXECUTE ON FUNCTIONS TO sellright_app;
+        SQL
+    networks: [private]
+
   api:
     image: sellright-api:local
     build:
@@ -27,10 +68,17 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
     environment:
       NODE_ENV: production
       PORT: 3300
-      DATABASE_URL: postgresql://sellright:${POSTGRES_PASSWORD}@postgres:5432/sellright
+      # Runtime serves requests as the non-owner app role (NOSUPERUSER
+      # NOBYPASSRLS). The privileged migration URL below is used ONLY by the
+      # migrate/bootstrap steps in `command`; index.js never sees it. The API
+      # asserts at boot that its runtime role is not superuser/BYPASSRLS.
+      DATABASE_URL: postgresql://sellright_app:${POSTGRES_APP_PASSWORD}@postgres:5432/sellright
+      DATABASE_URL_MIGRATE: postgresql://sellright:${POSTGRES_PASSWORD}@postgres:5432/sellright
       STOREFRONT_URL: ${STOREFRONT_URL:?set STOREFRONT_URL in deploy/.env}
       ASSET_DIR: /app/var/assets
       DOWNLOAD_DIR: /app/var/downloads
@@ -47,6 +95,7 @@ services:
       STRIPE_SECRET_KEY_LIVE: ${STRIPE_SECRET_KEY_LIVE:-}
       STRIPE_PUBLISHABLE_KEY_LIVE: ${STRIPE_PUBLISHABLE_KEY_LIVE:-}
       STRIPE_WEBHOOK_SECRET_LIVE: ${STRIPE_WEBHOOK_SECRET_LIVE:-}
+      GATEWAY_ACCOUNTS_JSON_FILE: /run/secrets/gateway_accounts
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USER: ${SMTP_USER:-}
@@ -61,7 +110,19 @@ services:
     volumes:
       - assets:/app/var/assets
       - downloads:/app/var/downloads
+    secrets:
+      - gateway_accounts
     networks: [private]
+    # Same lifecycle as the Dockerfile CMD, but schema migrations and the
+    # create-only bootstrap run as the privileged migration role while the
+    # request-serving process keeps the non-owner DATABASE_URL.
+    command:
+      - sh
+      - -c
+      - |
+        DATABASE_URL="$${DATABASE_URL_MIGRATE}" node dist/scripts/migrate.js &&
+        DATABASE_URL="$${DATABASE_URL_MIGRATE}" node dist/scripts/bootstrap.js &&
+        exec node dist/index.js
 
   admin:
     image: sellright-admin:local
@@ -106,3 +167,7 @@ volumes:
 networks:
   private:
     driver: bridge
+
+secrets:
+  gateway_accounts:
+    file: ${GATEWAY_ACCOUNTS_FILE:-./gateway-accounts.json}

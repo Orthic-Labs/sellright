@@ -36,24 +36,6 @@ updates:
     labels:
       - dependencies
 
-  - package-ecosystem: npm
-    directory: /packages/storefront
-    schedule:
-      interval: weekly
-      day: monday
-      time: '05:30'
-      timezone: Asia/Kolkata
-    open-pull-requests-limit: 10
-    groups:
-      storefront-runtime:
-        patterns:
-          - '*'
-        update-types:
-          - minor
-          - patch
-    labels:
-      - dependencies
-
   - package-ecosystem: github-actions
     directory: /
     schedule:

@@ -274,7 +274,7 @@ const alignCls = (a?: 'left' | 'center' | 'right') => (a === 'right' ? 'text-rig
 
 export function ResourceTable<T>({
   columns, rows, rowKey, onRowClick, loading, isFetching, error, onRetry, empty, skeletonRows = 8,
-  selection, toolbar,
+  selection, toolbar, minWidth = '36rem',
 }: {
   columns: Column<T>[];
   rows: T[] | undefined;
@@ -286,6 +286,13 @@ export function ResourceTable<T>({
   onRetry?: () => void;
   empty?: ReactNode;
   skeletonRows?: number;
+  /**
+   * Minimum table width (SR-14). The table is `table-fixed w-full`, so below
+   * this width percentage columns crush into unreadable fragments — instead,
+   * the card scrolls horizontally (same overflow-x-auto pattern as
+   * ProductDetail) and document-level layout never overflows.
+   */
+  minWidth?: string;
   /**
    * Optional row selection. When provided, a checkbox column is rendered and
    * `onSelectionChange` is called with the new set of selected row keys.
@@ -331,21 +338,23 @@ export function ResourceTable<T>({
   if (loading) {
     return (
       <div className="card overflow-hidden">
-        <table className="w-full table-fixed">
-          {head}
-          <tbody>
-            {Array.from({ length: skeletonRows }).map((_, i) => (
-              <tr key={i}>
-                {headCheckbox !== null && <td className="td"><SkeletonBlock className="h-4 w-4" /></td>}
-                {columns.map((c) => (
-                  <td key={c.key} className={`td ${alignCls(c.align)}`}>
-                    <SkeletonBlock className={`h-4 ${c.align === 'right' ? 'ml-auto w-12' : c.align === 'center' ? 'mx-auto w-10' : 'w-3/4'}`} />
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="overflow-x-auto">
+          <table className="w-full table-fixed" style={{ minWidth }}>
+            {head}
+            <tbody>
+              {Array.from({ length: skeletonRows }).map((_, i) => (
+                <tr key={i}>
+                  {headCheckbox !== null && <td className="td"><SkeletonBlock className="h-4 w-4" /></td>}
+                  {columns.map((c) => (
+                    <td key={c.key} className={`td ${alignCls(c.align)}`}>
+                      <SkeletonBlock className={`h-4 ${c.align === 'right' ? 'ml-auto w-12' : c.align === 'center' ? 'mx-auto w-10' : 'w-3/4'}`} />
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     );
   }
@@ -363,33 +372,35 @@ export function ResourceTable<T>({
           <div className="ml-auto flex items-center gap-2">{toolbar(selectedCount)}</div>
         </div>
       )}
-      <table className="w-full table-fixed">
-        {head}
-        <tbody className={isFetching ? 'opacity-60 transition-opacity' : 'transition-opacity'}>
-          {rows.map((row) => {
-            const key = rowKey(row);
-            const isSelected = !!selection?.selectedKeys.has(key);
-            return (
-              <tr key={key} className={`${onRowClick ? 'row-link' : ''} ${isSelected ? 'bg-brand-light/40' : ''}`} onClick={onRowClick ? () => onRowClick(row) : undefined}>
-                {selection && (
-                  <td className="td" onClick={(e) => e.stopPropagation()}>
-                    <input
-                      type="checkbox"
-                      aria-label={`Select row ${key}`}
-                      className="h-4 w-4 accent-brand align-middle"
-                      checked={isSelected}
-                      onChange={() => selection.onToggle(key)}
-                    />
-                  </td>
-                )}
-                {columns.map((c) => (
-                  <td key={c.key} className={`td ${alignCls(c.align)} ${c.className ?? ''}`}>{c.render(row)}</td>
-                ))}
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+      <div className="overflow-x-auto">
+        <table className="w-full table-fixed" style={{ minWidth }}>
+          {head}
+          <tbody className={isFetching ? 'opacity-60 transition-opacity' : 'transition-opacity'}>
+            {rows.map((row) => {
+              const key = rowKey(row);
+              const isSelected = !!selection?.selectedKeys.has(key);
+              return (
+                <tr key={key} className={`${onRowClick ? 'row-link' : ''} ${isSelected ? 'bg-brand-light/40' : ''}`} onClick={onRowClick ? () => onRowClick(row) : undefined}>
+                  {selection && (
+                    <td className="td" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        aria-label={`Select row ${key}`}
+                        className="h-4 w-4 accent-brand align-middle"
+                        checked={isSelected}
+                        onChange={() => selection.onToggle(key)}
+                      />
+                    </td>
+                  )}
+                  {columns.map((c) => (
+                    <td key={c.key} className={`td ${alignCls(c.align)} ${c.className ?? ''}`}>{c.render(row)}</td>
+                  ))}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

@@ -1,9 +1,0 @@
-mutation transitionOrderToState($state: String!) {
-  transitionOrderToState(state: $state) {
-    ...CustomOrderDetail
-    ... on ErrorResult {
-      errorCode
-      message
-    }
-  }
-}

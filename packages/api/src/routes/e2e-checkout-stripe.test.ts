@@ -109,7 +109,7 @@ afterAll(async () => { await wipe(); await pool.end(); });
       body: JSON.stringify({ items: [{ sku: 'E2E-LIC-1', quantity: 1 }] }),
     });
     expect(cartRes.status).toBe(200);
-    const cart = await cartRes.json() as { token: string; grandTotal: number };
+    const cart = await cartRes.json() as { token: string; grandTotal: number; revision: number };
     expect(cart.token).toBeTruthy();
     expect(cart.grandTotal).toBe(2500);
 
@@ -125,7 +125,7 @@ afterAll(async () => { await wipe(); await pool.end(); });
     };
     const checkoutRes = await app.request('/v1/shop/checkout', {
       method: 'POST', headers: hdr(),
-      body: JSON.stringify({ cartToken: cart.token, email: 'e2e-buyer@test.local', shippingAddress: shipAddr }),
+      body: JSON.stringify({ cartToken: cart.token, expectedRevision: cart.revision, email: 'e2e-buyer@test.local', shippingAddress: shipAddr }),
     });
     expect(checkoutRes.status).toBe(200);
     const checkoutBody = await checkoutRes.json() as { code: string; state: string; grandTotal: number; receiptToken: string };

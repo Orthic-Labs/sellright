@@ -7,9 +7,12 @@
  * payment simply because a public client named the method.
  */
 import { stripeProvider } from './stripe.js';
+import { nmiProvider } from './nmi.js';
+import { sezzleProvider } from './sezzle.js';
+import type { GatewayAccount } from './gateway-account.js';
 
 export interface PaymentResult {
-  state: 'Settled' | 'Authorized' | 'Declined' | 'Failed';
+  state: 'Settled' | 'Authorized' | 'Pending' | 'Declined' | 'Failed';
   providerRef: string | null;
   metadata?: unknown;
   errorMessage?: string | null;
@@ -17,6 +20,10 @@ export interface PaymentResult {
 
 export interface CreatePaymentInput {
   orderCode: string;
+  storeId?: string;
+  attemptId?: string;
+  gateway?: GatewayAccount;
+  billingAddress?: Record<string, unknown>;
   amount: number; // cents
   currency: string;
   /** Tokenized input from the client (never raw PAN). Shape is provider-specific. */
@@ -25,6 +32,7 @@ export interface CreatePaymentInput {
 }
 
 export interface RefundInput {
+  gateway?: GatewayAccount;
   /** The settled payment's provider reference (e.g. Stripe payment_intent id). */
   providerRef: string | null;
   amount: number; // cents
@@ -107,7 +115,7 @@ export const giftCardProvider: PaymentProvider = {
   },
 };
 
-export const SUPPORTED_PAYMENT_METHODS = ['manual', 'cod', 'stripe', 'gift_card'] as const;
+export const SUPPORTED_PAYMENT_METHODS = ['manual', 'cod', 'stripe', 'gift_card', 'nmi', 'sezzle'] as const;
 export type SupportedPaymentMethod = typeof SUPPORTED_PAYMENT_METHODS[number];
 
 const PROVIDERS: Record<SupportedPaymentMethod, PaymentProvider> = {
@@ -115,7 +123,8 @@ const PROVIDERS: Record<SupportedPaymentMethod, PaymentProvider> = {
   cod: codProvider,
   stripe: stripeProvider,
   gift_card: giftCardProvider,
-  // nmi / sezzle: implement against this interface (need credentials).
+  nmi: nmiProvider,
+  sezzle: sezzleProvider,
 };
 
 export function isSupportedPaymentMethod(method: string): method is SupportedPaymentMethod {

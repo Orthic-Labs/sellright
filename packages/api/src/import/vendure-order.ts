@@ -22,6 +22,7 @@ export function mapVendureOrderState(sourceState: string): ImportedOrderState {
     case 'Shipped':
     case 'PartiallyDelivered':
     case 'Delivered':
+    case 'Modifying': // Vendure admin edit of a placed (already-settled) order
       return 'Paid';
     case 'AddingItems':
     case 'ArrangingPayment':

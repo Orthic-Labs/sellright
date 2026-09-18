@@ -22,6 +22,10 @@ export type ShippingCalculator = {
   max?: number;
   countries?: string[];
   exclude?: boolean;
+  requireCountry?: boolean;
+  subtotalBasis?: 'pre_discount' | 'discounted_with_tax';
+  taxRate?: number;
+  taxInclusive?: boolean;
 };
 
 export type ShippingContext = {
@@ -29,6 +33,7 @@ export type ShippingContext = {
   country?: string | null;
   /** Pre-discount line subtotal in integer cents. */
   subtotal: number;
+  discountedSubtotalWithTax?: number;
 };
 
 function norm(c: unknown): ShippingCalculator {
@@ -38,9 +43,12 @@ function norm(c: unknown): ShippingCalculator {
 /** Is this method offered for the given cart context? */
 export function isMethodEligible(calculator: unknown, ctx: ShippingContext): boolean {
   const calc = norm(calculator);
-  if (calc.min != null && ctx.subtotal < calc.min) return false;
-  if (calc.max != null && ctx.subtotal > calc.max) return false;
-  if (calc.countries?.length) {
+  const subtotal = calc.subtotalBasis === 'discounted_with_tax' ? ctx.discountedSubtotalWithTax : ctx.subtotal;
+  if (subtotal == null || !Number.isSafeInteger(subtotal) || subtotal < 0) return false;
+  if (calc.requireCountry && !ctx.country?.trim()) return false;
+  if (calc.min != null && subtotal < calc.min) return false;
+  if (calc.max != null && subtotal > calc.max) return false;
+  if (calc.countries && (calc.countries.length || calc.requireCountry)) {
     const country = ctx.country?.trim().toUpperCase() ?? '';
     const list = calc.countries.map((x) => x.trim().toUpperCase());
     const inList = country !== '' && list.includes(country);

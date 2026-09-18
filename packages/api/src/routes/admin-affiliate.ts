@@ -5,6 +5,7 @@ import { withStore } from '../db/client.js';
 import { resolveStore, DEV_DEFAULT_STORE } from '../store-context.js';
 import * as s from '../db/schema.js';
 import { HttpError, J, errBody, money, requireAdmin, requireStore, requireWrite, guard, slugify } from './admin-helpers.js';
+import { enqueueAffiliateMail, reassignAffiliate, syncPromotionAffiliate } from '../affiliate/onboarding.js';
 
 export const adminAffiliate = new OpenAPIHono();
 
@@ -68,6 +69,9 @@ adminAffiliate.openapi(
       const accessToken = randomBytes(24).toString('hex'); // 48 chars
       const [aff] = await tx.insert(s.affiliate).values({ storeId: st.storeId, promotionId: promo!.id, email: b.email, accessToken }).returning({ id: s.affiliate.id });
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'affiliate', entityId: aff!.id, action: 'onboard', data: { email: b.email, code } });
+      // Welcome mail in the same tx (transactional outbox) — the affiliate
+      // only exists when the email does. dedupeKey pins it to the row.
+      await enqueueAffiliateMail(tx, st.storeId, 'welcome', b.email, code, accessToken, aff!.id);
       return { id: aff!.id, code, accessToken };
     });
     if ('dupe' in res) throw new HttpError(409, `coupon code ${code} already exists — pass a different code`);
@@ -100,6 +104,54 @@ adminAffiliate.openapi(
         settlements: settlements.map((sx) => ({ amountCents: sx.amountCents, settledAt: sx.settledAt.toISOString(), txRef: sx.txRef, notes: sx.notes })),
       };
     });
+    if (!out) throw new HttpError(404, 'affiliate not found');
+    return c.json(out, 200);
+  }),
+);
+
+// ── bind a promotion to an affiliate email (promotion.affiliate_email) ───────
+// The marketing lane's POST/PATCH /v1/admin/promotions should call
+// syncPromotionAffiliate() after saving; until that call-site lands this
+// endpoint is how an operator binds/unbinds a coupon to an affiliate recipient
+// (bind → onboard mail; rebind → rotate + mail; clear → binding removed, the
+// affiliate row stays but stops tracking new orders via the promotion).
+adminAffiliate.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/affiliates/link', summary: 'Bind a promotion to an affiliate email (or clear with email:null)',
+    request: { body: { content: J(z.object({ promotionId: z.string().uuid(), email: z.string().email().nullable() })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ result: z.string() })) }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireWrite(st);
+    const b = c.req.valid('json');
+    const res = await withStore(st.storeId, async (tx) => {
+      const upd = await tx.execute(sql`UPDATE promotion SET affiliate_email = ${b.email} WHERE id = ${b.promotionId} RETURNING id`);
+      if (!upd.rows.length) return { kind: 'missing' as const };
+      if (!b.email) return { kind: 'unbound' as const };
+      return syncPromotionAffiliate(tx, st.storeId, b.promotionId, admin.email);
+    });
+    if (res.kind === 'missing') throw new HttpError(404, 'promotion not found');
+    return c.json({ result: res.kind }, 200);
+  }),
+);
+
+// ── recipient change (rotates the dashboard token — old link dies) ───────────
+adminAffiliate.openapi(
+  createRoute({
+    method: 'patch', path: '/v1/admin/affiliates/{id}', summary: 'Reassign affiliate recipient (rotates access token)',
+    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ email: z.string().email() })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string(), email: z.string(), code: z.string().nullable() })) }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireWrite(st);
+    const { id } = c.req.valid('param');
+    const b = c.req.valid('json');
+    // reassignAffiliate: same-email saves are a no-op; a changed email rotates
+    // the access token (invalidating the previous recipient's dashboard link)
+    // and enqueues the rotation mail in this tx.
+    const out = await withStore(st.storeId, (tx) => reassignAffiliate(tx, st.storeId, id, b.email, admin.email));
     if (!out) throw new HttpError(404, 'affiliate not found');
     return c.json(out, 200);
   }),

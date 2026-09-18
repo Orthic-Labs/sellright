@@ -6,8 +6,7 @@
     ".agent/**",
     ".audit/**",
     "right-release.config.mjs",
-    "packages/api/drizzle/**",
-    "packages/storefront/src/generated/**"
+    "packages/api/drizzle/**"
   ],
   "ignoreFiles": ["right-release.config.mjs"],
   "ignoreExportsUsedInFile": true,
@@ -20,9 +19,10 @@
         "src/import/catalog.ts",
         "src/import/customers.ts",
         "src/import/orders.ts",
-        "src/import/store.ts",
+        "src/import/run.ts",
+        "src/import/restore.ts",
+        "src/import/preflight.ts",
         "src/manifest/generate.ts",
-        "src/scripts/provision-right-apps.ts",
         "src/scripts/seed-admin.ts"
       ],
       "project": ["src/**/*.ts"],
@@ -31,11 +31,6 @@
     "packages/shared": {
       "entry": ["src/index.ts"],
       "project": ["src/**/*.ts"],
-      "ignoreExportsUsedInFile": true
-    },
-    "packages/storefront": {
-      "entry": ["codegen-shop.ts"],
-      "project": ["codegen-shop.ts"],
       "ignoreExportsUsedInFile": true
     }
   }

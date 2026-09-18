@@ -28,7 +28,7 @@ export const orderState = pgEnum('order_state', [
   'Refunded',
   'Cancelled',
 ]);
-export const fulfillmentState = pgEnum('fulfillment_state', ['Pending', 'Shipped', 'Delivered']);
+export const fulfillmentState = pgEnum('fulfillment_state', ['Pending', 'Shipped', 'Delivered', 'Cancelled']);
 export const fulfillmentType = pgEnum('fulfillment_type', ['physical', 'digital_download', 'license', 'update_pass']);
 export const paymentState = pgEnum('payment_state', [
   'Pending',
@@ -277,6 +277,7 @@ export const customer = pgTable(
     stripeCustomerId: text(),
     listmonkSubscribedAt: timestamp({ withTimezone: true }),
     googleSub: text(),
+    appleUserId: text(),
     passwordHash: text(), // nullable for OAuth-only
     emailVerified: boolean().notNull().default(false),
     sheeridVerifications: jsonb(),
@@ -330,5 +331,8 @@ export const promotion = pgTable('promotion', {
   priority: integer().notNull().default(0),
   exclusionGroup: text(),
   enabled: boolean().notNull().default(true),
+  // 0052: bound affiliate recipient — presence drives auto-onboard/rotation
+  // (affiliate/onboarding.ts). Raw-SQL writes predate this mapping.
+  affiliateEmail: text(),
 });
 

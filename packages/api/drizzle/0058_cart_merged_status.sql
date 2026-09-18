@@ -1,0 +1,14 @@
+-- HAND-WRITTEN: see docs/runbooks/migrations.md
+-- CART-05: 'merged' — a donor cart consumed by POST /cart/{token}/merge is
+-- terminal and empty. Merge folds = MOVES the donor's lines into the target
+-- (they are copied then deleted), so the donor can never be re-edited and
+-- re-merged to duplicate quantities. 'merged' is blocked by mutationBlocker
+-- like 'converted' and is TTL-purgeable once expires_at lapses (the row is
+-- always empty and unconverted).
+--
+-- ALTER TYPE ... ADD VALUE is legal inside a transaction since PG12 — the new
+-- label merely can't be USED until the transaction commits, and nothing in
+-- this migration writes a 'merged' row. 0042 does the same for
+-- fulfillment_state. IF NOT EXISTS keeps the statement idempotent for DBs
+-- where the label was added by hand.
+ALTER TYPE cart_status ADD VALUE IF NOT EXISTS 'merged';

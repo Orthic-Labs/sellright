@@ -118,10 +118,9 @@ describe('MONEY-1: (store_id, provider_ref) unique settle', () => {
       withStore(STORE_A, (tx) => applyPaymentResult(tx, { storeId: STORE_A, order: orderRef, method: 'stripe', result })),
     ]);
 
-    // Exactly one of the two calls should have won the insert and driven the
-    // order to Paid; the loser reports the pre-transition order state it read.
-    const paidCount = [r1, r2].filter((r) => r.orderState === 'Paid').length;
-    expect(paidCount).toBe(1);
+    // Both callers read the current locked order state. The ledger and paid
+    // effects are still written only by the winning transaction.
+    expect([r1.orderState, r2.orderState]).toEqual(['Paid', 'Paid']);
 
     const rows = await withStore(STORE_A, (tx) =>
       tx.select().from(s.payment).where(and(eq(s.payment.storeId, STORE_A), eq(s.payment.providerRef, 'pi_shared_capture_123'))));

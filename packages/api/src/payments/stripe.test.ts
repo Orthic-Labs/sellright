@@ -53,6 +53,20 @@ describe('verifyIntent — server-side trust boundary', () => {
     expect(r.state).toBe('Declined');
     expect(r.errorMessage).toMatch(/requires_payment_method/);
   });
+
+  // SR-03: the mode the caller verified under (webhook signature / initiating
+  // config) must ride the result so settle.ts can persist payment.gateway_mode
+  // — a later refund can never safely re-derive it from CURRENT store config.
+  it('carries input.stripeMode into metadata.gateway.mode on every outcome', () => {
+    const live = { ...base, stripeMode: 'live' as const };
+    expect(verifyIntent(intent({}), live).metadata)
+      .toMatchObject({ gateway: { mode: 'live' }, latest_charge: 'ch_1' });
+    expect(verifyIntent(intent({ amount: 1 }), live).metadata).toMatchObject({ gateway: { mode: 'live' } });
+    expect(verifyIntent(intent({}), { ...base, stripeMode: 'test' as const }).metadata)
+      .toMatchObject({ gateway: { mode: 'test' } });
+    // No verified mode supplied → no gateway identity is fabricated.
+    expect(verifyIntent(intent({}), base).metadata).not.toMatchObject({ gateway: expect.anything() });
+  });
 });
 
 describe('manual/cod refund no-ops', () => {

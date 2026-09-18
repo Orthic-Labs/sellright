@@ -45,6 +45,12 @@ const JOB_KEYS = {
   // processed_event never had a reaper before; batched-delete pass, same
   // leader-locked shape as webhook-reaper.
   'processed-event-reaper': NAMESPACE | 9n,
+  'gateway-events': NAMESPACE | 10n,
+  // PAR-4: SheerID verification expiry sweep (sheerid-expiry.ts).
+  'sheerid-expiry': NAMESPACE | 11n,
+  // PAR-5: drains stock-trigger restock events into one-shot notifications
+  // (routes/restock.ts sweepRestockEvents).
+  'restock-notify': NAMESPACE | 12n,
 } as const satisfies Record<string, bigint>;
 
 export type LeaderLockedJob = keyof typeof JOB_KEYS;

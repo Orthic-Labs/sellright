@@ -117,7 +117,7 @@ export async function onCheckoutCompleted(tx: Tx, storeId: string, session: Chec
 }
 
 /** Read back the single license issued for an order (after settle). */
-async function licenseForOrder(tx: Tx, orderId: string): Promise<{ id: string; orderLineId: string; expiresAt: Date | null; updatesUntil: Date | null } | null> {
+async function licenseForOrder(tx: Tx, orderId: string): Promise<{ id: string; orderLineId: string | null; expiresAt: Date | null; updatesUntil: Date | null } | null> {
   const [row] = await tx
     .select({ id: s.license.id, orderLineId: s.license.orderLineId, expiresAt: s.license.expiresAt, updatesUntil: s.license.updatesUntil })
     .from(s.license).where(eq(s.license.orderId, orderId)).limit(1);
@@ -232,7 +232,10 @@ async function extendRenewal(
     .select({ id: s.license.id, orderLineId: s.license.orderLineId, expiresAt: s.license.expiresAt, updatesUntil: s.license.updatesUntil })
     .from(s.license).where(eq(s.license.id, licenseId)).limit(1);
   if (!lic) return;
-  const [variant] = await tx
+  // orderLineId is nullable now that orderless (admin/storekit) issuance
+  // exists; a subscription license always originates from an order line, but
+  // the guard keeps the nullable type honest.
+  const [variant] = lic.orderLineId == null ? [undefined] : await tx
     .select({ licenseDurationDays: s.productVariant.licenseDurationDays, updatesDurationDays: s.productVariant.updatesDurationDays })
     .from(s.orderLine)
     .innerJoin(s.productVariant, eq(s.productVariant.id, s.orderLine.variantId))
@@ -267,10 +270,7 @@ async function extendRenewal(
         state: 'Settled',
         metadata: { stripeInvoiceId: invoice.id, renewal: true },
       })
-      .onConflictDoNothing({
-        target: [s.payment.storeId, s.payment.providerRef],
-        where: sql`${s.payment.providerRef} is not null`,
-      })
+      .onConflictDoNothing()
       .returning({ id: s.payment.id });
     if (inserted.length === 0) {
       await audit(tx, storeId, 'subscription_renewal_payment_duplicate', subId, { invoiceId: invoice.id, providerRef });

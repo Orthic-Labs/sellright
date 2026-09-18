@@ -82,8 +82,53 @@ const EnvSchema = z.object({
   STRIPE_WEBHOOK_SECRET_LIVE: z.string().optional(),
   STRIPE_PUBLISHABLE_KEY_TEST: z.string().optional(),
   STRIPE_PUBLISHABLE_KEY_LIVE: z.string().optional(),
+  // NMI and Sezzle account profiles. Prefer GATEWAY_ACCOUNTS_JSON_FILE in
+  // production so credentials can be mounted without appearing in Compose.
+  GATEWAY_ACCOUNTS_JSON: z.string().default('[]'),
   // Google OAuth — consumed by routes/auth.ts (lane G).
   GOOGLE_CLIENT_ID: z.string().optional(),
+  // ── Customer session policy (auth/session.ts, routes/auth.ts) ─────────────
+  // Defaults preserve the historical SellRight posture: 30-day sessions that do
+  // NOT slide. Per-store overrides live in store.config.auth:
+  //   sessionTtlDays / renewable / sessionRenewWindowDays.
+  // SESSION_TTL_DAYS — session + customer-cookie lifetime. Downstream forks
+  //   choose their own (RightSites runs 365); SellRight stays at 30.
+  // SESSION_RENEWABLE — when 'true', an authenticated resolve inside the renew
+  //   window extends expiresAt server-side (authoritative: the new expiry is
+  //   persisted; logout/revocation still kills the token).
+  // SESSION_RENEW_WINDOW_DAYS — renew when remaining lifetime drops below this.
+  //   A window >= ttl means every authenticated request renews (sliding
+  //   sessions that never expire while active) — set it deliberately.
+  SESSION_TTL_DAYS: z.coerce.number().positive().default(30),
+  SESSION_RENEWABLE: z.preprocess(emptyToUndefined, z.enum(['true', 'false']).default('false')),
+  SESSION_RENEW_WINDOW_DAYS: z.coerce.number().positive().default(7),
+  // ── Passwordless sign-in (auth/magic-link.ts) ─────────────────────────────
+  // Disabled unless a deployment or an individual store opts in — the endpoint
+  // 409s when unconfigured. MAGIC_LINK_ENABLED is the fleet-wide default;
+  // store.config.auth.magicLink (boolean) overrides per tenant, including an
+  // explicit false to opt a store out of an enabled fleet.
+  MAGIC_LINK_ENABLED: z.preprocess(emptyToUndefined, z.enum(['true', 'false']).default('false')),
+  MAGIC_LINK_TTL_MINUTES: z.coerce.number().positive().default(15),
+  // Landing path appended to the resolved storefront URL in the sign-in email.
+  // store.config.auth.magicLinkPath overrides per tenant.
+  MAGIC_LINK_PATH: z.string().default('/account/magic-link'),
+  // Sign in with Apple — accepted identity-token `aud` values, comma-separated
+  // (a native app's bundle id and/or a web Services ID). Per-store override:
+  // store.config.auth.appleClientId (string or string[]). Empty/absent (the
+  // default) = not configured → the endpoint 409s. Never trust a client-
+  // supplied bundle id; the audience list is server-side config only.
+  APPLE_CLIENT_IDS: optionalEnvString,
+  // Contact form / anti-bot (routes/contact.ts, security/turnstile.ts).
+  // CONTACT_FORM_SECRET signs the submitter-confirmation link (falls back to
+  // LICENSING_HMAC_SECRET → COOKIE_SECRET inside contact.ts); CONTACT_EMAIL is
+  // the last-resort team inbox after per-store config; TURNSTILE_SECRET_KEY is
+  // the global fallback when a store has no turnstile secret in config.
+  CONTACT_FORM_SECRET: z.string().optional(),
+  // Legacy fallbacks in the contact-link signing chain (contact.ts).
+  LICENSING_HMAC_SECRET: z.string().optional(),
+  COOKIE_SECRET: z.string().optional(),
+  CONTACT_EMAIL: z.string().email().optional(),
+  TURNSTILE_SECRET_KEY: z.string().optional(),
   // First-run admin + store bootstrap. All optional so existing deployments are
   // unaffected. bootstrap.ts treats a partially configured set as an error and
   // never resets an existing admin password on restart.
@@ -119,6 +164,21 @@ const EnvSchema = z.object({
   // the production host silently fails with BadDeviceToken. The app reports its
   // own environment at registration; this is only the fallback.
   APNS_DEFAULT_ENVIRONMENT: z.enum(['production', 'sandbox']).default('production'),
+  // StoreKit (Apple In-App Purchase) — deployment-wide verification knobs for
+  // licensing/storekit-*.ts + routes/storekit-webhooks.ts. Per-app config
+  // (bundleId, appAppleId, product→entitlement map, sandbox policy) lives in
+  // the storekit_app table, NEVER in env or request input; these are only the
+  // global gates.
+  // STOREKIT_ONLINE_CHECKS: '1' (default) enables Apple's online OCSP
+  //   revocation checking during JWS verification. Set '0' only on networks
+  //   that cannot reach Apple's OCSP responders (offline dev/CI) — production
+  //   must keep it on.
+  STOREKIT_ONLINE_CHECKS: z.enum(['0', '1']).default('1'),
+  // STOREKIT_ALLOW_SANDBOX: '1' (default) permits Sandbox-environment
+  //   purchases (TestFlight — Apple always uses Sandbox there) wherever the
+  //   per-app storekit_app.allow_sandbox row also allows it. '0' is a
+  //   deployment-wide kill switch rejecting every Sandbox transaction.
+  STOREKIT_ALLOW_SANDBOX: z.enum(['0', '1']).default('1'),
   // Job scheduler: master on/off switch (default off — safe for dev/test).
   JOBS_ENABLED: z.enum(['0', '1']).optional(),
   // push sender: deliver queued pushes (default off — the outbox still fills,

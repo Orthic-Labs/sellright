@@ -19,6 +19,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { pool, withStore, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { sendEmail, type SendEmailInput } from './mailer.js';
+import { emitEvent } from '../webhooks/emit.js';
 
 /** Per-attempt backoff in seconds: 1m, 5m, 30m, 2h, 12h. */
 const BACKOFF_S = [60, 300, 1800, 7200, 43200];
@@ -43,18 +44,37 @@ export function normalizeEmailBatchLimit(limit?: number): number {
  * Enqueue an email delivery in the caller's transaction. Same shape as
  * webhooks/emit.ts emitEvent — the row is part of the same txn as the Paid
  * transition, so a rollback also drops the email. No SMTP at the call site.
+ *
+ * `dedupeKey` (migration 0057) gives event-driven sends exactly-once enqueue
+ * semantics: a second enqueue carrying a key already present for this store is
+ * a silent no-op (ON CONFLICT DO NOTHING on the partial unique index), so a
+ * replayed settlement/fulfillment event can never double-email the customer.
+ * Returns true when a new outbox row was actually inserted.
  */
 export async function enqueueEmail(tx: Tx, storeId: string, args: {
   kind: 'order_confirmation' | (string & {}); // string-narrow for forward-compat kinds
   recipient: string;
   payload: SendEmailInput;
-}): Promise<void> {
+  dedupeKey?: string;
+}): Promise<boolean> {
+  if (args.dedupeKey) {
+    // Raw SQL: dedupe_key is added by hand-written migration 0057 and is not on
+    // the drizzle schema (schema-orders.ts is owned by another lane).
+    const r = await tx.execute(
+      sql`INSERT INTO email_outbox (store_id, kind, recipient, payload, dedupe_key)
+          VALUES (${storeId}, ${args.kind}, ${args.recipient}, ${JSON.stringify(args.payload)}::jsonb, ${args.dedupeKey})
+          ON CONFLICT DO NOTHING
+          RETURNING id`,
+    );
+    return r.rows.length > 0;
+  }
   await tx.insert(s.emailOutbox).values({
     storeId,
     kind: args.kind,
     recipient: args.recipient,
     payload: args.payload as object,
   });
+  return true;
 }
 
 async function claimDueEmails(storeId: string, limit: number): Promise<ClaimedEmail[]> {
@@ -97,10 +117,11 @@ async function finalizeEmail(
 
     const giveUp = delivery.attempts >= MAX_ATTEMPTS;
     const backoff = BACKOFF_S[Math.min(delivery.attempts - 1, BACKOFF_S.length - 1)]!;
+    const lastError = String(outcome.error instanceof Error ? outcome.error.message : outcome.error);
     const rows = await tx
       .update(s.emailOutbox)
       .set({
-        lastError: String(outcome.error instanceof Error ? outcome.error.message : outcome.error),
+        lastError,
         status: giveUp ? 'dead' : 'pending',
         nextAttemptAt: new Date(Date.now() + backoff * 1000),
         updatedAt: new Date(),
@@ -112,7 +133,28 @@ async function finalizeEmail(
       ))
       .returning({ id: s.emailOutbox.id });
     if (!rows.length) return 'stale';
-    return giveUp ? 'dead' : 'retry';
+    if (!giveUp) return 'retry';
+    // SR-12: an exhausted delivery must not be silent. Two operator-visible
+    // signals, committed atomically with the dead transition:
+    //   1. audit_log row (the existing admin-visible audit mechanism);
+    //   2. an 'email.dead' event through the webhook outbox, so any subscribed
+    //      endpoint (ops alerting) gets the failure as a first-class event.
+    await tx.insert(s.auditLog).values({
+      storeId,
+      actor: 'system:email-outbox',
+      entity: 'email_outbox',
+      entityId: delivery.id,
+      action: 'delivery_dead',
+      data: { kind: delivery.kind, recipient: delivery.recipient, attempts: delivery.attempts, lastError },
+    });
+    await emitEvent(tx, storeId, 'email.dead', {
+      id: delivery.id,
+      kind: delivery.kind,
+      recipient: delivery.recipient,
+      attempts: delivery.attempts,
+      lastError,
+    });
+    return 'dead';
   });
 }
 

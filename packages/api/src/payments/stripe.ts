@@ -106,18 +106,31 @@ export interface IntentLike {
  * and the SellRight order facts, decide the PaymentResult. Never trusts the
  * client: an intent whose amount/currency/orderCode doesn't match the order is
  * Failed, regardless of what the client claims.
+ *
+ * SR-03: every outcome carries `metadata.gateway.mode` = the mode the CALLER
+ * verified under (input.stripeMode — from store config on /pay, or the webhook
+ * signature's verifying secret on the reconcile path). settle.ts persists it
+ * onto payment.gateway_mode, so a later refund never has to guess which Stripe
+ * account/mode the money actually moved through.
  */
 export function verifyIntent(pi: IntentLike, input: CreatePaymentInput): PaymentResult {
+  const gateway = input.stripeMode ? { gateway: { mode: input.stripeMode } } : undefined;
   if (pi.amount !== input.amount || pi.currency.toUpperCase() !== input.currency.toUpperCase()) {
-    return { state: 'Failed', providerRef: pi.id, errorMessage: 'amount/currency mismatch' };
+    return { state: 'Failed', providerRef: pi.id, errorMessage: 'amount/currency mismatch', metadata: gateway };
   }
   if (pi.metadata?.orderCode !== input.orderCode) {
-    return { state: 'Failed', providerRef: pi.id, errorMessage: 'order mismatch' };
+    return { state: 'Failed', providerRef: pi.id, errorMessage: 'order mismatch', metadata: gateway };
   }
-  if (pi.status === 'succeeded') return { state: 'Settled', providerRef: pi.id, metadata: { latest_charge: pi.latest_charge ?? null } };
-  if (pi.status === 'requires_capture') return { state: 'Authorized', providerRef: pi.id };
-  return { state: 'Declined', providerRef: pi.id, errorMessage: `status: ${pi.status}` };
+  if (pi.status === 'succeeded') return { state: 'Settled', providerRef: pi.id, metadata: { latest_charge: pi.latest_charge ?? null, ...gateway } };
+  if (pi.status === 'requires_capture') return { state: 'Authorized', providerRef: pi.id, metadata: gateway };
+  return { state: 'Declined', providerRef: pi.id, errorMessage: `status: ${pi.status}`, metadata: gateway };
 }
+
+/** Metadata key stamped on provider refunds so inbound webhook events and
+ *  operator verification can correlate a Stripe refund to OUR durable
+ *  payment_attempt (SR-04). The value is the refund payment_attempt.id — the
+ *  same id requestRefund uses as the provider idempotency key. */
+export const STRIPE_REFUND_ATTEMPT_KEY = 'sellright_refund_attempt';
 
 export const stripeProvider: PaymentProvider = {
   method: 'stripe',
@@ -148,14 +161,45 @@ export const stripeProvider: PaymentProvider = {
       // the key from stable identifiers (order id / return request id + amount) —
       // see admin-orders.ts.
       const opts = input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : undefined;
-      const r = await stripeClient(input.stripeMode).refunds.create({ payment_intent: input.providerRef, amount: input.amount }, opts);
+      const r = await stripeClient(input.stripeMode).refunds.create({
+        payment_intent: input.providerRef, amount: input.amount,
+        // SR-04: stamp the durable refund-attempt id onto the provider refund
+        // itself. If our response is lost before refund.provider_ref is
+        // persisted, the inbound refund.* webhook still carries this metadata
+        // and can bind the outcome to the SAME attempt instead of recording a
+        // second (duplicate) refund row.
+        ...(input.idempotencyKey ? { metadata: { [STRIPE_REFUND_ATTEMPT_KEY]: input.idempotencyKey } } : {}),
+      }, opts);
       const state: RefundResult['state'] = r.status === 'succeeded' ? 'Settled' : r.status === 'pending' ? 'Pending' : 'Failed';
       return { state, providerRef: r.id, errorMessage: state === 'Failed' ? `refund status: ${r.status}` : null };
     } catch (e) {
-      return { state: 'Failed', providerRef: null, errorMessage: e instanceof Error ? e.message : 'refund failed' };
+      return { state: 'Pending', providerRef: null, errorMessage: 'Stripe refund outcome requires reconciliation' };
     }
   },
 };
+
+export interface StripeRefundLike {
+  id: string;
+  amount: number;
+  status: string;
+  metadata?: Record<string, string> | null;
+  payment_intent?: string | { id?: string } | null;
+}
+
+/** Read-only provider truth for refund reconciliation (SR-04): list the Stripe
+ *  refunds attached to a PaymentIntent. Used by verifyGatewayAttempt's refund
+ *  branch to resolve an attempt whose provider response was lost before
+ *  refund.provider_ref was persisted. */
+export async function listStripeRefunds(mode: StripeMode, paymentIntentId: string): Promise<StripeRefundLike[]> {
+  const list = await stripeClient(mode).refunds.list({ payment_intent: paymentIntentId, limit: 100 });
+  return list.data.map((r) => ({
+    id: r.id,
+    amount: r.amount,
+    status: r.status ?? '',
+    metadata: (r.metadata ?? null) as Record<string, string> | null,
+    payment_intent: r.payment_intent as StripeRefundLike['payment_intent'],
+  }));
+}
 
 /**
  * Mint a PaymentIntent for an order, server-side. Amount comes from the order

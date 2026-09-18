@@ -5,6 +5,7 @@ import type { Promotion } from './totals.js';
 export interface CouponContext {
   subtotal: number; // cents, pre-discount
   activeVerifications: string[]; // customer's SheerID categories (may be empty)
+  items?: Array<{ quantity: number; facetValueIds: string[] }>;
 }
 
 export interface CouponEval {
@@ -38,12 +39,27 @@ export function evaluateCoupon(
         if (!ctx.activeVerifications.some((v) => categories.includes(v))) return { valid: false, reason: 'requires verified status' };
         break;
       }
-      case 'at_least_n_with_facets':
-        // Can't be evaluated against a local cart — checkout is authoritative (rulebook §5).
+      case 'at_least_n_with_facets': {
+        let facets: unknown;
+        try { facets = JSON.parse(arg(cond, 'facets') ?? '[]'); } catch { return { valid: false, reason: 'invalid facet condition' }; }
+        const minimum = Number(arg(cond, 'minimum') ?? 1);
+        if (!Array.isArray(facets) || !Number.isSafeInteger(minimum) || minimum < 1 || !ctx.items) {
+          return { valid: false, reason: 'requires eligible products' };
+        }
+        const required = facets.map(String);
+        const matched = ctx.items.filter(item => required.every(id => item.facetValueIds.includes(id)))
+          .reduce((sum, item) => sum + item.quantity, 0);
+        if (matched < minimum) return { valid: false, reason: 'requires eligible products' };
         break;
+      }
       default:
         return { valid: false, reason: `unsupported condition: ${cond.code}` };
     }
   }
   return { valid: true, promotion: { type: promo.type, value: promo.value } };
+}
+
+export function productFacetIds(metafields: unknown): string[] {
+  const ids = (metafields as { facetValueIds?: unknown } | null)?.facetValueIds;
+  return Array.isArray(ids) ? ids.map(String) : [];
 }

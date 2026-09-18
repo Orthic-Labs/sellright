@@ -18,6 +18,22 @@ env:
   NODE_LTS: 24.20.0
 
 jobs:
+  storefront:
+    # Retains the protected branch's storefront check for the isolated demo
+    # consumer. Production merchant storefronts remain downstream.
+    name: Storefront build / Node 24 LTS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ env.NODE_LTS }}
+      - name: Check demo consumer and safety boundary
+        run: |
+          node --check deploy/demo/shop.js
+          node --check deploy/demo/server.mjs
+          node --test deploy/demo/*.test.mjs
+
   verify:
     name: Core + admin / Node 24 LTS
     runs-on: ubuntu-latest
@@ -51,7 +67,7 @@ jobs:
         run: pnpm verify:static
 
       - name: Password hashing contract
-        run: pnpm --filter @sellright/api test -- src/auth/password.test.ts
+        run: pnpm --filter @sellright/api test src/auth/password.test.ts
 
       - name: Admin tests
         run: pnpm --dir packages/admin test
@@ -78,6 +94,8 @@ jobs:
       NODE_ENV: test
       DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/sellright_test
       DATABASE_URL_NONOWNER: postgres://sellright_app:sellright_app@127.0.0.1:5432/sellright_test
+      IMPORT_SOURCE_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/sellright_import_source_test
+      IMPORT_TARGET_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/sellright_import_target_test
       STOREFRONT_URL: https://shop.example.net
       DOWNLOAD_URL_SECRET: abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
     steps:
@@ -103,6 +121,14 @@ jobs:
       - name: Apply migrations
         run: pnpm --filter @sellright/api db:migrate:runtime
 
+      - name: Prepare isolated importer fixtures
+        env:
+          PGPASSWORD: postgres
+        run: |
+          createdb -h 127.0.0.1 -U postgres sellright_import_source_test
+          createdb -h 127.0.0.1 -U postgres sellright_import_target_test
+          DATABASE_URL="$IMPORT_TARGET_DATABASE_URL" pnpm --filter @sellright/api db:migrate:runtime
+
       - name: Create non-owner RLS test role
         env:
           PGPASSWORD: postgres
@@ -115,35 +141,19 @@ jobs:
           GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO sellright_app;
           SQL
 
+      # SR-11: both lanes run with the service database — the unit lane must
+      # stay green with a DB present (self-skipping suites execute their DB
+      # cases here), and the db lane covers every suite that declares a
+      # *_test-database guard (selected by vitest.config.ts's content scan,
+      # not a hand-maintained file list).
+      - name: Run unit lane
+        run: pnpm --filter @sellright/api test
+
       - name: Run DB integration suite
         run: pnpm --filter @sellright/api test:db
 
       - name: Verify database isolation invariants
         run: pnpm verify:db
-
-  storefront:
-    name: Storefront build / Node 24 LTS
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
-        with:
-          version: ${{ env.PNPM_VERSION }}
-          install: false
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: ${{ env.NODE_LTS }}
-          cache: pnpm
-          cache-dependency-path: packages/storefront/pnpm-lock.yaml
-
-      - name: Install storefront
-        run: pnpm --dir packages/storefront install --frozen-lockfile
-
-      - name: Build storefront
-        run: pnpm --dir packages/storefront build
 
   packaging:
     name: Production container smoke / Node 24 LTS
@@ -151,6 +161,7 @@ jobs:
     timeout-minutes: 30
     env:
       POSTGRES_PASSWORD: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      POSTGRES_APP_PASSWORD: fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210
       STOREFRONT_URL: https://shop.example.net
       DOWNLOAD_URL_SECRET: abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
       ADMIN_EMAIL: ci@example.net
@@ -164,7 +175,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Validate Compose model
-        run: docker compose -f deploy/compose.yaml config --quiet
+        run: |
+          printf '[]\n' > deploy/gateway-accounts.json
+          docker compose -f deploy/compose.yaml config --quiet
 
       - name: Build production images
         run: docker compose -f deploy/compose.yaml build api admin

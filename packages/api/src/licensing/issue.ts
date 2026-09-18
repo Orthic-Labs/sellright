@@ -3,8 +3,9 @@ import { eq, inArray, sql } from 'drizzle-orm';
 import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { buildLicenseGrants, type FulfillmentType } from './entitlements.js';
+import { devicePolicyFor, withCurrentDevicePolicy } from './device-policy.js';
 
-function newLicenseKey(appKey: string): string {
+export function newLicenseKey(appKey: string): string {
   return `SR-${appKey.toUpperCase()}-${randomBytes(16).toString('hex').toUpperCase()}`;
 }
 
@@ -49,7 +50,13 @@ export async function issueLicensesForPaidOrder(
     .from(s.license)
     .where(inArray(s.license.orderLineId, [...new Set(grants.map((g) => g.orderLineId))]));
   const remaining = new Map<string, number>();
-  for (const row of existing) remaining.set(row.orderLineId, (remaining.get(row.orderLineId) ?? 0) + 1);
+  for (const row of existing) {
+    // order_line_id is nullable (admin/creator licenses have no order line).
+    // This query only matches order-issued rows — SQL IN never matches NULL —
+    // but narrow explicitly so the Map key stays a string.
+    if (row.orderLineId == null) continue;
+    remaining.set(row.orderLineId, (remaining.get(row.orderLineId) ?? 0) + 1);
+  }
   const toIssue = grants.filter((grant) => {
     const already = remaining.get(grant.orderLineId) ?? 0;
     if (already > 0) { remaining.set(grant.orderLineId, already - 1); return false; } // already issued
@@ -64,10 +71,12 @@ export async function issueLicensesForPaidOrder(
     orderLineId: grant.orderLineId,
     appKey: grant.appKey,
     licenseKey: newLicenseKey(grant.appKey),
-    seats: grant.seats,
+    // Apps with a pooled-seats device policy keep the flat seat cap disabled
+    // so bounded per-pool caps (selected via metadata) are authoritative.
+    seats: devicePolicyFor(grant.appKey)?.pooledSeats ? 0 : grant.seats,
     updatesUntil: grant.updatesUntil,
     expiresAt: grant.expiresAt,
-    metadata: grant.metadata as object | null,
+    metadata: withCurrentDevicePolicy(grant.appKey, grant.metadata) as object | null,
   })));
   return toIssue.length;
 }

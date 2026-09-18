@@ -29,13 +29,10 @@ var/
 
 SR outside audit.md
 
-# SECURITY-FIX-XSS.md is a private remediation note (see packages/storefront/).
-# Do not commit it to the public repo.
+# Private deployment and migration material must stay outside this public repo.
 SECURITY-FIX-XSS.md
-packages/storefront/SECURITY-FIX-XSS.md
-
-# Real Trustpilot review data — must not ship in the public repo.
-packages/storefront/src/data/trustpilot.json
+deployment-private/
+migration-private/
 
 # Cortex repo map: generated graph/caches/logs stay out; the authored config is repo content.
 .agent/*

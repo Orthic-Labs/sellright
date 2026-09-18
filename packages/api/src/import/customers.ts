@@ -1,72 +1,51 @@
-/**
- * Customer + address importer: Vendure (damned_vendure) -> SellRight.
- * Run AFTER catalog (shares DD_STORE_ID). Imports all non-deleted customers
- * (8.2k) + their addresses. No password hashes (Vendure auth lives in
- * authentication_method; auth migration is a separate concern) and no Stripe id
- * (DD is NMI/Sezzle). email_verified comes from the linked user.verified.
- *
- *   SOURCE_DATABASE_URL=...damned_vendure DATABASE_URL=...sellright_dev \
- *   corepack pnpm tsx src/import/customers.ts
- */
-import { randomUUID } from 'node:crypto';
-import { Pool } from 'pg';
-import { pool, withStore } from '../db/client.js';
+/** Atomic Vendure migration phase. Invoke through import/run.ts. */
 import * as s from '../db/schema.js';
-import { env } from '../env.js';
-import { DD_STORE_ID, ensureDdStore, chunk, parseDate, parseJson, parseStrArray } from './store.js';
+import { chunk, parseDate, parseJson, parseStrArray } from './store.js';
+import { optionalColumn } from './source-schema.js';
 
-const SOURCE_URL = env.SOURCE_DATABASE_URL;
-if (!SOURCE_URL) throw new Error('SOURCE_DATABASE_URL is required (the damned_vendure clone)');
+import { isLegacyBcryptHash } from '../auth/password.js';
+import { normalizeEmail } from '../auth/email.js';
+import type { ImportContext } from './context.js';
 
-// WP9.4: TRUNCATE guard (mirrors catalog.ts) — requires BOTH --force and
-// ALLOW_FORCE_TRUNCATE=1 to override.
-const TARGET_URL = env.DATABASE_URL;
-const forceFlag = process.argv.includes('--force');
-const forceEnv = env.ALLOW_FORCE_TRUNCATE === '1';
-const allowedTarget = /[/_](dev|test)(\b|$|\?)/.test(TARGET_URL);
-if (!allowedTarget && !(forceFlag && forceEnv)) {
-  throw new Error(
-    `REFUSING to TRUNCATE: DATABASE_URL does not look like a dev/test instance. ` +
-    `Override requires BOTH --force and ALLOW_FORCE_TRUNCATE=1. url=${TARGET_URL.replace(/:[^:@/]+@/, ':***@')}`,
-  );
-}
-
-const src = new Pool({ connectionString: SOURCE_URL });
-const q = async (sql: string, params: unknown[] = []) => (await src.query(sql, params)).rows;
-
-async function main() {
-  // eslint-disable-next-line no-console
-  console.log(`[import:customers] about to TRUNCATE address, customer. 5s to abort with Ctrl-C…`);
-  await new Promise<void>((r) => setTimeout(r, 5_000));
-  await pool.query(`TRUNCATE "address", "customer" CASCADE`);
-
+export async function importCustomers(ctx: ImportContext): Promise<void> {
+  const { tx, q } = ctx;
   const customerMap = new Map<number, string>();
 
-  await withStore(DD_STORE_ID, async (tx) => {
-    await ensureDdStore(tx);
+  {
 
     // --- customers ---
+    // SR-08: customFields* columns are per-store declarations (DD has the
+    // SheerID verification fields and the Stripe customer ref, RH has neither).
+    // Required core columns are already preflight-verified; each optional
+    // column selects NULL when absent so the row shape stays constant.
+    const cf = (column: string, alias: string) => optionalColumn(ctx.sourceColumns, 'customer', column, 'c', alias);
     const custRows = (
       await q(
         `SELECT c.id, c."emailAddress" AS email, c."firstName" AS fn, c."lastName" AS ln,
-                c."phoneNumber" AS phone, c."customFieldsListmonksubscribedat" AS listmonk,
-                c."customFieldsSheeridverifications" AS sheerid,
-                c."customFieldsActiveverifications" AS active,
-                c."customFieldsVerificationmetadata" AS vmeta, u.verified
+                c."phoneNumber" AS phone, ${cf('customFieldsListmonksubscribedat', 'listmonk')},
+                ${cf('customFieldsSheeridverifications', 'sheerid')},
+                ${cf('customFieldsActiveverifications', 'active')},
+                ${cf('customFieldsVerificationmetadata', 'vmeta')},
+                ${cf('customFieldsStripecustomerid', 'stripecid')},
+                u.verified, am."passwordHash" AS password, c."createdAt" AS created, c."updatedAt" AS updated
          FROM customer c LEFT JOIN "user" u ON u.id = c."userId"
+         LEFT JOIN authentication_method am ON am."userId"=c."userId" AND am.type='NativeAuthenticationMethod'
          WHERE c."deletedAt" IS NULL`,
       )
     ).map((c) => {
-      const id = randomUUID();
+      const id = ctx.id('customer', c.id);
+      if (c.password && !isLegacyBcryptHash(c.password)) throw new Error('Unsupported password hash for source customer ' + c.id);
       customerMap.set(c.id, id);
       return {
         id,
-        storeId: DD_STORE_ID,
-        email: c.email,
+        storeId: ctx.storeId,
+        email: normalizeEmail(c.email),
+        passwordHash: c.password ?? null, createdAt: parseDate(c.created) ?? undefined, updatedAt: parseDate(c.updated) ?? undefined,
         firstName: c.fn ?? null,
         lastName: c.ln ?? null,
         phone: c.phone ?? null,
         listmonkSubscribedAt: parseDate(c.listmonk),
+        stripeCustomerId: c.stripecid ?? null,
         emailVerified: c.verified ?? false,
         sheeridVerifications: parseJson(c.sheerid),
         activeVerifications: parseStrArray(c.active),
@@ -78,7 +57,7 @@ async function main() {
     // --- addresses (country code via country table; no soft-delete on address) ---
     const addrRows = (
       await q(
-        `SELECT a."customerId" AS cid, a."fullName" AS fullname, a."streetLine1" AS l1,
+        `SELECT a.id, a."customerId" AS cid, a."fullName" AS fullname, a."streetLine1" AS l1,
                 a."streetLine2" AS l2, a.city, a.province, a."postalCode" AS postal,
                 a."phoneNumber" AS phone, a."defaultShippingAddress" AS dship,
                 a."defaultBillingAddress" AS dbill, co.code AS country
@@ -88,8 +67,17 @@ async function main() {
       .map((a) => {
         const customerId = customerMap.get(a.cid);
         if (!customerId) return null;
+        // Incomplete source address-book rows are excluded, not fabricated: the
+        // manifest records each one for operator review (real DD data has a
+        // handful — e.g. a school address with no city). Orders carry their own
+        // shipping snapshot, so skipping a book entry loses no order data.
+        if (!a.l1 || !a.city || !a.country) {
+          ctx.exclusions.push({ type: 'unmappable-source-row', table: 'address',
+            detail: `address ${a.id} (customer ${a.cid}) missing required streetLine1/city/country` });
+          return null;
+        }
         return {
-          storeId: DD_STORE_ID,
+          id: ctx.id('address', a.id), storeId: ctx.storeId,
           customerId,
           fullName: a.fullname ?? null,
           line1: a.l1 ?? null,
@@ -107,20 +95,7 @@ async function main() {
     for (const part of chunk(addrRows, 500)) await tx.insert(s.address).values(part);
 
     // eslint-disable-next-line no-console
-    console.log(JSON.stringify({ store: DD_STORE_ID, customers: custRows.length, addresses: addrRows.length }, null, 2));
-  });
+    console.log(JSON.stringify({ store: ctx.storeId, customers: custRows.length, addresses: addrRows.length }, null, 2));
+  }
 
-  await src.end();
-  await pool.end();
 }
-
-main()
-  .catch((e) => {
-    // eslint-disable-next-line no-console
-    console.error(e);
-    process.exitCode = 1;
-  })
-  .finally(async () => {
-    try { await src.end(); } catch { /* noop */ }
-    try { await pool.end(); } catch { /* noop */ }
-  });

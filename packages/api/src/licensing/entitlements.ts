@@ -53,3 +53,78 @@ export function canReceiveUpdate(license: { status: string; updatesUntil: Date |
 export function canAccessDownload(license: { status: string; expiresAt: Date | null }, now = new Date()): boolean {
   return license.status === 'active' && (license.expiresAt == null || license.expiresAt.getTime() >= now.getTime());
 }
+
+// ── Unified entitlement contract (shared across every licensed app) ─────────
+// VERSIONED so the shape can evolve without breaking clients at once. Rule:
+// additive-only — new fields are optional, `v` bumps ONLY on a breaking change,
+// and clients ignore unknown fields (forward-compatible). The server is the
+// single source of truth for what each tier unlocks; the app just reads features[].
+export interface Entitlements {
+  v: 1;
+  tier: string | null;
+  features: string[];
+}
+
+// Per-app tier catalogs are registered by the deployer (from store config /
+// product metadata) — tier names, plan→tier aliases, and feature lists are
+// suite values and are never hardcoded here.
+export interface TierCatalog {
+  /** metadata.tier value → authorization tier (e.g. a checkout plan whose name
+   *  describes device allowance, not the shared authorization class). The
+   *  original plan stays preserved in license metadata for support. */
+  aliases?: Record<string, string>;
+  /** authorization tier → feature list. */
+  features?: Record<string, string[]>;
+}
+
+const tierCatalogs = new Map<string, TierCatalog>();
+
+export function registerTierCatalog(appKey: string, catalog: TierCatalog): void {
+  tierCatalogs.set(appKey, catalog);
+}
+
+/** Test/deploy seam: drop every registered catalog. */
+export function clearTierCatalogs(): void {
+  tierCatalogs.clear();
+}
+
+export function tierCatalogFor(appKey: string): TierCatalog | null {
+  return tierCatalogs.get(appKey) ?? null;
+}
+
+/** Resolve a license's stored plan/tier to its authorization tier via the
+ *  registered aliases. Unknown plans pass through unchanged. */
+export function resolveAuthorizationTier(appKey: string | undefined, plan: string | null): string | null {
+  if (plan == null) return null;
+  const aliases = appKey ? tierCatalogFor(appKey)?.aliases : undefined;
+  return aliases?.[plan] ?? plan;
+}
+
+/** Private/material feature updates are a tier entitlement, not merely an
+ *  active update window. Keep this separate from `canReceiveUpdate`: public
+ *  patches remain available to lower-tier installs through the public patch
+ *  lane. `requiredTier` is the tier the update lane requires (e.g. 'pro'). */
+export function canReceiveTieredUpdate(
+  license: { status: string; updatesUntil: Date | null; expiresAt?: Date | null; appKey?: string; metadata: unknown },
+  requiredTier: string,
+  now = new Date(),
+): boolean {
+  if (!canReceiveUpdate(license, now)) return false;
+  if (license.expiresAt != null && license.expiresAt.getTime() < now.getTime()) return false;
+  if (!license.metadata || typeof license.metadata !== 'object' || Array.isArray(license.metadata)) return false;
+  const tier = (license.metadata as Record<string, unknown>).tier;
+  return resolveAuthorizationTier(license.appKey, typeof tier === 'string' ? tier : null) === requiredTier;
+}
+
+/** Derive the generic entitlement object from a license. `tier` comes from
+ *  metadata.tier (set at mint/issue), resolved through the app's aliases;
+ *  `features` is an explicit metadata.features[] if present, else expanded
+ *  from the registered per-app tier catalog. */
+export function buildEntitlements(license: { appKey: string; metadata: unknown }): Entitlements {
+  const meta = (license.metadata ?? {}) as { tier?: string; features?: string[] };
+  const tier = resolveAuthorizationTier(license.appKey, meta.tier ?? null);
+  const features = Array.isArray(meta.features)
+    ? meta.features
+    : (tier ? tierCatalogFor(license.appKey)?.features?.[tier] : undefined) ?? [];
+  return { v: 1, tier, features };
+}

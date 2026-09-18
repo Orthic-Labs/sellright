@@ -90,7 +90,6 @@ describe('POST /v1/shop/auth/register', () => {
     const cookies = parseSetCookies(res);
     expect(cookies[CUST_COOKIE]).toBe(body.token);
     expect(cookies[CUST_CSRF_COOKIE]).toBeTruthy();
-    expect(res.headers.get('set-cookie')).toContain('Max-Age=31536000');
 
     const dbCustomer = await withStore(STORE, async (tx) => {
       const [c] = await tx.select().from(s.customer).where(eq(s.customer.email, 'newbuyer@auth.test')).limit(1);
@@ -159,25 +158,31 @@ describe('POST /v1/shop/auth/login', () => {
   });
 });
 
-describe('GET /v1/shop/auth/me — native session renewal', () => {
-  it('extends any valid bearer session for one year', async () => {
-    const reg = await app.request('/v1/shop/auth/register', {
-      method: 'POST', headers: hdr(), body: JSON.stringify({ email: 'renew@auth.test', password: 'renewpassword1' }),
-    });
-    const body = await reg.json() as { token: string };
+describe('GET /v1/shop/auth/me session policy', () => {
+  it('persists renewal outside the window when the store opts in', async () => {
     await withStore(STORE, async (tx) => {
-      await tx.update(s.session).set({ expiresAt: new Date(Date.now() + 180 * 86_400_000) });
+      await tx.update(s.store).set({
+        config: { auth: { renewable: true, sessionTtlDays: 120, sessionRenewWindowDays: 7 } },
+      }).where(eq(s.store.id, STORE));
     });
-
+    const reg = await app.request('/v1/shop/auth/register', {
+      method: 'POST', headers: hdr(),
+      body: JSON.stringify({ email: 'renew-policy@auth.test', password: 'renewpassword1' }),
+    });
+    expect(reg.status).toBe(200);
+    const { token } = await reg.json() as { token: string };
+    const previous = new Date(Date.now() + 60 * 86_400_000);
+    await withStore(STORE, async (tx) => {
+      await tx.update(s.session).set({ expiresAt: previous }).where(eq(s.session.storeId, STORE));
+    });
     const res = await app.request('/v1/shop/auth/me', {
-      headers: hdr({ authorization: `Bearer ${body.token}` }),
+      headers: hdr({ authorization: `Bearer ${token}` }),
     });
     expect(res.status).toBe(200);
-    const renewed = await withStore(STORE, async (tx) => {
-      const [row] = await tx.select({ expiresAt: s.session.expiresAt }).from(s.session).limit(1);
-      return row?.expiresAt;
-    });
-    expect(renewed?.getTime()).toBeGreaterThan(Date.now() + 360 * 86_400_000);
+    const [renewed] = await withStore(STORE, (tx) => tx.select({ expiresAt: s.session.expiresAt })
+      .from(s.session).where(eq(s.session.storeId, STORE)).limit(1));
+    expect(renewed!.expiresAt.getTime()).toBeGreaterThan(Date.now() + 119 * 86_400_000);
+    expect(renewed!.expiresAt.getTime()).toBeLessThanOrEqual(Date.now() + 120 * 86_400_000);
   });
 });
 

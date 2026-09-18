@@ -65,3 +65,56 @@ describe('email dispatch app routing', () => {
     }));
   });
 });
+
+describe('per-store resolution precedence (SR-05)', () => {
+  it('store.config wins over global env when no appKey applies', async () => {
+    process.env = {
+      NODE_ENV: 'test',
+      SMTP_FROM: 'global@env.test',
+      STOREFRONT_URL: 'https://global-env.test',
+    };
+    const { resolveFromEmail, resolveStorefrontUrl } = await import('./dispatch.js');
+    const store = { name: 'Brand B', currency: 'EUR', config: { storefrontUrl: 'https://b-brand.example', emailFrom: 'orders@b-brand.example' } };
+    expect(resolveStorefrontUrl(store)).toBe('https://b-brand.example');
+    expect(resolveFromEmail(store)).toBe('orders@b-brand.example');
+  });
+
+  it('per-app env override still beats store.config (shared-store routing kept)', async () => {
+    process.env = {
+      NODE_ENV: 'test',
+      SMTP_FROM: 'global@env.test',
+      STOREFRONT_URL: 'https://global-env.test',
+      EMAIL_FROM_BY_APP: 'viewright=hello@viewright.cc',
+      STOREFRONT_URL_BY_APP: 'viewright=https://viewright.cc',
+    };
+    const { resolveFromEmail, resolveStorefrontUrl } = await import('./dispatch.js');
+    const store = { name: 'Shared', currency: 'USD', appKey: 'viewright', config: { storefrontUrl: 'https://shared-store.example', emailFrom: 'hi@shared-store.example' } };
+    expect(resolveStorefrontUrl(store)).toBe('https://viewright.cc');
+    expect(resolveFromEmail(store)).toBe('hello@viewright.cc');
+  });
+
+  it('falls back to env only when config carries no storefront identity', async () => {
+    process.env = {
+      NODE_ENV: 'test',
+      SMTP_FROM: 'global@env.test',
+      STOREFRONT_URL: 'https://global-env.test',
+    };
+    const { resolveFromEmail, resolveStorefrontUrl } = await import('./dispatch.js');
+    const store = { name: 'NoCfg', currency: 'USD', config: null };
+    expect(resolveStorefrontUrl(store)).toBe('https://global-env.test');
+    expect(resolveFromEmail(store)).toBe('global@env.test');
+  });
+
+  it('ignores a malformed config storefrontUrl rather than shipping it in a link', async () => {
+    process.env = {
+      NODE_ENV: 'test',
+      SMTP_FROM: 'global@env.test',
+      STOREFRONT_URL: 'https://global-env.test',
+    };
+    const { resolveStorefrontUrl } = await import('./dispatch.js');
+    expect(resolveStorefrontUrl({ name: 'X', currency: 'USD', config: { storefrontUrl: 'javascript:alert(1)' } })).toBe('https://global-env.test');
+    expect(resolveStorefrontUrl({ name: 'X', currency: 'USD', config: { storefrontUrl: 'not a url' } })).toBe('https://global-env.test');
+    // trailing slash is normalized so link paths don't get `//`
+    expect(resolveStorefrontUrl({ name: 'X', currency: 'USD', config: { storefrontUrl: 'https://shop.example/' } })).toBe('https://shop.example');
+  });
+});

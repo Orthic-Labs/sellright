@@ -295,6 +295,118 @@
       "when": 1782001200000,
       "tag": "0041_subscriber",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1788820000000,
+      "tag": "0042_payment_attempts",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1789200000000,
+      "tag": "0050_sheerid_verification",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1789200001000,
+      "tag": "0051_dispute",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1789200002000,
+      "tag": "0052_promotion_affiliate_email",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1790000000000,
+      "tag": "0057_email_change_outbox_dedupe",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1790000001000,
+      "tag": "0048_contact_submission",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1790000002000,
+      "tag": "0049_restock_notify",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1790000003000,
+      "tag": "0053_gateway_tenant_resolution",
+      "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1790000004000,
+      "tag": "0043_cart_revision",
+      "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1790000005000,
+      "tag": "0055_payment_refund_identity",
+      "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1790000006000,
+      "tag": "0058_cart_merged_status",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1790000007000,
+      "tag": "0059_subscriber_signup_group",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1790000008000,
+      "tag": "0060_gateway_tenant_resolution_strict",
+      "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1790000009000,
+      "tag": "0061_passwordless_signin",
+      "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1790000009100,
+      "tag": "0064_licensing_engine",
+      "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "7",
+      "when": 1790000009200,
+      "tag": "0066_storekit",
+      "breakpoints": true
     }
   ]
 }

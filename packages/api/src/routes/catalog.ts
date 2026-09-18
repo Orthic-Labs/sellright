@@ -23,6 +23,12 @@ const Variant = z.object({
   compareAtPrice: Money.nullable(),
   isPreOrder: z.boolean(),
   enabled: z.boolean(),
+  // Storefronts must know a variant is a software license before checkout: the
+  // legal gate keys off these two, and the API rejects a licensed order that
+  // arrives without an acceptance receipt. Both are product metadata, not
+  // fulfillment internals — nothing sensitive is exposed by publishing them.
+  fulfillmentType: z.enum(['physical', 'digital_download', 'license', 'update_pass']),
+  appKey: z.string().nullable(),
 });
 
 const ProductDetail = z.object({
@@ -128,6 +134,8 @@ catalog.openapi(
           compareAtPrice: s.productVariant.compareAtPrice,
           isPreOrder: s.productVariant.isPreOrder,
           enabled: s.productVariant.enabled,
+          fulfillmentType: s.productVariant.fulfillmentType,
+          appKey: s.productVariant.appKey,
         })
         .from(s.productVariant)
         .where(and(eq(s.productVariant.productId, p.id), isNull(s.productVariant.deletedAt)))

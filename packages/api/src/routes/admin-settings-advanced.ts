@@ -1,28 +1,17 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { randomBytes, createHash } from 'node:crypto';
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { hashPassword } from '../auth/password.js';
 import { normalizeEmail } from '../auth/email.js';
 import {
-  attachStaffToStore,
-  countStoreOwners,
   createAdminUser,
-  createStaffInvite,
   findAdminIdByEmail,
   findInviteByTokenHash,
-  getStaffPermissions,
-  getStaffRole,
-  isStaffInStore,
   listStoreInvites,
   listStoreStaff,
-  markInviteAccepted,
-  removeStaffFromStore,
-  revokeAllSessionsForAdmin,
   setAdminPassword,
-  setStaffPermissions,
-  updateStaffRole,
 } from '../auth/admin-staff.js';
 import { sendStaffInvite } from '../email/dispatch.js';
 import { err as logErr } from '../lib/logger.js';
@@ -31,6 +20,16 @@ import { assertSafeOutboundUrl, type OutboundUrlLookup } from '../security/outbo
 import { HttpError, J, errBody, requireAdmin, requireStore, requireManage, requireOwner, requirePermission, guard } from './admin-helpers.js';
 
 export const adminSettingsAdvanced = new OpenAPIHono();
+
+// SR-16: staff / permission / invite mutations below write their audit_log row
+// in the SAME withStore transaction as the mutation itself — both commit or
+// both roll back, and a denied action throws before the insert so it never
+// produces a "success" record. The mutations hit admin_user_store /
+// staff_invite / session, which are deliberately RLS-EXEMPT (drizzle/0008,
+// 0018, 0025 — they're the global ACL registry), so a store-scoped tx can
+// write them; audit_log is tenant_isolation-gated and gets storeId = the
+// caller's store, keeping each store's audit rows invisible to other stores.
+// Audit payloads never carry passwords, hashes, tokens, or signing secrets.
 
 export async function sanitizeWebhookEndpointPatch(
   input: { url?: string; topics?: string[]; enabled?: boolean },
@@ -69,6 +68,9 @@ adminSettingsAdvanced.openapi(
     const secret = randomBytes(24).toString('hex');
     const id = await withStore(st.storeId, async (tx) => {
       const [w] = await tx.insert(s.webhookEndpoint).values({ storeId: st.storeId, url, topics: b.topics, secret }).returning({ id: s.webhookEndpoint.id });
+      // SR-16: the signing secret is returned once and NEVER written to the
+      // audit row — only the non-secret endpoint shape is recorded.
+      await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'webhook_endpoint', entityId: w!.id, action: 'create', data: { url, topics: b.topics } });
       return w!.id;
     });
     return c.json({ id, secret }, 200);
@@ -88,9 +90,10 @@ adminSettingsAdvanced.openapi(
     const b = c.req.valid('json');
     const patch = await sanitizeWebhookEndpointPatch(b);
     const ok = await withStore(st.storeId, async (tx) => {
-      const [w] = await tx.select({ id: s.webhookEndpoint.id }).from(s.webhookEndpoint).where(eq(s.webhookEndpoint.id, id)).limit(1);
+      const [w] = await tx.select({ id: s.webhookEndpoint.id, url: s.webhookEndpoint.url, topics: s.webhookEndpoint.topics, enabled: s.webhookEndpoint.enabled }).from(s.webhookEndpoint).where(eq(s.webhookEndpoint.id, id)).limit(1);
       if (!w) return false;
       await tx.update(s.webhookEndpoint).set(patch).where(eq(s.webhookEndpoint.id, id));
+      await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'webhook_endpoint', entityId: id, action: 'update', data: { before: { url: w.url, topics: w.topics, enabled: w.enabled }, after: patch } });
       return true;
     });
     if (!ok) throw new HttpError(404, 'webhook not found');
@@ -108,7 +111,12 @@ adminSettingsAdvanced.openapi(
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireManage(st);
     const { id } = c.req.valid('param');
-    await withStore(st.storeId, async (tx) => { await tx.delete(s.webhookDelivery).where(eq(s.webhookDelivery.endpointId, id)); await tx.delete(s.webhookEndpoint).where(eq(s.webhookEndpoint.id, id)); });
+    await withStore(st.storeId, async (tx) => {
+      const [w] = await tx.select({ url: s.webhookEndpoint.url }).from(s.webhookEndpoint).where(eq(s.webhookEndpoint.id, id)).limit(1);
+      await tx.delete(s.webhookDelivery).where(eq(s.webhookDelivery.endpointId, id));
+      await tx.delete(s.webhookEndpoint).where(eq(s.webhookEndpoint.id, id));
+      if (w) await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'webhook_endpoint', entityId: id, action: 'delete', data: { url: w.url } });
+    });
     return c.json({ id }, 200);
   }),
 );
@@ -158,7 +166,25 @@ adminSettingsAdvanced.openapi(
     if (!adminUserId) {
       adminUserId = await createAdminUser(email, await hashPassword(password));
     }
-    await attachStaffToStore(adminUserId, st.storeId, role);
+    // SR-16: the store-scoped grant (admin_user_store is RLS-exempt — see
+    // drizzle/0008 — so a withStore tx can write it) and its audit row commit
+    // or roll back together. The password never leaves this handler.
+    const uid = adminUserId;
+    await withStore(st.storeId, async (tx) => {
+      await tx
+        .insert(s.adminUserStore)
+        .values({ adminUserId: uid, storeId: st.storeId, role })
+        .onConflictDoUpdate({ target: [s.adminUserStore.adminUserId, s.adminUserStore.storeId], set: { role } });
+      await tx.insert(s.auditLog).values({
+        storeId: st.storeId,
+        actor: admin.email,
+        entity: 'staff',
+        entityId: uid,
+        action: 'add',
+        toState: role,
+        data: { email },
+      });
+    });
     return c.json({ adminUserId }, 200);
   }),
 );
@@ -177,14 +203,44 @@ adminSettingsAdvanced.openapi(
     // SEC-OWNER-1: a manager passes requireManage() above but must not be able
     // to grant themselves (or anyone) 'owner', nor to demote the real owner —
     // either direction requires the CALLER to already be an owner.
-    const currentRole = await getStaffRole(adminUserId, st.storeId);
-    if (role === 'owner' || currentRole === 'owner') requireOwner(st);
-    // Even an owner can't demote the last remaining owner — that would leave
-    // the store with nobody able to grant owner access again.
-    if (currentRole === 'owner' && role !== 'owner' && (await countStoreOwners(st.storeId)) <= 1) {
-      throw new HttpError(409, 'cannot demote the last remaining owner');
-    }
-    await updateStaffRole(adminUserId, st.storeId, role);
+    //
+    // SR-16: check + role write + audit row run in ONE transaction (the row is
+    // FOR UPDATE locked, so the last-owner check can't race; admin_user_store
+    // is RLS-exempt — drizzle/0008 — so a withStore tx can write it). A denied
+    // change throws before the audit insert and rolls back — no phantom record.
+    await withStore(st.storeId, async (tx) => {
+      const [m] = await tx
+        .select({ role: s.adminUserStore.role })
+        .from(s.adminUserStore)
+        .where(and(eq(s.adminUserStore.adminUserId, adminUserId), eq(s.adminUserStore.storeId, st.storeId)))
+        .for('update')
+        .limit(1);
+      const currentRole = m?.role ?? null;
+      if (role === 'owner' || currentRole === 'owner') requireOwner(st);
+      // Even an owner can't demote the last remaining owner — that would
+      // leave the store with nobody able to grant owner access again.
+      if (currentRole === 'owner' && role !== 'owner') {
+        const owners = await tx
+          .select({ id: s.adminUserStore.adminUserId })
+          .from(s.adminUserStore)
+          .where(and(eq(s.adminUserStore.storeId, st.storeId), eq(s.adminUserStore.role, 'owner')));
+        if (owners.length <= 1) throw new HttpError(409, 'cannot demote the last remaining owner');
+      }
+      if (currentRole === null) throw new HttpError(404, 'staff member not enrolled in this store');
+      await tx
+        .update(s.adminUserStore)
+        .set({ role })
+        .where(and(eq(s.adminUserStore.adminUserId, adminUserId), eq(s.adminUserStore.storeId, st.storeId)));
+      await tx.insert(s.auditLog).values({
+        storeId: st.storeId,
+        actor: admin.email,
+        entity: 'staff',
+        entityId: adminUserId,
+        action: 'role_change',
+        fromState: currentRole,
+        toState: role,
+      });
+    });
     return c.json({ ok: true }, 200);
   }),
 );
@@ -202,12 +258,37 @@ adminSettingsAdvanced.openapi(
     if (adminUserId === admin.id) throw new HttpError(409, 'cannot remove your own access');
     // SEC-OWNER-1: removing an owner requires the CALLER to be an owner, and
     // even an owner can't remove the last remaining owner.
-    const targetRole = await getStaffRole(adminUserId, st.storeId);
-    if (targetRole === 'owner') {
-      requireOwner(st);
-      if ((await countStoreOwners(st.storeId)) <= 1) throw new HttpError(409, 'cannot remove the last remaining owner');
-    }
-    await removeStaffFromStore(adminUserId, st.storeId);
+    // SR-16: check + delete + audit row share one transaction — see PATCH above.
+    await withStore(st.storeId, async (tx) => {
+      const [m] = await tx
+        .select({ role: s.adminUserStore.role })
+        .from(s.adminUserStore)
+        .where(and(eq(s.adminUserStore.adminUserId, adminUserId), eq(s.adminUserStore.storeId, st.storeId)))
+        .for('update')
+        .limit(1);
+      const targetRole = m?.role ?? null;
+      if (targetRole === 'owner') {
+        requireOwner(st);
+        const owners = await tx
+          .select({ id: s.adminUserStore.adminUserId })
+          .from(s.adminUserStore)
+          .where(and(eq(s.adminUserStore.storeId, st.storeId), eq(s.adminUserStore.role, 'owner')));
+        if (owners.length <= 1) throw new HttpError(409, 'cannot remove the last remaining owner');
+      }
+      await tx
+        .delete(s.adminUserStore)
+        .where(and(eq(s.adminUserStore.adminUserId, adminUserId), eq(s.adminUserStore.storeId, st.storeId)));
+      if (targetRole !== null) {
+        await tx.insert(s.auditLog).values({
+          storeId: st.storeId,
+          actor: admin.email,
+          entity: 'staff',
+          entityId: adminUserId,
+          action: 'remove',
+          fromState: targetRole,
+        });
+      }
+    });
     return c.json({ ok: true }, 200);
   }),
 );
@@ -229,7 +310,24 @@ adminSettingsAdvanced.openapi(
     // SEC-OWNER-1: same owner-only gate as direct staff creation.
     if (b.role === 'owner') requireOwner(st);
     const token = randomBytes(24).toString('hex');
-    const invId = await createStaffInvite(st.storeId, b.email, b.role, hashTok(token), new Date(Date.now() + INVITE_TTL_MS));
+    // SR-16: invite insert + audit row in one transaction. The raw token is
+    // never persisted anywhere but the response — only its sha256 hash is
+    // stored, and the audit row carries email/role, not the token or hash.
+    const invId = await withStore(st.storeId, async (tx) => {
+      const [inv] = await tx
+        .insert(s.staffInvite)
+        .values({ storeId: st.storeId, email: normalizeEmail(b.email), role: b.role, tokenHash: hashTok(token), expiresAt: new Date(Date.now() + INVITE_TTL_MS) })
+        .returning({ id: s.staffInvite.id });
+      await tx.insert(s.auditLog).values({
+        storeId: st.storeId,
+        actor: admin.email,
+        entity: 'staff_invite',
+        entityId: inv!.id,
+        action: 'create',
+        data: { email: normalizeEmail(b.email), role: b.role },
+      });
+      return inv!.id;
+    });
     const acceptUrl = `/admin/accept-invite?token=${token}`;
     // WP2: best-effort invite email. If SMTP is unconfigured the dev log line
     // will surface the token; the response still includes it for the inviter.
@@ -272,8 +370,27 @@ adminSettingsAdvanced.openapi(
     } else {
       adminId = await createAdminUser(inv.email, passwordHash);
     }
-    await attachStaffToStore(adminId, inv.storeId, inv.role as 'owner' | 'manager' | 'staff' | 'read_only');
-    await markInviteAccepted(inv.id);
+    // SR-16: the attach + invite-acceptance + audit row commit atomically.
+    // Actor is the invitee themselves — this is a public, token-gated route.
+    // The password hash never touches the audit row.
+    const uid = adminId;
+    await withStore(inv.storeId, async (tx) => {
+      const role = inv.role as 'owner' | 'manager' | 'staff' | 'read_only';
+      await tx
+        .insert(s.adminUserStore)
+        .values({ adminUserId: uid, storeId: inv.storeId, role })
+        .onConflictDoUpdate({ target: [s.adminUserStore.adminUserId, s.adminUserStore.storeId], set: { role } });
+      await tx.update(s.staffInvite).set({ acceptedAt: new Date() }).where(eq(s.staffInvite.id, inv.id));
+      await tx.insert(s.auditLog).values({
+        storeId: inv.storeId,
+        actor: `invite:${inv.email}`,
+        entity: 'staff',
+        entityId: uid,
+        action: 'accept_invite',
+        toState: inv.role,
+        data: { email: inv.email, inviteId: inv.id },
+      });
+    });
     return c.json({ ok: true }, 200);
   },
 );
@@ -291,9 +408,25 @@ adminSettingsAdvanced.openapi(
     // ra-sec: sessions are global (RLS-exempt), so scope the action here — confirm
     // the target is enrolled in the caller's store before force-logging them out,
     // or a manager could revoke a superadmin / another store's user by UUID (IDOR).
-    const enrolled = await isStaffInStore(adminUserId, st.storeId);
-    if (!enrolled) throw new HttpError(404, 'staff member not enrolled in this store');
-    const revoked = await revokeAllSessionsForAdmin(adminUserId);
+    // SR-16: enrollment check + session delete + audit row in one transaction.
+    const revoked = await withStore(st.storeId, async (tx) => {
+      const [m] = await tx
+        .select({ id: s.adminUserStore.adminUserId })
+        .from(s.adminUserStore)
+        .where(and(eq(s.adminUserStore.adminUserId, adminUserId), eq(s.adminUserStore.storeId, st.storeId)))
+        .limit(1);
+      if (!m) throw new HttpError(404, 'staff member not enrolled in this store');
+      const del = await tx.delete(s.session).where(eq(s.session.adminUserId, adminUserId)).returning({ id: s.session.id });
+      await tx.insert(s.auditLog).values({
+        storeId: st.storeId,
+        actor: admin.email,
+        entity: 'staff',
+        entityId: adminUserId,
+        action: 'revoke_sessions',
+        data: { revoked: del.length },
+      });
+      return del.length;
+    });
     return c.json({ revoked }, 200);
   }),
 );
@@ -327,6 +460,7 @@ adminSettingsAdvanced.openapi(
     await withStore(st.storeId, async (tx) => {
       await tx.insert(s.currencyRate).values({ storeId: st.storeId, currency: cur, rate: b.rate, enabled: b.enabled })
         .onConflictDoUpdate({ target: [s.currencyRate.storeId, s.currencyRate.currency], set: { rate: b.rate, enabled: b.enabled } });
+      await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'currency_rate', entityId: cur, action: 'upsert', data: { rate: b.rate, enabled: b.enabled } });
     });
     return c.json({ currency: cur, rate: b.rate }, 200);
   }),
@@ -382,10 +516,34 @@ adminSettingsAdvanced.openapi(
     // the value we just SELECTed — concurrent PUTs to the same member are rare
     // and the resolution is whichever landed last (acceptable: the UI serializes
     // edits from the same operator).
-    const cur = await getStaffPermissions(adminUserId, st.storeId);
-    if (cur === null) throw new HttpError(404, 'staff member not enrolled in this store');
-    const next = mergeStaffPermissions(cur, b.permissions);
-    await setStaffPermissions(adminUserId, st.storeId, next);
+    // SR-16: read + merge + write + audit row share one transaction (FOR UPDATE
+    // so the "before" snapshot and the merge can't interleave with a second
+    // writer). Permission maps are the whole payload — they hold capability
+    // flags only, never secrets.
+    const next = await withStore(st.storeId, async (tx) => {
+      const [cur] = await tx
+        .select({ permissions: s.adminUserStore.permissions })
+        .from(s.adminUserStore)
+        .where(and(eq(s.adminUserStore.adminUserId, adminUserId), eq(s.adminUserStore.storeId, st.storeId)))
+        .for('update')
+        .limit(1);
+      if (!cur) throw new HttpError(404, 'staff member not enrolled in this store');
+      const before = (cur.permissions ?? null) as Record<string, boolean> | null;
+      const merged = mergeStaffPermissions(before, b.permissions);
+      await tx
+        .update(s.adminUserStore)
+        .set({ permissions: merged })
+        .where(and(eq(s.adminUserStore.adminUserId, adminUserId), eq(s.adminUserStore.storeId, st.storeId)));
+      await tx.insert(s.auditLog).values({
+        storeId: st.storeId,
+        actor: admin.email,
+        entity: 'staff',
+        entityId: adminUserId,
+        action: 'permissions_update',
+        data: { before, after: merged },
+      });
+      return merged;
+    });
     return c.json({ adminUserId, permissions: next }, 200);
   }),
 );

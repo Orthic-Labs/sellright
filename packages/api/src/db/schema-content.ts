@@ -22,10 +22,11 @@ export const customerToken = pgTable('customer_token', {
   customerId: uuid().notNull().references(() => customer.id),
   // Compile-time enum — typos in `kind` fail at the TS layer, not at insert.
   // The DB-level CHECK constraint is added by migration 0023 (defense in depth).
-  kind: text({ enum: ['password_reset', 'email_verify', 'set_password'] }).notNull(),
+  kind: text({ enum: ['password_reset', 'email_verify', 'set_password', 'email_change', 'magic_link'] }).notNull(),
   tokenHash: text().notNull().unique(),
   expiresAt: timestamp({ withTimezone: true }).notNull(),
   usedAt: timestamp({ withTimezone: true }),
+  payload: jsonb(), // e.g. pending new email for email_change tokens
   createdAt: ts(),
 });
 
@@ -76,6 +77,10 @@ export const subscriber = pgTable(
     lastSentAt: timestamp({ withTimezone: true }),
     source: text({ enum: ['storefront', 'checkout', 'import', 'api'] }),
     meta: jsonb(),
+    // Shared identity of one logical signup that was expanded across multiple
+    // variant topics (imported product-level waitlists). The restock claim
+    // consumes by group so one signup = one notification, DD parity.
+    signupGroup: text('signup_group'),
     listmonkSyncedAt: timestamp({ withTimezone: true }),
     createdAt: ts(),
     updatedAt: ts(),
@@ -136,7 +141,7 @@ export const blogPost = pgTable(
 // The storefront keeps a snappy local cart and syncs it here for persistence,
 // cross-device recovery, and abandonment/funnel analytics. An order is created
 // from a cart only at checkout (cart.converted_order_id links the two).
-export const cartStatus = pgEnum('cart_status', ['active', 'abandoned', 'converted']);
+export const cartStatus = pgEnum('cart_status', ['active', 'abandoned', 'converted', 'merged']);
 
 export const cart = pgTable('cart', {
   id: uuid().primaryKey().defaultRandom(),
@@ -150,6 +155,9 @@ export const cart = pgTable('cart', {
   // Set on create + extended on every line mutation (cartExpiry helper).
   // (migration 0032)
   expiresAt: timestamp({ withTimezone: true }),
+  // Monotonic optimistic-concurrency counter (CART-03, migration 0043). Every
+  // mutation bumps it; writers passing expectedRevision conflict on staleness.
+  revision: integer().notNull().default(0),
   createdAt: ts(),
   updatedAt: ts(),
 });

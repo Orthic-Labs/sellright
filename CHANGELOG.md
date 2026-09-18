@@ -12,10 +12,23 @@ must update the matching changelog in the same push.
 
 ### Changed
 
+- NMI test profiles can use an existing merchant account on the production
+  endpoint with per-transaction test mode. Endpoint identity is retained for
+  replay, reconciliation and refunds.
+
 - Web/admin favicons, touch icons, and manifest artwork now use the selected
   SellRight mark from the verified cross-platform asset kit.
 
 ### Fixed
+
+- NMI refund reconciliation requires successful matching refund evidence,
+  rather than treating a known transaction reference as settlement.
+- Gateway replay and verification reject endpoint changes with a controlled
+  conflict response.
+- Opt-in gateway tests require an explicitly named disposable database and
+  independent single-use tokens for charge and refund acceptance.
+- Container CI provides the required non-owner role password and empty gateway
+  secret file.
 
 - Postgres transactions no longer stay open while Stripe, SMTP, or APNs calls
   wait on the network. Payments and refunds use a cross-process advisory lock

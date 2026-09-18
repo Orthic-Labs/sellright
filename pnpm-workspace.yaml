@@ -1,9 +1,5 @@
 packages:
   - "packages/*"
-  # storefront is a cloned Qwik app with its own lockfile/toolchain; it manages
-  # its own deps (own pnpm install) so it can't disturb the api/shared build
-  # while its data layer is rewired from Vendure GraphQL -> SellRight REST.
-  - "!packages/storefront"
   # admin is a standalone React+Vite SPA with its own lockfile/toolchain; it
   # installs independently so its React deps can't disturb the api/shared build.
   - "!packages/admin"
@@ -13,8 +9,8 @@ packages:
 # candidates (minimumReleaseAge, trustPolicy: no-downgrade) would block the
 # existing lockfile (`semver@6.3.1` flags a trust-downgrade; several packages
 # were published within the last 7 days). Land those settings as a follow-up
-# once the lockfile is rebuilt from a clean state — add them here AND in
-# packages/{admin,storefront}/pnpm-workspace.yaml. The blockExoticSubdeps knob
+# once the lockfile is rebuilt from a clean state â€” add them here AND in
+# packages/admin/pnpm-workspace.yaml. The blockExoticSubdeps knob
 # already blocks packages from registries outside the trusted allowlist, which
 # is the highest-value supply-chain defense and works against the current
 # lockfile.
@@ -32,12 +28,15 @@ onlyBuiltDependencies:
   - sharp
 
 overrides:
+  # GHSA-82fw-gwwq-j7x9: keep the test runner and its mocker on the patched release.
+  vitest: 4.1.11
+  '@vitest/mocker': 4.1.11
   esbuild: 0.28.1
-  # GHSA-r28c-9q8g-f849 (path traversal) — postcss is pulled in transitively
-  # (sanitize-html) as well as directly by admin/storefront; force >= 8.5.18
+  # GHSA-r28c-9q8g-f849 (path traversal) â€” postcss is pulled in transitively
+  # (sanitize-html) as well as directly by admin; force >= 8.5.18
   # workspace-wide rather than editing each package.json.
   postcss: ^8.5.18
-  # GHSA-2v37-7h3g-55p8 � sanitize-html/postcss permits vulnerable nanoid 3.x.
+  # GHSA-2v37-7h3g-55p8 — sanitize-html/postcss permits vulnerable nanoid 3.x.
   nanoid: ^3.3.18
-  # brace-expansion via @typescript-eslint devDependency — fix >= 5.0.8.
+  # brace-expansion via @typescript-eslint devDependency â€” fix >= 5.0.8.
   brace-expansion: ^5.0.8
