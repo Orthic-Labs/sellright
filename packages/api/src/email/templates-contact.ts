@@ -3,11 +3,13 @@
  *
  * Lives beside templates.ts rather than inside it because that file is owned
  * by another lane. Same shape: plain functions returning {subject, html,
- * text}; the wrap/escape/stripTags helpers below are local copies of the
+ * text}; the wrap/escape helpers below are local copies of the
  * templates.ts originals — they are not exported there and duplicating ~20
  * lines keeps the ownership boundary clean. Keep them in sync if the
  * canonical versions change.
  */
+import { textBody as stripTags } from './text-body.js';
+
 export interface StoreCtx { name: string; currency: string; storefrontUrl: string; fromEmail: string; }
 
 const wrap = (store: StoreCtx, title: string, body: string) => ({
@@ -24,7 +26,6 @@ const wrap = (store: StoreCtx, title: string, body: string) => ({
 });
 
 const escape = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
-const stripTags = (s: string) => s.replace(/<[^>]+>/g, '');
 
 // PAR-01: confirm-before-deliver. Sent to the SUBMITTER, not an account OTP —
 // clicking the signed link is what releases the message to the team inbox.

@@ -5,9 +5,9 @@
  * via the existing outbox/dispatch API.
  */
 import type { StoreCtx } from './templates.js';
+import { textBody as stripTags } from './text-body.js';
 
 const escape = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
-const stripTags = (s: string) => s.replace(/<[^>]+>/g, '');
 
 const wrap = (store: StoreCtx, title: string, body: string) => ({
   // Strip CR/LF from the subject — SMTP header-injection guard (see templates.ts).

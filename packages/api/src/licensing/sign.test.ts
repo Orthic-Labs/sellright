@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createPublicKey, generateKeyPairSync } from 'node:crypto';
-import { writeFileSync, rmSync } from 'node:fs';
+import { writeFileSync, rmSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -172,8 +172,9 @@ describe('signed entitlement token', () => {
 
   it('signEntitlement reads the key from LICENSE_SIGNING_KEY_FILE (box deploy path)', () => {
     const { privateKey, publicKey } = generateKeyPairSync('ed25519');
-    const tmp = join(tmpdir(), `sr-test-key-${process.pid}.pem`);
-    writeFileSync(tmp, privateKey.export({ type: 'pkcs8', format: 'pem' }) as string);
+    const dir = mkdtempSync(join(tmpdir(), 'sr-test-key-'));
+    const tmp = join(dir, 'key.pem');
+    writeFileSync(tmp, privateKey.export({ type: 'pkcs8', format: 'pem' }) as string, { mode: 0o600, flag: 'wx' });
     const prevInline = process.env.LICENSE_SIGNING_KEY;
     delete process.env.LICENSE_SIGNING_KEY;
     process.env.LICENSE_SIGNING_KEY_FILE = tmp;
@@ -186,7 +187,7 @@ describe('signed entitlement token', () => {
       delete process.env.LICENSE_SIGNING_KEY_FILE;
       if (prevInline !== undefined) process.env.LICENSE_SIGNING_KEY = prevInline;
       _resetSigningKeyCache();
-      rmSync(tmp, { force: true });
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 

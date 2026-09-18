@@ -2,6 +2,8 @@
  * Email templates (WP2b). Plain TS functions — no template engine dep. Each
  * returns {subject, html, text} so the mailer stays dumb.
  */
+import { textBody as stripTags } from './text-body.js';
+
 export interface StoreCtx { name: string; currency: string; storefrontUrl: string; fromEmail: string; }
 
 const wrap = (store: StoreCtx, title: string, body: string) => ({
@@ -19,8 +21,6 @@ const wrap = (store: StoreCtx, title: string, body: string) => ({
 });
 
 const escape = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
-const stripTags = (s: string) => s.replace(/<[^>]+>/g, '');
-
 export const orderConfirmation = (store: StoreCtx, data: { code: string; grandTotal: number; currency: string; lines: Array<{ name: string; quantity: number; lineTotal: number }> }) =>
   wrap(store, `Order confirmed — ${data.code}`,
     `<p>Thanks for your order. Here's the summary:</p>
