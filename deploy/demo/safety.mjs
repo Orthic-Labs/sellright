@@ -51,7 +51,13 @@ export async function assertDemoData(pool) {
 export async function cleanDemo(pool) {
   await assertDemoData(pool);
   await demoTransaction(pool, async (client) => {
-    await client.query("DELETE FROM cart WHERE created_at < now() - interval '1 day'");
+    // Lock the expired parents before removing children; the FK is not cascading.
+    const { rows: expired } = await client.query("SELECT id FROM cart WHERE created_at < now() - interval '1 day' FOR UPDATE");
+    if (expired.length) {
+      const ids = expired.map(row => row.id);
+      await client.query('DELETE FROM cart_line WHERE cart_id = ANY($1::uuid[])', [ids]);
+      await client.query('DELETE FROM cart WHERE id = ANY($1::uuid[])', [ids]);
+    }
     await client.query("DELETE FROM session WHERE expires_at < now() OR created_at < now() - interval '1 hour'");
   });
 }
