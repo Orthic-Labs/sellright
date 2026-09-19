@@ -1,4 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
+import { emitProductChanged, emitVariantProductChanged } from '../webhooks/catalog.js';
 import { and, eq, ilike, inArray, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
@@ -67,6 +68,9 @@ adminProducts.openapi(
           name: s.productVariant.name,
           price: s.productVariant.price,
           salePrice: s.productVariant.salePrice,
+          isPreOrder: s.productVariant.isPreOrder,
+          preOrderPrice: s.productVariant.preOrderPrice,
+          shipDate: s.productVariant.shipDate,
           enabled: s.productVariant.enabled,
           fulfillmentType: s.productVariant.fulfillmentType,
           appKey: s.productVariant.appKey,
@@ -120,6 +124,7 @@ adminProducts.openapi(
       if (!p) return false;
       await tx.update(s.product).set({ ...patch, updatedAt: new Date() }).where(eq(s.product.id, id));
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'product', entityId: id, action: 'update', fromState: p.status, toState: patch.status ?? p.status, data: patch });
+      await emitProductChanged(tx, st.storeId, id);
       return true;
     });
     if (!ok) throw new HttpError(404, 'product not found');
@@ -133,6 +138,9 @@ adminProducts.openapi(
     request: { params: z.object({ id: z.string() }), body: { content: J(z.object({
       price: money.optional(),
       salePrice: money.nullable().optional(),
+      isPreOrder: z.boolean().optional(),
+      preOrderPrice: money.min(0).nullable().optional(),
+      shipDate: z.iso.datetime({ offset: true }).nullable().optional(),
       compareAtPrice: money.nullable().optional(),
       cost: money.nullable().optional(),
       barcode: z.string().nullable().optional(),
@@ -158,8 +166,9 @@ adminProducts.openapi(
     const ok = await withStore(st.storeId, async (tx) => {
       const [v] = await tx.select({ id: s.productVariant.id }).from(s.productVariant).where(eq(s.productVariant.id, id)).limit(1);
       if (!v) return false;
-      await tx.update(s.productVariant).set({ ...patch, updatedAt: new Date() }).where(eq(s.productVariant.id, id));
+      await tx.update(s.productVariant).set({ ...patch, shipDate: patch.shipDate === undefined ? undefined : patch.shipDate === null ? null : new Date(patch.shipDate), updatedAt: new Date() }).where(eq(s.productVariant.id, id));
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'variant', entityId: id, action: 'update', data: patch });
+      await emitVariantProductChanged(tx, st.storeId, id);
       return true;
     });
     if (!ok) throw new HttpError(404, 'variant not found');
@@ -192,10 +201,10 @@ adminProducts.openapi(
         await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: id, delta: onHand, reason: 'admin_adjust' });
       }
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'variant', entityId: id, action: 'stock', data: { onHand } });
+      await emitVariantProductChanged(tx, st.storeId, id);
       return true;
     });
     if (!ok) throw new HttpError(404, 'variant not found');
     return c.json({ id, onHand }, 200);
   }),
 );
-

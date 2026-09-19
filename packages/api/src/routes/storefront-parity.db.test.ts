@@ -9,8 +9,11 @@ import { clearLoginAttempts } from '../auth/rate-limit.js';
 import { verifyTurnstileToken } from '../security/turnstile.js';
 import { shopExtra } from './shop-extra.js';
 import { adminContent } from './admin-content.js';
+import { adminProducts } from './admin-products.js';
+import { adminCatalog } from './admin-catalog.js';
 import { auth } from './auth.js';
 import { clearTrackingAttempts } from './shop-extra.tracking-limit.js';
+import { emitProductChanged } from '../webhooks/catalog.js';
 
 vi.mock('../security/turnstile.js', () => ({ verifyTurnstileToken: vi.fn(async ({ token }) => token === 'valid-token') }));
 const dbName = decodeURIComponent(new URL(process.env.DATABASE_URL ?? '').pathname.slice(1));
@@ -23,6 +26,8 @@ const EMAIL = 'buyer@parity.test';
 const app = new OpenAPIHono();
 app.route('/', shopExtra);
 app.route('/', adminContent);
+app.route('/', adminProducts);
+app.route('/', adminCatalog);
 app.route('/', auth);
 const headers = { 'x-store-slug': SLUG, 'content-type': 'application/json' };
 let token: string;
@@ -57,6 +62,66 @@ afterAll(() => pool.end());
 function admin(method: string, path: string, body: unknown) {
   return app.request(path, { method, headers: { ...headers, authorization: `Bearer ${token}` }, body: JSON.stringify(body) });
 }
+
+describe('native preorder administration', () => {
+  it('creates, reads, updates and clears preorder values with audit evidence', async () => {
+    const product = await admin('POST', '/v1/admin/products', { name: 'Preorder fixture', status: 'active' });
+    const { id: productId } = await product.json() as { id: string };
+    const created = await admin('POST', `/v1/admin/products/${productId}/variants`, { sku: 'PREORDER-FIXTURE', name: 'Fixture', price: 5000, isPreOrder: true, preOrderPrice: 3000, shipDate: '2027-01-01T00:00:00Z' });
+    expect(created.status).toBe(200);
+    const { id } = await created.json() as { id: string };
+    const read = async () => (await (await app.request(`/v1/admin/products/${productId}`, { headers: { ...headers, authorization: `Bearer ${token}` } })).json()) as { variants: unknown[] };
+    expect((await read()).variants[0]).toMatchObject({ isPreOrder: true, preOrderPrice: 3000, shipDate: '2027-01-01T00:00:00.000Z' });
+    expect((await admin('PATCH', `/v1/admin/variants/${id}`, { preOrderPrice: 3500, shipDate: '2027-02-01T12:30:00+02:00' })).status).toBe(200);
+    expect((await read()).variants[0]).toMatchObject({ isPreOrder: true, preOrderPrice: 3500, shipDate: '2027-02-01T10:30:00.000Z' });
+    const clear = { isPreOrder: false, preOrderPrice: null, shipDate: null };
+    expect((await admin('PATCH', `/v1/admin/variants/${id}`, clear)).status).toBe(200);
+    expect((await read()).variants[0]).toMatchObject(clear);
+    const audit = await withStore(STORE, tx => tx.select().from(s.auditLog).where(eq(s.auditLog.entityId, id)));
+    expect(audit.map(row => row.data)).toContainEqual(clear);
+    for (const invalid of [{ preOrderPrice: -1 }, { shipDate: 'not-a-date' }, { isPreOrder: 'true' }]) {
+      expect((await admin('PATCH', `/v1/admin/variants/${id}`, invalid)).status).toBe(400);
+      expect((await admin('POST', `/v1/admin/products/${productId}/variants`, { sku: 'INVALID', name: 'Invalid', price: 5000, ...invalid })).status).toBe(400);
+    }
+  });
+});
+
+describe('catalog change webhooks', () => {
+  it('queues product and variant changes only for the subscribed store, atomically', async () => {
+    for (const storeId of [STORE, OTHER]) await withStore(storeId, tx => tx.insert(s.webhookEndpoint).values({
+      storeId, url: 'https://store.example/indexnow/', secret: 'fixture-only', topics: ['catalog.product_changed'],
+    }));
+    const created = await admin('POST', '/v1/admin/products', { name: 'Catalog event fixture', status: 'active' });
+    const { id, slug } = await created.json() as { id: string; slug: string };
+    const deliveries = () => pool.query<{ payload: unknown; store_id: string }>('SELECT payload, store_id FROM webhook_delivery ORDER BY created_at');
+    expect((await deliveries()).rows).toEqual([{ store_id: STORE, payload: { storeId: STORE, productId: id, slug } }]);
+    const variant = await admin('POST', `/v1/admin/products/${id}/variants`, { sku: 'EVENT-SKU', name: 'Variant', price: 1000 });
+    const { id: variantId } = await variant.json() as { id: string };
+    for (const [method, path, body] of [
+      ['PATCH', `/v1/admin/products/${id}`, { description: 'Updated' }],
+      ['PATCH', `/v1/admin/variants/${variantId}`, { price: 1200 }],
+      ['PATCH', `/v1/admin/variants/${variantId}/stock`, { onHand: 5 }],
+      ['POST', `/v1/admin/products/${id}/assets`, { assetId }],
+      ['DELETE', `/v1/admin/products/${id}/assets/${assetId}`, {}],
+      ['POST', `/v1/admin/products/${id}/option-groups`, { name: 'Size', values: ['Small'] }],
+      ['PUT', `/v1/admin/variants/${variantId}/options`, { optionIds: [] }],
+      ['DELETE', `/v1/admin/variants/${variantId}`, {}],
+      ['DELETE', `/v1/admin/products/${id}`, {}],
+    ] as const) {
+      const before = (await deliveries()).rowCount!;
+      expect((await admin(method, path, body)).status).toBe(200);
+      expect((await deliveries()).rowCount).toBe(before + 1);
+    }
+    const before = (await deliveries()).rowCount;
+    await expect(withStore(STORE, async tx => {
+      await emitProductChanged(tx, STORE, id);
+      throw new Error('rollback fixture');
+    })).rejects.toThrow('rollback fixture');
+    expect((await deliveries()).rowCount).toBe(before);
+    expect((await deliveries()).rows.every(row => row.store_id === STORE)).toBe(true);
+    expect((await deliveries()).rows.at(-1)?.payload).toEqual({ storeId: STORE, productId: id, slug });
+  });
+});
 
 describe('blog parity', () => {
   it('hides scheduled posts, paginates visible posts, sorts null dates last and returns featured assets', async () => {

@@ -85,6 +85,19 @@ Current money modules cover totals, tax, discounts, gift cards, currency rates, 
 
 ## Catalog Read Path
 
+Native admin variant creation/detail/edit supports preorder status, nullable
+preorder price in cents, and a nullable ISO ship timestamp. Clearing price/date
+uses explicit `null`; the editor labels ship timestamps as UTC.
+
+Admin product, variant, gallery, option and stock mutations enqueue
+`catalog.product_changed` in the existing transactional webhook outbox.
+Its payload is `{ storeId, productId, slug }`, including the original slug after
+soft deletion. Endpoints are matched by store and topic; delivery uses the
+existing HMAC signature and bounded retries. This generic event contains no
+storefront host, IndexNow identity or merchant-specific behavior. Storefronts
+can use it to notify their configured search engines. Bulk imports, blog edits
+and order-driven stock changes do not emit this admin-catalog event.
+
 The preferred browse path is a static catalog manifest:
 
 - `shop-catalog.json` for listing/search primitives.

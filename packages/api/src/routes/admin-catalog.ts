@@ -5,6 +5,7 @@ import * as s from '../db/schema.js';
 import { HttpError, J, errBody, money, Page, requireAdmin, requireStore, requireWrite, guard, slugify } from './admin-helpers.js';
 import { uniqueSlug } from './admin-catalog-utils.js';
 import { registerCollectionRoutes } from './admin-catalog-collections.js';
+import { emitProductChanged, emitVariantProductChanged } from '../webhooks/catalog.js';
 
 export const adminCatalog = new OpenAPIHono();
 
@@ -23,6 +24,7 @@ adminCatalog.openapi(
       const slug = await uniqueSlug(tx, s.product, body.slug ? slugify(body.slug) : slugify(body.name));
       const [p] = await tx.insert(s.product).values({ storeId: st.storeId, name: body.name, slug, description: body.description ?? null, status: body.status }).returning({ id: s.product.id });
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'product', entityId: p!.id, action: 'create', data: { name: body.name, slug } });
+      await emitProductChanged(tx, st.storeId, p!.id);
       return { id: p!.id, slug };
     });
     return c.json(out, 200);
@@ -48,6 +50,7 @@ adminCatalog.openapi(
       const [a] = await tx.select({ id: s.asset.id }).from(s.asset).where(eq(s.asset.id, assetId)).limit(1);
       if (!a) return 'notfound';
       await tx.insert(s.productAsset).values({ storeId: st.storeId, productId: id, assetId, position: position ?? 0 }).onConflictDoNothing();
+      await emitProductChanged(tx, st.storeId, id);
       return 'ok';
     });
     if (res === 'notfound') throw new HttpError(404, 'product or asset not found');
@@ -65,7 +68,10 @@ adminCatalog.openapi(
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireWrite(st);
     const { id, assetId } = c.req.valid('param');
-    await withStore(st.storeId, (tx) => tx.delete(s.productAsset).where(and(eq(s.productAsset.productId, id), eq(s.productAsset.assetId, assetId))));
+    await withStore(st.storeId, async (tx) => {
+      await tx.delete(s.productAsset).where(and(eq(s.productAsset.productId, id), eq(s.productAsset.assetId, assetId)));
+      await emitProductChanged(tx, st.storeId, id);
+    });
     return c.json({ ok: true }, 200);
   }),
 );
@@ -87,6 +93,7 @@ adminCatalog.openapi(
       await tx.update(s.product).set({ deletedAt: new Date(), status: 'draft' }).where(eq(s.product.id, id));
       await tx.update(s.productVariant).set({ deletedAt: new Date(), enabled: false }).where(eq(s.productVariant.productId, id));
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'product', entityId: id, action: 'delete' });
+      await emitProductChanged(tx, st.storeId, id);
       return true;
     });
     if (!ok) throw new HttpError(404, 'product not found');
@@ -102,6 +109,9 @@ adminCatalog.openapi(
       name: z.string().min(1),
       price: money,
       salePrice: money.nullable().optional(),
+      isPreOrder: z.boolean().default(false),
+      preOrderPrice: money.min(0).nullable().optional(),
+      shipDate: z.iso.datetime({ offset: true }).nullable().optional(),
       onHand: z.number().int().min(0).default(0),
       fulfillmentType: z.enum(['physical', 'digital_download', 'license', 'update_pass']).default('physical'),
       appKey: z.string().nullable().optional(),
@@ -130,6 +140,9 @@ adminCatalog.openapi(
         name: body.name,
         price: body.price,
         salePrice: body.salePrice ?? null,
+        isPreOrder: body.isPreOrder,
+        preOrderPrice: body.preOrderPrice ?? null,
+        shipDate: body.shipDate ? new Date(body.shipDate) : null,
         fulfillmentType: body.fulfillmentType,
         appKey: body.appKey ?? null,
         artifactKey: body.artifactKey ?? null,
@@ -143,6 +156,7 @@ adminCatalog.openapi(
         if (body.onHand > 0) await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: v!.id, delta: body.onHand, reason: 'admin_create' });
       }
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'variant', entityId: v!.id, action: 'create', data: { sku: body.sku } });
+      await emitProductChanged(tx, st.storeId, id);
       return { kind: 'ok' as const, id: v!.id };
     });
     if (res.kind === 'notfound') throw new HttpError(404, 'product not found');
@@ -166,6 +180,7 @@ adminCatalog.openapi(
       if (!v) return false;
       await tx.update(s.productVariant).set({ deletedAt: new Date(), enabled: false }).where(eq(s.productVariant.id, id));
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'variant', entityId: id, action: 'delete' });
+      await emitVariantProductChanged(tx, st.storeId, id);
       return true;
     });
     if (!ok) throw new HttpError(404, 'variant not found');
@@ -279,6 +294,7 @@ adminCatalog.openapi(
       const agg = sum?.n ?? 0;
       await tx.insert(s.stock).values({ storeId: st.storeId, variantId: id, onHand: agg, allocated: 0 })
         .onConflictDoUpdate({ target: s.stock.variantId, set: { onHand: agg } });
+      await emitVariantProductChanged(tx, st.storeId, id);
       return agg;
     });
     return c.json({ id, onHand: total }, 200);
@@ -343,6 +359,7 @@ adminCatalog.openapi(
     const gid = await withStore(st.storeId, async (tx) => {
       const [g] = await tx.insert(s.productOptionGroup).values({ storeId: st.storeId, productId: id, name: b.name }).returning({ id: s.productOptionGroup.id });
       if (b.values?.length) await tx.insert(s.productOption).values(b.values.map((v: string) => ({ storeId: st.storeId, groupId: g!.id, value: v })));
+      await emitProductChanged(tx, st.storeId, id);
       return g!.id;
     });
     return c.json({ id: gid }, 200);
@@ -362,6 +379,8 @@ adminCatalog.openapi(
     const b = c.req.valid('json');
     const oid = await withStore(st.storeId, async (tx) => {
       const [o] = await tx.insert(s.productOption).values({ storeId: st.storeId, groupId, value: b.value }).returning({ id: s.productOption.id });
+      const [group] = await tx.select({ productId: s.productOptionGroup.productId }).from(s.productOptionGroup).where(eq(s.productOptionGroup.id, groupId)).limit(1);
+      if (group) await emitProductChanged(tx, st.storeId, group.productId);
       return o!.id;
     });
     return c.json({ id: oid }, 200);
@@ -382,6 +401,7 @@ adminCatalog.openapi(
     await withStore(st.storeId, async (tx) => {
       await tx.delete(s.variantOption).where(eq(s.variantOption.variantId, id));
       if (b.optionIds.length) await tx.insert(s.variantOption).values(b.optionIds.map((oid: string) => ({ storeId: st.storeId, variantId: id, optionId: oid })));
+      await emitVariantProductChanged(tx, st.storeId, id);
     });
     return c.json({ id }, 200);
   }),

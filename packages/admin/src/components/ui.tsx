@@ -28,9 +28,9 @@ export function SkeletonText({ w = 'w-24' }: { w?: string }) {
   return <span className={`skeleton inline-block h-3.5 ${w} rounded`} />;
 }
 
-export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: ReactNode; actions?: ReactNode }) {
+export function PageHeader({ title, subtitle, actions, stackOnMobile = false }: { title: string; subtitle?: ReactNode; actions?: ReactNode; stackOnMobile?: boolean }) {
   return (
-    <div className="flex items-start justify-between mb-5 gap-4">
+    <div className={`flex items-start justify-between mb-5 gap-4${stackOnMobile ? ' flex-col sm:flex-row' : ''}`}>
       <div className="min-w-0">
         <h1 className="font-display text-2xl font-semibold tracking-tight text-balance">{title}</h1>
         {subtitle && <p className="text-sm text-gray-500 mt-1">{subtitle}</p>}
