@@ -13,6 +13,15 @@ async function root() {
 afterEach(async () => { await Promise.all(roots.splice(0).map(dir => rm(dir, { recursive: true, force: true }))); });
 
 describe('catalog generation publication', () => {
+  it('prevents two stores claiming the same new destination concurrently', async () => {
+    const outDir = await root();
+    const results = await Promise.allSettled(['store-a', 'store-b'].map(storeSlug => publishGeneration({ outDir, storeSlug, manifest: { storeSlug }, details: [] })));
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter(result => result.status === 'rejected')).toHaveLength(1);
+    const owner = JSON.parse(await readFile(join(outDir, 'owner.json'), 'utf8'));
+    const marker = JSON.parse(await readFile(join(outDir, 'current/marker.json'), 'utf8'));
+    expect(marker.storeSlug).toBe(owner.storeSlug);
+  });
   it('swaps complete generations and removes deleted products from the current view', async () => {
     const outDir = await root();
     const first = await publishGeneration({ outDir, storeSlug: 'fixture', manifest: { products: ['old'] }, details: [{ slug: 'old' }] });

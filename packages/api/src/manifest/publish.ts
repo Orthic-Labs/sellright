@@ -23,6 +23,15 @@ export async function publishGeneration(input: Input) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     if (previous) throw new Error('Current catalog marker is missing');
   }
+  // Claim a new directory exclusively, including simultaneous first publication.
+  const ownerPath = join(root, 'owner.json');
+  try {
+    await writeFile(ownerPath, JSON.stringify({ source: 'sellright', storeSlug: input.storeSlug }), { flag: 'wx' });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    const owner = JSON.parse(await readFile(ownerPath, 'utf8')) as { source?: string; storeSlug?: string };
+    if (owner.source !== 'sellright' || owner.storeSlug !== input.storeSlug) throw new Error('Refusing foreign catalog destination');
+  }
   const generation = randomUUID();
   const target = join(generations, generation);
   const pointer = join(root, `.current-${generation}`);

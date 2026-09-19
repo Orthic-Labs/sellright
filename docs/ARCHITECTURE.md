@@ -93,7 +93,7 @@ The preferred browse path is a static catalog manifest:
 
 Publication is opt-in: `JOBS_ENABLED=1`, `CATALOG_MANIFEST_JOBS_ENABLED=1`,
 explicit `STORE_SLUG`, and a dedicated `CATALOG_DIR`. The scheduler publishes
-once per minute under a database leader lock. For a one-shot publication, run
+once per minute under a store-scoped database leader lock. For a one-shot publication, run
 `pnpm --filter @sellright/api exec tsx src/manifest/generate.ts` with the same
 store/directory settings and the unprivileged runtime database role.
 
@@ -104,7 +104,8 @@ fresh `generatedAt`), and read files from that pinned directory. RightSites
 rejects snapshots older than five minutes and fetches REST data during SSR.
 Never point it at a legacy Vendure directory. Keep the previous generation and
 a ten-minute grace period for in-flight readers; only marked, owned generations
-are cleaned up. Configure a separate destination/publisher per store; a single
+are cleaned up. An exclusive `owner.json` claim prevents different stores from
+racing to initialize the same destination. Configure a separate destination/publisher per store; a single
 API scheduler publishes only its explicit `STORE_SLUG`.
 
 Public Vendure facet labels are imported into native product tags for browse
