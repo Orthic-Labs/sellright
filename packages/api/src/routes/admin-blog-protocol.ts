@@ -79,3 +79,13 @@ export async function recordCreate(tx: StoreTx, storeId: string, actor: string, 
   await tx.insert(s.auditLog).values({ id, storeId, actor, entity: 'blog_post', entityId: result.id,
     action: 'idempotent_create', data: { requestHash: hash, postId: result.id, slug: result.slug } });
 }
+
+/** Read-only reconciliation after a possibly successful creation; never another POST. */
+export async function readCreate(tx: StoreTx, storeId: string, key: string) {
+  const id = receiptId(storeId, key);
+  const [receipt] = await tx.select().from(s.auditLog).where(eq(s.auditLog.id, id)).limit(1);
+  const data = receipt?.data as { requestHash?: string; postId?: string; slug?: string } | null;
+  if (!receipt || receipt.storeId !== storeId || receipt.entity !== 'blog_post' || receipt.action !== 'idempotent_create' ||
+      !data || !data.requestHash || !data.postId || !data.slug) throw new HttpError(404, 'create receipt not found');
+  return { storeId, id: data.postId, slug: data.slug, requestHash: data.requestHash };
+}

@@ -115,6 +115,16 @@ describe('blog conditional update and durable create contract', () => {
     expect(post.publishDate).toBe(publishDate);
     expect((await patchPost(id, { publishDate: null, expectedRevision: post.seoRevision })).status).toBe(200);
   });
+  it('offers read-only reconciliation of a specific store-scoped request', async () => {
+    expect((await app.request('/v1/admin/blog/requests/missing', { headers: auth() })).status).toBe(404);
+    const post = await (await create()).json() as { id: string; slug: string };
+    const response = await app.request('/v1/admin/blog/requests/fixture-create-1', { headers: auth() });
+    expect(response.status).toBe(200);
+    const receipt = await response.json() as { requestHash: string };
+    expect(receipt).toMatchObject({ id: post.id, slug: post.slug, storeId: STORE });
+    expect(receipt.requestHash).toMatch(/^[a-f0-9]{64}$/);
+    expect((await app.request('/v1/admin/blog/requests/fixture-create-1')).status).toBe(401);
+  });
   it('rejects malformed keys and conditional revisions before effects', async () => {
     expect((await create('not a valid key')).status).toBe(400);
     const { id } = await (await create()).json() as { id: string };

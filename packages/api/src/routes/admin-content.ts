@@ -4,7 +4,7 @@ import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { sanitizeBlogHtml } from '../lib/sanitize-html.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireWrite, guard, slugify } from './admin-helpers.js';
-import { BLOG_CONTRACT, CREATE_CONTRACT, blogRevision, createKey, existingCreate, lockedBlog, ownedFeaturedAsset, recordCreate } from './admin-blog-protocol.js';
+import { BLOG_CONTRACT, CREATE_CONTRACT, blogRevision, createKey, existingCreate, lockedBlog, ownedFeaturedAsset, recordCreate, readCreate } from './admin-blog-protocol.js';
 
 export const adminContent = new OpenAPIHono();
 
@@ -62,6 +62,21 @@ adminContent.openapi(
       return result;
     });
     return c.json(out, 200);
+  }),
+);
+
+adminContent.openapi(
+  createRoute({
+    method: 'get', path: '/v1/admin/blog/requests/{key}', summary: 'Read a durable blog create receipt',
+    request: { params: z.object({ key: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/) }) },
+    responses: { 200: { description: 'OK', content: J(z.object({ storeId: z.string(), id: z.string(), slug: z.string(), requestHash: z.string() })) }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    const { key } = c.req.valid('param');
+    const result = await withStore(st.storeId, tx => readCreate(tx, st.storeId, key));
+    return c.json(result, 200);
   }),
 );
 

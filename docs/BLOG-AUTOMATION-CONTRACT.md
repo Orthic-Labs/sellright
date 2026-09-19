@@ -21,6 +21,11 @@ Retain `entity=blog_post, action=idempotent_create` audit rows for the lifetime 
 clients' retry keys. Do not prune them as disposable diagnostic logs. No secret,
 article body or bearer token is stored in that receipt.
 
+GET `/v1/admin/blog/requests/{key}` provides read-only reconciliation of that
+store-scoped receipt (request hash, post ID and slug). A client must compare the
+request hash and read the post before adopting the result of a lost POST response.
+A missing receipt never authorizes an unqualified retry.
+
 POST/PATCH accept the existing schema's `featuredAssetId`, including null to clear.
 The asset must belong to the selected store. A key-share lock prevents deletion
 between that check and establishing the reference. This does not upload an image;
