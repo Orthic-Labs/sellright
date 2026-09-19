@@ -16,8 +16,10 @@
 --    Partial index keeps non-keyed rows (password resets etc.) unaffected.
 
 ALTER TABLE customer_token DROP CONSTRAINT customer_token_kind_check;
+-- Existing consumers may already issue magic links before this upgrade.
+-- Preserve them here: a later widening cannot rescue this intermediate CHECK.
 ALTER TABLE customer_token ADD CONSTRAINT customer_token_kind_check
-  CHECK (kind IN ('password_reset', 'email_verify', 'set_password', 'email_change'));
+  CHECK (kind IN ('password_reset', 'email_verify', 'set_password', 'email_change', 'magic_link'));
 ALTER TABLE customer_token ADD COLUMN IF NOT EXISTS payload jsonb;
 
 ALTER TABLE email_outbox ADD COLUMN IF NOT EXISTS dedupe_key text;

@@ -73,6 +73,20 @@ Custom workflow (only for the three hand-written files):
 
 ## If a future schema change is incompatible with a hand-written file
 
+Upgrade compatibility exception: `0057_email_change_outbox_dedupe` preserves
+`magic_link` token kinds already issued by older consumers. Its intermediate
+constraint previously rejected these rows before `0061` could widen it. This
+correction must occur in the failing migration; appending a later migration
+cannot repair an earlier transaction failure. Already-applied installations
+retain their recorded hash and do not rerun `0057`. Never delete tokens or
+rewrite ledger hashes to make an upgrade pass. The `upgrade-compatibility` DB
+tests exercise the SQL against synthetic legacy rows, not an empty schema.
+
+`0067_subscription_policy_reconcile` is a forward repair for deployments missing
+the earlier subscription policy hardening. It updates the policy in place,
+preserves rows, and leaves historical ledger entries unchanged. Downstream forks
+may renumber these files; match the descriptive suffix and inspect their journal.
+
 The hand-written file is a frozen contract. If the schema underneath drifts
 enough that the hand-written file's SQL would no longer apply cleanly, the
 right move is to:
