@@ -48,13 +48,13 @@ const jobLog = (m: string) => log.info(m);
  * one instance actually executes a given tick; the rest see the lock held and
  * skip, cheaply, without racing the DB.
  */
-function every(ms: number, label: string, leaderJob: LeaderLockedJob, fn: () => Promise<unknown>): NodeJS.Timeout {
+function every(ms: number, label: string, leaderJob: LeaderLockedJob, fn: () => Promise<unknown>, scope?: string): NodeJS.Timeout {
   let running = false;
   const tick = async () => {
     if (running) return; // skip if the previous pass hasn't finished (this process)
     running = true;
     try {
-      await withLeaderLock(leaderJob, fn); // skip if another instance is leader for this tick
+      await withLeaderLock(leaderJob, fn, scope); // skip if another instance is leader for this tick
     } catch (e) {
       logErr.error('job failed', e, { job: label });
     } finally {
@@ -91,7 +91,7 @@ export function startJobScheduler(): void {
     if (!env.CATALOG_DIR?.trim() || !env.STORE_SLUG?.trim()) {
       log.info('catalog publisher disabled: explicit CATALOG_DIR and STORE_SLUG required');
     } else {
-      every(60_000, 'catalog-manifest', 'catalog-manifest', () => publishCatalogManifest({ outDir: env.CATALOG_DIR!, storeSlug: env.STORE_SLUG! }));
+      every(60_000, 'catalog-manifest', 'catalog-manifest', () => publishCatalogManifest({ outDir: env.CATALOG_DIR!, storeSlug: env.STORE_SLUG! }), env.STORE_SLUG);
     }
   }
   every(HOUR, 'auto-deliver', 'auto-deliver', () => autoDeliver({ apply: autoDeliverApply, days: autoDeliverDays, log: jobLog }));

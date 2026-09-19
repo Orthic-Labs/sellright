@@ -5,14 +5,14 @@
  * pass that pushes due rows with an HMAC signature + exponential backoff.
  */
 import { createHmac } from 'node:crypto';
-import { eq, lte, sql } from 'drizzle-orm';
+import { and, eq, lte, sql } from 'drizzle-orm';
 import { pool, withStore, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { safeOutboundFetch } from '../security/outbound-url.js';
 
 /** Enqueue a delivery for every enabled endpoint subscribed to `topic` (or '*'). */
 export async function emitEvent(tx: Tx, storeId: string, topic: string, payload: unknown): Promise<void> {
-  const endpoints = await tx.select({ id: s.webhookEndpoint.id, topics: s.webhookEndpoint.topics }).from(s.webhookEndpoint).where(eq(s.webhookEndpoint.enabled, true));
+  const endpoints = await tx.select({ id: s.webhookEndpoint.id, topics: s.webhookEndpoint.topics }).from(s.webhookEndpoint).where(and(eq(s.webhookEndpoint.storeId, storeId), eq(s.webhookEndpoint.enabled, true)));
   const matched = endpoints.filter((e) => e.topics.includes('*') || e.topics.includes(topic));
   if (!matched.length) return;
   await tx.insert(s.webhookDelivery).values(matched.map((e) => ({ storeId, endpointId: e.id, topic, payload: payload as object })));

@@ -85,6 +85,19 @@ Current money modules cover totals, tax, discounts, gift cards, currency rates, 
 
 ## Catalog Read Path
 
+Native admin variant creation/detail/edit supports preorder status, nullable
+preorder price in cents, and a nullable ISO ship timestamp. Clearing price/date
+uses explicit `null`; the editor labels ship timestamps as UTC.
+
+Admin product, variant, gallery, option and stock mutations enqueue
+`catalog.product_changed` in the existing transactional webhook outbox.
+Its payload is `{ storeId, productId, slug }`, including the original slug after
+soft deletion. Endpoints are matched by store and topic; delivery uses the
+existing HMAC signature and bounded retries. This generic event contains no
+storefront host, IndexNow identity or merchant-specific behavior. Storefronts
+can use it to notify their configured search engines. Bulk imports, blog edits
+and order-driven stock changes do not emit this admin-catalog event.
+
 The preferred browse path is a static catalog manifest:
 
 - `shop-catalog.json` for listing/search primitives.
@@ -93,7 +106,7 @@ The preferred browse path is a static catalog manifest:
 
 Publication is opt-in: `JOBS_ENABLED=1`, `CATALOG_MANIFEST_JOBS_ENABLED=1`,
 explicit `STORE_SLUG`, and a dedicated `CATALOG_DIR`. The scheduler publishes
-once per minute under a database leader lock. For a one-shot publication, run
+once per minute under a store-scoped database leader lock. For a one-shot publication, run
 `pnpm --filter @sellright/api exec tsx src/manifest/generate.ts` with the same
 store/directory settings and the unprivileged runtime database role.
 
@@ -104,7 +117,8 @@ fresh `generatedAt`), and read files from that pinned directory. RightSites
 rejects snapshots older than five minutes and fetches REST data during SSR.
 Never point it at a legacy Vendure directory. Keep the previous generation and
 a ten-minute grace period for in-flight readers; only marked, owned generations
-are cleaned up. Configure a separate destination/publisher per store; a single
+are cleaned up. An exclusive `owner.json` claim prevents different stores from
+racing to initialize the same destination. Configure a separate destination/publisher per store; a single
 API scheduler publishes only its explicit `STORE_SLUG`.
 
 Public Vendure facet labels are imported into native product tags for browse

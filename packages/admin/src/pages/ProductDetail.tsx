@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Package, Trash2, Plus, X, Upload } from 'lucide-react';
@@ -7,13 +7,16 @@ import { useAuth } from '../auth';
 import { useToast } from '../components/Toast';
 import { PageHeader, StatusBadge, FormSection, InlineAlert, ErrorState, Loading, Field, Spinner } from '../components/ui';
 
-type Draft = { name: string; status: string; description: string; variants: Record<string, { price: string; salePrice: string; enabled: boolean; onHand: string }> };
+type Draft = { name: string; status: string; description: string; variants: Record<string, { price: string; salePrice: string; isPreOrder: boolean; preOrderPrice: string; shipDate: string; enabled: boolean; onHand: string }> };
+
+const dateInput = (value: string | null | undefined) => value ? new Date(value).toISOString().slice(0, 16) : '';
 
 function toDraft(p: ProductDetail): Draft {
   return {
     name: p.name, status: p.status, description: p.description ?? '',
     variants: Object.fromEntries(p.variants.map((v) => [v.id, {
       price: (v.price / 100).toFixed(2), salePrice: v.salePrice != null ? (v.salePrice / 100).toFixed(2) : '',
+      isPreOrder: v.isPreOrder ?? false, preOrderPrice: v.preOrderPrice != null ? (v.preOrderPrice / 100).toFixed(2) : '', shipDate: dateInput(v.shipDate),
       enabled: v.enabled, onHand: String(v.onHand),
     }])),
   };
@@ -45,14 +48,18 @@ export default function ProductDetailPage() {
         const d = draft.variants[v.id]!;
         const price = toCents(d.price);
         const salePrice = d.salePrice.trim() === '' ? null : toCents(d.salePrice);
+        const preOrderPrice = d.preOrderPrice.trim() === '' ? null : toCents(d.preOrderPrice);
         const onHand = Number(d.onHand);
         // Guard bad input so we never PATCH NaN (which serializes to null / 422).
-        if (Number.isNaN(price) || (salePrice !== null && Number.isNaN(salePrice)) || !Number.isInteger(onHand) || onHand < 0) {
+        if (!Number.isFinite(price) || price < 0 || (salePrice !== null && (!Number.isFinite(salePrice) || salePrice < 0)) || (preOrderPrice !== null && (!Number.isFinite(preOrderPrice) || preOrderPrice < 0)) || !Number.isInteger(onHand) || onHand < 0) {
           throw new Error(`Invalid price or stock for variant ${v.sku}`);
         }
         const vp: Record<string, unknown> = {};
         if (price !== v.price) vp.price = price;
         if (salePrice !== v.salePrice) vp.salePrice = salePrice;
+        if (d.isPreOrder !== (v.isPreOrder ?? false)) vp.isPreOrder = d.isPreOrder;
+        if (preOrderPrice !== (v.preOrderPrice ?? null)) vp.preOrderPrice = preOrderPrice;
+        if (d.shipDate !== dateInput(v.shipDate)) vp.shipDate = d.shipDate ? new Date(`${d.shipDate}Z`).toISOString() : null;
         if (d.enabled !== v.enabled) vp.enabled = d.enabled;
         if (Object.keys(vp).length) await api.patch(`/variants/${v.id}`, vp);
         if (onHand !== v.onHand) await api.patch(`/variants/${v.id}/stock`, { onHand });
@@ -115,6 +122,7 @@ export default function ProductDetailPage() {
     <>
       <Link to="/products" className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-ink mb-3"><ArrowLeft size={15} /> Products</Link>
       <PageHeader
+        stackOnMobile
         title={p.name}
         subtitle={`/${p.slug}`}
         actions={
@@ -134,7 +142,7 @@ export default function ProductDetailPage() {
       )}
 
       <div className="grid lg:grid-cols-3 gap-5">
-        <div className="lg:col-span-2 space-y-5">
+        <div className="lg:col-span-2 space-y-5 min-w-0">
           <FormSection title="Basics" description="Title, description, and core metadata shown to customers.">
             <Field label="Title"><input className="input" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></Field>
             <Field label="Description" hint="Markdown is not supported. Plain text only."><textarea className="input min-h-[120px]" value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} /></Field>
@@ -150,7 +158,7 @@ export default function ProductDetailPage() {
                   {p.variants.map((v: VariantRow) => {
                     const d = draft.variants[v.id]!;
                     return (
-                      <tr key={v.id} className="border-t border-gray-100">
+                      <Fragment key={v.id}><tr className="border-t border-gray-100">
                         <td className="td"><div className="font-medium truncate max-w-[14rem]">{v.name}</div><div className="text-xs text-gray-400 truncate">{v.sku}{v.allocated > 0 && ` · ${v.allocated} allocated`}</div></td>
                         <td className="td"><CurrencyInput value={d.price} onChange={(val) => setV(v.id, { price: val })} cur={cur} /></td>
                         <td className="td"><CurrencyInput value={d.salePrice} placeholder="—" onChange={(val) => setV(v.id, { salePrice: val })} cur={cur} /></td>
@@ -158,6 +166,13 @@ export default function ProductDetailPage() {
                         <td className="td text-center"><input type="checkbox" className="h-4 w-4 accent-brand" checked={d.enabled} onChange={(e) => setV(v.id, { enabled: e.target.checked })} /></td>
                         <td className="td text-right"><button className="text-gray-300 hover:text-danger" title="Delete variant" onClick={() => { if (confirm(`Delete variant ${v.sku}?`)) delVariant.mutate(v.id); }}><X size={16} /></button></td>
                       </tr>
+                      <tr><td colSpan={6} className="px-3 pb-4">
+                        <div className="flex flex-wrap items-end gap-4">
+                          <label className="flex items-center gap-2 text-sm py-2"><input type="checkbox" aria-label={`Preorder ${v.sku}`} className="h-4 w-4 accent-brand" checked={d.isPreOrder} onChange={(e) => setV(v.id, { isPreOrder: e.target.checked })} />Preorder</label>
+                          <Field label="Preorder price"><CurrencyInput label={`Preorder price ${v.sku}`} value={d.preOrderPrice} onChange={(value) => setV(v.id, { preOrderPrice: value })} cur={cur} /></Field>
+                          <Field label="Ship date (UTC)"><input type="datetime-local" aria-label={`Ship date ${v.sku}`} className="input max-w-full" value={d.shipDate} onInput={(e) => setV(v.id, { shipDate: e.currentTarget.value })} /></Field>
+                        </div>
+                      </td></tr></Fragment>
                     );
                   })}
                 </tbody>
@@ -181,7 +196,7 @@ export default function ProductDetailPage() {
           <OptionsEditor productId={p.id} storeSlug={store?.slug} variants={p.variants.map((v) => ({ id: v.id, sku: v.sku, optionIds: v.optionIds }))} />
         </div>
 
-        <div className="space-y-5">
+        <div className="space-y-5 min-w-0">
           <FormSection title="Status" description="Only active products appear in your storefront and search.">
             <select className="input" value={draft.status} onChange={(e) => setDraft({ ...draft, status: e.target.value })}>
               <option value="active">Active</option>
@@ -309,12 +324,12 @@ function OptionsEditor({ productId, storeSlug, variants }: { productId: string; 
   );
 }
 
-function CurrencyInput({ value, onChange, cur, placeholder }: { value: string; onChange: (v: string) => void; cur: string; placeholder?: string }) {
+function CurrencyInput({ value, onChange, cur, placeholder, label }: { value: string; onChange: (v: string) => void; cur: string; placeholder?: string; label?: string }) {
   const sym = (0).toLocaleString('en-US', { style: 'currency', currency: cur }).replace(/[\d.,\s]/g, '') || '$';
   return (
     <div className="relative w-28">
       <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-sm">{sym}</span>
-      <input className="input pl-6" inputMode="decimal" value={value} placeholder={placeholder} onChange={(e) => onChange(e.target.value)} />
+      <input aria-label={label} className="input pl-6" inputMode="decimal" value={value} placeholder={placeholder} onChange={(e) => onChange(e.target.value)} />
     </div>
   );
 }

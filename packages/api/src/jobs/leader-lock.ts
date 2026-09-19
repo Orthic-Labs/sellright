@@ -63,16 +63,19 @@ export type LeaderLockedJob = keyof typeof JOB_KEYS;
  * release happen on one dedicated client for the lock's lifetime; `fn` itself
  * still uses the shared `pool`/`withStore` for its actual queries.
  */
-export async function withLeaderLock<T>(job: LeaderLockedJob, fn: () => Promise<T>): Promise<T | undefined> {
+export async function withLeaderLock<T>(job: LeaderLockedJob, fn: () => Promise<T>, scope?: string): Promise<T | undefined> {
   const key = JOB_KEYS[job];
   const client = await pool.connect();
   try {
-    const { rows } = await client.query<{ locked: boolean }>('SELECT pg_try_advisory_lock($1) AS locked', [key]);
+    // Per-store publishers must not suppress unrelated stores on the same DB.
+    const lockKey = scope === undefined ? key : `${key}:${scope}`;
+    const expression = scope === undefined ? '$1' : 'hashtextextended($1, 0)';
+    const { rows } = await client.query<{ locked: boolean }>(`SELECT pg_try_advisory_lock(${expression}) AS locked`, [lockKey]);
     if (!rows[0]?.locked) return undefined; // another instance is leader for this tick — skip
     try {
       return await fn();
     } finally {
-      await client.query('SELECT pg_advisory_unlock($1)', [key]);
+      await client.query(`SELECT pg_advisory_unlock(${expression})`, [lockKey]);
     }
   } finally {
     client.release();
