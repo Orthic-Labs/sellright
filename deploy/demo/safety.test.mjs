@@ -1,13 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { assertDemoData, demoStoreId, demoTransaction } from './safety.mjs';
+import { assertDemoData, cleanDemo, demoStoreId, demoTransaction } from './safety.mjs';
 
 function fixture(changes = {}) {
   const statements = [];
+  const calls = [];
   let released = false;
   const client = {
-    async query(sql) {
+    async query(sql, values) {
       statements.push(sql);
+      calls.push({ sql, values });
+      if (sql.startsWith('SELECT id FROM cart')) return { rows: changes.expired ?? [] };
       if (sql.startsWith('SELECT id, slug')) return { rows: changes.stores ?? [{
         id: demoStoreId, slug: 'demo', config: { demo: true, payments: { stripe: false } },
       }] };
@@ -20,7 +23,7 @@ function fixture(changes = {}) {
     },
     release() { released = true; },
   };
-  return { pool: { connect: async () => client }, statements, released: () => released };
+  return { pool: { connect: async () => client }, statements, calls, released: () => released };
 }
 test('accepts only the marked synthetic store and read-only visitor', async () => {
   const f = fixture();
@@ -50,4 +53,22 @@ test('transaction failures roll back and release the same client', async () => {
   await assert.rejects(demoTransaction(f.pool, async () => { throw new Error('fixture'); }), /fixture/);
   assert.equal(f.statements.at(-1), 'ROLLBACK');
   assert.equal(f.released(), true);
+});
+test('cleanup locks expired carts and deletes their lines before the parent carts', async () => {
+  const ids = ['de000000-0000-4000-8000-000000000002'];
+  const f = fixture({ expired: ids.map(id => ({ id })) });
+  await cleanDemo(f.pool);
+  const operations = f.calls.filter(call => call.sql.includes('FROM cart'));
+  assert.deepEqual(operations.slice(-3), [
+    { sql: "SELECT id FROM cart WHERE created_at < now() - interval '1 day' FOR UPDATE", values: undefined },
+    { sql: 'DELETE FROM cart_line WHERE cart_id = ANY($1::uuid[])', values: [ids] },
+    { sql: 'DELETE FROM cart WHERE id = ANY($1::uuid[])', values: [ids] },
+  ]);
+  assert.equal(f.statements.at(-1), 'COMMIT');
+});
+test('cleanup does not delete carts or lines when no carts have expired', async () => {
+  const f = fixture();
+  await cleanDemo(f.pool);
+  assert.equal(f.statements.some(sql => sql.startsWith('DELETE FROM cart')), false);
+  assert.ok(f.statements.some(sql => sql.startsWith('DELETE FROM session')));
 });
