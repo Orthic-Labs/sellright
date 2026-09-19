@@ -63,7 +63,8 @@ export function productionEnvErrors(env: ProductionEnvView, source: EnvSource): 
   }
   try {
     const database = decodeURIComponent(new URL(env.DATABASE_URL).pathname.slice(1));
-    if (/(?:^|_)(?:dev|test)(?:_|$)/i.test(database)) {
+    if (!database) errors.push('DATABASE_URL must explicitly name the production database');
+    if (/(?:^|[^a-z0-9])(?:dev|test)(?:[^a-z0-9]|$)/i.test(database)) {
       errors.push('DATABASE_URL points at a development/test-looking database');
     }
   } catch {
