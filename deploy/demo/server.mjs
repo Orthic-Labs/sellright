@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve, extname, sep } from 'node:path';
-import { allowedDemoRequest, allowedDemoBody, demoBindHost } from './policy.mjs';
+import { allowedDemoRequest, allowedDemoBody, demoBindHost, demoSessionCookie } from './policy.mjs';
 import { assertDemoData, cleanDemo, demoCounts } from './safety.mjs';
 import { createHash } from 'node:crypto';
 
@@ -81,6 +81,11 @@ const server = createServer(async (req, res) => {
       return;
     }
     if (url.pathname === '/enter' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end('<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SellRight Demo</title><body><main><h1>SellRight</h1><form method="post" action="/enter"><button type="submit">Open demo admin</button></form><p><a href="/shop">Storefront</a></p></main></body></html>');
+      return;
+    }
+    if (url.pathname === '/enter' && req.method === 'POST') {
       await assertDemoData(pool);
       const existing = await app.request('/v1/admin/me', { headers: { cookie: req.headers.cookie ?? '' } });
       if (existing.ok) { res.writeHead(303, { Location: '/' }); res.end(); return; }
@@ -97,7 +102,7 @@ const server = createServer(async (req, res) => {
       const { token } = await login.json();
       await pool.query("UPDATE session SET expires_at = now() + interval '1 hour' WHERE token_hash = $1",
         [createHash('sha256').update(token).digest('hex')]);
-      res.setHeader('Set-Cookie', login.headers.getSetCookie());
+      res.setHeader('Set-Cookie', login.headers.getSetCookie().map(demoSessionCookie));
       res.writeHead(303, { Location: '/' }); res.end(); return;
       } finally { entering = false; }
     }

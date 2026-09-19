@@ -3,6 +3,10 @@ const adminReads = new Set([
   'customers', 'reports', 'activity', 'locations', 'promotions', 'returns',
 ]);
 
+export function demoSessionCookie(cookie) {
+  return cookie.replace(/;\s*(?:max-age|expires)=[^;]*/gi, '') + '; Max-Age=3600';
+}
+
 export function demoBindHost(host = '127.0.0.1') {
   if (!['127.0.0.1', '172.22.0.1'].includes(host)) {
     throw new Error('Demo listener must use loopback or the designated private nginx bridge');

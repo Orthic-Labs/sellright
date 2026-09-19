@@ -378,7 +378,7 @@ auth.openapi(
   createRoute({
     method: 'get', path: '/v1/shop/auth/check-email',
     summary: 'Check if an email is already registered (rate-limited)',
-    request: { query: z.object({ email: z.string().email() }) },
+    request: { query: z.object({ email: z.string().email(), turnstileToken: z.string().max(2048).optional(), honeypot: z.string().max(1024).optional() }) },
     responses: {
       200: { description: 'OK', content: { 'application/json': { schema: z.object({ exists: z.boolean() }) } } },
       429: { description: 'Too many attempts', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
@@ -390,7 +390,11 @@ auth.openapi(
     const retry = loginRetryAfter(ip, `checkemail:${ip}`);
     if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
     recordLoginFailure(ip, `checkemail:${ip}`); // count every probe toward the throttle
-    const email = normalizeEmail(c.req.valid('query').email);
+    const query = c.req.valid('query');
+    if (query.honeypot || !(await turnstileOk(st.config, query.turnstileToken, ip))) {
+      return c.json({ exists: false }, 200);
+    }
+    const email = normalizeEmail(query.email);
     const exists = await withStore(st.id, async (tx) => {
       const [row] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, email)).limit(1);
       return !!row;

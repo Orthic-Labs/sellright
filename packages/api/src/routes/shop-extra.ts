@@ -1,5 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, sql, isNull, lte, or } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
@@ -13,6 +13,7 @@ import { enqueueEmail } from '../email/outbox.js';
 import { sendSubscriberConfirmation } from './shop-extra.subscriber.js';
 import { contactRoutes } from './contact.js';
 import { restockRoutes } from './restock.js';
+import { clearTrackingAttempts, trackingRetryAfter } from './shop-extra.tracking-limit.js';
 
 export const shopExtra = new OpenAPIHono();
 
@@ -22,12 +23,18 @@ const J = (schema: z.ZodTypeAny) => ({ 'application/json': { schema } });
 shopExtra.openapi(
   createRoute({
     method: 'get', path: '/v1/shop/track', summary: 'Guest order tracking by code + email',
-    request: { query: z.object({ code: z.string(), email: z.string().email() }) },
-    responses: { 200: { description: 'OK', content: J(z.any()) }, 404: { description: 'Not found', content: J(z.object({ error: z.string() })) } },
+    request: { query: z.object({ code: z.string().min(1).max(128), email: z.string().trim().email().max(254) }) },
+    responses: { 200: { description: 'OK', content: J(z.any()) }, 404: { description: 'Not found', content: J(z.object({ error: z.string() })) }, 429: { description: 'Rate limited', content: J(z.object({ error: z.string() })) } },
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
     const { code, email } = c.req.valid('query');
+    const key = JSON.stringify([st.id, clientIp(c), email.toLowerCase()]);
+    const retry = trackingRetryAfter(key);
+    if (retry) {
+      c.header('Retry-After', String(retry));
+      return c.json({ error: 'too many tracking attempts' }, 429);
+    }
     const out = await withStore(st.id, async (tx) => {
       const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
       if (!o) return null;
@@ -62,6 +69,7 @@ shopExtra.openapi(
       };
     });
     if (!out) return c.json({ error: 'order not found for that code + email' }, 404);
+    clearTrackingAttempts(key);
     return c.json(out, 200);
   },
 );
@@ -70,15 +78,21 @@ shopExtra.openapi(
 shopExtra.openapi(
   createRoute({
     method: 'get', path: '/v1/shop/blog', summary: 'Published blog posts',
-    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.unknown()) })) } },
+    request: { query: z.object({ take: z.coerce.number().int().min(1).max(100).default(20), skip: z.coerce.number().int().min(0).max(100000).default(0) }) },
+    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.unknown()), totalItems: z.number() })) } },
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
-    const items = await withStore(st.id, async (tx) =>
-      tx.select({ title: s.blogPost.title, slug: s.blogPost.slug, excerpt: s.blogPost.excerpt, authorName: s.blogPost.authorName, readingTime: s.blogPost.readingTime, publishDate: s.blogPost.publishDate, tags: s.blogPost.tags })
-        .from(s.blogPost).where(eq(s.blogPost.isPublished, true)).orderBy(desc(s.blogPost.publishDate)),
-    );
-    return c.json({ items: items.map((p) => ({ ...p, publishDate: p.publishDate?.toISOString() ?? null })) }, 200);
+    const { take, skip } = c.req.valid('query');
+    const visible = and(eq(s.blogPost.isPublished, true), or(isNull(s.blogPost.publishDate), lte(s.blogPost.publishDate, new Date())));
+    const result = await withStore(st.id, async (tx) => {
+      const items = await tx.select({ id: s.blogPost.id, title: s.blogPost.title, slug: s.blogPost.slug, excerpt: s.blogPost.excerpt, authorName: s.blogPost.authorName, readingTime: s.blogPost.readingTime, publishDate: s.blogPost.publishDate, tags: s.blogPost.tags, featuredAsset: { id: s.asset.id, path: s.asset.path } })
+        .from(s.blogPost).leftJoin(s.asset, eq(s.asset.id, s.blogPost.featuredAssetId)).where(visible)
+        .orderBy(sql`${s.blogPost.publishDate} DESC NULLS LAST`, desc(s.blogPost.id)).limit(take).offset(skip);
+      const [count] = await tx.select({ total: sql<number>`count(*)::int` }).from(s.blogPost).where(visible);
+      return { items, totalItems: count!.total };
+    });
+    return c.json({ ...result, items: result.items.map((p) => ({ ...p, publishDate: p.publishDate?.toISOString() ?? null })) }, 200);
   },
 );
 
@@ -91,9 +105,14 @@ shopExtra.openapi(
   async (c) => {
     const st = await resolveStoreFromCtx(c);
     const { slug } = c.req.valid('param');
-    const out = await withStore(st.id, async (tx) => (await tx.select().from(s.blogPost).where(and(eq(s.blogPost.slug, slug), eq(s.blogPost.isPublished, true))).limit(1))[0]);
+    const out = await withStore(st.id, async (tx) => {
+      const [post] = await tx.select().from(s.blogPost).where(and(eq(s.blogPost.slug, slug), eq(s.blogPost.isPublished, true), or(isNull(s.blogPost.publishDate), lte(s.blogPost.publishDate, new Date())))).limit(1);
+      if (!post) return null;
+      const [featuredAsset] = post.featuredAssetId ? await tx.select({ id: s.asset.id, path: s.asset.path }).from(s.asset).where(eq(s.asset.id, post.featuredAssetId)).limit(1) : [];
+      return { ...post, featuredAsset: featuredAsset ?? null };
+    });
     if (!out) return c.json({ error: 'post not found' }, 404);
-    return c.json({ title: out.title, slug: out.slug, bodyHtml: out.bodyHtml, authorName: out.authorName, readingTime: out.readingTime, publishDate: out.publishDate?.toISOString() ?? null, seoTitle: out.seoTitle, seoDescription: out.seoDescription, tags: out.tags }, 200);
+    return c.json({ id: out.id, title: out.title, slug: out.slug, excerpt: out.excerpt, bodyHtml: out.bodyHtml, authorName: out.authorName, readingTime: out.readingTime, publishDate: out.publishDate?.toISOString() ?? null, seoTitle: out.seoTitle, seoDescription: out.seoDescription, tags: out.tags, featuredAsset: out.featuredAsset }, 200);
   },
 );
 

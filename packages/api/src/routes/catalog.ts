@@ -4,6 +4,33 @@ import { withStore } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
 import { convertMoney, rateFor, RATE_SCALE } from '../money/currency.js';
+import { variantPriceRuleFromConfig } from '../money/pricing.js';
+
+// Aggregate display price follows the same positive-override rule as checkout.
+// Keep variants correlated so collection joins cannot change the price range.
+function effectivePrice(config: unknown) {
+  const rule = variantPriceRuleFromConfig(config);
+  return sql`case
+    when ${rule} = 'preorder' and pv.is_pre_order then
+      case when pv.pre_order_price > 0 then pv.pre_order_price else pv.price end
+    when pv.sale_price > 0 then pv.sale_price else pv.price end`;
+}
+
+function minimumPrice(config: unknown) {
+  return sql<number | null>`(select min(${effectivePrice(config)})
+    from product_variant pv where pv.product_id = ${s.product.id}
+    and pv.deleted_at is null and pv.enabled = true)`;
+}
+
+// Metadata belongs to the variant supplying minPrice, not an unrelated variant.
+function listingVariant(config: unknown) {
+  return sql<{ sku: string; price: number; salePrice: number | null; preOrderPrice: number | null; isPreOrder: boolean; shipDate: string | null } | null>`(
+    select jsonb_build_object('sku', pv.sku, 'price', pv.price, 'salePrice', pv.sale_price,
+      'preOrderPrice', pv.pre_order_price, 'isPreOrder', pv.is_pre_order, 'shipDate', pv.ship_date)
+    from product_variant pv where pv.product_id = ${s.product.id}
+    and pv.deleted_at is null and pv.enabled = true
+    order by ${effectivePrice(config)}, pv.sku limit 1)`;
+}
 
 const Money = z.number().int().describe('integer minor units (cents)');
 
@@ -12,6 +39,7 @@ const ProductListItem = z.object({
   name: z.string(),
   status: z.string(),
   minPrice: Money.nullable(),
+  pricingVariant: z.object({ sku: z.string(), price: Money, salePrice: Money.nullable(), preOrderPrice: Money.nullable(), isPreOrder: z.boolean(), shipDate: z.string().nullable() }).nullable(),
   image: z.string().nullable(),
 });
 
@@ -20,6 +48,8 @@ const Variant = z.object({
   name: z.string(),
   price: Money,
   salePrice: Money.nullable(),
+  preOrderPrice: Money.nullable(),
+  shipDate: z.string().nullable(),
   compareAtPrice: Money.nullable(),
   isPreOrder: z.boolean(),
   enabled: z.boolean(),
@@ -73,7 +103,8 @@ catalog.openapi(
           slug: s.product.slug,
           name: s.product.name,
           status: s.product.status,
-          minPrice: sql<number | null>`min(${s.productVariant.price})`,
+          minPrice: minimumPrice(st.config),
+          pricingVariant: listingVariant(st.config),
           image: sql<string | null>`max(${s.asset.path})`,
         })
         .from(s.product)
@@ -131,6 +162,8 @@ catalog.openapi(
           name: s.productVariant.name,
           price: s.productVariant.price,
           salePrice: s.productVariant.salePrice,
+          preOrderPrice: s.productVariant.preOrderPrice,
+          shipDate: s.productVariant.shipDate,
           compareAtPrice: s.productVariant.compareAtPrice,
           isPreOrder: s.productVariant.isPreOrder,
           enabled: s.productVariant.enabled,
@@ -140,7 +173,7 @@ catalog.openapi(
         .from(s.productVariant)
         .where(and(eq(s.productVariant.productId, p.id), isNull(s.productVariant.deletedAt)))
         .orderBy(asc(s.productVariant.name)))
-        .map((v) => ({ ...v, price: convertMoney(v.price, rate), salePrice: conv(v.salePrice), compareAtPrice: conv(v.compareAtPrice) }));
+        .map((v) => ({ ...v, price: convertMoney(v.price, rate), salePrice: conv(v.salePrice), preOrderPrice: conv(v.preOrderPrice), shipDate: v.shipDate?.toISOString() ?? null, compareAtPrice: conv(v.compareAtPrice) }));
       const imgs = await tx
         .select({ path: s.asset.path })
         .from(s.productAsset)
@@ -239,7 +272,7 @@ catalog.openapi(
         const countRows = await tx.select({ count: sql<number>`count(*)::int` }).from(s.product).where(baseWhere);
         total = countRows[0]?.count ?? 0;
         products = await tx
-          .select({ slug: s.product.slug, name: s.product.name, minPrice: sql<number | null>`(select min(price) from product_variant pv where pv.product_id = ${s.product.id} and pv.deleted_at is null)` })
+          .select({ slug: s.product.slug, name: s.product.name, minPrice: minimumPrice(st.config) })
           .from(s.product)
           .where(baseWhere)
           .orderBy(asc(s.product.name))
@@ -253,7 +286,7 @@ catalog.openapi(
           .where(baseWhere);
         total = countRows[0]?.count ?? 0;
         products = await tx
-          .select({ slug: s.product.slug, name: s.product.name, minPrice: sql<number | null>`(select min(price) from product_variant pv where pv.product_id = ${s.product.id} and pv.deleted_at is null)` })
+          .select({ slug: s.product.slug, name: s.product.name, minPrice: minimumPrice(st.config) })
           .from(s.collectionProduct).innerJoin(s.product, eq(s.product.id, s.collectionProduct.productId))
           .where(baseWhere)
           .orderBy(asc(s.collectionProduct.position), s.product.name)
@@ -313,7 +346,8 @@ catalog.openapi(
       const items = await tx
         .select({
           slug: s.product.slug, name: s.product.name, status: s.product.status,
-          minPrice: sql<number | null>`min(${s.productVariant.price})`,
+          minPrice: minimumPrice(st.config),
+          pricingVariant: listingVariant(st.config),
           image: sql<string | null>`max(${s.asset.path})`,
         })
         .from(s.product)
