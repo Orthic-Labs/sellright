@@ -15,7 +15,7 @@
  * confirming the cutoff only catches orders from the new checkout flow. Apply is
  * off by default for exactly this reason; the scheduler logs a dry-run instead.
  *
- * Runs as the OWNER role (jobs set their own per-store context). Only call this
+ * Runs as the unprivileged runtime role (jobs set their own store context). Only call this
  * from a process that owns the DB pool (the API server), never from tests.
  */
 import { env } from '../env.js';
@@ -33,6 +33,7 @@ import { sheeridExpirySweep } from './sheerid-expiry.js';
 import { sweepRestockEvents } from '../routes/restock.js';
 import { withLeaderLock, type LeaderLockedJob } from './leader-lock.js';
 import { log, err as logErr } from '../lib/logger.js';
+import { publishCatalogManifest } from '../manifest/catalog.js';
 
 const HOUR = 3_600_000;
 // OBS-1: job-level log line passes through the structured logger so it carries
@@ -86,6 +87,13 @@ export function startJobScheduler(): void {
   });
 
   every(60_000, 'gateway-events', 'gateway-events', reconcileGatewayEvents);
+  if (env.CATALOG_MANIFEST_JOBS_ENABLED === '1') {
+    if (!env.CATALOG_DIR?.trim() || !env.STORE_SLUG?.trim()) {
+      log.info('catalog publisher disabled: explicit CATALOG_DIR and STORE_SLUG required');
+    } else {
+      every(60_000, 'catalog-manifest', 'catalog-manifest', () => publishCatalogManifest({ outDir: env.CATALOG_DIR!, storeSlug: env.STORE_SLUG! }));
+    }
+  }
   every(HOUR, 'auto-deliver', 'auto-deliver', () => autoDeliver({ apply: autoDeliverApply, days: autoDeliverDays, log: jobLog }));
   every(15 * 60_000, 'release-stale', 'release-stale', () => releaseStaleAllocations({ apply: releaseApply, ttlMin: releaseTtlMin, log: jobLog }));
   // Cart lifecycle: flag inactive non-empty carts abandoned (emits cart.abandoned

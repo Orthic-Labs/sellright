@@ -40,6 +40,37 @@ beforeEach(async () => {
 afterAll(() => pool.end());
 
 describe('GET /v1/shop/catalog/products/:slug variant metadata', () => {
+  it('reports purchasable stock and treats inStock=false as no stock filter', async () => {
+    await withStore(STORE, async tx => {
+      await tx.execute(sql`UPDATE product_variant SET fulfillment_type = 'physical', app_key = NULL WHERE product_id = ${PRODUCT}`);
+    });
+    for (const path of ['/v1/shop/catalog/products', '/v1/shop/catalog/search?term=Licensed&inStock=false']) {
+      const res = await app.request(path, { headers: { 'x-store-slug': SLUG } });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ total: 1, items: [{ inStock: false }] });
+    }
+    const onlyStock = () => app.request('/v1/shop/catalog/search?term=Licensed&inStock=true', { headers: { 'x-store-slug': SLUG } });
+    expect(await (await onlyStock()).json()).toMatchObject({ total: 0 });
+    await withStore(STORE, async tx => { await tx.execute(sql`UPDATE product_variant SET is_pre_order = true WHERE id = ${VARIANT}`); });
+    expect(await (await onlyStock()).json()).toMatchObject({ total: 1, items: [{ inStock: true }] });
+  });
+  it('retains option identity and excludes unavailable variants and draft products', async () => {
+    const group = 'dddddddd-dddd-dddd-dddd-ddddddddddd4';
+    const option = 'dddddddd-dddd-dddd-dddd-ddddddddddd5';
+    await withStore(STORE, async tx => {
+      await tx.execute(sql`INSERT INTO product_option_group (id, store_id, product_id, name) VALUES (${group}, ${STORE}, ${PRODUCT}, 'Color')`);
+      await tx.execute(sql`INSERT INTO product_option (id, store_id, group_id, value) VALUES (${option}, ${STORE}, ${group}, 'Red')`);
+      await tx.execute(sql`INSERT INTO variant_option (store_id, variant_id, option_id) VALUES (${STORE}, ${VARIANT}, ${option})`);
+      await tx.execute(sql`UPDATE product_variant SET enabled = false WHERE sku = 'PHYS-1'`);
+    });
+    const res = await app.request('/v1/shop/catalog/products/lic-app', { headers: { 'x-store-slug': SLUG } });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { variants: unknown[] };
+    expect(body.variants).toHaveLength(1);
+    expect(body.variants[0]).toMatchObject({ sku: 'LIC-1', options: [{ id: option, code: option, name: 'Red', group: { id: group, code: group, name: 'Color' } }] });
+    await withStore(STORE, async tx => { await tx.execute(sql`UPDATE product SET status = 'draft' WHERE id = ${PRODUCT}`); });
+    expect((await app.request('/v1/shop/catalog/products/lic-app', { headers: { 'x-store-slug': SLUG } })).status).toBe(404);
+  });
   it.each(['preorder', 'sale'])('uses the %s pricing rule on list and search without disabled variants', async rule => {
     await withStore(STORE, async tx => {
       await tx.execute(sql`UPDATE store SET config = ${JSON.stringify({ pricing: { variantRule: rule } })}::jsonb WHERE id = ${STORE}`);

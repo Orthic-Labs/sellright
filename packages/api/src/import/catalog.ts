@@ -44,6 +44,23 @@ export async function importCatalog(ctx: ImportContext): Promise<void> {
       });
     }
 
+    // Public source facets become native browse tags; private facets stay private.
+    const publicTags = await q(`SELECT links.pid, fvt.name FROM (
+      SELECT "productId" AS pid, "facetValueId" AS fid FROM product_facet_values_facet_value
+      UNION
+      SELECT pv."productId" AS pid, links."facetValueId" AS fid
+      FROM product_variant_facet_values_facet_value links
+      JOIN product_variant pv ON pv.id = links."productVariantId"
+      WHERE pv."deletedAt" IS NULL AND pv.enabled = true
+    ) links JOIN facet_value fv ON fv.id = links.fid
+    JOIN facet f ON f.id = fv."facetId" AND f."isPrivate" = false
+    JOIN facet_value_translation fvt ON fvt."baseId" = fv.id AND fvt."languageCode" = $1`, [LANG]);
+    const tagsByProduct = new Map<number, Set<string>>();
+    for (const tag of publicTags) {
+      const values = tagsByProduct.get(tag.pid) ?? new Set<string>();
+      values.add(tag.name);
+      tagsByProduct.set(tag.pid, values);
+    }
     // --- products (en, not deleted) ---
     for (const p of await q(
       `SELECT p.id, p.enabled, p."featuredAssetId" AS fa, pt.name, pt.slug, pt.description
@@ -56,6 +73,7 @@ export async function importCatalog(ctx: ImportContext): Promise<void> {
         id, storeId, slug: p.slug, name: p.name, description: p.description ?? null,
         status: p.enabled ? 'active' : 'draft',
         featuredAssetId: p.fa ? assetMap.get(p.fa) ?? null : null,
+        tags: [...(tagsByProduct.get(p.id) ?? [])].sort(),
       });
     }
 
