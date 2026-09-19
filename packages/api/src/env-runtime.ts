@@ -61,8 +61,14 @@ export function productionEnvErrors(env: ProductionEnvView, source: EnvSource): 
   if (!source.DATABASE_URL) {
     errors.push('DATABASE_URL must be explicitly configured in production (directly or via DATABASE_URL_FILE)');
   }
-  if (/sellright_(dev|test)(?:\b|[?/#])/i.test(env.DATABASE_URL) || /[:/]5433\//.test(env.DATABASE_URL)) {
-    errors.push('DATABASE_URL points at a development/test-looking database or the reserved :5433 development port');
+  try {
+    const database = decodeURIComponent(new URL(env.DATABASE_URL).pathname.slice(1));
+    if (!database) errors.push('DATABASE_URL must explicitly name the production database');
+    if (/(?:^|[^a-z0-9])(?:dev|test)(?:[^a-z0-9]|$)/i.test(database)) {
+      errors.push('DATABASE_URL points at a development/test-looking database');
+    }
+  } catch {
+    errors.push('DATABASE_URL must contain a valid database URL and name');
   }
   try {
     const host = new URL(env.STOREFRONT_URL).hostname.toLowerCase();

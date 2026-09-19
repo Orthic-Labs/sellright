@@ -31,6 +31,26 @@ describe('resolveFileBackedEnv', () => {
 });
 
 describe('productionEnvErrors', () => {
+  it('allows an explicit production database on a non-default PostgreSQL port', () => {
+    const DATABASE_URL = 'postgres://app:password@127.0.0.1:5433/rightapps';
+    expect(productionEnvErrors({ NODE_ENV: 'production', DATABASE_URL,
+      STOREFRONT_URL: 'https://store.example-shop.com' }, { DATABASE_URL })).toEqual([]);
+  });
+
+  it.each(['sellright_dev', 'sellright_test', 'rightsites_sync_test', 'sellright_%64ev', 'rightapps-test', 'rightapps.test', 'rightapps-test-prod'])('rejects development/test database %s regardless of port', (name) => {
+    const DATABASE_URL = `postgres://app:password@127.0.0.1:5432/${name}`;
+    expect(productionEnvErrors({ NODE_ENV: 'production', DATABASE_URL,
+      STOREFRONT_URL: 'https://store.example-shop.com' }, { DATABASE_URL }))
+      .toContain('DATABASE_URL points at a development/test-looking database');
+  });
+
+  it('rejects a connection that would implicitly choose a database', () => {
+    const DATABASE_URL = 'postgres://app:password@127.0.0.1:5433';
+    expect(productionEnvErrors({ NODE_ENV: 'production', DATABASE_URL,
+      STOREFRONT_URL: 'https://store.example-shop.com' }, { DATABASE_URL }))
+      .toContain('DATABASE_URL must explicitly name the production database');
+  });
+
   it('allows local defaults outside production', () => {
     expect(productionEnvErrors({
       NODE_ENV: 'development',
