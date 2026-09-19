@@ -1,6 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { allowedDemoRequest, allowedDemoBody, demoBindHost } from './policy.mjs';
+import { allowedDemoRequest, allowedDemoBody, demoBindHost, demoSessionCookie } from './policy.mjs';
+
+test('demo cookies match the one-hour database session without stale expiry', () => {
+  assert.equal(demoSessionCookie('sr_session=fixture; Max-Age=1209600; Path=/; HttpOnly; Secure; SameSite=Lax'), 'sr_session=fixture; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=3600');
+  assert.equal(demoSessionCookie('sr_csrf=fixture; expires=Wed, 01 Jan 2030 00:00:00 GMT; Path=/'), 'sr_csrf=fixture; Path=/; Max-Age=3600');
+});
 
 test('demo listener rejects wildcard and public interface binding', () => {
   assert.equal(demoBindHost(), '127.0.0.1');

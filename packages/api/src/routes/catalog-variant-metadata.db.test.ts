@@ -40,6 +40,32 @@ beforeEach(async () => {
 afterAll(() => pool.end());
 
 describe('GET /v1/shop/catalog/products/:slug variant metadata', () => {
+  it.each(['preorder', 'sale'])('uses the %s pricing rule on list and search without disabled variants', async rule => {
+    await withStore(STORE, async tx => {
+      await tx.execute(sql`UPDATE store SET config = ${JSON.stringify({ pricing: { variantRule: rule } })}::jsonb WHERE id = ${STORE}`);
+      await tx.execute(sql`UPDATE product_variant SET is_pre_order = true, pre_order_price = 3000, sale_price = 2000 WHERE id = ${VARIANT}`);
+      await tx.execute(sql`UPDATE product_variant SET enabled = false, price = 1 WHERE sku = 'PHYS-1'`);
+    });
+    invalidateStoreCache();
+    for (const path of ['/v1/shop/catalog/products', '/v1/shop/catalog/search?term=Licensed']) {
+      const res = await app.request(path, { headers: { 'x-store-slug': SLUG } });
+      expect(res.status).toBe(200);
+      const body = await res.json() as { items: { minPrice: number; pricingVariant: unknown }[] };
+      expect(body.items[0]!.minPrice).toBe(rule === 'preorder' ? 3000 : 2000);
+      expect(body.items[0]!.pricingVariant).toMatchObject({ sku: 'LIC-1', price: 4900, preOrderPrice: 3000, salePrice: 2000, isPreOrder: true });
+    }
+  });
+  it('exposes preorder price and ship date, including currency conversion', async () => {
+    await withStore(STORE, async tx => {
+      await tx.execute(sql`UPDATE product_variant SET is_pre_order = true, pre_order_price = 3000, ship_date = '2027-01-01T00:00:00Z' WHERE id = ${VARIANT}`);
+      await tx.execute(sql`INSERT INTO currency_rate (store_id, currency, rate) VALUES (${STORE}, 'EUR', 9000)`);
+    });
+    const res = await app.request('/v1/shop/catalog/products/lic-app?currency=EUR', { headers: { 'x-store-slug': SLUG } });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { variants: { sku: string }[] };
+    expect(body.variants.find((v: { sku: string }) => v.sku === 'LIC-1')).toMatchObject({ price: 4410, preOrderPrice: 2700, isPreOrder: true, shipDate: '2027-01-01T00:00:00.000Z' });
+    expect(body.variants.find((v: { sku: string }) => v.sku === 'PHYS-1')).toMatchObject({ preOrderPrice: null, shipDate: null });
+  });
   it('exposes fulfillmentType + appKey so the storefront can gate licensed checkout', async () => {
     const res = await app.request(`/v1/shop/catalog/products/${'lic-app'}`, {
       headers: { 'x-store-slug': SLUG },

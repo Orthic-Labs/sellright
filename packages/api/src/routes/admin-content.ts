@@ -1,5 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { sanitizeBlogHtml } from '../lib/sanitize-html.js';
@@ -28,7 +28,7 @@ adminContent.openapi(
   }),
 );
 
-const postBody = z.object({ title: z.string().min(1), slug: z.string().optional(), excerpt: z.string().optional(), body: z.string().optional(), authorName: z.string().optional(), tags: z.array(z.string()).optional(), isPublished: z.boolean().optional(), seoTitle: z.string().optional(), seoDescription: z.string().optional() });
+const postBody = z.object({ title: z.string().min(1), slug: z.string().optional(), excerpt: z.string().optional(), body: z.string().optional(), authorName: z.string().optional(), tags: z.array(z.string()).optional(), isPublished: z.boolean().optional(), publishDate: z.string().datetime().nullable().optional(), featuredAssetId: z.string().uuid().nullable().optional(), seoTitle: z.string().optional(), seoDescription: z.string().optional() });
 
 adminContent.openapi(
   createRoute({
@@ -41,13 +41,17 @@ adminContent.openapi(
     const st = requireStore(admin, c); requireWrite(st);
     const b = c.req.valid('json');
     const out = await withStore(st.storeId, async (tx) => {
+      if (b.featuredAssetId) {
+        const [asset] = await tx.select({ id: s.asset.id }).from(s.asset).where(and(eq(s.asset.id, b.featuredAssetId), eq(s.asset.storeId, st.storeId))).limit(1);
+        if (!asset) throw new HttpError(404, 'asset not found');
+      }
       let slug = b.slug ? slugify(b.slug) : slugify(b.title);
       const [dupe] = await tx.select({ id: s.blogPost.id }).from(s.blogPost).where(eq(s.blogPost.slug, slug)).limit(1);
       if (dupe) slug = `${slug}-${Date.now().toString(36)}`;
       const [p] = await tx.insert(s.blogPost).values({
         storeId: st.storeId, title: b.title, slug, excerpt: b.excerpt ?? null, body: b.body ?? null, bodyHtml: sanitizeBlogHtml(b.body ?? ''),
         authorName: b.authorName ?? admin.email, readingTime: readingTime(b.body ?? ''), tags: b.tags ?? null,
-        isPublished: b.isPublished ?? false, publishDate: b.isPublished ? new Date() : null, seoTitle: b.seoTitle ?? null, seoDescription: b.seoDescription ?? null,
+        isPublished: b.isPublished ?? false, publishDate: b.publishDate === undefined ? (b.isPublished ? new Date() : null) : (b.publishDate ? new Date(b.publishDate) : null), featuredAssetId: b.featuredAssetId ?? null, seoTitle: b.seoTitle ?? null, seoDescription: b.seoDescription ?? null,
       }).returning({ id: s.blogPost.id });
       return { id: p!.id, slug };
     });
@@ -85,10 +89,16 @@ adminContent.openapi(
     const ok = await withStore(st.storeId, async (tx) => {
       const [p] = await tx.select().from(s.blogPost).where(eq(s.blogPost.id, id)).limit(1);
       if (!p) return false;
+      if (b.featuredAssetId) {
+        const [asset] = await tx.select({ id: s.asset.id }).from(s.asset).where(and(eq(s.asset.id, b.featuredAssetId), eq(s.asset.storeId, st.storeId))).limit(1);
+        if (!asset) throw new HttpError(404, 'asset not found');
+      }
       const patch: Record<string, unknown> = {};
       for (const k of ['title', 'excerpt', 'authorName', 'tags', 'seoTitle', 'seoDescription'] as const) if (b[k] !== undefined) patch[k] = b[k];
       if (b.body !== undefined) { patch.body = b.body; patch.bodyHtml = sanitizeBlogHtml(b.body ?? ''); patch.readingTime = readingTime(b.body ?? ''); }
       if (b.isPublished !== undefined) { patch.isPublished = b.isPublished; if (b.isPublished && !p.publishDate) patch.publishDate = new Date(); }
+      if (b.publishDate !== undefined) patch.publishDate = b.publishDate ? new Date(b.publishDate) : null;
+      if (b.featuredAssetId !== undefined) patch.featuredAssetId = b.featuredAssetId;
       await tx.update(s.blogPost).set(patch).where(eq(s.blogPost.id, id));
       return true;
     });
