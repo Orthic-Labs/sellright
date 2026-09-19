@@ -91,6 +91,26 @@ The preferred browse path is a static catalog manifest:
 - Per-product detail files for product pages.
 - Dynamic REST remains available for account, checkout, live stock, and admin.
 
+Publication is opt-in: `JOBS_ENABLED=1`, `CATALOG_MANIFEST_JOBS_ENABLED=1`,
+explicit `STORE_SLUG`, and a dedicated `CATALOG_DIR`. The scheduler publishes
+once per minute under a database leader lock. For a one-shot publication, run
+`pnpm --filter @sellright/api exec tsx src/manifest/generate.ts` with the same
+store/directory settings and the unprivileged runtime database role.
+
+Each publication writes a complete `generations/<uuid>/` tree, then atomically
+swaps the `current` symlink. Consumers must resolve `current` once, validate
+`marker.json` (`format: 1`, `source: sellright`, matching store and generation,
+fresh `generatedAt`), and read files from that pinned directory. RightSites
+rejects snapshots older than five minutes and fetches REST data during SSR.
+Never point it at a legacy Vendure directory. Keep the previous generation and
+a ten-minute grace period for in-flight readers; only marked, owned generations
+are cleaned up. Configure a separate destination/publisher per store; a single
+API scheduler publishes only its explicit `STORE_SLUG`.
+
+Public Vendure facet labels are imported into native product tags for browse
+filters; private source facets are excluded. Original facet IDs remain in
+variant metadata for migrated coupon eligibility.
+
 This keeps storefront browsing cheap and fast while preserving a transactional backend for money and account flows.
 
 ## Security Model

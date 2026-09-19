@@ -32,12 +32,20 @@ function listingVariant(config: unknown) {
     order by ${effectivePrice(config)}, pv.sku limit 1)`;
 }
 
+function productInStock() {
+  return sql<boolean>`exists (select 1 from product_variant pv left join stock stk on stk.variant_id = pv.id
+    where pv.product_id = ${s.product.id} and pv.deleted_at is null and pv.enabled = true
+    and (pv.fulfillment_type <> 'physical' or pv.is_pre_order or (stk.on_hand - stk.allocated) > 0))`;
+}
+
 const Money = z.number().int().describe('integer minor units (cents)');
 
 const ProductListItem = z.object({
   slug: z.string(),
   name: z.string(),
   status: z.string(),
+  inStock: z.boolean(),
+  tags: z.array(z.string()).nullable(),
   minPrice: Money.nullable(),
   pricingVariant: z.object({ sku: z.string(), price: Money, salePrice: Money.nullable(), preOrderPrice: Money.nullable(), isPreOrder: z.boolean(), shipDate: z.string().nullable() }).nullable(),
   image: z.string().nullable(),
@@ -53,6 +61,7 @@ const Variant = z.object({
   compareAtPrice: Money.nullable(),
   isPreOrder: z.boolean(),
   enabled: z.boolean(),
+  options: z.array(z.object({ id: z.string(), code: z.string(), name: z.string(), group: z.object({ id: z.string(), code: z.string(), name: z.string() }) })),
   // Storefronts must know a variant is a software license before checkout: the
   // legal gate keys off these two, and the API rejects a licensed order that
   // arrives without an acceptance receipt. Both are product metadata, not
@@ -65,6 +74,7 @@ const ProductDetail = z.object({
   slug: z.string(),
   name: z.string(),
   description: z.string().nullable(),
+  tags: z.array(z.string()).nullable(),
   status: z.string(),
   seoTitle: z.string().nullable(),
   seoDescription: z.string().nullable(),
@@ -103,6 +113,8 @@ catalog.openapi(
           slug: s.product.slug,
           name: s.product.name,
           status: s.product.status,
+          inStock: productInStock(),
+          tags: s.product.tags,
           minPrice: minimumPrice(st.config),
           pricingVariant: listingVariant(st.config),
           image: sql<string | null>`max(${s.asset.path})`,
@@ -145,7 +157,7 @@ catalog.openapi(
       const [p] = await tx
         .select()
         .from(s.product)
-        .where(and(eq(s.product.slug, slug), isNull(s.product.deletedAt)))
+        .where(and(eq(s.product.slug, slug), eq(s.product.status, 'active'), isNull(s.product.deletedAt)))
         .limit(1);
       if (!p) return null;
       // Presentment conversion (display-only): orders still charge in base currency.
@@ -156,6 +168,12 @@ catalog.openapi(
         rate = rateFor(rates, st.currency, displayCurrency);
       }
       const conv = (v: number | null) => (v == null ? null : convertMoney(v, rate));
+      const optionRows = await tx.select({ sku: s.productVariant.sku, id: s.productOption.id, name: s.productOption.value, groupId: s.productOptionGroup.id, groupName: s.productOptionGroup.name })
+        .from(s.variantOption)
+        .innerJoin(s.productVariant, eq(s.productVariant.id, s.variantOption.variantId))
+        .innerJoin(s.productOption, eq(s.productOption.id, s.variantOption.optionId))
+        .innerJoin(s.productOptionGroup, eq(s.productOptionGroup.id, s.productOption.groupId))
+        .where(eq(s.productVariant.productId, p.id)).orderBy(asc(s.productOptionGroup.name), asc(s.productOption.value));
       const variants = (await tx
         .select({
           sku: s.productVariant.sku,
@@ -171,9 +189,9 @@ catalog.openapi(
           appKey: s.productVariant.appKey,
         })
         .from(s.productVariant)
-        .where(and(eq(s.productVariant.productId, p.id), isNull(s.productVariant.deletedAt)))
+        .where(and(eq(s.productVariant.productId, p.id), eq(s.productVariant.enabled, true), isNull(s.productVariant.deletedAt)))
         .orderBy(asc(s.productVariant.name)))
-        .map((v) => ({ ...v, price: convertMoney(v.price, rate), salePrice: conv(v.salePrice), preOrderPrice: conv(v.preOrderPrice), shipDate: v.shipDate?.toISOString() ?? null, compareAtPrice: conv(v.compareAtPrice) }));
+        .map((v) => ({ ...v, price: convertMoney(v.price, rate), salePrice: conv(v.salePrice), preOrderPrice: conv(v.preOrderPrice), shipDate: v.shipDate?.toISOString() ?? null, compareAtPrice: conv(v.compareAtPrice), options: optionRows.filter(o => o.sku === v.sku).map(o => ({ id: o.id, code: o.id, name: o.name, group: { id: o.groupId, code: o.groupId, name: o.groupName } })) }));
       const imgs = await tx
         .select({ path: s.asset.path })
         .from(s.productAsset)
@@ -184,6 +202,7 @@ catalog.openapi(
         slug: p.slug,
         name: p.name,
         description: p.description,
+        tags: p.tags,
         status: p.status,
         seoTitle: p.seoTitle,
         seoDescription: p.seoDescription,
@@ -326,7 +345,7 @@ catalog.openapi(
       collectionSlug: z.string().max(200).optional(),
       take: z.coerce.number().int().min(1).max(100).default(24),
       skip: z.coerce.number().int().min(0).default(0),
-      inStock: z.coerce.boolean().optional(),
+      inStock: z.enum(['true', 'false']).transform(value => value === 'true').optional(),
     }) },
     responses: { 200: { description: 'Results', content: { 'application/json': { schema: z.object({ items: z.array(ProductListItem), total: z.number().int() }) } } } },
   }),
@@ -341,11 +360,13 @@ catalog.openapi(
         sql`(${s.product.name} ilike ${like} or ${s.product.description} ilike ${like})`,
       ];
       if (collectionSlug) conds.push(sql`exists (select 1 from collection_product cp join collection c2 on c2.id = cp.collection_id where cp.product_id = ${s.product.id} and c2.slug = ${collectionSlug})`);
-      if (inStock) conds.push(sql`exists (select 1 from product_variant pv left join stock stk on stk.variant_id = pv.id where pv.product_id = ${s.product.id} and pv.deleted_at is null and (pv.fulfillment_type <> 'physical' or (stk.on_hand - stk.allocated) > 0))`);
+      if (inStock) conds.push(productInStock());
       const where = and(...conds);
       const items = await tx
         .select({
           slug: s.product.slug, name: s.product.name, status: s.product.status,
+          inStock: productInStock(),
+          tags: s.product.tags,
           minPrice: minimumPrice(st.config),
           pricingVariant: listingVariant(st.config),
           image: sql<string | null>`max(${s.asset.path})`,
@@ -375,13 +396,13 @@ catalog.openapi(
     const st = await resolveStoreFromCtx(c);
     const { slug } = c.req.valid('param');
     const out = await withStore(st.id, async (tx) => {
-      const [p] = await tx.select({ id: s.product.id }).from(s.product).where(and(eq(s.product.slug, slug), isNull(s.product.deletedAt))).limit(1);
+      const [p] = await tx.select({ id: s.product.id }).from(s.product).where(and(eq(s.product.slug, slug), eq(s.product.status, 'active'), isNull(s.product.deletedAt))).limit(1);
       if (!p) return null;
       const rows = await tx
         .select({ sku: s.productVariant.sku, isPreOrder: s.productVariant.isPreOrder, fulfillmentType: s.productVariant.fulfillmentType, onHand: s.stock.onHand, allocated: s.stock.allocated })
         .from(s.productVariant)
         .leftJoin(s.stock, eq(s.stock.variantId, s.productVariant.id))
-        .where(and(eq(s.productVariant.productId, p.id), isNull(s.productVariant.deletedAt)));
+        .where(and(eq(s.productVariant.productId, p.id), eq(s.productVariant.enabled, true), isNull(s.productVariant.deletedAt)));
       return rows.map((r) => ({ sku: r.sku, inStock: r.fulfillmentType !== 'physical' || r.isPreOrder || ((r.onHand ?? 0) - (r.allocated ?? 0)) > 0 }));
     });
     if (out === null) return c.json({ error: 'not found' }, 404);

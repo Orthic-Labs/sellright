@@ -51,6 +51,7 @@ const JOB_KEYS = {
   // PAR-5: drains stock-trigger restock events into one-shot notifications
   // (routes/restock.ts sweepRestockEvents).
   'restock-notify': NAMESPACE | 12n,
+  'catalog-manifest': NAMESPACE | 13n,
 } as const satisfies Record<string, bigint>;
 
 export type LeaderLockedJob = keyof typeof JOB_KEYS;

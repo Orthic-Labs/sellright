@@ -91,6 +91,9 @@ function buildSource(variant: Variant): string[] {
     TABLE('product_variant_options_product_option', ['"productVariantId" int', '"productOptionId" int']),
     TABLE('product_variant_facet_values_facet_value', ['"productVariantId" int', '"facetValueId" int']),
     TABLE('product_facet_values_facet_value', ['"productId" int', '"facetValueId" int']),
+    TABLE('facet', ['id int PRIMARY KEY', '"isPrivate" boolean']),
+    TABLE('facet_value', ['id int PRIMARY KEY', '"facetId" int']),
+    TABLE('facet_value_translation', ['"baseId" int', '"languageCode" varchar(5)', 'name text']),
     TABLE('global_settings', ['id int', '"trackInventory" boolean', '"outOfStockThreshold" int']),
     TABLE('stock_level', ['id int PRIMARY KEY', '"productVariantId" int', '"stockLocationId" int', '"stockOnHand" int', '"stockAllocated" int']),
     TABLE('stock_location', ['id int PRIMARY KEY', 'name text']),
@@ -139,6 +142,11 @@ const CORE_SEED = [
   `INSERT INTO stock_location VALUES (1, 'Main warehouse')`,
   `INSERT INTO product VALUES (1, true, NULL, NULL)`,
   `INSERT INTO product_translation VALUES (1, 'en', 'Widget', 'widget', 'A widget')`,
+  `INSERT INTO facet VALUES (1, false), (2, true)`,
+  `INSERT INTO facet_value VALUES (1, 1), (2, 2), (3, 1)`,
+  `INSERT INTO facet_value_translation VALUES (1, 'en', 'edc'), (2, 'en', 'internal-only'), (3, 'en', 'folding knives')`,
+  `INSERT INTO product_facet_values_facet_value VALUES (1, 1), (1, 2)`,
+  `INSERT INTO product_variant_facet_values_facet_value VALUES (1, 3)`,
   `INSERT INTO asset VALUES (5, 'image', 'img.png', NULL, 100, 100)`,
   `INSERT INTO stock_level VALUES (1, 1, 1, 5, 0)`,
   `INSERT INTO tax_rate VALUES (1, true, 1, 1, 0, NULL)`,
@@ -290,6 +298,7 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     const applied = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config,
       manifestPath: f.applyManifestPath, apply: true, expectedDigest: dry.sourceDigest });
     expect(applied.applied).toBe(true);
+    expect((await targetOne(storeId, 'product')).tags).toEqual(['edc', 'folding knives']);
     const stripe = await targetOne(storeId, 'payment', `AND method = 'stripe'`);
     expect(stripe.gateway_mode).toBeNull();
     expect(stripe.gateway_account).toBe('acct_rh'); // declared identity still recorded

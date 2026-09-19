@@ -148,6 +148,7 @@ const EnvSchema = z.object({
   CATALOG_DIR: z.string().optional(),
   // Manifest generator / multi-store: which store to generate for.
   STORE_SLUG: z.string().optional(),
+  CATALOG_MANIFEST_JOBS_ENABLED: z.enum(['0', '1']).default('0'),
   // APNs (mobile push for the admin app). ALL optional — with any of them unset
   // the push sender no-ops with a log line, exactly like the SMTP mailer. A
   // deployment without a mobile app never has to think about these.
