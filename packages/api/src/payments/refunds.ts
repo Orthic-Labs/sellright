@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { withAdvisoryLock, withStore, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { gatewayAccount, assertGatewayEnvironment, recordedNmiEnvironment } from './gateway-account.js';
@@ -213,6 +213,19 @@ export async function finalizeRefund(tx: Tx, storeId: string, attemptId: string,
   const refunds = await tx.select().from(s.refund).where(and(eq(s.refund.orderId, order.id), eq(s.refund.state, 'Settled')));
   const payments = await tx.select().from(s.payment).where(and(eq(s.payment.orderId, order.id), eq(s.payment.state, 'Settled')));
   const refunded = refunds.reduce((n,r) => n+r.amount,0), captured = payments.reduce((n,p) => n+p.amount,0);
+  if (captured > 0 && refunded >= captured) {
+    const now = new Date();
+    const licenses = await tx.update(s.license).set({ status: 'revoked', updatedAt: now })
+      .where(and(eq(s.license.storeId, storeId), eq(s.license.orderId, order.id)))
+      .returning({ id: s.license.id });
+    // Keep device tombstones and invalidate pre-refund leases without bumping
+    // generations again on an already-revoked/removed activation.
+    if (licenses.length) await tx.update(s.licenseActivation).set({
+      state: 'revoked', revokedAt: now, updatedAt: now,
+      generation: sql`${s.licenseActivation.generation} + 1`,
+    }).where(and(eq(s.licenseActivation.storeId, storeId),
+      inArray(s.licenseActivation.licenseId, licenses.map(l => l.id)), eq(s.licenseActivation.state, 'active')));
+  }
   const state = order.state === 'Cancelled' ? 'Cancelled' : refunded >= captured ? 'Refunded' : 'PartiallyRefunded';
   await tx.update(s.order).set({ state, updatedAt: new Date() }).where(eq(s.order.id, order.id));
   if (details?.returnId) await tx.update(s.returnRequest).set({ status: 'refunded', refundId: refund.id, updatedAt: new Date() })
