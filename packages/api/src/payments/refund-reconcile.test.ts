@@ -157,6 +157,54 @@ describe.skipIf(!isTestDb)('SR-04 refund correlation — webhook converges on th
   });
   afterAll(async () => { await wipe(); await pool.end(); });
 
+  async function seedLicense(orderId: string, lineId: string) {
+    return withStore(STORE, async tx => {
+      const result = await tx.execute(sql`INSERT INTO license(store_id,order_id,order_line_id,app_key,license_key)
+        VALUES (${STORE},${orderId},${lineId},'app',${'license-' + orderId}) RETURNING id`);
+      const id = (result.rows[0] as { id: string }).id;
+      await tx.execute(sql`INSERT INTO license_activation(store_id,license_id,app_key,device_id_hash,generation)
+        VALUES (${STORE},${id},'app','device',4)`);
+      return id;
+    });
+  }
+
+  async function licenseState(id: string) {
+    return withStore(STORE, async tx => {
+      const result = await tx.execute(sql`SELECT l.status,a.state,a.generation,a.revoked_at IS NOT NULL AS tombstoned
+        FROM license l JOIN license_activation a ON a.license_id=l.id WHERE l.id=${id}`);
+      return result.rows[0];
+    });
+  }
+
+  it('partial refunds preserve licences; a full cumulative refund revokes only that order and replay is a no-op', async () => {
+    const target = await seedPaidOrder('SR-LIC-REFUND');
+    const other = await seedPaidOrder('SR-LIC-KEEP');
+    const licenseId = await seedLicense(target.orderId, target.lineId);
+    const otherId = await seedLicense(other.orderId, other.lineId);
+    stripeRefundImpl = async () => ({ state: 'Settled', providerRef: 're_partial_lic' });
+    const input = { storeId: STORE, orderId: target.orderId, actor: 'test' };
+    await requestRefund({ ...input, amount: 500, idempotencyKey: 'lic-partial' });
+    expect(await licenseState(licenseId)).toMatchObject({ status: 'active', state: 'active', generation: 4 });
+    stripeRefundImpl = async () => ({ state: 'Settled', providerRef: 're_final_lic' });
+    await requestRefund({ ...input, amount: 1500, idempotencyKey: 'lic-final' });
+    await requestRefund({ ...input, amount: 1500, idempotencyKey: 'lic-final' });
+    expect(await licenseState(licenseId)).toMatchObject({ status: 'revoked', state: 'revoked', generation: 5, tombstoned: true });
+    expect(await licenseState(otherId)).toMatchObject({ status: 'active', state: 'active', generation: 4 });
+  });
+
+  it('pending/failed refunds preserve access; real reconciliation revokes once on definitive full settlement', async () => {
+    const { orderId, lineId } = await seedPaidOrder('SR-LIC-WEBHOOK');
+    const licenseId = await seedLicense(orderId, lineId);
+    const { attemptId } = await reservePendingRefund(orderId, 'lic-webhook', 2000);
+    expect(await licenseState(licenseId)).toMatchObject({ status: 'active', state: 'active', generation: 4 });
+    const event = { reId: 're_lic_webhook', amount: 2000, piId: 'pi_SR-LIC-WEBHOOK', attemptId };
+    await withStore(STORE, tx => reconcileStripeRefund(tx, STORE, { ...event, status: 'failed' }, { mode: 'test' }));
+    expect(await licenseState(licenseId)).toMatchObject({ status: 'active', state: 'active', generation: 4 });
+    await withStore(STORE, tx => reconcileStripeRefund(tx, STORE, { ...event, status: 'succeeded' }, { mode: 'test' }));
+    await withStore(STORE, tx => reconcileStripeRefund(tx, STORE, { ...event, status: 'succeeded' }, { mode: 'test' }));
+    expect(await licenseState(licenseId)).toMatchObject({ status: 'revoked', state: 'revoked', generation: 5, tombstoned: true });
+  });
+
   it('timeout-after-acceptance: the stamped attempt id binds the provider refund to the SAME reservation — effects once', async () => {
     const { orderId, lineId } = await seedPaidOrder('SR-RC-1', 2000);
     const { attemptId } = await reservePendingRefund(orderId, 'k-1', 500, lineId);
