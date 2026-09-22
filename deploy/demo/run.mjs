@@ -22,4 +22,4 @@ for (const key of Object.keys(process.env)) {
 }
 const { DATABASE_URL_OWNER: _owner, ...runtime } = config;
 Object.assign(process.env, runtime);
-await import('./server.mjs');
+await import(process.argv.includes('--read-only') ? './server.mjs' : './interactive-server.mjs');

@@ -1,5 +1,66 @@
 # Isolated Demo
 
+## Interactive Visitor Stores (September 2026)
+
+The default runner now serves a connected storefront and the real SellRight
+admin. Each browser receives its own disposable tenant, catalog, variants,
+inventory, collections, customers, promotions and sample orders. The original
+single-store read-only implementation remains available with `run.mjs --read-only`
+for rollback; its legacy contract and setup instructions are retained below.
+
+Start at `/shop`. Browse collections and product detail, choose a variant,
+edit the cart, select delivery, apply `WELCOME10` and place a demo order. Checkout
+uses the real server-pricing, stock-reservation and checkout transaction. The
+demo process alone authorizes a deterministic synthetic manual settlement through
+`applyPaymentResult`; it does not enable shopper manual payments or change the
+generic provider registry. The confirmation links to that actual admin order.
+
+The admin can edit product details/prices/availability, create/archive products
+and variants, adjust stock, manage discounts, fulfill/cancel/refund orders and
+inspect the synthetic customers and reports. New variant SKUs must start with
+`DEMO-` and use uppercase letters/hyphens. Media uploads, option editing, staff,
+settings, gateway configuration, exports and external integrations are disabled.
+This is a product evaluation environment, not gateway acceptance evidence.
+
+### Isolation and Limits
+
+- Only the dedicated `sellright_demo` database is accepted. The runtime role
+  must remain non-superuser/non-BYPASSRLS. Never use a merchant/development clone.
+- An HttpOnly random visitor token resolves to a server-owned tenant and expiry.
+  Client tenant headers, authorization headers and admin cookies cannot select
+  another visitor's store. CSRF plus same-origin checks protect all writes.
+- Every new tenant and generated admin account expires after one hour. At most
+  40 retained visitor tenants are allowed. Per-visitor caps bound orders, carts,
+  products, variants, discounts and audit activity; the edge also has a request cap.
+- Reset removes only the authenticated visitor's generated store, sessions,
+  account and tenant rows, transactionally in foreign-key dependency order.
+  Cleanup runs every minute and removes expired visitors. The baseline `demo`
+  tenant cannot be reset. Cleanup failure fails readiness closed.
+- All customer identity/address data is server-generated synthetic data. The
+  checkout never accepts card details or user contact information.
+- Stripe/NMI/Sezzle credentials and gateway accounts are rejected; no scheduler
+  starts; SMTP is disabled and outbound `fetch` is denied. Core commerce may
+  enqueue synthetic outbox records, but no dispatcher runs and reset removes them.
+- No database migration or extra runtime dependency is required. The provisioner
+  uses the existing runtime DML grants, never the owner connection.
+
+### Verification and Rollout
+
+Run `node --test deploy/demo/*.test.mjs` and syntax-check the interactive JS files.
+Before rollout, use an isolated copy of the synthetic baseline, non-owner role,
+and a different loopback port. Verify two independent browsers, checkout to admin
+refund, product/stock/discount mutations, forged tenant headers, blocked gateway
+and settings routes, CSRF rejection, reset and expiration cleanup, desktop/mobile.
+
+The public entry point stays `https://demo.sellright.cc/shop`; nginx/TLS do not
+change. Restart only `sellright-demo` after publication. Readiness now reports
+`synthetic:true`, `interactiveAdmin:true`, `isolatedVisitors:true`.
+For rollback, stop the demo, back up its private database, remove only marked
+visitor tenants using the guarded `removeVisitor` routine, and start the legacy
+runner with `--read-only`. Do not restore a merchant database or change RLS.
+
+## Legacy Read-Only Deployment Reference
+
 This is a real SellRight deployment with a small reference shop, the existing admin and synthetic catalog/order rows. It is not merchant acceptance evidence. No real payments, shipments or customer information belong here.
 
 The reference deployment uses a separate PostgreSQL 17 cluster, private Unix socket and non-owner runtime role. Nothing connects to an existing merchant or development-clone database. The service defaults to localhost:4310. The only alternate binding is the designated private nginx Docker bridge, `172.22.0.1`; public and wildcard bindings are rejected.
