@@ -2,7 +2,7 @@ import { component$, useStyles$ } from '@qwik.dev/core';
 import { OptimizedImage } from '~/components/ui/LazyImage';
 import { routeLoader$, Link } from '@qwik.dev/router';
 import { createSEOHead } from '~/utils/seo';
-import { sanitizeHtml } from '~/utils/sanitize';
+import { sanitizeHtml, stripHtml } from '~/utils/sanitize';
 import { getBlogPostBySlug, getBlogPosts } from '~/providers/shop/blog/blog';
 import type { BlogPostFull, BlogPostSummary } from '~/providers/shop/blog/blog';
 import { theme, siteUrl } from '~/theme/theme.config';
@@ -20,12 +20,17 @@ function fixBodyHtml(html: string): string {
         .replace(/<p>\s*#{1}\s+(.+?)<\/p>/g, '<h1>$1</h1>');
 }
 
+// stripHtml (DOMPurify, real HTML parser) instead of the previous hand-rolled
+// implementation: a single-pass `/<[^>]+>/g` tag-strip can leave a
+// reconstructed `<script` behind for crafted input like `<scr<script>ipt>`
+// (CodeQL js/incomplete-multi-character-sanitization), and chaining entity
+// decodes (`&amp;` → `&` before `&lt;`/`&gt;` → `<`/`>`) on the same string can
+// double-unescape a legitimately double-encoded value, e.g. `&amp;lt;` — which
+// should stay literal text `&lt;` — instead reconstructing `<` (CodeQL
+// js/double-escaping). A real HTML parser decodes entities exactly once, in
+// the correct DOM-text-node semantics, with no hand-written regex chain.
 function stripTags(s: string): string {
-    return s
-        .replace(/<[^>]+>/g, '')
-        .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-        .replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&nbsp;/g, ' ')
-        .replace(/\s+/g, ' ').trim();
+    return stripHtml(s).replace(/\s+/g, ' ').trim();
 }
 
 function slugify(s: string): string {

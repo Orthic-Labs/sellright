@@ -21,32 +21,11 @@ const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress
   const validationTimer = useSignal<number | null>(null);
   const hasUserInteracted = useSignal(false);
 
-  // Load billing address from localStorage — client-only init.
-  // Falls back to legacy sessionStorage key for in-flight users mid-deploy.
+  // Billing details are never persisted. Earlier versions cached the full
+  // guest billing address in browser storage; purge any leftover copy.
   useOnDocument('qinit', $(() => {
-    if (typeof localStorage === 'undefined') return;
-    let storedGuestBilling = localStorage.getItem('guestBillingAddress');
-    if (!storedGuestBilling && typeof sessionStorage !== 'undefined') {
-      storedGuestBilling = sessionStorage.getItem('guestBillingAddress');
-    }
-    if (!storedGuestBilling) return;
-    try {
-      const guestData = JSON.parse(storedGuestBilling);
-      if (guestData) {
-        appState.billingAddress = {
-          firstName: guestData.firstName || '',
-          lastName: guestData.lastName || '',
-          streetLine1: guestData.streetLine1 || '',
-          streetLine2: guestData.streetLine2 || '',
-          city: guestData.city || '',
-          province: guestData.province || '',
-          postalCode: guestData.postalCode || '',
-          countryCode: guestData.countryCode || ''
-        };
-      }
-    } catch (error) {
-      console.warn('[BillingAddressForm] Failed to parse guest billing address from storage:', error);
-    }
+    try { localStorage.removeItem('guestBillingAddress'); } catch { /* storage unavailable */ }
+    try { sessionStorage.removeItem('guestBillingAddress'); } catch { /* storage unavailable */ }
   }));
 
   // Handle field blur events
@@ -118,7 +97,7 @@ const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress
     return Object.keys(errors).length === 0;
   });
   
-  const handleInputChange$ = $((field: string, value: string) => {
+  const handleInputChange$ = $(async (field: string, value: string) => {
     // Notify parent component on first user interaction
     if (!hasUserInteracted.value && onUserInteraction$) {
       hasUserInteracted.value = true;
@@ -144,27 +123,8 @@ const BillingAddressForm = component$<BillingAddressFormProps>(({ billingAddress
       [field]: value
     };
 
-    // Save billing address to localStorage for persistence across tabs and browser restarts.
-    // Only fires when this form is rendered, which only happens when "use different billing" is checked.
-    if (typeof localStorage !== 'undefined' && appState.billingAddress) {
-      try {
-        const guestBillingData = {
-          firstName: appState.billingAddress.firstName || '',
-          lastName: appState.billingAddress.lastName || '',
-          streetLine1: appState.billingAddress.streetLine1 || '',
-          streetLine2: appState.billingAddress.streetLine2 || '',
-          city: appState.billingAddress.city || '',
-          province: appState.billingAddress.province || '',
-          postalCode: appState.billingAddress.postalCode || '',
-          countryCode: appState.billingAddress.countryCode || '',
-          lastUpdated: Date.now()
-        };
-        localStorage.setItem('guestBillingAddress', JSON.stringify(guestBillingData));
-      } catch (error) {
-        console.warn('[BillingAddressForm] Failed to save guest billing address to localStorage:', error);
-      }
-    }
-    
+    // Billing details stay in memory only — nothing personal is persisted.
+
     // If the field has been touched, validate on change
     if (touchedFields.value.has(field)) {
       const countryCode = appState.billingAddress?.countryCode ?? billingAddress?.countryCode ?? 'US';

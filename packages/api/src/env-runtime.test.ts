@@ -67,7 +67,13 @@ describe('productionEnvErrors', () => {
     }, {});
     expect(errors.some((e) => e.includes('explicitly configured'))).toBe(true);
     expect(errors.some((e) => e.includes('development/test'))).toBe(true);
-    expect(errors.some((e) => e.includes('example.com'))).toBe(true);
+    // Exact membership, not a substring check against a URL-shaped literal
+    // (CodeQL js/incomplete-url-substring-sanitization flags `.includes()`
+    // with a bare-domain-looking argument as an incomplete host check, even
+    // here where it's just a test assertion on an error message, not a
+    // security decision) — asserting the full known message is also just a
+    // more precise test.
+    expect(errors).toContain('STOREFRONT_URL must be a real deployment URL in production, not example.com');
   });
 
   it('accepts an explicit production database resolved from a file', () => {

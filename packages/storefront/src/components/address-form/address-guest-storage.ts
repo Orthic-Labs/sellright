@@ -8,38 +8,34 @@ export type GuestShippingAddress = Partial<ShippingAddress> & {
  lastUpdated?: number;
 };
 
-export const loadGuestShippingAddress = (): GuestShippingAddress | null => {
- if (typeof localStorage === 'undefined') return null;
- let storedGuestAddress = localStorage.getItem('guestShippingAddress');
- if (!storedGuestAddress && typeof sessionStorage !== 'undefined') {
-  storedGuestAddress = sessionStorage.getItem('guestShippingAddress');
- }
- if (!storedGuestAddress) return null;
- try {
-  return JSON.parse(storedGuestAddress);
- } catch (error) {
-  console.warn('[AddressForm] Failed to parse guest address from storage:', error);
-  return null;
+const COUNTRY_KEY = 'guestCountryCode';
+// Earlier versions cached the full guest address (name, phone, street) in
+// browser storage. Nothing personal is persisted any more; purge leftovers.
+const LEGACY_KEYS = ['guestShippingAddress'];
+
+const purgeLegacy = () => {
+ for (const k of LEGACY_KEYS) {
+  try { localStorage.removeItem(k); } catch { /* storage unavailable */ }
+  try { sessionStorage.removeItem(k); } catch { /* storage unavailable */ }
  }
 };
 
-export const saveGuestShippingAddress = (customer: ActiveCustomer, address: ShippingAddress): void => {
- if (typeof localStorage === 'undefined') return;
+/**
+ * Guest address details stay in memory for the checkout session only. The
+ * browser remembers just the country code so the next visit preselects it.
+ */
+export const loadGuestShippingAddress = async (): Promise<GuestShippingAddress | null> => {
+ if (typeof localStorage === 'undefined') return null;
+ purgeLegacy();
+ const countryCode = localStorage.getItem(COUNTRY_KEY);
+ return countryCode ? { countryCode } : null;
+};
+
+export const saveGuestShippingAddress = async (_customer: ActiveCustomer, address: ShippingAddress): Promise<void> => {
+ if (typeof localStorage === 'undefined' || !address.countryCode) return;
  try {
-  localStorage.setItem('guestShippingAddress', JSON.stringify({
-   firstName: customer.firstName || '',
-   lastName: customer.lastName || '',
-   emailAddress: customer.emailAddress || '',
-   streetLine1: address.streetLine1,
-   streetLine2: address.streetLine2,
-   city: address.city,
-   province: address.province,
-   postalCode: address.postalCode,
-   countryCode: address.countryCode,
-   phoneNumber: address.phoneNumber,
-   lastUpdated: Date.now(),
-  }));
+  localStorage.setItem(COUNTRY_KEY, address.countryCode);
  } catch (error) {
-  console.warn('[AddressForm] Failed to save guest address to localStorage:', error);
+  console.warn('[AddressForm] Failed to save guest country:', error);
  }
 };

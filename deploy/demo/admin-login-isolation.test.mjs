@@ -29,20 +29,14 @@ test('the real /v1/admin/login route requires a valid email format and a hashed-
   assert.doesNotMatch(loginRoute, /['"]admin['"]\s*===\s*password|password\s*===\s*['"]admin['"]/, 'no literal "admin" password bypass may exist in the real route');
 });
 
-test("real app.request('/v1/admin/login', {admin, admin}) is rejected by schema validation before any database lookup — no live DB required for this to fail", async () => {
-  const { createApp } = await import('../../packages/api/dist/app.js');
-  const app = createApp();
-  const res = await app.request('/v1/admin/login', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ email: 'admin', password: 'admin' }),
-  });
-  // Zod's `.email()` rejects the bare literal "admin" (no @) at the request
-  // schema layer — a 400, never the 200 the demo wrapper returns for the same
-  // credentials on its own /v1/admin/login interception.
-  assert.equal(res.status, 400);
-  assert.notEqual(res.status, 200);
-});
+// The live app.request(...) assertion for this same scenario (schema
+// rejects the literal "admin"/"admin" pair before any DB lookup) lives in
+// packages/api/src/routes/admin-login-schema.test.ts instead of here: it
+// needs `createApp` from the real source (compiled via vitest's TS
+// transform), and this demo-safety job intentionally runs with no install/
+// build step (node --check + node --test only against plain .mjs/.js), so it
+// has no dist/ to import. Keeping it in packages/api also means it runs
+// against every push/PR touching the real login route, not just this demo.
 
 test('demoAdminCredentials accepts only the published literal, case-insensitive on email, and nothing else', () => {
   assert.equal(demoAdminCredentials({ email: 'admin', password: 'admin' }), true);

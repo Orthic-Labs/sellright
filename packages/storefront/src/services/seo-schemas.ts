@@ -5,6 +5,7 @@ import type {
  ProductSchema,
 } from '~/types/seo.types';
 import { theme, siteUrl, socialLinks } from '~/theme/theme.config';
+import { stripHtml } from '~/utils/sanitize';
 
 export const generateBreadcrumbSchema = (breadcrumbs: BreadcrumbItem[]): BreadcrumbSchema => {
  return {
@@ -31,8 +32,12 @@ export const generateProductSchema = (product: any): ProductSchema | null => {
   return null;
  }
 
+ // stripHtml (DOMPurify, real HTML parser) instead of a hand-rolled tag-strip
+ // regex — a single-pass `/<[^>]*>/g` replace can leave a reconstructed
+ // `<script` behind for crafted input like `<scr<script>ipt>` (CodeQL
+ // js/incomplete-multi-character-sanitization).
  const cleanDescription = product.description
-  ? product.description.replace(/<[^>]*>/g, '').trim()
+  ? stripHtml(product.description).trim()
   : `${product.name} - Premium quality product from ${theme.storeName}`;
 
  const hasStock = product.variants.some((variant: any) =>

@@ -1,8 +1,13 @@
 /**
  * SEO-1: read-only queries shared by the sitemap/robots/JSON-LD/cache-version
- * routes. Every query runs inside `withStore(...)` (RLS-scoped) exactly like
- * catalog.ts, so no explicit store_id filter is needed inside the SQL — the
- * session's `app.current_store` setting already confines every table read.
+ * routes. Every query runs inside `withStore(...)` (RLS-scoped) like
+ * catalog.ts, but every query here ALSO filters explicitly on store_id: RLS
+ * is a defense-in-depth backstop, not the only tenant boundary — the test
+ * database lane (and any script/job that legitimately connects as the
+ * unscoped/owner Postgres role) is superuser and BYPASSES row level security
+ * entirely, so a query that relied on RLS alone would silently leak rows
+ * across stores whenever it ran privileged. Explicit store_id predicates make
+ * isolation hold regardless of which role executes the query.
  *
  * Nothing here is cached. `latestUpdatedAt` and `productAvailability` are the
  * two functions the org's "never cache stock" invariant applies to hardest —
@@ -23,29 +28,33 @@ export interface SitemapEntry {
 const toIso = (d: Date | null | undefined) => (d ? d.toISOString() : null);
 
 /** Active, non-deleted products — mirrors catalog.ts's product-list WHERE. */
-export async function listProductSitemapEntries(tx: Tx): Promise<SitemapEntry[]> {
+export async function listProductSitemapEntries(tx: Tx, storeId: string): Promise<SitemapEntry[]> {
   const rows = await tx
     .select({ slug: s.product.slug, updatedAt: s.product.updatedAt })
     .from(s.product)
-    .where(and(eq(s.product.status, 'active'), isNull(s.product.deletedAt)))
+    .where(and(eq(s.product.storeId, storeId), eq(s.product.status, 'active'), isNull(s.product.deletedAt)))
     .orderBy(asc(s.product.slug));
   return rows.map((r) => ({ slug: r.slug, lastmod: toIso(r.updatedAt) }));
 }
 
 /** Published collections only — never advertise an unpublished collection URL. */
-export async function listCollectionSitemapEntries(tx: Tx): Promise<SitemapEntry[]> {
+export async function listCollectionSitemapEntries(tx: Tx, storeId: string): Promise<SitemapEntry[]> {
   const rows = await tx
     .select({ slug: s.collection.slug, updatedAt: s.collection.updatedAt })
     .from(s.collection)
-    .where(eq(s.collection.published, true))
+    .where(and(eq(s.collection.storeId, storeId), eq(s.collection.published, true)))
     .orderBy(asc(s.collection.slug));
   return rows.map((r) => ({ slug: r.slug, lastmod: toIso(r.updatedAt) }));
 }
 
 /** Published blog posts (publishDate null-or-past) — same visibility rule as
  *  GET /v1/shop/blog in shop-extra.ts. */
-export async function listBlogSitemapEntries(tx: Tx): Promise<SitemapEntry[]> {
-  const visible = and(eq(s.blogPost.isPublished, true), sql`(${s.blogPost.publishDate} is null or ${s.blogPost.publishDate} <= now())`);
+export async function listBlogSitemapEntries(tx: Tx, storeId: string): Promise<SitemapEntry[]> {
+  const visible = and(
+    eq(s.blogPost.storeId, storeId),
+    eq(s.blogPost.isPublished, true),
+    sql`(${s.blogPost.publishDate} is null or ${s.blogPost.publishDate} <= now())`,
+  );
   const rows = await tx
     .select({ slug: s.blogPost.slug, updatedAt: s.blogPost.updatedAt })
     .from(s.blogPost)
@@ -69,17 +78,20 @@ export async function listBlogSitemapEntries(tx: Tx): Promise<SitemapEntry[]> {
  */
 export async function latestStoreUpdatedAt(tx: Tx, storeId: string): Promise<Date> {
   // Deliberately literal table/column identifiers (no interpolated Column/
-  // Table objects) — RLS already confines every subquery to app.current_store,
-  // so the only parameter here is storeId for the store row's own timestamps.
+  // Table objects) — but every subquery ALSO filters on store_id explicitly:
+  // RLS confines app.current_store-scoped connections, but this query must
+  // also stay correct when it runs on a privileged connection that bypasses
+  // RLS (e.g. the test suite's superuser role) — see the file header. `stock`
+  // carries its own store_id column directly (no join needed).
   // Matches the codebase's raw-SQL convention (see 0049_restock_notify.sql's
   // trigger function) of literal identifiers + parameterized values only.
   const result = await tx.execute(sql`
     select greatest(
-      coalesce((select max(updated_at) from product), 'epoch'::timestamptz),
-      coalesce((select max(updated_at) from product_variant), 'epoch'::timestamptz),
-      coalesce((select max(updated_at) from collection), 'epoch'::timestamptz),
-      coalesce((select max(updated_at) from blog_post), 'epoch'::timestamptz),
-      coalesce((select max(updated_at) from stock), 'epoch'::timestamptz),
+      coalesce((select max(updated_at) from product where store_id = ${storeId}), 'epoch'::timestamptz),
+      coalesce((select max(updated_at) from product_variant where store_id = ${storeId}), 'epoch'::timestamptz),
+      coalesce((select max(updated_at) from collection where store_id = ${storeId}), 'epoch'::timestamptz),
+      coalesce((select max(updated_at) from blog_post where store_id = ${storeId}), 'epoch'::timestamptz),
+      coalesce((select max(updated_at) from stock where store_id = ${storeId}), 'epoch'::timestamptz),
       coalesce((select greatest(created_at, updated_at) from store where id = ${storeId}), 'epoch'::timestamptz)
     ) as latest
   `);
@@ -112,8 +124,13 @@ export async function productAvailability(
   storeConfig: unknown,
   currency: string,
   slug: string,
+  storeId: string,
 ): Promise<ProductAvailability | null> {
-  const [p] = await tx.select().from(s.product).where(and(eq(s.product.slug, slug), eq(s.product.status, 'active'), isNull(s.product.deletedAt))).limit(1);
+  const [p] = await tx
+    .select()
+    .from(s.product)
+    .where(and(eq(s.product.storeId, storeId), eq(s.product.slug, slug), eq(s.product.status, 'active'), isNull(s.product.deletedAt)))
+    .limit(1);
   if (!p) return null;
 
   const variants = await tx

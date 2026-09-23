@@ -57,7 +57,7 @@ seo.openapi(
     const st = await resolveStoreFromCtx(c);
     const config = seoConfigFromStore(st);
     if (!config.siteUrl) return c.json({ error: 'siteUrl not configured for this store' }, 503);
-    const entries = await withStore(st.id, listProductSitemapEntries);
+    const entries = await withStore(st.id, (tx) => listProductSitemapEntries(tx, st.id));
     return xml(c, productsSitemapXml(config.siteUrl, entries));
   },
 );
@@ -68,7 +68,7 @@ seo.openapi(
     const st = await resolveStoreFromCtx(c);
     const config = seoConfigFromStore(st);
     if (!config.siteUrl) return c.json({ error: 'siteUrl not configured for this store' }, 503);
-    const entries = await withStore(st.id, listCollectionSitemapEntries);
+    const entries = await withStore(st.id, (tx) => listCollectionSitemapEntries(tx, st.id));
     return xml(c, collectionsSitemapXml(config.siteUrl, entries));
   },
 );
@@ -79,7 +79,7 @@ seo.openapi(
     const st = await resolveStoreFromCtx(c);
     const config = seoConfigFromStore(st);
     if (!config.siteUrl) return c.json({ error: 'siteUrl not configured for this store' }, 503);
-    const entries = await withStore(st.id, listBlogSitemapEntries);
+    const entries = await withStore(st.id, (tx) => listBlogSitemapEntries(tx, st.id));
     return xml(c, blogSitemapXml(config.siteUrl, entries));
   },
 );
@@ -128,7 +128,7 @@ seo.openapi(
     const config = seoConfigFromStore(st);
     if (!config.siteUrl) return c.json({ error: 'siteUrl not configured for this store' }, 503);
     const { slug } = c.req.valid('param');
-    const product = await withStore(st.id, (tx) => productAvailability(tx, st.config, st.currency, slug));
+    const product = await withStore(st.id, (tx) => productAvailability(tx, st.config, st.currency, slug, st.id));
     if (!product) return c.json({ error: 'not found' }, 404);
     const schema = productSchema(config, product);
     // never cache — offers.price/availability are live-stock derived (org-wide "never cache stock" rule)

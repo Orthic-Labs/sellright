@@ -1,5 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { and, desc, eq, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import { withStore, type Tx } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
@@ -7,6 +7,7 @@ import { customerToken, resolveCustomer, type SessionCustomer } from '../auth/se
 import { hashPassword, verifyPassword } from '../auth/password.js';
 import { customerCsrfValid, clearCustomerCookies } from '../auth/cookies.js';
 import { createHash } from 'node:crypto';
+import { revokeDeviceRemote } from '../licensing/device-leases.js';
 
 const hashToken = (t: string) => createHash('sha256').update(t).digest('hex');
 
@@ -63,6 +64,64 @@ account.openapi(
         .orderBy(desc(s.order.createdAt))
         .limit(50);
       return items.map((o) => ({ ...o, placedAt: o.placedAt ? o.placedAt.toISOString() : null }));
+    });
+    if (out === null) return c.json({ error: 'not authenticated' }, 401);
+    return c.json({ items: out }, 200);
+  },
+);
+
+// GET /v1/shop/account/licenses — issued licenses for the current customer
+account.openapi(
+  createRoute({
+    method: 'get', path: '/v1/shop/account/licenses', summary: "Current customer's licenses",
+    responses: {
+      200: { description: 'Licenses', content: { 'application/json': { schema: z.object({ items: z.array(z.object({
+        licenseKey: z.string(), appKey: z.string(), status: z.string(), seats: z.number().int(),
+        updatesUntil: z.string().nullable(), expiresAt: z.string().nullable(), createdAt: z.string(),
+        orderCode: z.string().nullable(), latestVersion: z.string().nullable(),
+      })) }) } } },
+      401: { description: 'Unauthenticated', content: { 'application/json': { schema: errSchema } } },
+    },
+  }),
+  async (c) => {
+    const st = await resolveStoreFromCtx(c);
+    const out = await withStore(st.id, async (tx) => {
+      const cust = await me(tx, customerToken(c));
+      if (!cust) return null;
+      const rows = await tx
+        .select({
+          licenseKey: s.license.licenseKey, appKey: s.license.appKey, status: s.license.status,
+          seats: s.license.seats, updatesUntil: s.license.updatesUntil, expiresAt: s.license.expiresAt,
+          createdAt: s.license.createdAt, orderCode: s.order.code,
+        })
+        .from(s.license)
+        .leftJoin(s.order, eq(s.order.id, s.license.orderId))
+        .where(and(
+          eq(s.license.customerId, cust.id),
+          // Same guest-email-match guard as orders: hide licenses from orders
+          // auto-linked by unverified email match.
+          ...(cust.emailVerified ? [] : [sql`(${s.order.metadata} ->> 'linked_via') IS DISTINCT FROM 'email_match'`]),
+        ))
+        .orderBy(desc(s.license.createdAt))
+        .limit(100);
+      // latest stable release version per appKey (for "update available" hints)
+      const appKeys = [...new Set(rows.map((r) => r.appKey))];
+      const latest = new Map<string, string>();
+      if (appKeys.length) {
+        const rel = await tx
+          .select({ appKey: s.appRelease.appKey, version: s.appRelease.version, publishedAt: s.appRelease.publishedAt })
+          .from(s.appRelease)
+          .where(and(inArray(s.appRelease.appKey, appKeys), eq(s.appRelease.channel, 'stable')))
+          .orderBy(desc(s.appRelease.publishedAt));
+        for (const r of rel) if (!latest.has(r.appKey)) latest.set(r.appKey, r.version);
+      }
+      return rows.map((r) => ({
+        licenseKey: r.licenseKey, appKey: r.appKey, status: r.status, seats: r.seats,
+        updatesUntil: r.updatesUntil ? r.updatesUntil.toISOString() : null,
+        expiresAt: r.expiresAt ? r.expiresAt.toISOString() : null,
+        createdAt: r.createdAt.toISOString(), orderCode: r.orderCode ?? null,
+        latestVersion: latest.get(r.appKey) ?? null,
+      }));
     });
     if (out === null) return c.json({ error: 'not authenticated' }, 401);
     return c.json({ items: out }, 200);
@@ -373,6 +432,29 @@ account.openapi(
           metadata: sql`coalesce(${s.order.metadata}, '{}'::jsonb) || jsonb_build_object('anonymized_at', now())`,
         })
         .where(eq(s.order.customerId, cust.id));
+
+      // Account erasure hardening: tombstone every device lease on every
+      // license this account owns BEFORE unlinking the license from the
+      // customer below — once customerId is nulled there is no way to find
+      // these rows again (no customer left to look them up by, no session/
+      // portal access to the account, and support has lost the link too).
+      // Reuses `revokeDeviceRemote` (the same function the account-facing
+      // "remove device" route calls) rather than duplicating its
+      // state='revoked' + generation-bump + pool-slot-free logic — two copies
+      // of that logic could drift. All of this runs inside the SAME
+      // transaction as the rest of erasure, so it cannot half-apply: either
+      // every activation is revoked and the customer is deleted, or neither
+      // happens (the withStore transaction wraps the whole handler).
+      const ownedLicenses = await tx.select({ id: s.license.id })
+        .from(s.license).where(eq(s.license.customerId, cust.id));
+      for (const lic of ownedLicenses) {
+        const activeActivations = await tx.select({ id: s.licenseActivation.id })
+          .from(s.licenseActivation)
+          .where(and(eq(s.licenseActivation.licenseId, lic.id), eq(s.licenseActivation.state, 'active')));
+        for (const activation of activeActivations) {
+          await revokeDeviceRemote(tx, { storeId: st.id, licenseId: lic.id, activationId: activation.id });
+        }
+      }
 
       // Null customer refs that are allowed to be null (kept for reporting/
       // audit shape) before deleting rows that hard-require the FK.

@@ -65,6 +65,9 @@ const EnvSchema = z.object({
   // Optional per-app overrides for shared stores, e.g.
   // viewright=hello@viewright.cc,heardright=hello@heardright.app
   EMAIL_FROM_BY_APP: optionalEnvString,
+  // Optional per-app display names for shared stores, e.g.
+  // someapp=SomeApp,otherapp=OtherApp
+  EMAIL_NAME_BY_APP: optionalEnvString,
   // Optional per-app storefront links for shared stores, e.g.
   // viewright=https://viewright.cc,heardright=https://heardright.app
   STOREFRONT_URL_BY_APP: optionalEnvString,

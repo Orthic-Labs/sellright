@@ -76,6 +76,14 @@ jobs:
       - name: Admin tests
         run: pnpm --dir packages/admin test
 
+      - name: Storefront tests
+        # `pnpm verify:static` above already builds and typechecks
+        # packages/storefront via `pnpm -r build`/`pnpm -r typecheck` (it's a
+        # normal workspace member — only packages/admin is excluded). This
+        # adds the one thing that wasn't running anywhere in CI: the
+        # storefront's own vitest suite.
+        run: pnpm --filter @sellright/storefront test
+
   database:
     name: PostgreSQL 17 integration
     runs-on: ubuntu-latest

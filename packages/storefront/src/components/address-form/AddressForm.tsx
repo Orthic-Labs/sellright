@@ -53,10 +53,10 @@ export default component$<IProps>(({ shippingAddress, formApi, isReviewMode, onU
 	const hasUserInteracted = useSignal(false);
 	const postalLookupSeq = useSignal(0);
 
-	useOnDocument('qinit', $(() => {
+	useOnDocument('qinit', $(async () => {
 		if (appState.customer?.id && appState.customer.id !== CUSTOMER_NOT_DEFINED_ID) return;
 
-		const guestData = loadGuestShippingAddress();
+		const guestData = await loadGuestShippingAddress();
 		if (guestData) {
 			appState.customer = {
 				...appState.customer,
@@ -116,7 +116,7 @@ export default component$<IProps>(({ shippingAddress, formApi, isReviewMode, onU
 		}
 	});
 
-	const validateAndSync$ = $(() => {
+	const validateAndSync$ = $(async () => {
 		let mergedAddress: ShippingAddress = {
 			...shippingAddress,
 			...localFormData.value,
@@ -131,7 +131,7 @@ export default component$<IProps>(({ shippingAddress, formApi, isReviewMode, onU
 
 		if (overallValid) {
 			appState.shippingAddress = { ...mergedAddress };
-			saveGuestShippingAddress(appState.customer, mergedAddress);
+			await saveGuestShippingAddress(appState.customer, mergedAddress);
 		}
 	});
 

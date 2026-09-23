@@ -38,6 +38,7 @@ import { paymentWebhooks } from './routes/payment-webhooks.js';
 import { storeKitWebhooks } from './routes/storekit-webhooks.js';
 import { subscriptions } from './routes/subscriptions.js';
 import { apps } from './routes/apps.js';
+import { wellKnown } from './routes/well-known.js';
 import { HttpError } from './routes/admin-helpers.js';
 import { csrfValid, customerCsrfValid, getCustomerSessionToken } from './auth/cookies.js';
 import { env } from './env.js';
@@ -262,6 +263,7 @@ export function createApp(): OpenAPIHono {
   app.route('/', sheeridRoutes); // PAR-4: SheerID verification lifecycle + webhook + admin config
   app.route('/', disputeRoutes); // PAR-7: NMI chargeback webhook + admin dispute list
   app.route('/', apps); // software licenses, app update manifests, admin app releases
+  app.route('/', wellKnown); // Apple AASA for iOS Password AutoFill (env-gated)
   app.route('/', subscriptions); // recurring billing: shop subscribe/portal + admin list
   app.route('/', seo); // SEO-1: sitemaps, robots.txt, JSON-LD, IndexNow key-file (generic, per-store)
   app.route('/', cacheVersion); // SEO-1: live per-store cache-invalidation token

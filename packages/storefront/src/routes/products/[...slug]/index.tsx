@@ -10,6 +10,7 @@ import type { JsonLdSchema } from '~/types/seo.types';
 import { ProductContent } from './ProductContent';
 import { PDP_STYLES } from './product-styles';
 import { theme, siteUrl } from '~/theme/theme.config';
+import { stripHtml } from '~/utils/sanitize';
 import { readCatalogSnapshot } from '~/services/catalog-snapshot';
 
 // ─────────────────────────────────────────────────────────────────
@@ -148,7 +149,11 @@ export const head = ({ resolveValue, url: _url }: { resolveValue: any; url: URL 
 
   const cleanDescription = product?.description
     ? (() => {
-      const raw = product.description.replace(/<[^>]*>/g, '').replace(/[""]/g, '"').replace(/['']/g, "'").trim();
+      // stripHtml (DOMPurify, real HTML parser) instead of a hand-rolled
+      // tag-strip regex — a single-pass `/<[^>]*>/g` replace can leave a
+      // reconstructed `<script` behind for crafted input like
+      // `<scr<script>ipt>` (CodeQL js/incomplete-multi-character-sanitization).
+      const raw = stripHtml(product.description).replace(/[""]/g, '"').replace(/['']/g, "'").trim();
       if (raw.length <= 160) return raw;
       const truncated = raw.substring(0, 160);
       const lastSpace = truncated.lastIndexOf(' ');

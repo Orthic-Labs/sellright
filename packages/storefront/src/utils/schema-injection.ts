@@ -23,6 +23,22 @@ export const escapeJsonForScript = (obj: any): string => {
 };
 
 /**
+ * True only for an actual schema.org host — exact match or a genuine
+ * subdomain (`www.schema.org`, never `schema.org.evil.example` or
+ * `evil.example/schema.org`). JSON-LD `@context` values are conventionally a
+ * bare host ("schema.org") or a full URL ("https://schema.org"), so parse
+ * with a scheme fallback before reading `hostname`.
+ */
+const isSchemaOrgContext = (context: string): boolean => {
+  try {
+    const url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(context) ? context : `https://${context}`);
+    return url.hostname === 'schema.org' || url.hostname.endsWith('.schema.org');
+  } catch {
+    return false;
+  }
+};
+
+/**
  * Validate JSON-LD schema structure
  * Ensures required properties are present
  */
@@ -37,8 +53,11 @@ export const validateJsonLdSchema = (schema: any): schema is JsonLdSchema => {
     return false;
   }
 
-  // Validate @context
-  if (typeof schema['@context'] !== 'string' || !schema['@context'].includes('schema.org')) {
+  // Validate @context — hostname equality via URL parsing, not a substring
+  // check: `.includes('schema.org')` also accepts
+  // "https://evil.example/schema.org" or "https://notschema.org.evil.example"
+  // (CodeQL js/incomplete-url-substring-sanitization).
+  if (typeof schema['@context'] !== 'string' || !isSchemaOrgContext(schema['@context'])) {
     console.warn('Invalid JSON-LD @context:', schema['@context']);
     return false;
   }

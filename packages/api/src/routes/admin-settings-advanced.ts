@@ -359,7 +359,9 @@ adminSettingsAdvanced.openapi(
   async (c) => {
     const b = c.req.valid('json');
     const inv = await findInviteByTokenHash(hashTok(b.token));
-    if (!inv || inv.acceptedAt || inv.expiresAt.getTime() <= Date.now()) throw new HttpError(409, 'invite is invalid, already used, or expired');
+    if (!inv || inv.acceptedAt || inv.expiresAt.getTime() <= Date.now()) {
+      return c.json({ error: 'invite is invalid, already used, or expired' }, 409);
+    }
     const passwordHash = await hashPassword(b.password);
     let adminId = await findAdminIdByEmail(inv.email);
     if (adminId) {
