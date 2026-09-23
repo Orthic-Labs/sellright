@@ -1,0 +1,21 @@
+# Storefront Demo
+
+> A neutral, themeable e-commerce storefront built on SellRight (generic commerce API + Qwik frontend). This is a demo instance — catalog, pricing, and copy are placeholders configured per deployment via the theme config (see `src/theme/theme.config.ts`).
+
+## Products
+
+Catalog index: `/shop/`. Individual product pages live at `/products/{slug}/`.
+
+## Site map
+
+- [Homepage](/)
+- [Shop](/shop/)
+- [Blog](/blog/)
+- [Contact](/contact/)
+- [Returns](/returns/)
+- [Privacy](/privacy/)
+- [Terms](/terms/)
+
+## Notes for automated agents
+
+This is a template deployment. Store name, contact details, and social links are configured per-brand via environment variables and are not hardcoded in this file's source.

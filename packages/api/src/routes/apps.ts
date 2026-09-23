@@ -2,6 +2,8 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, desc, eq, isNull, or } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import { resolveStore, resolveStoreForRequest, DEV_DEFAULT_STORE, type StoreCtx } from '../store-context.js';
+import { appKeyHeaderNames, deviceHeaderName, licenseHeaderName, firstHeader } from '../licensing/app-headers.js';
+import { resolveStoreWithFallback } from '../licensing/app-store-fallback.js';
 import * as s from '../db/schema.js';
 import { activateLicenseOnDevice, findActivationByToken } from '../licensing/activations.js';
 import { canAccessDownload, canReceiveUpdate } from '../licensing/entitlements.js';
@@ -45,8 +47,11 @@ function appKeyFromHost(host: string | undefined): string | null {
 }
 
 async function publicAppStore(c: { req: { header: (k: string) => string | undefined } }, explicitApp?: string | null) {
-  const appKey = explicitApp ?? c.req.header('x-viewright-app') ?? c.req.header('x-app-key') ?? appKeyFromHost(c.req.header('host')) ?? DEV_DEFAULT_STORE;
-  return { appKey, st: await resolveStore(appKey) };
+  const appKey = explicitApp ?? firstHeader(c, appKeyHeaderNames()) ?? appKeyFromHost(c.req.header('host')) ?? DEV_DEFAULT_STORE;
+  // Extension seam (licensing/app-store-fallback.ts): env.APPS_FALLBACK_STORE_SLUG
+  // unset (the default) rethrows on an unknown appKey, so this 404s exactly as
+  // before this seam existed.
+  return { appKey, st: await resolveStoreWithFallback(appKey, env.APPS_FALLBACK_STORE_SLUG) };
 }
 
 const ReleaseArtifactIn = z.object({
@@ -137,15 +142,15 @@ apps.post('/api/licenses/activate', async (c) => {
 });
 
 apps.get('/releases/latest.json', async (c) => {
-  const activationToken = bearerToken(c.req.header('authorization')) ?? c.req.header('x-viewright-license');
+  const activationToken = bearerToken(c.req.header('authorization')) ?? c.req.header(licenseHeaderName());
   if (!activationToken) return c.json({ ok: false, message: 'Missing activation token' }, 401);
 
   // Require an explicit app identifier — never fall back to DEV_DEFAULT_STORE /
   // Host-header derivation here (mirrors the /api/licenses/activate hardening).
-  const explicitApp = c.req.header('x-viewright-app') ?? c.req.header('x-app-key');
-  if (!explicitApp) return c.json({ ok: false, message: 'Missing app identifier (X-ViewRight-App header)' }, 400);
+  const explicitApp = firstHeader(c, appKeyHeaderNames());
+  if (!explicitApp) return c.json({ ok: false, message: 'Missing app identifier' }, 400);
   const { appKey, st } = await publicAppStore(c, explicitApp);
-  const deviceId = c.req.header('x-viewright-device');
+  const deviceId = c.req.header(deviceHeaderName());
   const channel = c.req.query('channel') ?? 'stable';
   const platform = c.req.query('platform') ?? undefined;
 

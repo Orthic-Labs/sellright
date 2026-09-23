@@ -226,6 +226,13 @@ export const collection = pgTable(
     imageAssetId: uuid().references(() => asset.id),
     seoTitle: text(),
     seoDescription: text(),
+    // SEO-1: sitemap <lastmod> + cache-version need a mutation timestamp;
+    // collection never tracked one. Migration 0068 backfills the column and
+    // adds a generic BEFORE UPDATE trigger (set_updated_at()) so every writer
+    // (admin-catalog-collections, import, future code) bumps it for free —
+    // no application code change required.
+    createdAt: ts(),
+    updatedAt: ts(),
   },
   (t) => [unique('collection_store_slug').on(t.storeId, t.slug)],
 );

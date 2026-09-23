@@ -30,6 +30,9 @@ import { feeds } from './routes/feeds.js';
 import { sheeridRoutes } from './routes/sheerid.js';
 import { disputeRoutes } from './routes/disputes.js';
 import { shopConfig } from './routes/shop-config.js';
+import { seo } from './routes/seo.js';
+import { cacheVersion } from './routes/cache-version.js';
+import { adminSeo } from './routes/admin-seo.js';
 import { customerTokens } from './routes/customer-tokens.js';
 import { paymentWebhooks } from './routes/payment-webhooks.js';
 import { storeKitWebhooks } from './routes/storekit-webhooks.js';
@@ -42,6 +45,7 @@ import { isAllowedCorsOrigin } from './cors-origins.js';
 import { pool } from './db/client.js';
 import { requestIdMiddleware, accessLogMiddleware } from './lib/request-id.js';
 import { err as logErr } from './lib/logger.js';
+import { listApiPlugins } from './plugins.js';
 
 export const SELLRIGHT_VERSION = '0.1.0';
 
@@ -259,6 +263,8 @@ export function createApp(): OpenAPIHono {
   app.route('/', disputeRoutes); // PAR-7: NMI chargeback webhook + admin dispute list
   app.route('/', apps); // software licenses, app update manifests, admin app releases
   app.route('/', subscriptions); // recurring billing: shop subscribe/portal + admin list
+  app.route('/', seo); // SEO-1: sitemaps, robots.txt, JSON-LD, IndexNow key-file (generic, per-store)
+  app.route('/', cacheVersion); // SEO-1: live per-store cache-invalidation token
 
   // Admin API — operator surface (auth, dashboard, orders, products, customers).
   app.route('/', admin);
@@ -278,6 +284,18 @@ export function createApp(): OpenAPIHono {
   app.route('/', adminLicenses); // mint/list software licenses (comp/support/creator, audited)
   app.route('/', shopExtra); // shop: guest tracking, public blog, shipping eligibility, newsletter
   app.route('/', subscriberRoutes); // subscriber confirm + unsubscribe (SUBSCRIBER-1)
+  app.route('/', adminSeo); // SEO-1: admin SEO config + admin-triggered IndexNow submit
+
+  // Extension seam (plugins.ts): mounted AFTER every built-in route above, so a
+  // plugin path never shadows a built-in one on an exact-path conflict. Empty
+  // by default — nothing is registered unless a fork calls registerApiPlugin()
+  // from its own entrypoint before createApp() runs.
+  for (const plugin of listApiPlugins()) {
+    if (plugin.routes) app.route('/', plugin.routes);
+  }
+  for (const plugin of listApiPlugins()) {
+    plugin.init?.(app);
+  }
 
   // Published API contract — the product surface (versioned under /v1).
   app.doc('/v1/openapi.json', {

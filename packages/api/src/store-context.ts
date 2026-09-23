@@ -144,7 +144,10 @@ export async function resolveStore(slug: string): Promise<StoreCtx> {
   return r.rows[0];
 }
 
-export const DEV_DEFAULT_STORE = 'damned';
+// Extension seam: sourced from env.DEV_DEFAULT_STORE_SLUG (default 'damned' —
+// identical to the prior hardcoded value). A fork points this at its own seed
+// store via env instead of editing this file.
+export const DEV_DEFAULT_STORE = env.DEV_DEFAULT_STORE_SLUG;
 
 /**
  * Normalize a Host / X-Forwarded-Host header value: strip a trailing :port,
@@ -171,6 +174,30 @@ export function hostMatchesAny(host: string, hostnames: readonly string[]): bool
   });
 }
 
+/** Parse env.STORE_HOST_STRIP_PREFIXES ("www,buy,get,store") into a lowercase
+ *  prefix list. Empty (the default) disables stripping entirely. */
+function hostStripPrefixes(): string[] {
+  return env.STORE_HOST_STRIP_PREFIXES.split(',').map((p) => p.trim().toLowerCase()).filter(Boolean);
+}
+
+/**
+ * Extension seam: strip a single leading marketing-style label (e.g. "buy.",
+ * "get.", "store.") from `host` when it matches one of `prefixes`, so
+ * store.config.hostnames can register one bare domain and still match several
+ * purchase-flow subdomains without listing each one. Strips at most ONE
+ * label — never iterates — so a legitimate host is never reduced to a bare
+ * TLD. Case-insensitive. A no-op (returns `host` unchanged) whenever
+ * `prefixes` is empty (env.STORE_HOST_STRIP_PREFIXES unset, the default).
+ */
+export function stripHostPrefix(host: string, prefixes: readonly string[]): string {
+  if (!prefixes.length) return host;
+  const labels = host.split('.');
+  if (labels.length < 2) return host;
+  const [first, ...rest] = labels;
+  if (!first || !prefixes.includes(first.toLowerCase())) return host;
+  return rest.join('.');
+}
+
 function hostnamesFromConfig(config: unknown): string[] {
   if (!config || typeof config !== 'object') return [];
   const raw = (config as Record<string, unknown>).hostnames;
@@ -191,11 +218,13 @@ function hostnamesFromConfig(config: unknown): string[] {
 export async function resolveStoreByHost(host: string): Promise<StoreCtx | null> {
   const cached = readCache(hostCache, host);
   if (cached) return cached;
+  const stripped = stripHostPrefix(host, hostStripPrefixes());
   const r = await pool.query<StoreCtx>(
     'SELECT id, slug, name, currency, tax_rate AS "taxRate", tax_inclusive AS "taxInclusive", shipping_taxable AS "shippingTaxable", config FROM store',
   );
   for (const row of r.rows) {
-    if (hostMatchesAny(host, hostnamesFromConfig(row.config))) {
+    const hostnames = hostnamesFromConfig(row.config);
+    if (hostMatchesAny(host, hostnames) || (stripped !== host && hostMatchesAny(stripped, hostnames))) {
       writeCache(hostCache, host, row);
       return row;
     }

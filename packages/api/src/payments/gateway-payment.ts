@@ -12,6 +12,7 @@ import { queryNmiPayment } from './nmi-query.js';
 import { listStripeRefunds, STRIPE_REFUND_ATTEMPT_KEY } from './stripe.js';
 import { finalizeRefund } from './refunds.js';
 import { refundStateFromStripe } from './webhook-reconcile.js';
+import { onStockChanged } from '../manifest/stock-hook.js';
 
 export class GatewayPaymentError extends Error {
   constructor(public status: 400 | 404 | 409 | 503, message: string) { super(message); }
@@ -234,7 +235,15 @@ async function reconcileRefundAttempt(storeId: string, id: string) {
       result = { state: 'Pending', providerRef: refund.providerRef ?? attempt.providerRef,
         errorMessage: 'Provider verification unavailable' };
     }
-    const finalized = await withStore(storeId, tx => finalizeRefund(tx, storeId, id, result));
+    const { finalized, storeSlug } = await withStore(storeId, async tx => {
+      const view = await finalizeRefund(tx, storeId, id, result);
+      const [store] = await tx.select({ slug: s.store.slug }).from(s.store).where(eq(s.store.id, storeId)).limit(1);
+      return { finalized: view, storeSlug: store?.slug };
+    });
+    // Zero-cache stock rule: finalizeRefund only ever touches stock once it
+    // reaches 'Settled' (release of unfulfilled qty + optional restock) — fire
+    // AFTER this commit, mirroring payments/refunds.ts's own requestRefund path.
+    if (finalized.refundState === 'Settled' && storeSlug) onStockChanged(storeSlug);
     return { attemptId: id,
       status: result.state === 'Settled' ? 'settled' : result.state === 'Failed' ? 'failed' : (result.providerRef ? 'pending' : 'unknown'),
       ...finalized };

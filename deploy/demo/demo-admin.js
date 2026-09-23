@@ -13,5 +13,26 @@
     document.querySelectorAll('input[type=file]').forEach(input=>{input.disabled=true;const label=input.closest('label');if(label){label.title='File uploads are disabled in the public demo';label.style.opacity='.45';label.style.pointerEvents='none';}});
     document.querySelectorAll('button').forEach(b=>{if(['Add group','Set as featured','Remove from gallery'].includes(b.textContent.trim())||['Set as featured','Remove from gallery'].includes(b.title)||/^(Export|Import|Upload)\b/.test(b.textContent.trim())){b.disabled=true;b.title='External files and option editing are unavailable in this demo';}});
   }
-  const root=document.getElementById('root');if(root)new MutationObserver(trimNavigation).observe(root,{subtree:true,childList:true});trimNavigation();
+  function injectLoginHint(){
+    if(!location.pathname.startsWith('/login'))return;
+    const form=document.querySelector('form');
+    if(!form)return;
+    // The real Login page's email field is type="email" + required, so the
+    // browser's own constraint validation blocks submitting the bare literal
+    // "admin" (no @) before it ever reaches our fetch. Relaxing it to a plain
+    // text field is a client-side demo affordance only — the server-side
+    // credential check in interactive-server.mjs is what actually authorizes
+    // anything, and it accepts the same literal either way.
+    const emailInput=form.querySelector('input[type=email]');
+    if(emailInput)emailInput.type='text';
+    if(form.querySelector('.demo-login-hint'))return;
+    const hint=document.createElement('p');
+    hint.className='demo-login-hint';
+    hint.style.cssText='margin:0 0 14px;font:12px system-ui;color:#173f34;background:#e9f3ee;border:1px solid #173f3440;border-radius:6px;padding:8px 10px;text-align:center';
+    hint.textContent='Demo login: admin / admin';
+    form.prepend(hint);
+  }
+  const root=document.getElementById('root');
+  if(root)new MutationObserver(()=>{trimNavigation();injectLoginHint();}).observe(root,{subtree:true,childList:true});
+  trimNavigation();injectLoginHint();
 })();

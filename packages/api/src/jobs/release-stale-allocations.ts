@@ -29,6 +29,7 @@
 import { sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
+import { onStockChanged } from '../manifest/stock-hook.js';
 
 export type ReleaseStaleOpts = { apply: boolean; ttlMin: number; log?: (m: string) => void; batchLimit?: number };
 
@@ -130,6 +131,11 @@ export async function releaseStaleAllocations(opts: ReleaseStaleOpts): Promise<{
     totalOrders += res.count;
     totalReleased += res.released;
     if (res.count) log(`[release-stale] ${st.slug}: ${apply ? 'cancelled' : 'would cancel'} ${res.count} orders, ${apply ? 'released' : 'would release'} ${res.released} units`);
+    // Zero-cache stock rule: the release UPDATE above already committed (this
+    // ran inside withStore, which COMMITs on return) — trigger the manifest
+    // regeneration now, never before the commit. Dry-run never wrote
+    // anything, so it must never trigger a regeneration either.
+    if (apply && res.released > 0) onStockChanged(st.slug);
   }
 
   log(`[release-stale] done: ${totalOrders} orders, ${totalReleased} units${apply ? '' : ' (DRY RUN — re-run with --apply to act)'}`);

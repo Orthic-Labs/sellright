@@ -38,6 +38,12 @@ function productInStock() {
     and (pv.fulfillment_type <> 'physical' or pv.is_pre_order or (stk.on_hand - stk.allocated) > 0))`;
 }
 
+// Featured-asset path as a scalar subquery (mirrors productInStock/minimumPrice
+// style) so callers can select it without a join + group by product.id.
+function productImage() {
+  return sql<string | null>`(select a.path from asset a where a.id = ${s.product.featuredAssetId})`;
+}
+
 const Money = z.number().int().describe('integer minor units (cents)');
 
 const ProductListItem = z.object({
@@ -95,6 +101,10 @@ catalog.openapi(
       query: z.object({
         limit: z.coerce.number().int().min(1).max(100).default(24),
         offset: z.coerce.number().int().min(0).default(0),
+        // Filter to a single collection (manual or smart, published only) —
+        // same shape/semantics as catalog/search's collectionSlug, so both
+        // list endpoints stay consistent for storefront callers.
+        collectionSlug: z.string().max(200).optional(),
       }),
     },
     responses: {
@@ -106,8 +116,13 @@ catalog.openapi(
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
-    const { limit, offset } = c.req.valid('query');
+    const { limit, offset, collectionSlug } = c.req.valid('query');
     const result = await withStore(st.id, async (tx) => {
+      const conds = [eq(s.product.status, 'active'), isNull(s.product.deletedAt)];
+      if (collectionSlug) {
+        conds.push(sql`exists (select 1 from collection_product cp join collection c2 on c2.id = cp.collection_id where cp.product_id = ${s.product.id} and c2.slug = ${collectionSlug} and c2.published = true)`);
+      }
+      const where = and(...conds);
       const items = await tx
         .select({
           slug: s.product.slug,
@@ -122,7 +137,7 @@ catalog.openapi(
         .from(s.product)
         .leftJoin(s.productVariant, eq(s.productVariant.productId, s.product.id))
         .leftJoin(s.asset, eq(s.asset.id, s.product.featuredAssetId))
-        .where(and(eq(s.product.status, 'active'), isNull(s.product.deletedAt)))
+        .where(where)
         .groupBy(s.product.id)
         .orderBy(asc(s.product.name))
         .limit(limit)
@@ -130,7 +145,7 @@ catalog.openapi(
       const totalRows = await tx
         .select({ total: sql<number>`count(*)::int` })
         .from(s.product)
-        .where(and(eq(s.product.status, 'active'), isNull(s.product.deletedAt)));
+        .where(where);
       return { items, total: totalRows[0]?.total ?? 0 };
     });
     return c.json(result);
@@ -271,7 +286,7 @@ catalog.openapi(
       }),
     },
     responses: {
-      200: { description: 'Collection', content: { 'application/json': { schema: z.object({ slug: z.string(), name: z.string(), description: z.string().nullable(), seoTitle: z.string().nullable(), seoDescription: z.string().nullable(), products: z.array(z.unknown()), total: z.number().int(), page: z.number().int(), pageSize: z.number().int() }) } } },
+      200: { description: 'Collection', content: { 'application/json': { schema: z.object({ slug: z.string(), name: z.string(), description: z.string().nullable(), seoTitle: z.string().nullable(), seoDescription: z.string().nullable(), products: z.array(ProductListItem.pick({ slug: true, name: true, minPrice: true, image: true, inStock: true, pricingVariant: true })), total: z.number().int(), page: z.number().int(), pageSize: z.number().int() }) } } },
       404: { description: 'Not found', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
     },
   }),
@@ -280,38 +295,49 @@ catalog.openapi(
     const { slug } = c.req.valid('param');
     const { page, pageSize } = c.req.valid('query');
     const offset = (page - 1) * pageSize;
+    // Full grid parity with catalog/search: image + inStock are computed live
+    // from stock_level via the same productInStock()/productImage() subqueries
+    // as every other listing endpoint — never search_index_item, never cached.
     const out = await withStore(st.id, async (tx) => {
       const [col] = await tx.select().from(s.collection).where(eq(s.collection.slug, slug)).limit(1);
       if (!col || !col.published) return null;
-      let products: { slug: string; name: string; minPrice: number | null }[];
-      let total: number;
+      const productCols = {
+        slug: s.product.slug,
+        name: s.product.name,
+        minPrice: minimumPrice(st.config),
+        pricingVariant: listingVariant(st.config),
+        inStock: productInStock(),
+        image: productImage(),
+      };
       const parsed = parseRules(col.rules);
-      if (parsed) {
-        const baseWhere = and(eq(s.product.status, 'active'), isNull(s.product.deletedAt), compileRulesToSql(parsed));
-        const countRows = await tx.select({ count: sql<number>`count(*)::int` }).from(s.product).where(baseWhere);
-        total = countRows[0]?.count ?? 0;
-        products = await tx
-          .select({ slug: s.product.slug, name: s.product.name, minPrice: minimumPrice(st.config) })
-          .from(s.product)
-          .where(baseWhere)
-          .orderBy(asc(s.product.name))
-          .limit(pageSize)
-          .offset(offset);
-      } else {
-        const baseWhere = and(eq(s.collectionProduct.collectionId, col.id), eq(s.product.status, 'active'), isNull(s.product.deletedAt));
-        const countRows = await tx
-          .select({ count: sql<number>`count(*)::int` })
-          .from(s.collectionProduct).innerJoin(s.product, eq(s.product.id, s.collectionProduct.productId))
-          .where(baseWhere);
-        total = countRows[0]?.count ?? 0;
-        products = await tx
-          .select({ slug: s.product.slug, name: s.product.name, minPrice: minimumPrice(st.config) })
-          .from(s.collectionProduct).innerJoin(s.product, eq(s.product.id, s.collectionProduct.productId))
-          .where(baseWhere)
-          .orderBy(asc(s.collectionProduct.position), s.product.name)
-          .limit(pageSize)
-          .offset(offset);
-      }
+      const [products, total] = parsed
+        ? await (async () => {
+            const baseWhere = and(eq(s.product.status, 'active'), isNull(s.product.deletedAt), compileRulesToSql(parsed));
+            const countRows = await tx.select({ count: sql<number>`count(*)::int` }).from(s.product).where(baseWhere);
+            const rows = await tx
+              .select(productCols)
+              .from(s.product)
+              .where(baseWhere)
+              .orderBy(asc(s.product.name))
+              .limit(pageSize)
+              .offset(offset);
+            return [rows, countRows[0]?.count ?? 0] as const;
+          })()
+        : await (async () => {
+            const baseWhere = and(eq(s.collectionProduct.collectionId, col.id), eq(s.product.status, 'active'), isNull(s.product.deletedAt));
+            const countRows = await tx
+              .select({ count: sql<number>`count(*)::int` })
+              .from(s.collectionProduct).innerJoin(s.product, eq(s.product.id, s.collectionProduct.productId))
+              .where(baseWhere);
+            const rows = await tx
+              .select(productCols)
+              .from(s.collectionProduct).innerJoin(s.product, eq(s.product.id, s.collectionProduct.productId))
+              .where(baseWhere)
+              .orderBy(asc(s.collectionProduct.position), s.product.name)
+              .limit(pageSize)
+              .offset(offset);
+            return [rows, countRows[0]?.count ?? 0] as const;
+          })();
       return { slug: col.slug, name: col.name, description: col.description, seoTitle: col.seoTitle, seoDescription: col.seoDescription, products, total, page, pageSize };
     });
     if (!out) return c.json({ error: 'collection not found' }, 404);

@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { invalidateStoreCache } from '../store-context.js';
@@ -93,7 +93,11 @@ describe('catalog change webhooks', () => {
     }));
     const created = await admin('POST', '/v1/admin/products', { name: 'Catalog event fixture', status: 'active' });
     const { id, slug } = await created.json() as { id: string; slug: string };
-    const deliveries = () => pool.query<{ payload: unknown; store_id: string }>('SELECT payload, store_id FROM webhook_delivery ORDER BY created_at');
+    // webhook_delivery carries FORCE ROW LEVEL SECURITY and the migration-owner
+    // pool role is NOT BYPASSRLS — a bare pool.query() with no app.current_store
+    // set sees zero rows. Scoped to STORE (the only store this test fires
+    // events for) via withStore, which also proves OTHER never leaks in.
+    const deliveries = () => withStore(STORE, tx => tx.execute<{ payload: unknown; store_id: string }>(sql`SELECT payload, store_id FROM webhook_delivery ORDER BY created_at`));
     expect((await deliveries()).rows).toEqual([{ store_id: STORE, payload: { storeId: STORE, productId: id, slug } }]);
     const variant = await admin('POST', `/v1/admin/products/${id}/variants`, { sku: 'EVENT-SKU', name: 'Variant', price: 1000 });
     const { id: variantId } = await variant.json() as { id: string };

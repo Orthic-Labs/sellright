@@ -15,6 +15,7 @@ import * as s from '../db/schema.js';
 import { stripeConfigured, stripeCreds, stripeModeFromConfig, verifyStripeWebhook, verifyIntent, STRIPE_REFUND_ATTEMPT_KEY, type IntentLike, type StripeMode } from '../payments/stripe.js';
 import { applyPaymentResult, amountDueForOrder } from '../payments/settle.js';
 import { resolveStoreIdForStripeEvent, resolveStoreIdForSubscriptionEvent, reconcileStripeRefund, recordStripeDispute, type StripeEventObj } from '../payments/webhook-reconcile.js';
+import { onStockChanged } from '../manifest/stock-hook.js';
 import {
   onCheckoutCompleted, onInvoicePaid, onInvoiceFailed, onSubscriptionUpdated, onSubscriptionDeleted,
   type CheckoutSessionLike, type InvoiceLike, type SubscriptionObjLike,
@@ -81,13 +82,20 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
     : await resolveStoreIdForStripeEvent(event.data.object as StripeEventObj, binding);
   if (!storeId) return c.json({ error: 'tenant unresolved — retry' }, 503);
 
+  // Zero-cache stock rule: reconcileStripeRefund never owns this transaction
+  // (it runs on the `tx` this handler supplies) — it only REPORTS whether a
+  // stock-affecting settlement happened via `stockChanged`. Fire the hook
+  // once, after this whole claim transaction commits, never before.
+  let stockChanged = false;
+  let storeSlug: string | undefined;
   await withStore(storeId, async (tx) => {
     // ra-sec: bind the verifying secret's mode to the store's configured mode. A
     // webhook signed with the TEST secret must not drive payment_intent.succeeded
     // on a LIVE store (a leaked test webhook secret would otherwise let a forged
     // event settle a live order). Mismatch → ack + ignore.
-    const [store] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, storeId)).limit(1);
+    const [store] = await tx.select({ config: s.store.config, slug: s.store.slug }).from(s.store).where(eq(s.store.id, storeId)).limit(1);
     if (!store || stripeModeFromConfig(store.config) !== verifiedMode) return;
+    storeSlug = store.slug;
     // Idempotency: claim the event id. A duplicate delivery is a no-op.
     const claimed = await tx
       .insert(s.processedEvent)
@@ -140,10 +148,13 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
       case 'refund.updated': {
         const r = event.data.object as unknown as { id: string; amount: number; status: string; payment_intent?: string | { id?: string }; metadata?: Record<string, string> | null };
         const pi = typeof r.payment_intent === 'string' ? r.payment_intent : r.payment_intent?.id;
-        if (pi && r.id) await reconcileStripeRefund(tx, storeId, {
-          reId: r.id, amount: r.amount, status: r.status, piId: pi,
-          attemptId: r.metadata?.[STRIPE_REFUND_ATTEMPT_KEY] ?? null,
-        }, { mode: verifiedMode });
+        if (pi && r.id) {
+          const result = await reconcileStripeRefund(tx, storeId, {
+            reId: r.id, amount: r.amount, status: r.status, piId: pi,
+            attemptId: r.metadata?.[STRIPE_REFUND_ATTEMPT_KEY] ?? null,
+          }, { mode: verifiedMode });
+          if (result.stockChanged) stockChanged = true;
+        }
         return;
       }
       case 'charge.refunded': {
@@ -151,10 +162,13 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
         const chPi = typeof ch.payment_intent === 'string' ? ch.payment_intent : ch.payment_intent?.id;
         for (const r of ch.refunds?.data ?? []) {
           const pi = (typeof r.payment_intent === 'string' ? r.payment_intent : r.payment_intent?.id) ?? chPi;
-          if (pi && r.id) await reconcileStripeRefund(tx, storeId, {
-            reId: r.id, amount: r.amount, status: r.status, piId: pi,
-            attemptId: r.metadata?.[STRIPE_REFUND_ATTEMPT_KEY] ?? null,
-          }, { mode: verifiedMode });
+          if (pi && r.id) {
+            const result = await reconcileStripeRefund(tx, storeId, {
+              reId: r.id, amount: r.amount, status: r.status, piId: pi,
+              attemptId: r.metadata?.[STRIPE_REFUND_ATTEMPT_KEY] ?? null,
+            }, { mode: verifiedMode });
+            if (result.stockChanged) stockChanged = true;
+          }
         }
         return;
       }
@@ -198,5 +212,6 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
         return;
     }
   });
+  if (stockChanged && storeSlug) onStockChanged(storeSlug);
   return c.json({ received: true }, 200);
 });

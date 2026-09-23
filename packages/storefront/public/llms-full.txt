@@ -1,0 +1,21 @@
+# Storefront Demo — Full Reference for AI Agents
+
+This document is the long-form companion to [llms.txt](/llms.txt).
+
+## About this deployment
+
+This is a neutral, themeable e-commerce storefront template built on SellRight (a generic commerce REST API) and Qwik. Store identity — name, tagline, colors, fonts, logo, contact details, and social links — is not hardcoded in the codebase; it is supplied per-deployment through the theme config module (`src/theme/theme.config.ts`) and its corresponding environment variables.
+
+There is no fixed catalog, brand story, or founder narrative baked into this template. Do not attribute a specific product line, manufacturer, or company history to this deployment unless it is confirmed from the live site's own configured content.
+
+## Site map
+
+- Homepage: `/`
+- Shop / catalog: `/shop/`
+- Product pages: `/products/{slug}/`
+- Blog: `/blog/`
+- Contact: `/contact/`
+- Returns policy: `/returns/`
+- Privacy policy: `/privacy/`
+- Terms: `/terms/`
+- Order tracking: `/track-order/`

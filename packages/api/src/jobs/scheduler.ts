@@ -87,11 +87,19 @@ export function startJobScheduler(): void {
   });
 
   every(60_000, 'gateway-events', 'gateway-events', reconcileGatewayEvents);
+  // Stock is never cached/polled (locked invariant): the catalog manifest used
+  // to regenerate on a 60s interval, which meant a stock change could sit
+  // stale for up to a minute. It now regenerates IMMEDIATELY from
+  // manifest/stock-hook.ts's onStockChanged(), called after every
+  // stock-mutating transaction commits (reservation, release, refund restock,
+  // admin stock edit, ...). All that's left here is a one-shot publish at
+  // startup so the manifest exists before the first stock event ever fires.
   if (env.CATALOG_MANIFEST_JOBS_ENABLED === '1') {
     if (!env.CATALOG_DIR?.trim() || !env.STORE_SLUG?.trim()) {
       log.info('catalog publisher disabled: explicit CATALOG_DIR and STORE_SLUG required');
     } else {
-      every(60_000, 'catalog-manifest', 'catalog-manifest', () => publishCatalogManifest({ outDir: env.CATALOG_DIR!, storeSlug: env.STORE_SLUG! }), env.STORE_SLUG);
+      void withLeaderLock('catalog-manifest', () => publishCatalogManifest({ outDir: env.CATALOG_DIR!, storeSlug: env.STORE_SLUG! }), env.STORE_SLUG)
+        .catch((e) => logErr.error('startup catalog publish failed', e, { job: 'catalog-manifest' }));
     }
   }
   every(HOUR, 'auto-deliver', 'auto-deliver', () => autoDeliver({ apply: autoDeliverApply, days: autoDeliverDays, log: jobLog }));

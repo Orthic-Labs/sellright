@@ -48,7 +48,15 @@ describe('stock reservation', () => {
       ['VIEWRIGHT-PRO', variant({ id: 'license-1', sku: 'VIEWRIGHT-PRO', fulfillmentType: 'license' })],
     ]);
 
-    await expect(reserveStockOrThrow(tx, 'store-1', [{ sku: 'VIEWRIGHT-PRO', quantity: 1 }], bySku)).resolves.toBeUndefined();
+    // Nothing physical was reserved — false tells the caller not to trigger a
+    // stock-changed manifest regeneration (see reserveStockOrThrow's JSDoc).
+    await expect(reserveStockOrThrow(tx, 'store-1', [{ sku: 'VIEWRIGHT-PRO', quantity: 1 }], bySku)).resolves.toBe(false);
     expect(calls).toHaveLength(0);
+  });
+
+  it('reports a change when a physical item is successfully reserved (caller must trigger onStockChanged)', async () => {
+    const tx = { async execute() { return { rowCount: 1 }; } };
+    const bySku = new Map([['A', variant({ id: 'a', sku: 'A' })]]);
+    await expect(reserveStockOrThrow(tx, 'store-1', [{ sku: 'A', quantity: 1 }], bySku)).resolves.toBe(true);
   });
 });

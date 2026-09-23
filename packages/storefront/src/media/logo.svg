@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Neutral placeholder mark for the demo storefront theme. Swap this file
+     (or import a brand's own SVG) to rebrand the header logo. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 32" role="img" aria-label="Store logo">
+  <rect x="0" y="0" width="32" height="32" rx="6" fill="#18181b" />
+  <text x="16" y="22" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="16" font-weight="700" fill="#ffffff">S</text>
+  <text x="40" y="21" font-family="Inter, system-ui, sans-serif" font-size="17" font-weight="600" letter-spacing="0.01em" fill="#18181b">Storefront</text>
+</svg>

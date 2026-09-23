@@ -1,7 +1,12 @@
 import { defineConfig } from 'drizzle-kit';
 
 export default defineConfig({
-  schema: './src/db/schema.ts',
+  // Extension seam: './src/db/extensions/**/*.ts' lets a fork drop its own
+  // Drizzle table modules into src/db/extensions/ and have `drizzle-kit
+  // generate` pick them up for migrations, without editing any schema-*.ts
+  // file here. Empty by default (see src/db/extensions/README.md) — an
+  // unconfigured checkout's schema discovery is unchanged.
+  schema: ['./src/db/schema.ts', './src/db/extensions/**/*.ts'],
   out: './drizzle',
   dialect: 'postgresql',
   casing: 'snake_case',

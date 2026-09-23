@@ -15,6 +15,7 @@ import { unitPrice } from './admin-order-utils.js';
 import { emitEvent } from '../webhooks/emit.js';
 import { variantPriceRuleFromConfig } from '../money/pricing.js';
 import { getProvider } from '../payments/provider.js';
+import { onStockChanged } from '../manifest/stock-hook.js';
 
 export const adminOrders = new OpenAPIHono();
 
@@ -92,6 +93,10 @@ adminOrders.openapi(
     const body = c.req.valid('json');
     const reqLines: Array<{ sku: string; quantity: number }> = body.lines;
     type R = { kind: 'ok'; grandTotal: number } | { kind: 'notfound' } | { kind: 'badstate'; state: string } | { kind: 'blocked'; skus: string[] };
+    // Zero-cache stock rule: true if either the release or the re-reservation
+    // below actually touched a stock row in a transaction that goes on to
+    // commit. Reset in .catch — every path there means a full rollback.
+    let stockChanged = false;
     const res: R = await withStore(st.storeId, async (tx): Promise<R> => {
       const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
       if (!o) return { kind: 'notfound' };
@@ -104,6 +109,7 @@ adminOrders.openapi(
         const rel = l.quantity - l.fulfilledQty - l.cancelledQty;
         if (rel > 0 && l.variantId) {
           await tx.update(s.stock).set({ allocated: sql`greatest(${s.stock.allocated} - ${rel}, 0)` }).where(and(eq(s.stock.variantId, l.variantId), eq(s.stock.storeId, st.storeId)));
+          stockChanged = true;
         }
       }
       const skus = [...new Set(reqLines.map((i) => i.sku))];
@@ -111,7 +117,8 @@ adminOrders.openapi(
       const bySku = new Map(variants.map((v) => [v.sku, v]));
       const blocked = validateReservableItems(reqLines, bySku);
       if (blocked.length) throw new StockReservationError(blocked);
-      await reserveStockOrThrow(tx, st.storeId, reqLines, bySku);
+      const reserved = await reserveStockOrThrow(tx, st.storeId, reqLines, bySku);
+      stockChanged = stockChanged || reserved;
 
       const [storeRow] = await tx.select({ taxRate: s.store.taxRate, taxInclusive: s.store.taxInclusive, shippingTaxable: s.store.shippingTaxable, config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1);
       const priced = reqLines.map((i) => { const v = bySku.get(i.sku)!; return { v, qty: i.quantity, unitPrice: unitPrice(v, variantPriceRuleFromConfig(storeRow?.config)) }; });
@@ -136,7 +143,8 @@ adminOrders.openapi(
       await tx.update(s.order).set({ subtotal: totals.subtotal, discountTotal: totals.discountTotal, shippingTotal: totals.shippingTotal, taxTotal: totals.taxTotal, grandTotal: totals.grandTotal, updatedAt: new Date() }).where(eq(s.order.id, o.id));
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: o.id, action: 'edit_lines', data: { grandTotal: totals.grandTotal, lines: priced.length } });
       return { kind: 'ok', grandTotal: totals.grandTotal };
-    }).catch((e: unknown): R => { if (e instanceof StockReservationError) return { kind: 'blocked', skus: e.skus }; throw e; });
+    }).catch((e: unknown): R => { stockChanged = false; if (e instanceof StockReservationError) return { kind: 'blocked', skus: e.skus }; throw e; });
+    if (stockChanged) onStockChanged(st.slug);
 
     if (res.kind === 'notfound') throw new HttpError(404, 'order not found');
     if (res.kind === 'badstate') throw new HttpError(409, `only unpaid (PendingPayment) orders can be edited — this one is ${res.state}`);

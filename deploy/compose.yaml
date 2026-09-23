@@ -56,6 +56,28 @@ services:
           GRANT USAGE, SELECT ON SEQUENCES TO sellright_app;
         ALTER DEFAULT PRIVILEGES FOR ROLE sellright IN SCHEMA public
           GRANT EXECUTE ON FUNCTIONS TO sellright_app;
+
+        -- SR-01/SR-02 follow-up: least-privilege owner for the cross-tenant
+        -- SECURITY DEFINER resolver seam (resolve_store_for_gateway_event,
+        -- resolve_store_for_storekit_bundle). These must see across every
+        -- tenant regardless of FORCE ROW LEVEL SECURITY, but NEITHER
+        -- sellright NOR sellright_app may hold BYPASSRLS (that would let
+        -- ordinary migration/runtime queries bypass tenant isolation
+        -- everywhere, not just inside these two functions) — so a third,
+        -- NOLOGIN role holds BYPASSRLS and owns ONLY these two functions.
+        -- See docs/runbooks/postgres-app-role.md "Resolver role bootstrap".
+        DO $$$$
+        BEGIN
+          IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'sellright_resolver') THEN
+            CREATE ROLE sellright_resolver
+              NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT BYPASSRLS;
+          END IF;
+        END
+        $$$$;
+        -- has_privs_of_role(sellright, sellright_resolver) — lets sellright
+        -- both take ownership below and CREATE OR REPLACE these functions in
+        -- every future migration without being superuser/BYPASSRLS itself.
+        GRANT sellright_resolver TO sellright WITH INHERIT TRUE;
         SQL
     networks: [private]
 

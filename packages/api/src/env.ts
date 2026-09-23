@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { productionEnvErrors, resolveFileBackedEnv } from './env-runtime.js';
+import { assertAllowedSenders, parseSenderDomainList } from './email/sender-policy.js';
 
 const emptyToUndefined = (value: unknown) => (
   typeof value === 'string' && value.trim() === '' ? undefined : value
@@ -218,6 +219,41 @@ const EnvSchema = z.object({
   // set '1' for local debugging — a staging box left without NODE_ENV=production
   // must NOT leak internal error text by default.
   DEBUG_ERRORS: z.enum(['0', '1']).default('0'),
+
+  // ── Extension seams (generic — a downstream fork's runtime config only;
+  //    every default below reproduces SellRight's own prior hardcoded
+  //    behavior, so an unconfigured deployment is byte-for-byte unchanged) ──
+  //
+  // DEV_DEFAULT_STORE_SLUG: the store slug resolveStoreForRequest() falls back
+  // to outside production when no x-store-slug header or Host match resolves
+  // a store (store-context.ts). A fork points this at its own seed store
+  // instead of editing store-context.ts.
+  DEV_DEFAULT_STORE_SLUG: z.string().trim().min(1).default('damned'),
+  // FORBIDDEN_SENDER_DOMAINS: comma-separated domain suffixes that must never
+  // appear as an outgoing email's From domain. Checked once here at boot
+  // (SMTP_FROM/FROM_EMAIL/EMAIL_FROM_BY_APP) and again per-send in
+  // email/mailer.ts via the same matcher (email/sender-policy.ts). Empty
+  // (default) enforces nothing.
+  FORBIDDEN_SENDER_DOMAINS: z.string().default(''),
+  // STORE_HOST_STRIP_PREFIXES: comma-separated single-label hostname prefixes
+  // (e.g. "www,buy,get,store") stripped from an incoming Host before matching
+  // store.config.hostnames (store-context.ts stripHostPrefix). Empty
+  // (default) strips nothing — identical to today's exact/subdomain matching.
+  STORE_HOST_STRIP_PREFIXES: z.string().default(''),
+  // APPS_APP_KEY_HEADERS: comma-separated request header names checked, in
+  // order, for an explicit app key on the public apps/licensing routes
+  // (routes/apps.ts). Default reproduces the historical literal headers.
+  APPS_APP_KEY_HEADERS: z.string().default('x-viewright-app,x-app-key'),
+  // APPS_DEVICE_HEADER / APPS_LICENSE_HEADER: header names for the device id
+  // and the legacy bearer-alternative license key on the same routes.
+  APPS_DEVICE_HEADER: z.string().trim().min(1).default('x-viewright-device'),
+  APPS_LICENSE_HEADER: z.string().trim().min(1).default('x-viewright-license'),
+  // APPS_FALLBACK_STORE_SLUG: when set, publicAppStore() falls back to this
+  // store slug after an unknown per-app-key store lookup fails — lets a
+  // consolidated multi-tenant deployment share one store across app keys
+  // without a literal slug in routes/apps.ts. Unset (default): an unknown
+  // appKey 404s, exactly as today.
+  APPS_FALLBACK_STORE_SLUG: optionalEnvString,
 }).transform((raw) => {
   const smtpUser = raw.SMTP_USER ?? raw.GMAIL_USER;
   return {
@@ -230,6 +266,7 @@ const EnvSchema = z.object({
 });
 
 export type Env = z.infer<typeof EnvSchema>;
+export type EnvSource = Record<string, string | undefined>;
 
 const resolvedEnvSource = resolveFileBackedEnv(process.env);
 const parsedEnv: Env = EnvSchema.parse(resolvedEnvSource);
@@ -237,5 +274,37 @@ const productionErrors = productionEnvErrors(parsedEnv, resolvedEnvSource);
 if (productionErrors.length) {
   throw new Error(`Invalid production environment:\n- ${productionErrors.join('\n- ')}`);
 }
+// Shared sender-domain policy (email/sender-policy.ts) — no-op while
+// FORBIDDEN_SENDER_DOMAINS is unset (the default).
+assertAllowedSenders(
+  { SMTP_FROM: parsedEnv.SMTP_FROM, FROM_EMAIL: parsedEnv.FROM_EMAIL, EMAIL_FROM_BY_APP: parsedEnv.EMAIL_FROM_BY_APP },
+  parseSenderDomainList(parsedEnv.FORBIDDEN_SENDER_DOMAINS),
+);
 
 export const env: Env = parsedEnv;
+
+/**
+ * Extension seam: parse additional, deployment-specific env vars from the
+ * same resolved source this file used, without editing this file. A fork
+ * defines its own zod shape (and optional boot-time validator) and gets back
+ * one merged, frozen object carrying both SellRight's `env` and its own typed
+ * extras.
+ *
+ * This runs a SEPARATE `z.object(extraShape).parse(...)` over the same
+ * resolved source — it never re-runs this file's own `.transform()` — so
+ * SellRight's own defaults/normalization above are untouched. `validate`
+ * receives the merged object and may return an array of error strings; a
+ * non-empty array throws, matching this file's own productionEnvErrors gate.
+ */
+export function extendEnv<Extra extends z.ZodRawShape>(
+  extraShape: Extra,
+  validate?: (merged: Readonly<Env & z.infer<z.ZodObject<Extra>>>) => string[] | void,
+): Readonly<Env & z.infer<z.ZodObject<Extra>>> {
+  const extra = z.object(extraShape).parse(resolvedEnvSource);
+  const merged = Object.freeze({ ...env, ...extra }) as Env & z.infer<z.ZodObject<Extra>>;
+  const errors = validate?.(merged);
+  if (errors && errors.length) {
+    throw new Error(`Invalid extended environment:\n- ${errors.join('\n- ')}`);
+  }
+  return merged;
+}

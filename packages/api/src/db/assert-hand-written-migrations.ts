@@ -42,6 +42,8 @@ const HAND_WRITTEN = [
   '0061_passwordless_signin.sql',
   '0064_licensing_engine.sql',
   '0066_storekit.sql',
+  '0068_seo_surface.sql',
+  '0069_resolver_role_ownership.sql',
 ];
 
 const MARKER = '-- HAND-WRITTEN: see docs/runbooks/migrations.md';

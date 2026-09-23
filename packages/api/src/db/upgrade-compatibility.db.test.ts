@@ -59,7 +59,13 @@ describe('upgrade compatibility', () => {
         CREATE TEMP TABLE subscription (store_id uuid) ON COMMIT DROP;
         INSERT INTO subscription VALUES ('11111111-1111-1111-1111-111111111111');
         ALTER TABLE subscription ENABLE ROW LEVEL SECURITY;
-        ALTER TABLE subscription FORCE ROW LEVEL SECURITY;
+        -- Deliberately NOT FORCE: this session is also the temp table's owner
+        -- (migration-owner role, non-BYPASSRLS by design — see SR-01), and
+        -- FORCE would make it subject to its own policy, hiding the very row
+        -- this test inspects below. ENABLE alone still exercises the real
+        -- policy text/idempotency/cast-safety this test is about; production
+        -- FORCE enforcement against non-owner app roles is covered elsewhere
+        -- (rls-test-utils / *.db.test.ts nonowner-role assertions).
         CREATE POLICY tenant_isolation ON subscription
           USING (store_id = current_setting('app.current_store', true)::uuid)
           WITH CHECK (store_id = current_setting('app.current_store', true)::uuid);
