@@ -47,6 +47,18 @@ export function interactiveBody(path, body) {
   return path.endsWith('/cancel') && only(body, []);
 }
 
+// The public demo's ONLY credential. Accepted exclusively by the demo
+// wrapper (interactive-server.mjs intercepts /v1/admin/login before it ever
+// reaches the real app) — the real sellright-api /v1/admin/login requires a
+// z.string().email() body and an argon2/bcrypt verifyPassword() match against
+// admin_user.password_hash, so a literal "admin"/"admin" pair is rejected by
+// schema validation alone, independent of this function ever running there.
+export function demoAdminCredentials(body) {
+  return !!(only(body, ['email', 'password']) &&
+    typeof body.email === 'string' && typeof body.password === 'string' &&
+    body.email.trim().toLowerCase() === 'admin' && body.password === 'admin');
+}
+
 export function sameOriginMutation(headers, host) {
   if (!headers.origin) return false;
   try { const origin=new URL(headers.origin);return ['http:','https:'].includes(origin.protocol)&&origin.host === host && !['cross-site', 'none'].includes(headers['sec-fetch-site']); }

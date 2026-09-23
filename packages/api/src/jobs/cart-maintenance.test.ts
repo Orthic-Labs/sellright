@@ -164,6 +164,10 @@ describe('cleanupExpiredCarts — scan→write race', () => {
     const extended = ahead(30 * DAYS);
     try {
       await client.query('BEGIN');
+      // "cart" carries FORCE ROW LEVEL SECURITY — without app.current_store
+      // set on this raw connection the UPDATE below matches zero rows (RLS
+      // hides them), takes no lock, and the job races ahead undetected.
+      await client.query("SELECT set_config('app.current_store', $1, true)", [STORE]);
       // Take the cart row lock exactly like a shopper mutation does — the
       // job must block on it rather than scan-then-delete underneath us.
       await client.query('UPDATE cart SET expires_at = $1, updated_at = now(), revision = revision + 1 WHERE id = $2', [extended, id]);
@@ -233,6 +237,10 @@ describe('abandonStaleCarts — scan→write race', () => {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
+      // "cart" carries FORCE ROW LEVEL SECURITY — without app.current_store
+      // set on this raw connection the UPDATE below matches zero rows (RLS
+      // hides them), takes no lock, and the job races ahead undetected.
+      await client.query("SELECT set_config('app.current_store', $1, true)", [STORE]);
       await client.query('UPDATE cart SET updated_at = now(), revision = revision + 1 WHERE id = $1', [id]);
       const job = abandonStaleCarts(4);
       await waitForCartLockWaiter();

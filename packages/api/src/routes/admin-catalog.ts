@@ -6,6 +6,7 @@ import { HttpError, J, errBody, money, Page, requireAdmin, requireStore, require
 import { uniqueSlug } from './admin-catalog-utils.js';
 import { registerCollectionRoutes } from './admin-catalog-collections.js';
 import { emitProductChanged, emitVariantProductChanged } from '../webhooks/catalog.js';
+import { onStockChanged } from '../manifest/stock-hook.js';
 
 export const adminCatalog = new OpenAPIHono();
 
@@ -128,6 +129,7 @@ adminCatalog.openapi(
     const st = requireStore(admin, c); requireWrite(st);
     const { id } = c.req.valid('param');
     const body = c.req.valid('json');
+    let stockChanged = false;
     const res = await withStore(st.storeId, async (tx) => {
       const [p] = await tx.select({ id: s.product.id }).from(s.product).where(and(eq(s.product.id, id), isNull(s.product.deletedAt))).limit(1);
       if (!p) return { kind: 'notfound' as const };
@@ -154,11 +156,13 @@ adminCatalog.openapi(
       if (body.fulfillmentType === 'physical') {
         await tx.insert(s.stock).values({ variantId: v!.id, storeId: st.storeId, onHand: body.onHand, allocated: 0 });
         if (body.onHand > 0) await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: v!.id, delta: body.onHand, reason: 'admin_create' });
+        stockChanged = true;
       }
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'variant', entityId: v!.id, action: 'create', data: { sku: body.sku } });
       await emitProductChanged(tx, st.storeId, id);
       return { kind: 'ok' as const, id: v!.id };
     });
+    if (stockChanged) onStockChanged(st.slug);
     if (res.kind === 'notfound') throw new HttpError(404, 'product not found');
     if (res.kind === 'dupe') throw new HttpError(409, `sku already exists: ${body.sku}`);
     return c.json({ id: res.id }, 200);
@@ -297,6 +301,7 @@ adminCatalog.openapi(
       await emitVariantProductChanged(tx, st.storeId, id);
       return agg;
     });
+    onStockChanged(st.slug);
     return c.json({ id, onHand: total }, 200);
   }),
 );

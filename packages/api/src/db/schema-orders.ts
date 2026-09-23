@@ -478,6 +478,12 @@ export const stock = pgTable('stock', {
   storeId: uuid().notNull().references(() => store.id),
   onHand: integer().notNull().default(0),
   allocated: integer().notNull().default(0),
+  // SEO-1: cache-version needs a live "did anything change" signal that
+  // includes availability, not just catalog content — a store's shop page is
+  // stale the instant a variant sells out even if no product/collection/blog
+  // row changed. Migration 0068's set_updated_at() trigger bumps this on
+  // every stock write, same mechanism as collection/blog_post.
+  updatedAt: ts(),
 });
 
 export const stockMovement = pgTable('stock_movement', {

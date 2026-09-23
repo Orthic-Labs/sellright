@@ -133,6 +133,10 @@ export const blogPost = pgTable(
     publishDate: timestamp({ withTimezone: true }),
     seoTitle: text(),
     seoDescription: text(),
+    // SEO-1: see collection.updatedAt in schema-core.ts for the rationale —
+    // same migration (0068) adds both columns + the shared trigger.
+    createdAt: ts(),
+    updatedAt: ts(),
   },
   (t) => [unique('blog_store_slug').on(t.storeId, t.slug)],
 );

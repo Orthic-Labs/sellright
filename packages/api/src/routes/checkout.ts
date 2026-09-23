@@ -14,6 +14,7 @@ import { emitEvent } from '../webhooks/emit.js';
 import { customerToken, resolveCustomer } from '../auth/session.js';
 import { normalizeEmail } from '../auth/email.js';
 import { reserveStockOrThrow, StockReservationError, validateReservableItems } from '../orders/stock-reservation.js';
+import { onStockChanged } from '../manifest/stock-hook.js';
 import { isMethodEligible, shippingRate, ShippingUnavailableError } from '../shipping/calculator.js';
 import { pickEmailAppKey } from '../email/dispatch.js';
 import { orderConfirmation as orderConfirmationTpl } from '../email/templates.js';
@@ -223,6 +224,13 @@ checkout.openapi(
     const fingerprint = checkoutFingerprint(body);
 
     type Result = { blocked: string[] } | { shippingError: string } | { cartError: string } | { legalError: string } | { cartConflict: { code: 'stale' | 'revision_required'; snapshot: z.infer<typeof CartOut> } } | { fingerprintConflict: true } | { code: string; state: string; grandTotal: number; discountTotal: number; couponApplied: boolean; replay?: boolean; giftCardApplied?: number; receiptToken: string };
+    // Zero-cache stock rule: set true only by a reserveStockOrThrow call whose
+    // surrounding transaction actually reaches COMMIT. Every path below that
+    // aborts the transaction (idempotency replay via unique-violation,
+    // StockReservationError, ShippingUnavailableError, or any other rethrow)
+    // resets it to false in the .catch — a rolled-back reservation never
+    // happened and must never trigger a manifest regeneration.
+    let stockChanged = false;
     const out = await withStore(st.id, async (tx): Promise<Result> => {
       // Idempotency: same key -> the same order (also guarded by a unique index),
       // bound to the request fingerprint — a reused key with a different payload
@@ -327,7 +335,7 @@ checkout.openapi(
           }
         }
       }
-      await reserveStockOrThrow(tx, st.id, items, bySku);
+      stockChanged = await reserveStockOrThrow(tx, st.id, items, bySku);
 
       const priceRule = variantPriceRuleFromConfig(st.config);
       const priced = items.map((i) => {
@@ -636,6 +644,11 @@ checkout.openapi(
       }
       return { code, state: paid ? 'Paid' : 'PendingPayment', grandTotal: totals.grandTotal, discountTotal: totals.discountTotal, couponApplied: promoId != null, giftCardApplied, receiptToken };
     }).catch(async (e: unknown): Promise<Result> => {
+      // Every catch branch below means the attempt above's transaction did NOT
+      // commit — any reservation it made was rolled back with it. The winner
+      // of a unique-violation race committed in its OWN request and fires its
+      // own onStockChanged() there; this request must not double-fire it.
+      stockChanged = false;
       // Concurrent double-submit with the same Idempotency-Key: the unique
       // (store, key) index rejected the loser; its txn (incl. allocation) rolled
       // back. Return the winner's order in a fresh read — still fingerprint-bound.
@@ -657,6 +670,9 @@ checkout.openapi(
       if (e instanceof ShippingUnavailableError) return { shippingError: e.reason };
       throw e;
     });
+    // Fire AFTER the transaction that actually reserved stock has committed —
+    // never from inside it, and never on a rolled-back/replayed attempt.
+    if (stockChanged) onStockChanged(st.slug);
 
     if ('shippingError' in out) return c.json({ error: 'shipping unavailable', reason: out.shippingError }, 409);
     if ('cartError' in out) return c.json({ error: out.cartError }, 409);

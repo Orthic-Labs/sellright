@@ -22,6 +22,7 @@ import { env } from '../env.js';
 import * as s from '../db/schema.js';
 import { createSession } from '../auth/session.js';
 import { account } from './account.js';
+import { issueDeviceLease, renewDeviceLease } from '../licensing/device-leases.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
 if (!/_test(\b|$|\?)/.test(DB)) {
@@ -166,5 +167,64 @@ describe('DELETE /v1/shop/account', () => {
   it('requires auth (401 without a session)', async () => {
     const res = await app.request('/v1/shop/account', { method: 'DELETE', headers: { 'x-store-slug': SLUG } });
     expect(res.status).toBe(401);
+  });
+
+  // Account erasure hardening: erasure previously left an already-leased
+  // device fully entitled for the remainder of its lease+grace window after
+  // the account (and the only way to reach or remove that device — session,
+  // portal, support lookup) was gone. Deletion must tombstone every
+  // device_activation on every license the customer owns, IN THE SAME
+  // TRANSACTION as the rest of erasure, and a client still holding the
+  // pre-deletion lease must be rejected on its next renew (not merely "would
+  // eventually expire").
+  it("tombstones every device lease on the customer's licenses, bumps generation, frees the seat, and rejects renewal of the pre-deletion lease", async () => {
+    const licenseId = await withStore(STORE, async (tx) => {
+      const [lic] = await tx.execute(sql`
+        INSERT INTO license (id, store_id, customer_id, app_key, license_key, status, seats)
+        VALUES (gen_random_uuid(), ${STORE}, ${CUSTOMER}, 'someapp', 'SK-ERASE-TEST-1', 'active'::license_status, 0)
+        RETURNING id
+      `).then((r) => r.rows as Array<{ id: string }>);
+      return lic!.id;
+    });
+
+    const deviceIdHash = `d${'0'.repeat(63)}`;
+    const leased = await withStore(STORE, (tx) => issueDeviceLease(tx, {
+      storeId: STORE, appKey: 'someapp', licenseKey: 'SK-ERASE-TEST-1',
+      deviceIdHash, platform: 'macos', deviceLabel: 'Erase-me laptop',
+    }));
+    if (leased.kind !== 'ok') throw new Error(`test setup: expected lease issuance to succeed, got ${leased.kind}`);
+    const preDeletionLeaseId = leased.lease.leaseId;
+    expect(leased.lease.generation).toBe(0);
+
+    const res = await app.request('/v1/shop/account', { method: 'DELETE', headers: auth() });
+    expect(res.status).toBe(200);
+
+    // The activation row is tombstoned — state='revoked', generation bumped,
+    // NOT hard-deleted (audit trail survives).
+    const activation = await withStore(STORE, async (tx) => {
+      const [row] = await tx.select().from(s.licenseActivation)
+        .where(eq(s.licenseActivation.licenseId, licenseId)).limit(1);
+      return row ?? null;
+    });
+    expect(activation).not.toBeNull();
+    expect(activation!.state).toBe('revoked');
+    expect(activation!.generation).toBe(1);
+    expect(activation!.revokedAt).not.toBeNull();
+
+    // The pool slot is free — a NEW device can now activate onto the same
+    // (now-unowned-but-still-active) license without hitting a pool cap it
+    // would otherwise still be occupying.
+    const reIssued = await withStore(STORE, (tx) => issueDeviceLease(tx, {
+      storeId: STORE, appKey: 'someapp', licenseKey: 'SK-ERASE-TEST-1',
+      deviceIdHash: `e${'0'.repeat(63)}`, platform: 'macos', deviceLabel: 'A different laptop',
+    }));
+    expect(reIssued.kind).toBe('ok');
+
+    // A client still holding the pre-deletion lease is rejected on its next
+    // renewal attempt, not merely "would eventually expire".
+    const renewResult = await withStore(STORE, (tx) => renewDeviceLease(tx, {
+      storeId: STORE, appKey: 'someapp', deviceIdHash, leaseId: preDeletionLeaseId,
+    }));
+    expect(renewResult.kind).toBe('revoked');
   });
 });

@@ -17,6 +17,7 @@ import { csvCell, inferCarrier, orderCode, unitPrice } from './admin-order-utils
 import { variantPriceRuleFromConfig } from '../money/pricing.js';
 import { issueLicensesForPaidOrder } from '../licensing/issue.js';
 import { err as logErr } from '../lib/logger.js';
+import { onStockChanged } from '../manifest/stock-hook.js';
 
 export const adminOrderOps = new OpenAPIHono();
 
@@ -45,12 +46,16 @@ adminOrderOps.openapi(
     const body = c.req.valid('json');
     const items = body.items as Array<{ sku: string; quantity: number }>;
     const skus = [...new Set(items.map((i) => i.sku))];
+    // Zero-cache stock rule: true only if a reservation from a transaction that
+    // actually commits happened — reset in .catch below, since every path
+    // there means the attempt's transaction rolled back.
+    let stockChanged = false;
     const res = await withStore(st.storeId, async (tx) => {
       const variants = await tx.select().from(s.productVariant).where(and(inArray(s.productVariant.sku, skus), isNull(s.productVariant.deletedAt)));
       const bySku = new Map(variants.map((v) => [v.sku, v]));
       const blocked = validateReservableItems(items, bySku);
       if (blocked.length) return { kind: 'blocked' as const, skus: blocked };
-      await reserveStockOrThrow(tx, st.storeId, items, bySku);
+      stockChanged = await reserveStockOrThrow(tx, st.storeId, items, bySku);
       // Mirror the edit-lines path: resolve the destination tax zone and honour the
       // store's tax-inclusive flag. Omitting taxInclusive here mispriced every
       // tax-inclusive store's manual/phone orders.
@@ -79,9 +84,11 @@ adminOrderOps.openapi(
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: orderId, action: 'draft_create', toState: paid ? 'Paid' : 'PendingPayment' });
       return { kind: 'ok' as const, code, state: paid ? 'Paid' : 'PendingPayment', grandTotal: totals.grandTotal };
     }).catch((e: unknown) => {
+      stockChanged = false; // the attempt above rolled back — nothing committed
       if (e instanceof StockReservationError) return { kind: 'blocked' as const, skus: e.skus };
       throw e;
     });
+    if (stockChanged) onStockChanged(st.slug);
     if (res.kind === 'blocked') return c.json({ error: 'unavailable or out of stock', skus: res.skus }, 409);
     return c.json({ code: res.code, state: res.state, grandTotal: res.grandTotal }, 200);
   }),
@@ -161,6 +168,10 @@ adminOrderOps.openapi(
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireWrite(st);
     const { rows } = c.req.valid('json');
+    // One transaction for the whole batch — set true only inside the branch
+    // that actually mutates stock (a NEW fulfillment ships un-shipped units);
+    // re-marking an already-existing fulfillment Shipped never touches stock.
+    let stockChanged = false;
     const result = await withStore(st.storeId, async (tx) => {
       let updated = 0; const errors: { code: string; error: string }[] = [];
       const [storeRow] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1);
@@ -185,6 +196,7 @@ adminOrderOps.openapi(
             if (l.variantId) {
               await tx.update(s.stock).set({ onHand: sql`greatest(${s.stock.onHand} - ${ship}, 0)`, allocated: sql`greatest(${s.stock.allocated} - ${ship}, 0)` }).where(and(eq(s.stock.variantId, l.variantId), eq(s.stock.storeId, st.storeId)));
               await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: l.variantId, delta: -ship, reason: 'fulfillment', refOrderId: o.id });
+              stockChanged = true;
             }
           }
         }
@@ -205,6 +217,7 @@ adminOrderOps.openapi(
       }
       return { updated, errors };
     });
+    if (stockChanged) onStockChanged(st.slug);
     return c.json({ updated: result.updated, errors: result.errors }, 200);
   }),
 );
@@ -227,6 +240,8 @@ adminOrderOps.openapi(
     const { codes } = c.req.valid('json');
     const results: { code: string; ok: boolean; error?: string }[] = [];
     for (const code of [...new Set(codes)] as string[]) {
+      // Fresh per iteration — each code is its own committed transaction.
+      let stockChanged = false;
       const r = await withStore(st.storeId, async (tx): Promise<{ ok: true } | { ok: false; error: string }> => {
         const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
         if (!o) return { ok: false, error: 'order not found' };
@@ -240,12 +255,14 @@ adminOrderOps.openapi(
           if (rel > 0 && l.variantId) {
             await tx.update(s.stock).set({ allocated: sql`greatest(${s.stock.allocated} - ${rel}, 0)` })
               .where(and(eq(s.stock.variantId, l.variantId), eq(s.stock.storeId, st.storeId)));
+            stockChanged = true;
           }
         }
         await tx.update(s.order).set({ state: 'Cancelled', updatedAt: new Date() }).where(eq(s.order.id, o.id));
         await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: o.id, action: 'cancel', fromState: o.state, toState: 'Cancelled' });
         return { ok: true };
       });
+      if (stockChanged) onStockChanged(st.slug);
       results.push(r.ok ? { code, ok: true } : { code, ok: false, error: r.error });
     }
     const succeeded = results.filter((r) => r.ok).length;

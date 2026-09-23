@@ -85,14 +85,17 @@ async function seedStoreWithSezzleOrder(): Promise<{ orderId: string }> {
   return { orderId };
 }
 
-const gatewayEvents = async () => {
-  const r = await pool.query(`SELECT event_id, event_type, provider_ref, status, details FROM gateway_event WHERE store_id = $1`, [STORE]);
+// gateway_event and dispute carry FORCE ROW LEVEL SECURITY and the
+// migration-owner pool role is NOT BYPASSRLS — a bare pool.query() with no
+// app.current_store set sees zero rows regardless of what actually committed.
+const gatewayEvents = async () => withStore(STORE, async (tx) => {
+  const r = await tx.execute(sql`SELECT event_id, event_type, provider_ref, status, details FROM gateway_event WHERE store_id = ${STORE}`);
   return r.rows as Array<{ event_id: string; event_type: string; provider_ref: string; status: string; details: Record<string, unknown> }>;
-};
-const disputes = async () => {
-  const r = await pool.query(`SELECT provider, provider_ref, order_id, amount, status, reason FROM dispute WHERE store_id = $1`, [STORE]);
+});
+const disputes = async () => withStore(STORE, async (tx) => {
+  const r = await tx.execute(sql`SELECT provider, provider_ref, order_id, amount, status, reason FROM dispute WHERE store_id = ${STORE}`);
   return r.rows as Array<{ provider: string; provider_ref: string; order_id: string | null; amount: number | null; status: string; reason: string | null }>;
-};
+});
 
 beforeEach(async () => { await wipe(); });
 afterAll(async () => { await wipe(); await pool.end(); });

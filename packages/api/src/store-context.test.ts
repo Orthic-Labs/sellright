@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { hostMatchesAny, normalizeHost } from './store-context.js';
+import { DEV_DEFAULT_STORE, hostMatchesAny, normalizeHost, stripHostPrefix } from './store-context.js';
+
+describe('DEV_DEFAULT_STORE', () => {
+  it('defaults to "damned" when env.DEV_DEFAULT_STORE_SLUG is unset (identical to the prior hardcoded value)', () => {
+    expect(DEV_DEFAULT_STORE).toBe('damned');
+  });
+});
 
 describe('normalizeHost', () => {
   it('lowercases and strips a trailing port', () => {
@@ -51,5 +57,33 @@ describe('hostMatchesAny', () => {
 
   it('skips blank entries in the hostnames list without matching everything', () => {
     expect(hostMatchesAny('damned.example', ['', '  '])).toBe(false);
+  });
+});
+
+describe('stripHostPrefix', () => {
+  it('is a no-op when the prefix list is empty (env.STORE_HOST_STRIP_PREFIXES unset, the default)', () => {
+    expect(stripHostPrefix('buy.example.com', [])).toBe('buy.example.com');
+  });
+
+  it('strips a single matching leading label', () => {
+    expect(stripHostPrefix('buy.example.com', ['www', 'buy', 'get', 'store'])).toBe('example.com');
+  });
+
+  it('is case-insensitive on the prefix match', () => {
+    expect(stripHostPrefix('WWW.example.com', ['www'])).toBe('example.com');
+  });
+
+  it('leaves the host unchanged when its leading label is not in the prefix list', () => {
+    expect(stripHostPrefix('shop.example.com', ['www', 'buy'])).toBe('shop.example.com');
+  });
+
+  it('never strips a bare two-label host down to a single label', () => {
+    // "www" alone has no further label to strip to — must stay unchanged.
+    expect(stripHostPrefix('www', ['www'])).toBe('www');
+  });
+
+  it('strips at most one label, never iterating', () => {
+    // Only the leading "buy." is a candidate; "www" nested one level in is left alone.
+    expect(stripHostPrefix('buy.www.example.com', ['www', 'buy'])).toBe('www.example.com');
   });
 });

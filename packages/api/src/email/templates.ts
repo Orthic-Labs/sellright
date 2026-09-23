@@ -89,6 +89,16 @@ export const staffInvite = (store: StoreCtx, data: { acceptUrl: string; role: st
     `<p>You've been invited to help manage <strong>${escape(store.name)}</strong> as a <strong>${escape(data.role)}</strong>.</p>
      <p><a href="${escape(data.acceptUrl)}" style="display:inline-block;padding:10px 16px;background:#222;color:#fff;text-decoration:none;border-radius:6px">Accept invite</a></p>`);
 
+// Free-trial license key delivery (licensing/trial.ts). The key is emailed,
+// never returned in the API response, so an unreceived/throwaway address
+// can't mint a working trial (see routes/apps.ts POST /licenses/trial).
+export const trialLicenseKey = (store: StoreCtx, data: { key: string; days: number; pricingUrl: string }) =>
+  wrap(store, `Your ${data.days}-day Pro key`,
+    `<p>Here's your ${data.days}-day Pro trial key. Paste it into ${escape(store.name)} to activate. No card, no auto-renewal.</p>
+     <p style="margin:16px 0;padding:12px 16px;background:#f6f6f6;border-radius:6px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:16px;word-break:break-all">${escape(data.key)}</p>
+     <p>When the ${data.days} days are up, the app stays free at its base tier.</p>
+     <p><a href="${escape(data.pricingUrl)}" style="display:inline-block;padding:10px 16px;background:#222;color:#fff;text-decoration:none;border-radius:6px">See Pro</a></p>`);
+
 // SUBSCRIBER-1: double opt-in confirmation. Topic-aware copy so the waitlist
 // template can read "you're on the ScrapeRight waitlist" without inventing a
 // second template class for every product name. Topic = '' = the general

@@ -9,7 +9,17 @@
  * helpers under withStore(). vitest runs files serially (fileParallelism:
  * false), so the shared DB is safe between files.
  */
-import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// Zero-cache stock rule (this task): releasing allocated stock must trigger an
+// immediate manifest regeneration, never a poll. Spy on the hook instead of
+// wiring a real manifest publish — that's covered end-to-end by
+// manifest/stock-hook.test.ts and manifest/catalog.db.test.ts.
+const onStockChangedCalls: string[] = [];
+vi.mock('../manifest/stock-hook.js', () => ({
+  onStockChanged: (storeSlug: string) => { onStockChangedCalls.push(storeSlug); },
+}));
+
 import { sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
@@ -79,7 +89,7 @@ async function orderStates(): Promise<string[]> {
 }
 
 describe('releaseStaleAllocations concurrency (OPS-2)', () => {
-  beforeEach(wipe);
+  beforeEach(() => { onStockChangedCalls.length = 0; return wipe(); });
   afterAll(async () => {
     await wipe();
     await pool.end();
@@ -141,5 +151,20 @@ describe('releaseStaleAllocations concurrency (OPS-2)', () => {
 
     expect(await stockAllocated()).toBe(0);
     expect(await orderStates()).toEqual(['Cancelled']);
+  });
+
+  it('triggers an immediate manifest regeneration for the store after an apply release, never on a dry run', async () => {
+    await seedStoreAndStock(5);
+    await seedStaleOrder('STALE-HOOK-DRY', 5);
+
+    // Dry run: nothing committed, so the zero-cache hook must not fire.
+    await releaseStaleAllocations({ apply: false, ttlMin: 60 });
+    expect(onStockChangedCalls).toEqual([]);
+
+    // Apply: the release UPDATE has already committed (releaseStaleAllocations
+    // runs inside withStore, which COMMITs on return) by the time this call
+    // returns, so it's safe to fire the hook synchronously afterwards.
+    await releaseStaleAllocations({ apply: true, ttlMin: 60 });
+    expect(onStockChangedCalls).toEqual([SLUG]);
   });
 });

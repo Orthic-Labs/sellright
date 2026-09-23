@@ -53,8 +53,8 @@ if (!/_test(\b|$|\?)/.test(DB)) {
 const STORE = 'eeeeeeee-eeee-eeee-eeee-e2eeee2eeeee';
 const SLUG = 'e2e-stripe-test-store';
 const CUSTOMER = 'eeeeeeee-eeee-eeee-eeee-e2e0000000c1';
-const PRODUCT = 'eeeeeeee-eeee-eeee-eeee-e2e0000000p1';
-const VARIANT = 'eeeeeeee-eeee-eeee-eeee-e2e0000000v1';
+const PRODUCT = 'eeeeeeee-eeee-eeee-eeee-e2e0000000d1';
+const VARIANT = 'eeeeeeee-eeee-eeee-eeee-e2e0000000a1';
 
 const app = createApp();
 
@@ -125,7 +125,10 @@ afterAll(async () => { await wipe(); await pool.end(); });
     };
     const checkoutRes = await app.request('/v1/shop/checkout', {
       method: 'POST', headers: hdr(),
-      body: JSON.stringify({ cartToken: cart.token, expectedRevision: cart.revision, email: 'e2e-buyer@test.local', shippingAddress: shipAddr }),
+      body: JSON.stringify({
+        items: [{ sku: 'E2E-LIC-1', quantity: 1 }],
+        cartToken: cart.token, expectedRevision: cart.revision, email: 'e2e-buyer@test.local', shippingAddress: shipAddr,
+      }),
     });
     expect(checkoutRes.status).toBe(200);
     const checkoutBody = await checkoutRes.json() as { code: string; state: string; grandTotal: number; receiptToken: string };

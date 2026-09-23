@@ -12,6 +12,7 @@
     "test:db": "vitest run --project db",
     "test:all": "vitest run",
     "db:generate": "drizzle-kit generate",
+    "postdb:generate": "node scripts/assert-no-partial-index-drop.mjs",
     "db:migrate": "drizzle-kit migrate",
     "db:migrate:runtime": "node dist/scripts/migrate.js",
     "bootstrap:runtime": "node dist/scripts/bootstrap.js",

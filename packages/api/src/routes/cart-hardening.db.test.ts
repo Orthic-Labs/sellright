@@ -135,8 +135,13 @@ async function cartRowByToken(token: string) {
 }
 
 async function orderCount(): Promise<number> {
-  const r = await pool.query('SELECT count(*)::int n FROM "order" WHERE store_id = $1', [STORE]);
-  return (r.rows[0] as { n: number }).n;
+  // Must go through withStore: "order" has FORCE ROW LEVEL SECURITY and the
+  // migration-owner pool role is NOT BYPASSRLS, so a bare pool.query() with no
+  // app.current_store set sees zero rows regardless of what actually committed.
+  return withStore(STORE, async (tx) => {
+    const r = await tx.execute(sql`SELECT count(*)::int n FROM "order" WHERE store_id = ${STORE}`);
+    return Number((r.rows[0] as { n: number }).n);
+  });
 }
 
 async function allocatedPhysical(): Promise<number> {
@@ -680,5 +685,62 @@ describe('cart hardening under the app role (FORCE RLS)', () => {
     const ok = await withStoreApp(STORE, (tx) =>
       tx.update(s.cart).set({ revision: sql`${s.cart.revision} + 1` }).where(eq(s.cart.id, own!.id)).returning({ revision: s.cart.revision }));
     expect(ok[0]!.revision).toBe(own!.revision + 1);
+  });
+});
+
+// ── Zero-cache stock rule: cart pricing must report LIVE stock availability,
+// never a cached/assumed one (see CLAUDE.md's locked stock architecture). ───
+describe('cart estimate — live stock availability', () => {
+  const VARIANT_NOSTOCK = 'bbbbbbbb-2222-2222-2222-2222222222b3';
+  const SKU_NOSTOCK = 'CH-SKU-NOSTOCK';
+
+  async function setStock(onHand: number, allocated: number): Promise<void> {
+    await withStore(STORE, (tx) => tx.execute(sql`UPDATE stock SET on_hand = ${onHand}, allocated = ${allocated} WHERE variant_id = ${VARIANT_P}`));
+  }
+  async function seedNoStockVariant(): Promise<void> {
+    await withStore(STORE, (tx) => tx.execute(sql`
+      INSERT INTO product_variant (id, store_id, product_id, sku, name, price, fulfillment_type)
+      VALUES (${VARIANT_NOSTOCK}, ${STORE}, ${PRODUCT}, ${SKU_NOSTOCK}, 'CH No Stock Row', ${PRICE}, 'physical')
+      ON CONFLICT (id) DO NOTHING`));
+  }
+  type Line = { sku: string; available: boolean; availableQuantity: number | null };
+  async function estimateLines(items: Array<{ sku: string; quantity: number }>): Promise<{ lines: Line[]; unavailable: string[] }> {
+    const res = await app.request('/v1/shop/cart/estimate', { method: 'POST', headers: hdr(), body: JSON.stringify({ items }) });
+    expect(res.status).toBe(200);
+    return res.json() as Promise<{ lines: Line[]; unavailable: string[] }>;
+  }
+
+  it('a physical line within stock is available and reports the live (on_hand - allocated) count', async () => {
+    await setStock(20, 0);
+    const { lines, unavailable } = await estimateLines([{ sku: SKU_P, quantity: 5 }]);
+    expect(lines[0]).toMatchObject({ sku: SKU_P, available: true, availableQuantity: 20 });
+    expect(unavailable).toEqual([]);
+  });
+
+  it('a physical line requesting more than (on_hand - allocated) is unavailable, excluded from totals', async () => {
+    await setStock(10, 8); // only 2 saleable
+    const { lines, unavailable } = await estimateLines([{ sku: SKU_P, quantity: 5 }]);
+    expect(lines[0]).toMatchObject({ sku: SKU_P, available: false, availableQuantity: 2 });
+    expect(unavailable).toEqual([SKU_P]);
+  });
+
+  it('allocated stock (reserved by other pending orders) lowers live availability immediately — no cache lag', async () => {
+    await setStock(10, 0);
+    expect((await estimateLines([{ sku: SKU_P, quantity: 10 }])).lines[0]).toMatchObject({ available: true, availableQuantity: 10 });
+    await setStock(10, 10); // fully allocated by other orders
+    expect((await estimateLines([{ sku: SKU_P, quantity: 1 }])).lines[0]).toMatchObject({ available: false, availableQuantity: 0 });
+  });
+
+  it('a stock-limited variant with NO stock row fails closed — never defaults to in-stock', async () => {
+    await seedNoStockVariant();
+    const { lines, unavailable } = await estimateLines([{ sku: SKU_NOSTOCK, quantity: 1 }]);
+    expect(lines[0]).toMatchObject({ sku: SKU_NOSTOCK, available: false, availableQuantity: 0 });
+    expect(unavailable).toEqual([SKU_NOSTOCK]);
+  });
+
+  it('a non-physical (digital) line is never stock-limited — availableQuantity is null, not a stock number', async () => {
+    const { lines, unavailable } = await estimateLines([{ sku: SKU, quantity: 1000 }]);
+    expect(lines[0]).toMatchObject({ sku: SKU, available: true, availableQuantity: null });
+    expect(unavailable).toEqual([]);
   });
 });

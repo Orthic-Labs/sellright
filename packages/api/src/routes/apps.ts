@@ -2,12 +2,17 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, desc, eq, isNull, or } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import { resolveStore, resolveStoreForRequest, DEV_DEFAULT_STORE, type StoreCtx } from '../store-context.js';
+import { appKeyHeaderNames, deviceHeaderName, licenseHeaderName, firstHeader } from '../licensing/app-headers.js';
+import { resolveStoreWithFallback } from '../licensing/app-store-fallback.js';
 import * as s from '../db/schema.js';
 import { activateLicenseOnDevice, findActivationByToken } from '../licensing/activations.js';
 import { canAccessDownload, canReceiveUpdate } from '../licensing/entitlements.js';
 import { bearerToken } from '../licensing/tokens.js';
 import { signedDownloadPath, verifyDownloadSig, downloadSigningConfigured } from '../licensing/download-url.js';
 import { isAllowedRedirectHost } from '../lib/redirect-allowlist.js';
+import { trialExpiresAt, TRIAL_DAYS } from '../licensing/trial.js';
+import { mintLicense } from '../licensing/mint.js';
+import { sendTrialKey } from '../email/dispatch.js';
 import { J, errBody, guard, requireAdmin, requireStore, requireWrite, requirePermission } from './admin-helpers.js';
 import { err as logErr } from '../lib/logger.js';
 import { createReadStream } from 'node:fs';
@@ -45,8 +50,11 @@ function appKeyFromHost(host: string | undefined): string | null {
 }
 
 async function publicAppStore(c: { req: { header: (k: string) => string | undefined } }, explicitApp?: string | null) {
-  const appKey = explicitApp ?? c.req.header('x-viewright-app') ?? c.req.header('x-app-key') ?? appKeyFromHost(c.req.header('host')) ?? DEV_DEFAULT_STORE;
-  return { appKey, st: await resolveStore(appKey) };
+  const appKey = explicitApp ?? firstHeader(c, appKeyHeaderNames()) ?? appKeyFromHost(c.req.header('host')) ?? DEV_DEFAULT_STORE;
+  // Extension seam (licensing/app-store-fallback.ts): env.APPS_FALLBACK_STORE_SLUG
+  // unset (the default) rethrows on an unknown appKey, so this 404s exactly as
+  // before this seam existed.
+  return { appKey, st: await resolveStoreWithFallback(appKey, env.APPS_FALLBACK_STORE_SLUG) };
 }
 
 const ReleaseArtifactIn = z.object({
@@ -136,16 +144,118 @@ apps.post('/api/licenses/activate', async (c) => {
   }, 200);
 });
 
+// POST /api/licenses/trial (also /v1/) — request a free trial Pro license KEY
+// by email. Mints a normal Pro license (tier=pro, source=admin) tied to the
+// email and EMAILS the key. The key is NOT in the response, so a junk email
+// that never receives it can't activate. The app then activates the key via
+// the standard /licenses/activate flow (device-seat-bound, signed token,
+// auto-expiry). Idempotent per (app, email): the same email always gets the
+// SAME key + expiry — no restart. Seat count is a generic per-trial default;
+// an app whose registered device policy uses pooled seats (device-policy.ts
+// `pooledSeats`) has mintLicense force it to 0 automatically, so the pool
+// caps — not this flat count — are authoritative.
+const TrialRequestIn = z.object({ app: z.string().min(1), email: z.string().email() });
+const TRIAL_SEATS = 2;
+
+apps.on('POST', ['/api/licenses/trial', '/v1/licenses/trial'], async (c) => {
+  const body = TrialRequestIn.parse(await c.req.json());
+  const email = body.email.trim().toLowerCase();
+  const { appKey, st } = await publicAppStore(c, body.app);
+
+  const minted = await withStore(st.id, async (tx) => {
+    // find-or-create the customer for this email (unique per store)
+    const found = await tx.select({ id: s.customer.id })
+      .from(s.customer)
+      .where(and(eq(s.customer.storeId, st.id), eq(s.customer.email, email)))
+      .limit(1);
+    let customerId = found[0]?.id;
+    if (!customerId) {
+      const created = await tx.insert(s.customer)
+        .values({ storeId: st.id, email })
+        .onConflictDoNothing({ target: [s.customer.storeId, s.customer.email] })
+        .returning({ id: s.customer.id });
+      customerId = created[0]?.id;
+      if (!customerId) {
+        const reread = await tx.select({ id: s.customer.id })
+          .from(s.customer)
+          .where(and(eq(s.customer.storeId, st.id), eq(s.customer.email, email)))
+          .limit(1);
+        customerId = reread[0]?.id;
+      }
+    }
+    if (!customerId) return null;
+
+    // dedup: this customer's existing trial (admin-sourced) license for this app
+    const existing = await tx.select({
+      key: s.license.licenseKey,
+      expiresAt: s.license.expiresAt,
+      metadata: s.license.metadata,
+    })
+      .from(s.license)
+      .where(and(
+        eq(s.license.storeId, st.id),
+        eq(s.license.customerId, customerId),
+        eq(s.license.appKey, appKey),
+        eq(s.license.source, 'admin'),
+      ))
+      .limit(1);
+    const priorTrial = existing.find((lic) =>
+      (lic.metadata as { kind?: string } | null)?.kind === 'trial');
+    if (priorTrial) {
+      if (priorTrial.expiresAt && priorTrial.expiresAt <= new Date()) {
+        return { kind: 'expired' as const };
+      }
+      return { kind: 'resend' as const, key: priorTrial.key };
+    }
+
+    // mint a fresh trial Pro license
+    const ends = trialExpiresAt();
+    const { licenseKey } = await mintLicense(tx, {
+      storeId: st.id,
+      appKey,
+      seats: TRIAL_SEATS,
+      updatesUntil: ends,
+      expiresAt: ends,
+      customerId,
+      metadata: { tier: 'pro', kind: 'trial' },
+      issuedBy: 'trial-self-serve',
+      reason: `${TRIAL_DAYS}-day self-serve Pro trial`,
+    });
+    return { kind: 'issued' as const, key: licenseKey };
+  });
+
+  if (!minted) return c.json({ ok: false, status: 'error', message: 'Could not start trial' }, 500);
+  if (minted.kind === 'expired') {
+    return c.json({
+      ok: false,
+      status: 'trial_used',
+      message: 'This email has already used its free trial.',
+    }, 409);
+  }
+
+  // Send the key AFTER the tx (best-effort). The user must RECEIVE it to activate —
+  // that's what keeps throwaway emails from minting a working trial.
+  try {
+    await sendTrialKey({ name: st.name, currency: st.currency, appKey }, email, {
+      key: minted.key,
+      days: TRIAL_DAYS,
+    });
+  } catch {
+    /* delivery failure is logged in the mailer; the user can re-request (same key) */
+  }
+  return c.json({ ok: true, status: 'sent', message: `Check your email for your ${TRIAL_DAYS}-day Pro key.` }, 200);
+});
+
 apps.get('/releases/latest.json', async (c) => {
-  const activationToken = bearerToken(c.req.header('authorization')) ?? c.req.header('x-viewright-license');
+  const activationToken = bearerToken(c.req.header('authorization')) ?? c.req.header(licenseHeaderName());
   if (!activationToken) return c.json({ ok: false, message: 'Missing activation token' }, 401);
 
   // Require an explicit app identifier — never fall back to DEV_DEFAULT_STORE /
   // Host-header derivation here (mirrors the /api/licenses/activate hardening).
-  const explicitApp = c.req.header('x-viewright-app') ?? c.req.header('x-app-key');
-  if (!explicitApp) return c.json({ ok: false, message: 'Missing app identifier (X-ViewRight-App header)' }, 400);
+  const explicitApp = firstHeader(c, appKeyHeaderNames());
+  if (!explicitApp) return c.json({ ok: false, message: 'Missing app identifier' }, 400);
   const { appKey, st } = await publicAppStore(c, explicitApp);
-  const deviceId = c.req.header('x-viewright-device');
+  const deviceId = c.req.header(deviceHeaderName());
   const channel = c.req.query('channel') ?? 'stable';
   const platform = c.req.query('platform') ?? undefined;
 

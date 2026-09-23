@@ -8,6 +8,7 @@ import { creditGiftCardRefund } from '../routes/admin-order-payment-helpers.js';
 import { emitEvent } from '../webhooks/emit.js';
 import { enqueueRefundConfirmation, pickEmailAppKey } from '../email/dispatch.js';
 import { normalizeEmail } from '../auth/email.js';
+import { onStockChanged } from '../manifest/stock-hook.js';
 
 export class RefundError extends Error {
   constructor(public status: 400 | 404 | 409 | 503, message: string) { super(message); }
@@ -122,7 +123,18 @@ export async function requestRefund(input: RefundRequest) {
         stripeMode: p.gatewayMode as 'test'|'live', gateway, idempotencyKey: prepared.attemptId,
       }) : { state: 'Settled', providerRef: null };
     } catch { result = { state: 'Pending', providerRef: null, errorMessage: 'Refund requires reconciliation' }; }
-    return withStore(input.storeId, tx => finalizeRefund(tx, input.storeId, prepared.attemptId, result));
+    const finalized = await withStore(input.storeId, async tx => {
+      const view = await finalizeRefund(tx, input.storeId, prepared.attemptId, result);
+      const [store] = await tx.select({ slug: s.store.slug }).from(s.store).where(eq(s.store.id, input.storeId)).limit(1);
+      return { view, storeSlug: store?.slug };
+    });
+    // finalizeRefund only ever touches stock.allocated/stock.onHand (unfulfilled
+    // release + restock) once it reaches 'Settled' — call the zero-cache hook
+    // AFTER this transaction has committed. A harmless superset: an idempotent
+    // replay of an already-settled refund also lands here and re-triggers a
+    // regeneration, which is safe (never wrong, just occasionally redundant).
+    if (finalized.view.refundState === 'Settled' && finalized.storeSlug) onStockChanged(finalized.storeSlug);
+    return finalized.view;
   });
 }
 

@@ -11,7 +11,7 @@
  *
  * Sender/URL identity (SR-05) resolves PER STORE, most specific wins:
  *   per-app env map (shared stores sell multiple brands under one tenant;
- *   EMAIL_FROM_BY_APP / STOREFRONT_URL_BY_APP keyed by product appKey)
+ *   EMAIL_FROM_BY_APP / EMAIL_NAME_BY_APP / STOREFRONT_URL_BY_APP keyed by product appKey)
  *   → store.config (storefrontUrl / emailFrom, set by the importer or admin)
  *   → global env (STOREFRONT_URL / SMTP_FROM).
  * A tenant store's mail must never link to another tenant's storefront just
@@ -27,6 +27,7 @@ import {
   emailAddressChange,
   orderRefundConfirmation,
   magicLinkAccess,
+  trialLicenseKey,
 } from './templates.js';
 import { enqueueEmail } from './outbox.js';
 import { env } from '../env.js';
@@ -114,7 +115,7 @@ export function resolveFromEmail(store: StoreEmailCtx): string {
 
 function emailCtx(store: StoreEmailCtx) {
   return {
-    name: store.name,
+    name: appValue(env.EMAIL_NAME_BY_APP, store.appKey) ?? store.name,
     currency: store.currency,
     storefrontUrl: resolveStorefrontUrl(store),
     fromEmail: resolveFromEmail(store),
@@ -248,4 +249,14 @@ export async function sendStaffInvite(store: StoreEmailCtx, to: string, data: {
 }): Promise<void> {
   const ctx = emailCtx(store);
   await sendEmail({ to, from: ctx.fromEmail, ...staffInvite(ctx, data) });
+}
+
+export async function sendTrialKey(store: StoreEmailCtx, to: string, data: {
+  key: string; days: number; pricingUrl?: string;
+}): Promise<void> {
+  const ctx = emailCtx(store);
+  await sendEmail({ to, from: ctx.fromEmail, ...trialLicenseKey(ctx, {
+    ...data,
+    pricingUrl: data.pricingUrl ?? `${ctx.storefrontUrl}/pricing`,
+  }) });
 }

@@ -6,6 +6,7 @@
 import nodemailer, { type Transporter } from 'nodemailer';
 import { env } from '../env.js';
 import { log, err as logErr } from '../lib/logger.js';
+import { isForbiddenSenderDomain, parseSenderDomainList } from './sender-policy.js';
 
 export interface SendEmailInput {
   to: string;
@@ -24,6 +25,10 @@ const smtpEnabled = (): boolean => {
   return Boolean(env.SMTP_HOST);
 };
 
+// Same policy env.ts checked at boot (email/sender-policy.ts) — empty when
+// FORBIDDEN_SENDER_DOMAINS is unset, so this is a no-op by default.
+const forbiddenSenderDomains = parseSenderDomainList(env.FORBIDDEN_SENDER_DOMAINS);
+
 let cached: Transporter | null = null;
 function transport(): Transporter | null {
   if (!smtpEnabled()) return null;
@@ -39,13 +44,18 @@ function transport(): Transporter | null {
 
 /** Send an email. No-op (with a log line) when SMTP is not configured. */
 export async function sendEmail(input: SendEmailInput): Promise<{ delivered: boolean; reason?: string }> {
+  const from = input.from ?? env.SMTP_FROM;
+  if (isForbiddenSenderDomain(from, forbiddenSenderDomains)) {
+    logErr.error('email blocked: forbidden sender domain', undefined, { from, to: input.to, subject: input.subject });
+    return { delivered: false, reason: 'forbidden_sender_domain' };
+  }
   const tx = transport();
   if (!tx) {
     log.info('email skipped', { reason: 'smtp_not_configured', to: input.to, subject: input.subject });
     return { delivered: false, reason: 'smtp_not_configured' };
   }
   try {
-    await tx.sendMail({ from: input.from ?? env.SMTP_FROM, ...input });
+    await tx.sendMail({ from, ...input });
     return { delivered: true };
   } catch (e) {
     logErr.error('email error', e, { to: input.to, subject: input.subject });

@@ -4,7 +4,7 @@ import {fileURLToPath} from 'node:url';
 import {resolve,extname,sep} from 'node:path';
 import {createRequire} from 'node:module';
 import {demoBindHost} from './policy.mjs';
-import {interactiveRequest,interactiveBody,sameOriginMutation} from './interactive-policy.mjs';
+import {interactiveRequest,interactiveBody,sameOriginMutation,demoAdminCredentials} from './interactive-policy.mjs';
 import {assertInteractiveDatabase,visitorFor,provisionVisitor,removeVisitor,cleanVisitors,hash,scoped} from './visitors.mjs';
 
 const database=new URL(process.env.DATABASE_URL??'');
@@ -53,6 +53,17 @@ async function seedOrders(visitor){
     const order=await r.json();await settle(visitor,order.code);
   }
 }
+async function provision(){
+  return serial('provision',async()=>{
+    const created=await provisionVisitor(pool);
+    try{await seedOrders(created);return created;}
+    catch(e){await removeVisitor(pool,created.id);throw e;}
+  });
+}
+function setVisitorCookies(res,visitor,url){
+  const flags='; Path=/; Max-Age=3600; SameSite=Strict'+(url.hostname==='demo.sellright.cc'?'; Secure':'');
+  res.setHeader('Set-Cookie',[`sr_demo=${visitor.token}; HttpOnly${flags}`,`sr_admin=${visitor.token}; HttpOnly${flags}`,`sr_csrf=${visitor.csrf}${flags}`]);
+}
 async function bounded(visitor){
   const result=await scoped(pool,visitor.id,async c=>(await c.query(`SELECT
     (SELECT count(*) FROM "order")::int AS orders,(SELECT count(*) FROM cart)::int AS carts,
@@ -83,18 +94,26 @@ const server=createServer(async(req,res)=>{
     }
     let visitor=await visitorFor(pool,cookies(req.headers.cookie).sr_demo);
     if(url.pathname==='/demo/session'&&method==='POST'){
-      if(!visitor)visitor=await serial('provision',async()=>{
-        const created=await provisionVisitor(pool);
-        try{await seedOrders(created);return created;}
-        catch(e){await removeVisitor(pool,created.id);throw e;}
-      });
-      if(visitor.csrf){
-        const flags='; Path=/; Max-Age=3600; SameSite=Strict'+(url.hostname==='demo.sellright.cc'?'; Secure':'');
-        res.setHeader('Set-Cookie',[`sr_demo=${visitor.token}; HttpOnly${flags}`,`sr_admin=${visitor.token}; HttpOnly${flags}`,`sr_csrf=${visitor.csrf}${flags}`]);
-      }
+      if(!visitor)visitor=await provision();
+      if(visitor.csrf)setVisitorCookies(res,visitor,url);
       return json(200,{slug:visitor.slug,expiresAt:visitor.config.expiresAt});
     }
     if(url.pathname==='/demo/session'&&method==='GET')return json(visitor?200:401,visitor?{slug:visitor.slug,expiresAt:visitor.config.expiresAt}:{error:'Start a demo session'});
+    // The published admin credential (README: "Demo login: admin / admin").
+    // Exempt from the CSRF gate below for the same reason /demo/session is —
+    // there is no session/CSRF token yet for a visitor who hasn't logged in.
+    // A shared literal never crosses tenants: a correct guess always maps to
+    // *the caller's own* fresh-or-existing sandbox (a new store on first use,
+    // the same cookie-bound store on any later use from that browser), never
+    // to another visitor's data, because visitor identity here comes only
+    // from the still-httpOnly sr_admin cookie this response is about to set.
+    if(url.pathname==='/v1/admin/login'&&method==='POST'){
+      let body;{let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>2000)return json(413,{error:'Request too large'});chunks.push(chunk);}
+        try{body=JSON.parse(Buffer.concat(chunks).toString()||'{}');}catch{return json(400,{error:'Invalid request body'});}}
+      if(!demoAdminCredentials(body))return json(401,{error:'invalid email or password'});
+      if(!visitor){visitor=await provision();setVisitorCookies(res,visitor,url);}
+      return json(200,{token:visitor.token,csrfToken:visitor.csrf,admin:{email:'admin'},stores:[{storeId:visitor.id,slug:visitor.slug,name:'Everyday Supply',currency:'USD',role:'manager'}]});
+    }
     const csrf=cookies(req.headers.cookie).sr_csrf;
     if(mutation&&(!visitor||!csrf||hash(csrf)!==visitor.config.csrfHash||req.headers['x-csrf-token']!==csrf))return json(403,{error:'Demo session or CSRF token is invalid'});
     if(url.pathname==='/demo/reset'&&method==='POST'){
@@ -102,9 +121,13 @@ const server=createServer(async(req,res)=>{
       res.setHeader('Set-Cookie',['sr_demo=; HttpOnly; Path=/; Max-Age=0','sr_admin=; HttpOnly; Path=/; Max-Age=0','sr_csrf=; Path=/; Max-Age=0']);
       return json(200,{reset:true});
     }
-    if(url.pathname==='/enter'&&method==='GET'){res.writeHead(303,{location:visitor?'/':'/shop'});res.end();return;}
+    if(url.pathname==='/v1/admin/logout'&&method==='POST'){
+      res.setHeader('Set-Cookie',['sr_demo=; HttpOnly; Path=/; Max-Age=0','sr_admin=; HttpOnly; Path=/; Max-Age=0','sr_csrf=; Path=/; Max-Age=0']);
+      return json(200,{ok:true});
+    }
+    if(url.pathname==='/enter'&&method==='GET'){res.writeHead(303,{location:'/'});res.end();return;}
     if(url.pathname.startsWith('/v1/')){
-      if(!visitor)return json(401,{error:'Your demo expired. Return to the storefront to start again.'});
+      if(!visitor)return json(401,{error:'Sign in with the demo admin/admin credentials, or open the storefront to start again.'});
       if(!interactiveRequest(method,url.pathname))return json(403,{error:'This operation is unavailable in the isolated demo'});
       let body;
       if(mutation){let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>12000)return json(413,{error:'Request too large'});chunks.push(chunk);}body=JSON.parse(Buffer.concat(chunks).toString()||'{}');if(!interactiveBody(url.pathname,body))return json(400,{error:'Only bounded demo data is accepted'});}
@@ -137,7 +160,11 @@ const server=createServer(async(req,res)=>{
     }
     if(mutation)return json(405,{error:'Method not allowed'});
     const shop=url.pathname==='/shop'||url.pathname.startsWith('/shop/');
-    if(!shop&&!visitor){res.writeHead(303,{location:'/shop'});res.end();return;}
+    // No forced bounce to /shop here: an unauthenticated visitor hitting an
+    // admin path (e.g. `/`, `/login`, `/enter`→`/`) gets the ordinary static
+    // SPA shell. It calls GET /v1/admin/me, gets 401 below, and client-side
+    // routing (Protected → <Navigate to="/login">) shows the demo-admin/admin
+    // login screen. No store data is ever served pre-authentication.
     const root=shop?directory:adminRoot;
     const relative=shop?url.pathname.slice(6):url.pathname.slice(1);
     let file=resolve(root,relative|| (shop?'interactive-shop.html':'index.html'));

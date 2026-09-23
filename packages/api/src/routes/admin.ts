@@ -14,6 +14,7 @@ import { verifyTotp } from '../auth/totp.js';
 import { normalizeEmail } from '../auth/email.js';
 import { enqueueShippingNotification } from '../email/dispatch.js';
 import { emitEvent } from '../webhooks/emit.js';
+import { onStockChanged } from '../manifest/stock-hook.js';
 
 export const admin = new OpenAPIHono();
 
@@ -181,6 +182,7 @@ admin.openapi(
     requireWrite(st);
     const { code } = c.req.valid('param');
     const { state, trackingCode, carrier } = c.req.valid('json');
+    let stockChanged = false;
     const res = await withStore(st.storeId, async (tx) => {
       const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
       if (!o) return { kind: 'notfound' as const };
@@ -214,6 +216,7 @@ admin.openapi(
               allocated: sql`greatest(${s.stock.allocated} - ${ship}, 0)`,
             }).where(eq(s.stock.variantId, l.variantId));
             await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: l.variantId, delta: -ship, reason: 'fulfillment', refOrderId: o.id });
+            stockChanged = true;
           }
         }
       }
@@ -242,6 +245,7 @@ admin.openapi(
       }
       return { kind: 'ok' as const, fid, state };
     });
+    if (stockChanged) onStockChanged(st.slug);
     if (res.kind === 'notfound') throw new HttpError(404, 'order not found');
     if (res.kind === 'badstate') throw new HttpError(409, `order not fulfillable in state ${res.state}`);
     if (res.kind === 'regress') throw new HttpError(409, `cannot move fulfillment from ${res.state} back to Shipped`);
@@ -295,6 +299,7 @@ admin.openapi(
     for (const o of orders) seen.set(o.code, o);
     const deduped = [...seen.values()];
     for (const o of deduped) {
+      let stockChanged = false;
       const res = await withStore(st.storeId, async (tx): Promise<{ kind: 'ok' | 'notfound' | 'badstate' | 'regress'; state?: string }> => {
         const [order] = await tx.select().from(s.order).where(eq(s.order.code, o.code)).limit(1);
         if (!order) return { kind: 'notfound' };
@@ -320,6 +325,7 @@ admin.openapi(
                 allocated: sql`greatest(${s.stock.allocated} - ${ship}, 0)`,
               }).where(eq(s.stock.variantId, l.variantId));
               await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: l.variantId, delta: -ship, reason: 'fulfillment', refOrderId: order.id });
+              stockChanged = true;
             }
           }
         }
@@ -341,6 +347,7 @@ admin.openapi(
         }
         return { kind: 'ok', state: o.state };
       });
+      if (stockChanged) onStockChanged(st.slug);
       if (res.kind === 'ok') {
         results.push({ code: o.code, ok: true, fulfillment: res.state });
       } else if (res.kind === 'notfound') {
@@ -369,6 +376,7 @@ admin.openapi(
     requireWrite(st);
     requirePermission(st, 'cancel_orders');
     const { code } = c.req.valid('param');
+    let stockChanged = false;
     const res = await withStore(st.storeId, async (tx) => {
       const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
       if (!o) return { kind: 'notfound' as const };
@@ -386,12 +394,14 @@ admin.openapi(
         if (release > 0 && l.variantId) {
           await tx.update(s.stock).set({ allocated: sql`greatest(${s.stock.allocated} - ${release}, 0)` })
             .where(and(eq(s.stock.variantId, l.variantId), eq(s.stock.storeId, st.storeId)));
+          stockChanged = true;
         }
       }
       await tx.update(s.order).set({ state: 'Cancelled', updatedAt: new Date() }).where(eq(s.order.id, o.id));
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: o.id, action: 'cancel', fromState: o.state, toState: 'Cancelled' });
       return { kind: 'ok' as const };
     });
+    if (stockChanged) onStockChanged(st.slug);
     if (res.kind === 'notfound') throw new HttpError(404, 'order not found');
     if (res.kind === 'paid') throw new HttpError(409, `paid order — use Refund (state ${res.state})`);
     if (res.kind === 'badstate') throw new HttpError(409, `cannot cancel order in state ${res.state}`);

@@ -1,0 +1,238 @@
+fragment CustomOrderDetail on Order {
+  __typename
+  id
+  code
+  active
+  createdAt
+  state
+  currencyCode
+  couponCodes
+  totalQuantity
+  subTotal
+  subTotalWithTax
+  shippingWithTax
+  totalWithTax
+  discounts {
+    type
+    description
+    amountWithTax
+  }
+  taxSummary {
+    description
+    taxRate
+    taxTotal
+  }
+  customer {
+    id
+    firstName
+    lastName
+    emailAddress
+  }
+  shippingAddress {
+    fullName
+    streetLine1
+    streetLine2
+    company
+    city
+    province
+    postalCode
+    countryCode
+    phoneNumber
+  }
+  billingAddress {
+    fullName
+    streetLine1
+    streetLine2
+    company
+    city
+    province
+    postalCode
+    countryCode
+    phoneNumber
+  }
+  shippingLines {
+    priceWithTax
+    shippingMethod {
+      id
+      name
+    }
+  }
+  lines {
+    id
+    unitPriceWithTax
+    linePriceWithTax
+    quantity
+    featuredAsset {
+      id
+      preview
+    }
+    productVariant {
+      id
+      name
+      price
+      stockLevel
+      customFields {
+        salePrice
+        preOrderPrice
+        shipDate
+        isPreOrder
+      }
+      options {
+        id
+        code
+        name
+        group {
+          id
+          name
+        }
+      }
+      product {
+        id
+        name
+        slug
+      }
+    }
+  }
+  payments {
+    id
+    method
+    amount
+    state
+    transactionId
+    metadata
+  }
+}
+
+query activeOrder {
+  activeOrder {
+    ...CustomOrderDetail
+  }
+}
+
+query orderByCode($code: String!) {
+  orderByCode(code: $code) {
+    ...CustomOrderDetail
+  }
+}
+
+mutation addItemToOrder($productVariantId: ID!, $quantity: Int!) {
+  addItemToOrder(productVariantId: $productVariantId, quantity: $quantity) {
+    ...CustomOrderDetail
+    ... on ErrorResult {
+      errorCode
+      message
+    }
+  }
+}
+
+mutation removeOrderLine($orderLineId: ID!) {
+  removeOrderLine(orderLineId: $orderLineId) {
+    ...CustomOrderDetail
+    ... on ErrorResult {
+      errorCode
+      message
+    }
+  }
+}
+
+mutation removeAllOrderLines {
+  removeAllOrderLines {
+    ... on Order {
+      id
+      totalWithTax
+      lines {
+        id
+      }
+    }
+    ... on ErrorResult {
+      errorCode
+      message
+    }
+  }
+}
+
+mutation adjustOrderLine($orderLineId: ID!, $quantity: Int!) {
+  adjustOrderLine(orderLineId: $orderLineId, quantity: $quantity) {
+    ...CustomOrderDetail
+    ... on ErrorResult {
+      errorCode
+      message
+    }
+  }
+}
+
+mutation setOrderShippingAddress($input: CreateAddressInput!) {
+  setOrderShippingAddress(input: $input) {
+    ...CustomOrderDetail
+    ... on ErrorResult {
+      errorCode
+      message
+    }
+  }
+}
+
+mutation setOrderShippingMethod($shippingMethodId: [ID!]!) {
+  setOrderShippingMethod(shippingMethodId: $shippingMethodId) {
+    ...CustomOrderDetail
+    ... on ErrorResult {
+      errorCode
+      message
+    }
+  }
+}
+
+mutation setCustomerForOrder($input: CreateCustomerInput!) {
+  setCustomerForOrder(input: $input) {
+    ...CustomOrderDetail
+    ... on ErrorResult {
+      errorCode
+      message
+    }
+  }
+}
+
+mutation applyCouponCode($couponCode: String!) {
+  applyCouponCode(couponCode: $couponCode) {
+    ...CustomOrderDetail
+    ... on ErrorResult {
+      errorCode
+      message
+    }
+  }
+}
+
+mutation removeCouponCode($couponCode: String!) {
+  removeCouponCode(couponCode: $couponCode) {
+    ...CustomOrderDetail
+  }
+}
+
+query validateLocalCartCoupon($input: ValidateLocalCartCouponInput!) {
+  validateLocalCartCoupon(input: $input) {
+    isValid
+    validationErrors
+    appliedCouponCode
+    discountAmount
+    discountPercentage
+    freeShipping
+    promotionName
+    promotionDescription
+  }
+}
+
+mutation setOrderBillingAddress($input: CreateAddressInput!) {
+  setOrderBillingAddress(input: $input) {
+    ...CustomOrderDetail
+    ... on ErrorResult {
+      errorCode
+      message
+    }
+  }
+}
+
+mutation verifySezzlePayment($orderCode: String!) {
+  verifySezzlePayment(orderCode: $orderCode) {
+    success
+    message
+  }
+}

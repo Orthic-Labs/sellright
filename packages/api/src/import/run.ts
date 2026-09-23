@@ -14,6 +14,7 @@ import { importSettings } from './settings.js';
 import { importBusiness } from './business.js';
 import { assertSourceSchema, introspectSource, unmappedCustomFields } from './source-schema.js';
 import { canonical, digest, readPrivateJson, writePrivateJson, stageVendureAssets } from './artifacts.js';
+import { onStockChanged } from '../manifest/stock-hook.js';
 
 export const migrationConfig = z.object({
   storeId: z.string().uuid(), slug: z.string().regex(/^[a-z0-9-]+$/), name: z.string().min(1),
@@ -141,6 +142,11 @@ export async function runMigration(input: {
       if (digest(copied) !== digest(assets)) throw new Error('Source assets changed during migration');
       await source.query('COMMIT');
       await target.query('COMMIT');
+      // Catalog/settings phases wrote stock.on_hand/allocated inside this same
+      // transaction; the manifest must only ever reflect committed stock, so
+      // this fires exactly once, right after COMMIT, never in the dry-run
+      // (ROLLBACK) branch below. Fire-and-forget per stock-hook.ts contract.
+      onStockChanged(config.slug);
     } else { await source.query('COMMIT'); await target.query('ROLLBACK'); }
     return { applied: !!input.apply, sourceDigest, exclusions,
       counts: Object.fromEntries(Object.entries(after).map(([table, rows]) => [table, rows.length])) };

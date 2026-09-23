@@ -82,6 +82,87 @@ ALTER ROLE sellright_app IN DATABASE sellright_dev
 If a separate test database is provisioned, repeat the same `IN DATABASE`
 statements for it. New sessions are required before the settings take effect.
 
+## Resolver role bootstrap (SR-01/SR-02 follow-up)
+
+`resolve_store_for_gateway_event` (0053/0060) and `resolve_store_for_storekit_bundle`
+(0066) are SECURITY DEFINER functions that MUST see across every tenant's rows
+regardless of FORCE ROW LEVEL SECURITY — that's their entire purpose: a
+webhook arrives before any `app.current_store` exists. They have always been
+owned by the migration role (`sellright`), whose header comments say
+"requires the migration role to be superuser/BYPASSRLS" — but `sellright` is
+deliberately NOSUPERUSER/NOBYPASSRLS (same SR-01 reasoning as the runtime
+role), so as owner these functions have been silently returning NULL for
+every cross-tenant lookup. Do NOT fix this by granting BYPASSRLS to
+`sellright` or to `sellright_app` — that would let ordinary migration or
+runtime queries bypass FORCE RLS everywhere, not just inside these two
+functions.
+
+Run this once per Postgres cluster/database as a superuser. It is idempotent
+— safe to re-run on every deploy alongside the `sellright_app` block above.
+
+```sql
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'sellright_resolver') THEN
+    CREATE ROLE sellright_resolver
+      NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT BYPASSRLS;
+  END IF;
+END
+$$;
+
+-- Lets `sellright` (the migration role) both ALTER FUNCTION ... OWNER TO
+-- sellright_resolver once, and CREATE OR REPLACE these two functions in every
+-- future migration afterward, without ever being superuser or BYPASSRLS
+-- itself — has_privs_of_role() treats a role as "owning" what a role it has
+-- the privileges of owns. Requires Postgres 16+ for the WITH INHERIT clause;
+-- on 15 and earlier use plain `GRANT sellright_resolver TO sellright;` (the
+-- default is equivalent to INHERIT TRUE there).
+GRANT sellright_resolver TO sellright WITH INHERIT TRUE;
+```
+
+Then apply `packages/api/drizzle/0069_resolver_role_ownership.sql` to move
+ownership and grant the narrow SELECT privileges the two function bodies
+need, run as `sellright`:
+
+```bash
+psql "$DATABASE_URL_MIGRATE" -v ON_ERROR_STOP=1 \
+  -f packages/api/drizzle/0069_resolver_role_ownership.sql
+```
+
+On a **fresh** deployment (compose `up` from empty), `deploy/compose.yaml`'s
+`db-init` already runs this bootstrap before the API's migrate step, so
+0069 takes effect the first time it's ever applied — no extra step needed.
+
+On an **already-migrated** deployment, 0069 has already run as its no-op
+branch and Drizzle's migration ledger records it as applied — restarting the
+API or re-running `db:migrate` will NOT re-execute it (Drizzle skips
+already-applied migrations by hash, regardless of what the file's own logic
+would now do differently). Run the `psql -f` command above by hand, once,
+immediately after creating `sellright_resolver` and granting membership. This
+is the only migration in this repo that requires a manual replay after an
+environment-level bootstrap; note it in the deploy log for that environment.
+
+Verify ownership and grants landed:
+
+```sql
+SELECT p.proname, r.rolname AS owner
+FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
+WHERE p.proname IN ('resolve_store_for_gateway_event', 'resolve_store_for_storekit_bundle');
+-- both rows must show owner = sellright_resolver
+
+SELECT table_name, privilege_type
+FROM information_schema.role_table_grants
+WHERE grantee = 'sellright_resolver'
+ORDER BY table_name;
+-- exactly: gateway_event, payment, payment_attempt, storekit_app, subscription — all SELECT only
+```
+
+Then re-run the `tenant resolution seam (SR-01)` and `storekit-webhooks`
+DB test suites (`payments/tenant-resolution.db.test.ts`,
+`routes/storekit-webhooks.db.test.ts`, `routes/payment-webhooks.route.test.ts`,
+`routes/gateway-payments.webhook.test.ts`) — they self-skip against a
+non-`_test` database but exercise this exact seam under the nonowner role.
+
 ## Verify
 
 Connect to each database as `sellright_app` in a fresh session:

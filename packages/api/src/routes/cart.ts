@@ -25,11 +25,19 @@ const lifecycle = (st: StoreCtx) =>
 
 type PricedCart = {
   currency: string;
-  lines: Array<{ sku: string; name: string; unitPrice: number; quantity: number; lineSubtotal: number; lineDiscount: number; lineTotal: number; available: boolean }>;
+  lines: Array<{ sku: string; name: string; unitPrice: number; quantity: number; lineSubtotal: number; lineDiscount: number; lineTotal: number; available: boolean; availableQuantity: number | null }>;
   subtotal: number; discountTotal: number; shippingTotal: number; taxTotal: number; grandTotal: number;
   unavailable: string[];
   coupon: { code: string; applied: boolean; reason?: string } | null;
 };
+
+/** True for the fulfillment types reserveStockOrThrow (orders/stock-reservation.ts)
+ *  actually decrements stock for — pre-order and non-physical items are never
+ *  stock-limited, so cart availability must match that rule exactly or a cart
+ *  line could show "in stock" while checkout's reservation would reject it. */
+function isStockLimited(v: { isPreOrder: boolean; fulfillmentType: string | null }): boolean {
+  return !v.isPreOrder && (v.fulfillmentType ?? 'physical') === 'physical';
+}
 
 /**
  * Server-authoritative cart pricing — the single source of truth shared by the
@@ -44,14 +52,20 @@ export async function priceCart(
   opts: { couponCode?: string; shipping?: number; token?: string | null; shipCountry?: string | null } = {},
 ): Promise<PricedCart> {
   const skus = [...new Set(items.map((i) => i.sku))];
+  // Live stock join — never cached, never read from a search index. A row
+  // missing from `stock` for a stock-limited variant leaves onHand/allocated
+  // null, which the availability check below treats as zero (fail closed).
   const variants = skus.length
     ? await tx
         .select({
           sku: s.productVariant.sku, name: s.productVariant.name, price: s.productVariant.price, metafields: s.productVariant.metafields,
           salePrice: s.productVariant.salePrice, isPreOrder: s.productVariant.isPreOrder,
           preOrderPrice: s.productVariant.preOrderPrice, enabled: s.productVariant.enabled,
+          fulfillmentType: s.productVariant.fulfillmentType,
+          onHand: s.stock.onHand, allocated: s.stock.allocated,
         })
         .from(s.productVariant)
+        .leftJoin(s.stock, eq(s.stock.variantId, s.productVariant.id))
         .where(and(inArray(s.productVariant.sku, skus), isNull(s.productVariant.deletedAt)))
     : [];
   const bySku = new Map(variants.map((v) => [v.sku, v]));
@@ -59,9 +73,14 @@ export async function priceCart(
   const unavailable: string[] = [];
   const priced = items.map((i) => {
     const v = bySku.get(i.sku);
-    const available = !!v && v.enabled;
+    // availableQuantity is null for anything not stock-limited (digital,
+    // license, update_pass, pre-order) — those are never quantity-capped by
+    // `stock`. For a stock-limited variant, missing stock row => 0 (fail
+    // closed), never "in stock by default".
+    const availableQuantity = v && isStockLimited(v) ? Math.max(0, (v.onHand ?? 0) - (v.allocated ?? 0)) : null;
+    const available = !!v && v.enabled && (availableQuantity === null || availableQuantity >= i.quantity);
     if (!available) unavailable.push(i.sku);
-    return { sku: i.sku, name: v?.name ?? '(unavailable)', unitPrice: v ? selectUnitPrice(v, priceRule(st)) : 0, quantity: i.quantity, available };
+    return { sku: i.sku, name: v?.name ?? '(unavailable)', unitPrice: v ? selectUnitPrice(v, priceRule(st)) : 0, quantity: i.quantity, available, availableQuantity };
   });
 
   let promotion: Promotion | undefined;
@@ -135,6 +154,9 @@ const LineOut = z.object({
   sku: z.string(), name: z.string(), unitPrice: z.number().int(), quantity: z.number().int(),
   lineSubtotal: z.number().int(), lineDiscount: z.number().int(), lineTotal: z.number().int(),
   available: z.boolean(),
+  // Live (on_hand - allocated), never cached. null = not stock-limited
+  // (digital/license/update_pass/pre-order) rather than "unlimited stock".
+  availableQuantity: z.number().int().nullable(),
 });
 const EstimateOut = z.object({
   currency: z.string(),

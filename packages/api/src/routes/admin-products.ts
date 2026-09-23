@@ -4,6 +4,7 @@ import { and, eq, ilike, inArray, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { HttpError, J, errBody, money, Page, requireAdmin, requireStore, requireWrite, guard } from './admin-helpers.js';
+import { onStockChanged } from '../manifest/stock-hook.js';
 
 export const adminProducts = new OpenAPIHono();
 
@@ -205,6 +206,11 @@ adminProducts.openapi(
       return true;
     });
     if (!ok) throw new HttpError(404, 'variant not found');
+    // Zero-cache stock rule: regenerate the manifest immediately, after this
+    // commit — never inside the transaction above (a later throw would roll
+    // the write back and the manifest would lie about a stock level that
+    // never actually landed).
+    onStockChanged(st.slug);
     return c.json({ id, onHand }, 200);
   }),
 );

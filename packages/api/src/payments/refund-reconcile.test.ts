@@ -137,16 +137,24 @@ async function refundRows(orderId: string) {
     return r.rows as Array<{ id: string; attempt_id: string | null; amount: number; state: string; provider_ref: string | null }>;
   });
 }
-async function scalar(q: string, ...params: unknown[]): Promise<number> {
-  const r = await pool.query(q, params as never[]);
-  return (r.rows[0] as { n: number }).n;
+// These tables carry FORCE ROW LEVEL SECURITY and the migration-owner pool
+// role is NOT BYPASSRLS — a bare pool.query() with no app.current_store set
+// sees zero rows regardless of what actually committed. Route every read
+// through withStore() like the rest of this file already does.
+async function scalar(q: string): Promise<number> {
+  return withStore(STORE, async (tx) => {
+    const r = await tx.execute(sql.raw(q));
+    return Number((r.rows[0] as { n: number }).n);
+  });
 }
 const stockMovements = () => scalar(`SELECT count(*)::int AS n FROM stock_movement WHERE store_id = '${STORE}'`);
 const refundEmails = () => scalar(`SELECT count(*)::int AS n FROM email_outbox WHERE store_id = '${STORE}' AND kind = 'order-refund-confirmation'`);
 const manualEvents = () => scalar(`SELECT count(*)::int AS n FROM gateway_event WHERE store_id = '${STORE}' AND status = 'manual'`);
 const orderState = async (orderId: string) => {
-  const r = await pool.query(`SELECT state FROM "order" WHERE id = $1`, [orderId]);
-  return (r.rows[0] as { state: string }).state;
+  return withStore(STORE, async (tx) => {
+    const r = await tx.execute(sql`SELECT state FROM "order" WHERE id = ${orderId}`);
+    return (r.rows[0] as { state: string }).state;
+  });
 };
 
 describe.skipIf(!isTestDb)('SR-04 refund correlation — webhook converges on the durable attempt', () => {
@@ -220,7 +228,7 @@ describe.skipIf(!isTestDb)('SR-04 refund correlation — webhook converges on th
     expect(await stockMovements()).toBe(1); // restock applied exactly once
     expect(await refundEmails()).toBe(1); // refund-confirmation enqueued once
 
-    const attempt = await pool.query(`SELECT status, provider_ref FROM payment_attempt WHERE id = $1`, [attemptId]);
+    const attempt = await withStore(STORE, (tx) => tx.execute(sql`SELECT status, provider_ref FROM payment_attempt WHERE id = ${attemptId}`));
     expect(attempt.rows[0]).toMatchObject({ status: 'settled', provider_ref: 're_timeout_1' });
   });
 

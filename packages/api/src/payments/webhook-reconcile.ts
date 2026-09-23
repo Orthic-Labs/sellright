@@ -166,9 +166,21 @@ async function quarantineRefundEvent(
  *   4. otherwise → a provider-side refund we never requested: record a
  *      money-only dashboard refund row (no stock effects — no line data).
  */
+/**
+ * Zero-cache stock rule: `tx` is supplied by the CALLER (routes/payment-webhooks.ts,
+ * inside its own webhook-claim transaction) — this function never owns a
+ * transaction boundary itself, so it must never call the manifest hook
+ * directly (the caller's txn could still roll back after this returns, e.g.
+ * on a downstream error). Instead it reports whether a stock-affecting
+ * settlement happened via the returned `stockChanged` flag; the caller MUST
+ * call `onStockChanged(storeSlug)` (from `../manifest/stock-hook.js`) right
+ * after ITS transaction commits when this returns `stockChanged: true`. Only
+ * the `finalizeAttempt` branches below can ever set it — the money-only
+ * dashboard-refund paths (no line data) never touch `stock`.
+ */
 export async function reconcileStripeRefund(
   tx: Tx, storeId: string, r: RefundDescriptor, opts?: ReconcileOpts,
-): Promise<void> {
+): Promise<{ stockChanged: boolean }> {
   const [pay] = await tx.select({ id: s.payment.id, orderId: s.payment.orderId,
     gatewayAccount: s.payment.gatewayAccount, gatewayMode: s.payment.gatewayMode })
     .from(s.payment).where(and(eq(s.payment.providerRef, r.piId), eq(s.payment.method, 'stripe')))
@@ -184,16 +196,17 @@ export async function reconcileStripeRefund(
     );
   }
   const state = refundStateFromStripe(r.status);
-  const finalizeAttempt = async (attemptId: string) => {
+  const finalizeAttempt = async (attemptId: string): Promise<{ stockChanged: boolean }> => {
     try {
-      await finalizeRefund(tx, storeId, attemptId, { state, providerRef: r.reId });
+      const view = await finalizeRefund(tx, storeId, attemptId, { state, providerRef: r.reId });
+      return { stockChanged: view.refundState === 'Settled' };
     } catch (err) {
       // Permanent binding conflicts (wrong ref family, corrupt reservation)
       // cannot self-heal — quarantine for an operator instead of 5xx-looping
       // the webhook forever. Transient 404s (row not visible yet) rethrow.
       if (err instanceof RefundError && err.status === 409) {
         await quarantineRefundEvent(tx, storeId, r, err.message, pay, opts);
-        return;
+        return { stockChanged: false };
       }
       throw err;
     }
@@ -213,7 +226,7 @@ export async function reconcileStripeRefund(
         await enqueueRefundSettledEmail(tx, storeId, existing);
       }
     }
-    return;
+    return { stockChanged: false };
   }
 
   // 2) Attempt-bound correlation via the stamped provider metadata.
@@ -237,7 +250,7 @@ export async function reconcileStripeRefund(
     if (matching.length === 1) return finalizeAttempt(matching[0]!.attemptId!);
     if (matching.length > 1) {
       await quarantineRefundEvent(tx, storeId, r, 'ambiguous_pending_reservations', pay, opts);
-      return;
+      return { stockChanged: false };
     }
   }
 
@@ -254,7 +267,7 @@ export async function reconcileStripeRefund(
       await recomputeOrderRefundState(tx, storeId, pay.orderId);
       await enqueueRefundSettledEmail(tx, storeId, inserted);
     }
-    return;
+    return { stockChanged: false };
   }
   // Lost a concurrent-insert race on (store_id, payment_id, provider_ref) —
   // apply the monotonic update to the winner's row instead.
@@ -270,6 +283,7 @@ export async function reconcileStripeRefund(
       }
     }
   }
+  return { stockChanged: false };
 }
 
 async function recomputeOrderRefundState(tx: Tx, storeId: string, orderId: string): Promise<void> {

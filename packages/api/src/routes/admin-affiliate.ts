@@ -1,5 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { desc, eq, sql } from 'drizzle-orm';
+import { desc, eq, inArray, sql } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
 import { withStore } from '../db/client.js';
 import { resolveStore, DEV_DEFAULT_STORE } from '../store-context.js';
@@ -186,6 +186,11 @@ adminAffiliate.openapi(
 );
 
 // ── public self-serve dashboard (token-gated, no admin auth) ─────────────────
+// Shape matches the storefront's AffiliateStatsResult contract (packages/
+// storefront src/providers/shop/affiliate/affiliate.ts) — this is the REST
+// replacement for the old Vendure affiliateStatsByToken GraphQL query.
+// Order codes are redacted to their last 4 chars; nothing else here is
+// sensitive (the token itself already gates access to one affiliate's data).
 adminAffiliate.openapi(
   createRoute({
     method: 'get', path: '/v1/shop/affiliate', summary: 'Affiliate self-serve stats (by access token)',
@@ -201,7 +206,49 @@ adminAffiliate.openapi(
       if (!a) return null;
       const [promo] = await tx.select({ code: s.promotion.code }).from(s.promotion).where(eq(s.promotion.id, a.promotionId)).limit(1);
       const amt = await affiliateAmounts(tx, a.promotionId);
-      return { email: a.email, code: promo?.code, commissionPct: COMMISSION_PCT, currency: ctx.currency, ...amt };
+      const orderRows = await tx.select({ id: s.order.id, code: s.order.code, subtotal: s.order.subtotal, state: s.order.state, placedAt: s.order.placedAt, createdAt: s.order.createdAt })
+        .from(s.order).where(eq(s.order.promotionId, a.promotionId)).orderBy(desc(s.order.createdAt)).limit(100);
+      const orderIds = orderRows.map((o) => o.id);
+      const itemCountRows = orderIds.length
+        ? await tx.select({ orderId: s.orderLine.orderId, qty: sql<number>`sum(${s.orderLine.quantity})::int` })
+            .from(s.orderLine).where(inArray(s.orderLine.orderId, orderIds)).groupBy(s.orderLine.orderId)
+        : [];
+      const itemCounts = new Map(itemCountRows.map((r) => [r.orderId, r.qty]));
+      const settlementRows = await tx.select().from(s.affiliateSettle).where(eq(s.affiliateSettle.promotionId, a.promotionId)).orderBy(desc(s.affiliateSettle.settledAt));
+      return {
+        success: true as const,
+        email: a.email,
+        couponCode: promo?.code ?? null,
+        rate: COMMISSION_PCT / 100,
+        currency: ctx.currency,
+        totals: {
+          earnedUsd: amt.earned / 100,
+          paidUsd: amt.settled / 100,
+          owedUsd: amt.unsettled / 100,
+          orderCount: amt.orders,
+          rangeStart: null,
+          rangeEnd: null,
+        },
+        orders: orderRows.map((o) => ({
+          redactedCode: o.code.slice(-4),
+          placedAt: (o.placedAt ?? o.createdAt).toISOString(),
+          itemCount: itemCounts.get(o.id) ?? 0,
+          subtotalUsd: o.subtotal / 100,
+          commissionUsd: Math.round(o.subtotal * (COMMISSION_PCT / 100)) / 100,
+          state: o.state,
+        })),
+        // Top-sellers breakdown isn't computed yet (needs a product-level
+        // join over orderLine); the storefront only renders this section
+        // when non-empty, so an empty array degrades gracefully.
+        topProducts: [] as Array<{ name: string; sku: string; qtySold: number; revenueUsd: number }>,
+        settles: settlementRows.map((sx) => ({
+          amountUsd: sx.amountCents / 100,
+          periodStartAt: null,
+          periodEndAt: sx.periodEndAt.toISOString(),
+          settledAt: sx.settledAt.toISOString(),
+          txRef: sx.txRef ?? null,
+        })),
+      };
     });
     if (!out) throw new HttpError(404, 'invalid affiliate link');
     return c.json(out, 200);

@@ -1,0 +1,21 @@
+# .graphql-tag-allowlist — generic storefront
+#
+# Files listed here are TEMPORARILY exempt from the no-graphql-tag guard.
+# Every entry should be considered debt. Review periodically and remove the
+# entry as soon as the file is migrated to the generated SDK / typed
+# documents.
+#
+# Format: one path or glob per line. Paths are relative to the store root.
+# Lines starting with `#` are comments. Blank lines are ignored.
+#
+# Example:
+#   src/providers/shop/products/dynamic-batched-loader.ts  # dynamic query, see PR #123
+#
+# Always-ignored without an entry:
+#   - src/generated/**     (codegen output)
+#   - **/*.graphql         (.graphql files themselves)
+#
+# (This storefront currently has no expected runtime gql usage post-migration. If you
+# add an entry here, document why and link to the issue.)
+# Negative guard fixtures contain forbidden import strings, never runtime imports.
+src/services/customer-build-guard.test.ts
