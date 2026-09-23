@@ -70,7 +70,7 @@
 		"vite-imagetools": "^10.0.1",
 		"vite-plugin-compression": "^0.5.1",
 		"vite-tsconfig-paths": "^6.1.1",
-		"vitest": "4.1.9"
+		"vitest": "5.0.1"
 	},
 	"dependencies": {
 		"@stripe/stripe-js": "^4.10.0",
