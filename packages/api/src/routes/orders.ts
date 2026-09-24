@@ -1,5 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import { customerToken, resolveCustomer } from '../auth/session.js';
@@ -40,7 +40,8 @@ orders.openapi(
               discountTotal: z.number().int(), grandTotal: z.number().int(),
               placedAt: z.string().nullable(),
               shippingAddress: z.any(),
-              lines: z.array(z.object({ sku: z.string(), name: z.string(), quantity: z.number().int(), unitPrice: z.number().int(), lineTotal: z.number().int() })),
+              customerEmail: z.string().nullable(),
+              lines: z.array(z.object({ sku: z.string(), name: z.string(), quantity: z.number().int(), unitPrice: z.number().int(), lineTotal: z.number().int(), image: z.string().nullable() })),
             }),
           },
         },
@@ -63,14 +64,33 @@ orders.openapi(
         granted = !!cust && cust.id === o.customerId;
       }
       if (!granted) return null;
+      // Guest checkouts still link an order to a synthetic/matched customer
+      // row (see order.customerId) purely to carry the email the confirmation
+      // page shows under "Contact" — not an account. Null when genuinely absent.
+      let customerEmail: string | null = null;
+      if (o.customerId) {
+        const [cust] = await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, o.customerId)).limit(1);
+        customerEmail = cust?.email ?? null;
+      }
+      // Order lines snapshot sku/name/price at purchase time (survives the
+      // variant later being edited or deleted) but never carried an image —
+      // the confirmation page fell back to a bare placeholder icon for every
+      // line. variantId is still kept (nullable) purely to resolve imagery;
+      // prefer the variant's own photo, else the parent product's.
       const lines = await tx
-        .select({ sku: s.orderLine.variantSku, name: s.orderLine.variantName, quantity: s.orderLine.quantity, unitPrice: s.orderLine.unitPrice, lineTotal: s.orderLine.lineTotal })
+        .select({
+          sku: s.orderLine.variantSku, name: s.orderLine.variantName, quantity: s.orderLine.quantity, unitPrice: s.orderLine.unitPrice, lineTotal: s.orderLine.lineTotal,
+          image: sql<string | null>`coalesce(
+            (select a.path from ${s.variantAsset} va join ${s.asset} a on a.id = va.asset_id where va.variant_id = ${s.orderLine.variantId} order by va.position asc limit 1),
+            (select a.path from ${s.productVariant} pv join ${s.productAsset} pa on pa.product_id = pv.product_id join ${s.asset} a on a.id = pa.asset_id where pv.id = ${s.orderLine.variantId} order by pa.position asc limit 1)
+          )`,
+        })
         .from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
       return {
         code: o.code, state: o.state, currency: o.currency,
         subtotal: o.subtotal, shippingTotal: o.shippingTotal, taxTotal: o.taxTotal, discountTotal: o.discountTotal, grandTotal: o.grandTotal,
         placedAt: o.placedAt ? o.placedAt.toISOString() : null,
-        shippingAddress: o.shippingAddress ?? null, lines,
+        shippingAddress: o.shippingAddress ?? null, customerEmail, lines,
       };
     });
     if (!out) return c.json({ error: 'order not found' }, 404);

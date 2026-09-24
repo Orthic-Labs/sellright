@@ -64,7 +64,10 @@ export const createSEOHead = ({
   }
 
   const head: DocumentHead = {
-    title: title.endsWith(` | ${theme.storeName}`) ? title : `${title} | ${theme.storeName}`,
+    title:
+      title === theme.storeName || title.endsWith(` | ${theme.storeName}`)
+        ? title
+        : `${title} | ${theme.storeName}`,
     meta: [
       { name: 'description', content: description },
       { property: 'og:type', content: ogType },

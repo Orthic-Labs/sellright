@@ -1,8 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Neutral placeholder mark for the demo storefront theme. Swap this file
+<!-- Neutral placeholder mark for the demo storefront theme — icon only, no
+     baked-in wordmark (the store name renders as real text next to it in
+     header.tsx so it's never clipped and always matches theme.storeName).
+     Uses currentColor so it inherits the header's text color. Swap this file
      (or import a brand's own SVG) to rebrand the header logo. -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 32" role="img" aria-label="Store logo">
-  <rect x="0" y="0" width="32" height="32" rx="6" fill="#18181b" />
-  <text x="16" y="22" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="16" font-weight="700" fill="#ffffff">S</text>
-  <text x="40" y="21" font-family="Inter, system-ui, sans-serif" font-size="17" font-weight="600" letter-spacing="0.01em" fill="#18181b">Storefront</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-hidden="true">
+  <rect x="1.5" y="1.5" width="29" height="29" rx="8" fill="none" stroke="currentColor" stroke-width="1.6" />
+  <circle cx="16" cy="16" r="6.5" fill="none" stroke="currentColor" stroke-width="1.6" />
+  <circle cx="16" cy="16" r="2" fill="currentColor" />
 </svg>

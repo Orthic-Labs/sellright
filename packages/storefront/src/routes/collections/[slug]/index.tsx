@@ -48,7 +48,10 @@ export default component$(() => {
       {c.products.length === 0 ? (
         <p class="text-[var(--color-text-muted,#71717a)]">No products in this collection yet.</p>
       ) : (
-        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-px bg-[var(--color-card-border)]">
+        // auto-fit (not a fixed column count) collapses unused tracks to 0
+        // width instead of rendering them as empty background-colored cells
+        // when a collection has fewer products than the usual column count.
+        <div class="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-px bg-[var(--color-card-border)] border border-[var(--color-card-border)]">
           {c.products.map((p, index) => (
             <ProductCard
               key={p.slug}

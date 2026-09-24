@@ -53,16 +53,16 @@ export const HomeHero = component$(() => (
             <p class="hero-sub stagger-3">Thoughtfully made. Built to last. Backed by real support.</p>
             <div class="hero-ctas stagger-4">
               <a href="/shop" class="btn-primary">Shop Now <span class="btn-arrow">&rarr;</span></a>
-              <a href="/shop" class="btn-ghost">See the Lineup</a>
+              <a href="/shop" class="btn-ghost">Browse the Shop</a>
             </div>
           </div>
 
           <div class="hero-meta stagger-4" style="text-shadow: 0 1px 16px rgba(0,0,0,0.5)">
             <div style="display:flex;flex-direction:column;gap:2px">
-              <span class="meta-val">Free</span><span class="meta-label">Shipping over $100</span>
+              <span class="meta-val">{theme.policies.shipping.label}</span><span class="meta-label">{theme.policies.shipping.sub}</span>
             </div>
             <div style="display:flex;flex-direction:column;gap:2px">
-              <span class="meta-val">Easy</span><span class="meta-label">30-day returns</span>
+              <span class="meta-val">{theme.policies.returns.label}</span><span class="meta-label">{theme.policies.returns.sub}</span>
             </div>
           </div>
         </div>

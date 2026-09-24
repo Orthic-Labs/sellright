@@ -4,8 +4,10 @@ one-click-deploy
 # Build
 build
 dist
+dist-*
 lib
 server
+server-*
 functions/**/*.js
 
 # Development
@@ -50,3 +52,14 @@ lerna-debug.log*
 !.env.example
 
 .claude-flow/
+
+# Generated placeholder demo/dev imagery — see scripts/generate-placeholder-assets.mjs
+# (runs automatically via prebuild/predev). The repo's pre-commit hook blocks
+# committing .jpg/.png/.webp, and per project policy generated media is never
+# committed anyway. Real merchants override by placing their own assets at
+# these exact paths.
+/src/media/hero.jpg
+/src/media/sec2.jpg
+/src/media/homelast.png
+/public/og-image.jpg
+/public/social-image.jpg

@@ -3,13 +3,13 @@ import { useLocation, useNavigate } from '@qwik.dev/router';
 import { APP_STATE } from '~/constants';
 import { isCheckoutPage } from '~/utils/route-helpers';
 import CartContents from '../cart-contents/CartContents';
-import FreeShippingProgress from '../free-shipping-progress/FreeShippingProgress';
 import { EligibleShippingMethods } from '~/types';
 import { formatPrice } from '~/utils';
 import { useLocalCart } from '~/contexts/CartContext';
 import { CountryService } from '~/services/CountryService';
 import { LocalCartService } from '~/services/LocalCartService';
 import { fetchCartShippingMethod } from './cart-shipping';
+import { theme, policySentence } from '~/theme/theme.config';
 
 export default component$(() => {
 	const location = useLocation();
@@ -212,11 +212,11 @@ export default component$(() => {
 
 						{/* L8: Trust strip — overflow-hidden + whitespace-nowrap to prevent text wrapping on narrow screens */}
 						<div class="flex items-center justify-center gap-3 px-4 py-2 border-b border-[#E5E0D8] bg-[#F5F2EE] shrink-0 overflow-hidden whitespace-nowrap">
-							<span class="text-[10px] tracking-[0.06em] text-[#9A9288] truncate">Free Shipping $100+</span>
+							<span class="text-[10px] tracking-[0.06em] text-[#9A9288] truncate">{policySentence(theme.policies.shipping)}</span>
 							<span class="w-px h-2.5 bg-[#DDD8D0] shrink-0" />
-							<span class="text-[10px] tracking-[0.06em] text-[#9A9288] truncate">Ships in 1-2 business days</span>
+							<span class="text-[10px] tracking-[0.06em] text-[#9A9288] truncate">{policySentence(theme.policies.returns)}</span>
 							<span class="w-px h-2.5 bg-[#DDD8D0] shrink-0" />
-							<span class="text-[10px] tracking-[0.06em] text-[#9A9288] truncate">Secure Checkout</span>
+							<span class="text-[10px] tracking-[0.06em] text-[#9A9288] truncate">{policySentence(theme.policies.payment)}</span>
 						</div>
 
 						<div class="flex-1 overflow-y-auto overscroll-contain px-5 py-1 min-h-0">
@@ -257,14 +257,12 @@ export default component$(() => {
 						{localCart.localCart.totalQuantity > 0 && isInEditableUrl && (
 							<div class="border-t border-[#E5E0D8] bg-[#F0EBE3] px-5 pt-3 pb-4 shrink-0">
 
-								{/* Free Shipping Progress Bar */}
-								<div class="mb-2">
-									<FreeShippingProgress
-										countryCode={appState.shippingAddress.countryCode}
-										orderTotalAfterDiscount={localCart.localCart.subTotal - (localCart.appliedCoupon?.discountAmount || 0)}
-										currencyCode={localCart.localCart.currencyCode}
-									/>
-								</div>
+								{/* Only claim free shipping when a coupon that actually grants it is
+								    applied — there is no order-total threshold wired up server-side,
+								    so a progress-toward-$X widget here would be a false promise. */}
+								{localCart.appliedCoupon?.freeShipping && (
+									<div class="mb-2 text-[11px] text-[#4a7c3f]">Free shipping applied with code {localCart.appliedCoupon.code}</div>
+								)}
 
 								{/* M4: Removed dynamic key to prevent re-mount on country change; M8: Added aria-label for accessibility */}
 								<div class="relative mb-2">

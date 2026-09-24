@@ -1,5 +1,6 @@
 import { $, component$, type QRL, type Signal } from '@qwik.dev/core';
 import { Link } from '@qwik.dev/router';
+import { theme, policySentence } from '~/theme/theme.config';
 
 interface CheckoutCtaProps {
   checkoutState: any;
@@ -68,7 +69,7 @@ export const CheckoutDesktopCta = component$<CheckoutCtaProps>((props) => (
         <svg class="w-4 h-4 text-[rgba(100,85,65,0.7)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 11c1.1 0 2-.9 2-2V7a2 2 0 00-4 0v2c0 1.1.9 2 2 2zm6 0h-1V9a5 5 0 10-10 0v2H6a2 2 0 00-2 2v5a2 2 0 002 2h12a2 2 0 002-2v-5a2 2 0 00-2-2z" />
         </svg>
-        <span>Secure checkout · Free shipping over $100 · 30-day returns</span>
+        <span>{policySentence(theme.policies.payment)} · {policySentence(theme.policies.shipping)} · {policySentence(theme.policies.returns)}</span>
       </div>
     </div>
   </>

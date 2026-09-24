@@ -90,6 +90,8 @@ export const STYLES = `
   .po-color-white.active { border-color: var(--accent); }
   .po-color-jade { background: #6b8f71; }
 
+  .po-price-wrap { display: block; margin-bottom: 12px; }
+  .po-price-wrap > div { justify-content: flex-start; }
   .po-price { font-family: var(--font-display); font-size: 1.75rem; font-weight: 700; color: var(--text-on-light); margin-bottom: 4px; font-variant-numeric: tabular-nums; }
   .po-price-note { font-family: var(--font-mono); font-size: 0.75rem; color: var(--warm-grey); letter-spacing: 0.5px; margin-bottom: 24px; }
   .po-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
@@ -114,6 +116,8 @@ export const STYLES = `
   .tee-spec:first-child { border-top: 1px solid var(--dark-border); }
   .tee-spec-k { font-family: var(--font-mono); font-size: 0.75rem; letter-spacing: 2px; text-transform: uppercase; color: var(--text-on-dark-secondary); }
   .tee-spec-v { font-family: var(--font-display); font-size: 0.875rem; color: var(--text-on-dark); }
+  .tee-price-wrap { display: block; margin-top: 4px; margin-bottom: 4px; }
+  .tee-price-wrap > div { justify-content: flex-start; }
   .tee-price { font-family: var(--font-display); font-size: 1.5rem; font-weight: 700; color: var(--text-on-dark); margin-top: 20px; margin-bottom: 24px; font-variant-numeric: tabular-nums; }
 
   /* ── Reviews ── */
@@ -137,6 +141,16 @@ export const STYLES = `
   .rev-avatar { width: 36px; height: 36px; border-radius: 50%; background: var(--accent-dim); color: var(--accent); display: flex; align-items: center; justify-content: center; font-family: var(--font-body); font-size: 0.8125rem; font-weight: 600; }
   .rev-name { font-family: var(--font-body); font-size: 0.8125rem; font-weight: 500; color: var(--text-on-light); letter-spacing: 0.5px; }
   .rev-verified { font-family: var(--font-mono); font-size: 0.6875rem; color: var(--warm-grey); letter-spacing: 0.5px; }
+
+  /* ── Featured grid (live catalog) ── */
+  .featured-grid { background: var(--parchment); padding: 3rem 1.5rem; }
+  @media (min-width: 768px) { .featured-grid { padding: 4rem 3.25rem; } }
+  .featured-grid-head { margin-bottom: 24px; }
+  .featured-grid-title { font-family: var(--font-display); font-weight: 700; font-size: var(--step-2); color: var(--text-on-light); letter-spacing: -0.3px; text-wrap: balance; }
+  .featured-grid-items { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1px; background: var(--color-card-border); border: 1px solid var(--color-card-border); }
+  .featured-collections { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 28px; }
+  .featured-collection-link { display: inline-flex; align-items: center; gap: 8px; background: transparent; color: var(--text-on-light); border: 1px solid rgba(26,26,26,0.15); padding: 10px 20px; font-family: var(--font-body); font-weight: 500; font-size: 0.8125rem; letter-spacing: 0.08em; text-transform: uppercase; border-radius: 2px; text-decoration: none; transition: border-color 0.2s, color 0.2s; }
+  .featured-collection-link:hover { border-color: var(--accent); color: var(--accent); }
 
   /* ── Service strip ── */
   .service { background: var(--parchment); padding: 2rem 1.5rem; }

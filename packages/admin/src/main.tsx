@@ -107,11 +107,20 @@ function App() {
   );
 }
 
+// Sub-path mount (the isolated demo hosts this SPA at /admin, since / and
+// most of its own top-level paths — /shop, /products, /collections, /blog —
+// belong to the generic Qwik storefront there; see deploy/demo/README.md and
+// interactive-server.mjs). basename covers every <Link>/<NavLink>/navigate()
+// call in this app automatically — there is no equivalent hardcoded-href
+// landmine here the way there is in the storefront's codebase. Empty for
+// every normal deployment, so BrowserRouter keeps mounting at '/'.
+const basename = (import.meta.env.VITE_ADMIN_BASE_PATH as string | undefined)?.replace(/\/+$/, '') || undefined;
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={qc}>
       <AuthProvider>
-        <BrowserRouter>
+        <BrowserRouter basename={basename}>
           <ToastProvider>
             {/* Root boundary — last-resort catch-all. Any error not isolated by
                 a section boundary surfaces here so the user still sees the

@@ -170,7 +170,7 @@ export default component$(() => {
         return (
             <div class="sr-post"><div class="sr-post__404">
                 <h1 class="sr-post__404-title">Post Not Found</h1>
-                <Link href="/blog/" class="sr-post__back">&larr; Back to Lore</Link>
+                <Link href="/blog/" class="sr-post__back">&larr; Back to Journal</Link>
             </div></div>
         );
     }
@@ -183,7 +183,7 @@ export default component$(() => {
                 <nav class="sr-post__crumbs" aria-label="Breadcrumb">
                     <Link href="/">Home</Link> / <Link href="/blog/">Journal</Link> / <span aria-current="page">{post.title}</span>
                 </nav>
-                <Link href="/blog/" class="sr-post__back">&larr; Lore</Link>
+                <Link href="/blog/" class="sr-post__back">&larr; Journal</Link>
                 <div class="sr-post__meta">
                     <span>{fmtDate(post.publishDate || post.createdAt)}</span>
                     <span>{post.readingTime} min read</span>
