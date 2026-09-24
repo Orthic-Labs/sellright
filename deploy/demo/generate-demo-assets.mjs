@@ -6,14 +6,16 @@
 // runtime instead of shipping as binaries in the repo.
 //
 // Deterministic: flat background + a centered SVG label, no randomness, no
-// network calls. Idempotent: skips any file that already exists (called on
-// every `sellright-demo` process start from interactive-server.mjs — a pm2
-// restart should not repaint files a prior boot already produced). The skip
-// check is a fast-path hint only — the actual write below is exclusive
-// (`wx`), so two processes racing to create the same file can't corrupt or
-// double-write it; the loser's EEXIST is caught and treated as "already
-// there" (CodeQL js/file-system-race: an existsSync-then-writeFile check
-// would otherwise be a TOCTOU race).
+// network calls. Idempotent: called on every `sellright-demo` process start
+// from interactive-server.mjs (a pm2 restart should not repaint files a
+// prior boot already produced) AND safe if two processes race to create the
+// same file. Idempotency and race-safety both come from a single exclusive
+// write (`wx`) with EEXIST caught and treated as "already there" — there is
+// deliberately no separate existsSync-then-write check (that would be a
+// TOCTOU race; CodeQL js/file-system-race flags exactly that pattern, and
+// flags it purely from a check and a write sharing a path, regardless of
+// what flag the write itself uses — so the check has to not exist at all,
+// not just be made harmless).
 //
 // Uses the api package's own sharp dependency the same way the rest of
 // deploy/demo already reaches into packages/api (e.g. `drizzle-orm` via
@@ -29,7 +31,6 @@
 // pixel-output tests only run where sharp IS installed, e.g. `pnpm verify`).
 
 import { mkdir, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createRequire } from 'node:module';
 
@@ -81,15 +82,14 @@ export async function ensureDemoSeedAssets(assetDir) {
   const written = [];
   for (const { slug, name, bg } of DEMO_SEED_PRODUCTS) {
     const dest = resolve(dir, `${slug}.webp`);
-    if (existsSync(dest)) continue; // fast-path only; the write below is the real guard
     const buffer = await sharp({ create: { width: WIDTH, height: HEIGHT, channels: 3, background: bg } })
       .composite([{ input: labelOverlay(WIDTH, HEIGHT, name) }])
       .webp({ quality: 82 })
       .toBuffer();
     try {
       // Exclusive create — throws EEXIST instead of silently overwriting, so
-      // a concurrent boot that lost the existsSync race can't clobber the
-      // winner's file (and never partially-writes one either).
+      // a file from a prior boot (or a concurrently racing one) is left
+      // alone rather than clobbered or partially rewritten.
       await writeFile(dest, buffer, { flag: 'wx' });
       written.push(dest);
     } catch (error) {
