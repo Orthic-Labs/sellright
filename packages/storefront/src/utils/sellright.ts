@@ -265,7 +265,7 @@ export interface SrOrder {
   code: string; state: string; currency: string;
   subtotal: number; shippingTotal: number; taxTotal: number; discountTotal: number; grandTotal: number;
   placedAt: string | null; shippingAddress: unknown;
-  lines: { sku: string; name: string; quantity: number; unitPrice: number; lineTotal: number }[];
+  lines: { sku: string; name: string; quantity: number; unitPrice: number; lineTotal: number; image: string | null }[];
 }
 /** GET /v1/shop/orders/{code} — receipt read. Scoped: pass the receipt token
  *  (`rt`, from srCreateOrder) OR be the authed owner; a bare code is denied. */

@@ -70,7 +70,10 @@ export const HomeReviewsSection = component$<HomeReviewsProps>(({ tpData }) => (
   </>
 ));
 
+// SheerID is a paid, per-merchant-configured service (see theme.config.ts) —
+// never render this claim/offer unless the store actually has it turned on.
 export const HomeServiceSection = component$(() => (
+  theme.sheerIdEnabled ? (
   <>
       {/* ════════ Service strip ════════ */}
       <section class="service">
@@ -95,4 +98,5 @@ export const HomeServiceSection = component$(() => (
           </div>
       </section>
   </>
+  ) : null
 ));

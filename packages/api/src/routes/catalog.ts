@@ -205,7 +205,18 @@ catalog.openapi(
         })
         .from(s.productVariant)
         .where(and(eq(s.productVariant.productId, p.id), eq(s.productVariant.enabled, true), isNull(s.productVariant.deletedAt)))
-        .orderBy(asc(s.productVariant.name)))
+        // Cheapest-effective-price first (sale price wins over list price),
+        // matching minimumPrice()/listingVariant() above — NOT alphabetical
+        // by name. A storefront with no formal option groups treats
+        // variants[0] as the default selection (findVariant in
+        // product-options.ts); ordering by name let a variant named e.g.
+        // "Ink" sort before "Sage" regardless of which was actually cheaper,
+        // so the PDP/cart could default to a different price than the one
+        // the listing/shop-grid displays (minPrice always picks the cheapest).
+        .orderBy(
+          sql`case when ${s.productVariant.salePrice} is not null and ${s.productVariant.salePrice} > 0 then ${s.productVariant.salePrice} else ${s.productVariant.price} end`,
+          asc(s.productVariant.sku),
+        ))
         .map((v) => ({ ...v, price: convertMoney(v.price, rate), salePrice: conv(v.salePrice), preOrderPrice: conv(v.preOrderPrice), shipDate: v.shipDate?.toISOString() ?? null, compareAtPrice: conv(v.compareAtPrice), options: optionRows.filter(o => o.sku === v.sku).map(o => ({ id: o.id, code: o.id, name: o.name, group: { id: o.groupId, code: o.groupId, name: o.groupName } })) }));
       const imgs = await tx
         .select({ path: s.asset.path })

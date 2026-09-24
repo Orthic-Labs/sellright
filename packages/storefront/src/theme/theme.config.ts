@@ -91,6 +91,16 @@ export interface StoreTheme {
 		returns: { label: string; sub: string };
 		payment: { label: string; sub: string };
 	};
+	/** Show the SheerID (military/first-responder/teacher/student) verification
+	 * banner on the homepage. SheerID is a paid, per-merchant-configured
+	 * third-party service — a fresh install (and the isolated demo) has no
+	 * account behind it, so this defaults OFF. Set VITE_SHEERID_ENABLED=1 only
+	 * once the store's SheerID program is actually configured. */
+	sheerIdEnabled: boolean;
+	/** True only for the isolated interactive demo build (VITE_DEMO_MODE=1) —
+	 * used strictly for copy that must disclose "this is simulated", never for
+	 * feature gating (that's what the flags above are for). */
+	isDemo: boolean;
 }
 
 export const theme: StoreTheme = {
@@ -144,6 +154,8 @@ export const theme: StoreTheme = {
 		returns: { label: env('VITE_POLICY_RETURNS_LABEL', '1 Week'), sub: env('VITE_POLICY_RETURNS_SUB', 'Defect Returns') },
 		payment: { label: env('VITE_POLICY_PAYMENT_LABEL', 'Secure'), sub: env('VITE_POLICY_PAYMENT_SUB', 'Checkout') },
 	},
+	sheerIdEnabled: env('VITE_SHEERID_ENABLED', '') === '1',
+	isDemo: env('VITE_DEMO_MODE', '') === '1',
 };
 
 /** `"<label> <sub>"` lower-cased for sentence-style trust bars (ticker, cart

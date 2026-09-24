@@ -3,11 +3,17 @@ import { Link, useLocation } from '@qwik.dev/router';
 import { APP_STATE } from '~/constants';
 import { CartContextId, clearLocalCart, SERVER_CART_ENABLED } from '~/contexts/CartContext';
 import { Order } from '~/generated/graphql-shop';
-import { srGetOrder, srVerifyGatewayPayment } from '~/utils/sellright';
+import { srAssetUrl, srGetOrder, srVerifyGatewayPayment } from '~/utils/sellright';
 import { ServerCartService } from '~/services/ServerCartService';
 import { SR_CHECKOUT_ENABLED } from '~/providers/shop/checkout/checkout';
+import { theme } from '~/theme/theme.config';
 
-const SR_CHECKOUT_PAYMENT_LABEL = SR_CHECKOUT_ENABLED ? 'card' : 'cod';
+// Real Stripe card charge (SR_CHECKOUT_ENABLED) vs the isolated demo's
+// synthetic manual settlement (deploy/demo/interactive-server.mjs settle()) —
+// 'cod' read as "Cash on Delivery" here, which this never is; it's whatever
+// the legacy non-SR checkout path actually settled with. Label it honestly
+// per context instead of a single hardcoded guess.
+const SR_CHECKOUT_PAYMENT_LABEL = SR_CHECKOUT_ENABLED ? 'card' : theme.isDemo ? 'Simulated payment' : 'cod';
 import { formatPrice } from '~/utils';
 import { OptimizedImage } from '~/components/ui';
 import { TIMELINE, activeStepFromState } from './confirmation-data';
@@ -78,7 +84,7 @@ const ConfirmationPage = component$(() => {
 				shippingAddress: (sr.shippingAddress as any) || {}, billingAddress: {},
 				lines: sr.lines.map((l) => ({
 					id: l.sku, quantity: l.quantity, linePriceWithTax: l.lineTotal, priceWithTax: l.unitPrice,
-					featuredAsset: { preview: '' }, productVariant: { name: l.name, sku: l.sku },
+					featuredAsset: { preview: l.image ? srAssetUrl(l.image) : '' }, productVariant: { name: l.name, sku: l.sku },
 				})),
 			} as unknown as typeof store.order;
 

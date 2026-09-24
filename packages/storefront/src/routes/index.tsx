@@ -8,12 +8,14 @@ import { APP_STATE } from '~/constants';
 import { type LocalCartItem } from '~/services/LocalCartService';
 import { useLocalCart, addToLocalCart } from '~/contexts/CartContext';
 import { loadCountryOnDemand } from '~/utils/addressStorage';
-import { getProductBySlug } from '~/providers/shop/products/products';
+import { getProductBySlug, search } from '~/providers/shop/products/products';
+import { srCollections } from '~/utils/sellright';
 import { STYLES } from '~/components/home/homepage-styles';
 import { HomeHero } from '~/components/home/HomeHero';
 import { HomeTeeSection } from '~/components/home/HomeTeeSection';
 import { HomeServiceSection, HomeTrustBar } from '~/components/home/HomeSocialSections';
 import Price from '~/components/products/Price';
+import ProductCard from '~/components/products/ProductCard';
 import { theme, siteUrl } from '~/theme/theme.config';
 import HeroImage_1024 from '~/media/hero.jpg?format=avif&w=1024&quality=75&url';
 
@@ -46,6 +48,11 @@ export const usePreorderProduct = routeLoader$(async () => {
       id: product.id,
       name: product.name,
       slug: product.slug,
+      // Plain-text category label for the featured-product spec row (e.g.
+      // seed tags ['demo','desk'] -> 'Desk'). Never fabricate material/fit/
+      // finish claims — show only what the product's own data says.
+      category: (product.facetValues || []).map((f: any) => f.name).find((t: string) => t !== 'demo') || null,
+      description: product.description || null,
       featuredAsset: product.featuredAsset,
       variants: product.variants.map((v: any) => ({
         id: v.id,
@@ -68,12 +75,37 @@ export const usePreorderProduct = routeLoader$(async () => {
   }
 });
 
+/** Live storefront catalog — 4 tiles, same data/shape as the shop grid
+ * (adaptSearch), so a demo/fresh install always has real, honest product
+ * tiles here rather than a hand-picked slug that might not exist yet. */
+export const useFeaturedProducts = routeLoader$(async () => {
+  try {
+    const res = await search({ take: 4 });
+    return (res?.items ?? []).slice(0, 4);
+  } catch {
+    return [];
+  }
+});
+
+/** Collection links (Desk & Paper / Everyday Carry / At Home on the seeded
+ * demo catalog) — whatever the store actually has, never a hardcoded list. */
+export const useHomeCollections = routeLoader$(async () => {
+  try {
+    const res = await srCollections();
+    return (res?.items ?? []).filter((c) => c.products > 0).slice(0, 6);
+  } catch {
+    return [];
+  }
+});
+
 export default component$(() => {
   useStyles$(STYLES);
 
   const appState = useContext(APP_STATE);
   const localCart = useLocalCart();
   const preorderProduct = usePreorderProduct();
+  const featuredProducts = useFeaturedProducts();
+  const homeCollections = useHomeCollections();
   const isAddingToCart = useSignal(false);
 
   const spotlightVariant = preorderProduct.value
@@ -221,7 +253,39 @@ export default component$(() => {
         </section>
       )}
 
-      <HomeTeeSection />
+      <HomeTeeSection product={preorderProduct.value} variant={spotlightVariant} />
+
+      {/* ════════ Shop the collection — live catalog grid ════════ */}
+      {featuredProducts.value.length > 0 && (
+        <section class="featured-grid">
+          <div class="featured-grid-head" data-reveal>
+            <div class="tee-label">Shop the collection</div>
+            <h2 class="featured-grid-title">Everything, considered.</h2>
+          </div>
+          <div class="featured-grid-items">
+            {featuredProducts.value.map((item: any, i: number) => (
+              <ProductCard
+                key={item.slug}
+                productAsset={item.productAsset}
+                productName={item.productName}
+                slug={item.slug}
+                priceWithTax={item.priceWithTax}
+                inStock={item.inStock}
+                priority={i < 4}
+              />
+            ))}
+          </div>
+          {homeCollections.value.length > 0 && (
+            <div class="featured-collections" data-reveal>
+              {homeCollections.value.map((c) => (
+                <a key={c.slug} href={`/collections/${c.slug}/`} class="featured-collection-link">
+                  {c.name} <span class="btn-arrow">&rarr;</span>
+                </a>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
 
       <HomeServiceSection />
 
