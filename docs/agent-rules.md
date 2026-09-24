@@ -8,7 +8,7 @@ RightSites is its Right Suite web-layer fork and owns suite-specific storefront 
 - Read `README.md` and `docs/ARCHITECTURE.md` for product structure.
 - Read parent SSH runbook before server work.
 - Read RightSites overlay before cross-fork changes.
-- Treat `github.com/bogusyogi/sellright` as origin identity.
+- Treat `github.com/Orthic-Labs/sellright` as origin (`bogusyogi/sellright` redirects there).
 
 ## Commands
 - Run `pnpm verify` for the broad product gate.
