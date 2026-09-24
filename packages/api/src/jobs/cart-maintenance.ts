@@ -1,14 +1,17 @@
 /** Cart lifecycle jobs (CART-04): mark inactive non-empty carts abandoned
  *  (emit an event for analytics/recovery), hard-delete idle/empty carts past
- *  their TTL, and — when a store opts in via config.cart.retentionDays —
- *  purge abandoned carts past that retention window.
+ *  their TTL, and purge abandoned carts past the retention window.
  *
  *  Lifecycle config is explicit and per-store: `store.config.cart` keys
  *  `abandonAfterHours` / `ttlDays` / `retentionDays` override the deployment
- *  defaults (env CART_ABANDON_HOURS / CART_TTL_DAYS) — see cart/ttl.ts
- *  ::cartLifecycleFromConfig. retentionDays defaults to null = retain
- *  abandoned carts indefinitely; they are the analytics/recovery record, so
- *  cleanup never destroys abandonment data unless a store asked for it.
+ *  defaults (env CART_ABANDON_HOURS / CART_TTL_DAYS / CART_RETENTION_DAYS) —
+ *  see cart/ttl.ts ::cartLifecycleFromConfig. Owner decision 2026-09-24:
+ *  idle carts (including abandoned, non-converted) are kept 24 hours —
+ *  CART_TTL_DAYS and CART_RETENTION_DAYS both default to 1 day. A store can
+ *  still opt into a longer per-store retention window via
+ *  config.cart.retentionDays (any positive number of days overrides the
+ *  deployment default; there is no "retain forever" config value once a
+ *  deployment default is set — raise CART_RETENTION_DAYS instead).
  *
  *  Hard invariants:
  *   - never delete orders; converted carts are never purged either —
@@ -52,7 +55,11 @@ async function activeStores(): Promise<Array<{ id: string; config: unknown }>> {
 }
 
 const lifecycleFor = (config: unknown, fallbackHours: number): CartLifecycleConfig =>
-  cartLifecycleFromConfig(config, { abandonAfterHours: fallbackHours, ttlDays: env.CART_TTL_DAYS });
+  cartLifecycleFromConfig(config, {
+    abandonAfterHours: fallbackHours,
+    ttlDays: env.CART_TTL_DAYS,
+    retentionDays: env.CART_RETENTION_DAYS,
+  });
 
 /** Mark active carts with items + no activity past the store's inactivity
  *  window as abandoned. `defaultWindowHours` is the deployment default (env),

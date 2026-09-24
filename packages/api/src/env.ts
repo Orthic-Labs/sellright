@@ -71,10 +71,22 @@ const EnvSchema = z.object({
   // Optional per-app storefront links for shared stores, e.g.
   // viewright=https://viewright.cc,heardright=https://heardright.app
   STOREFRONT_URL_BY_APP: optionalEnvString,
-  // Cart lifecycle: hard TTL (cleanup deletes past this) + inactivity window
-  // after which a cart with items is marked abandoned (analytics/recovery).
-  CART_TTL_DAYS: z.coerce.number().int().positive().default(30),
+  // Cart lifecycle (CART-04 — owner decision 2026-09-24: 24h retention for
+  // idle carts, converted carts/orders untouched):
+  //   CART_TTL_DAYS      — hard TTL written to cart.expires_at on every
+  //     mutation; cleanup deletes EXPIRED + EMPTY active/merged carts past
+  //     it. Default 1 (24h) — was 30.
+  //   CART_ABANDON_HOURS — inactivity window after which a cart WITH items
+  //     is flagged 'abandoned' (analytics/recovery event; not a deletion).
+  //   CART_RETENTION_DAYS — how long an ABANDONED (non-empty) cart is kept
+  //     before cleanup purges it. Default 1 (24h) — previously had no env
+  //     default at all (opt-in per store, else retained forever). All three
+  //     stay overridable per-store via store.config.cart.{ttlDays,
+  //     abandonAfterHours,retentionDays} — see cart/ttl.ts. Converted carts
+  //     are NEVER purged by any of these knobs; their order is untouched.
+  CART_TTL_DAYS: z.coerce.number().int().positive().default(1),
   CART_ABANDON_HOURS: z.coerce.number().int().positive().default(4),
+  CART_RETENTION_DAYS: z.coerce.number().int().positive().default(1),
   // WP3: Stripe. Legacy single-key envs still work; optional test/live envs let
   // one deployment hold both credential sets at once for runtime mode toggles.
   STRIPE_SECRET_KEY: z.string().optional(),

@@ -12,10 +12,13 @@ export function cartExpiry(now: Date, ttlDays: number): Date {
  *   ttlDays           — hard TTL written to cart.expires_at on every mutation;
  *     the cleanup job deletes only EXPIRED + EMPTY + ACTIVE carts.
  *   retentionDays     — how long an ABANDONED cart is retained for recovery /
- *     analytics. null (the default) = retain indefinitely. While the row
- *     exists and is not converted, the cart is resumable by its bearer token.
- *     Converted carts are never purged — converted_order_id anchors payment
- *     recovery on the order.
+ *     analytics before cleanup purges it. Falls back to the deployment
+ *     default (env CART_RETENTION_DAYS — owner decision 2026-09-24: 24h /
+ *     1 day) when a store sets nothing; pass `null` explicitly as that
+ *     default to retain indefinitely instead. While the row exists and is
+ *     not converted, the cart is resumable by its bearer token. Converted
+ *     carts are never purged — converted_order_id anchors payment recovery
+ *     on the order.
  *
  * An email captured on a cart is NOT verified account ownership, so retention
  * never keys on email/customer presence — only on status + age.
@@ -28,7 +31,7 @@ export interface CartLifecycleConfig {
 
 export function cartLifecycleFromConfig(
   config: unknown,
-  defaults: { abandonAfterHours: number; ttlDays: number },
+  defaults: { abandonAfterHours: number; ttlDays: number; retentionDays: number | null },
 ): CartLifecycleConfig {
   const c = (config as { cart?: Record<string, unknown> } | null | undefined)?.cart ?? {};
   // Positive finite numbers only — a 0 retention window would mean "purge
@@ -38,7 +41,7 @@ export function cartLifecycleFromConfig(
   return {
     abandonAfterHours: pos(c.abandonAfterHours) ?? defaults.abandonAfterHours,
     ttlDays: pos(c.ttlDays) ?? defaults.ttlDays,
-    retentionDays: pos(c.retentionDays) ?? null,
+    retentionDays: pos(c.retentionDays) ?? defaults.retentionDays,
   };
 }
 

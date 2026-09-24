@@ -1,9 +1,10 @@
 /**
  * DB tests for the cart lifecycle job (CART-04): inactivity → abandoned,
- * expired empty active carts purged, abandoned carts retained indefinitely by
- * default, per-store retention windows honored, and converted carts + orders
- * NEVER touched. Also covers the stale-write guard: the job must not clobber
- * a cart that was converted between its scan and its write.
+ * expired empty active carts purged, abandoned carts purged past the 24h
+ * (CART_RETENTION_DAYS=1) deployment default — owner decision 2026-09-24 —
+ * per-store retention windows honored, and converted carts + orders NEVER
+ * touched. Also covers the stale-write guard: the job must not clobber a
+ * cart that was converted between its scan and its write.
  *
  * Runs against a dedicated *_test DB ONLY (these wipe data). vitest runs
  * files serially (fileParallelism: false).
@@ -269,11 +270,14 @@ describe('cleanupExpiredCarts', () => {
     expect(await cartById(liveEmpty)).not.toBeNull();
   });
 
-  it('retains abandoned carts indefinitely by default (no retentionDays configured)', async () => {
+  it('owner decision 2026-09-24: purges abandoned carts past the 24h (CART_RETENTION_DAYS=1) deployment default with no store config', async () => {
     const ancient = await seedCart({ status: 'abandoned', lines: 1, updatedAt: ago(365 * DAYS), expiresAt: ago(300 * DAYS) });
+    const recent = await seedCart({ status: 'abandoned', lines: 1, updatedAt: ago(2 * HOURS) });
     const { deleted } = await cleanupExpiredCarts();
-    expect(deleted).toBe(0);
-    expect(await cartById(ancient)).not.toBeNull();
+    expect(deleted).toBe(1);
+    expect(await cartById(ancient)).toBeNull();
+    // Still well within the 24h retention window — not touched.
+    expect(await cartById(recent)).not.toBeNull();
   });
 
   it('with store.config.cart.retentionDays set, old abandoned carts purge — but NEVER converted carts or orders', async () => {
