@@ -44,8 +44,13 @@ BEGIN
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'sellright_resolver') THEN
     EXECUTE 'GRANT SELECT ON public.payment, public.payment_attempt, public.subscription, public.gateway_event TO sellright_resolver';
     EXECUTE 'GRANT SELECT ON public.storekit_app TO sellright_resolver';
+    -- ALTER ... OWNER TO requires the new owner to hold CREATE on the schema.
+    -- Grant it only for the ownership change, then take it back: the role
+    -- keeps USAGE (needed to resolve the tables its functions read) only.
+    EXECUTE 'GRANT USAGE, CREATE ON SCHEMA public TO sellright_resolver';
     EXECUTE 'ALTER FUNCTION public.resolve_store_for_gateway_event(text, text, text, text, text) OWNER TO sellright_resolver';
     EXECUTE 'ALTER FUNCTION public.resolve_store_for_storekit_bundle(text) OWNER TO sellright_resolver';
+    EXECUTE 'REVOKE CREATE ON SCHEMA public FROM sellright_resolver';
   END IF;
 END
 $$;
