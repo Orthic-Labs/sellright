@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,readFile,stat} from 'node:fs/promises';
+import {mkdtemp,readFile,stat} from 'node:fs/promises'; // stat: idempotency test only
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {DEMO_SEED_PRODUCTS,ensureDemoSeedAssets,sharpAvailable} from './generate-demo-assets.mjs';
@@ -20,9 +20,11 @@ test('renders one webp per seeded demo product',{skip},async()=>{
   assert.equal(written.length,DEMO_SEED_PRODUCTS.length);
   for(const {slug} of DEMO_SEED_PRODUCTS){
     const path=join(dir,'demo-seed',`${slug}.webp`);
-    const info=await stat(path);
-    assert.ok(info.size>0,`${slug}.webp should be non-empty`);
+    // Single read (no separate stat-then-read — CodeQL js/file-system-race
+    // flags a check and a later use of the same path, however harmless the
+    // gap is in a synchronous test): derive size from the bytes themselves.
     const bytes=await readFile(path);
+    assert.ok(bytes.length>0,`${slug}.webp should be non-empty`);
     // RIFF....WEBP header — cheap sanity check without a decoder dependency.
     assert.equal(bytes.toString('ascii',0,4),'RIFF');
     assert.equal(bytes.toString('ascii',8,12),'WEBP');
