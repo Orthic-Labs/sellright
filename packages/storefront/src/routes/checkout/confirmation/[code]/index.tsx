@@ -16,7 +16,7 @@ import { theme } from '~/theme/theme.config';
 const SR_CHECKOUT_PAYMENT_LABEL = SR_CHECKOUT_ENABLED ? 'card' : theme.isDemo ? 'Simulated payment' : 'cod';
 import { formatPrice } from '~/utils';
 import { OptimizedImage } from '~/components/ui';
-import { TIMELINE, activeStepFromState } from './confirmation-data';
+import { TIMELINE, activeStepFromState, parseLineName } from './confirmation-data';
 export { head } from './confirmation-data';
 
 const ConfirmationPage = component$(() => {
@@ -79,7 +79,12 @@ const ConfirmationPage = component$(() => {
 				id: sr.code, code: sr.code, state: sr.state,
 				totalWithTax: sr.grandTotal, subTotal: sr.subtotal, subTotalWithTax: sr.subtotal + sr.taxTotal,
 				shippingWithTax: sr.shippingTotal,
-				customer: null, discounts: [], shippingLines: [],
+				// Name isn't carried by this REST read (guest checkouts have no
+				// account profile) — only the email the order was placed/linked
+				// with, when one exists. The "Contact" block below falls back to
+				// the shipping address name when this is null.
+				customer: sr.customerEmail ? { emailAddress: sr.customerEmail } : null,
+				discounts: [], shippingLines: [],
 				payments: [{ method: SR_CHECKOUT_PAYMENT_LABEL, state: sr.state === 'Paid' ? 'Settled' : 'Created', amount: sr.grandTotal }],
 				shippingAddress: (sr.shippingAddress as any) || {}, billingAddress: {},
 				lines: sr.lines.map((l) => ({
@@ -191,9 +196,12 @@ const ConfirmationPage = component$(() => {
 			{/* ── Confirmation ── */}
 			{store.order?.id && !store.error && !store.sezzleVerificationFailed && (() => {
 				const activeStep = activeStepFromState(store.order.state);
-				const fullName = [store.order.customer?.firstName, store.order.customer?.lastName].filter(Boolean).join(' ');
 				const addr = store.order.shippingAddress;
 				const billAddr = store.order.billingAddress;
+				// Guest checkouts carry no account profile via this read; fall back
+				// to the shipping address name so Contact isn't blank when a real
+				// name IS known, just not on a customer record.
+				const fullName = [store.order.customer?.firstName, store.order.customer?.lastName].filter(Boolean).join(' ') || addr?.fullName || '';
 				const hasBilling = !!(billAddr?.streetLine1 && (billAddr.streetLine1 !== addr?.streetLine1 || billAddr.postalCode !== addr?.postalCode));
 
 				return (
@@ -246,11 +254,8 @@ const ConfirmationPage = component$(() => {
 						<h2 class="font-mono text-[11px] tracking-[0.14em] uppercase text-[#5b5a56] mb-5">Your order</h2>
 						<ul class="divide-y divide-[#E5E0D8]">
 							{store.order.lines?.map((line) => {
-								const productName = line.productVariant?.product?.name
-									|| line.productVariant?.name?.split(' ').slice(0, -1).join(' ')
-									|| 'Product';
 								const variantName = line.productVariant?.name || '';
-								const vLabel = variantName.replace(productName, '').trim().replace(/^-\s*/, '');
+								const { productName, variantLabel: vLabel } = parseLineName(variantName, line.productVariant?.product?.name);
 
 								return (
 									<li key={line.id} class="py-4 grid grid-cols-[64px_1fr_auto] gap-4 items-center">

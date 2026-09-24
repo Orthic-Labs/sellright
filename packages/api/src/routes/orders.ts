@@ -40,6 +40,7 @@ orders.openapi(
               discountTotal: z.number().int(), grandTotal: z.number().int(),
               placedAt: z.string().nullable(),
               shippingAddress: z.any(),
+              customerEmail: z.string().nullable(),
               lines: z.array(z.object({ sku: z.string(), name: z.string(), quantity: z.number().int(), unitPrice: z.number().int(), lineTotal: z.number().int(), image: z.string().nullable() })),
             }),
           },
@@ -63,6 +64,14 @@ orders.openapi(
         granted = !!cust && cust.id === o.customerId;
       }
       if (!granted) return null;
+      // Guest checkouts still link an order to a synthetic/matched customer
+      // row (see order.customerId) purely to carry the email the confirmation
+      // page shows under "Contact" — not an account. Null when genuinely absent.
+      let customerEmail: string | null = null;
+      if (o.customerId) {
+        const [cust] = await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, o.customerId)).limit(1);
+        customerEmail = cust?.email ?? null;
+      }
       // Order lines snapshot sku/name/price at purchase time (survives the
       // variant later being edited or deleted) but never carried an image —
       // the confirmation page fell back to a bare placeholder icon for every
@@ -81,7 +90,7 @@ orders.openapi(
         code: o.code, state: o.state, currency: o.currency,
         subtotal: o.subtotal, shippingTotal: o.shippingTotal, taxTotal: o.taxTotal, discountTotal: o.discountTotal, grandTotal: o.grandTotal,
         placedAt: o.placedAt ? o.placedAt.toISOString() : null,
-        shippingAddress: o.shippingAddress ?? null, lines,
+        shippingAddress: o.shippingAddress ?? null, customerEmail, lines,
       };
     });
     if (!out) return c.json({ error: 'order not found' }, 404);

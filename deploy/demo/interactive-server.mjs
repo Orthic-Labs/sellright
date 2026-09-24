@@ -6,6 +6,7 @@ import {createRequire} from 'node:module';
 import {demoBindHost} from './policy.mjs';
 import {interactiveRequest,interactiveBody,sameOriginMutation,demoAdminCredentials,demoRouteTarget,allowedDemoHost} from './interactive-policy.mjs';
 import {assertInteractiveDatabase,visitorFor,provisionVisitor,removeVisitor,cleanVisitors,hash,scoped} from './visitors.mjs';
+import {ensureDemoSeedAssets} from './generate-demo-assets.mjs';
 
 // The generic Qwik storefront (packages/storefront), built root-mounted
 // exactly like any other deployment and served as its own process — see
@@ -28,6 +29,11 @@ const {env}=await import('../../packages/api/dist/env.js');
 const assetDir=resolve(env.ASSET_DIR);
 const require=createRequire(new URL('../../packages/api/package.json',import.meta.url));
 const {eq,and,sql}=require('drizzle-orm');
+// Shared synthetic product photography for the seeded demo catalog — not
+// committed (repo hook blocks binary images), rendered on disk once per
+// unique assetDir. Non-fatal: a rendering failure just leaves the built-in
+// icon placeholder until the next successful boot, never blocks traffic.
+await ensureDemoSeedAssets(assetDir).catch((error)=>{console.error('generate-demo-assets failed (non-fatal):',error);});
 await assertRuntimeRoleUnprivileged();
 await assertInteractiveDatabase(pool);
 // The demo wrapper calls Hono in-process. No demo feature may make HTTP calls.

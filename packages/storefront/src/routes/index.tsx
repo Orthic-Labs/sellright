@@ -33,16 +33,24 @@ import PreorderImageJPEG_1024 from '~/media/sec2.jpg?format=jpeg&w=1024&quality=
  * ships a broken/fabricated product reference. */
 const SPOTLIGHT_PRODUCT_SLUG = (import.meta.env.VITE_HOME_SPOTLIGHT_SLUG as string | undefined) || '';
 
+/* Optional second homepage product for the "New Arrival" strip
+ * (HomeTeeSection) — configure VITE_HOME_FEATURE_SLUG to a DIFFERENT catalog
+ * item than VITE_HOME_SPOTLIGHT_SLUG so the two sections never feature the
+ * same product back-to-back. If unset (or accidentally equal to the
+ * spotlight slug) HomeTeeSection falls back to its generic, product-less
+ * "New arrivals." copy rather than repeating the spotlight product. */
+const FEATURE_PRODUCT_SLUG = (import.meta.env.VITE_HOME_FEATURE_SLUG as string | undefined) || '';
+
 // Organization + WebSite JSON-LD proxied live from the SellRight API
 // (/v1/shop/seo/jsonld/organization) — never generated locally from
 // theme.config.ts, so the schema always matches whatever the backend store
 // config says (siteUrl, address, social links, etc).
 export const useOrganizationJsonLd = routeLoader$(async () => jsonLdOrganization());
 
-export const usePreorderProduct = routeLoader$(async () => {
-  if (!SPOTLIGHT_PRODUCT_SLUG) return null;
+async function fetchHomeProduct(slug: string) {
+  if (!slug) return null;
   try {
-    const product = await getProductBySlug(SPOTLIGHT_PRODUCT_SLUG);
+    const product = await getProductBySlug(slug);
     if (!product) return null;
     return {
       id: product.id,
@@ -73,6 +81,15 @@ export const usePreorderProduct = routeLoader$(async () => {
   } catch {
     return null;
   }
+}
+
+export const usePreorderProduct = routeLoader$(async () => fetchHomeProduct(SPOTLIGHT_PRODUCT_SLUG));
+
+// Distinct from usePreorderProduct on purpose — same slug would render the
+// same product in both the spotlight section AND HomeTeeSection.
+export const useFeatureProduct = routeLoader$(async () => {
+  if (!FEATURE_PRODUCT_SLUG || FEATURE_PRODUCT_SLUG === SPOTLIGHT_PRODUCT_SLUG) return null;
+  return fetchHomeProduct(FEATURE_PRODUCT_SLUG);
 });
 
 /** Live storefront catalog — 4 tiles, same data/shape as the shop grid
@@ -104,12 +121,16 @@ export default component$(() => {
   const appState = useContext(APP_STATE);
   const localCart = useLocalCart();
   const preorderProduct = usePreorderProduct();
+  const featureProduct = useFeatureProduct();
   const featuredProducts = useFeaturedProducts();
   const homeCollections = useHomeCollections();
   const isAddingToCart = useSignal(false);
 
   const spotlightVariant = preorderProduct.value
     ? preorderProduct.value.variants.find((v: any) => v.stockLevel !== 'OUT_OF_STOCK') || preorderProduct.value.variants[0]
+    : null;
+  const featureVariant = featureProduct.value
+    ? featureProduct.value.variants.find((v: any) => v.stockLevel !== 'OUT_OF_STOCK') || featureProduct.value.variants[0]
     : null;
 
   const nlEmail = useSignal('');
@@ -242,18 +263,23 @@ export default component$(() => {
               </div>
               <div class="preorder-img-cell">
                 <div class="po-img-wrap">
-                  <picture>
-                    <source type="image/avif" srcset={`${PreorderImage_480} 480w, ${PreorderImage_768} 768w, ${PreorderImage_1024} 1024w`} sizes="(max-width: 480px) 100vw, (max-width: 1024px) 80vw, 600px" />
-                    <source type="image/webp" srcset={`${PreorderImageWebP_480} 480w, ${PreorderImageWebP_768} 768w, ${PreorderImageWebP_1024} 1024w`} sizes="(max-width: 480px) 100vw, (max-width: 1024px) 80vw, 600px" />
-                    <img src={PreorderImageJPEG_1024} alt={`${preorderProduct.value.name} — featured product`}
+                  {preorderProduct.value.featuredAsset?.preview ? (
+                    <img src={`${preorderProduct.value.featuredAsset.preview}?preset=large`} alt={`${preorderProduct.value.name} — featured product`}
                       loading="lazy" decoding="async" width={1024} height={1280} class="po-img" />
-                  </picture>
+                  ) : (
+                    <picture>
+                      <source type="image/avif" srcset={`${PreorderImage_480} 480w, ${PreorderImage_768} 768w, ${PreorderImage_1024} 1024w`} sizes="(max-width: 480px) 100vw, (max-width: 1024px) 80vw, 600px" />
+                      <source type="image/webp" srcset={`${PreorderImageWebP_480} 480w, ${PreorderImageWebP_768} 768w, ${PreorderImageWebP_1024} 1024w`} sizes="(max-width: 480px) 100vw, (max-width: 1024px) 80vw, 600px" />
+                      <img src={PreorderImageJPEG_1024} alt={`${preorderProduct.value.name} — featured product`}
+                        loading="lazy" decoding="async" width={1024} height={1280} class="po-img" />
+                    </picture>
+                  )}
                 </div>
               </div>
         </section>
       )}
 
-      <HomeTeeSection product={preorderProduct.value} variant={spotlightVariant} />
+      <HomeTeeSection product={featureProduct.value} variant={featureVariant} />
 
       {/* ════════ Shop the collection — live catalog grid ════════ */}
       {featuredProducts.value.length > 0 && (
