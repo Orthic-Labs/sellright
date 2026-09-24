@@ -4,19 +4,31 @@
  * uses relative /v1 paths which vite/the host proxies to the API (no CORS).
  */
 import { isServer } from '@qwik.dev/core/build';
+import { sellrightRequestCookie } from './sellright-request-context.server';
 
 const API = import.meta.env.VITE_SELLRIGHT_API_URL || 'http://127.0.0.1:3300';
 const STORE_SLUG = import.meta.env.VITE_SELLRIGHT_STORE_SLUG || 'demo';
 
 async function sr<T>(path: string, init: RequestInit = {}): Promise<T> {
   const url = isServer ? `${API}${path}` : path;
+  // SSR only: forward the browser's own cookie header so a per-visitor/
+  // per-customer session (sr_session, sr_csrf, and the isolated demo's
+  // sr_demo/sr_csrf) resolves to the SAME session the browser has, instead of
+  // an anonymous server-to-server call. Browser calls already send cookies
+  // natively via credentials:'include' below.
+  const forwardedCookie = isServer ? sellrightRequestCookie.getStore() : undefined;
   const res = await fetch(url, {
     ...init,
     // credentials: 'include' so the auth/CSRF cookies the API sets (sr_session,
     // sr_csrf) ride along on browser calls — auth, account, and the server cart
     // are all cookie-authenticated.
     credentials: 'include',
-    headers: { 'content-type': 'application/json', 'x-store-slug': STORE_SLUG, ...(init.headers as Record<string, string> | undefined) },
+    headers: {
+      'content-type': 'application/json',
+      'x-store-slug': STORE_SLUG,
+      ...(forwardedCookie ? { cookie: forwardedCookie } : {}),
+      ...(init.headers as Record<string, string> | undefined),
+    },
   });
   if (!res.ok) {
     const text = await res.text();

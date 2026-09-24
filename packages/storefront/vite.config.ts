@@ -10,6 +10,17 @@ export default defineConfig((config) => {
   const env = loadEnv(config.mode, process.cwd(), 'VITE_');
   const api = process.env.VITE_SELLRIGHT_API_URL || env.VITE_SELLRIGHT_API_URL || 'http://127.0.0.1:3300';
   const publicDomain = process.env.VITE_PUBLIC_DOMAIN || env.VITE_PUBLIC_DOMAIN || 'localhost:4100';
+  // Escape hatch to build into an alternate output directory (e.g. the
+  // isolated demo's dist-demo/server-demo, built with SSG disabled — see
+  // adapters/express/vite.config.mts). Unset for every normal deployment:
+  // outDir stays 'dist'/'server'. NOTE: this package is always root-mounted
+  // (base stays '/') — Vite's `base` only reaches asset URLs and the Qwik
+  // router's own matching, not the many hardcoded absolute hrefs/navigate()
+  // calls throughout src/ (ProductCard, header, checkout, etc.), so a real
+  // sub-path mount would need those fixed too. The demo instead mounts this
+  // app at the domain root and relocates the admin SPA to /admin, which
+  // React Router's `basename` handles cleanly with no such landmines.
+  const outDirSuffix = process.env.SELLRIGHT_BUILD_SUFFIX ? `-${process.env.SELLRIGHT_BUILD_SUFFIX}` : '';
 
   return {
     logLevel: 'info', // Show build progress and info logs
@@ -18,7 +29,7 @@ export default defineConfig((config) => {
     build: {
       sourcemap: false, // Explicitly disable for production to save memory
       minify: !isDev ? 'terser' : false, // Enhanced: Switch to Terser for better compression
-      outDir: 'dist', // Ensure output goes to dist/
+      outDir: `dist${outDirSuffix}`, // Ensure output goes to dist/ (or dist-<suffix>/ for an alternate build)
       chunkSizeWarningLimit: 500, // Intentional lazy chunks exceed default 150KB
 
       // 🚀 ENHANCED TERSER CONFIGURATION - 15-25% better compression than esbuild

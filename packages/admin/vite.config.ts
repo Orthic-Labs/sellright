@@ -9,8 +9,19 @@ import { CSP_PROD, cspFor } from './src/lib/csp';
 // (DISPATCH FE-7) — dev/prod variants + the cspFor(mode) helper. nginx
 // mirrors CSP_PROD verbatim — see src/lib/csp-headers.test.ts.
 export default defineConfig(({ mode }) => {
-  const apiOrigin = loadEnv(mode, '.', '').SELLRIGHT_API_ORIGIN || 'http://127.0.0.1:3300';
+  // Empty prefix pulls in the full merged env (.env files + the actual shell
+  // environment), not just VITE_-prefixed vars — this file has no `node`
+  // types configured (tsconfig.json), so reading `process.env` directly here
+  // would fail typecheck; loadEnv sidesteps that.
+  const env = loadEnv(mode, '.', '');
+  const apiOrigin = env.SELLRIGHT_API_ORIGIN || 'http://127.0.0.1:3300';
+  // Sub-path mount for the isolated demo (see src/main.tsx VITE_ADMIN_BASE_PATH
+  // / deploy/demo/interactive-server.mjs) — outDir suffix keeps that build in
+  // its own directory so it never overwrites a normal root-mounted build.
+  const basePath = env.SELLRIGHT_ADMIN_BASE_PATH ? `${env.SELLRIGHT_ADMIN_BASE_PATH.replace(/\/+$/, '')}/` : '/';
+  const outDirSuffix = env.SELLRIGHT_BUILD_SUFFIX ? `-${env.SELLRIGHT_BUILD_SUFFIX}` : '';
   return {
+  base: basePath,
   plugins: [react()],
   define: mode === 'qa' ? {
     'import.meta.env.VITE_QA_MOCK': JSON.stringify('1'),
@@ -24,6 +35,7 @@ export default defineConfig(({ mode }) => {
   },
   build: {
     target: 'es2022',
+    outDir: `dist${outDirSuffix}`,
     // Product/media assets are served under /assets. Keep Vite's own immutable
     // JS/CSS chunks in a distinct namespace so a single static/admin origin can
     // never shadow merchant media or vice versa.

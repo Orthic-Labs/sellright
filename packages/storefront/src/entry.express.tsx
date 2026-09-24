@@ -8,6 +8,7 @@ import { randomBytes } from"node:crypto";
 import { join } from"node:path";
 import { fileURLToPath } from"node:url";
 import render from"./entry.ssr";
+import { sellrightRequestCookie } from"./utils/sellright-request-context.server";
 
 declare global {
  interface QwikRouterPlatform extends PlatformNode {}
@@ -121,6 +122,16 @@ app.use((req, res, next) => {
 	}
 
 	next();
+});
+
+// Per-request context: thread the incoming cookie header through to every
+// sr() fetch this request triggers (SSR data loads need the caller's own
+// session/visitor cookie, not an anonymous server-to-server call — see
+// utils/sellright-request-context.server.ts). Must wrap the router itself,
+// not just start before it, so the AsyncLocalStorage context is live for the
+// whole async render.
+app.use((req, _res, next) => {
+	sellrightRequestCookie.run(req.headers.cookie, next);
 });
 
 // Static asset handlers

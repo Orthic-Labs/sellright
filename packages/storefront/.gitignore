@@ -4,8 +4,10 @@ one-click-deploy
 # Build
 build
 dist
+dist-*
 lib
 server
+server-*
 functions/**/*.js
 
 # Development
