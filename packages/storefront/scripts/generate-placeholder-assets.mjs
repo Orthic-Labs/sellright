@@ -25,7 +25,11 @@ import sharp from 'sharp';
 const root = fileURLToPath(new URL('..', import.meta.url)); // packages/storefront
 
 const TARGETS = [
-  { out: 'src/media/hero.jpg', width: 1600, height: 1067, format: 'jpeg', bg: '#20242b', label: 'Hero' },
+  // Hero renders full-bleed with page copy overlaid on top of it — any text
+  // baked into the placeholder itself ("Hero") shows through as a ghosted
+  // watermark. Kept label-less/purely abstract; every other placeholder is
+  // never shown behind other text so its identifying label is harmless.
+  { out: 'src/media/hero.jpg', width: 1600, height: 1067, format: 'jpeg', bg: '#20242b', label: null },
   { out: 'src/media/sec2.jpg', width: 1024, height: 1280, format: 'jpeg', bg: '#2a2f38', label: 'Spotlight' },
   { out: 'src/media/homelast.png', width: 1024, height: 1024, format: 'png', bg: '#333a45', label: 'New Arrivals' },
   { out: 'public/og-image.jpg', width: 1200, height: 630, format: 'jpeg', bg: '#20242b', label: 'SellRight' },
@@ -47,9 +51,8 @@ function labelOverlay(width, height, label) {
 async function generateOne({ out, width, height, format, bg, label }) {
   const dest = resolve(root, out);
   await mkdir(dirname(dest), { recursive: true });
-  const image = sharp({ create: { width, height, channels: 3, background: bg } }).composite([
-    { input: labelOverlay(width, height, label) },
-  ]);
+  const image = sharp({ create: { width, height, channels: 3, background: bg } });
+  if (label) image.composite([{ input: labelOverlay(width, height, label) }]);
   const buffer = format === 'png' ? await image.png({ compressionLevel: 9 }).toBuffer() : await image.jpeg({ quality: 82 }).toBuffer();
   await writeFile(dest, buffer);
   return dest;

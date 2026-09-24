@@ -105,7 +105,12 @@ export const STYLES = `
   .tee { position: relative; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='250' height='250'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.55' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='250' height='250' filter='url(%23n)' opacity='0.12'/%3E%3C/svg%3E"), linear-gradient(to bottom, #0a0a09, #181614); background-size: 250px 250px, 100% 100%; padding: 3rem 1.5rem; display: grid; grid-template-columns: 1fr; gap: 3rem; align-items: center; }
   @media (min-width: 1024px) { .tee { padding: 5.5rem 3.25rem; grid-template-columns: 1fr 1fr; gap: 5rem; } }
   .tee-img-wrap { position: relative; overflow: hidden; border-radius: 2px; }
-  .tee-img { width: 100%; height: auto; aspect-ratio: 1/1; object-fit: cover; display: block; background: var(--dark-elevated); transition: transform 0.6s cubic-bezier(0.25,0.1,0.25,1); outline: 1px solid rgba(255,255,255,0.06); outline-offset: -1px; }
+  /* background: matches the actual product-image backdrop (off-white), not
+     --dark-elevated — that near-black tone is visually identical to this
+     section's own dark bg, so any load delay (lazy-load, slow network,
+     decode latency) reads as a broken/empty black hole instead of a
+     placeholder. */
+  .tee-img { width: 100%; height: auto; aspect-ratio: 1/1; object-fit: cover; display: block; background: var(--off-white); transition: transform 0.6s cubic-bezier(0.25,0.1,0.25,1); outline: 1px solid rgba(255,255,255,0.06); outline-offset: -1px; }
   .tee-img-wrap:hover .tee-img { transform: scale(1.03); }
   .tee-tag { position: absolute; top: 16px; left: 16px; background: var(--accent); color: #fff; padding: 6px 14px; font-family: var(--font-body); font-size: 0.6875rem; letter-spacing: 2px; text-transform: uppercase; border-radius: 2px; z-index: 2; }
   .tee-label { font-family: var(--font-mono); font-size: var(--step--1); letter-spacing: 0.18em; text-transform: uppercase; color: var(--accent-light); margin-bottom: 12px; }

@@ -10,6 +10,7 @@ import { useLocalCart, addToLocalCart } from '~/contexts/CartContext';
 import { loadCountryOnDemand } from '~/utils/addressStorage';
 import { getProductBySlug, search } from '~/providers/shop/products/products';
 import { srCollections } from '~/utils/sellright';
+import { stripHtml } from '~/utils/sanitize';
 import { STYLES } from '~/components/home/homepage-styles';
 import { HomeHero } from '~/components/home/HomeHero';
 import { HomeTeeSection } from '~/components/home/HomeTeeSection';
@@ -132,6 +133,12 @@ export default component$(() => {
   const featureVariant = featureProduct.value
     ? featureProduct.value.variants.find((v: any) => v.stockLevel !== 'OUT_OF_STOCK') || featureProduct.value.variants[0]
     : null;
+  // Spotlight body copy: the product's OWN description, never the site
+  // tagline — theme.tagline is generic storefront copy and was leaking in
+  // here as a fallback, which is wrong for every configured spotlight
+  // product. No fallback text when a product has no description; the
+  // paragraph simply doesn't render rather than showing something untrue.
+  const spotlightBody = preorderProduct.value?.description ? stripHtml(preorderProduct.value.description).trim() : '';
 
   const nlEmail = useSignal('');
   const nlHoneypot = useSignal('');
@@ -245,9 +252,11 @@ export default component$(() => {
                     />
                   </div>
                 )}
-                <p class="po-sub reveal visible" data-reveal>
-                  {theme.tagline}
-                </p>
+                {spotlightBody && (
+                  <p class="po-sub reveal visible" data-reveal>
+                    {spotlightBody}
+                  </p>
+                )}
 
                 <div class="po-actions">
                   <button
