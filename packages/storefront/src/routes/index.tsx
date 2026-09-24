@@ -13,6 +13,7 @@ import { STYLES } from '~/components/home/homepage-styles';
 import { HomeHero } from '~/components/home/HomeHero';
 import { HomeTeeSection } from '~/components/home/HomeTeeSection';
 import { HomeServiceSection, HomeTrustBar } from '~/components/home/HomeSocialSections';
+import Price from '~/components/products/Price';
 import { theme, siteUrl } from '~/theme/theme.config';
 import HeroImage_1024 from '~/media/hero.jpg?format=avif&w=1024&quality=75&url';
 
@@ -74,6 +75,10 @@ export default component$(() => {
   const localCart = useLocalCart();
   const preorderProduct = usePreorderProduct();
   const isAddingToCart = useSignal(false);
+
+  const spotlightVariant = preorderProduct.value
+    ? preorderProduct.value.variants.find((v: any) => v.stockLevel !== 'OUT_OF_STOCK') || preorderProduct.value.variants[0]
+    : null;
 
   const nlEmail = useSignal('');
   const nlHoneypot = useSignal('');
@@ -176,6 +181,17 @@ export default component$(() => {
               <div>
                 <div class="po-badge reveal visible"><span class="po-dot-green" />Featured</div>
                 <h2 class="po-title reveal visible" data-reveal>{preorderProduct.value.name}</h2>
+                {spotlightVariant && (
+                  <div class="po-price-wrap">
+                    <Price
+                      priceWithTax={spotlightVariant.priceWithTax ?? spotlightVariant.price}
+                      salePrice={spotlightVariant.customFields?.salePrice}
+                      preOrderPrice={spotlightVariant.customFields?.preOrderPrice}
+                      isPreOrder={spotlightVariant.customFields?.isPreOrder}
+                      forcedClass="po-price"
+                    />
+                  </div>
+                )}
                 <p class="po-sub reveal visible" data-reveal>
                   {theme.tagline}
                 </p>
@@ -213,8 +229,8 @@ export default component$(() => {
       <section class="newsletter">
           <div data-reveal>
             <div class="nl-label">Stay in the loop</div>
-            <div class="nl-title">New drops. Restocks. No spam.</div>
-            <div class="nl-sub">Be the first to know when new products drop and restocks happen. One email, no fluff.</div>
+            <div class="nl-title">New arrivals. Restocks. No spam.</div>
+            <div class="nl-sub">Be the first to know about new arrivals and restocks. One email, no fluff.</div>
             <form
               class="nl-form"
               preventdefault:submit

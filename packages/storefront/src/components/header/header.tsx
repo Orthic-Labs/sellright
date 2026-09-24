@@ -72,15 +72,12 @@ export default component$(() => {
 			<div class="max-w-[1920px] mx-auto px-4 sm:px-6 lg:px-8 w-full h-full">
 				<div class="relative flex items-center justify-between h-full">
 
-					{/* LEFT: Logo only */}
+					{/* LEFT: Logo mark + full store name (never baked into the image, so it's
+					    never clipped and always matches theme.storeName) */}
 					<div class="flex items-center flex-shrink-0">
-						<Link href="/" aria-label={`${theme.storeName} — Go to homepage`}>
-							<LogoImage
-								alt={theme.storeName}
-								class="h-8 w-auto object-contain bg-transparent filter brightness-0 invert transition-opacity duration-300"
-								width="100"
-								height="32"
-							/>
+						<Link href="/" aria-label={`${theme.storeName} — Go to homepage`} class="header-logo">
+							<LogoImage class="header-logo-icon" width="28" height="28" />
+							<span class="header-logo-text">{theme.storeName}</span>
 						</Link>
 					</div>
 
@@ -103,7 +100,7 @@ export default component$(() => {
 							href="/blog/"
 							class={`header-nav-link ${location.url.pathname.startsWith('/blog') ? 'active' : ''}`}
 						>
-							Lore
+							Journal
 						</Link>
 						<Link
 							href="/contact"
@@ -268,7 +265,7 @@ export default component$(() => {
 							class={`mobile-nav-link ${location.url.pathname.startsWith('/blog') ? 'active' : ''}`}
 							onClick$={() => { setTimeout(() => { appState.showMenu = false; }, 0); }}
 						>
-							Lore
+							Journal
 						</Link>
 						<Link
 							href="/contact"

@@ -24,6 +24,8 @@ const {createApp}=await import('../../packages/api/dist/app.js');
 const {pool,withStore,assertRuntimeRoleUnprivileged}=await import('../../packages/api/dist/db/client.js');
 const schema=await import('../../packages/api/dist/db/schema.js');
 const {applyPaymentResult}=await import('../../packages/api/dist/payments/settle.js');
+const {env}=await import('../../packages/api/dist/env.js');
+const assetDir=resolve(env.ASSET_DIR);
 const require=createRequire(new URL('../../packages/api/package.json',import.meta.url));
 const {eq,and,sql}=require('drizzle-orm');
 await assertRuntimeRoleUnprivileged();
@@ -42,7 +44,7 @@ const adminRoot=resolve(directory,'../../packages/admin/dist-demo');
 // is the only file this process still serves out of deploy/demo/ directly
 // (the "Open storefront / Reset demo" banner injected into the admin SPA).
 const assets=new Set(['demo-admin.js']);
-const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript','.css':'text/css','.png':'image/png','.svg':'image/svg+xml','.woff2':'font/woff2'};
+const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript','.css':'text/css','.png':'image/png','.svg':'image/svg+xml','.woff2':'font/woff2','.webp':'image/webp','.avif':'image/avif','.jpg':'image/jpeg','.jpeg':'image/jpeg','.gif':'image/gif'};
 const cookies=header=>Object.fromEntries((header??'').split(';').map(s=>s.trim().split('=')));
 let cleanupHealthy=true;
 const traffic=new Map();
@@ -207,6 +209,25 @@ const server=createServer(async(req,res)=>{
       return await serial(visitor.id,execute);
     }
     if(mutation)return json(405,{error:'Method not allowed'});
+    // Product/collection imagery. In a real (non-demo) deployment nginx
+    // serves ASSET_DIR at /assets/<path> directly (see admin-assets.ts); this
+    // demo's nginx vhost has no such rule (everything proxies to this
+    // process, see sellright-demo.conf), and demoRouteTarget() would
+    // otherwise send this straight to the storefront's own /assets/ (its
+    // bundled CSS/JS chunks, a same-named but unrelated directory) where it
+    // 404s. Handle it here instead, reading the same ASSET_DIR the in-process
+    // app writes to.
+    if(url.pathname.startsWith('/assets/')){
+      const relative=url.pathname.slice('/assets/'.length);
+      const file=resolve(assetDir,relative);
+      if(!relative||!file.startsWith(assetDir+sep))return json(400,{error:'Invalid asset path'});
+      try{
+        const payload=await readFile(file);
+        res.writeHead(200,{'content-type':mime[extname(file)]??'application/octet-stream','cache-control':'public, max-age=31536000, immutable'});
+        res.end(method==='HEAD'?undefined:payload);
+      }catch{return json(404,{error:'Not found'});}
+      return;
+    }
     const target=demoRouteTarget(url.pathname);
     if(target==='storefront'){
       // A first-time browser has no sr_demo cookie yet. Every /v1/* read the

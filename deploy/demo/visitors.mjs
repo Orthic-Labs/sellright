@@ -63,13 +63,22 @@ export async function provisionVisitor(pool) {
       ['Desk Tray','desk-tray','TRAY',3200,'desk','Keep keys, pens and daily essentials in one considered place.','Rose','Stone'],
     ];
     const variants=[];
+    // Neutral, text-free generated placeholder photography — one shared webp
+    // per product slug, pre-rendered onto disk under ASSET_DIR/demo-seed/ (not
+    // per-visitor; only the `asset` row below is per-visitor, so it obeys the
+    // same store-scoped RLS as every other row here). Without this, product
+    // cards/PDP/cart render the built-in icon placeholder instead of imagery.
     for(const [i,[name,productSlug,sku,price,category,description,...colors]] of products.entries()) {
       const {rows:[p]}=await c.query("INSERT INTO product(store_id,slug,name,status,description,product_type,tags) VALUES($1,$2,$3,'active',$4,$5,$6) RETURNING id",[id,productSlug,name,description,category,['demo',category]]);
       await c.query('INSERT INTO collection_product(store_id,collection_id,product_id,position) VALUES($1,$2,$3,$4)',[id,categories.get(category),p.id,i]);
+      const {rows:[asset]}=await c.query("INSERT INTO asset(store_id,type,path,width,height,alt) VALUES($1,'image',$2,1000,1250,$3) RETURNING id",[id,`demo-seed/${productSlug}.webp`,`${name} — synthetic demo product photo`]);
+      await c.query('UPDATE product SET featured_asset_id=$1 WHERE id=$2',[asset.id,p.id]);
+      await c.query('INSERT INTO product_asset(store_id,product_id,asset_id,position) VALUES($1,$2,$3,0)',[id,p.id,asset.id]);
       for(const [n,color] of colors.entries()) {
         const {rows:[v]}=await c.query(`INSERT INTO product_variant(store_id,product_id,sku,name,price,fulfillment_type,weight_g)
           VALUES($1,$2,$3,$4,$5,'physical',200) RETURNING id`,[id,p.id,'DEMO-'+sku+(n?'-ALT':''),name+' / '+color,price+n*200]);
         await c.query('INSERT INTO stock(store_id,variant_id,on_hand) VALUES($1,$2,$3)',[id,v.id,24+i*8]);
+        await c.query('INSERT INTO variant_asset(store_id,variant_id,asset_id,position) VALUES($1,$2,$3,0)',[id,v.id,asset.id]);
         variants.push({...v,sku:'DEMO-'+sku+(n?'-ALT':''),name:name+' / '+color,price:price+n*200});
       }
     }

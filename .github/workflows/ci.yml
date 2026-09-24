@@ -33,7 +33,7 @@ jobs:
           node --check deploy/demo/shop.js
           node --check deploy/demo/server.mjs
           node --check deploy/demo/interactive-server.mjs
-          node --check deploy/demo/interactive-shop.js
+          node --check deploy/demo/run-storefront.mjs
           node --check deploy/demo/demo-admin.js
           node --check deploy/demo/visitors.mjs
           node --test deploy/demo/*.test.mjs

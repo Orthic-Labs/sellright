@@ -1,11 +1,12 @@
 import { component$ } from '@qwik.dev/core';
 import VerificationButton from '~/components/verification/VerificationButton';
+import { theme, policySentence } from '~/theme/theme.config';
 
 const TRUST_SIGNALS = [
-  'Free shipping over $100',
-  'Easy 30-day returns',
-  'Flexible payment options',
-  'Ships within 2 business days',
+  policySentence(theme.policies.shipping),
+  policySentence(theme.policies.returns),
+  policySentence(theme.policies.payment),
+  'Order tracking included',
 ] as const;
 
 const ReviewStars = component$<{ color?: string }>(({ color }) => (

@@ -1,13 +1,45 @@
 /**
  * SellRight REST client (replaces the Vendure GraphQL requester for the dynamic
- * paths). SSR fetches the API directly (localhost:3300 on the box); the browser
- * uses relative /v1 paths which vite/the host proxies to the API (no CORS).
+ * paths). SSR fetches the API directly (localhost:3300 on the box, the real
+ * merchant API); the browser uses relative /v1 paths which vite/the host
+ * proxies to the API (no CORS).
+ *
+ * Isolated interactive demo (packages/storefront/package.json `build:demo`):
+ * VITE_SELLRIGHT_API_URL MUST be set to wherever the demo wrapper
+ * (deploy/demo/interactive-server.mjs, DEMO_PORT 4310) is actually bound —
+ * DEMO_BIND_HOST 172.22.0.1 (the nginx Docker bridge) once switched to the
+ * private proxy path per deploy/demo/README.md, 127.0.0.1 before that switch
+ * — never the default 127.0.0.1:3300. Only the wrapper can resolve an
+ * incoming request's sr_demo cookie to that visitor's own ephemeral store and dispatch it
+ * in-process with the correct x-store-slug; the real API on 3300 has never
+ * heard of a store literally named 'demo' (STORE_SLUG's default below) and
+ * every SSR-side catalog/PDP/cart call 503s until this is set correctly.
  */
 import { isServer } from '@qwik.dev/core/build';
 import { sellrightRequestCookie } from './sellright-request-context.server';
 
 const API = import.meta.env.VITE_SELLRIGHT_API_URL || 'http://127.0.0.1:3300';
 const STORE_SLUG = import.meta.env.VITE_SELLRIGHT_STORE_SLUG || 'demo';
+const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+/**
+ * Double-submit CSRF token, browser-side only. packages/api's shop/admin CSRF
+ * guards (app.ts) require `x-csrf-token` to match the readable `sr_csrf`
+ * cookie for any mutation once a session cookie exists (customer session on
+ * the real API; every visitor on the isolated demo, which has no anonymous
+ * "guest checkout" concept — its stricter wrapper CSRF gate checks this on
+ * every mutation, session or not). `sr()` never read this cookie at all, so
+ * every mutating call 403'd the moment a session existed to protect — most
+ * visibly, 100% of isolated-demo checkouts. `sr_csrf` is deliberately NOT
+ * HttpOnly (that's the whole point of double-submit: same-origin JS must be
+ * able to read it back to prove it isn't a cross-site forgery), so this is
+ * exactly what it's for.
+ */
+function readCsrfCookie(): string | undefined {
+  if (isServer || typeof document === 'undefined') return undefined;
+  const match = document.cookie.match(/(?:^|;\s*)sr_csrf=([^;]+)/);
+  return match ? decodeURIComponent(match[1]) : undefined;
+}
 
 async function sr<T>(path: string, init: RequestInit = {}): Promise<T> {
   const url = isServer ? `${API}${path}` : path;
@@ -17,6 +49,8 @@ async function sr<T>(path: string, init: RequestInit = {}): Promise<T> {
   // an anonymous server-to-server call. Browser calls already send cookies
   // natively via credentials:'include' below.
   const forwardedCookie = isServer ? sellrightRequestCookie.getStore() : undefined;
+  const method = (init.method ?? 'GET').toUpperCase();
+  const csrf = !isServer && MUTATING_METHODS.has(method) ? readCsrfCookie() : undefined;
   const res = await fetch(url, {
     ...init,
     // credentials: 'include' so the auth/CSRF cookies the API sets (sr_session,
@@ -27,6 +61,7 @@ async function sr<T>(path: string, init: RequestInit = {}): Promise<T> {
       'content-type': 'application/json',
       'x-store-slug': STORE_SLUG,
       ...(forwardedCookie ? { cookie: forwardedCookie } : {}),
+      ...(csrf ? { 'x-csrf-token': csrf } : {}),
       ...(init.headers as Record<string, string> | undefined),
     },
   });

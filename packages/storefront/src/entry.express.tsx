@@ -5,7 +5,7 @@ import {
 import"dotenv/config";
 import express from"express";
 import { randomBytes } from"node:crypto";
-import { join } from"node:path";
+import { join, dirname, basename } from"node:path";
 import { fileURLToPath } from"node:url";
 import render from"./entry.ssr";
 import { sellrightRequestCookie } from"./utils/sellright-request-context.server";
@@ -14,14 +14,16 @@ declare global {
  interface QwikRouterPlatform extends PlatformNode {}
 }
 
-declare module"express-serve-static-core" {
- interface Locals {
-  nonce?: string;
- }
-}
-
-// Directories where the static assets are located
-const distDir = join(fileURLToPath(import.meta.url),"..","..","dist");
+// Directories where the static assets are located. Derived from THIS file's
+// own directory name rather than a literal 'dist', so an alternate build
+// (SELLRIGHT_BUILD_SUFFIX=demo -> outDir 'dist-demo'/'server-demo', see
+// vite.config.ts + adapters/express/vite.config.mts) finds its own sibling
+// dist-<suffix> at runtime instead of accidentally reading a leftover plain
+// 'dist' from a different build sitting next to it. A stray 'dist' with
+// mismatched asset hashes silently 404s every image/script it references.
+const selfDir = dirname(fileURLToPath(import.meta.url));
+const distDirName = basename(selfDir).replace(/^server/, 'dist');
+const distDir = join(selfDir, "..", distDirName);
 const buildDir = join(distDir,"build");
 const assetsDir = join(distDir,"assets");
 
@@ -47,14 +49,21 @@ const connectSrcExtra = apiOrigin ? ` ${apiOrigin}` : '';
 
 // Set security headers
 app.use((req, res, next) => {
-	// Per-request CSP nonce. Threaded to Qwik's SSR render via
-	// res.locals.nonce -> entry.ssr.tsx -> <Root nonce> -> <Head nonce> ->
-	// the inline <script nonce=...> tags Qwik/this app emit. Must match the
-	// nonce declared in script-src below, or Qwik's inline bootstrap script
-	// (and the iOS service-worker registration script in head.tsx) will be
-	// blocked by the browser.
+	// Per-request CSP nonce. Threaded to Qwik's SSR render via a custom
+	// x-qwik-nonce request header -> entry.ssr.tsx reads it back off
+	// opts.serverData.requestHeaders -> <Root nonce> + serverData.nonce ->
+	// the inline <script nonce=...> tags (this app's own, and the framework's
+	// own bootstrap-loader script). Must match the nonce declared in
+	// script-src below, or every inline script — including Qwik's own
+	// bootstrap loader, meaning NO client-side interactivity at all — gets
+	// silently dropped by the browser's CSP.
+	//
+	// NOT res.locals, NOT a plain `req.customProp`: neither survives the trip
+	// through @qwik.dev/router's node-server middleware into this app's
+	// render() call (see entry.ssr.tsx for the full trace) — only headers on
+	// the request do, via opts.serverData.requestHeaders.
 	const nonce = randomBytes(16).toString('base64');
-	res.locals.nonce = nonce;
+	req.headers['x-qwik-nonce'] = nonce;
 
 	// Security Headers - PCI DSS Compliance
 	// XSS Protection

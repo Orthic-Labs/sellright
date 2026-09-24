@@ -90,6 +90,8 @@ export const STYLES = `
   .po-color-white.active { border-color: var(--accent); }
   .po-color-jade { background: #6b8f71; }
 
+  .po-price-wrap { display: block; margin-bottom: 12px; }
+  .po-price-wrap > div { justify-content: flex-start; }
   .po-price { font-family: var(--font-display); font-size: 1.75rem; font-weight: 700; color: var(--text-on-light); margin-bottom: 4px; font-variant-numeric: tabular-nums; }
   .po-price-note { font-family: var(--font-mono); font-size: 0.75rem; color: var(--warm-grey); letter-spacing: 0.5px; margin-bottom: 24px; }
   .po-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }

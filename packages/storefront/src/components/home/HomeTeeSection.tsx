@@ -23,7 +23,7 @@ export const HomeTeeSection = component$(() => (
       {/* ════════ Featured product section ════════ */}
       <section class="tee">
             <div class="tee-img-wrap">
-              <span class="tee-tag">New Drop</span>
+              <span class="tee-tag">New Arrival</span>
               <picture>
                 <source type="image/avif" srcset={`${TeeImage_480} 480w, ${TeeImage_768} 768w, ${TeeImage_1024} 1024w`} sizes="(max-width: 480px) 100vw, (max-width: 1024px) 80vw, 600px" />
                 <source type="image/webp" srcset={`${TeeImageWebP_480} 480w, ${TeeImageWebP_768} 768w, ${TeeImageWebP_1024} 1024w`} sizes="(max-width: 480px) 100vw, (max-width: 1024px) 80vw, 600px" />

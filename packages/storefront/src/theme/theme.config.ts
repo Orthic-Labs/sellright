@@ -77,6 +77,20 @@ export interface StoreTheme {
 	locale: string;
 	/** Generic shop-page category filter labels (matched against product tags). */
 	shopCategories: string[];
+	/**
+	 * Short trust-signal phrases shown in the header/PDP/cart/checkout trust
+	 * bars. Keep these truthful for whatever this deployment actually does —
+	 * checkout only zeroes shipping via an applied free-shipping coupon (see
+	 * `ValidateLocalCartCouponQuery.freeShipping`), there is no order-total
+	 * threshold, so never phrase this as "free shipping over $X" unless a
+	 * real threshold promotion is wired up server-side. Defaults reflect the
+	 * generic base product (flat-rate shipping, no payment method claims).
+	 */
+	policies: {
+		shipping: { label: string; sub: string };
+		returns: { label: string; sub: string };
+		payment: { label: string; sub: string };
+	};
 }
 
 export const theme: StoreTheme = {
@@ -125,7 +139,17 @@ export const theme: StoreTheme = {
 		const raw = envOrUndefined('VITE_SHOP_CATEGORIES');
 		return raw ? raw.split(',').map((s) => s.trim()).filter(Boolean) : ['New', 'Bestsellers', 'Sale'];
 	})(),
+	policies: {
+		shipping: { label: env('VITE_POLICY_SHIPPING_LABEL', 'Flat-Rate'), sub: env('VITE_POLICY_SHIPPING_SUB', 'Shipping') },
+		returns: { label: env('VITE_POLICY_RETURNS_LABEL', '1 Week'), sub: env('VITE_POLICY_RETURNS_SUB', 'Defect Returns') },
+		payment: { label: env('VITE_POLICY_PAYMENT_LABEL', 'Secure'), sub: env('VITE_POLICY_PAYMENT_SUB', 'Checkout') },
+	},
 };
+
+/** `"<label> <sub>"` lower-cased for sentence-style trust bars (ticker, cart
+ * strip, checkout CTA line) — same source of truth as the two-line stat
+ * widgets (hero meta, PDP trust bar), just formatted differently. */
+export const policySentence = (p: { label: string; sub: string }): string => `${p.label} ${p.sub}`;
 
 /** `https://` + theme.domain, no trailing slash — the canonical site origin. */
 export const siteUrl = `https://${theme.domain}`;

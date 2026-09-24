@@ -401,18 +401,22 @@
 html.scroll-locked { overflow: hidden; }
 html.scroll-locked body { position: fixed; width: 100%; }
 
-/* T10: CSS scroll-driven reveal (replaces IntersectionObserver UVT) */
+/* T10: fade-in-on-paint reveal. Previously scroll-driven
+ * (animation-timeline: view()): elements below the fold stayed at their
+ * opacity:0 starting keyframe in any render path that doesn't fire a real,
+ * incremental scroll — headless full-page screenshot capture (which resizes
+ * to the full document height in one paint rather than scrolling through
+ * it), print/PDF, and some accessibility tooling. That's what made the
+ * "Thank You for Your Service" and newsletter sections look permanently
+ * empty in QA screenshots. A plain time-based fade-in animates once on
+ * paint regardless of scroll and always lands on its visible end state.
+ */
 @keyframes hp-fade-reveal {
   from { opacity: 0; transform: translateY(20px); }
   to   { opacity: 1; transform: none; }
 }
 [data-reveal] {
   animation: hp-fade-reveal 0.6s ease-out both;
-  animation-timeline: view();
-  animation-range: entry 0% entry 30%;
-}
-@supports not (animation-timeline: view()) {
-  [data-reveal] { opacity: 1; transform: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   [data-reveal] { animation: none !important; opacity: 1 !important; transform: none !important; }

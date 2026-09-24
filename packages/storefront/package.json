@@ -16,6 +16,7 @@
 	"scripts": {
 		"clean": "node -e \"const fs=require('fs');for(const p of ['dist','server','.cache'])fs.rmSync(p,{recursive:true,force:true});\"",
 		"build": "pnpm run lint && pnpm run build.types && pnpm run clean && pnpm run build.client && pnpm run build.server && node scripts/cleanup-static-sitemaps.js",
+		"build:demo": "SELLRIGHT_DISABLE_SSG=1 SELLRIGHT_BUILD_SUFFIX=demo VITE_SELLRIGHT_API_URL=http://172.22.0.1:4310 VITE_SERVER_CART=1 pnpm run build",
 		"cleanup-sitemaps": "node scripts/cleanup-static-sitemaps.js",
 		"ensure:qwik-service-worker": "node -e \"const fs=require('fs');const src='node_modules/@qwik.dev/router/lib/service-worker/index.mjs';const dest='node_modules/@qwik.dev/router/lib/service-worker.mjs';if(fs.existsSync(src))fs.copyFileSync(src,dest);\"",
 		"prebuild.client": "pnpm run ensure:qwik-service-worker",

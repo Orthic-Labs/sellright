@@ -1,4 +1,32 @@
 export const HEADER_STYLES = `
+  .header-logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: #fff;
+    text-decoration: none;
+    min-height: 44px;
+  }
+  .header-logo-icon {
+    flex-shrink: 0;
+    display: block;
+  }
+  .header-logo-text {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 1.05rem;
+    letter-spacing: 0.01em;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 46vw;
+  }
+  @media (min-width: 768px) {
+    .header-logo-text {
+      max-width: 320px;
+    }
+  }
   .header-nav-link {
     font-family: var(--font-body);
     font-weight: 500;
