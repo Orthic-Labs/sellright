@@ -8,20 +8,43 @@
 // Deterministic: flat background + a centered SVG label, no randomness, no
 // network calls. Idempotent: skips any file that already exists (called on
 // every `sellright-demo` process start from interactive-server.mjs — a pm2
-// restart should not repaint files a prior boot already produced).
+// restart should not repaint files a prior boot already produced). The skip
+// check is a fast-path hint only — the actual write below is exclusive
+// (`wx`), so two processes racing to create the same file can't corrupt or
+// double-write it; the loser's EEXIST is caught and treated as "already
+// there" (CodeQL js/file-system-race: an existsSync-then-writeFile check
+// would otherwise be a TOCTOU race).
 //
 // Uses the api package's own sharp dependency the same way the rest of
 // deploy/demo already reaches into packages/api (e.g. `drizzle-orm` via
 // createRequire in interactive-server.mjs) — deploy/demo is not a pnpm
 // workspace member and has no node_modules of its own.
+//
+// Loaded lazily/optionally: the CI lane that syntax-checks this file
+// (`node --check` + `node --test deploy/demo/*.test.mjs`, see
+// .github/workflows/ci.yml's "storefront" job) never runs `pnpm install` —
+// it's deliberately dependency-free — so packages/api/node_modules/sharp
+// doesn't exist there. Falling back to a no-op keeps that job fast and
+// dependency-free while still exercising every other invariant (the real
+// pixel-output tests only run where sharp IS installed, e.g. `pnpm verify`).
 
 import { mkdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createRequire } from 'node:module';
 
-const require = createRequire(new URL('../../packages/api/package.json', import.meta.url));
-const sharp = require('sharp');
+let sharp = null;
+try {
+  const require = createRequire(new URL('../../packages/api/package.json', import.meta.url));
+  sharp = require('sharp');
+} catch {
+  // Not installed in this environment — ensureDemoSeedAssets becomes a no-op.
+}
+
+/** True when packages/api's sharp dependency was resolvable — gates both
+ *  ensureDemoSeedAssets' actual rendering and the pixel-output assertions in
+ *  generate-demo-assets.test.mjs. */
+export const sharpAvailable = sharp !== null;
 
 // Mirrors the product list seeded in visitors.mjs (`provisionVisitor`) — keep
 // slugs/names/colors in sync if that list ever changes.
@@ -52,18 +75,26 @@ function labelOverlay(width, height, label) {
  *  should not prevent the demo API from serving traffic; it just means the
  *  built-in icon placeholder shows until the next successful boot. */
 export async function ensureDemoSeedAssets(assetDir) {
+  if (!sharp) return [];
   const dir = resolve(assetDir, 'demo-seed');
   await mkdir(dir, { recursive: true });
   const written = [];
   for (const { slug, name, bg } of DEMO_SEED_PRODUCTS) {
     const dest = resolve(dir, `${slug}.webp`);
-    if (existsSync(dest)) continue;
+    if (existsSync(dest)) continue; // fast-path only; the write below is the real guard
     const buffer = await sharp({ create: { width: WIDTH, height: HEIGHT, channels: 3, background: bg } })
       .composite([{ input: labelOverlay(WIDTH, HEIGHT, name) }])
       .webp({ quality: 82 })
       .toBuffer();
-    await writeFile(dest, buffer);
-    written.push(dest);
+    try {
+      // Exclusive create — throws EEXIST instead of silently overwriting, so
+      // a concurrent boot that lost the existsSync race can't clobber the
+      // winner's file (and never partially-writes one either).
+      await writeFile(dest, buffer, { flag: 'wx' });
+      written.push(dest);
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+    }
   }
   return written;
 }
@@ -74,6 +105,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const assetDir = process.argv[2];
   if (!assetDir) {
     console.error('Usage: node generate-demo-assets.mjs <assetDir>');
+    process.exit(1);
+  }
+  if (!sharpAvailable) {
+    console.error('generate-demo-assets: sharp is not installed (packages/api/node_modules) — nothing to do.');
     process.exit(1);
   }
   const written = await ensureDemoSeedAssets(assetDir);

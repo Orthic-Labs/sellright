@@ -3,9 +3,18 @@ import assert from 'node:assert/strict';
 import {mkdtemp,readFile,stat} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {DEMO_SEED_PRODUCTS,ensureDemoSeedAssets} from './generate-demo-assets.mjs';
+import {DEMO_SEED_PRODUCTS,ensureDemoSeedAssets,sharpAvailable} from './generate-demo-assets.mjs';
 
-test('renders one webp per seeded demo product',async()=>{
+// This suite runs in two lanes: the dependency-free `node --check`/`node
+// --test deploy/demo/*.test.mjs` CI job (no `pnpm install`, so
+// packages/api/node_modules/sharp doesn't exist) and the full `pnpm verify`
+// lane where it does. Self-skip the pixel-output assertions in the former —
+// mirrors the repo's existing self-skipping-DB-suite convention — rather
+// than forcing a real dependency install onto a job whose whole point is to
+// be fast and dependency-free.
+const skip = sharpAvailable ? false : 'sharp is not installed in this environment (packages/api/node_modules)';
+
+test('renders one webp per seeded demo product',{skip},async()=>{
   const dir=await mkdtemp(join(tmpdir(),'sellright-demo-assets-'));
   const written=await ensureDemoSeedAssets(dir);
   assert.equal(written.length,DEMO_SEED_PRODUCTS.length);
@@ -20,7 +29,7 @@ test('renders one webp per seeded demo product',async()=>{
   }
 });
 
-test('is deterministic — identical bytes across independent runs',async()=>{
+test('is deterministic — identical bytes across independent runs',{skip},async()=>{
   const dirA=await mkdtemp(join(tmpdir(),'sellright-demo-assets-a-'));
   const dirB=await mkdtemp(join(tmpdir(),'sellright-demo-assets-b-'));
   await ensureDemoSeedAssets(dirA);
@@ -32,7 +41,7 @@ test('is deterministic — identical bytes across independent runs',async()=>{
   }
 });
 
-test('idempotent — never rewrites a file that already exists',async()=>{
+test('idempotent — never rewrites a file that already exists',{skip},async()=>{
   const dir=await mkdtemp(join(tmpdir(),'sellright-demo-assets-c-'));
   await ensureDemoSeedAssets(dir);
   const path=join(dir,'demo-seed',`${DEMO_SEED_PRODUCTS[0].slug}.webp`);
