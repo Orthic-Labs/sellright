@@ -21,7 +21,11 @@ const priceRule = (st: StoreCtx) => variantPriceRuleFromConfig(st.config);
 
 /** Deployment-default cart lifecycle + per-store config.cart overrides (CART-04). */
 const lifecycle = (st: StoreCtx) =>
-  cartLifecycleFromConfig(st.config, { abandonAfterHours: env.CART_ABANDON_HOURS, ttlDays: env.CART_TTL_DAYS });
+  cartLifecycleFromConfig(st.config, {
+    abandonAfterHours: env.CART_ABANDON_HOURS,
+    ttlDays: env.CART_TTL_DAYS,
+    retentionDays: env.CART_RETENTION_DAYS,
+  });
 
 type PricedCart = {
   currency: string;

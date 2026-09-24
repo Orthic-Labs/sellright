@@ -84,6 +84,7 @@ export function startJobScheduler(): void {
     releaseTtlMin,
     cartAbandonHours: env.CART_ABANDON_HOURS,
     cartTtlDays: env.CART_TTL_DAYS,
+    cartRetentionDays: env.CART_RETENTION_DAYS,
   });
 
   every(60_000, 'gateway-events', 'gateway-events', reconcileGatewayEvents);
