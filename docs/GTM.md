@@ -149,6 +149,8 @@ These are source-level findings/recommendations from the September 17 follow-up,
 
 Primary targets: packages/api/src/routes/cart.ts, routes/checkout.ts, db/schema-content.ts, jobs/cart-maintenance.ts, cart/ttl.ts and their migrations/tests. Use one consistent locking/version protocol across mutations, conversion and background jobs. Do not hold a database transaction open during gateway network calls. Reuse existing order/payment recovery, RLS and outboxes.
 
+**CART-04 durations — owner decision 2026-09-24:** idle carts, including abandoned and non-converted ones, are retained 24 hours before purge. `CART_TTL_DAYS` (empty active/merged carts) and `CART_RETENTION_DAYS` (non-empty abandoned carts) both default to `1` (env-overridable; `CART_RETENTION_DAYS` previously had no deployment default at all and defaulted to "retain forever" per store). `CART_ABANDON_HOURS` (default 4, unchanged) still just flags a non-empty cart 'abandoned' for recovery/analytics partway through that window — it is not itself a deletion point. Converted carts and their orders are never purged by any of these knobs, at any age.
+
 Exit: focused route/database concurrency tests pass under the nonowner runtime role, followed by the normal product gates. The acceptance matrix explicitly proves no order exists before Place Order, stock remains unreserved during shopping, and one submission produces at most one order even under retries. These are production gates, not demo polish.
 
 ## Domain and Demo Store

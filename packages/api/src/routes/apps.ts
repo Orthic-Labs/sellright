@@ -5,8 +5,9 @@ import { resolveStore, resolveStoreForRequest, DEV_DEFAULT_STORE, type StoreCtx 
 import { appKeyHeaderNames, deviceHeaderName, licenseHeaderName, firstHeader } from '../licensing/app-headers.js';
 import { resolveStoreWithFallback } from '../licensing/app-store-fallback.js';
 import * as s from '../db/schema.js';
-import { activateLicenseOnDevice, findActivationByToken } from '../licensing/activations.js';
+import { activateLicenseOnDevice, deactivateDevice, findActivationByToken } from '../licensing/activations.js';
 import { canAccessDownload, canReceiveUpdate } from '../licensing/entitlements.js';
+import { callEntitlementHook, entitlementProvider, withEntitlementVeto } from '../licensing/entitlement-provider.js';
 import { bearerToken } from '../licensing/tokens.js';
 import { signedDownloadPath, verifyDownloadSig, downloadSigningConfigured } from '../licensing/download-url.js';
 import { isAllowedRedirectHost } from '../lib/redirect-allowlist.js';
@@ -122,27 +123,125 @@ apps.openapi(
 // ra-011: body.app is required — PublicActivateIn.parse will throw (400) if omitted.
 // We pass body.app directly into publicAppStore so the store is always caller-supplied,
 // never derived from the Host header.
-apps.post('/api/licenses/activate', async (c) => {
+//
+// Entitlements seam: a registered provider's `onActivate` hook runs INSIDE the
+// same transaction as the activation upsert (licensing/entitlement-provider.ts).
+// It may add response fields (e.g. a signed offline entitlement token) or
+// veto the activation — a veto rolls the activation back too. No provider
+// registered => identical behavior to before this seam existed.
+apps.post('/api/licenses/activate', async (c) => withEntitlementVeto(c, async () => {
   const body = PublicActivateIn.parse(await c.req.json());
   const { appKey, st } = await publicAppStore(c, body.app);
-  const out = await withStore(st.id, (tx) => activateLicenseOnDevice(tx, {
-    storeId: st.id,
-    appKey,
-    licenseKey: body.licenseKey,
-    deviceId: body.deviceId,
-    deviceLabel: body.version ? `app ${body.version}` : null,
-  }));
-  if (out.kind === 'notfound') return c.json({ ok: false, status: 'not_found', message: 'License not found or inactive' }, 404);
-  if (out.kind === 'full') return c.json({ ok: false, status: 'seat_limit_reached', message: 'License device limit reached' }, 409);
+  const result = await withStore(st.id, async (tx) => {
+    const activation = await activateLicenseOnDevice(tx, {
+      storeId: st.id,
+      appKey,
+      licenseKey: body.licenseKey,
+      deviceId: body.deviceId,
+      deviceLabel: body.version ? `app ${body.version}` : null,
+    });
+    if (activation.kind !== 'ok') return { activation, fields: null };
+    // Not caught here — a veto (or any other throw) must propagate out of
+    // this withStore callback uncaught so the transaction rolls back.
+    const fields = await callEntitlementHook(entitlementProvider()?.onActivate, tx, {
+      storeId: st.id,
+      appKey,
+      license: activation.lic,
+      activationId: activation.activationId,
+      activationToken: activation.activationToken,
+      deviceId: body.deviceId,
+      now: new Date(),
+    });
+    return { activation, fields };
+  });
+  const { activation } = result;
+  if (activation.kind === 'notfound') return c.json({ ok: false, status: 'not_found', message: 'License not found or inactive' }, 404);
+  if (activation.kind === 'full') return c.json({ ok: false, status: 'seat_limit_reached', message: 'License device limit reached' }, 409);
   return c.json({
     ok: true,
-    status: out.lic.status,
-    licenseId: out.lic.id,
-    activationToken: out.activationToken,
-    updatesUntil: out.lic.updatesUntil?.toISOString() ?? null,
+    status: activation.lic.status,
+    licenseId: activation.lic.id,
+    activationToken: activation.activationToken,
+    updatesUntil: activation.lic.updatesUntil?.toISOString() ?? null,
     message: 'Activated',
+    ...(result.fields ?? {}),
   }, 200);
+}));
+
+// POST /api/licenses/refresh (also /v1/) — re-validate an activated device and
+// return its current status. This is what makes the server the authority: the
+// client calls it on launch + on a cadence, so a revoked/expired/refunded
+// license (findActivationByToken returns null for any non-active license)
+// drops the app's entitlement at the next refresh.
+//
+// Entitlements seam: a registered provider's `onRefresh` hook runs inside the
+// same transaction and may add fields (e.g. a re-signed offline entitlement
+// token) or veto the refresh. No provider registered => the generic
+// status-only response below, unchanged by this seam's existence.
+const RefreshIn = z.object({
+  app: z.string().min(1),
+  activationToken: z.string().min(1),
+  deviceId: z.string().min(1).optional(),
 });
+
+apps.on('POST', ['/api/licenses/refresh', '/v1/licenses/refresh'], async (c) => withEntitlementVeto(c, async () => {
+  const body = RefreshIn.parse(await c.req.json());
+  const { appKey, st } = await publicAppStore(c, body.app);
+  const result = await withStore(st.id, async (tx) => {
+    const activation = await findActivationByToken(tx, { appKey, activationToken: body.activationToken, deviceId: body.deviceId });
+    if (!activation) return { activation: null, fields: null };
+    const fields = await callEntitlementHook(entitlementProvider()?.onRefresh, tx, {
+      storeId: st.id,
+      appKey,
+      license: activation.license,
+      activationId: activation.activationId,
+      deviceId: body.deviceId ?? null,
+      now: new Date(),
+    });
+    return { activation, fields };
+  });
+  if (!result.activation) {
+    // Unknown token, wrong device, or the license is revoked/expired — the app drops entitlement.
+    return c.json({ ok: false, status: 'invalid', message: 'License is no longer active' }, 200);
+  }
+  const lic = result.activation.license;
+  return c.json({
+    ok: true,
+    status: lic.status,
+    licenseId: lic.id,
+    updatesUntil: lic.updatesUntil?.toISOString() ?? null,
+    expiresAt: lic.expiresAt?.toISOString() ?? null,
+    ...(result.fields ?? {}),
+  }, 200);
+}));
+
+// POST /api/licenses/deactivate (also /v1/) — free this device's seat
+// (app-generic, app from body.app). Idempotent: an unknown/already-removed
+// token still returns ok so the client can clear local state unconditionally.
+//
+// Entitlements seam: a registered provider's `onDeactivate` hook runs BEFORE
+// the row is removed, inside the same transaction, and may add fields or
+// veto the deactivation (e.g. to block it during a support hold) — a veto
+// means the seat is NOT freed. No provider registered => the row is removed
+// unconditionally, unchanged by this seam's existence.
+const DeactivateIn = z.object({ app: z.string().min(1), activationToken: z.string().min(1) });
+
+apps.on('POST', ['/api/licenses/deactivate', '/v1/licenses/deactivate'], async (c) => withEntitlementVeto(c, async () => {
+  const body = DeactivateIn.parse(await c.req.json());
+  const { appKey, st } = await publicAppStore(c, body.app);
+  const result = await withStore(st.id, async (tx) => {
+    // Hook runs BEFORE the row is removed; a veto (thrown, not returned)
+    // rolls back the whole transaction, so the seat is never freed.
+    const fields = await callEntitlementHook(entitlementProvider()?.onDeactivate, tx, {
+      storeId: st.id,
+      appKey,
+      activationToken: body.activationToken,
+    });
+    await deactivateDevice(tx, { appKey, activationToken: body.activationToken });
+    return { fields };
+  });
+  return c.json({ ok: true, ...(result.fields ?? {}) }, 200);
+}));
 
 // POST /api/licenses/trial (also /v1/) — request a free trial Pro license KEY
 // by email. Mints a normal Pro license (tier=pro, source=admin) tied to the
@@ -154,10 +253,17 @@ apps.post('/api/licenses/activate', async (c) => {
 // an app whose registered device policy uses pooled seats (device-policy.ts
 // `pooledSeats`) has mintLicense force it to 0 automatically, so the pool
 // caps — not this flat count — are authoritative.
+//
+// Entitlements seam: a registered provider's `onTrial` hook runs inside the
+// same transaction, after the license is resolved (freshly minted, or an
+// existing valid trial found for resend) and before the key is emailed. It
+// may add response fields or veto issuance entirely — a veto rolls back the
+// customer/license rows created this call. No provider registered => the
+// generic sent/trial_used response below, unchanged by this seam's existence.
 const TrialRequestIn = z.object({ app: z.string().min(1), email: z.string().email() });
 const TRIAL_SEATS = 2;
 
-apps.on('POST', ['/api/licenses/trial', '/v1/licenses/trial'], async (c) => {
+apps.on('POST', ['/api/licenses/trial', '/v1/licenses/trial'], async (c) => withEntitlementVeto(c, async () => {
   const body = TrialRequestIn.parse(await c.req.json());
   const email = body.email.trim().toLowerCase();
   const { appKey, st } = await publicAppStore(c, body.app);
@@ -205,7 +311,13 @@ apps.on('POST', ['/api/licenses/trial', '/v1/licenses/trial'], async (c) => {
       if (priorTrial.expiresAt && priorTrial.expiresAt <= new Date()) {
         return { kind: 'expired' as const };
       }
-      return { kind: 'resend' as const, key: priorTrial.key };
+      // Not caught here — a veto must propagate out of this withStore
+      // callback uncaught so the transaction (customer find-or-create, any
+      // hook-side writes) rolls back.
+      const fields = await callEntitlementHook(entitlementProvider()?.onTrial, tx, {
+        storeId: st.id, appKey, email, licenseKey: priorTrial.key, customerId, outcome: 'resend',
+      });
+      return { kind: 'resend' as const, key: priorTrial.key, fields };
     }
 
     // mint a fresh trial Pro license
@@ -221,7 +333,12 @@ apps.on('POST', ['/api/licenses/trial', '/v1/licenses/trial'], async (c) => {
       issuedBy: 'trial-self-serve',
       reason: `${TRIAL_DAYS}-day self-serve Pro trial`,
     });
-    return { kind: 'issued' as const, key: licenseKey };
+    // A veto here rolls back the customer row (if newly created) AND the
+    // freshly-minted license — never a half-issued trial.
+    const fields = await callEntitlementHook(entitlementProvider()?.onTrial, tx, {
+      storeId: st.id, appKey, email, licenseKey, customerId, outcome: 'issued',
+    });
+    return { kind: 'issued' as const, key: licenseKey, fields };
   });
 
   if (!minted) return c.json({ ok: false, status: 'error', message: 'Could not start trial' }, 500);
@@ -243,8 +360,13 @@ apps.on('POST', ['/api/licenses/trial', '/v1/licenses/trial'], async (c) => {
   } catch {
     /* delivery failure is logged in the mailer; the user can re-request (same key) */
   }
-  return c.json({ ok: true, status: 'sent', message: `Check your email for your ${TRIAL_DAYS}-day Pro key.` }, 200);
-});
+  return c.json({
+    ok: true,
+    status: 'sent',
+    message: `Check your email for your ${TRIAL_DAYS}-day Pro key.`,
+    ...(minted.fields ?? {}),
+  }, 200);
+}));
 
 apps.get('/releases/latest.json', async (c) => {
   const activationToken = bearerToken(c.req.header('authorization')) ?? c.req.header(licenseHeaderName());

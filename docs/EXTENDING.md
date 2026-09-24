@@ -141,3 +141,65 @@ APPS_FALLBACK_STORE_SLUG=myapp-consolidated
 import { appKeyHeaderNames, firstHeader } from '../licensing/app-headers.js';
 firstHeader(c, appKeyHeaderNames()); // reads whichever header(s) you configured
 ```
+
+## 8. Entitlements provider seam (`licensing/entitlement-provider.ts`)
+
+The four public license lifecycle routes in `routes/apps.ts` —
+`POST /api/licenses/activate`, `/api/licenses/refresh`,
+`/api/licenses/deactivate`, `/api/licenses/trial` (each also served at the
+matching `/v1/licenses/...` path) — call an optional, registered
+`EntitlementProvider`'s hook INSIDE the same store-scoped transaction as the
+route's own DB work. A hook can:
+
+- **add fields** to the route's JSON response (e.g. a signed offline
+  entitlement token, richer lifecycle metadata) by returning an object; or
+- **veto** the request by throwing `EntitlementVeto(httpStatus, code, message)`
+  — the veto (like any other error a hook throws) propagates out of the
+  route's `withStore(...)` callback UNCAUGHT, so the transaction rolls back
+  everything the route did (activation upsert, freshly-minted trial license,
+  find-or-create customer, ...) before it becomes an HTTP response.
+
+Nothing registered (the default) means every route's response is byte-for-byte
+what it was before this seam existed.
+
+```ts
+// your-fork/src/index.ts — before createApp()
+import { registerEntitlementProvider, EntitlementVeto } from '@sellright/api/src/licensing/entitlement-provider.js';
+
+registerEntitlementProvider({
+  async onActivate(tx, ctx) {
+    // ctx: { storeId, appKey, license, activationId, activationToken, deviceId, now }
+    const token = signMyEntitlementToken(ctx.license, ctx.deviceId);
+    if (!token) throw new EntitlementVeto(503, 'signing_unavailable', 'License signing is temporarily unavailable.');
+    return { signedToken: token };
+  },
+  async onRefresh(tx, ctx) { /* ctx: { ..., license, activationId, deviceId, now } */ },
+  async onDeactivate(tx, ctx) { /* ctx: { storeId, appKey, activationToken } */ },
+  async onTrial(tx, ctx) { /* ctx: { storeId, appKey, email, licenseKey, customerId, outcome } */ },
+});
+```
+
+A route body ALWAYS calls the hook via `callEntitlementHook(hook, tx, ctx)`
+(a no-op returning `null` when no hook is registered) and never catches what
+it throws inside the transaction — only the outer `withEntitlementVeto(c, fn)`
+wrapper, OUTSIDE `withStore(...)`, catches `EntitlementVeto` and turns it into
+`{ ok: false, status: code, message }` at `httpStatus`. Any other error the
+hook throws rethrows to the app's generic, sanitizing error handler — never
+echoed to the client, never a partial commit either way.
+
+**Mapping a consumer's inline entitlement-signing logic onto the hooks** (the
+shape this seam was built to replace — a fork's own copy of `routes/apps.ts`
+with signed-token issuance inlined into each route):
+
+| Consumer's inline logic | Becomes |
+|---|---|
+| Building the versioned entitlement contract (`buildEntitlements`) + planning the offline lifecycle (`planLicenseLifecycle`) + calling `signEntitlement(...)` after a successful device activation, adding `signedToken`/`entitlements`/`validUntil`/`licenseKind`/... to the activate response | `onActivate` hook: read `ctx.license`, compute the same fields, `return {...}` them |
+| The same signing/lifecycle logic re-run on `/licenses/refresh`, keyed off the re-validated activation | `onRefresh` hook |
+| `recordCanonicalEntitlementIssuance(tx, {...})` called right after a signed token is minted, inside the same transaction | The hook's own `tx` work inside `onActivate`/`onRefresh` — call it there instead of after; a later throw in the SAME hook now correctly rolls it back too (the inline fork version had no such rollback) |
+| `503 signing_unavailable` / `400 device_id_required` responses when signing fails or a required field is missing | `throw new EntitlementVeto(503, 'signing_unavailable', ...)` / `throw new EntitlementVeto(400, 'device_id_required', ...)` |
+| Nothing today on `/licenses/deactivate` (the fork's version is a plain passthrough to `deactivateDevice`) | `onDeactivate` is available for future use (e.g. revoking a cached signed token) but doesn't need a hook body yet |
+| `withCurrentDevicePolicy` / pooled-seat overrides in the trial route | **Not** part of this seam — that's the existing `registerDevicePolicy` seam (`licensing/device-policy.ts`); leave those calls where they are |
+
+Once the fork's `routes/apps.ts` fork is replaced by this provider, the fork
+no longer needs its own copy of `routes/apps.ts` at all — it can depend on
+SellRight's routes directly and just register the provider.
