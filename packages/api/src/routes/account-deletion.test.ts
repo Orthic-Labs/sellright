@@ -56,6 +56,12 @@ async function seed(): Promise<string> {
     // an order with PII on it (customerId + shipping/billing snapshot)
     await tx.execute(sql`INSERT INTO "order" (id, store_id, code, customer_id, state, shipping_address, billing_address, grand_total)
       VALUES (gen_random_uuid(), ${STORE}, 'ORD-1', ${CUSTOMER}, 'Paid', '{"name":"Erase Me"}'::jsonb, '{"name":"Erase Me"}'::jsonb, 5000)`);
+    // a sent email_outbox row addressed to this customer (order confirmation)
+    await tx.execute(sql`INSERT INTO email_outbox (id, store_id, kind, recipient, payload, status)
+      VALUES (gen_random_uuid(), ${STORE}, 'order_confirmation', 'erase-me@acct.test', '{"to":"erase-me@acct.test","subject":"hi"}'::jsonb, 'sent')`);
+    // a newsletter subscriber row for the same email, independent of the customer row
+    await tx.execute(sql`INSERT INTO subscriber (id, store_id, email, kind, status)
+      VALUES (gen_random_uuid(), ${STORE}, 'erase-me@acct.test', 'newsletter', 'confirmed')`);
   });
   return token;
 }
@@ -137,6 +143,16 @@ describe('DELETE /v1/shop/account', () => {
     expect(order!.billingAddress).toBeNull();
     expect(order!.grandTotal).toBe(5000); // money figures untouched
     expect((order!.metadata as Record<string, unknown> | null)?.anonymized_at).toBeDefined();
+
+    // email_outbox row survives (delivery/ops history) but is scrubbed of the address + body
+    const outbox = await withStore(STORE, async (tx) => tx.select().from(s.emailOutbox).where(eq(s.emailOutbox.storeId, STORE)));
+    expect(outbox).toHaveLength(1);
+    expect(outbox[0]!.recipient).not.toBe('erase-me@acct.test');
+    expect(JSON.stringify(outbox[0]!.payload)).not.toContain('erase-me@acct.test');
+
+    // subscriber row for this email is gone
+    const subs = await withStore(STORE, async (tx) => tx.select().from(s.subscriber).where(eq(s.subscriber.storeId, STORE)));
+    expect(subs).toHaveLength(0);
   });
 
   it('refuses with 409 when the customer has an active (non-canceled) subscription', async () => {

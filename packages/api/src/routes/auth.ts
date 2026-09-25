@@ -133,7 +133,7 @@ auth.openapi(
     responses: {
       200: { description: 'OK', content: { 'application/json': { schema: z.object({ token: z.string(), customer: CustomerOut }) } } },
       401: { description: 'Invalid', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
-      403: { description: 'Bot check failed', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+      403: { description: 'Bot check failed or email not verified', content: { 'application/json': { schema: z.object({ error: z.string(), code: z.literal('not_verified').optional() }) } } },
       429: { description: 'Too many attempts', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
     },
   }),
@@ -148,7 +148,7 @@ auth.openapi(
       recordLoginFailure(ip, email);
       return c.json({ error: 'verification failed' }, 403);
     }
-    const out = await withStore(st.id, async (tx): Promise<{ ok: false } | { ok: true; token: string; customer: z.infer<typeof CustomerOut> }> => {
+    const out = await withStore(st.id, async (tx): Promise<{ ok: false } | { ok: 'not_verified' } | { ok: true; token: string; customer: z.infer<typeof CustomerOut> }> => {
       const [cust] = await tx.select({ id: s.customer.id, email: s.customer.email, firstName: s.customer.firstName, lastName: s.customer.lastName, phone: s.customer.phone, emailVerified: s.customer.emailVerified, passwordHash: s.customer.passwordHash }).from(s.customer).where(eq(s.customer.email, email)).limit(1);
       if (!cust || !(await verifyPassword(password, cust.passwordHash))) return { ok: false };
 
@@ -159,13 +159,63 @@ auth.openapi(
         await tx.update(s.customer).set({ passwordHash: await hashPassword(password), updatedAt: new Date() }).where(eq(s.customer.id, cust.id));
       }
 
+      // SEC: the password matched, but the account was never proven to own its
+      // mailbox — a native login must not hand out a session for it. Checked
+      // AFTER password verification so this can't become a second account-
+      // existence oracle (same 401 as a wrong password for a bad guess).
+      if (!cust.emailVerified) return { ok: 'not_verified' };
+
       const token = await createSession(tx, st.id, cust.id, sessionPolicy(st.config));
       return { ok: true, token, customer: { id: cust.id, email: cust.email, firstName: cust.firstName, lastName: cust.lastName, phone: cust.phone, emailVerified: cust.emailVerified, isMigrated: false } };
     });
-    if (!out.ok) { recordLoginFailure(ip, email); return c.json({ error: 'invalid email or password' }, 401); }
+    if (out.ok === false) { recordLoginFailure(ip, email); return c.json({ error: 'invalid email or password' }, 401); }
+    if (out.ok === 'not_verified') {
+      // A correct password DOES clear the login-failure counter here — this is
+      // a legitimate credential, just an unverified account — so a real user
+      // isn't throttled out of resending their verification email.
+      clearLoginAttempts(ip, email);
+      return c.json({ error: 'please verify your email before signing in', code: 'not_verified' as const }, 403);
+    }
     clearLoginAttempts(ip, email);
     setCustomerCookies(c, out.token, newCsrf(), customerCookieSeconds(st));
     return c.json({ token: out.token, customer: out.customer }, 200);
+  },
+);
+
+// POST /v1/shop/auth/resend-verification — re-send the email-verify link for
+// an unverified account. Enumeration-safe: identical 200 whether or not the
+// email exists or is already verified (mirrors magic-link/request). Rate-
+// limited per (ip, email) on the SAME bucket family as register, since it is
+// exactly as mail-abuse-relevant.
+auth.openapi(
+  createRoute({
+    method: 'post',
+    path: '/v1/shop/auth/resend-verification',
+    summary: 'Resend the email verification link',
+    request: { body: { content: { 'application/json': { schema: z.object({ email: z.string().email() }) } } } },
+    responses: {
+      200: { description: 'Always OK', content: { 'application/json': { schema: z.object({ ok: z.boolean() }) } } },
+      429: { description: 'Rate limited', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+    },
+  }),
+  async (c) => {
+    const st = await resolveStoreFromCtx(c);
+    const email = normalizeEmail(c.req.valid('json').email);
+    const ip = clientIp(c);
+    const bucket = `resendverify:${email}`;
+    const retry = loginRetryAfter(ip, bucket);
+    if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
+    recordLoginFailure(ip, bucket);
+    await withStore(st.id, async (tx) => {
+      const [cust] = await tx.select({ id: s.customer.id, emailVerified: s.customer.emailVerified })
+        .from(s.customer).where(eq(s.customer.email, email)).limit(1);
+      if (!cust || cust.emailVerified) return; // enumeration-safe: identical 200 either way
+      const verifyRaw = randomBytes(32).toString('base64url');
+      await tx.insert(s.customerToken).values({ storeId: st.id, customerId: cust.id, kind: 'email_verify', tokenHash: hashToken(verifyRaw), expiresAt: new Date(Date.now() + EMAIL_VERIFY_TTL_HOURS * 3600 * 1000) });
+      const verifyUrl = `${resolveStorefrontUrl(emailStoreCtx(st))}/verify-email?token=${verifyRaw}`;
+      await enqueueEmailVerify(tx, st.id, emailStoreCtx(st), email, { url: verifyUrl });
+    });
+    return c.json({ ok: true }, 200);
   },
 );
 
@@ -179,7 +229,7 @@ auth.openapi(
     responses: {
       200: { description: 'OK', content: { 'application/json': { schema: z.object({ token: z.string(), customer: CustomerOut }) } } },
       401: { description: 'Invalid token', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
-      409: { description: 'Not configured', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+      409: { description: 'Not configured, or an unverified account already owns this email', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
     },
   }),
   async (c) => {
@@ -189,11 +239,28 @@ auth.openapi(
     const { credential } = c.req.valid('json');
     const g = await verifyGoogleIdToken(credential, clientId);
     if (!g || !g.emailVerified) return c.json({ error: 'invalid or unverified Google token' }, 401);
-    const out = await withStore(st.id, async (tx): Promise<{ token: string; customer: z.infer<typeof CustomerOut> }> => {
+    const out = await withStore(st.id, async (tx): Promise<{ kind: 'blocked' } | { kind: 'ok'; token: string; customer: z.infer<typeof CustomerOut> }> => {
       // Match by googleSub first, then link by email, else create.
       let [cust] = await tx.select().from(s.customer).where(eq(s.customer.googleSub, g.sub)).limit(1);
       if (!cust) {
         const [byEmail] = await tx.select().from(s.customer).where(eq(s.customer.email, g.email)).limit(1);
+        // SEC: auto-linking Google sign-in into an EXISTING account by email
+        // match is an account-takeover vector if that account has a password
+        // and its email was never proven — anyone who can register
+        // unverified@victim.com and later prove that SAME address via Google
+        // would otherwise silently inherit the victim's pre-existing account.
+        // Google itself proved this email (g.emailVerified, checked above),
+        // so the only unsafe case is: the target account is unverified AND
+        // has a password of its own (someone else set it up first). Refuse
+        // the link there rather than clearing the password ourselves — this
+        // is not the account owner authenticating, so we don't get to make
+        // destructive changes to it; the legitimate owner can still sign in
+        // with their password + verify normally, or use the account-recovery
+        // flow. A passwordless (isMigrated) unverified account is safe to
+        // link: nothing to steal, no credential to invalidate.
+        if (byEmail && !byEmail.emailVerified && byEmail.passwordHash) {
+          return { kind: 'blocked' };
+        }
         if (byEmail) {
           await tx.update(s.customer).set({ googleSub: g.sub, emailVerified: true, updatedAt: new Date() }).where(eq(s.customer.id, byEmail.id));
           cust = byEmail;
@@ -203,10 +270,13 @@ auth.openapi(
         }
       }
       const token = await createSession(tx, st.id, cust.id, sessionPolicy(st.config));
-      return { token, customer: { id: cust.id, email: cust.email, firstName: cust.firstName, lastName: cust.lastName, phone: cust.phone, emailVerified: true, isMigrated: cust.passwordHash == null } };
+      return { kind: 'ok', token, customer: { id: cust.id, email: cust.email, firstName: cust.firstName, lastName: cust.lastName, phone: cust.phone, emailVerified: true, isMigrated: cust.passwordHash == null } };
     });
+    if (out.kind === 'blocked') {
+      return c.json({ error: 'an account with this email already exists — sign in with your password and verify your email first' }, 409);
+    }
     setCustomerCookies(c, out.token, newCsrf(), customerCookieSeconds(st));
-    return c.json(out, 200);
+    return c.json({ token: out.token, customer: out.customer }, 200);
   },
 );
 
@@ -228,7 +298,7 @@ auth.openapi(
     responses: {
       200: { description: 'OK', content: { 'application/json': { schema: z.object({ token: z.string(), customer: CustomerOut }) } } },
       401: { description: 'Invalid token', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
-      409: { description: 'Not configured', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+      409: { description: 'Not configured, or an unverified account already owns this email', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
     },
   }),
   async (c) => {
@@ -243,14 +313,20 @@ auth.openapi(
     }
     if (!apple) return c.json({ error: 'invalid Apple identity token' }, 401);
     const { sub, email: appleEmail, emailVerified } = apple;
-    const out = await withStore(st.id, async (tx): Promise<{ token: string; customer: z.infer<typeof CustomerOut> }> => {
+    const out = await withStore(st.id, async (tx): Promise<{ kind: 'blocked' } | { kind: 'ok'; token: string; customer: z.infer<typeof CustomerOut> }> => {
       type CustomerRow = { id: string; email: string; first_name: string | null; last_name: string | null; phone: string | null; email_verified: boolean; password_hash: string | null };
       let [cust] = (await tx.execute(sql`SELECT * FROM customer WHERE apple_user_id = ${sub} AND store_id = ${st.id} LIMIT 1`)).rows as CustomerRow[];
       if (!cust && appleEmail) {
         const [byEmail] = (await tx.execute(sql`SELECT * FROM customer WHERE email = ${normalizeEmail(appleEmail)} AND store_id = ${st.id} LIMIT 1`)).rows as CustomerRow[];
-        if (byEmail) {
+        // SEC: same account-takeover guard as Google (see auth/google above).
+        // Only auto-link when Apple itself proved the address AND the target
+        // account isn't a password-holding, still-unverified account that
+        // someone else registered first.
+        if (byEmail && emailVerified && !(!byEmail.email_verified && byEmail.password_hash)) {
           await tx.execute(sql`UPDATE customer SET apple_user_id = ${sub}, updated_at = now() WHERE id = ${byEmail.id}`);
           cust = byEmail;
+        } else if (byEmail && !byEmail.email_verified && byEmail.password_hash) {
+          return { kind: 'blocked' };
         }
       }
       if (!cust) {
@@ -266,10 +342,13 @@ auth.openapi(
         cust = created!;
       }
       const token = await createSession(tx, st.id, cust.id, sessionPolicy(st.config));
-      return { token, customer: { id: cust.id, email: cust.email, firstName: cust.first_name, lastName: cust.last_name, phone: cust.phone, emailVerified: cust.email_verified, isMigrated: cust.password_hash == null } };
+      return { kind: 'ok', token, customer: { id: cust.id, email: cust.email, firstName: cust.first_name, lastName: cust.last_name, phone: cust.phone, emailVerified: cust.email_verified, isMigrated: cust.password_hash == null } };
     });
+    if (out.kind === 'blocked') {
+      return c.json({ error: 'an account with this email already exists — sign in with your password and verify your email first' }, 409);
+    }
     setCustomerCookies(c, out.token, newCsrf(), customerCookieSeconds(st));
-    return c.json(out, 200);
+    return c.json({ token: out.token, customer: out.customer }, 200);
   },
 );
 

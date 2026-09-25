@@ -114,6 +114,24 @@ describe('signed entitlement token', () => {
     }
   });
 
+  it('defaults ttlSeconds to 7 days (SEC: lowered from 30d) when unset and ENTITLEMENT_TTL_SECONDS is unset', () => {
+    const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+    process.env.LICENSE_SIGNING_KEY = (privateKey.export({ type: 'pkcs8', format: 'pem' }) as string);
+    _resetSigningKeyCache();
+    try {
+      const token = signEntitlement(
+        { licenseId: 'lic_default_ttl', app: 'testapp', tier: 'pro', features: [], deviceId: 'd' },
+        10_000, // now = 10s
+      );
+      const v = verifyToken(token as string, publicKey);
+      expect(v!.iat).toBe(10);
+      expect(v!.exp - v!.iat).toBe(7 * 86_400);
+    } finally {
+      delete process.env.LICENSE_SIGNING_KEY;
+      _resetSigningKeyCache();
+    }
+  });
+
   it('signEntitlement clamps exp to expiresAtUnix (trial offline token cannot outlive expiry)', () => {
     const { privateKey, publicKey } = generateKeyPairSync('ed25519');
     process.env.LICENSE_SIGNING_KEY = (privateKey.export({ type: 'pkcs8', format: 'pem' }) as string);

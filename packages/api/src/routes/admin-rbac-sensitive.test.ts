@@ -28,6 +28,7 @@ import { createAdminSession } from '../auth/admin-session.js';
 import { admin } from './admin.js';
 import { adminOrders } from './admin-orders.js';
 import { apps } from './apps.js';
+import { adminAffiliate } from './admin-affiliate.js';
 
 // Safety: refuse to run against anything but a *_test database.
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
@@ -47,6 +48,7 @@ const app = new OpenAPIHono();
 app.route('/', admin);
 app.route('/', adminOrders);
 app.route('/', apps);
+app.route('/', adminAffiliate);
 
 let ownerToken = '';
 let staffToken = '';
@@ -112,6 +114,23 @@ async function seedOrder(opts: SeedOrderOpts): Promise<string> {
     });
   }
   return orderId;
+}
+
+/** Seed a promotion + affiliate + one paid order attributed to it (so `unsettled` > 0
+ *  and a settle call has something real to pay out), for the settle-permission tests. */
+async function seedAffiliate(code: string): Promise<string> {
+  return withStore(STORE, async (tx) => {
+    const promo = (await tx.execute(sql`
+      INSERT INTO promotion (id, store_id, code, type, value, enabled)
+      VALUES (gen_random_uuid(), ${STORE}, ${code}, 'percent', 0, true) RETURNING id`)).rows[0] as { id: string };
+    const aff = (await tx.execute(sql`
+      INSERT INTO affiliate (id, store_id, promotion_id, email, access_token)
+      VALUES (gen_random_uuid(), ${STORE}, ${promo.id}, ${`aff-${code}@rbac.test`}, ${`tok-${code}`}) RETURNING id`)).rows[0] as { id: string };
+    await tx.execute(sql`
+      INSERT INTO "order" (id, store_id, code, state, subtotal, promotion_id, email)
+      VALUES (gen_random_uuid(), ${STORE}, ${`ORD-${code}`}, 'Paid', 10000, ${promo.id}, ${`buyer-${code}@rbac.test`})`);
+    return aff.id;
+  });
 }
 
 async function call(token: string, path: string, body: unknown): Promise<{ status: number; body: Record<string, unknown> }> {
@@ -207,6 +226,28 @@ describe('releases permission gate', () => {
   it('staff WITH releases permission gets 200 on release create', async () => {
     await grantStaffPermission('releases');
     const { status } = await call(staffToken, '/apps/releases', releaseBody('1.0.0-grant'));
+    expect(status).toBe(200);
+  });
+});
+
+describe('affiliate_payouts permission gate', () => {
+  it('owner passes the settle route without any explicit grant', async () => {
+    const id = await seedAffiliate('own-aff');
+    const { status } = await call(ownerToken, `/affiliates/${id}/settle`, {});
+    expect(status).toBe(200);
+  });
+
+  it('staff WITHOUT affiliate_payouts permission gets 403 on settle', async () => {
+    const id = await seedAffiliate('deny-aff');
+    const { status, body } = await call(staffToken, `/affiliates/${id}/settle`, {});
+    expect(status).toBe(403);
+    expect(String(body.error)).toMatch(/affiliate_payouts/);
+  });
+
+  it('staff WITH affiliate_payouts permission gets 200 on settle', async () => {
+    await grantStaffPermission('affiliate_payouts');
+    const id = await seedAffiliate('grant-aff');
+    const { status } = await call(staffToken, `/affiliates/${id}/settle`, {});
     expect(status).toBe(200);
   });
 });

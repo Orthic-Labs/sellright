@@ -16,6 +16,10 @@ import { mintLicense } from '../licensing/mint.js';
 import { sendTrialKey } from '../email/dispatch.js';
 import { J, errBody, guard, requireAdmin, requireStore, requireWrite, requirePermission } from './admin-helpers.js';
 import { err as logErr } from '../lib/logger.js';
+import { clientIp } from '../auth/rate-limit.js';
+import { verifyTurnstileToken } from '../security/turnstile.js';
+import { trialRetryAfter, recordTrialAttempt, licenseActionRetryAfter, recordLicenseAction } from './apps.limit.js';
+import { turnstileSecret } from './contact.js';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
@@ -97,12 +101,17 @@ apps.openapi(
       200: { description: 'Activated', content: J(z.object({ activated: z.boolean(), ok: z.boolean(), appKey: z.string(), status: z.string(), licenseId: z.string(), activationToken: z.string(), updatesUntil: z.string().nullable(), expiresAt: z.string().nullable(), seats: z.number().int() })) },
       404: { description: 'Not found', ...errBody },
       409: { description: 'Seat limit reached', ...errBody },
+      429: { description: 'Rate limited', ...errBody },
     },
   }),
   async (c) => {
     const st = await store(c);
     const { appKey } = c.req.valid('param');
     const { licenseKey, deviceId, deviceLabel } = c.req.valid('json');
+    const ip = clientIp(c);
+    const retry = licenseActionRetryAfter(ip, licenseKey);
+    if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
+    recordLicenseAction(ip, licenseKey);
     const out = await withStore(st.id, (tx) => activateLicenseOnDevice(tx, { storeId: st.id, appKey, licenseKey, deviceId, deviceLabel }));
     if (out.kind === 'notfound') return c.json({ error: 'license not found' }, 404);
     if (out.kind === 'full') return c.json({ error: 'license seat limit reached' }, 409);
@@ -131,6 +140,13 @@ apps.openapi(
 // registered => identical behavior to before this seam existed.
 apps.post('/api/licenses/activate', async (c) => withEntitlementVeto(c, async () => {
   const body = PublicActivateIn.parse(await c.req.json());
+  const ip = clientIp(c);
+  // SEC: throttle per (ip, licenseKey) — blunts key-guessing/credential
+  // stuffing against the activation endpoint without penalizing an
+  // unrelated caller who happens to share an IP (NAT/office/VPN).
+  const retry = licenseActionRetryAfter(ip, body.licenseKey);
+  if (retry > 0) return c.json({ ok: false, status: 'rate_limited', message: `too many attempts — try again in ${retry}s` }, 429);
+  recordLicenseAction(ip, body.licenseKey);
   const { appKey, st } = await publicAppStore(c, body.app);
   const result = await withStore(st.id, async (tx) => {
     const activation = await activateLicenseOnDevice(tx, {
@@ -186,6 +202,11 @@ const RefreshIn = z.object({
 
 apps.on('POST', ['/api/licenses/refresh', '/v1/licenses/refresh'], async (c) => withEntitlementVeto(c, async () => {
   const body = RefreshIn.parse(await c.req.json());
+  const ip = clientIp(c);
+  // SEC: throttle per (ip, activationToken) — same rationale as activate.
+  const retry = licenseActionRetryAfter(ip, body.activationToken);
+  if (retry > 0) return c.json({ ok: false, status: 'rate_limited', message: `too many attempts — try again in ${retry}s` }, 429);
+  recordLicenseAction(ip, body.activationToken);
   const { appKey, st } = await publicAppStore(c, body.app);
   const result = await withStore(st.id, async (tx) => {
     const activation = await findActivationByToken(tx, { appKey, activationToken: body.activationToken, deviceId: body.deviceId });
@@ -228,6 +249,11 @@ const DeactivateIn = z.object({ app: z.string().min(1), activationToken: z.strin
 
 apps.on('POST', ['/api/licenses/deactivate', '/v1/licenses/deactivate'], async (c) => withEntitlementVeto(c, async () => {
   const body = DeactivateIn.parse(await c.req.json());
+  const ip = clientIp(c);
+  // SEC: throttle per (ip, activationToken) — same rationale as activate.
+  const retry = licenseActionRetryAfter(ip, body.activationToken);
+  if (retry > 0) return c.json({ ok: false, status: 'rate_limited', message: `too many attempts — try again in ${retry}s` }, 429);
+  recordLicenseAction(ip, body.activationToken);
   const { appKey, st } = await publicAppStore(c, body.app);
   const result = await withStore(st.id, async (tx) => {
     // Hook runs BEFORE the row is removed; a veto (thrown, not returned)
@@ -260,13 +286,26 @@ apps.on('POST', ['/api/licenses/deactivate', '/v1/licenses/deactivate'], async (
 // may add response fields or veto issuance entirely — a veto rolls back the
 // customer/license rows created this call. No provider registered => the
 // generic sent/trial_used response below, unchanged by this seam's existence.
-const TrialRequestIn = z.object({ app: z.string().min(1), email: z.string().email() });
+const TrialRequestIn = z.object({ app: z.string().min(1), email: z.string().email(), turnstileToken: z.string().optional() });
 const TRIAL_SEATS = 2;
 
 apps.on('POST', ['/api/licenses/trial', '/v1/licenses/trial'], async (c) => withEntitlementVeto(c, async () => {
   const body = TrialRequestIn.parse(await c.req.json());
   const email = body.email.trim().toLowerCase();
+  const ip = clientIp(c);
+
+  // SEC: trial mints a real license + sends mail per call — throttle per
+  // (ip, email) BEFORE resolving the store / touching the DB.
+  const retry = trialRetryAfter(ip, email);
+  if (retry > 0) return c.json({ ok: false, status: 'rate_limited', message: `too many attempts — try again in ${retry}s` }, 429);
+  recordTrialAttempt(ip, email);
+
   const { appKey, st } = await publicAppStore(c, body.app);
+
+  // SEC: fail-closed Turnstile when the resolved store has a secret
+  // configured (same contract as contact.ts) — off entirely when it doesn't.
+  const turnstileOk = await verifyTurnstileToken({ secret: turnstileSecret(st.config), token: body.turnstileToken, remoteIp: ip });
+  if (!turnstileOk) return c.json({ ok: false, status: 'verification_failed', message: 'security verification failed — please try again' }, 403);
 
   const minted = await withStore(st.id, async (tx) => {
     // find-or-create the customer for this email (unique per store)

@@ -14,6 +14,7 @@
 import { createPrivateKey, sign as edSign, verify as edVerify, type KeyObject } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import type { EntitlementStage, LicenseKind } from './license-lifecycle.js';
+import { env } from '../env.js';
 
 export interface SignedPayload {
   /** Schema version. */
@@ -122,7 +123,10 @@ export interface EntitlementInput {
   confirmationDueAtUnix?: number | null;
 }
 
-const DEFAULT_TTL_SECONDS = 30 * 86_400;
+// SEC: default lowered from 30d to 7d to tighten the offline-revocation window
+// on a compromised or refunded license; override via ENTITLEMENT_TTL_SECONDS
+// when a deployment genuinely needs a longer offline grace period.
+const DEFAULT_TTL_SECONDS = env.ENTITLEMENT_TTL_SECONDS ?? 7 * 86_400;
 
 /** Mint a signed token for an active entitlement. Returns null when signing isn't
  *  configured (no `LICENSE_SIGNING_KEY`), so endpoints degrade gracefully before the
