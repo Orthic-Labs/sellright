@@ -37,8 +37,8 @@ When `SMTP_*` values are empty, `GMAIL_USER` + `EMAIL_PASS` automatically map to
 
 ## Per-App Sender Routing
 
-Shared stores can route email by app. This is used by RightApps, where one
-`rightapps` store sells multiple app brands.
+Shared stores can route email by app. This is used by RightSites, where one
+`rightsites` store sells multiple app brands.
 
 ```env
 EMAIL_FROM_BY_APP=appkey=hello@app.example,otherapp=hello@other.example

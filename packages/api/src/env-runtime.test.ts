@@ -32,12 +32,12 @@ describe('resolveFileBackedEnv', () => {
 
 describe('productionEnvErrors', () => {
   it('allows an explicit production database on a non-default PostgreSQL port', () => {
-    const DATABASE_URL = 'postgres://app:password@127.0.0.1:5433/rightapps';
+    const DATABASE_URL = 'postgres://app:password@127.0.0.1:5433/rightsites';
     expect(productionEnvErrors({ NODE_ENV: 'production', DATABASE_URL,
       STOREFRONT_URL: 'https://store.example-shop.com' }, { DATABASE_URL })).toEqual([]);
   });
 
-  it.each(['sellright_dev', 'sellright_test', 'rightsites_sync_test', 'sellright_%64ev', 'rightapps-test', 'rightapps.test', 'rightapps-test-prod'])('rejects development/test database %s regardless of port', (name) => {
+  it.each(['sellright_dev', 'sellright_test', 'rightsites_sync_test', 'sellright_%64ev', 'rightsites-test', 'rightsites.test', 'rightsites-test-prod'])('rejects development/test database %s regardless of port', (name) => {
     const DATABASE_URL = `postgres://app:password@127.0.0.1:5432/${name}`;
     expect(productionEnvErrors({ NODE_ENV: 'production', DATABASE_URL,
       STOREFRONT_URL: 'https://store.example-shop.com' }, { DATABASE_URL }))

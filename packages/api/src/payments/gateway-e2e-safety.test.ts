@@ -6,8 +6,8 @@ describe('gateway E2E target authorization', () => {
     expect(() => assertTarget('postgres://localhost/sellright_test', 'sellright_test')).not.toThrow();
   });
   it.each([
-    ['postgres://user_test:secret@localhost/rightapps', 'rightapps'],
-    ['postgres://localhost/rightapps?application_name=foo_test', 'rightapps'],
+    ['postgres://user_test:secret@localhost/rightsites', 'rightsites'],
+    ['postgres://localhost/rightsites?application_name=foo_test', 'rightsites'],
     ['postgres://localhost/sellright_dev', 'sellright_dev'],
     ['postgres://localhost/sellright_test', undefined],
     ['postgres://localhost/sellright_test', 'different_test'],
