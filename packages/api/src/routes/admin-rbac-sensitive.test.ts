@@ -127,8 +127,8 @@ async function seedAffiliate(code: string): Promise<string> {
       INSERT INTO affiliate (id, store_id, promotion_id, email, access_token)
       VALUES (gen_random_uuid(), ${STORE}, ${promo.id}, ${`aff-${code}@rbac.test`}, ${`tok-${code}`}) RETURNING id`)).rows[0] as { id: string };
     await tx.execute(sql`
-      INSERT INTO "order" (id, store_id, code, state, subtotal, promotion_id, email)
-      VALUES (gen_random_uuid(), ${STORE}, ${`ORD-${code}`}, 'Paid', 10000, ${promo.id}, ${`buyer-${code}@rbac.test`})`);
+      INSERT INTO "order" (id, store_id, code, state, subtotal, promotion_id)
+      VALUES (gen_random_uuid(), ${STORE}, ${`ORD-${code}`}, 'Paid', 10000, ${promo.id})`);
     return aff.id;
   });
 }
