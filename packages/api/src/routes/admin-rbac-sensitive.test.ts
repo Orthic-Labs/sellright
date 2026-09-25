@@ -122,7 +122,7 @@ async function seedAffiliate(code: string): Promise<string> {
   return withStore(STORE, async (tx) => {
     const promo = (await tx.execute(sql`
       INSERT INTO promotion (id, store_id, code, type, value, enabled)
-      VALUES (gen_random_uuid(), ${STORE}, ${code}, 'percent', 0, true) RETURNING id`)).rows[0] as { id: string };
+      VALUES (gen_random_uuid(), ${STORE}, ${code}, 'percentage', 0, true) RETURNING id`)).rows[0] as { id: string };
     const aff = (await tx.execute(sql`
       INSERT INTO affiliate (id, store_id, promotion_id, email, access_token)
       VALUES (gen_random_uuid(), ${STORE}, ${promo.id}, ${`aff-${code}@rbac.test`}, ${`tok-${code}`}) RETURNING id`)).rows[0] as { id: string };

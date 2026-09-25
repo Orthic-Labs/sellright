@@ -14,8 +14,11 @@
  *   - license actions (activate/refresh/deactivate): guessing/credential-
  *     stuffing a licenseKey, or hammering the entitlement authority.
  *     20/15min per (ip, licenseKey).
- *   - cart: legitimate shoppers can hit this often (every add/remove); the
- *     limit only needs to stop a scripted flood, not normal use. 30/min/IP.
+ *   - cart: legitimate shoppers can hit this often (every add/remove), and a
+ *     single IP can legitimately open several carts in a short window
+ *     (multiple tabs/devices behind one NAT, or a busy storefront/e2e test
+ *     session). The limit only needs to stop a scripted flood, not normal
+ *     use. 60/min/IP.
  */
 interface Entry { attempts: number[]; }
 
@@ -54,7 +57,7 @@ const HOUR = 60 * MIN;
 
 const trial = makeKeyedLimiter(HOUR, 5); // 5/hr per (ip, email)
 const licenseAction = makeKeyedLimiter(15 * MIN, 20); // 20/15min per (ip, licenseKey)
-const cart = makeKeyedLimiter(MIN, 30); // 30/min per ip
+const cart = makeKeyedLimiter(MIN, 60); // 60/min per ip
 
 export const trialRetryAfter = trial.retryAfter;
 export const recordTrialAttempt = trial.record;

@@ -46,10 +46,10 @@ describe('license action rate limit (20/15min per ip+licenseKey)', () => {
   });
 });
 
-describe('cart rate limit (30/min per ip)', () => {
-  it('allows up to 30 attempts then blocks', () => {
+describe('cart rate limit (60/min per ip)', () => {
+  it('allows up to 60 attempts then blocks', () => {
     const theIp = ip();
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 60; i++) {
       expect(cartRetryAfter(theIp)).toBe(0);
       recordCartAttempt(theIp);
     }
@@ -58,7 +58,7 @@ describe('cart rate limit (30/min per ip)', () => {
 
   it('is per-ip — a different ip is unaffected', () => {
     const theIp = ip();
-    for (let i = 0; i < 30; i++) recordCartAttempt(theIp);
+    for (let i = 0; i < 60; i++) recordCartAttempt(theIp);
     expect(cartRetryAfter(theIp)).toBeGreaterThan(0);
     expect(cartRetryAfter(ip())).toBe(0);
   });
