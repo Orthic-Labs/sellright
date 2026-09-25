@@ -20,6 +20,7 @@ export const PERMISSION_ACTIONS: { key: string; label: string; hint: string }[] 
   { key: 'refunds', label: 'Refunds', hint: 'Refund orders and approve return requests' },
   { key: 'cancel_orders', label: 'Cancel orders', hint: 'Cancel orders and release reserved stock' },
   { key: 'releases', label: 'App releases', hint: 'Create and publish app release manifests' },
+  { key: 'affiliate_payouts', label: 'Affiliate payouts', hint: 'Record affiliate settlement payouts' },
 ];
 
 const UI_PERMISSION_KEYS = PERMISSION_ACTIONS.map((p) => p.key);

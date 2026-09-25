@@ -470,6 +470,20 @@ account.openapi(
       await tx.update(s.cart).set({ customerId: null }).where(eq(s.cart.customerId, cust.id)); // cart TTL job reaps it
       await tx.delete(s.address).where(eq(s.address.customerId, cust.id));
 
+      // Email outbox rows are queued/sent mail keyed by recipient address, not
+      // customerId — they'd otherwise survive erasure holding this person's
+      // email + rendered message body forever. Scrub the recipient and payload
+      // rather than deleting: sent/delivery history stays auditable for
+      // deliverability/ops without retaining the readable address or content.
+      await tx.update(s.emailOutbox)
+        .set({ recipient: 'erased@deleted.invalid', payload: sql`jsonb_build_object('erased', true)` })
+        .where(and(eq(s.emailOutbox.storeId, st.id), eq(s.emailOutbox.recipient, cust.email)));
+
+      // Marketing subscriptions (newsletter/waitlist) are opt-in PII keyed by
+      // email, independent of the customer row — erasure must remove them too,
+      // not just the shop account.
+      await tx.delete(s.subscriber).where(and(eq(s.subscriber.storeId, st.id), eq(s.subscriber.email, cust.email)));
+
       await tx.delete(s.customer).where(eq(s.customer.id, cust.id));
       return 'ok';
     });

@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { withStore } from '../db/client.js';
 import { resolveStore, DEV_DEFAULT_STORE } from '../store-context.js';
 import * as s from '../db/schema.js';
-import { HttpError, J, errBody, money, requireAdmin, requireStore, requireWrite, guard, slugify } from './admin-helpers.js';
+import { HttpError, J, errBody, money, requireAdmin, requireStore, requireWrite, requirePermission, guard, slugify } from './admin-helpers.js';
 import { enqueueAffiliateMail, reassignAffiliate, syncPromotionAffiliate } from '../affiliate/onboarding.js';
 
 export const adminAffiliate = new OpenAPIHono();
@@ -166,7 +166,10 @@ adminAffiliate.openapi(
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
-    const st = requireStore(admin, c); requireWrite(st);
+    // SEC: settling a payout moves money outside the order/refund ledger — gate
+    // it behind an explicit permission rather than the generic write role so a
+    // plain 'staff' member can't record arbitrary affiliate payouts.
+    const st = requireStore(admin, c); requireWrite(st); requirePermission(st, 'affiliate_payouts');
     const { id } = c.req.valid('param');
     const b = c.req.valid('json');
     const res = await withStore(st.storeId, async (tx) => {

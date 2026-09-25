@@ -14,6 +14,8 @@ import { customerToken, resolveCustomer } from '../auth/session.js';
 import { normalizeEmail } from '../auth/email.js';
 import { env } from '../env.js';
 import { cartExpiry, cartLifecycleFromConfig } from '../cart/ttl.js';
+import { clientIp } from '../auth/rate-limit.js';
+import { cartRetryAfter, recordCartAttempt } from './apps.limit.js';
 
 /** Per-store effective-price rule (see money/pricing.ts) — resolved from
  *  store.config.pricing.variantRule so cart and checkout price identically. */
@@ -355,9 +357,18 @@ cart.openapi(
   createRoute({
     method: 'post', path: '/v1/shop/cart', summary: 'Create a cart',
     request: { body: { content: { 'application/json': { schema: z.object({ items: z.array(CartLineIn).optional(), email: z.string().email().optional(), couponCode: z.string().optional() }) } } } },
-    responses: { 200: { description: 'Cart', content: { 'application/json': { schema: CartOut } } } },
+    responses: {
+      200: { description: 'Cart', content: { 'application/json': { schema: CartOut } } },
+      429: { description: 'Rate limited', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+    },
   }),
   async (c) => {
+    // SEC: generous per-IP throttle — a scripted flood of cart creates writes
+    // an unbounded number of cart rows; legitimate shoppers never approach 60/min.
+    const ip = clientIp(c);
+    const retry = cartRetryAfter(ip);
+    if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
+    recordCartAttempt(ip);
     const st = await resolveStoreFromCtx(c);
     const body = c.req.valid('json');
     const authTok = customerToken(c);

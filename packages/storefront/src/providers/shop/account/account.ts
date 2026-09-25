@@ -16,10 +16,12 @@ import {
 	srLogout,
 	srRegister,
 	srVerifyEmail,
+	srResendVerification,
 	srUpdateProfile,
 	srResetPassword,
 	srForgotPassword,
 	srErrorStatus,
+	srErrorBody,
 } from '~/utils/sellright';
 
 export const loginMutation = async (
@@ -33,8 +35,26 @@ export const loginMutation = async (
 		return { login: { __typename: 'CurrentUser', id: res.customer.id, identifier: res.customer.email } } as unknown as LoginMutation;
 	} catch (e) {
 		const status = srErrorStatus(e);
+		// SEC: the API refuses login for a correct-password, unverified account
+		// with a distinct 403 + { code: 'not_verified' } — surface that as its
+		// own discriminated error so the sign-in page can render a
+		// "verify your email" state (with resend) instead of a generic
+		// invalid-credentials message.
+		if (status === 403 && srErrorBody<{ code?: string }>(e)?.code === 'not_verified') {
+			return { login: { __typename: 'NotVerifiedError', errorCode: 'NOT_VERIFIED_ERROR', message: 'please verify your email before signing in' } } as unknown as LoginMutation;
+		}
 		const message = status === 429 ? 'Too many attempts — please try again later' : 'Invalid email or password';
 		return { login: { __typename: 'InvalidCredentialsError', errorCode: 'INVALID_CREDENTIALS_ERROR', message } } as unknown as LoginMutation;
+	}
+};
+
+/** Re-send the email verification link for an unverified account. Always
+ *  resolves ok (enumeration-safe server response). */
+export const resendVerificationMutation = async (email: string): Promise<{ ok: boolean }> => {
+	try {
+		return await srResendVerification(email);
+	} catch {
+		return { ok: true }; // never leak a failure shape to the caller — same enumeration-safe contract as the server
 	}
 };
 

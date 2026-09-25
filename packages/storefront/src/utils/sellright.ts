@@ -132,6 +132,9 @@ export const srResetPassword = (token: string, password: string) =>
 export const srVerifyEmail = (token: string) =>
   sr<{ ok: boolean }>('/v1/shop/auth/verify-email', { method: 'POST', body: JSON.stringify({ token }) });
 
+export const srResendVerification = (email: string) =>
+  sr<{ ok: boolean }>('/v1/shop/auth/resend-verification', { method: 'POST', body: JSON.stringify({ email }) });
+
 /** PATCH /v1/shop/account/me — profile (firstName/lastName/phone). */
 export const srUpdateProfile = (body: { firstName?: string | null; lastName?: string | null; phone?: string | null }) =>
   sr<{ id: string; email: string; firstName: string | null; lastName: string | null; phone: string | null }>(

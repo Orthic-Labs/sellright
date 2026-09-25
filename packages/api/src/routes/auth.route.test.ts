@@ -125,8 +125,18 @@ describe('POST /v1/shop/auth/login', () => {
     expect(res.status).toBe(200);
   }
 
+  /** Registration leaves emailVerified=false — mark it verified the way the
+   *  verify-email link flow would, so login tests unrelated to SEC-VERIFY-1
+   *  aren't blocked by it. */
+  async function markVerified(email: string): Promise<void> {
+    await withStore(STORE, async (tx) => {
+      await tx.update(s.customer).set({ emailVerified: true }).where(eq(s.customer.email, email));
+    });
+  }
+
   it('logs in with correct credentials and sets cookies', async () => {
     await registerDirect('logintest@auth.test', 'rightpassword1');
+    await markVerified('logintest@auth.test');
     const res = await app.request('/v1/shop/auth/login', {
       method: 'POST', headers: hdr(), body: JSON.stringify({ email: 'logintest@auth.test', password: 'rightpassword1' }),
     });
@@ -140,6 +150,7 @@ describe('POST /v1/shop/auth/login', () => {
 
   it('a wrong password returns a generic 401 (no account-existence leak)', async () => {
     await registerDirect('wrongpw@auth.test', 'correctpassword1');
+    await markVerified('wrongpw@auth.test');
     const res = await app.request('/v1/shop/auth/login', {
       method: 'POST', headers: hdr(), body: JSON.stringify({ email: 'wrongpw@auth.test', password: 'totallywrongpassword' }),
     });
@@ -155,6 +166,69 @@ describe('POST /v1/shop/auth/login', () => {
     expect(res.status).toBe(401);
     const body = await res.json() as { error: string };
     expect(body.error).toBe('invalid email or password');
+  });
+
+  // ── SEC-VERIFY-1: native login refuses an unverified account ──────────────
+  it('refuses login for a correct password on an UNVERIFIED account (403, code not_verified)', async () => {
+    await registerDirect('unverified@auth.test', 'rightpassword1');
+    // deliberately NOT marking verified
+    const res = await app.request('/v1/shop/auth/login', {
+      method: 'POST', headers: hdr(), body: JSON.stringify({ email: 'unverified@auth.test', password: 'rightpassword1' }),
+    });
+    expect(res.status).toBe(403);
+    const body = await res.json() as { error: string; code?: string };
+    expect(body.code).toBe('not_verified');
+    expect(parseSetCookies(res)[CUST_COOKIE]).toBeUndefined(); // no session handed out
+  });
+
+  it('once verified, the SAME account can log in normally', async () => {
+    await registerDirect('willverify@auth.test', 'rightpassword1');
+    let res = await app.request('/v1/shop/auth/login', {
+      method: 'POST', headers: hdr(), body: JSON.stringify({ email: 'willverify@auth.test', password: 'rightpassword1' }),
+    });
+    expect(res.status).toBe(403);
+    await markVerified('willverify@auth.test');
+    res = await app.request('/v1/shop/auth/login', {
+      method: 'POST', headers: hdr(), body: JSON.stringify({ email: 'willverify@auth.test', password: 'rightpassword1' }),
+    });
+    expect(res.status).toBe(200);
+  });
+});
+
+describe('POST /v1/shop/auth/resend-verification', () => {
+  it('is enumeration-safe: identical 200 whether or not the email exists', async () => {
+    const resKnown = await app.request('/v1/shop/auth/resend-verification', {
+      method: 'POST', headers: hdr(), body: JSON.stringify({ email: 'resend-unknown-1@auth.test' }),
+    });
+    const resUnknown = await app.request('/v1/shop/auth/resend-verification', {
+      method: 'POST', headers: hdr(), body: JSON.stringify({ email: 'resend-unknown-2@auth.test' }),
+    });
+    expect(resKnown.status).toBe(200);
+    expect(resUnknown.status).toBe(200);
+    expect(await resKnown.json()).toEqual({ ok: true });
+    expect(await resUnknown.json()).toEqual({ ok: true });
+  });
+
+  it('mints a fresh email_verify token for an unverified account', async () => {
+    await app.request('/v1/shop/auth/register', {
+      method: 'POST', headers: hdr(), body: JSON.stringify({ email: 'resend-real@auth.test', password: 'rightpassword1' }),
+    });
+    const before = await withStore(STORE, async (tx) => {
+      const [c] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, 'resend-real@auth.test')).limit(1);
+      return tx.select().from(s.customerToken).where(eq(s.customerToken.customerId, c!.id));
+    });
+    expect(before).toHaveLength(1); // the one minted at register
+
+    const res = await app.request('/v1/shop/auth/resend-verification', {
+      method: 'POST', headers: hdr(), body: JSON.stringify({ email: 'resend-real@auth.test' }),
+    });
+    expect(res.status).toBe(200);
+
+    const after = await withStore(STORE, async (tx) => {
+      const [c] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, 'resend-real@auth.test')).limit(1);
+      return tx.select().from(s.customerToken).where(eq(s.customerToken.customerId, c!.id));
+    });
+    expect(after.length).toBe(before.length + 1); // a second token minted
   });
 });
 

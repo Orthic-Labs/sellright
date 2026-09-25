@@ -1,14 +1,14 @@
 import { $, component$, useSignal, useVisibleTask$ } from '@qwik.dev/core';
 import { useNavigate } from '@qwik.dev/router';
 import { registerCustomerFromSignup } from '~/components/auth/signup-flow';
-import { loginMutation, registerCustomerAccountMutation, requestPasswordResetMutation } from '~/providers/shop/account/account';
+import { loginMutation, registerCustomerAccountMutation, requestPasswordResetMutation, resendVerificationMutation } from '~/providers/shop/account/account';
 import { checkCustomerEmail } from '~/providers/shop/account/check-email';
 import { SignInError } from './SignInError';
 export { head } from './seo';
 
 const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY || '';
 
-type Step = 'email' | 'signin' | 'signup' | 'success' | 'reset-sent';
+type Step = 'email' | 'signin' | 'signup' | 'success' | 'reset-sent' | 'verify-needed';
 
 export default component$(() => {
 	const navigate = useNavigate();
@@ -24,6 +24,8 @@ export default component$(() => {
 	const loading = useSignal(false);
 	const turnstileToken = useSignal('');
 	const honeypot = useSignal('');
+	const resendLoading = useSignal(false);
+	const resendSent = useSignal(false);
 	const widgetId = useSignal<string>();
 	const resetChallenge = $(() => {
 		turnstileToken.value = '';
@@ -89,10 +91,12 @@ export default component$(() => {
 			const { login } = await loginMutation(email.value.trim(), password.value, rememberMe.value, turnstileToken.value);
 			if (login.__typename === 'CurrentUser') {
 				navigate('/account');
+			} else if ((login as any).__typename === 'NotVerifiedError') {
+				step.value = 'verify-needed';
 			} else {
 				const msg = (login as any).message?.toLowerCase() || '';
 				if (msg.includes('verify') || msg.includes('verification')) {
-					error.value = 'Please verify your email address first. Check your inbox for a verification link.';
+					step.value = 'verify-needed';
 				} else {
 					error.value = 'Invalid email or password.';
 				}
@@ -160,7 +164,15 @@ export default component$(() => {
 		confirmPassword.value = '';
 		firstName.value = '';
 		lastName.value = '';
+		resendSent.value = false;
 		step.value = 'email';
+	});
+
+	const handleResendVerification = $(async () => {
+		resendLoading.value = true;
+		await resendVerificationMutation(email.value.trim());
+		resendLoading.value = false;
+		resendSent.value = true;
 	});
 
 	return (
@@ -362,6 +374,35 @@ export default component$(() => {
 							<button
 								onClick$={handleBack}
 								class="text-sm text-[var(--color-accent)] hover:text-[var(--color-ink)] underline cursor-pointer"
+							>
+								Back to sign in
+							</button>
+						</div>
+					)}
+
+					{/* ── Step: unverified account tried to sign in ── */}
+					{step.value === 'verify-needed' && (
+						<div class="text-center py-4">
+							<div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-[var(--color-parchment)] mb-4">
+								<svg class="h-6 w-6 text-[var(--color-accent)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+								</svg>
+							</div>
+							<h2 class="text-lg font-medium text-gray-900 mb-2">Verify your email</h2>
+							<p class="text-sm text-gray-600 mb-6">
+								Your password is correct, but <span class="font-medium">{email.value}</span> hasn't been verified yet.
+								Check your inbox for the verification link{resendSent.value ? ' — we just sent another one.' : '.'}
+							</p>
+							<button
+								onClick$={handleResendVerification}
+								disabled={resendLoading.value || resendSent.value}
+								class="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-[var(--color-accent)] hover:bg-[#4F3B26] focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-[var(--color-accent)] transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed mb-3"
+							>
+								{resendLoading.value ? 'Sending...' : resendSent.value ? 'Verification email sent' : 'Resend verification email'}
+							</button>
+							<button
+								onClick$={handleBack}
+								class="text-sm text-gray-600 hover:text-gray-800 underline cursor-pointer"
 							>
 								Back to sign in
 							</button>
