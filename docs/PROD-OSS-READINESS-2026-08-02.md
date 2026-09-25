@@ -55,7 +55,7 @@ Grounded in the repo's researched teardown (`docs/COMPETITORS.md`, `docs/COMMERC
 
 **Performance** — parity for single-instance, behind at scale. Disciplined indexes, tuned pool, static catalog manifest ≈ Vendure-class. No Redis, no HTTP cache, offset pagination, local-disk assets = a documented single-instance ceiling; Shopify/BigCommerce (hosted) and Medusa (Redis-native) win beyond one box. For DD/RH volumes this ceiling is nowhere in sight.
 
-**Basic features** — complete commerce core (catalog/cart/checkout/orders/refunds/customers/promotions/gift cards/tax zones/subscriptions/affiliates/licensing/webhooks/blog). Ahead of everyone on digital/licensing + true multi-tenancy. Behind on payment breadth (Stripe-only), live shipping rates, automatic tax/EU VAT, reviews/loyalty/upsell, and the app ecosystem — none of which block DD/RH/RightApps.
+**Basic features** — complete commerce core (catalog/cart/checkout/orders/refunds/customers/promotions/gift cards/tax zones/subscriptions/affiliates/licensing/webhooks/blog). Ahead of everyone on digital/licensing + true multi-tenancy. Behind on payment breadth (Stripe-only), live shipping rates, automatic tax/EU VAT, reviews/loyalty/upsell, and the app ecosystem — none of which block DD/RH/RightSites.
 
 **Bottom line vs Vendure specifically:** you lose GraphQL and the plugin ecosystem; you gain RLS multi-tenancy, native licensing/subscriptions, a leaner REST contract, and code you own. For your stores this is a net upgrade — the migration risk is operational (cutover), not architectural.
 
@@ -86,7 +86,7 @@ Grounded in the repo's researched teardown (`docs/COMPETITORS.md`, `docs/COMMERC
 |---|---|---|
 | H1 | **Server-side bot protection**: validate Turnstile (or equivalent) on register/login/check-email/contact/newsletter/checkout. Vendure-era storefront had it; SellRight dropped it — card-testing and signup spam hit day one on a live store. | zero `turnstile` hits in `packages/api/src`; `check-email.ts:6` |
 | H2 | **Untrack internal strategy docs** (MOAT, GTM, COMPETITORS, MARKET-PLACEMENT, COMMERCE-GAP-ANALYSIS, ADMIN-*-PLAN, docs/plans/, rank.md, .agent/) and trim README's links to them. | all still tracked; `README.md:43-46` |
-| H3 | **Move/genericize `packages/api/scripts-deploy/`** — box-specific nginx/systemd + `adrdsouza@gmail.com` hardcoded in 3 scripts (incl. `deploy-rightapps-tls.sh:14`). | scripts-deploy/* |
+| H3 | **Move/genericize `packages/api/scripts-deploy/`** — box-specific nginx/systemd + `adrdsouza@gmail.com` hardcoded in 3 scripts (incl. `deploy-rightsites-tls.sh:14`). | scripts-deploy/* |
 | H4 | **Vendor or drop `deps:*` scripts** — they call `../tools/right-release/deps.mjs`, which no cloner has; CLAUDE.md/AGENTS.md also describe your private workspace. Rewrite as public contributor docs. | root `package.json:20-23` |
 | H5 | **Document the single-instance ceiling loudly in README** (in-process rate limiter + store-context cache, local-disk assets) so self-hosters don't horizontal-scale into it. Redis adapter itself can wait. | `rate-limit.ts:3-5`, `store-context.ts` |
 

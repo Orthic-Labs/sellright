@@ -260,7 +260,7 @@ database whose name does not end in `_test`.
 
 Shipped to RightSites production. Five brand sites post to
 `/v1/shop/newsletter-signup` same-origin (nginx proxies `/v1/` to
-`rightapps-api` on every brand vhost), so there is no CORS surface and no
+`rightsites-api` on every brand vhost), so there is no CORS surface and no
 per-app Cloudflare Worker in the path.
 
 | site | kind | topic |

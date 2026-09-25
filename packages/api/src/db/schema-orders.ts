@@ -96,7 +96,7 @@ export const orderLine = pgTable('order_line', {
   refundedQty: integer().notNull().default(0),
 });
 
-// Software entitlements issued from paid order lines. Store-scoped: Right Apps
+// Software entitlements issued from paid order lines. Store-scoped: RightSites
 // can host ViewRight/CodeRight/etc. in one instance, while Damned/RH remain
 // separate DB/API instances with their own license rows.
 //

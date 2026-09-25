@@ -62,7 +62,7 @@ section in the same pass.
 
 ### 4. `packages/api/scripts-deploy/` is personal infrastructure
 
-Box-specific ops: `deploy-rightapps-tls.sh`, `nginx-rightapps.conf`,
+Box-specific ops: `deploy-rightsites-tls.sh`, `nginx-rightsites.conf`,
 `nginx-admin.conf`, `sellright-api.service`, `create-tenant-db.sh`, and verify
 scripts that hardcode `adrdsouza@gmail.com` (`auth-verify.sh:18`,
 `affiliate-commission-test.sh:7`). No secrets in them, but they're Adrian's

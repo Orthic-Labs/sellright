@@ -316,7 +316,8 @@ const CheckoutContent = component$(() => {
       if (SR_CHECKOUT_ENABLED) {
         // Stripe when the store advertises it; otherwise the configured gateway
         // methods (NMI/Sezzle) — the mounted panel drives POST gateway-payment.
-        // shopConfig null = fetch failed → keep the Stripe default (RightApps).
+        // shopConfig null = fetch failed → keep the Stripe default (e.g. a
+        // store without NMI/Sezzle configured).
         const useGateway = shopConfig.value !== null && !shopConfig.value.stripeConfigured
           && !!(shopConfig.value.gateways.nmi || shopConfig.value.gateways.sezzle);
         const form = {

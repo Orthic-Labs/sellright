@@ -43,7 +43,7 @@ production/TestFlight builds to receive anything.
 
 ## 3. Set the env on the box
 
-`~/sites/sellright/packages/api/.env` (and the RightApps equivalent if that
+`~/sites/sellright/packages/api/.env` (and the RightSites equivalent if that
 deployment should push too):
 
 ```sh

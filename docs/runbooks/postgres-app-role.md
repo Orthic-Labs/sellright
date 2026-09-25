@@ -13,7 +13,7 @@ Set a distinct application name in each deployment:
 PGAPPNAME=sellright-api
 
 # RightSites production API
-PGAPPNAME=rightapps-api
+PGAPPNAME=rightsites-api
 ```
 
 The API passes this value to Postgres as `application_name`, so activity and
@@ -64,11 +64,11 @@ Run as a Postgres administrator for each database used by the application. The
 transaction-boundary regression test is present and green.
 
 ```sql
-ALTER ROLE sellright_app IN DATABASE rightapps
+ALTER ROLE sellright_app IN DATABASE rightsites
   SET statement_timeout = '30s';
-ALTER ROLE sellright_app IN DATABASE rightapps
+ALTER ROLE sellright_app IN DATABASE rightsites
   SET idle_in_transaction_session_timeout = '15s';
-ALTER ROLE sellright_app IN DATABASE rightapps
+ALTER ROLE sellright_app IN DATABASE rightsites
   SET lock_timeout = '5s';
 
 ALTER ROLE sellright_app IN DATABASE sellright_dev

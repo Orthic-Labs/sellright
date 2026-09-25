@@ -4,7 +4,7 @@
 
 **How to use:** copy ONE fenced block below — it is the agent's ENTIRE job (branch, spec, tests, constraints, gate, report format). Paste it verbatim to one agent. The agent pushes its branch and reports; the main session re-gates in a clean checkout, merges `--no-ff`, deletes the branch, and marks the lane DONE here in the same turn.
 
-**Scope discipline:** this repo is the SellRight **product** (`D:\Claude\sellright`), not the RightApps fork. Edit here, push `origin/main`, pull on the box. Every lane targets `packages/api` unless it says otherwise. No lane may touch `packages/storefront` payment code except S-CFG-flip (Lane P1) and only behind the flag.
+**Scope discipline:** this repo is the SellRight **product** (`D:\Claude\sellright`), not the RightSites fork. Edit here, push `origin/main`, pull on the box. Every lane targets `packages/api` unless it says otherwise. No lane may touch `packages/storefront` payment code except S-CFG-flip (Lane P1) and only behind the flag.
 
 ## ⇒ NEXT-AGENT HANDOFF — start here (updated 2026-07-04)
 

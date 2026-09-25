@@ -28,7 +28,7 @@ describe('email dispatch app routing', () => {
     // do not require a real-looking database/deployment URL fixture here.
     process.env = {
       NODE_ENV: 'test',
-      SMTP_FROM: 'hello@rightapps.test',
+      SMTP_FROM: 'hello@example-store.test',
       STOREFRONT_URL: 'https://store.example.com',
       EMAIL_FROM_BY_APP: [
         'heardright=hello@heardright.app',
@@ -45,7 +45,7 @@ describe('email dispatch app routing', () => {
     const { sendOrderConfirmation } = await import('./dispatch.js');
 
     await sendOrderConfirmation(
-      { name: 'RightApps', currency: 'USD', appKey: 'viewright' },
+      { name: 'Example Store', currency: 'USD', appKey: 'viewright' },
       'buyer@example.com',
       {
         code: 'SR-VR-1',

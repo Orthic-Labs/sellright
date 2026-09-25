@@ -16,7 +16,7 @@ SellRight's hard parts are genuinely well-built — arguably better-architected 
 
 Where competitors win is **not the engine** — it's (1) the **growth/retention app ecosystem** (email/SMS, reviews, loyalty, subscriptions, upsell), (2) **operational breadth** (live shipping, automatic tax, multi-channel/POS), and (3) **infra for scale** (Redis, search index, CDN/signed URLs, cursor pagination).
 
-**For RightApps specifically (digital software/license sales, multi-tenant), SellRight is _ahead_ of all three competitors** — and most of their "killer" gaps (carrier shipping, POS, marketplace sync) don't apply to you.
+**For RightSites specifically (digital software/license sales, multi-tenant), SellRight is _ahead_ of all three competitors** — and most of their "killer" gaps (carrier shipping, POS, marketplace sync) don't apply to you.
 
 ---
 
@@ -168,7 +168,7 @@ The top-installed apps across all three ecosystems converge on the same categori
 
 ---
 
-## Prioritized roadmap — worth adding vs not (for RightApps)
+## Prioritized roadmap — worth adding vs not (for RightSites)
 
 Scored by **demand × effort × fit-for-digital-software-store**.
 
@@ -193,7 +193,7 @@ Scored by **demand × effort × fit-for-digital-software-store**.
 14. Bulk catalog ops + CSV import UI, smart-collection rule editor, metafield surfacing.
 15. Expand audit-log coverage (customer/staff-role/settings/login) + broaden enforced RBAC keys.
 
-### Skip / not worth it for RightApps
+### Skip / not worth it for RightSites
 - ❌ Live carrier shipping rates + labels (digital goods)
 - ❌ POS / in-person retail
 - ❌ Multi-channel marketplace sync (Amazon/eBay/Walmart — N/A for software)
@@ -204,6 +204,6 @@ Scored by **demand × effort × fit-for-digital-software-store**.
 
 ## One-line bottom line
 
-> **SellRight is a world-class commerce _engine_ wrapped in a strong admin, missing the growth-app layer and scale-infra that competitors monetize separately. For a general merchant it's not a Shopify replacement (shipping/tax/channels/apps). For RightApps it already beats Shopify/Woo/BigCommerce on the things that matter to selling software — and the highest-value additions (signed downloads, subscriptions, email flows) are small because the foundations are already there.**
+> **SellRight is a world-class commerce _engine_ wrapped in a strong admin, missing the growth-app layer and scale-infra that competitors monetize separately. For a general merchant it's not a Shopify replacement (shipping/tax/channels/apps). For RightSites it already beats Shopify/Woo/BigCommerce on the things that matter to selling software — and the highest-value additions (signed downloads, subscriptions, email flows) are small because the foundations are already there.**
 
 _Evidence: `.audit/spec-research.json` (full per-feature inventory with file:line + competitor sources)._

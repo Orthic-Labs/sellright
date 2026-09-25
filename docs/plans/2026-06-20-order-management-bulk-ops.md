@@ -2,7 +2,7 @@
 
 **Goal:** Give the operator a safe, reversible-by-default way to clear orders in bulk from the admin Orders page — cancel unpaid orders, trash/restore (soft-delete), and permanently purge — closing the "no way to bulk-delete orders" gap.
 
-**Architecture:** Build in **SellRight** (the commerce product); RightApps absorbs it via the upstream merge. Reuse the existing bulk pattern (`POST /v1/admin/orders/bulk-fulfill` in `admin.ts` — dedup → per-order `withStore` → `{results, succeeded, skipped}` + `auditLog`), the FSM (`canTransition`, `Cancelled` already exists), and the established soft-delete convention (`deletedAt`, as on product/variant). The only schema change is an additive `order.deletedAt`. The admin Orders page already has multi-select + a bulk toolbar + a per-row result panel — we add buttons + a Trash view.
+**Architecture:** Build in **SellRight** (the commerce product); RightSites absorbs it via the upstream merge. Reuse the existing bulk pattern (`POST /v1/admin/orders/bulk-fulfill` in `admin.ts` — dedup → per-order `withStore` → `{results, succeeded, skipped}` + `auditLog`), the FSM (`canTransition`, `Cancelled` already exists), and the established soft-delete convention (`deletedAt`, as on product/variant). The only schema change is an additive `order.deletedAt`. The admin Orders page already has multi-select + a bulk toolbar + a per-row result panel — we add buttons + a Trash view.
 
 **Visual Plan: "four actions, three risk tiers"**
 
@@ -65,7 +65,7 @@ flowchart LR
 ```bash
 cd packages/api && pnpm db:generate
 ```
-Expected: a new `drizzle/<NNNN>_*.sql` containing exactly `ALTER TABLE "order" ADD COLUMN "deleted_at" timestamp with time zone;`. If `db:generate` regenerates unrelated tables (stale snapshots — as in the RightApps fork), instead hand-write `drizzle/<NNNN>_order_soft_delete.sql` with that one line and add a `{ "idx": <N>, "version": "7", "when": <ms>, "tag": "<NNNN>_order_soft_delete", "breakpoints": true }` entry to `drizzle/meta/_journal.json`.
+Expected: a new `drizzle/<NNNN>_*.sql` containing exactly `ALTER TABLE "order" ADD COLUMN "deleted_at" timestamp with time zone;`. If `db:generate` regenerates unrelated tables (stale snapshots — as in the RightSites fork), instead hand-write `drizzle/<NNNN>_order_soft_delete.sql` with that one line and add a `{ "idx": <N>, "version": "7", "when": <ms>, "tag": "<NNNN>_order_soft_delete", "breakpoints": true }` entry to `drizzle/meta/_journal.json`.
 
 **1c.** Apply + verify:
 ```bash
@@ -362,7 +362,7 @@ Expected: clean.
 
 ## Verification & immediate use
 - `pnpm verify` (api) green; `admin-orders.bulk.test.ts` green (cascade proven).
-- The test-order cleanup that motivated this is already done on the RightApps box; once this lands in SellRight and merges upstream, the **Trash → Delete permanently** flow replaces ad-hoc scripts for good.
+- The test-order cleanup that motivated this is already done on the RightSites box; once this lands in SellRight and merges upstream, the **Trash → Delete permanently** flow replaces ad-hoc scripts for good.
 
 ## Self-review
 - **Spec coverage:** cancel (FSM + stock) ✓, soft-delete/restore ✓, purge (gated + cascade) ✓, read-filter (list/dashboard/reports/export) ✓ (Task 2), UI for all four + Trash view ✓. Migration additive ✓.
