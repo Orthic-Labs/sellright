@@ -212,8 +212,8 @@ importers:
         specifier: ^10.11.0
         version: 10.11.0(jiti@2.7.0)(supports-color@7.2.0)
       eslint-plugin-qwik:
-        specifier: 2.0.0-beta.30
-        version: 2.0.0-beta.30(eslint@10.11.0(jiti@2.7.0)(supports-color@7.2.0))(supports-color@7.2.0)(typescript@6.0.3)
+        specifier: 2.0.0-beta.45
+        version: 2.0.0-beta.45(eslint@10.11.0(jiti@2.7.0)(supports-color@7.2.0))(supports-color@7.2.0)(typescript@6.0.3)
       express:
         specifier: ^5.2.1
         version: 5.2.1(supports-color@7.2.0)
@@ -2929,8 +2929,8 @@ packages:
     resolution: {integrity: sha512-/veY75JbMK4j1yjvuUxuVsiS/hr/4iHs9FTT6cgTexxdE0Ly/glccBAkloH/DofkjRbZU3bnoj38mOmhkZ0lHw==}
     engines: {node: '>=12'}
 
-  eslint-plugin-qwik@2.0.0-beta.30:
-    resolution: {integrity: sha512-6GtIB6Eu4mBd9OJtQ88p3RQudZ1zeGfT58xphT0Dy43wMaWzq3a82JGdpJoLVP/tTcxPbrPBrluyQUlra7gDOQ==}
+  eslint-plugin-qwik@2.0.0-beta.45:
+    resolution: {integrity: sha512-YDDZzgbvdJvnB9n5G19PEme2Q1O1Lpn7Y5cfvcfek5uDdSJ5wJBwZZ2XzWPahfAqdWtmUZnMSPE2mW10gFO8bg==}
     engines: {node: ^18.17.0 || ^20.3.0 || >=21.0.0}
     peerDependencies:
       eslint: ^8.57.0 || ^9.0.0 || ^10.0.0
@@ -7068,7 +7068,7 @@ snapshots:
   '@typescript-eslint/project-service@8.70.0(supports-color@7.2.0)(typescript@6.0.3)':
     dependencies:
       '@typescript-eslint/tsconfig-utils': 8.70.0(typescript@6.0.3)
-      '@typescript-eslint/types': 8.70.0
+      '@typescript-eslint/types': 8.70.1
       debug: 4.4.3(supports-color@7.2.0)
       typescript: 6.0.3
     transitivePeerDependencies:
@@ -7964,7 +7964,7 @@ snapshots:
 
   escape-string-regexp@5.0.0: {}
 
-  eslint-plugin-qwik@2.0.0-beta.30(eslint@10.11.0(jiti@2.7.0)(supports-color@7.2.0))(supports-color@7.2.0)(typescript@6.0.3):
+  eslint-plugin-qwik@2.0.0-beta.45(eslint@10.11.0(jiti@2.7.0)(supports-color@7.2.0))(supports-color@7.2.0)(typescript@6.0.3):
     dependencies:
       '@typescript-eslint/utils': 8.70.1(eslint@10.11.0(jiti@2.7.0)(supports-color@7.2.0))(supports-color@7.2.0)(typescript@6.0.3)
       eslint: 10.11.0(jiti@2.7.0)(supports-color@7.2.0)
