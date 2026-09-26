@@ -1,4 +1,6 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
+import { PassThrough, Readable } from 'node:stream';
+import ExcelJS from 'exceljs';
 import { hasUnresolvedPayment } from '../payments/hold.js';
 import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
@@ -121,36 +123,109 @@ adminOrderOps.openapi(
   }),
 );
 
-// ── order export (CSV) ───────────────────────────────────────────────────────
+// ── order export (CSV + XLSX) ────────────────────────────────────────────────
+// Column order shared by both formats — keep in sync with orderExportRow().
+export const ORDER_EXPORT_COLUMNS = ['code', 'date', 'email', 'state', 'preOrder', 'fulfillment', 'tracking', 'subtotal', 'discount', 'shipping', 'tax', 'total', 'currency'] as const;
+
+type OrderExportRow = {
+  code: string; state: string; isPreOrder: boolean; email: string | null;
+  subtotal: number; discountTotal: number; shippingTotal: number; taxTotal: number; grandTotal: number; currency: string;
+  placedAt: Date | null; createdAt: Date; tracking: string | null; fulfillmentState: string | null;
+};
+
+function parseExportQuery(c: { req: { query: (k: string) => string | undefined } }): { days: number; state?: string } {
+  const days = Math.min(3650, Math.max(1, Number(c.req.query('days') ?? '365')));
+  const state = c.req.query('state') || undefined;
+  return { days, state };
+}
+
+/** Shared query for both export formats. Same 50k-row cap as the original CSV export. */
+async function fetchOrderExportRows(storeId: string, opts: { days: number; state?: string }): Promise<OrderExportRow[]> {
+  return withStore(storeId, async (tx) => {
+    const conds = [sql`coalesce(${s.order.placedAt}, ${s.order.createdAt}) >= now() - (${opts.days} || ' days')::interval`, sql`${s.order.deletedAt} is null`] as never[];
+    if (opts.state) conds.push(sql`${s.order.state} = ${opts.state}` as never);
+    return tx
+      .select({
+        code: s.order.code, state: s.order.state, isPreOrder: s.order.isPreOrder, email: s.customer.email,
+        subtotal: s.order.subtotal, discountTotal: s.order.discountTotal, shippingTotal: s.order.shippingTotal,
+        taxTotal: s.order.taxTotal, grandTotal: s.order.grandTotal, currency: s.order.currency,
+        placedAt: s.order.placedAt, createdAt: s.order.createdAt,
+        tracking: sql<string | null>`(select f.tracking_code from fulfillment f where f.order_id = ${s.order.id} order by f.created_at desc limit 1)`,
+        fulfillmentState: sql<string | null>`(select f.state from fulfillment f where f.order_id = ${s.order.id} order by f.created_at desc limit 1)`,
+      })
+      .from(s.order).leftJoin(s.customer, eq(s.customer.id, s.order.customerId))
+      .where(and(...conds)).orderBy(desc(sql`coalesce(${s.order.placedAt}, ${s.order.createdAt})`)).limit(50000);
+  });
+}
+
+const money2dp = (n: number) => n / 100;
+
+/** Row values in ORDER_EXPORT_COLUMNS order, as native types (caller formats/escapes per format). */
+export function orderExportRowValues(r: OrderExportRow): [string, string, string, string, string, string, string, number, number, number, number, number, string] {
+  return [
+    r.code,
+    (r.placedAt ?? r.createdAt).toISOString().slice(0, 10),
+    r.email ?? '',
+    r.state,
+    r.isPreOrder ? 'yes' : '',
+    r.fulfillmentState ?? '',
+    r.tracking ?? '',
+    money2dp(r.subtotal),
+    money2dp(r.discountTotal),
+    money2dp(r.shippingTotal),
+    money2dp(r.taxTotal),
+    money2dp(r.grandTotal),
+    r.currency,
+  ];
+}
+
 // Plain handler (not .openapi) so it can stream text/csv as a download.
 adminOrderOps.get('/v1/admin/export/orders', async (c) => {
   try {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c);
-    const days = Math.min(3650, Math.max(1, Number(c.req.query('days') ?? '365')));
-    const state = c.req.query('state') || undefined;
-    const rows = await withStore(st.storeId, async (tx) => {
-      const conds = [sql`coalesce(${s.order.placedAt}, ${s.order.createdAt}) >= now() - (${days} || ' days')::interval`, sql`${s.order.deletedAt} is null`] as never[];
-      if (state) conds.push(sql`${s.order.state} = ${state}` as never);
-      return tx
-        .select({
-          code: s.order.code, state: s.order.state, isPreOrder: s.order.isPreOrder, email: s.customer.email,
-          subtotal: s.order.subtotal, discountTotal: s.order.discountTotal, shippingTotal: s.order.shippingTotal,
-          taxTotal: s.order.taxTotal, grandTotal: s.order.grandTotal, currency: s.order.currency,
-          placedAt: s.order.placedAt, createdAt: s.order.createdAt,
-          tracking: sql<string | null>`(select f.tracking_code from fulfillment f where f.order_id = ${s.order.id} order by f.created_at desc limit 1)`,
-          fulfillmentState: sql<string | null>`(select f.state from fulfillment f where f.order_id = ${s.order.id} order by f.created_at desc limit 1)`,
-        })
-        .from(s.order).leftJoin(s.customer, eq(s.customer.id, s.order.customerId))
-        .where(and(...conds)).orderBy(desc(sql`coalesce(${s.order.placedAt}, ${s.order.createdAt})`)).limit(50000);
-    });
-    const header = ['code', 'date', 'email', 'state', 'preOrder', 'fulfillment', 'tracking', 'subtotal', 'discount', 'shipping', 'tax', 'total', 'currency'];
-    const lines = [header.join(',')];
-    const c2 = (n: number) => (n / 100).toFixed(2);
+    const rows = await fetchOrderExportRows(st.storeId, parseExportQuery(c));
+    const lines = [ORDER_EXPORT_COLUMNS.join(',')];
     for (const r of rows) {
-      lines.push([r.code, (r.placedAt ?? r.createdAt).toISOString().slice(0, 10), r.email ?? '', r.state, r.isPreOrder ? 'yes' : '', r.fulfillmentState ?? '', r.tracking ?? '', c2(r.subtotal), c2(r.discountTotal), c2(r.shippingTotal), c2(r.taxTotal), c2(r.grandTotal), r.currency].map(csvCell).join(','));
+      const v = orderExportRowValues(r);
+      // money columns formatted to 2dp for the CSV, same as the original output
+      lines.push([v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7].toFixed(2), v[8].toFixed(2), v[9].toFixed(2), v[10].toFixed(2), v[11].toFixed(2), v[12]].map(csvCell).join(','));
     }
     return c.body(lines.join('\n'), 200, { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="orders-${st.slug}.csv"` });
+  } catch (e) {
+    if (e instanceof HttpError) return c.json({ error: e.message }, e.status);
+    throw e;
+  }
+});
+
+// Same columns/rows as the CSV export above, streamed as a real .xlsx workbook
+// (ExcelJS's streaming writer — never buffers the whole file in memory).
+adminOrderOps.get('/v1/admin/export/orders.xlsx', async (c) => {
+  try {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    const rows = await fetchOrderExportRows(st.storeId, parseExportQuery(c));
+
+    const passThrough = new PassThrough();
+    const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({ stream: passThrough, useStyles: true });
+    const sheet = workbook.addWorksheet('Orders');
+    sheet.columns = ORDER_EXPORT_COLUMNS.map((key) => ({ header: key, key }));
+    for (const r of rows) {
+      const v = orderExportRowValues(r);
+      sheet.addRow(v).commit();
+    }
+    sheet.commit();
+    // Fire-and-forget: WorkbookWriter finalizes the ZIP into passThrough as rows
+    // are committed; commit() below flushes the remaining central-directory bytes
+    // and ends the stream. Do not await before returning — Hono streams the
+    // response as passThrough emits, matching the CSV route's download behaviour.
+    void workbook.commit();
+
+    const webStream = Readable.toWeb(passThrough) as ReadableStream;
+    return c.body(webStream, 200, {
+      'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'content-disposition': `attachment; filename="orders-${st.slug}.xlsx"`,
+    });
   } catch (e) {
     if (e instanceof HttpError) return c.json({ error: e.message }, e.status);
     throw e;

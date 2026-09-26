@@ -194,7 +194,12 @@ export const head = ({ resolveValue, url: _url }: { resolveValue: any; url: URL 
 // Static generation — identical to original
 // ─────────────────────────────────────────────────────────────────
 export const onStaticGenerate: StaticGenerateHandler = async () => {
-  const endpoint = process.env.VENDURE_API_URL || 'http://localhost:3100/shop-api';
+  // Build-time only (SSG) — bare Node env var, not a Vite VITE_* client var.
+  // Renamed from VENDURE_API_URL; default port now matches the SellRight
+  // API's own default (packages/api/src/env.ts PORT), not the old
+  // Vendure-era localhost:3100. A fetch failure here degrades gracefully
+  // (empty slug list, caught below) rather than failing the build.
+  const endpoint = process.env.SELLRIGHT_API_URL || 'http://localhost:3300/shop-api';
   const query = `
     query GetProductSlugs {
       products(options: { take: 500 }) {

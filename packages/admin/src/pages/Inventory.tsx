@@ -28,6 +28,8 @@ export default function Inventory() {
   const [view, setView] = useState('all');
   const [page, setPage] = useState(1);
   const [edits, setEdits] = useState<Record<string, string>>({});
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkValue, setBulkValue] = useState('');
   const low = view === 'low';
 
   const { data, isLoading, error, isFetching, refetch } = useQuery({
@@ -43,6 +45,20 @@ export default function Inventory() {
       toast.success('Stock saved', `On hand set to ${vars.onHand}`);
     },
     onError: (e) => toast.error('Stock save failed', (e as Error).message),
+  });
+  // Bulk set: one PATCH, one transaction on the API side (all-or-nothing —
+  // see admin-products.ts /v1/admin/variants/stock/bulk). All selected
+  // variants are set to the SAME on-hand value; per-variant differing values
+  // still go through the single-row editor above.
+  const bulkSave = useMutation({
+    mutationFn: (items: { id: string; onHand: number }[]) => api.patch<{ updated: { id: string; onHand: number }[] }>('/variants/stock/bulk', { items }),
+    onSuccess: (d) => {
+      setSelected(new Set());
+      setBulkValue('');
+      qc.invalidateQueries({ queryKey: ['inventory', store?.slug] });
+      toast.success('Stock saved', `${d.updated.length} variant${d.updated.length === 1 ? '' : 's'} set to ${d.updated[0]?.onHand ?? ''}`);
+    },
+    onError: (e) => toast.error('Bulk stock save failed', (e as Error).message),
   });
 
   const columns: Column<InventoryRow>[] = [
@@ -82,6 +98,40 @@ export default function Inventory() {
         isFetching={isFetching}
         error={error ? (error as Error).message : null}
         onRetry={() => refetch()}
+        selection={{
+          selectedKeys: selected,
+          onToggle: (k) => setSelected((cur) => { const n = new Set(cur); if (n.has(k)) n.delete(k); else n.add(k); return n; }),
+          onToggleAllVisible: (keys) => setSelected((cur) => {
+            const allSelected = keys.every((k) => cur.has(k));
+            const n = new Set(cur);
+            if (allSelected) for (const k of keys) n.delete(k); else for (const k of keys) n.add(k);
+            return n;
+          }),
+        }}
+        toolbar={(count) => (
+          <>
+            <input
+              className="input w-20 text-center tnum py-1.5"
+              type="number"
+              min={0}
+              aria-label="New on-hand value for selected variants"
+              placeholder="On hand"
+              value={bulkValue}
+              onChange={(e) => setBulkValue(e.target.value)}
+            />
+            <button
+              className="btn-primary btn-sm"
+              disabled={bulkSave.isPending || bulkValue === '' || Number(bulkValue) < 0}
+              onClick={() => {
+                const onHand = Number(bulkValue);
+                bulkSave.mutate([...selected].map((id) => ({ id, onHand })));
+              }}
+            >
+              {bulkSave.isPending ? <Spinner className="text-white" /> : <Check size={15} />} Set stock for {count} selected
+            </button>
+            <button className="btn-ghost btn-sm" onClick={() => setSelected(new Set())}>Clear</button>
+          </>
+        )}
         empty={low
           ? <EmptyStateActionPanel icon={<Boxes size={22} />} title="Nothing is low on stock" description="No variants are at or below the low-stock threshold. That's a good thing." actions={[{ label: 'Show all stock', variant: 'ghost', onClick: () => { setView('all'); setPage(1); } }]} />
           : q

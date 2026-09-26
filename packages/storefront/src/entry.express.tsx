@@ -9,6 +9,7 @@ import { join, dirname, basename } from"node:path";
 import { fileURLToPath } from"node:url";
 import render from"./entry.ssr";
 import { sellrightRequestCookie } from"./utils/sellright-request-context.server";
+import { assertProdApiConfigured } from"./constants";
 
 declare global {
  interface QwikRouterPlatform extends PlatformNode {}
@@ -42,7 +43,7 @@ const app = express();
 // API / payment-provider origins the storefront legitimately talks to.
 // Pulled from env so dev (127.0.0.1:3300) and prod (the real API host) both
 // work without editing this file. 'self' always covers same-origin SSR calls.
-const apiOrigin = (process.env.VITE_SELLRIGHT_API_URL || process.env.VENDURE_API_URL || '')
+const apiOrigin = (process.env.VITE_SELLRIGHT_API_URL || '')
 	.replace(/\/(shop-api)?\/?$/, '')
 	.trim();
 const connectSrcExtra = apiOrigin ? ` ${apiOrigin}` : '';
@@ -167,6 +168,14 @@ app.use(router);
 
 // Use Qwik Router's 404 handler
 app.use(notFound);
+
+// Fail loud rather than silently serving a dev API URL: VITE_SELLRIGHT_PROD_URL
+// is inlined at build time, so if a production build was produced without it,
+// this Node process (NODE_ENV=production) refuses to start rather than serve
+// checkout/catalog traffic against a dev-port default nothing is listening on
+// in prod. Checked here — at actual server startup — not at build time (see
+// constants.ts assertProdApiConfigured for why the build itself must not throw).
+assertProdApiConfigured(process.env.NODE_ENV);
 
 // Start the express server
 app.listen(PORT, HOST, () => {
