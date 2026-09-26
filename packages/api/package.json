@@ -31,7 +31,7 @@
     "@xmldom/xmldom": "0.9.12",
     "bcryptjs": "3.0.3",
     "dotenv": "^17.4.2",
-    "drizzle-orm": "^0.45.2",
+    "drizzle-orm": "^0.45.3",
     "exceljs": "^4.4.0",
     "hono": "^4.13.8",
     "nodemailer": "^10.0.10",
@@ -43,14 +43,14 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@types/node": "^25.9.4",
+    "@types/node": "^25.9.8",
     "@types/nodemailer": "^8.0.2",
     "@types/pg": "^8.23.1",
     "@types/sanitize-html": "^2.16.1",
-    "drizzle-kit": "^0.31.10",
+    "drizzle-kit": "^0.31.11",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
-    "vite": "7.3.5",
+    "vite": "7.3.6",
     "vitest": "^4.1.9"
   }
 }
