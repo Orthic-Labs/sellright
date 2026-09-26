@@ -37,6 +37,7 @@ import { env } from '../env.js';
 import { publishCatalogManifest } from './catalog.js';
 import { withLeaderLock } from '../jobs/leader-lock.js';
 import { log, err as logErr } from '../lib/logger.js';
+import { onCatalogCacheChanged } from '../cache/purge-hook.js';
 
 interface RegenState {
   generating: boolean;
@@ -65,6 +66,11 @@ function manifestConfigured(): boolean {
  * caller's response, and its own failures are logged, not thrown.
  */
 export function onStockChanged(storeSlug: string): void {
+  // Independent of the manifest feature gate below — a deployment with the
+  // catalog manifest disabled must still get Cloudflare cache purges on stock
+  // change. onCatalogCacheChanged() itself no-ops per-store when that store
+  // has no Cloudflare config, so this is always safe to call.
+  onCatalogCacheChanged(storeSlug);
   if (!manifestConfigured() || storeSlug !== env.STORE_SLUG) return;
   const st = stateFor(storeSlug);
   if (st.generating) {

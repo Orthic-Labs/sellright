@@ -1,7 +1,7 @@
 import { server$ } from '@qwik.dev/router';
 import { isBrowser } from '@qwik.dev/core/build';
 import type { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
-import { AUTH_TOKEN, DEV_API, HEADER_AUTH_TOKEN_KEY, PROD_API } from '~/constants';
+import { AUTH_TOKEN, DEV_API, HEADER_AUTH_TOKEN_KEY, LOCAL_API, PROD_API } from '~/constants';
 
 export interface RequesterOptions {
 	channelToken?: string;
@@ -21,6 +21,11 @@ const normalizeApiUrl = (value: string) => {
 
 const baseUrl = normalizeApiUrl(import.meta.env.DEV ? DEV_API : PROD_API);
 const shopApi = `${baseUrl}/shop-api`;
+// Server-side (SSR / server$()) internal target — always localhost, never the
+// public PROD_API domain, which goes through Cloudflare and 400s server-to-
+// server traffic. Configurable via VITE_SELLRIGHT_LOCAL_URL; was previously
+// hardcoded to localhost:3100 regardless of environment.
+const internalShopApi = `${normalizeApiUrl(LOCAL_API)}/shop-api`;
 
 export const requester = async <R, V>(
 	doc: DocumentTypeDecoration<R, V>,
@@ -51,7 +56,7 @@ const execute = async <R, V = Record<string, any>>(
 
 	const response: ResponseProps<R> = isBrowser
 		? await executeOnTheServer(requestOptions)
-		: await executeRequest(requestOptions, options.apiUrl?.includes('localhost') ? options.apiUrl : 'http://localhost:3100/shop-api');
+		: await executeRequest(requestOptions, options.apiUrl?.includes('localhost') ? options.apiUrl : internalShopApi);
 
 	return response.data;
 };
@@ -63,7 +68,7 @@ const createHeaders = () => {
 };
 
 const executeOnTheServer = server$(async function (this, options: Options) {
-	const internalUrl = 'http://localhost:3100/shop-api';
+	const internalUrl = internalShopApi;
 	const token = this.cookie.get(AUTH_TOKEN)?.value;
 
 	if (token && !options.headers.Authorization) {

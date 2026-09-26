@@ -89,6 +89,13 @@ export default function Orders() {
     finally { setExporting(false); }
   }
 
+  async function exportXlsx() {
+    setExporting(true);
+    try { await downloadFile(`/export/orders.xlsx?days=365${state ? `&state=${state}` : ''}`, `orders-${store?.slug ?? 'store'}.xlsx`); toast.success('Export started'); }
+    catch (e) { toast.error('Export failed', (e as Error).message); }
+    finally { setExporting(false); }
+  }
+
   function exportSelectedCsv() {
     const rows = (data?.items ?? []).filter((o) => selected.has(o.code));
     if (!rows.length) return;
@@ -203,6 +210,7 @@ export default function Orders() {
         <div className="flex items-center gap-2">
           <ActionMenu label="Actions" items={[
             { label: exporting ? 'Exporting…' : 'Export CSV', icon: <Download size={15} />, onClick: exportCsv, disabled: exporting },
+            { label: exporting ? 'Exporting…' : 'Export XLSX', icon: <Download size={15} />, onClick: exportXlsx, disabled: exporting },
             { label: 'Import tracking', icon: <Upload size={15} />, to: '/orders/import-tracking' },
             { label: 'Abandoned carts', icon: <ShoppingCart size={15} />, to: '/abandoned-carts' },
             { label: 'Save current as view', icon: <Plus size={15} />, onClick: saveCurrentView },

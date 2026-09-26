@@ -214,3 +214,70 @@ adminProducts.openapi(
     return c.json({ id, onHand }, 200);
   }),
 );
+
+adminProducts.openapi(
+  createRoute({
+    method: 'patch', path: '/v1/admin/variants/stock/bulk', summary: 'Set on-hand stock for many variants in one transaction',
+    request: { body: { content: J(z.object({
+      items: z.array(z.object({ id: z.string(), onHand: z.number().int().min(0) })).min(1).max(500),
+    })) } },
+    responses: {
+      200: { description: 'OK', content: J(z.object({ updated: z.array(z.object({ id: z.string(), onHand: z.number().int() })) })) },
+      404: { description: 'One or more variants not found (nothing written — atomic)', content: J(z.object({ error: z.string(), missing: z.array(z.string()) })) },
+      401: { description: 'Unauthorized', ...errBody },
+    },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    requireWrite(st);
+    const { items } = c.req.valid('json');
+    // De-dupe by variant id — last write for a given id in the payload wins,
+    // same as if the caller had sent two separate single-variant PATCHes in a
+    // row. Prevents two rows in the request racing each other inside the loop.
+    const byId = new Map(items.map((i) => [i.id, i.onHand]));
+    const ids = [...byId.keys()];
+
+    const updated = await withStore(st.storeId, async (tx) => {
+      // Whole bulk write is one transaction: validate every id up front so a
+      // typo/stale row aborts the ENTIRE batch (nothing partially applied)
+      // rather than silently skipping it mid-loop.
+      const knownVariants = await tx.select({ id: s.productVariant.id }).from(s.productVariant)
+        .where(and(inArray(s.productVariant.id, ids), sql`${s.productVariant.deletedAt} is null`));
+      const knownIds = new Set(knownVariants.map((v) => v.id));
+      const missing = ids.filter((id) => !knownIds.has(id));
+      if (missing.length) throw new HttpError(404, `variant(s) not found: ${missing.join(', ')}`);
+
+      const existingStock = await tx.select().from(s.stock).where(inArray(s.stock.variantId, ids));
+      const stockByVariant = new Map(existingStock.map((row) => [row.variantId, row]));
+
+      const out: { id: string; onHand: number }[] = [];
+      for (const id of ids) {
+        const onHand = byId.get(id)!;
+        const cur = stockByVariant.get(id);
+        if (cur) {
+          const delta = onHand - cur.onHand;
+          await tx.update(s.stock).set({ onHand }).where(eq(s.stock.variantId, id));
+          if (delta !== 0) await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: id, delta, reason: 'admin_bulk_adjust' });
+        } else {
+          await tx.insert(s.stock).values({ variantId: id, storeId: st.storeId, onHand, allocated: 0 });
+          await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: id, delta: onHand, reason: 'admin_bulk_adjust' });
+        }
+        await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'variant', entityId: id, action: 'stock', data: { onHand, bulk: true } });
+        await emitVariantProductChanged(tx, st.storeId, id);
+        out.push({ id, onHand });
+      }
+      return out;
+    });
+
+    // Zero-cache stock rule: regenerate the manifest immediately, after this
+    // commit, exactly once for the whole batch — never inside the transaction
+    // above (a later throw would roll the write back). Matches the single-
+    // variant PATCH above: fires unconditionally on success, delta or not.
+    // onStockChanged's own state machine (manifest/stock-hook.ts) already
+    // collapses concurrent triggers into a single trailing rerun, so one call
+    // after N variant writes is correct, not a missed update.
+    onStockChanged(st.slug);
+    return c.json({ updated }, 200);
+  }),
+);

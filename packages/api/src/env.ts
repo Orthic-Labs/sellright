@@ -71,6 +71,25 @@ const EnvSchema = z.object({
   // Optional per-app storefront links for shared stores, e.g.
   // viewright=https://viewright.cc,heardright=https://heardright.app
   STOREFRONT_URL_BY_APP: optionalEnvString,
+  // Optional per-STORE (slug, not app) storefront origin override for the
+  // Cloudflare cache-purge hook (cache/purge-hook.ts) — e.g.
+  // brand-a=https://brand-a.example.com,brand-b=https://brand-b.example.com.
+  // Falls back to STOREFRONT_URL for the common single-store deployment.
+  STOREFRONT_ORIGIN_BY_STORE: optionalEnvString,
+  // Cloudflare cache purge (per-store, optional — disabled/no-op when unset
+  // for a given store). Zone id is not secret; the API token is. Both support
+  // a per-store "slug=value,slug2=value2" map with a single-store fallback,
+  // same convention as EMAIL_FROM_BY_APP. A store with neither its slug nor
+  // the fallback configured simply never gets a purge call — cache purge must
+  // never become a hard dependency for a catalog/stock write to succeed.
+  CLOUDFLARE_ZONE_ID: optionalEnvString,
+  CLOUDFLARE_ZONE_ID_BY_APP: optionalEnvString,
+  CLOUDFLARE_API_TOKEN: optionalEnvString,
+  CLOUDFLARE_API_TOKEN_BY_APP: optionalEnvString,
+  // Internal admin cache-purge route (routes/admin-cache.ts). Compared with
+  // crypto.timingSafeEqual, fail CLOSED (503) when unset — never fall back to
+  // an unauthenticated purge endpoint.
+  CACHE_ADMIN_TOKEN: optionalEnvString,
   // Cart lifecycle (CART-04 — owner decision 2026-09-24: 24h retention for
   // idle carts, converted carts/orders untouched):
   //   CART_TTL_DAYS      — hard TTL written to cart.expires_at on every

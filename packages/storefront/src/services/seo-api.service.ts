@@ -1,5 +1,5 @@
 import { server$ } from '@qwik.dev/router';
-import { DEV_API } from '~/constants';
+import { DEV_API, LOCAL_API } from '~/constants';
 import type {
   SeoApiResponse,
   SeoApiCacheConfig,
@@ -72,10 +72,13 @@ class SeoCache {
 // Global cache instance
 const seoCache = new SeoCache(CACHE_CONFIG);
 
-// Base API URL — always use localhost when running server-side (inside server$())
-// PROD_API (public domain) must not be used from server context: it hits Cloudflare and returns 400
-const INTERNAL_API = 'http://localhost:3100';
-const baseUrl = import.meta.env.DEV ? DEV_API : INTERNAL_API;
+// Base API URL — always use LOCAL_API (localhost, configurable via
+// VITE_SELLRIGHT_LOCAL_URL) when running server-side (inside server$()).
+// PROD_API (the public domain) must not be used from server context: it goes
+// through Cloudflare, which 400s server-to-server traffic that doesn't look
+// like a real browser request — same reason the Stunning Strangers storefront
+// fetches its SSR route-loader data directly against localhost.
+const baseUrl = import.meta.env.DEV ? DEV_API : LOCAL_API;
 
 /**
  * Generic API request function with caching and error handling

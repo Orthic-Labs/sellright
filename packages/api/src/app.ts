@@ -32,6 +32,7 @@ import { disputeRoutes } from './routes/disputes.js';
 import { shopConfig } from './routes/shop-config.js';
 import { seo } from './routes/seo.js';
 import { cacheVersion } from './routes/cache-version.js';
+import { adminCache } from './routes/admin-cache.js';
 import { adminSeo } from './routes/admin-seo.js';
 import { customerTokens } from './routes/customer-tokens.js';
 import { paymentWebhooks } from './routes/payment-webhooks.js';
@@ -267,6 +268,7 @@ export function createApp(): OpenAPIHono {
   app.route('/', subscriptions); // recurring billing: shop subscribe/portal + admin list
   app.route('/', seo); // SEO-1: sitemaps, robots.txt, JSON-LD, IndexNow key-file (generic, per-store)
   app.route('/', cacheVersion); // SEO-1: live per-store cache-invalidation token
+  app.route('/', adminCache); // internal Cloudflare cache-purge route (shared-token auth, not an admin session)
 
   // Admin API — operator surface (auth, dashboard, orders, products, customers).
   app.route('/', admin);
