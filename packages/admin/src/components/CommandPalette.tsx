@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, ArrowRight, ShoppingBag, Package, Users, FileText, Mail, BarChart3, Gift, Settings, Warehouse, HandCoins, Receipt, Webhook, Coins, RotateCcw, Layers, Percent, Boxes, Activity, Shield, Plus, Upload, ShoppingCart, BadgeCheck } from 'lucide-react';
+import { Search, ArrowRight, ShoppingBag, Package, Users, FileText, Mail, BarChart3, Gift, Award, Settings, Warehouse, HandCoins, Receipt, Webhook, Coins, RotateCcw, Layers, Percent, Boxes, Activity, Shield, Plus, Upload, ShoppingCart, BadgeCheck } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../auth';
 import { useToast } from './Toast';
@@ -92,6 +92,7 @@ export function CommandPalette() {
     { id: 'go:locations', label: 'Go to Locations', section: 'Navigate', keywords: ['locations','warehouse'], to: '/locations', icon: Warehouse },
     { id: 'go:discounts', label: 'Go to Discounts', section: 'Navigate', keywords: ['discounts','promotions'], to: '/discounts', icon: Percent },
     { id: 'go:gift-cards', label: 'Go to Gift cards', section: 'Navigate', keywords: ['gift cards','vouchers'], to: '/gift-cards', icon: Gift },
+    { id: 'go:loyalty', label: 'Go to Points', section: 'Navigate', keywords: ['points','loyalty','rewards'], to: '/loyalty', icon: Award },
     { id: 'go:affiliates', label: 'Go to Affiliates', section: 'Navigate', keywords: ['affiliates'], to: '/affiliates', icon: HandCoins },
     { id: 'go:marketing', label: 'Go to Marketing', section: 'Navigate', keywords: ['marketing','listmonk','email'], to: '/marketing', icon: Mail },
     { id: 'go:blog', label: 'Go to Blog', section: 'Navigate', keywords: ['blog','posts'], to: '/blog', icon: FileText },

@@ -10,6 +10,7 @@ import { evaluateCoupon, productFacetIds } from '../money/coupon.js';
 import { selectAutomaticPromotion } from '../money/auto-discount.js';
 import { resolveTaxRate } from '../money/tax.js';
 import { selectUnitPrice, variantPriceRuleFromConfig } from '../money/pricing.js';
+import { earnableCents, loyaltySettingsFromConfig, pointsEarned } from '../money/loyalty.js';
 import { customerToken, resolveCustomer } from '../auth/session.js';
 import { normalizeEmail } from '../auth/email.js';
 import { env } from '../env.js';
@@ -148,10 +149,20 @@ export async function priceCart(
     return { ...p, lineSubtotal: t.lineSubtotal, lineDiscount: t.lineDiscount, lineTotal: t.lineTotal };
   });
 
+  // LOYALTY-1: preview of the points this cart would earn (same base as the
+  // checkout snapshot: merchandise after discounts, excl. shipping + tax).
+  // Omitted entirely while the store's program is off. Estimate only —
+  // checkout computes the authoritative number and only registered
+  // customers are credited.
+  const loyalty = loyaltySettingsFromConfig(st.config);
+  const pointsToEarn = loyalty.enabled
+    ? pointsEarned(earnableCents({ subtotal: totals.subtotal, discountTotal: totals.discountTotal, taxRate, taxInclusive: st.taxInclusive }), loyalty.earnRatePerDollar)
+    : undefined;
   return {
     currency: st.currency, lines,
     subtotal: totals.subtotal, discountTotal: totals.discountTotal, shippingTotal: totals.shippingTotal,
     taxTotal: totals.taxTotal, grandTotal: totals.grandTotal, unavailable, coupon,
+    ...(pointsToEarn !== undefined ? { pointsToEarn } : {}),
   };
 }
 
@@ -171,6 +182,8 @@ const EstimateOut = z.object({
   taxTotal: z.number().int(), grandTotal: z.number().int(),
   unavailable: z.array(z.string()),
   coupon: z.object({ code: z.string(), applied: z.boolean(), reason: z.string().optional() }).nullable(),
+  /** Present only when the store's loyalty program is enabled. */
+  pointsToEarn: z.number().int().optional(),
 });
 
 export const cart = new OpenAPIHono();

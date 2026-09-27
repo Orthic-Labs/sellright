@@ -3,7 +3,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, ShoppingBag, Package, Layers, Boxes, Users, Settings, ChevronDown,
   LogOut, Store, Percent, Mail, BarChart3, Activity, Search, HandCoins, FileText,
-  RotateCcw, Gift, Webhook, Warehouse, Receipt, Coins, Shield, Menu, X, CreditCard,
+  RotateCcw, Gift, Award, Webhook, Warehouse, Receipt, Coins, Shield, Menu, X, CreditCard,
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../auth';
@@ -34,6 +34,7 @@ const GROUPS: NavGroup[] = [
   { id: 'grow', label: 'Grow', items: [
     { to: '/discounts', label: 'Discounts', icon: Percent },
     { to: '/gift-cards', label: 'Gift cards', icon: Gift },
+    { to: '/loyalty', label: 'Points', icon: Award },
     { to: '/affiliates', label: 'Affiliates', icon: HandCoins },
     { to: '/marketing', label: 'Marketing', icon: Mail },
     { to: '/blog', label: 'Blog', icon: FileText },
@@ -71,6 +72,7 @@ const SECTION_PREFIXES: ReadonlyArray<readonly [string, string]> = [
   ['/locations', 'Locations'],
   ['/discounts', 'Discounts'],
   ['/gift-cards', 'Gift cards'],
+  ['/loyalty', 'Points'],
   ['/affiliates', 'Affiliates'],
   ['/marketing', 'Marketing'],
   ['/blog', 'Blog'],

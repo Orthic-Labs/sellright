@@ -428,6 +428,13 @@
       "when": 1790000009700,
       "tag": "0069_resolver_role_ownership",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1790000009800,
+      "tag": "0070_loyalty_ledger",
+      "breakpoints": true
     }
   ]
 }

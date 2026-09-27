@@ -9,6 +9,7 @@ import { emitEvent } from '../webhooks/emit.js';
 import { enqueueRefundConfirmation, pickEmailAppKey } from '../email/dispatch.js';
 import { normalizeEmail } from '../auth/email.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
+import { reconcileRefundLoyalty } from '../loyalty/ledger.js';
 
 export class RefundError extends Error {
   constructor(public status: 400 | 404 | 409 | 503, message: string) { super(message); }
@@ -225,6 +226,11 @@ export async function finalizeRefund(tx: Tx, storeId: string, attemptId: string,
   const refunds = await tx.select().from(s.refund).where(and(eq(s.refund.orderId, order.id), eq(s.refund.state, 'Settled')));
   const payments = await tx.select().from(s.payment).where(and(eq(s.payment.orderId, order.id), eq(s.payment.state, 'Settled')));
   const refunded = refunds.reduce((n,r) => n+r.amount,0), captured = payments.reduce((n,p) => n+p.amount,0);
+  // LOYALTY-1: restore redeemed points and reverse earned points in
+  // proportion to the money refunded so far (cumulative + idempotent per
+  // refund; a reversal the balance can't cover is recorded as shortfall).
+  await reconcileRefundLoyalty(tx, { storeId, orderId: order.id, refundId: refund.id, refunded, captured,
+    actor: details?.actor ?? 'gateway:reconciliation' });
   if (captured > 0 && refunded >= captured) {
     const now = new Date();
     const licenses = await tx.update(s.license).set({ status: 'revoked', updatedAt: now })

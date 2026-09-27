@@ -60,6 +60,16 @@ afterEach(() => vi.unstubAllGlobals());
 const lastBody = () => JSON.parse(String(calls[calls.length - 1].init.body ?? '{}'));
 
 describe('placeOrder → POST /v1/shop/checkout', () => {
+	it('forwards redeemPoints only when points are being spent', async () => {
+		enqueue(respond(200, { code: 'OP', state: 'PendingPayment', grandTotal: 9900, receiptToken: 'rt_p', pointsRedeemed: 1000, pointsDiscount: 1000 }));
+		const res = await placeOrder({ ...form, redeemPoints: 1000 });
+		expect(lastBody().redeemPoints).toBe(1000);
+		expect(res.pointsDiscount).toBe(1000);
+		enqueue(respond(200, { code: 'OQ', state: 'PendingPayment', grandTotal: 100, receiptToken: 'rt_q' }));
+		await placeOrder({ ...form, redeemPoints: 0 });
+		expect(lastBody()).not.toHaveProperty('redeemPoints');
+	});
+
 	it('sends cartToken + live revision + shippingMethodCode, server cart wins', async () => {
 		enqueue(respond(200, { code: 'O1', state: 'PendingPayment', grandTotal: 5800, receiptToken: 'rt_1' }));
 		const res = await placeOrder(form);

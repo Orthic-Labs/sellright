@@ -10,6 +10,30 @@ must update the matching changelog in the same push.
 
 ## [Unreleased]
 
+### Added
+
+- Points & rewards (loyalty). Per-store program in `store.config.loyalty`
+  (off by default): points earned per $1, points needed per $1 off, minimum
+  redemption, optional maximum discount (% of subtotal) and optional expiry.
+  Registered customers earn on the post-discount merchandise subtotal
+  (never shipping or tax) when an order reaches Paid, once per order.
+  Checkout accepts `redeemPoints` (signed-in only): re-validated under a
+  per-customer lock, applied as a pre-tax discount, reserved on the order,
+  released when an unpaid order is cancelled (including the stale-unpaid
+  job) and restored/reversed in proportion to refunds. Balances are the sum
+  of an append-only, FORCE-RLS `loyalty_ledger` (migration 0070); reversals
+  the balance can't cover are recorded as shortfall, never a negative
+  balance. Admin: Points settings page, per-customer balance/ledger, and
+  `loyalty`-permission-gated manual adjustments (audited). Shop API:
+  `GET /v1/shop/account/loyalty`, `loyalty` terms on `/v1/shop/config`,
+  `pointsToEarn` on cart estimates. Storefront: account balance card,
+  points-to-earn on cart totals, and a redeem control at checkout.
+- Importer: store-credit balances (`account_credit`) become loyalty
+  `import` entries at the target's `pointsPerDollarOff` (optional
+  `loyalty` block in the migration config); `account_credit_discount` and
+  discount + free-shipping multi-action promotions are recorded as counted
+  exclusions instead of failing the run.
+
 ### Changed
 
 - NMI test profiles can use an existing merchant account on the production

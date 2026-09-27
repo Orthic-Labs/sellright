@@ -10,6 +10,8 @@ import { selectAutomaticPromotion } from '../money/auto-discount.js';
 import { resolveTaxRate } from '../money/tax.js';
 import { selectUnitPrice, variantPriceRuleFromConfig } from '../money/pricing.js';
 import { applyGiftCard } from '../money/gift-card.js';
+import { earnableCents, loyaltySettingsFromConfig, planRedemption, pointsEarned, type RedeemRejection } from '../money/loyalty.js';
+import { lockedAvailable, orderLoyaltySnapshot, postEarnForPaidOrder, reserveRedemption, type OrderLoyaltySnapshot } from '../loyalty/ledger.js';
 import { emitEvent } from '../webhooks/emit.js';
 import { customerToken, resolveCustomer } from '../auth/session.js';
 import { normalizeEmail } from '../auth/email.js';
@@ -62,6 +64,12 @@ function normalizeAddress(a: Record<string, unknown> | null | undefined): Record
   };
 }
 
+/** A points redemption the server refuses; thrown so the checkout txn (and
+ *  its stock reservation) rolls back. */
+class LoyaltyRedeemError extends Error {
+  constructor(readonly reason: RedeemRejection) { super(reason); }
+}
+
 const orderCode = () => ('SR' + randomUUID().replace(/-/g, '').slice(0, 10)).toUpperCase();
 
 /**
@@ -96,6 +104,7 @@ function checkoutFingerprint(body: {
   cartToken?: string;
   couponCode?: string;
   giftCardCode?: string;
+  redeemPoints?: number;
   shippingMethodCode?: string;
   email?: string;
   shippingAddress?: Record<string, unknown>;
@@ -113,6 +122,9 @@ function checkoutFingerprint(body: {
     items,
     couponCode: body.couponCode ?? null,
     giftCardCode: body.giftCardCode ?? null,
+    // Only present when set, so fingerprints of pre-loyalty payloads (and
+    // their Idempotency-Key replays) are byte-identical to before.
+    ...(body.redeemPoints ? { redeemPoints: body.redeemPoints } : {}),
     shippingMethodCode: body.shippingMethodCode ?? null,
     email: body.email ? normalizeEmail(body.email) : null,
     shippingAddress: normalizeAddress(body.shippingAddress),
@@ -141,13 +153,15 @@ export function fingerprintMatches(orderMetadata: unknown, fingerprint: string):
  *  the original response. */
 async function orderReplayResult(
   tx: Tx,
-  o: { id: string; code: string; state: string; grandTotal: number; discountTotal: number; receiptToken: string | null },
+  o: { id: string; code: string; state: string; grandTotal: number; discountTotal: number; receiptToken: string | null; metadata?: unknown },
 ) {
   const r = await tx.execute(sql`SELECT coalesce(sum(amount), 0)::int AS applied FROM payment WHERE order_id = ${o.id} AND method = 'gift_card' AND state = 'Settled'`);
   const giftCardApplied = Number((r.rows[0] as { applied: number } | undefined)?.applied ?? 0);
+  const loyalty = orderLoyaltySnapshot(o.metadata);
   return {
     code: o.code, state: o.state, grandTotal: o.grandTotal, discountTotal: o.discountTotal,
-    couponApplied: o.discountTotal > 0, giftCardApplied, replay: true as const, receiptToken: o.receiptToken ?? '',
+    couponApplied: o.discountTotal - (loyalty?.pointsDiscount ?? 0) > 0, giftCardApplied, replay: true as const, receiptToken: o.receiptToken ?? '',
+    pointsRedeemed: loyalty?.redeemPoints ?? 0, pointsDiscount: loyalty?.pointsDiscount ?? 0,
   };
 }
 
@@ -177,6 +191,11 @@ checkout.openapi(
               shipping: z.number().int().min(0).default(0),
               couponCode: z.string().optional(),
               giftCardCode: z.string().optional(), // applied as a tender against the order total
+              // Loyalty points to spend (signed-in customers only). A DISCOUNT
+              // applied before tax, re-validated under a per-customer lock
+              // here — never trusted from the client. Rejections are a 409
+              // (reason) rather than a silent full-price order.
+              redeemPoints: z.number().int().min(1).max(1_000_000_000).optional(),
               cartToken: z.string().optional(), // when set, the cart is marked converted on success
               // CART-03: REQUIRED optimistic-concurrency check against
               // cart.revision whenever cartToken is present — the cart
@@ -201,7 +220,7 @@ checkout.openapi(
     responses: {
       200: {
         description: 'Order created',
-        content: { 'application/json': { schema: z.object({ code: z.string(), state: z.string(), grandTotal: z.number().int(), discountTotal: z.number().int(), currency: z.string(), couponApplied: z.boolean(), giftCardApplied: z.number().int(), receiptToken: z.string() }) } },
+        content: { 'application/json': { schema: z.object({ code: z.string(), state: z.string(), grandTotal: z.number().int(), discountTotal: z.number().int(), currency: z.string(), couponApplied: z.boolean(), giftCardApplied: z.number().int(), receiptToken: z.string(), pointsRedeemed: z.number().int(), pointsDiscount: z.number().int() }) } },
       },
       409: { description: 'Out of stock / shipping unavailable / idempotency-payload or stale-cart conflict', content: { 'application/json': { schema: z.object({ error: z.string(), code: z.string().optional(), skus: z.array(z.string()).optional(), reason: z.string().optional(), revision: z.number().int().optional(), cart: CartOut.optional() }) } } },
       422: { description: 'Required legal acceptance is missing or invalid', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
@@ -223,7 +242,7 @@ checkout.openapi(
 
     const fingerprint = checkoutFingerprint(body);
 
-    type Result = { blocked: string[] } | { shippingError: string } | { cartError: string } | { legalError: string } | { cartConflict: { code: 'stale' | 'revision_required'; snapshot: z.infer<typeof CartOut> } } | { fingerprintConflict: true } | { code: string; state: string; grandTotal: number; discountTotal: number; couponApplied: boolean; replay?: boolean; giftCardApplied?: number; receiptToken: string };
+    type Result = { blocked: string[] } | { shippingError: string } | { cartError: string } | { legalError: string } | { loyaltyError: RedeemRejection } | { cartConflict: { code: 'stale' | 'revision_required'; snapshot: z.infer<typeof CartOut> } } | { fingerprintConflict: true } | { code: string; state: string; grandTotal: number; discountTotal: number; couponApplied: boolean; replay?: boolean; giftCardApplied?: number; receiptToken: string; pointsRedeemed?: number; pointsDiscount?: number };
     // Zero-cache stock rule: set true only by a reserveStockOrThrow call whose
     // surrounding transaction actually reaches COMMIT. Every path below that
     // aborts the transaction (idempotency replay via unique-violation,
@@ -266,7 +285,7 @@ checkout.openapi(
           // lost-response retry) — one cart, one order, always.
           const [o] = row.convertedOrderId
             ? await tx
-                .select({ id: s.order.id, code: s.order.code, state: s.order.state, grandTotal: s.order.grandTotal, discountTotal: s.order.discountTotal, receiptToken: s.order.receiptToken })
+                .select({ id: s.order.id, code: s.order.code, state: s.order.state, grandTotal: s.order.grandTotal, discountTotal: s.order.discountTotal, receiptToken: s.order.receiptToken, metadata: s.order.metadata })
                 .from(s.order)
                 .where(and(eq(s.order.id, row.convertedOrderId), isNull(s.order.deletedAt)))
                 .limit(1)
@@ -456,11 +475,46 @@ checkout.openapi(
         shipping: 0, taxRate, taxInclusive: st.taxInclusive, promotion });
       if (shippingCalculator && !isMethodEligible(shippingCalculator, { subtotal: subtotalCents, country: shipCountry,
         discountedSubtotalWithTax: discounted.grandTotal })) throw new ShippingUnavailableError('not_eligible');
+
+      // ── Loyalty points (LOYALTY-1) ────────────────────────────────────────
+      // Redemption: session customers only (an email-matched guest link is
+      // not proof of account ownership). lockedAvailable takes the
+      // per-customer advisory lock for the rest of this txn, writes off
+      // expired points, then reads the ledger sum — a concurrent checkout for
+      // the same customer waits here and sees this redemption once we commit.
+      // The discount is fixed cents applied after the promotion, before tax.
+      const loyalty = loyaltySettingsFromConfig(st.config);
+      let redeem: { points: number; discountCents: number } | null = null;
+      if (body.redeemPoints) {
+        // THROW (not return): stock is already reserved in this txn, so a
+        // rejection must roll it back — the .catch below maps it to a 409.
+        if (!loyalty.enabled) throw new LoyaltyRedeemError('disabled');
+        if (!sessionCustomer) throw new LoyaltyRedeemError('not_signed_in');
+        const available = await lockedAvailable(tx, st.id, sessionCustomer.id);
+        const plan = planRedemption({ settings: loyalty, requestedPoints: body.redeemPoints, availablePoints: available,
+          discountableCents: discounted.subtotal - discounted.discountTotal });
+        if (!plan.ok) throw new LoyaltyRedeemError(plan.reason);
+        redeem = { points: plan.points, discountCents: plan.discountCents };
+      }
       const totals = calculateOrderTotals({
         shippingTaxRate: shippingCalculator?.taxRate, shippingTaxInclusive: shippingCalculator?.taxInclusive,
         lines: priced.map((p) => ({ unitPrice: p.unitPrice, quantity: p.qty })),
         shipping: shippingAmount, taxRate, taxInclusive: st.taxInclusive, shippingTaxable: st.shippingTaxable, promotion,
+        pointsDiscount: redeem?.discountCents ?? 0,
       });
+      // Earn snapshot: registered customers only, on merchandise after every
+      // discount (promo + points), excluding shipping and tax. Posted to the
+      // ledger only when the order reaches Paid (postEarnForPaidOrder).
+      const loyaltySnap: OrderLoyaltySnapshot | null = loyalty.enabled || redeem
+        ? {
+            redeemPoints: redeem?.points ?? 0,
+            pointsDiscount: totals.pointsDiscount,
+            earnPoints: loyalty.enabled && customerId
+              ? pointsEarned(earnableCents({ subtotal: totals.subtotal, discountTotal: totals.discountTotal, taxRate, taxInclusive: st.taxInclusive }), loyalty.earnRatePerDollar)
+              : 0,
+            expiryDays: loyalty.expiryDays,
+          }
+        : null;
 
       const orderId = randomUUID();
       const code = orderCode();
@@ -486,7 +540,8 @@ checkout.openapi(
           checkoutFingerprint: fingerprint,
           // Immutable legal-acceptance receipt (canonical configured values,
           // verified above) for manifest-configured licensed products.
-          ...(legalReceipt ? { legal_acceptance: legalReceipt } : {}) },
+          ...(legalReceipt ? { legal_acceptance: legalReceipt } : {}),
+          ...(loyaltySnap ? { loyalty: loyaltySnap } : {}) },
       });
       await tx.insert(s.orderLine).values(
         priced.map((p, idx) => ({
@@ -503,6 +558,13 @@ checkout.openapi(
         await tx.update(s.promotion).set({ usedCount: sql`${s.promotion.usedCount} + 1` }).where(eq(s.promotion.id, promoId));
       }
 
+      // Reserve the redeemed points against this order (same txn as the
+      // order: a rollback un-spends them). Released by cancellation (admin or
+      // the stale-unpaid job) and proportionally restored by refunds.
+      if (redeem && sessionCustomer) {
+        await reserveRedemption(tx, { storeId: st.id, customerId: sessionCustomer.id, orderId, points: redeem.points, discountCents: redeem.discountCents });
+      }
+
       let giftCardApplied = 0;
       let paid = false;
 
@@ -515,6 +577,7 @@ checkout.openapi(
         const paidAt = new Date();
         await tx.update(s.order).set({ state: 'Paid', placedAt: paidAt, updatedAt: paidAt }).where(eq(s.order.id, orderId));
         await issueLicensesForPaidOrder(tx, { storeId: st.id, orderId, customerId, paidAt });
+        await postEarnForPaidOrder(tx, st.id, orderId, paidAt);
         paid = true;
       } else if (body.giftCardCode) {
         // Gift card / store credit is a tender, not a discount. The launch
@@ -532,6 +595,7 @@ checkout.openapi(
               const paidAt = new Date();
               await tx.update(s.order).set({ state: 'Paid', placedAt: paidAt, updatedAt: paidAt }).where(eq(s.order.id, orderId));
               await issueLicensesForPaidOrder(tx, { storeId: st.id, orderId, customerId, paidAt });
+              await postEarnForPaidOrder(tx, st.id, orderId, paidAt);
               paid = true;
             }
           }
@@ -642,7 +706,8 @@ checkout.openapi(
           });
         }
       }
-      return { code, state: paid ? 'Paid' : 'PendingPayment', grandTotal: totals.grandTotal, discountTotal: totals.discountTotal, couponApplied: promoId != null, giftCardApplied, receiptToken };
+      return { code, state: paid ? 'Paid' : 'PendingPayment', grandTotal: totals.grandTotal, discountTotal: totals.discountTotal, couponApplied: promoId != null, giftCardApplied, receiptToken,
+        pointsRedeemed: redeem?.points ?? 0, pointsDiscount: totals.pointsDiscount };
     }).catch(async (e: unknown): Promise<Result> => {
       // Every catch branch below means the attempt above's transaction did NOT
       // commit — any reservation it made was rolled back with it. The winner
@@ -668,6 +733,7 @@ checkout.openapi(
       }
       if (e instanceof StockReservationError) return { blocked: e.skus };
       if (e instanceof ShippingUnavailableError) return { shippingError: e.reason };
+      if (e instanceof LoyaltyRedeemError) return { loyaltyError: e.reason };
       throw e;
     });
     // Fire AFTER the transaction that actually reserved stock has committed —
@@ -677,6 +743,7 @@ checkout.openapi(
     if ('shippingError' in out) return c.json({ error: 'shipping unavailable', reason: out.shippingError }, 409);
     if ('cartError' in out) return c.json({ error: out.cartError }, 409);
     if ('legalError' in out) return c.json({ error: out.legalError }, 422);
+    if ('loyaltyError' in out) return c.json({ error: 'points could not be redeemed', reason: out.loyaltyError }, 409);
     if ('blocked' in out) return c.json({ error: 'unavailable or out of stock', skus: out.blocked }, 409);
     if ('fingerprintConflict' in out) return c.json({ error: 'idempotency-key was already used with a different payload', reason: 'payload_mismatch' }, 409);
     if ('cartConflict' in out) return c.json({
@@ -688,6 +755,7 @@ checkout.openapi(
       cart: out.cartConflict.snapshot,
     }, 409);
 
-    return c.json({ code: out.code, state: out.state, grandTotal: out.grandTotal, discountTotal: out.discountTotal, currency: st.currency, couponApplied: out.couponApplied, giftCardApplied: out.giftCardApplied ?? 0, receiptToken: out.receiptToken }, 200);
+    return c.json({ code: out.code, state: out.state, grandTotal: out.grandTotal, discountTotal: out.discountTotal, currency: st.currency, couponApplied: out.couponApplied, giftCardApplied: out.giftCardApplied ?? 0, receiptToken: out.receiptToken,
+      pointsRedeemed: out.pointsRedeemed ?? 0, pointsDiscount: out.pointsDiscount ?? 0 }, 200);
   },
 );

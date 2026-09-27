@@ -3,6 +3,7 @@ import { hasUnresolvedPayment } from '../payments/hold.js';
 import { and, desc, eq, ilike, or, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
+import { releaseOrderLoyalty } from '../loyalty/ledger.js';
 import { bearer } from '../auth/session.js';
 import { verifyPassword } from '../auth/password.js';
 import { createAdminSession, deleteAdminSession, findAdminByEmail, resolveAdmin } from '../auth/admin-session.js';
@@ -398,6 +399,8 @@ admin.openapi(
         }
       }
       await tx.update(s.order).set({ state: 'Cancelled', updatedAt: new Date() }).where(eq(s.order.id, o.id));
+      // LOYALTY-1: release points reserved by this order (idempotent).
+      await releaseOrderLoyalty(tx, st.storeId, o.id, admin.email);
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: o.id, action: 'cancel', fromState: o.state, toState: 'Cancelled' });
       return { kind: 'ok' as const };
     });

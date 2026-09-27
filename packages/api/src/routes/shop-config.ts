@@ -7,6 +7,8 @@ import { resolveStoreFromCtx } from './store-context.js';
 import { configuredGatewayAccount, nmiEnvironment } from '../payments/gateway-account.js';
 import { isPaymentMethodEnabled } from '../payments/provider.js';
 import { stripeModeFromConfig, stripePublishableForClient, stripeUsable } from '../payments/stripe.js';
+import { loyaltySettingsFromConfig } from '../money/loyalty.js';
+import { PublicLoyaltySettings } from './loyalty.js';
 
 export const shopConfig = new OpenAPIHono();
 
@@ -23,6 +25,9 @@ shopConfig.openapi(
           stripePublishableKey: z.string().nullable(),
           stripeConfigured: z.boolean(),
           gateways: z.object({ nmi: z.object({ tokenizationKey: z.string(), mode: z.enum(['test','live']), environment: z.enum(['sandbox', 'production']) }).nullable(), sezzle: z.boolean() }),
+          // Points program terms (null while the program is off) — lets the
+          // storefront show points-to-earn and the redeem control.
+          loyalty: PublicLoyaltySettings.nullable(),
         }) } },
       },
     },
@@ -37,8 +42,10 @@ shopConfig.openapi(
       if (account.tokenizationKey) nmi = { tokenizationKey: account.tokenizationKey, mode: account.mode, environment: nmiEnvironment(account) };
     } } catch { /* An unavailable account is not advertised to shoppers. */ }
     try { if (isPaymentMethodEnabled(st.config, 'sezzle')) { configuredGatewayAccount(st.id, 'sezzle', st.config); sezzle = true; } } catch { /* fail closed */ }
+    const loyalty = loyaltySettingsFromConfig(st.config);
     return c.json({
       gateways: { nmi, sezzle },
+      loyalty: loyalty.enabled ? loyalty : null,
       stripeMode: mode,
       stripePublishableKey: stripePublishableForClient(mode),
       stripeConfigured: isPaymentMethodEnabled(st.config, 'stripe') && stripeUsable(mode),

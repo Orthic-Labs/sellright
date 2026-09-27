@@ -83,6 +83,10 @@ export const OPTIONAL_SOURCE_TABLES: Record<string, readonly string[]> = {
   affiliate: ['id', 'promotionId', 'email', 'accessToken', 'onboardedAt'],
   affiliate_settle: ['id', 'promotionId', 'amountCents', 'periodStartAt', 'periodEndAt', 'settledAt', 'txRef', 'notes'],
   waitlist_signup: ['id', 'productId', 'productSlug', 'productName', 'variantId', 'email', 'status', 'notifiedAt', 'createdAt', 'updatedAt'],
+  // Store-credit plugin: balances migrate into the loyalty points ledger
+  // (import/loyalty.ts), converted at the target's pointsPerDollarOff.
+  account_credit: ['id', 'emailNormalized', 'currencyCode', 'balance', 'disabled'],
+  account_credit_transaction: ['id', 'accountCreditId', 'kind', 'status'],
 };
 
 /** Non-customFields source columns that are optional per source vintage. */

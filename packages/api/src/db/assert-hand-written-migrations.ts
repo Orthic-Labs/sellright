@@ -48,6 +48,7 @@ const HAND_WRITTEN = [
   '0066_storekit.sql',
   '0068_seo_surface.sql',
   '0069_resolver_role_ownership.sql',
+  '0070_loyalty_ledger.sql',
 ];
 
 const MARKER = '-- HAND-WRITTEN: see docs/runbooks/migrations.md';

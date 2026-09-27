@@ -8,6 +8,7 @@ import { gatewayPayments } from './routes/gateway-payments.js';
 import { adminGatewayPayments } from './routes/admin-gateway-payments.js';
 import { auth } from './routes/auth.js';
 import { account } from './routes/account.js';
+import { loyalty } from './routes/loyalty.js';
 import { orders } from './routes/orders.js';
 import { admin } from './routes/admin.js';
 import { adminDashboard } from './routes/admin-dashboard.js';
@@ -17,6 +18,7 @@ import { adminOrders } from './routes/admin-orders.js';
 import { adminOrderOps } from './routes/admin-order-ops.js';
 import { adminMarketing } from './routes/admin-marketing.js';
 import { adminSettings } from './routes/admin-settings.js';
+import { adminLoyalty } from './routes/admin-loyalty.js';
 import { adminSettingsAdvanced } from './routes/admin-settings-advanced.js';
 import { adminReports } from './routes/admin-reports.js';
 import { adminAffiliate } from './routes/admin-affiliate.js';
@@ -257,6 +259,7 @@ export function createApp(): OpenAPIHono {
   app.route('/', shopConfig);
   app.route('/', customerTokens);
   app.route('/', account);
+  app.route('/', loyalty); // LOYALTY-1: customer points balance (redeem happens in checkout)
   app.route('/', orders);
   app.route('/', paymentWebhooks); // WP3: inbound Stripe webhooks (signature-auth, no CSRF/cookie)
   app.route('/', storeKitWebhooks); // Apple StoreKit: App Store Server Notifications + pro/link-storekit
@@ -279,6 +282,7 @@ export function createApp(): OpenAPIHono {
   app.route('/', adminOrderOps); // draft orders, tracking import, export, bulk order operations
   app.route('/', adminMarketing); // promotions manager + Listmonk integration
   app.route('/', adminSettings); // store/tax, payments, shipping, staff/roles, notifications
+  app.route('/', adminLoyalty); // LOYALTY-1: points program settings, customer ledger, manual adjust
   app.route('/', adminSettingsAdvanced); // webhooks, staff, currency rates
   app.route('/', adminReports); // customers write, reports, search, activity
   app.route('/', adminAffiliate); // affiliate program + public self-serve dashboard

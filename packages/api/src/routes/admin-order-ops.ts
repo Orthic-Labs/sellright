@@ -6,6 +6,7 @@ import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
+import { releaseOrderLoyalty } from '../loyalty/ledger.js';
 import { dispute } from '../db/schema-ops.js';
 import { HttpError, J, errBody, money, Page, requireAdmin, requireStore, requireWrite, requireManage, requirePermission, guard } from './admin-helpers.js';
 import { calculateOrderTotals } from '../money/totals.js';
@@ -334,6 +335,8 @@ adminOrderOps.openapi(
           }
         }
         await tx.update(s.order).set({ state: 'Cancelled', updatedAt: new Date() }).where(eq(s.order.id, o.id));
+        // LOYALTY-1: release points reserved by this order (idempotent).
+        await releaseOrderLoyalty(tx, st.storeId, o.id, admin.email);
         await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: o.id, action: 'cancel', fromState: o.state, toState: 'Cancelled' });
         return { ok: true };
       });
