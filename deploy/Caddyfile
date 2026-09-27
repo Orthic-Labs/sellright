@@ -8,3 +8,18 @@
         header_up X-Real-IP {remote_host}
     }
 }
+
+# WS-C shipped a generic runtime-config storefront image (resolves store
+# identity per-request Host against the API — see packages/storefront/
+# adapters and routes/layout.tsx), so this Caddy block's own per-Host routing
+# to multiple stores is now a Caddy-side follow-up, not blocked on the image.
+# Still opt-in for this PR (WS-D): it only binds when
+# SELLRIGHT_STOREFRONT_DOMAIN is set in deploy/.env, so installs that don't
+# set it get byte-identical behavior to before the storefront service existed.
+{$SELLRIGHT_STOREFRONT_DOMAIN:-:8090} {
+    encode zstd gzip
+
+    reverse_proxy storefront:4100 {
+        header_up X-Real-IP {remote_host}
+    }
+}

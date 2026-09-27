@@ -1,0 +1,31 @@
+# Developer override: build images from source instead of pulling signed
+# GHCR images. Use alongside the base file, never alone:
+#
+#   docker compose --env-file deploy/.env \
+#     -f deploy/compose.yaml -f deploy/compose.build.yaml up -d --build
+#
+# CI's `verify-appliance` job uses the base compose.yaml with images built and
+# loaded locally (tagged to match SELLRIGHT_IMAGE_PREFIX/SELLRIGHT_IMAGE_TAG)
+# instead of this file, so the drill exercises the exact same file production
+# uses.
+# Compose builds the image and still tags it with the base file's `image:`
+# value, so SELLRIGHT_IMAGE_PREFIX/TAG (default local/latest) name the result
+# too — no need to override `image:` here.
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: packages/api/Dockerfile
+
+  admin:
+    build:
+      context: ../packages/admin
+      dockerfile: Dockerfile
+
+  # WS-C: this image is generic (no store baked in); it resolves store
+  # identity per-request Host at runtime via SELLRIGHT_API_URL (set on the
+  # `storefront` service itself in compose.yaml), not a build arg.
+  storefront:
+    build:
+      context: ..
+      dockerfile: packages/storefront/Dockerfile

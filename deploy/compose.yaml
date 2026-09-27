@@ -1,5 +1,11 @@
 name: sellright
 
+# Production images are pinned, signed GHCR references (see
+# .github/workflows/ci.yml's `release` job and docs/runbooks/production-compose.md).
+# Developers building from source should additionally pass
+# `-f deploy/compose.yaml -f deploy/compose.build.yaml`, which overrides these
+# three `image:` refs with local `build:` contexts and drops the `@sha256:...`
+# digest pin so `up --build` works without a registry.
 services:
   postgres:
     image: postgres:17-bookworm
@@ -82,10 +88,7 @@ services:
     networks: [private]
 
   api:
-    image: sellright-api:local
-    build:
-      context: ..
-      dockerfile: packages/api/Dockerfile
+    image: ${SELLRIGHT_IMAGE_PREFIX:-ghcr.io/orthic-labs/sellright}-api:${SELLRIGHT_IMAGE_TAG:-latest}
     restart: unless-stopped
     depends_on:
       postgres:
@@ -147,10 +150,7 @@ services:
         exec node dist/index.js
 
   admin:
-    image: sellright-admin:local
-    build:
-      context: ../packages/admin
-      dockerfile: Dockerfile
+    image: ${SELLRIGHT_IMAGE_PREFIX:-ghcr.io/orthic-labs/sellright}-admin:${SELLRIGHT_IMAGE_TAG:-latest}
     restart: unless-stopped
     depends_on:
       api:
@@ -161,14 +161,33 @@ services:
       - assets:/assets:ro
     networks: [private]
 
+  # WS-C landed a generic runtime-config image: no store identity/theme is
+  # baked in, it resolves per-request Host via GET /v1/shop/identity against
+  # SELLRIGHT_API_URL below. Not exposed publicly unless
+  # SELLRIGHT_STOREFRONT_DOMAIN is set (see Caddyfile) — still true today
+  # because Caddy has no per-Host store routing of its own yet; the storefront
+  # container itself already supports serving multiple stores from one image.
+  storefront:
+    image: ${SELLRIGHT_IMAGE_PREFIX:-ghcr.io/orthic-labs/sellright}-storefront:${SELLRIGHT_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      SELLRIGHT_API_URL: ${SELLRIGHT_API_URL:-http://api:3300}
+    networks: [private]
+
   caddy:
     image: caddy:2.10-alpine
     restart: unless-stopped
     depends_on:
       admin:
         condition: service_healthy
+      storefront:
+        condition: service_healthy
     environment:
       SELLRIGHT_DOMAIN: ${SELLRIGHT_DOMAIN:?set SELLRIGHT_DOMAIN in deploy/.env}
+      SELLRIGHT_STOREFRONT_DOMAIN: ${SELLRIGHT_STOREFRONT_DOMAIN:-:8090}
     ports:
       - "80:80"
       - "443:443"
