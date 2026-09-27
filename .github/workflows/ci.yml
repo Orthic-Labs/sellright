@@ -288,6 +288,93 @@ jobs:
           docker compose -f deploy/compose.yaml exec -T api sh -c \
             "grep -qx persistence-ok /app/var/assets/.ci-persistence && grep -qx persistence-ok /app/var/downloads/.ci-persistence"
 
+      - name: Tear down bootstrap-based stack (fresh volumes for the one-click drill)
+        run: docker compose -f deploy/compose.yaml down -v --remove-orphans
+
+      - name: Start an UNbootstrapped stack (the real one-click install path — no ADMIN_EMAIL/PASSWORD/BOOTSTRAP_STORE_SLUG)
+        env:
+          ADMIN_EMAIL: ''
+          ADMIN_PASSWORD: ''
+          BOOTSTRAP_STORE_SLUG: ''
+        run: docker compose -f deploy/compose.yaml up -d postgres api admin storefront
+
+      - name: Wait for proxied readiness (unbootstrapped stack)
+        shell: bash
+        run: |
+          for attempt in {1..60}; do
+            if docker compose -f deploy/compose.yaml exec -T admin \
+              wget -qO- http://127.0.0.1:8080/v1/readyz 2>/dev/null \
+              | grep -q '"status":"ok"'; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose -f deploy/compose.yaml ps
+          docker compose -f deploy/compose.yaml logs --no-color
+          exit 1
+
+      - name: One-click install drill — no admin exists yet
+        shell: bash
+        run: |
+          docker compose -f deploy/compose.yaml exec -T postgres \
+            psql -U sellright -d sellright -Atc "SELECT count(*) FROM admin_user" | grep -qx '0'
+
+      - name: One-click install drill — setup-link, claim via API, setup surface 404s afterward, preview reachable
+        shell: bash
+        run: |
+          set -e
+          token=$(docker compose -f deploy/compose.yaml exec -T api node dist/scripts/setup-link.js)
+          test -n "$token"
+          echo "claim token acquired (length ${#token})"
+
+          claim_body='{"token":"'"$token"'","email":"owner@example.net","name":"CI Owner","password":"correct horse battery staple"}'
+          claim_resp=$(docker compose -f deploy/compose.yaml exec -T admin wget -qO- \
+            --header="Content-Type: application/json" --post-data="$claim_body" \
+            http://127.0.0.1:8080/v1/setup/claim)
+          echo "$claim_resp" | grep -q '"storeSlug"' || { echo "claim failed: $claim_resp"; exit 1; }
+          session_token=$(echo "$claim_resp" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>process.stdout.write(JSON.parse(d).token))")
+          test -n "$session_token"
+
+          docker compose -f deploy/compose.yaml exec -T postgres \
+            psql -U sellright -d sellright -Atc "SELECT count(*) FROM admin_user WHERE is_installation_admin" | grep -qx '1'
+
+          # Every /v1/setup/* route must 404 now that an installation admin exists.
+          if docker compose -f deploy/compose.yaml exec -T admin wget -qO- http://127.0.0.1:8080/v1/setup/status >/tmp/setup-status.out 2>&1; then
+            echo "expected /v1/setup/status to fail (404) after claim, got: $(cat /tmp/setup-status.out)"; exit 1
+          fi
+
+          # A second claim attempt with a fresh setup-link token must ALSO fail —
+          # not just "the old token is used up" but "no installation admin can
+          # ever be created again" (SetupAlreadyClaimedError, independent of the
+          # token-consumption path — see setup-claim.ts's doc comment).
+          if docker compose -f deploy/compose.yaml exec -T api node dist/scripts/setup-link.js; then
+            echo "expected setup-link to fail once claimed"; exit 1
+          fi
+
+          # Issue a private-preview token as the freshly-claimed owner (bearer
+          # auth — no CSRF/cookie dance needed for a non-browser client; see
+          # cookies.ts's csrfValid: a valid bearer always passes).
+          preview_resp=$(docker compose -f deploy/compose.yaml exec -T admin wget -qO- \
+            --header="Authorization: Bearer $session_token" --header="Content-Type: application/json" \
+            --post-data='{}' http://127.0.0.1:8080/v1/admin/settings/preview-token)
+          preview_token=$(echo "$preview_resp" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>process.stdout.write(JSON.parse(d).token))")
+          test -n "$preview_token"
+          echo "preview token issued"
+
+          # Preview reachable: the storefront process answers the preview-token
+          # request (proves the claim -> preview-token -> storefront pipeline
+          # runs end to end without crashing/timing out). This CI environment
+          # has no real domain, so store.config.hostnames is empty and host-
+          # based store resolution (store-context.ts) legitimately can't match
+          # — that's WS-D/domain-feature territory (see computeReadiness's doc
+          # comment), not something this drill can prove. Any well-formed HTTP
+          # response (not a connection failure) is what "reachable" asserts here.
+          docker compose -f deploy/compose.yaml exec -T storefront node -e "
+            fetch('http://127.0.0.1:4100/?preview_token=${preview_token}')
+              .then(r => { console.log('storefront preview response status:', r.status); process.exit(0); })
+              .catch(e => { console.error('storefront preview request FAILED:', e); process.exit(1); })
+          "
+
       - name: Tear down smoke stack
         if: always()
         run: docker compose -f deploy/compose.yaml down -v --remove-orphans
