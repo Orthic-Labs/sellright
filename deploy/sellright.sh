@@ -4,6 +4,7 @@
 set -eu
 
 SELLRIGHT_HOME="${SELLRIGHT_HOME:-/opt/sellright}"
+COSIGN_VERSION="${COSIGN_VERSION:-2.4.1}"
 
 compose() {
   docker compose --env-file "${SELLRIGHT_HOME}/.env" -f "${SELLRIGHT_HOME}/compose.yaml" "$@"
@@ -235,8 +236,172 @@ gen_secret_local() {
   openssl rand -hex "$1" 2>/dev/null || head -c "$1" /dev/urandom | od -An -tx1 | tr -d ' \n'
 }
 
+cmd_maintenance() {
+  require_home
+  action="${1:-}"
+  case "$action" in
+    on|off|status) ;;
+    *) die "usage: sellright maintenance <on|off|status>" ;;
+  esac
+  compose exec -T api node dist/scripts/maintenance-cli.js "$action"
+}
+
+cmd_functional_check() {
+  require_home
+  compose exec -T api node dist/scripts/functional-check.js
+}
+
+# Records each running service's current image digest (repo@sha256:...), one
+# `service digest` pair per line. Used by cmd_update to remember what to
+# restart if the new images fail their functional checks.
+capture_digests() {
+  for svc in api admin storefront; do
+    ref=$(compose images -q "$svc" 2>/dev/null || true)
+    [ -n "$ref" ] || continue
+    digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$ref" 2>/dev/null || true)
+    [ -n "$digest" ] && printf '%s %s\n' "$svc" "$digest"
+  done
+}
+
+# Re-pins each service to the exact digest captured by capture_digests, via a
+# throwaway Compose override file, then recreates just those containers. A
+# digest (not a floating tag like "latest") is used deliberately — this is
+# the rollback path, so it must not depend on the registry still serving
+# whatever the tag currently resolves to.
+restart_digests() {
+  digests_file="$1"
+  [ -s "$digests_file" ] || { log "no previous digests recorded; cannot roll back automatically"; return 1; }
+  override_file=$(mktemp)
+  {
+    printf 'services:\n'
+    while read -r svc digest; do
+      [ -n "$svc" ] || continue
+      printf '  %s:\n    image: %s\n' "$svc" "$digest"
+    done < "$digests_file"
+  } > "$override_file"
+  log "rollback plan:"
+  cat "$digests_file" >&2
+  # Through compose() (not a bare `docker compose ...`) so this honors any
+  # project-name/host override compose() carries — in production both resolve
+  # to the same `name: sellright` project either way, but a test harness that
+  # patches compose() to add `-p <isolated-project>` (see the CI drill in
+  # .github/workflows/ci.yml's verify-update job) must not have the rollback
+  # path silently fall back to the default project and operate on the wrong
+  # containers.
+  compose -f "$override_file" up -d --no-deps api admin storefront
+  rm -f "$override_file"
+}
+
 cmd_update() {
-  die "update is not implemented yet (WS-E). Manually: sellright backup, then docker compose pull && up -d in ${SELLRIGHT_HOME}."
+  require_home
+  digests_file=$(mktemp)
+  trap 'rm -f "$digests_file"' EXIT
+
+  log "1/7 entering maintenance mode..."
+  cmd_maintenance on
+
+  log "2/7 taking a backup..."
+  cmd_backup
+
+  log "recording current image digests (for rollback)..."
+  capture_digests > "$digests_file"
+
+  log "3/7 pulling + verifying signed images..."
+  if ! compose pull; then
+    log "pull failed; leaving maintenance on, no changes made"
+    exit 1
+  fi
+  # WS-D's install.sh performs the authoritative cosign keyless-verify (image
+  # digest against the release workflow's OIDC identity) before ever writing
+  # an image ref into compose's env; `compose pull` here re-resolves the exact
+  # digest install.sh already verified for the configured tag. A same-tag
+  # cosign re-check is repeated here defensively so `sellright update` alone
+  # (without re-running install.sh) still never runs an image whose signature
+  # can't be verified.
+  cosign_verify_images || { log "cosign verification failed; leaving maintenance on, no changes made"; exit 1; }
+
+  log "4/7 migrating..."
+  # shellcheck disable=SC2016 # single-quoted deliberately: $DATABASE_URL_MIGRATE
+  # must expand inside the container's sh, not here on the host.
+  if ! compose run --rm --no-deps api sh -c 'DATABASE_URL="$DATABASE_URL_MIGRATE" node dist/scripts/migrate.js'; then
+    log "migration failed; leaving maintenance on. No backup restore was performed — restore this backup set manually only if you determine the migration left the schema inconsistent: ${out_dir:-see sellright backup output above}"
+    exit 1
+  fi
+
+  log "5/7 starting updated services..."
+  compose up -d api admin storefront
+
+  log "6/7 running functional checks..."
+  if ! cmd_functional_check; then
+    log "functional checks FAILED after update. Rolling back to the previous images BEFORE reopening (maintenance stays on). No backup restore performed."
+    restart_digests "$digests_file"
+    log "rollback complete. Re-running functional checks against the restored images..."
+    if cmd_functional_check; then
+      log "previous images restored and healthy. Maintenance remains ON — clear it manually once you've investigated: sellright maintenance off"
+    else
+      log "CRITICAL: functional checks still failing after rollback. Maintenance remains ON. Manual intervention required — see docs/runbooks/migrations.md."
+    fi
+    exit 1
+  fi
+
+  log "7/7 leaving maintenance mode..."
+  cmd_maintenance off
+  log "update complete."
+}
+
+# Fail-closed: `sellright update` must never run an image it couldn't verify.
+# Installs cosign itself (same download install.sh's install_cosign performs)
+# rather than skipping — a host missing cosign is a setup gap to fix, not a
+# reason to relax the update path's own signature gate.
+ensure_cosign() {
+  command -v cosign >/dev/null 2>&1 && return 0
+  log "cosign not found; installing cosign ${COSIGN_VERSION}..."
+  arch=$(uname -m)
+  case "$arch" in
+    x86_64) cosign_arch=amd64 ;;
+    aarch64) cosign_arch=arm64 ;;
+    *) die "unsupported architecture for cosign: $arch" ;;
+  esac
+  if ! curl -fsSL -o /usr/local/bin/cosign \
+      "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-${cosign_arch}"; then
+    die "failed to download cosign — cannot verify image signatures, refusing to update"
+  fi
+  chmod +x /usr/local/bin/cosign
+  command -v cosign >/dev/null 2>&1 || die "cosign install did not produce a usable binary"
+}
+
+# Keyless-signature check for the three images this compose file currently
+# resolves to. Fail-closed: missing cosign, an unresolvable image ref, or any
+# failed verification all abort the update (non-zero return) — cmd_update
+# treats that as "leave maintenance on, make no changes", never as "proceed
+# anyway". This is the same identity/issuer install.sh's own verify_and_pull
+# checks, re-applied here so `sellright update` never trusts a pull it hasn't
+# independently verified itself.
+cosign_verify_images() {
+  ensure_cosign || return 1
+  verified_any=0
+  for svc in api admin storefront; do
+    ref=$(compose images -q "$svc" 2>/dev/null || true)
+    if [ -z "$ref" ]; then
+      log "could not resolve a running image for service '${svc}'; refusing to update without verifying it"
+      return 1
+    fi
+    digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$ref" 2>/dev/null || true)
+    if [ -z "$digest" ]; then
+      log "could not resolve a content digest for service '${svc}' (ref: ${ref}); refusing to update without verifying it"
+      return 1
+    fi
+    if ! cosign verify \
+        --certificate-identity-regexp '^https://github.com/Orthic-Labs/sellright/' \
+        --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+        "$digest" >/dev/null 2>&1; then
+      log "cosign verify FAILED for ${svc} (${digest}); refusing to update"
+      return 1
+    fi
+    verified_any=$((verified_any + 1))
+  done
+  [ "$verified_any" -eq 3 ] || { log "expected to verify 3 images (api, admin, storefront), verified ${verified_any}"; return 1; }
+  return 0
 }
 
 usage() {
@@ -255,7 +420,13 @@ Commands:
                       confirmation unless --yes is given.
   setup-link          Print how to claim/reset the installation admin
   reset-admin <email> Reset the admin account directly
-  update              (stub) update the appliance to the latest images
+  maintenance <on|off|status>
+                      Toggle or check maintenance mode directly
+  functional-check    Run the post-update health checks directly
+  update              Maintenance on -> backup -> pull+verify -> migrate ->
+                      start -> functional checks -> maintenance off.
+                      Rolls back to the previous images automatically if a
+                      functional check fails before reopening.
 EOF
 }
 
@@ -271,6 +442,8 @@ main() {
     restore) cmd_restore "$@" ;;
     setup-link) cmd_setup_link "$@" ;;
     reset-admin) cmd_reset_admin "$@" ;;
+    maintenance) cmd_maintenance "$@" ;;
+    functional-check) cmd_functional_check "$@" ;;
     update) cmd_update "$@" ;;
     -h|--help|help) usage ;;
     *) log "unknown command: $cmd"; usage; exit 1 ;;

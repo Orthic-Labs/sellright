@@ -206,6 +206,27 @@ export interface SrStoreIdentity {
 export const srShopIdentity = (previewToken?: string) =>
   sr<SrStoreIdentity>('/v1/shop/identity', previewToken ? { headers: { 'x-preview-token': previewToken } } : {});
 
+export interface SrMaintenanceStatus {
+  maintenance: boolean;
+  since?: string;
+  reason?: string;
+}
+
+/**
+ * WS-E: polled on every request alongside identity so the layout can render
+ * "back soon" instead of the real storefront chrome while the API is mid
+ * update. Deliberately never throws on failure — an unreachable API here
+ * should fail open (render the normal page, which will itself fail
+ * downstream) rather than mask a real outage as a maintenance screen.
+ */
+export const srMaintenanceStatus = async (): Promise<SrMaintenanceStatus> => {
+  try {
+    return await sr<SrMaintenanceStatus>('/v1/maintenance', {});
+  } catch {
+    return { maintenance: false };
+  }
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Auth & account — mirrors packages/api/src/routes/{auth,account,customer-tokens}.ts
 // ─────────────────────────────────────────────────────────────────────────────
