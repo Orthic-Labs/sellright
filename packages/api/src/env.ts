@@ -175,8 +175,17 @@ const EnvSchema = z.object({
   // First-run admin + store bootstrap. All optional so existing deployments are
   // unaffected. bootstrap.ts treats a partially configured set as an error and
   // never resets an existing admin password on restart.
-  ADMIN_EMAIL: z.string().email().optional(),
-  ADMIN_PASSWORD: z.string().optional(),
+  // WS-B: compose.yaml's `${ADMIN_EMAIL:-}` (and PASSWORD) resolve to an empty
+  // string, not "unset", whenever the var is absent from deploy/.env — which
+  // is now the NORMAL case for a fresh one-click install (install.sh no
+  // longer writes either line). Without emptyToUndefined, z.string().email()
+  // rejects "" and env.ts's module-level EnvSchema.parse() throws, crash-
+  // looping the api container on every install that doesn't set these by
+  // hand. `optionalEnvString`/`optionalEnvEmail` are ALREADY this repo's
+  // convention for exactly this (see BOOTSTRAP_STORE_SLUG) — these two had
+  // just never been switched over.
+  ADMIN_EMAIL: optionalEnvEmail,
+  ADMIN_PASSWORD: optionalEnvString,
   BOOTSTRAP_STORE_SLUG: optionalEnvString,
   BOOTSTRAP_STORE_NAME: optionalEnvString,
   BOOTSTRAP_STORE_CURRENCY: z.preprocess(emptyToUndefined, z.string().regex(/^[A-Za-z]{3}$/).transform((v) => v.toUpperCase()).optional()),
