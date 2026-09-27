@@ -180,6 +180,16 @@ export async function claimInstallation(input: ClaimInput): Promise<ClaimResult>
 
     await tx.insert(s.adminUserStore).values({ adminUserId: adminId, storeId, role: 'owner' });
 
+    // audit_log (unlike store/admin_user/admin_user_store — see rls-tables.test.ts's
+    // EXEMPT set) DOES have FORCE ROW LEVEL SECURITY, and this transaction runs on
+    // unsafeUnscopedDb (correctly — no store exists yet at the top of this
+    // function), so app.current_store was never set. Under the restricted
+    // NOSUPERUSER/NOBYPASSRLS runtime role this insert would silently violate the
+    // tenant policy and throw (masked in tests that connect as a privileged
+    // Postgres role, which bypasses RLS entirely) — set it explicitly, now that
+    // storeId is known, exactly like withStore()/runStoreTransaction() do.
+    await tx.execute(sql`SELECT set_config('app.current_store', ${storeId}, true)`);
+
     await tx.insert(s.auditLog).values({
       storeId,
       actor: email,
