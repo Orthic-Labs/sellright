@@ -80,13 +80,13 @@ admin.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/me', summary: 'Current admin + accessible stores',
     responses: {
-      200: { description: 'OK', content: J(z.object({ email: z.string(), stores: z.array(StoreAccess) })) },
+      200: { description: 'OK', content: J(z.object({ email: z.string(), isInstallationAdmin: z.boolean(), stores: z.array(StoreAccess) })) },
       401: { description: 'Unauthorized', ...errBody },
     },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
-    return c.json({ email: admin.email, stores: admin.stores }, 200);
+    return c.json({ email: admin.email, isInstallationAdmin: admin.isInstallationAdmin, stores: admin.stores }, 200);
   }),
 );
 

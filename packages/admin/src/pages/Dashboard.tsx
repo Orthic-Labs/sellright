@@ -6,6 +6,7 @@ import { useAuth } from '../auth';
 import { money, dateTime } from '../lib/format';
 import { halfPeriodDelta, sparkHeights, totals, trendDeltaLabel, type TrendSeries } from '../lib/report-deltas';
 import { Badge, Loading, ErrorState, PageHeader, KpiCard, EmptyStateActionPanel } from '../components/ui';
+import SetupChecklist from '../components/SetupChecklist';
 
 // An operational signal: a count that wants action when it's non-zero.
 function OpCard({ label, count, hint, to, icon, danger }: {
@@ -70,6 +71,8 @@ export default function Dashboard() {
   return (
     <>
       <PageHeader title="Welcome back" subtitle={data.store.name} />
+
+      {!data.store.published && <SetupChecklist />}
 
       {fresh ? (
         <div className="panel p-6 mb-6">
@@ -152,7 +155,7 @@ export default function Dashboard() {
                   <td className="td font-medium">{o.code}</td>
                   <td className="td text-gray-500">{dateTime(o.placedAt ?? o.createdAt)}</td>
                   <td className="td text-gray-600 truncate">{o.email ?? '—'}</td>
-                  <td className="td"><Badge value={o.state} /></td>
+                  <td className="td"><Badge value={o.state} /> {o.isDemo && <Badge value="Demo" tone="neutral" />}</td>
                   <td className="td text-right font-medium tnum">{money(o.grandTotal, o.currency)}</td>
                 </tr>
               ))}

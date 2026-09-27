@@ -79,6 +79,34 @@ export const adminUser = pgTable('admin_user', {
   email: text().notNull().unique(),
   passwordHash: text(),
   totpSecret: text(),
+  // Display name. Only ever set at claim time today (POST /v1/setup/claim);
+  // nullable so every admin created by earlier flows (seed-admin, invites,
+  // bootstrap) keeps working unchanged.
+  name: text(),
+  // One-click install (plan §1.3): install-wide authority, distinct from any
+  // per-store `owner` role. Owns system operations (backup/restore trigger,
+  // recovery-kit download, add-store, future update trigger). Owning a store
+  // — even as 'owner' — never implies this. Set exactly once, by
+  // POST /v1/setup/claim; never toggled by ordinary staff-management routes.
+  isInstallationAdmin: boolean().notNull().default(false),
+  // One-click install (plan §1.10): set once the installation admin has
+  // downloaded the recovery kit via GET /v1/admin/system/recovery-kit. Gates
+  // Publish (plan §1.5) alongside payments/email verification.
+  recoveryKitDownloadedAt: timestamp({ withTimezone: true }),
+  createdAt: ts(),
+});
+
+// One-click install (plan §1.4): single-use claim token minted by
+// `sellright setup-link`, redeemed by POST /v1/setup/claim to create the
+// installation administrator + first store in one transaction. Global and
+// pre-auth — like staff_invite, isolation is the 256-bit token hash, not RLS.
+// The route (not this schema) enforces "only while no installation admin
+// exists" and invalidates prior unused tokens when a new one is issued.
+export const setupClaimToken = pgTable('setup_claim_token', {
+  id: uuid().primaryKey().defaultRandom(),
+  tokenHash: text().notNull().unique(),
+  expiresAt: timestamp({ withTimezone: true }).notNull(),
+  usedAt: timestamp({ withTimezone: true }),
   createdAt: ts(),
 });
 

@@ -21,6 +21,10 @@ export interface AdminStoreAccess {
 export interface AdminPrincipal {
   id: string;
   email: string;
+  /** Install-wide authority (plan §1.3) — distinct from any per-store 'owner'
+   *  role. Gates system operations (backup/restore, recovery-kit download,
+   *  add-store). See requireInstallationAdmin() in admin-helpers.ts. */
+  isInstallationAdmin: boolean;
   stores: AdminStoreAccess[];
 }
 
@@ -55,6 +59,7 @@ export async function resolveAdmin(token: string): Promise<AdminPrincipal | null
     .select({
       id: s.adminUser.id,
       email: s.adminUser.email,
+      isInstallationAdmin: s.adminUser.isInstallationAdmin,
       storeId: s.store.id,
       slug: s.store.slug,
       name: s.store.name,
@@ -89,7 +94,7 @@ export async function resolveAdmin(token: string): Promise<AdminPrincipal | null
       role: r.role as AdminStoreAccess['role'],
       permissions: (r.permissions as Record<string, boolean> | null) ?? null,
     }));
-  return { id: first.id, email: first.email, stores };
+  return { id: first.id, email: first.email, isInstallationAdmin: first.isInstallationAdmin, stores };
 }
 
 /** Find an admin user by email — global registry lookup on the default db client. */

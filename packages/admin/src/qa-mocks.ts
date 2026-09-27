@@ -187,10 +187,10 @@ function makeProductDetail(): ProductDetail {
 function makeDashboard(kind: 'fresh' | 'active' | 'trend' | 'error' = 'active'): Dashboard {
   if (kind === 'error') throw new Error('mock: dashboard endpoint failed');
   if (kind === 'fresh') {
-    return { store: { slug: 'demo', name: 'Demo Store', currency: 'USD' }, revenue: 0, orders: 0, aov: 0, pendingFulfillment: 0, customers: 0, lowStock: 0, recentOrders: [] };
+    return { store: { slug: 'demo', name: 'Demo Store', currency: 'USD', published: true }, revenue: 0, orders: 0, aov: 0, pendingFulfillment: 0, customers: 0, lowStock: 0, recentOrders: [] };
   }
   return {
-    store: { slug: 'demo', name: 'Demo Store', currency: 'USD' },
+    store: { slug: 'demo', name: 'Demo Store', currency: 'USD', published: true },
     revenue: money(842150), orders: 312, aov: money(2700),
     pendingFulfillment: 17, customers: 248, lowStock: 5,
     recentOrders: makeOrders(6, 'dense').items,

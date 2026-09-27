@@ -59,12 +59,31 @@ export const LOCAL_API = localApi;
  * Call once at real server startup (entry.express.tsx) — NOT at module load.
  * Refuses to start (throws) when running as a production Node process
  * (NODE_ENV=production, a runtime check independent of Vite's build-time
- * import.meta.env.PROD) with PROD_API still on the dev-port default, i.e.
- * VITE_SELLRIGHT_PROD_URL was never configured for this build.
+ * import.meta.env.PROD) with NO API endpoint configured by any mechanism.
+ *
+ * WS-C (runtime storefront configuration, plan §1.9) introduced a SECOND,
+ * now-primary way to configure the API endpoint: the runtime env var
+ * `SELLRIGHT_API_URL`, read fresh per-request by utils/sellright.ts's
+ * `apiBase()` — this is what lets one generic built image (no store/API URL
+ * baked in) serve any store. `packages/storefront/Dockerfile`'s runtime image
+ * is built with NO `VITE_SELLRIGHT_PROD_URL` build arg BY DESIGN (see that
+ * file's header comment), so `PROD_API` is always the dev-port default for
+ * that image — this assertion checking `PROD_API` alone would refuse to
+ * start EVERY generic-image container unconditionally, regardless of
+ * `SELLRIGHT_API_URL` being correctly set (deploy/compose.yaml always
+ * defaults it to `http://api:3300`). Pass the runtime value in explicitly
+ * (entry.express.tsx reads `process.env.SELLRIGHT_API_URL`) so a legacy
+ * single-store build-time-configured deployment (PROD_API set, no
+ * SELLRIGHT_API_URL) and the WS-C generic-image deployment (SELLRIGHT_API_URL
+ * set, PROD_API left at its dev default) both correctly pass, and only a
+ * build/deploy with genuinely NEITHER configured fails loud.
  */
-export function assertProdApiConfigured(nodeEnv: string | undefined): void {
-	if (nodeEnv === 'production' && PROD_API === SELLRIGHT_DEV_API_DEFAULT) {
-		throw new Error('VITE_SELLRIGHT_PROD_URL is required in production — refusing to serve with a dev API URL baked into the build.');
+export function assertProdApiConfigured(nodeEnv: string | undefined, runtimeApiUrl?: string): void {
+	const hasRuntimeOverride = !!runtimeApiUrl?.trim();
+	if (nodeEnv === 'production' && PROD_API === SELLRIGHT_DEV_API_DEFAULT && !hasRuntimeOverride) {
+		throw new Error(
+			'No API endpoint configured in production — set SELLRIGHT_API_URL (runtime, WS-C generic-image deployments) or bake in VITE_SELLRIGHT_PROD_URL at build time (legacy single-store deployments).',
+		);
 	}
 }
 

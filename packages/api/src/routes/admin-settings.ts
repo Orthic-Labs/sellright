@@ -7,8 +7,14 @@ import { clearAdminTotpSecret, getAdminTotpSecret, setAdminTotpSecret } from '..
 import { isSupportedPaymentMethod } from '../payments/provider.js';
 import { resolveStripeConfigured, stripeModeFromConfig } from '../payments/stripe.js';
 import { invalidateStoreCache } from '../store-context.js';
+import { env } from '../env.js';
 import { generatePreviewToken, hashPreviewToken } from '../store-publish.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireManage, guard } from './admin-helpers.js';
+// Circular with admin-system.ts (which imports mutateStoreConfig from here)
+// is safe: both bindings are only ever called from inside route handlers,
+// never at module-evaluation time, so ESM's live-binding semantics resolve
+// them fine regardless of import order.
+import { computeReadiness } from './admin-system.js';
 
 export const adminSettings = new OpenAPIHono();
 
@@ -175,13 +181,22 @@ adminSettings.openapi(
 adminSettings.openapi(
   createRoute({
     method: 'patch', path: '/v1/admin/settings/store', summary: 'Update store details / tax',
-    request: { body: { content: J(z.object({ name: z.string().optional(), currency: z.string().optional(), taxRate: z.number().int().min(0).optional(), taxInclusive: z.boolean().optional(), shippingTaxable: z.boolean().optional() })) } },
+    request: { body: { content: J(z.object({
+      name: z.string().optional(), currency: z.string().optional(), taxRate: z.number().int().min(0).optional(),
+      taxInclusive: z.boolean().optional(), shippingTaxable: z.boolean().optional(),
+      // Domain checklist item (plan §1.5): the Host(s) store-context.ts's
+      // resolveStoreByHost matches against. Lives in config.hostnames
+      // (JSONB), not a `store` column — handled separately from the rest of
+      // this body below. Previously nothing on the admin surface could ever
+      // set this after bootstrap.js's one-time BOOTSTRAP_STORE_HOSTNAMES.
+      hostnames: z.array(z.string().trim().min(1)).optional(),
+    })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireManage(st);
-    const b = c.req.valid('json');
+    const { hostnames, ...b } = c.req.valid('json');
     await withStore(st.storeId, async (tx) => {
       // SR-16: lock the row and snapshot the touched columns so the audit row
       // carries a truthful before/after — name/currency/tax flags only, never
@@ -193,18 +208,30 @@ adminSettings.openapi(
         .for('update')
         .limit(1);
       if (!before) throw new HttpError(404, 'store not found');
-      await tx.update(s.store).set({ ...b, updatedAt: new Date() }).where(eq(s.store.id, st.storeId));
-      const keys = Object.keys(b) as Array<keyof typeof before>;
-      const pick = (row: Record<string, unknown>) => Object.fromEntries(keys.map((k) => [k, row[k]]));
-      await tx.insert(s.auditLog).values({
-        storeId: st.storeId,
-        actor: admin.email,
-        entity: 'store',
-        entityId: st.storeId,
-        action: 'settings_update',
-        data: { section: 'store', before: pick(before), after: pick({ ...before, ...b }) },
-      });
+      // A hostnames-only PATCH touches no `store` column — skip both the
+      // update and its audit row rather than writing a spurious
+      // before===after entry.
+      if (Object.keys(b).length > 0) {
+        await tx.update(s.store).set({ ...b, updatedAt: new Date() }).where(eq(s.store.id, st.storeId));
+        const keys = Object.keys(b) as Array<keyof typeof before>;
+        const pick = (row: Record<string, unknown>) => Object.fromEntries(keys.map((k) => [k, row[k]]));
+        await tx.insert(s.auditLog).values({
+          storeId: st.storeId,
+          actor: admin.email,
+          entity: 'store',
+          entityId: st.storeId,
+          action: 'settings_update',
+          data: { section: 'store', before: pick(before), after: pick({ ...before, ...b }) },
+        });
+      }
     });
+    if (hostnames) {
+      await mutateStoreConfig(st.storeId, (config) => ({ ...config, hostnames }), {
+        actor: admin.email,
+        action: 'settings_update_hostnames',
+        detail: () => ({ hostnames }),
+      });
+    }
     invalidateStoreCache(st.slug);
     return c.json({ ok: true }, 200);
   }),
@@ -545,12 +572,30 @@ adminSettings.openapi(
   createRoute({
     method: 'patch', path: '/v1/admin/settings/publish', summary: 'Set the storefront published flag',
     request: { body: { content: J(z.object({ published: z.boolean() })) } },
-    responses: { 200: { description: 'OK', content: J(z.object({ published: z.boolean() })) }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: {
+      200: { description: 'OK', content: J(z.object({ published: z.boolean() })) },
+      401: { description: 'Unauthorized', ...errBody },
+      409: { description: 'Readiness checks not met', content: J(z.object({ error: z.string(), failing: z.array(z.string()) })) },
+    },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireManage(st);
     const { published } = c.req.valid('json');
+
+    // Publish readiness (plan §1.5): going private never needs a gate — only
+    // going live does. Domain is deliberately never a blocker here (no
+    // domain/TLS automation has shipped — see computeReadiness's doc
+    // comment); off-site backup and the product/shipping checklist items are
+    // informational only, not gates, per the plan's exact readiness list.
+    if (published) {
+      const readiness = await computeReadiness(st.storeId, admin.isInstallationAdmin ? admin.id : null);
+      const failing = (['payments', 'email', 'recoveryKit'] as const).filter((k) => !readiness[k].ok);
+      if (failing.length > 0) {
+        return c.json({ error: 'readiness checks not met', failing }, 409);
+      }
+    }
+
     await mutateStoreConfig(st.storeId, (config) => ({ ...config, published }), {
       actor: admin.email,
       action: published ? 'publish-store' : 'unpublish-store',
@@ -562,7 +607,7 @@ adminSettings.openapi(
 adminSettings.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/settings/preview-token', summary: 'Issue a new private-preview token (invalidates the previous one)',
-    responses: { 200: { description: 'OK', content: J(z.object({ token: z.string() })) }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: { 200: { description: 'OK', content: J(z.object({ token: z.string(), previewUrl: z.string() })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
@@ -572,8 +617,11 @@ adminSettings.openapi(
       actor: admin.email,
       action: 'issue-preview-token',
     });
-    // The plaintext token exists only in this response — only its hash is persisted.
-    return c.json({ token }, 200);
+    // The plaintext token exists only in this response — only its hash is
+    // persisted. previewUrl saves the onboarding UI (Setup screen 3) from
+    // needing its own STOREFRONT_URL plumbing — layout.tsx reads this exact
+    // query param name (`preview_token`, not `token`).
+    return c.json({ token, previewUrl: `${env.STOREFRONT_URL}/?preview_token=${token}` }, 200);
   }),
 );
 

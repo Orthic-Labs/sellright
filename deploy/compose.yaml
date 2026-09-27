@@ -112,9 +112,28 @@ services:
       # survives the very container restart the update sequence performs.
       MAINTENANCE_FLAG_FILE: /app/var/state/MAINTENANCE
       DOWNLOAD_URL_SECRET: ${DOWNLOAD_URL_SECRET:?set DOWNLOAD_URL_SECRET in deploy/.env}
-      ADMIN_EMAIL: ${ADMIN_EMAIL:?set ADMIN_EMAIL in deploy/.env}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in deploy/.env}
-      BOOTSTRAP_STORE_SLUG: ${BOOTSTRAP_STORE_SLUG:?set BOOTSTRAP_STORE_SLUG in deploy/.env}
+      # WS-A's secret-crypto.ts reads this directly from process.env (it's
+      # infra-only, deliberately outside the zod env schema — see that file's
+      # doc comment) to encrypt/decrypt every store_secret row. It was
+      # generated into deploy/.env by install.sh from day one but was never
+      # actually passed through to this container — payment/email secret
+      # encryption would fail closed on every real install. Fixed here as
+      # part of WS-B's recovery-kit endpoint, which needs the same variable.
+      SELLRIGHT_MASTER_KEY: ${SELLRIGHT_MASTER_KEY:?set SELLRIGHT_MASTER_KEY in deploy/.env}
+      # Recovery kit (plan §1.10): the kit file install.sh writes to disk is
+      # reconstructible entirely from env the api container already has
+      # (SELLRIGHT_MASTER_KEY + this id), so GET /v1/admin/system/recovery-kit
+      # never needs filesystem access to $SELLRIGHT_HOME.
+      RECOVERY_KIT_ID: ${RECOVERY_KIT_ID:-}
+      # One-click install (WS-B): a fresh install.sh run no longer writes
+      # these — the owner claims the install in the browser via
+      # `sellright setup-link` + POST /v1/setup/claim instead (dist/scripts/
+      # bootstrap.js is a no-op without BOOTSTRAP_STORE_SLUG). Left optional,
+      # not required, so an existing env-based deployment that still sets all
+      # three in deploy/.env keeps bootstrapping exactly as before.
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      BOOTSTRAP_STORE_SLUG: ${BOOTSTRAP_STORE_SLUG:-}
       BOOTSTRAP_STORE_NAME: ${BOOTSTRAP_STORE_NAME:-}
       BOOTSTRAP_STORE_CURRENCY: ${BOOTSTRAP_STORE_CURRENCY:-USD}
       BOOTSTRAP_STORE_HOSTNAMES: ${BOOTSTRAP_STORE_HOSTNAMES:-}

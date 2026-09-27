@@ -28,6 +28,7 @@ import { issueLicensesForPaidOrder } from '../licensing/issue.js';
 import { bootstrapAccountAndQueueAccessMail } from '../licensing/account-bootstrap.js';
 import { legalReceiptForOrder, type OrderLegalReceipt } from '../legal/acceptance.js';
 import { legalManifestForApp } from '../legal/manifests.js';
+import { isStorePublished } from '../store-publish.js';
 import { cartResponse, CartOut } from './cart.js';
 
 /** Mirror of email/dispatch.ts::parseAppMap — duplicated here to avoid an
@@ -528,6 +529,11 @@ checkout.openapi(
         subtotal: totals.subtotal, discountTotal: totals.discountTotal, shippingTotal: totals.shippingTotal,
         taxTotal: totals.taxTotal, grandTotal: totals.grandTotal,
         isPreOrder: priced.some((p) => p.v.isPreOrder),
+        // Plan §1.5: a store still in private-preview (unpublished) can't yet
+        // have real customers — anything placed there is a demonstration
+        // order, kept for the owner to see the flow work but excluded from
+        // reports/KPIs (admin-reports.ts, admin-dashboard.ts).
+        isDemo: !isStorePublished(st.config),
         shippingAddress: normalizeAddress(body.shippingAddress), billingAddress: normalizeAddress(body.billingAddress),
         // WP9.5: attach the link provenance to the order metadata. The account
         // order-list endpoint reads this to suppress email_match-linked orders

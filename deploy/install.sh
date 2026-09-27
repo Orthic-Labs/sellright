@@ -108,9 +108,11 @@ write_env() {
     printf 'RECOVERY_KIT_ID=%s\n' "$(gen_secret 8)"
     printf 'STOREFRONT_URL=%s\n' "${SELLRIGHT_DOMAIN:-https://localhost}"
     printf 'SELLRIGHT_DOMAIN=%s\n' "${SELLRIGHT_DOMAIN:-:80}"
-    printf 'BOOTSTRAP_STORE_SLUG=%s\n' "${BOOTSTRAP_STORE_SLUG:-default}"
-    printf 'ADMIN_EMAIL=%s\n' "${ADMIN_EMAIL:-setup-pending@example.invalid}"
-    printf 'ADMIN_PASSWORD=%s\n' "$(gen_secret 24)"
+    # No BOOTSTRAP_STORE_SLUG/ADMIN_EMAIL/ADMIN_PASSWORD here: the one-click
+    # install claims itself in the browser (`sellright setup-link` +
+    # POST /v1/setup/claim), never by typing a generated password out of a
+    # file. An operator who wants the OLD env-based bootstrap can still set
+    # all three by hand in this file after it's written (see compose.yaml).
   } > "$env_file"
   chmod 600 "$env_file"
 }
@@ -171,6 +173,20 @@ start_stack() {
   ( cd "$SELLRIGHT_HOME" && docker compose --env-file .env -f compose.yaml up -d )
 }
 
+wait_for_api() {
+  log "Waiting for the API to finish migrating and come up..."
+  i=0
+  while [ "$i" -lt 60 ]; do
+    if ( cd "$SELLRIGHT_HOME" && docker compose --env-file .env -f compose.yaml exec -T admin \
+        wget -qO- http://127.0.0.1:8080/v1/readyz 2>/dev/null | grep -q '"status":"ok"' ); then
+      return 0
+    fi
+    i=$((i + 1))
+    sleep 2
+  done
+  die "API did not become ready in time; check: sellright logs api"
+}
+
 main() {
   require_root
   check_os
@@ -183,10 +199,11 @@ main() {
   write_recovery_kit
   verify_and_pull
   start_stack
+  wait_for_api
   log ""
-  log "SellRight is starting. Finish setup with:"
-  log "  sellright setup-link"
-  log "(claim endpoint ships in a follow-up release; this prints instructions until then)"
+  log "SellRight is running. Claim it — this link is shown ONLY here, once:"
+  log ""
+  /usr/local/bin/sellright setup-link
   log ""
   log "Recovery kit: ${SELLRIGHT_HOME}/recovery-kit.json — download it now and store it somewhere other than this server."
 }
