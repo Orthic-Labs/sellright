@@ -493,6 +493,11 @@ const IdentityPatchSchema = z.object({
     textMuted: z.string().optional(), border: z.string().optional(),
   }).optional(),
   fonts: z.object({ display: z.string().optional(), body: z.string().optional(), mono: z.string().optional() }).optional(),
+  policies: z.object({
+    shipping: z.object({ label: z.string().optional(), sub: z.string().optional() }).optional(),
+    returns: z.object({ label: z.string().optional(), sub: z.string().optional() }).optional(),
+    payment: z.object({ label: z.string().optional(), sub: z.string().optional() }).optional(),
+  }).optional(),
 });
 
 adminSettings.openapi(

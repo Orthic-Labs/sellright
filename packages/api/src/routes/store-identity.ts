@@ -53,6 +53,12 @@ export const StoreIdentitySchema = z.object({
   siteOrigin: z.string(),
   /** Whether the storefront is publicly visible (plan §1.5: Publish store). */
   published: z.boolean(),
+  /** Short trust-signal phrases (shipping/returns/payment) shown in header/PDP/cart/checkout trust bars. */
+  policies: z.object({
+    shipping: z.object({ label: z.string(), sub: z.string() }),
+    returns: z.object({ label: z.string(), sub: z.string() }),
+    payment: z.object({ label: z.string(), sub: z.string() }),
+  }),
 });
 
 export type StoreIdentity = z.infer<typeof StoreIdentitySchema>;
@@ -78,6 +84,11 @@ const NEUTRAL_DEFAULTS = {
     mono: 'ui-monospace, SFMono-Regular, monospace',
   },
   locale: 'en',
+  policies: {
+    shipping: { label: 'Flat-Rate', sub: 'Shipping' },
+    returns: { label: '1 Week', sub: 'Defect Returns' },
+    payment: { label: 'Secure', sub: 'Checkout' },
+  },
 } as const;
 
 interface StoreRowForIdentity {
@@ -107,6 +118,14 @@ export function storeIdentityFromConfig(store: StoreRowForIdentity, published: b
   const fontsIn = (identity.fonts ?? {}) as Record<string, unknown>;
   const addressIn = identity.address as Record<string, unknown> | undefined;
   const siteOrigin = strOrUndefined('siteOrigin') ?? `https://${strOrUndefined('domain') ?? 'localhost'}`;
+  const policiesIn = (identity.policies ?? {}) as Record<string, unknown>;
+  const policy = (key: 'shipping' | 'returns' | 'payment') => {
+    const p = (policiesIn[key] ?? {}) as Record<string, unknown>;
+    return {
+      label: typeof p.label === 'string' ? p.label : NEUTRAL_DEFAULTS.policies[key].label,
+      sub: typeof p.sub === 'string' ? p.sub : NEUTRAL_DEFAULTS.policies[key].sub,
+    };
+  };
   return {
     storeName,
     legalName: str('legalName', storeName),
@@ -150,5 +169,10 @@ export function storeIdentityFromConfig(store: StoreRowForIdentity, published: b
     locale: str('locale', NEUTRAL_DEFAULTS.locale),
     siteOrigin,
     published,
+    policies: {
+      shipping: policy('shipping'),
+      returns: policy('returns'),
+      payment: policy('payment'),
+    },
   };
 }
