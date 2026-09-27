@@ -10,6 +10,9 @@
  */
 import Stripe from 'stripe';
 import { env } from '../env.js';
+import { withStore, unsafeUnscopedDb } from '../db/client.js';
+import { store as storeTable } from '../db/schema-core.js';
+import { resolveField } from '../security/settings-resolver.js';
 import type { PaymentProvider, CreatePaymentInput, PaymentResult, RefundInput, RefundResult } from './provider.js';
 
 export type StripeMode = 'test' | 'live';
@@ -53,9 +56,34 @@ function keyMatchesMode(key: string | undefined, mode: StripeMode): boolean {
 // yields a fresh client. `env` is parsed once at boot so in practice this holds
 // one client per mode, but keying by secret is correct even if that changes.
 const _clients = new Map<string, Stripe>();
-export function stripeClient(mode: StripeMode): Stripe {
-  const key = stripeCreds(mode).secretKey;
-  if (!key) throw new Error(`STRIPE_SECRET_KEY_${mode === 'live' ? 'LIVE' : 'TEST'} is not configured`);
+
+/**
+ * WS-A env>db resolution (one-click install plan §1.6): the environment's
+ * per-mode credentials (stripeCreds) ALWAYS win — an existing deployment with
+ * STRIPE_SECRET_KEY_* set behaves identically, byte for byte, to before this
+ * change. Only a field the environment leaves empty is read (decrypted) from
+ * the store's `store_secret` row. Self-manages a short-lived, store-scoped
+ * transaction (withStore) so every call site — most of which must NOT hold a
+ * DB transaction open across the subsequent Stripe network call — stays a
+ * simple `await resolveStripeCreds(storeId, mode)` with no tx to thread.
+ */
+export async function resolveStripeCreds(storeId: string, mode: StripeMode): Promise<StripeCreds> {
+  const envCreds = stripeCreds(mode);
+  return withStore(storeId, async (tx) => {
+    const secretKey = await resolveField(tx, { storeId, provider: 'stripe', mode, field: 'secretKey' }, envCreds.secretKey);
+    const webhookSecret = await resolveField(tx, { storeId, provider: 'stripe', mode, field: 'webhookSecret' }, envCreds.webhookSecret);
+    const publishableKey = await resolveField(tx, { storeId, provider: 'stripe', mode, field: 'publishableKey' }, envCreds.publishableKey);
+    return {
+      secretKey: secretKey.value || undefined,
+      webhookSecret: webhookSecret.value || undefined,
+      publishableKey: publishableKey.value || undefined,
+    };
+  });
+}
+
+export async function resolveStripeClient(storeId: string, mode: StripeMode): Promise<Stripe> {
+  const key = (await resolveStripeCreds(storeId, mode)).secretKey;
+  if (!key) throw new Error(`Stripe secret key is not configured for this store (${mode} mode)`);
   let client = _clients.get(key);
   if (!client) { client = new Stripe(key); _clients.set(key, client); }
   return client;
@@ -64,13 +92,13 @@ export function stripeClient(mode: StripeMode): Stripe {
 /** True only when this mode has a secret key that is actually a secret key
  *  (`sk_`/`rk_`) AND embeds this mode — so a test key in the live slot, or a
  *  publishable key pasted into the secret slot, reads as NOT configured. */
-export function stripeConfigured(mode: StripeMode): boolean {
-  const sk = stripeCreds(mode).secretKey;
+export async function resolveStripeConfigured(storeId: string, mode: StripeMode): Promise<boolean> {
+  const sk = (await resolveStripeCreds(storeId, mode)).secretKey;
   return !!sk && (sk.startsWith('sk_') || sk.startsWith('rk_')) && keyMatchesMode(sk, mode);
 }
 
-export function stripePublishableForClient(mode: StripeMode): string | null {
-  const pk = stripeCreds(mode).publishableKey;
+export async function resolveStripePublishableForClient(storeId: string, mode: StripeMode): Promise<string | null> {
+  const pk = (await resolveStripeCreds(storeId, mode)).publishableKey;
   return pk && pk.startsWith('pk_') && keyMatchesMode(pk, mode) ? pk : null;
 }
 
@@ -78,8 +106,18 @@ export function stripePublishableForClient(mode: StripeMode): string | null {
  *  key (mint + verify) and a matching publishable key (Stripe.js confirm) exist.
  *  This is the single gate the storefront (/shop/config) and the payment-intent
  *  endpoint both use, so they can never disagree. */
-export function stripeUsable(mode: StripeMode): boolean {
-  return stripeConfigured(mode) && !!stripePublishableForClient(mode);
+export async function resolveStripeUsable(storeId: string, mode: StripeMode): Promise<boolean> {
+  return (await resolveStripeConfigured(storeId, mode)) && !!(await resolveStripePublishableForClient(storeId, mode));
+}
+
+/** All store ids, for the inbound-webhook signature-matching fallback (below).
+ *  The `store` table carries no RLS (registry/ACL, resolved pre-context — see
+ *  db/assert-force-rls.ts's EXEMPT set), so this is not an RLS bypass. Kept
+ *  out of src/routes/** so the unsafeUnscopedDb lint restriction never applies
+ *  here (payment-webhooks.ts imports this function, never the raw client). */
+export async function listAllStoreIds(): Promise<string[]> {
+  const rows = await unsafeUnscopedDb.select({ id: storeTable.id }).from(storeTable);
+  return rows.map((r) => r.id);
 }
 
 // constructEvent is pure crypto (no API call), so webhook signature verification
@@ -143,9 +181,11 @@ export const stripeProvider: PaymentProvider = {
     // No silent default to 'test' — routing live money through the test client (or
     // vice-versa) must fail loudly, not silently mis-charge.
     if (!input.stripeMode) return { state: 'Failed', providerRef: null, errorMessage: 'stripeMode is required for Stripe payments' };
+    if (!input.storeId) return { state: 'Failed', providerRef: null, errorMessage: 'storeId is required for Stripe payments' };
     let pi: Stripe.PaymentIntent;
     try {
-      pi = await stripeClient(input.stripeMode).paymentIntents.retrieve(intentId);
+      const client = await resolveStripeClient(input.storeId, input.stripeMode);
+      pi = await client.paymentIntents.retrieve(intentId);
     } catch (e) {
       return { state: 'Failed', providerRef: intentId, errorMessage: e instanceof Error ? e.message : 'retrieve failed' };
     }
@@ -154,6 +194,7 @@ export const stripeProvider: PaymentProvider = {
   async refundPayment(input: RefundInput): Promise<RefundResult> {
     if (!input.providerRef) return { state: 'Failed', providerRef: null, errorMessage: 'no payment_intent to refund' };
     if (!input.stripeMode) return { state: 'Failed', providerRef: null, errorMessage: 'stripeMode is required for Stripe refunds' };
+    if (!input.storeId) return { state: 'Failed', providerRef: null, errorMessage: 'storeId is required for Stripe refunds' };
     try {
       // Idempotency key: a retry of the SAME logical refund (admin double-click,
       // or a retry after a transient network failure) reuses the key, so Stripe
@@ -161,7 +202,8 @@ export const stripeProvider: PaymentProvider = {
       // the key from stable identifiers (order id / return request id + amount) —
       // see admin-orders.ts.
       const opts = input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : undefined;
-      const r = await stripeClient(input.stripeMode).refunds.create({
+      const client = await resolveStripeClient(input.storeId, input.stripeMode);
+      const r = await client.refunds.create({
         payment_intent: input.providerRef, amount: input.amount,
         // SR-04: stamp the durable refund-attempt id onto the provider refund
         // itself. If our response is lost before refund.provider_ref is
@@ -190,8 +232,9 @@ export interface StripeRefundLike {
  *  refunds attached to a PaymentIntent. Used by verifyGatewayAttempt's refund
  *  branch to resolve an attempt whose provider response was lost before
  *  refund.provider_ref was persisted. */
-export async function listStripeRefunds(mode: StripeMode, paymentIntentId: string): Promise<StripeRefundLike[]> {
-  const list = await stripeClient(mode).refunds.list({ payment_intent: paymentIntentId, limit: 100 });
+export async function listStripeRefunds(storeId: string, mode: StripeMode, paymentIntentId: string): Promise<StripeRefundLike[]> {
+  const client = await resolveStripeClient(storeId, mode);
+  const list = await client.refunds.list({ payment_intent: paymentIntentId, limit: 100 });
   return list.data.map((r) => ({
     id: r.id,
     amount: r.amount,
@@ -211,7 +254,8 @@ export async function createPaymentIntent(opts: { orderCode: string; storeId: st
   // client_secret) for a repeated `idempotencyKey` within 24h, so a double-click
   // / retry of /payment-intent reuses the order's open PI instead of minting a
   // duplicate. The key is keyed on the order id by the caller.
-  const pi = await stripeClient(opts.mode).paymentIntents.create({
+  const client = await resolveStripeClient(opts.storeId, opts.mode);
+  const pi = await client.paymentIntents.create({
     amount: opts.amount,
     currency: opts.currency.toLowerCase(),
     metadata: { orderCode: opts.orderCode, storeId: opts.storeId },
@@ -230,11 +274,11 @@ export async function createPaymentIntent(opts: { orderCode: string; storeId: st
  * resolveStoreIdForSubscriptionEvent), so the implementation does not DEPEND on
  * that propagation.
  */
-export async function createSubscriptionCheckout(mode: StripeMode, args: {
+export async function createSubscriptionCheckout(storeId: string, mode: StripeMode, args: {
   priceId: string; successUrl: string; cancelUrl: string;
   customerEmail?: string; metadata: Record<string, string>; // {storeId, orderCode, customerId?}
 }): Promise<{ url: string; sessionId: string }> {
-  const stripe = stripeClient(mode);
+  const stripe = await resolveStripeClient(storeId, mode);
   const session = await stripe.checkout.sessions.create({
     mode: 'subscription',
     line_items: [{ price: args.priceId, quantity: 1 }],
@@ -249,8 +293,8 @@ export async function createSubscriptionCheckout(mode: StripeMode, args: {
 }
 
 /** Open a Stripe Customer Portal session for self-serve cancel / card update. */
-export async function createBillingPortal(mode: StripeMode, args: { customerId: string; returnUrl: string }): Promise<string> {
-  const stripe = stripeClient(mode);
+export async function createBillingPortal(storeId: string, mode: StripeMode, args: { customerId: string; returnUrl: string }): Promise<string> {
+  const stripe = await resolveStripeClient(storeId, mode);
   const ps = await stripe.billingPortal.sessions.create({ customer: args.customerId, return_url: args.returnUrl });
   return ps.url;
 }

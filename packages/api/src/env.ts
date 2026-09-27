@@ -121,6 +121,10 @@ const EnvSchema = z.object({
   STRIPE_WEBHOOK_SECRET_LIVE: z.string().optional(),
   STRIPE_PUBLISHABLE_KEY_TEST: z.string().optional(),
   STRIPE_PUBLISHABLE_KEY_LIVE: z.string().optional(),
+
+  // WS-A: master key for encrypting owner-entered secrets (store_secret table).
+  // Infra-only — never stored in the database. See security/secret-crypto.ts.
+  SELLRIGHT_MASTER_KEY: z.string().optional(),
   // NMI and Sezzle account profiles. Prefer GATEWAY_ACCOUNTS_JSON_FILE in
   // production so credentials can be mounted without appearing in Compose.
   GATEWAY_ACCOUNTS_JSON: z.string().default('[]'),

@@ -4,8 +4,11 @@
  * Mirrors e2e-checkout-stripe.test.ts's signing technique
  * (`Stripe.webhooks.generateTestHeaderString` is pure crypto — no network
  * call, no real Stripe API key needed) but does NOT require real Stripe test
- * keys: stripeConfigured/stripeCreds/stripeModeFromConfig are MOCKED so the
- * suite runs unconditionally (unlike the skip-when-no-keys e2e test).
+ * keys: stripeCreds/stripeModeFromConfig are MOCKED so the suite runs
+ * unconditionally (unlike the skip-when-no-keys e2e test). WS-A's DB-fallback
+ * signature-matching loop (listAllStoreIds + resolveField) is left REAL — the
+ * env-mocked secrets always win the fast path in these fixtures, so it's
+ * never reached, but it's exercised harmlessly on the "bad signature" case.
  *
  * Runs against sellright_test ONLY (these wipe data). vitest runs files
  * serially (fileParallelism: false).
@@ -29,15 +32,14 @@ import * as s from '../db/schema.js';
 const TEST_WEBHOOK_SECRET = 'whsec_test_dummy_secret_for_signing_only';
 const LIVE_WEBHOOK_SECRET = 'whsec_live_dummy_secret_for_signing_only';
 
-// Mock the Stripe surface so the route's stripeConfigured/stripeCreds/
-// stripeModeFromConfig gates pass without real API keys. verifyStripeWebhook
-// is left REAL (it's pure crypto — Stripe.webhooks.constructEvent) so the
-// actual signature-verification code path runs exactly as in production.
+// Mock the Stripe surface so the route's stripeCreds/stripeModeFromConfig
+// gates pass without real API keys. verifyStripeWebhook is left REAL (it's
+// pure crypto — Stripe.webhooks.constructEvent) so the actual
+// signature-verification code path runs exactly as in production.
 vi.mock('../payments/stripe.js', async (orig) => {
   const actual = await orig<typeof import('../payments/stripe.js')>();
   return {
     ...actual,
-    stripeConfigured: (mode: 'test' | 'live') => mode === 'test' || mode === 'live',
     stripeCreds: (mode: 'test' | 'live') => ({
       secretKey: mode === 'test' ? 'sk_test_dummy' : 'sk_live_dummy',
       webhookSecret: mode === 'test' ? TEST_WEBHOOK_SECRET : LIVE_WEBHOOK_SECRET,

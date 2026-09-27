@@ -22,7 +22,7 @@ import { and, desc, eq } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { dispute } from '../db/schema-ops.js';
-import { gatewayAccount } from '../payments/gateway-account.js';
+import { resolveGatewayAccount } from '../payments/gateway-account.js';
 import { recordDispute } from '../disputes/disputes.js';
 import { J, errBody, guard, requireAdmin, requireStore } from './admin-helpers.js';
 import { err as logErr } from '../lib/logger.js';
@@ -63,7 +63,7 @@ disputeRoutes.post('/v1/webhooks/nmi/:storeId/:accountId', async (c) => {
   if (!z.string().uuid().safeParse(storeId).success) return c.json({ error: 'unknown account' }, 404);
   let account;
   try {
-    account = gatewayAccount(storeId, 'nmi', c.req.param('accountId'));
+    account = await resolveGatewayAccount(storeId, 'nmi', c.req.param('accountId'));
   } catch {
     return c.json({ error: 'unknown account' }, 404);
   }

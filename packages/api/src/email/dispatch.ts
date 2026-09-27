@@ -53,6 +53,11 @@ export interface StoreEmailCtx {
   appKey?: string | null;
   /** store.config JSONB — carries storefrontUrl / emailFrom when set (SR-05). */
   config?: unknown;
+  /** WS-A: enables per-store SMTP resolution (env still wins globally) for the
+   *  inline (legacy, non-durable) send* path below. Optional — omitting it
+   *  just means those sends fall back to the env-only transporter, same as
+   *  before WS-A. */
+  storeId?: string;
 }
 
 function parseAppMap(raw: string | undefined): Map<string, string> {
@@ -119,6 +124,7 @@ function emailCtx(store: StoreEmailCtx) {
     currency: store.currency,
     storefrontUrl: resolveStorefrontUrl(store),
     fromEmail: resolveFromEmail(store),
+    storeId: store.storeId,
   };
 }
 
@@ -234,21 +240,21 @@ export async function sendOrderConfirmation(store: StoreEmailCtx, to: string, da
   lines: Array<{ name: string; quantity: number; lineTotal: number }>;
 }): Promise<void> {
   const ctx = emailCtx(store);
-  await sendEmail({ to, from: ctx.fromEmail, ...orderConfirmation(ctx, data) });
+  await sendEmail({ to, from: ctx.fromEmail, ...orderConfirmation(ctx, data) }, ctx.storeId);
 }
 
 export async function sendShippingNotification(store: StoreEmailCtx, to: string, data: {
   code: string; trackingCode: string | null; carrier: string | null;
 }): Promise<void> {
   const ctx = emailCtx(store);
-  await sendEmail({ to, from: ctx.fromEmail, ...shippingNotification(ctx, data) });
+  await sendEmail({ to, from: ctx.fromEmail, ...shippingNotification(ctx, data) }, ctx.storeId);
 }
 
 export async function sendStaffInvite(store: StoreEmailCtx, to: string, data: {
   acceptUrl: string; role: string; inviterEmail: string;
 }): Promise<void> {
   const ctx = emailCtx(store);
-  await sendEmail({ to, from: ctx.fromEmail, ...staffInvite(ctx, data) });
+  await sendEmail({ to, from: ctx.fromEmail, ...staffInvite(ctx, data) }, ctx.storeId);
 }
 
 export async function sendTrialKey(store: StoreEmailCtx, to: string, data: {
@@ -258,5 +264,5 @@ export async function sendTrialKey(store: StoreEmailCtx, to: string, data: {
   await sendEmail({ to, from: ctx.fromEmail, ...trialLicenseKey(ctx, {
     ...data,
     pricingUrl: data.pricingUrl ?? `${ctx.storefrontUrl}/pricing`,
-  }) });
+  }) }, ctx.storeId);
 }

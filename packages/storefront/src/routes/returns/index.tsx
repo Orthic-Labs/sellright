@@ -1,15 +1,16 @@
 import { component$ } from '@qwik.dev/core';
 import { createSEOHead } from '~/utils/seo';
-import { theme } from '~/theme/theme.config';
+import { useStoreIdentityLoader } from '~/routes/layout';
 
 export default component$(() => {
+	const identity = useStoreIdentityLoader().value.identity;
  return (
  <div class="bg-white min-h-screen">
   <div class="max-w-4xl mx-auto px-4 py-16">
   <div class="text-center mb-16">
   <h1 class="text-4xl sm:text-5xl font-bold text-black mb-4">Returns & Refund Policy</h1>
   <p class="text-lg text-gray-600 max-w-2xl mx-auto">
-   Our policy for returns, refunds, and exchanges on all {theme.storeName} products.
+   Our policy for returns, refunds, and exchanges on all {identity.storeName} products.
   </p>
   </div>
 
@@ -68,7 +69,7 @@ export default component$(() => {
   <h2 class="text-2xl font-bold text-black mt-8 mb-4">Return Process</h2>
   <h3 class="text-xl font-bold mt-6 mb-3">Step 1: Contact Us</h3>
   <p>
-   Before returning any item, you must contact our customer service team at <strong>{theme.supportEmail}</strong>. Include your order number and detailed description of the issue.
+   Before returning any item, you must contact our customer service team at <strong>{identity.supportEmail}</strong>. Include your order number and detailed description of the issue.
   </p>
   
   <h3 class="text-xl font-bold mt-6 mb-3">Step 2: Return Authorization</h3>
@@ -125,10 +126,10 @@ export default component$(() => {
   </p>
   <div class="mt-4">
    <p><strong>Returns Department</strong></p>
-   <p>{theme.storeName}</p>
+   <p>{identity.storeName}</p>
    <p>169 Madison Ave STE 15182</p>
    <p>New York, NY 10016</p>
-   <p>Email: {theme.supportEmail}</p>
+   <p>Email: {identity.supportEmail}</p>
    <p>Phone: (609) 997-8106</p>
    <p>Hours: Monday-Friday, 9:00 AM - 5:00 PM EST</p>
   </div>
@@ -144,12 +145,15 @@ export default component$(() => {
  );
 });
 
-export const head = () =>
- createSEOHead({
+export const head = ({ resolveValue }: { resolveValue: any }) => {
+ const identity = resolveValue(useStoreIdentityLoader);
+ return createSEOHead({
  title: 'Returns & Refund Policy',
- description: `Returns and refund policy for ${theme.storeName}. Learn about our return procedures and conditions.`,
+ description: `Returns and refund policy for ${identity.storeName}. Learn about our return procedures and conditions.`,
  noindex: false,
+ identity,
  });
+};
 
 
 import type { StaticGenerateHandler } from '@qwik.dev/router';

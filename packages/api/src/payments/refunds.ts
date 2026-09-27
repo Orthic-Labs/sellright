@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { withAdvisoryLock, withStore, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
-import { gatewayAccount, assertGatewayEnvironment, recordedNmiEnvironment } from './gateway-account.js';
+import { resolveGatewayAccount, assertGatewayEnvironment, recordedNmiEnvironment } from './gateway-account.js';
 import { getProvider, type RefundResult } from './provider.js';
 import { creditGiftCardRefund } from '../routes/admin-order-payment-helpers.js';
 import { emitEvent } from '../webhooks/emit.js';
@@ -64,7 +64,7 @@ export async function requestRefund(input: RefundRequest) {
       if (payment.method === 'nmi' || payment.method === 'sezzle') {
         if (!payment.gatewayAccount) throw new RefundError(409, 'Original merchant account is missing');
         try {
-          const account = gatewayAccount(input.storeId, payment.method, payment.gatewayAccount, mode as 'test'|'live');
+          const account = await resolveGatewayAccount(input.storeId, payment.method, payment.gatewayAccount, mode as 'test'|'live');
           assertGatewayEnvironment(account, (payment.metadata as { gateway?: unknown } | null)?.gateway);
         }
         catch { throw new RefundError(503, 'Original merchant account is unavailable'); }
@@ -116,12 +116,12 @@ export async function requestRefund(input: RefundRequest) {
     let result: RefundResult;
     try {
       const gateway = p.method === 'nmi' || p.method === 'sezzle'
-        ? gatewayAccount(input.storeId, p.method, p.gatewayAccount!, p.gatewayMode as 'test'|'live') : undefined;
+        ? await resolveGatewayAccount(input.storeId, p.method, p.gatewayAccount!, p.gatewayMode as 'test'|'live') : undefined;
       if (gateway) assertGatewayEnvironment(gateway, (p.metadata as { gateway?: unknown } | null)?.gateway);
       const provider = getProvider(p.method)!;
       result = provider.refundPayment ? await provider.refundPayment({
         providerRef: p.providerRef, amount: prepared.amount, currency: prepared.currency,
-        stripeMode: p.gatewayMode as 'test'|'live', gateway, idempotencyKey: prepared.attemptId,
+        stripeMode: p.gatewayMode as 'test'|'live', storeId: input.storeId, gateway, idempotencyKey: prepared.attemptId,
       }) : { state: 'Settled', providerRef: null };
     } catch { result = { state: 'Pending', providerRef: null, errorMessage: 'Refund requires reconciliation' }; }
     const finalized = await withStore(input.storeId, async tx => {

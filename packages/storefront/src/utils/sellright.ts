@@ -45,10 +45,33 @@ export function resolveApiBase(runtimeUrl: string | undefined, buildTimeUrl: str
 
 /** Server-only: the API base for THIS request. `process` only exists in the
  *  Node SSR bundle — never referenced outside an `isServer` branch, so it's
- *  safe alongside the browser bundle (which never evaluates this function). */
-function apiBase(): string {
+ *  safe alongside the browser bundle (which never evaluates this function).
+ *  Exported so other server-only proxies (e.g. sellright-seo.ts's sitemap/
+ *  robots/JSON-LD proxy) resolve the SAME API instance `sr()` does, instead
+ *  of keeping their own copy of this precedence rule. */
+export function apiBase(): string {
 	const runtimeUrl = isServer && typeof process !== 'undefined' ? process.env?.SELLRIGHT_API_URL : undefined;
 	return resolveApiBase(runtimeUrl, BUILD_TIME_API);
+}
+
+/**
+ * Server-only: the store-resolution headers for THIS request — `x-store-slug`
+ * when a build pins one (dev/demo/legacy single-store), else the incoming
+ * request's own Host forwarded as `x-forwarded-host` (WS-C: per-host runtime
+ * resolution). Exported so every server-side proxy to the API resolves the
+ * SAME store `sr()` does — a proxy with its own hardcoded store slug would
+ * silently serve the wrong store's data (or the dev default) on any real
+ * multi-store deployment.
+ */
+export function storeResolutionHeaders(): Record<string, string> {
+	if (!isServer) return {};
+	const headers: Record<string, string> = {};
+	if (STORE_SLUG) headers['x-store-slug'] = STORE_SLUG;
+	else {
+		const forwardedHost = sellrightRequestHost.getStore();
+		if (forwardedHost) headers['x-forwarded-host'] = forwardedHost;
+	}
+	return headers;
 }
 
 /**
@@ -78,11 +101,6 @@ async function sr<T>(path: string, init: RequestInit = {}): Promise<T> {
   // an anonymous server-to-server call. Browser calls already send cookies
   // natively via credentials:'include' below.
   const forwardedCookie = isServer ? sellrightRequestCookie.getStore() : undefined;
-  // SSR only, WS-C: forward the incoming request's own Host so the API
-  // resolves the same store a real browser request to that host would.
-  // Skipped entirely when STORE_SLUG is explicitly configured (dev/demo/
-  // legacy single-store builds), which takes precedence on the API side too.
-  const forwardedHost = isServer && !STORE_SLUG ? sellrightRequestHost.getStore() : undefined;
   const method = (init.method ?? 'GET').toUpperCase();
   const csrf = !isServer && MUTATING_METHODS.has(method) ? readCsrfCookie() : undefined;
   // Server-only, and only when the caller hasn't already supplied its own
@@ -103,8 +121,7 @@ async function sr<T>(path: string, init: RequestInit = {}): Promise<T> {
     credentials: 'include',
     headers: {
       'content-type': 'application/json',
-      ...(STORE_SLUG ? { 'x-store-slug': STORE_SLUG } : {}),
-      ...(forwardedHost ? { 'x-forwarded-host': forwardedHost } : {}),
+      ...storeResolutionHeaders(),
       ...(forwardedCookie ? { cookie: forwardedCookie } : {}),
       ...(csrf ? { 'x-csrf-token': csrf } : {}),
       ...(init.headers as Record<string, string> | undefined),
@@ -171,6 +188,11 @@ export interface SrStoreIdentity {
   locale: string;
   siteOrigin: string;
   published: boolean;
+  policies: {
+    shipping: { label: string; sub: string };
+    returns: { label: string; sub: string };
+    payment: { label: string; sub: string };
+  };
 }
 
 /**

@@ -45,6 +45,8 @@ const GROUPS: NavGroup[] = [
   ]},
   { id: 'config', label: 'Configuration', items: [
     { to: '/settings', label: 'Settings', icon: Settings },
+    { to: '/settings/payments', label: 'Payments', icon: HandCoins },
+    { to: '/settings/email', label: 'Email', icon: Mail },
     { to: '/staff', label: 'Staff', icon: Shield },
     { to: '/tax-zones', label: 'Tax zones', icon: Receipt },
     { to: '/currency-rates', label: 'Currencies', icon: Coins },
@@ -78,6 +80,8 @@ const SECTION_PREFIXES: ReadonlyArray<readonly [string, string]> = [
   ['/blog', 'Blog'],
   ['/reports', 'Reports'],
   ['/activity', 'Activity'],
+  ['/settings/payments', 'Payments'],
+  ['/settings/email', 'Email'],
   ['/settings', 'Settings'],
   ['/staff', 'Staff'],
   ['/tax-zones', 'Tax zones'],

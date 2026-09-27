@@ -42,6 +42,8 @@ import Blog from './pages/Blog';
 import Reports from './pages/Reports';
 import Activity from './pages/Activity';
 import SettingsPage from './pages/Settings';
+import PaymentsSettings from './pages/PaymentsSettings';
+import EmailSettings from './pages/EmailSettings';
 import Returns from './pages/Returns';
 import GiftCards from './pages/GiftCards';
 import Loyalty from './pages/Loyalty';
@@ -103,6 +105,8 @@ function App() {
         <Route path="/webhooks" element={<Webhooks />} />
         <Route path="/staff" element={<Staff />} />
         <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/settings/payments" element={<PaymentsSettings />} />
+        <Route path="/settings/email" element={<EmailSettings />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

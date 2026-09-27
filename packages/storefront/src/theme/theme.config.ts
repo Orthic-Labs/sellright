@@ -196,5 +196,6 @@ export function identityFromStaticTheme(): import('~/utils/sellright').SrStoreId
 		locale: theme.locale,
 		siteOrigin: siteUrl,
 		published: true,
+		policies: theme.policies,
 	};
 }

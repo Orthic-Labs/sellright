@@ -1,6 +1,6 @@
 import { component$ } from '@qwik.dev/core';
 import { createSEOHead } from '~/utils/seo';
-import { theme, siteUrl } from '~/theme/theme.config';
+import { useStoreIdentityLoader } from '~/routes/layout';
 
 export default component$(() => {
   return (
@@ -38,8 +38,12 @@ export default component$(() => {
   );
 });
 
-export const head = () => createSEOHead({
-  title: `Press — ${theme.storeName}`,
-  description: `Press inquiries, media kits, and review samples for ${theme.storeName}.`,
-  ogUrl: `${siteUrl}/press/`,
-});
+export const head = ({ resolveValue }: { resolveValue: any }) => {
+  const identity = resolveValue(useStoreIdentityLoader);
+  return createSEOHead({
+    title: `Press — ${identity.storeName}`,
+    description: `Press inquiries, media kits, and review samples for ${identity.storeName}.`,
+    ogUrl: `${identity.siteOrigin}/press/`,
+    identity,
+  });
+};

@@ -19,6 +19,8 @@ import { adminOrderOps } from './routes/admin-order-ops.js';
 import { adminMarketing } from './routes/admin-marketing.js';
 import { adminSettings } from './routes/admin-settings.js';
 import { adminLoyalty } from './routes/admin-loyalty.js';
+import { adminPaymentSettings } from './routes/admin-payment-settings.js';
+import { adminEmailSettings } from './routes/admin-email-settings.js';
 import { adminSettingsAdvanced } from './routes/admin-settings-advanced.js';
 import { adminReports } from './routes/admin-reports.js';
 import { adminAffiliate } from './routes/admin-affiliate.js';
@@ -329,6 +331,8 @@ export function createApp(): OpenAPIHono {
   app.route('/', adminMarketing); // promotions manager + Listmonk integration
   app.route('/', adminSettings); // store/tax, payments, shipping, staff/roles, notifications
   app.route('/', adminLoyalty); // LOYALTY-1: points program settings, customer ledger, manual adjust
+  app.route('/', adminPaymentSettings); // WS-A: encrypted per-store payment credentials, verify, Stripe webhook auto-create
+  app.route('/', adminEmailSettings); // WS-A: encrypted per-store SMTP settings, presets, test send
   app.route('/', adminSettingsAdvanced); // webhooks, staff, currency rates
   app.route('/', adminReports); // customers write, reports, search, activity
   app.route('/', adminAffiliate); // affiliate program + public self-serve dashboard

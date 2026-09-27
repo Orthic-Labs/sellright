@@ -44,7 +44,7 @@ describe('trial license route', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ ok: true, status: 'sent' });
     expect(sendTrialKey).toHaveBeenCalledWith(
-      { name: 'SellRight', currency: 'USD', appKey: 'someapp' },
+      { name: 'SellRight', currency: 'USD', appKey: 'someapp', storeId: 'store_1' },
       'trial@example.com',
       { key: 'SR-TRIAL-123', days: 14 },
     );

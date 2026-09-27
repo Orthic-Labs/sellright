@@ -4,8 +4,19 @@ import type {
  JsonLdSchema,
  ProductSchema,
 } from '~/types/seo.types';
-import { theme, siteUrl, socialLinks } from '~/theme/theme.config';
+import { identityFromStaticTheme } from '~/theme/theme.config';
+import type { SrStoreIdentity } from '~/utils/sellright';
 import { stripHtml } from '~/utils/sanitize';
+
+/**
+ * WS-C: every schema generator below takes an optional `identity` — the
+ * runtime store identity resolved per-request by the root layout's
+ * useStoreIdentityLoader (see routes/*'s `head` functions, which read it via
+ * `resolveValue(useStoreIdentityLoader)` and pass it through). Omitting it
+ * falls back to the build-time static theme — kept for callers that haven't
+ * been threaded through yet and for tests; never used to override a real,
+ * resolved identity.
+ */
 
 export const generateBreadcrumbSchema = (breadcrumbs: BreadcrumbItem[]): BreadcrumbSchema => {
  return {
@@ -20,7 +31,7 @@ export const generateBreadcrumbSchema = (breadcrumbs: BreadcrumbItem[]): Breadcr
  };
 };
 
-export const generateProductSchema = (product: any): ProductSchema | null => {
+export const generateProductSchema = (product: any, identity: SrStoreIdentity = identityFromStaticTheme()): ProductSchema | null => {
  if (!product) {
   console.warn('Product data is required for schema generation');
   return null;
@@ -38,13 +49,13 @@ export const generateProductSchema = (product: any): ProductSchema | null => {
  // js/incomplete-multi-character-sanitization).
  const cleanDescription = product.description
   ? stripHtml(product.description).trim()
-  : `${product.name} - Premium quality product from ${theme.storeName}`;
+  : `${product.name} - Premium quality product from ${identity.storeName}`;
 
  const hasStock = product.variants.some((variant: any) =>
   variant.stockLevel !== 'OUT_OF_STOCK'
  );
 
- const SITE = siteUrl;
+ const SITE = identity.siteOrigin;
  const absUrl = (path: string) => path.startsWith('http') ? path : `${SITE}${path}`;
  const productImages: string[] = [];
  if (product.featuredAsset?.preview) {
@@ -70,27 +81,27 @@ export const generateProductSchema = (product: any): ProductSchema | null => {
   sku: primaryVariant.sku || product.id,
   brand: {
    '@type': 'Brand',
-   name: theme.storeName,
+   name: identity.storeName,
   },
   offers: {
    '@type': 'Offer',
    url: productUrl,
    price: (primaryVariant.priceWithTax / 100).toFixed(2),
-   priceCurrency: primaryVariant.currencyCode || theme.currency,
+   priceCurrency: primaryVariant.currencyCode || identity.currency,
    priceValidUntil: validUntil,
    availability: hasStock
     ? 'https://schema.org/InStock'
     : 'https://schema.org/OutOfStock',
    seller: {
     '@type': 'Organization',
-    name: theme.storeName,
+    name: identity.storeName,
    },
    shippingDetails: [{
     '@type': 'OfferShippingDetails',
     shippingRate: {
      '@type': 'MonetaryAmount',
      value: '8.00',
-     currency: theme.currency,
+     currency: identity.currency,
     },
     shippingDestination: {
      '@type': 'DefinedRegion',
@@ -127,35 +138,36 @@ export const generateProductSchema = (product: any): ProductSchema | null => {
  };
 };
 
-export const generateOrganizationSchema = (): JsonLdSchema => {
+export const generateOrganizationSchema = (identity: SrStoreIdentity = identityFromStaticTheme()): JsonLdSchema => {
+ const social = Object.values(identity.social).filter((v): v is string => typeof v === 'string' && v.length > 0);
  return {
   '@context': 'https://schema.org',
   '@type': 'Organization',
-  '@id': `${siteUrl}/#organization`,
-  name: theme.storeName,
-  url: siteUrl,
-  logo: `${siteUrl}${theme.logoImageUrl ?? '/logo.png'}`,
-  image: `${siteUrl}${theme.ogImageUrl}`,
-  description: theme.tagline,
+  '@id': `${identity.siteOrigin}/#organization`,
+  name: identity.storeName,
+  url: identity.siteOrigin,
+  logo: `${identity.siteOrigin}${identity.logoImageUrl ?? '/logo.png'}`,
+  image: `${identity.siteOrigin}${identity.ogImageUrl}`,
+  description: identity.tagline,
   contactPoint: {
    '@type': 'ContactPoint',
-   email: theme.supportEmail,
+   email: identity.supportEmail,
    contactType: 'customer service',
   },
-  ...(theme.address ? { address: { '@type': 'PostalAddress', ...theme.address } } : {}),
-  ...(socialLinks.length > 0 ? { sameAs: socialLinks } : {}),
+  ...(identity.address ? { address: { '@type': 'PostalAddress', ...identity.address } } : {}),
+  ...(social.length > 0 ? { sameAs: social } : {}),
  };
 };
 
-export const generateWebsiteSchema = (): JsonLdSchema => {
+export const generateWebsiteSchema = (identity: SrStoreIdentity = identityFromStaticTheme()): JsonLdSchema => {
  return {
   '@context': 'https://schema.org',
   '@type': 'WebSite',
-  name: theme.storeName,
-  url: siteUrl,
+  name: identity.storeName,
+  url: identity.siteOrigin,
   potentialAction: {
    '@type': 'SearchAction',
-   target: `${siteUrl}/shop?q={search_term_string}`,
+   target: `${identity.siteOrigin}/shop?q={search_term_string}`,
    'query-input': 'required name=search_term_string',
   },
  };
