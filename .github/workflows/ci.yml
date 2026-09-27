@@ -363,32 +363,43 @@ jobs:
           test -n "$preview_token"
           echo "preview token issued"
 
-          # Preview reachable: the storefront process answers the preview-token
-          # request (proves the claim -> preview-token -> storefront pipeline
-          # runs end to end without crashing/timing out). This CI environment
-          # has no real domain, so store.config.hostnames is empty and host-
-          # based store resolution (store-context.ts) legitimately can't match
-          # — that's WS-D/domain-feature territory (see computeReadiness's doc
-          # comment), not something this drill can prove.
-          #
-          # NON-FATAL by design (investigated, not swept under the rug): the
-          # storefront container crash-loops in this exact zero-store window —
-          # `docker compose logs storefront` shows it dying repeatedly trying
-          # to render `/` before any store exists at all, which never happened
-          # pre-WS-B because bootstrap.js always seeded a store before the
-          # storefront's own healthcheck could ever fire. That's a storefront/
-          # WS-C runtime-identity robustness gap (crashing instead of a 404/
-          # error page when no store resolves), not a WS-B regression — WS-B's
-          # own surface (claim, 404-after-claim, preview-token issuance) is
-          # fully asserted above with hard failures. Tracked as a follow-up;
-          # logged here, never silently green, never blocking on someone
-          # else's pre-existing bug.
+          # Preview reachable, FATAL: the freshly-claimed store has no
+          # config.hostnames yet (nothing on the admin surface ever set one —
+          # see PATCH /v1/admin/settings/store's `hostnames` field, added
+          # alongside this drill), so store-context.ts's Host-based resolution
+          # can't match a raw container IP:port request no matter what. Set a
+          # test hostname via that same PATCH (bearer auth, direct to the api
+          # container — busybox wget on the admin image has no PATCH support),
+          # then send that Host header when hitting the storefront directly.
+          store_slug=$(echo "$claim_resp" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>process.stdout.write(JSON.parse(d).storeSlug))")
+          test -n "$store_slug"
+          test_host="storefront-drill.test"
+          docker compose -f deploy/compose.yaml exec -T api node -e "
+            fetch('http://127.0.0.1:3300/v1/admin/settings/store', {
+              method: 'PATCH',
+              headers: { 'content-type': 'application/json', authorization: 'Bearer ${session_token}', 'x-store-slug': '${store_slug}' },
+              body: JSON.stringify({ hostnames: ['${test_host}'] }),
+            }).then(async r => { if (!r.ok) { console.error('hostnames PATCH failed', r.status, await r.text()); process.exit(1); } console.log('hostnames set'); })
+              .catch(e => { console.error(e); process.exit(1); })
+          "
+
+          # WITH the preview token + matching Host -> the real storefront
+          # chrome renders (200). A fresh store has zero products; this proves
+          # the SSR path itself is crash-safe on an empty catalog (home/shop
+          # loaders already degrade to an empty-state render — see
+          # routes/index.tsx's useFeaturedProducts/useHomeCollections and
+          # routes/shop/index.tsx's useCatalogLoader), not just that the
+          # process is technically alive.
           storefront_ok=0
-          for attempt in $(seq 1 10); do
+          for attempt in $(seq 1 15); do
             if docker compose -f deploy/compose.yaml exec -T storefront node -e "
-              fetch('http://127.0.0.1:4100/?preview_token=${preview_token}')
-                .then(r => { console.log('storefront preview response status:', r.status); process.exit(0); })
-                .catch(e => { console.error('storefront preview request FAILED:', e); process.exit(1); })
+              const http = require('node:http');
+              const req = http.request({ host: '127.0.0.1', port: 4100, path: '/?preview_token=${preview_token}', headers: { Host: '${test_host}' } }, (res) => {
+                console.log('with preview_token: status', res.statusCode);
+                process.exit(res.statusCode === 200 ? 0 : 1);
+              });
+              req.on('error', (e) => { console.error(e); process.exit(1); });
+              req.end();
             "; then
               storefront_ok=1
               break
@@ -396,9 +407,31 @@ jobs:
             sleep 2
           done
           if [ "$storefront_ok" -ne 1 ]; then
-            echo "::warning::storefront preview was not reachable — see the job summary/PR description for the known crash-loop-on-empty-database follow-up (not a WS-B regression)"
             docker compose -f deploy/compose.yaml logs storefront --no-color | tail -c 4000
+            echo "::error::storefront never returned 200 for the preview-token request"
+            exit 1
           fi
+
+          # WITHOUT the token (matching Host, unpublished store) -> the
+          # storefront must gate it: either a real 404, or a 200 that's
+          # unambiguously the ComingSoon page (never the real storefront
+          # chrome — plan §1.5's "unpublished storefront reveals nothing").
+          docker compose -f deploy/compose.yaml exec -T storefront node -e "
+            const http = require('node:http');
+            const req = http.request({ host: '127.0.0.1', port: 4100, path: '/', headers: { Host: '${test_host}' } }, (res) => {
+              let body = '';
+              res.on('data', (c) => { body += c; });
+              res.on('end', () => {
+                console.log('without preview_token: status', res.statusCode);
+                if (res.statusCode === 404) { process.exit(0); }
+                if (res.statusCode === 200 && /being set up/i.test(body)) { process.exit(0); }
+                console.error('expected 404 or a coming-soon page, got', res.statusCode);
+                process.exit(1);
+              });
+            });
+            req.on('error', (e) => { console.error(e); process.exit(1); });
+            req.end();
+          " || { docker compose -f deploy/compose.yaml logs storefront --no-color | tail -c 4000; exit 1; }
 
       - name: Tear down smoke stack
         if: always()

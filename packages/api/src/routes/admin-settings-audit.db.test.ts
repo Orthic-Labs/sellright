@@ -187,6 +187,26 @@ describe('store/payment settings audit', () => {
     expect(data.before).toEqual({ name: 'Audit Test Store', taxRate: 0 });
     expect(data.after).toEqual({ name: 'Renamed Store', taxRate: 875 });
   });
+
+  it('PATCH /v1/admin/settings/store with hostnames persists to config.hostnames, not the store row, and audits separately', async () => {
+    const res = await req(owner, 'PATCH', '/v1/admin/settings/store', { hostnames: ['storefront-drill.test'] });
+    expect(res.status).toBe(200);
+
+    const [row] = await withStore(STORE, (tx) => tx.select({ config: s.store.config }).from(s.store).where(sql`id = ${STORE}`).limit(1));
+    expect((row?.config as { hostnames?: string[] } | null)?.hostnames).toEqual(['storefront-drill.test']);
+
+    const rows = await auditRows('store', STORE);
+    const hostRow = rows.find((r) => r.action === 'settings_update_hostnames');
+    expect(hostRow).toBeDefined();
+    expect(hostRow!.actor).toBe(OWNER_EMAIL);
+    expect((hostRow!.data as { hostnames: string[] }).hostnames).toEqual(['storefront-drill.test']);
+
+    // A bare hostnames-only PATCH must NOT emit a spurious empty `store`
+    // section audit row (Object.keys(b).length === 0 guard) or touch
+    // name/taxRate.
+    const storeSectionRows = rows.filter((r) => (r.data as { section?: string } | null)?.section === 'store');
+    expect(storeSectionRows.every((r) => Object.keys((r.data as { after: object }).after).length > 0)).toBe(true);
+  });
 });
 
 describe('staff creation audit — secret-free', () => {

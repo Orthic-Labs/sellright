@@ -188,7 +188,7 @@ app.use(notFound);
 // checkout/catalog traffic against a dev-port default nothing is listening on
 // in prod. Checked here — at actual server startup — not at build time (see
 // constants.ts assertProdApiConfigured for why the build itself must not throw).
-assertProdApiConfigured(process.env.NODE_ENV);
+assertProdApiConfigured(process.env.NODE_ENV, process.env.SELLRIGHT_API_URL);
 
 // Start the express server
 app.listen(PORT, HOST, () => {

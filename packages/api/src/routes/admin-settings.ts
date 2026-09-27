@@ -181,13 +181,22 @@ adminSettings.openapi(
 adminSettings.openapi(
   createRoute({
     method: 'patch', path: '/v1/admin/settings/store', summary: 'Update store details / tax',
-    request: { body: { content: J(z.object({ name: z.string().optional(), currency: z.string().optional(), taxRate: z.number().int().min(0).optional(), taxInclusive: z.boolean().optional(), shippingTaxable: z.boolean().optional() })) } },
+    request: { body: { content: J(z.object({
+      name: z.string().optional(), currency: z.string().optional(), taxRate: z.number().int().min(0).optional(),
+      taxInclusive: z.boolean().optional(), shippingTaxable: z.boolean().optional(),
+      // Domain checklist item (plan §1.5): the Host(s) store-context.ts's
+      // resolveStoreByHost matches against. Lives in config.hostnames
+      // (JSONB), not a `store` column — handled separately from the rest of
+      // this body below. Previously nothing on the admin surface could ever
+      // set this after bootstrap.js's one-time BOOTSTRAP_STORE_HOSTNAMES.
+      hostnames: z.array(z.string().trim().min(1)).optional(),
+    })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireManage(st);
-    const b = c.req.valid('json');
+    const { hostnames, ...b } = c.req.valid('json');
     await withStore(st.storeId, async (tx) => {
       // SR-16: lock the row and snapshot the touched columns so the audit row
       // carries a truthful before/after — name/currency/tax flags only, never
@@ -199,18 +208,30 @@ adminSettings.openapi(
         .for('update')
         .limit(1);
       if (!before) throw new HttpError(404, 'store not found');
-      await tx.update(s.store).set({ ...b, updatedAt: new Date() }).where(eq(s.store.id, st.storeId));
-      const keys = Object.keys(b) as Array<keyof typeof before>;
-      const pick = (row: Record<string, unknown>) => Object.fromEntries(keys.map((k) => [k, row[k]]));
-      await tx.insert(s.auditLog).values({
-        storeId: st.storeId,
-        actor: admin.email,
-        entity: 'store',
-        entityId: st.storeId,
-        action: 'settings_update',
-        data: { section: 'store', before: pick(before), after: pick({ ...before, ...b }) },
-      });
+      // A hostnames-only PATCH touches no `store` column — skip both the
+      // update and its audit row rather than writing a spurious
+      // before===after entry.
+      if (Object.keys(b).length > 0) {
+        await tx.update(s.store).set({ ...b, updatedAt: new Date() }).where(eq(s.store.id, st.storeId));
+        const keys = Object.keys(b) as Array<keyof typeof before>;
+        const pick = (row: Record<string, unknown>) => Object.fromEntries(keys.map((k) => [k, row[k]]));
+        await tx.insert(s.auditLog).values({
+          storeId: st.storeId,
+          actor: admin.email,
+          entity: 'store',
+          entityId: st.storeId,
+          action: 'settings_update',
+          data: { section: 'store', before: pick(before), after: pick({ ...before, ...b }) },
+        });
+      }
     });
+    if (hostnames) {
+      await mutateStoreConfig(st.storeId, (config) => ({ ...config, hostnames }), {
+        actor: admin.email,
+        action: 'settings_update_hostnames',
+        detail: () => ({ hostnames }),
+      });
+    }
     invalidateStoreCache(st.slug);
     return c.json({ ok: true }, 200);
   }),
