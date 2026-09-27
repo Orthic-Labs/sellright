@@ -1,7 +1,8 @@
 import type { DocumentHead } from '@qwik.dev/router';
 import type { JsonLdSchema } from '~/types/seo.types';
 import { injectJsonLdSchemas, debugJsonLdSchemas } from './schema-injection';
-import { theme, siteUrl } from '~/theme/theme.config';
+import { identityFromStaticTheme } from '~/theme/theme.config';
+import type { SrStoreIdentity } from './sellright';
 
 interface SEOConfig {
   title: string;
@@ -29,6 +30,15 @@ interface SEOConfig {
     imagesizes?: string;
   }>;
   schemas?: JsonLdSchema[];
+  /**
+   * WS-C: the runtime store identity resolved per-request by the root
+   * layout's useStoreIdentityLoader. Route `head` functions read it via
+   * `resolveValue(useStoreIdentityLoader)` and pass it through here so the
+   * title suffix / og:site_name / default image reflect the actual resolved
+   * store instead of the build-time static theme. Omitting it falls back to
+   * that static theme (offline/dev, or a caller not yet threaded through).
+   */
+  identity?: SrStoreIdentity;
 }
 
 export const createSEOHead = ({
@@ -42,9 +52,10 @@ export const createSEOHead = ({
   articleMeta,
   links = [],
   schemas = [],
+  identity = identityFromStaticTheme(),
 }: SEOConfig): DocumentHead => {
-  const SITE_DOMAIN = siteUrl;
-  const DEFAULT_IMAGE = `${SITE_DOMAIN}${theme.ogImageUrl}`;
+  const SITE_DOMAIN = identity.siteOrigin;
+  const DEFAULT_IMAGE = `${SITE_DOMAIN}${identity.ogImageUrl}`;
   const absoluteImage = image
     ? (image.startsWith('http') ? image : `${SITE_DOMAIN}${image}`)
     : undefined;
@@ -65,15 +76,15 @@ export const createSEOHead = ({
 
   const head: DocumentHead = {
     title:
-      title === theme.storeName || title.endsWith(` | ${theme.storeName}`)
+      title === identity.storeName || title.endsWith(` | ${identity.storeName}`)
         ? title
-        : `${title} | ${theme.storeName}`,
+        : `${title} | ${identity.storeName}`,
     meta: [
       { name: 'description', content: description },
       { property: 'og:type', content: ogType },
       { property: 'og:title', content: title },
       { property: 'og:description', content: description },
-      { property: 'og:site_name', content: theme.storeName },
+      { property: 'og:site_name', content: identity.storeName },
       ...(ogUrl ? [{ property: 'og:url', content: ogUrl }] : []),
       ...(optimizedImage ? [{ property: 'og:image', content: optimizedImage }] : []),
       ...(optimizedImage ? [{ property: 'og:image:width', content: '1200' }] : []),
@@ -110,6 +121,7 @@ export const createProductSEOHead = ({
   links = [],
   productSchema,
   breadcrumbSchema,
+  identity,
 }: SEOConfig & {
   productSchema?: JsonLdSchema;
   breadcrumbSchema?: JsonLdSchema;
@@ -126,6 +138,7 @@ export const createProductSEOHead = ({
     canonical,
     links,
     schemas,
+    identity,
   });
 };
 
@@ -141,6 +154,7 @@ export const createOrganizationSEOHead = ({
   links = [],
   organizationSchema,
   websiteSchema,
+  identity,
 }: SEOConfig & {
   organizationSchema?: JsonLdSchema;
   websiteSchema?: JsonLdSchema;
@@ -157,5 +171,6 @@ export const createOrganizationSEOHead = ({
     canonical,
     links,
     schemas,
+    identity,
   });
 };

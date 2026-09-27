@@ -1,6 +1,3 @@
-import { createSEOHead } from '~/utils/seo';
-import { theme } from '~/theme/theme.config';
-
 export type TimelineStep = { key: string; label: string };
 
 export const TIMELINE: TimelineStep[] = [
@@ -48,10 +45,3 @@ export const activeStepFromState = (state?: string): number => {
  }
 };
 
-export const head = ({ params }: { params: { code: string } }) => {
- return createSEOHead({
-  title: 'Order Confirmation',
-  description: `Thank you for your order${params?.code ? ' #' + params.code : ''} at ${theme.storeName}. View your order summary and details.`,
-  noindex: true,
- });
-};

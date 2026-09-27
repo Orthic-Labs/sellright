@@ -46,6 +46,22 @@ describe('storeIdentityFromConfig', () => {
     expect(identity.siteOrigin).toBe('https://acme.test');
   });
 
+  it('defaults policies and overrides only the given sub-fields', () => {
+    const withDefault = storeIdentityFromConfig({ name: 'Acme', currency: 'USD', config: null }, true);
+    expect(withDefault.policies).toEqual({
+      shipping: { label: 'Flat-Rate', sub: 'Shipping' },
+      returns: { label: '1 Week', sub: 'Defect Returns' },
+      payment: { label: 'Secure', sub: 'Checkout' },
+    });
+    const withOverride = storeIdentityFromConfig({
+      name: 'Acme',
+      currency: 'USD',
+      config: { identity: { policies: { shipping: { label: 'Free' } } } },
+    }, true);
+    expect(withOverride.policies.shipping).toEqual({ label: 'Free', sub: 'Shipping' });
+    expect(withOverride.policies.returns).toEqual({ label: '1 Week', sub: 'Defect Returns' });
+  });
+
   it('ignores non-string/malformed identity fields rather than throwing', () => {
     const identity = storeIdentityFromConfig({
       name: 'Acme',

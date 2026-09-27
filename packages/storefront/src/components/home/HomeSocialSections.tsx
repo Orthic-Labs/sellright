@@ -1,11 +1,12 @@
 import { component$ } from '@qwik.dev/core';
 import VerificationButton from '~/components/verification/VerificationButton';
-import { theme, policySentence } from '~/theme/theme.config';
+import { theme, policySentence, type StoreTheme } from '~/theme/theme.config';
+import { useStoreIdentityLoader } from '~/routes/layout';
 
-const TRUST_SIGNALS = [
-  policySentence(theme.policies.shipping),
-  policySentence(theme.policies.returns),
-  policySentence(theme.policies.payment),
+const trustSignals = (policies: StoreTheme['policies']) => [
+  policySentence(policies.shipping),
+  policySentence(policies.returns),
+  policySentence(policies.payment),
   'Order tracking included',
 ] as const;
 
@@ -19,12 +20,15 @@ type HomeReviewsProps = {
   tpData: { score: string; count: string; reviews: Array<{ text: string; name: string }> };
 };
 
-export const HomeTrustBar = component$(() => (
+export const HomeTrustBar = component$(() => {
+  const identity = useStoreIdentityLoader().value.identity;
+  const signals = trustSignals(identity.policies);
+  return (
   <>
       {/* ════════ Trust Bar (scrolling ticker) ════════ */}
       <div class="trust-bar" aria-label="Trust signals">
         <div class="trust-track" style="display:inline-flex;white-space:nowrap;animation:hp-ticker 30s linear infinite">
-          {[...TRUST_SIGNALS, ...TRUST_SIGNALS, ...TRUST_SIGNALS].map((item, i) => (
+          {[...signals, ...signals, ...signals].map((item, i) => (
             <div key={`${item}-${i}`} class="trust-item">
               <span class="trust-dot" />
               <span class="trust-text">{item}</span>
@@ -33,7 +37,8 @@ export const HomeTrustBar = component$(() => (
         </div>
       </div>
   </>
-));
+  );
+});
 
 export const HomeReviewsSection = component$<HomeReviewsProps>(({ tpData }) => (
   <>

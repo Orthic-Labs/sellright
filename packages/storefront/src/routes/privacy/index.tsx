@@ -1,8 +1,9 @@
 import { component$ } from '@qwik.dev/core';
 import { createSEOHead } from '~/utils/seo';
-import { theme } from '~/theme/theme.config';
+import { useStoreIdentityLoader } from '~/routes/layout';
 
 export default component$(() => {
+	const identity = useStoreIdentityLoader().value.identity;
  return (
  <div class="bg-white min-h-screen">
   <div class="max-w-4xl mx-auto px-4 py-16">
@@ -18,7 +19,7 @@ export default component$(() => {
 
   <h2 class="text-2xl font-bold text-black mt-8 mb-4">Introduction</h2>
   <p>
-   {theme.legalName} ("we," "our," or "us") respects your privacy and is committed to protecting your personal information in compliance with applicable privacy laws, including the General Data Protection Regulation (GDPR), California Consumer Privacy Act (CCPA), and other relevant privacy regulations.
+   {identity.legalName} ("we," "our," or "us") respects your privacy and is committed to protecting your personal information in compliance with applicable privacy laws, including the General Data Protection Regulation (GDPR), California Consumer Privacy Act (CCPA), and other relevant privacy regulations.
   </p>
   <p>
    This Privacy Policy explains how we collect, use, disclose, and safeguard your information when you visit our website, make a purchase, create an account, or interact with us in any way. Please read this Privacy Policy carefully. By accessing or using our website, you acknowledge that you have read, understood, and agree to be bound by all the terms of this Privacy Policy.
@@ -26,7 +27,7 @@ export default component$(() => {
 
   <h2 class="text-2xl font-bold text-black mt-8 mb-4">Data Controller Information</h2>
   <p>
-   For the purposes of GDPR and other applicable privacy laws, {theme.legalName} is the data controller responsible for your personal information. Our designated privacy contact can be reached at the contact information provided at the end of this policy.
+   For the purposes of GDPR and other applicable privacy laws, {identity.legalName} is the data controller responsible for your personal information. Our designated privacy contact can be reached at the contact information provided at the end of this policy.
   </p>
 
   <h2 class="text-2xl font-bold text-black mt-8 mb-4">Information We Collect</h2>
@@ -188,9 +189,9 @@ export default component$(() => {
   <h3 class="text-xl font-bold mt-6 mb-3">How to Exercise Your Rights</h3>
   <p>To exercise any of these rights, please contact us using the following methods:</p>
   <ul class="list-disc pl-5 space-y-2">
-   <li><strong>Email:</strong> {theme.supportEmail}</li>
+   <li><strong>Email:</strong> {identity.supportEmail}</li>
    <li><strong>Phone:</strong> (609) 997-8106</li>
-   <li><strong>Mail:</strong> {theme.storeName}, Privacy Rights, {theme.address ? `${theme.address.streetAddress}, ${theme.address.addressLocality}, ${theme.address.addressRegion} ${theme.address.postalCode}` : 'our registered business address (available on request)'}</li>
+   <li><strong>Mail:</strong> {identity.storeName}, Privacy Rights, {identity.address ? `${identity.address.streetAddress}, ${identity.address.addressLocality}, ${identity.address.addressRegion} ${identity.address.postalCode}` : 'our registered business address (available on request)'}</li>
   </ul>
   <p>
    We will respond to your request within 30 days (GDPR) or 45 days (CCPA). We may need to verify your identity before processing your request to protect your personal information.
@@ -294,7 +295,7 @@ export default component$(() => {
 
   <h2 class="text-2xl font-bold text-black mt-8 mb-4">Governing Law</h2>
   <p>
-   This Privacy Policy is governed by the laws of the jurisdiction in which {theme.legalName} is organized, without regard to conflict of law principles. However, your privacy rights under GDPR, CCPA, and other applicable privacy laws remain in effect regardless of this governing law provision.
+   This Privacy Policy is governed by the laws of the jurisdiction in which {identity.legalName} is organized, without regard to conflict of law principles. However, your privacy rights under GDPR, CCPA, and other applicable privacy laws remain in effect regardless of this governing law provision.
   </p>
 
   <h2 class="text-2xl font-bold text-black mt-8 mb-4">Contact Information</h2>
@@ -304,10 +305,10 @@ export default component$(() => {
 
   <h3 class="text-xl font-bold mt-6 mb-3">Privacy Contact</h3>
   <div class="mt-4">
-   <p><strong>{theme.storeName} - Privacy Officer</strong></p>
+   <p><strong>{identity.storeName} - Privacy Officer</strong></p>
    <p>169 Madison Ave STE 15182</p>
    <p>New York, NY 10016</p>
-   <p>Email: {theme.supportEmail}</p>
+   <p>Email: {identity.supportEmail}</p>
    <p>Phone: (609) 997-8106</p>
    <p>Hours: Monday-Friday, 9:00 AM - 5:00 PM EST</p>
   </div>
@@ -336,12 +337,15 @@ export default component$(() => {
  );
 });
 
-export const head = () =>
- createSEOHead({
+export const head = ({ resolveValue }: { resolveValue: any }) => {
+ const identity = resolveValue(useStoreIdentityLoader);
+ return createSEOHead({
  title: 'Privacy Policy',
- description: `Comprehensive privacy policy for ${theme.storeName}. GDPR and CCPA compliant. Learn how we protect your data and respect your privacy rights.`,
+ description: `Comprehensive privacy policy for ${identity.storeName}. GDPR and CCPA compliant. Learn how we protect your data and respect your privacy rights.`,
  noindex: false,
+ identity,
  });
+};
 
 
 

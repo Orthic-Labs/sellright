@@ -1,10 +1,15 @@
 import { component$ } from '@qwik.dev/core';
 import { Link } from '@qwik.dev/router';
-import { theme } from '~/theme/theme.config';
+import { useStoreIdentityLoader } from '~/routes/layout';
+import { footerViewModel } from './footer-view-model';
 
 const SEZZLE_CONFIGURED = !!(import.meta.env.VITE_SEZZLE_MERCHANT_UUID as string | undefined);
 
 export default component$(() => {
+	// WS-C: runtime store identity, resolved per-request by the root layout's
+	// routeLoader$ — see routes/layout.tsx useStoreIdentityLoader.
+	const identity = useStoreIdentityLoader().value.identity;
+	const footer = footerViewModel(identity);
 	return (
 		<footer
 			role="contentinfo"
@@ -67,12 +72,12 @@ export default component$(() => {
 					gap: '20px',
 				}}>
 					{/* Instagram */}
-					{theme.social.instagram && (
+					{footer.social.instagram && (
 						<a
-							href={theme.social.instagram}
+							href={footer.social.instagram.href}
 							target="_blank"
 							rel="nofollow noopener noreferrer"
-							aria-label={`${theme.storeName} on Instagram`}
+							aria-label={footer.social.instagram.ariaLabel}
 							style={{
 								color: '#9A9488',
 								transition: 'color 0.15s',
@@ -93,12 +98,12 @@ export default component$(() => {
 						</a>
 					)}
 					{/* Facebook */}
-					{theme.social.facebook && (
+					{footer.social.facebook && (
 						<a
-							href={theme.social.facebook}
+							href={footer.social.facebook.href}
 							target="_blank"
 							rel="nofollow noopener noreferrer"
-							aria-label={`${theme.storeName} on Facebook`}
+							aria-label={footer.social.facebook.ariaLabel}
 							style={{
 								color: '#9A9488',
 								transition: 'color 0.15s',
@@ -117,12 +122,12 @@ export default component$(() => {
 						</a>
 					)}
 					{/* Twitter/X */}
-					{theme.social.twitter && (
+					{footer.social.twitter && (
 						<a
-							href={theme.social.twitter}
+							href={footer.social.twitter.href}
 							target="_blank"
 							rel="nofollow noopener noreferrer"
-							aria-label={`${theme.storeName} on Twitter`}
+							aria-label={footer.social.twitter.ariaLabel}
 							style={{
 								color: '#9A9488',
 								transition: 'color 0.15s',
@@ -174,7 +179,7 @@ export default component$(() => {
 					color: '#9A9488',
 					margin: '0',
 				}}>
-					&copy; {new Date().getFullYear()} {theme.legalName}. All rights reserved.
+					{footer.copyright}
 				</p>
 			</div>
 		</footer>

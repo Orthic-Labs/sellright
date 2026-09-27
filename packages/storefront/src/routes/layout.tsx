@@ -28,6 +28,7 @@ import { CACHE_POLICY_VERSION, getRouteCacheProfile } from '~/config/route-cache
 import { DEV_API } from '~/constants';
 import { srShopIdentity, srErrorStatus } from '~/utils/sellright';
 import { identityFromStaticTheme } from '~/theme/theme.config';
+import { normalizeIdentity } from '~/utils/normalize-identity';
 import ComingSoon from '~/components/coming-soon/ComingSoon';
 
 /** WS-C: cookie that remembers a valid preview token across navigation, once
@@ -60,7 +61,7 @@ export const useStoreIdentityLoader = routeLoader$(async ({ cookie, query, statu
 	const previewToken = queryToken ?? cookie.get(PREVIEW_TOKEN_COOKIE)?.value;
 	try {
 		const identity = await srShopIdentity(previewToken);
-		return { identity, notPublished: false };
+		return { identity: normalizeIdentity(identity), notPublished: false };
 	} catch (e) {
 		if (srErrorStatus(e) === 404) {
 			status(404);
