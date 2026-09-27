@@ -371,11 +371,28 @@ jobs:
           # — that's WS-D/domain-feature territory (see computeReadiness's doc
           # comment), not something this drill can prove. Any well-formed HTTP
           # response (not a connection failure) is what "reachable" asserts here.
-          docker compose -f deploy/compose.yaml exec -T storefront node -e "
-            fetch('http://127.0.0.1:4100/?preview_token=${preview_token}')
-              .then(r => { console.log('storefront preview response status:', r.status); process.exit(0); })
-              .catch(e => { console.error('storefront preview request FAILED:', e); process.exit(1); })
-          "
+          # Retried: the storefront container was only just (re)created for
+          # this second stack and can still be finishing its own boot/restart
+          # cycle (`docker compose exec` fails outright with "Container ... is
+          # restarting" mid-cycle, distinct from the app-level readiness the
+          # earlier admin /v1/readyz poll already proved).
+          storefront_ok=0
+          for attempt in $(seq 1 15); do
+            if docker compose -f deploy/compose.yaml exec -T storefront node -e "
+              fetch('http://127.0.0.1:4100/?preview_token=${preview_token}')
+                .then(r => { console.log('storefront preview response status:', r.status); process.exit(0); })
+                .catch(e => { console.error('storefront preview request FAILED:', e); process.exit(1); })
+            "; then
+              storefront_ok=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$storefront_ok" -ne 1 ]; then
+            docker compose -f deploy/compose.yaml logs storefront --no-color
+            echo "storefront never became reachable for the preview request"
+            exit 1
+          fi
 
       - name: Tear down smoke stack
         if: always()
