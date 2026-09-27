@@ -85,8 +85,18 @@ async function sr<T>(path: string, init: RequestInit = {}): Promise<T> {
   const forwardedHost = isServer && !STORE_SLUG ? sellrightRequestHost.getStore() : undefined;
   const method = (init.method ?? 'GET').toUpperCase();
   const csrf = !isServer && MUTATING_METHODS.has(method) ? readCsrfCookie() : undefined;
+  // Server-only, and only when the caller hasn't already supplied its own
+  // `signal`: bound how long an SSR/SSG data load waits on the API. Static
+  // generation (`pnpm build`, no API reachable) has no request-timeout
+  // backstop otherwise — an unresponsive/slow-to-refuse socket can leave a
+  // page's render hanging or resolving at an unpredictable time relative to
+  // other in-flight work, which is exactly the kind of timing this function
+  // must NOT be sensitive to (every caller's catch block must always run,
+  // deterministically, within a bounded window).
+  const signal = isServer && !init.signal ? AbortSignal.timeout(8000) : init.signal;
   const res = await fetch(url, {
     ...init,
+    signal,
     // credentials: 'include' so the auth/CSRF cookies the API sets (sr_session,
     // sr_csrf) ride along on browser calls — auth, account, and the server cart
     // are all cookie-authenticated.
