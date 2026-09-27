@@ -3,9 +3,10 @@ import { useLocation } from '@qwik.dev/router';
 import { Order } from '~/generated/graphql-shop';
 import { OrderDetails } from './OrderDetails';
 import { trackOrderServer } from '~/services/track-order.service';
-import { theme } from '~/theme/theme.config';
+import { useStoreIdentityLoader } from '~/routes/layout';
 
 export default component$(() => {
+  const identity = useStoreIdentityLoader().value.identity;
   const location = useLocation();
   const orderCode = useSignal('');
   const email = useSignal('');
@@ -225,7 +226,7 @@ export default component$(() => {
           </div>
           <div>
             <h4 class="font-medium text-[#141210] mb-2">Still having trouble?</h4>
-            <p>Contact our support team at <a href={`mailto:${theme.supportEmail}`} class="text-[var(--color-accent)] hover:text-[#4F3B26] hover:underline">{theme.supportEmail}</a> with your order details.</p>
+            <p>Contact our support team at <a href={`mailto:${identity.supportEmail}`} class="text-[var(--color-accent)] hover:text-[#4F3B26] hover:underline">{identity.supportEmail}</a> with your order details.</p>
           </div>
         </div>
       </div>
