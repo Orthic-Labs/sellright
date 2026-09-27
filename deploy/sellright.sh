@@ -232,6 +232,8 @@ cmd_update() {
   cosign_verify_images || { log "cosign verification failed; leaving maintenance on, no changes made"; exit 1; }
 
   log "4/7 migrating..."
+  # shellcheck disable=SC2016 # single-quoted deliberately: $DATABASE_URL_MIGRATE
+  # must expand inside the container's sh, not here on the host.
   if ! compose run --rm --no-deps api sh -c 'DATABASE_URL="$DATABASE_URL_MIGRATE" node dist/scripts/migrate.js'; then
     log "migration failed; leaving maintenance on. No backup restore was performed — restore this backup set manually only if you determine the migration left the schema inconsistent: ${out_dir:-see sellright backup output above}"
     exit 1
