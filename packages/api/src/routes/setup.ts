@@ -1,0 +1,96 @@
+/**
+ * One-click install: pre-auth claim surface (plan §1.3/§1.4).
+ *
+ * Every route here 404s once an installation administrator exists — an
+ * outside observer must not be able to tell "already claimed" from "route
+ * never existed" (see SetupAlreadyClaimedError/InvalidClaimTokenError).
+ * Onboarding after the claim (store basics, preview, checklist, publish) is
+ * ordinary authenticated admin work — see admin-settings.ts.
+ */
+import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
+import { HttpError, J, errBody, guard } from './admin-helpers.js';
+import { clientIp, attemptRetryAfter } from '../auth/rate-limit.js';
+import { setAuthCookies, newCsrf } from '../auth/cookies.js';
+import {
+  claimInstallation,
+  hasInstallationAdmin,
+  InvalidClaimTokenError,
+  SetupAlreadyClaimedError,
+} from '../auth/setup-claim.js';
+import { createAdminSession } from '../auth/admin-session.js';
+
+export const setup = new OpenAPIHono();
+
+async function assertUnclaimed(): Promise<void> {
+  if (await hasInstallationAdmin()) throw new SetupAlreadyClaimedError();
+}
+
+setup.openapi(
+  createRoute({
+    method: 'get', path: '/v1/setup/status', summary: 'Whether this installation still needs claiming',
+    responses: {
+      200: { description: 'Unclaimed', content: J(z.object({ claimed: z.literal(false) })) },
+      404: { description: 'Already claimed', ...errBody },
+    },
+  }),
+  async (c) => guard(c, async () => {
+    await assertUnclaimed();
+    // Never confirms whether a token exists/is valid — that's the point of
+    // /v1/setup/claim's own 404 on a bad token. This only answers "has
+    // ANY installation admin ever been created", so the admin UI can decide
+    // whether to render the claim screen at all before a token is even
+    // known.
+    return c.json({ claimed: false as const }, 200);
+  }),
+);
+
+setup.openapi(
+  createRoute({
+    method: 'post', path: '/v1/setup/claim', summary: 'Redeem a setup-link token; creates the installation admin + first store',
+    request: {
+      body: {
+        content: J(z.object({
+          token: z.string().min(1),
+          email: z.string().email(),
+          name: z.string().min(1).max(200),
+          password: z.string().min(12),
+        })),
+      },
+    },
+    responses: {
+      200: {
+        description: 'Claimed',
+        content: J(z.object({ token: z.string(), csrfToken: z.string(), storeSlug: z.string() })),
+      },
+      404: { description: 'Already claimed, or invalid/expired/used token', ...errBody },
+      429: { description: 'Too many attempts', ...errBody },
+    },
+  }),
+  async (c) => guard(c, async () => {
+    const ip = clientIp(c);
+    // Attempt-counted, not failure-counted (rate-limit.ts): there is no
+    // authentication-failure signal here (a bad token 404s exactly like a
+    // route that doesn't exist), and this is a high-risk one-shot action
+    // like checkout, so every request — success or failure — consumes a slot.
+    const retry = attemptRetryAfter(ip, 'setup:claim');
+    if (retry > 0) throw new HttpError(429, `too many attempts — try again in ${retry}s`);
+
+    const body = c.req.valid('json');
+    let result;
+    try {
+      result = await claimInstallation(body);
+    } catch (e) {
+      if (e instanceof SetupAlreadyClaimedError || e instanceof InvalidClaimTokenError) {
+        throw new HttpError(404, e.message);
+      }
+      throw e;
+    }
+
+    // Onboarding is ordinary authenticated admin work from here (plan §1.4) —
+    // log the new installation admin in immediately, exactly like /v1/admin/login.
+    const token = await createAdminSession(result.adminId);
+    const csrf = newCsrf();
+    setAuthCookies(c, token, csrf);
+    return c.json({ token, csrfToken: csrf, storeSlug: result.storeSlug }, 200);
+  }),
+);

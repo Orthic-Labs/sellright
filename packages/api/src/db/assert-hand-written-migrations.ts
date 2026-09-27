@@ -50,6 +50,7 @@ const HAND_WRITTEN = [
   '0069_resolver_role_ownership.sql',
   '0070_loyalty_ledger.sql',
   '0071_store_secret.sql',
+  '0072_installation_admin.sql',
 ];
 
 const MARKER = '-- HAND-WRITTEN: see docs/runbooks/migrations.md';

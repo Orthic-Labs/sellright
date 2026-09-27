@@ -62,6 +62,17 @@ export function requireOwner(st: AdminStoreAccess): void {
   if (st.role !== 'owner') throw new HttpError(403, `role '${st.role}' cannot manage owner-level access`);
 }
 
+// One-click install (plan §1.3): system operations (backup/restore trigger,
+// recovery-kit download, add-store, future update trigger) require the
+// install-wide `isInstallationAdmin` flag. Holding 'owner' on some store —
+// even every store — never satisfies this on its own; owning store B must
+// never grant system operations over store A or the install itself.
+export function requireInstallationAdmin(admin: AdminPrincipal): void {
+  if (!admin.isInstallationAdmin) {
+    throw new HttpError(403, 'requires installation administrator');
+  }
+}
+
 /**
  * Per-action permission gate (composes with roles). owner/manager always pass.
  * Otherwise the action must be explicitly granted via the staff member's
