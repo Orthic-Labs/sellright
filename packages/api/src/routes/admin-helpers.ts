@@ -73,6 +73,31 @@ export function requireInstallationAdmin(admin: AdminPrincipal): void {
   }
 }
 
+// 5-minute step-up window, matching common re-auth conventions (GitHub's
+// sudo mode, AWS's re-auth for sensitive IAM actions). Deliberately short and
+// per-session (session.step_up_at, not admin_user) — stepping up in one
+// browser tab must never grant it to another session of the same admin, and
+// a stale step-up from an hour ago must not silently authorize a fresh
+// download.
+const STEP_UP_WINDOW_MS = 5 * 60 * 1000;
+
+/** Thrown by a step-up-gated route with no (or an expired) step-up on file
+ *  for THIS session. The admin UI matches this exact message to decide
+ *  whether to show the step-up prompt versus a generic error. */
+export const STEP_UP_REQUIRED_MESSAGE = 'step_up_required';
+
+/** Recovery-kit download (and any future sensitive system action) requires
+ *  the CURRENT session to have re-verified the admin's password (+ TOTP if
+ *  enabled) within the last 5 minutes — see POST /v1/admin/step-up. Being an
+ *  installation administrator is necessary but not sufficient: a stolen or
+ *  long-lived session cookie alone must not be able to exfiltrate the master
+ *  key without the admin re-proving their password at the moment of use. */
+export function requireStepUp(admin: AdminPrincipal): void {
+  if (!admin.stepUpAt || Date.now() - admin.stepUpAt.getTime() > STEP_UP_WINDOW_MS) {
+    throw new HttpError(403, STEP_UP_REQUIRED_MESSAGE);
+  }
+}
+
 /**
  * Per-action permission gate (composes with roles). owner/manager always pass.
  * Otherwise the action must be explicitly granted via the staff member's

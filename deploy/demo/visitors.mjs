@@ -48,7 +48,14 @@ export async function provisionVisitor(pool) {
       demo:true,demoSession:1,expiresAt,adminId,csrfHash:hash(csrf),storefrontUrl:'https://demo.sellright.cc/shop',
       payments:{stripe:false,nmi:false,sezzle:false,cod:false,manual:false},
     }]);
-    await c.query('INSERT INTO admin_user(id,email) VALUES($1,$2)',[adminId,slug+'@demo.invalid']);
+    // is_installation_admin explicitly false (not just the column default):
+    // a demo visitor — reachable with the publicly-known admin/admin
+    // credentials — must never hold install-wide authority (recovery-kit
+    // download, future backup/restore/add-store triggers). Never omit this
+    // column here even though the default already matches; the point is that
+    // this INSERT can never be edited to admit `true` by accident without a
+    // visible diff.
+    await c.query('INSERT INTO admin_user(id,email,is_installation_admin) VALUES($1,$2,false)',[adminId,slug+'@demo.invalid']);
     await c.query("INSERT INTO admin_user_store(admin_user_id,store_id,role) VALUES($1,$2,'manager')",[adminId,id]);
     await c.query('INSERT INTO session(admin_user_id,token_hash,expires_at) VALUES($1,$2,$3)',[adminId,hash(token),expiresAt]);
     const categories = new Map();

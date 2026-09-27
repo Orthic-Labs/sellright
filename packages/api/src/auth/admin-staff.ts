@@ -31,6 +31,19 @@ export async function getAdminTotpSecret(adminId: string): Promise<string | null
   return u?.totpSecret ?? null;
 }
 
+/** Both credential facts POST /v1/admin/step-up needs in one query: the
+ *  password hash to verify against, and whether TOTP must additionally be
+ *  checked (a null/absent totpSecret means 2FA isn't enabled — password
+ *  alone is the full step-up, same as login's own rule). */
+export async function getAdminCredentialsById(adminId: string): Promise<{ passwordHash: string | null; totpSecret: string | null } | null> {
+  const [u] = await db
+    .select({ passwordHash: s.adminUser.passwordHash, totpSecret: s.adminUser.totpSecret })
+    .from(s.adminUser)
+    .where(eq(s.adminUser.id, adminId))
+    .limit(1);
+  return u ?? null;
+}
+
 /** Set the TOTP secret (called from /v1/admin/2fa/enable after a code is confirmed). */
 export async function setAdminTotpSecret(adminId: string, secret: string): Promise<void> {
   await db.update(s.adminUser).set({ totpSecret: secret }).where(eq(s.adminUser.id, adminId));
