@@ -412,7 +412,21 @@ jobs:
       - name: Start appliance
         run: |
           docker compose -p sellright-drill -f deploy/compose.yaml -f deploy/compose.build.yaml \
-            up -d postgres db-init api admin storefront
+            up -d postgres db-init api admin storefront || {
+              echo "::group::api logs"
+              docker compose -p sellright-drill -f deploy/compose.yaml logs api --no-color || true
+              echo "::endgroup::"
+              echo "::group::db-init logs"
+              docker compose -p sellright-drill -f deploy/compose.yaml logs db-init --no-color || true
+              echo "::endgroup::"
+              echo "::group::admin logs"
+              docker compose -p sellright-drill -f deploy/compose.yaml logs admin --no-color || true
+              echo "::endgroup::"
+              echo "::group::storefront logs"
+              docker compose -p sellright-drill -f deploy/compose.yaml logs storefront --no-color || true
+              echo "::endgroup::"
+              exit 1
+            }
 
       - name: Wait for readiness
         run: |
