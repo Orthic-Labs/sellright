@@ -27,7 +27,7 @@ adminDashboard.openapi(
       const [agg] = await tx
         .select({ revenue: sql<number>`coalesce(sum(${s.order.grandTotal}),0)::int`, cnt: sql<number>`count(*)::int` })
         .from(s.order)
-        .where(sql`${s.order.state} = any(${PAID_STATES}) and ${s.order.deletedAt} is null`);
+        .where(sql`${s.order.state} = any(${PAID_STATES}) and ${s.order.deletedAt} is null and not ${s.order.isDemo}`);
       const revenue = agg?.revenue ?? 0;
       const cnt = agg?.cnt ?? 0;
       // To-fulfill = Paid orders with no Shipped/Delivered fulfillment record yet.
@@ -36,14 +36,14 @@ adminDashboard.openapi(
       const [pf] = await tx
         .select({ n: sql<number>`count(*)::int` })
         .from(s.order)
-        .where(sql`${s.order.state} = 'Paid' and ${s.order.deletedAt} is null and not exists (select 1 from fulfillment f where f.order_id = ${s.order.id} and f.state in ('Shipped','Delivered'))`);
+        .where(sql`${s.order.state} = 'Paid' and ${s.order.deletedAt} is null and not ${s.order.isDemo} and not exists (select 1 from fulfillment f where f.order_id = ${s.order.id} and f.state in ('Shipped','Delivered'))`);
       const [cu] = await tx.select({ n: sql<number>`count(*)::int` }).from(s.customer);
       const [ls] = await tx
         .select({ n: sql<number>`count(*)::int` })
         .from(s.stock)
         .where(sql`${s.stock.onHand} - ${s.stock.allocated} <= 3`);
       const recent = await tx
-        .select({ code: s.order.code, state: s.order.state, grandTotal: s.order.grandTotal, currency: s.order.currency, placedAt: s.order.placedAt, email: s.customer.email })
+        .select({ code: s.order.code, state: s.order.state, grandTotal: s.order.grandTotal, currency: s.order.currency, placedAt: s.order.placedAt, email: s.customer.email, isDemo: s.order.isDemo })
         .from(s.order)
         .leftJoin(s.customer, eq(s.customer.id, s.order.customerId))
         .where(isNull(s.order.deletedAt))

@@ -44,6 +44,11 @@ export const order = pgTable(
     taxTotal: integer().notNull().default(0),
     grandTotal: integer().notNull().default(0),
     isPreOrder: boolean().notNull().default(false),
+    // One-click install (plan §1.5): true for any order placed while the
+    // store was still unpublished (private preview). Excluded from reports/
+    // dashboard KPIs — see PAID_STATES/isDemo callers in admin-reports.ts and
+    // admin-dashboard.ts. Never true for an order placed after Publish.
+    isDemo: boolean().notNull().default(false),
     // Stripe-canonical idempotency: a client-supplied key per checkout attempt.
     // Same (store, key) -> the same order, so a double-submit can't create two.
     idempotencyKey: text(),

@@ -449,6 +449,13 @@
       "when": 1790000010000,
       "tag": "0072_installation_admin",
       "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1790000010100,
+      "tag": "0073_demo_order",
+      "breakpoints": true
     }
   ]
 }
