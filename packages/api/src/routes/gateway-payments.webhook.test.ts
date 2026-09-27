@@ -24,14 +24,17 @@ const PUBLIC_KEY = 'sz_pub_test';
 
 vi.mock('../payments/gateway-account.js', async (orig) => {
   const actual = await orig<typeof import('../payments/gateway-account.js')>();
+  const lookup = (storeId: string, method: string, accountId: string, mode?: string) => {
+    if (storeId === STORE && method === 'sezzle' && accountId === ACCOUNT && (!mode || mode === 'test')) {
+      return { accountId: ACCOUNT, storeId: STORE, method: 'sezzle' as const, mode: 'test' as const, publicKey: PUBLIC_KEY, privateKey: PRIVATE_KEY };
+    }
+    return actual.gatewayAccount(storeId, method as 'nmi' | 'sezzle', accountId, mode as 'test' | 'live' | undefined);
+  };
   return {
     ...actual,
-    gatewayAccount: (storeId: string, method: string, accountId: string, mode?: string) => {
-      if (storeId === STORE && method === 'sezzle' && accountId === ACCOUNT && (!mode || mode === 'test')) {
-        return { accountId: ACCOUNT, storeId: STORE, method: 'sezzle' as const, mode: 'test' as const, publicKey: PUBLIC_KEY, privateKey: PRIVATE_KEY };
-      }
-      return actual.gatewayAccount(storeId, method as 'nmi' | 'sezzle', accountId, mode as 'test' | 'live' | undefined);
-    },
+    gatewayAccount: lookup,
+    // WS-A: the route now calls the async resolver — mirror the same fixture lookup.
+    resolveGatewayAccount: async (storeId: string, method: string, accountId: string, mode?: string) => lookup(storeId, method, accountId, mode),
   };
 });
 

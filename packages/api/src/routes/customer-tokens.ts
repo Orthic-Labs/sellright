@@ -30,7 +30,7 @@ const TTL_HOURS = 2;
 const EMAIL_CHANGE_TTL_HOURS = 24; // bounded lifetime for the change link
 
 function storeEmailCtx(st: StoreCtx): StoreEmailCtx {
-  return { name: st.name, currency: st.currency, config: st.config };
+  return { name: st.name, currency: st.currency, config: st.config, storeId: st.id };
 }
 
 // 'email_change' joined the customer_token kind CHECK in migration 0057. The

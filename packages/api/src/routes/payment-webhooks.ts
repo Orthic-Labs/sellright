@@ -12,7 +12,8 @@ import { and, eq, isNull } from 'drizzle-orm';
 import type Stripe from 'stripe';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
-import { stripeConfigured, stripeCreds, stripeModeFromConfig, verifyStripeWebhook, verifyIntent, STRIPE_REFUND_ATTEMPT_KEY, type IntentLike, type StripeMode } from '../payments/stripe.js';
+import { stripeCreds, stripeModeFromConfig, verifyStripeWebhook, verifyIntent, listAllStoreIds, STRIPE_REFUND_ATTEMPT_KEY, type IntentLike, type StripeMode } from '../payments/stripe.js';
+import { resolveField } from '../security/settings-resolver.js';
 import { applyPaymentResult, amountDueForOrder } from '../payments/settle.js';
 import { resolveStoreIdForStripeEvent, resolveStoreIdForSubscriptionEvent, reconcileStripeRefund, recordStripeDispute, type StripeEventObj } from '../payments/webhook-reconcile.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
@@ -38,12 +39,22 @@ const SUBSCRIPTION_EVENT_TYPES = new Set([
 export const paymentWebhooks = new OpenAPIHono();
 
 paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
-  if (!stripeConfigured('test') && !stripeConfigured('live')) return c.json({ error: 'stripe not configured' }, 503);
   const sig = c.req.header('stripe-signature');
   if (!sig) return c.json({ error: 'missing signature' }, 400);
   const raw = await c.req.text(); // raw body BEFORE json parse — Stripe sig requires it
   let event: Stripe.Event | null = null;
   let verifiedMode: StripeMode | null = null;
+  // SECURITY (post-review fix): set ONLY when a DB-stored (per-store) secret
+  // verified the signature — never for the env fast path, which is a single
+  // shared secret with no per-store identity to bind. When set, the event's
+  // resolved tenant MUST equal this store: the credential holder can sign an
+  // arbitrary body (including a forged metadata.storeId, or a payment/
+  // subscription ref that happens to belong to another store) — without this
+  // check, a store with its OWN legitimately-configured webhook secret could
+  // forge an event that settles/refunds a DIFFERENT store's order.
+  let verifiedStoreId: string | null = null;
+  // Fast path: env-configured (global, cross-store) webhook secrets — unchanged
+  // from before WS-A, so an existing deployment behaves identically.
   for (const mode of ['test', 'live'] as StripeMode[]) {
     const secret = stripeCreds(mode).webhookSecret;
     if (!secret) continue;
@@ -56,6 +67,32 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
       break;
     } catch {
       // signature didn't match this mode's secret — try the other.
+    }
+  }
+  // WS-A fallback: no env secret matched (or none configured) — try every
+  // store's own DB-stored webhook secret. `store` carries no RLS (registry
+  // table), so listing ids isn't an RLS bypass; each secret read still goes
+  // through withStore + resolveField, scoped to that one store. Bounded by
+  // the (typically single-digit) number of stores on this install.
+  if (!event) {
+    const storeIds = await listAllStoreIds();
+    outer: for (const sid of storeIds) {
+      for (const mode of ['test', 'live'] as StripeMode[]) {
+        let secret: string | undefined;
+        try {
+          secret = await withStore(sid, async (tx) => {
+            const r = await resolveField(tx, { storeId: sid, provider: 'stripe', mode, field: 'webhookSecret' }, undefined);
+            return r.value || undefined;
+          });
+        } catch { continue; }
+        if (!secret) continue;
+        try {
+          event = verifyStripeWebhook(raw, sig, secret);
+          verifiedMode = mode;
+          verifiedStoreId = sid;
+          break outer;
+        } catch { /* try the next candidate */ }
+      }
     }
   }
   if (!event || !verifiedMode) return c.json({ error: 'bad signature' }, 400);
@@ -81,6 +118,21 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
     ? await resolveStoreIdForSubscriptionEvent(event.data.object as Parameters<typeof resolveStoreIdForSubscriptionEvent>[0], binding)
     : await resolveStoreIdForStripeEvent(event.data.object as StripeEventObj, binding);
   if (!storeId) return c.json({ error: 'tenant unresolved — retry' }, 503);
+
+  // SECURITY: a DB-stored secret cryptographically proves only "signed by
+  // store X's credential" — never "about store X". A body forging
+  // metadata.storeId (or a payment/subscription ref) to point at a DIFFERENT
+  // store must not be processed against that other store. Ack-and-ignore
+  // (never 503 — retrying can't fix a forged tenant claim) and audit it under
+  // the store whose credential was used, so its owner can see the attempt.
+  if (verifiedStoreId && storeId !== verifiedStoreId) {
+    await withStore(verifiedStoreId, (tx) => tx.insert(s.auditLog).values({
+      storeId: verifiedStoreId!, actor: 'system:webhook', entity: 'store_secret', entityId: 'stripe:webhookSecret',
+      action: 'cross_tenant_signature_rejected',
+      data: { eventId: event.id, eventType: event.type, verifiedStoreId, resolvedStoreId: storeId },
+    })).catch(() => undefined); // best-effort — never let audit logging block the reject
+    return c.json({ received: true }, 200);
+  }
 
   // Zero-cache stock rule: reconcileStripeRefund never owns this transaction
   // (it runs on the `tx` this handler supplies) — it only REPORTS whether a

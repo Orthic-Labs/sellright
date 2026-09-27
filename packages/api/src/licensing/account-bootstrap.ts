@@ -227,6 +227,7 @@ export async function bootstrapAccountAndQueueAccessMail(
     currency: storeRow?.currency ?? 'USD',
     appKey,
     config: storeRow?.config,
+    storeId: input.storeId,
   };
   const url = `${resolveStorefrontUrl(ctx)}/set-password?token=${raw}`;
   const rendered = accountAccessMail(ctx.name, {

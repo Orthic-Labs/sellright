@@ -20,17 +20,22 @@ vi.mock('../db/client.js', async (original) => ({
     return run({ select: () => query });
   },
 }));
-vi.mock('./gateway-account.js', async (original) => ({
-  ...await original<typeof import('./gateway-account.js')>(),
-  configuredGatewayAccount: () => ({
+vi.mock('./gateway-account.js', async (original) => {
+  const fixtureAccount = {
     storeId: 'store', accountId: 'nmi-test', method: 'nmi', mode: 'test',
     nmiEnvironment: 'production', securityKey: 'fixture',
-  }),
-  gatewayAccount: () => ({
-    storeId: 'store', accountId: 'nmi-test', method: 'nmi', mode: 'test',
-    nmiEnvironment: 'production', securityKey: 'fixture',
-  }),
-}));
+  };
+  return {
+    ...await original<typeof import('./gateway-account.js')>(),
+    configuredGatewayAccount: () => fixtureAccount,
+    gatewayAccount: () => fixtureAccount,
+    // WS-A resolver wrappers — this suite exercises the (still env-only, via
+    // GATEWAY_ACCOUNTS_JSON) reconciliation path, so they resolve exactly the
+    // same fixture account synchronously-as-a-promise.
+    resolveConfiguredGatewayAccount: async () => fixtureAccount,
+    resolveGatewayAccount: async () => fixtureAccount,
+  };
+});
 import { startGatewayPayment, verifyGatewayAttempt } from './gateway-payment.js';
 
 beforeEach(() => {

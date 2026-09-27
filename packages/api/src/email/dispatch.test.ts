@@ -58,11 +58,11 @@ describe('email dispatch app routing', () => {
     expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
       to: 'buyer@example.com',
       from: 'hello@viewright.cc',
-    }));
+    }), undefined);
     expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
       html: expect.stringContaining('https://viewright.cc/orders/SR-VR-1'),
       text: expect.stringContaining('https://viewright.cc/orders/SR-VR-1'),
-    }));
+    }), undefined);
   });
 });
 

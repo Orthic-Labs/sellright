@@ -5,7 +5,7 @@ import * as s from '../db/schema.js';
 import { newTotpSecret, verifyTotp, otpauthUri } from '../auth/totp.js';
 import { clearAdminTotpSecret, getAdminTotpSecret, setAdminTotpSecret } from '../auth/admin-staff.js';
 import { isSupportedPaymentMethod } from '../payments/provider.js';
-import { stripeConfigured, stripeModeFromConfig } from '../payments/stripe.js';
+import { resolveStripeConfigured, stripeModeFromConfig } from '../payments/stripe.js';
 import { invalidateStoreCache } from '../store-context.js';
 import { generatePreviewToken, hashPreviewToken } from '../store-publish.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireManage, guard } from './admin-helpers.js';
@@ -252,7 +252,7 @@ adminSettings.openapi(
     const { mode } = c.req.valid('json');
     // Don't let an operator flip to a mode whose credentials aren't loaded — every
     // subsequent /payment-intent would 503 with nothing surfaced at this endpoint.
-    if (!stripeConfigured(mode)) throw new HttpError(409, `cannot switch to ${mode} mode — Stripe ${mode} credentials are not configured`);
+    if (!(await resolveStripeConfigured(st.storeId, mode))) throw new HttpError(409, `cannot switch to ${mode} mode — Stripe ${mode} credentials are not configured`);
     await mutateStoreConfig(st.storeId, (config) => {
       const stripe = { ...(((config.stripe as object) ?? {}) as Record<string, unknown>), mode };
       return { ...config, stripe };

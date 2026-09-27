@@ -5,7 +5,7 @@ import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
 import { getProvider, isPaymentMethodEnabled } from '../payments/provider.js';
 import { applyPaymentResult, amountDueForOrder } from '../payments/settle.js';
-import { createPaymentIntent, stripeUsable, stripeModeFromConfig } from '../payments/stripe.js';
+import { createPaymentIntent, resolveStripeUsable, stripeModeFromConfig } from '../payments/stripe.js';
 import { clientIp, loginRetryAfter } from '../auth/rate-limit.js';
 
 export const pay = new OpenAPIHono();
@@ -84,6 +84,7 @@ pay.openapi(
       // order; Stripe/webhook reconciliation remains DB-idempotent.
       const result = await provider.createPayment({
         orderCode: code,
+        storeId: st.id,
         amount: prepared.amountDue,
         currency: prepared.order.currency,
         token,
@@ -157,7 +158,7 @@ pay.openapi(
     // stripeUsable (not just secret-key present) — the same gate /shop/config
     // advertises, so the storefront never shows Stripe then gets a 503 here (and
     // vice-versa). Needs a mode-matched sk_ AND a mode-matched pk_.
-    if (!stripeUsable(mode)) return c.json({ error: `stripe is not configured (${mode} mode)` }, 503);
+    if (!(await resolveStripeUsable(st.id, mode))) return c.json({ error: `stripe is not configured (${mode} mode)` }, 503);
     const prepared = await withStore(st.id, async (tx) => {
       const [o] = await tx.select({ id: s.order.id, state: s.order.state, grandTotal: s.order.grandTotal, currency: s.order.currency })
         .from(s.order).where(eq(s.order.code, code)).limit(1);

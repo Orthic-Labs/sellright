@@ -33,6 +33,7 @@ export async function executeGatewayRefund(
   currency: string,
   stripeMode: 'test' | 'live' | undefined,
   idempotencyKey: string,
+  storeId?: string,
 ): Promise<{ state: 'Settled' | 'Pending'; providerRef: string | null }> {
   const provider = getProvider(payMethod);
   if (!provider) {
@@ -44,7 +45,7 @@ export async function executeGatewayRefund(
   if (!provider.refundPayment) {
     return { state: 'Settled', providerRef: null };
   }
-  const r = await provider.refundPayment({ providerRef: payProviderRef, amount, currency, stripeMode, idempotencyKey });
+  const r = await provider.refundPayment({ providerRef: payProviderRef, amount, currency, stripeMode, storeId, idempotencyKey });
   if (r.state === 'Failed') {
     throw Object.assign(new Error(r.errorMessage ?? 'gateway refund failed'), { kind: 'providerfail' as const, message: r.errorMessage ?? 'gateway refund failed' });
   }

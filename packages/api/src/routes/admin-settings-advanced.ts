@@ -331,7 +331,7 @@ adminSettingsAdvanced.openapi(
     const acceptUrl = `/admin/accept-invite?token=${token}`;
     // WP2: best-effort invite email. If SMTP is unconfigured the dev log line
     // will surface the token; the response still includes it for the inviter.
-    try { await sendStaffInvite({ name: st.name, currency: st.currency }, normalizeEmail(b.email), { acceptUrl: `${env.STOREFRONT_URL}${acceptUrl}`, role: b.role, inviterEmail: admin.email }); } catch (e) { logErr.error('email staffInvite failed', e, { inviteEmail: b.email }); }
+    try { await sendStaffInvite({ name: st.name, currency: st.currency, storeId: st.storeId }, normalizeEmail(b.email), { acceptUrl: `${env.STOREFRONT_URL}${acceptUrl}`, role: b.role, inviterEmail: admin.email }); } catch (e) { logErr.error('email staffInvite failed', e, { inviteEmail: b.email }); }
     return c.json({ id: invId, token, acceptUrl }, 200);
   }),
 );

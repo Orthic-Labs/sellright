@@ -17,7 +17,7 @@ import { withStore, type Tx } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
 import { customerToken, resolveCustomer, type SessionCustomer } from '../auth/session.js';
-import { createSubscriptionCheckout, createBillingPortal, stripeModeFromConfig, stripeUsable } from '../payments/stripe.js';
+import { createSubscriptionCheckout, createBillingPortal, stripeModeFromConfig, resolveStripeUsable } from '../payments/stripe.js';
 import { isPaymentMethodEnabled } from '../payments/provider.js';
 import { env } from '../env.js';
 import { J, Page, errBody, requireAdmin, requireStore, guard } from './admin-helpers.js';
@@ -51,7 +51,7 @@ subscriptions.openapi(
     const { variantId } = c.req.valid('json');
     if (!isPaymentMethodEnabled(st.config, 'stripe')) return c.json({ error: 'payment method disabled: stripe' }, 409);
     const mode = stripeModeFromConfig(st.config);
-    if (!stripeUsable(mode)) return c.json({ error: `stripe is not configured (${mode} mode)` }, 503);
+    if (!(await resolveStripeUsable(st.id, mode))) return c.json({ error: `stripe is not configured (${mode} mode)` }, 503);
 
     type R =
       | { kind: 'unauth' }
@@ -85,7 +85,7 @@ subscriptions.openapi(
     if (out.kind === 'badVariant') return c.json({ error: 'variant is not a recurring plan' }, 400);
 
     const base = env.STOREFRONT_URL.replace(/\/$/, '');
-    const session = await createSubscriptionCheckout(mode, {
+    const session = await createSubscriptionCheckout(st.id, mode, {
       priceId: out.priceId,
       successUrl: `${base}/account/subscriptions?session_id={CHECKOUT_SESSION_ID}`,
       cancelUrl: `${base}/account/subscriptions?canceled=1`,
@@ -112,7 +112,7 @@ subscriptions.openapi(
   async (c) => {
     const st = await resolveStoreFromCtx(c);
     const mode = stripeModeFromConfig(st.config);
-    if (!stripeUsable(mode)) return c.json({ error: `stripe is not configured (${mode} mode)` }, 503);
+    if (!(await resolveStripeUsable(st.id, mode))) return c.json({ error: `stripe is not configured (${mode} mode)` }, 503);
     const out = await withStore(st.id, async (tx): Promise<{ kind: 'unauth' } | { kind: 'none' } | { kind: 'ok'; stripeCustomerId: string }> => {
       const cust = await me(tx, customerToken(c));
       if (!cust) return { kind: 'unauth' };
@@ -128,7 +128,7 @@ subscriptions.openapi(
     if (out.kind === 'unauth') return c.json({ error: 'not authenticated' }, 401);
     if (out.kind === 'none') return c.json({ error: 'no subscription found' }, 404);
     const base = env.STOREFRONT_URL.replace(/\/$/, '');
-    const url = await createBillingPortal(mode, { customerId: out.stripeCustomerId, returnUrl: `${base}/account/subscriptions` });
+    const url = await createBillingPortal(st.id, mode, { customerId: out.stripeCustomerId, returnUrl: `${base}/account/subscriptions` });
     return c.json({ url }, 200);
   },
 );

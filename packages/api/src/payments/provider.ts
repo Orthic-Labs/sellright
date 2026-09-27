@@ -38,6 +38,9 @@ export interface RefundInput {
   amount: number; // cents
   currency: string;
   stripeMode?: 'test' | 'live';
+  /** Required by the Stripe provider (env>db credential resolution, WS-A);
+   *  nmi/sezzle resolve credentials via `gateway` instead and ignore this. */
+  storeId?: string;
   /** Deterministic key for this logical refund — identical across a retry of
    *  the SAME refund, distinct across different refunds. Stripe returns the
    *  same `re_...` for a repeated key within 24h, so an admin retry after a

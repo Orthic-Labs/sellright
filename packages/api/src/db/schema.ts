@@ -4,6 +4,7 @@ export * from './schema-payment-attempts.js';
 export * from './schema-content.js';
 export * from './schema-licensing.js';
 export * from './schema-storekit.js';
+export * from './schema-settings.js';
 
 import { store, productVariant } from './schema-core.js';
 import { order } from './schema-orders.js';
