@@ -141,6 +141,12 @@ export const session = pgTable('session', {
   adminUserId: uuid().references(() => adminUser.id),
   tokenHash: text().notNull().unique(),
   expiresAt: timestamp({ withTimezone: true }).notNull(),
+  // WS-B follow-up: when THIS session last re-verified the admin's password
+  // (+ TOTP, if enabled). Step-up-gated routes (GET /v1/admin/system/
+  // recovery-kit) require this within the last 5 minutes — see
+  // requireStepUp() in routes/admin-helpers.ts. Per-session, not per-admin:
+  // stepping up in one browser tab must never grant it to another session.
+  stepUpAt: timestamp({ withTimezone: true }),
   createdAt: ts(),
 });
 

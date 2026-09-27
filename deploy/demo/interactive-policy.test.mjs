@@ -7,6 +7,25 @@ test('demo exposes bounded commerce, never credentials, uploads or real gateway 
   }
   for(const [method,path] of [['POST','/v1/shop/checkout'],['PATCH','/v1/admin/variants/abc/stock'],['POST','/v1/admin/orders/SR1/refund'],['GET','/v1/admin/orders/SR1']])assert.equal(interactiveRequest(method,path),true);
 });
+test('installation-admin/system routes are unreachable through the public admin/admin demo credentials, for every method', () => {
+  // The demo's only credential (demoAdminCredentials) is publicly known
+  // (admin/admin) and every visitor's admin_user is seeded with
+  // is_installation_admin=false (visitors.mjs) — but this must ALSO hold at
+  // the request-routing layer, independent of that seeding, in case a demo
+  // visitor's row was ever somehow flagged true. GET /v1/admin/system/
+  // recovery-kit returns the install's master key; none of this surface may
+  // ever be reachable here.
+  for (const path of [
+    '/v1/admin/system/recovery-kit',
+    '/v1/admin/system/checklist',
+    '/v1/admin/system/checklist/offsite-backup-confirmed',
+    '/v1/admin/system',
+    '/v1/admin/system/',
+    '/v1/admin/step-up',
+  ]) {
+    for (const method of ['GET', 'HEAD', 'POST', 'PATCH', 'DELETE']) assert.equal(interactiveRequest(method, path), false, `${method} ${path}`);
+  }
+});
 test('the generic storefront can browse and read receipts, but never accounts, auth or gateways', () => {
   for (const path of ['/v1/shop/catalog/search', '/v1/shop/catalog/products/studio-notebook/stock', '/v1/shop/collections/desk', '/v1/shop/orders/SR1', '/v1/shop/blog', '/v1/shop/blog/my-post', '/v1/shop/currencies'])
     assert.equal(interactiveRequest('GET', path), true, path);

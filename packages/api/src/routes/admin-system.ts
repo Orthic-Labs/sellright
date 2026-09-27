@@ -9,7 +9,11 @@ import { and, eq } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { env } from '../env.js';
-import { getRecoveryKitDownloadedAt, markRecoveryKitDownloaded } from '../auth/admin-staff.js';
+import { getAdminCredentialsById, getRecoveryKitDownloadedAt, markRecoveryKitDownloaded } from '../auth/admin-staff.js';
+import { markStepUpVerified } from '../auth/admin-session.js';
+import { verifyPassword } from '../auth/password.js';
+import { verifyTotp } from '../auth/totp.js';
+import { clientIp, loginRetryAfter, recordLoginFailure, clearLoginAttempts } from '../auth/rate-limit.js';
 import { isEnvManaged } from '../security/settings-resolver.js';
 // SELLRIGHT_MASTER_KEY/RECOVERY_KIT_ID are read directly from process.env,
 // not the parsed `env` singleton — matching security/secret-crypto.ts's own
@@ -18,7 +22,7 @@ import { isEnvManaged } from '../security/settings-resolver.js';
 // process.env.SELLRIGHT_MASTER_KEY in beforeEach() and have it take effect.
 import { configuredGatewayAccount } from '../payments/gateway-account.js';
 import { stripeCreds } from '../payments/stripe.js';
-import { HttpError, J, errBody, guard, requireAdmin, requireInstallationAdmin, requireStore } from './admin-helpers.js';
+import { HttpError, J, errBody, guard, requireAdmin, requireInstallationAdmin, requireStepUp, requireStore } from './admin-helpers.js';
 import { mutateStoreConfig } from './admin-settings.js';
 
 export const adminSystem = new OpenAPIHono();
@@ -130,6 +134,55 @@ adminSystem.openapi(
   }),
 );
 
+// Best-effort audit — recovery-kit access and step-up verification are
+// install-wide facts, not really "about" any one store, but audit_log is
+// FORCE-RLS'd and store_id is NOT NULL. Scoped to whatever store the admin
+// currently has selected (defaulting to their first, like every other admin
+// route); an admin with zero store enrollments (shouldn't happen for a real
+// installation admin — claiming always grants one) just skips the audit row
+// rather than failing the underlying action.
+async function auditSystemAction(admin: { email: string; stores: { storeId: string }[] }, action: string): Promise<void> {
+  const storeId = admin.stores[0]?.storeId;
+  if (!storeId) return;
+  await withStore(storeId, (tx) => tx.insert(s.auditLog).values({ storeId, actor: admin.email, entity: 'installation', action }));
+}
+
+adminSystem.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/step-up', summary: 'Re-verify password (+ TOTP if enabled); unlocks step-up-gated actions for 5 minutes',
+    request: { body: { content: J(z.object({ password: z.string().min(1), totp: z.string().optional() })) } },
+    responses: {
+      200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) },
+      401: { description: 'Invalid password or 2FA code', ...errBody },
+      429: { description: 'Too many attempts', ...errBody },
+    },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin, token } = await requireAdmin(c);
+    const ip = clientIp(c);
+    // Same rate-limit shape as /v1/admin/login (rate-limit.ts) — step-up IS a
+    // second password check, and deserves the identical brute-force guard.
+    const retry = loginRetryAfter(ip, `stepup:${admin.id}`);
+    if (retry > 0) throw new HttpError(429, `too many attempts — try again in ${retry}s`);
+
+    const { password, totp } = c.req.valid('json');
+    const creds = await getAdminCredentialsById(admin.id);
+    if (!creds || !(await verifyPassword(password, creds.passwordHash))) {
+      recordLoginFailure(ip, `stepup:${admin.id}`);
+      throw new HttpError(401, 'invalid password or 2FA code');
+    }
+    if (creds.totpSecret && (!totp || !verifyTotp(creds.totpSecret, totp, admin.id))) {
+      recordLoginFailure(ip, `stepup:${admin.id}`);
+      throw new HttpError(401, 'invalid password or 2FA code');
+    }
+    clearLoginAttempts(ip, `stepup:${admin.id}`);
+
+    await markStepUpVerified(token);
+    await auditSystemAction(admin, 'step_up_verify');
+    return c.json({ ok: true }, 200);
+  }),
+);
+
 const RecoveryKitResponse = z.object({
   kitId: z.string().nullable(),
   generatedAt: z.string(),
@@ -140,20 +193,22 @@ const RecoveryKitResponse = z.object({
 
 adminSystem.openapi(
   createRoute({
-    method: 'get', path: '/v1/admin/system/recovery-kit', summary: 'Download the recovery kit (installation administrators only)',
+    method: 'get', path: '/v1/admin/system/recovery-kit', summary: 'Download the recovery kit (installation administrators only; requires a recent step-up)',
     responses: {
       200: { description: 'OK', content: J(RecoveryKitResponse) },
       401: { description: 'Unauthorized', ...errBody },
-      403: { description: 'Forbidden — installation administrator required', ...errBody },
+      403: { description: 'Forbidden — installation administrator required, or step-up needed', ...errBody },
     },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     requireInstallationAdmin(admin);
+    requireStepUp(admin);
     const masterKey = process.env.SELLRIGHT_MASTER_KEY;
     if (!masterKey) throw new HttpError(503, 'SELLRIGHT_MASTER_KEY is not configured on this server');
 
     await markRecoveryKitDownloaded(admin.id);
+    await auditSystemAction(admin, 'recovery_kit_download');
 
     return c.json({
       kitId: process.env.RECOVERY_KIT_ID ?? null,

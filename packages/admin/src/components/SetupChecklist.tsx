@@ -1,10 +1,70 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, Circle, Download, ExternalLink } from 'lucide-react';
-import { api, type Checklist, type RecoveryKit } from '../api';
+import { api, ApiError, type Checklist, type RecoveryKit } from '../api';
 import { useAuth } from '../auth';
 import { useToast } from './Toast';
 import { Loading, Spinner } from './ui';
+
+const STEP_UP_REQUIRED_MESSAGE = 'step_up_required';
+
+/**
+ * Re-auth prompt for GET /v1/admin/system/recovery-kit (plan follow-up: the
+ * master key is sensitive enough that a merely-still-logged-in session isn't
+ * enough — the admin must re-prove their password, right now, every 5
+ * minutes). Always shows the TOTP field: the admin API never reveals whether
+ * 2FA is enabled to an unauthenticated-for-this-purpose caller (same
+ * enumeration-safety rule as login), so the client can't decide to hide it.
+ */
+function StepUpModal({ onVerified, onCancel }: { onVerified: () => void; onCancel: () => void }) {
+  const [password, setPassword] = useState('');
+  const [totp, setTotp] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setErr(null); setBusy(true);
+    try {
+      await api.post('/step-up', { password, totp: totp || undefined });
+      onVerified();
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : 'Verification failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="fixed inset-0 z-40 bg-black/30 animate-fade-in" onClick={onCancel} aria-hidden="true" />
+      <div role="dialog" aria-modal="true" aria-label="Confirm your password" className="fixed inset-x-0 top-[15vh] z-50 mx-auto w-full max-w-sm px-3">
+        <form onSubmit={submit} className="card p-6 space-y-4 shadow-lg">
+          <div>
+            <h2 className="text-base font-semibold">Confirm it's you</h2>
+            <p className="text-sm text-gray-500">The recovery kit contains your master key. Re-enter your password to continue.</p>
+          </div>
+          {err && <div className="rounded-lg bg-danger-soft text-danger text-sm px-3 py-2 border border-danger/30">{err}</div>}
+          <div>
+            <label className="label">Password</label>
+            <input className="input" type="password" autoFocus value={password} onChange={(e) => setPassword(e.target.value)} required />
+          </div>
+          <div>
+            <label className="label">2FA code (if enabled)</label>
+            <input className="input tracking-widest" inputMode="numeric" maxLength={6} value={totp} onChange={(e) => setTotp(e.target.value.replace(/\D/g, ''))} placeholder="000000" />
+          </div>
+          <div className="flex gap-2">
+            <button type="button" className="btn-secondary flex-1" onClick={onCancel}>Cancel</button>
+            <button type="submit" className="btn-primary flex-1" disabled={busy || !password}>
+              {busy ? <Spinner className="text-white" /> : 'Confirm'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </>
+  );
+}
 
 // Each checklist key's settings page + human label. Order matches the plan's
 // checklist list (§1.5).
@@ -29,6 +89,7 @@ export default function SetupChecklist() {
   const toast = useToast();
   const qc = useQueryClient();
   const key = ['system-checklist', store?.slug];
+  const [showStepUp, setShowStepUp] = useState(false);
 
   const { data, isLoading } = useQuery({ queryKey: key, queryFn: () => api.get<Checklist>('/system/checklist') });
 
@@ -48,7 +109,15 @@ export default function SetupChecklist() {
       qc.invalidateQueries({ queryKey: key });
       toast.success('Recovery kit downloaded — store it offline, away from this server.');
     },
-    onError: (e) => toast.error('Could not download recovery kit', (e as Error).message),
+    onError: (e) => {
+      // 403 + this exact message means "installation admin, but no recent
+      // step-up" — prompt for it instead of showing a generic failure toast.
+      if (e instanceof ApiError && e.status === 403 && e.message === STEP_UP_REQUIRED_MESSAGE) {
+        setShowStepUp(true);
+        return;
+      }
+      toast.error('Could not download recovery kit', (e as Error).message);
+    },
   });
 
   const publish = useMutation({
@@ -112,6 +181,12 @@ export default function SetupChecklist() {
           );
         })}
       </ul>
+      {showStepUp && (
+        <StepUpModal
+          onCancel={() => setShowStepUp(false)}
+          onVerified={() => { setShowStepUp(false); downloadKit.mutate(); }}
+        />
+      )}
     </div>
   );
 }

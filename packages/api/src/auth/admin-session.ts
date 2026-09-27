@@ -25,6 +25,10 @@ export interface AdminPrincipal {
    *  role. Gates system operations (backup/restore, recovery-kit download,
    *  add-store). See requireInstallationAdmin() in admin-helpers.ts. */
   isInstallationAdmin: boolean;
+  /** When THIS session last re-verified the admin's password (+ TOTP if
+   *  enabled) via POST /v1/admin/step-up, or null if never. Per-session, not
+   *  per-admin — see requireStepUp() in routes/admin-helpers.ts. */
+  stepUpAt: Date | null;
   stores: AdminStoreAccess[];
 }
 
@@ -60,6 +64,7 @@ export async function resolveAdmin(token: string): Promise<AdminPrincipal | null
       id: s.adminUser.id,
       email: s.adminUser.email,
       isInstallationAdmin: s.adminUser.isInstallationAdmin,
+      stepUpAt: s.session.stepUpAt,
       storeId: s.store.id,
       slug: s.store.slug,
       name: s.store.name,
@@ -94,7 +99,14 @@ export async function resolveAdmin(token: string): Promise<AdminPrincipal | null
       role: r.role as AdminStoreAccess['role'],
       permissions: (r.permissions as Record<string, boolean> | null) ?? null,
     }));
-  return { id: first.id, email: first.email, isInstallationAdmin: first.isInstallationAdmin, stores };
+  return { id: first.id, email: first.email, isInstallationAdmin: first.isInstallationAdmin, stepUpAt: first.stepUpAt, stores };
+}
+
+/** Records that THIS session (identified by its own bearer token, not the
+ *  admin generally) just re-verified the admin's credentials. Called by
+ *  POST /v1/admin/step-up on success. */
+export async function markStepUpVerified(token: string): Promise<void> {
+  await db.update(s.session).set({ stepUpAt: new Date() }).where(eq(s.session.tokenHash, hashToken(token)));
 }
 
 /** Find an admin user by email — global registry lookup on the default db client. */
