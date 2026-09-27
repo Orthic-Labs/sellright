@@ -181,9 +181,12 @@ describe('claimInstallation', () => {
   it('rejects a token that was already used', async () => {
     const { token } = await issueSetupClaimToken();
     await claimInstallation({ token, email: 'a@example.com', name: 'A', password: 'x'.repeat(12) });
-    // Reset installation-admin state so the SECOND call fails on the token
-    // check specifically, not the earlier hasInstallationAdmin() guard.
-    await db.update(s.adminUser).set({ isInstallationAdmin: false });
+    // Clear every admin row (not just the isInstallationAdmin flag — hasAnyAdmin()
+    // would still correctly refuse the second call otherwise) so the SECOND
+    // call fails on the token check specifically, not the earlier
+    // hasAnyAdmin() guard.
+    await db.delete(s.adminUserStore);
+    await db.delete(s.adminUser);
     await expect(
       claimInstallation({ token, email: 'b@example.com', name: 'B', password: 'x'.repeat(12) }),
     ).rejects.toBeInstanceOf(InvalidClaimTokenError);

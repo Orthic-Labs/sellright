@@ -29,7 +29,12 @@ import { createAdminSession } from '../auth/admin-session.js';
 export const setup = new OpenAPIHono();
 
 async function assertUnclaimed(): Promise<void> {
-  if (await hasAnyAdmin()) throw new SetupAlreadyClaimedError();
+  // HttpError, not the raw SetupAlreadyClaimedError — guard() only translates
+  // HttpError into a JSON response; this exact bug (a 500 instead of a 404 on
+  // an already-claimed install) was only ever missed because no test hit
+  // this route via real HTTP with hasAnyAdmin() already true until
+  // setup.upgrade-promotion.db.test.ts's end-to-end case did.
+  if (await hasAnyAdmin()) throw new HttpError(404, new SetupAlreadyClaimedError().message);
 }
 
 setup.openapi(
