@@ -24,6 +24,7 @@ require_root() {
 
 check_os() {
   [ -r /etc/os-release ] || die "cannot detect OS: /etc/os-release missing"
+  # shellcheck disable=SC1091
   . /etc/os-release
   case "${ID:-}" in
     ubuntu|debian) : ;;
@@ -119,7 +120,7 @@ write_recovery_kit() {
   if [ -f "$kit_file" ]; then
     return 0
   fi
-  # shellcheck disable=SC1090
+  # shellcheck disable=SC1090,SC1091
   . "${SELLRIGHT_HOME}/.env"
   umask 077
   cat > "$kit_file" <<EOF

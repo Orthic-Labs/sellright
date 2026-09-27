@@ -193,7 +193,12 @@ jobs:
 
       - name: Validate Caddyfile
         run: |
+          # SELLRIGHT_DOMAIN/SELLRIGHT_STOREFRONT_DOMAIN must be non-empty here:
+          # an empty {$VAR} site address makes Caddy parse that block as GLOBAL
+          # OPTIONS instead of a site, which then rejects `encode` as unknown.
           docker run --rm -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            -e SELLRIGHT_DOMAIN=sellright.example.net \
+            -e SELLRIGHT_STOREFRONT_DOMAIN=:8090 \
             caddy:2.10-alpine caddy validate --config /etc/caddy/Caddyfile
 
       - name: Build production images

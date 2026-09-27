@@ -17,7 +17,7 @@ require_home() {
 }
 
 env_get() {
-  # shellcheck disable=SC1090
+  # shellcheck disable=SC1090,SC1091
   ( . "${SELLRIGHT_HOME}/.env" && eval "printf '%s' \"\${$1:-}\"" )
 }
 
