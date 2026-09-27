@@ -37,6 +37,11 @@ cmd_backup() {
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
   out_dir="${SELLRIGHT_HOME}/backups/${stamp}"
   mkdir -p "$out_dir"
+  # The api container writes into this bind mount as its non-root `node`
+  # user, whose uid won't generally match whoever owns $SELLRIGHT_HOME on the
+  # host (root, via install.sh). 0777 only on this one transient per-backup
+  # staging directory, not on $SELLRIGHT_HOME itself.
+  chmod 777 "$out_dir"
   log "Backing up database..."
   compose exec -T postgres pg_dump -U sellright -d sellright -Fc > "${out_dir}/database.dump"
   log "Backing up assets and downloads volumes..."
