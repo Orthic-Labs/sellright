@@ -47,6 +47,10 @@ const EnvSchema = z.object({
   // (<checkout>/var/assets via the packages/api cwd) — never ~/sites root. Each
   // deployment sets ASSET_DIR explicitly in its env (dev vs downstream prod).
   ASSET_DIR: z.string().default('var/assets'),
+  // WS-E: maintenance-mode flag file, shared with the job scheduler and
+  // polled by the storefront via GET /v1/maintenance. Must live on a volume
+  // that survives an `api` container restart (see maintenance.ts).
+  MAINTENANCE_FLAG_FILE: z.string().default('var/state/MAINTENANCE'),
   // WP-dl: licensed downloads. Artifacts live in a PRIVATE dir (NOT the
   // nginx-served /assets path) and are streamed by the app behind short-lived
   // HMAC-signed URLs. DOWNLOAD_URL_SECRET signs those URLs — set it in prod; when
@@ -187,6 +191,17 @@ const EnvSchema = z.object({
   ADMIN_EMAIL: optionalEnvEmail,
   ADMIN_PASSWORD: optionalEnvString,
   BOOTSTRAP_STORE_SLUG: optionalEnvString,
+  // WS-E: which store `functional-check.js` dry-runs a cart against.
+  // Defaults to BOOTSTRAP_STORE_SLUG so single-store installs need no extra
+  // config; set explicitly to point the update's dry run at a dedicated,
+  // non-production test store instead.
+  FUNCTIONAL_CHECK_STORE_SLUG: optionalEnvString,
+  // WS-E: test/CI-only escape hatch to deterministically fail
+  // functional-check.js without needing a real broken migration or DB outage
+  // — used by the appliance CI job that proves `sellright update` actually
+  // rolls back when a functional check fails. Never read anywhere except
+  // functional-check.ts's own final report.
+  FUNCTIONAL_CHECK_FORCE_FAIL: z.preprocess(emptyToUndefined, z.enum(['true', 'false']).optional()),
   BOOTSTRAP_STORE_NAME: optionalEnvString,
   BOOTSTRAP_STORE_CURRENCY: z.preprocess(emptyToUndefined, z.string().regex(/^[A-Za-z]{3}$/).transform((v) => v.toUpperCase()).optional()),
   BOOTSTRAP_STORE_HOSTNAMES: optionalEnvString,

@@ -26,10 +26,11 @@ import { LocalAddressService } from '~/services/LocalAddressService';
 import { LocalCartService } from '~/services/LocalCartService';
 import { CACHE_POLICY_VERSION, getRouteCacheProfile } from '~/config/route-cache-policy';
 import { DEV_API } from '~/constants';
-import { srShopIdentity, srErrorStatus } from '~/utils/sellright';
+import { srShopIdentity, srErrorStatus, srMaintenanceStatus } from '~/utils/sellright';
 import { identityFromStaticTheme } from '~/theme/theme.config';
 import { normalizeIdentity } from '~/utils/normalize-identity';
 import ComingSoon from '~/components/coming-soon/ComingSoon';
+import MaintenanceScreen from '~/components/maintenance/MaintenanceScreen';
 
 /** WS-C: cookie that remembers a valid preview token across navigation, once
  *  presented on any request via ?preview_token=. Not HttpOnly — the value is
@@ -86,6 +87,15 @@ export const onGet: RequestHandler = async ({ cacheControl, url, headers }) => {
 	}
 };
 
+/**
+ * WS-E: polled on every request. Deliberately a plain routeLoader$ (not
+ * cached/debounced — see docs/plans/2026-09-27-one-click-install.md decision
+ * 1.11 and the stock-architecture "no cache" precedent this project follows
+ * for anything that gates whether a page is even servable) so a maintenance
+ * window that ends mid-visit clears on the visitor's very next navigation.
+ */
+export const useMaintenanceLoader = routeLoader$(async () => srMaintenanceStatus());
+
 // Lightweight auth check only - NO backend calls
 export const useAuthLoader = routeLoader$(({ cookie }) => {
 	const authToken = cookie.get(AUTH_TOKEN)?.value;
@@ -129,6 +139,7 @@ export default component$(() => {
 
 	const authData = useAuthLoader();
 	const identityData = useStoreIdentityLoader();
+	const maintenanceData = useMaintenanceLoader();
 
 	const state = useStore<AppState>({
 		showCart: false,
@@ -274,6 +285,12 @@ export default component$(() => {
 	useOn('qwik-router-error', $((event: any) => {
 		console.error('Qwik Router Error:', event.detail);
 	}));
+
+	// Maintenance takes priority over the publish gate: a store mid-update is a
+	// temporary outage regardless of whether it's published yet.
+	if (maintenanceData.value.maintenance) {
+		return <MaintenanceScreen storeName={identityData.value.identity.storeName} />;
+	}
 
 	if (identityData.value.notPublished) {
 		return <ComingSoon storeName={identityData.value.identity.storeName} />;

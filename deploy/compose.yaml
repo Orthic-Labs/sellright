@@ -107,6 +107,10 @@ services:
       STOREFRONT_URL: ${STOREFRONT_URL:?set STOREFRONT_URL in deploy/.env}
       ASSET_DIR: /app/var/assets
       DOWNLOAD_DIR: /app/var/downloads
+      # WS-E: maintenance-mode flag file. Lives on its own named volume (not
+      # inside the container's writable layer) so `sellright maintenance on`
+      # survives the very container restart the update sequence performs.
+      MAINTENANCE_FLAG_FILE: /app/var/state/MAINTENANCE
       DOWNLOAD_URL_SECRET: ${DOWNLOAD_URL_SECRET:?set DOWNLOAD_URL_SECRET in deploy/.env}
       # WS-A's secret-crypto.ts reads this directly from process.env (it's
       # infra-only, deliberately outside the zod env schema — see that file's
@@ -133,6 +137,11 @@ services:
       BOOTSTRAP_STORE_NAME: ${BOOTSTRAP_STORE_NAME:-}
       BOOTSTRAP_STORE_CURRENCY: ${BOOTSTRAP_STORE_CURRENCY:-USD}
       BOOTSTRAP_STORE_HOSTNAMES: ${BOOTSTRAP_STORE_HOSTNAMES:-}
+      FUNCTIONAL_CHECK_STORE_SLUG: ${FUNCTIONAL_CHECK_STORE_SLUG:-}
+      # Test/CI-only escape hatch (see packages/api/src/env.ts) to deterministically
+      # fail `sellright functional-check` without a real broken migration —
+      # never set this in a real deployment's .env.
+      FUNCTIONAL_CHECK_FORCE_FAIL: ${FUNCTIONAL_CHECK_FORCE_FAIL:-}
       STRIPE_SECRET_KEY_TEST: ${STRIPE_SECRET_KEY_TEST:-}
       STRIPE_PUBLISHABLE_KEY_TEST: ${STRIPE_PUBLISHABLE_KEY_TEST:-}
       STRIPE_WEBHOOK_SECRET_TEST: ${STRIPE_WEBHOOK_SECRET_TEST:-}
@@ -154,6 +163,7 @@ services:
     volumes:
       - assets:/app/var/assets
       - downloads:/app/var/downloads
+      - state:/app/var/state
     secrets:
       - gateway_accounts
     networks: [private]
@@ -221,6 +231,7 @@ volumes:
   postgres_data:
   assets:
   downloads:
+  state:
   caddy_data:
   caddy_config:
 
