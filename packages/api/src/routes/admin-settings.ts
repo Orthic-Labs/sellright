@@ -9,6 +9,11 @@ import { resolveStripeConfigured, stripeModeFromConfig } from '../payments/strip
 import { invalidateStoreCache } from '../store-context.js';
 import { generatePreviewToken, hashPreviewToken } from '../store-publish.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireManage, guard } from './admin-helpers.js';
+// Circular with admin-system.ts (which imports mutateStoreConfig from here)
+// is safe: both bindings are only ever called from inside route handlers,
+// never at module-evaluation time, so ESM's live-binding semantics resolve
+// them fine regardless of import order.
+import { computeReadiness } from './admin-system.js';
 
 export const adminSettings = new OpenAPIHono();
 
@@ -545,12 +550,30 @@ adminSettings.openapi(
   createRoute({
     method: 'patch', path: '/v1/admin/settings/publish', summary: 'Set the storefront published flag',
     request: { body: { content: J(z.object({ published: z.boolean() })) } },
-    responses: { 200: { description: 'OK', content: J(z.object({ published: z.boolean() })) }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: {
+      200: { description: 'OK', content: J(z.object({ published: z.boolean() })) },
+      401: { description: 'Unauthorized', ...errBody },
+      409: { description: 'Readiness checks not met', content: J(z.object({ error: z.string(), failing: z.array(z.string()) })) },
+    },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireManage(st);
     const { published } = c.req.valid('json');
+
+    // Publish readiness (plan §1.5): going private never needs a gate — only
+    // going live does. Domain is deliberately never a blocker here (no
+    // domain/TLS automation has shipped — see computeReadiness's doc
+    // comment); off-site backup and the product/shipping checklist items are
+    // informational only, not gates, per the plan's exact readiness list.
+    if (published) {
+      const readiness = await computeReadiness(st.storeId, admin.isInstallationAdmin ? admin.id : null);
+      const failing = (['payments', 'email', 'recoveryKit'] as const).filter((k) => !readiness[k].ok);
+      if (failing.length > 0) {
+        return c.json({ error: 'readiness checks not met', failing }, 409);
+      }
+    }
+
     await mutateStoreConfig(st.storeId, (config) => ({ ...config, published }), {
       actor: admin.email,
       action: published ? 'publish-store' : 'unpublish-store',

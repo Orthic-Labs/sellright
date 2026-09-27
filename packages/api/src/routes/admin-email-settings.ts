@@ -111,6 +111,7 @@ adminEmailSettings.openapi(
     if (isEnvManaged(env.SMTP_HOST)) {
       // Env-managed: exercise the real, already-configured mailer.
       const result = await sendEmail({ to, subject: 'SellRight test email', text: 'Test email from SellRight.', html: '<p>Test email from SellRight.</p>' });
+      if (result.delivered) await markEmailVerified(st.storeId);
       return c.json({ delivered: result.delivered, error: result.reason }, 200);
     }
 
@@ -120,8 +121,18 @@ adminEmailSettings.openapi(
     const credential = await withStore(st.storeId, (tx) => readSecret(tx, scopeFor(st.storeId, 'smtp', 'default', 'authCredential')));
 
     const result = await sendTestEmail({ preset: cfg.preset, host: cfg.host, port: cfg.port, secure: cfg.secure, user: cfg.user, pass: credential }, to);
+    // Publish readiness (plan §1.5) reads config.email.verifiedAt — "verified"
+    // means a passed test-send, mirroring the payments provider gate.
+    if (result.delivered) await markEmailVerified(st.storeId);
     return c.json(result, 200);
   }),
 );
+
+async function markEmailVerified(storeId: string): Promise<void> {
+  await mutateStoreConfig(storeId, (config) => ({
+    ...config,
+    email: { ...(config.email as Record<string, unknown> | undefined), verifiedAt: new Date().toISOString() },
+  }));
+}
 
 export { SMTP_PRESETS };

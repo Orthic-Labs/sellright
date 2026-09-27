@@ -12,6 +12,7 @@ import { loyalty } from './routes/loyalty.js';
 import { orders } from './routes/orders.js';
 import { admin } from './routes/admin.js';
 import { setup } from './routes/setup.js';
+import { adminSystem } from './routes/admin-system.js';
 import { adminDashboard } from './routes/admin-dashboard.js';
 import { adminCatalog } from './routes/admin-catalog.js';
 import { adminProducts } from './routes/admin-products.js';
@@ -279,6 +280,7 @@ export function createApp(): OpenAPIHono {
   // Admin API — operator surface (auth, dashboard, orders, products, customers).
   app.route('/', admin);
   app.route('/', setup); // one-click install: pre-auth claim (404s once claimed)
+  app.route('/', adminSystem); // one-click install: setup checklist, Publish readiness, recovery-kit download
   app.route('/', adminDashboard); // store dashboard KPIs
   app.route('/', adminProducts); // product list/detail/edit + variant pricing/stock
   app.route('/', adminCatalog); // catalog mgmt: product/variant create+delete, collections, inventory

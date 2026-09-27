@@ -21,6 +21,7 @@ import { stripeCreds } from '../payments/stripe.js';
 import { configuredGatewayAccount } from '../payments/gateway-account.js';
 import { verifyNmiKey, verifySezzleKeys, verifyStripeKey } from '../payments/settings-verify.js';
 import { ensureStripeWebhook, type StripeWebhookClient } from '../payments/stripe-webhook-provision.js';
+import { mutateStoreConfig } from './admin-settings.js';
 
 export const adminPaymentSettings = new OpenAPIHono();
 
@@ -204,6 +205,28 @@ adminPaymentSettings.openapi(
       storeId: st.storeId, actor: admin.email, entity: 'store_secret', entityId: `${provider}:${mode}`,
       action: 'secret_verify', data: { provider, mode, ok: result.ok },
     }));
+    if (result.ok) {
+      // Publish readiness (plan §1.5) reads config.payments[provider][mode].
+      // verifiedAt — "a provider verified" means a PASSED test-connection
+      // call, not merely "a secret is saved". A later credential edit doesn't
+      // clear this; a subsequent FAILED verify does (below), so readiness
+      // can't go stale-green after rotating to a bad key.
+      await mutateStoreConfig(st.storeId, (config) => {
+        const payments = { ...(config.payments as Record<string, unknown> | undefined) };
+        const forProvider = { ...(payments[provider] as Record<string, unknown> | undefined) };
+        forProvider[mode] = { ...(forProvider[mode] as Record<string, unknown> | undefined), verifiedAt: new Date().toISOString() };
+        payments[provider] = forProvider;
+        return { ...config, payments };
+      });
+    } else {
+      await mutateStoreConfig(st.storeId, (config) => {
+        const payments = { ...(config.payments as Record<string, unknown> | undefined) };
+        const forProvider = { ...(payments[provider] as Record<string, unknown> | undefined) };
+        const { [mode]: _dropped, ...restModes } = forProvider;
+        payments[provider] = restModes;
+        return { ...config, payments };
+      });
+    }
     return c.json(result, 200);
   }),
 );

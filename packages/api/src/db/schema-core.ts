@@ -89,6 +89,10 @@ export const adminUser = pgTable('admin_user', {
   // — even as 'owner' — never implies this. Set exactly once, by
   // POST /v1/setup/claim; never toggled by ordinary staff-management routes.
   isInstallationAdmin: boolean().notNull().default(false),
+  // One-click install (plan §1.10): set once the installation admin has
+  // downloaded the recovery kit via GET /v1/admin/system/recovery-kit. Gates
+  // Publish (plan §1.5) alongside payments/email verification.
+  recoveryKitDownloadedAt: timestamp({ withTimezone: true }),
   createdAt: ts(),
 });
 

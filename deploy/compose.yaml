@@ -108,6 +108,19 @@ services:
       ASSET_DIR: /app/var/assets
       DOWNLOAD_DIR: /app/var/downloads
       DOWNLOAD_URL_SECRET: ${DOWNLOAD_URL_SECRET:?set DOWNLOAD_URL_SECRET in deploy/.env}
+      # WS-A's secret-crypto.ts reads this directly from process.env (it's
+      # infra-only, deliberately outside the zod env schema — see that file's
+      # doc comment) to encrypt/decrypt every store_secret row. It was
+      # generated into deploy/.env by install.sh from day one but was never
+      # actually passed through to this container — payment/email secret
+      # encryption would fail closed on every real install. Fixed here as
+      # part of WS-B's recovery-kit endpoint, which needs the same variable.
+      SELLRIGHT_MASTER_KEY: ${SELLRIGHT_MASTER_KEY:?set SELLRIGHT_MASTER_KEY in deploy/.env}
+      # Recovery kit (plan §1.10): the kit file install.sh writes to disk is
+      # reconstructible entirely from env the api container already has
+      # (SELLRIGHT_MASTER_KEY + this id), so GET /v1/admin/system/recovery-kit
+      # never needs filesystem access to $SELLRIGHT_HOME.
+      RECOVERY_KIT_ID: ${RECOVERY_KIT_ID:-}
       # One-click install (WS-B): a fresh install.sh run no longer writes
       # these — the owner claims the install in the browser via
       # `sellright setup-link` + POST /v1/setup/claim instead (dist/scripts/

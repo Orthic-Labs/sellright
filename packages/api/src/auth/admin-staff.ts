@@ -246,6 +246,26 @@ export async function revokeAllSessionsForAdmin(adminUserId: string): Promise<nu
   return del.length;
 }
 
+// ── recovery kit (plan §1.10) ─────────────────────────────────────────────────
+
+/** Whether — and when — this admin (must be the installation admin; callers
+ *  check requireInstallationAdmin/isInstallationAdmin themselves) has ever
+ *  downloaded the recovery kit. Used by the Publish readiness gate. */
+export async function getRecoveryKitDownloadedAt(adminId: string): Promise<Date | null> {
+  const [row] = await db
+    .select({ at: s.adminUser.recoveryKitDownloadedAt })
+    .from(s.adminUser)
+    .where(eq(s.adminUser.id, adminId))
+    .limit(1);
+  return row?.at ?? null;
+}
+
+/** Records that the recovery kit was just downloaded (GET /v1/admin/system/
+ *  recovery-kit). Idempotent — re-downloading only refreshes the timestamp. */
+export async function markRecoveryKitDownloaded(adminId: string): Promise<void> {
+  await db.update(s.adminUser).set({ recoveryKitDownloadedAt: new Date() }).where(eq(s.adminUser.id, adminId));
+}
+
 // NOTE: stale-invite cleanup is intentionally not exposed here yet — the
 // accepted/expiry invariant is enforced at the accept route, and a hard
 // delete of expired rows is a future jobs/ cleanup concern (would need a
