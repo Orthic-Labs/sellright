@@ -453,13 +453,13 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: docker/login-action@9780b0c442fbb1117ed29e0efdff246ede52c91f # v3.3.0
+      - uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69a08a9a1f # v3.7.0
+      - uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da # v3.7.0
 
       - name: Resolve build context/dockerfile
         id: ctx
@@ -481,7 +481,7 @@ jobs:
 
       - name: Build and push
         id: build
-        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a4 # v6.18.0
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
         with:
           context: ${{ steps.ctx.outputs.context }}
           file: ${{ steps.ctx.outputs.dockerfile }}
@@ -701,13 +701,13 @@ jobs:
           ref: ${{ env.OLD_REF }}
           path: old
 
-      - uses: docker/login-action@9780b0c442fbb1117ed29e0efdff246ede52c91f # v3.3.0
+      - uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69a08a9a1f # v3.7.0
+      - uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da # v3.7.0
 
       # Unrolled per component/version (6 explicit build-and-push steps) rather
       # than a matrix or a bash loop calling `docker buildx build` directly —
@@ -717,7 +717,7 @@ jobs:
       # throwaway tag instead of `:latest`/`:sha`.
       - name: Build + push OLD api (from main)
         id: build_old_api
-        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a4 # v6.18.0
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
         with:
           context: old
           file: old/packages/api/Dockerfile
@@ -726,7 +726,7 @@ jobs:
 
       - name: Build + push OLD admin (from main)
         id: build_old_admin
-        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a4 # v6.18.0
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
         with:
           context: old/packages/admin
           file: old/packages/admin/Dockerfile
@@ -735,7 +735,7 @@ jobs:
 
       - name: Build + push OLD storefront (from main)
         id: build_old_storefront
-        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a4 # v6.18.0
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
         with:
           context: old
           file: old/packages/storefront/Dockerfile
@@ -744,7 +744,7 @@ jobs:
 
       - name: Build + push NEW api (from this PR)
         id: build_new_api
-        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a4 # v6.18.0
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
         with:
           context: new
           file: new/packages/api/Dockerfile
@@ -753,7 +753,7 @@ jobs:
 
       - name: Build + push NEW admin (from this PR)
         id: build_new_admin
-        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a4 # v6.18.0
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
         with:
           context: new/packages/admin
           file: new/packages/admin/Dockerfile
@@ -762,7 +762,7 @@ jobs:
 
       - name: Build + push NEW storefront (from this PR)
         id: build_new_storefront
-        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a4 # v6.18.0
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
         with:
           context: new
           file: new/packages/storefront/Dockerfile
