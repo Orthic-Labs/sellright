@@ -5,7 +5,7 @@ import { useToast } from '../components/Toast';
 import { ErrorState, Field, FormSection, InlineAlert, Loading, PageHeader, Spinner } from '../components/ui';
 
 type SmtpConfig = { preset: string; host: string; port: number; secure: boolean; user?: string; from?: string };
-type Status = { envManaged: boolean; config: Partial<SmtpConfig> | null; passwordConfigured: boolean };
+type Status = { envManaged: boolean; config: Partial<SmtpConfig> | null; credentialConfigured: boolean };
 
 const PRESETS = [
   { id: 'custom', label: 'Custom' },
@@ -28,7 +28,7 @@ export default function EmailSettingsPage() {
   }, [data]);
 
   const save = useMutation({
-    mutationFn: () => api.put('/email/settings', { preset: form.preset, host: form.host, port: form.port, secure: form.secure, user: form.user, from: form.from || undefined, password: form.password || undefined }),
+    mutationFn: () => api.put('/email/settings', { preset: form.preset, host: form.host, port: form.port, secure: form.secure, user: form.user, from: form.from || undefined, credential: form.password || undefined }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: key }); setForm((f) => ({ ...f, password: '' })); toast.success('Email settings saved'); },
     onError: (e) => toast.error('Save failed', (e as Error).message),
   });
@@ -61,8 +61,8 @@ export default function EmailSettingsPage() {
             <Field label="Host"><input className="input" value={form.host} onChange={(e) => setForm({ ...form, host: e.target.value })} /></Field>
             <Field label="Port"><input className="input" inputMode="numeric" value={form.port} onChange={(e) => setForm({ ...form, port: Number(e.target.value) || 0 })} /></Field>
             <Field label="Username"><input className="input" value={form.user ?? ''} onChange={(e) => setForm({ ...form, user: e.target.value })} /></Field>
-            <Field label="Password" hint={data.passwordConfigured ? 'A password is already saved — leave blank to keep it.' : undefined}>
-              <input className="input" type="password" placeholder={data.passwordConfigured ? '••••••••' : ''} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+            <Field label="Password" hint={data.credentialConfigured ? 'A password is already saved — leave blank to keep it.' : undefined}>
+              <input className="input" type="password" placeholder={data.credentialConfigured ? '••••••••' : ''} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
             </Field>
             <Field label="From address"><input className="input" type="email" value={form.from ?? ''} onChange={(e) => setForm({ ...form, from: e.target.value })} /></Field>
             <Field label="Use TLS (secure)">

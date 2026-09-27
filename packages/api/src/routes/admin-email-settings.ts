@@ -4,7 +4,7 @@
  * configuration" and this route only supports Test send (against the LIVE
  * env-based mailer), never editing. Only when SMTP_HOST is unset does the
  * per-store DB config (non-secret host/port/secure/preset in store.config,
- * password encrypted in store_secret) become editable.
+ * credential encrypted in store_secret) become editable.
  */
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { eq } from 'drizzle-orm';
@@ -26,7 +26,7 @@ const SmtpConfig = z.object({
   host: z.string(), port: z.number().int().positive(), secure: z.boolean(),
   user: z.string().optional(), from: z.string().email().optional(),
 });
-const Status = z.object({ envManaged: z.boolean(), config: SmtpConfig.partial().nullable(), passwordConfigured: z.boolean() });
+const Status = z.object({ envManaged: z.boolean(), config: SmtpConfig.partial().nullable(), credentialConfigured: z.boolean() });
 
 function smtpConfigFromStore(config: unknown): z.infer<typeof SmtpConfig> | null {
   const smtp = (config as { email?: { smtp?: unknown } } | null)?.email?.smtp;
@@ -43,20 +43,20 @@ adminEmailSettings.openapi(
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c);
     const envManaged = isEnvManaged(env.SMTP_HOST);
-    if (envManaged) return c.json({ envManaged: true, config: null, passwordConfigured: true }, 200);
+    if (envManaged) return c.json({ envManaged: true, config: null, credentialConfigured: true }, 200);
 
     const [row] = await withStore(st.storeId, (tx) => tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1));
     const cfg = smtpConfigFromStore(row?.config);
-    const passwordRows = await withStore(st.storeId, (tx) => tx.select({ last4: s.storeSecret.last4 }).from(s.storeSecret)
+    const credentialRows = await withStore(st.storeId, (tx) => tx.select({ last4: s.storeSecret.last4 }).from(s.storeSecret)
       .where(eq(s.storeSecret.storeId, st.storeId)).limit(1));
-    return c.json({ envManaged: false, config: cfg, passwordConfigured: passwordRows.some((r) => r.last4) }, 200);
+    return c.json({ envManaged: false, config: cfg, credentialConfigured: credentialRows.some((r) => r.last4) }, 200);
   }),
 );
 
 const UpdateBody = z.object({
   preset: z.enum(['custom', 'gmail', 'ses', 'postmark', 'resend']),
   host: z.string().optional(), port: z.number().int().positive().optional(), secure: z.boolean().optional(),
-  user: z.string().optional(), from: z.string().email().optional(), password: z.string().optional(),
+  user: z.string().optional(), from: z.string().email().optional(), credential: z.string().optional(),
 });
 
 adminEmailSettings.openapi(
@@ -84,21 +84,21 @@ adminEmailSettings.openapi(
       detail: () => ({ section: 'email_smtp', preset: b.preset, host: resolved.host, port: resolved.port }),
     });
 
-    if (b.password) {
+    if (b.credential) {
       await withStore(st.storeId, async (tx) => {
-        const scope = scopeFor(st.storeId, 'smtp', 'default', 'password');
-        const sealed = encryptSecret(b.password!, { purpose: purposeKey(scope) });
+        const scope = scopeFor(st.storeId, 'smtp', 'default', 'authCredential');
+        const sealed = encryptSecret(b.credential!, { purpose: purposeKey(scope) });
         await tx.insert(s.storeSecret).values({
-          storeId: st.storeId, provider: 'smtp', mode: 'default', field: 'password',
+          storeId: st.storeId, provider: 'smtp', mode: 'default', field: 'authCredential',
           keyVersion: sealed.v, iv: sealed.iv, ciphertext: sealed.ct, authTag: sealed.tag,
-          last4: computeLast4(b.password!), updatedBy: admin.email,
+          last4: computeLast4(b.credential!), updatedBy: admin.email,
         }).onConflictDoUpdate({
           target: [s.storeSecret.storeId, s.storeSecret.provider, s.storeSecret.mode, s.storeSecret.field],
-          set: { keyVersion: sealed.v, iv: sealed.iv, ciphertext: sealed.ct, authTag: sealed.tag, last4: computeLast4(b.password!), updatedBy: admin.email, updatedAt: new Date() },
+          set: { keyVersion: sealed.v, iv: sealed.iv, ciphertext: sealed.ct, authTag: sealed.tag, last4: computeLast4(b.credential!), updatedBy: admin.email, updatedAt: new Date() },
         });
         await tx.insert(s.auditLog).values({
-          storeId: st.storeId, actor: admin.email, entity: 'store_secret', entityId: 'smtp:default:password',
-          action: 'secret_update', data: { provider: 'smtp', mode: 'default', field: 'password', last4: computeLast4(b.password!) },
+          storeId: st.storeId, actor: admin.email, entity: 'store_secret', entityId: 'smtp:default:authCredential',
+          action: 'secret_update', data: { provider: 'smtp', mode: 'default', field: 'authCredential', last4: computeLast4(b.credential!) },
         });
       });
     }
@@ -128,9 +128,9 @@ adminEmailSettings.openapi(
     const [row] = await withStore(st.storeId, (tx) => tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1));
     const cfg = smtpConfigFromStore(row?.config);
     if (!cfg) return c.json({ delivered: false, error: 'No SMTP settings saved yet' }, 200);
-    const password = await withStore(st.storeId, (tx) => readSecret(tx, scopeFor(st.storeId, 'smtp', 'default', 'password')));
+    const credential = await withStore(st.storeId, (tx) => readSecret(tx, scopeFor(st.storeId, 'smtp', 'default', 'authCredential')));
 
-    const result = await sendTestEmail({ preset: cfg.preset, host: cfg.host, port: cfg.port, secure: cfg.secure, user: cfg.user, pass: password }, to);
+    const result = await sendTestEmail({ preset: cfg.preset, host: cfg.host, port: cfg.port, secure: cfg.secure, user: cfg.user, pass: credential }, to);
     return c.json(result, 200);
   }),
 );

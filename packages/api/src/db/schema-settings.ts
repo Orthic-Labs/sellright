@@ -11,7 +11,7 @@ import { store, ts } from './schema-core.js';
 // 'sezzle' | 'smtp'; `mode` is the provider's own mode discriminator
 // ('test'/'live', 'sandbox'/'production', or 'default' for mode-less
 // providers like SMTP); `field` is the credential name within that
-// provider+mode (e.g. 'secretKey', 'webhookSecret', 'securityKey', 'password').
+// provider+mode (e.g. 'secretKey', 'webhookSecret', 'securityKey', 'authCredential').
 //
 // `keyVersion`/`iv`/`ciphertext`/`authTag` are the EncryptedSecret envelope
 // (see secret-crypto.ts) — base64 strings, opaque to SQL. `last4` is a
