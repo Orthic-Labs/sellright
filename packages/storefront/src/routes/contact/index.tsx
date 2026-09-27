@@ -1,7 +1,7 @@
 import { component$, useSignal, useVisibleTask$, $ } from '@qwik.dev/core';
 import { server$ } from '@qwik.dev/router';
 import { createSEOHead } from '~/utils/seo';
-import { theme, siteUrl } from '~/theme/theme.config';
+import { useStoreIdentityLoader } from '~/routes/layout';
 
 
 const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY || '';
@@ -24,6 +24,7 @@ const submitFormServer = server$(async function(formData: {
 });
 
 export default component$(() => {
+	const identity = useStoreIdentityLoader().value.identity;
 	const name = useSignal('');
 	const email = useSignal('');
 	const subject = useSignal('GENERAL');
@@ -186,16 +187,16 @@ export default component$(() => {
 									<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="w-6 h-6 text-[var(--color-accent)] mt-1 flex-shrink-0"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>
 									<div>
 										<h3 class="font-semibold text-[var(--color-ink)] font-['IBM_Plex_Sans'] text-sm">Email</h3>
-										<p class="text-[#555] font-['IBM_Plex_Sans'] text-sm">{theme.supportEmail}</p>
+										<p class="text-[#555] font-['IBM_Plex_Sans'] text-sm">{identity.supportEmail}</p>
 									</div>
 								</div>
-								{theme.address && (
+								{identity.address && (
 									<div class="flex items-start space-x-4">
 										<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="w-6 h-6 text-[var(--color-accent)] mt-1 flex-shrink-0"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/></svg>
 										<div>
 											<h3 class="font-semibold text-[var(--color-ink)] font-['IBM_Plex_Sans'] text-sm">Address</h3>
 											<p class="text-[#555] font-['IBM_Plex_Sans'] text-sm">
-												{theme.address.streetAddress}<br />{theme.address.addressLocality}, {theme.address.addressRegion} {theme.address.postalCode}
+												{identity.address.streetAddress}<br />{identity.address.addressLocality}, {identity.address.addressRegion} {identity.address.postalCode}
 											</p>
 										</div>
 									</div>
@@ -224,13 +225,15 @@ export default component$(() => {
 	);
 });
 
-export const head = () => {
+export const head = ({ resolveValue }: { resolveValue: any }) => {
+	const identity = resolveValue(useStoreIdentityLoader);
 	return createSEOHead({
 		title: 'Contact & About Us',
-		description: `Get in touch with ${theme.storeName} for product inquiries, support, or questions. Learn about our policies and commitment to quality.`,
+		description: `Get in touch with ${identity.storeName} for product inquiries, support, or questions. Learn about our policies and commitment to quality.`,
 		noindex: false,
-		ogUrl: `${siteUrl}/contact/`,
-		canonical: `${siteUrl}/contact/`,
+		ogUrl: `${identity.siteOrigin}/contact/`,
+		canonical: `${identity.siteOrigin}/contact/`,
+		identity,
 	});
 };
 

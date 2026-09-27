@@ -17,7 +17,7 @@ import { HomeTeeSection } from '~/components/home/HomeTeeSection';
 import { HomeServiceSection, HomeTrustBar } from '~/components/home/HomeSocialSections';
 import Price from '~/components/products/Price';
 import ProductCard from '~/components/products/ProductCard';
-import { theme, siteUrl } from '~/theme/theme.config';
+import { useStoreIdentityLoader } from '~/routes/layout';
 import HeroImage_1024 from '~/media/hero.jpg?format=avif&w=1024&quality=75&url';
 
 // Spotlight section image — 65: decorative/lifestyle, not a purchase decision image
@@ -378,13 +378,15 @@ export default component$(() => {
 
 export const head = ({ resolveValue }: { resolveValue: any }) => {
   const schemas = resolveValue(useOrganizationJsonLd) as unknown as JsonLdSchema[];
+  const identity = resolveValue(useStoreIdentityLoader);
 
   return createSEOHead({
-    title: theme.storeName,
-    description: theme.tagline,
+    title: identity.storeName,
+    description: identity.tagline,
     noindex: false,
-    image: `${siteUrl}${theme.ogImageUrl}`,
-    ogUrl: `${siteUrl}/`,
+    image: `${identity.siteOrigin}${identity.ogImageUrl}`,
+    ogUrl: `${identity.siteOrigin}/`,
+    identity,
     links: [
       { rel: 'preload', as: 'image', type: 'image/avif', href: HeroImage_1024 },
     ],

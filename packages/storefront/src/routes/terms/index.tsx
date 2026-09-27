@@ -1,8 +1,9 @@
 import { component$ } from '@qwik.dev/core';
 import { createSEOHead } from '~/utils/seo';
-import { theme } from '~/theme/theme.config';
+import { useStoreIdentityLoader } from '~/routes/layout';
 
 export default component$(() => {
+	const identity = useStoreIdentityLoader().value.identity;
  return (
  <div class="bg-white min-h-screen">
   <div class="max-w-4xl mx-auto px-4 py-16">
@@ -18,7 +19,7 @@ export default component$(() => {
 
   <h2 class="text-2xl font-bold text-black mt-8 mb-4">Introduction</h2>
   <p>
-   Welcome to {theme.storeName}. These Terms of Service ("Terms") govern your access to and use of our website, products, and services operated by {theme.legalName}. By accessing or using our website, you agree to be bound by these Terms and our Privacy Policy.
+   Welcome to {identity.storeName}. These Terms of Service ("Terms") govern your access to and use of our website, products, and services operated by {identity.legalName}. By accessing or using our website, you agree to be bound by these Terms and our Privacy Policy.
   </p>
   <p>
    Please read these Terms carefully before using our website. If you do not agree to all the terms and conditions of this agreement, you may not access or use our website or services.
@@ -114,7 +115,7 @@ export default component$(() => {
 
   <h2 class="text-2xl font-bold text-black mt-8 mb-4">Intellectual Property</h2>
   <p>
-   Our website and its entire contents, features, and functionality (including but not limited to all information, software, text, displays, images, video, and audio) are owned by {theme.storeName}, its licensors, or other providers of such material and are protected by United States and international copyright, trademark, patent, trade secret, and other intellectual property or proprietary rights laws.
+   Our website and its entire contents, features, and functionality (including but not limited to all information, software, text, displays, images, video, and audio) are owned by {identity.storeName}, its licensors, or other providers of such material and are protected by United States and international copyright, trademark, patent, trade secret, and other intellectual property or proprietary rights laws.
   </p>
 
   <h2 class="text-2xl font-bold text-black mt-8 mb-4">Comprehensive Disclaimer of Warranties</h2>
@@ -131,7 +132,7 @@ export default component$(() => {
 
   <h2 class="text-2xl font-bold text-black mt-8 mb-4">Comprehensive Limitation of Liability</h2>
   <p>
-   TO THE FULLEST EXTENT PERMITTED BY LAW, IN NO EVENT SHALL {theme.storeName.toUpperCase()}, ITS AFFILIATES, OFFICERS, DIRECTORS, EMPLOYEES, AGENTS, LICENSORS, OR SERVICE PROVIDERS BE LIABLE FOR ANY DAMAGES OF ANY KIND, INCLUDING BUT NOT LIMITED TO:
+   TO THE FULLEST EXTENT PERMITTED BY LAW, IN NO EVENT SHALL {identity.storeName.toUpperCase()}, ITS AFFILIATES, OFFICERS, DIRECTORS, EMPLOYEES, AGENTS, LICENSORS, OR SERVICE PROVIDERS BE LIABLE FOR ANY DAMAGES OF ANY KIND, INCLUDING BUT NOT LIMITED TO:
   </p>
   <ul class="list-disc pl-5 space-y-2">
    <li>PERSONAL INJURY, BODILY HARM, OR DEATH</li>
@@ -150,7 +151,7 @@ export default component$(() => {
 
   <h2 class="text-2xl font-bold text-black mt-8 mb-4">Comprehensive Indemnification</h2>
   <p>
-   You agree to defend, indemnify, and hold harmless {theme.storeName}, its affiliates, licensors, service providers, officers, directors, employees, contractors, agents, suppliers, successors, and assigns from and against any and all claims, liabilities, damages, judgments, awards, losses, costs, expenses, or fees (including reasonable attorneys' fees) arising out of or relating to:
+   You agree to defend, indemnify, and hold harmless {identity.storeName}, its affiliates, licensors, service providers, officers, directors, employees, contractors, agents, suppliers, successors, and assigns from and against any and all claims, liabilities, damages, judgments, awards, losses, costs, expenses, or fees (including reasonable attorneys' fees) arising out of or relating to:
   </p>
   <ul class="list-disc pl-5 space-y-2">
    <li>Your purchase, possession, or use of our products</li>
@@ -173,7 +174,7 @@ export default component$(() => {
 
   <h2 class="text-2xl font-bold text-black mt-8 mb-4">Governing Law and Jurisdiction</h2>
   <p>
-   These Terms and any dispute or claim arising out of or related to them, their subject matter, or their formation shall be governed by and construed in accordance with the laws of the jurisdiction in which {theme.legalName} is organized, without giving effect to any choice or conflict of law provision or rule. Any legal action or proceeding arising under these Terms shall be brought exclusively in the courts of that jurisdiction, and you hereby consent to the personal jurisdiction and venue therein.
+   These Terms and any dispute or claim arising out of or related to them, their subject matter, or their formation shall be governed by and construed in accordance with the laws of the jurisdiction in which {identity.legalName} is organized, without giving effect to any choice or conflict of law provision or rule. Any legal action or proceeding arising under these Terms shall be brought exclusively in the courts of that jurisdiction, and you hereby consent to the personal jurisdiction and venue therein.
   </p>
 
   <h2 class="text-2xl font-bold text-black mt-8 mb-4">Severability</h2>
@@ -186,10 +187,10 @@ export default component$(() => {
    If you have any questions about these Terms of Service, please contact us at:
   </p>
   <div class="mt-4">
-   <p><strong>{theme.storeName}</strong></p>
+   <p><strong>{identity.storeName}</strong></p>
    <p>169 Madison Ave STE 15182</p>
    <p>New York, NY 10016</p>
-   <p>Email: {theme.supportEmail}</p>
+   <p>Email: {identity.supportEmail}</p>
    <p>Phone: (609) 997-8106</p>
   </div>
   </div>
@@ -198,12 +199,15 @@ export default component$(() => {
  );
 });
 
-export const head = () =>
- createSEOHead({
+export const head = ({ resolveValue }: { resolveValue: any }) => {
+ const identity = resolveValue(useStoreIdentityLoader);
+ return createSEOHead({
  title: 'Terms of Service',
- description: `Terms of Service for ${theme.storeName}. Rules, guidelines, and agreements for using our website and purchasing our products.`,
+ description: `Terms of Service for ${identity.storeName}. Rules, guidelines, and agreements for using our website and purchasing our products.`,
  noindex: false,
+ identity,
  });
+};
 
 
 
