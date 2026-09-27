@@ -16,10 +16,10 @@ import { adminSettings } from './admin-settings.js';
 
 assertTestDatabase(process.env.DATABASE_URL ?? env.DATABASE_URL, 'admin-system.db.test.ts');
 
-const STORE = 'eeeeeeee-0000-0000-0000-0000000sy01';
+const STORE = 'eeeeeeee-0000-0000-0000-0000000af01';
 const SLUG = 'admin-system-test-store';
-const INSTALL_ADMIN = 'eeeeeeee-0000-0000-0000-0000000sy02';
-const OWNER_ONLY = 'eeeeeeee-0000-0000-0000-0000000sy03';
+const INSTALL_ADMIN = 'eeeeeeee-0000-0000-0000-0000000af02';
+const OWNER_ONLY = 'eeeeeeee-0000-0000-0000-0000000af03';
 
 const app = new OpenAPIHono();
 app.route('/', adminSystem);
