@@ -16,9 +16,14 @@ require_home() {
   [ -f "${SELLRIGHT_HOME}/.env" ] || die "no install found at ${SELLRIGHT_HOME} (run install.sh first, or set SELLRIGHT_HOME)"
 }
 
+# Reads one KEY=value out of deploy/.env WITHOUT sourcing/executing it as
+# shell — sourcing broke on any value containing a space (e.g.
+# BOOTSTRAP_STORE_NAME="Drill Store" parses as an assignment followed by a
+# bareword command) and, more importantly, would execute arbitrary shell
+# metacharacters in any value. Values may be bare or double-quoted.
 env_get() {
-  # shellcheck disable=SC1090,SC1091
-  ( . "${SELLRIGHT_HOME}/.env" && eval "printf '%s' \"\${$1:-}\"" )
+  [ -f "${SELLRIGHT_HOME}/.env" ] || return 0
+  sed -n "s/^$1=//p" "${SELLRIGHT_HOME}/.env" | tail -n 1 | sed -e 's/^"//' -e 's/"$//'
 }
 
 cmd_status() {
