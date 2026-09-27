@@ -44,6 +44,15 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
   const raw = await c.req.text(); // raw body BEFORE json parse — Stripe sig requires it
   let event: Stripe.Event | null = null;
   let verifiedMode: StripeMode | null = null;
+  // SECURITY (post-review fix): set ONLY when a DB-stored (per-store) secret
+  // verified the signature — never for the env fast path, which is a single
+  // shared secret with no per-store identity to bind. When set, the event's
+  // resolved tenant MUST equal this store: the credential holder can sign an
+  // arbitrary body (including a forged metadata.storeId, or a payment/
+  // subscription ref that happens to belong to another store) — without this
+  // check, a store with its OWN legitimately-configured webhook secret could
+  // forge an event that settles/refunds a DIFFERENT store's order.
+  let verifiedStoreId: string | null = null;
   // Fast path: env-configured (global, cross-store) webhook secrets — unchanged
   // from before WS-A, so an existing deployment behaves identically.
   for (const mode of ['test', 'live'] as StripeMode[]) {
@@ -80,6 +89,7 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
         try {
           event = verifyStripeWebhook(raw, sig, secret);
           verifiedMode = mode;
+          verifiedStoreId = sid;
           break outer;
         } catch { /* try the next candidate */ }
       }
@@ -108,6 +118,21 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
     ? await resolveStoreIdForSubscriptionEvent(event.data.object as Parameters<typeof resolveStoreIdForSubscriptionEvent>[0], binding)
     : await resolveStoreIdForStripeEvent(event.data.object as StripeEventObj, binding);
   if (!storeId) return c.json({ error: 'tenant unresolved — retry' }, 503);
+
+  // SECURITY: a DB-stored secret cryptographically proves only "signed by
+  // store X's credential" — never "about store X". A body forging
+  // metadata.storeId (or a payment/subscription ref) to point at a DIFFERENT
+  // store must not be processed against that other store. Ack-and-ignore
+  // (never 503 — retrying can't fix a forged tenant claim) and audit it under
+  // the store whose credential was used, so its owner can see the attempt.
+  if (verifiedStoreId && storeId !== verifiedStoreId) {
+    await withStore(verifiedStoreId, (tx) => tx.insert(s.auditLog).values({
+      storeId: verifiedStoreId!, actor: 'system:webhook', entity: 'store_secret', entityId: 'stripe:webhookSecret',
+      action: 'cross_tenant_signature_rejected',
+      data: { eventId: event.id, eventType: event.type, verifiedStoreId, resolvedStoreId: storeId },
+    })).catch(() => undefined); // best-effort — never let audit logging block the reject
+    return c.json({ received: true }, 200);
+  }
 
   // Zero-cache stock rule: reconcileStripeRefund never owns this transaction
   // (it runs on the `tx` this handler supplies) — it only REPORTS whether a
