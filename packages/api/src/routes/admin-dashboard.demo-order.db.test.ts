@@ -13,11 +13,11 @@ import { adminDashboard } from './admin-dashboard.js';
 
 assertTestDatabase(process.env.DATABASE_URL ?? env.DATABASE_URL, 'admin-dashboard.demo-order.db.test.ts');
 
-const STORE = 'eeeeeeee-0000-0000-0000-0000000da01';
+const STORE = 'eeeeeeee-0000-0000-0000-00000000da01';
 const SLUG = 'demo-order-test-store';
-const OWNER = 'eeeeeeee-0000-0000-0000-0000000da02';
-const ORDER_REAL = 'eeeeeeee-0000-0000-0000-0000000da03';
-const ORDER_DEMO = 'eeeeeeee-0000-0000-0000-0000000da04';
+const OWNER = 'eeeeeeee-0000-0000-0000-00000000da02';
+const ORDER_REAL = 'eeeeeeee-0000-0000-0000-00000000da03';
+const ORDER_DEMO = 'eeeeeeee-0000-0000-0000-00000000da04';
 
 const app = new OpenAPIHono();
 app.route('/', adminDashboard);
