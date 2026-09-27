@@ -878,6 +878,12 @@ jobs:
       POSTGRES_APP_PASSWORD: updrltest9876543210fedcba9876543210fedcba9876543210fedcba98765
       STOREFRONT_URL: https://shop.example.net
       DOWNLOAD_URL_SECRET: abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
+      # WS-B: compose.yaml's api service now requires SELLRIGHT_MASTER_KEY
+      # (previously generated into deploy/.env by install.sh but never
+      # actually wired through to the container — see that fix's commit).
+      # Quoted: an unquoted all-digit YAML scalar is parsed as a number.
+      SELLRIGHT_MASTER_KEY: '1122334455667788112233445566778811223344556677881122334455667788'
+      RECOVERY_KIT_ID: update-drill-recovery-kit
       ADMIN_EMAIL: updrill@example.net
       ADMIN_PASSWORD: updrill-only-long-random-password-12345
       BOOTSTRAP_STORE_SLUG: updrill
@@ -995,6 +1001,8 @@ jobs:
             printf 'POSTGRES_APP_PASSWORD=%s\n' "$POSTGRES_APP_PASSWORD"
             printf 'STOREFRONT_URL=%s\n' "$STOREFRONT_URL"
             printf 'DOWNLOAD_URL_SECRET=%s\n' "$DOWNLOAD_URL_SECRET"
+            printf 'SELLRIGHT_MASTER_KEY=%s\n' "$SELLRIGHT_MASTER_KEY"
+            printf 'RECOVERY_KIT_ID=%s\n' "$RECOVERY_KIT_ID"
             printf 'ADMIN_EMAIL=%s\n' "$ADMIN_EMAIL"
             printf 'ADMIN_PASSWORD=%s\n' "$ADMIN_PASSWORD"
             printf 'BOOTSTRAP_STORE_SLUG=%s\n' "$BOOTSTRAP_STORE_SLUG"
