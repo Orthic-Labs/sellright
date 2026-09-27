@@ -100,7 +100,7 @@ describe('email outbox (REL-4)', () => {
     expect(res.sent).toBe(1);
     expect(res.failed).toBe(0);
     expect(sendEmail).toHaveBeenCalledTimes(1);
-    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({ to: 'buyer@example.com', subject: 'Order confirmed — SR-OK' }));
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({ to: 'buyer@example.com', subject: 'Order confirmed — SR-OK' }), expect.any(String));
 
     const after = await rowStatus(id);
     expect(after.status).toBe('sent');
