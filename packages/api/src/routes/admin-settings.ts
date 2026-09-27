@@ -7,6 +7,7 @@ import { clearAdminTotpSecret, getAdminTotpSecret, setAdminTotpSecret } from '..
 import { isSupportedPaymentMethod } from '../payments/provider.js';
 import { resolveStripeConfigured, stripeModeFromConfig } from '../payments/stripe.js';
 import { invalidateStoreCache } from '../store-context.js';
+import { env } from '../env.js';
 import { generatePreviewToken, hashPreviewToken } from '../store-publish.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireManage, guard } from './admin-helpers.js';
 // Circular with admin-system.ts (which imports mutateStoreConfig from here)
@@ -585,7 +586,7 @@ adminSettings.openapi(
 adminSettings.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/settings/preview-token', summary: 'Issue a new private-preview token (invalidates the previous one)',
-    responses: { 200: { description: 'OK', content: J(z.object({ token: z.string() })) }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: { 200: { description: 'OK', content: J(z.object({ token: z.string(), previewUrl: z.string() })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
@@ -595,8 +596,11 @@ adminSettings.openapi(
       actor: admin.email,
       action: 'issue-preview-token',
     });
-    // The plaintext token exists only in this response — only its hash is persisted.
-    return c.json({ token }, 200);
+    // The plaintext token exists only in this response — only its hash is
+    // persisted. previewUrl saves the onboarding UI (Setup screen 3) from
+    // needing its own STOREFRONT_URL plumbing — layout.tsx reads this exact
+    // query param name (`preview_token`, not `token`).
+    return c.json({ token, previewUrl: `${env.STOREFRONT_URL}/?preview_token=${token}` }, 200);
   }),
 );
 

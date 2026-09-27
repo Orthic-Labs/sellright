@@ -87,13 +87,13 @@ export async function uploadAsset(file: File, alt?: string): Promise<AssetRow> {
 
 // ── shared types ────────────────────────────────────────────────────────────
 export interface StoreAccess { storeId: string; slug: string; name: string; currency: string; role: string; }
-export interface Me { email: string; stores: StoreAccess[]; }
+export interface Me { email: string; isInstallationAdmin: boolean; stores: StoreAccess[]; }
 export interface LoginResp { token?: string; csrfToken?: string; twoFactorRequired?: boolean; admin?: { email: string }; stores?: StoreAccess[]; }
 export interface Page<T> { items: T[]; total: number; page: number; pageSize: number; }
 
-export interface OrderRow { code: string; state: string; isPreOrder?: boolean; grandTotal: number; currency: string; placedAt: string | null; createdAt: string; email: string | null; }
+export interface OrderRow { code: string; state: string; isPreOrder?: boolean; isDemo?: boolean; grandTotal: number; currency: string; placedAt: string | null; createdAt: string; email: string | null; }
 export interface Dashboard {
-  store: { slug: string; name: string; currency: string };
+  store: { slug: string; name: string; currency: string; published: boolean };
   revenue: number; orders: number; aov: number; pendingFulfillment: number; customers: number; lowStock: number;
   recentOrders: OrderRow[];
 }
@@ -124,6 +124,14 @@ export interface CollectionRow { id: string; slug: string; name: string; parentI
 export interface CollectionDetail { id: string; slug: string; name: string; description: string | null; parentId: string | null; products: { id: string; name: string; status: string; position: number }[]; }
 export interface InventoryRow { variantId: string; sku: string; name: string; productName: string; onHand: number; allocated: number; available: number; }
 export interface StockMovementRow { delta: number; reason: string; refOrderId: string | null; createdAt: string; }
+
+// ── one-click install (WS-B) ──────────────────────────────────────────────────
+export interface ChecklistItem { ok: boolean; detail: string; }
+export interface Checklist {
+  products: ChecklistItem; domain: ChecklistItem; payments: ChecklistItem; email: ChecklistItem;
+  shippingAndTax: ChecklistItem; recoveryKit: ChecklistItem; offSiteBackup: ChecklistItem;
+}
+export interface RecoveryKit { kitId: string | null; generatedAt: string; masterKeyPresent: boolean; masterKey: string | null; note: string; }
 
 export function assetUrl(path: string | null): string | null {
   if (!path) return null;

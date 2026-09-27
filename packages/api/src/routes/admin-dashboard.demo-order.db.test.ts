@@ -62,12 +62,13 @@ describe('GET /v1/admin/dashboard — demo-order exclusion', () => {
       headers: { authorization: `Bearer ${token}`, 'x-store-slug': SLUG },
     });
     expect(res.status).toBe(200);
-    const body = await res.json() as { revenue: number; orders: number; aov: number; recentOrders: Array<{ code: string; isDemo: boolean }> };
+    const body = await res.json() as { store: { published: boolean }; revenue: number; orders: number; aov: number; recentOrders: Array<{ code: string; isDemo: boolean }> };
 
     // Only the real order's $100.00 counts — the $999,999.99 demo order does not.
     expect(body.revenue).toBe(10000);
     expect(body.orders).toBe(1);
     expect(body.aov).toBe(10000);
+    expect(body.store.published).toBe(true);
 
     // The raw recent-orders feed still shows both, labeled, so the owner can
     // see the demo flow they just ran — only the aggregate KPIs are gated.
