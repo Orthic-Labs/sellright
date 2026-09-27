@@ -6,6 +6,7 @@ import { pickEmailAppKey, enqueueOrderConfirmation } from '../email/dispatch.js'
 import { normalizeEmail } from '../auth/email.js';
 import { enrollOnPaidOrder } from '../jobs/listmonk-sync.js';
 import { bootstrapAccountAndQueueAccessMail } from '../licensing/account-bootstrap.js';
+import { postEarnForPaidOrder } from '../loyalty/ledger.js';
 
 /** Called only by the transaction that wins the PendingPayment -> Paid transition. */
 export async function enqueuePaidEffects(tx: Tx, storeId: string, orderId: string) {
@@ -24,6 +25,10 @@ export async function enqueuePaidEffects(tx: Tx, storeId: string, orderId: strin
   await bootstrapAccountAndQueueAccessMail(tx, {
     storeId, orderId: order.id, existingCustomerId: order.customerId,
   });
+  // LOYALTY-1: post the points this order earns (snapshot taken at checkout;
+  // registered customers only). Runs after the account bootstrap so a
+  // freshly attached account is credited; idempotent per order.
+  await postEarnForPaidOrder(tx, storeId, order.id, order.placedAt ?? new Date());
   const [customer] = order.customerId
     ? await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, order.customerId)).limit(1) : [];
   const contact = (order.metadata as { contact?: { email?: string } } | null)?.contact;

@@ -430,6 +430,36 @@ export const giftCardTransaction = pgTable('gift_card_transaction', {
   createdAt: ts(),
 });
 
+// Loyalty points ledger (migration 0070, hand-written). APPEND-ONLY: a
+// customer's balance is the SUM of their rows — never a stored counter. A DB
+// trigger rejects UPDATE. Program settings live in store.config.loyalty.
+// Store-scoped (FORCE RLS).
+export const loyaltyLedgerKinds = ['earn', 'redeem', 'reverse', 'adjust', 'expire', 'import'] as const;
+export type LoyaltyLedgerKind = typeof loyaltyLedgerKinds[number];
+export const loyaltyLedger = pgTable('loyalty_ledger', {
+  id: uuid().primaryKey().defaultRandom(),
+  storeId: uuid().notNull().references(() => store.id),
+  customerId: uuid().notNull().references(() => customer.id),
+  kind: text().$type<LoyaltyLedgerKind>().notNull(),
+  points: integer().notNull(), // signed: + credits, − debits (integer points)
+  // Provenance only — NOT foreign keys: ledger rows must survive an order
+  // purge (append-only rows can't be detached, and deleting them would
+  // change a balance).
+  orderId: uuid(),
+  refundId: uuid(),
+  // Deterministic idempotency key for system postings (unique per store when
+  // set): earn:<order>, redeem:<order>, <refund|cancel>:<id>:<leg>, import:...
+  sourceRef: text(),
+  expiresAt: timestamp({ withTimezone: true }), // credit lots only; null = never
+  // Reversal that could not be fully posted because the customer had already
+  // spent the points — recorded, never allowed to drive the balance negative.
+  shortfall: integer().notNull().default(0),
+  reason: text(),
+  actor: text(),
+  metadata: jsonb(),
+  createdAt: ts(),
+});
+
 // Return / exchange requests (RMA). Approval restocks + records a refund through
 // the existing refund machinery. Store-scoped (RLS).
 export const returnRequest = pgTable('return_request', {

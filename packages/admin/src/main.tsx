@@ -44,6 +44,7 @@ import Activity from './pages/Activity';
 import SettingsPage from './pages/Settings';
 import Returns from './pages/Returns';
 import GiftCards from './pages/GiftCards';
+import Loyalty from './pages/Loyalty';
 import Webhooks from './pages/Webhooks';
 import Locations from './pages/Locations';
 import TaxZones from './pages/TaxZones';
@@ -95,6 +96,7 @@ function App() {
         <Route path="/activity" element={<Activity />} />
         <Route path="/returns" element={<Returns />} />
         <Route path="/gift-cards" element={<GiftCards />} />
+        <Route path="/loyalty" element={<Loyalty />} />
         <Route path="/locations" element={<Locations />} />
         <Route path="/tax-zones" element={<TaxZones />} />
         <Route path="/currency-rates" element={<CurrencyRates />} />

@@ -237,6 +237,8 @@ export interface SrCreatedOrder {
   // Checkout-migration: discountTotal / coupon / gift-card / receipt token. The
   // receiptToken scopes the public confirmation read (carried as ?rt=).
   discountTotal?: number; couponApplied?: boolean; giftCardApplied?: number; receiptToken?: string;
+  /** Points spent on this order and the discount they bought (cents). */
+  pointsRedeemed?: number; pointsDiscount?: number;
 }
 export const srCreateOrder = (body: unknown, opts?: { idempotencyKey?: string }) =>
   sr<SrCreatedOrder>('/v1/shop/checkout', {
@@ -522,6 +524,46 @@ export const srMergeCart = (token: string, expectedRevision: number) =>
 
 /** GET /v1/shop/config — public runtime config: which tender paths the store
  *  actually has configured (never expose methods that would 409 at payment). */
+/** Public points-program terms (GET /v1/shop/config `loyalty`). */
+export interface SrLoyaltyProgram {
+  enabled: boolean;
+  earnRatePerDollar: number;
+  pointsPerDollarOff: number;
+  minRedeemPoints: number;
+  maxRedeemPercentOfSubtotal: number | null;
+  expiryDays: number | null;
+}
+
+/** GET /v1/shop/account/loyalty — the signed-in customer's points. */
+export interface SrAccountLoyalty {
+  program: SrLoyaltyProgram;
+  currency: string;
+  balance: number;
+  available: number;
+  /** Cents the available points are worth. */
+  availableValue: number;
+  activity: Array<{ kind: string; points: number; createdAt: string; expiresAt: string | null; orderCode: string | null }>;
+}
+export const srAccountLoyalty = () => sr<SrAccountLoyalty>('/v1/shop/account/loyalty');
+
+/** Display-only estimate (the server computes the real number at checkout):
+ *  points earned on `eligibleCents` of merchandise after discounts. */
+export const estimatePointsEarned = (eligibleCents: number, program: SrLoyaltyProgram | null | undefined): number =>
+  program?.enabled && eligibleCents > 0 ? Math.floor((Math.floor(eligibleCents) * program.earnRatePerDollar) / 100) : 0;
+
+/** Display-only preview of a redemption, mirroring the server's rules
+ *  (cap, minimum, only the points the discount costs). */
+export const previewRedemption = (
+  requested: number, available: number, discountableCents: number, program: SrLoyaltyProgram | null | undefined,
+): { points: number; discountCents: number } | null => {
+  if (!program?.enabled || !(requested > 0) || requested > available || requested < program.minRedeemPoints) return null;
+  const cap = program.maxRedeemPercentOfSubtotal == null ? discountableCents : Math.floor((discountableCents * program.maxRedeemPercentOfSubtotal) / 100);
+  const discountCents = Math.min(Math.floor((requested * 100) / program.pointsPerDollarOff), Math.max(0, cap));
+  if (discountCents <= 0) return null;
+  const points = Math.min(requested, Math.ceil((discountCents * program.pointsPerDollarOff) / 100));
+  return points >= program.minRedeemPoints ? { points, discountCents } : null;
+};
+
 export interface SrShopConfig {
   stripeMode: 'test' | 'live';
   stripePublishableKey: string | null;
@@ -532,6 +574,8 @@ export interface SrShopConfig {
     nmi: { tokenizationKey: string; mode: 'test' | 'live'; environment?: 'sandbox' | 'production' } | null;
     sezzle: boolean;
   };
+  /** Points program terms; null/absent while the program is off. */
+  loyalty?: SrLoyaltyProgram | null;
 }
 export const srShopConfig = () => sr<SrShopConfig>('/v1/shop/config');
 

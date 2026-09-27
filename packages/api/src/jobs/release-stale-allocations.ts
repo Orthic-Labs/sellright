@@ -30,6 +30,7 @@ import { sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
+import { releaseOrderLoyalty } from '../loyalty/ledger.js';
 
 export type ReleaseStaleOpts = { apply: boolean; ttlMin: number; log?: (m: string) => void; batchLimit?: number };
 
@@ -118,6 +119,10 @@ export async function releaseStaleAllocations(opts: ReleaseStaleOpts): Promise<{
         await tx.execute(
           sql`UPDATE "order" SET state = 'Cancelled', updated_at = now() WHERE id IN ${orderIds}`,
         );
+        // LOYALTY-1: an unpaid order that times out gives its reserved
+        // points back (payment failed/abandoned). No-op for orders without
+        // loyalty rows; idempotent per order.
+        for (const id of orderIds) await releaseOrderLoyalty(tx, st.id, id, 'system:reservation-expiry');
         await tx.insert(s.auditLog).values(
           stale.map((o) => ({
             storeId: st.id, actor: 'system:reservation-expiry', entity: 'order', entityId: o.id,

@@ -18,6 +18,22 @@ function actionToTypeValue(actions: Array<{ code: string; args?: Array<{ name: s
 
 import type { ImportContext } from './context.js';
 
+type SourceAction = { code: string; args?: Array<{ name: string; value: string }> };
+const DISCOUNT_ACTIONS = new Set(['order_percentage_discount', 'order_fixed_discount']);
+
+/** How a source promotion's action list maps onto the single-action target
+ *  model. Exported for unit tests. */
+export function classifyPromotionActions(actions: SourceAction[]): 'single' | 'account_credit' | 'multi_action' | 'unsupported' {
+  if (!Array.isArray(actions) || actions.length === 0) return 'unsupported';
+  if (actions.some((a) => a?.code === 'account_credit_discount')) return 'account_credit';
+  if (actions.length === 1) return 'single';
+  const codes = actions.map((a) => a?.code);
+  const discounts = codes.filter((c) => DISCOUNT_ACTIONS.has(c)).length;
+  const freeShipping = codes.filter((c) => c === 'free_shipping').length;
+  if (actions.length === 2 && discounts === 1 && freeShipping === 1) return 'multi_action';
+  return 'unsupported';
+}
+
 export async function importCatalog(ctx: ImportContext): Promise<void> {
   const { tx, q } = ctx;
   const LANG = 'en';
@@ -180,13 +196,24 @@ export async function importCatalog(ctx: ImportContext): Promise<void> {
     }
 
     // --- promotions (coupon-code based) ---
+    // Two source shapes are recorded as reviewed exclusions instead of
+    // failing the run: account_credit_discount promotions (the source's old
+    // store-credit mechanism — balances move to the points ledger in
+    // import/loyalty.ts) and multi-action promotions (a discount PLUS free
+    // shipping), which the single-action target promotion model cannot
+    // represent without silently dropping one of the two benefits.
     let promoCount = 0;
+    const skippedCredit: string[] = [];
+    const skippedMulti: string[] = [];
     for (const pr of await q(
       `SELECT id, "couponCode" AS code, conditions, actions, "startsAt" AS starts, "endsAt" AS ends,
               "usageLimit" AS uselimit, "perCustomerUsageLimit" AS percust, "priorityScore" AS prio
        FROM promotion WHERE enabled = true AND "deletedAt" IS NULL `,
     )) {
       const actions = typeof pr.actions === 'string' ? JSON.parse(pr.actions) : pr.actions;
+      const shape = classifyPromotionActions(actions);
+      if (shape === 'account_credit') { skippedCredit.push(String(pr.id)); continue; }
+      if (shape === 'multi_action') { skippedMulti.push(String(pr.id)); continue; }
       const tv = actionToTypeValue(actions);
       if (!tv || actions.length !== 1) throw new Error('Unsupported promotion action: ' + pr.id);
       const conditions = typeof pr.conditions === 'string' ? JSON.parse(pr.conditions) : pr.conditions;
@@ -202,6 +229,12 @@ export async function importCatalog(ctx: ImportContext): Promise<void> {
       });
       promoCount++;
     }
+    if (skippedCredit.length) ctx.exclusions.push({ type: 'unmappable-source-row', table: 'promotion',
+      detail: `account_credit_discount promotions skipped (legacy store-credit mechanism; balances import as loyalty points): ${skippedCredit.join(',')}`,
+      count: skippedCredit.length });
+    if (skippedMulti.length) ctx.exclusions.push({ type: 'unmappable-source-row', table: 'promotion',
+      detail: `multi-action promotions (order discount + free shipping) skipped; target promotions carry one action — recreate manually: ${skippedMulti.join(',')}`,
+      count: skippedMulti.length });
 
     // --- collections (skip root; parent->null if parent is root) ---
     const rootRows = await q(`SELECT id FROM collection WHERE "isRoot"=true`);

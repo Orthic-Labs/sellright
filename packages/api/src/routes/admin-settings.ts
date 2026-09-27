@@ -52,7 +52,7 @@ interface SettingsAudit {
  *  values without waiting for TTL. Slug + config are read in one locked txn so
  *  the lock guarantees the slug is consistent with the row we just mutated —
  *  a stale slug could leave a host cache entry pointed at the wrong store. */
-async function mutateStoreConfig(
+export async function mutateStoreConfig(
   storeId: string,
   mutate: (config: Record<string, unknown>) => Record<string, unknown>,
   audit?: SettingsAudit,

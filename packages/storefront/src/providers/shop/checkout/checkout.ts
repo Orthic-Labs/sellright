@@ -44,6 +44,8 @@ export interface SrCheckoutForm {
 	shippingMethodCode?: string;
 	couponCode?: string;
 	giftCardCode?: string;
+	/** Loyalty points to spend (signed-in shoppers). Re-validated server-side. */
+	redeemPoints?: number;
 }
 
 /** One Idempotency-Key per checkout attempt. Retries of the SAME attempt reuse
@@ -80,6 +82,7 @@ export const placeOrder = async (form: SrCheckoutForm): Promise<SrCreatedOrder> 
 		shippingMethodCode: form.shippingMethodCode,
 		couponCode: form.couponCode,
 		giftCardCode: form.giftCardCode,
+		...(form.redeemPoints && form.redeemPoints > 0 ? { redeemPoints: form.redeemPoints } : {}),
 	};
 	if (cart) {
 		body.cartToken = cart.token;

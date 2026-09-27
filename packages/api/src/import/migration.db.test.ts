@@ -638,4 +638,75 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     expect(details).toContain('fulfillment refs exceed ordered quantity');
     expect(details).toContain('sentinel transactionId');
   });
+
+  it('maps store-credit balances to loyalty points and excludes legacy credit / multi-action promotions', async () => {
+    await resetSource('rh', 'r' + randomUUID().slice(0, 8));
+    const client = await sourcePool.connect();
+    try {
+      await client.query(TABLE('account_credit', ['id int PRIMARY KEY', '"promotionId" int', '"emailNormalized" varchar(320)',
+        '"currencyCode" varchar(3)', '"initialAmount" int', 'balance int', 'disabled boolean']));
+      await client.query(TABLE('account_credit_transaction', ['id int PRIMARY KEY', '"accountCreditId" int', 'kind varchar(16)',
+        'status varchar(16)', 'amount int']));
+      await client.query(`INSERT INTO promotion VALUES
+        (20, 'CREDIT-1', '[]', '[{"code":"account_credit_discount","args":[]}]', NULL, NULL, NULL, NULL, 0, true, NULL),
+        (21, 'BUNDLE', '[]', '[{"code":"order_percentage_discount","args":[{"name":"discount","value":"15"}]},{"code":"free_shipping","args":[]}]', NULL, NULL, NULL, NULL, 0, true, NULL),
+        (22, 'PLAIN5', '[]', '[{"code":"order_fixed_discount","args":[{"name":"amount","value":"500"}]}]', NULL, NULL, NULL, NULL, 0, true, NULL)`);
+      await client.query(`INSERT INTO account_credit VALUES
+        (1, 20, 'buyer@example.com', 'USD', 5000, 2550, false),
+        (2, 20, 'stranger@example.com', 'USD', 1000, 1000, false),
+        (3, 20, 'buyer@example.com', 'USD', 900, 900, true),
+        (4, 20, 'buyer@example.com', 'USD', 700, 0, false)`);
+      await client.query(`INSERT INTO account_credit_transaction VALUES (1, 1, 'RESERVE', 'PENDING', 100), (2, 1, 'ISSUE', 'SETTLED', 5000)`);
+    } finally { client.release(); }
+    const storeId = randomUUID();
+    const f = await fixtureConfig(storeId, { stripe: { accountId: 'acct_rh', mode: 'live' } });
+    const config = { ...f.config, loyalty: { enabled: true, earnRatePerDollar: 1, pointsPerDollarOff: 100, minRedeemPoints: 0,
+      maxRedeemPercentOfSubtotal: null, expiryDays: null } };
+    const dry = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config, manifestPath: f.manifestPath });
+    const applied = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config,
+      manifestPath: f.applyManifestPath, apply: true, expectedDigest: dry.sourceDigest });
+    expect(applied.applied).toBe(true);
+
+    // Only the single-action promotion imports; the other two are exclusions.
+    const promos = await targetRows(storeId, 'promotion', 'ORDER BY code');
+    expect(promos.map(p => p.code)).toEqual(['PLAIN5']);
+
+    // 2550 cents at 100 points per $1 → 2550 points, one import row.
+    const ledger = await targetRows(storeId, 'loyalty_ledger');
+    expect(ledger).toHaveLength(1);
+    const customer = await targetOne(storeId, 'customer');
+    expect(ledger[0]).toMatchObject({ kind: 'import', points: 2550, customer_id: customer.id, order_id: null });
+    expect(ledger[0]!.source_ref).toBe('import:account_credit:vendure:test:1');
+    const store = await targetOne(storeId, 'store');
+    expect(store.config.loyalty.pointsPerDollarOff).toBe(100);
+
+    const manifest = JSON.parse(await readFile(f.applyManifestPath, 'utf8'));
+    const ex = manifest.exclusions as Array<{ type: string; table: string; detail: string; count?: number }>;
+    const find = (re: RegExp) => ex.find((e) => re.test(e.detail));
+    expect(find(/account_credit_discount/)).toMatchObject({ table: 'promotion', count: 1 });
+    expect(find(/multi-action/)).toMatchObject({ table: 'promotion', count: 1 });
+    expect(find(/matches no imported customer/)).toMatchObject({ table: 'account_credit', count: 1 });
+    expect(find(/disabled store credits/)).toMatchObject({ table: 'account_credit', count: 1 });
+    expect(find(/pending store-credit reservations/)).toMatchObject({ table: 'account_credit', count: 1 });
+
+    // Restore removes the imported ledger rows with the rest of the tenant.
+    const restored = await restoreMigration({ targetUrl: TARGET_URL, manifest: manifest, apply: true });
+    expect(restored.restored).toBe(true);
+    expect(await targetRows(storeId, 'loyalty_ledger')).toEqual([]);
+  });
+
+  it('lists — does not import — store-credit balances when no points rate is configured', async () => {
+    await resetSource('rh', 'r' + randomUUID().slice(0, 8));
+    const client = await sourcePool.connect();
+    try {
+      await client.query(TABLE('account_credit', ['id int PRIMARY KEY', '"emailNormalized" varchar(320)', '"currencyCode" varchar(3)', 'balance int', 'disabled boolean']));
+      await client.query(`INSERT INTO account_credit VALUES (1, 'buyer@example.com', 'USD', 1200, false)`);
+    } finally { client.release(); }
+    const storeId = randomUUID();
+    const f = await fixtureConfig(storeId, { stripe: { accountId: 'acct_rh', mode: 'live' } });
+    const dry = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config, manifestPath: f.manifestPath });
+    const detail = dry.exclusions.find((e) => e.table === 'account_credit' && /NOT imported/.test(e.detail));
+    expect(detail).toMatchObject({ count: 1 });
+    expect(detail!.detail).toContain('1200 cents');
+  });
 });

@@ -1,6 +1,7 @@
 import { $, component$, type Signal } from '@qwik.dev/core';
 import CartContents from '~/components/cart-contents/CartContents';
 import CartTotals from '~/components/cart-totals/CartTotals';
+import { LoyaltyRedeem } from '~/components/loyalty/LoyaltyRedeem';
 
 interface CheckoutOrderSummaryProps {
   formattedTotal: Signal<string | null>;
@@ -9,6 +10,8 @@ interface CheckoutOrderSummaryProps {
   pageLoading: Signal<boolean>;
   promoExpanded: Signal<boolean>;
   shippingCents: Signal<number | null>;
+  /** Loyalty points the shopper chose to spend (0 = none). */
+  redeemPoints: Signal<number>;
 }
 
 export const CheckoutOrderSummary = component$<CheckoutOrderSummaryProps>((props) => (
@@ -103,6 +106,13 @@ export const CheckoutOrderSummary = component$<CheckoutOrderSummaryProps>((props
             />
           )}
         </div>
+        {!props.pageLoading.value && (
+          <LoyaltyRedeem
+            redeemPoints={props.redeemPoints}
+            discountableCents={Math.max(0, (props.localCart?.localCart?.subTotal || 0) - (props.localCart?.appliedCoupon?.discountAmount || 0))}
+            currencyCode={props.localCart?.localCart?.currencyCode || 'USD'}
+          />
+        )}
       </div>
     </div>
   </div>

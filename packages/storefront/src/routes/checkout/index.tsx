@@ -51,6 +51,9 @@ const CheckoutContent = component$(() => {
   const pageLoading = useSignal(true);
   const paymentComplete = useSignal(false);
   const promoExpanded = useSignal(false);
+  // Loyalty points to spend on this order (0 = none) — set by LoyaltyRedeem,
+  // re-validated server-side at order creation.
+  const redeemPoints = useSignal(0);
 
   const isCartEmpty = useSignal(true);
 
@@ -327,6 +330,7 @@ const CheckoutContent = component$(() => {
           shippingMethodCode: shippingMethod.value?.code,
           billingAddress: checkoutValidation.useDifferentBilling ? (appState.billingAddress as any) : undefined,
           couponCode: localCart.appliedCoupon?.code,
+          redeemPoints: redeemPoints.value > 0 ? redeemPoints.value : undefined,
         };
         const phase = await (useGateway ? placeOrderGateway(form) : placeOrderStripe(form));
         if (phase === 'paid') {
@@ -430,6 +434,7 @@ const CheckoutContent = component$(() => {
       onStripeProcessingChange$={onStripeProcessingChange$}
       pageLoading={pageLoading}
       promoExpanded={promoExpanded}
+      redeemPoints={redeemPoints}
       selectedPaymentMethod={selectedPaymentMethod}
       sezzleTriggerSignal={sezzleTriggerSignal}
       shippingCents={shippingCents}

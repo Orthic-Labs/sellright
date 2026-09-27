@@ -22,6 +22,10 @@ export interface TotalsInput {
   shippingTaxInclusive?: boolean;
   taxInclusive?: boolean; // true = line/shipping prices already include tax (extract, don't add)
   promotion?: Promotion | null;
+  /** Loyalty-points discount in cents, applied AFTER the promotion and BEFORE
+   *  tax (capped at the remaining merchandise subtotal). Distributed across
+   *  lines with the largest-remainder method and folded into lineDiscount. */
+  pointsDiscount?: number;
 }
 
 export interface LineTotals {
@@ -39,6 +43,8 @@ export interface OrderTotals {
   shippingTotal: number;
   taxTotal: number;
   grandTotal: number;
+  /** Portion of discountTotal that came from loyalty points (cents). */
+  pointsDiscount: number;
 }
 
 const roundHalfUp = (n: number): number => Math.round(n);
@@ -85,6 +91,17 @@ export function calculateOrderTotals(input: TotalsInput): OrderTotals {
     perLineDiscount = distributeLargestRemainder(target, lineSubtotals);
   }
 
+  // Loyalty points: a fixed-cents discount on what the promotion left, so it
+  // can never push a line (or the order) below zero and is taxed like any
+  // other discount (i.e. tax is computed on the reduced subtotal).
+  const afterPromo = lineSubtotals.map((s, i) => s - perLineDiscount[i]!);
+  const remaining = afterPromo.reduce((a, x) => a + x, 0);
+  const pointsDiscount = Math.min(Math.max(0, Math.floor(input.pointsDiscount ?? 0)), Math.max(0, remaining));
+  if (pointsDiscount > 0) {
+    const share = distributeLargestRemainder(pointsDiscount, afterPromo);
+    perLineDiscount = perLineDiscount.map((d, i) => d + share[i]!);
+  }
+
   const lines: LineTotals[] = input.lines.map((l, i) => {
     const lineSubtotal = lineSubtotals[i]!;
     const lineDiscount = perLineDiscount[i]!;
@@ -122,5 +139,5 @@ export function calculateOrderTotals(input: TotalsInput): OrderTotals {
   // discount/tax inputs produced it.
   const grandTotal = Math.max(0, grandTotalRaw);
 
-  return { lines, subtotal, discountTotal, shippingTotal, taxTotal, grandTotal };
+  return { lines, subtotal, discountTotal, shippingTotal, taxTotal, grandTotal, pointsDiscount };
 }

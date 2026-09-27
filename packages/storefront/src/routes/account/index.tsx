@@ -8,6 +8,7 @@ import PencilSquareIcon from '~/components/icons/PencilSquareIcon';
 import ShieldCheckIcon from '~/components/icons/ShieldCheckIcon';
 import XMarkIcon from '~/components/icons/XMarkIcon';
 import { Modal } from '~/components/modal/Modal';
+import { LoyaltyBalanceCard } from '~/components/loyalty/LoyaltyBalanceCard';
 import { APP_STATE } from '~/constants';
 import {
 	requestUpdateCustomerEmailAddressMutation,
@@ -126,6 +127,8 @@ export default component$(() => {
 			)}
 
 			{/* Quick Stats Panel */}
+			<LoyaltyBalanceCard />
+
 			<div class="mb-8">
 				<div class="grid grid-cols-1 md:grid-cols-3 gap-6">
 					{/* Total Orders Stat */}

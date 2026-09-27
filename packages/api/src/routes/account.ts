@@ -464,6 +464,9 @@ account.openapi(
       await tx.update(s.license).set({ customerId: null }).where(eq(s.license.customerId, cust.id));
 
       // Hard-delete PII-bearing / access-granting rows.
+      // Loyalty points are personal, non-transferable value: erasure forfeits
+      // them. The ledger is append-only (UPDATE rejected), so the rows go.
+      await tx.delete(s.loyaltyLedger).where(eq(s.loyaltyLedger.customerId, cust.id));
       await tx.delete(s.paymentMethod).where(eq(s.paymentMethod.customerId, cust.id));
       await tx.delete(s.customerToken).where(eq(s.customerToken.customerId, cust.id));
       await tx.delete(s.session).where(eq(s.session.customerId, cust.id));

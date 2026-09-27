@@ -24,6 +24,7 @@ interface CheckoutPageViewProps {
   onStripeProcessingChange$: QRL<(processing: boolean) => void>;
   pageLoading: Signal<boolean>;
   promoExpanded: Signal<boolean>;
+  redeemPoints: Signal<number>;
   selectedPaymentMethod: Signal<string>;
   sezzleTriggerSignal: Signal<number>;
   shippingCents: Signal<number | null>;
@@ -55,6 +56,7 @@ export const CheckoutPageView = component$<CheckoutPageViewProps>((props) => (
               localCart={props.localCart}
               pageLoading={props.pageLoading}
               promoExpanded={props.promoExpanded}
+              redeemPoints={props.redeemPoints}
               shippingCents={props.shippingCents}
             />
             <CheckoutPaymentPanel {...props} />

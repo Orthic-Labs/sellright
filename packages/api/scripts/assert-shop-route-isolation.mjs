@@ -16,6 +16,7 @@ const ROUTES = fileURLToPath(new URL('../src/routes/', import.meta.url));
 // Every shop-surface / public route a customer or unauthenticated request reaches.
 const SHOP_ROUTES = [
   'account.ts',
+  'loyalty.ts',
   'auth.ts',
   'cart.ts',
   'catalog.ts',

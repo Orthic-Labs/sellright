@@ -8,6 +8,7 @@ import { ServerCartService } from '~/services/ServerCartService';
 import { formatPrice } from '~/utils';
 import TrashIcon from '../icons/TrashIcon';
 import Alert from '../alert/Alert';
+import { LoyaltyEarnHint } from '../loyalty/LoyaltyEarnHint';
 import { useLocalCart } from '~/contexts/CartContext';
 
 export default component$<{
@@ -332,6 +333,7 @@ export default component$<{
 						{shippingKnown.value ? formatPrice(shipping.value || 0, currencyCode) : 'Calculated at next step'}
 					</dd>
 				</div>
+				<LoyaltyEarnHint eligibleCents={orderTotalAfterDiscount.value} dark />
 			</dl>
 		);
 	}
@@ -417,6 +419,7 @@ export default component$<{
 				<dt class="font-medium">Total</dt>
 				<dd class="font-medium text-gray-900">{formatPrice(total.value, currencyCode)}</dd>
 			</div>
+			<LoyaltyEarnHint eligibleCents={orderTotalAfterDiscount.value} />
 		</dl>
 	);
 });

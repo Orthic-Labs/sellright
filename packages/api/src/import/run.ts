@@ -12,6 +12,8 @@ import { importOrders } from './orders.js';
 import { importHistory } from './history.js';
 import { importSettings } from './settings.js';
 import { importBusiness } from './business.js';
+import { importLoyalty } from './loyalty.js';
+import { LoyaltySettingsSchema, loyaltySettingsFromConfig } from '../money/loyalty.js';
 import { assertSourceSchema, introspectSource, unmappedCustomFields } from './source-schema.js';
 import { canonical, digest, readPrivateJson, writePrivateJson, stageVendureAssets } from './artifacts.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
@@ -24,12 +26,20 @@ export const migrationConfig = z.object({
   // mode is optional: an account mapping WITHOUT a declared mode is not a
   // verified historical mapping — affected payments quarantine (SR-03).
   gatewayAccounts: z.record(z.string(), z.object({ accountId: z.string().min(1), mode: z.enum(['test', 'live']).optional() })),
+  // Optional loyalty program for the target store (merged into
+  // store.config.loyalty). Source store-credit balances are converted into
+  // points at its pointsPerDollarOff; without it (and without an existing
+  // target loyalty block) balances are listed as exclusions, not imported.
+  loyalty: LoyaltySettingsSchema.optional(),
 }).strict();
 type Config = z.infer<typeof migrationConfig>;
 export const MIGRATION_TABLES = ['asset', 'product', 'product_option_group', 'product_option', 'product_variant', 'variant_option',
   'stock', 'location', 'stock_location', 'promotion', 'collection', 'collection_product', 'product_asset', 'variant_asset',
   'customer', 'address', 'order', 'order_line', 'payment', 'fulfillment', 'fulfillment_line', 'refund', 'refund_line',
   'promotion_usage', 'shipping_method', 'tax_zone', 'blog_post', 'affiliate', 'affiliate_settle', 'subscriber',
+  // Store-credit balances → points (import/loyalty.ts). References customer,
+  // so it sits after it (restore deletes in reverse order).
+  'loyalty_ledger',
   // Trigger-written during import: a stock insert that takes a variant from
   // unavailable to available enqueues a pending restock_event (migration 0049
   // stock_restock_event trigger). It is part of the migration's written
@@ -96,6 +106,7 @@ export async function runMigration(input: {
     const tx = drizzle(target, { schema, casing: 'snake_case' }) as Tx;
     const configBefore = beforeStore[0]?.config ?? {};
     const storeConfig = { ...configBefore, storefrontUrl: config.storefrontUrl,
+      ...(config.loyalty ? { loyalty: config.loyalty } : {}),
       payments: Object.fromEntries(Object.keys(config.gatewayAccounts).map(method => [method, true])),
       paymentAccounts: Object.fromEntries(Object.entries(config.gatewayAccounts).map(([method, account]) => [method, account.accountId])),
       // SR-03: the migrated store's Stripe mode is the reviewed account profile's
@@ -109,7 +120,8 @@ export async function runMigration(input: {
       currency: config.currency, taxInclusive: channels[0]!.pricesIncludeTax,
       config: storeConfig,
     }).onConflictDoUpdate({ target: schema.store.id, set: { taxInclusive: channels[0]!.pricesIncludeTax, config: storeConfig } });
-    const ctx: ImportContext = { tx, source, q, ...config, sourceColumns, exclusions,
+    const { loyalty: loyaltyConfig, ...phaseConfig } = config;
+    const ctx: ImportContext = { tx, source, q, ...phaseConfig, sourceColumns, exclusions,
       id: (entity, id) => migrationId(config.storeId, config.sourceKey, entity, id) };
     await importCatalog(ctx);
     // Business records run before orders so affiliate-linked source promotions
@@ -118,6 +130,10 @@ export async function runMigration(input: {
     await importCustomers(ctx);
     await importOrders(ctx);
     await importHistory(ctx);
+    // Only an EXPLICIT program (migration config or a pre-existing target
+    // store.config.loyalty) sets the conversion rate — never the defaults.
+    const loyaltyRaw = loyaltyConfig ?? (storeConfig as { loyalty?: unknown }).loyalty;
+    await importLoyalty(ctx, loyaltyRaw ? loyaltySettingsFromConfig({ loyalty: loyaltyRaw }) : null);
     await importSettings(ctx);
     const assetRows = await q('SELECT id, source, preview FROM asset ORDER BY id');
     const assets = await stageVendureAssets(config.sourceAssetRoot, config.targetAssetRoot, config.storeId,
