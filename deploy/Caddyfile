@@ -8,3 +8,19 @@
         header_up X-Real-IP {remote_host}
     }
 }
+
+# TODO(WS-C): the storefront still bakes its API URL/theme in at build time
+# (see packages/storefront/Dockerfile), so today it only serves usefully as a
+# second, separately-built image pointed at THIS deployment's API. Once WS-C
+# lands per-store runtime settings, one generic storefront image can share a
+# host with the admin (e.g. admin at a subpath) instead of needing its own
+# domain. Until then this block is opt-in: it only binds when
+# SELLRIGHT_STOREFRONT_DOMAIN is set in deploy/.env, so installs that don't
+# set it get byte-identical behavior to before the storefront service existed.
+{$SELLRIGHT_STOREFRONT_DOMAIN:-:8090} {
+    encode zstd gzip
+
+    reverse_proxy storefront:4100 {
+        header_up X-Real-IP {remote_host}
+    }
+}
