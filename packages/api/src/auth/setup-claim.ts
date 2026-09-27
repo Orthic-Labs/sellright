@@ -11,9 +11,9 @@
  *
  * Concurrency: two requests racing to claim with the DIFFERENCE tokens
  * cannot happen (issueSetupClaimToken invalidates every prior unused token
- * before minting a new one, and /v1/setup/* 404s once an installation admin
- * exists — see requireNoInstallationAdmin). Two requests racing with the
- * SAME token are decided by the atomic `UPDATE ... WHERE used_at IS NULL
+ * before minting a new one, and /v1/setup/* 404s once ANY admin_user exists
+ * — see hasAnyAdmin()). Two requests racing with the SAME token are decided
+ * by the atomic `UPDATE ... WHERE used_at IS NULL
  * RETURNING id`: Postgres row-level locking on that UPDATE means exactly one
  * concurrent transaction observes a returned row; the loser sees zero rows
  * and fails with InvalidClaimTokenError. The partial unique index added in
@@ -40,16 +40,35 @@ export function hashClaimToken(token: string): string {
   return createHash('sha256').update(token, 'utf8').digest('hex');
 }
 
-/** True once any admin_user holds installation-wide authority. Every
- *  `/v1/setup/*` route (claim, and any future setup-status endpoint) MUST
- *  check this first and 404 when true — the setup surface does not exist
- *  after claiming (plan §1.4). */
+/** True once any admin_user holds installation-wide authority. NOT the right
+ *  check for "has this install been claimed" — see hasAnyAdmin() below, which
+ *  every `/v1/setup/*` route actually gates on. Kept for callers that
+ *  genuinely need the installation-admin fact itself (e.g. tests asserting a
+ *  claim succeeded). */
 export async function hasInstallationAdmin(): Promise<boolean> {
   const [row] = await db
     .select({ id: s.adminUser.id })
     .from(s.adminUser)
     .where(eq(s.adminUser.isInstallationAdmin, true))
     .limit(1);
+  return !!row;
+}
+
+/**
+ * True once ANY admin_user row exists — this, not hasInstallationAdmin(), is
+ * the correct "has this install been claimed" signal. An EXISTING deployment
+ * upgraded to a release that introduced admin_user.is_installation_admin
+ * (0072_installation_admin.sql) has real admins but none flagged
+ * installation-admin until the post-migrate promotion (see
+ * 0075_promote_installation_admin.sql) runs. Gating `/v1/setup/*` on
+ * hasInstallationAdmin() alone would read every such upgrade as "unclaimed",
+ * 200 the claim screen, and lock every existing admin out behind it. Every
+ * `/v1/setup/*` route (and issueSetupClaimToken/claimInstallation
+ * themselves) MUST check this and refuse once true — the setup surface only
+ * ever exists for a genuinely empty, brand-new install.
+ */
+export async function hasAnyAdmin(): Promise<boolean> {
+  const [row] = await db.select({ id: s.adminUser.id }).from(s.adminUser).limit(1);
   return !!row;
 }
 
@@ -79,7 +98,7 @@ export class InvalidClaimTokenError extends Error {
  * token; only its SHA-256 hash is persisted.
  */
 export async function issueSetupClaimToken(): Promise<{ token: string; expiresAt: Date }> {
-  if (await hasInstallationAdmin()) throw new SetupAlreadyClaimedError();
+  if (await hasAnyAdmin()) throw new SetupAlreadyClaimedError();
   const token = generateClaimToken();
   const tokenHash = hashClaimToken(token);
   const expiresAt = new Date(Date.now() + TOKEN_TTL_MS);
@@ -115,7 +134,7 @@ function randomSlug(): string {
  * transaction; see the module doc comment for the concurrency argument.
  */
 export async function claimInstallation(input: ClaimInput): Promise<ClaimResult> {
-  if (await hasInstallationAdmin()) throw new SetupAlreadyClaimedError();
+  if (await hasAnyAdmin()) throw new SetupAlreadyClaimedError();
 
   const email = normalizeEmail(input.email);
   const name = input.name.trim();

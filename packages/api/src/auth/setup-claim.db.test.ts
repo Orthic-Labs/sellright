@@ -11,8 +11,11 @@
  *   4. CONCURRENCY: two concurrent claims with the same token → exactly one
  *      installation administrator, exactly one owner membership, the loser
  *      gets InvalidClaimTokenError.
- *   5. Every /v1/setup/* route 404s once an installation admin exists
- *      (issueSetupClaimToken and claimInstallation both reject).
+ *   5. Every /v1/setup/* route 404s once ANY admin_user exists — not just
+ *      once an installation admin exists (issueSetupClaimToken and
+ *      claimInstallation both reject; this is what keeps an upgraded
+ *      pre-WS-B install, whose real admins have no installation-admin flag
+ *      yet, from ever being treated as "unclaimed").
  *   6. Expired and already-used tokens are rejected.
  *
  * Runs against a *_test DB only (TRUNCATEs store CASCADE + admin_user).
@@ -24,6 +27,7 @@ import { env } from '../env.js';
 import * as s from '../db/schema.js';
 import {
   claimInstallation,
+  hasAnyAdmin,
   hasInstallationAdmin,
   hashClaimToken,
   InvalidClaimTokenError,
@@ -72,6 +76,18 @@ describe('issueSetupClaimToken', () => {
   it('refuses to issue once an installation admin exists', async () => {
     const { token } = await issueSetupClaimToken();
     await claimInstallation({ token, email: 'owner@example.com', name: 'Owner', password: 'x'.repeat(12) });
+    await expect(issueSetupClaimToken()).rejects.toBeInstanceOf(SetupAlreadyClaimedError);
+  });
+
+  // The bug this guards against: an upgraded pre-WS-B install has real
+  // admin_user rows but NONE flagged installation-admin (until the
+  // post-migrate promotion in 0075_promote_installation_admin.sql runs).
+  // Gating on hasInstallationAdmin() alone would issue a claim link for an
+  // already-live install.
+  it('refuses to issue once ANY admin_user exists, even with no installation admin', async () => {
+    await db.insert(s.adminUser).values({ email: 'legacy-owner@example.com' });
+    expect(await hasInstallationAdmin()).toBe(false);
+    expect(await hasAnyAdmin()).toBe(true);
     await expect(issueSetupClaimToken()).rejects.toBeInstanceOf(SetupAlreadyClaimedError);
   });
 });
@@ -126,16 +142,26 @@ describe('claimInstallation', () => {
     expect((store?.config as { published?: boolean })?.published).toBe(false);
   });
 
-  it('ignores an already-owned store and mints a placeholder instead', async () => {
+  // Under the current invariant, a store already owned by SOME admin can only
+  // coexist with a valid, still-issuable claim token in a manufactured test
+  // state (issueSetupClaimToken/claimInstallation both refuse the moment ANY
+  // admin_user row exists — see hasAnyAdmin()). This proves claimInstallation
+  // enforces that guard independently, not just issueSetupClaimToken — same
+  // pattern as the "already claimed" test below, generalized from
+  // "installation admin exists" to "any admin exists at all".
+  it('refuses to claim once ANY admin_user exists, even one unrelated to installation status, with a fresh valid token row', async () => {
     const [owned] = await db.insert(s.store).values({ slug: 'owned', name: 'Owned Store' }).returning({ id: s.store.id });
     const [otherAdmin] = await db.insert(s.adminUser).values({ email: 'staff@example.com' }).returning({ id: s.adminUser.id });
     await db.insert(s.adminUserStore).values({ adminUserId: otherAdmin!.id, storeId: owned!.id, role: 'owner' });
 
-    const { token } = await issueSetupClaimToken();
-    const result = await claimInstallation({
-      token, email: 'owner@example.com', name: 'Owner', password: 'correct horse battery',
-    });
-    expect(result.storeId).not.toBe(owned!.id);
+    // Bypass issueSetupClaimToken's own guard (already covered above) to
+    // prove claimInstallation checks independently.
+    const tokenHash = hashClaimToken('manufactured-token-value');
+    await db.insert(s.setupClaimToken).values({ tokenHash, expiresAt: new Date(Date.now() + 60_000) });
+
+    await expect(
+      claimInstallation({ token: 'manufactured-token-value', email: 'owner@example.com', name: 'Owner', password: 'correct horse battery' }),
+    ).rejects.toBeInstanceOf(SetupAlreadyClaimedError);
   });
 
   it('rejects an invalid token', async () => {

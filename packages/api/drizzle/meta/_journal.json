@@ -463,6 +463,13 @@
       "when": 1790000010200,
       "tag": "0074_recovery_kit_downloaded",
       "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "7",
+      "when": 1790000010300,
+      "tag": "0075_promote_installation_admin",
+      "breakpoints": true
     }
   ]
 }

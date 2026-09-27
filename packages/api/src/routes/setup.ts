@@ -1,11 +1,18 @@
 /**
  * One-click install: pre-auth claim surface (plan §1.3/§1.4).
  *
- * Every route here 404s once an installation administrator exists — an
- * outside observer must not be able to tell "already claimed" from "route
- * never existed" (see SetupAlreadyClaimedError/InvalidClaimTokenError).
- * Onboarding after the claim (store basics, preview, checklist, publish) is
- * ordinary authenticated admin work — see admin-settings.ts.
+ * Every route here 404s once ANY admin_user row exists — not just once an
+ * installation administrator exists. An existing deployment upgraded to a
+ * release with admin_user.is_installation_admin has real admins but none
+ * flagged installation-admin until the post-migrate promotion
+ * (0075_promote_installation_admin.sql) runs; gating on
+ * hasInstallationAdmin() alone would read that upgrade as "unclaimed" and
+ * lock every existing admin out behind the claim-only UI (see hasAnyAdmin()'s
+ * doc comment in setup-claim.ts). An outside observer must not be able to
+ * tell "already claimed" from "route never existed" either way (see
+ * SetupAlreadyClaimedError/InvalidClaimTokenError). Onboarding after the
+ * claim (store basics, preview, checklist, publish) is ordinary authenticated
+ * admin work — see admin-settings.ts.
  */
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { HttpError, J, errBody, guard } from './admin-helpers.js';
@@ -13,7 +20,7 @@ import { clientIp, attemptRetryAfter } from '../auth/rate-limit.js';
 import { setAuthCookies, newCsrf } from '../auth/cookies.js';
 import {
   claimInstallation,
-  hasInstallationAdmin,
+  hasAnyAdmin,
   InvalidClaimTokenError,
   SetupAlreadyClaimedError,
 } from '../auth/setup-claim.js';
@@ -22,7 +29,7 @@ import { createAdminSession } from '../auth/admin-session.js';
 export const setup = new OpenAPIHono();
 
 async function assertUnclaimed(): Promise<void> {
-  if (await hasInstallationAdmin()) throw new SetupAlreadyClaimedError();
+  if (await hasAnyAdmin()) throw new SetupAlreadyClaimedError();
 }
 
 setup.openapi(
@@ -36,10 +43,9 @@ setup.openapi(
   async (c) => guard(c, async () => {
     await assertUnclaimed();
     // Never confirms whether a token exists/is valid — that's the point of
-    // /v1/setup/claim's own 404 on a bad token. This only answers "has
-    // ANY installation admin ever been created", so the admin UI can decide
-    // whether to render the claim screen at all before a token is even
-    // known.
+    // /v1/setup/claim's own 404 on a bad token. This only answers "does ANY
+    // admin_user row exist yet", so the admin UI can decide whether to render
+    // the claim screen at all before a token is even known.
     return c.json({ claimed: false as const }, 200);
   }),
 );

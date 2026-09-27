@@ -1146,6 +1146,36 @@ jobs:
             wget -qO- http://127.0.0.1:8080/v1/maintenance | grep -q '"maintenance":false'
           echo "clean update verified: new images running, maintenance off"
 
+      - name: WS-B upgrade regression -- the ADMIN_EMAIL/ADMIN_PASSWORD bootstrap admin from the OLD release can still log in, and gets promoted to installation admin
+        working-directory: new
+        run: |
+          set -e
+          # This admin was created by the OLD image's bootstrap.js, long
+          # before admin_user.is_installation_admin (0072) or the
+          # hasAnyAdmin()-gated claim surface existed. The bug this proves
+          # fixed: upgrading past 0072 must never lock this admin out behind
+          # the claim-only UI (GET /v1/setup/status must 404, not 200), and
+          # 0075_promote_installation_admin.sql must promote exactly this
+          # admin (the install's only owner) so recovery-kit/system
+          # operations stay reachable post-upgrade.
+          docker compose -p sellright-updatedrill --env-file deploy/.env -f deploy/compose.yaml exec -T admin \
+            wget -qO- http://127.0.0.1:8080/v1/setup/status >/tmp/updrill-setup-status.out 2>&1 \
+            && { echo "::error::expected /v1/setup/status to 404 after upgrade (an admin already exists), got: $(cat /tmp/updrill-setup-status.out)"; exit 1; }
+          echo "setup surface correctly still 404s post-upgrade"
+
+          docker compose -p sellright-updatedrill --env-file deploy/.env -f deploy/compose.yaml exec -T postgres \
+            psql -U sellright -d sellright -Atc "SELECT count(*) FROM admin_user WHERE is_installation_admin" | grep -qx '1'
+          docker compose -p sellright-updatedrill --env-file deploy/.env -f deploy/compose.yaml exec -T postgres \
+            psql -U sellright -d sellright -Atc "SELECT email FROM admin_user WHERE is_installation_admin" | grep -qx "${ADMIN_EMAIL}"
+          echo "the pre-existing bootstrap admin was promoted to installation admin"
+
+          login_resp=$(docker compose -p sellright-updatedrill --env-file deploy/.env -f deploy/compose.yaml exec -T admin wget -qO- \
+            --header="Content-Type: application/json" \
+            --post-data="{\"email\":\"${ADMIN_EMAIL}\",\"password\":\"${ADMIN_PASSWORD}\"}" \
+            http://127.0.0.1:8080/v1/admin/login)
+          echo "$login_resp" | grep -q '"token"' || { echo "::error::login failed after upgrade: $login_resp"; exit 1; }
+          echo "pre-existing admin login still works after upgrade"
+
       - name: Tear down update-drill stack
         if: always()
         working-directory: new

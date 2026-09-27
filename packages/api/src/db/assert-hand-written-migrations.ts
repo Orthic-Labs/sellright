@@ -53,6 +53,7 @@ const HAND_WRITTEN = [
   '0072_installation_admin.sql',
   '0073_demo_order.sql',
   '0074_recovery_kit_downloaded.sql',
+  '0075_promote_installation_admin.sql',
 ];
 
 const MARKER = '-- HAND-WRITTEN: see docs/runbooks/migrations.md';
