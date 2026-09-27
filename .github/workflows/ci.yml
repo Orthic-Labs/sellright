@@ -397,7 +397,12 @@ jobs:
             printf 'SMTP_ENABLED=%s\n' "$SMTP_ENABLED"
             printf 'JOBS_ENABLED=%s\n' "$JOBS_ENABLED"
           } > deploy/.env
-          printf '[]\n' > deploy/gateway-accounts.json
+          # Reset the umask before this: it's a Compose secret bind-mounted
+          # read-only into the api container for the non-root `node` user, not
+          # a host secret needing the .env's 600. A umask-077 0600 file here
+          # (owned by the runner's uid) makes the API crash at boot with
+          # EACCES reading /run/secrets/gateway_accounts as `node`.
+          ( umask 022 && printf '[]\n' > deploy/gateway-accounts.json )
 
       # This drill proves the recovery MECHANISM (backup set shape, restore
       # into a disposable database, data present) using this PR's own
