@@ -6,12 +6,38 @@ Pages: home, shop (with client-side category/search filters), collection/categor
 
 ## Configuring a store
 
-All configuration is env-driven (Vite `VITE_*` vars, read at build time). Nothing needs to be hardcoded to rebrand a deployment — set env vars and rebuild.
+Two ways to configure a deployment:
+
+1. **Runtime, per-host (WS-C — one generic image serving any store).** The root
+   layout (`src/routes/layout.tsx`, `useStoreIdentityLoader`) fetches store
+   identity/theme/contact/social/SEO-origin from `GET /v1/shop/identity` on
+   every request, resolved by that request's own Host. The API base itself is
+   also runtime-configurable: set `SELLRIGHT_API_URL` (a plain Node env var,
+   NOT `VITE_*`) on the running process to point one built image at any API
+   instance without a rebuild. Build this way with `pnpm run build:runtime`
+   (sets `SELLRIGHT_DISABLE_SSG=1` — required: a statically prerendered page
+   would freeze whichever store happened to resolve at build time and serve
+   it to every visitor of every host).
+2. **Build-time, single-store (legacy/dev/offline fallback).** The `VITE_*`
+   vars below, read at build time via `src/theme/theme.config.ts`. Still used
+   whenever the runtime identity fetch fails for a reason other than "store
+   not published" (offline dev, the isolated demo before its wrapper is up),
+   and by `VITE_SELLRIGHT_STORE_SLUG` to pin a build to one store instead of
+   resolving by Host (sends `x-store-slug` instead of forwarding Host —
+   takes precedence over runtime host-resolution when set).
+
+An unpublished store (`config.published === false`, set via
+`PATCH /v1/admin/settings/publish`) renders a private "coming soon" page
+(404) instead of the real storefront, unless the request carries a valid
+preview token — either `?preview_token=<token>` (persisted to a cookie for
+the rest of the visit) or an `x-preview-token` header. Issue a token via
+`POST /v1/admin/settings/preview-token`.
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `VITE_SELLRIGHT_API_URL` | SellRight API base URL | `http://127.0.0.1:3300` |
-| `VITE_SELLRIGHT_STORE_SLUG` | Store slug sent as `x-store-slug` | `demo` |
+| `SELLRIGHT_API_URL` | **Runtime** (not `VITE_*`) SellRight API base URL — checked per-request, no rebuild needed | falls back to `VITE_SELLRIGHT_API_URL` |
+| `VITE_SELLRIGHT_API_URL` | Build-time SellRight API base URL (dev/demo/offline fallback) | `http://127.0.0.1:3300` |
+| `VITE_SELLRIGHT_STORE_SLUG` | Pin a build to one store (`x-store-slug`) instead of runtime per-host resolution | unset (resolves by request Host) |
 | `VITE_PUBLIC_DOMAIN` | Public domain (no protocol), used for canonical/CSP/allowed-hosts | `localhost:4100` |
 | `VITE_PUBLIC_SITE_ORIGIN` | Full origin used by sitemap/robots generation | `https://example.com` |
 | `VITE_STORE_NAME` | Display name (header, footer, JSON-LD, page titles) | `Storefront Demo` |
