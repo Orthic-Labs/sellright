@@ -216,9 +216,26 @@ cmd_restore() {
 }
 
 cmd_setup_link() {
-  log "The /v1/setup/claim endpoint ships with WS-B. Until then, use:"
-  log "  sellright reset-admin"
-  log "to set a known admin email/password directly."
+  require_home
+  # dist/scripts/setup-link.js prints ONLY the raw token on stdout (its own
+  # progress/errors go to stderr, which passes through uncaptured here). It
+  # exits non-zero — with an explanatory stderr line — once an installation
+  # admin already exists; there is deliberately no way to re-claim an
+  # installed instance through this path (use reset-admin instead).
+  token=$(compose exec -T api node dist/scripts/setup-link.js) \
+    || die "setup-link failed (see above). If this installation was already claimed, use: sellright reset-admin <email>"
+  [ -n "$token" ] || die "setup-link produced no token"
+  domain="$(env_get SELLRIGHT_DOMAIN)"
+  case "$domain" in
+    :*|'')
+      log "Claim link (valid 7 days, single use). SELLRIGHT_DOMAIN isn't set to a real hostname yet, so this uses localhost — swap in your server's address if you're browsing remotely:"
+      log "  http://localhost${domain}/setup?token=${token}"
+      ;;
+    *)
+      log "Claim link (valid 7 days, single use):"
+      log "  https://${domain}/setup?token=${token}"
+      ;;
+  esac
 }
 
 cmd_reset_admin() {

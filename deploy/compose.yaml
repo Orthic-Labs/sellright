@@ -108,9 +108,15 @@ services:
       ASSET_DIR: /app/var/assets
       DOWNLOAD_DIR: /app/var/downloads
       DOWNLOAD_URL_SECRET: ${DOWNLOAD_URL_SECRET:?set DOWNLOAD_URL_SECRET in deploy/.env}
-      ADMIN_EMAIL: ${ADMIN_EMAIL:?set ADMIN_EMAIL in deploy/.env}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in deploy/.env}
-      BOOTSTRAP_STORE_SLUG: ${BOOTSTRAP_STORE_SLUG:?set BOOTSTRAP_STORE_SLUG in deploy/.env}
+      # One-click install (WS-B): a fresh install.sh run no longer writes
+      # these — the owner claims the install in the browser via
+      # `sellright setup-link` + POST /v1/setup/claim instead (dist/scripts/
+      # bootstrap.js is a no-op without BOOTSTRAP_STORE_SLUG). Left optional,
+      # not required, so an existing env-based deployment that still sets all
+      # three in deploy/.env keeps bootstrapping exactly as before.
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      BOOTSTRAP_STORE_SLUG: ${BOOTSTRAP_STORE_SLUG:-}
       BOOTSTRAP_STORE_NAME: ${BOOTSTRAP_STORE_NAME:-}
       BOOTSTRAP_STORE_CURRENCY: ${BOOTSTRAP_STORE_CURRENCY:-USD}
       BOOTSTRAP_STORE_HOSTNAMES: ${BOOTSTRAP_STORE_HOSTNAMES:-}
