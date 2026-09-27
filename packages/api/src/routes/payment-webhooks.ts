@@ -12,7 +12,8 @@ import { and, eq, isNull } from 'drizzle-orm';
 import type Stripe from 'stripe';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
-import { stripeConfigured, stripeCreds, stripeModeFromConfig, verifyStripeWebhook, verifyIntent, STRIPE_REFUND_ATTEMPT_KEY, type IntentLike, type StripeMode } from '../payments/stripe.js';
+import { stripeCreds, stripeModeFromConfig, verifyStripeWebhook, verifyIntent, listAllStoreIds, STRIPE_REFUND_ATTEMPT_KEY, type IntentLike, type StripeMode } from '../payments/stripe.js';
+import { resolveField } from '../security/settings-resolver.js';
 import { applyPaymentResult, amountDueForOrder } from '../payments/settle.js';
 import { resolveStoreIdForStripeEvent, resolveStoreIdForSubscriptionEvent, reconcileStripeRefund, recordStripeDispute, type StripeEventObj } from '../payments/webhook-reconcile.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
@@ -38,12 +39,13 @@ const SUBSCRIPTION_EVENT_TYPES = new Set([
 export const paymentWebhooks = new OpenAPIHono();
 
 paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
-  if (!stripeConfigured('test') && !stripeConfigured('live')) return c.json({ error: 'stripe not configured' }, 503);
   const sig = c.req.header('stripe-signature');
   if (!sig) return c.json({ error: 'missing signature' }, 400);
   const raw = await c.req.text(); // raw body BEFORE json parse — Stripe sig requires it
   let event: Stripe.Event | null = null;
   let verifiedMode: StripeMode | null = null;
+  // Fast path: env-configured (global, cross-store) webhook secrets — unchanged
+  // from before WS-A, so an existing deployment behaves identically.
   for (const mode of ['test', 'live'] as StripeMode[]) {
     const secret = stripeCreds(mode).webhookSecret;
     if (!secret) continue;
@@ -56,6 +58,31 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
       break;
     } catch {
       // signature didn't match this mode's secret — try the other.
+    }
+  }
+  // WS-A fallback: no env secret matched (or none configured) — try every
+  // store's own DB-stored webhook secret. `store` carries no RLS (registry
+  // table), so listing ids isn't an RLS bypass; each secret read still goes
+  // through withStore + resolveField, scoped to that one store. Bounded by
+  // the (typically single-digit) number of stores on this install.
+  if (!event) {
+    const storeIds = await listAllStoreIds();
+    outer: for (const sid of storeIds) {
+      for (const mode of ['test', 'live'] as StripeMode[]) {
+        let secret: string | undefined;
+        try {
+          secret = await withStore(sid, async (tx) => {
+            const r = await resolveField(tx, { storeId: sid, provider: 'stripe', mode, field: 'webhookSecret' }, undefined);
+            return r.value || undefined;
+          });
+        } catch { continue; }
+        if (!secret) continue;
+        try {
+          event = verifyStripeWebhook(raw, sig, secret);
+          verifiedMode = mode;
+          break outer;
+        } catch { /* try the next candidate */ }
+      }
     }
   }
   if (!event || !verifiedMode) return c.json({ error: 'bad signature' }, 400);

@@ -171,7 +171,7 @@ export async function deliverEmails(opts: { limit?: number; log?: (m: string) =>
     for (const d of due) {
       let outcome: { ok: true } | { ok: false; error: unknown };
       try {
-        const res = await sendEmail(d.payload);
+        const res = await sendEmail(d.payload, st.id);
         if (!res.delivered) throw new Error(res.reason ?? 'send failed');
         outcome = { ok: true };
       } catch (error) {

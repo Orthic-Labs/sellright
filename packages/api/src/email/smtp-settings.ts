@@ -7,8 +7,26 @@
  * never open a real SMTP connection.
  */
 import nodemailer, { type Transporter } from 'nodemailer';
+import { z } from '@hono/zod-openapi';
 
 export type SmtpPresetId = 'custom' | 'gmail' | 'ses' | 'postmark' | 'resend';
+
+// Shared shape for the non-secret half of a store's SMTP config (store.config.
+// email.smtp) — used by both the admin route (admin-email-settings.ts) and the
+// real mailer (mailer.ts) so the two never drift on what a "valid saved
+// config" looks like.
+export const SmtpConfig = z.object({
+  preset: z.enum(['custom', 'gmail', 'ses', 'postmark', 'resend']),
+  host: z.string(), port: z.number().int().positive(), secure: z.boolean(),
+  user: z.string().optional(), from: z.string().email().optional(),
+});
+export type SmtpConfigValue = z.infer<typeof SmtpConfig>;
+
+export function smtpConfigFromStoreConfig(config: unknown): SmtpConfigValue | null {
+  const smtp = (config as { email?: { smtp?: unknown } } | null)?.email?.smtp;
+  const parsed = SmtpConfig.safeParse(smtp);
+  return parsed.success ? parsed.data : null;
+}
 
 export interface SmtpPresetDefaults {
   host: string | null; // null = owner must supply (SES varies by region)

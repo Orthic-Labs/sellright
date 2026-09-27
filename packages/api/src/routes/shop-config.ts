@@ -4,9 +4,9 @@
  */
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { resolveStoreFromCtx } from './store-context.js';
-import { configuredGatewayAccount, nmiEnvironment } from '../payments/gateway-account.js';
+import { resolveConfiguredGatewayAccount, nmiEnvironment } from '../payments/gateway-account.js';
 import { isPaymentMethodEnabled } from '../payments/provider.js';
-import { stripeModeFromConfig, stripePublishableForClient, stripeUsable } from '../payments/stripe.js';
+import { stripeModeFromConfig, resolveStripePublishableForClient, resolveStripeUsable } from '../payments/stripe.js';
 import { loyaltySettingsFromConfig } from '../money/loyalty.js';
 import { PublicLoyaltySettings } from './loyalty.js';
 
@@ -38,17 +38,17 @@ shopConfig.openapi(
     let nmi: { tokenizationKey: string; mode: 'test'|'live'; environment: 'sandbox'|'production' } | null = null;
     let sezzle = false;
     try { if (isPaymentMethodEnabled(st.config, 'nmi')) {
-      const account = configuredGatewayAccount(st.id, 'nmi', st.config);
+      const account = await resolveConfiguredGatewayAccount(st.id, 'nmi', st.config);
       if (account.tokenizationKey) nmi = { tokenizationKey: account.tokenizationKey, mode: account.mode, environment: nmiEnvironment(account) };
     } } catch { /* An unavailable account is not advertised to shoppers. */ }
-    try { if (isPaymentMethodEnabled(st.config, 'sezzle')) { configuredGatewayAccount(st.id, 'sezzle', st.config); sezzle = true; } } catch { /* fail closed */ }
+    try { if (isPaymentMethodEnabled(st.config, 'sezzle')) { await resolveConfiguredGatewayAccount(st.id, 'sezzle', st.config); sezzle = true; } } catch { /* fail closed */ }
     const loyalty = loyaltySettingsFromConfig(st.config);
     return c.json({
       gateways: { nmi, sezzle },
       loyalty: loyalty.enabled ? loyalty : null,
       stripeMode: mode,
-      stripePublishableKey: stripePublishableForClient(mode),
-      stripeConfigured: isPaymentMethodEnabled(st.config, 'stripe') && stripeUsable(mode),
+      stripePublishableKey: await resolveStripePublishableForClient(st.id, mode),
+      stripeConfigured: isPaymentMethodEnabled(st.config, 'stripe') && (await resolveStripeUsable(st.id, mode)),
     }, 200);
   },
 );
@@ -69,6 +69,6 @@ shopConfig.openapi(
   async (c) => {
     const st = await resolveStoreFromCtx(c);
     const mode = stripeModeFromConfig(st.config);
-    return c.json({ publishableKey: stripePublishableForClient(mode) }, 200);
+    return c.json({ publishableKey: await resolveStripePublishableForClient(st.id, mode) }, 200);
   },
 );

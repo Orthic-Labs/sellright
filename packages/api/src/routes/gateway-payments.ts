@@ -8,7 +8,7 @@ import { clientIp, attemptRetryAfter } from '../auth/rate-limit.js';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { resolveStoreFromCtx } from './store-context.js';
-import { gatewayAccount } from '../payments/gateway-account.js';
+import { resolveGatewayAccount } from '../payments/gateway-account.js';
 import { normalizeSezzleEvent, verifySezzleSignature } from '../payments/sezzle.js';
 import { recordDispute } from '../disputes/disputes.js';
 import {
@@ -64,7 +64,7 @@ gatewayPayments.post('/v1/webhooks/sezzle/:storeId/:accountId', async c => {
   const storeId = c.req.param('storeId');
   if (!z.string().uuid().safeParse(storeId).success) return c.json({ error: 'Unknown account' }, 404);
   let account;
-  try { account = gatewayAccount(storeId, 'sezzle', c.req.param('accountId')); }
+  try { account = await resolveGatewayAccount(storeId, 'sezzle', c.req.param('accountId')); }
   catch { return c.json({ error: 'Unknown account' }, 404); }
   const raw = await c.req.text();
   if (Buffer.byteLength(raw) > 262144) return c.json({ error: 'Payload too large' }, 413);

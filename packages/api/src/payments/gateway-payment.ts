@@ -5,7 +5,7 @@ import * as s from '../db/schema.js';
 import { resolveCustomer } from '../auth/session.js';
 import { amountDueForOrder, applyPaymentResult } from './settle.js';
 import { getProvider, isPaymentMethodEnabled, type PaymentResult, type RefundResult } from './provider.js';
-import { configuredGatewayAccount, gatewayAccount, gatewayIdentity, assertGatewayEnvironment, recordedNmiEnvironment, type GatewayMethod } from './gateway-account.js';
+import { resolveConfiguredGatewayAccount, resolveGatewayAccount, gatewayIdentity, assertGatewayEnvironment, recordedNmiEnvironment, type GatewayMethod } from './gateway-account.js';
 import { sezzleProvider } from './sezzle.js';
 import { prepareSezzleSession } from './session-input.js';
 import { queryNmiPayment } from './nmi-query.js';
@@ -44,7 +44,7 @@ export async function startGatewayPayment(input: {
 }) {
   if (!isPaymentMethodEnabled(input.config, input.method)) throw new GatewayPaymentError(409, 'Payment method disabled');
   let account;
-  try { account = configuredGatewayAccount(input.storeId, input.method, input.config); }
+  try { account = await resolveConfiguredGatewayAccount(input.storeId, input.method, input.config); }
   catch { throw new GatewayPaymentError(503, 'Payment account is not configured'); }
   const operation = input.method === 'sezzle' ? 'session' : 'charge';
   return withAdvisoryLock('pay:' + input.storeId + ':' + input.code, async () => {
@@ -161,7 +161,7 @@ export async function verifySezzleAttempt(storeId: string, id: string) {
     tx.select({ code: s.order.code }).from(s.order).where(eq(s.order.id, attempt.orderId)).limit(1));
   if (!order) throw new GatewayPaymentError(404, 'Order not found');
   return withAdvisoryLock('pay:' + storeId + ':' + order.code, async () => {
-    const account = gatewayAccount(storeId, 'sezzle', attempt.accountId, attempt.mode as 'test' | 'live');
+    const account = await resolveGatewayAccount(storeId, 'sezzle', attempt.accountId, attempt.mode as 'test' | 'live');
     const result = await sezzleProvider.createPayment({
       storeId, orderCode: order.code,
       attemptId: (attempt.context as { orderReference?: string } | null)?.orderReference ?? id, amount: attempt.amount,
@@ -264,7 +264,7 @@ async function discoverRefundOutcome(
     if (!payment?.providerRef) {
       return { state: 'Pending', providerRef: bound, errorMessage: 'Original payment has no provider reference' };
     }
-    const refunds = await listStripeRefunds(mode, payment.providerRef);
+    const refunds = await listStripeRefunds(storeId, mode, payment.providerRef);
     if (bound) {
       const found = refunds.find((r) => r.id === bound);
       if (!found) return { state: 'Pending', providerRef: bound, errorMessage: 'Bound provider refund not found' };
@@ -291,7 +291,7 @@ async function discoverRefundOutcome(
     if (!payment?.providerRef) {
       return { state: 'Pending', providerRef: bound, errorMessage: 'Original payment has no provider reference' };
     }
-    const account = gatewayAccount(storeId, 'sezzle', attempt.accountId, attempt.mode as 'test' | 'live');
+    const account = await resolveGatewayAccount(storeId, 'sezzle', attempt.accountId, attempt.mode as 'test' | 'live');
     const order = await sezzleProvider.getOrder(account, payment.providerRef);
     const refunds = (order.authorization?.refunds ?? []).filter((r) => r?.uuid);
     if (bound) {
@@ -309,7 +309,7 @@ async function discoverRefundOutcome(
     return { state: 'Pending', providerRef: null, errorMessage: 'No matching provider refund found' };
   }
   if (attempt.method === 'nmi') {
-    const account = gatewayAccount(storeId, 'nmi', attempt.accountId, attempt.mode as 'test' | 'live');
+    const account = await resolveGatewayAccount(storeId, 'nmi', attempt.accountId, attempt.mode as 'test' | 'live');
     assertGatewayEnvironment(account, attempt.context);
     const res = await queryNmiPayment({ account, amount: attempt.amount, currency: attempt.currency, operation: 'refund',
       // The refund transact call keyed orderid by the refund attempt id —
@@ -340,7 +340,7 @@ export async function verifyGatewayAttempt(storeId: string, id: string) {
     .where(eq(s.order.id, attempt.orderId)).limit(1));
   if (!order) throw new GatewayPaymentError(404, 'Order not found');
   return withAdvisoryLock('pay:' + storeId + ':' + order.code, async () => {
-    const account = gatewayAccount(storeId, 'nmi', attempt.accountId, attempt.mode as 'test' | 'live');
+    const account = await resolveGatewayAccount(storeId, 'nmi', attempt.accountId, attempt.mode as 'test' | 'live');
     try { assertGatewayEnvironment(account, attempt.context); }
     catch { throw new GatewayPaymentError(409, 'Payment gateway environment changed; restore the original account configuration'); }
     const result = await queryNmiPayment({ account, amount: attempt.amount, currency: attempt.currency,

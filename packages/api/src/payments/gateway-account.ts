@@ -102,6 +102,74 @@ export function configuredGatewayAccount(storeId: string, method: GatewayMethod,
   return gatewayAccount(storeId, method, id);
 }
 
+/** Marker accountId for a GatewayAccount assembled from the encrypted
+ *  `store_secret` table (WS-A) rather than GATEWAY_ACCOUNTS_JSON. Never a
+ *  real env-configured accountId (those are merchant-chosen strings), so it
+ *  safely round-trips through paymentAttempt.accountId to identify, on
+ *  reconciliation, which resolution path to use again. */
+export const DB_ACCOUNT_ID = 'db';
+
+/** Per-store, per-method mode selector for the DB-backed (one-click install)
+ *  path — the NMI/Sezzle analogue of stripeModeFromConfig(). Defaults to
+ *  'test' (fail-safe) until a store explicitly flips to live. */
+export function gatewayModeFromConfig(config: unknown, method: GatewayMethod): GatewayMode {
+  const m = (config as { payments?: Record<string, { mode?: unknown }> } | null | undefined)?.payments?.[method]?.mode;
+  return m === 'live' ? 'live' : 'test';
+}
+
+async function dbGatewayAccount(tx: Tx, storeId: string, method: GatewayMethod, mode: GatewayMode): Promise<GatewayAccount> {
+  if (method === 'nmi') {
+    const securityKey = await resolveField(tx, { storeId, provider: 'nmi', mode, field: 'securityKey' }, undefined);
+    const tokenizationKey = await resolveField(tx, { storeId, provider: 'nmi', mode, field: 'tokenizationKey' }, undefined);
+    // A signing secret for NMI's chargeback webhook (routes/disputes.ts) reuses
+    // the shared `privateKey` field, same as Sezzle's HMAC key — see that
+    // route's doc comment. Optional: absence just means chargebacks aren't wired.
+    const privateKey = await resolveField(tx, { storeId, provider: 'nmi', mode, field: 'privateKey' }, undefined);
+    if (!securityKey.value) throw new Error('NMI security key is not configured');
+    return {
+      accountId: DB_ACCOUNT_ID, storeId, method: 'nmi', mode,
+      securityKey: securityKey.value,
+      tokenizationKey: tokenizationKey.value || undefined,
+      privateKey: privateKey.value || undefined,
+    };
+  }
+  const publicKey = await resolveField(tx, { storeId, provider: 'sezzle', mode, field: 'publicKey' }, undefined);
+  const privateKey = await resolveField(tx, { storeId, provider: 'sezzle', mode, field: 'privateKey' }, undefined);
+  if (!publicKey.value || !privateKey.value) throw new Error('Sezzle keys are not configured');
+  return { accountId: DB_ACCOUNT_ID, storeId, method: 'sezzle', mode, publicKey: publicKey.value, privateKey: privateKey.value };
+}
+
+/**
+ * WS-A env>db resolution for a NAMED account (reconciliation call sites that
+ * already know accountId+mode from a persisted paymentAttempt row). An
+ * accountId other than DB_ACCOUNT_ID takes the unchanged env path
+ * (GATEWAY_ACCOUNTS_JSON) exactly as before — existing deployments are
+ * unaffected. DB_ACCOUNT_ID resolves the mode's credentials from
+ * `store_secret`, scoped to `storeId` under RLS (own short-lived transaction —
+ * callers of this function are, by design, never inside an open tx while a
+ * gateway/network call is pending).
+ */
+export async function resolveGatewayAccount(
+  storeId: string, method: GatewayMethod, accountId: string, mode?: GatewayMode,
+): Promise<GatewayAccount> {
+  if (accountId !== DB_ACCOUNT_ID) return gatewayAccount(storeId, method, accountId, mode);
+  if (!mode) throw new Error('mode is required to resolve a DB-backed gateway account');
+  return withStore(storeId, (tx) => dbGatewayAccount(tx, storeId, method, mode));
+}
+
+/**
+ * WS-A env>db resolution for the store's CONFIGURED account for `method`
+ * (checkout-time). An env account selected via config.paymentAccounts[method]
+ * takes the unchanged path; otherwise falls back to the DB-backed account for
+ * the store's configured mode (gatewayModeFromConfig).
+ */
+export async function resolveConfiguredGatewayAccount(storeId: string, method: GatewayMethod, config: unknown): Promise<GatewayAccount> {
+  const id = (config as { paymentAccounts?: Record<string, unknown> } | null)?.paymentAccounts?.[method];
+  if (typeof id === 'string' && id) return gatewayAccount(storeId, method, id);
+  const mode = gatewayModeFromConfig(config, method);
+  return withStore(storeId, (tx) => dbGatewayAccount(tx, storeId, method, mode));
+}
+
 export function validGatewayInput(
   input: { storeId?: string; amount: number; currency: string; gateway?: GatewayAccount },
   method: GatewayMethod,
@@ -133,3 +201,5 @@ export async function boundedGatewayResponse(response: Response): Promise<string
 }
 import { z } from 'zod';
 import { env } from '../env.js';
+import { withStore, type Tx } from '../db/client.js';
+import { resolveField } from '../security/settings-resolver.js';

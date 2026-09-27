@@ -26,9 +26,9 @@ vi.mock('../payments/stripe.js', async (orig) => {
   const actual = await orig<typeof import('../payments/stripe.js')>();
   return {
     ...actual,
-    stripeUsable: () => true,
+    resolveStripeUsable: async () => true,
     stripeModeFromConfig: () => 'test' as const,
-    createSubscriptionCheckout: vi.fn(async (_mode: unknown, args: { metadata: Record<string, string> }) => ({
+    createSubscriptionCheckout: vi.fn(async (_storeId: unknown, _mode: unknown, args: { metadata: Record<string, string> }) => ({
       url: `https://checkout.stripe.test/c/${args.metadata.orderCode}`,
       sessionId: 'cs_test_123',
     })),
@@ -150,7 +150,7 @@ describe('POST /v1/shop/subscribe', () => {
 
     // checkout was called with {storeId, orderCode, customerId} metadata + priceId
     const call = (createSubscriptionCheckout as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]!;
-    const args = call[1] as { priceId: string; metadata: Record<string, string> };
+    const args = call[2] as { priceId: string; metadata: Record<string, string> };
     expect(args.priceId).toBe(STRIPE_PRICE_ID);
     expect(args.metadata).toMatchObject({ storeId: STORE, orderCode: order!.code, customerId: CUSTOMER });
   });

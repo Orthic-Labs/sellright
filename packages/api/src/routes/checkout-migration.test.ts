@@ -23,7 +23,7 @@ vi.mock('../payments/stripe.js', async (orig) => {
   const actual = await orig<typeof import('../payments/stripe.js')>();
   return {
     ...actual,
-    stripeUsable: () => true,
+    resolveStripeUsable: async () => true,
     stripeModeFromConfig: () => 'test' as const,
     createPaymentIntent: vi.fn(async (opts: { orderCode: string; idempotencyKey?: string }) => {
       piCalls.push({ orderCode: opts.orderCode, idempotencyKey: opts.idempotencyKey });

@@ -16,23 +16,12 @@ import { mutateStoreConfig } from './admin-settings.js';
 import { encryptSecret, last4 as computeLast4 } from '../security/secret-crypto.js';
 import { isEnvManaged } from '../security/settings-resolver.js';
 import { readSecret, purposeKey, scopeFor } from './admin-payment-settings.js';
-import { SMTP_PRESETS, resolveSmtpPreset, sendTestEmail, type SmtpPresetId } from '../email/smtp-settings.js';
+import { SMTP_PRESETS, SmtpConfig, smtpConfigFromStoreConfig, resolveSmtpPreset, sendTestEmail, type SmtpPresetId } from '../email/smtp-settings.js';
 import { sendEmail } from '../email/mailer.js';
 
 export const adminEmailSettings = new OpenAPIHono();
 
-const SmtpConfig = z.object({
-  preset: z.enum(['custom', 'gmail', 'ses', 'postmark', 'resend']),
-  host: z.string(), port: z.number().int().positive(), secure: z.boolean(),
-  user: z.string().optional(), from: z.string().email().optional(),
-});
 const Status = z.object({ envManaged: z.boolean(), config: SmtpConfig.partial().nullable(), credentialConfigured: z.boolean() });
-
-function smtpConfigFromStore(config: unknown): z.infer<typeof SmtpConfig> | null {
-  const smtp = (config as { email?: { smtp?: unknown } } | null)?.email?.smtp;
-  const parsed = SmtpConfig.safeParse(smtp);
-  return parsed.success ? parsed.data : null;
-}
 
 adminEmailSettings.openapi(
   createRoute({
@@ -46,7 +35,7 @@ adminEmailSettings.openapi(
     if (envManaged) return c.json({ envManaged: true, config: null, credentialConfigured: true }, 200);
 
     const [row] = await withStore(st.storeId, (tx) => tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1));
-    const cfg = smtpConfigFromStore(row?.config);
+    const cfg = smtpConfigFromStoreConfig(row?.config);
     const credentialRows = await withStore(st.storeId, (tx) => tx.select({ last4: s.storeSecret.last4 }).from(s.storeSecret)
       .where(eq(s.storeSecret.storeId, st.storeId)).limit(1));
     return c.json({ envManaged: false, config: cfg, credentialConfigured: credentialRows.some((r) => r.last4) }, 200);
@@ -126,7 +115,7 @@ adminEmailSettings.openapi(
     }
 
     const [row] = await withStore(st.storeId, (tx) => tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1));
-    const cfg = smtpConfigFromStore(row?.config);
+    const cfg = smtpConfigFromStoreConfig(row?.config);
     if (!cfg) return c.json({ delivered: false, error: 'No SMTP settings saved yet' }, 200);
     const credential = await withStore(st.storeId, (tx) => readSecret(tx, scopeFor(st.storeId, 'smtp', 'default', 'authCredential')));
 

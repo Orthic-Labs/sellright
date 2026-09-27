@@ -392,7 +392,7 @@ apps.on('POST', ['/api/licenses/trial', '/v1/licenses/trial'], async (c) => with
   // Send the key AFTER the tx (best-effort). The user must RECEIVE it to activate —
   // that's what keeps throwaway emails from minting a working trial.
   try {
-    await sendTrialKey({ name: st.name, currency: st.currency, appKey }, email, {
+    await sendTrialKey({ name: st.name, currency: st.currency, appKey, storeId: st.id }, email, {
       key: minted.key,
       days: TRIAL_DAYS,
     });
