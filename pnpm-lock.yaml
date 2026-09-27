@@ -123,12 +123,24 @@ importers:
 
   packages/storefront:
     dependencies:
+      '@qwik.dev/core':
+        specifier: 2.0.0-beta.35
+        version: 2.0.0-beta.35(prettier@3.9.8)(vite@7.3.5(@types/node@25.9.4)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.0))(vitest@4.1.11(@types/node@25.9.4)(jsdom@30.1.0)(vite@7.3.5(@types/node@25.9.4)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.0)))
+      '@qwik.dev/router':
+        specifier: 2.0.0-beta.35
+        version: 2.0.0-beta.35(@qwik.dev/core@2.0.0-beta.35(prettier@3.9.8)(vite@7.3.5(@types/node@25.9.4)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.0))(vitest@4.1.11(@types/node@25.9.4)(jsdom@30.1.0)(vite@7.3.5(@types/node@25.9.4)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.0))))(rollup@4.62.2)(supports-color@7.2.0)(typescript@6.0.3)(vite@7.3.5(@types/node@25.9.4)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.0))
       '@stripe/stripe-js':
         specifier: ^4.10.0
         version: 4.10.0
       card-validator:
         specifier: ^10.0.4
         version: 10.0.4
+      dotenv:
+        specifier: ^17.4.2
+        version: 17.4.2
+      express:
+        specifier: ^5.2.1
+        version: 5.2.1(supports-color@7.2.0)
       graphql:
         specifier: ^16.14.2
         version: 16.14.2
@@ -172,12 +184,6 @@ importers:
       '@graphql-typed-document-node/core':
         specifier: ^3.2.0
         version: 3.2.0(graphql@16.14.2)
-      '@qwik.dev/core':
-        specifier: 2.0.0-beta.35
-        version: 2.0.0-beta.35(prettier@3.9.8)(vite@7.3.5(@types/node@25.9.4)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.0))(vitest@4.1.11(@types/node@25.9.4)(jsdom@30.1.0)(vite@7.3.5(@types/node@25.9.4)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.0)))
-      '@qwik.dev/router':
-        specifier: 2.0.0-beta.35
-        version: 2.0.0-beta.35(@qwik.dev/core@2.0.0-beta.35(prettier@3.9.8)(vite@7.3.5(@types/node@25.9.4)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.0))(vitest@4.1.11(@types/node@25.9.4)(jsdom@30.1.0)(vite@7.3.5(@types/node@25.9.4)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.0))))(rollup@4.62.2)(supports-color@7.2.0)(typescript@6.0.3)(vite@7.3.5(@types/node@25.9.4)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.0))
       '@tailwindcss/forms':
         specifier: ^0.5.11
         version: 0.5.11(tailwindcss@4.3.3)
@@ -205,18 +211,12 @@ importers:
       '@typescript-eslint/parser':
         specifier: ^8.70.0
         version: 8.70.0(eslint@10.11.0(jiti@2.7.0)(supports-color@7.2.0))(supports-color@7.2.0)(typescript@6.0.3)
-      dotenv:
-        specifier: ^17.4.2
-        version: 17.4.2
       eslint:
         specifier: ^10.11.0
         version: 10.11.0(jiti@2.7.0)(supports-color@7.2.0)
       eslint-plugin-qwik:
         specifier: 2.0.0-beta.30
         version: 2.0.0-beta.30(eslint@10.11.0(jiti@2.7.0)(supports-color@7.2.0))(supports-color@7.2.0)(typescript@6.0.3)
-      express:
-        specifier: ^5.2.1
-        version: 5.2.1(supports-color@7.2.0)
       globals:
         specifier: ^17.7.0
         version: 17.12.0

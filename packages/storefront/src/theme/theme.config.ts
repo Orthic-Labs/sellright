@@ -170,3 +170,31 @@ export const siteUrl = `https://${theme.domain}`;
 export const socialLinks: string[] = Object.values(theme.social).filter(
 	(v): v is string => typeof v === 'string' && v.length > 0,
 );
+
+/**
+ * WS-C fallback: the build-time `theme` object reshaped into the same
+ * `SrStoreIdentity` wire shape the runtime `/v1/shop/identity` endpoint
+ * returns. Used by the root route loader when that endpoint is unreachable
+ * (offline dev, the isolated demo before its wrapper is up) — never used to
+ * override a real, reachable API response. Always reports `published: true`
+ * so a fallback never triggers the "coming soon" gate.
+ */
+export function identityFromStaticTheme(): import('~/utils/sellright').SrStoreIdentity {
+	return {
+		storeName: theme.storeName,
+		legalName: theme.legalName,
+		tagline: theme.tagline,
+		supportEmail: theme.supportEmail,
+		logoText: theme.logoText,
+		logoImageUrl: theme.logoImageUrl,
+		ogImageUrl: theme.ogImageUrl,
+		address: theme.address,
+		social: theme.social,
+		colors: theme.colors,
+		fonts: theme.fonts,
+		currency: theme.currency,
+		locale: theme.locale,
+		siteOrigin: siteUrl,
+		published: true,
+	};
+}

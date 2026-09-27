@@ -11,6 +11,16 @@ import baseConfig from "../../vite.config.ts"; // Adjusted path
 // it is. SELLRIGHT_DISABLE_SSG turns prerendering off so every route is
 // rendered live per-request instead — required for that build, a no-op for
 // every other one (SSG stays on by default).
+//
+// WS-C (runtime storefront configuration): the SAME reasoning now applies to
+// the generic one-image build (packages/storefront/Dockerfile,
+// `pnpm run build:runtime`) — every route's root layout resolves store
+// identity/theme per request Host (see routes/layout.tsx
+// useStoreIdentityLoader), so a page baked at build time would freeze
+// whichever store's branding happened to resolve then (or none) and serve it
+// to every visitor of every host that image is later pointed at. Any build
+// meant to serve more than one store from the same image MUST set
+// SELLRIGHT_DISABLE_SSG=1.
 const ssgDisabled = process.env.SELLRIGHT_DISABLE_SSG === '1';
 const outDirSuffix = process.env.SELLRIGHT_BUILD_SUFFIX ? `-${process.env.SELLRIGHT_BUILD_SUFFIX}` : '';
 

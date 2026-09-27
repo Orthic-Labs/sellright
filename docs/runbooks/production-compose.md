@@ -32,7 +32,7 @@ docker compose --env-file deploy/.env -f deploy/compose.yaml exec -T admin \
 
 ## Storefront
 
-The `storefront` service (Qwik SSR, `packages/storefront/Dockerfile`) is included in Compose behind Caddy but **TODO(WS-C)**: it still bakes `SELLRIGHT_API_URL` in at *build* time (as `VITE_SELLRIGHT_API_URL`), not read at runtime, so today's image is only correct for the exact API this stack points at — one generic image per store is a WS-C prerequisite. It's not exposed publicly unless `SELLRIGHT_STOREFRONT_DOMAIN` is set in `deploy/.env`; unset, Caddy binds it to the internal-only `:8090` and only the `admin` domain is public, matching pre-storefront behavior exactly.
+The `storefront` service (Qwik SSR, `packages/storefront/Dockerfile`) is included in Compose behind Caddy. Since WS-C, it's a **generic image**: no store identity/theme is baked in at build time — it resolves the store per incoming request `Host` at runtime (`GET /v1/shop/identity` against `SELLRIGHT_API_URL`), so one image serves every store an operator points it at. It's not exposed publicly unless `SELLRIGHT_STOREFRONT_DOMAIN` is set in `deploy/.env`; unset, Caddy binds it to the internal-only `:8090` and only the `admin` domain is public, matching pre-storefront behavior exactly. Multi-store per-Host routing in Caddy itself (so one Caddy instance fronts several storefront hosts) remains a follow-up.
 
 ## HTTPS / Caddy IP certificate (spike result)
 

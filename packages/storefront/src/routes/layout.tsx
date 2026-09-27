@@ -26,6 +26,52 @@ import { LocalAddressService } from '~/services/LocalAddressService';
 import { LocalCartService } from '~/services/LocalCartService';
 import { CACHE_POLICY_VERSION, getRouteCacheProfile } from '~/config/route-cache-policy';
 import { DEV_API } from '~/constants';
+import { srShopIdentity, srErrorStatus } from '~/utils/sellright';
+import { identityFromStaticTheme } from '~/theme/theme.config';
+import ComingSoon from '~/components/coming-soon/ComingSoon';
+
+/** WS-C: cookie that remembers a valid preview token across navigation, once
+ *  presented on any request via ?preview_token=. Not HttpOnly — the value is
+ *  only useful to identify a link-holder as trusted, never a session secret;
+ *  keeping it readable also lets client nav propagate it if ever needed. */
+const PREVIEW_TOKEN_COOKIE = 'sr_preview_token';
+
+/**
+ * Runtime store identity/theme (plan §1.9): fetched fresh per request from
+ * the API, resolved by the request's own Host — this is what makes one built
+ * storefront image servable for any store. Falls back to the build-time
+ * `theme` object (theme.config.ts, itself VITE_*-driven) only when the API
+ * call fails for a reason OTHER than "store not published" — i.e. treats
+ * network/API-down as an offline/dev fallback, never as a way to bypass the
+ * publish gate.
+ *
+ * `notPublished: true` tells the layout to render the private-preview
+ * "coming soon" page instead of the real storefront chrome (plan §1.5): an
+ * unpublished store, viewed by someone without a valid preview token.
+ */
+export const useStoreIdentityLoader = routeLoader$(async ({ cookie, query, status }) => {
+	const queryToken = query.get('preview_token') ?? undefined;
+	if (queryToken) {
+		// Persist it (30 days) so following the link once is enough for the rest
+		// of the visit/session — the API re-verifies the hash on every request
+		// regardless, this cookie is purely "don't make me paste it on every page".
+		cookie.set(PREVIEW_TOKEN_COOKIE, queryToken, { path: '/', maxAge: 60 * 60 * 24 * 30, sameSite: 'lax' });
+	}
+	const previewToken = queryToken ?? cookie.get(PREVIEW_TOKEN_COOKIE)?.value;
+	try {
+		const identity = await srShopIdentity(previewToken);
+		return { identity, notPublished: false };
+	} catch (e) {
+		if (srErrorStatus(e) === 404) {
+			status(404);
+			return { identity: identityFromStaticTheme(), notPublished: true };
+		}
+		// API unreachable (offline dev, demo wrapper not up yet, transient error)
+		// — fail OPEN to the static theme rather than showing "coming soon" for
+		// an outage that has nothing to do with publish state.
+		return { identity: identityFromStaticTheme(), notPublished: false };
+	}
+});
 
 export const onGet: RequestHandler = async ({ cacheControl, url, headers }) => {
 	const pathname = url.pathname;
@@ -81,6 +127,7 @@ export default component$(() => {
 	});
 
 	const authData = useAuthLoader();
+	const identityData = useStoreIdentityLoader();
 
 	const state = useStore<AppState>({
 		showCart: false,
@@ -226,6 +273,10 @@ export default component$(() => {
 	useOn('qwik-router-error', $((event: any) => {
 		console.error('Qwik Router Error:', event.detail);
 	}));
+
+	if (identityData.value.notPublished) {
+		return <ComingSoon storeName={identityData.value.identity.storeName} />;
+	}
 
 	return (
 		<CartProvider>

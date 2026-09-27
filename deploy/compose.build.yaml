@@ -22,9 +22,10 @@ services:
       context: ../packages/admin
       dockerfile: Dockerfile
 
+  # WS-C: this image is generic (no store baked in); it resolves store
+  # identity per-request Host at runtime via SELLRIGHT_API_URL (set on the
+  # `storefront` service itself in compose.yaml), not a build arg.
   storefront:
     build:
       context: ..
       dockerfile: packages/storefront/Dockerfile
-      args:
-        SELLRIGHT_API_URL: ${SELLRIGHT_API_URL:-http://172.22.0.1:3300}

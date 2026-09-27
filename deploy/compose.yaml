@@ -161,10 +161,12 @@ services:
       - assets:/assets:ro
     networks: [private]
 
-  # TODO(WS-C): bakes SELLRIGHT_API_URL in at BUILD time (see
-  # packages/storefront/Dockerfile) rather than reading it at runtime, so this
-  # image is only correct for the exact API this compose stack points at. Not
-  # exposed publicly unless SELLRIGHT_STOREFRONT_DOMAIN is set (see Caddyfile).
+  # WS-C landed a generic runtime-config image: no store identity/theme is
+  # baked in, it resolves per-request Host via GET /v1/shop/identity against
+  # SELLRIGHT_API_URL below. Not exposed publicly unless
+  # SELLRIGHT_STOREFRONT_DOMAIN is set (see Caddyfile) — still true today
+  # because Caddy has no per-Host store routing of its own yet; the storefront
+  # container itself already supports serving multiple stores from one image.
   storefront:
     image: ${SELLRIGHT_IMAGE_PREFIX:-ghcr.io/orthic-labs/sellright}-storefront:${SELLRIGHT_IMAGE_TAG:-latest}
     restart: unless-stopped

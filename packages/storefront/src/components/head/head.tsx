@@ -3,7 +3,7 @@ import { useDocumentHead, useLocation } from '@qwik.dev/router';
 import { DEFAULT_METADATA_TITLE } from '~/constants';
 import { generateDocumentHead } from '~/utils';
 import { sanitizeStyle, sanitizeInlineScript } from '~/utils/sanitize';
-import { theme, siteUrl } from '~/theme/theme.config';
+import { useStoreIdentityLoader } from '~/routes/layout';
 
 interface HeadProps {
 	nonce?: string;
@@ -14,6 +14,11 @@ export const Head = component$<HeadProps>(({ nonce }) => {
 	const head =
 		documentHead.meta.length > 0 ? documentHead : { ...documentHead, ...generateDocumentHead() };
 	const loc = useLocation();
+	// WS-C: runtime store identity/theme, resolved per-request by the root
+	// layout's routeLoader$ (safe to call from any component for this route —
+	// unlike a plain useContext, a loader doesn't require Head to be a
+	// descendant of where the loader is invoked in the render tree).
+	const identity = useStoreIdentityLoader().value.identity;
 
 	return (
 		<head>
@@ -69,7 +74,7 @@ export const Head = component$<HeadProps>(({ nonce }) => {
 
 			{/* iPhone Advanced Privacy Protection compatibility */}
 			<meta name="apple-mobile-web-app-capable" content="yes" />
-			<meta name="apple-mobile-web-app-title" content={theme.storeName} />
+			<meta name="apple-mobile-web-app-title" content={identity.storeName} />
 			<meta name="format-detection" content="telephone=no" />
 			<meta name="msapplication-tap-highlight" content="no" />
 
@@ -137,7 +142,7 @@ export const Head = component$<HeadProps>(({ nonce }) => {
 			{/* Canonical: use page-specific if provided, otherwise default */}
 			{head.links.some((l: any) => l.rel === 'canonical')
 				? null
-				: <link rel="canonical" href={`${siteUrl}${loc.url.pathname}`} />
+				: <link rel="canonical" href={`${identity.siteOrigin}${loc.url.pathname}`} />
 			}
 
 			{head.meta
