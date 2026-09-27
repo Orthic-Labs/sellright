@@ -9,6 +9,7 @@ import { join, dirname, basename } from"node:path";
 import { fileURLToPath } from"node:url";
 import render from"./entry.ssr";
 import { sellrightRequestCookie } from"./utils/sellright-request-context.server";
+import { sellrightRequestHost } from"./utils/sellright-request-host.server";
 import { assertProdApiConfigured } from"./constants";
 
 declare global {
@@ -142,6 +143,18 @@ app.use((req, res, next) => {
 // whole async render.
 app.use((req, _res, next) => {
 	sellrightRequestCookie.run(req.headers.cookie, next);
+});
+
+// WS-C: thread the incoming Host (preferring X-Forwarded-Host, set by a
+// reverse proxy/CDN terminating TLS in front of this app — same precedence
+// the API's resolveStoreForRequest applies) through to every sr() fetch this
+// request triggers, so SSR data loads resolve the SAME store a browser
+// request to this host would get. Nested inside the cookie ALS.run above is
+// fine — both are independent AsyncLocalStorage instances.
+app.use((req, _res, next) => {
+	const forwardedHost = req.headers['x-forwarded-host'];
+	const host = (Array.isArray(forwardedHost) ? forwardedHost[0] : forwardedHost) || req.headers.host;
+	sellrightRequestHost.run(host, next);
 });
 
 // Static asset handlers

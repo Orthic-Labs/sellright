@@ -14,13 +14,42 @@
  * in-process with the correct x-store-slug; the real API on 3300 has never
  * heard of a store literally named 'demo' (STORE_SLUG's default below) and
  * every SSR-side catalog/PDP/cart call 503s until this is set correctly.
+ *
+ * WS-C (runtime storefront configuration, plan §1.9): the API base is read
+ * from the RUNTIME env var SELLRIGHT_API_URL when present (checked at request
+ * time via `process.env`, Node's actual environment — not Vite's build-time
+ * `import.meta.env`), falling back to the build-time VITE_SELLRIGHT_API_URL
+ * for dev/demo builds and single-store deployments that never set it. This is
+ * what lets one built image be pointed at any API instance without a rebuild.
+ * Likewise STORE_SLUG (VITE_SELLRIGHT_STORE_SLUG) is now a dev/legacy-single-
+ * store fallback ONLY — when unset, the request's own Host is forwarded
+ * instead (see sellright-request-host.server.ts) so the API's
+ * resolveStoreForRequest resolves the store per-host, exactly like a browser
+ * request to that host would.
  */
 import { isServer } from '@qwik.dev/core/build';
 import { sellrightRequestCookie } from './sellright-request-context.server';
+import { sellrightRequestHost } from './sellright-request-host.server';
 
-const API = import.meta.env.VITE_SELLRIGHT_API_URL || 'http://127.0.0.1:3300';
-const STORE_SLUG = import.meta.env.VITE_SELLRIGHT_STORE_SLUG || 'demo';
+const BUILD_TIME_API = import.meta.env.VITE_SELLRIGHT_API_URL || 'http://127.0.0.1:3300';
+const STORE_SLUG = import.meta.env.VITE_SELLRIGHT_STORE_SLUG || '';
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+/** Pure precedence rule, unit-testable without mocking `process`/`import.meta`:
+ *  a non-empty runtime override wins, else the build-time value. Trims a
+ *  trailing slash either way so callers can safely do `${base}${path}`. */
+export function resolveApiBase(runtimeUrl: string | undefined, buildTimeUrl: string): string {
+	const runtime = runtimeUrl?.trim();
+	return (runtime ? runtime : buildTimeUrl).replace(/\/+$/, '');
+}
+
+/** Server-only: the API base for THIS request. `process` only exists in the
+ *  Node SSR bundle — never referenced outside an `isServer` branch, so it's
+ *  safe alongside the browser bundle (which never evaluates this function). */
+function apiBase(): string {
+	const runtimeUrl = isServer && typeof process !== 'undefined' ? process.env?.SELLRIGHT_API_URL : undefined;
+	return resolveApiBase(runtimeUrl, BUILD_TIME_API);
+}
 
 /**
  * Double-submit CSRF token, browser-side only. packages/api's shop/admin CSRF
@@ -42,13 +71,18 @@ function readCsrfCookie(): string | undefined {
 }
 
 async function sr<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const url = isServer ? `${API}${path}` : path;
+  const url = isServer ? `${apiBase()}${path}` : path;
   // SSR only: forward the browser's own cookie header so a per-visitor/
   // per-customer session (sr_session, sr_csrf, and the isolated demo's
   // sr_demo/sr_csrf) resolves to the SAME session the browser has, instead of
   // an anonymous server-to-server call. Browser calls already send cookies
   // natively via credentials:'include' below.
   const forwardedCookie = isServer ? sellrightRequestCookie.getStore() : undefined;
+  // SSR only, WS-C: forward the incoming request's own Host so the API
+  // resolves the same store a real browser request to that host would.
+  // Skipped entirely when STORE_SLUG is explicitly configured (dev/demo/
+  // legacy single-store builds), which takes precedence on the API side too.
+  const forwardedHost = isServer && !STORE_SLUG ? sellrightRequestHost.getStore() : undefined;
   const method = (init.method ?? 'GET').toUpperCase();
   const csrf = !isServer && MUTATING_METHODS.has(method) ? readCsrfCookie() : undefined;
   const res = await fetch(url, {
@@ -59,7 +93,8 @@ async function sr<T>(path: string, init: RequestInit = {}): Promise<T> {
     credentials: 'include',
     headers: {
       'content-type': 'application/json',
-      'x-store-slug': STORE_SLUG,
+      ...(STORE_SLUG ? { 'x-store-slug': STORE_SLUG } : {}),
+      ...(forwardedHost ? { 'x-forwarded-host': forwardedHost } : {}),
       ...(forwardedCookie ? { cookie: forwardedCookie } : {}),
       ...(csrf ? { 'x-csrf-token': csrf } : {}),
       ...(init.headers as Record<string, string> | undefined),
@@ -84,6 +119,60 @@ export const srErrorStatus = (e: unknown): number | undefined =>
 /** Parsed JSON body carried on errors thrown by `sr` (409 conflict payloads). */
 export const srErrorBody = <T = unknown>(e: unknown): T | undefined =>
   (e as { body?: T } | null)?.body;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Store identity/theme (WS-C) — mirrors packages/api/src/routes/store-identity.ts
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface SrStoreIdentity {
+  storeName: string;
+  legalName: string;
+  tagline: string;
+  supportEmail: string;
+  logoText: string;
+  logoImageUrl: string | null;
+  ogImageUrl: string;
+  address: {
+    streetAddress: string;
+    addressLocality: string;
+    addressRegion: string;
+    postalCode: string;
+    addressCountry: string;
+  } | null;
+  social: {
+    instagram?: string;
+    facebook?: string;
+    twitter?: string;
+    tiktok?: string;
+    youtube?: string;
+  };
+  colors: {
+    primary: string;
+    secondary: string;
+    accent: string;
+    background: string;
+    surface: string;
+    text: string;
+    textMuted: string;
+    border: string;
+  };
+  fonts: { display: string; body: string; mono: string };
+  currency: string;
+  locale: string;
+  siteOrigin: string;
+  published: boolean;
+}
+
+/**
+ * GET /v1/shop/identity for the store resolved from this request (per-host in
+ * production, STORE_SLUG in dev/demo — see `sr`). `previewToken`, when given,
+ * is forwarded as `x-preview-token` so an unpublished store's own owner (or
+ * anyone holding the preview link) can still resolve identity; the API 404s
+ * (StoreNotPublishedError) for anyone else. Callers (the root route loader)
+ * catch that 404 and render a "coming soon" page instead of propagating it.
+ */
+export const srShopIdentity = (previewToken?: string) =>
+  sr<SrStoreIdentity>('/v1/shop/identity', previewToken ? { headers: { 'x-preview-token': previewToken } } : {});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Auth & account — mirrors packages/api/src/routes/{auth,account,customer-tokens}.ts
