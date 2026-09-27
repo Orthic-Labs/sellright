@@ -42,3 +42,11 @@ overrides:
   brace-expansion: ^5.0.8
   # GHSA-w5hq-g745-h8pq — exceljs pins uuid <11.1.1; 11.x keeps the CJS build exceljs requires.
   uuid: ^11.1.1
+  # GHSA-f88m-g3jw-g9cj / GHSA-rgj7-g3m4-5g8c / GHSA-g89c-p67h-r497 / GHSA-2jg2-4ch7-h545 —
+  # @sellright/storefront's own sharp is already >=0.35.4 (patched), but moving
+  # @qwik.dev/router into storefront's `dependencies` (WS-D, so the SSR server
+  # image's production install actually includes it) pulls its transitive
+  # vite-imagetools -> sharp<0.35 into `pnpm audit --prod` scope as a separate,
+  # older resolution. Force every sharp in the tree to the patched version
+  # instead of only the direct one.
+  sharp: ^0.35.4

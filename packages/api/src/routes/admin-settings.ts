@@ -7,6 +7,7 @@ import { clearAdminTotpSecret, getAdminTotpSecret, setAdminTotpSecret } from '..
 import { isSupportedPaymentMethod } from '../payments/provider.js';
 import { resolveStripeConfigured, stripeModeFromConfig } from '../payments/stripe.js';
 import { invalidateStoreCache } from '../store-context.js';
+import { generatePreviewToken, hashPreviewToken } from '../store-publish.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireManage, guard } from './admin-helpers.js';
 
 export const adminSettings = new OpenAPIHono();
@@ -458,6 +459,121 @@ adminSettings.openapi(
       if (z2) await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'tax_zone', entityId: id, action: 'delete', data: { name: z2.name } });
     });
     return c.json({ id }, 200);
+  }),
+);
+
+// ── store identity/theme (WS-C: runtime storefront configuration) ──────────
+// Free-form identity fields are written as one JSON blob under
+// config.identity — same shape the public /v1/shop/identity route reads via
+// storeIdentityFromConfig. Kept permissive (partial merge, no schema
+// enforcement beyond "an object") because this is display copy, not a
+// security-sensitive setting; the public route already falls back safely for
+// any missing/malformed field.
+const IdentityPatchSchema = z.object({
+  storeName: z.string().optional(),
+  legalName: z.string().optional(),
+  tagline: z.string().optional(),
+  supportEmail: z.string().optional(),
+  logoText: z.string().optional(),
+  logoImageUrl: z.string().nullable().optional(),
+  ogImageUrl: z.string().optional(),
+  siteOrigin: z.string().optional(),
+  locale: z.string().optional(),
+  address: z.object({
+    streetAddress: z.string(), addressLocality: z.string(), addressRegion: z.string(),
+    postalCode: z.string(), addressCountry: z.string(),
+  }).nullable().optional(),
+  social: z.object({
+    instagram: z.string().optional(), facebook: z.string().optional(), twitter: z.string().optional(),
+    tiktok: z.string().optional(), youtube: z.string().optional(),
+  }).optional(),
+  colors: z.object({
+    primary: z.string().optional(), secondary: z.string().optional(), accent: z.string().optional(),
+    background: z.string().optional(), surface: z.string().optional(), text: z.string().optional(),
+    textMuted: z.string().optional(), border: z.string().optional(),
+  }).optional(),
+  fonts: z.object({ display: z.string().optional(), body: z.string().optional(), mono: z.string().optional() }).optional(),
+  policies: z.object({
+    shipping: z.object({ label: z.string().optional(), sub: z.string().optional() }).optional(),
+    returns: z.object({ label: z.string().optional(), sub: z.string().optional() }).optional(),
+    payment: z.object({ label: z.string().optional(), sub: z.string().optional() }).optional(),
+  }).optional(),
+});
+
+adminSettings.openapi(
+  createRoute({
+    method: 'get', path: '/v1/admin/settings/identity', summary: 'Store identity/theme config',
+    responses: { 200: { description: 'OK', content: J(z.any()) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    const row = await storeRow(st.storeId);
+    const config = cfg(row);
+    return c.json({
+      identity: (config.identity as object) ?? {},
+      published: (config as Record<string, unknown>).published !== false,
+      hasPreviewToken: typeof (config as Record<string, unknown>).previewTokenHash === 'string',
+    }, 200);
+  }),
+);
+
+adminSettings.openapi(
+  createRoute({
+    method: 'patch', path: '/v1/admin/settings/identity', summary: 'Update store identity/theme config (merged with existing)',
+    request: { body: { content: J(IdentityPatchSchema) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireManage(st);
+    const patch = c.req.valid('json');
+    await mutateStoreConfig(st.storeId, (config) => ({
+      ...config,
+      identity: { ...((config.identity as object) ?? {}), ...patch },
+    }), {
+      actor: admin.email,
+      action: 'update-identity',
+      detail: () => ({ keys: Object.keys(patch) }),
+    });
+    return c.json({ ok: true }, 200);
+  }),
+);
+
+// ── publish state + private-preview token (plan §1.5) ───────────────────────
+adminSettings.openapi(
+  createRoute({
+    method: 'patch', path: '/v1/admin/settings/publish', summary: 'Set the storefront published flag',
+    request: { body: { content: J(z.object({ published: z.boolean() })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ published: z.boolean() })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireManage(st);
+    const { published } = c.req.valid('json');
+    await mutateStoreConfig(st.storeId, (config) => ({ ...config, published }), {
+      actor: admin.email,
+      action: published ? 'publish-store' : 'unpublish-store',
+    });
+    return c.json({ published }, 200);
+  }),
+);
+
+adminSettings.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/settings/preview-token', summary: 'Issue a new private-preview token (invalidates the previous one)',
+    responses: { 200: { description: 'OK', content: J(z.object({ token: z.string() })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireManage(st);
+    const token = generatePreviewToken();
+    await mutateStoreConfig(st.storeId, (config) => ({ ...config, previewTokenHash: hashPreviewToken(token) }), {
+      actor: admin.email,
+      action: 'issue-preview-token',
+    });
+    // The plaintext token exists only in this response — only its hash is persisted.
+    return c.json({ token }, 200);
   }),
 );
 

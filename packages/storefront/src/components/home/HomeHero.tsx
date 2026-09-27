@@ -1,5 +1,5 @@
 import { component$ } from '@qwik.dev/core';
-import { theme } from '~/theme/theme.config';
+import { useStoreIdentityLoader } from '~/routes/layout';
 // Responsive hero images with multi-format support
 import HeroImage_768 from '~/media/hero.jpg?format=avif&w=768&quality=75&url';
 import HeroImage_1024 from '~/media/hero.jpg?format=avif&w=1024&quality=75&url';
@@ -11,7 +11,9 @@ import HeroImageJPEG_768 from '~/media/hero.jpg?format=jpeg&w=768&quality=90&url
 import HeroImageJPEG_1024 from '~/media/hero.jpg?format=jpeg&w=1024&quality=90&url';
 import HeroImageJPEG_1600 from '~/media/hero.jpg?format=jpeg&w=1600&quality=90&url';
 
-export const HomeHero = component$(() => (
+export const HomeHero = component$(() => {
+  const identity = useStoreIdentityLoader().value.identity;
+  return (
   <>
       {/* ════════ Hero ════════ */}
       <section class="hero">
@@ -28,7 +30,7 @@ export const HomeHero = component$(() => (
               sizes="(max-width: 768px) 100vw, (max-width: 1440px) 1024px, 1600px" />
             <img
               src={HeroImageJPEG_1024}
-              alt={`${theme.storeName} — featured product photography`}
+              alt={`${identity.storeName} — featured product photography`}
               loading="eager" fetchPriority="high" decoding="sync"
               width={1600} height={1067}
               class="hero-img absolute inset-0 w-full h-full object-cover"
@@ -47,8 +49,8 @@ export const HomeHero = component$(() => (
         <div class="hero-content">
           <div style="text-shadow: 0 1px 20px rgba(0,0,0,0.4)">
             <h1 class="hero-title">
-              <span class="hero-kicker-text" style="display:block;margin-bottom:16px">{theme.storeName}</span>
-              {theme.tagline}
+              <span class="hero-kicker-text" style="display:block;margin-bottom:16px">{identity.storeName}</span>
+              {identity.tagline}
             </h1>
             <p class="hero-sub stagger-3">Thoughtfully made. Built to last. Backed by real support.</p>
             <div class="hero-ctas stagger-4">
@@ -59,13 +61,14 @@ export const HomeHero = component$(() => (
 
           <div class="hero-meta stagger-4" style="text-shadow: 0 1px 16px rgba(0,0,0,0.5)">
             <div style="display:flex;flex-direction:column;gap:2px">
-              <span class="meta-val">{theme.policies.shipping.label}</span><span class="meta-label">{theme.policies.shipping.sub}</span>
+              <span class="meta-val">{identity.policies.shipping.label}</span><span class="meta-label">{identity.policies.shipping.sub}</span>
             </div>
             <div style="display:flex;flex-direction:column;gap:2px">
-              <span class="meta-val">{theme.policies.returns.label}</span><span class="meta-label">{theme.policies.returns.sub}</span>
+              <span class="meta-val">{identity.policies.returns.label}</span><span class="meta-label">{identity.policies.returns.sub}</span>
             </div>
           </div>
         </div>
       </section>
   </>
-));
+  );
+});

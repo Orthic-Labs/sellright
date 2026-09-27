@@ -3,16 +3,19 @@ import { LocalCartService } from '~/services/LocalCartService';
 import { useLocalCart, refreshCartStock, loadCartIfNeeded } from '~/contexts/CartContext';
 import { useLocation, Link, useNavigate } from '@qwik.dev/router';
 import { APP_STATE, CUSTOMER_NOT_DEFINED_ID } from '~/constants';
+import { useStoreIdentityLoader } from '~/routes/layout';
 import { logoutMutation } from '~/services/customer';
 import { isCheckoutPage } from '~/utils/route-helpers';
 import LogoImage from '~/media/logo.svg?jsx';
 import { useLoginModalActions } from '~/contexts/LoginModalContext';
 import { HEADER_STYLES } from './header-styles';
-import { theme } from '~/theme/theme.config';
 
 export default component$(() => {
 	useStyles$(HEADER_STYLES);
 	const appState = useContext(APP_STATE);
+	// WS-C: runtime identity (resolved per-request by the root layout's
+	// routeLoader$ — callable from any component rendered for this route).
+	const identity = useStoreIdentityLoader().value.identity;
 	const location = useLocation();
 	const isScrolledFallback = useSignal(false);
 	const { openLoginModal } = useLoginModalActions();
@@ -75,9 +78,9 @@ export default component$(() => {
 					{/* LEFT: Logo mark + full store name (never baked into the image, so it's
 					    never clipped and always matches theme.storeName) */}
 					<div class="flex items-center flex-shrink-0">
-						<Link href="/" aria-label={`${theme.storeName} — Go to homepage`} class="header-logo">
+						<Link href="/" aria-label={`${identity.storeName} — Go to homepage`} class="header-logo">
 							<LogoImage class="header-logo-icon" width="28" height="28" />
-							<span class="header-logo-text">{theme.storeName}</span>
+							<span class="header-logo-text">{identity.storeName}</span>
 						</Link>
 					</div>
 

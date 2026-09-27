@@ -9,8 +9,17 @@ import { isPaymentMethodEnabled } from '../payments/provider.js';
 import { stripeModeFromConfig, resolveStripePublishableForClient, resolveStripeUsable } from '../payments/stripe.js';
 import { loyaltySettingsFromConfig } from '../money/loyalty.js';
 import { PublicLoyaltySettings } from './loyalty.js';
+import { canViewStorefront, isStorePublished, StoreNotPublishedError } from '../store-publish.js';
+import { storeIdentityFromConfig, StoreIdentitySchema } from './store-identity.js';
 
 export const shopConfig = new OpenAPIHono();
+
+/** WS-C: the preview token may arrive as a header (linked-to preview, set by
+ *  the storefront from a `?preview_token=` query param on first load) or as a
+ *  query param directly (bookmarkable preview links). Either is accepted. */
+function previewTokenFromCtx(c: { req: { header: (k: string) => string | undefined; query: (k: string) => string | undefined } }): string | undefined {
+  return c.req.header('x-preview-token') || c.req.query('preview_token') || undefined;
+}
 
 shopConfig.openapi(
   createRoute({
@@ -70,5 +79,28 @@ shopConfig.openapi(
     const st = await resolveStoreFromCtx(c);
     const mode = stripeModeFromConfig(st.config);
     return c.json({ publishableKey: await resolveStripePublishableForClient(st.id, mode) }, 200);
+  },
+);
+
+// GET /v1/shop/identity — public brand identity/theme/contact/social/SEO
+// origin for the resolved store (WS-C). Gated on publish state: an
+// unpublished store 404s here (StoreNotPublishedError) unless the caller
+// presents a valid preview token, so an unpublished storefront reveals
+// nothing — not even its name — to an outside observer (plan §1.5).
+shopConfig.openapi(
+  createRoute({
+    method: 'get',
+    path: '/v1/shop/identity',
+    summary: 'Public store identity/theme/contact/social/SEO config for the resolved host',
+    responses: {
+      200: { description: 'OK', content: { 'application/json': { schema: StoreIdentitySchema } } },
+      404: { description: 'Store not found or not published' },
+    },
+  }),
+  async (c) => {
+    const st = await resolveStoreFromCtx(c);
+    const token = previewTokenFromCtx(c);
+    if (!canViewStorefront(st.config, token)) throw new StoreNotPublishedError();
+    return c.json(storeIdentityFromConfig(st, isStorePublished(st.config)), 200);
   },
 );

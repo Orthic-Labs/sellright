@@ -1,15 +1,25 @@
 import type { RequestHandler } from '@qwik.dev/router';
+import { apiBase, storeResolutionHeaders } from '~/utils/sellright';
 
 // Thin proxies to the SellRight API's own SEO routes (packages/api
 // src/routes/seo.ts) — the API is the source of truth for sitemaps, robots.txt,
 // and the IndexNow key file; this storefront never reconstructs them locally.
-const API = import.meta.env.VITE_SELLRIGHT_API_URL || 'http://127.0.0.1:3300';
-const STORE = import.meta.env.VITE_SELLRIGHT_STORE_SLUG || 'demo';
-
+//
+// WS-C: resolves the API base and the store via the SAME per-request logic
+// `sr()` (utils/sellright.ts) uses — apiBase() (runtime SELLRIGHT_API_URL,
+// falling back to build-time VITE_SELLRIGHT_API_URL) and
+// storeResolutionHeaders() (x-store-slug when a build pins one, else the
+// incoming request's own Host forwarded as x-forwarded-host). Previously this
+// file kept its own copy of the old build-time-only logic (a hardcoded
+// VITE_SELLRIGHT_STORE_SLUG default of 'demo', no Host forwarding at all),
+// so every JSON-LD Organization/WebSite/Product schema and every sitemap/
+// robots.txt response silently resolved 'demo' (or the dev API) on ANY real
+// multi-store deployment, regardless of which store's storefront was
+// actually being requested.
 async function proxy(path: string): Promise<{ status: number; body: string; contentType: string }> {
   try {
-    const res = await fetch(`${API}${path}`, {
-      headers: { 'x-store-slug': STORE, accept: '*/*' },
+    const res = await fetch(`${apiBase()}${path}`, {
+      headers: { ...storeResolutionHeaders(), accept: '*/*' },
       signal: AbortSignal.timeout(10000),
     });
     const body = await res.text();

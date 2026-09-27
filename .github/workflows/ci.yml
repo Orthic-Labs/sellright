@@ -67,6 +67,21 @@ jobs:
       - name: Audit production dependencies
         run: pnpm deps:audit
 
+      - name: Production build (root — exercises the storefront's SSG path)
+        # The exact command a real deploy runs: `pnpm -r build` (every
+        # workspace package's own `build` script, including packages/
+        # storefront's full production build with static prerendering) then
+        # packages/admin's build. `pnpm verify:static` below also runs
+        # `pnpm -r build`, but as one step inside a longer chain — this
+        # dedicated step exists so a regression in the storefront's SSG path
+        # (PR #96 shipped one: an intermittent Code(Q8) crash rendering
+        # /checkout/ during static generation, since fixed by excluding
+        # /checkout from SSG and hardening the runtime identity fetch —
+        # see routes/layout.tsx, adapters/express/vite.config.mts) fails
+        # here, unambiguously, on its own line — not silently inside a
+        # bigger pipeline that happened to get lucky on a given run.
+        run: pnpm build
+
       - name: Verify core and admin
         run: pnpm verify:static
 
@@ -191,11 +206,21 @@ jobs:
           printf '[]\n' > deploy/gateway-accounts.json
           docker compose -f deploy/compose.yaml config --quiet
 
-      - name: Build production images
-        run: docker compose -f deploy/compose.yaml build api admin
+      - name: Validate Caddyfile
+        run: |
+          # SELLRIGHT_DOMAIN/SELLRIGHT_STOREFRONT_DOMAIN must be non-empty here:
+          # an empty {$VAR} site address makes Caddy parse that block as GLOBAL
+          # OPTIONS instead of a site, which then rejects `encode` as unknown.
+          docker run --rm -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            -e SELLRIGHT_DOMAIN=sellright.example.net \
+            -e SELLRIGHT_STOREFRONT_DOMAIN=:8090 \
+            caddy:2.10-alpine caddy validate --config /etc/caddy/Caddyfile
 
-      - name: Start database, API and admin
-        run: docker compose -f deploy/compose.yaml up -d postgres api admin
+      - name: Build production images
+        run: docker compose -f deploy/compose.yaml -f deploy/compose.build.yaml build api admin storefront
+
+      - name: Start database, API, admin and storefront
+        run: docker compose -f deploy/compose.yaml -f deploy/compose.build.yaml up -d postgres api admin storefront
 
       - name: Wait for proxied readiness
         shell: bash
@@ -244,7 +269,7 @@ jobs:
           docker compose -f deploy/compose.yaml exec -T api sh -c \
             "printf 'persistence-ok\n' > /app/var/assets/.ci-persistence && printf 'persistence-ok\n' > /app/var/downloads/.ci-persistence"
           docker compose -f deploy/compose.yaml down
-          docker compose -f deploy/compose.yaml up -d postgres api admin
+          docker compose -f deploy/compose.yaml up -d postgres api admin storefront
           for attempt in {1..60}; do
             if docker compose -f deploy/compose.yaml exec -T admin \
               wget -qO- http://127.0.0.1:8080/v1/readyz 2>/dev/null \
@@ -266,3 +291,302 @@ jobs:
       - name: Tear down smoke stack
         if: always()
         run: docker compose -f deploy/compose.yaml down -v --remove-orphans
+
+  shellcheck:
+    name: Shellcheck installer + CLI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: shellcheck
+        uses: ludeeus/action-shellcheck@00cae500b08a931fb5698e11e79bfbd38e612a38 # 2.0.0
+        with:
+          scandir: deploy
+          severity: style
+          ignore_names: demo
+
+  release:
+    name: Build, push and sign images
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [verify, database, packaging, shellcheck]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    strategy:
+      matrix:
+        component: [api, admin, storefront]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
+
+      - name: Resolve build context/dockerfile
+        id: ctx
+        run: |
+          case "${{ matrix.component }}" in
+            admin)
+              printf 'context=packages/admin\n' >> "$GITHUB_OUTPUT"
+              printf 'dockerfile=packages/admin/Dockerfile\n' >> "$GITHUB_OUTPUT"
+              ;;
+            api)
+              printf 'context=.\n' >> "$GITHUB_OUTPUT"
+              printf 'dockerfile=packages/api/Dockerfile\n' >> "$GITHUB_OUTPUT"
+              ;;
+            storefront)
+              printf 'context=.\n' >> "$GITHUB_OUTPUT"
+              printf 'dockerfile=packages/storefront/Dockerfile\n' >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: ${{ steps.ctx.outputs.context }}
+          file: ${{ steps.ctx.outputs.dockerfile }}
+          push: true
+          tags: |
+            ghcr.io/orthic-labs/sellright-${{ matrix.component }}:latest
+            ghcr.io/orthic-labs/sellright-${{ matrix.component }}:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      # Keyless signing: no key material anywhere. Sigstore's Fulcio issues a
+      # short-lived cert bound to this workflow's OIDC identity
+      # (id-token: write above), and the signature + certificate are uploaded
+      # to the public Rekor transparency log. install.sh's `cosign verify`
+      # step checks the image digest against that same identity/issuer.
+      - name: Sign image (cosign keyless)
+        run: |
+          cosign sign --yes "ghcr.io/orthic-labs/sellright-${{ matrix.component }}@${{ steps.build.outputs.digest }}"
+
+      - name: Record digest
+        run: |
+          echo "${{ matrix.component }} -> ${{ steps.build.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"
+
+  verify-appliance:
+    name: Recovery drill (backup -> destroy -> restore)
+    needs: [release]
+    if: always() && needs.release.result != 'failure' && needs.release.result != 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      POSTGRES_PASSWORD: driltest0123456789abcdef0123456789abcdef0123456789abcdef012345
+      POSTGRES_APP_PASSWORD: driltest9876543210fedcba9876543210fedcba9876543210fedcba987654
+      STOREFRONT_URL: https://shop.example.net
+      DOWNLOAD_URL_SECRET: abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
+      ADMIN_EMAIL: drill@example.net
+      ADMIN_PASSWORD: drill-only-long-random-password-12345
+      BOOTSTRAP_STORE_SLUG: drill
+      BOOTSTRAP_STORE_NAME: Drill Store
+      BOOTSTRAP_STORE_CURRENCY: USD
+      BOOTSTRAP_STORE_HOSTNAMES: shop.example.net
+      SELLRIGHT_DOMAIN: sellright.example.net
+      SMTP_ENABLED: "false"
+      JOBS_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install rclone (off-site backup path)
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends rclone
+
+      - name: Write appliance env
+        run: |
+          umask 077
+          master_key=$(openssl rand -hex 32)
+          kit_id=$(openssl rand -hex 4)
+          mkdir -p "${{ github.workspace }}/offsite-remote"
+          {
+            printf 'POSTGRES_PASSWORD=%s\n' "$POSTGRES_PASSWORD"
+            printf 'POSTGRES_APP_PASSWORD=%s\n' "$POSTGRES_APP_PASSWORD"
+            printf 'STOREFRONT_URL=%s\n' "$STOREFRONT_URL"
+            printf 'DOWNLOAD_URL_SECRET=%s\n' "$DOWNLOAD_URL_SECRET"
+            printf 'ADMIN_EMAIL=%s\n' "$ADMIN_EMAIL"
+            printf 'ADMIN_PASSWORD=%s\n' "$ADMIN_PASSWORD"
+            printf 'BOOTSTRAP_STORE_SLUG=%s\n' "$BOOTSTRAP_STORE_SLUG"
+            printf 'BOOTSTRAP_STORE_NAME=%s\n' "$BOOTSTRAP_STORE_NAME"
+            printf 'BOOTSTRAP_STORE_CURRENCY=%s\n' "$BOOTSTRAP_STORE_CURRENCY"
+            printf 'BOOTSTRAP_STORE_HOSTNAMES=%s\n' "$BOOTSTRAP_STORE_HOSTNAMES"
+            printf 'SELLRIGHT_DOMAIN=%s\n' "$SELLRIGHT_DOMAIN"
+            printf 'SMTP_ENABLED=%s\n' "$SMTP_ENABLED"
+            printf 'JOBS_ENABLED=%s\n' "$JOBS_ENABLED"
+            printf 'SELLRIGHT_MASTER_KEY=%s\n' "$master_key"
+            printf 'RECOVERY_KIT_ID=%s\n' "$kit_id"
+            # rclone treats a plain filesystem path (no 'remote:' prefix) as a
+            # local backend directly — no cloud account/config needed for the
+            # drill to exercise the real off-site copy + encrypt code path.
+            printf 'SELLRIGHT_OFFSITE_REMOTE=%s\n' "${{ github.workspace }}/offsite-remote"
+          } > deploy/.env
+          # This recovery kit mirrors what install.sh writes at real install
+          # time (same masterKey/kitId as deploy/.env) — 'sellright restore'
+          # reads it, not the env vars, when decrypting an off-site set.
+          printf '{"kitId":"%s","generatedAt":"2026-01-01T00:00:00Z","masterKey":"%s","backupLocation":"local"}\n' \
+            "$kit_id" "$master_key" > deploy/recovery-kit.json
+          # Reset the umask before this: it's a Compose secret bind-mounted
+          # read-only into the api container for the non-root `node` user, not
+          # a host secret needing the .env's 600. A umask-077 0600 file here
+          # (owned by the runner's uid) makes the API crash at boot with
+          # EACCES reading /run/secrets/gateway_accounts as `node`.
+          ( umask 022 && printf '[]\n' > deploy/gateway-accounts.json )
+
+      # This drill proves the recovery MECHANISM (backup set shape, restore
+      # into a disposable database, data present) using this PR's own
+      # locally-built images. It intentionally does NOT run install.sh's
+      # cosign-verified pull — those signed images only exist for pushes to
+      # main (the `release` job above), so a PR branch has none yet to verify.
+      - name: Build appliance images (isolated project)
+        run: |
+          docker compose -p sellright-drill -f deploy/compose.yaml -f deploy/compose.build.yaml \
+            build api admin storefront
+
+      - name: Start appliance
+        run: |
+          docker compose -p sellright-drill -f deploy/compose.yaml -f deploy/compose.build.yaml \
+            up -d postgres db-init api admin storefront || {
+              echo "::group::api logs"
+              docker compose -p sellright-drill -f deploy/compose.yaml logs api --no-color || true
+              echo "::endgroup::"
+              echo "::group::db-init logs"
+              docker compose -p sellright-drill -f deploy/compose.yaml logs db-init --no-color || true
+              echo "::endgroup::"
+              echo "::group::admin logs"
+              docker compose -p sellright-drill -f deploy/compose.yaml logs admin --no-color || true
+              echo "::endgroup::"
+              echo "::group::storefront logs"
+              docker compose -p sellright-drill -f deploy/compose.yaml logs storefront --no-color || true
+              echo "::endgroup::"
+              exit 1
+            }
+
+      - name: Wait for readiness
+        run: |
+          for attempt in $(seq 1 60); do
+            if docker compose -p sellright-drill -f deploy/compose.yaml exec -T admin \
+              wget -qO- http://127.0.0.1:8080/v1/readyz 2>/dev/null | grep -q '"status":"ok"'; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose -p sellright-drill -f deploy/compose.yaml ps
+          docker compose -p sellright-drill -f deploy/compose.yaml logs --no-color
+          exit 1
+
+      - name: Seed recognizable asset + download sentinels
+        run: |
+          docker compose -p sellright-drill -f deploy/compose.yaml exec -T api sh -c \
+            "printf 'drill-asset-sentinel\n' > /app/var/assets/.drill-sentinel && \
+             printf 'drill-download-sentinel\n' > /app/var/downloads/.drill-sentinel"
+
+      - name: Backup --offsite (sellright CLI) and verify authenticated encryption
+        env:
+          SELLRIGHT_HOME: ${{ github.workspace }}/deploy
+        run: |
+          sed -i "s#docker compose --env-file#docker compose -p sellright-drill --env-file#" deploy/sellright.sh
+          sh deploy/sellright.sh backup --offsite
+          out_dir=$(find deploy/backups -mindepth 1 -maxdepth 1 -type d | sort | tail -1)
+          echo "BACKUP_DIR=$out_dir" >> "$GITHUB_ENV"
+          test -s "$out_dir/database.dump"
+          test -s "$out_dir/assets.tar.gz"
+          test -s "$out_dir/downloads.tar.gz"
+          test -s "$out_dir/manifest.json"
+          grep -q sha256 "$out_dir/manifest.json"
+          tar xzOf "$out_dir/assets.tar.gz" assets/.drill-sentinel | grep -qx drill-asset-sentinel
+          tar xzOf "$out_dir/downloads.tar.gz" downloads/.drill-sentinel | grep -qx drill-download-sentinel
+
+          offsite_dir="${{ github.workspace }}/offsite-remote/$(basename "$out_dir")"
+          echo "OFFSITE_DIR=$offsite_dir" >> "$GITHUB_ENV"
+          for f in database.dump assets.tar.gz downloads.tar.gz manifest.json; do
+            test -s "${offsite_dir}/${f}.enc"
+            test -s "${offsite_dir}/${f}.enc.hmac"
+          done
+
+      - name: Tampered off-site backup must be rejected, not restored
+        env:
+          SELLRIGHT_HOME: ${{ github.workspace }}/deploy
+        run: |
+          tampered_dir=$(mktemp -d)
+          cp "$OFFSITE_DIR"/* "$tampered_dir"/
+          # Flip one byte inside the ciphertext (not the .hmac tag) so the
+          # HMAC recomputed at restore time no longer matches.
+          python3 - "$tampered_dir/database.dump.enc" <<'PY'
+          import sys
+          path = sys.argv[1]
+          with open(path, "r+b") as f:
+              f.seek(0)
+              b = f.read(1)
+              f.seek(0)
+              f.write(bytes([b[0] ^ 0xFF]))
+          PY
+          if sh deploy/sellright.sh restore --kit deploy/recovery-kit.json --set "$tampered_dir" --yes \
+              > /tmp/tamper-restore.log 2>&1; then
+            echo "::error::restore succeeded against a tampered backup — integrity check did not work"
+            cat /tmp/tamper-restore.log
+            exit 1
+          fi
+          grep -qi "integrity check failed" /tmp/tamper-restore.log || {
+            echo "::error::restore failed for the wrong reason (expected an integrity-check message)"
+            cat /tmp/tamper-restore.log
+            exit 1
+          }
+          echo "Tampered backup correctly rejected:"
+          grep -i "integrity check failed" /tmp/tamper-restore.log
+          rm -rf "$tampered_dir"
+          # The live store must be completely unaffected by the rejected attempt.
+          docker compose -p sellright-drill -f deploy/compose.yaml exec -T postgres \
+            psql -U sellright -d sellright -Atc "SELECT count(*) FROM store WHERE slug = 'drill'" \
+            | grep -qx '1'
+
+      - name: Destroy volumes (simulate total server loss)
+        run: |
+          docker compose -p sellright-drill -f deploy/compose.yaml down -v --remove-orphans
+
+      - name: Bring up a fresh database only
+        run: |
+          docker compose -p sellright-drill -f deploy/compose.yaml -f deploy/compose.build.yaml \
+            up -d postgres db-init
+
+      - name: Restore --yes from the off-site (encrypted) set and verify full promotion
+        env:
+          SELLRIGHT_HOME: ${{ github.workspace }}/deploy
+        run: |
+          sh deploy/sellright.sh restore --kit deploy/recovery-kit.json --set "$OFFSITE_DIR" --yes
+
+          # Assets/downloads promotion and the database rename both happen
+          # inside `restore` itself, before it starts api back up — check them
+          # via a fresh one-off container rather than racing api's own
+          # migrate/bootstrap startup sequence.
+          docker compose -p sellright-drill -f deploy/compose.yaml run --rm -T api \
+            sh -c "grep -qx drill-asset-sentinel /app/var/assets/.drill-sentinel && \
+                   grep -qx drill-download-sentinel /app/var/downloads/.drill-sentinel"
+
+          # Database was PROMOTED (renamed) — the live 'sellright' database
+          # itself must have the restored data now, not a side database.
+          docker compose -p sellright-drill -f deploy/compose.yaml exec -T postgres \
+            psql -U sellright -d sellright -Atc "SELECT count(*) FROM store WHERE slug = 'drill'" \
+            | grep -qx '1'
+
+          # And prove the promoted stack actually comes back up healthy end to
+          # end, not just that the files/rows are in the right place.
+          cid=$(docker compose -p sellright-drill -f deploy/compose.yaml ps -q api)
+          for attempt in $(seq 1 60); do
+            status=$(docker inspect --format='{{.State.Health.Status}}' "$cid" 2>/dev/null || echo "")
+            [ "$status" = "healthy" ] && break
+            test "$attempt" -lt 60 || {
+              docker compose -p sellright-drill -f deploy/compose.yaml logs api --no-color
+              exit 1
+            }
+            sleep 2
+          done
+
+      - name: Tear down drill stack
+        if: always()
+        run: docker compose -p sellright-drill -f deploy/compose.yaml down -v --remove-orphans
