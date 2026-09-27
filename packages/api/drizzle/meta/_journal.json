@@ -435,6 +435,13 @@
       "when": 1790000009800,
       "tag": "0070_loyalty_ledger",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1790000009900,
+      "tag": "0071_store_secret",
+      "breakpoints": true
     }
   ]
 }
