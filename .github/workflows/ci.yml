@@ -319,13 +319,13 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: docker/login-action@9780b0c442fbb1117ed29e0efdff246ede52c91f # v3.3.0
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69a08a9a1f # v3.7.0
+      - uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
 
       - name: Resolve build context/dockerfile
         id: ctx
@@ -347,7 +347,7 @@ jobs:
 
       - name: Build and push
         id: build
-        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a4 # v6.18.0
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: ${{ steps.ctx.outputs.context }}
           file: ${{ steps.ctx.outputs.dockerfile }}
@@ -394,9 +394,17 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Install rclone (off-site backup path)
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends rclone
+
       - name: Write appliance env
         run: |
           umask 077
+          master_key=$(openssl rand -hex 32)
+          kit_id=$(openssl rand -hex 4)
+          mkdir -p "${{ github.workspace }}/offsite-remote"
           {
             printf 'POSTGRES_PASSWORD=%s\n' "$POSTGRES_PASSWORD"
             printf 'POSTGRES_APP_PASSWORD=%s\n' "$POSTGRES_APP_PASSWORD"
@@ -411,7 +419,18 @@ jobs:
             printf 'SELLRIGHT_DOMAIN=%s\n' "$SELLRIGHT_DOMAIN"
             printf 'SMTP_ENABLED=%s\n' "$SMTP_ENABLED"
             printf 'JOBS_ENABLED=%s\n' "$JOBS_ENABLED"
+            printf 'SELLRIGHT_MASTER_KEY=%s\n' "$master_key"
+            printf 'RECOVERY_KIT_ID=%s\n' "$kit_id"
+            # rclone treats a plain filesystem path (no 'remote:' prefix) as a
+            # local backend directly — no cloud account/config needed for the
+            # drill to exercise the real off-site copy + encrypt code path.
+            printf 'SELLRIGHT_OFFSITE_REMOTE=%s\n' "${{ github.workspace }}/offsite-remote"
           } > deploy/.env
+          # This recovery kit mirrors what install.sh writes at real install
+          # time (same masterKey/kitId as deploy/.env) — 'sellright restore'
+          # reads it, not the env vars, when decrypting an off-site set.
+          printf '{"kitId":"%s","generatedAt":"2026-01-01T00:00:00Z","masterKey":"%s","backupLocation":"local"}\n' \
+            "$kit_id" "$master_key" > deploy/recovery-kit.json
           # Reset the umask before this: it's a Compose secret bind-mounted
           # read-only into the api container for the non-root `node` user, not
           # a host secret needing the .env's 600. A umask-077 0600 file here
@@ -461,17 +480,18 @@ jobs:
           docker compose -p sellright-drill -f deploy/compose.yaml logs --no-color
           exit 1
 
-      - name: Seed a recognizable asset sentinel
+      - name: Seed recognizable asset + download sentinels
         run: |
           docker compose -p sellright-drill -f deploy/compose.yaml exec -T api sh -c \
-            "printf 'drill-sentinel\n' > /app/var/assets/.drill-sentinel"
+            "printf 'drill-asset-sentinel\n' > /app/var/assets/.drill-sentinel && \
+             printf 'drill-download-sentinel\n' > /app/var/downloads/.drill-sentinel"
 
-      - name: Backup (sellright CLI)
+      - name: Backup --offsite (sellright CLI) and verify authenticated encryption
         env:
           SELLRIGHT_HOME: ${{ github.workspace }}/deploy
         run: |
           sed -i "s#docker compose --env-file#docker compose -p sellright-drill --env-file#" deploy/sellright.sh
-          sh deploy/sellright.sh backup
+          sh deploy/sellright.sh backup --offsite
           out_dir=$(find deploy/backups -mindepth 1 -maxdepth 1 -type d | sort | tail -1)
           echo "BACKUP_DIR=$out_dir" >> "$GITHUB_ENV"
           test -s "$out_dir/database.dump"
@@ -479,7 +499,51 @@ jobs:
           test -s "$out_dir/downloads.tar.gz"
           test -s "$out_dir/manifest.json"
           grep -q sha256 "$out_dir/manifest.json"
-          tar xzOf "$out_dir/assets.tar.gz" assets/.drill-sentinel | grep -qx drill-sentinel
+          tar xzOf "$out_dir/assets.tar.gz" assets/.drill-sentinel | grep -qx drill-asset-sentinel
+          tar xzOf "$out_dir/downloads.tar.gz" downloads/.drill-sentinel | grep -qx drill-download-sentinel
+
+          offsite_dir="${{ github.workspace }}/offsite-remote/$(basename "$out_dir")"
+          echo "OFFSITE_DIR=$offsite_dir" >> "$GITHUB_ENV"
+          for f in database.dump assets.tar.gz downloads.tar.gz manifest.json; do
+            test -s "${offsite_dir}/${f}.enc"
+            test -s "${offsite_dir}/${f}.enc.hmac"
+          done
+
+      - name: Tampered off-site backup must be rejected, not restored
+        env:
+          SELLRIGHT_HOME: ${{ github.workspace }}/deploy
+        run: |
+          tampered_dir=$(mktemp -d)
+          cp "$OFFSITE_DIR"/* "$tampered_dir"/
+          # Flip one byte inside the ciphertext (not the .hmac tag) so the
+          # HMAC recomputed at restore time no longer matches.
+          python3 - "$tampered_dir/database.dump.enc" <<'PY'
+          import sys
+          path = sys.argv[1]
+          with open(path, "r+b") as f:
+              f.seek(0)
+              b = f.read(1)
+              f.seek(0)
+              f.write(bytes([b[0] ^ 0xFF]))
+          PY
+          if sh deploy/sellright.sh restore --kit deploy/recovery-kit.json --set "$tampered_dir" --yes \
+              > /tmp/tamper-restore.log 2>&1; then
+            echo "::error::restore succeeded against a tampered backup — integrity check did not work"
+            cat /tmp/tamper-restore.log
+            exit 1
+          fi
+          grep -qi "integrity check failed" /tmp/tamper-restore.log || {
+            echo "::error::restore failed for the wrong reason (expected an integrity-check message)"
+            cat /tmp/tamper-restore.log
+            exit 1
+          }
+          echo "Tampered backup correctly rejected:"
+          grep -i "integrity check failed" /tmp/tamper-restore.log
+          rm -rf "$tampered_dir"
+          # The live store must be completely unaffected by the rejected attempt.
+          docker compose -p sellright-drill -f deploy/compose.yaml exec -T postgres \
+            psql -U sellright -d sellright -Atc "SELECT count(*) FROM store WHERE slug = 'drill'" \
+            | grep -qx '1'
 
       - name: Destroy volumes (simulate total server loss)
         run: |
@@ -490,15 +554,38 @@ jobs:
           docker compose -p sellright-drill -f deploy/compose.yaml -f deploy/compose.build.yaml \
             up -d postgres db-init
 
-      - name: Restore (sellright CLI) and verify data present
+      - name: Restore --yes from the off-site (encrypted) set and verify full promotion
         env:
           SELLRIGHT_HOME: ${{ github.workspace }}/deploy
         run: |
-          printf '{"kitId":"drill","masterKey":"unused-local-restore","backupLocation":"local"}\n' > deploy/recovery-kit.json
-          sh deploy/sellright.sh restore --kit deploy/recovery-kit.json --set "$BACKUP_DIR"
+          sh deploy/sellright.sh restore --kit deploy/recovery-kit.json --set "$OFFSITE_DIR" --yes
+
+          # Assets/downloads promotion and the database rename both happen
+          # inside `restore` itself, before it starts api back up — check them
+          # via a fresh one-off container rather than racing api's own
+          # migrate/bootstrap startup sequence.
+          docker compose -p sellright-drill -f deploy/compose.yaml run --rm -T api \
+            sh -c "grep -qx drill-asset-sentinel /app/var/assets/.drill-sentinel && \
+                   grep -qx drill-download-sentinel /app/var/downloads/.drill-sentinel"
+
+          # Database was PROMOTED (renamed) — the live 'sellright' database
+          # itself must have the restored data now, not a side database.
           docker compose -p sellright-drill -f deploy/compose.yaml exec -T postgres \
-            psql -U sellright -d sellright_restore -Atc "SELECT count(*) FROM store WHERE slug = 'drill'" \
+            psql -U sellright -d sellright -Atc "SELECT count(*) FROM store WHERE slug = 'drill'" \
             | grep -qx '1'
+
+          # And prove the promoted stack actually comes back up healthy end to
+          # end, not just that the files/rows are in the right place.
+          cid=$(docker compose -p sellright-drill -f deploy/compose.yaml ps -q api)
+          for attempt in $(seq 1 60); do
+            status=$(docker inspect --format='{{.State.Health.Status}}' "$cid" 2>/dev/null || echo "")
+            [ "$status" = "healthy" ] && break
+            test "$attempt" -lt 60 || {
+              docker compose -p sellright-drill -f deploy/compose.yaml logs api --no-color
+              exit 1
+            }
+            sleep 2
+          done
 
       - name: Tear down drill stack
         if: always()
