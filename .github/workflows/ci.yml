@@ -324,7 +324,13 @@ jobs:
       # this job uses, same as the `database` job above. This job is proving
       # schema/route compatibility, not production env validation.
       NODE_ENV: test
-      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/sellright_test
+      # Privileged (superuser) URL: migrate.js and bootstrap.js need to create
+      # tables/roles. The compiled server itself refuses to boot on this URL
+      # (SR-01's own-role guard, packages/api/src/db/client.ts) — it gets the
+      # dedicated NOSUPERUSER NOBYPASSRLS app role instead (created below,
+      # same as the `database` job above).
+      MIGRATE_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/sellright_test
+      DATABASE_URL: postgres://sellright_app:sellright_app@127.0.0.1:5432/sellright_test
       STOREFRONT_URL: https://shop.example.net
       DOWNLOAD_URL_SECRET: abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
       ADMIN_EMAIL: compat@example.net
@@ -370,10 +376,32 @@ jobs:
 
       - name: Apply the PR's migrations to the test database
         working-directory: new
+        env:
+          DATABASE_URL: ${{ env.MIGRATE_DATABASE_URL }}
         run: pnpm --filter @sellright/api db:migrate:runtime
+
+      - name: Create non-owner RLS app role (same as the `database` job)
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h 127.0.0.1 -U postgres -d sellright_test <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'sellright_app') THEN
+              CREATE ROLE sellright_app LOGIN PASSWORD 'sellright_app' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+            END IF;
+          END
+          $$;
+          GRANT CONNECT ON DATABASE sellright_test TO sellright_app;
+          GRANT USAGE ON SCHEMA public TO sellright_app;
+          GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO sellright_app;
+          GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO sellright_app;
+          SQL
 
       - name: Bootstrap a test store (using the PR's bootstrap script)
         working-directory: new
+        env:
+          DATABASE_URL: ${{ env.MIGRATE_DATABASE_URL }}
         run: node packages/api/dist/scripts/bootstrap.js
 
       - name: Start the PREVIOUS release's API against the migrated schema
