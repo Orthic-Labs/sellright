@@ -107,6 +107,10 @@ services:
       STOREFRONT_URL: ${STOREFRONT_URL:?set STOREFRONT_URL in deploy/.env}
       ASSET_DIR: /app/var/assets
       DOWNLOAD_DIR: /app/var/downloads
+      # WS-E: maintenance-mode flag file. Lives on its own named volume (not
+      # inside the container's writable layer) so `sellright maintenance on`
+      # survives the very container restart the update sequence performs.
+      MAINTENANCE_FLAG_FILE: /app/var/state/MAINTENANCE
       DOWNLOAD_URL_SECRET: ${DOWNLOAD_URL_SECRET:?set DOWNLOAD_URL_SECRET in deploy/.env}
       ADMIN_EMAIL: ${ADMIN_EMAIL:?set ADMIN_EMAIL in deploy/.env}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in deploy/.env}
@@ -135,6 +139,7 @@ services:
     volumes:
       - assets:/app/var/assets
       - downloads:/app/var/downloads
+      - state:/app/var/state
     secrets:
       - gateway_accounts
     networks: [private]
@@ -202,6 +207,7 @@ volumes:
   postgres_data:
   assets:
   downloads:
+  state:
   caddy_data:
   caddy_config:
 

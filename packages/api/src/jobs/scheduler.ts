@@ -19,6 +19,7 @@
  * from a process that owns the DB pool (the API server), never from tests.
  */
 import { env } from '../env.js';
+import { isMaintenanceOn } from '../maintenance.js';
 import { autoDeliver } from './auto-deliver.js';
 import { releaseStaleAllocations } from './release-stale-allocations.js';
 import { reconcileGatewayEvents } from './reconcile-gateway-events.js';
@@ -52,6 +53,11 @@ function every(ms: number, label: string, leaderJob: LeaderLockedJob, fn: () => 
   let running = false;
   const tick = async () => {
     if (running) return; // skip if the previous pass hasn't finished (this process)
+    // WS-E: pause every scheduled pass during an appliance update. The update
+    // sequence flips maintenance on before backup/migrate — a job racing a
+    // schema mid-migration (or writing rows during the functional-check dry
+    // run) is exactly the class of bug maintenance mode exists to prevent.
+    if (isMaintenanceOn()) return;
     running = true;
     try {
       await withLeaderLock(leaderJob, fn, scope); // skip if another instance is leader for this tick

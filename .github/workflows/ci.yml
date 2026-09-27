@@ -292,6 +292,107 @@ jobs:
         if: always()
         run: docker compose -f deploy/compose.yaml down -v --remove-orphans
 
+  migration-compat:
+    name: Migration compat (previous release's API vs new schema)
+    # See docs/runbooks/migrations.md "Expand/contract policy" — this proves
+    # the specific claim `sellright update`'s automatic rollback depends on:
+    # the immediately-previous release's API still serves correctly once
+    # THIS PR's migrations have been applied. Skipped on main itself (there is
+    # no "previous release" relative to main's own HEAD) and on the very first
+    # commit of a repo (no parent to diff against).
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: sellright_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d sellright_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      NODE_ENV: production
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/sellright_test
+      STOREFRONT_URL: https://shop.example.net
+      DOWNLOAD_URL_SECRET: abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
+      ADMIN_EMAIL: compat@example.net
+      ADMIN_PASSWORD: compat-only-long-random-password-12345
+      BOOTSTRAP_STORE_SLUG: compat
+      BOOTSTRAP_STORE_NAME: Compat Store
+      BOOTSTRAP_STORE_CURRENCY: USD
+      FUNCTIONAL_CHECK_STORE_SLUG: compat
+    steps:
+      - name: Checkout PR (new schema)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: new
+
+      - name: Checkout main (previous release's code)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          path: old
+
+      - uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          install: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_LTS }}
+
+      - name: Install + build PR (new) — used only to run its migrations
+        working-directory: new
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @sellright/shared build
+          pnpm --filter @sellright/api build
+
+      - name: Install + build main (old) — this is the API under test
+        working-directory: old
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @sellright/shared build
+          pnpm --filter @sellright/api build
+
+      - name: Apply the PR's migrations to the test database
+        working-directory: new
+        run: pnpm --filter @sellright/api db:migrate:runtime
+
+      - name: Bootstrap a test store (using the PR's bootstrap script)
+        working-directory: new
+        run: node packages/api/dist/scripts/bootstrap.js
+
+      - name: Start the PREVIOUS release's API against the migrated schema
+        working-directory: old
+        run: |
+          nohup node packages/api/dist/index.js > /tmp/old-api.log 2>&1 &
+          echo $! > /tmp/old-api.pid
+
+      - name: Smoke-test the previous release's API
+        run: |
+          ok=0
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3300/v1/readyz | grep -q '"status":"ok"'; then ok=1; break; fi
+            sleep 1
+          done
+          [ "$ok" = "1" ] || { echo "::error::previous release never became ready"; cat /tmp/old-api.log; exit 1; }
+          curl -fsS -H 'x-store-slug: compat' http://127.0.0.1:3300/v1/shop/catalog/products \
+            || { echo "::error::previous release's catalog read failed against the new schema"; cat /tmp/old-api.log; exit 1; }
+          echo "previous release's API is compatible with this PR's schema"
+
+      - name: Stop the previous release's API
+        if: always()
+        run: kill "$(cat /tmp/old-api.pid)" 2>/dev/null || true
+
   shellcheck:
     name: Shellcheck installer + CLI
     runs-on: ubuntu-latest

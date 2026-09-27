@@ -40,7 +40,7 @@ COPY --from=build --chown=node:node /runtime/ ./
 COPY --from=build --chown=node:node /workspace/packages/api/dist ./dist
 COPY --from=build --chown=node:node /workspace/packages/api/drizzle ./drizzle
 
-RUN mkdir -p /app/var/assets /app/var/downloads \
+RUN mkdir -p /app/var/assets /app/var/downloads /app/var/state \
  && chown -R node:node /app/var
 
 USER node

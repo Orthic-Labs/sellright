@@ -111,3 +111,76 @@ right move is to:
    did this migration do at the time it landed" from the file itself.
 3. Open an issue to eventually de-hand-write the migration once enough
    changes have accumulated to make a regeneration safe.
+
+## Expand/contract policy (WS-E, decision 1.11 step 11)
+
+The one-click-install update sequence (`sellright update`, `deploy/sellright.sh`)
+promises an automatic rollback to the previous release's images if a
+post-update functional check fails — **without restoring from backup**. That
+promise only holds if the previous release's compiled code can still run
+correctly against the schema the new migrations just applied. If a migration
+makes a breaking change, "roll back the image" silently serves requests
+against a schema the old code doesn't understand, and the rollback becomes
+the incident instead of the fix.
+
+**Every migration merged to `main` must be additive from the previous
+release's point of view: expand this release, contract (drop the old shape)
+no earlier than the release after next.**
+
+Concretely, a migration in a given release MUST NOT, in the same release:
+
+- Drop or rename a column, table, or enum value that the previous release's
+  code reads or writes.
+- Add a `NOT NULL` column without a default (the previous release's `INSERT`s
+  omit it and would start failing).
+- Narrow a type, tighten a `CHECK`, or add a uniqueness constraint that
+  existing rows or the previous release's writes could violate.
+- Change the meaning of an existing column in place (e.g. reinterpreting a
+  status enum value).
+
+The correct multi-release shape for a genuinely breaking change:
+
+1. **Expand** (release N): add the new column/table alongside the old one;
+   backfill; have the current release's code write to *both* the old and new
+   shape.
+2. **Migrate readers** (release N+1 or later): switch reads to the new shape.
+   Both N and N+1's code must still tolerate the old shape existing.
+3. **Contract** (release N+2 at the earliest): drop the old column/table only
+   once no supported previous release still reads or writes it — i.e. once
+   it's no longer possible for `sellright update`'s rollback to land on code
+   that needs it.
+
+This is the same rule Vendure/Rails/Stripe-style "expand/contract" migration
+guides describe; the concrete addition here is tying the minimum contract
+delay to this project's own rollback window (exactly one release back, per
+`sellright update`'s design) rather than an arbitrary N.
+
+### CI check: does the previous release's API still work against the new schema?
+
+`.github/workflows/ci.yml`'s `migration-compat` job (added alongside this
+runbook section) operationalizes the rule instead of leaving it to
+migration-review discipline alone:
+
+1. Check out `origin/main` (the previous release) and build its `api` image
+   from that commit.
+2. Start Postgres + `db-init`, apply **this PR's** migrations on top (the
+   schema the update would actually produce).
+3. Run the `main`-built API against that already-migrated database and hit
+   `GET /v1/readyz` and `GET /v1/shop/catalog/products` (the same two
+   surfaces `functional-check.js` exercises at update time).
+4. Fail the PR if either request fails.
+
+This proves the specific claim `sellright update`'s rollback depends on: the
+one release behind HEAD still runs correctly once HEAD's migrations have been
+applied. It does not (and cannot, without running every historical release)
+prove compatibility further back than one release — `sellright update` only
+ever rolls back to the immediately preceding image, so that's the contract
+this project actually makes.
+
+**What this check cannot catch:** a migration that is compatible with the
+previous release's *read/write shape* but changes application-level meaning
+in a way no automated smoke test exercises (e.g. a status value the old code
+treats as terminal that the new schema now treats as transient). Migrations
+of that shape require a manual reviewer sign-off called out explicitly in the
+PR description — the automated check is a floor, not a substitute for
+migration review.

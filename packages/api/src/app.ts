@@ -47,6 +47,7 @@ import { csrfValid, customerCsrfValid, getCustomerSessionToken } from './auth/co
 import { env } from './env.js';
 import { isAllowedCorsOrigin } from './cors-origins.js';
 import { pool } from './db/client.js';
+import { isMaintenanceOn, maintenanceInfo } from './maintenance.js';
 import { requestIdMiddleware, accessLogMiddleware } from './lib/request-id.js';
 import { err as logErr } from './lib/logger.js';
 import { listApiPlugins } from './plugins.js';
@@ -93,6 +94,24 @@ export function createApp(): OpenAPIHono {
       allowHeaders: ['Content-Type', 'Authorization', 'x-csrf-token', 'x-store-slug', 'x-receipt-token', 'idempotency-key'],
     });
     return handler(c, next);
+  });
+
+  // WS-E: maintenance-mode gate. During an appliance update the sellright
+  // CLI flips the flag file (see maintenance.ts) before touching the
+  // database. Reads and the health/readiness/maintenance probes always pass
+  // through — only mutating /v1/* requests are rejected, with 503 (not 403 or
+  // 400: this is "come back later", not a client error) so callers retry.
+  // Registered before the CSRF guards so a maintenance response never depends
+  // on cookie state.
+  app.use('/v1/*', async (c, next) => {
+    const method = c.req.method;
+    const path = c.req.path;
+    const alwaysAllowed = path === '/v1/health' || path === '/v1/readyz' || path === '/v1/maintenance';
+    const isSafeMethod = method === 'GET' || method === 'HEAD' || method === 'OPTIONS';
+    if (!alwaysAllowed && !isSafeMethod && isMaintenanceOn()) {
+      return c.json({ error: 'The store is temporarily unavailable for maintenance. Please try again shortly.', maintenance: true }, 503);
+    }
+    await next();
   });
 
   // CSRF guard for cookie-based admin mutations (bearer/API clients are exempt;
@@ -155,6 +174,33 @@ export function createApp(): OpenAPIHono {
   });
 
   app.openapi(healthRoute, (c) => c.json({ status: 'ok' as const, version: SELLRIGHT_VERSION }));
+
+  // WS-E: polled by the storefront (WS-C runtime config) to decide whether to
+  // render its normal pages or a static "back soon" screen. Deliberately
+  // outside the /v1/admin and /v1/shop trees (no CSRF/session requirement —
+  // it must be readable while the storefront itself has no session yet) and
+  // exempt from the maintenance gate above so it answers even mid-maintenance.
+  const maintenanceRoute = createRoute({
+    method: 'get',
+    path: '/v1/maintenance',
+    summary: 'Maintenance-mode status (WS-E)',
+    responses: {
+      200: {
+        description: 'Current maintenance status',
+        content: {
+          'application/json': {
+            schema: z.object({
+              maintenance: z.boolean(),
+              since: z.string().optional(),
+              reason: z.string().optional(),
+            }),
+          },
+        },
+      },
+    },
+  });
+
+  app.openapi(maintenanceRoute, (c) => c.json(maintenanceInfo(), 200));
 
   // OBS-2: readiness probe distinct from /v1/health. Cheaper probes (LB /
   // deploy) can hit /v1/health; the readiness probe actually asks the DB
