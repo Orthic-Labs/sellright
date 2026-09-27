@@ -318,7 +318,12 @@ jobs:
           --health-timeout 5s
           --health-retries 12
     env:
-      NODE_ENV: production
+      # NODE_ENV=test (not production) deliberately: env.ts's production-only
+      # guard (env-runtime.ts productionEnvErrors) refuses to boot against a
+      # DATABASE_URL containing "test" — exactly the throwaway CI database
+      # this job uses, same as the `database` job above. This job is proving
+      # schema/route compatibility, not production env validation.
+      NODE_ENV: test
       DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/sellright_test
       STOREFRONT_URL: https://shop.example.net
       DOWNLOAD_URL_SECRET: abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
