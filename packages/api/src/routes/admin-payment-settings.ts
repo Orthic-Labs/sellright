@@ -27,7 +27,12 @@ export const adminPaymentSettings = new OpenAPIHono();
 type Provider = 'stripe' | 'nmi' | 'sezzle';
 const PROVIDER_FIELDS: Record<Provider, { modes: readonly [string, string]; fields: readonly string[] }> = {
   stripe: { modes: ['test', 'live'], fields: ['publishableKey', 'secretKey', 'webhookSecret'] },
-  nmi: { modes: ['test', 'live'], fields: ['securityKey', 'tokenizationKey'] },
+  // privateKey: the chargeback webhook signing secret (routes/disputes.ts
+  // verifies `webhook-signature` against it — gateway-account.ts's
+  // dbGatewayAccount() already resolves this field; it was just missing from
+  // the admin-settable field list). Optional — absence just means NMI
+  // chargeback webhooks aren't wired for this store/mode.
+  nmi: { modes: ['test', 'live'], fields: ['securityKey', 'tokenizationKey', 'privateKey'] },
   sezzle: { modes: ['sandbox', 'production'], fields: ['publicKey', 'privateKey'] },
 };
 

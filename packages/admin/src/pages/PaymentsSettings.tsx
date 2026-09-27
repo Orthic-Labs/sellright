@@ -16,6 +16,7 @@ const PROVIDERS: Array<{ id: 'stripe' | 'nmi' | 'sezzle'; label: string; modes: 
   { id: 'nmi', label: 'NMI', modes: ['test', 'live'], fields: [
     { key: 'securityKey', label: 'Security key' },
     { key: 'tokenizationKey', label: 'Tokenization key' },
+    { key: 'privateKey', label: 'Chargeback webhook signing secret (optional)' },
   ] },
   { id: 'sezzle', label: 'Sezzle', modes: ['sandbox', 'production'], fields: [
     { key: 'publicKey', label: 'Public key' },
