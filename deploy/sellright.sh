@@ -4,6 +4,7 @@
 set -eu
 
 SELLRIGHT_HOME="${SELLRIGHT_HOME:-/opt/sellright}"
+COSIGN_VERSION="${COSIGN_VERSION:-2.4.1}"
 
 compose() {
   docker compose --env-file "${SELLRIGHT_HOME}/.env" -f "${SELLRIGHT_HOME}/compose.yaml" "$@"
@@ -197,9 +198,14 @@ restart_digests() {
   } > "$override_file"
   log "rollback plan:"
   cat "$digests_file" >&2
-  docker compose --env-file "${SELLRIGHT_HOME}/.env" \
-    -f "${SELLRIGHT_HOME}/compose.yaml" -f "$override_file" \
-    up -d --no-deps api admin storefront
+  # Through compose() (not a bare `docker compose ...`) so this honors any
+  # project-name/host override compose() carries — in production both resolve
+  # to the same `name: sellright` project either way, but a test harness that
+  # patches compose() to add `-p <isolated-project>` (see the CI drill in
+  # .github/workflows/ci.yml's verify-update job) must not have the rollback
+  # path silently fall back to the default project and operate on the wrong
+  # containers.
+  compose -f "$override_file" up -d --no-deps api admin storefront
   rm -f "$override_file"
 }
 
@@ -260,24 +266,58 @@ cmd_update() {
   log "update complete."
 }
 
-# Best-effort keyless-signature check for the three images this compose file
-# currently resolves to. Requires `cosign` on PATH (installed by install.sh);
-# skips (with a warning, not a hard failure) when cosign isn't present so a
-# host that hasn't re-run install.sh's setup step yet doesn't get stuck unable
-# to update at all — the real gate is still install.sh's own verify-before-
-# write step for a fresh install.
+# Fail-closed: `sellright update` must never run an image it couldn't verify.
+# Installs cosign itself (same download install.sh's install_cosign performs)
+# rather than skipping — a host missing cosign is a setup gap to fix, not a
+# reason to relax the update path's own signature gate.
+ensure_cosign() {
+  command -v cosign >/dev/null 2>&1 && return 0
+  log "cosign not found; installing cosign ${COSIGN_VERSION}..."
+  arch=$(uname -m)
+  case "$arch" in
+    x86_64) cosign_arch=amd64 ;;
+    aarch64) cosign_arch=arm64 ;;
+    *) die "unsupported architecture for cosign: $arch" ;;
+  esac
+  if ! curl -fsSL -o /usr/local/bin/cosign \
+      "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-${cosign_arch}"; then
+    die "failed to download cosign — cannot verify image signatures, refusing to update"
+  fi
+  chmod +x /usr/local/bin/cosign
+  command -v cosign >/dev/null 2>&1 || die "cosign install did not produce a usable binary"
+}
+
+# Keyless-signature check for the three images this compose file currently
+# resolves to. Fail-closed: missing cosign, an unresolvable image ref, or any
+# failed verification all abort the update (non-zero return) — cmd_update
+# treats that as "leave maintenance on, make no changes", never as "proceed
+# anyway". This is the same identity/issuer install.sh's own verify_and_pull
+# checks, re-applied here so `sellright update` never trusts a pull it hasn't
+# independently verified itself.
 cosign_verify_images() {
-  command -v cosign >/dev/null 2>&1 || { log "cosign not installed; skipping re-verification (already verified by install.sh at install time)"; return 0; }
+  ensure_cosign || return 1
+  verified_any=0
   for svc in api admin storefront; do
     ref=$(compose images -q "$svc" 2>/dev/null || true)
-    [ -n "$ref" ] || continue
+    if [ -z "$ref" ]; then
+      log "could not resolve a running image for service '${svc}'; refusing to update without verifying it"
+      return 1
+    fi
     digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$ref" 2>/dev/null || true)
-    [ -n "$digest" ] || continue
-    cosign verify \
-      --certificate-identity-regexp '^https://github.com/Orthic-Labs/sellright/' \
-      --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-      "$digest" >/dev/null 2>&1 || { log "cosign verify failed for ${digest}"; return 1; }
+    if [ -z "$digest" ]; then
+      log "could not resolve a content digest for service '${svc}' (ref: ${ref}); refusing to update without verifying it"
+      return 1
+    fi
+    if ! cosign verify \
+        --certificate-identity-regexp '^https://github.com/Orthic-Labs/sellright/' \
+        --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+        "$digest" >/dev/null 2>&1; then
+      log "cosign verify FAILED for ${svc} (${digest}); refusing to update"
+      return 1
+    fi
+    verified_any=$((verified_any + 1))
   done
+  [ "$verified_any" -eq 3 ] || { log "expected to verify 3 images (api, admin, storefront), verified ${verified_any}"; return 1; }
   return 0
 }
 

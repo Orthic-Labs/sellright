@@ -637,3 +637,290 @@ jobs:
       - name: Tear down drill stack
         if: always()
         run: docker compose -p sellright-drill -f deploy/compose.yaml down -v --remove-orphans
+
+  verify-update:
+    name: Update drill (forced failure -> rollback, then a clean update)
+    # Needs real, cosign-signed images at a real registry ref: `sellright
+    # update` (deploy/sellright.sh cosign_verify_images) is fail-closed by
+    # design (see docs/runbooks/migrations.md and cmd_update) and refuses to
+    # run anything it can't verify — so unlike verify-appliance above (which
+    # deliberately uses unsigned local builds to test the backup/restore
+    # mechanism only), this job must push two real, signed tag sets to GHCR
+    # and run THIS PR's own deploy/sellright.sh (the update logic under test)
+    # to move a running appliance from the first set to the second, with the
+    # exact identity `sellright update`'s cosign verify step checks (this
+    # repo's own OIDC workflow identity — the same one the `release` job
+    # signs with).
+    #
+    # "OLD" is intentionally NOT built from `main`: this PR is the one that
+    # introduces `sellright maintenance`/`functional-check.js` in the first
+    # place, so `main`'s api image has neither script, and step 1 of
+    # `cmd_update` (`sellright maintenance on`, which execs into the
+    # CURRENTLY RUNNING container) would fail before ever reaching the part
+    # under test. That bootstrapping gap is specific to this one PR — any
+    # real install already on a WS-E-or-later release doesn't have it. So
+    # "OLD" here is pinned to this branch's own first WS-E commit (which
+    # already has maintenance-cli.js/functional-check.js, just not this PR's
+    # later fail-closed-cosign and forced-failure-testing additions), and
+    # "NEW" is this PR's current HEAD — a realistic same-branch upgrade.
+    if: github.event_name == 'pull_request'
+    needs: [verify, database, packaging, shellcheck]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    env:
+      OLD_REF: 79484e4ad30ea8183437d5855acfb81fbcd4cc09
+      OLD_TAG: update-drill-old-${{ github.run_id }}
+      NEW_TAG: update-drill-new-${{ github.run_id }}
+      POSTGRES_PASSWORD: updrltest0123456789abcdef0123456789abcdef0123456789abcdef01234
+      POSTGRES_APP_PASSWORD: updrltest9876543210fedcba9876543210fedcba9876543210fedcba98765
+      STOREFRONT_URL: https://shop.example.net
+      DOWNLOAD_URL_SECRET: abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
+      ADMIN_EMAIL: updrill@example.net
+      ADMIN_PASSWORD: updrill-only-long-random-password-12345
+      BOOTSTRAP_STORE_SLUG: updrill
+      BOOTSTRAP_STORE_NAME: Update Drill Store
+      BOOTSTRAP_STORE_CURRENCY: USD
+      BOOTSTRAP_STORE_HOSTNAMES: shop.example.net
+      SELLRIGHT_DOMAIN: sellright.example.net
+      SELLRIGHT_IMAGE_PREFIX: ghcr.io/orthic-labs/sellright
+      SMTP_ENABLED: "false"
+      JOBS_ENABLED: "0"
+    steps:
+      - name: Checkout PR (the update / the CLI under test)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: new
+
+      - name: Checkout this branch's first WS-E commit (the "currently-installed" version)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.OLD_REF }}
+          path: old
+
+      - uses: docker/login-action@9780b0c442fbb1117ed29e0efdff246ede52c91f # v3.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69a08a9a1f # v3.7.0
+
+      # Unrolled per component/version (6 explicit build-and-push steps) rather
+      # than a matrix or a bash loop calling `docker buildx build` directly —
+      # this reuses the exact `docker/build-push-action` invocation the
+      # `release` job above already proves works on this repo's runners
+      # (no separate setup-buildx-action step needed), just against a
+      # throwaway tag instead of `:latest`/`:sha`.
+      - name: Build + push OLD api (from main)
+        id: build_old_api
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a4 # v6.18.0
+        with:
+          context: old
+          file: old/packages/api/Dockerfile
+          push: true
+          tags: ${{ env.SELLRIGHT_IMAGE_PREFIX }}-api:${{ env.OLD_TAG }}
+
+      - name: Build + push OLD admin (from main)
+        id: build_old_admin
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a4 # v6.18.0
+        with:
+          context: old/packages/admin
+          file: old/packages/admin/Dockerfile
+          push: true
+          tags: ${{ env.SELLRIGHT_IMAGE_PREFIX }}-admin:${{ env.OLD_TAG }}
+
+      - name: Build + push OLD storefront (from main)
+        id: build_old_storefront
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a4 # v6.18.0
+        with:
+          context: old
+          file: old/packages/storefront/Dockerfile
+          push: true
+          tags: ${{ env.SELLRIGHT_IMAGE_PREFIX }}-storefront:${{ env.OLD_TAG }}
+
+      - name: Build + push NEW api (from this PR)
+        id: build_new_api
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a4 # v6.18.0
+        with:
+          context: new
+          file: new/packages/api/Dockerfile
+          push: true
+          tags: ${{ env.SELLRIGHT_IMAGE_PREFIX }}-api:${{ env.NEW_TAG }}
+
+      - name: Build + push NEW admin (from this PR)
+        id: build_new_admin
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a4 # v6.18.0
+        with:
+          context: new/packages/admin
+          file: new/packages/admin/Dockerfile
+          push: true
+          tags: ${{ env.SELLRIGHT_IMAGE_PREFIX }}-admin:${{ env.NEW_TAG }}
+
+      - name: Build + push NEW storefront (from this PR)
+        id: build_new_storefront
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a4 # v6.18.0
+        with:
+          context: new
+          file: new/packages/storefront/Dockerfile
+          push: true
+          tags: ${{ env.SELLRIGHT_IMAGE_PREFIX }}-storefront:${{ env.NEW_TAG }}
+
+      - name: Sign both image sets (cosign keyless) and record digests
+        run: |
+          set -e
+          declare -A digests=(
+            [OLD_DIGEST_api]="${{ steps.build_old_api.outputs.digest }}"
+            [OLD_DIGEST_admin]="${{ steps.build_old_admin.outputs.digest }}"
+            [OLD_DIGEST_storefront]="${{ steps.build_old_storefront.outputs.digest }}"
+            [NEW_DIGEST_api]="${{ steps.build_new_api.outputs.digest }}"
+            [NEW_DIGEST_admin]="${{ steps.build_new_admin.outputs.digest }}"
+            [NEW_DIGEST_storefront]="${{ steps.build_new_storefront.outputs.digest }}"
+          )
+          for key in "${!digests[@]}"; do
+            digest="${digests[$key]}"
+            component=$(printf '%s' "$key" | sed -E 's/^(OLD|NEW)_DIGEST_//')
+            cosign sign --yes "${SELLRIGHT_IMAGE_PREFIX}-${component}@${digest}"
+            echo "${key}=${digest}" >> "$GITHUB_ENV"
+          done
+
+      - name: Write appliance env, pinned to the OLD image set
+        working-directory: new
+        run: |
+          umask 022
+          {
+            printf 'POSTGRES_PASSWORD=%s\n' "$POSTGRES_PASSWORD"
+            printf 'POSTGRES_APP_PASSWORD=%s\n' "$POSTGRES_APP_PASSWORD"
+            printf 'STOREFRONT_URL=%s\n' "$STOREFRONT_URL"
+            printf 'DOWNLOAD_URL_SECRET=%s\n' "$DOWNLOAD_URL_SECRET"
+            printf 'ADMIN_EMAIL=%s\n' "$ADMIN_EMAIL"
+            printf 'ADMIN_PASSWORD=%s\n' "$ADMIN_PASSWORD"
+            printf 'BOOTSTRAP_STORE_SLUG=%s\n' "$BOOTSTRAP_STORE_SLUG"
+            printf 'BOOTSTRAP_STORE_NAME=%s\n' "$BOOTSTRAP_STORE_NAME"
+            printf 'BOOTSTRAP_STORE_CURRENCY=%s\n' "$BOOTSTRAP_STORE_CURRENCY"
+            printf 'BOOTSTRAP_STORE_HOSTNAMES=%s\n' "$BOOTSTRAP_STORE_HOSTNAMES"
+            printf 'SELLRIGHT_DOMAIN=%s\n' "$SELLRIGHT_DOMAIN"
+            printf 'SMTP_ENABLED=%s\n' "$SMTP_ENABLED"
+            printf 'JOBS_ENABLED=%s\n' "$JOBS_ENABLED"
+            printf 'SELLRIGHT_IMAGE_PREFIX=%s\n' "$SELLRIGHT_IMAGE_PREFIX"
+            printf 'SELLRIGHT_IMAGE_TAG=%s\n' "$OLD_TAG"
+          } > deploy/.env
+          ( umask 022 && printf '[]\n' > deploy/gateway-accounts.json )
+          # verify-appliance's own trick: pin every compose invocation to an
+          # isolated project name so this job never collides with another
+          # concurrent job's containers/volumes on the same runner image cache.
+          sed -i "s#docker compose --env-file#docker compose -p sellright-updatedrill --env-file#" deploy/sellright.sh
+
+      - name: Install the OLD image set
+        working-directory: new
+        run: |
+          docker compose -p sellright-updatedrill --env-file deploy/.env -f deploy/compose.yaml \
+            pull postgres api admin storefront
+          docker compose -p sellright-updatedrill --env-file deploy/.env -f deploy/compose.yaml \
+            up -d postgres db-init api admin storefront || {
+              docker compose -p sellright-updatedrill --env-file deploy/.env -f deploy/compose.yaml logs --no-color
+              exit 1
+            }
+
+      - name: Wait for the OLD install to become ready
+        working-directory: new
+        run: |
+          for attempt in $(seq 1 60); do
+            if docker compose -p sellright-updatedrill --env-file deploy/.env -f deploy/compose.yaml exec -T admin \
+              wget -qO- http://127.0.0.1:8080/v1/readyz 2>/dev/null | grep -q '"status":"ok"'; then exit 0; fi
+            sleep 2
+          done
+          docker compose -p sellright-updatedrill --env-file deploy/.env -f deploy/compose.yaml logs --no-color
+          exit 1
+
+      - name: Seed sentinel data (asset file + DB row) on the OLD install
+        working-directory: new
+        run: |
+          docker compose -p sellright-updatedrill --env-file deploy/.env -f deploy/compose.yaml exec -T api sh -c \
+            "printf 'update-drill-sentinel\n' > /app/var/assets/.update-drill-sentinel"
+          docker compose -p sellright-updatedrill --env-file deploy/.env -f deploy/compose.yaml exec -T postgres \
+            psql -U sellright -d sellright -Atc \
+            "SELECT count(*) FROM store WHERE slug = 'updrill'" | grep -qx '1'
+
+      - name: Forced-failure drill -- update must roll back before reopening
+        working-directory: new
+        env:
+          SELLRIGHT_HOME: ${{ github.workspace }}/new/deploy
+        run: |
+          set -e
+          sed -i "s/^SELLRIGHT_IMAGE_TAG=.*/SELLRIGHT_IMAGE_TAG=${NEW_TAG}/" deploy/.env
+          printf 'FUNCTIONAL_CHECK_FORCE_FAIL=true\n' >> deploy/.env
+          if sh deploy/sellright.sh update; then
+            echo "::error::sellright update was expected to FAIL (forced functional-check failure) but exited 0"
+            exit 1
+          fi
+          echo "update correctly reported failure; verifying the rollback..."
+
+      - name: Assert rollback -- previous digests running, maintenance still on, sentinel intact
+        working-directory: new
+        run: |
+          set -e
+          for component in api admin storefront; do
+            ref=$(docker compose -p sellright-updatedrill --env-file deploy/.env -f deploy/compose.yaml images -q "$component")
+            running_digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$ref" | sed 's/^[^@]*@//')
+            expected="OLD_DIGEST_${component}"
+            if [ "$running_digest" != "${!expected}" ]; then
+              echo "::error::${component} is running ${running_digest}, expected the OLD digest ${!expected}"
+              exit 1
+            fi
+          done
+          docker compose -p sellright-updatedrill --env-file deploy/.env -f deploy/compose.yaml exec -T admin \
+            wget -qO- http://127.0.0.1:8080/v1/maintenance | grep -q '"maintenance":true'
+          docker compose -p sellright-updatedrill --env-file deploy/.env -f deploy/compose.yaml exec -T api sh -c \
+            "cat /app/var/assets/.update-drill-sentinel" | grep -qx 'update-drill-sentinel'
+          docker compose -p sellright-updatedrill --env-file deploy/.env -f deploy/compose.yaml exec -T postgres \
+            psql -U sellright -d sellright -Atc "SELECT count(*) FROM store WHERE slug = 'updrill'" | grep -qx '1'
+          echo "rollback verified: previous images running, maintenance still on, sentinel data intact"
+
+      - name: Clean update -- turn off the forced failure and update again
+        working-directory: new
+        env:
+          SELLRIGHT_HOME: ${{ github.workspace }}/new/deploy
+        run: |
+          set -e
+          sed -i "/^FUNCTIONAL_CHECK_FORCE_FAIL=/d" deploy/.env
+          sh deploy/sellright.sh update
+
+      - name: Assert the clean update succeeded -- new digests running, maintenance off
+        working-directory: new
+        run: |
+          set -e
+          for component in api admin storefront; do
+            ref=$(docker compose -p sellright-updatedrill --env-file deploy/.env -f deploy/compose.yaml images -q "$component")
+            running_digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$ref" | sed 's/^[^@]*@//')
+            expected="NEW_DIGEST_${component}"
+            if [ "$running_digest" != "${!expected}" ]; then
+              echo "::error::${component} is running ${running_digest}, expected the NEW digest ${expected}=${!expected}"
+              exit 1
+            fi
+          done
+          docker compose -p sellright-updatedrill --env-file deploy/.env -f deploy/compose.yaml exec -T admin \
+            wget -qO- http://127.0.0.1:8080/v1/maintenance | grep -q '"maintenance":false'
+          echo "clean update verified: new images running, maintenance off"
+
+      - name: Tear down update-drill stack
+        if: always()
+        working-directory: new
+        run: docker compose -p sellright-updatedrill --env-file deploy/.env -f deploy/compose.yaml down -v --remove-orphans
+
+      - name: Delete throwaway GHCR tags (best effort)
+        if: always()
+        continue-on-error: true
+        run: |
+          for component in api admin storefront; do
+            for tag in "$OLD_TAG" "$NEW_TAG"; do
+              version_id=$(gh api "/orgs/Orthic-Labs/packages/container/sellright-${component}/versions" \
+                --jq ".[] | select(.metadata.container.tags[]? == \"${tag}\") | .id" | head -1)
+              [ -n "$version_id" ] && gh api -X DELETE "/orgs/Orthic-Labs/packages/container/sellright-${component}/versions/${version_id}" || true
+            done
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

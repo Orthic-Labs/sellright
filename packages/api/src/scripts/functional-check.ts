@@ -121,6 +121,12 @@ async function main(): Promise<void> {
   results.push(await checkDatabase());
   results.push(...await checkCatalogAndCart());
   results.push(await checkQueue());
+  if (env.FUNCTIONAL_CHECK_FORCE_FAIL === 'true') {
+    // Test/CI-only forced failure — see env.ts. Appended after every real
+    // check has already run (so a real bug is still visible in the log),
+    // deliberately never short-circuits them.
+    results.push({ name: 'forced-failure', ok: false, detail: 'FUNCTIONAL_CHECK_FORCE_FAIL=true' });
+  }
 
   for (const r of results) {
     console.log(`[functional-check] ${r.ok ? 'PASS' : 'FAIL'} ${r.name}${r.detail ? ` — ${r.detail}` : ''}`);

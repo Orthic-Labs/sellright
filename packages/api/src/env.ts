@@ -183,6 +183,12 @@ const EnvSchema = z.object({
   // config; set explicitly to point the update's dry run at a dedicated,
   // non-production test store instead.
   FUNCTIONAL_CHECK_STORE_SLUG: optionalEnvString,
+  // WS-E: test/CI-only escape hatch to deterministically fail
+  // functional-check.js without needing a real broken migration or DB outage
+  // — used by the appliance CI job that proves `sellright update` actually
+  // rolls back when a functional check fails. Never read anywhere except
+  // functional-check.ts's own final report.
+  FUNCTIONAL_CHECK_FORCE_FAIL: z.preprocess(emptyToUndefined, z.enum(['true', 'false']).optional()),
   BOOTSTRAP_STORE_NAME: optionalEnvString,
   BOOTSTRAP_STORE_CURRENCY: z.preprocess(emptyToUndefined, z.string().regex(/^[A-Za-z]{3}$/).transform((v) => v.toUpperCase()).optional()),
   BOOTSTRAP_STORE_HOSTNAMES: optionalEnvString,
