@@ -61,7 +61,14 @@ export default extendConfig(baseConfig, () => {
         name: "express",
         ssg: ssgDisabled ? { include: [] } : {
           include: ["/*"],
-          exclude: ["/account/*", "/search/*", "/blog", "/blog/*", "/affiliate", "/affiliate/*"],
+          // /checkout is excluded on its own merits, independent of WS-C: it
+          // reflects live cart contents, live stock, and live payment-method
+          // configuration — a statically prerendered checkout page would be
+          // stale the moment it's built, regardless of which store's identity
+          // it carries. (Observed as the trigger for a build-time SSG crash —
+          // see routes/checkout — but it should never have been a static
+          // candidate either way.)
+          exclude: ["/account/*", "/search/*", "/blog", "/blog/*", "/affiliate", "/affiliate/*", "/checkout", "/checkout/*"],
         },
       }),
     ],
