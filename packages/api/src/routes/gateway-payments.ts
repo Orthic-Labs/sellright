@@ -100,16 +100,12 @@ gatewayPayments.openapi(
     const st = await resolveStoreFromCtx(c);
     const retry = await attemptRetryAfter(clientIp(c), 'gateway:' + clientIp(c));
     if (retry) return errJson(c, 429, 'RATE_LIMITED', 'Too many payment attempts');
-    const key = c.req.header('idempotency-key');
-    if (!key || key.length > 200) {
-      return errJson(c, 400, 'IDEMPOTENCY_KEY_REQUIRED', 'Idempotency-Key required (maximum 200 characters)', { param: 'idempotency-key' });
-    }
-    const body = requestSchema.safeParse(await c.req.json().catch(() => null));
-    if (!body.success) return errJson(c, 400, 'INVALID_PAYMENT_REQUEST', 'Invalid payment request');
+    const { 'idempotency-key': key, 'x-receipt-token': receiptToken } = c.req.valid('header');
+    const body = c.req.valid('json');
     try {
       const result = await startGatewayPayment({
         storeId: st.id, code: c.req.param('code'), config: st.config,
-        ...body.data, idempotencyKey: key, receiptToken: c.req.header('x-receipt-token'),
+        ...body, idempotencyKey: key, receiptToken,
         customerSession: customerToken(c),
       });
       return c.json(result, 200);
@@ -117,6 +113,21 @@ gatewayPayments.openapi(
       if (error instanceof GatewayPaymentError) return gatewayErrorResponse(c, error);
       throw error;
     }
+  },
+  // Per-route hook (NOT a global defaultHook — scoped to just this route):
+  // without it, `@hono/zod-openapi`'s default validation-failure response is
+  // `c.json({ success: false, error: <ZodError> }, 400)` — NOT this API's
+  // structured envelope — so a missing/invalid header or body would 400 with
+  // the wrong shape before the handler above ever runs. `result.target` tells
+  // us which validator failed ('header' | 'json' here) so the two failure
+  // modes keep their specific, storefront-client-documented codes instead of
+  // collapsing into one generic message.
+  (result, c) => {
+    if (result.success) return undefined;
+    if (result.target === 'header') {
+      return errJson(c, 400, 'IDEMPOTENCY_KEY_REQUIRED', 'Idempotency-Key required (maximum 200 characters)', { param: 'idempotency-key' });
+    }
+    return errJson(c, 400, 'INVALID_PAYMENT_REQUEST', 'Invalid payment request');
   },
 );
 
