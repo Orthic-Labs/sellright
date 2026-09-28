@@ -1,12 +1,13 @@
 /**
- * Native cart types — derived directly from the generated OpenAPI paths
- * (`~/sellright/schema.gen.ts`) so they can never drift from the live API.
- * The API's OpenAPI document has no named `components.schemas` entries (every
- * shape is inlined per-path), so `ServerCart`/`ServerCartLine` are extracted
- * by indexing into `paths[...]['...']['responses'][200]['content']['application/json']`
- * instead of via `Schemas['Cart']`. Regenerate `schema.gen.ts`
- * (`pnpm gen:sellright-types`) and these types follow automatically — never
- * hand-edit a shape here.
+ * Native cart types — derived directly from `@sellright/storefront-client`'s
+ * generated OpenAPI paths (re-exported by `~/sellright/client`) so they can
+ * never drift from the live API. The API's OpenAPI document has no named
+ * `components.schemas` entries (every shape is inlined per-path), so
+ * `ServerCart`/`ServerCartLine` are extracted by indexing into
+ * `paths[...]['...']['responses'][200]['content']['application/json']`
+ * instead of via `Schemas['Cart']`. Regenerate the client package's schema
+ * (`pnpm --filter @sellright/storefront-client run generate`) and these
+ * types follow automatically — never hand-edit a shape here.
  *
  * ─── The cart API (src/services/CartService.ts) ───────────────────────────
  * One server-owned cart. The server is the only source of truth for

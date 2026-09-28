@@ -63,7 +63,6 @@ export default component$(() => {
 	// T20: Track out-of-stock via useTask$
 	useTask$(async ({ track }) => {
 		track(() => cartState.cart.lines);
-		track(() => appState.activeOrder);
 		isOutOfStock.value = await hasOutOfStockItems();
 	});
 

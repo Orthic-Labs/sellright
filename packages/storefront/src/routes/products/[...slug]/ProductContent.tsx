@@ -10,7 +10,7 @@ import { ProductPageView } from './ProductPageView';
 import { findVariant, getOptionGroups } from './product-options';
 import type { ProductLoaderResult } from './index';
 
-/** One gallery image — native shape (no Vendure `Asset` object, no `id`;
+/** One gallery image — native shape (no legacy `Asset` object, no `id`;
  *  images are matched by `preview` URL, which is unique within a product). */
 export interface GalleryImage {
   preview: string;

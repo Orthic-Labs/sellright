@@ -9,7 +9,7 @@ import { FacetWithValues } from '~/types';
 import { createSEOHead } from '~/utils/seo';
 
 // SellRight's catalog search has no facet/facet-value aggregation (unlike the
-// old Vendure SearchResponse.facetValues) — `activeFacetValueIds` is accepted
+// old legacy SearchResponse.facetValues) — `activeFacetValueIds` is accepted
 // for URL-contract compatibility (the `f=` query param) but never actually
 // narrows results, matching prior behavior (the old adapter always returned
 // an empty facetValues array too).

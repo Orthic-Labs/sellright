@@ -1,19 +1,20 @@
 /**
  * Native SellRight account + auth types.
  *
- * The generated `schema.gen.ts` has no named `components.schemas` — this
- * OpenAPI document inlines every request/response shape directly on its
- * `paths` entry, so `components['schemas']` (aliased as `Schemas` by
- * `~/sellright/client`) is `never`. These types are derived straight from the
- * `paths` response/request bodies with indexed-access types instead, so they
- * can never drift from the API's own contract — regenerate `schema.gen.ts`
- * and these follow automatically, same guarantee `Schemas` would have given
- * if the API exposed named components.
+ * The generated OpenAPI schema (`@sellright/storefront-client`) has no named
+ * `components.schemas` — this API's document inlines every request/response
+ * shape directly on its `paths` entry, so `components['schemas']` (aliased
+ * as `Schemas` by `~/sellright/client`) is `never`. These types are derived
+ * straight from the `paths` response/request bodies with indexed-access
+ * types instead, so they can never drift from the API's own contract —
+ * regenerate the client package's schema and these follow automatically,
+ * same guarantee `Schemas` would have given if the API exposed named
+ * components.
  *
- * Zero Vendure shapes: no `__typename`, no GraphQL `ErrorResult` unions. Every
- * mutation here resolves to a plain `{ ok, ... }` / throws `SellRightError`;
- * branch on `SellRightError.code` (or `.status` when the API has no stable
- * code for that case) — never on a discriminated `__typename`.
+ * A fully native shape throughout: every mutation here resolves to a plain
+ * `{ ok, ... }` / throws `SellRightError`; branch on `SellRightError.code`
+ * (or `.status` when the API has no stable code for that case) — never on a
+ * discriminated union field.
  */
 import type { paths } from '~/sellright/client';
 
@@ -65,7 +66,7 @@ export type LoyaltyBalance = Json<'/v1/shop/account/loyalty', 'get', 200>;
 /** Stable, storefront-facing account error codes. Prefers `SellRightError.code`
  *  when the API supplies one (currently only `not_verified` on login); falls
  *  back to a status-derived code for the cases the API signals by HTTP status
- *  alone. Never a Vendure `errorCode` / `__typename`. */
+ *  alone. Never a legacy discriminated-union `errorCode` field. */
 export type AccountErrorCode =
 	| 'not_verified'
 	| 'invalid_credentials'

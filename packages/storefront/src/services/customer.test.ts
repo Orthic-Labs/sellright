@@ -20,14 +20,14 @@ describe('services/customer — native SellRight client', () => {
 	});
 
 	it('getMe resolves null on 401 rather than throwing (not signed in)', async () => {
-		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(401, { error: 'unauthenticated' })));
+		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(401, { error: { code: 'NOT_AUTHENTICATED', message: 'unauthenticated' } })));
 
 		const { getMe } = await import('./customer');
 		await expect(getMe()).resolves.toBeNull();
 	});
 
 	it('getMe propagates a non-401 failure', async () => {
-		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(500, { error: 'boom' })));
+		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(500, { error: { code: 'UNKNOWN_ERROR', message: 'boom' } })));
 
 		const { getMe } = await import('./customer');
 		await expect(getMe()).rejects.toThrow();
@@ -53,20 +53,20 @@ describe('services/customer — native SellRight client', () => {
 	});
 
 	it('getOrders resolves an empty real-shaped page on 401 instead of throwing', async () => {
-		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(401, { error: 'unauthenticated' })));
+		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(401, { error: { code: 'NOT_AUTHENTICATED', message: 'unauthenticated' } })));
 
 		const { getOrders } = await import('./customer');
 		await expect(getOrders()).resolves.toEqual({ items: [], total: 0, limit: 20, offset: 0 });
 	});
 
 	it('getOrderByCode resolves null on 404 (not this customer\'s order) and on 401', async () => {
-		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(404, { error: 'not found' })));
+		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(404, { error: { code: 'ORDER_NOT_FOUND', message: 'not found' } })));
 		const { getOrderByCode } = await import('./customer');
 		await expect(getOrderByCode('MISSING')).resolves.toBeNull();
 	});
 
 	it('changePassword maps a 401 to wrong_password, never unauthenticated (the caller is already known-signed-in)', async () => {
-		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(401, { error: 'wrong password' })));
+		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(401, { error: { code: 'PASSWORD_INCORRECT', message: 'wrong password' } })));
 
 		const { changePassword } = await import('./customer');
 		const result = await changePassword('wrong', 'newpassword1');

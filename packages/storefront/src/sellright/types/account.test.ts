@@ -47,7 +47,7 @@ describe('describeAccountError', () => {
 		expect(result).toEqual({ code: 'unknown', message: 'network down' });
 	});
 
-	it('never produces a __typename or errorCode field — only {code, message}', () => {
+	it('never produces a legacy discriminated-union field — only {code, message}', () => {
 		const result = describeAccountError({ status: 500, message: 'boom' });
 		expect(Object.keys(result).sort()).toEqual(['code', 'message']);
 	});

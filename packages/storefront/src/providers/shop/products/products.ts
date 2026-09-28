@@ -57,9 +57,9 @@ export async function searchProducts(params: {
 const LEGACY_IN_STOCK = '999';
 const LEGACY_OUT_OF_STOCK = '0';
 
-/** Minimal local stand-in for the legacy Vendure `SearchInput` GraphQL type —
+/** Minimal local stand-in for the legacy `SearchInput` type —
  *  only the fields the old provider ever read. Avoids importing generated
- *  Vendure types into this file; callers pass plain object literals either way. */
+ *  external types into this file; callers pass plain object literals either way. */
 interface LegacySearchInput {
   term?: string | null;
   collectionSlug?: string | null;

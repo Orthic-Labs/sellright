@@ -6,7 +6,6 @@ import { getProductDetail } from '~/providers/shop/products/products';
 import { formatPrice } from '~/utils';
 import { isCheckoutPage } from '~/utils/route-helpers';
 import { isImageCached } from '~/utils/image-cache';
-import Price from '../products/Price';
 import TrashIcon from '../icons/TrashIcon';
 import { useCart, updateCartLineQuantity, removeCartLine } from '~/contexts/CartContext';
 import { isLineAvailable, remainingQuantity } from '~/sellright/types/cart';

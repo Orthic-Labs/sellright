@@ -1,5 +1,5 @@
 /**
- * SellRight REST client (replaces the Vendure GraphQL requester for the dynamic
+ * SellRight REST client (replaces the legacy GraphQL requester for the dynamic
  * paths). SSR fetches the API directly (localhost:3300 on the box, the real
  * merchant API); the browser uses relative /v1 paths which vite/the host
  * proxies to the API (no CORS).

@@ -1,12 +1,12 @@
 /**
  * Native SellRight checkout — the ONE checkout backend for this storefront.
- * There is no Vendure GraphQL fallback and no "convert the local cart to an
+ * There is no legacy fallback and no "convert the local cart to an
  * order" step: the server-cart token (when one exists) IS the order's source
  * of truth, and POST /v1/shop/checkout creates the order directly from it.
  *
  * Every call here goes through `sellright()` (src/sellright/client.ts) —
  * openapi-fetch typed against the API's own OpenAPI document — never the
- * legacy hand-rolled `sr()` helper and never a Vendure shape.
+ * legacy hand-rolled `sr()` helper and never a legacy shape.
  */
 import { sellright, idempotency, SellRightError } from '~/sellright/client';
 import { CartService } from '~/services/CartService';
@@ -108,14 +108,14 @@ export const placeOrder = async (form: CheckoutForm): Promise<CheckoutResponse> 
 				// for a converted cart before this branch, so reaching it means the
 				// cart itself is unusable — retire the token + mirror.
 				CartService.discard();
-				throw Object.assign(new Error(conflict.error || 'This cart can no longer be checked out.'), { cause: error });
+				throw Object.assign(new Error(error.message || 'This cart can no longer be checked out.'), { cause: error });
 			}
 			if (conflict?.reason === 'payload_mismatch') {
 				// The attempt mutated under a used key — rotate so the NEXT try is a
 				// fresh idempotency identity (this attempt's error still propagates).
 				resetAttemptKey();
 			}
-			throw Object.assign(new Error(conflict?.error || 'Checkout failed. Please try again.'), { cause: error });
+			throw Object.assign(new Error(error.message || 'Checkout failed. Please try again.'), { cause: error });
 		}
 		throw error;
 	}

@@ -24,7 +24,7 @@ import {
 
 const TOKEN_COOKIE = 'sr_cart';
 /** Pre-native cart key, read exactly once for a lossless one-time migration. */
-const LEGACY_CART_KEY = 'vendure_local_cart';
+const LEGACY_CART_KEY = 'sellright_legacy_local_cart';
 
 export class CartError extends Error {
   constructor(
@@ -138,7 +138,7 @@ export class CartService {
   }
 
   // ── one-time legacy migration ────────────────────────────────────────
-  /** Reads the pre-native `vendure_local_cart` key exactly once, converts its
+  /** Reads the pre-native `sellright_legacy_local_cart` key exactly once, converts its
    *  lines to `{ sku, quantity }` by SKU, carries over its display
    *  enrichment, and deletes the key immediately — deleting it is what makes
    *  this single-shot: no key means nothing left to migrate, ever again. */

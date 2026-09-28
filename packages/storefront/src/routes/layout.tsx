@@ -14,7 +14,6 @@ import { RequestHandler, routeLoader$, useLocation } from '@qwik.dev/router';
 import { ImageTransformerProps, useImageProvider } from 'qwik-image';
 import Menu from '~/components/menu/Menu';
 import { APP_STATE, CUSTOMER_NOT_DEFINED_ID, IMAGE_RESOLUTIONS, AUTH_TOKEN, COUNTRY_COOKIE } from '~/constants';
-import { Order } from '~/generated/graphql-shop';
 import { ActiveCustomer, AppState } from '~/types';
 import ConditionalCart from '../components/cart/ConditionalCart';
 import Header from '../components/header/header';
@@ -148,8 +147,6 @@ export default component$(() => {
 		showMobileUserMenu: false,
 		isLoading: false,
 		customer: { id: CUSTOMER_NOT_DEFINED_ID, firstName: '', lastName: '', emailAddress: '' } as ActiveCustomer,
-		activeOrder: {} as Order,
-		collections: [],
 		availableCountries: [],
 		shippingAddress: {
 			id: '',

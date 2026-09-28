@@ -10,7 +10,7 @@ export interface OrderTrackingResult {
 
 /** Guest order tracking — SellRight REST (`GET /v1/shop/track`, code + email),
  *  typed end to end through `~/sellright/content` and `TrackedOrder`. No
- *  Vendure/GraphQL shape involved — `OrderDetails`/`OrderTracking` render the
+ *  legacy shape involved — `OrderDetails`/`OrderTracking` render the
  *  API's own native fields directly. */
 export const trackOrderServer = server$(async (orderCode: string, email: string): Promise<OrderTrackingResult> => {
   const result = await trackOrder(orderCode, email);

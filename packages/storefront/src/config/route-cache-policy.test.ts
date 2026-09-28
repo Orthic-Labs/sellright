@@ -9,7 +9,7 @@ describe('getRouteCacheProfile', () => {
 		}
 	});
 
-	it('no longer treats the dead Vendure GraphQL prefixes as dynamic', () => {
+	it('no longer treats the dead legacy GraphQL prefixes as dynamic', () => {
 		// This storefront never serves /shop-api or /admin-api — the native
 		// SellRight API lives entirely under /v1, reached server-side via
 		// ~/sellright/client, never through a Qwik route. These prefixes fell

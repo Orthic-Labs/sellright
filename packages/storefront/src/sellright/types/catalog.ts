@@ -1,18 +1,20 @@
 /**
  * Native catalog domain types for the storefront's shop/search/collections/PDP
- * area, derived from the generated OpenAPI `paths` (see `../schema.gen`).
+ * area, derived from `@sellright/storefront-client`'s generated OpenAPI
+ * `paths` (re-exported by `../client`).
  *
  * The generated spec has no reusable `components.schemas` (every response is
  * inlined per path — `components['schemas']` is literally `never`), so these
  * are derived from the relevant `paths[...]['get']['responses'][200]` shapes
  * instead. That's the equivalent of "Schemas['...']" for this API.
  *
- * Zero Vendure shapes: no `id`/`featuredAsset`/`facetValues`/`customFields`/
- * `priceWithTax`/`__typename`/string `stockLevel` anywhere in this module or
- * anything built on it. Identity is the product `slug` / variant `sku`, prices
- * are plain integer-cents fields, stock is `{ inStock: boolean; availableQuantity: number | null }`.
+ * A fully native shape throughout: identity is the product `slug` / variant
+ * `sku`, prices are plain integer-cents fields, stock is
+ * `{ inStock: boolean; availableQuantity: number | null }` — no legacy
+ * discriminated-union or string-stock-level fields anywhere in this module or
+ * anything built on it.
  */
-import type { paths } from '../schema.gen';
+import type { paths } from '../client';
 import { effectiveUnitPriceCents } from '~/utils/effective-price';
 
 type Json<P extends keyof paths, M extends 'get'> =
@@ -55,7 +57,7 @@ export type CatalogCollectionDetail = Json<'/v1/shop/collections/{slug}', 'get'>
 export type CatalogCollectionProduct = CatalogCollectionDetail['products'][number];
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Pure helpers (unit-tested in catalog.test.ts) — no network, no Vendure shapes
+// Pure helpers (unit-tested in catalog.test.ts) — no network, no legacy shapes
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Resolve a raw asset path (as stored: relative name or already-absolute) to a
@@ -88,7 +90,7 @@ export const UNCHECKED_STOCK = { inStock: false, availableQuantity: 0 } as const
 /**
  * Raw shape written by the (out-of-scope, backend) manifest publisher
  * (packages/api/src/manifest/catalog.ts) into shop-catalog.json — still
- * Vendure-flavoured field names (`id`, `featuredAsset`, `priceRange`,
+ * legacy-flavoured field names (`id`, `featuredAsset`, `priceRange`,
  * `facetValues`, `customFields`) because that's the on-disk serialization
  * format the backend happens to use today. This is the ONLY place those
  * field names may appear in the catalog area: every caller past this
@@ -139,7 +141,7 @@ export function normalizeManifestListItem(raw: RawManifestListItem): CatalogList
 
 /**
  * Raw shape written by the manifest publisher for `products/{slug}.json` —
- * same Vendure-flavoured on-disk format as the list manifest. The detail
+ * same legacy-flavoured on-disk format as the list manifest. The detail
  * manifest carries no `enabled`/`fulfillmentType`/`appKey`/`compareAtPrice`/
  * stock fields (pre-existing backend limitation, out of scope here); this
  * normalizer fills the safe native defaults documented inline.

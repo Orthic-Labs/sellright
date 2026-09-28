@@ -1,18 +1,18 @@
 /**
- * Native checkout + payment types — derived from the generated OpenAPI
- * `paths` map (`~/sellright/schema.gen`), never hand-invented. This API's
- * OpenAPI document has no named `components.schemas` (see schema.gen.ts:
- * `components.schemas` is literally `never`); every operation inlines its
- * request/response shape, so these types index the specific path + method +
- * status code instead of a shared schema name.
+ * Native checkout + payment types — derived from `@sellright/storefront-
+ * client`'s generated OpenAPI `paths` map (re-exported by `../client`),
+ * never hand-invented. This API's OpenAPI document has no named
+ * `components.schemas` (`components.schemas` is literally `never`); every
+ * operation inlines its request/response shape, so these types index the
+ * specific path + method + status code instead of a shared schema name.
  *
  * Anything indexed from `paths` below is generated-schema-derived. The two
  * types marked NOT SCHEMA-DERIVED are hand-written because the upstream
  * OpenAPI doc types that field as `unknown[]` — the route exists and returns
  * a real shape at runtime (confirmed against
  * packages/api/src/shipping/calculator.ts), but zod-openapi never had a
- * response schema attached to it. Regenerate `schema.gen.ts` and replace
- * these two if the API ever adds one.
+ * response schema attached to it. Regenerate the client package's schema
+ * and replace these two if the API ever adds one.
  */
 import type { paths } from '../client';
 

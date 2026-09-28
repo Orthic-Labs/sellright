@@ -1,10 +1,10 @@
 /**
  * Account auth provider — native SellRight client (PASS 3). Talks to the API
  * exclusively through `~/sellright/client` (`sellright()`, generated
- * `paths`); zero Vendure shapes, zero `__typename` unions. Every result is
+ * `paths`); every result is
  * either the plain native payload or a `describeAccountError` `{ code,
  * message }`, built from `SellRightError.code`/`.status` — never a
- * `errorCode`/`__typename` discriminated union.
+ * a legacy discriminated-union `errorCode` field.
  */
 import { sellright, SellRightError } from '~/sellright/client';
 import { describeAccountError, type AccountError, type AuthCustomer, type ProfileUpdateResult } from '~/sellright/types/account';

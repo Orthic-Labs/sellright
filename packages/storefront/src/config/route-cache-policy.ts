@@ -12,7 +12,7 @@ export interface RouteCacheProfile {
 
 export const CACHE_POLICY_VERSION = '2026-03-19.3';
 
-// `/shop-api` and `/admin-api` were the old Vendure GraphQL endpoint
+// `/shop-api` and `/admin-api` were the old legacy GraphQL endpoint
 // prefixes — this SellRight storefront never serves or proxies those paths
 // (the native API lives under `/v1`, handled directly by
 // `~/sellright/client`'s SSR fetch, never through a Qwik route), so they were

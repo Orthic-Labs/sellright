@@ -96,7 +96,7 @@ describe('trackOrder', () => {
 	});
 
 	it('returns a not-found error on 404', async () => {
-		enqueue(jsonResponse(404, { error: 'order not found for that code + email' }));
+		enqueue(jsonResponse(404, { error: { code: 'ORDER_NOT_FOUND', message: 'order not found for that code + email' } }));
 		const result = await trackOrder('MISSING', 'x@y.z');
 		expect(result).toEqual({ success: false, error: 'Order not found for that code + email.' });
 	});
@@ -118,7 +118,7 @@ describe('newsletterSignup', () => {
 	});
 
 	it('surfaces the rate-limit message on 429', async () => {
-		enqueue(jsonResponse(429, { error: 'too many attempts' }));
+		enqueue(jsonResponse(429, { error: { code: 'RATE_LIMITED', message: 'too many attempts' } }));
 		const result = await newsletterSignup('subscriber@example.com');
 		expect(result.ok).toBe(false);
 		expect(result.message).toContain('Too many signups');
@@ -151,7 +151,7 @@ describe('fetchAffiliateStats', () => {
 	});
 
 	it('reports an invalid link on 404', async () => {
-		enqueue(jsonResponse(404, { error: 'not found' }));
+		enqueue(jsonResponse(404, { error: { code: 'TOKEN_INVALID', message: 'not found' } }));
 		const token = 'b'.repeat(32);
 		const result = await fetchAffiliateStats(token);
 		expect(result).toEqual({ success: false, error: 'Invalid affiliate link.' });

@@ -3,7 +3,7 @@
  * (`./client`). This is the ONLY place storefront code should reach for
  * guest order tracking, newsletter/subscriber lifecycle, and the affiliate
  * dashboard feed — callers get `TrackedOrder` etc. (`./types/content`), never
- * a Vendure/GraphQL shape.
+ * a legacy shape.
  */
 import { sellright } from './client';
 import { srErrorStatus } from '~/utils/sellright';
@@ -27,7 +27,7 @@ import type {
 /** The API returns the canonical address shape (line1/line2/country/phone —
  *  see packages/api `normalizeAddress()`); this only guards against a
  *  genuinely missing address (address-less digital-only orders) or a field
- *  that predates this build. Never invents a Vendure-ish key. */
+ *  that predates this build. Never invents a made-up key. */
 function normalizeTrackedAddress(raw: unknown): TrackedAddress | null {
 	if (!raw || typeof raw !== 'object') return null;
 	const a = raw as Record<string, unknown>;
@@ -96,9 +96,9 @@ function normalizeTrackedOrder(raw: Record<string, unknown>): TrackedOrder {
 }
 
 /** GET /v1/shop/track (code + email). The endpoint's response body is
- *  untyped in the OpenAPI doc (`content: { "application/json": unknown }`,
- *  see schema.gen.ts) — the API doesn't publish a schema for it — so this is
- *  the one place that normalizes the raw payload into `TrackedOrder`. */
+ *  untyped in the OpenAPI doc (`content: { "application/json": unknown }`)
+ *  — the API doesn't publish a schema for it — so this is the one place that
+ *  normalizes the raw payload into `TrackedOrder`. */
 export async function trackOrder(code: string, email: string): Promise<TrackOrderResult> {
 	try {
 		const { data, error } = await sellright().GET('/v1/shop/track', {

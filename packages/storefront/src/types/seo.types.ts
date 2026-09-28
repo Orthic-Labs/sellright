@@ -6,7 +6,7 @@
 // local business — see `~/services/seo-schemas.ts`), `SeoApiResponse`,
 // `SeoApiCacheConfig`, `SeoApiEndpoints` — all dead, only ever referenced by
 // the removed `seo-api.service.ts` fetch/cache layer that called stale
-// pre-`/v1` Vendure-plugin-era paths and had zero real callers.
+// pre-`/v1` legacy-plugin-era paths and had zero real callers.
 
 export interface JsonLdSchema {
   '@context': string;

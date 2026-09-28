@@ -192,7 +192,7 @@ export default component$(() => {
 
 /** The API types `shippingAddress`/`billingAddress` as `unknown` (address
  *  shape isn't standardized across payment/shipping providers) — render
- *  defensively rather than assume Vendure's address field names. */
+ *  defensively rather than assume the legacy address field names. */
 const AddressBlock = component$(({ address }: { address: unknown }) => {
 	const a = (address ?? {}) as Record<string, unknown>;
 	const line = (v: unknown) => (typeof v === 'string' && v ? v : undefined);

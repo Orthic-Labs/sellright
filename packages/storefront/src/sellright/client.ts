@@ -1,29 +1,41 @@
 /**
- * Native SellRight API client for the storefront.
+ * Native SellRight API client for the storefront — thin Qwik adapter over
+ * `@sellright/storefront-client`'s framework-agnostic `sellright()`/
+ * `SellRightError`/`idempotency()` compat surface (see that package's
+ * `compat.ts` doc comment). This file's only job is to call
+ * `configureSellRightClient()` once with this app's own environment
+ * primitives (API base, SSR/browser detection, cookie forwarding, store
+ * resolution, CSRF) and re-export the three names — every existing call
+ * site (`sellright().GET(...)`, `err instanceof SellRightError`,
+ * `idempotency(key)`) keeps compiling unchanged.
  *
- * Types come from `schema.gen.ts`, generated from the API's own OpenAPI
- * document (`/v1/openapi.json`), so requests and responses can't drift from
- * the backend. Regenerate with `pnpm gen:sellright-types`.
- *
- * This is the only way storefront code should talk to the API. It carries
- * over the transport behaviour of the old `sr()` helper: per-request API base
- * on the server, cookie forwarding during SSR, double-submit CSRF on browser
- * mutations, store resolution headers and a bounded SSR timeout.
+ * Types (`paths`/`components`) come from the package's own generated
+ * schema, built from the API's OpenAPI document — regenerate via
+ * `pnpm --filter @sellright/storefront-client run generate` (see that
+ * package's `scripts/generate.mts`), not from a storefront-local script.
  */
-import createClient, { type Middleware } from 'openapi-fetch';
 import { isServer } from '@qwik.dev/core/build';
-import type { paths, components } from './schema.gen';
+import {
+	configureSellRightClient,
+	SellRightError,
+	idempotency,
+	sellright as sellrightClient,
+	unknownApiError,
+	type paths,
+	type components,
+} from '@sellright/storefront-client';
 import { apiBase, storeResolutionHeaders } from '~/utils/sellright';
 import { sellrightRequestCookie } from '~/utils/sellright-request-context.server';
 
 export type { paths, components };
 export type Schemas = components['schemas'];
+export { SellRightError, idempotency };
 
-const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
-
+/** Same dual-cookie-name CSRF read the previous storefront-embedded client
+ *  used: customer sessions on the real API set `sr_cust_csrf`; the isolated
+ *  demo (no customer accounts) sets `sr_csrf` instead. */
 function readCsrfCookie(): string | undefined {
 	if (isServer || typeof document === 'undefined') return undefined;
-	// Customer sessions on the API use sr_cust_csrf; the isolated demo uses sr_csrf.
 	for (const name of ['sr_cust_csrf', 'sr_csrf']) {
 		const match = document.cookie.match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`));
 		if (match) return decodeURIComponent(match[1]);
@@ -31,79 +43,39 @@ function readCsrfCookie(): string | undefined {
 	return undefined;
 }
 
-/** Error thrown for any non-2xx response. `code` is the API's stable error
- *  code when the response carries one; branch on it, never on `message`. */
-export class SellRightError extends Error {
-	constructor(
-		readonly status: number,
-		readonly code: string | undefined,
-		message: string,
-		readonly body: unknown,
-	) {
-		super(message);
-		this.name = 'SellRightError';
-	}
-}
+configureSellRightClient({
+	baseUrl: () => (isServer ? apiBase() : ''),
+	isServer: () => isServer,
+	forwardCookie: () => (isServer ? sellrightRequestCookie.getStore() : undefined),
+	// storeResolutionHeaders() already returns {} in the browser and picks
+	// x-store-slug vs x-forwarded-host server-side — read whichever one it
+	// set rather than re-deriving the same precedence rule here.
+	storeSlug: () => storeResolutionHeaders()['x-store-slug'],
+	forwardedHost: () => storeResolutionHeaders()['x-forwarded-host'],
+	getCsrfToken: readCsrfCookie,
+	timeoutMs: 8000,
+});
 
-const transport: Middleware = {
-	onRequest({ request }) {
-		for (const [k, v] of Object.entries(storeResolutionHeaders())) request.headers.set(k, v);
-		if (isServer) {
-			const cookie = sellrightRequestCookie.getStore();
-			if (cookie) request.headers.set('cookie', cookie);
-		} else if (MUTATING_METHODS.has(request.method.toUpperCase())) {
-			const csrf = readCsrfCookie();
-			if (csrf) request.headers.set('x-csrf-token', csrf);
-		}
-		return request;
-	},
-	async onResponse({ response }) {
-		if (response.ok) return response;
-		const text = await response.clone().text();
-		let body: unknown;
-		try { body = JSON.parse(text); } catch { body = undefined; }
-		const err = (body as { error?: unknown } | undefined)?.error;
-		// `code` sits alongside a string `error` message at the top level for
-		// every error this API returns (e.g. login 403 →
-		// `{ error: "...", code: "not_verified" }`) — not nested inside `error`.
-		// The nested-object fallback is kept for forward compatibility only;
-		// no current endpoint uses it.
-		const code =
-			typeof (body as { code?: unknown } | undefined)?.code === 'string'
-				? (body as { code: string }).code
-				: typeof err === 'object' && err !== null
-					? (err as { code?: string }).code
-					: undefined;
-		const message =
-			typeof err === 'string' ? err
-			: typeof err === 'object' && err !== null && typeof (err as { message?: unknown }).message === 'string' ? (err as { message: string }).message
-			: `HTTP ${response.status}`;
-		throw new SellRightError(response.status, code, message, body);
-	},
-};
-
-function boundedFetch(input: Request): Promise<Response> {
-	// Server-side calls must resolve within a bounded window (SSR/SSG), so an
-	// unreachable API can never hang a render.
-	if (isServer && !input.signal?.aborted) {
-		return fetch(new Request(input, { signal: AbortSignal.timeout(8000) }));
-	}
-	return fetch(input);
-}
-
-/** Create a client for this request. On the server the API base is resolved
- *  per request; in the browser, calls are same-origin. */
+/** Create a client for this request — same zero-argument shape (and same
+ *  ALWAYS-THROW-ON-NON-2XX behavior) the previous storefront-embedded client
+ *  had. `compat.ts`'s `sellright()` intentionally returns the raw,
+ *  non-throwing openapi-fetch client (`{ data, error }`, its `request()`
+ *  helper is the throwing wrapper) — every call site in this storefront was
+ *  written against the old client's throwing contract
+ *  (`const { data } = await sellright().POST(...)`, catching `SellRightError`),
+ *  so this adds one more `onResponse` middleware on top of the package's own
+ *  client that throws a `SellRightError` for any non-2xx response, same as
+ *  the retired inline client did. */
 export function sellright() {
-	const client = createClient<paths>({
-		baseUrl: isServer ? apiBase() : '',
-		credentials: 'include',
-		fetch: boundedFetch,
+	const client = sellrightClient();
+	client.use({
+		async onResponse({ response }) {
+			if (response.ok) return response;
+			const text = await response.clone().text();
+			let body: unknown;
+			try { body = JSON.parse(text); } catch { body = undefined; }
+			throw unknownApiError(response.status, body);
+		},
 	});
-	client.use(transport);
 	return client;
-}
-
-/** Idempotency header for retry-safe mutations such as checkout. */
-export function idempotency(key: string): { 'idempotency-key': string } {
-	return { 'idempotency-key': key };
 }

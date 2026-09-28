@@ -16,7 +16,7 @@ export default component$(() => {
 	const success = useSignal(false);
 
 	// Native registration always collects the password up front, so — unlike
-	// the old Vendure flow — verifying an email never needs a follow-up
+	// the old legacy flow — verifying an email never needs a follow-up
 	// "set your password" step. `verify-email` either succeeds or it doesn't.
 	useVisibleTask$(async () => {
 		const urlParams = new URLSearchParams(window.location.search);

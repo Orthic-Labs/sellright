@@ -102,7 +102,7 @@ describe('placeOrder → POST /v1/shop/checkout', () => {
 	});
 
 	it('reuses one Idempotency-Key across retries of the same attempt', async () => {
-		enqueue(respond(500, { error: 'blip' }), respond(200, { code: 'O2', state: 'PendingPayment', grandTotal: 100, receiptToken: 'rt_2' }));
+		enqueue(respond(500, { error: { code: 'UNKNOWN_ERROR', message: 'blip' } }), respond(200, { code: 'O2', state: 'PendingPayment', grandTotal: 100, receiptToken: 'rt_2' }));
 		await placeOrder(form).catch(() => {});
 		await placeOrder(form);
 		const keys = calls.map((c) => c.headers.get('idempotency-key'));
@@ -111,7 +111,7 @@ describe('placeOrder → POST /v1/shop/checkout', () => {
 	});
 
 	it('rotates the key only on payload_mismatch', async () => {
-		enqueue(respond(409, { error: 'mismatch', reason: 'payload_mismatch' }), respond(200, { code: 'O3', state: 'PendingPayment', grandTotal: 100, receiptToken: 'rt_3' }));
+		enqueue(respond(409, { error: { code: 'IDEMPOTENCY_PAYLOAD_MISMATCH', message: 'mismatch' }, reason: 'payload_mismatch' }), respond(200, { code: 'O3', state: 'PendingPayment', grandTotal: 100, receiptToken: 'rt_3' }));
 		await placeOrder(form).catch(() => {});
 		await placeOrder(form);
 		const keys = calls.map((c) => c.headers.get('idempotency-key'));
@@ -121,7 +121,7 @@ describe('placeOrder → POST /v1/shop/checkout', () => {
 	});
 
 	it('does NOT rotate the key for an unrelated 409 (e.g. out of stock)', async () => {
-		enqueue(respond(409, { error: 'SKU1 is out of stock', skus: ['SKU1'] }), respond(200, { code: 'O3b', state: 'PendingPayment', grandTotal: 100, receiptToken: 'rt_3b' }));
+		enqueue(respond(409, { error: { code: 'OUT_OF_STOCK', message: 'SKU1 is out of stock' }, skus: ['SKU1'] }), respond(200, { code: 'O3b', state: 'PendingPayment', grandTotal: 100, receiptToken: 'rt_3b' }));
 		await expect(placeOrder(form)).rejects.toThrow('SKU1 is out of stock');
 		await placeOrder(form);
 		const keys = calls.map((c) => c.headers.get('idempotency-key'));
@@ -130,7 +130,7 @@ describe('placeOrder → POST /v1/shop/checkout', () => {
 
 	it('stale-cart conflict adopts the server snapshot and tells the shopper to review', async () => {
 		const conflictCart = { token: 'tok_srv', revision: 9, status: 'active', currency: 'USD', subtotal: 0, discountTotal: 0, shippingTotal: 0, taxTotal: 0, grandTotal: 0, unavailable: [], coupon: null, lines: [], email: null, customerId: null };
-		enqueue(respond(409, { error: 'cart changed', code: 'stale', revision: 9, cart: conflictCart }));
+		enqueue(respond(409, { error: { code: 'CART_STALE', message: 'cart changed' }, code: 'stale', revision: 9, cart: conflictCart }));
 		await expect(placeOrder(form)).rejects.toThrow('cart changed');
 		expect(adoptConflict).toHaveBeenCalledWith(conflictCart);
 		expect(discard).not.toHaveBeenCalled();
@@ -138,14 +138,14 @@ describe('placeOrder → POST /v1/shop/checkout', () => {
 
 	it('revision_required conflict adopts the snapshot the same way as stale', async () => {
 		const conflictCart = { token: 'tok_srv', revision: 1, status: 'active', currency: 'USD', subtotal: 0, discountTotal: 0, shippingTotal: 0, taxTotal: 0, grandTotal: 0, unavailable: [], coupon: null, lines: [], email: null, customerId: null };
-		enqueue(respond(409, { error: 'revision required', code: 'revision_required', revision: 1, cart: conflictCart }));
+		enqueue(respond(409, { error: { code: 'REVISION_REQUIRED', message: 'revision required' }, code: 'revision_required', revision: 1, cart: conflictCart }));
 		await expect(placeOrder(form)).rejects.toThrow('review it and try again');
 		expect(adoptConflict).toHaveBeenCalledWith(conflictCart);
 	});
 
 	it('converted/merged conflict discards the local mirror instead of adopting', async () => {
 		const conflictCart = { token: 'tok_srv', revision: 2, status: 'converted', currency: 'USD', subtotal: 0, discountTotal: 0, shippingTotal: 0, taxTotal: 0, grandTotal: 0, unavailable: [], coupon: null, lines: [], email: null, customerId: null };
-		enqueue(respond(409, { error: 'cart already converted', code: 'converted', revision: 2, cart: conflictCart }));
+		enqueue(respond(409, { error: { code: 'CART_STALE', message: 'cart already converted' }, code: 'converted', revision: 2, cart: conflictCart }));
 		await expect(placeOrder(form)).rejects.toThrow('cart already converted');
 		expect(discard).toHaveBeenCalled();
 		expect(adoptConflict).not.toHaveBeenCalled();
@@ -169,7 +169,7 @@ describe('settleZeroDueOrder → POST /v1/shop/orders/{code}/pay', () => {
 	});
 
 	it('treats "already covered" (400) as a no-op success, not an error', async () => {
-		enqueue(respond(400, { error: 'Already covered', state: 'Paid' }));
+		enqueue(respond(400, { error: { code: 'ORDER_ALREADY_PAID', message: 'Already covered' }, state: 'Paid' }));
 		const res = await settleZeroDueOrder('O10');
 		expect(res).toBeNull();
 	});

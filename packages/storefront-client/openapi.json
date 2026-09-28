@@ -30,6 +30,7 @@
           "GOOGLE_TOKEN_INVALID",
           "IDEMPOTENCY_KEY_REQUIRED",
           "IDEMPOTENCY_PAYLOAD_MISMATCH",
+          "INVALID_CHECKOUT_REQUEST",
           "INVALID_CREDENTIALS",
           "INVALID_PAYMENT_REQUEST",
           "INVITE_INVALID",
@@ -2937,6 +2938,16 @@
                     "pointsRedeemed",
                     "pointsDiscount"
                   ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed checkout request body or Idempotency-Key header",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
                 }
               }
             }

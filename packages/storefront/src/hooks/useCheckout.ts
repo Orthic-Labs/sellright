@@ -9,7 +9,7 @@ import { decideCheckoutStage } from './checkout-stage';
 
 /**
  * Native checkout flow — single state machine, single backend. There is no
- * flag and no Vendure fallback: every checkout on this storefront goes
+ * flag and no legacy fallback: every checkout on this storefront goes
  * through POST /v1/shop/checkout.
  *
  *   idle → placing (POST /checkout) → either

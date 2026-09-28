@@ -12,7 +12,8 @@
   },
   "sideEffects": false,
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && pnpm run build.copy-generated",
+    "build.copy-generated": "node -e \"const fs=require('fs');fs.mkdirSync('dist/generated',{recursive:true});fs.copyFileSync('src/generated/schema.d.ts','dist/generated/schema.d.ts');\"",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "generate": "tsx scripts/generate.mts",

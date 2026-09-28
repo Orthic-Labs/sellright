@@ -1,16 +1,16 @@
 /**
  * Native content/SEO/misc types for the storefront.
  *
- * `components['schemas']` in `../schema.gen.ts` is `never` — none of the
- * content-area endpoints (blog, track, contact, newsletter, affiliate, SEO)
- * publish a named OpenAPI component schema, only inline per-path shapes (see
- * `paths` in schema.gen.ts). So these types are hand-authored against the
- * deployed API contract (packages/api `src/routes/shop-extra.ts`,
- * `order-facts.ts`, `checkout.ts` `normalizeAddress`) rather than generated —
- * but they are the SAME native vocabulary the API actually returns, not a
- * carried-over Vendure/GraphQL shape. Kept in one file so every consumer in
+ * `components['schemas']` in the generated OpenAPI schema
+ * (`@sellright/storefront-client`) is `never` — none of the content-area
+ * endpoints (blog, track, contact, newsletter, affiliate, SEO) publish a
+ * named OpenAPI component schema, only inline per-path shapes. So these
+ * types are hand-authored against the deployed API contract (packages/api
+ * `src/routes/shop-extra.ts`, `order-facts.ts`, `checkout.ts`
+ * `normalizeAddress`) rather than generated — but they are the SAME native
+ * vocabulary the API actually returns. Kept in one file so every consumer in
  * this area (routes, services, components) imports from here instead of
- * reaching for `~/generated/graphql-shop` or `~/types.ts`.
+ * reaching for `~/types.ts`.
  */
 
 // ── Guest order tracking (GET /v1/shop/track) ────────────────────────────────
@@ -37,7 +37,7 @@ export type TrackedOrderDisplayStatus =
 
 /** Canonical address shape (matches the `address` table and
  *  `normalizeAddress()` in packages/api `src/routes/checkout.ts`: line1/line2/
- *  country/phone — not the storefront's old Vendure-ish streetLine1/
+ *  country/phone — not the storefront's old legacy streetLine1/
  *  countryCode/phoneNumber aliases that function accepts as INPUT only). */
 export interface TrackedAddress {
 	fullName: string | null;

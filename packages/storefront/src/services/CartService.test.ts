@@ -117,7 +117,7 @@ describe('updateLine — revisioned absolute set', () => {
 		enqueue(
 			respond(200, serverCart({ revision: 4 })), // GET (ensureRevision)
 			respond(409, {
-				error: 'cart changed', code: 'stale', revision: 6,
+				error: { code: 'CART_STALE', message: 'cart changed' }, code: 'stale', revision: 6,
 				cart: serverCart({ revision: 6, lines: [{ sku: 'SKU1', name: 'Widget', quantity: 3, unitPrice: 2400, lineSubtotal: 7200, lineDiscount: 0, lineTotal: 7200, available: true, availableQuantity: 999 }], subtotal: 7200 }),
 			}),
 			respond(200, serverCart({ revision: 7, lines: [{ sku: 'SKU1', name: 'Widget', quantity: 5, unitPrice: 2400, lineSubtotal: 12000, lineDiscount: 0, lineTotal: 12000, available: true, availableQuantity: 999 }], subtotal: 12000 })), // retry succeeds
@@ -134,8 +134,8 @@ describe('updateLine — revisioned absolute set', () => {
 		setCookie('tok_srv');
 		enqueue(
 			respond(200, serverCart({ revision: 4 })),
-			respond(409, { error: 'stale', code: 'stale', revision: 6, cart: serverCart({ revision: 6 }) }),
-			respond(409, { error: 'stale', code: 'stale', revision: 7, cart: serverCart({ revision: 7 }) }),
+			respond(409, { error: { code: 'CART_STALE', message: 'stale' }, code: 'stale', revision: 6, cart: serverCart({ revision: 6 }) }),
+			respond(409, { error: { code: 'CART_STALE', message: 'stale' }, code: 'stale', revision: 7, cart: serverCart({ revision: 7 }) }),
 		);
 		await expect(CartService.updateLine('SKU1', 5)).rejects.toThrow(/try again/);
 		expect(patchCalls()).toHaveLength(2); // exactly one retry, never a loop
@@ -145,7 +145,7 @@ describe('updateLine — revisioned absolute set', () => {
 		setCookie('tok_srv');
 		enqueue(
 			respond(200, serverCart({ revision: 4 })),
-			respond(409, { error: 'converted', code: 'converted', revision: 4, cart: serverCart({ status: 'converted' }) }),
+			respond(409, { error: { code: 'CART_STALE', message: 'converted' }, code: 'converted', revision: 4, cart: serverCart({ status: 'converted' }) }),
 		);
 		await expect(CartService.updateLine('SKU1', 2)).rejects.toThrow(/checked out/);
 		expect(CartService.getCart().lines).toHaveLength(0);
@@ -154,7 +154,7 @@ describe('updateLine — revisioned absolute set', () => {
 
 	it('404 on refresh retires the local cart', async () => {
 		setCookie('tok_srv');
-		enqueue(respond(404, { error: 'not found' }));
+		enqueue(respond(404, { error: { code: 'CART_NOT_FOUND', message: 'not found' } }));
 		await CartService.refresh();
 		expect(CartService.getCart().lines).toHaveLength(0);
 	});
@@ -210,7 +210,7 @@ describe('fail-closed stock', () => {
 
 describe('legacy cart migration', () => {
 	it('seeds the server cart from the pre-native localStorage cart by SKU, then deletes the key', async () => {
-		localStorage.setItem('vendure_local_cart', JSON.stringify({
+		localStorage.setItem('sellright_legacy_local_cart', JSON.stringify({
 			items: [
 				{ productVariantId: 'SKU1', quantity: 2, productVariant: { id: 'SKU1', name: 'Widget', product: { slug: 'widget' }, featuredAsset: { preview: '/w.jpg' } } },
 				{ sku: 'SKU2', quantity: 1, productVariant: { id: 'SKU2', name: 'Gadget', product: { slug: 'gadget' } } },
@@ -232,7 +232,7 @@ describe('legacy cart migration', () => {
 		const create = calls.find((c) => c.url.endsWith('/v1/shop/cart'));
 		const body = JSON.parse(create!.init.body!);
 		expect(body.items).toEqual(expect.arrayContaining([{ sku: 'SKU1', quantity: 2 }, { sku: 'SKU2', quantity: 1 }]));
-		expect(localStorage.getItem('vendure_local_cart')).toBeNull();
+		expect(localStorage.getItem('sellright_legacy_local_cart')).toBeNull();
 		// The mirror carries the migrated lines' enrichment (image/slug) even
 		// though the server line itself has no such fields.
 		expect(res.cart.lines.find((l) => l.sku === 'SKU1')?.slug).toBe('widget');

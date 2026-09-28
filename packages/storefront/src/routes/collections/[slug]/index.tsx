@@ -4,7 +4,7 @@
 // state) — `/v1/shop/collections/{slug}` returns image/inStock/pricingVariant
 // per product, same as catalog/search, so the grid has full parity with the
 // shop page. Talks to the native `~/sellright/catalog` client directly
-// (bypassing the Vendure-shaped `providers/shop/collections/collections.ts`
+// (bypassing the retired legacy-shaped collections provider
 // adapter, which is out of scope for this conversion and has no other
 // consumers after this route stops using it).
 import { component$ } from '@qwik.dev/core';

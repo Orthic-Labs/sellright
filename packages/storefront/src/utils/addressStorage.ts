@@ -3,7 +3,7 @@
  * Priority: Customer saved address → CountryPreferenceService storage.
  *
  * Native SellRight client only — `getMe`/`getAddresses` (services/customer.ts)
- * and the native `Address` type (sellright/types/account.ts), zero Vendure
+ * and the native `Address` type (sellright/types/account.ts), zero legacy
  * shapes. Country persistence is CountryPreferenceService (localStorage),
  * carried over from the retired LocalCartService with identical semantics.
  */

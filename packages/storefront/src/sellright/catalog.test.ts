@@ -40,12 +40,12 @@ describe('fetchProductList', () => {
 
 describe('fetchProductDetail', () => {
   it('returns null on a 404', async () => {
-    state.getMock.mockRejectedValue(new SellRightError(404, 'not_found', 'Not found', { error: 'Not found' }));
+    state.getMock.mockRejectedValue(new SellRightError(404, { error: { code: 'not_found', message: 'Not found' } }));
     expect(await fetchProductDetail('missing')).toBeNull();
   });
 
   it('rethrows non-404 errors', async () => {
-    state.getMock.mockRejectedValue(new SellRightError(500, undefined, 'boom', undefined));
+    state.getMock.mockRejectedValue(new SellRightError(500, { error: { code: 'UNKNOWN_ERROR', message: 'boom' } }));
     await expect(fetchProductDetail('x')).rejects.toThrow('boom');
   });
 
@@ -73,7 +73,7 @@ describe('fetchProductDetail', () => {
 
 describe('fetchProductStock', () => {
   it('returns null on 404', async () => {
-    state.getMock.mockRejectedValue(new SellRightError(404, undefined, 'nope', undefined));
+    state.getMock.mockRejectedValue(new SellRightError(404, { error: { code: 'UNKNOWN_ERROR', message: 'nope' } }));
     expect(await fetchProductStock('missing')).toBeNull();
   });
   it('passes through the native stock shape, including explicit null (uncapped)', async () => {
@@ -102,7 +102,7 @@ describe('fetchProductDetailWithStock', () => {
   });
 
   it('returns null when the product itself 404s', async () => {
-    state.getMock.mockRejectedValue(new SellRightError(404, undefined, 'nope', undefined));
+    state.getMock.mockRejectedValue(new SellRightError(404, { error: { code: 'UNKNOWN_ERROR', message: 'nope' } }));
     expect(await fetchProductDetailWithStock('missing')).toBeNull();
   });
 });
@@ -114,7 +114,7 @@ describe('fetchCollectionList / fetchCollectionDetail', () => {
   });
 
   it('returns null on a 404 collection', async () => {
-    state.getMock.mockRejectedValue(new SellRightError(404, undefined, 'nope', undefined));
+    state.getMock.mockRejectedValue(new SellRightError(404, { error: { code: 'UNKNOWN_ERROR', message: 'nope' } }));
     expect(await fetchCollectionDetail('missing')).toBeNull();
   });
 

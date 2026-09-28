@@ -13,7 +13,7 @@ interface PriceProps {
   currencyCode?: string;
   /** @deprecated legacy alias for `price` — kept only for routes/index.tsx and
    *  components/home/HomeTeeSection.tsx (out of scope for this conversion),
-   *  which still pass a Vendure-ish `priceWithTax` (plain number or, from the
+   *  which still pass a legacy `priceWithTax` (plain number or, from the
    *  legacy search adapter, a `{min,max}` pair where min always equals max).
    *  New callers should always pass `price` instead. */
   priceWithTax?: number | { min: number; max: number } | { value: number } | null;

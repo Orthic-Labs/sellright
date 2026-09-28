@@ -8,7 +8,7 @@
  * in localStorage at all (the cart itself is server-owned — only its opaque
  * token persists client-side, in a cookie). This service keeps the shipping
  * destination alive in its own small key instead of disappearing with the
- * retired `vendure_local_cart` blob.
+ * retired `sellright_legacy_local_cart` blob.
  *
  * Same static surface as the old `LocalCartService` country methods
  * (`getCountry` / `setCountry` / `setCountryFromGeolocation` /

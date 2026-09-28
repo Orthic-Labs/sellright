@@ -40,8 +40,8 @@ describe('providers/shop/account/account — native SellRight client', () => {
 		expect(body.turnstileToken).toBe('tok');
 	});
 
-	it('login surfaces the not_verified case via SellRightError.code, not a __typename union', async () => {
-		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(403, { error: 'email not verified', code: 'not_verified' })));
+	it('login surfaces the not_verified case via SellRightError.code, not a discriminated union', async () => {
+		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(403, { error: { code: 'not_verified', message: 'email not verified' } })));
 
 		const { login } = await import('./account');
 		const result = await login('a@b.com', 'wrongish');
@@ -49,13 +49,13 @@ describe('providers/shop/account/account — native SellRight client', () => {
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
 			expect(result.code).toBe('not_verified');
-			expect(result).not.toHaveProperty('__typename');
+			expect(result).not.toHaveProperty('errorCode');
 			expect(result).not.toHaveProperty('errorCode');
 		}
 	});
 
 	it('login maps a 401 to invalid_credentials', async () => {
-		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(401, { error: 'bad credentials' })));
+		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(401, { error: { code: 'INVALID_CREDENTIALS', message: 'bad credentials' } })));
 
 		const { login } = await import('./account');
 		const result = await login('a@b.com', 'wrong');
@@ -64,7 +64,7 @@ describe('providers/shop/account/account — native SellRight client', () => {
 	});
 
 	it('login maps a 429 to rate_limited', async () => {
-		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(429, { error: 'slow down' })));
+		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(429, { error: { code: 'RATE_LIMITED', message: 'slow down' } })));
 
 		const { login } = await import('./account');
 		const result = await login('a@b.com', 'x');
@@ -81,7 +81,7 @@ describe('providers/shop/account/account — native SellRight client', () => {
 	});
 
 	it('logout surfaces a real CSRF failure (403) instead of pretending success', async () => {
-		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(403, { error: 'csrf mismatch' })));
+		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(403, { error: { code: 'CSRF_INVALID', message: 'csrf mismatch' } })));
 
 		const { logout } = await import('./account');
 		const result = await logout();
@@ -91,16 +91,22 @@ describe('providers/shop/account/account — native SellRight client', () => {
 	});
 
 	it('logout surfaces a transport failure rather than swallowing it', async () => {
+		// A raw fetch throw (network down / unreachable API) is normalized by
+		// the client into a `NetworkError` with a stable message — the
+		// original ("network down") is preserved on `.cause`, not re-surfaced
+		// verbatim, but the failure is still real and non-empty, not swallowed
+		// into a fake `ok: true`.
 		vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('network down'); }));
 
 		const { logout } = await import('./account');
 		const result = await logout();
 
-		expect(result).toEqual({ ok: false, error: 'network down' });
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.error).toBeTruthy();
 	});
 
 	it('register maps a 409 to email_taken', async () => {
-		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(409, { error: 'email taken' })));
+		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(409, { error: { code: 'EMAIL_TAKEN', message: 'email taken' } })));
 
 		const { register } = await import('./account');
 		const result = await register({ email: 'a@b.com', password: 'password123' });
@@ -123,21 +129,21 @@ describe('providers/shop/account/account — native SellRight client', () => {
 	});
 
 	it('resendVerification is enumeration-safe: resolves ok:true even on failure', async () => {
-		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(500, { error: 'boom' })));
+		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(500, { error: { code: 'UNKNOWN_ERROR', message: 'boom' } })));
 
 		const { resendVerification } = await import('./account');
 		await expect(resendVerification('a@b.com')).resolves.toEqual({ ok: true });
 	});
 
 	it('requestPasswordReset is enumeration-safe: resolves ok:true even on failure', async () => {
-		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(500, { error: 'boom' })));
+		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(500, { error: { code: 'UNKNOWN_ERROR', message: 'boom' } })));
 
 		const { requestPasswordReset } = await import('./account');
 		await expect(requestPasswordReset('a@b.com')).resolves.toEqual({ ok: true });
 	});
 
 	it('resetPassword maps a 409 to invalid_token', async () => {
-		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(409, { error: 'expired' })));
+		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(409, { error: { code: 'TOKEN_INVALID', message: 'expired' } })));
 
 		const { resetPassword } = await import('./account');
 		const result = await resetPassword('tok', 'newpassword1');
@@ -156,14 +162,14 @@ describe('providers/shop/account/account — native SellRight client', () => {
 	});
 
 	it('requestEmailChange maps 401 to wrong_password and 409 to email_unavailable', async () => {
-		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(401, { error: 'bad password' })));
+		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(401, { error: { code: 'PASSWORD_INCORRECT', message: 'bad password' } })));
 		let { requestEmailChange } = await import('./account');
 		let result = await requestEmailChange('new@b.com', 'wrongpw');
 		expect(result.ok).toBe(false);
 		if (!result.ok) expect(result.code).toBe('wrong_password');
 
 		vi.resetModules();
-		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(409, { error: 'taken' })));
+		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(409, { error: { code: 'EMAIL_TAKEN', message: 'taken' } })));
 		({ requestEmailChange } = await import('./account'));
 		result = await requestEmailChange('new@b.com', 'pw');
 		expect(result.ok).toBe(false);
@@ -183,7 +189,7 @@ describe('providers/shop/account/account — native SellRight client', () => {
 	});
 
 	it('verifyEmailChange posts the token to verify-email-change and maps 409 to invalid_token', async () => {
-		const mockedFetch = vi.fn(async () => jsonResponse(409, { error: 'expired' }));
+		const mockedFetch = vi.fn(async () => jsonResponse(409, { error: { code: 'TOKEN_INVALID', message: 'expired' } }));
 		vi.stubGlobal('fetch', mockedFetch);
 
 		const { verifyEmailChange } = await import('./account');

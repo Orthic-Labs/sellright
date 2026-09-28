@@ -1,7 +1,7 @@
 /**
  * Consumer-contract test for the affiliate dashboard provider — proves it
  * calls the SellRight REST route (GET /v1/shop/affiliate?t=...) through the
- * typed `~/sellright/client` (never the old Vendure GraphQL
+ * typed `~/sellright/client` (never the old legacy
  * affiliateStatsByToken query, and never a hand-rolled fetch with its own
  * copy of the store-resolution logic), and reshapes the backend response
  * into the AffiliateStatsResult the /affiliate page renders.
@@ -52,7 +52,7 @@ describe('fetchAffiliateStatsByToken', () => {
 	});
 
 	it('maps a 404 (unknown token) to a graceful failure, no throw', async () => {
-		queue.push(respond(404, { error: 'invalid affiliate link' }));
+		queue.push(respond(404, { error: { code: 'TOKEN_INVALID', message: 'invalid affiliate link' } }));
 		const result = await fetchAffiliateStatsByToken(TOKEN);
 		expect(result.success).toBe(false);
 		expect(result.error).toBeTruthy();

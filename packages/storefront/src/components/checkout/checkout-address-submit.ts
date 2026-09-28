@@ -2,7 +2,7 @@ import type { QRL, Signal } from '@qwik.dev/core';
 
 /**
  * Address "submission" for the native checkout: there is no incremental
- * Vendure order to sync addresses onto step by step. Shipping/billing
+ * legacy order to sync addresses onto step by step. Shipping/billing
  * address + customer info live in `appState` as plain local state and are
  * only sent to the server ONCE, inside the single POST /v1/shop/checkout
  * call `placeOrder` (routes/checkout/index.tsx) makes. This function's job
