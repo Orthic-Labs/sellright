@@ -29,6 +29,7 @@ import { OpenAPIHono } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
+import { requestIdMiddleware } from '../lib/request-id.js';
 import { gatewayPayments } from './gateway-payments.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
@@ -42,6 +43,11 @@ const ORDER_CODE = 'GWP-ROUTE-1';
 const RECEIPT_TOKEN = 'gwp-route-receipt-token';
 
 const app = new OpenAPIHono();
+// requestId assertions below (every error response also carries `requestId`)
+// need the same middleware the real app.ts registers globally — a minimal
+// route-only test app doesn't get it for free (see api-error.test.ts's
+// appWithRoute helper for the same pattern).
+app.use('*', requestIdMiddleware());
 app.route('/', gatewayPayments);
 
 async function wipe() {
