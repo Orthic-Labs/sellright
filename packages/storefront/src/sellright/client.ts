@@ -63,7 +63,17 @@ const transport: Middleware = {
 		let body: unknown;
 		try { body = JSON.parse(text); } catch { body = undefined; }
 		const err = (body as { error?: unknown } | undefined)?.error;
-		const code = typeof err === 'object' && err !== null ? (err as { code?: string }).code : undefined;
+		// `code` sits alongside a string `error` message at the top level for
+		// every error this API returns (e.g. login 403 →
+		// `{ error: "...", code: "not_verified" }`) — not nested inside `error`.
+		// The nested-object fallback is kept for forward compatibility only;
+		// no current endpoint uses it.
+		const code =
+			typeof (body as { code?: unknown } | undefined)?.code === 'string'
+				? (body as { code: string }).code
+				: typeof err === 'object' && err !== null
+					? (err as { code?: string }).code
+					: undefined;
 		const message =
 			typeof err === 'string' ? err
 			: typeof err === 'object' && err !== null && typeof (err as { message?: unknown }).message === 'string' ? (err as { message: string }).message

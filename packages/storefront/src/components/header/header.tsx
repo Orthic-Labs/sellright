@@ -4,7 +4,7 @@ import { useLocalCart, refreshCartStock, loadCartIfNeeded } from '~/contexts/Car
 import { useLocation, Link, useNavigate } from '@qwik.dev/router';
 import { APP_STATE, CUSTOMER_NOT_DEFINED_ID } from '~/constants';
 import { useStoreIdentityLoader } from '~/routes/layout';
-import { logoutMutation } from '~/services/customer';
+import { logout as logoutAccount } from '~/providers/shop/account/account';
 import { isCheckoutPage } from '~/utils/route-helpers';
 import LogoImage from '~/media/logo.svg?jsx';
 import { useLoginModalActions } from '~/contexts/LoginModalContext';
@@ -55,7 +55,8 @@ export default component$(() => {
 	}));
 
 	const logout = $(async () => {
-		await logoutMutation();
+		const result = await logoutAccount();
+		if (!result.ok) console.error('Sign out failed:', result.error);
 		window.location.reload();
 	});
 

@@ -7,13 +7,29 @@ import CheckIcon from '~/components/icons/CheckIcon';
 import XCircleIcon from '~/components/icons/XCircleIcon';
 import XMarkIcon from '~/components/icons/XMarkIcon';
 import { APP_STATE, AUTH_TOKEN } from '~/constants';
-import { CreateAddressInput, UpdateAddressInput } from '~/generated/graphql-shop';
-import {
-	createCustomerAddressMutation,
-	updateCustomerAddressMutation,
-} from '~/services/customer';
+import { createAddress, updateAddress } from '~/services/customer';
+import type { NewAddressInput, AddressPatch } from '~/sellright/types/account';
 import { ShippingAddress } from '~/types';
 import { createSEOHead } from '~/utils/seo';
+
+/** appState.shippingAddress uses its own long-standing field names
+ *  (streetLine1/countryCode/phoneNumber/…), shared with checkout — this maps
+ *  them onto the native API's address shape (line1/country/phone/…) at the
+ *  boundary, so nothing outside this file needs to know both conventions. */
+function toNativeAddress(addr: ShippingAddress): NewAddressInput {
+	return {
+		fullName: addr.fullName || null,
+		line1: addr.streetLine1 ?? '',
+		line2: addr.streetLine2 || null,
+		city: addr.city ?? '',
+		province: addr.province || null,
+		postalCode: addr.postalCode || null,
+		country: addr.countryCode ?? '',
+		phone: addr.phoneNumber || null,
+		isDefaultShipping: addr.defaultShippingAddress ?? false,
+		isDefaultBilling: addr.defaultBillingAddress ?? false,
+	};
+}
 
 export default component$(() => {
 	const navigate = useNavigate();
@@ -50,27 +66,13 @@ export default component$(() => {
 		activeCustomerAddress.value = appState.shippingAddress;
 	}
 
-	const createOrUpdateAddress = $(async (id: string | undefined, authToken: string | undefined) => {
+	const createOrUpdateAddress = $(async (id: string | undefined, _authToken: string | undefined) => {
 		delete appState.shippingAddress.country;
-		const { shippingAddress } = appState;
-		const addressInput: UpdateAddressInput | CreateAddressInput = {
-			city: shippingAddress.city ?? '',
-			company: shippingAddress.company ?? '',
-			countryCode: shippingAddress.countryCode ?? '',
-			defaultBillingAddress: shippingAddress.defaultBillingAddress,
-			defaultShippingAddress: shippingAddress.defaultShippingAddress,
-			fullName: shippingAddress.fullName ?? '',
-			phoneNumber: shippingAddress.phoneNumber ?? '',
-			postalCode: shippingAddress.postalCode ?? '',
-			province: shippingAddress.province ?? '',
-			streetLine1: shippingAddress.streetLine1 ?? '',
-			streetLine2: shippingAddress.streetLine2 ?? '',
-		};
+		const native = toNativeAddress(appState.shippingAddress);
 		if (id === 'add') {
-			await createCustomerAddressMutation(addressInput as CreateAddressInput, authToken);
+			await createAddress(native);
 		} else {
-			(addressInput as UpdateAddressInput).id = shippingAddress.id ?? '';
-			await updateCustomerAddressMutation(addressInput as UpdateAddressInput, authToken);
+			await updateAddress(appState.shippingAddress.id ?? '', native as AddressPatch);
 		}
 	});
 
