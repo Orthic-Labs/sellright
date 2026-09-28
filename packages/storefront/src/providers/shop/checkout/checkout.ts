@@ -186,5 +186,5 @@ export const getEligibleShippingMethods = async (
 // this task doesn't own. Backed by the same native call as above.
 export const getEligibleShippingMethodsCached = async (countryCode: string, subtotal: number) => {
 	const methods = await getEligibleShippingMethods(countryCode, subtotal);
-	return methods.map((m) => ({ id: m.code, code: m.code, name: m.name, priceWithTax: m.rate }));
+	return methods.map((m) => ({ id: m.code, code: m.code, name: m.name, price: m.rate, priceWithTax: m.rate }));
 };

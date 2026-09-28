@@ -39,6 +39,23 @@ export type OrderSummary = OrderOp['responses'][200]['content']['application/jso
 export type OrderPayment = OrderSummary['payments'][number];
 export type OrderFulfillment = OrderSummary['fulfillments'][number];
 export type OrderLine = OrderSummary['lines'][number];
+/** NOT SCHEMA-DERIVED (see file header): `OrderSummary['shippingAddress']` is
+ *  typed `unknown` upstream. This is the actual normalized shape the API
+ *  persists and returns — confirmed against `normalizeAddress()` in
+ *  packages/api/src/routes/checkout.ts, which accepts either this shape or
+ *  the storefront's own `streetLine1`/`countryCode` input aliases on write,
+ *  but always returns THIS shape on read. Field names deliberately differ
+ *  from `CheckoutRequest['shippingAddress']` — do not assume they match. */
+export interface OrderAddressSnapshot {
+	fullName: string | null;
+	line1: string | null;
+	line2: string | null;
+	city: string | null;
+	province: string | null;
+	postalCode: string | null;
+	country: string | null;
+	phone: string | null;
+}
 /** The order states this storefront ever needs to branch on. The API's
  *  `state` field is `string` (no shared enum schema); this is the closed set
  *  the checkout + confirmation flow actually reads. */

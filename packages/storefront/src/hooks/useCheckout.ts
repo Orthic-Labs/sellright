@@ -1,166 +1,92 @@
 import { $, useStore } from '@qwik.dev/core';
-import { useLocalCart } from '~/contexts/CartContext';
-import { LocalCartService } from '~/services/LocalCartService';
-import { convertLocalCartToVendureOrder as _convertLocalCartToVendureOrder } from '~/contexts/CartContext';
 import {
-  placeOrder as srPlaceOrder,
-  createPaymentIntent as srCreatePI,
-  payWithGiftCardOnly as srGiftCardPay,
-  type SrCheckoutForm,
+	placeOrder as srPlaceOrder,
+	createPaymentIntent as srCreatePI,
+	settleZeroDueOrder as srSettleZeroDue,
+	type CheckoutForm,
 } from '~/providers/shop/checkout/checkout';
+import { decideCheckoutStage } from './checkout-stage';
 
 /**
- * @description
- * Checkout flow hook. The legacy Vendure path
- * (`convertLocalCartToVendureOrder`) is preserved as the default; the SellRight
- * + Stripe path (behind VITE_SR_CHECKOUT) is the new state machine below.
+ * Native checkout flow — single state machine, single backend. There is no
+ * flag and no Vendure fallback: every checkout on this storefront goes
+ * through POST /v1/shop/checkout.
  *
- * SR flow (state machine):
  *   idle → placing (POST /checkout) → either
- *     - paid       (gift card covered the whole total → confirmation), or
- *     - paying     (PaymentIntent client_secret → Stripe Payment Element confirm)
+ *     - paid    (grandTotal 0, or the server already settled it — e.g. a
+ *                gift card / loyalty points covered the whole total), or
+ *     - paying  (PaymentIntent client_secret → Stripe Payment Element mounts)
  *   → confirming (Stripe redirect to /checkout/confirmation/{code}?rt=…)
- *   any step → error (recoverable; order stays PendingPayment)
+ *   any step → error (recoverable — the order stays PendingPayment for retry)
  */
-export type SrCheckoutPhase = 'idle' | 'placing' | 'paid' | 'paying' | 'error';
+export type CheckoutPhase = 'idle' | 'placing' | 'paid' | 'paying' | 'error';
 
 export const useCheckout = () => {
-  const cartState = useLocalCart();
+	const checkoutState = useStore({
+		isLoading: false,
+		error: null as string | null,
+	});
 
-  const checkoutState = useStore({
-    isLoading: false,
-    error: null as string | null,
-  });
+	const state = useStore({
+		phase: 'idle' as CheckoutPhase,
+		code: '' as string,
+		receiptToken: '' as string,
+		clientSecret: '' as string,
+		grandTotal: 0,
+		error: null as string | null,
+	});
 
-  // SR/Stripe state machine.
-  const srState = useStore({
-    phase: 'idle' as SrCheckoutPhase,
-    code: '' as string,
-    receiptToken: '' as string,
-    clientSecret: '' as string,
-    grandTotal: 0,
-    error: null as string | null,
-  });
+	/**
+	 * Create the order, then resolve either the zero-due short-circuit OR a
+	 * Stripe PaymentIntent. Returns the resulting phase so the caller can mount
+	 * the Payment Element ('paying') or navigate straight to confirmation
+	 * ('paid').
+	 */
+	const placeOrder = $(async (form: CheckoutForm): Promise<CheckoutPhase> => {
+		state.phase = 'placing';
+		state.error = null;
+		checkoutState.isLoading = true;
+		try {
+			const created = await srPlaceOrder(form);
+			state.code = created.code;
+			state.receiptToken = created.receiptToken ?? '';
+			state.grandTotal = created.grandTotal;
+			state.clientSecret = '';
 
-  /**
-   * Legacy Vendure path — converts the local cart to a Vendure order.
-   * Does NOT clear the cart items.
-   */
-  const convertLocalCartToVendureOrder = $(async () => {
-    checkoutState.isLoading = true;
-    checkoutState.error = null;
+			const outcome = decideCheckoutStage(created);
+			if (outcome.kind === 'paid') {
+				if (outcome.needsSettle) {
+					try {
+						await srSettleZeroDue(created.code);
+					} catch {
+						/* server may have already settled it independently */
+					}
+				}
+				state.phase = 'paid';
+				return 'paid';
+			}
 
-    try {
-      const stockValidation = LocalCartService.validateStock();
-      if (!stockValidation.valid) {
-        throw new Error(`Stock validation failed: ${stockValidation.errors.join(', ')}`);
-      }
+			// Card path — mint the PaymentIntent and hand the client_secret to the
+			// Stripe Payment Element (mounted by the caller).
+			const pi = await srCreatePI(created.code);
+			if (!pi.clientSecret) throw new Error('Could not start the payment.');
+			state.clientSecret = pi.clientSecret;
+			state.phase = 'paying';
+			return 'paying';
+		} catch (error) {
+			const msg = error instanceof Error ? error.message : 'Checkout failed. Please try again.';
+			state.error = msg;
+			checkoutState.error = msg;
+			state.phase = 'error';
+			return 'error';
+		} finally {
+			checkoutState.isLoading = false;
+		}
+	});
 
-      const order = await _convertLocalCartToVendureOrder(cartState);
-
-      if (order) {
-        return order;
-      } else {
-        throw new Error('Failed to create Vendure order from the cart.');
-      }
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'An unknown checkout error occurred.';
-      checkoutState.error = errorMessage;
-      console.error('❌ useCheckout: Failed to convert cart:', error);
-      return null;
-    } finally {
-      checkoutState.isLoading = false;
-    }
-  });
-
-  /**
-   * SR/Stripe path — create the order, then resolve either the gift-card-paid
-   * short-circuit OR a Stripe PaymentIntent. Returns the resulting phase so the
-   * caller can mount the Payment Element (phase 'paying') or navigate to the
-   * confirmation (phase 'paid').
-   */
-  const placeOrderStripe = $(async (form: SrCheckoutForm): Promise<SrCheckoutPhase> => {
-    srState.phase = 'placing';
-    srState.error = null;
-    checkoutState.isLoading = true;
-    try {
-      const created = await srPlaceOrder(form);
-      srState.code = created.code;
-      srState.receiptToken = created.receiptToken ?? '';
-      srState.grandTotal = created.grandTotal;
-
-      // Gift card covered the whole total (server already settled to Paid), or a
-      // zero-due order — finalize without Stripe.
-      if (created.state === 'Paid' || created.grandTotal === 0) {
-        if (created.state !== 'Paid') {
-          try { await srGiftCardPay(created.code); } catch { /* server may have already settled */ }
-        }
-        srState.phase = 'paid';
-        return 'paid';
-      }
-
-      // Card path — mint the PaymentIntent and hand the client_secret to the
-      // Stripe Payment Element (mounted by the caller).
-      const pi = await srCreatePI(created.code);
-      if (!pi.clientSecret) throw new Error('Could not start the payment.');
-      srState.clientSecret = pi.clientSecret;
-      srState.phase = 'paying';
-      return 'paying';
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : 'Checkout failed. Please try again.';
-      srState.error = msg;
-      checkoutState.error = msg;
-      srState.phase = 'error';
-      return 'error';
-    } finally {
-      checkoutState.isLoading = false;
-    }
-  });
-
-  /**
-   * SR gateway path (NMI / Sezzle) — identical order creation to the Stripe
-   * path, but no PaymentIntent: the order rests in PendingPayment and the
-   * mounted gateway component (Collect.js tokenize / Sezzle redirect) drives
-   * POST gateway-payment itself. Returns 'paying' so the caller mounts the
-   * payment panel, or 'paid' when the order settled without a card charge.
-   */
-  const placeOrderGateway = $(async (form: SrCheckoutForm): Promise<SrCheckoutPhase> => {
-    srState.phase = 'placing';
-    srState.error = null;
-    checkoutState.isLoading = true;
-    try {
-      const created = await srPlaceOrder(form);
-      srState.code = created.code;
-      srState.receiptToken = created.receiptToken ?? '';
-      srState.grandTotal = created.grandTotal;
-      srState.clientSecret = '';
-      if (created.state === 'Paid' || created.grandTotal === 0) {
-        if (created.state !== 'Paid') {
-          try { await srGiftCardPay(created.code); } catch { /* server may have already settled */ }
-        }
-        srState.phase = 'paid';
-        return 'paid';
-      }
-      srState.phase = 'paying';
-      return 'paying';
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : 'Checkout failed. Please try again.';
-      srState.error = msg;
-      checkoutState.error = msg;
-      srState.phase = 'error';
-      return 'error';
-    } finally {
-      checkoutState.isLoading = false;
-    }
-  });
-
-  return {
-    checkoutState,
-    convertLocalCartToVendureOrder,
-    // SR/Stripe
-    srState,
-    placeOrderStripe,
-    // SR gateway (NMI/Sezzle)
-    placeOrderGateway,
-  };
+	return {
+		checkoutState,
+		state,
+		placeOrder,
+	};
 };
