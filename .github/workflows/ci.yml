@@ -591,7 +591,14 @@ jobs:
           --health-retries 12
     env:
       NODE_ENV: production
-      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/sellright_e2e
+      # Privileged (superuser) URL: migrate/bootstrap/seed need to create
+      # tables/roles. The compiled server itself refuses to boot on this URL
+      # (SR-01's own-role guard, packages/api/src/db/client.ts) — it gets the
+      # dedicated NOSUPERUSER NOBYPASSRLS app role instead (created below,
+      # same as the `database` job above), which is what DATABASE_URL is set
+      # to for every step after that role exists.
+      MIGRATE_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/sellright_e2e
+      DATABASE_URL: postgres://sellright_app:sellright_app@127.0.0.1:5432/sellright_e2e
       STOREFRONT_URL: http://127.0.0.1:4398
       DOWNLOAD_URL_SECRET: abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
       SELLRIGHT_MASTER_KEY: '1122334455667788112233445566778811223344556677881122334455667788'
@@ -637,12 +644,28 @@ jobs:
           pnpm --filter @sellright/storefront run build.server
 
       - name: Apply migrations
+        env:
+          DATABASE_URL: ${{ env.MIGRATE_DATABASE_URL }}
         run: pnpm --filter @sellright/api db:migrate:runtime
 
       - name: Bootstrap the e2e store + seed the OOS/in-stock catalog fixture
+        env:
+          DATABASE_URL: ${{ env.MIGRATE_DATABASE_URL }}
         run: |
           node packages/api/dist/scripts/bootstrap.js
           node packages/api/dist/scripts/seed-e2e-catalog.js
+
+      - name: Create non-owner RLS app role (same as the `database` job)
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h 127.0.0.1 -U postgres -d sellright_e2e <<'SQL'
+          CREATE ROLE sellright_app LOGIN PASSWORD 'sellright_app' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+          GRANT CONNECT ON DATABASE sellright_e2e TO sellright_app;
+          GRANT USAGE ON SCHEMA public TO sellright_app;
+          GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO sellright_app;
+          GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO sellright_app;
+          SQL
 
       - name: Start the API
         run: |
