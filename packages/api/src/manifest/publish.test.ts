@@ -27,7 +27,9 @@ describe('catalog generation publication', () => {
     const first = await publishGeneration({ outDir, storeSlug: 'fixture', manifest: { products: ['old'] }, details: [{ slug: 'old' }] });
     const second = await publishGeneration({ outDir, storeSlug: 'fixture', manifest: { products: ['new'] }, details: [{ slug: 'new' }] });
     expect(await readlink(join(outDir, 'current'))).toBe(`generations/${second.generation}`);
-    expect(JSON.parse(await readFile(join(outDir, 'current/marker.json'), 'utf8'))).toMatchObject({ format: 1, source: 'sellright', storeSlug: 'fixture', generation: second.generation });
+    // format bumped to 2 (SR-CLIENT-1): this generation also carries the
+    // native v2 manifest alongside v1 — see publishGeneration's marker.json comment.
+    expect(JSON.parse(await readFile(join(outDir, 'current/marker.json'), 'utf8'))).toMatchObject({ format: 2, source: 'sellright', storeSlug: 'fixture', generation: second.generation });
     expect(await readdir(join(outDir, 'current/products'))).toEqual(['new.json']);
     expect(await readFile(join(outDir, 'generations', first.generation, 'products/old.json'), 'utf8')).toBe('{"slug":"old"}');
   });
