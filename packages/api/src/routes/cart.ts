@@ -42,7 +42,7 @@ type PricedCart = {
  *  actually decrements stock for — pre-order and non-physical items are never
  *  stock-limited, so cart availability must match that rule exactly or a cart
  *  line could show "in stock" while checkout's reservation would reject it. */
-function isStockLimited(v: { isPreOrder: boolean; fulfillmentType: string | null }): boolean {
+export function isStockLimited(v: { isPreOrder: boolean; fulfillmentType: string | null }): boolean {
   return !v.isPreOrder && (v.fulfillmentType ?? 'physical') === 'physical';
 }
 
