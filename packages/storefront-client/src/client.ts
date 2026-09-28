@@ -155,6 +155,16 @@ export interface StorefrontClient {
   raw: ReturnType<typeof createOpenApiClient<paths>>;
 }
 
+/** Trims trailing `/` characters WITHOUT a regex — `baseUrl` is caller-
+ *  supplied config, but CodeQL flags any `/+$/`-style pattern against
+ *  "library input" as a potential polynomial-time ReDoS regardless of
+ *  actual exploitability, so this stays a plain, linear-time loop instead. */
+function stripTrailingSlashes(url: string): string {
+  let end = url.length;
+  while (end > 0 && url[end - 1] === '/') end--;
+  return url.slice(0, end);
+}
+
 /** Build a client bound to one API instance/store. Cheap — safe to create
  *  per-request in an SSR handler (it holds no connection state) or once at
  *  module scope in the browser. */
@@ -163,7 +173,7 @@ export function createStorefrontClient(options: StorefrontClientOptions): Storef
   const getCsrfToken = options.getCsrfToken ?? readBrowserCsrfCookie;
 
   const raw = createOpenApiClient<paths>({
-    baseUrl: options.baseUrl.replace(/\/+$/, ''),
+    baseUrl: stripTrailingSlashes(options.baseUrl),
     // Browser: cookies ride along automatically. SSR: there's no cookie jar
     // to include from — forwardCookie (below) carries the browser's own
     // Cookie header instead. `include` is harmless either way.
