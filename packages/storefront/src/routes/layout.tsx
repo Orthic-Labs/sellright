@@ -23,7 +23,7 @@ import { CartProvider } from '~/contexts/CartContext';
 import { LoginModalProvider, useLoginModalState, useLoginModalActions } from '~/contexts/LoginModalContext';
 import LoginModal from '~/components/auth/LoginModal';
 import { LocalAddressService } from '~/services/LocalAddressService';
-import { LocalCartService } from '~/services/LocalCartService';
+import { CountryPreferenceService } from '~/services/CountryPreferenceService';
 import { CACHE_POLICY_VERSION, getRouteCacheProfile } from '~/config/route-cache-policy';
 import { DEV_API } from '~/constants';
 import { srShopIdentity, srErrorStatus, srMaintenanceStatus } from '~/utils/sellright';
@@ -247,7 +247,7 @@ export default component$(() => {
 
 	// T3: Restore persisted country selection (qidle — lazy, no urgency)
 	useOnDocument('qidle', $(() => {
-		const storedCountry = LocalCartService.getCountry();
+		const storedCountry = CountryPreferenceService.getCountry();
 		if (storedCountry) {
 			state.shippingAddress.countryCode = storedCountry;
 		}
