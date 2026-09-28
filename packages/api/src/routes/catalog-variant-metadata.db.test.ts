@@ -124,3 +124,81 @@ describe('GET /v1/shop/catalog/products/:slug variant metadata', () => {
     expect(bySku['PHYS-1']).toMatchObject({ fulfillmentType: 'physical', appKey: null });
   });
 });
+
+// exact stock quantity — storefronts (Damned's live Vendure exact-stock
+// strategy) need a real remaining count to cap qty selectors, not just an
+// in/out boolean that forces them to invent 999/0. Computed live from
+// stock.on_hand - stock.allocated on every request; never cached.
+describe('availableQuantity — exact live stock (not boolean-only)', () => {
+  const STORE_B = 'dddddddd-dddd-dddd-dddd-ddddddddddd9';
+  const SLUG_B = 'catalog-meta-test-b';
+  const PRODUCT_B = 'dddddddd-dddd-dddd-dddd-dddddddddda1';
+  const PHYS = 'dddddddd-dddd-dddd-dddd-dddddddddda2'; // stock-limited, 7 on hand, 2 allocated -> 5 available
+  const NO_ROW = 'dddddddd-dddd-dddd-dddd-dddddddddda3'; // stock-limited, no stock row -> 0 (fail closed)
+  const PRE = 'dddddddd-dddd-dddd-dddd-dddddddddda4'; // pre-order -> uncapped (null)
+  const DIGITAL = 'dddddddd-dddd-dddd-dddd-dddddddddda5'; // non-physical -> uncapped (null)
+
+  beforeEach(async () => {
+    await withStore(STORE_B, async (tx) => {
+      await tx.execute(sql`INSERT INTO store (id, slug, name, currency) VALUES (${STORE_B}, ${SLUG_B}, ${SLUG_B}, 'USD') ON CONFLICT (id) DO NOTHING`);
+      await tx.execute(sql`INSERT INTO product (id, store_id, slug, name, status) VALUES (${PRODUCT_B}, ${STORE_B}, 'qty-test', 'Qty Test', 'active')`);
+      await tx.execute(sql`INSERT INTO product_variant (id, store_id, product_id, sku, name, price, fulfillment_type) VALUES (${PHYS}, ${STORE_B}, ${PRODUCT_B}, 'QTY-PHYS', 'Phys', 1000, 'physical')`);
+      await tx.execute(sql`INSERT INTO stock (variant_id, store_id, on_hand, allocated) VALUES (${PHYS}, ${STORE_B}, 7, 2)`);
+      await tx.execute(sql`INSERT INTO product_variant (id, store_id, product_id, sku, name, price, fulfillment_type) VALUES (${NO_ROW}, ${STORE_B}, ${PRODUCT_B}, 'QTY-NOROW', 'NoRow', 1000, 'physical')`);
+      await tx.execute(sql`INSERT INTO product_variant (id, store_id, product_id, sku, name, price, fulfillment_type, is_pre_order) VALUES (${PRE}, ${STORE_B}, ${PRODUCT_B}, 'QTY-PRE', 'Pre', 1000, 'physical', true)`);
+      await tx.execute(sql`INSERT INTO stock (variant_id, store_id, on_hand, allocated) VALUES (${PRE}, ${STORE_B}, 0, 0)`); // even with a stock row, pre-order is uncapped
+      await tx.execute(sql`INSERT INTO product_variant (id, store_id, product_id, sku, name, price, fulfillment_type) VALUES (${DIGITAL}, ${STORE_B}, ${PRODUCT_B}, 'QTY-DIGITAL', 'Digital', 1000, 'digital_download')`);
+    });
+    invalidateStoreCache();
+  });
+
+  it('GET /v1/shop/catalog/products/{slug}/stock reports exact remaining quantity per SKU', async () => {
+    const res = await app.request('/v1/shop/catalog/products/qty-test/stock', { headers: { 'x-store-slug': SLUG_B } });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { variants: Array<{ sku: string; inStock: boolean; availableQuantity: number | null }> };
+    const bySku = Object.fromEntries(body.variants.map((v) => [v.sku, v]));
+    expect(bySku['QTY-PHYS']).toMatchObject({ inStock: true, availableQuantity: 5 });
+    expect(bySku['QTY-NOROW']).toMatchObject({ inStock: false, availableQuantity: 0 }); // fail closed, never unlimited
+    expect(bySku['QTY-PRE']).toMatchObject({ inStock: true, availableQuantity: null }); // uncapped, not "0 in stock"
+    expect(bySku['QTY-DIGITAL']).toMatchObject({ inStock: true, availableQuantity: null });
+  });
+
+  it('GET /v1/shop/catalog/products/{slug} (product detail) carries the same fields on each variant', async () => {
+    const res = await app.request('/v1/shop/catalog/products/qty-test', { headers: { 'x-store-slug': SLUG_B } });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { variants: Array<{ sku: string; inStock: boolean; availableQuantity: number | null }> };
+    const bySku = Object.fromEntries(body.variants.map((v) => [v.sku, v]));
+    expect(bySku['QTY-PHYS']).toMatchObject({ inStock: true, availableQuantity: 5 });
+    expect(bySku['QTY-NOROW']).toMatchObject({ inStock: false, availableQuantity: 0 });
+    expect(bySku['QTY-PRE']).toMatchObject({ inStock: true, availableQuantity: null });
+  });
+
+  it('reflects a live stock change immediately — no cache/TTL', async () => {
+    const before = await app.request('/v1/shop/catalog/products/qty-test/stock', { headers: { 'x-store-slug': SLUG_B } });
+    const beforeBody = await before.json() as { variants: Array<{ sku: string; availableQuantity: number | null }> };
+    expect(beforeBody.variants.find(v => v.sku === 'QTY-PHYS')!.availableQuantity).toBe(5);
+
+    await withStore(STORE_B, async (tx) => { await tx.execute(sql`UPDATE stock SET on_hand = 100 WHERE variant_id = ${PHYS}`); });
+
+    const after = await app.request('/v1/shop/catalog/products/qty-test/stock', { headers: { 'x-store-slug': SLUG_B } });
+    const afterBody = await after.json() as { variants: Array<{ sku: string; availableQuantity: number | null }> };
+    expect(afterBody.variants.find(v => v.sku === 'QTY-PHYS')!.availableQuantity).toBe(98); // 100 - 2 allocated, read live, not the earlier value
+  });
+
+  // RLS scope: a request scoped to a DIFFERENT store must never see this
+  // store's stock numbers, even for an identically-slugged/named product.
+  it('never leaks another store\'s stock — RLS-scoped by store slug', async () => {
+    const otherStore = 'dddddddd-dddd-dddd-dddd-ddddddddddb1';
+    const otherSlug = 'catalog-meta-test-other';
+    await withStore(otherStore, async (tx) => {
+      await tx.execute(sql`INSERT INTO store (id, slug, name, currency) VALUES (${otherStore}, ${otherSlug}, ${otherSlug}, 'USD') ON CONFLICT (id) DO NOTHING`);
+    });
+    invalidateStoreCache();
+    // The product/variant only exist in STORE_B — a request scoped to a
+    // different store must 404, not accidentally resolve cross-tenant.
+    const res = await app.request('/v1/shop/catalog/products/qty-test/stock', { headers: { 'x-store-slug': otherSlug } });
+    expect(res.status).toBe(404);
+    const detail = await app.request('/v1/shop/catalog/products/qty-test', { headers: { 'x-store-slug': otherSlug } });
+    expect(detail.status).toBe(404);
+  });
+});

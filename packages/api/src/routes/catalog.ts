@@ -5,6 +5,18 @@ import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
 import { convertMoney, rateFor, RATE_SCALE } from '../money/currency.js';
 import { variantPriceRuleFromConfig } from '../money/pricing.js';
+import { isStockLimited } from './cart.js';
+
+// Live, uncached: computed straight from stock.on_hand/allocated on every
+// call — never persisted, never TTL'd (locked stock-architecture rule).
+// null = not quantity-capped (pre-order or non-physical fulfillment; matches
+// cart.ts's priceCart availability rule exactly, so a storefront never shows
+// "N available" here and then has checkout's reservation reject it).
+// A stock-limited variant with no `stock` row at all reads as 0 (fail
+// closed), never "unlimited".
+function availableQuantityFor(v: { isPreOrder: boolean; fulfillmentType: string | null; onHand: number | null; allocated: number | null }): number | null {
+  return isStockLimited(v) ? Math.max(0, (v.onHand ?? 0) - (v.allocated ?? 0)) : null;
+}
 
 // Aggregate display price follows the same positive-override rule as checkout.
 // Keep variants correlated so collection joins cannot change the price range.
@@ -79,6 +91,11 @@ const Variant = z.object({
   // fulfillment internals — nothing sensitive is exposed by publishing them.
   fulfillmentType: z.enum(['physical', 'digital_download', 'license', 'update_pass']),
   appKey: z.string().nullable(),
+  // Live, uncached — see availableQuantityFor(). inStock kept for callers
+  // that only need the toggle; availableQuantity is the exact remaining
+  // count a qty selector should cap against (null = uncapped).
+  inStock: z.boolean(),
+  availableQuantity: z.number().int().nullable(),
 });
 
 const ProductDetail = z.object({
@@ -215,8 +232,11 @@ catalog.openapi(
           enabled: s.productVariant.enabled,
           fulfillmentType: s.productVariant.fulfillmentType,
           appKey: s.productVariant.appKey,
+          onHand: s.stock.onHand,
+          allocated: s.stock.allocated,
         })
         .from(s.productVariant)
+        .leftJoin(s.stock, eq(s.stock.variantId, s.productVariant.id))
         .where(and(eq(s.productVariant.productId, p.id), eq(s.productVariant.enabled, true), isNull(s.productVariant.deletedAt)))
         // Cheapest-effective-price first (sale price wins over list price),
         // matching minimumPrice()/listingVariant() above — NOT alphabetical
@@ -230,7 +250,16 @@ catalog.openapi(
           sql`case when ${s.productVariant.salePrice} is not null and ${s.productVariant.salePrice} > 0 then ${s.productVariant.salePrice} else ${s.productVariant.price} end`,
           asc(s.productVariant.sku),
         ))
-        .map((v) => ({ ...v, price: convertMoney(v.price, rate), salePrice: conv(v.salePrice), preOrderPrice: conv(v.preOrderPrice), shipDate: v.shipDate?.toISOString() ?? null, compareAtPrice: conv(v.compareAtPrice), options: optionRows.filter(o => o.sku === v.sku).map(o => ({ id: o.id, code: o.id, name: o.name, group: { id: o.groupId, code: o.groupId, name: o.groupName } })), assets: variantAssetRows.filter(a => a.variantId === v.id).map(a => ({ preview: a.path })) }));
+        .map(({ onHand, allocated, ...v }) => ({
+          ...v, price: convertMoney(v.price, rate), salePrice: conv(v.salePrice), preOrderPrice: conv(v.preOrderPrice), shipDate: v.shipDate?.toISOString() ?? null, compareAtPrice: conv(v.compareAtPrice),
+          options: optionRows.filter(o => o.sku === v.sku).map(o => ({ id: o.id, code: o.id, name: o.name, group: { id: o.groupId, code: o.groupId, name: o.groupName } })),
+          assets: variantAssetRows.filter(a => a.variantId === v.id).map(a => ({ preview: a.path })),
+          // Live, uncached (locked stock-architecture rule) — computed fresh
+          // on every request straight from the stock join above, never
+          // persisted/TTL'd.
+          inStock: v.fulfillmentType !== 'physical' || v.isPreOrder || ((onHand ?? 0) - (allocated ?? 0)) > 0,
+          availableQuantity: availableQuantityFor({ isPreOrder: v.isPreOrder, fulfillmentType: v.fulfillmentType, onHand, allocated }),
+        }));
       const imgs = await tx
         .select({ path: s.asset.path })
         .from(s.productAsset)
@@ -438,7 +467,16 @@ catalog.openapi(
     method: 'get', path: '/v1/shop/catalog/products/{slug}/stock', summary: 'Per-variant stock',
     request: { params: z.object({ slug: z.string() }) },
     responses: {
-      200: { description: 'Stock', content: { 'application/json': { schema: z.object({ variants: z.array(z.object({ sku: z.string(), inStock: z.boolean() })) }) } } },
+      200: { description: 'Stock', content: { 'application/json': { schema: z.object({ variants: z.array(z.object({
+        sku: z.string(), inStock: z.boolean(),
+        // Exact remaining quantity (on_hand - allocated, floored at 0) for
+        // stock-limited variants — null for pre-order/non-physical, which
+        // are never quantity-capped. Storefronts that need to cap a qty
+        // selector (rather than a plain in/out toggle) read this instead of
+        // inventing a number from the boolean. `inStock` stays for backward
+        // compatibility with callers that only need the toggle.
+        availableQuantity: z.number().int().nullable(),
+      })) }) } } },
       404: { description: 'Not found', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
     },
   }),
@@ -453,7 +491,11 @@ catalog.openapi(
         .from(s.productVariant)
         .leftJoin(s.stock, eq(s.stock.variantId, s.productVariant.id))
         .where(and(eq(s.productVariant.productId, p.id), eq(s.productVariant.enabled, true), isNull(s.productVariant.deletedAt)));
-      return rows.map((r) => ({ sku: r.sku, inStock: r.fulfillmentType !== 'physical' || r.isPreOrder || ((r.onHand ?? 0) - (r.allocated ?? 0)) > 0 }));
+      return rows.map((r) => ({
+        sku: r.sku,
+        inStock: r.fulfillmentType !== 'physical' || r.isPreOrder || ((r.onHand ?? 0) - (r.allocated ?? 0)) > 0,
+        availableQuantity: availableQuantityFor(r),
+      }));
     });
     if (out === null) return c.json({ error: 'not found' }, 404);
     return c.json({ variants: out }, 200);
