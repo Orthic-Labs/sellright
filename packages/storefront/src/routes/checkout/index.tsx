@@ -342,7 +342,14 @@ const CheckoutContent = component$(() => {
         redeemPoints: redeemPoints.value > 0 ? redeemPoints.value : undefined,
       };
       gatewayIdempotencyKey.value = crypto.randomUUID();
-      const phase = await placeOrderNative(form, paymentMethod.value);
+      // When shop-config says the store has no gateway at all, don't mint a
+      // doomed Stripe PaymentIntent (it 503s and bounces the shopper back to
+      // the shipping step with a raw API error). Place the order unpaid and
+      // land on 'paying', where the panel renders its explicit
+      // "no payment method configured" state.
+      const cfg = shopConfig.value;
+      const anyGatewayConfigured = !cfg || !!cfg.stripeConfigured || !!cfg.gateways?.nmi || !!cfg.gateways?.sezzle;
+      const phase = await placeOrderNative(form, anyGatewayConfigured ? paymentMethod.value : null);
       if (phase === 'paid') {
         showProcessingModal.value = false;
         isOrderProcessing.value = false;

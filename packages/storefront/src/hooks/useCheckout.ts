@@ -20,6 +20,9 @@ import { decideCheckoutStage } from './checkout-stage';
  *                'stripe' -> PaymentIntent client_secret + Payment Element
  *                'nmi'/'sezzle' -> no client_secret; the NMI/Sezzle
  *                components call the gateway-payment API directly
+ *                null -> the store has no gateway configured at all; the
+ *                order stays PendingPayment and the panel renders the
+ *                explicit "no payment method configured" state
  *   → confirming (redirect to /checkout/confirmation/{code}?rt=… — Stripe's
  *     own redirect, or the NMI/Sezzle component navigating there itself)
  *   any step → error (recoverable — the order stays PendingPayment for retry)
@@ -51,7 +54,7 @@ export const useCheckout = () => {
 	 * so the caller can mount the right payment UI ('paying') or navigate
 	 * straight to confirmation ('paid').
 	 */
-	const placeOrder = $(async (form: CheckoutForm, method: PaymentMethod = 'stripe'): Promise<CheckoutPhase> => {
+	const placeOrder = $(async (form: CheckoutForm, method: PaymentMethod | null = 'stripe'): Promise<CheckoutPhase> => {
 		state.phase = 'placing';
 		state.error = null;
 		checkoutState.isLoading = true;
