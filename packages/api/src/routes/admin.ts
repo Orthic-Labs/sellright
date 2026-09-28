@@ -1,5 +1,6 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { hasUnresolvedPayment } from '../payments/hold.js';
+import { errJson } from '../lib/api-error.js';
 import { and, desc, eq, ilike, or, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
@@ -68,7 +69,7 @@ admin.openapi(
     },
   }),
   async (c) => {
-    if (!csrfValid(c)) return c.json({ error: 'invalid CSRF token' }, 403);
+    if (!csrfValid(c)) return errJson(c, 403, 'CSRF_INVALID', 'invalid CSRF token');
     const token = bearer(c.req.header('authorization')) ?? cookie(c, SESSION_COOKIE);
     if (token) await deleteAdminSession(token);
     clearAuthCookies(c);

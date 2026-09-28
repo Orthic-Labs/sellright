@@ -26,6 +26,88 @@ const assetUrl = (path: string | null | undefined) => !path ? null : (/^(https?:
 const selectPrice = (v: { price: number; salePrice: number | null; isPreOrder: boolean; preOrderPrice: number | null }, rule: VariantPriceRule) =>
   selectUnitPrice(v, rule);
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Manifest v2 — SR-CLIENT-1 (storefront-client audit).
+//
+// v1 above mirrors Vendure's Shop API shapes on purpose (facetValues with a
+// hardcoded facetName:'Tags', featuredAsset.preview, customFields carrying
+// salePrice/preOrderPrice/shipDate/isPreOrder, priceWithTax that ISN'T
+// actually tax-inclusive, variant `id`=sku, product `id`=slug) — that parity
+// is what let the storefront keep its existing Vendure-shaped reader while
+// the backend migrated off Vendure underneath it. It was never meant to be
+// the PERMANENT native contract, and it's what a generated OpenAPI client
+// would otherwise bake in as ground truth.
+//
+// v2 is the native shape: stable ids (the real product/variant UUID, not
+// slug/sku), sku kept as its own field, tags as a plain string array, every
+// price as an explicit `{ amount, currency, taxInclusive }` (no more a bare
+// int that LOOKS tax-inclusive-flavored but isn't), compareAt/sale/preorder
+// as their own native fields instead of a Vendure-flavored `customFields`
+// grab-bag, images as `{ url, alt, position }[]`, and `inStock` as the ONLY
+// availability signal — never a raw stock number (the zero-cache-stock rule
+// applies here exactly as everywhere else: this manifest is regenerated on
+// every StockMovementEvent with no debounce, and a client must re-check live
+// stock at cart/checkout regardless of what `inStock` said at manifest time).
+//
+// v1 is kept, unmodified, until the storefront migrates onto the generated
+// client; v2 is additive (a second file per generation, see publish.ts).
+// @deprecated v1's shape is Vendure-parity scaffolding, not the native
+// contract — new consumers (the storefront-client package) should read v2.
+
+export interface NativeMoney {
+  amount: number;
+  currency: string;
+  taxInclusive: boolean;
+}
+
+export interface NativeImage {
+  url: string;
+  alt: string | null;
+  position: number;
+}
+
+export interface NativeVariantV2 {
+  id: string;
+  sku: string;
+  name: string;
+  /** The effective selling price (same selection rule as v1: store's
+   *  configured sale/preorder precedence). */
+  price: NativeMoney;
+  /** The original price to show crossed out, ONLY when a sale/preorder
+   *  override is actually in effect (i.e. `price.amount < basePrice`).
+   *  Null when nothing is overriding the base price — never a duplicate of
+   *  `price`. */
+  compareAtPrice: NativeMoney | null;
+  salePrice: NativeMoney | null;
+  preOrderPrice: NativeMoney | null;
+  isPreOrder: boolean;
+  shipDate: string | null;
+  options: Array<{ group: string; groupId: string; code: string; name: string }>;
+  images: NativeImage[];
+}
+
+export interface NativeProductManifestEntryV2 {
+  id: string;
+  slug: string;
+  name: string;
+  tags: string[];
+  priceRange: { min: NativeMoney; max: NativeMoney };
+  hasMultiplePrices: boolean;
+  /** Availability only — see the file-level note above. Never a quantity. */
+  inStock: boolean;
+  images: NativeImage[];
+}
+
+export interface NativeProductDetailV2 extends NativeProductManifestEntryV2 {
+  lastUpdated: string;
+  description: string | null;
+  variants: NativeVariantV2[];
+}
+
+function nativeMoney(amount: number, store: Pick<StoreCtx, 'currency' | 'taxInclusive'>): NativeMoney {
+  return { amount, currency: store.currency, taxInclusive: store.taxInclusive };
+}
+
 function group<T, K>(arr: T[], key: (t: T) => K): Map<K, T[]> {
   const m = new Map<K, T[]>();
   for (const x of arr) {
@@ -49,7 +131,7 @@ async function buildEntries(tx: Tx, store: StoreCtx, priceRule: VariantPriceRule
   const baseWhere = and(eq(s.product.storeId, store.id), eq(s.product.status, 'active'), isNull(s.product.deletedAt));
   const where = productFilter ? and(baseWhere, inArray(s.product.id, productFilter)) : baseWhere;
   const products = await tx.select().from(s.product).where(where).orderBy(asc(s.product.name));
-  if (!products.length) return { manifestProducts: [], details: [] };
+  if (!products.length) return { manifestProducts: [], details: [], manifestProductsV2: [], detailsV2: [] };
 
   const productIds = products.map((p) => p.id);
   const assetById = new Map((await tx.select({ id: s.asset.id, path: s.asset.path }).from(s.asset).where(eq(s.asset.storeId, store.id))).map((a) => [a.id, a.path]));
@@ -79,6 +161,8 @@ async function buildEntries(tx: Tx, store: StoreCtx, priceRule: VariantPriceRule
 
   const manifestProducts = [];
   const details = [];
+  const manifestProductsV2: NativeProductManifestEntryV2[] = [];
+  const detailsV2: NativeProductDetailV2[] = [];
   for (const p of products) {
     const vs = variantsByProduct.get(p.id) ?? [];
     const prices = vs.map((v) => selectPrice(v, priceRule));
@@ -105,8 +189,41 @@ async function buildEntries(tx: Tx, store: StoreCtx, priceRule: VariantPriceRule
         customFields: { salePrice: v.salePrice, preOrderPrice: v.preOrderPrice, shipDate: v.shipDate, isPreOrder: v.isPreOrder },
       })),
     });
+
+    // ── v2 (native) — same data, native shapes; see the file-level note above. ──
+    const productImages: NativeImage[] = (assetsByProduct.get(p.id) ?? [])
+      .map((a, i): NativeImage | null => { const url = assetUrl(a.path); return url ? { url, alt: null, position: i } : null; })
+      .filter((x): x is NativeImage => x !== null);
+    const manifestImages: NativeImage[] = featured ? [{ url: featured, alt: null, position: 0 }] : [];
+    const variantsV2: NativeVariantV2[] = vs.map((v) => {
+      const effective = selectPrice(v, priceRule);
+      return {
+        id: v.id,
+        sku: v.sku,
+        name: v.name,
+        price: nativeMoney(effective, store),
+        compareAtPrice: effective < v.price ? nativeMoney(v.price, store) : null,
+        salePrice: v.salePrice != null ? nativeMoney(v.salePrice, store) : null,
+        preOrderPrice: v.preOrderPrice != null ? nativeMoney(v.preOrderPrice, store) : null,
+        isPreOrder: v.isPreOrder,
+        shipDate: v.shipDate ? v.shipDate.toISOString() : null,
+        options: (optsByVariant.get(v.id) ?? []).map((o) => ({ group: o.groupName, groupId: o.groupId, code: o.optionId, name: o.value })),
+        images: [],
+      };
+    });
+    manifestProductsV2.push({
+      id: p.id, slug: p.slug, name: p.name, tags: p.tags ?? [],
+      priceRange: { min: nativeMoney(min, store), max: nativeMoney(max, store) },
+      hasMultiplePrices: min !== max, inStock, images: manifestImages,
+    });
+    detailsV2.push({
+      id: p.id, slug: p.slug, name: p.name, tags: p.tags ?? [],
+      priceRange: { min: nativeMoney(min, store), max: nativeMoney(max, store) },
+      hasMultiplePrices: min !== max, inStock, images: productImages,
+      lastUpdated: now, description: p.description, variants: variantsV2,
+    });
   }
-  return { manifestProducts, details };
+  return { manifestProducts, details, manifestProductsV2, detailsV2 };
 }
 
 /** Product ids owning ANY of `variantIds`, regardless of the variant's or the
@@ -133,7 +250,12 @@ async function slugsForProductIds(tx: Tx, storeId: string, productIds: string[])
 interface PublishPayload {
   manifest: { lastUpdated: string; totalItems: number; defaultSort: string; products: ManifestProductEntry[] };
   details: ProductDetailEntry[];
+  manifestV2: { lastUpdated: string; totalItems: number; defaultSort: string; products: NativeProductManifestEntryV2[] };
+  detailsV2: NativeProductDetailV2[];
 }
+
+const v2Envelope = (now: string, manifestProductsV2: NativeProductManifestEntryV2[]) =>
+  ({ lastUpdated: now, totalItems: manifestProductsV2.length, defaultSort: 'name', products: manifestProductsV2 });
 
 export async function publishCatalogManifest(args: { outDir: string; storeSlug: string; variantIds?: string[] }) {
   const now = new Date().toISOString();
@@ -161,14 +283,26 @@ export async function publishCatalogManifest(args: { outDir: string; storeSlug: 
         for (const entry of freshDetails) detailMap.set(entry.slug, entry as ProductDetailEntry);
         const manifestProducts = [...productMap.values()].sort((a, b) => (a.name as string).localeCompare(b.name as string));
         const details = manifestProducts.map((p) => detailMap.get(p.slug)!).filter(Boolean);
-        return { manifest: { lastUpdated: now, totalItems: manifestProducts.length, defaultSort: 'name', products: manifestProducts }, details };
+        // v2 doesn't (yet) share v1's incremental-reuse optimization above —
+        // it's new and not yet load-bearing, and correctness-via-full-scan
+        // beats a second, separately-maintained merge algorithm for a
+        // not-yet-relied-upon format. Reuses this same open transaction, so
+        // it costs one more (uncached) query set, not another connection.
+        const { manifestProductsV2, detailsV2 } = await buildEntries(tx, store, priceRule);
+        return {
+          manifest: { lastUpdated: now, totalItems: manifestProducts.length, defaultSort: 'name', products: manifestProducts }, details,
+          manifestV2: v2Envelope(now, manifestProductsV2), detailsV2,
+        };
       })
     : null;
 
-  const { manifest, details } = scoped ?? await withStore(store.id, async (tx): Promise<PublishPayload> => {
-    const { manifestProducts, details } = await buildEntries(tx, store, priceRule);
-    return { manifest: { lastUpdated: now, totalItems: manifestProducts.length, defaultSort: 'name', products: manifestProducts }, details };
+  const { manifest, details, manifestV2, detailsV2 } = scoped ?? await withStore(store.id, async (tx): Promise<PublishPayload> => {
+    const { manifestProducts, details, manifestProductsV2, detailsV2 } = await buildEntries(tx, store, priceRule);
+    return {
+      manifest: { lastUpdated: now, totalItems: manifestProducts.length, defaultSort: 'name', products: manifestProducts }, details,
+      manifestV2: v2Envelope(now, manifestProductsV2), detailsV2,
+    };
   });
 
-  return publishGeneration({ outDir: args.outDir, storeSlug: args.storeSlug, manifest, details });
+  return publishGeneration({ outDir: args.outDir, storeSlug: args.storeSlug, manifest, details, manifestV2, detailsV2 });
 }

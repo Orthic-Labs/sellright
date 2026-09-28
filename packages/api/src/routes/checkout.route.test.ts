@@ -132,7 +132,7 @@ describe('POST /v1/shop/checkout — stock reservation', () => {
       body: JSON.stringify({ items: [{ sku: SKU, quantity: 5 }], shippingMethodCode: SHIPPING_CODE }),
     });
     expect(res.status).toBe(409);
-    const body = await res.json() as { error: string; skus?: string[] };
+    const body = await res.json() as { error: { code: string; message: string }; skus?: string[] };
     expect(body.skus).toContain(SKU);
 
     // no order was created, and stock allocation is untouched (still 0 allocated)
@@ -214,8 +214,8 @@ describe('POST /v1/shop/checkout — empty/invalid cart', () => {
       method: 'POST', headers: hdr(), body: JSON.stringify({ items: [{ sku: SKU, quantity: 1 }], cartToken: 'does-not-exist' }),
     });
     expect(res.status).toBe(409);
-    const body = await res.json() as { error: string };
-    expect(body.error).toMatch(/cart is empty|invalid|already checked out/i);
+    const body = await res.json() as { error: { code: string; message: string } };
+    expect(body.error.message).toMatch(/cart is empty|invalid|already checked out/i);
   });
 
   it('an already-converted cart returns 409', async () => {

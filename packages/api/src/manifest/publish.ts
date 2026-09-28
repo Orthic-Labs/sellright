@@ -4,7 +4,15 @@ import { join, resolve } from 'node:path';
 
 const GENERATION = /^[0-9a-f-]{36}$/;
 const SAFE_SLUG = /^[a-z0-9][a-z0-9_-]*$/;
-type Input = { outDir: string; storeSlug: string; manifest: unknown; details: { slug: string }[] };
+type Input = {
+  outDir: string; storeSlug: string; manifest: unknown; details: { slug: string }[];
+  // SR-CLIENT-1: the native (v2) manifest, published alongside v1 in the SAME
+  // generation so a reader of either format sees a snapshot from the same
+  // instant — never a v1/v2 pair computed at different times. Optional so
+  // existing callers/tests that only know about v1 keep compiling; catalog.ts
+  // (the only real caller) always supplies it.
+  manifestV2?: unknown; detailsV2?: { slug: string }[];
+};
 
 export interface CatalogManifestShape {
   lastUpdated: string;
@@ -49,10 +57,41 @@ export async function readCurrentGeneration(outDir: string, storeSlug: string): 
   }
 }
 
+/** v2 counterpart of readCurrentGeneration. Currently unused by catalog.ts
+ *  (v2 is always a full scan — see its own doc comment) but published here
+ *  for symmetry and so a future incremental-v2 path doesn't need to
+ *  reinvent this read. Same marker/foreign-pointer checks as v1. */
+export async function readCurrentGenerationV2(outDir: string, storeSlug: string): Promise<{ manifest: CatalogManifestShape; details: Array<{ slug: string; [k: string]: unknown }> } | null> {
+  const root = resolve(outDir);
+  try {
+    const previous = await readlink(join(root, 'current'));
+    if (!/^generations\/[0-9a-f-]{36}$/.test(previous)) return null;
+    const dir = join(root, previous);
+    const marker = JSON.parse(await readFile(join(dir, 'marker.json'), 'utf8')) as { source?: string; storeSlug?: string };
+    if (marker.source !== 'sellright' || marker.storeSlug !== storeSlug) return null;
+    const manifest = JSON.parse(await readFile(join(dir, 'shop-catalog.v2.json'), 'utf8')) as CatalogManifestShape;
+    const details: Array<{ slug: string; [k: string]: unknown }> = [];
+    for (const p of manifest.products) {
+      if (!SAFE_SLUG.test(p.slug)) continue;
+      try {
+        details.push(JSON.parse(await readFile(join(dir, 'products-v2', `${p.slug}.json`), 'utf8')) as { slug: string; [k: string]: unknown });
+      } catch {
+        return null;
+      }
+    }
+    return { manifest, details };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    return null;
+  }
+}
+
 // Call under the catalog leader lock. Readers resolve current once per request.
 export async function publishGeneration(input: Input) {
   if (!input.outDir.trim() || !SAFE_SLUG.test(input.storeSlug)) throw new Error('Invalid catalog destination or store');
   if (input.details.some(d => !SAFE_SLUG.test(d.slug)) || new Set(input.details.map(d => d.slug)).size !== input.details.length) throw new Error('Invalid or duplicate product slug');
+  const detailsV2 = input.detailsV2 ?? [];
+  if (detailsV2.some(d => !SAFE_SLUG.test(d.slug)) || new Set(detailsV2.map(d => d.slug)).size !== detailsV2.length) throw new Error('Invalid or duplicate product slug (v2)');
   const root = resolve(input.outDir);
   const generations = join(root, 'generations');
   await mkdir(generations, { recursive: true });
@@ -81,9 +120,15 @@ export async function publishGeneration(input: Input) {
   let published = false;
   try {
     await mkdir(join(target, 'products'), { recursive: true });
+    await mkdir(join(target, 'products-v2'), { recursive: true });
     await writeFile(join(target, 'shop-catalog.json'), JSON.stringify(input.manifest));
     for (const detail of input.details) await writeFile(join(target, 'products', `${detail.slug}.json`), JSON.stringify(detail));
-    await writeFile(join(target, 'marker.json'), JSON.stringify({ format: 1, source: 'sellright', storeSlug: input.storeSlug, generation, generatedAt: new Date().toISOString() }));
+    await writeFile(join(target, 'shop-catalog.v2.json'), JSON.stringify(input.manifestV2 ?? null));
+    for (const detail of detailsV2) await writeFile(join(target, 'products-v2', `${detail.slug}.json`), JSON.stringify(detail));
+    // format: 2 — this generation carries both v1 (Vendure-parity) and v2
+    // (native) manifests. A reader keyed on `format` can tell whether v2
+    // files exist without probing the filesystem.
+    await writeFile(join(target, 'marker.json'), JSON.stringify({ format: 2, source: 'sellright', storeSlug: input.storeSlug, generation, generatedAt: new Date().toISOString() }));
     await symlink(`generations/${generation}`, pointer);
     await rename(pointer, join(root, 'current'));
     published = true;

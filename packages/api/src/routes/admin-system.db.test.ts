@@ -179,8 +179,8 @@ describe('GET /v1/admin/system/recovery-kit', () => {
     const { installToken } = await seed();
     const res = await req(installToken, 'GET', '/v1/admin/system/recovery-kit');
     expect(res.status).toBe(403);
-    const body = await res.json() as { error: string };
-    expect(body.error).toBe('step_up_required');
+    const body = await res.json() as { error: { code: string; message: string } };
+    expect(body.error.message).toBe('step_up_required');
   });
 
   it('200s after step-up, and records the download', async () => {

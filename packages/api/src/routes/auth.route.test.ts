@@ -156,8 +156,8 @@ describe('POST /v1/shop/auth/login', () => {
       method: 'POST', headers: hdr(), body: JSON.stringify({ email: 'wrongpw@auth.test', password: 'totallywrongpassword' }),
     });
     expect(res.status).toBe(401);
-    const body = await res.json() as { error: string };
-    expect(body.error).toBe('invalid email or password');
+    const body = await res.json() as { error: { code: string; message: string } };
+    expect(body.error.message).toBe('invalid email or password');
   });
 
   it('an unknown email returns the SAME generic 401 as a wrong password', async () => {
@@ -165,8 +165,8 @@ describe('POST /v1/shop/auth/login', () => {
       method: 'POST', headers: hdr(), body: JSON.stringify({ email: 'doesnotexist@auth.test', password: 'whatever12345' }),
     });
     expect(res.status).toBe(401);
-    const body = await res.json() as { error: string };
-    expect(body.error).toBe('invalid email or password');
+    const body = await res.json() as { error: { code: string; message: string } };
+    expect(body.error.message).toBe('invalid email or password');
   });
 
   // ── SEC-VERIFY-1: native login refuses an unverified account ──────────────
@@ -177,7 +177,7 @@ describe('POST /v1/shop/auth/login', () => {
       method: 'POST', headers: hdr(), body: JSON.stringify({ email: 'unverified@auth.test', password: 'rightpassword1' }),
     });
     expect(res.status).toBe(403);
-    const body = await res.json() as { error: string; code?: string };
+    const body = await res.json() as { error: { code: string; message: string }; code?: string };
     expect(body.code).toBe('not_verified');
     expect(parseSetCookies(res)[CUST_COOKIE]).toBeUndefined(); // no session handed out
   });

@@ -160,7 +160,7 @@ describe('refunds permission gate', () => {
     await seedOrder({ code: 'O-REF-DENY', state: 'Paid', settledPayment: true });
     const { status, body } = await call(staffToken, '/orders/O-REF-DENY/refund', { restock: false, idempotencyKey: 'rbac-deny-refund' });
     expect(status).toBe(403);
-    expect(String(body.error)).toMatch(/refunds/);
+    expect(String((body.error as { message: string }).message)).toMatch(/refunds/);
   });
 
   it('staff WITH refunds permission gets 200 on refund', async () => {
@@ -192,7 +192,7 @@ describe('cancel_orders permission gate', () => {
     await seedOrder({ code: 'O-CXL-DENY', state: 'PendingPayment' });
     const { status, body } = await call(staffToken, '/orders/O-CXL-DENY/cancel', {});
     expect(status).toBe(403);
-    expect(String(body.error)).toMatch(/cancel_orders/);
+    expect(String((body.error as { message: string }).message)).toMatch(/cancel_orders/);
   });
 
   it('staff WITH cancel_orders permission gets 200 on cancel', async () => {
@@ -220,7 +220,7 @@ describe('releases permission gate', () => {
   it('staff WITHOUT releases permission gets 403 on release create', async () => {
     const { status, body } = await call(staffToken, '/apps/releases', releaseBody('1.0.0-deny'));
     expect(status).toBe(403);
-    expect(String(body.error)).toMatch(/releases/);
+    expect(String((body.error as { message: string }).message)).toMatch(/releases/);
   });
 
   it('staff WITH releases permission gets 200 on release create', async () => {
@@ -241,7 +241,7 @@ describe('affiliate_payouts permission gate', () => {
     const id = await seedAffiliate('deny-aff');
     const { status, body } = await call(staffToken, `/affiliates/${id}/settle`, {});
     expect(status).toBe(403);
-    expect(String(body.error)).toMatch(/affiliate_payouts/);
+    expect(String((body.error as { message: string }).message)).toMatch(/affiliate_payouts/);
   });
 
   it('staff WITH affiliate_payouts permission gets 200 on settle', async () => {

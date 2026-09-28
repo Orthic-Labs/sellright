@@ -30,6 +30,7 @@ import { legalReceiptForOrder, type OrderLegalReceipt } from '../legal/acceptanc
 import { legalManifestForApp } from '../legal/manifests.js';
 import { isStorePublished } from '../store-publish.js';
 import { cartResponse, CartOut } from './cart.js';
+import { apiErrorSchema, errJson } from '../lib/api-error.js';
 
 /** Mirror of email/dispatch.ts::parseAppMap — duplicated here to avoid an
  * internal export just for the outbox enqueue path. */
@@ -223,9 +224,9 @@ checkout.openapi(
         description: 'Order created',
         content: { 'application/json': { schema: z.object({ code: z.string(), state: z.string(), grandTotal: z.number().int(), discountTotal: z.number().int(), currency: z.string(), couponApplied: z.boolean(), giftCardApplied: z.number().int(), receiptToken: z.string(), pointsRedeemed: z.number().int(), pointsDiscount: z.number().int() }) } },
       },
-      409: { description: 'Out of stock / shipping unavailable / idempotency-payload or stale-cart conflict', content: { 'application/json': { schema: z.object({ error: z.string(), code: z.string().optional(), skus: z.array(z.string()).optional(), reason: z.string().optional(), revision: z.number().int().optional(), cart: CartOut.optional() }) } } },
-      422: { description: 'Required legal acceptance is missing or invalid', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
-      429: { description: 'Rate limited', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+      409: { description: 'Out of stock / shipping unavailable / idempotency-payload or stale-cart conflict', content: { 'application/json': { schema: apiErrorSchema().extend({ code: z.string().optional(), skus: z.array(z.string()).optional(), reason: z.string().optional(), revision: z.number().int().optional(), cart: CartOut.optional() }) } } },
+      422: { description: 'Required legal acceptance is missing or invalid', content: { 'application/json': { schema: apiErrorSchema() } } },
+      429: { description: 'Rate limited', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
   async (c) => {
@@ -239,7 +240,7 @@ checkout.openapi(
     const ip = clientIp(c);
     const checkoutBucket = `checkout:${token ?? ip}`;
     const checkoutRetry = await loginRetryAfter(ip, checkoutBucket);
-    if (checkoutRetry > 0) return c.json({ error: `too many checkouts — try again in ${checkoutRetry}s` }, 429);
+    if (checkoutRetry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many checkouts — try again in ${checkoutRetry}s`);
 
     const fingerprint = checkoutFingerprint(body);
 
@@ -746,20 +747,20 @@ checkout.openapi(
     // never from inside it, and never on a rolled-back/replayed attempt.
     if (stockChanged) onStockChanged(st.slug);
 
-    if ('shippingError' in out) return c.json({ error: 'shipping unavailable', reason: out.shippingError }, 409);
-    if ('cartError' in out) return c.json({ error: out.cartError }, 409);
-    if ('legalError' in out) return c.json({ error: out.legalError }, 422);
-    if ('loyaltyError' in out) return c.json({ error: 'points could not be redeemed', reason: out.loyaltyError }, 409);
-    if ('blocked' in out) return c.json({ error: 'unavailable or out of stock', skus: out.blocked }, 409);
-    if ('fingerprintConflict' in out) return c.json({ error: 'idempotency-key was already used with a different payload', reason: 'payload_mismatch' }, 409);
-    if ('cartConflict' in out) return c.json({
-      error: out.cartConflict.code === 'revision_required'
+    if ('shippingError' in out) return errJson(c, 409, 'SHIPPING_UNAVAILABLE', 'shipping unavailable', { extra: { reason: out.shippingError } });
+    if ('cartError' in out) return errJson(c, 409, 'CART_INVALID', out.cartError);
+    if ('legalError' in out) return errJson(c, 422, 'LEGAL_ACCEPTANCE_REQUIRED', out.legalError);
+    if ('loyaltyError' in out) return errJson(c, 409, 'LOYALTY_REDEEM_FAILED', 'points could not be redeemed', { extra: { reason: out.loyaltyError } });
+    if ('blocked' in out) return errJson(c, 409, 'OUT_OF_STOCK', 'unavailable or out of stock', { extra: { skus: out.blocked } });
+    if ('fingerprintConflict' in out) return errJson(c, 409, 'IDEMPOTENCY_PAYLOAD_MISMATCH', 'idempotency-key was already used with a different payload', { extra: { reason: 'payload_mismatch' } });
+    if ('cartConflict' in out) return errJson(
+      c, 409,
+      out.cartConflict.code === 'revision_required' ? 'REVISION_REQUIRED' : 'CART_STALE',
+      out.cartConflict.code === 'revision_required'
         ? 'expectedRevision is required for checkout — read the cart and echo its revision'
         : 'cart changed — refresh and retry',
-      code: out.cartConflict.code,
-      revision: out.cartConflict.snapshot.revision,
-      cart: out.cartConflict.snapshot,
-    }, 409);
+      { extra: { code: out.cartConflict.code, revision: out.cartConflict.snapshot.revision, cart: out.cartConflict.snapshot } },
+    );
 
     return c.json({ code: out.code, state: out.state, grandTotal: out.grandTotal, discountTotal: out.discountTotal, currency: st.currency, couponApplied: out.couponApplied, giftCardApplied: out.giftCardApplied ?? 0, receiptToken: out.receiptToken,
       pointsRedeemed: out.pointsRedeemed ?? 0, pointsDiscount: out.pointsDiscount ?? 0 }, 200);

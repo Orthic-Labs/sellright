@@ -40,6 +40,7 @@ import { enqueueEmail } from '../email/outbox.js';
 import { contactConfirm, contactTeamNotice, contactAck } from '../email/templates-contact.js';
 import { env } from '../env.js';
 import { log } from '../lib/logger.js';
+import { apiErrorSchema, errJson } from '../lib/api-error.js';
 
 export const contactRoutes = new OpenAPIHono();
 
@@ -136,8 +137,8 @@ contactRoutes.openapi(
     request: { body: { content: J(ContactIn) } },
     responses: {
       200: { description: 'Accepted — confirmation email queued', content: J(z.object({ ok: z.boolean(), message: z.string().optional() })) },
-      400: { description: 'Invalid or failed security check', content: J(z.object({ error: z.string() })) },
-      429: { description: 'Rate limited', content: J(z.object({ error: z.string() })) },
+      400: { description: 'Invalid or failed security check', content: J(apiErrorSchema()) },
+      429: { description: 'Rate limited', content: J(apiErrorSchema()) },
     },
   }),
   async (c) => {
@@ -151,7 +152,7 @@ contactRoutes.openapi(
 
     const ip = clientIp(c);
     const retry = await contactRetryAfter(ip);
-    if (retry > 0) return c.json({ error: `too many submissions — try again in ${retry}s` }, 429);
+    if (retry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many submissions — try again in ${retry}s`);
     await recordContactAttempt(ip);
 
     const st = await resolveStoreFromCtx(c);
@@ -160,7 +161,7 @@ contactRoutes.openapi(
     // store config); verifyTurnstileToken returns true unconditionally when
     // unconfigured, and fails closed on any error when configured.
     const ok = await verifyTurnstileToken({ secret: turnstileSecret(st.config), token: body.turnstileToken, remoteIp: ip });
-    if (!ok) return c.json({ error: 'security verification failed — please try again' }, 400);
+    if (!ok) return errJson(c, 400, 'SECURITY_CHECK_FAILED', 'security verification failed — please try again');
 
     const name = body.name.trim();
     const email = body.email.trim().toLowerCase();

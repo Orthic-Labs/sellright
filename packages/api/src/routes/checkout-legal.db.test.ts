@@ -174,8 +174,8 @@ describe('POST /v1/shop/checkout — legal acceptance', () => {
   it('missing legalAcceptance on a manifest-configured product → 422 and no order', async () => {
     const res = await post({ items: [{ sku: SKU_LIC, quantity: 1 }] });
     expect(res.status).toBe(422);
-    const body = await res.json() as { error: string };
-    expect(body.error).toMatch(/legal acceptance/i);
+    const body = await res.json() as { error: { code: string; message: string } };
+    expect(body.error.message).toMatch(/legal acceptance/i);
     const n = await withStore(STORE, async (tx) => {
       const r = await tx.execute(sql`SELECT count(*)::int n FROM "order" WHERE store_id = ${STORE}`);
       return (r.rows[0] as { n: number }).n;

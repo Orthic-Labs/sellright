@@ -6,6 +6,7 @@ import { customerToken, resolveCustomer } from '../auth/session.js';
 import * as s from '../db/schema.js';
 import { timingSafeEqual as cryptoTimingSafeEqual } from 'node:crypto';
 import { loadOrderFulfillments, loadOrderLines, loadOrderPayments, loadOrderPromotionCode } from './order-facts.js';
+import { apiErrorSchema, errJson } from '../lib/api-error.js';
 
 /** Constant-time string compare (avoids leaking the receipt token via timing). */
 function tokensMatch(a: string | null | undefined, b: string | null | undefined): boolean {
@@ -61,7 +62,7 @@ orders.openapi(
           },
         },
       },
-      404: { description: 'Not found', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+      404: { description: 'Not found', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
   async (c) => {
@@ -104,7 +105,7 @@ orders.openapi(
         payments, fulfillments, lines,
       };
     });
-    if (!out) return c.json({ error: 'order not found' }, 404);
+    if (!out) return errJson(c, 404, 'ORDER_NOT_FOUND', 'order not found');
     return c.json(out, 200);
   },
 );

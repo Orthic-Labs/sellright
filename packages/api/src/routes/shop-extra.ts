@@ -13,6 +13,7 @@ import { enqueueEmail } from '../email/outbox.js';
 import { sendSubscriberConfirmation } from './shop-extra.subscriber.js';
 import { contactRoutes } from './contact.js';
 import { restockRoutes } from './restock.js';
+import { apiErrorSchema, errJson } from '../lib/api-error.js';
 import { clearTrackingAttempts, trackingRetryAfter } from './shop-extra.tracking-limit.js';
 import { loadOrderPayments } from './order-facts.js';
 
@@ -25,7 +26,7 @@ shopExtra.openapi(
   createRoute({
     method: 'get', path: '/v1/shop/track', summary: 'Guest order tracking by code + email',
     request: { query: z.object({ code: z.string().min(1).max(128), email: z.string().trim().email().max(254) }) },
-    responses: { 200: { description: 'OK', content: J(z.any()) }, 404: { description: 'Not found', content: J(z.object({ error: z.string() })) }, 429: { description: 'Rate limited', content: J(z.object({ error: z.string() })) } },
+    responses: { 200: { description: 'OK', content: J(z.any()) }, 404: { description: 'Not found', content: J(apiErrorSchema()) }, 429: { description: 'Rate limited', content: J(apiErrorSchema()) } },
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
@@ -34,7 +35,7 @@ shopExtra.openapi(
     const retry = await trackingRetryAfter(key);
     if (retry) {
       c.header('Retry-After', String(retry));
-      return c.json({ error: 'too many tracking attempts' }, 429);
+      return errJson(c, 429, 'RATE_LIMITED', 'too many tracking attempts');
     }
     const out = await withStore(st.id, async (tx) => {
       const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
@@ -73,7 +74,7 @@ shopExtra.openapi(
         })),
       };
     });
-    if (!out) return c.json({ error: 'order not found for that code + email' }, 404);
+    if (!out) return errJson(c, 404, 'ORDER_NOT_FOUND', 'order not found for that code + email');
     await clearTrackingAttempts(key);
     return c.json(out, 200);
   },
@@ -105,7 +106,7 @@ shopExtra.openapi(
   createRoute({
     method: 'get', path: '/v1/shop/blog/{slug}', summary: 'Blog post by slug',
     request: { params: z.object({ slug: z.string() }) },
-    responses: { 200: { description: 'OK', content: J(z.any()) }, 404: { description: 'Not found', content: J(z.object({ error: z.string() })) } },
+    responses: { 200: { description: 'OK', content: J(z.any()) }, 404: { description: 'Not found', content: J(apiErrorSchema()) } },
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
@@ -116,7 +117,7 @@ shopExtra.openapi(
       const [featuredAsset] = post.featuredAssetId ? await tx.select({ id: s.asset.id, path: s.asset.path }).from(s.asset).where(eq(s.asset.id, post.featuredAssetId)).limit(1) : [];
       return { ...post, featuredAsset: featuredAsset ?? null };
     });
-    if (!out) return c.json({ error: 'post not found' }, 404);
+    if (!out) return errJson(c, 404, 'POST_NOT_FOUND', 'post not found');
     return c.json({ id: out.id, title: out.title, slug: out.slug, excerpt: out.excerpt, bodyHtml: out.bodyHtml, authorName: out.authorName, readingTime: out.readingTime, publishDate: out.publishDate?.toISOString() ?? null, seoTitle: out.seoTitle, seoDescription: out.seoDescription, tags: out.tags, featuredAsset: out.featuredAsset }, 200);
   },
 );
@@ -144,7 +145,7 @@ shopExtra.openapi(
   createRoute({
     method: 'get', path: '/v1/shop/gift-card/{code}', summary: 'Check a gift card balance',
     request: { params: z.object({ code: z.string() }) },
-    responses: { 200: { description: 'OK', content: J(z.object({ code: z.string(), balance: z.number().int(), currency: z.string(), valid: z.boolean() })) }, 404: { description: 'Not found', content: J(z.object({ error: z.string() })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ code: z.string(), balance: z.number().int(), currency: z.string(), valid: z.boolean() })) }, 404: { description: 'Not found', content: J(apiErrorSchema()) } },
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
@@ -153,7 +154,7 @@ shopExtra.openapi(
       const [g] = await tx.select({ code: s.giftCard.code, balance: s.giftCard.balance, currency: s.giftCard.currency, enabled: s.giftCard.enabled, expiresAt: s.giftCard.expiresAt }).from(s.giftCard).where(eq(s.giftCard.code, code)).limit(1);
       return g ?? null;
     });
-    if (!gc) return c.json({ error: 'gift card not found' }, 404);
+    if (!gc) return errJson(c, 404, 'GIFT_CARD_NOT_FOUND', 'gift card not found');
     const valid = gc.enabled && gc.balance > 0 && (!gc.expiresAt || gc.expiresAt.getTime() > Date.now());
     return c.json({ code: gc.code, balance: gc.balance, currency: gc.currency, valid }, 200);
   },
@@ -206,14 +207,14 @@ shopExtra.openapi(
     )) } },
     responses: {
       200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) },
-      429: { description: 'Rate limited', content: J(z.object({ error: z.string() })) },
+      429: { description: 'Rate limited', content: J(apiErrorSchema()) },
     },
   }),
   async (c) => {
     // 1. Per-IP throttle (gate 1). Same shape as auth.ts's check-email probe.
     const ip = clientIp(c);
     const retry = await newsletterRetryAfter(ip);
-    if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
+    if (retry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${retry}s`);
     await recordNewsletterAttempt(ip);
 
     const st = await resolveStoreFromCtx(c);

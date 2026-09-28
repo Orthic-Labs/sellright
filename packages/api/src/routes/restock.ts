@@ -42,6 +42,7 @@ import { appValue } from '../email/dispatch.js';
 import { restockNotify } from '../email/templates-contact.js';
 import { env } from '../env.js';
 import { log } from '../lib/logger.js';
+import { apiErrorSchema, errJson } from '../lib/api-error.js';
 
 export const restockRoutes = new OpenAPIHono();
 
@@ -95,9 +96,9 @@ restockRoutes.openapi(
     request: { body: { content: J(RestockIn) } },
     responses: {
       200: { description: 'Recorded (or already recorded)', content: J(z.object({ ok: z.boolean() })) },
-      400: { description: 'Invalid or failed security check', content: J(z.object({ error: z.string() })) },
-      404: { description: 'Variant not found', content: J(z.object({ error: z.string() })) },
-      429: { description: 'Rate limited', content: J(z.object({ error: z.string() })) },
+      400: { description: 'Invalid or failed security check', content: J(apiErrorSchema()) },
+      404: { description: 'Variant not found', content: J(apiErrorSchema()) },
+      429: { description: 'Rate limited', content: J(apiErrorSchema()) },
     },
   }),
   async (c) => {
@@ -106,13 +107,13 @@ restockRoutes.openapi(
 
     const ip = clientIp(c);
     const retry = await restockRetryAfter(ip);
-    if (retry > 0) return c.json({ error: `too many requests — try again in ${retry}s` }, 429);
+    if (retry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many requests — try again in ${retry}s`);
     await recordRestockAttempt(ip);
 
     const st = await resolveStoreFromCtx(c);
 
     const ok = await verifyTurnstileToken({ secret: turnstileSecret(st.config), token: body.turnstileToken, remoteIp: ip });
-    if (!ok) return c.json({ error: 'security verification failed — please try again' }, 400);
+    if (!ok) return errJson(c, 400, 'SECURITY_CHECK_FAILED', 'security verification failed — please try again');
 
     const email = body.email.trim().toLowerCase();
 
@@ -159,7 +160,7 @@ restockRoutes.openapi(
       return 'recorded' as const;
     });
 
-    if (result === 'not-found') return c.json({ error: body.variantId ? 'variant not found' : 'product not found' }, 404);
+    if (result === 'not-found') return errJson(c, 404, body.variantId ? 'VARIANT_NOT_FOUND' : 'PRODUCT_NOT_FOUND', body.variantId ? 'variant not found' : 'product not found');
     return c.json({ ok: true }, 200);
   },
 );
