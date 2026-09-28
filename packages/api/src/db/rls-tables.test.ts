@@ -34,7 +34,7 @@ const withStoreApp = createStoreAppRunner(appPool, drizzleOpts);
 
 // EXEMPT mirrors assert-force-rls.ts: the session/admin_user_store/store/
 // processed_event/staff_invite tables are intentionally non-RLS'd.
-const EXEMPT = new Set(['store', 'admin_user', 'admin_user_store', 'session', 'processed_event', 'staff_invite']);
+const EXEMPT = new Set(['store', 'admin_user', 'admin_user_store', 'session', 'processed_event', 'staff_invite', 'catalog_manifest_pending']);
 
 // Discover the table list once, from the OWNER pool (pg_catalog is fine to read).
 let tablesNeedingCheck: string[] = [];

@@ -17,7 +17,15 @@
  */
 import { pool } from './client.js';
 
-const EXEMPT = new Set(['store', 'admin_user', 'admin_user_store', 'session', 'processed_event', 'staff_invite']);
+const EXEMPT = new Set([
+  'store', 'admin_user', 'admin_user_store', 'session', 'processed_event', 'staff_invite',
+  // SELLRIGHT-ISSUES P1: durable-retry marker for catalog manifest
+  // regeneration (manifest/manifest-pending.ts, migration 0079). Carries
+  // store_id for convenience (the drain job needs it) but is written by the
+  // stock-hook path via the unscoped owner pool, outside any store context —
+  // same cross-cutting-infra posture as processed_event.
+  'catalog_manifest_pending',
+]);
 
 async function main() {
   const { rows } = await pool.query<{ table: string; rls: boolean; force: boolean }>(`
