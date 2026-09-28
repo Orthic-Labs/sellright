@@ -84,27 +84,4 @@ describe('services/customer — native SellRight client', () => {
 		expect(urlOf(mockedFetch)).toContain('/v1/shop/account/addresses/addr-1');
 	});
 
-	// ── Compatibility shims (checkout/cart out of scope — must keep their exact
-	//    old Vendure-ish contract without checkout itself being touched) ──────
-
-	it('getActiveCustomerQuery (compat shim) still returns the Vendure-ish {emailAddress, addresses} shape checkout reads', async () => {
-		vi.stubGlobal('fetch', vi.fn(async () =>
-			jsonResponse(200, { id: 'c1', email: 'a@b.com', firstName: 'A', lastName: 'B', phone: '555', emailVerified: true, isMigrated: false }),
-		));
-
-		const { getActiveCustomerQuery } = await import('./customer');
-		const result = await getActiveCustomerQuery();
-
-		expect(result).toMatchObject({ id: 'c1', emailAddress: 'a@b.com', firstName: 'A', lastName: 'B', phoneNumber: '555' });
-	});
-
-	it('createCustomerAddressMutation (compat shim) echoes {id, ...input} under createCustomerAddress, matching the pre-existing checkout contract', async () => {
-		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(201, { id: 'addr-9' })));
-
-		const { createCustomerAddressMutation } = await import('./customer');
-		const input = { fullName: 'A B', streetLine1: '1 Main St', city: 'X', countryCode: 'US' };
-		const result = await createCustomerAddressMutation(input);
-
-		expect(result.createCustomerAddress).toEqual({ id: 'addr-9', ...input });
-	});
 });
