@@ -7,7 +7,7 @@ export interface BlogPostSummary {
     excerpt: string;
     readingTime: number;
     authorName: string;
-    featuredAsset: { id: string; preview: string } | null;
+    featuredImage: { id: string; preview: string } | null;
     tags: string[];
     publishDate: string | null;
     createdAt: string | null;
@@ -28,7 +28,7 @@ function adaptPost(post: SrBlogPost): BlogPostSummary {
         readingTime: post.readingTime ?? 1,
         authorName: post.authorName ?? '',
         tags: post.tags ?? [],
-        featuredAsset: post.featuredAsset ? { id: post.featuredAsset.id, preview: srAssetUrl(post.featuredAsset.path) } : null,
+        featuredImage: post.featuredImage ? { id: post.featuredImage.id, preview: srAssetUrl(post.featuredImage.path) } : null,
         // SellRight does not store creation timestamps; do not invent one.
         createdAt: null,
     };

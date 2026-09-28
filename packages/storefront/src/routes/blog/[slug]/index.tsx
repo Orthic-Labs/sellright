@@ -195,8 +195,8 @@ export default component$(() => {
                         {post.tags.map((tag: string) => <span key={tag} class="sr-post__tag">{tag}</span>)}
                     </div>
                 )}
-                {post.featuredAsset && (
-                    <OptimizedImage src={post.featuredAsset.preview} alt={post.title} class="sr-post__hero" width={1280} height={720} priority responsive="hero" />
+                {post.featuredImage && (
+                    <OptimizedImage src={post.featuredImage.preview} alt={post.title} class="sr-post__hero" width={1280} height={720} priority responsive="hero" />
                 )}
                 {toc.length >= 3 && (
                     <nav class="sr-post__toc" aria-label="In this guide">
@@ -259,7 +259,7 @@ export const head = ({ resolveValue }: any) => {
     const seoTitle = post.seoTitle || post.title;
     const seoDesc = post.seoDescription || post.excerpt;
     const postUrl = `${siteUrl}/blog/${post.slug}/`;
-    const rawImage = post.featuredAsset?.preview || '';
+    const rawImage = post.featuredImage?.preview || '';
     const image = rawImage.startsWith('http') ? rawImage : rawImage ? `${siteUrl}${rawImage}` : `${siteUrl}${theme.ogImageUrl}`;
 
     const authorName = post.authorName || theme.storeName;
@@ -276,7 +276,7 @@ export const head = ({ resolveValue }: any) => {
             url: postUrl,
             datePublished: post.publishDate || post.createdAt,
             dateModified: post.updatedAt,
-            image: { '@type': 'ImageObject', url: image + (post.featuredAsset ? '?preset=xl' : ''), width: 1200, height: 630 },
+            image: { '@type': 'ImageObject', url: image + (post.featuredImage ? '?preset=xl' : ''), width: 1200, height: 630 },
             author: authorSchema,
             publisher: { '@type': 'Organization', '@id': `${siteUrl}/#organization`, name: theme.storeName, url: siteUrl, logo: { '@type': 'ImageObject', url: `${siteUrl}/logo.png` } },
             mainEntityOfPage: { '@type': 'WebPage', '@id': postUrl },

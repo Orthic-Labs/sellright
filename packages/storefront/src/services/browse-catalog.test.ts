@@ -13,9 +13,9 @@ describe('server-rendered browse catalog', () => {
       products: [{
         slug: 'snapshot', name: 'Snapshot', inStock: true,
         priceRange: { min: 1200, max: 1200 },
-        facetValues: [{ name: 'EDC', facetName: 'Tags' }],
-        featuredAsset: { preview: '/assets/snapshot.jpg' },
-        customFields: { salePrice: null, preOrderPrice: null, shipDate: null, isPreOrder: false },
+        tags: ['EDC'],
+        featuredImage: { url: '/assets/snapshot.jpg' },
+        salePrice: null, preOrderPrice: null, shipDate: null, isPreOrder: false,
       }],
     });
     const result = await loadBrowseCatalog();

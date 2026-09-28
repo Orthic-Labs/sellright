@@ -101,12 +101,12 @@ describe('migrated plugin contracts', () => {
 	});
 
 	it('loads paged blogs and featured images from the native SellRight API', async () => {
-		const post = { id: 'post', slug: 'story', title: 'Story', excerpt: null, readingTime: 2, authorName: null, featuredAsset: { id: 'asset', path: '/assets/story.jpg' }, tags: null, publishDate: '2026-01-01T00:00:00.000Z' };
+		const post = { id: 'post', slug: 'story', title: 'Story', excerpt: null, readingTime: 2, authorName: null, featuredImage: { id: 'asset', path: '/assets/story.jpg' }, tags: null, publishDate: '2026-01-01T00:00:00.000Z' };
 		enqueue(respond(200, { items: [post], totalItems: 30 }));
 		const result = await getBlogPosts(10, 20);
 		expect(lastPath()).toBe('/v1/shop/blog?take=10&skip=20');
 		expect(result.totalItems).toBe(30);
-		expect(result.items[0]).toMatchObject({ id: 'post', featuredAsset: { id: 'asset', preview: '/assets/story.jpg' }, createdAt: null });
+		expect(result.items[0]).toMatchObject({ id: 'post', featuredImage: { id: 'asset', preview: '/assets/story.jpg' }, createdAt: null });
 		enqueue(respond(200, { ...post, bodyHtml: '<p>Story</p>', seoTitle: null, seoDescription: null }));
 		expect(await getBlogPostBySlug('story')).toMatchObject({ bodyHtml: '<p>Story</p>', isPublished: true });
 		expect(lastPath()).toBe('/v1/shop/blog/story');

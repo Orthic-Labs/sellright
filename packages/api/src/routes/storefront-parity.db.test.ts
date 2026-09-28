@@ -138,12 +138,12 @@ describe('blog parity', () => {
       ]);
     });
     const first = await (await app.request('/v1/shop/blog?take=1', { headers })).json() as { items: unknown[] };
-    expect(first).toMatchObject({ totalItems: 2, items: [{ slug: 'past', featuredAsset: { id: assetId, path: '/assets/blog.jpg' } }] });
+    expect(first).toMatchObject({ totalItems: 2, items: [{ slug: 'past', featuredImage: { id: assetId, path: '/assets/blog.jpg' } }] });
     expect(first.items).toHaveLength(1);
     const next = await (await app.request('/v1/shop/blog?take=1&skip=1', { headers })).json() as { items: unknown[] };
-    expect(next.items[0]).toMatchObject({ slug: 'undated', featuredAsset: null });
+    expect(next.items[0]).toMatchObject({ slug: 'undated', featuredImage: null });
     for (const slug of ['future', 'draft']) expect((await app.request(`/v1/shop/blog/${slug}`, { headers })).status).toBe(404);
-    expect(await (await app.request('/v1/shop/blog/past', { headers })).json()).toMatchObject({ featuredAsset: { id: assetId } });
+    expect(await (await app.request('/v1/shop/blog/past', { headers })).json()).toMatchObject({ featuredImage: { id: assetId } });
     expect((await app.request('/v1/shop/blog?take=101', { headers })).status).toBe(400);
   });
 
@@ -154,13 +154,13 @@ describe('blog parity', () => {
     expect((await app.request(`/v1/shop/blog/${slug}`, { headers })).status).toBe(404);
     const edit = await admin('PATCH', `/v1/admin/blog/${id}`, { publishDate: '2020-01-01T00:00:00.000Z' });
     expect(edit.status).toBe(200);
-    const detail = await (await app.request(`/v1/shop/blog/${slug}`, { headers })).json() as { featuredAsset: { id: string }; bodyHtml: string };
-    expect(detail.featuredAsset.id).toBe(assetId);
+    const detail = await (await app.request(`/v1/shop/blog/${slug}`, { headers })).json() as { featuredImage: { id: string }; bodyHtml: string };
+    expect(detail.featuredImage.id).toBe(assetId);
     expect(detail.bodyHtml).toBe('<p>Safe</p>');
     expect((await admin('POST', '/v1/admin/blog', { title: 'Foreign', featuredAssetId: foreignAssetId })).status).toBe(404);
     expect((await admin('PATCH', `/v1/admin/blog/${id}`, { featuredAssetId: foreignAssetId })).status).toBe(404);
     expect((await admin('PATCH', `/v1/admin/blog/${id}`, { featuredAssetId: null, publishDate: null })).status).toBe(200);
-    expect(await (await app.request(`/v1/shop/blog/${slug}`, { headers })).json()).toMatchObject({ featuredAsset: null, publishDate: null });
+    expect(await (await app.request(`/v1/shop/blog/${slug}`, { headers })).json()).toMatchObject({ featuredImage: null, publishDate: null });
   });
 });
 

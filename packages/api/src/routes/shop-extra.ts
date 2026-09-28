@@ -93,7 +93,7 @@ shopExtra.openapi(
     const { take, skip } = c.req.valid('query');
     const visible = and(eq(s.blogPost.isPublished, true), or(isNull(s.blogPost.publishDate), lte(s.blogPost.publishDate, new Date())));
     const result = await withStore(st.id, async (tx) => {
-      const items = await tx.select({ id: s.blogPost.id, title: s.blogPost.title, slug: s.blogPost.slug, excerpt: s.blogPost.excerpt, authorName: s.blogPost.authorName, readingTime: s.blogPost.readingTime, publishDate: s.blogPost.publishDate, tags: s.blogPost.tags, featuredAsset: { id: s.asset.id, path: s.asset.path } })
+      const items = await tx.select({ id: s.blogPost.id, title: s.blogPost.title, slug: s.blogPost.slug, excerpt: s.blogPost.excerpt, authorName: s.blogPost.authorName, readingTime: s.blogPost.readingTime, publishDate: s.blogPost.publishDate, tags: s.blogPost.tags, featuredImage: { id: s.asset.id, path: s.asset.path } })
         .from(s.blogPost).leftJoin(s.asset, eq(s.asset.id, s.blogPost.featuredAssetId)).where(visible)
         .orderBy(sql`${s.blogPost.publishDate} DESC NULLS LAST`, desc(s.blogPost.id)).limit(take).offset(skip);
       const [count] = await tx.select({ total: sql<number>`count(*)::int` }).from(s.blogPost).where(visible);
@@ -115,11 +115,11 @@ shopExtra.openapi(
     const out = await withStore(st.id, async (tx) => {
       const [post] = await tx.select().from(s.blogPost).where(and(eq(s.blogPost.slug, slug), eq(s.blogPost.isPublished, true), or(isNull(s.blogPost.publishDate), lte(s.blogPost.publishDate, new Date())))).limit(1);
       if (!post) return null;
-      const [featuredAsset] = post.featuredAssetId ? await tx.select({ id: s.asset.id, path: s.asset.path }).from(s.asset).where(eq(s.asset.id, post.featuredAssetId)).limit(1) : [];
-      return { ...post, featuredAsset: featuredAsset ?? null };
+      const [featuredImage] = post.featuredAssetId ? await tx.select({ id: s.asset.id, path: s.asset.path }).from(s.asset).where(eq(s.asset.id, post.featuredAssetId)).limit(1) : [];
+      return { ...post, featuredImage: featuredImage ?? null };
     });
     if (!out) return errJson(c, 404, 'POST_NOT_FOUND', 'post not found');
-    return c.json({ id: out.id, title: out.title, slug: out.slug, excerpt: out.excerpt, bodyHtml: out.bodyHtml, authorName: out.authorName, readingTime: out.readingTime, publishDate: out.publishDate?.toISOString() ?? null, seoTitle: out.seoTitle, seoDescription: out.seoDescription, tags: out.tags, featuredAsset: out.featuredAsset }, 200);
+    return c.json({ id: out.id, title: out.title, slug: out.slug, excerpt: out.excerpt, bodyHtml: out.bodyHtml, authorName: out.authorName, readingTime: out.readingTime, publishDate: out.publishDate?.toISOString() ?? null, seoTitle: out.seoTitle, seoDescription: out.seoDescription, tags: out.tags, featuredImage: out.featuredImage }, 200);
   },
 );
 
@@ -358,7 +358,7 @@ const ShippingQuoteIn = z.object({
 shopExtra.openapi(createRoute({
   method: 'post', path: '/v1/shop/shipping-methods', summary: 'Quote shipping from cart items',
   request: { body: { content: J(ShippingQuoteIn) } },
-  responses: { 200: { description: 'Quoted methods', content: J(z.any()) } },
+  responses: { 200: { description: 'Quoted methods', content: J(z.object({ methods: z.array(z.object({ code: z.string(), name: z.string(), rate: z.number().int(), price: z.number().int() })) })) } },
 }), async c => {
   const st = await resolveStoreFromCtx(c);
   const body = c.req.valid('json') as z.infer<typeof ShippingQuoteIn>;
@@ -372,7 +372,7 @@ shopExtra.openapi(createRoute({
       const total = calculateOrderTotals({ lines: [], shipping: shippingRate(calc), taxRate: st.taxRate,
         taxInclusive: st.taxInclusive, shippingTaxable: st.shippingTaxable,
         shippingTaxRate: calc.taxRate, shippingTaxInclusive: calc.taxInclusive });
-      return { code: method.code, name: method.name, rate: shippingRate(calc), priceWithTax: total.grandTotal };
+      return { code: method.code, name: method.name, rate: shippingRate(calc), price: total.grandTotal };
     });
   });
   return c.json({ methods }, 200);

@@ -175,6 +175,9 @@ export class CartService {
         quantity,
         enrichment: {
           slug: item?.productVariant?.product?.slug,
+          // One-time read of the PRE-MIGRATION persisted cart shape (legacy
+          // field names) — this is data written by the old storefront, not an
+          // API field. Intentionally kept verbatim; do not "modernize".
           image: item?.productVariant?.featuredAsset?.preview ?? null,
           name: item?.productVariant?.name,
           isPreOrder: !!item?.isPreOrder,

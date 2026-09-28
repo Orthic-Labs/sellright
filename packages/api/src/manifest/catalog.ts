@@ -29,14 +29,11 @@ const selectPrice = (v: { price: number; salePrice: number | null; isPreOrder: b
 // ─────────────────────────────────────────────────────────────────────────────
 // Manifest v2 — SR-CLIENT-1 (storefront-client audit).
 //
-// v1 above mirrors Vendure's Shop API shapes on purpose (facetValues with a
-// hardcoded facetName:'Tags', featuredAsset.preview, customFields carrying
-// salePrice/preOrderPrice/shipDate/isPreOrder, priceWithTax that ISN'T
-// actually tax-inclusive, variant `id`=sku, product `id`=slug) — that parity
-// is what let the storefront keep its existing Vendure-shaped reader while
-// the backend migrated off Vendure underneath it. It was never meant to be
-// the PERMANENT native contract, and it's what a generated OpenAPI client
-// would otherwise bake in as ground truth.
+// v1 above is the original storefront manifest format — a flat integer-cents
+// shape (variant `id`=sku, product `id`=slug, plain `price`/`tags`/
+// `featuredImage`/`assets[].url`, sale/preorder fields flattened onto each
+// entry). It once mirrored Vendure's field names for reader parity during
+// the migration; those names are gone — only the file layout remains "v1".
 //
 // v2 is the native shape: stable ids (the real product/variant UUID, not
 // slug/sku), sku kept as its own field, tags as a plain string array, every
@@ -192,19 +189,20 @@ async function buildEntries(tx: Tx, store: StoreCtx, priceRule: VariantPriceRule
     const cf = { salePrice: v0?.salePrice ?? null, preOrderPrice: v0?.preOrderPrice ?? null, shipDate: v0?.shipDate ?? null, isPreOrder: v0?.isPreOrder ?? false };
     manifestProducts.push({
       id: p.slug, name: p.name, slug: p.slug,
-      featuredAsset: featured ? { preview: featured } : null,
-      priceRange: { min, max }, inStock, facetValues: (p.tags ?? []).map(name => ({ name, facetName: 'Tags' })), hasMultiplePrices: min !== max, customFields: cf,
+      featuredImage: featured ? { url: featured } : null,
+      priceRange: { min, max }, inStock, tags: p.tags ?? [], hasMultiplePrices: min !== max,
+      salePrice: cf.salePrice, preOrderPrice: cf.preOrderPrice, shipDate: cf.shipDate, isPreOrder: cf.isPreOrder,
     });
     details.push({
       lastUpdated: now, id: p.slug, name: p.name, slug: p.slug, description: p.description,
-      featuredAsset: featured ? { preview: featured } : null,
+      featuredImage: featured ? { url: featured } : null,
       assets: (assetsByProduct.get(p.id) ?? []).map((a) => ({ preview: assetUrl(a.path) })),
-      priceRange: { min, max }, facetValues: (p.tags ?? []).map(name => ({ name, facetName: 'Tags' })), hasMultiplePrices: min !== max, hasVariantAssets: false,
+      priceRange: { min, max }, tags: p.tags ?? [], hasMultiplePrices: min !== max, hasVariantAssets: false,
       variants: vs.map((v) => ({
-        id: v.sku, name: v.name, sku: v.sku, priceWithTax: selectPrice(v, priceRule),
+        id: v.sku, name: v.name, sku: v.sku, price: selectPrice(v, priceRule),
         options: (optsByVariant.get(v.id) ?? []).map((o) => ({ group: o.groupName, groupId: o.groupId, groupPosition: o.groupPosition, code: o.optionId, name: o.value, position: o.position })),
         assets: [],
-        customFields: { salePrice: v.salePrice, preOrderPrice: v.preOrderPrice, shipDate: v.shipDate, isPreOrder: v.isPreOrder },
+        salePrice: v.salePrice, preOrderPrice: v.preOrderPrice, shipDate: v.shipDate, isPreOrder: v.isPreOrder,
       })),
     });
 

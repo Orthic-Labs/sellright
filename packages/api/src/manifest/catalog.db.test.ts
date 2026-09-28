@@ -30,10 +30,10 @@ describe('native catalog generation', () => {
       expect(first.products).toBe(1);
       const manifest = JSON.parse(await readFile(join(outDir, 'current/shop-catalog.json'), 'utf8'));
       expect(manifest.products).toHaveLength(1);
-      expect(manifest.products[0]).toMatchObject({ priceRange: { min: 3000, max: 3000 }, inStock: true, featuredAsset: { preview: '/assets/fixture/product.webp' }, facetValues: [{ name: 'edc' }] });
+      expect(manifest.products[0]).toMatchObject({ priceRange: { min: 3000, max: 3000 }, inStock: true, featuredImage: { url: '/assets/fixture/product.webp' }, tags: ['edc'] });
       const detail = JSON.parse(await readFile(join(outDir, 'current/products/fixture.json'), 'utf8'));
-      expect(detail.facetValues).toEqual([{ name: 'edc', facetName: 'Tags' }]);
-      expect(detail.variants[0]).toMatchObject({ id: 'FIXTURE', priceWithTax: 3000, options: [{ code: option, groupId: group, group: 'Color', name: 'Red' }] });
+      expect(detail.tags).toEqual(['edc']);
+      expect(detail.variants[0]).toMatchObject({ id: 'FIXTURE', price: 3000, options: [{ code: option, groupId: group, group: 'Color', name: 'Red' }] });
 
       // SR-CLIENT-1 — v2 (native): stable UUID ids (not slug/sku), tags as a
       // plain array, prices as { amount, currency, taxInclusive }, and

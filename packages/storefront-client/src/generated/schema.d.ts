@@ -15524,7 +15524,14 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": unknown;
+                        "application/json": {
+                            methods: {
+                                code: string;
+                                name: string;
+                                price: number;
+                                rate: number;
+                            }[];
+                        };
                     };
                 };
             };
