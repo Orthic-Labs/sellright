@@ -69,7 +69,7 @@
 	},
 	"dependencies": {
 		"@qwik.dev/core": "2.0.0-beta.35",
-		"@qwik.dev/router": "2.0.0-beta.35",
+		"@qwik.dev/router": "2.0.0-beta.45",
 		"@sellright/storefront-client": "workspace:*",
 		"@stripe/stripe-js": "^4.10.0",
 		"card-validator": "^10.0.4",
