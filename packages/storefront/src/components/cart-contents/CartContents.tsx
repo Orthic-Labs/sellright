@@ -10,8 +10,8 @@ import { isCheckoutPage } from '~/utils/route-helpers';
 import { isImageCached } from '~/utils/image-cache';
 import Price from '../products/Price';
 import TrashIcon from '../icons/TrashIcon';
-import { useLocalCart, updateLocalCartQuantity, removeFromLocalCart } from '~/contexts/CartContext';
-import { LocalCartService } from '~/services/LocalCartService';
+import { useCart, updateCartLineQuantity, removeCartLine } from '~/contexts/CartContext';
+import { isLineAvailable, remainingQuantity } from '~/sellright/types/cart';
 import { StockWarning } from '../cart/StockWarning';
 
 // Image preloading function for cart product links
@@ -31,12 +31,12 @@ export default component$<{
 
 	const location = useLocation();
 	const appState = useContext(APP_STATE);
-	const localCart = useLocalCart();
+	const cartState = useCart();
 	const currentOrderLineSignal = useSignal<{ id: string; value: number }>();
 	const isCheckoutView = isCheckoutPage(location.url.toString());
 	const isInEditableUrl = !isCheckoutView || !order;
 	const isOrderConfirmation = !!order;
-	const currencyCode = order?.currencyCode || appState.activeOrder?.currencyCode || 'USD';
+	const currencyCode = order?.currencyCode || appState.activeOrder?.currencyCode || cartState.cart.currency || 'USD';
 
 	const productNameCache = useSignal<Record<string, string>>({});
 	const quantityOptionsCache = useSignal<Record<string, (number | string)[]>>({});
@@ -45,11 +45,11 @@ export default component$<{
 
 	// Component-level handlers — avoid .map() params crossing $() boundary
 	const handleRemoveItem$ = $((e: Event) => {
-		const btn = (e.target as HTMLElement).closest('[data-variant-id]') as HTMLElement;
+		const btn = (e.target as HTMLElement).closest('[data-sku], [data-variant-id]') as HTMLElement;
 		if (!btn) return;
-		const variantId = btn.dataset.variantId!;
-		removeFromLocalCart(localCart, variantId).then(() => {
-			if (localCart.localCart.items.length === 0) {
+		const sku = btn.dataset.sku ?? btn.dataset.variantId!;
+		removeCartLine(cartState, sku).then(() => {
+			if (cartState.cart.lines.length === 0) {
 				appState.showCart = false;
 			}
 		}).catch(() => {});
@@ -61,16 +61,16 @@ export default component$<{
 		handleProductLinkClick(el.dataset.slug!, el.dataset.preview || undefined);
 	});
 
-	const handleStockRemove$ = $((variantId: string) => {
-		removeFromLocalCart(localCart, variantId);
+	const handleStockRemove$ = $((sku: string) => {
+		removeCartLine(cartState, sku);
 	});
 
 	const handleQtyChange$ = $((value: number | string, id: string) => {
-		const variantId = id.replace('quantity-', '');
+		const key = id.replace('quantity-', '');
 		if (value === '10+') {
-			expandedDropdowns.value = new Set([...expandedDropdowns.value, variantId]);
+			expandedDropdowns.value = new Set([...expandedDropdowns.value, key]);
 		} else {
-			currentOrderLineSignal.value = { id: variantId, value: +value };
+			currentOrderLineSignal.value = { id: key, value: +value };
 		}
 	});
 
@@ -80,8 +80,8 @@ export default component$<{
 		if (currentOrderLineSignal.value) {
 			id = setTimeout(async () => {
 				try {
-					await updateLocalCartQuantity(
-						localCart,
+					await updateCartLineQuantity(
+						cartState,
 						currentOrderLineSignal.value!.id,
 						currentOrderLineSignal.value!.value
 					);
@@ -99,7 +99,7 @@ export default component$<{
 
 	// T23: Replace UVT with useTask$ for reactive cart tracking
 	useTask$(async ({ track }) => {
-		const _cartItems = track(() => localCart.localCart.items);
+		const _cartItems = track(() => cartState.cart.lines);
 
 		const lines = order?.lines || appState.activeOrder?.lines || [];
 
@@ -155,11 +155,12 @@ export default component$<{
 		return stripped.startsWith('-') ? stripped.substring(1).trim() : stripped;
 	};
 
-	// Helper: derive quantity options for local cart items
-	const qtyOptions = (stockLevel: string, currentQty: number, variantId: string) => {
-		const numeric = parseInt(stockLevel, 10);
-		const maxQty = isNaN(numeric) ? currentQty : Math.max(numeric, currentQty);
-		const expanded = expandedDropdowns.value.has(variantId);
+	// Helper: derive quantity options for cart lines. `remaining === null` is
+	// the fail-closed-safe "uncapped" case — bounded to a sane dropdown size,
+	// never treated as literally infinite.
+	const qtyOptions = (remaining: number | null, currentQty: number, sku: string) => {
+		const maxQty = remaining === null ? Math.max(currentQty, 99) : Math.max(remaining, currentQty);
+		const expanded = expandedDropdowns.value.has(sku);
 		if (maxQty <= 10) return Array.from({ length: maxQty }, (_, i) => i + 1);
 		return expanded
 			? Array.from({ length: maxQty }, (_, i) => i + 1)
@@ -169,31 +170,31 @@ export default component$<{
 	return (
 		<div class="flow-root w-full">
 			<ul class={`divide-y w-full ${isCheckoutView ? 'divide-[rgba(var(--color-accent-rgb),0.25)]' : 'divide-[rgba(17,17,17,0.08)]'}`}>
-				{/* Render local cart items when in local mode */}
-				{localCart.localCart.items.map((item) => {
-					const productSlug = item.productVariant.product?.slug || '';
-					const productName = item.productVariant.product?.name ||
+				{/* Render native cart lines (the server-owned cart) */}
+				{cartState.cart.lines.map((line) => {
+					const productSlug = line.slug || '';
+					const productName = line.name ||
 						productNameCache.value[productSlug] ||
 						productSlug.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
 
-					const linePrice = LocalCartService.lineUnitPrice(item) * item.quantity;
-					const stockNum = parseInt(item.productVariant.stockLevel || '0');
-					const isOOS = stockNum <= 0;
-					const quantityOpts = qtyOptions(item.productVariant.stockLevel || '3', item.quantity, item.productVariantId);
-					const vLabel = variantLabel(item.productVariant.name, productName);
+					const linePrice = line.lineSubtotal;
+					const isOOS = !isLineAvailable(line);
+					const remaining = remainingQuantity(line);
+					const quantityOpts = qtyOptions(remaining, line.quantity, line.sku);
+					const vLabel = line.options ?? variantLabel(line.name, productName);
 
 					return (
-						<li key={item.productVariantId} class="py-5 grid grid-cols-[88px_minmax(0,1fr)_auto] gap-4 w-full">
+						<li key={line.sku} class="py-5 grid grid-cols-[88px_minmax(0,1fr)_auto] gap-4 w-full">
 							{/* Image — square crop, no border radius for editorial feel */}
 							<div class={`shrink-0 w-[88px] h-[112px] overflow-hidden ${isCheckoutView ? 'bg-[rgba(253,250,246,0.06)]' : 'bg-[rgba(17,17,17,0.04)]'}`}>
 								<OptimizedImage
 									class="w-full h-full object-center object-cover"
-									src={item.productVariant.featuredAsset?.preview || '/asset_placeholder.webp'}
+									src={line.image || '/asset_placeholder.webp'}
 									width={160}
 									height={200}
 									loading="lazy"
 									responsive="thumbnail"
-									alt={`Image of: ${item.productVariant.name}`}
+									alt={`Image of: ${line.name}`}
 								/>
 							</div>
 
@@ -205,7 +206,7 @@ export default component$<{
 											<Link
 												href={`/products/${productSlug}/`}
 												data-slug={productSlug}
-								data-preview={item.productVariant.featuredAsset?.preview || ''}
+								data-preview={line.image || ''}
 								onClick$={handleLinkClick$}
 											>
 												{productName}
@@ -219,11 +220,11 @@ export default component$<{
 											{vLabel}
 										</p>
 									)}
-									{(item as any).isPreOrder && (
+									{line.isPreOrder && (
 										<span class="inline-flex items-center gap-1.5 px-2.5 py-1 text-[10px] tracking-[1.5px] uppercase font-heading mt-1 border border-[var(--color-accent)]/30 text-[var(--color-accent)] bg-[var(--color-accent)]/5">
 											Pre-order
-											{(item as any).shipDate && (
-												<span class="text-[#8a6d4a]">· Ships {(item as any).shipDate}</span>
+											{line.shipDate && (
+												<span class="text-[#8a6d4a]">· Ships {line.shipDate}</span>
 											)}
 										</span>
 									)}
@@ -231,8 +232,8 @@ export default component$<{
 
 								{/* Stock warning */}
 								<StockWarning
-									item={item}
-									variantId={item.productVariantId}
+									line={line}
+									sku={line.sku}
 									onRemove$={handleStockRemove$}
 								/>
 
@@ -241,15 +242,15 @@ export default component$<{
 									<div class="flex items-center mt-3">
 										{isInEditableUrl && !isOrderConfirmation ? (
 											<QuantityDropdown
-												id={`quantity-${item.productVariantId}`}
-												value={item.quantity}
+												id={`quantity-${line.sku}`}
+												value={line.quantity}
 												options={quantityOpts}
 												theme={isCheckoutView ? 'dark' : 'light'}
 												disabled={!isInEditableUrl}
 												onChange$={handleQtyChange$}
 											/>
 										) : (
-											<span class={`text-[12px] ${isCheckoutView ? 'text-[rgba(253,250,246,0.7)]' : 'text-[rgba(26,26,26,0.7)]'}`}>Qty {item.quantity}</span>
+											<span class={`text-[12px] ${isCheckoutView ? 'text-[rgba(253,250,246,0.7)]' : 'text-[rgba(26,26,26,0.7)]'}`}>Qty {line.quantity}</span>
 										)}
 									</div>
 								)}
@@ -262,7 +263,7 @@ export default component$<{
 								</span>
 								{isInEditableUrl && (
 									<button
-										data-variant-id={item.productVariantId}
+										data-sku={line.sku}
 										aria-label="Remove item"
 										class={`p-1.5 -mr-1 transition-colors duration-150 cursor-pointer bg-transparent border-0 ${isCheckoutView ? 'text-[rgba(253,250,246,0.35)] hover:text-[rgba(253,250,246,0.7)]' : 'text-[rgba(26,26,26,0.28)] hover:text-[rgba(26,26,26,0.65)]'}`}
 										onClick$={handleRemoveItem$}
