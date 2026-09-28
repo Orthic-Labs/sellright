@@ -56,22 +56,22 @@ describe('newsletter-signup SSRF guard', () => {
 });
 
 describe('newsletter-signup rate limit bucket', () => {
-  it('allows attempts under the threshold and blocks once exceeded, with a retry-after', () => {
+  it('allows attempts under the threshold and blocks once exceeded, with a retry-after', async () => {
     const ip = `test-ip-${Math.random()}`;
     for (let i = 0; i < 5; i++) {
-      expect(newsletterRetryAfter(ip)).toBe(0);
-      recordNewsletterAttempt(ip);
+      expect(await newsletterRetryAfter(ip)).toBe(0);
+      await recordNewsletterAttempt(ip);
     }
-    const retry = newsletterRetryAfter(ip);
+    const retry = await newsletterRetryAfter(ip);
     expect(retry).toBeGreaterThan(0);
     expect(retry).toBeLessThanOrEqual(15 * 60);
   });
 
-  it('tracks separate IPs independently', () => {
+  it('tracks separate IPs independently', async () => {
     const ipA = `test-ip-a-${Math.random()}`;
     const ipB = `test-ip-b-${Math.random()}`;
-    for (let i = 0; i < 5; i++) recordNewsletterAttempt(ipA);
-    expect(newsletterRetryAfter(ipA)).toBeGreaterThan(0);
-    expect(newsletterRetryAfter(ipB)).toBe(0);
+    for (let i = 0; i < 5; i++) await recordNewsletterAttempt(ipA);
+    expect(await newsletterRetryAfter(ipA)).toBeGreaterThan(0);
+    expect(await newsletterRetryAfter(ipB)).toBe(0);
   });
 });

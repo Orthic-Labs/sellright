@@ -216,6 +216,14 @@ const EnvSchema = z.object({
   // Manifest generator / multi-store: which store to generate for.
   STORE_SLUG: z.string().optional(),
   CATALOG_MANIFEST_JOBS_ENABLED: z.enum(['0', '1']).default('0'),
+  // SELLRIGHT-ISSUES P1: shared rate-limit backend. 'postgres' (default) is
+  // shared across every API process via the rate_limit_attempt table
+  // (migration 0078) — a process-local in-memory limiter is silently
+  // ineffective the moment there's more than one API instance. 'memory' is
+  // an explicit single-process opt-out (also what tests use, since the unit
+  // lane runs with no database). Never Redis — Postgres is the store's
+  // already-required dependency.
+  RATE_LIMIT_BACKEND: z.enum(['postgres', 'memory']).optional(),
   // APNs (mobile push for the admin app). ALL optional — with any of them unset
   // the push sender no-ops with a log line, exactly like the SMTP mailer. A
   // deployment without a mobile app never has to think about these.

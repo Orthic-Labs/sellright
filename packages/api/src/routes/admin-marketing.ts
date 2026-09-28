@@ -4,7 +4,7 @@ import { and, desc, eq, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { assertSafeOutboundUrl, safeOutboundFetch } from '../security/outbound-url.js';
-import { invalidateStoreCache } from '../store-context.js';
+import { broadcastStoreCacheInvalidation } from '../store-context.js';
 import { HttpError, J, errBody, money, requireAdmin, requireStore, requireWrite, requireManage, requirePermission, guard, Page } from './admin-helpers.js';
 import { err as logErr } from '../lib/logger.js';
 import { syncPromotionAffiliate } from '../affiliate/onboarding.js';
@@ -228,7 +228,7 @@ adminMarketing.openapi(
       const config = { ...((row?.config as object) ?? {}), listmonk: safeCfg };
       await tx.update(s.store).set({ config }).where(eq(s.store.id, st.storeId));
     });
-    invalidateStoreCache(st.slug); // PERF-2 — match admin-settings.ts pattern
+    await broadcastStoreCacheInvalidation(st.slug); // PERF-2 — match admin-settings.ts pattern
     return c.json({ ok: true, lists: lists.data?.total ?? 0 }, 200);
   }),
 );

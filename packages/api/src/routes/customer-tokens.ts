@@ -78,10 +78,10 @@ customerTokens.openapi(
     const { email: rawEmail, turnstileToken } = c.req.valid('json');
     const email = normalizeEmail(rawEmail);
     const ip = clientIp(c);
-    const retry = loginRetryAfter(ip, `forgot:${email}`);
+    const retry = await loginRetryAfter(ip, `forgot:${email}`);
     if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
     if (!(await turnstileOk(st.config, turnstileToken, ip))) {
-      recordLoginFailure(ip, `forgot:${email}`);
+      await recordLoginFailure(ip, `forgot:${email}`);
       return c.json({ error: 'verification failed' }, 403);
     }
     await withStore(st.id, async (tx) => {
@@ -94,7 +94,7 @@ customerTokens.openapi(
       // and the outbox retries delivery instead of dropping it (SR-12).
       await enqueuePasswordReset(tx, st.id, storeEmailCtx(st), email, { url, ttlHours: TTL_HOURS });
     });
-    recordLoginFailure(ip, `forgot:${email}`); // throttle: per-IP+email bucket, not per-account,
+    await recordLoginFailure(ip, `forgot:${email}`); // throttle: per-IP+email bucket, not per-account,
     // so an attacker can't lock a real customer out by spamming forgot-password,
     // but the attacker themselves is throttled.
     return c.json({ ok: true }, 200);
@@ -151,7 +151,7 @@ customerTokens.openapi(
     // the throttle for that IP, but multiple customers behind the same NAT
     // still throttles cleanly.
     const bucket = `verify:${ip}`;
-    const retry = loginRetryAfter(ip, bucket);
+    const retry = await loginRetryAfter(ip, bucket);
     if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
     const ok = await withStore(st.id, async (tx): Promise<boolean> => {
       const [row] = await tx.select({ id: s.customerToken.id, customerId: s.customerToken.customerId }).from(s.customerToken)
@@ -161,7 +161,7 @@ customerTokens.openapi(
       await tx.update(s.customerToken).set({ usedAt: new Date() }).where(eq(s.customerToken.id, row.id));
       return true;
     });
-    if (!ok) { recordLoginFailure(ip, bucket); return c.json({ error: 'token is invalid, expired, or already used' }, 409); }
+    if (!ok) { await recordLoginFailure(ip, bucket); return c.json({ error: 'token is invalid, expired, or already used' }, 409); }
     return c.json({ ok: true }, 200);
   },
 );
@@ -191,7 +191,7 @@ customerTokens.openapi(
     const newEmail = normalizeEmail(rawNewEmail);
     const ip = clientIp(c);
     const bucket = `emailchange:${newEmail}`;
-    const retry = loginRetryAfter(ip, bucket);
+    const retry = await loginRetryAfter(ip, bucket);
     if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
     const out = await withStore(st.id, async (tx): Promise<'unauth' | 'wrong' | 'same' | 'taken' | 'ok'> => {
       const token = customerToken(c);
@@ -214,7 +214,7 @@ customerTokens.openapi(
       await tx.insert(s.auditLog).values({ storeId: st.id, actor: cust.email, entity: 'customer', entityId: cust.id, action: 'email_change_requested' });
       return 'ok';
     });
-    recordLoginFailure(ip, bucket); // mailbomb guard for the target address
+    await recordLoginFailure(ip, bucket); // mailbomb guard for the target address
     if (out === 'unauth') return c.json({ error: 'not authenticated' }, 401);
     if (out === 'wrong') return c.json({ error: 'password is incorrect' }, 401);
     if (out === 'same') return c.json({ error: 'that is already your email address' }, 409);
@@ -241,7 +241,7 @@ customerTokens.openapi(
     const tokenHash = hashToken(token);
     const ip = clientIp(c);
     const bucket = `verify-change:${ip}`;
-    const retry = loginRetryAfter(ip, bucket);
+    const retry = await loginRetryAfter(ip, bucket);
     if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
     const out = await withStore(st.id, async (tx): Promise<'invalid' | 'taken' | 'ok'> => {
       // Atomic consume: used_at flips only when the token is still pending —
@@ -281,7 +281,7 @@ customerTokens.openapi(
       }
       return 'ok';
     });
-    if (out !== 'ok') { recordLoginFailure(ip, bucket); return c.json({ error: 'token is invalid, expired, or already used' }, 409); }
+    if (out !== 'ok') { await recordLoginFailure(ip, bucket); return c.json({ error: 'token is invalid, expired, or already used' }, 409); }
     return c.json({ ok: true }, 200);
   },
 );

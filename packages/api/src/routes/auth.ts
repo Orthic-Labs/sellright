@@ -103,11 +103,11 @@ auth.openapi(
     // bucket (NOT per-account — an attacker could lock a real customer out).
     const regIp = clientIp(c);
     const regBucket = `register:${regIp}:${email}`;
-    const regRetry = loginRetryAfter(regIp, regBucket);
+    const regRetry = await loginRetryAfter(regIp, regBucket);
     if (regRetry > 0) return c.json({ error: `too many attempts — try again in ${regRetry}s` }, 429);
     // PAR-06: server-side Turnstile when the store config carries a secret.
     if (!(await turnstileOk(st.config, turnstileToken, regIp))) {
-      recordLoginFailure(regIp, regBucket);
+      await recordLoginFailure(regIp, regBucket);
       return c.json({ error: 'verification failed' }, 403);
     }
     const passwordHash = await hashPassword(password);
@@ -127,8 +127,8 @@ auth.openapi(
       await enqueueEmailVerify(tx, st.id, emailStoreCtx(st), email, { url: verifyUrl });
       return { token, id: cust!.id, firstName: cust!.firstName, lastName: cust!.lastName };
     });
-    if ('taken' in out) { recordLoginFailure(regIp, regBucket); return c.json({ error: 'email already registered' }, 409); }
-    clearLoginAttempts(regIp, regBucket);
+    if ('taken' in out) { await recordLoginFailure(regIp, regBucket); return c.json({ error: 'email already registered' }, 409); }
+    await clearLoginAttempts(regIp, regBucket);
     setCustomerCookies(c, out.token, newCsrf(), customerCookieSeconds(st));
     return c.json({ token: out.token, customer: { id: out.id, email, firstName: out.firstName, lastName: out.lastName, phone: null, emailVerified: false, isMigrated: false } }, 200);
   },
@@ -153,10 +153,10 @@ auth.openapi(
     const { email: rawEmail, password, turnstileToken, rememberMe } = c.req.valid('json');
     const email = normalizeEmail(rawEmail);
     const ip = clientIp(c);
-    const retry = loginRetryAfter(ip, email);
+    const retry = await loginRetryAfter(ip, email);
     if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
     if (!(await turnstileOk(st.config, turnstileToken, ip))) {
-      recordLoginFailure(ip, email);
+      await recordLoginFailure(ip, email);
       return c.json({ error: 'verification failed' }, 403);
     }
     const out = await withStore(st.id, async (tx): Promise<{ ok: false } | { ok: 'not_verified' } | { ok: true; token: string; ttlMs: number; customer: z.infer<typeof CustomerOut> }> => {
@@ -180,15 +180,15 @@ auth.openapi(
       const token = await createSession(tx, st.id, cust.id, policy);
       return { ok: true, token, ttlMs: policy.ttlMs, customer: { id: cust.id, email: cust.email, firstName: cust.firstName, lastName: cust.lastName, phone: cust.phone, emailVerified: cust.emailVerified, isMigrated: false } };
     });
-    if (out.ok === false) { recordLoginFailure(ip, email); return c.json({ error: 'invalid email or password' }, 401); }
+    if (out.ok === false) { await recordLoginFailure(ip, email); return c.json({ error: 'invalid email or password' }, 401); }
     if (out.ok === 'not_verified') {
       // A correct password DOES clear the login-failure counter here — this is
       // a legitimate credential, just an unverified account — so a real user
       // isn't throttled out of resending their verification email.
-      clearLoginAttempts(ip, email);
+      await clearLoginAttempts(ip, email);
       return c.json({ error: 'please verify your email before signing in', code: 'not_verified' as const }, 403);
     }
-    clearLoginAttempts(ip, email);
+    await clearLoginAttempts(ip, email);
     // Cookie Max-Age tracks the SAME (possibly shortened) TTL the session row
     // just got — rememberMe:false must not hand out a long-lived cookie for a
     // short-lived session.
@@ -218,9 +218,9 @@ auth.openapi(
     const email = normalizeEmail(c.req.valid('json').email);
     const ip = clientIp(c);
     const bucket = `resendverify:${email}`;
-    const retry = loginRetryAfter(ip, bucket);
+    const retry = await loginRetryAfter(ip, bucket);
     if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
-    recordLoginFailure(ip, bucket);
+    await recordLoginFailure(ip, bucket);
     await withStore(st.id, async (tx) => {
       const [cust] = await tx.select({ id: s.customer.id, emailVerified: s.customer.emailVerified })
         .from(s.customer).where(eq(s.customer.email, email)).limit(1);
@@ -393,7 +393,7 @@ auth.openapi(
     // Attempt-counted in practice: every request records — each one can trigger
     // an outgoing email, so it's abuse-relevant whether or not an account exists.
     const bucket = `magiclink:${email}`;
-    const retry = loginRetryAfter(ip, bucket);
+    const retry = await loginRetryAfter(ip, bucket);
     if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
     await withStore(st.id, async (tx) => {
       const [cust] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, email)).limit(1);
@@ -402,7 +402,7 @@ auth.openapi(
       const url = `${resolveStorefrontUrl(emailStoreCtx(st))}${policy.path}?token=${raw}`;
       await enqueueMagicLink(tx, st.id, emailStoreCtx(st), email, { url, ttlMinutes: policy.ttlMinutes });
     });
-    recordLoginFailure(ip, bucket);
+    await recordLoginFailure(ip, bucket);
     return c.json({ ok: true }, 200);
   },
 );
@@ -481,9 +481,9 @@ auth.openapi(
   async (c) => {
     const st = await resolveStoreFromCtx(c);
     const ip = clientIp(c);
-    const retry = loginRetryAfter(ip, `checkemail:${ip}`);
+    const retry = await loginRetryAfter(ip, `checkemail:${ip}`);
     if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
-    recordLoginFailure(ip, `checkemail:${ip}`); // count every probe toward the throttle
+    await recordLoginFailure(ip, `checkemail:${ip}`); // count every probe toward the throttle
     const query = c.req.valid('query');
     if (query.honeypot || !(await turnstileOk(st.config, query.turnstileToken, ip))) {
       return c.json({ exists: false }, 200);

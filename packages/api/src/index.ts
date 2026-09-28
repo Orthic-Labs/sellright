@@ -5,6 +5,7 @@ import { env } from './env.js';
 import { registerProcessErrorHandlers } from './lib/process-error-handlers.js';
 import { pool } from './db/client.js';
 import { startJobScheduler } from './jobs/scheduler.js';
+import { startStoreCacheInvalidationListener } from './store-context.js';
 import { log } from './lib/logger.js';
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
@@ -21,6 +22,10 @@ const server = serve({ fetch: app.fetch, port: env.PORT }, (info) => {
   log.info('api listening', { url: `http://localhost:${info.port}`, env: env.NODE_ENV, port: info.port });
   log.info('openapi published', { url: `http://localhost:${info.port}/v1/openapi.json` });
   startJobScheduler();
+  // SELLRIGHT-ISSUES P2: cross-process store-config cache invalidation
+  // (LISTEN side — see store-context.ts). Best-effort: a failure here still
+  // leaves the 60s TTL as the fallback, so it never blocks startup.
+  startStoreCacheInvalidationListener().catch((e) => log.info('store cache invalidation listener failed to start (60s TTL is the fallback)', { err: String(e) }));
 });
 
 let shuttingDown = false;

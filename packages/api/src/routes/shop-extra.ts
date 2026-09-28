@@ -31,7 +31,7 @@ shopExtra.openapi(
     const st = await resolveStoreFromCtx(c);
     const { code, email } = c.req.valid('query');
     const key = JSON.stringify([st.id, clientIp(c), email.toLowerCase()]);
-    const retry = trackingRetryAfter(key);
+    const retry = await trackingRetryAfter(key);
     if (retry) {
       c.header('Retry-After', String(retry));
       return c.json({ error: 'too many tracking attempts' }, 429);
@@ -74,7 +74,7 @@ shopExtra.openapi(
       };
     });
     if (!out) return c.json({ error: 'order not found for that code + email' }, 404);
-    clearTrackingAttempts(key);
+    await clearTrackingAttempts(key);
     return c.json(out, 200);
   },
 );
@@ -212,9 +212,9 @@ shopExtra.openapi(
   async (c) => {
     // 1. Per-IP throttle (gate 1). Same shape as auth.ts's check-email probe.
     const ip = clientIp(c);
-    const retry = newsletterRetryAfter(ip);
+    const retry = await newsletterRetryAfter(ip);
     if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
-    recordNewsletterAttempt(ip);
+    await recordNewsletterAttempt(ip);
 
     const st = await resolveStoreFromCtx(c);
     // zod-openapi v1 fails to infer valid('json') for this public POST — same

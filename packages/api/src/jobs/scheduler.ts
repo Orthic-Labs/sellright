@@ -35,6 +35,7 @@ import { sweepRestockEvents } from '../routes/restock.js';
 import { withLeaderLock, type LeaderLockedJob } from './leader-lock.js';
 import { log, err as logErr } from '../lib/logger.js';
 import { publishCatalogManifest } from '../manifest/catalog.js';
+import { reapRateLimitAttempts } from '../auth/rate-limit-backend.js';
 
 const HOUR = 3_600_000;
 // OBS-1: job-level log line passes through the structured logger so it carries
@@ -164,4 +165,11 @@ export function startJobScheduler(): void {
   const processedEventReaperRetentionDays = env.JOBS_PROCESSED_EVENT_REAPER_RETENTION_DAYS ?? 30;
   every(HOUR, 'processed-event-reaper', 'processed-event-reaper', () =>
     reapProcessedEvents({ apply: processedEventReaperApply, retentionDays: processedEventReaperRetentionDays, log: jobLog }));
+  // SELLRIGHT-ISSUES P1: shared rate-limit backend retention cleanup. Every
+  // window here is <=1hr, so rows older than a day are unambiguously stale —
+  // always applies (no dry-run flag), same posture as cart-maintenance.ts.
+  every(HOUR, 'rate-limit-reaper', 'rate-limit-reaper', async () => {
+    const r = await reapRateLimitAttempts(24);
+    if (r.deleted) jobLog(`[jobs:rate-limit] reaped=${r.deleted}`);
+  });
 }

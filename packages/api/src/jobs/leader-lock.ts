@@ -52,6 +52,9 @@ const JOB_KEYS = {
   // (routes/restock.ts sweepRestockEvents).
   'restock-notify': NAMESPACE | 12n,
   'catalog-manifest': NAMESPACE | 13n,
+  // SELLRIGHT-ISSUES P1: retention cleanup for the shared rate-limit backend's
+  // rate_limit_attempt table (auth/rate-limit-backend.ts).
+  'rate-limit-reaper': NAMESPACE | 14n,
 } as const satisfies Record<string, bigint>;
 
 export type LeaderLockedJob = keyof typeof JOB_KEYS;

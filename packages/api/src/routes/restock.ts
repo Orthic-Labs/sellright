@@ -105,9 +105,9 @@ restockRoutes.openapi(
     if (body.honeypot || body.website) return c.json({ ok: true }, 200); // bot — fake success
 
     const ip = clientIp(c);
-    const retry = restockRetryAfter(ip);
+    const retry = await restockRetryAfter(ip);
     if (retry > 0) return c.json({ error: `too many requests — try again in ${retry}s` }, 429);
-    recordRestockAttempt(ip);
+    await recordRestockAttempt(ip);
 
     const st = await resolveStoreFromCtx(c);
 

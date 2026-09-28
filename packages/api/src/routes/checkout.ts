@@ -238,7 +238,7 @@ checkout.openapi(
     // bot behind a credential-stuffing script).
     const ip = clientIp(c);
     const checkoutBucket = `checkout:${token ?? ip}`;
-    const checkoutRetry = loginRetryAfter(ip, checkoutBucket);
+    const checkoutRetry = await loginRetryAfter(ip, checkoutBucket);
     if (checkoutRetry > 0) return c.json({ error: `too many checkouts — try again in ${checkoutRetry}s` }, 429);
 
     const fingerprint = checkoutFingerprint(body);

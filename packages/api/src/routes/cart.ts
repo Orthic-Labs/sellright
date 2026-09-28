@@ -379,9 +379,9 @@ cart.openapi(
     // SEC: generous per-IP throttle — a scripted flood of cart creates writes
     // an unbounded number of cart rows; legitimate shoppers never approach 60/min.
     const ip = clientIp(c);
-    const retry = cartRetryAfter(ip);
+    const retry = await cartRetryAfter(ip);
     if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
-    recordCartAttempt(ip);
+    await recordCartAttempt(ip);
     const st = await resolveStoreFromCtx(c);
     const body = c.req.valid('json');
     const authTok = customerToken(c);
