@@ -15,7 +15,7 @@ import { contactRoutes } from './contact.js';
 import { restockRoutes } from './restock.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
 import { clearTrackingAttempts, trackingRetryAfter } from './shop-extra.tracking-limit.js';
-import { loadOrderPayments } from './order-facts.js';
+import { loadOrderPayments, loadOrderStatusFacts } from './order-facts.js';
 
 export const shopExtra = new OpenAPIHono();
 
@@ -57,8 +57,9 @@ shopExtra.openapi(
       // R18: real payment facts alongside order.state, same as the public
       // receipt (orders.ts) and account order detail (account.ts).
       const payments = await loadOrderPayments(tx, o.id);
+      const { status, paymentStatus, fulfillmentStatus } = await loadOrderStatusFacts(tx, o);
       return {
-        code: o.code, state: o.state, placedAt: o.placedAt?.toISOString() ?? null,
+        code: o.code, state: o.state, status, paymentStatus, fulfillmentStatus, placedAt: o.placedAt?.toISOString() ?? null,
         currency: o.currency,
         subtotal: o.subtotal, shippingTotal: o.shippingTotal, taxTotal: o.taxTotal,
         discountTotal: o.discountTotal, grandTotal: o.grandTotal,

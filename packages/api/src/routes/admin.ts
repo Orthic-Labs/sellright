@@ -17,6 +17,8 @@ import { normalizeEmail } from '../auth/email.js';
 import { enqueueShippingNotification } from '../email/dispatch.js';
 import { emitEvent } from '../webhooks/emit.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
+import { deriveFulfillmentStatus, derivePaymentStatus, wirePaymentState } from '../orders/status.js';
+import { fulfillmentStatusSql, paymentStatusSql } from '../orders/status-sql.js';
 
 export const admin = new OpenAPIHono();
 
@@ -95,24 +97,39 @@ admin.openapi(
 admin.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/orders', summary: 'List orders',
-    request: { query: z.object({ state: z.string().optional(), q: z.string().optional(), preOrder: z.coerce.boolean().optional(), trashed: z.coerce.boolean().default(false), page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(25) }) },
+    request: { query: z.object({
+      state: z.string().optional(), q: z.string().optional(), preOrder: z.coerce.boolean().optional(), trashed: z.coerce.boolean().default(false),
+      // Wire-facing status filters (BREAKING, pre-1.0 — see CHANGELOG.md), on
+      // top of the legacy combined `state` filter above.
+      status: z.enum(['open', 'completed', 'cancelled', 'archived']).optional(),
+      paymentStatus: z.enum(['pending', 'authorized', 'paid', 'partially_refunded', 'refunded', 'voided', 'failed']).optional(),
+      fulfillmentStatus: z.enum(['unfulfilled', 'partially_fulfilled', 'fulfilled', 'partially_delivered', 'delivered']).optional(),
+      page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(25),
+    }) },
     responses: { 200: { description: 'OK', content: J(Page) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c);
-    const { state, q, preOrder, trashed, page, pageSize } = c.req.valid('query');
+    const { state, q, preOrder, trashed, status, paymentStatus, fulfillmentStatus, page, pageSize } = c.req.valid('query');
     const out = await withStore(st.storeId, async (tx) => {
       const conds = [] as ReturnType<typeof eq>[];
       // Trash filter FIRST: ?trashed=1 shows ONLY soft-deleted orders; default
       // shows only live ones. Without this, trashed orders leak into every list.
       conds.push((trashed ? sql`${s.order.deletedAt} is not null` : sql`${s.order.deletedAt} is null`) as never);
       if (state) conds.push(sql`${s.order.state} = ${state}` as never);
+      if (status) conds.push(eq(s.order.status, status) as never);
+      if (paymentStatus) conds.push(sql`${paymentStatusSql()} = ${paymentStatus}` as never);
+      if (fulfillmentStatus) conds.push(sql`${fulfillmentStatusSql()} = ${fulfillmentStatus}` as never);
       if (preOrder) conds.push(eq(s.order.isPreOrder, true) as never);
       if (q) conds.push(or(ilike(s.order.code, `%${q}%`), ilike(s.customer.email, `%${q}%`)) as never);
       const where = conds.length ? and(...conds) : undefined;
       const base = tx
-        .select({ code: s.order.code, state: s.order.state, isPreOrder: s.order.isPreOrder, grandTotal: s.order.grandTotal, currency: s.order.currency, placedAt: s.order.placedAt, createdAt: s.order.createdAt, email: s.customer.email })
+        .select({
+          code: s.order.code, state: s.order.state, status: s.order.status,
+          paymentStatus: paymentStatusSql(), fulfillmentStatus: fulfillmentStatusSql(),
+          isPreOrder: s.order.isPreOrder, grandTotal: s.order.grandTotal, currency: s.order.currency, placedAt: s.order.placedAt, createdAt: s.order.createdAt, email: s.customer.email,
+        })
         .from(s.order)
         .leftJoin(s.customer, eq(s.customer.id, s.order.customerId))
         .$dynamic();
@@ -152,8 +169,10 @@ admin.openapi(
         const [cu] = await tx.select({ id: s.customer.id, email: s.customer.email, firstName: s.customer.firstName, lastName: s.customer.lastName, phone: s.customer.phone }).from(s.customer).where(eq(s.customer.id, o.customerId)).limit(1);
         customer = cu ?? null;
       }
+      const paymentStatus = derivePaymentStatus(o.state, payments);
+      const fulfillmentStatus = deriveFulfillmentStatus(lines, fulfillments);
       return {
-        code: o.code, state: o.state, isPreOrder: o.isPreOrder, currency: o.currency,
+        code: o.code, state: o.state, status: o.status, paymentStatus, fulfillmentStatus, isPreOrder: o.isPreOrder, currency: o.currency,
         subtotal: o.subtotal, discountTotal: o.discountTotal, shippingTotal: o.shippingTotal, taxTotal: o.taxTotal, grandTotal: o.grandTotal,
         placedAt: o.placedAt ? o.placedAt.toISOString() : null, createdAt: o.createdAt.toISOString(),
         shippingAddress: o.shippingAddress ?? null, billingAddress: o.billingAddress ?? null,
@@ -162,7 +181,10 @@ admin.openapi(
         // `lines[].orderLineId` on — without it no consumer of this response can
         // build a per-line refund.
         lines: lines.map((l) => ({ id: l.id, sku: l.variantSku, name: l.variantName, quantity: l.quantity, unitPrice: l.unitPrice, lineTotal: l.lineTotal, fulfilledQty: l.fulfilledQty, refundedQty: l.refundedQty })),
-        payments: payments.map((p) => ({ method: p.method, amount: p.amount, state: p.state, providerRef: p.providerRef, createdAt: p.createdAt.toISOString() })),
+        // `state` here is the individual PAYMENT record's wire state (Settled
+        // -> captured — BREAKING, pre-1.0), distinct from the order-level
+        // `paymentStatus` above. See orders/status.ts.
+        payments: payments.map((p) => ({ method: p.method, amount: p.amount, state: wirePaymentState(p.state), providerRef: p.providerRef, createdAt: p.createdAt.toISOString() })),
         fulfillments: fulfillments.map((f) => ({ id: f.id, state: f.state, trackingCode: f.trackingCode, carrier: f.carrier, createdAt: f.createdAt.toISOString() })),
         events: events.map((e) => ({ action: e.action, fromState: e.fromState, toState: e.toState, actor: e.actor, at: e.at.toISOString() })),
       };

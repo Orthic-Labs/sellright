@@ -100,7 +100,7 @@ export function CommandPalette() {
     { id: 'go:activity', label: 'Go to Activity', section: 'Navigate', keywords: ['activity','audit log'], to: '/activity', icon: Activity },
     { id: 'go:settings', label: 'Go to Settings', section: 'Navigate', keywords: ['settings','config'], to: '/settings', icon: Settings },
     { id: 'go:staff', label: 'Go to Staff', section: 'Navigate', keywords: ['staff','team','permissions','roles'], to: '/staff', icon: Shield },
-    { id: 'go:tax-zones', label: 'Go to Tax zones', section: 'Navigate', keywords: ['tax'], to: '/tax-zones', icon: Receipt },
+    { id: 'go:tax-zones', label: 'Go to Taxes', section: 'Navigate', keywords: ['tax'], to: '/tax-zones', icon: Receipt },
     { id: 'go:webhooks', label: 'Go to Webhooks', section: 'Navigate', keywords: ['webhooks','events'], to: '/webhooks', icon: Webhook },
     { id: 'go:currency-rates', label: 'Go to Currencies', section: 'Navigate', keywords: ['currencies','fx'], to: '/currency-rates', icon: Coins },
 

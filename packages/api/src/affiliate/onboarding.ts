@@ -11,7 +11,8 @@
  * in the database from 0052 onward.)
  *
  * syncPromotionAffiliate() is the drop-in for admin-marketing.ts's
- * POST/PATCH /v1/admin/promotions handlers — that file is owned by another
+ * POST/PATCH /v1/admin/discounts handlers (/v1/admin/promotions is now a
+ * deprecated alias for the same handler) — that file is owned by another
  * lane, so the call-site is reported, not edited:
  *
  *   await syncPromotionAffiliate(tx, st.storeId, p.id, admin.email);

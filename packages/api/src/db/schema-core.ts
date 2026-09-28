@@ -28,6 +28,15 @@ export const orderState = pgEnum('order_state', [
   'Refunded',
   'Cancelled',
 ]);
+// NOTE: `order.status` (schema-orders.ts) — the wire-facing open|completed|
+// cancelled|archived projection of the row above — is declared `text()`,
+// NOT a pgEnum like the others on this page. Postgres enum I/O/cast
+// functions are STABLE, not IMMUTABLE (ALTER TYPE ... ADD VALUE can change
+// the catalog), so a GENERATED ALWAYS AS expression may never resolve to an
+// enum type — Postgres rejects it at DDL time with "generation expression is
+// not immutable" regardless of how the expression casts. `text()` matches
+// the existing plain-text-status convention already used elsewhere in this
+// schema (webhookDelivery.status, emailOutbox.status, subscriber.status).
 export const fulfillmentState = pgEnum('fulfillment_state', ['Pending', 'Shipped', 'Delivered', 'Cancelled']);
 export const fulfillmentType = pgEnum('fulfillment_type', ['physical', 'digital_download', 'license', 'update_pass']);
 export const paymentState = pgEnum('payment_state', [
