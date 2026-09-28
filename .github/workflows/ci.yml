@@ -693,7 +693,13 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: playwright-report
-          path: packages/storefront/playwright-report/
+          # test-results/ (traces + only-on-failure screenshots) is where a
+          # failure actually lands per playwright.config.ts's `use` block —
+          # playwright-report/ only gets content from the 'html' reporter.
+          # Upload both so a failed run leaves something to inspect.
+          path: |
+            packages/storefront/playwright-report/
+            packages/storefront/test-results/
           retention-days: 7
 
       - name: Stop the API

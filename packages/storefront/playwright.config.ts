@@ -23,7 +23,11 @@ export default defineConfig({
 	forbidOnly: !!process.env.CI,
 	retries: process.env.CI ? 1 : 0,
 	workers: 1,
-	reporter: process.env.CI ? [['github'], ['list']] : [['list']],
+	// 'html' (CI only) so a failure leaves a browsable report + the
+	// retain-on-failure traces/screenshots somewhere the workflow can upload —
+	// without it, `playwright-report/` never gets created and CI's
+	// "Upload Playwright report on failure" step has nothing to attach.
+	reporter: process.env.CI ? [['github'], ['html', { open: 'never' }], ['list']] : [['list']],
 	timeout: 30_000,
 	use: {
 		baseURL: BASE_URL,
