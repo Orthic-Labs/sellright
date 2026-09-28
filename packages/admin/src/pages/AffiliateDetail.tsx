@@ -6,6 +6,7 @@ import { api } from '../api';
 import { useAuth } from '../auth';
 import { money, dateTime } from '../lib/format';
 import { Loading, ErrorNote, Badge, Spinner } from '../components/ui';
+import { useConfirmDialog } from '../components/ConfirmDialog';
 
 interface Detail {
   id: string; email: string; code: string; accessToken: string; commissionPct: number;
@@ -19,6 +20,7 @@ export default function AffiliateDetailPage() {
   const qc = useQueryClient();
   const cur = store?.currency ?? 'USD';
   const [txRef, setTxRef] = useState('');
+  const { confirm, dialog: confirmDialog } = useConfirmDialog();
 
   const key = ['affiliate', store?.slug, id];
   const { data: a, isLoading, error } = useQuery({ queryKey: key, queryFn: () => api.get<Detail>(`/affiliates/${id}`) });
@@ -31,6 +33,7 @@ export default function AffiliateDetailPage() {
 
   return (
     <>
+      {confirmDialog}
       <Link to="/affiliates" className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-ink mb-3"><ArrowLeft size={15} /> Affiliates</Link>
       <h1 className="text-xl font-semibold tracking-tight mb-1">{a.email}</h1>
       <div className="text-sm text-gray-500 mb-5">Code <span className="font-mono">{a.code}</span> · {a.commissionPct}% commission</div>
@@ -45,7 +48,7 @@ export default function AffiliateDetailPage() {
         <div className="text-sm font-semibold mb-2">Self-serve dashboard link</div>
         <div className="flex items-center gap-2">
           <input className="input font-mono text-xs" readOnly value={dashUrl} />
-          <button className="btn-ghost" onClick={() => navigator.clipboard?.writeText(dashUrl)}><Copy size={15} /></button>
+          <button className="btn-ghost" aria-label="Copy dashboard link" onClick={() => navigator.clipboard?.writeText(dashUrl)}><Copy size={15} /></button>
         </div>
       </div>
 
@@ -67,7 +70,7 @@ export default function AffiliateDetailPage() {
             <div className="text-sm font-semibold mb-2">Record payout</div>
             <input className="input mb-2" placeholder="payment reference (optional)" value={txRef} onChange={(e) => setTxRef(e.target.value)} />
             {settle.error && <div className="mb-2"><ErrorNote message={(settle.error as Error).message} /></div>}
-            <button className="btn-primary w-full" disabled={a.unsettled <= 0 || settle.isPending} onClick={() => { if (confirm(`Record a payout of ${money(a.unsettled, cur)} to ${a.email}?`)) settle.mutate(); }}>
+            <button className="btn-primary w-full" disabled={a.unsettled <= 0 || settle.isPending} onClick={async () => { if (await confirm({ title: `Record a payout of ${money(a.unsettled, cur)} to ${a.email}?`, confirmLabel: 'Record payout' })) settle.mutate(); }}>
               {settle.isPending ? <Spinner className="text-white" /> : `Pay outstanding ${money(a.unsettled, cur)}`}
             </button>
           </div>

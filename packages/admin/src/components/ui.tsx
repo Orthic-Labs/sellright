@@ -1,7 +1,37 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { MoreHorizontal, AlertCircle, CheckCircle2, Info, AlertTriangle, RefreshCw } from 'lucide-react';
+import { MoreHorizontal, AlertCircle, CheckCircle2, Info, AlertTriangle, RefreshCw, X } from 'lucide-react';
 export { Field, FormSection, KpiCard, Pagination } from './ui-forms';
+
+/* ------------------------------------------------------------------ *
+ * Modal — generic dialog shell (see ConfirmDialog for the yes/no case)
+ * ------------------------------------------------------------------ */
+
+export function Modal({ open, title, onClose, children, width = 'max-w-md' }: {
+  open: boolean; title: string; onClose: () => void; children: ReactNode; width?: string;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+  if (!open) return null;
+  return (
+    <>
+      <div className="fixed inset-0 z-40 bg-black/30 animate-fade-in" onClick={onClose} aria-hidden="true" />
+      <div className={`fixed inset-x-0 top-[8vh] z-50 mx-auto w-full ${width} px-3`} role="dialog" aria-modal="true" aria-label={title}>
+        <div className="card shadow-lg max-h-[84vh] overflow-y-auto">
+          <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
+            <h2 className="text-sm font-semibold">{title}</h2>
+            <button aria-label="Close dialog" className="text-gray-400 hover:text-ink" onClick={onClose}><X size={18} /></button>
+          </div>
+          <div className="p-4">{children}</div>
+        </div>
+      </div>
+    </>
+  );
+}
 
 export function Spinner({ className = '' }: { className?: string }) {
   return (

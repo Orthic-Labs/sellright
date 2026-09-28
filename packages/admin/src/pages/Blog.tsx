@@ -4,6 +4,7 @@ import { Plus, Trash2 } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../auth';
 import { Loading, ErrorNote, PageHeader, EmptyState, Badge, Spinner } from '../components/ui';
+import { useConfirmDialog } from '../components/ConfirmDialog';
 import { date } from '../lib/format';
 
 interface Post { id: string; title: string; slug: string; isPublished: boolean; publishDate: string | null; authorName: string | null; }
@@ -12,6 +13,7 @@ interface Draft { id?: string; title: string; body: string; excerpt: string; isP
 export default function Blog() {
   const { store } = useAuth();
   const qc = useQueryClient();
+  const { confirm, dialog: confirmDialog } = useConfirmDialog();
   const key = ['blog', store?.slug];
   const { data, isLoading, error } = useQuery({ queryKey: key, queryFn: () => api.get<{ items: Post[] }>('/blog') });
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -26,6 +28,7 @@ export default function Blog() {
 
   return (
     <>
+      {confirmDialog}
       <PageHeader title="Blog" subtitle="Posts for the storefront blog." actions={
         <button className="btn-primary" onClick={() => setDraft({ title: '', body: '', excerpt: '', isPublished: false })}><Plus size={16} /> New post</button>
       } />
@@ -40,7 +43,7 @@ export default function Blog() {
           <div className="flex gap-2">
             <button className="btn-primary" disabled={save.isPending || !draft.title.trim()} onClick={() => save.mutate()}>{save.isPending ? <Spinner className="text-white" /> : 'Save'}</button>
             <button className="btn-ghost" onClick={() => setDraft(null)}>Cancel</button>
-            {draft.id && <button className="btn-danger ml-auto" onClick={() => { if (confirm('Delete this post?')) del.mutate(draft.id!); }}><Trash2 size={15} /> Delete</button>}
+            {draft.id && <button className="btn-danger ml-auto" onClick={async () => { if (await confirm({ title: 'Delete this post?', tone: 'danger', confirmLabel: 'Delete' })) del.mutate(draft.id!); }}><Trash2 size={15} /> Delete</button>}
           </div>
         </div>
       )}

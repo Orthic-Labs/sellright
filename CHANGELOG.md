@@ -12,6 +12,44 @@ must update the matching changelog in the same push.
 
 ### Added
 
+- Admin essentials for running real stores:
+  - **Refunds**: per-line quantity + independent per-line restock toggle
+    (a single refund can restock one line and not another), a separate
+    `shippingAmount` refunded on top of the item total (own `refund.shippingAmount`
+    ledger column, not folded into the adjustment bucket), and a `reason`
+    field — all surfaced end to end (API `POST /v1/admin/orders/{code}/refund`
+    + the order-detail refund panel), plus per-refund history with the
+    restock/reason breakdown.
+  - **Partial fulfillment**: `POST /v1/admin/orders/{code}/fulfillments`
+    creates a fulfillment scoped to selected lines/quantities (distinct from
+    the existing all-or-nothing `POST /fulfill`, unchanged for its CSV/bulk
+    callers), with an optional ship-from location, tracking/carrier, and a
+    `notifyCustomer` toggle that gates the customer email without ever
+    gating the outbound `order.shipped` webhook. Multiple partial
+    fulfillments per order are supported (split shipments); the order-detail
+    page gets a per-line quantity picker and a fulfillment history list.
+  - **Stock adjustments**: `POST /v1/admin/variants/{id}/stock/adjust` applies
+    a signed delta with a mandatory reason — never an absolute overwrite —
+    recorded as a new `stock_movement` row (now carrying an `actor`) every
+    time; `GET .../stock/history` and a per-location breakdown
+    (`GET .../stock/locations`) are surfaced in a new Inventory "Adjust"
+    modal. Terminology is "Committed" everywhere (already was; verified
+    consistent). Stock reads remain live/uncached throughout.
+  - **Discounts admin**: the existing `startsAt`/`endsAt`, minimum-order-amount
+    and facet-value scope conditions (`money/coupon.ts`'s existing condition
+    vocabulary — no new shape introduced) and usage limits are now editable
+    in the admin UI, including an edit flow for existing discounts (the API
+    already supported all of this; only the UI was missing it).
+  - **Order timeline internal notes**: `POST /v1/admin/orders/{code}/notes`
+    appends a staff-only note into the same `audit_log`-backed timeline as
+    every other order event (no second feed to keep in sync).
+  - **Shared `ConfirmDialog`**: an accessible, focus-managed confirm modal
+    (`useConfirmDialog()`) replaces every `window.confirm(...)` call site in
+    the admin app (orders bulk-purge, order cancel/refund, product
+    archive/variant delete, blog post delete, tax zone delete, staff
+    removal, affiliate payout). Icon-only buttons without an accessible name
+    (copy link, remove line item, delete variant, remove/add collection
+    product) now carry `aria-label`.
 - Points & rewards (loyalty). Per-store program in `store.config.loyalty`
   (off by default): points earned per $1, points needed per $1 off, minimum
   redemption, optional maximum discount (% of subtotal) and optional expiry.

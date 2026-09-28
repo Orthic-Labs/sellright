@@ -103,10 +103,20 @@ export interface OrderDetail {
   placedAt: string | null; createdAt: string;
   shippingAddress: Record<string, unknown> | null; billingAddress: Record<string, unknown> | null;
   customer: { id: string; email: string; firstName: string | null; lastName: string | null; phone: string | null } | null;
-  lines: { sku: string; name: string; quantity: number; unitPrice: number; lineTotal: number; fulfilledQty: number; refundedQty: number }[];
-  payments: { method: string; amount: number; state: string; providerRef: string | null; createdAt: string }[];
-  fulfillments: { id: string; state: string; trackingCode: string | null; carrier: string | null; createdAt: string }[];
-  events: { action: string; fromState: string | null; toState: string | null; actor: string | null; at: string }[];
+  lines: { id: string; sku: string; name: string; quantity: number; unitPrice: number; lineTotal: number; fulfilledQty: number; cancelledQty: number; refundedQty: number }[];
+  payments: { id: string; method: string; amount: number; state: string; providerRef: string | null; createdAt: string }[];
+  fulfillments: {
+    id: string; state: string; trackingCode: string | null; carrier: string | null;
+    locationId: string | null; notifyCustomer: boolean; createdAt: string;
+    lines: { orderLineId: string; quantity: number }[];
+  }[];
+  refunds: {
+    id: string; state: string; amount: number; itemsAmount: number | null; shippingAmount: number | null;
+    reason: string | null; createdAt: string;
+    lines: { orderLineId: string; quantity: number; amount: number; restock: boolean }[];
+  }[];
+  locations: { id: string; name: string; code: string; isDefault: boolean }[];
+  events: { id: string; action: string; fromState: string | null; toState: string | null; actor: string | null; at: string; data?: { note?: string } }[];
 }
 export interface ProductRow { id: string; slug: string; name: string; status: string; assetPath: string | null; variants: number; minPrice: number | null; stock: number; }
 export interface VariantRow { id: string; sku: string; name: string; price: number; salePrice: number | null; isPreOrder?: boolean; preOrderPrice?: number | null; shipDate?: string | null; enabled: boolean; onHand: number; allocated: number; available: number; optionIds?: string[]; }
@@ -123,7 +133,8 @@ export interface CustomerDetail {
 export interface CollectionRow { id: string; slug: string; name: string; parentId: string | null; products: number; }
 export interface CollectionDetail { id: string; slug: string; name: string; description: string | null; parentId: string | null; products: { id: string; name: string; status: string; position: number }[]; }
 export interface InventoryRow { variantId: string; sku: string; name: string; productName: string; onHand: number; allocated: number; available: number; }
-export interface StockMovementRow { delta: number; reason: string; refOrderId: string | null; createdAt: string; }
+export interface StockMovementRow { id: string; delta: number; reason: string; actor: string | null; refOrderId: string | null; createdAt: string; }
+export interface StockLocationRow { locationId: string; name: string; code: string; onHand: number; }
 
 // ── one-click install (WS-B) ──────────────────────────────────────────────────
 export interface ChecklistItem { ok: boolean; detail: string; }

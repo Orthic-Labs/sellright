@@ -57,6 +57,7 @@ const HAND_WRITTEN = [
   '0076_session_step_up.sql',
   '0078_rate_limit_shared.sql',
   '0079_catalog_manifest_pending.sql',
+  '0080_admin_essentials.sql',
 ];
 
 const MARKER = '-- HAND-WRITTEN: see docs/runbooks/migrations.md';

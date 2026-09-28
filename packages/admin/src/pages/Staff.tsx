@@ -4,6 +4,7 @@ import { UserMinus, RefreshCw, Copy, Check } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../auth';
 import { PageHeader, Loading, ErrorNote, EmptyState, Badge, Spinner } from '../components/ui';
+import { useConfirmDialog } from '../components/ConfirmDialog';
 import {
   PERMISSION_ACTIONS,
   PermissionsMatrix,
@@ -42,6 +43,7 @@ function CopyButton({ text }: { text: string }) {
 export default function StaffPage() {
   const { store } = useAuth();
   const qc = useQueryClient();
+  const { confirm, dialog: confirmDialog } = useConfirmDialog();
 
   const staffKey = ['staff', store?.slug];
   const invitesKey = ['staff-invites', store?.slug];
@@ -98,6 +100,7 @@ export default function StaffPage() {
 
   return (
     <>
+      {confirmDialog}
       <PageHeader
         title="Staff"
         subtitle="Manage team members and per-action permissions for this store."
@@ -176,8 +179,8 @@ export default function StaffPage() {
                             className="btn-ghost py-1 px-2 text-xs text-danger hover:bg-danger-soft flex items-center gap-1"
                             title="Remove from store"
                             disabled={removeStaff.isPending}
-                            onClick={() => {
-                              if (confirm(`Remove ${m.email} from this store?`)) {
+                            onClick={async () => {
+                              if (await confirm({ title: `Remove ${m.email} from this store?`, tone: 'danger', confirmLabel: 'Remove' })) {
                                 removeStaff.mutate(m.adminUserId);
                               }
                             }}
