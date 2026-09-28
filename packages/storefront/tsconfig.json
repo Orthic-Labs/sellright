@@ -21,6 +21,5 @@
 			"~/*": ["./src/*"]
 		}	},
 	"files": ["./eslint.config.js"],
-	"exclude": ["src/generated/graphql-shop.ts"],
-	"include": ["src", "src/vite-env.d.ts", "tailwind.config.js", "codegen-shop.ts"]
+	"include": ["src", "src/vite-env.d.ts", "tailwind.config.js"]
 }

@@ -230,6 +230,33 @@ describe('POST /v1/shop/checkout — empty/invalid cart', () => {
   });
 });
 
+describe('POST /v1/shop/checkout — malformed request uses the structured error envelope', () => {
+  // Before this fix, a validation failure fell through to
+  // `@hono/zod-openapi`'s default `{ success: false, error: <ZodError> }`
+  // response instead of this API's `{ error: { code, message } }` envelope
+  // (see the per-route hook added to checkout.ts, mirroring gateway-payments.ts).
+  it('an empty items array (body schema violation) returns 400 INVALID_CHECKOUT_REQUEST in the envelope shape', async () => {
+    const res = await app.request('/v1/shop/checkout', {
+      method: 'POST', headers: hdr(), body: JSON.stringify({ items: [] }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: { code: string; message: string } };
+    expect(body.error.code).toBe('INVALID_CHECKOUT_REQUEST');
+    expect(typeof body.error.message).toBe('string');
+    expect(body).not.toHaveProperty('success');
+  });
+
+  it('a negative-quantity line (body schema violation) also returns the structured envelope, not a bare ZodError', async () => {
+    const res = await app.request('/v1/shop/checkout', {
+      method: 'POST', headers: hdr(), body: JSON.stringify({ items: [{ sku: SKU, quantity: -1 }] }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: { code: string; message: string } };
+    expect(body.error.code).toBe('INVALID_CHECKOUT_REQUEST');
+    expect(body).not.toHaveProperty('success');
+  });
+});
+
 // MONEY-5: cart.ts priced tax with the store's flat rate only; checkout.ts
 // additionally resolves a destination tax_zone (money/tax.ts::resolveTaxRate).
 // Cart never consulted tax zones, so the price shown pre-checkout disagreed

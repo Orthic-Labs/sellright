@@ -81,7 +81,7 @@ export const CheckoutAddressesView = component$<CheckoutAddressesViewProps>((pro
                 value={appState.customer?.emailAddress}
                 placeholder="Email address"
                 aria-label="Email address"
-                onChange$={(_, el) => handleEmailChange$(el.value)}
+                onInput$={(_, el) => handleEmailChange$(el.value)}
                 onBlur$={handleEmailBlur$}
                 aria-invalid={!!(emailTouched.value && emailValidationError.value)}
                 aria-describedby={emailTouched.value && emailValidationError.value ? 'checkout-email-error' : undefined}
@@ -106,7 +106,7 @@ export const CheckoutAddressesView = component$<CheckoutAddressesViewProps>((pro
                 value={sanitizePhoneNumber(appState.shippingAddress?.phoneNumber)}
                 placeholder={phonePlaceholder.value}
                 aria-label="Phone number"
-                onChange$={(_, el) => handlePhoneChange$(el.value)}
+                onInput$={(_, el) => handlePhoneChange$(el.value)}
                 onBlur$={handlePhoneBlur$}
                 aria-invalid={!!(phoneTouched.value && phoneValidationError.value)}
                 aria-describedby={phoneTouched.value && phoneValidationError.value ? 'checkout-phone-error' : undefined}
@@ -134,7 +134,7 @@ export const CheckoutAddressesView = component$<CheckoutAddressesViewProps>((pro
                 value={appState.customer?.firstName}
                 placeholder="First name"
                 aria-label="First name"
-                onChange$={(_, el) => handleFirstNameChange$(el.value)}
+                onInput$={(_, el) => handleFirstNameChange$(el.value)}
                 onBlur$={handleFirstNameBlur$}
                 aria-invalid={!!(firstNameTouched.value && firstNameValidationError.value)}
                 aria-describedby={firstNameTouched.value && firstNameValidationError.value ? 'checkout-firstName-error' : undefined}
@@ -160,7 +160,7 @@ export const CheckoutAddressesView = component$<CheckoutAddressesViewProps>((pro
                 value={appState.customer?.lastName}
                 placeholder="Last name"
                 aria-label="Last name"
-                onChange$={(_, el) => handleLastNameChange$(el.value)}
+                onInput$={(_, el) => handleLastNameChange$(el.value)}
                 onBlur$={handleLastNameBlur$}
                 aria-invalid={!!(lastNameTouched.value && lastNameValidationError.value)}
                 aria-describedby={lastNameTouched.value && lastNameValidationError.value ? 'checkout-lastName-error' : undefined}

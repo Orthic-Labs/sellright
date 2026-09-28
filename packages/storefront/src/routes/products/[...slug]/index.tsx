@@ -1,10 +1,11 @@
 import { component$, useStyles$ } from '@qwik.dev/core';
 import { routeLoader$, type StaticGenerateHandler } from '@qwik.dev/router';
 import { generateImagePreloadLinks } from '~/components/ui';
-import { getProductBySlug, getProductBySlugWithCachedVariants } from '~/providers/shop/products/products';
+import { getProductDetail } from '~/providers/shop/products/products';
+import { normalizeManifestProductDetail, type CatalogProduct, type RawManifestProductDetail } from '~/sellright/types/catalog';
 import { cleanUpParams } from '~/utils';
 import { createSEOHead } from '~/utils/seo';
-import { generateBreadcrumbSchema } from '~/services/seo-api.service';
+import { generateBreadcrumbSchema } from '~/services/seo-schemas';
 import { jsonLdProduct } from '~/services/sellright-seo';
 import type { JsonLdSchema } from '~/types/seo.types';
 import { ProductContent } from './ProductContent';
@@ -13,8 +14,17 @@ import { theme, siteUrl } from '~/theme/theme.config';
 import { stripHtml } from '~/utils/sanitize';
 import { readCatalogSnapshot } from '~/services/catalog-snapshot';
 
+export interface ProductLoaderResult {
+  product: CatalogProduct;
+  source: 'manifest' | 'network';
+  warning: string | null;
+}
+
 // ─────────────────────────────────────────────────────────────────
-// Route loader — manifest-first with API fallback
+// Route loader — manifest-first with API fallback. Both paths return the
+// native CatalogProduct shape with fail-closed stock (LOCKED rule: never
+// block a routeLoader$ on a stock query, never default missing stock to
+// in-stock) — the client hydrates real availability on qidle.
 // ─────────────────────────────────────────────────────────────────
 export const useProductLoader = routeLoader$(async ({ params, fail, status }) => {
   const { slug } = cleanUpParams(params);
@@ -30,85 +40,29 @@ export const useProductLoader = routeLoader$(async ({ params, fail, status }) =>
     return fail(404, { message: 'Product not found: invalid slug' });
   }
 
-  // Try reading from product JSON file first (metadata only — NO stock in the SSR payload).
-  // Variants ship with stockLevel '0' so every option button renders disabled on first paint.
-  // Live stock is populated by the client-side refreshLiveStock hook on qidle/focus/visibility,
-  // fast SSR shell, progressive stock enable once the client checks in.
+  // Try reading from the product JSON manifest first (metadata only — NO stock
+  // in the SSR payload). Live stock is populated by the client-side
+  // refreshLiveStock hook on qidle — fast SSR shell, progressive stock enable
+  // once the client checks in.
   try {
-    const data = await readCatalogSnapshot<any>(`products/${slug}.json`);
-
-    return {
-      product: {
-        id: data.id,
-        name: data.name,
-        slug: data.slug,
-        description: data.description,
-        featuredAsset: data.featuredAsset ? { id: 'manifest', preview: data.featuredAsset.preview, name: data.name, source: data.featuredAsset.preview, createdAt: data.lastUpdated, updatedAt: data.lastUpdated, fileSize: 0, height: 0, width: 0, mimeType: 'image/png', type: 'IMAGE', focalPoint: null, customFields: null, tags: [] } : null,
-        assets: data.assets.map((a: any, i: number) => ({ id: `asset_${i}`, preview: a.preview, name: `${data.name} ${i}`, source: a.preview, createdAt: data.lastUpdated, updatedAt: data.lastUpdated, fileSize: 0, height: 0, width: 0, mimeType: 'image/png', type: 'IMAGE', focalPoint: null, customFields: null, tags: [] })),
-        variants: data.variants.map((v: any) => ({
-          id: v.id,
-          name: v.name,
-          sku: v.sku,
-          priceWithTax: v.priceWithTax,
-          currencyCode: 'USD',
-          options: v.options.map((o: any) => ({ id: o.code, code: o.code, name: o.name, group: { id: o.groupId, name: o.group, code: o.groupId }, groupId: o.groupId })),
-          assets: v.assets.map((a: any, i: number) => ({ id: `vasset_${v.id}_${i}`, preview: a.preview })),
-          customFields: v.customFields || {},
-          // Stock is NEVER in the SSR payload — populated client-side after hydration.
-          stockLevel: '0',
-        })),
-        facetValues: data.facetValues?.map((fv: any) => ({ id: fv.name, name: fv.name, code: fv.name, facet: { id: fv.facetName, name: fv.facetName, code: fv.facetName } })) || [],
-        customFields: {},
-        hasVariantAssets: Boolean(data.hasVariantAssets),
-      },
-      source: 'manifest',
-      warning: null,
-    };
+    const raw = await readCatalogSnapshot<RawManifestProductDetail>(`products/${slug}.json`);
+    return { product: normalizeManifestProductDetail(raw), source: 'manifest' as const, warning: null };
   } catch {
-    // File doesn't exist or failed to parse — fall back to API
+    // File doesn't exist or failed to parse — fall back to the live API.
   }
 
-  // Existing API fallback
-  let result;
   try {
-    result = await getProductBySlugWithCachedVariants(slug);
-    if (!result || !result.product) {
-      console.warn('Cache-aware loader failed, falling back to direct query');
-      const product = await getProductBySlug(slug);
-      if (!product) {
-        status(404);
-        return fail(404, { message: `Product not found: ${slug}` });
-      }
-      result = { product, source: 'fallback', warning: null };
-    }
-  } catch (error) {
-    console.error('Product loader error:', error);
-    try {
-      const product = await getProductBySlug(slug);
-      if (!product) {
-        status(404);
-        return fail(404, { message: `Product not found: ${slug}` });
-      }
-      result = { product, source: 'error-fallback', warning: 'Data may be outdated due to loading issues' };
-    } catch (_fallbackError) {
+    const product = await getProductDetail(slug);
+    if (!product) {
       status(404);
       return fail(404, { message: `Product not found: ${slug}` });
     }
+    return { product, source: 'network' as const, warning: null };
+  } catch (error) {
+    console.error('Product loader error:', error);
+    status(404);
+    return fail(404, { message: `Product not found: ${slug}` });
   }
-
-  const product = result.product;
-  if (product && !product.assets) product.assets = [];
-  if (product && product.assets.length === 0) {
-    product.assets.push({
-      __typename: 'Asset' as const,
-      id: 'placeholder_1', name: 'placeholder',
-      preview: '/asset_placeholder.webp', source: '/asset_placeholder.webp',
-      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-      fileSize: 0, height: 400, width: 400, mimeType: 'image/webp',
-      type: 'IMAGE' as any, focalPoint: null, customFields: null, tags: [],
-    } as any);
-  }
-  return result;
 });
 
 // Product JSON-LD proxied live from the SellRight API
@@ -162,9 +116,9 @@ export const head = ({ resolveValue, url: _url }: { resolveValue: any; url: URL 
     : `${product?.name || 'Product'} - High quality product available at ${theme.storeName}`;
 
   let imagePreloadLinks: any[] = [];
-  if (product?.featuredAsset?.preview) {
+  if (product?.images?.[0]) {
     imagePreloadLinks.push(
-      ...generateImagePreloadLinks(product.featuredAsset.preview, 'productMain', ['avif', 'webp']),
+      ...generateImagePreloadLinks(product.images[0], 'productMain', ['avif', 'webp']),
     );
   }
 
@@ -181,7 +135,7 @@ export const head = ({ resolveValue, url: _url }: { resolveValue: any; url: URL 
   return createSEOHead({
     title: product?.name || 'Product',
     description: cleanDescription || `${product?.name || 'Product'} - Premium quality product from ${theme.storeName}`,
-    image: product?.featuredAsset?.preview,
+    image: product?.images?.[0],
     canonical: canonicalUrl,
     ogUrl: canonicalUrl,
     ogType: 'product',
@@ -191,30 +145,21 @@ export const head = ({ resolveValue, url: _url }: { resolveValue: any; url: URL 
 };
 
 // ─────────────────────────────────────────────────────────────────
-// Static generation — identical to original
+// Static generation — enumerates every active product slug via the native
+// catalog list (paginated, the API caps each page at 100). A fetch failure
+// degrades gracefully (empty slug list) rather than failing the build.
 // ─────────────────────────────────────────────────────────────────
 export const onStaticGenerate: StaticGenerateHandler = async () => {
-  // Build-time only (SSG) — bare Node env var, not a Vite VITE_* client var.
-  // Renamed from VENDURE_API_URL; default port now matches the SellRight
-  // API's own default (packages/api/src/env.ts PORT), not the old
-  // Vendure-era localhost:3100. A fetch failure here degrades gracefully
-  // (empty slug list, caught below) rather than failing the build.
-  const endpoint = process.env.SELLRIGHT_API_URL || 'http://localhost:3300/shop-api';
-  const query = `
-    query GetProductSlugs {
-      products(options: { take: 500 }) {
-        items { slug }
-      }
-    }
-  `;
   try {
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query }),
-    });
-    const json = await response.json();
-    const slugs: string[] = json?.data?.products?.items?.map((p: { slug: string }) => p.slug) ?? [];
+    const { listProducts } = await import('~/providers/shop/products/products');
+    const slugs: string[] = [];
+    let offset = 0;
+    for (;;) {
+      const page = await listProducts({ limit: 100, offset });
+      slugs.push(...page.items.map((p) => p.slug));
+      offset += page.items.length;
+      if (!page.items.length || offset >= page.total) break;
+    }
     return { params: slugs.map(slug => ({ slug })) };
   } catch (error) {
     console.error('Failed to generate product slugs', error);

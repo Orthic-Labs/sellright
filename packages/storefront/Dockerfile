@@ -25,12 +25,19 @@ WORKDIR /workspace
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY packages/storefront/package.json packages/storefront/package.json
 COPY packages/shared/package.json packages/shared/package.json
+COPY packages/storefront-client/package.json packages/storefront-client/package.json
 RUN pnpm install --frozen-lockfile
 
 COPY packages/storefront packages/storefront
 COPY packages/shared packages/shared
+COPY packages/storefront-client packages/storefront-client
 
+# storefront-client must build (incl. copying its hand-authored
+# generated/schema.d.ts into dist/ — tsc doesn't emit non-.ts inputs, see
+# that package's package.json build.copy-generated script) before the
+# storefront, which imports it as a workspace dependency.
 RUN pnpm --filter @sellright/shared build \
+ && pnpm --filter @sellright/storefront-client build \
  && pnpm --filter @sellright/storefront run build:runtime
 
 # Portable deployment directory (pnpm 11 requires --legacy without

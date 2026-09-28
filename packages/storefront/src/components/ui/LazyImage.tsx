@@ -1,13 +1,13 @@
 import { component$, type QRL } from '@qwik.dev/core';
 import { theme } from '~/theme/theme.config';
 
-// Helper function to generate responsive srcset for Vendure assets
+// Helper function to generate responsive srcset for hosted image assets
 export const generateResponsiveSources = (src: string, widths: number[] = [320, 640, 1024, 1280]) => {
-  // Check if this is a Vendure asset URL
-  const isVendureAsset = src.includes('/assets/') || src.includes('/assetspreview/') || src.includes(theme.domain);
+  // Check if this is a hosted asset-store URL
+  const isHostedAsset = src.includes('/assets/') || src.includes('/assetspreview/') || src.includes(theme.domain);
   
-  if (!isVendureAsset) {
-    // For non-Vendure images, return as-is
+  if (!isHostedAsset) {
+    // For non-hosted images, return as-is
     return { 
       avif: null, 
       webp: null, 
@@ -23,7 +23,7 @@ export const generateResponsiveSources = (src: string, widths: number[] = [320, 
   const vMatch = src.match(/[?&]v=([^&]+)/);
   const vParam = vMatch ? `&v=${vMatch[1]}` : '';
 
-  // Map widths to appropriate Vendure presets
+  // Map widths to appropriate hosted-asset presets
   // NOTE: w= param is ignored by PresetOnlyStrategy — dimensions come from preset only
   const getPresetForWidth = (width: number) => {
     if (width <= 160) return 'thumb';
@@ -246,9 +246,9 @@ export const OptimizedImage = component$<OptimizedImageProps>(({
  const finalSrcset = customSrcset || (config ? imageSources.originalSrcset : undefined);
  const finalSizes = customSizes || config?.sizes || (width ? `${width}px` : undefined);
 
- // For Vendure assets, ensure fallback src has format to avoid raw PNG
- const isVendureAsset = src && (src.includes('/assets/') || src.includes(theme.domain));
- const fallbackSrc = isVendureAsset ? `${src.split('?')[0]}?preset=large&format=jpg&q=80` : src;
+ // For hosted assets, ensure fallback src has format to avoid raw PNG
+ const isHostedAsset = src && (src.includes('/assets/') || src.includes(theme.domain));
+ const fallbackSrc = isHostedAsset ? `${src.split('?')[0]}?preset=large&format=jpg&q=80` : src;
 
  // Simple native picture element with all the smart responsive logic and format optimization
  return (

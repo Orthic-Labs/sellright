@@ -1,5 +1,5 @@
 import type { StaticGenerateHandler } from '@qwik.dev/router';
-import { generateBreadcrumbSchema } from '~/services/seo-api.service';
+import { generateBreadcrumbSchema } from '~/services/seo-schemas';
 import { createSEOHead } from '~/utils/seo';
 import { siteUrl } from '~/theme/theme.config';
 

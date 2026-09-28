@@ -14,7 +14,7 @@ describe('resolveApiUrls', () => {
 	it('uses the SellRight dev-port default when nothing is configured', () => {
 		const out = resolveApiUrls({ prodUrl: undefined, devUrl: undefined, localUrl: undefined });
 		expect(out).toEqual({ devApi: SELLRIGHT_DEV_API_DEFAULT, prodApi: SELLRIGHT_DEV_API_DEFAULT, localApi: SELLRIGHT_DEV_API_DEFAULT });
-		expect(SELLRIGHT_DEV_API_DEFAULT).not.toContain('3100'); // must not be the old Vendure-era port
+		expect(SELLRIGHT_DEV_API_DEFAULT).not.toContain('3100'); // must not be the old legacy-era port
 	});
 
 	it('resolves each tier from its own configured value', () => {

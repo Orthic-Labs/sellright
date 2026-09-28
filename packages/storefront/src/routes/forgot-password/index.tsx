@@ -1,6 +1,6 @@
 import { $, component$, useSignal } from '@qwik.dev/core';
 import XCircleIcon from '~/components/icons/XCircleIcon';
-import { requestPasswordResetMutation } from '~/providers/shop/account/account';
+import { requestPasswordReset } from '~/providers/shop/account/account';
 import { createSEOHead } from '~/utils/seo';
 import { theme } from '~/theme/theme.config';
 
@@ -9,12 +9,9 @@ export default component$(() => {
 	const error = useSignal('');
 	const success = useSignal(false);
 	const reset = $(async () => {
-		const requestPasswordReset = await requestPasswordResetMutation(email.value);
-		if (requestPasswordReset?.__typename === 'Success') {
-			success.value = true;
-		} else {
-			error.value = requestPasswordReset?.message ?? 'Reset password error';
-		}
+		// Enumeration-safe on the API side — always resolves ok.
+		await requestPasswordReset(email.value);
+		success.value = true;
 	});
 	return (
 		<div class="flex flex-col justify-center py-12 sm:px-6 lg:px-8 bg-white">

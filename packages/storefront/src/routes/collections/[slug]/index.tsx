@@ -1,24 +1,27 @@
 // Collection / category page — generic, data-driven from the SellRight
 // collections API (no hardcoded category names/copy). Renders full
 // ProductCard tiles (image, price, sale/pre-order badges, live in-stock
-// state) — `/v1/shop/collections/{slug}` now returns image/inStock/
-// pricingVariant per product, same as catalog/search, so the grid has full
-// parity with the shop page.
+// state) — `/v1/shop/collections/{slug}` returns image/inStock/pricingVariant
+// per product, same as catalog/search, so the grid has full parity with the
+// shop page. Talks to the native `~/sellright/catalog` client directly
+// (bypassing the retired legacy-shaped collections provider
+// adapter, which is out of scope for this conversion and has no other
+// consumers after this route stops using it).
 import { component$ } from '@qwik.dev/core';
 import { Link, routeLoader$ } from '@qwik.dev/router';
 import ProductCard from '~/components/products/ProductCard';
-import { getCollectionBySlug } from '~/providers/shop/collections/collections';
+import { fetchCollectionDetail } from '~/sellright/catalog';
 import { createSEOHead } from '~/utils/seo';
-import { generateBreadcrumbSchema } from '~/services/seo-api.service';
+import { generateBreadcrumbSchema } from '~/services/seo-schemas';
 import { siteUrl, theme } from '~/theme/theme.config';
 
 export const useCollectionLoader = routeLoader$(async ({ params, status }) => {
-  try {
-    return await getCollectionBySlug(params.slug, { pageSize: 60 });
-  } catch {
+  const collection = await fetchCollectionDetail(params.slug, { pageSize: 60 });
+  if (!collection) {
     status(404);
     return null;
   }
+  return collection;
 });
 
 export default component$(() => {
@@ -55,15 +58,15 @@ export default component$(() => {
           {c.products.map((p, index) => (
             <ProductCard
               key={p.slug}
-              productAsset={p.productAsset}
-              productName={p.name}
+              image={p.image}
+              name={p.name}
               slug={p.slug}
-              priceWithTax={p.minPrice}
+              price={p.pricingVariant?.price ?? p.minPrice}
               inStock={p.inStock}
               priority={index < 6}
-              salePrice={p.salePrice}
-              preOrderPrice={p.preOrderPrice}
-              isPreOrder={p.isPreOrder}
+              salePrice={p.pricingVariant?.salePrice ?? null}
+              preOrderPrice={p.pricingVariant?.preOrderPrice ?? null}
+              isPreOrder={!!p.pricingVariant?.isPreOrder}
             />
           ))}
         </div>

@@ -27,7 +27,7 @@ describe('SellRight catalog snapshot reader', () => {
     expect(await readCatalogSnapshot('shop-catalog.json', config)).toEqual({ products: [{ slug: 'native' }] });
     expect(await readCatalogSnapshot('products/native.json', config)).toEqual({ slug: 'native' });
   });
-  it.each([{ source: 'vendure' }, { storeSlug: 'another' }, { format: 2 }, { generatedAt: '2000-01-01' }, { generatedAt: 'invalid' }, { generatedAt: '2100-01-01' }, { generation: randomUUID() }])('rejects invalid marker %j', async marker => {
+  it.each([{ source: 'legacy' }, { storeSlug: 'another' }, { format: 2 }, { generatedAt: '2000-01-01' }, { generatedAt: 'invalid' }, { generatedAt: '2100-01-01' }, { generation: randomUUID() }])('rejects invalid marker %j', async marker => {
     await expect(readCatalogSnapshot('shop-catalog.json', await fixture(marker))).rejects.toThrow('Stale or foreign');
   });
   it('requires explicit configuration and prevents path traversal', async () => {

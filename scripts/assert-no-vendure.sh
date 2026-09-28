@@ -106,19 +106,14 @@ check_scope() {
 check_scope "packages/api/src" "yes" "api"
 check_scope "packages/storefront-client" "no" "storefront-client"
 
-# The storefront itself still calls the OLD non-typed sellright.ts surface
-# (packages/storefront/src/utils/sellright.ts) and hasn't been migrated onto
-# storefront-client yet — that migration is a separate PR. Run the check for
-# visibility but don't fail the build on it: TODO remove this allow-failing
-# branch once packages/storefront adopts @sellright/storefront-client.
-echo "--- storefront (allow-failing until migrated onto storefront-client) ---"
-STOREFRONT_FAIL_BEFORE=$FAIL
-FAIL=0
+# packages/storefront now imports its typed client from
+# @sellright/storefront-client (src/sellright/client.ts is a thin Qwik
+# adapter over that package's compat surface; the old storefront-embedded
+# client.ts + schema.gen.ts duplicates and the whole GraphQL/codegen
+# toolchain were deleted in the sf-native integration) — HARD fail here too,
+# same as api/storefront-client. No allowlist: a native storefront should
+# never need the word at all.
 check_scope "packages/storefront/src" "no" "storefront"
-if [ "$FAIL" -ne 0 ]; then
-  echo "assert-no-vendure: [storefront] hits reported above are NON-FATAL (TODO)."
-fi
-FAIL=$STOREFRONT_FAIL_BEFORE
 
 if [ "$FAIL" -ne 0 ]; then
   echo "assert-no-vendure: FAILED (see above)"

@@ -1,4 +1,5 @@
-import { component$ } from '@qwik.dev/core';
+import { component$, useTask$ } from '@qwik.dev/core';
+import { isBrowser } from '@qwik.dev/core/build';
 import { useDocumentHead, useLocation } from '@qwik.dev/router';
 import { DEFAULT_METADATA_TITLE } from '~/constants';
 import { generateDocumentHead } from '~/utils';
@@ -19,6 +20,18 @@ export const Head = component$<HeadProps>(({ nonce }) => {
 	// unlike a plain useContext, a loader doesn't require Head to be a
 	// descendant of where the loader is invoked in the render tree).
 	const identity = useStoreIdentityLoader().value.identity;
+
+	// The initial <html lang> (entry.ssr.tsx containerAttributes) is the
+	// build-time static theme's locale — the real per-request store identity
+	// isn't resolved yet when that tag is opened. Once it is (here), reconcile
+	// the live DOM attribute for any store whose runtime locale differs, so
+	// assistive tech / the browser's own language handling matches the
+	// actual resolved store for the rest of the session.
+	useTask$(({ track }) => {
+		const locale = track(() => identity.locale);
+		if (!isBrowser || !locale) return;
+		document.documentElement.lang = locale;
+	});
 
 	return (
 		<head>

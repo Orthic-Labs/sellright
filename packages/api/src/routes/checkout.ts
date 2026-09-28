@@ -225,6 +225,7 @@ checkout.openapi(
         description: 'Order created',
         content: { 'application/json': { schema: z.object({ code: z.string(), state: z.string(), grandTotal: z.number().int(), discountTotal: z.number().int(), currency: z.string(), couponApplied: z.boolean(), giftCardApplied: z.number().int(), receiptToken: z.string(), pointsRedeemed: z.number().int(), pointsDiscount: z.number().int() }) } },
       },
+      400: { description: 'Malformed checkout request body or Idempotency-Key header', content: { 'application/json': { schema: apiErrorSchema() } } },
       409: { description: 'Out of stock / shipping unavailable / idempotency-payload or stale-cart conflict', content: { 'application/json': { schema: apiErrorSchema().extend({ code: z.string().optional(), skus: z.array(z.string()).optional(), reason: z.string().optional(), revision: z.number().int().optional(), cart: CartOut.optional() }) } } },
       422: { description: 'Required legal acceptance is missing or invalid', content: { 'application/json': { schema: apiErrorSchema() } } },
       429: { description: 'Rate limited', content: { 'application/json': { schema: apiErrorSchema() } } },
@@ -767,5 +768,19 @@ checkout.openapi(
 
     return c.json({ code: out.code, state: out.state, grandTotal: out.grandTotal, discountTotal: out.discountTotal, currency: st.currency, couponApplied: out.couponApplied, giftCardApplied: out.giftCardApplied ?? 0, receiptToken: out.receiptToken,
       pointsRedeemed: out.pointsRedeemed ?? 0, pointsDiscount: out.pointsDiscount ?? 0 }, 200);
+  },
+  // Per-route hook (NOT a global defaultHook — scoped to just this route,
+  // same pattern as gateway-payments.ts): without it, `@hono/zod-openapi`'s
+  // default validation-failure response is `c.json({ success: false, error:
+  // <ZodError> }, 400)` — NOT this API's structured envelope — so a
+  // malformed checkout body (or the optional idempotency-key header failing
+  // its own shape check) would 400 with the wrong shape before the handler
+  // above ever runs.
+  (result, c) => {
+    if (result.success) return undefined;
+    if (result.target === 'header') {
+      return errJson(c, 400, 'INVALID_CHECKOUT_REQUEST', 'Invalid Idempotency-Key header', { param: 'idempotency-key' });
+    }
+    return errJson(c, 400, 'INVALID_CHECKOUT_REQUEST', 'Invalid checkout request');
   },
 );

@@ -1,7 +1,8 @@
 import { $, component$, useSignal, useStore, useTask$ } from '@qwik.dev/core';
 import { routeLoader$ } from '@qwik.dev/router';
 import ProductCard from '~/components/products/ProductCard';
-import { searchQueryWithTerm } from '~/providers/shop/products/products';
+import { searchProducts } from '~/providers/shop/products/products';
+import type { CatalogListItem } from '~/sellright/types/catalog';
 import { FacetWithValues } from '~/types';
 import Filters from '~/components/Filters';
 import { loadBrowseCatalog } from '~/services/browse-catalog';
@@ -9,9 +10,11 @@ import { theme } from '~/theme/theme.config';
 export { head, onStaticGenerate } from './seo';
 
 // ── Catalog manifest loader (SSR) ──────────────────────────────
-// Reads the pre-generated shop-catalog.json at SSR time.
-// SellRight's opt-in publisher refreshes every minute. Stale/foreign snapshots
-// fall back to the live API; stock is rechecked before checkout.
+// Reads the pre-generated shop-catalog.json at SSR time, normalized to the
+// native CatalogListItem shape regardless of source (manifest or live-API
+// fallback — see services/browse-catalog.ts). SellRight's opt-in publisher
+// refreshes every minute. Stale/foreign snapshots fall back to the live API;
+// stock is rechecked before checkout.
 // Products are in the HTML on first byte — no client-side API call needed.
 export const useCatalogLoader = routeLoader$(async ({ error }) => {
  try {
@@ -34,7 +37,7 @@ const HARDCODED_SHOP_FILTERS: FacetWithValues[] = [
  },
 ];
 
-// Map facet filter IDs to facet value names for client-side filtering
+// Map facet filter IDs to tag names for client-side filtering
 const FACET_ID_TO_NAME: Record<string, string> = Object.fromEntries(
  theme.shopCategories.map((name, i) => [String(i + 1), name]),
 );
@@ -42,14 +45,17 @@ const FACET_ID_TO_NAME: Record<string, string> = Object.fromEntries(
 export default component$(() => {
  const catalog = useCatalogLoader();
 
- // Fallback API data (only used when manifest is missing or for text search)
- const apiData = useSignal<{ items: any[]; itemCustomFields?: any[]; totalItems: number } | null>(null);
+ // Fallback API data (only used when manifest is missing or for text search) —
+ // same native CatalogListItem[] shape as the manifest, so the grid never has
+ // to branch on where a product came from.
+ const apiData = useSignal<{ items: CatalogListItem[]; total: number } | null>(null);
  const isSearching = useSignal(false);
  const searchTerm = useSignal('');
  const facetIds = useSignal<string[]>([]);
  const inStockOnly = useSignal(true);
  // Overrides populated ONLY when the in-stock toggle is flipped — live backend check
- // at that exact moment. Never consulted at any other time.
+ // at that exact moment. Never consulted at any other time. Keyed by slug (the
+ // catalog's stable identity — SellRight has no numeric product id).
  const liveStockOverride = useSignal<Record<string, boolean> | null>(null);
 
  const state = useStore<{
@@ -71,8 +77,8 @@ export default component$(() => {
   if (term) {
    isSearching.value = true;
    try {
-    const result = await searchQueryWithTerm('', term, facetIds.value, 0, 200, inStockOnly.value);
-    apiData.value = result as any;
+    const result = await searchProducts({ term, take: 200, inStock: inStockOnly.value || undefined });
+    apiData.value = result;
    } catch (err) {
     console.error('Shop search failed:', err);
    } finally {
@@ -85,55 +91,45 @@ export default component$(() => {
 
  const getDisplayProducts = () => {
   // If text search is active, use API data
-  if (searchTerm.value && apiData.value?.items) {
+  if (searchTerm.value && apiData.value) {
    const filterName = FACET_ID_TO_NAME[facetIds.value[0]];
-   const products = apiData.value.items.filter(item => (!inStockOnly.value || item.inStock) && (!filterName || item.facetValues?.some((value: any) => value.name === filterName)));
-   return { products, count: products.length, fromApi: true };
+   const products = apiData.value.items.filter(item =>
+    (!inStockOnly.value || item.inStock) && (!filterName || (item.tags ?? []).includes(filterName)),
+   );
+   return { products, count: products.length };
   }
 
   // Use manifest data with client-side filtering.
   // If the in-stock toggle was flipped, the live override from that moment
   // supersedes the manifest's inStock value.
   const override = liveStockOverride.value;
-  let products: any[] = (catalog.value.products || []).map((p: any) =>
-   override && Object.prototype.hasOwnProperty.call(override, String(p.id))
-    ? { ...p, inStock: override[String(p.id)] }
+  let products: CatalogListItem[] = (catalog.value.products || []).map(p =>
+   override && Object.prototype.hasOwnProperty.call(override, p.slug)
+    ? { ...p, inStock: override[p.slug] }
     : p,
   );
 
   // In-stock filter
   if (inStockOnly.value) {
-   products = products.filter((p: any) => p.inStock);
+   products = products.filter(p => p.inStock);
   }
 
   // Category filter
   if (facetIds.value.length > 0) {
    const filterName = FACET_ID_TO_NAME[facetIds.value[0]];
    if (filterName) {
-    products = products.filter((p: any) =>
-     p.facetValues?.some((fv: any) => fv.name === filterName)
-    );
+    products = products.filter(p => (p.tags ?? []).includes(filterName));
    }
   }
 
   // Sort: in-stock first, then by manifest order (position)
-  const sorted = [...products].sort((a: any, b: any) => {
+  const sorted = [...products].sort((a, b) => {
    if (a.inStock && !b.inStock) return -1;
    if (!a.inStock && b.inStock) return 1;
    return 0; // Preserve manifest order within same stock status
   });
 
-  return { products: sorted, count: sorted.length, fromApi: false };
- };
-
- const getCustomFieldsMap = () => {
-  // For API data, use itemCustomFields
-  if (apiData.value?.itemCustomFields) {
-   return new Map<string, any>(
-    (apiData.value.itemCustomFields as any[]).map((cf: any) => [String(cf.productVariantId), cf])
-   );
-  }
-  return new Map<string, any>();
+  return { products: sorted, count: sorted.length };
  };
 
  const onFilterChange = $((id: string) => {
@@ -161,10 +157,10 @@ export default component$(() => {
   inStockOnly.value = inStock;
   try {
    isSearching.value = true;
-   const liveSearch = await searchQueryWithTerm('', searchTerm.value, facetIds.value, 0, 500, undefined);
+   const liveSearch = await searchProducts({ term: searchTerm.value || undefined, take: 500 });
    const override: Record<string, boolean> = {};
-   for (const item of ((liveSearch as any)?.items || [])) {
-    override[String(item.productId)] = Boolean(item.inStock);
+   for (const item of liveSearch.items) {
+    override[item.slug] = item.inStock === true;
    }
    liveStockOverride.value = override;
   } catch (err) {
@@ -177,7 +173,6 @@ export default component$(() => {
  const displayData = getDisplayProducts();
  const displayProducts = displayData.products;
  const displayCount = displayData.count;
- const isFromApi = displayData.fromApi;
 
  return (
   <div class="bg-[var(--color-parchment)] min-h-screen">
@@ -256,10 +251,10 @@ export default component$(() => {
       class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-px bg-[var(--color-card-border)]"
       style={{ contain: 'layout' }}
      >
-      <ProductCard skeleton />
-      <ProductCard skeleton />
-      <div class="hidden md:block"><ProductCard skeleton /></div>
-      <div class="hidden lg:block"><ProductCard skeleton /></div>
+      <ProductCard skeleton slug="" />
+      <ProductCard skeleton slug="" />
+      <div class="hidden md:block"><ProductCard skeleton slug="" /></div>
+      <div class="hidden lg:block"><ProductCard skeleton slug="" /></div>
      </div>
     ) : displayProducts.length === 0 ? (
      /* Empty state */
@@ -292,42 +287,20 @@ export default component$(() => {
       class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-px bg-[var(--color-card-border)]"
       style={{ contain: 'layout' }}
      >
-      {(() => {
-       const cfMap = isFromApi ? getCustomFieldsMap() : null;
-       return displayProducts.map((item: any, index: number) => {
-        // For manifest data, use product-level customFields
-        // For API data, use itemCustomFields map
-        const cf = isFromApi
-         ? cfMap?.get(String(item.productVariantId))
-         : item.customFields;
-
-        const productAsset = isFromApi
-         ? item.productAsset
-         : item.featuredAsset
-          ? { id: item.id, preview: item.featuredAsset.preview }
-          : null;
-
-        const priceWithTax = isFromApi
-         ? item.priceWithTax
-         : item.priceRange;
-
-        return (
-         <ProductCard
-          key={isFromApi ? item.productId : item.id}
-          productAsset={productAsset}
-          productName={isFromApi ? item.productName : item.name}
-          slug={item.slug}
-          priceWithTax={priceWithTax}
-          inStock={isFromApi ? item.inStock : item.inStock}
-          productId={isFromApi ? item.productId : item.id}
-          priority={index < 6}
-          salePrice={cf?.salePrice ?? null}
-          preOrderPrice={cf?.preOrderPrice ?? null}
-          isPreOrder={!!cf?.isPreOrder}
-         />
-        );
-       });
-      })()}
+      {displayProducts.map((item, index) => (
+       <ProductCard
+        key={item.slug}
+        image={item.image}
+        name={item.name}
+        slug={item.slug}
+        price={item.pricingVariant?.price ?? item.minPrice}
+        inStock={item.inStock}
+        priority={index < 6}
+        salePrice={item.pricingVariant?.salePrice ?? null}
+        preOrderPrice={item.pricingVariant?.preOrderPrice ?? null}
+        isPreOrder={!!item.pricingVariant?.isPreOrder}
+       />
+      ))}
      </div>
     )}
    </div>

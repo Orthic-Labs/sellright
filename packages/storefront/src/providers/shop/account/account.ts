@@ -1,169 +1,139 @@
 /**
- * Account auth provider — migrated from Vendure GraphQL to the SellRight REST
- * shop API (PASS 2). Return shapes preserve the Vendure discriminated unions the
- * components switch on (`__typename === 'CurrentUser' | 'Success' |
- * 'InvalidCredentialsError' | …`) so sign-in / register / verify / reset pages
- * need no changes.
+ * Account auth provider — native SellRight client (PASS 3). Talks to the API
+ * exclusively through `~/sellright/client` (`sellright()`, generated
+ * `paths`); every result is
+ * either the plain native payload or a `describeAccountError` `{ code,
+ * message }`, built from `SellRightError.code`/`.status` — never a
+ * a legacy discriminated-union `errorCode` field.
  */
-import type {
-	RegisterCustomerAccountMutationVariables,
-	Success,
-	UpdateCustomerInput,
-} from '~/generated/graphql-shop';
-import type { LoginMutation } from '~/generated/graphql-shop-typed';
-import {
-	srLogin,
-	srLogout,
-	srRegister,
-	srVerifyEmail,
-	srResendVerification,
-	srUpdateProfile,
-	srResetPassword,
-	srForgotPassword,
-	srErrorStatus,
-	srErrorBody,
-} from '~/utils/sellright';
+import { sellright, SellRightError } from '~/sellright/client';
+import { describeAccountError, type AccountError, type AuthCustomer, type ProfileUpdateResult } from '~/sellright/types/account';
 
-export const loginMutation = async (
+export type LoginResult = { ok: true; customer: AuthCustomer } | ({ ok: false } & AccountError);
+
+/** R21-equivalent: `rememberMe` is forwarded to the API for real (the SellRight
+ *  API session-lengths on it — default true = long-lived, false = 1-day). */
+export async function login(
 	email: string,
 	password: string,
-	_rememberMe: boolean,
-	turnstileToken?: string,
-): Promise<LoginMutation> => {
+	opts: { turnstileToken?: string; rememberMe?: boolean } = {},
+): Promise<LoginResult> {
 	try {
-		const res = await srLogin(email, password, turnstileToken);
-		return { login: { __typename: 'CurrentUser', id: res.customer.id, identifier: res.customer.email } } as unknown as LoginMutation;
-	} catch (e) {
-		const status = srErrorStatus(e);
-		// SEC: the API refuses login for a correct-password, unverified account
-		// with a distinct 403 + { code: 'not_verified' } — surface that as its
-		// own discriminated error so the sign-in page can render a
-		// "verify your email" state (with resend) instead of a generic
-		// invalid-credentials message.
-		if (status === 403 && srErrorBody<{ code?: string }>(e)?.code === 'not_verified') {
-			return { login: { __typename: 'NotVerifiedError', errorCode: 'NOT_VERIFIED_ERROR', message: 'please verify your email before signing in' } } as unknown as LoginMutation;
-		}
-		const message = status === 429 ? 'Too many attempts — please try again later' : 'Invalid email or password';
-		return { login: { __typename: 'InvalidCredentialsError', errorCode: 'INVALID_CREDENTIALS_ERROR', message } } as unknown as LoginMutation;
-	}
-};
-
-/** Re-send the email verification link for an unverified account. Always
- *  resolves ok (enumeration-safe server response). */
-export const resendVerificationMutation = async (email: string): Promise<{ ok: boolean }> => {
-	try {
-		return await srResendVerification(email);
-	} catch {
-		return { ok: true }; // never leak a failure shape to the caller — same enumeration-safe contract as the server
-	}
-};
-
-export const logoutMutation = async (): Promise<Success> => {
-	try {
-		await srLogout();
-	} catch {
-		// best-effort
-	}
-	return { success: true } as Success;
-};
-
-export const registerCustomerAccountMutation = async (
-	variables: RegisterCustomerAccountMutationVariables,
-	turnstileToken?: string,
-): Promise<any> => {
-	const input = (variables as any)?.input ?? {};
-	try {
-		await srRegister({
-			email: input.emailAddress,
-			password: input.password,
-			firstName: input.firstName ?? undefined,
-			lastName: input.lastName ?? undefined,
-			turnstileToken,
+		const { data } = await sellright().POST('/v1/shop/auth/login', {
+			body: { email, password, turnstileToken: opts.turnstileToken, rememberMe: opts.rememberMe },
 		});
-		return { registerCustomerAccount: { __typename: 'Success', success: true } };
+		return { ok: true, customer: data!.customer };
 	} catch (e) {
-		const status = srErrorStatus(e);
-		const message =
-			status === 409 ? 'That email is already registered' :
-			status === 429 ? 'Too many attempts — please try again later' :
-			'Registration failed';
-		return {
-			registerCustomerAccount: {
-				__typename: status === 409 ? 'EmailAddressConflictError' : 'MissingPasswordError',
-				success: false,
-				errorCode: status === 409 ? 'EMAIL_ADDRESS_CONFLICT_ERROR' : 'UNKNOWN_ERROR',
-				message,
-			},
-		};
+		const err = describeAccountError(e, { 401: 'invalid_credentials' });
+		return { ok: false, ...err };
 	}
-};
+}
 
-export const verifyCustomerAccountMutation = async (
-	token: string,
-	_password?: string
-): Promise<any> => {
+export type LogoutResult = { ok: true } | { ok: false; error: string };
+
+/** Best-effort for a genuinely unreachable API, but a CSRF rejection (403)
+ *  means the server session is still live — that must not be reported as a
+ *  success (the caller decides what to show; this never lies about it). */
+export async function logout(): Promise<LogoutResult> {
 	try {
-		await srVerifyEmail(token);
-		return { verifyCustomerAccount: { __typename: 'CurrentUser', id: '', identifier: '' } };
+		await sellright().POST('/v1/shop/auth/logout');
+		return { ok: true };
 	} catch (e) {
-		const status = srErrorStatus(e);
-		const message = status === 429 ? 'Too many attempts — please try again later' : 'Verification link is invalid, expired, or already used';
-		return { verifyCustomerAccount: { __typename: 'VerificationTokenInvalidError', errorCode: 'VERIFICATION_TOKEN_INVALID_ERROR', message } };
+		if (e instanceof SellRightError && e.status === 403) {
+			return { ok: false, error: e.message || 'Could not sign out — please try again.' };
+		}
+		// Any other transport failure (network down, API unreachable): the
+		// session is unverifiable either way, so the client still clears its
+		// own state — but the failure is real and gets surfaced, not swallowed.
+		return { ok: false, error: e instanceof Error ? e.message : 'Sign out failed.' };
 	}
+}
+
+export type RegisterInput = {
+	email: string;
+	password: string;
+	firstName?: string;
+	lastName?: string;
+	turnstileToken?: string;
 };
 
-export const updateCustomerMutation = async (input: UpdateCustomerInput) => {
-	const i = input as any;
-	const res = await srUpdateProfile({
-		firstName: i.firstName ?? undefined,
-		lastName: i.lastName ?? undefined,
-		phone: i.phoneNumber ?? undefined,
-	});
-	return { updateCustomer: { __typename: 'Customer', ...res } } as any;
-};
+export type RegisterResult = { ok: true; customer: AuthCustomer } | ({ ok: false } & AccountError);
 
-// Email-address change is not exposed by the SellRight shop API. These keep the
-// call sites compiling and degrade to a clear, non-crashing error.
-export const requestUpdateCustomerEmailAddressMutation = async (
-	_password: string,
-	_newEmailAddress: string
-) => {
-	return {
-		requestUpdateCustomerEmailAddress: {
-			__typename: 'NativeAuthStrategyError',
-			errorCode: 'NATIVE_AUTH_STRATEGY_ERROR',
-			message: 'Changing your email address is not currently supported.',
-		},
-	} as any;
-};
-
-export const updateCustomerEmailAddressMutation = async (_token: string) => {
-	return {
-		updateCustomerEmailAddress: {
-			__typename: 'IdentifierChangeTokenInvalidError',
-			errorCode: 'IDENTIFIER_CHANGE_TOKEN_INVALID_ERROR',
-			message: 'Changing your email address is not currently supported.',
-		},
-	} as any;
-};
-
-export const resetPasswordMutation = async (token: string, password: string) => {
+export async function register(input: RegisterInput): Promise<RegisterResult> {
 	try {
-		await srResetPassword(token, password);
-		return { __typename: 'CurrentUser', id: '', identifier: '' } as any;
+		const { data } = await sellright().POST('/v1/shop/auth/register', { body: input });
+		return { ok: true, customer: data!.customer };
 	} catch (e) {
-		const status = srErrorStatus(e);
-		const message = status === 409 ? 'This reset link is invalid, expired, or already used' : 'Password reset failed';
-		return { __typename: 'PasswordResetTokenInvalidError', errorCode: 'PASSWORD_RESET_TOKEN_INVALID_ERROR', message } as any;
+		return { ok: false, ...describeAccountError(e, { 409: 'email_taken' }) };
 	}
-};
+}
 
-export const requestPasswordResetMutation = async (emailAddress: string) => {
-	// The API is enumeration-safe (always 200). Mirror that: always Success.
+export type SimpleResult = { ok: true } | ({ ok: false } & AccountError);
+
+/** Always resolves `ok: true` on the happy path AND on a transient failure —
+ *  the API's own resend-verification endpoint is enumeration-safe (always
+ *  200), so this mirrors that: never leak whether the address exists. */
+export async function resendVerification(email: string): Promise<{ ok: true }> {
 	try {
-		await srForgotPassword(emailAddress);
+		await sellright().POST('/v1/shop/auth/resend-verification', { body: { email } });
 	} catch {
-		// even on a transient error, do not leak account existence
+		// enumeration-safe: no-op
 	}
-	return { __typename: 'Success', success: true } as any;
-};
+	return { ok: true };
+}
+
+export async function verifyEmail(token: string): Promise<SimpleResult> {
+	try {
+		await sellright().POST('/v1/shop/auth/verify-email', { body: { token } });
+		return { ok: true };
+	} catch (e) {
+		return { ok: false, ...describeAccountError(e, { 409: 'invalid_token' }) };
+	}
+}
+
+export type UpdateProfileInput = { firstName?: string | null; lastName?: string | null; phone?: string | null };
+
+export async function updateProfile(input: UpdateProfileInput): Promise<ProfileUpdateResult> {
+	const { data } = await sellright().PATCH('/v1/shop/account/me', { body: input });
+	return data!;
+}
+
+/** Request an email-address change — verification goes to the NEW address.
+ *  The API requires the current password to confirm the change. */
+export async function requestEmailChange(newEmail: string, password: string): Promise<SimpleResult> {
+	try {
+		await sellright().POST('/v1/shop/auth/request-email-change', { body: { newEmail, password } });
+		return { ok: true };
+	} catch (e) {
+		return { ok: false, ...describeAccountError(e, { 401: 'wrong_password', 409: 'email_unavailable' }) };
+	}
+}
+
+export async function verifyEmailChange(token: string): Promise<SimpleResult> {
+	try {
+		await sellright().POST('/v1/shop/auth/verify-email-change', { body: { token } });
+		return { ok: true };
+	} catch (e) {
+		return { ok: false, ...describeAccountError(e, { 409: 'invalid_token' }) };
+	}
+}
+
+export async function resetPassword(token: string, password: string): Promise<SimpleResult> {
+	try {
+		await sellright().POST('/v1/shop/auth/reset-password', { body: { token, password } });
+		return { ok: true };
+	} catch (e) {
+		return { ok: false, ...describeAccountError(e, { 409: 'invalid_token' }) };
+	}
+}
+
+/** The API is enumeration-safe (always 200) — mirror that unconditionally, do
+ *  not leak account existence on a transient failure either. */
+export async function requestPasswordReset(email: string): Promise<{ ok: true }> {
+	try {
+		await sellright().POST('/v1/shop/auth/forgot-password', { body: { email } });
+	} catch {
+		// enumeration-safe: no-op
+	}
+	return { ok: true };
+}

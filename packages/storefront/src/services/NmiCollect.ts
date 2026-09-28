@@ -3,7 +3,7 @@
  * SellRight gateway path. Collect.js swaps the card inputs for hosted iframes
  * and returns a `payment_token`; raw PAN never reaches this app (the API
  * contract requires the token, which is also the correct PCI posture — the
- * retired Vendure plugin charged raw card fields server-side).
+ * retired legacy plugin charged raw card fields server-side).
  *
  * Docs: https://secure.nmi.com/merchants/resources/integration/download.php?document=collectjs
  * The account environment selects the host independently of payment mode;

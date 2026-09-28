@@ -36,12 +36,26 @@ export const activeStepFromState = (state?: string): number => {
   case 'Shipped':
   case 'PartiallyShipped':
    return 2;
-  case 'PaymentSettled':
-  case 'PaymentAuthorized':
   case 'Paid':
    return 1;
   default:
+   // PendingPayment, AddingItems, Cancelled, Declined and any unrecognized
+   // state all read as "just confirmed" — Cancelled/Declined get their own
+   // banner in the route rather than a misleading mid-timeline step.
    return 0;
  }
 };
 
+/** True once the order has actually settled — gates the "clear the cart"
+ *  side effect on the confirmation page. Never treat PendingPayment (still
+ *  polling) or a terminal Cancelled/Declined order as settled. */
+export const isOrderSettled = (state?: string): boolean => state === 'Paid' || state === 'Shipped' || state === 'PartiallyShipped' || state === 'Delivered';
+
+/** True for a terminal, un-settleable order — the confirmation page shows a
+ *  dedicated message instead of polling further. */
+export const isOrderTerminalUnpaid = (state?: string): boolean => state === 'Cancelled' || state === 'Declined';
+
+/** Builds an absolute-or-root asset URL from the API's stored path, mirroring
+ *  the API's own static asset mount (`/assets/<path>`). Local to this route
+ *  so confirmation has no dependency on the legacy `sr()` REST helper. */
+export const assetUrl = (path: string): string => (/^(https?:\/\/|\/)/.test(path) ? path : `/assets/${path}`);

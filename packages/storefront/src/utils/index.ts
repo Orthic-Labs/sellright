@@ -6,7 +6,6 @@ import {
 	DEFAULT_CURRENCY,
 } from '~/constants';
 import { ENV_VARIABLES } from '~/env';
-import { SearchResponse } from '~/generated/graphql-shop';
 import { ActiveCustomer, FacetWithValues } from '~/types';
 
 export const getRandomInt = (max: number) => Math.floor(Math.random() * max);
@@ -30,37 +29,6 @@ export function formatCustomPrice(value = 0, currencyCode?: string) {
 		maximumFractionDigits: 0,
 	}).format(value);
 }
-
-export const groupFacetValues = (
-	search: SearchResponse,
-	activeFacetValueIds: string[]
-): FacetWithValues[] => {
-	if (!search) {
-		return [];
-	}
-	const facetMap = new Map<string, FacetWithValues>();
-	for (const {
-		facetValue: { id, name, facet },
-		count,
-	} of search.facetValues) {
-		if (count === search.totalItems) {
-			continue;
-		}
-		const facetFromMap = facetMap.get(facet.id);
-		const selected = (activeFacetValueIds || []).includes(id);
-		if (facetFromMap) {
-			facetFromMap.values.push({ id, name, selected });
-		} else {
-			facetMap.set(facet.id, {
-				id: facet.id,
-				name: facet.name,
-				open: true,
-				values: [{ id, name, selected }],
-			});
-		}
-	}
-	return Array.from(facetMap.values());
-};
 
 export const enableDisableFacetValues = (_facetValues: FacetWithValues[], ids: string[]) => {
 	const facetValueIds: string[] = [];

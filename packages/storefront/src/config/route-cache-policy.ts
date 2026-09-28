@@ -10,18 +10,24 @@ export interface RouteCacheProfile {
 	responseCacheControl?: string;
 }
 
-export const CACHE_POLICY_VERSION = '2026-03-19.2';
+export const CACHE_POLICY_VERSION = '2026-03-19.3';
 
+// `/shop-api` and `/admin-api` were the old legacy GraphQL endpoint
+// prefixes — this SellRight storefront never serves or proxies those paths
+// (the native API lives under `/v1`, handled directly by
+// `~/sellright/client`'s SSR fetch, never through a Qwik route), so they were
+// dead entries here.
 const DYNAMIC_PREFIXES = [
 	'/checkout',
 	'/account',
 	'/sign-in',
 	'/api/',
-	'/shop-api',
-	'/admin-api',
 	'/cache-debug',
 	'/cache',
 	'/track-order',
+	'/newsletter-signup',
+	'/subscriber',
+	'/affiliate',
 	'/verify',
 	'/forgot-password',
 	'/verify-email-address-change',
