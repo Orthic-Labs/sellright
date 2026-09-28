@@ -7,6 +7,7 @@ import type {
 import { identityFromStaticTheme } from '~/theme/theme.config';
 import type { SrStoreIdentity } from '~/utils/sellright';
 import { stripHtml } from '~/utils/sanitize';
+import { formatMinorUnitsAsDecimalString } from '~/utils/currency';
 
 /**
  * WS-C: every schema generator below takes an optional `identity` — the
@@ -86,7 +87,7 @@ export const generateProductSchema = (product: any, identity: SrStoreIdentity = 
   offers: {
    '@type': 'Offer',
    url: productUrl,
-   price: (primaryVariant.priceWithTax / 100).toFixed(2),
+   price: formatMinorUnitsAsDecimalString(primaryVariant.priceWithTax, primaryVariant.currencyCode || identity.currency),
    priceCurrency: primaryVariant.currencyCode || identity.currency,
    priceValidUntil: validUntil,
    availability: hasStock

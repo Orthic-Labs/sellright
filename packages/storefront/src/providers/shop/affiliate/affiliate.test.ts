@@ -1,8 +1,10 @@
 /**
- * Consumer-contract test for the affiliate dashboard provider — proves it now
- * calls the SellRight REST route (GET /v1/shop/affiliate?t=...) instead of
- * the old Vendure GraphQL affiliateStatsByToken query, and reshapes the
- * backend response into the AffiliateStatsResult the /affiliate page renders.
+ * Consumer-contract test for the affiliate dashboard provider — proves it
+ * calls the SellRight REST route (GET /v1/shop/affiliate?t=...) through the
+ * typed `~/sellright/client` (never the old Vendure GraphQL
+ * affiliateStatsByToken query, and never a hand-rolled fetch with its own
+ * copy of the store-resolution logic), and reshapes the backend response
+ * into the AffiliateStatsResult the /affiliate page renders.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchAffiliateStatsByToken } from './affiliate';
@@ -17,8 +19,13 @@ const respond = (status: number, body: unknown) =>
 beforeEach(() => {
 	calls.length = 0;
 	queue = [];
-	vi.stubGlobal('fetch', vi.fn(async (url: unknown, init?: RequestInit) => {
-		calls.push({ url: String(url), init: init ?? {} });
+	// The typed client (openapi-fetch) calls `fetch(new Request(...))` — the
+	// first argument is a `Request` instance, not a bare URL string, so the
+	// URL has to be read off `.url`, not `String(input)` (which would give
+	// "[object Request]").
+	vi.stubGlobal('fetch', vi.fn(async (input: unknown, init?: RequestInit) => {
+		const url = typeof input === 'string' ? input : (input as Request).url;
+		calls.push({ url, init: init ?? {} });
 		const next = queue.shift();
 		if (!next) throw new Error('fetch called with no queued response');
 		return next;
