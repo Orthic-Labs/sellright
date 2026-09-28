@@ -45,6 +45,7 @@ describe('native catalog generation', () => {
         id: product, slug: 'fixture', tags: ['edc'], inStock: true,
         priceRange: { min: { amount: 3000, currency: 'USD', taxInclusive: false }, max: { amount: 3000, currency: 'USD', taxInclusive: false } },
         images: [{ url: '/assets/fixture/product.webp', position: 0 }],
+        hasSale: true, hasPreOrder: true, // sale 2000 < base 5000; variant flagged pre-order
       });
       const detailV2 = JSON.parse(await readFile(join(outDir, 'current/products-v2/fixture.json'), 'utf8'));
       expect(detailV2.id).toBe(product);
@@ -64,6 +65,8 @@ describe('native catalog generation', () => {
       await publishCatalogManifest({ outDir, storeSlug: slug });
       expect(JSON.parse(await readFile(join(outDir, 'current/products/fixture.json'), 'utf8')).variants).toEqual([]);
       expect(JSON.parse(await readFile(join(outDir, 'current/products-v2/fixture.json'), 'utf8')).variants).toEqual([]);
+      // With the only variant disabled, the grid badges must clear too.
+      expect(JSON.parse(await readFile(join(outDir, 'current/shop-catalog.v2.json'), 'utf8')).products[0]).toMatchObject({ hasSale: false, hasPreOrder: false, inStock: false });
       await withStore(store, async tx => { await tx.execute(sql`UPDATE product SET deleted_at = now() WHERE id = ${product}`); });
       expect((await publishCatalogManifest({ outDir, storeSlug: slug })).products).toBe(0);
       await expect(readFile(join(outDir, 'current/products/fixture.json'))).rejects.toMatchObject({ code: 'ENOENT' });
