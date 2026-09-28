@@ -10,7 +10,9 @@ import {
   jsonb,
   unique,
   primaryKey,
+  check,
 } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 import {
   adminUser,
   customer,
@@ -71,12 +73,29 @@ export const order = pgTable(
     // order read — list/dashboard/reports/export — but restorable). Purge hard-
     // deletes. Mirrors the product/variant deletedAt convention. (migration 0033)
     deletedAt: timestamp({ withTimezone: true }),
+    // Wire-facing lifecycle status (open|completed|cancelled|archived) —
+    // Postgres STORED GENERATED column, a pure function of `state` +
+    // `deleted_at` on THIS row only. Never written by application code (the
+    // DB computes and stores it on every insert/update); see orders/status.ts
+    // for the paymentStatus/fulfillmentStatus counterparts, which depend on
+    // OTHER tables (payment/order_line/fulfillment) and so are computed at
+    // read time instead of stored (migration 0080's header comment has the
+    // full rationale). `text()`, not a pgEnum — see schema-core.ts's note by
+    // the (removed) orderStatus enum for why a GENERATED column can't resolve
+    // to a Postgres enum type. (migration 0080)
+    status: text().notNull().generatedAlwaysAs(sql`(case
+      when deleted_at is not null then 'archived'
+      when state = 'Cancelled' then 'cancelled'
+      when state = 'PendingPayment' then 'open'
+      else 'completed'
+    end)`),
     createdAt: ts(),
     updatedAt: ts(),
   },
   (t) => [
     unique('order_store_code').on(t.storeId, t.code),
     unique('order_store_idempotency').on(t.storeId, t.idempotencyKey),
+    check('order_status_check', sql`${t.status} in ('open', 'completed', 'cancelled', 'archived')`),
   ],
 );
 
@@ -494,6 +513,13 @@ export const fulfillment = pgTable('fulfillment', {
   state: fulfillmentState().notNull().default('Pending'),
   trackingCode: text(),
   carrier: text(),
+  // ADMIN-ESSENTIALS: partial fulfillment — the location it shipped from
+  // (nullable: existing/legacy fulfillments and single-location stores don't
+  // set one) and whether the customer notification email was requested for
+  // THIS fulfillment (defaults true to match the pre-existing always-email
+  // behavior of the whole-order /fulfill route).
+  locationId: uuid().references(() => location.id),
+  notifyCustomer: boolean().notNull().default(true),
   metadata: jsonb(),
   createdAt: ts(),
   updatedAt: ts(),
@@ -528,6 +554,12 @@ export const stockMovement = pgTable('stock_movement', {
   delta: integer().notNull(),
   reason: text().notNull(),
   refOrderId: uuid().references(() => order.id),
+  // ADMIN-ESSENTIALS: who made the adjustment (admin email, or a system
+  // actor like 'gateway:reconciliation' / null for legacy call sites that
+  // predate this column). Every movement is an append-only ledger row — an
+  // adjustment is always a NEW row, never an edit of onHand/an old row, so
+  // "never overwrite silently" holds structurally, not just by convention.
+  actor: text(),
   createdAt: ts(),
 });
 

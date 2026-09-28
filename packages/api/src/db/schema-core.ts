@@ -28,6 +28,15 @@ export const orderState = pgEnum('order_state', [
   'Refunded',
   'Cancelled',
 ]);
+// NOTE: `order.status` (schema-orders.ts) — the wire-facing open|completed|
+// cancelled|archived projection of the row above — is declared `text()`,
+// NOT a pgEnum like the others on this page. Postgres enum I/O/cast
+// functions are STABLE, not IMMUTABLE (ALTER TYPE ... ADD VALUE can change
+// the catalog), so a GENERATED ALWAYS AS expression may never resolve to an
+// enum type — Postgres rejects it at DDL time with "generation expression is
+// not immutable" regardless of how the expression casts. `text()` matches
+// the existing plain-text-status convention already used elsewhere in this
+// schema (webhookDelivery.status, emailOutbox.status, subscriber.status).
 export const fulfillmentState = pgEnum('fulfillment_state', ['Pending', 'Shipped', 'Delivered', 'Cancelled']);
 export const fulfillmentType = pgEnum('fulfillment_type', ['physical', 'digital_download', 'license', 'update_pass']);
 export const paymentState = pgEnum('payment_state', [
@@ -190,6 +199,10 @@ export const productOptionGroup = pgTable('product_option_group', {
   storeId: uuid().notNull().references(() => store.id),
   productId: uuid().notNull().references(() => product.id),
   name: text().notNull(),
+  // Merchant-controlled display order among a product's option groups
+  // (e.g. Size before Color). Scoped per productId, not globally — see
+  // migration 0080's backfill and admin-catalog.ts's reorder endpoint.
+  position: integer().notNull().default(0),
 });
 
 export const productOption = pgTable('product_option', {
@@ -197,6 +210,9 @@ export const productOption = pgTable('product_option', {
   storeId: uuid().notNull().references(() => store.id),
   groupId: uuid().notNull().references(() => productOptionGroup.id),
   value: text().notNull(),
+  // Merchant-controlled display order among a group's values (e.g. S, M, L
+  // instead of alphabetical). Scoped per groupId — see migration 0080.
+  position: integer().notNull().default(0),
 });
 
 export const productVariant = pgTable(

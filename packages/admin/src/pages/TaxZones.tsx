@@ -4,6 +4,7 @@ import { Plus, Trash2 } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../auth';
 import { Loading, ErrorNote, PageHeader, EmptyState, Badge, Spinner } from '../components/ui';
+import { useConfirmDialog } from '../components/ConfirmDialog';
 
 interface TaxZone {
   id: string;
@@ -39,6 +40,7 @@ function pctToBps(pct: string): number {
 export default function TaxZonesPage() {
   const { store } = useAuth();
   const qc = useQueryClient();
+  const { confirm, dialog: confirmDialog } = useConfirmDialog();
   const [form, setForm] = useState<FormState | null>(null);
 
   const key = ['tax-zones', store?.slug];
@@ -76,15 +78,16 @@ export default function TaxZonesPage() {
 
   return (
     <>
+      {confirmDialog}
       <PageHeader
-        title="Tax Zones"
+        title="Taxes"
         subtitle="Country-based tax rates applied at checkout."
         actions={
           <button
             className="btn-primary"
             onClick={() => setForm(form ? null : { ...EMPTY_FORM })}
           >
-            <Plus size={16} /> Add zone
+            <Plus size={16} /> Add rate
           </button>
         }
       />
@@ -160,7 +163,7 @@ export default function TaxZonesPage() {
 
       <div className="card overflow-hidden">
         {isLoading ? <Loading /> : error ? <ErrorNote message={(error as Error).message} /> : !data || data.items.length === 0 ? (
-          <EmptyState title="No tax zones" />
+          <EmptyState title="No taxes" />
         ) : (
           <table className="w-full">
             <thead>
@@ -189,10 +192,11 @@ export default function TaxZonesPage() {
                   <td className="td text-right">
                     <button
                       className="text-gray-300 hover:text-danger"
-                      onClick={() => {
-                        if (confirm(`Delete tax zone "${z.name}"?`)) del.mutate(z.id);
+                      onClick={async () => {
+                        if (await confirm({ title: `Delete tax zone "${z.name}"?`, tone: 'danger', confirmLabel: 'Delete' })) del.mutate(z.id);
                       }}
                       title="Delete"
+                      aria-label={`Delete tax zone ${z.name}`}
                     >
                       <Trash2 size={15} />
                     </button>

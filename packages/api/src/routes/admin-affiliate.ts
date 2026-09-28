@@ -110,7 +110,8 @@ adminAffiliate.openapi(
 );
 
 // ── bind a promotion to an affiliate email (promotion.affiliate_email) ───────
-// The marketing lane's POST/PATCH /v1/admin/promotions should call
+// The marketing lane's POST/PATCH /v1/admin/discounts (/v1/admin/promotions
+// is now a deprecated alias for the same handler) should call
 // syncPromotionAffiliate() after saving; until that call-site lands this
 // endpoint is how an operator binds/unbinds a coupon to an affiliate recipient
 // (bind → onboard mail; rebind → rotate + mail; clear → binding removed, the

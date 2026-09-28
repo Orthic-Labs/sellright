@@ -537,6 +537,9 @@
                                 "name": {
                                   "type": "string"
                                 },
+                                "position": {
+                                  "type": "integer"
+                                },
                                 "group": {
                                   "type": "object",
                                   "properties": {
@@ -548,12 +551,16 @@
                                     },
                                     "name": {
                                       "type": "string"
+                                    },
+                                    "position": {
+                                      "type": "integer"
                                     }
                                   },
                                   "required": [
                                     "id",
                                     "code",
-                                    "name"
+                                    "name",
+                                    "position"
                                   ]
                                 }
                               },
@@ -561,6 +568,7 @@
                                 "id",
                                 "code",
                                 "name",
+                                "position",
                                 "group"
                               ]
                             }
@@ -5191,6 +5199,37 @@
                           "state": {
                             "type": "string"
                           },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "open",
+                              "completed",
+                              "cancelled",
+                              "archived"
+                            ]
+                          },
+                          "paymentStatus": {
+                            "type": "string",
+                            "enum": [
+                              "pending",
+                              "authorized",
+                              "paid",
+                              "partially_refunded",
+                              "refunded",
+                              "voided",
+                              "failed"
+                            ]
+                          },
+                          "fulfillmentStatus": {
+                            "type": "string",
+                            "enum": [
+                              "unfulfilled",
+                              "partially_fulfilled",
+                              "fulfilled",
+                              "partially_delivered",
+                              "delivered"
+                            ]
+                          },
                           "currency": {
                             "type": "string"
                           },
@@ -5208,6 +5247,9 @@
                         "required": [
                           "code",
                           "state",
+                          "status",
+                          "paymentStatus",
+                          "fulfillmentStatus",
                           "currency",
                           "grandTotal",
                           "placedAt",
@@ -5357,6 +5399,37 @@
                     "state": {
                       "type": "string"
                     },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "open",
+                        "completed",
+                        "cancelled",
+                        "archived"
+                      ]
+                    },
+                    "paymentStatus": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "authorized",
+                        "paid",
+                        "partially_refunded",
+                        "refunded",
+                        "voided",
+                        "failed"
+                      ]
+                    },
+                    "fulfillmentStatus": {
+                      "type": "string",
+                      "enum": [
+                        "unfulfilled",
+                        "partially_fulfilled",
+                        "fulfilled",
+                        "partially_delivered",
+                        "delivered"
+                      ]
+                    },
                     "currency": {
                       "type": "string"
                     },
@@ -5502,6 +5575,9 @@
                   "required": [
                     "code",
                     "state",
+                    "status",
+                    "paymentStatus",
+                    "fulfillmentStatus",
                     "currency",
                     "subtotal",
                     "shippingTotal",
@@ -6389,6 +6465,37 @@
                     "currency": {
                       "type": "string"
                     },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "open",
+                        "completed",
+                        "cancelled",
+                        "archived"
+                      ]
+                    },
+                    "paymentStatus": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "authorized",
+                        "paid",
+                        "partially_refunded",
+                        "refunded",
+                        "voided",
+                        "failed"
+                      ]
+                    },
+                    "fulfillmentStatus": {
+                      "type": "string",
+                      "enum": [
+                        "unfulfilled",
+                        "partially_fulfilled",
+                        "fulfilled",
+                        "partially_delivered",
+                        "delivered"
+                      ]
+                    },
                     "subtotal": {
                       "type": "integer"
                     },
@@ -6533,6 +6640,9 @@
                     "code",
                     "state",
                     "currency",
+                    "status",
+                    "paymentStatus",
+                    "fulfillmentStatus",
                     "subtotal",
                     "shippingTotal",
                     "taxTotal",
@@ -8638,6 +8748,52 @@
           },
           {
             "schema": {
+              "type": "string",
+              "enum": [
+                "open",
+                "completed",
+                "cancelled",
+                "archived"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "authorized",
+                "paid",
+                "partially_refunded",
+                "refunded",
+                "voided",
+                "failed"
+              ]
+            },
+            "required": false,
+            "name": "paymentStatus",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "unfulfilled",
+                "partially_fulfilled",
+                "fulfilled",
+                "partially_delivered",
+                "delivered"
+              ]
+            },
+            "required": false,
+            "name": "fulfillmentStatus",
+            "in": "query"
+          },
+          {
+            "schema": {
               "type": "integer",
               "minimum": 1,
               "default": 1
@@ -8752,6 +8908,80 @@
         }
       }
     },
+    "/v1/admin/orders/{code}/notes": {
+      "post": {
+        "summary": "Add an internal note to the order timeline (staff-only)",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "code",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "note": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2000
+                  }
+                },
+                "required": [
+                  "note"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/admin/orders/{code}/fulfill": {
       "post": {
         "summary": "Fulfill order (Shipped/Delivered)",
@@ -8808,6 +9038,128 @@
                   "required": [
                     "code",
                     "fulfillment"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/orders/{code}/fulfillments": {
+      "post": {
+        "summary": "Create a fulfillment for selected lines/quantities (partial fulfillment)",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "code",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "lines": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "orderLineId": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "quantity": {
+                          "type": "integer",
+                          "minimum": 1
+                        }
+                      },
+                      "required": [
+                        "orderLineId",
+                        "quantity"
+                      ]
+                    },
+                    "minItems": 1
+                  },
+                  "locationId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "trackingCode": {
+                    "type": "string"
+                  },
+                  "carrier": {
+                    "type": "string"
+                  },
+                  "notifyCustomer": {
+                    "type": "boolean",
+                    "default": true
+                  }
+                },
+                "required": [
+                  "lines"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "fulfillmentId": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "fulfillmentId",
+                    "state"
                   ]
                 }
               }
@@ -10248,6 +10600,247 @@
         }
       }
     },
+    "/v1/admin/variants/{id}/stock/adjust": {
+      "post": {
+        "summary": "Adjust variant on-hand stock by a +/- delta, with a reason",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "delta": {
+                    "type": "integer"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "delta",
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "onHand": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "onHand"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (would go negative)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/variants/{id}/stock/history": {
+      "get": {
+        "summary": "Stock adjustment history for a variant",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            },
+            "required": false,
+            "name": "page",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 25
+            },
+            "required": false,
+            "name": "pageSize",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "nullable": true
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "page": {
+                      "type": "integer"
+                    },
+                    "pageSize": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "total",
+                    "page",
+                    "pageSize"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/variants/{id}/stock/locations": {
+      "get": {
+        "summary": "Per-location on-hand stock for a variant",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "locationId": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "code": {
+                            "type": "string"
+                          },
+                          "onHand": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "locationId",
+                          "name",
+                          "code",
+                          "onHand"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/admin/products/{id}/assets": {
       "post": {
         "summary": "Attach a gallery image",
@@ -11545,6 +12138,158 @@
         }
       }
     },
+    "/v1/admin/products/{id}/option-groups/reorder": {
+      "put": {
+        "summary": "Reorder a product's option groups",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "order": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "minItems": 1
+                  }
+                },
+                "required": [
+                  "order"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/option-groups/{groupId}/options/reorder": {
+      "put": {
+        "summary": "Reorder an option group's values",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "groupId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "order": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "minItems": 1
+                  }
+                },
+                "required": [
+                  "order"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/admin/variants/{id}/options": {
       "put": {
         "summary": "Set the option values for a variant (replaces the set)",
@@ -11868,6 +12613,9 @@
                         "quantity": {
                           "type": "integer",
                           "minimum": 1
+                        },
+                        "restock": {
+                          "type": "boolean"
                         }
                       },
                       "required": [
@@ -11879,6 +12627,9 @@
                   "restock": {
                     "type": "boolean",
                     "default": false
+                  },
+                  "shippingAmount": {
+                    "type": "integer"
                   },
                   "reason": {
                     "type": "string"
@@ -12875,9 +13626,9 @@
         }
       }
     },
-    "/v1/admin/promotions": {
+    "/v1/admin/discounts": {
       "get": {
-        "summary": "List promotions",
+        "summary": "List discounts",
         "responses": {
           "200": {
             "description": "OK",
@@ -12913,7 +13664,7 @@
         }
       },
       "post": {
-        "summary": "Create a promotion",
+        "summary": "Create a discount",
         "requestBody": {
           "content": {
             "application/json": {
@@ -13030,9 +13781,9 @@
         }
       }
     },
-    "/v1/admin/promotions/{id}": {
+    "/v1/admin/discounts/{id}": {
       "get": {
-        "summary": "Promotion detail + recent usage",
+        "summary": "Discount detail + recent usage",
         "parameters": [
           {
             "schema": {
@@ -13077,7 +13828,7 @@
         }
       },
       "patch": {
-        "summary": "Update a promotion",
+        "summary": "Update a discount",
         "parameters": [
           {
             "schema": {
@@ -13211,7 +13962,416 @@
         }
       },
       "delete": {
-        "summary": "Delete a promotion (only if unused)",
+        "summary": "Delete a discount (only if unused)",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "In use",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/promotions": {
+      "get": {
+        "summary": "List discounts",
+        "deprecated": true,
+        "description": "Deprecated alias for GET /v1/admin/discounts — will be removed in a future release.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "nullable": true
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create a discount",
+        "deprecated": true,
+        "description": "Deprecated alias for POST /v1/admin/discounts — will be removed in a future release.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "nullable": true,
+                    "minLength": 1
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "percentage",
+                      "fixed",
+                      "free_shipping"
+                    ]
+                  },
+                  "value": {
+                    "type": "integer",
+                    "default": 0
+                  },
+                  "freeShipping": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "conditions": {
+                    "type": "array",
+                    "nullable": true,
+                    "items": {
+                      "nullable": true
+                    }
+                  },
+                  "usageLimit": {
+                    "type": "integer",
+                    "nullable": true
+                  },
+                  "perCustomerUsageLimit": {
+                    "type": "integer",
+                    "nullable": true
+                  },
+                  "priority": {
+                    "type": "integer"
+                  },
+                  "exclusionGroup": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "startsAt": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "endsAt": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "enabled": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "affiliateEmail": {
+                    "type": "string",
+                    "nullable": true,
+                    "format": "email"
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Code exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/promotions/{id}": {
+      "get": {
+        "summary": "Discount detail + recent usage",
+        "deprecated": true,
+        "description": "Deprecated alias for GET /v1/admin/discounts/{id} — will be removed in a future release.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "nullable": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Update a discount",
+        "deprecated": true,
+        "description": "Deprecated alias for PATCH /v1/admin/discounts/{id} — will be removed in a future release.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "nullable": true,
+                    "minLength": 1
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "percentage",
+                      "fixed",
+                      "free_shipping"
+                    ]
+                  },
+                  "value": {
+                    "type": "integer",
+                    "default": 0
+                  },
+                  "freeShipping": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "conditions": {
+                    "type": "array",
+                    "nullable": true,
+                    "items": {
+                      "nullable": true
+                    }
+                  },
+                  "usageLimit": {
+                    "type": "integer",
+                    "nullable": true
+                  },
+                  "perCustomerUsageLimit": {
+                    "type": "integer",
+                    "nullable": true
+                  },
+                  "priority": {
+                    "type": "integer"
+                  },
+                  "exclusionGroup": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "startsAt": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "endsAt": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "enabled": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "affiliateEmail": {
+                    "type": "string",
+                    "nullable": true,
+                    "format": "email"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid value",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete a discount (only if unused)",
+        "deprecated": true,
+        "description": "Deprecated alias for DELETE /v1/admin/discounts/{id} — will be removed in a future release.",
         "parameters": [
           {
             "schema": {

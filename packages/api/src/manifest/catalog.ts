@@ -82,7 +82,12 @@ export interface NativeVariantV2 {
   preOrderPrice: NativeMoney | null;
   isPreOrder: boolean;
   shipDate: string | null;
-  options: Array<{ group: string; groupId: string; code: string; name: string }>;
+  // position: merchant-controlled order (migration 0080) — groupPosition
+  // orders the groups, position orders values within that group. This array
+  // arrives pre-sorted by both (see buildEntries' `vo` query); position is
+  // carried through anyway so a consumer that re-groups client-side (rather
+  // than trusting array order) still sorts correctly.
+  options: Array<{ group: string; groupId: string; groupPosition: number; code: string; name: string; position: number }>;
   images: NativeImage[];
 }
 
@@ -146,11 +151,18 @@ async function buildEntries(tx: Tx, store: StoreCtx, priceRule: VariantPriceRule
       : [],
   );
   const vo = variantIds.length
-    ? await tx.select({ variantId: s.variantOption.variantId, optionId: s.productOption.id, groupId: s.productOptionGroup.id, value: s.productOption.value, groupName: s.productOptionGroup.name })
+    ? await tx.select({
+        variantId: s.variantOption.variantId, optionId: s.productOption.id, groupId: s.productOptionGroup.id,
+        value: s.productOption.value, groupName: s.productOptionGroup.name,
+        position: s.productOption.position, groupPosition: s.productOptionGroup.position,
+      })
       .from(s.variantOption)
       .innerJoin(s.productOption, eq(s.productOption.id, s.variantOption.optionId))
       .innerJoin(s.productOptionGroup, eq(s.productOptionGroup.id, s.productOption.groupId))
       .where(and(eq(s.variantOption.storeId, store.id), inArray(s.variantOption.variantId, variantIds)))
+      // Merchant-controlled order (migration 0080), id as a stable tiebreak —
+      // both manifest v1 and v2 below read this pre-sorted array as-is.
+      .orderBy(asc(s.productOptionGroup.position), asc(s.productOptionGroup.id), asc(s.productOption.position), asc(s.productOption.id))
     : [];
   const optsByVariant = group(vo, (x) => x.variantId);
   const pa = await tx.select({ productId: s.productAsset.productId, path: s.asset.path, position: s.productAsset.position })
@@ -184,7 +196,7 @@ async function buildEntries(tx: Tx, store: StoreCtx, priceRule: VariantPriceRule
       priceRange: { min, max }, facetValues: (p.tags ?? []).map(name => ({ name, facetName: 'Tags' })), hasMultiplePrices: min !== max, hasVariantAssets: false,
       variants: vs.map((v) => ({
         id: v.sku, name: v.name, sku: v.sku, priceWithTax: selectPrice(v, priceRule),
-        options: (optsByVariant.get(v.id) ?? []).map((o) => ({ group: o.groupName, groupId: o.groupId, code: o.optionId, name: o.value })),
+        options: (optsByVariant.get(v.id) ?? []).map((o) => ({ group: o.groupName, groupId: o.groupId, groupPosition: o.groupPosition, code: o.optionId, name: o.value, position: o.position })),
         assets: [],
         customFields: { salePrice: v.salePrice, preOrderPrice: v.preOrderPrice, shipDate: v.shipDate, isPreOrder: v.isPreOrder },
       })),
@@ -207,7 +219,7 @@ async function buildEntries(tx: Tx, store: StoreCtx, priceRule: VariantPriceRule
         preOrderPrice: v.preOrderPrice != null ? nativeMoney(v.preOrderPrice, store) : null,
         isPreOrder: v.isPreOrder,
         shipDate: v.shipDate ? v.shipDate.toISOString() : null,
-        options: (optsByVariant.get(v.id) ?? []).map((o) => ({ group: o.groupName, groupId: o.groupId, code: o.optionId, name: o.value })),
+        options: (optsByVariant.get(v.id) ?? []).map((o) => ({ group: o.groupName, groupId: o.groupId, groupPosition: o.groupPosition, code: o.optionId, name: o.value, position: o.position })),
         images: [],
       };
     });

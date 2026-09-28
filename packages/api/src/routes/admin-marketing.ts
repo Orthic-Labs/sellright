@@ -11,7 +11,15 @@ import { syncPromotionAffiliate } from '../affiliate/onboarding.js';
 
 export const adminMarketing = new OpenAPIHono();
 
-// ── promotions / discounts manager ───────────────────────────────────────────
+// ── discounts manager ────────────────────────────────────────────────────────
+// Admin API naming: the primary surface is `/v1/admin/discounts` — matches
+// what the admin dashboard has always CALLED this feature
+// (packages/admin/src/pages/Discounts.tsx) even though the route itself used
+// to say "promotions". `/v1/admin/promotions*` remains mounted below as a
+// DEPRECATED ALIAS (`deprecated: true` in its OpenAPI entry) for one release,
+// with its handler body kept byte-for-byte identical to the `/discounts`
+// version so the two paths can't drift, then removed. BREAKING (pre-1.0, see
+// CHANGELOG.md): new API consumers should call `/discounts`.
 const promoBodyBase = z.object({
   code: z.string().min(1).nullable().optional(), // null/omitted = AUTOMATIC discount
   type: z.enum(['percentage', 'fixed', 'free_shipping']),
@@ -41,141 +49,149 @@ function checkPromoValueBound(type: string | undefined, value: number | undefine
 }
 const promoBody = promoBodyBase.superRefine((val, ctx) => checkPromoValueBound(val.type, val.value, ctx));
 
-adminMarketing.openapi(
-  createRoute({
-    method: 'get', path: '/v1/admin/promotions', summary: 'List promotions',
-    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.unknown()) })) }, 401: { description: 'Unauthorized', ...errBody } },
-  }),
-  async (c) => guard(c, async () => {
-    const { admin } = await requireAdmin(c);
-    const st = requireStore(admin, c);
-    const items = await withStore(st.storeId, async (tx) =>
-      tx.select({ id: s.promotion.id, code: s.promotion.code, type: s.promotion.type, value: s.promotion.value, freeShipping: s.promotion.freeShipping, enabled: s.promotion.enabled, usedCount: s.promotion.usedCount, usageLimit: s.promotion.usageLimit, perCustomerUsageLimit: s.promotion.perCustomerUsageLimit, startsAt: s.promotion.startsAt, endsAt: s.promotion.endsAt })
-        .from(s.promotion).orderBy(desc(s.promotion.enabled), s.promotion.code),
-    );
-    return c.json({ items: items.map((p) => ({ ...p, startsAt: p.startsAt?.toISOString() ?? null, endsAt: p.endsAt?.toISOString() ?? null })) }, 200);
-  }),
-);
+for (const path of ['/v1/admin/discounts', '/v1/admin/promotions']) {
+  const deprecated = path === '/v1/admin/promotions';
+  const dep = deprecated ? { deprecated: true as const, description: 'Deprecated alias for GET /v1/admin/discounts — will be removed in a future release.' } : {};
+  adminMarketing.openapi(
+    createRoute({
+      method: 'get', path, summary: 'List discounts', ...dep,
+      responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.unknown()) })) }, 401: { description: 'Unauthorized', ...errBody } },
+    }),
+    async (c) => guard(c, async () => {
+      const { admin } = await requireAdmin(c);
+      const st = requireStore(admin, c);
+      const items = await withStore(st.storeId, async (tx) =>
+        tx.select({ id: s.promotion.id, code: s.promotion.code, type: s.promotion.type, value: s.promotion.value, freeShipping: s.promotion.freeShipping, enabled: s.promotion.enabled, usedCount: s.promotion.usedCount, usageLimit: s.promotion.usageLimit, perCustomerUsageLimit: s.promotion.perCustomerUsageLimit, startsAt: s.promotion.startsAt, endsAt: s.promotion.endsAt })
+          .from(s.promotion).orderBy(desc(s.promotion.enabled), s.promotion.code),
+      );
+      return c.json({ items: items.map((p) => ({ ...p, startsAt: p.startsAt?.toISOString() ?? null, endsAt: p.endsAt?.toISOString() ?? null })) }, 200);
+    }),
+  );
 
-adminMarketing.openapi(
-  createRoute({
-    method: 'post', path: '/v1/admin/promotions', summary: 'Create a promotion',
-    request: { body: { content: J(promoBody) } },
-    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 409: { description: 'Code exists', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
-  }),
-  async (c) => guard(c, async () => {
-    const { admin } = await requireAdmin(c);
-    const st = requireStore(admin, c); requireWrite(st);
-    const b = c.req.valid('json');
-    const res = await withStore(st.storeId, async (tx) => {
-      if (b.code) {
-        const [dupe] = await tx.select({ id: s.promotion.id }).from(s.promotion).where(eq(s.promotion.code, b.code)).limit(1);
-        if (dupe) return { dupe: true as const };
-      }
-      const [p] = await tx.insert(s.promotion).values({
-        storeId: st.storeId, code: b.code ?? null, type: b.type, value: b.value, freeShipping: b.freeShipping ?? false,
-        conditions: b.conditions ?? null, usageLimit: b.usageLimit ?? null, perCustomerUsageLimit: b.perCustomerUsageLimit ?? null,
-        priority: b.priority ?? 0, exclusionGroup: b.exclusionGroup ?? null,
-        startsAt: b.startsAt ? new Date(b.startsAt) : null, endsAt: b.endsAt ? new Date(b.endsAt) : null, enabled: b.enabled,
-        affiliateEmail: b.affiliateEmail ?? null,
-      }).returning({ id: s.promotion.id });
-      await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'promotion', entityId: p!.id, action: 'create', data: { code: b.code } });
-      await syncPromotionAffiliate(tx, st.storeId, p!.id, admin.email);
-      return { id: p!.id };
-    });
-    if ('dupe' in res) throw new HttpError(409, `promotion code already exists: ${b.code}`);
-    return c.json({ id: res.id }, 200);
-  }),
-);
+  adminMarketing.openapi(
+    createRoute({
+      method: 'post', path, summary: 'Create a discount',
+      ...(deprecated ? { deprecated: true as const, description: 'Deprecated alias for POST /v1/admin/discounts — will be removed in a future release.' } : {}),
+      request: { body: { content: J(promoBody) } },
+      responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 409: { description: 'Code exists', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
+    }),
+    async (c) => guard(c, async () => {
+      const { admin } = await requireAdmin(c);
+      const st = requireStore(admin, c); requireWrite(st);
+      const b = c.req.valid('json');
+      const res = await withStore(st.storeId, async (tx) => {
+        if (b.code) {
+          const [dupe] = await tx.select({ id: s.promotion.id }).from(s.promotion).where(eq(s.promotion.code, b.code)).limit(1);
+          if (dupe) return { dupe: true as const };
+        }
+        const [p] = await tx.insert(s.promotion).values({
+          storeId: st.storeId, code: b.code ?? null, type: b.type, value: b.value, freeShipping: b.freeShipping ?? false,
+          conditions: b.conditions ?? null, usageLimit: b.usageLimit ?? null, perCustomerUsageLimit: b.perCustomerUsageLimit ?? null,
+          priority: b.priority ?? 0, exclusionGroup: b.exclusionGroup ?? null,
+          startsAt: b.startsAt ? new Date(b.startsAt) : null, endsAt: b.endsAt ? new Date(b.endsAt) : null, enabled: b.enabled,
+          affiliateEmail: b.affiliateEmail ?? null,
+        }).returning({ id: s.promotion.id });
+        await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'promotion', entityId: p!.id, action: 'create', data: { code: b.code } });
+        await syncPromotionAffiliate(tx, st.storeId, p!.id, admin.email);
+        return { id: p!.id };
+      });
+      if ('dupe' in res) throw new HttpError(409, `discount code already exists: ${b.code}`);
+      return c.json({ id: res.id }, 200);
+    }),
+  );
 
-adminMarketing.openapi(
-  createRoute({
-    method: 'get', path: '/v1/admin/promotions/{id}', summary: 'Promotion detail + recent usage',
-    request: { params: z.object({ id: z.string() }) },
-    responses: { 200: { description: 'OK', content: J(z.any()) }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
-  }),
-  async (c) => guard(c, async () => {
-    const { admin } = await requireAdmin(c);
-    const st = requireStore(admin, c);
-    const { id } = c.req.valid('param');
-    const out = await withStore(st.storeId, async (tx) => {
-      const [p] = await tx.select().from(s.promotion).where(eq(s.promotion.id, id)).limit(1);
-      if (!p) return null;
-      const usage = await tx
-        .select({ orderCode: s.order.code, email: s.customer.email, at: s.promotionUsage.createdAt })
-        .from(s.promotionUsage)
-        .innerJoin(s.order, eq(s.order.id, s.promotionUsage.orderId))
-        .leftJoin(s.customer, eq(s.customer.id, s.promotionUsage.customerId))
-        .where(eq(s.promotionUsage.promotionId, id)).orderBy(desc(s.promotionUsage.createdAt)).limit(50);
-      return {
-        id: p.id, code: p.code, type: p.type, value: p.value, freeShipping: p.freeShipping, conditions: p.conditions, enabled: p.enabled,
-        usedCount: p.usedCount, usageLimit: p.usageLimit, perCustomerUsageLimit: p.perCustomerUsageLimit,
-        startsAt: p.startsAt?.toISOString() ?? null, endsAt: p.endsAt?.toISOString() ?? null,
-        usage: usage.map((u) => ({ ...u, at: u.at.toISOString() })),
-      };
-    });
-    if (!out) throw new HttpError(404, 'promotion not found');
-    return c.json(out, 200);
-  }),
-);
+  adminMarketing.openapi(
+    createRoute({
+      method: 'get', path: `${path}/{id}`, summary: 'Discount detail + recent usage',
+      ...(deprecated ? { deprecated: true as const, description: 'Deprecated alias for GET /v1/admin/discounts/{id} — will be removed in a future release.' } : {}),
+      request: { params: z.object({ id: z.string() }) },
+      responses: { 200: { description: 'OK', content: J(z.any()) }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
+    }),
+    async (c) => guard(c, async () => {
+      const { admin } = await requireAdmin(c);
+      const st = requireStore(admin, c);
+      const { id } = c.req.valid('param');
+      const out = await withStore(st.storeId, async (tx) => {
+        const [p] = await tx.select().from(s.promotion).where(eq(s.promotion.id, id)).limit(1);
+        if (!p) return null;
+        const usage = await tx
+          .select({ orderCode: s.order.code, email: s.customer.email, at: s.promotionUsage.createdAt })
+          .from(s.promotionUsage)
+          .innerJoin(s.order, eq(s.order.id, s.promotionUsage.orderId))
+          .leftJoin(s.customer, eq(s.customer.id, s.promotionUsage.customerId))
+          .where(eq(s.promotionUsage.promotionId, id)).orderBy(desc(s.promotionUsage.createdAt)).limit(50);
+        return {
+          id: p.id, code: p.code, type: p.type, value: p.value, freeShipping: p.freeShipping, conditions: p.conditions, enabled: p.enabled,
+          usedCount: p.usedCount, usageLimit: p.usageLimit, perCustomerUsageLimit: p.perCustomerUsageLimit,
+          startsAt: p.startsAt?.toISOString() ?? null, endsAt: p.endsAt?.toISOString() ?? null,
+          usage: usage.map((u) => ({ ...u, at: u.at.toISOString() })),
+        };
+      });
+      if (!out) throw new HttpError(404, 'discount not found');
+      return c.json(out, 200);
+    }),
+  );
 
-adminMarketing.openapi(
-  createRoute({
-    method: 'patch', path: '/v1/admin/promotions/{id}', summary: 'Update a promotion',
-    request: { params: z.object({ id: z.string() }), body: { content: J(promoBodyBase.partial()) } },
-    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 404: { description: 'Not found', ...errBody }, 400: { description: 'Invalid value', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
-  }),
-  async (c) => guard(c, async () => {
-    const { admin } = await requireAdmin(c);
-    const st = requireStore(admin, c); requireWrite(st);
-    const { id } = c.req.valid('param');
-    const b = c.req.valid('json');
-    const res = await withStore(st.storeId, async (tx) => {
-      const [p] = await tx.select({ id: s.promotion.id, type: s.promotion.type, value: s.promotion.value }).from(s.promotion).where(eq(s.promotion.id, id)).limit(1);
-      if (!p) return { kind: 'notfound' as const };
-      // A PATCH can change value without type (or vice versa) — validate the
-      // EFFECTIVE (merged) type/value pair, not just whatever fields were sent.
-      const effectiveType = b.type ?? p.type;
-      const effectiveValue = b.value ?? p.value;
-      if (effectiveType === 'percentage' && (effectiveValue < 0 || effectiveValue > 100)) {
-        return { kind: 'invalid' as const };
-      }
-      const patch: Record<string, unknown> = {};
-      for (const k of ['code', 'type', 'value', 'freeShipping', 'conditions', 'usageLimit', 'perCustomerUsageLimit', 'priority', 'exclusionGroup', 'enabled', 'affiliateEmail'] as const) if (b[k] !== undefined) patch[k] = b[k];
-      if (b.startsAt !== undefined) patch.startsAt = b.startsAt ? new Date(b.startsAt) : null;
-      if (b.endsAt !== undefined) patch.endsAt = b.endsAt ? new Date(b.endsAt) : null;
-      await tx.update(s.promotion).set(patch).where(eq(s.promotion.id, id));
-      await syncPromotionAffiliate(tx, st.storeId, id, admin.email);
-      return { kind: 'ok' as const };
-    });
-    if (res.kind === 'notfound') throw new HttpError(404, 'promotion not found');
-    if (res.kind === 'invalid') throw new HttpError(400, 'percentage promotion value must be between 0 and 100');
-    return c.json({ id }, 200);
-  }),
-);
+  adminMarketing.openapi(
+    createRoute({
+      method: 'patch', path: `${path}/{id}`, summary: 'Update a discount',
+      ...(deprecated ? { deprecated: true as const, description: 'Deprecated alias for PATCH /v1/admin/discounts/{id} — will be removed in a future release.' } : {}),
+      request: { params: z.object({ id: z.string() }), body: { content: J(promoBodyBase.partial()) } },
+      responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 404: { description: 'Not found', ...errBody }, 400: { description: 'Invalid value', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
+    }),
+    async (c) => guard(c, async () => {
+      const { admin } = await requireAdmin(c);
+      const st = requireStore(admin, c); requireWrite(st);
+      const { id } = c.req.valid('param');
+      const b = c.req.valid('json');
+      const res = await withStore(st.storeId, async (tx) => {
+        const [p] = await tx.select({ id: s.promotion.id, type: s.promotion.type, value: s.promotion.value }).from(s.promotion).where(eq(s.promotion.id, id)).limit(1);
+        if (!p) return { kind: 'notfound' as const };
+        // A PATCH can change value without type (or vice versa) — validate the
+        // EFFECTIVE (merged) type/value pair, not just whatever fields were sent.
+        const effectiveType = b.type ?? p.type;
+        const effectiveValue = b.value ?? p.value;
+        if (effectiveType === 'percentage' && (effectiveValue < 0 || effectiveValue > 100)) {
+          return { kind: 'invalid' as const };
+        }
+        const patch: Record<string, unknown> = {};
+        for (const k of ['code', 'type', 'value', 'freeShipping', 'conditions', 'usageLimit', 'perCustomerUsageLimit', 'priority', 'exclusionGroup', 'enabled', 'affiliateEmail'] as const) if (b[k] !== undefined) patch[k] = b[k];
+        if (b.startsAt !== undefined) patch.startsAt = b.startsAt ? new Date(b.startsAt) : null;
+        if (b.endsAt !== undefined) patch.endsAt = b.endsAt ? new Date(b.endsAt) : null;
+        await tx.update(s.promotion).set(patch).where(eq(s.promotion.id, id));
+        await syncPromotionAffiliate(tx, st.storeId, id, admin.email);
+        return { kind: 'ok' as const };
+      });
+      if (res.kind === 'notfound') throw new HttpError(404, 'discount not found');
+      if (res.kind === 'invalid') throw new HttpError(400, 'percentage discount value must be between 0 and 100');
+      return c.json({ id }, 200);
+    }),
+  );
 
-adminMarketing.openapi(
-  createRoute({
-    method: 'delete', path: '/v1/admin/promotions/{id}', summary: 'Delete a promotion (only if unused)',
-    request: { params: z.object({ id: z.string() }) },
-    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 404: { description: 'Not found', ...errBody }, 409: { description: 'In use', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
-  }),
-  async (c) => guard(c, async () => {
-    const { admin } = await requireAdmin(c);
-    const st = requireStore(admin, c); requireWrite(st);
-    const { id } = c.req.valid('param');
-    const res = await withStore(st.storeId, async (tx) => {
-      const [p] = await tx.select({ used: s.promotion.usedCount }).from(s.promotion).where(eq(s.promotion.id, id)).limit(1);
-      if (!p) return 'notfound' as const;
-      if (p.used > 0) return 'inuse' as const; // keep history; disable instead
-      await tx.delete(s.promotion).where(eq(s.promotion.id, id));
-      return 'ok' as const;
-    });
-    if (res === 'notfound') throw new HttpError(404, 'promotion not found');
-    if (res === 'inuse') throw new HttpError(409, 'promotion has been used — disable it instead of deleting');
-    return c.json({ id }, 200);
-  }),
-);
+  adminMarketing.openapi(
+    createRoute({
+      method: 'delete', path: `${path}/{id}`, summary: 'Delete a discount (only if unused)',
+      ...(deprecated ? { deprecated: true as const, description: 'Deprecated alias for DELETE /v1/admin/discounts/{id} — will be removed in a future release.' } : {}),
+      request: { params: z.object({ id: z.string() }) },
+      responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 404: { description: 'Not found', ...errBody }, 409: { description: 'In use', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
+    }),
+    async (c) => guard(c, async () => {
+      const { admin } = await requireAdmin(c);
+      const st = requireStore(admin, c); requireWrite(st);
+      const { id } = c.req.valid('param');
+      const res = await withStore(st.storeId, async (tx) => {
+        const [p] = await tx.select({ used: s.promotion.usedCount }).from(s.promotion).where(eq(s.promotion.id, id)).limit(1);
+        if (!p) return 'notfound' as const;
+        if (p.used > 0) return 'inuse' as const; // keep history; disable instead
+        await tx.delete(s.promotion).where(eq(s.promotion.id, id));
+        return 'ok' as const;
+      });
+      if (res === 'notfound') throw new HttpError(404, 'discount not found');
+      if (res === 'inuse') throw new HttpError(409, 'discount has been used — disable it instead of deleting');
+      return c.json({ id }, 200);
+    }),
+  );
+}
 
 // ── Listmonk integration (managed IN the admin — no bouncing to Listmonk UI) ──
 // Config lives in store.config.listmonk = { url, apiUser, apiToken }. The API

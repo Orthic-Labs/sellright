@@ -18,6 +18,12 @@ type Line = { orderLineId: string; quantity: number; restock: boolean };
 export interface RefundRequest {
   storeId: string; orderId: string; actor: string; idempotencyKey: string;
   paymentId?: string; amount?: number; lines?: Line[]; restock?: boolean;
+  // ADMIN-ESSENTIALS: a separate shipping-refund amount, added on top of the
+  // per-line items total when no explicit `amount` override is given. Stored
+  // on its own ledger column (refund.shippingAmount) instead of being folded
+  // into the opaque `adjustmentAmount` bucket, so the admin UI/API can show
+  // "items X + shipping Y = total Z" instead of one lump sum.
+  shippingAmount?: number;
   reason?: string; returnId?: string;
 }
 export function refundQuantity(line: { quantity: number; metadata?: unknown }): number {
@@ -95,7 +101,13 @@ export async function requestRefund(input: RefundRequest) {
         const unit = row.quantity ? row.lineTotal / row.quantity : row.unitPrice;
         return { ...line, amount: Math.round(unit * line.quantity) };
       });
-      const amount = input.amount ?? (explicitLines ? snapshots.reduce((n,l) => n+l.amount,0) : available);
+      const itemsAmount = snapshots.reduce((n,l) => n+l.amount,0);
+      // A separate shipping-refund amount only makes sense alongside explicit
+      // lines (a full/no-lines refund's `available` already IS the whole
+      // remaining balance, shipping included — adding it again there would
+      // double-count). Ignored (never silently added) outside that branch.
+      const shippingAmount = explicitLines && Number.isSafeInteger(input.shippingAmount) && input.shippingAmount! > 0 ? input.shippingAmount! : 0;
+      const amount = input.amount ?? (explicitLines ? itemsAmount + shippingAmount : available);
       if (!Number.isSafeInteger(amount) || amount < 1 || amount > available) throw new RefundError(409, 'Refund exceeds the payment balance');
       const attemptId = randomUUID(), refundId = randomUUID();
       await tx.insert(s.paymentAttempt).values({ id: attemptId, storeId: input.storeId, orderId: order.id, paymentId: payment.id,
@@ -104,8 +116,8 @@ export async function requestRefund(input: RefundRequest) {
         idempotencyKey: key, fingerprint, context: { originalProviderRef: payment.providerRef, refundId, actor: input.actor, returnId: input.returnId ?? null,
           ...(payment.method === 'nmi' ? { nmiEnvironment: recordedNmiEnvironment((payment.metadata as { gateway?: unknown } | null)?.gateway, mode as 'test'|'live') } : {}) } });
       await tx.insert(s.refund).values({ id: refundId, storeId: input.storeId, orderId: order.id, paymentId: payment.id,
-        attemptId, amount, itemsAmount: snapshots.reduce((n,l) => n+l.amount,0), shippingAmount: 0,
-        adjustmentAmount: amount - snapshots.reduce((n,l) => n+l.amount,0), state: 'Pending', reason: input.reason ?? rma?.reason ?? null,
+        attemptId, amount, itemsAmount, shippingAmount,
+        adjustmentAmount: amount - itemsAmount - shippingAmount, state: 'Pending', reason: input.reason ?? rma?.reason ?? null,
         metadata: { actor: input.actor, returnId: input.returnId ?? null, effectsApplied: false } });
       for (const line of snapshots) await tx.insert(s.refundLine).values({ storeId: input.storeId, refundId, ...line });
       if (rma) await tx.update(s.returnRequest).set({ status: 'approved', refundId, updatedAt: new Date() }).where(eq(s.returnRequest.id, rma.id));
@@ -218,7 +230,7 @@ export async function finalizeRefund(tx: Tx, storeId: string, attemptId: string,
       if (unfulfilled) await tx.update(s.stock).set({ allocated: sql`greatest(0, ${s.stock.allocated} - ${unfulfilled})` }).where(eq(s.stock.variantId, row.variantId));
       if (line.restock && returned) {
         await tx.update(s.stock).set({ onHand: sql`${s.stock.onHand} + ${returned}` }).where(eq(s.stock.variantId, row.variantId));
-        await tx.insert(s.stockMovement).values({ storeId, variantId: row.variantId, delta: returned, reason: 'refund_restock', refOrderId: order.id });
+        await tx.insert(s.stockMovement).values({ storeId, variantId: row.variantId, delta: returned, reason: 'refund_restock', refOrderId: order.id, actor: details?.actor ?? null });
       }
     }
   }

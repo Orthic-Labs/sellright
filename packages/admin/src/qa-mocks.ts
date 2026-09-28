@@ -151,14 +151,16 @@ function makeOrderDetail(code: string): OrderDetail {
     billingAddress: { fullName: 'Ava Park', line1: '742 Evergreen Terrace, Apt 4B', line2: null, city: 'Springfield', province: 'OR', postalCode: '97403', countryCode: 'US', phone: '+1 555-0100' },
     customer: { id: 'c0', email: pick(EMAILS, 0), firstName: 'Ava', lastName: 'Park', phone: '+1 555-0100' },
     lines: [
-      { sku: 'ATL-CV2-001', name: pick(NAMES, 0), quantity: 1, unitPrice: money(12000), lineTotal: money(12000), fulfilledQty: 0, refundedQty: 0 },
-      { sku: 'BCN-LAN-1', name: pick(NAMES, 2), quantity: 2, unitPrice: money(1450), lineTotal: money(2900), fulfilledQty: 0, refundedQty: 0 },
+      { id: 'l0', sku: 'ATL-CV2-001', name: pick(NAMES, 0), quantity: 1, unitPrice: money(12000), lineTotal: money(12000), fulfilledQty: 0, cancelledQty: 0, refundedQty: 0 },
+      { id: 'l1', sku: 'BCN-LAN-1', name: pick(NAMES, 2), quantity: 2, unitPrice: money(1450), lineTotal: money(2900), fulfilledQty: 0, cancelledQty: 0, refundedQty: 0 },
     ],
-    payments: [{ method: 'card', amount: money(16340), state: 'Settled', providerRef: 'pi_mock_1', createdAt: new Date().toISOString() }],
+    payments: [{ id: 'pay0', method: 'card', amount: money(16340), state: 'Settled', providerRef: 'pi_mock_1', createdAt: new Date().toISOString() }],
     fulfillments: [],
+    refunds: [],
+    locations: [],
     events: [
-      { action: 'create', fromState: null, toState: 'PendingPayment', actor: 'storefront', at: new Date(Date.now() - 3600_000).toISOString() },
-      { action: 'pay', fromState: 'PendingPayment', toState: 'Paid', actor: 'stripe', at: new Date(Date.now() - 3500_000).toISOString() },
+      { id: 'e0', action: 'create', fromState: null, toState: 'PendingPayment', actor: 'storefront', at: new Date(Date.now() - 3600_000).toISOString() },
+      { id: 'e1', action: 'pay', fromState: 'PendingPayment', toState: 'Paid', actor: 'stripe', at: new Date(Date.now() - 3500_000).toISOString() },
     ],
   };
 }

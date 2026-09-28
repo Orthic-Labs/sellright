@@ -44,7 +44,7 @@ export default function CollectionDetailPage() {
                   <tr key={p.id} className="border-t border-gray-100 first:border-0">
                     <td className="td"><Link to={`/products/${p.id}`} className="font-medium hover:text-brand">{p.name}</Link></td>
                     <td className="td"><Badge value={p.status} /></td>
-                    <td className="td text-right"><button className="text-gray-400 hover:text-danger" onClick={() => remove.mutate(p.id)} title="Remove"><X size={16} /></button></td>
+                    <td className="td text-right"><button className="text-gray-400 hover:text-danger" onClick={() => remove.mutate(p.id)} title="Remove" aria-label={`Remove ${p.name} from this collection`}><X size={16} /></button></td>
                   </tr>
                 ))}
               </tbody>
@@ -65,7 +65,7 @@ export default function CollectionDetailPage() {
                 <span className="truncate">{p.name}</span>
                 {inCollection.has(p.id)
                   ? <span className="text-xs text-gray-400">added</span>
-                  : <button className="btn-ghost py-1 px-2" disabled={add.isPending} onClick={() => add.mutate(p.id)}><Plus size={14} /></button>}
+                  : <button className="btn-ghost py-1 px-2" disabled={add.isPending} aria-label={`Add ${p.name} to this collection`} onClick={() => add.mutate(p.id)}><Plus size={14} /></button>}
               </div>
             ))}
           </div>

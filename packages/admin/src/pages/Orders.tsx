@@ -5,6 +5,7 @@ import { Plus, Download, Upload, ShoppingCart, ShoppingBag, Trash2, Truck, Check
 import { api, downloadFile, type Page, type OrderRow } from '../api';
 import { useAuth } from '../auth';
 import { useToast } from '../components/Toast';
+import { useConfirmDialog } from '../components/ConfirmDialog';
 import { money, dateTime } from '../lib/format';
 import {
   Badge, PageHeader, Pagination, Tabs, ResourceToolbar, SearchInput, ResourceTable,
@@ -53,6 +54,7 @@ export default function Orders() {
   const { store } = useAuth();
   const nav = useNavigate();
   const toast = useToast();
+  const { confirm, dialog: confirmDialog } = useConfirmDialog();
   const qc = useQueryClient();
   const [params, setParams] = useSearchParams();
   const [tab, setTab] = useState(() => {
@@ -158,8 +160,14 @@ export default function Orders() {
   const bulkTrash = useMutation({ mutationFn: () => bulkOrderAction('bulk-soft-delete'), onSuccess: onBulkDone('moved to trash'), onError: onBulkErr });
   const bulkRestore = useMutation({ mutationFn: () => bulkOrderAction('bulk-restore'), onSuccess: onBulkDone('restored'), onError: onBulkErr });
   const bulkPurge = useMutation({
-    mutationFn: () => {
-      if (!window.confirm(`Permanently delete ${selected.size} order(s)? This cannot be undone.`)) throw new Error('cancelled');
+    mutationFn: async () => {
+      const ok = await confirm({
+        title: `Permanently delete ${selected.size} order${selected.size === 1 ? '' : 's'}?`,
+        description: 'This cannot be undone.',
+        tone: 'danger',
+        confirmLabel: 'Delete permanently',
+      });
+      if (!ok) throw new Error('cancelled');
       return bulkOrderAction('bulk-purge');
     },
     onSuccess: onBulkDone('purged'),
@@ -206,6 +214,7 @@ export default function Orders() {
 
   return (
     <>
+      {confirmDialog}
       <PageHeader title="Orders" subtitle={data ? `${data.total} total` : undefined} actions={
         <div className="flex items-center gap-2">
           <ActionMenu label="Actions" items={[

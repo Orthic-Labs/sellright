@@ -498,6 +498,27 @@
       "when": 1790000010700,
       "tag": "0079_catalog_manifest_pending",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1790000010800,
+      "tag": "0080_product_option_position",
+      "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1790000010900,
+      "tag": "0081_order_status_split",
+      "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1790000011000,
+      "tag": "0082_admin_essentials",
+      "breakpoints": true
     }
   ]
 }

@@ -158,7 +158,7 @@ export interface RawManifestProductDetail {
     name: string;
     sku: string;
     priceWithTax: number; // pre-computed effective price (see note below)
-    options: Array<{ code: string; name: string; groupId: string; group: string }>;
+    options: Array<{ code: string; name: string; groupId: string; group: string; position?: number; groupPosition?: number }>;
     assets: Array<{ preview: string }>;
     customFields?: {
       salePrice?: number | null;
@@ -212,7 +212,11 @@ export function normalizeManifestProductDetail(raw: RawManifestProductDetail): C
         id: o.code,
         code: o.code,
         name: o.name,
-        group: { id: o.groupId, code: o.groupId, name: o.group },
+        // Merchant order (migration 0080). Older snapshots may omit these —
+        // forwarded as-is so getOptionGroups' absent-position fallback still
+        // kicks in instead of sorting on a fabricated 0.
+        position: o.position as number,
+        group: { id: o.groupId, code: o.groupId, name: o.group, position: o.groupPosition as number },
       })),
       assets: v.assets.map((a) => ({ preview: resolveAssetPath(a.preview) ?? a.preview })),
       fulfillmentType: 'physical' as const,

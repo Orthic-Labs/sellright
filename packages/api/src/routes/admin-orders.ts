@@ -10,6 +10,7 @@ import { reserveStockOrThrow, StockReservationError, validateReservableItems } f
 import { normalizeEmail } from '../auth/email.js';
 import { buildInvoice, buildPackingSlip, renderInvoiceHtml } from '../orders/invoice.js';
 import { evaluateCoupon } from '../money/coupon.js';
+import { couponItemsFromFacts, loadCouponMatchContext } from '../money/coupon-context.js';
 import { resolveTaxRate } from '../money/tax.js';
 import { requestRefund, RefundError } from '../payments/refunds.js';
 import { unitPrice } from './admin-order-utils.js';
@@ -132,7 +133,12 @@ adminOrders.openapi(
       let promotion;
       if (o.promotionId) {
         const [promo] = await tx.select().from(s.promotion).where(eq(s.promotion.id, o.promotionId)).limit(1);
-        if (promo) { const ev = evaluateCoupon({ type: promo.type, value: promo.value, conditions: promo.conditions, freeShipping: promo.freeShipping }, { subtotal: subtotalCents, activeVerifications: [] }); if (ev.valid && ev.promotion) promotion = ev.promotion; }
+        if (promo) {
+          const couponFacts = await loadCouponMatchContext(tx, priced.map((p) => p.v.productId));
+          const couponItems = couponItemsFromFacts(priced.map((p) => ({ quantity: p.qty, productId: p.v.productId })), couponFacts);
+          const ev = evaluateCoupon({ type: promo.type, value: promo.value, conditions: promo.conditions, freeShipping: promo.freeShipping }, { subtotal: subtotalCents, activeVerifications: [], items: couponItems });
+          if (ev.valid && ev.promotion) promotion = ev.promotion;
+        }
       }
       const totals = calculateOrderTotals({ lines: priced.map((p) => ({ unitPrice: p.unitPrice, quantity: p.qty })), shipping: o.shippingTotal, taxRate, taxInclusive: storeRow!.taxInclusive, shippingTaxable: storeRow!.shippingTaxable, promotion });
 
@@ -159,8 +165,18 @@ adminOrders.openapi(createRoute({
   method: 'post', path: '/v1/admin/orders/{code}/refund', summary: 'Refund a selected payment',
   request: { params: z.object({ code: z.string() }), body: { content: J(z.object({
     idempotencyKey: z.string().min(1).max(200), paymentId: z.string().uuid().optional(), amount: money.optional(),
-    lines: z.array(z.object({ orderLineId: z.string().uuid(), quantity: z.number().int().min(1) })).optional(),
-    restock: z.boolean().default(false), reason: z.string().optional(),
+    // Per-line restock: a line's own `restock` wins when present; `restock`
+    // (top-level) is only the fallback default for lines that omit it — so a
+    // single request can restock some lines and not others (e.g. a damaged
+    // item that goes back on the shelf next to a defective one that doesn't).
+    lines: z.array(z.object({ orderLineId: z.string().uuid(), quantity: z.number().int().min(1), restock: z.boolean().optional() })).optional(),
+    restock: z.boolean().default(false),
+    // Refunded separately from the line items — e.g. "we refunded the item
+    // but the customer keeps paying nothing extra for the shipping we can't
+    // claw back from the carrier" scenario, or the reverse (refund shipping
+    // only, keep the goods).
+    shippingAmount: money.optional(),
+    reason: z.string().optional(),
   })) } }, responses: { 200: { description: 'Refund status', content: J(z.any()) }, 404: { description: 'Not found', ...errBody }, 409: { description: 'Conflict', ...errBody } },
 }), async c => guard(c, async () => {
   const { admin } = await requireAdmin(c), st = requireStore(admin, c); requireWrite(st); requirePermission(st, 'refunds');
@@ -169,7 +185,7 @@ adminOrders.openapi(createRoute({
   if (!order) throw new HttpError(404, 'Order not found');
   try {
     const result = await requestRefund({ ...body, storeId: st.storeId, orderId: order.id, actor: admin.email,
-      lines: body.lines?.map(line => ({ ...line, restock: body.restock })) });
+      lines: body.lines?.map(line => ({ ...line, restock: line.restock ?? body.restock })) });
     return c.json({ code, ...result }, 200);
   } catch (error) { if (error instanceof RefundError) throw new HttpError(error.status, error.message); throw error; }
 }));

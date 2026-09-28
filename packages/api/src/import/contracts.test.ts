@@ -37,12 +37,14 @@ describe('Vendure migration contracts', () => {
     expect(totals.taxTotal).toBe(1050);
     expect(totals.grandTotal).toBe(12050);
   });
-  it('requires the right facet combination and quantity for source coupons', () => {
+  it('requires enough eligible quantity from any of the target native collections', () => {
     const promo = { type: 'percentage' as const, value: 10,
-      conditions: [operation('at_least_n_with_facets', { minimum: '2', facets: '["1","2"]' })] };
+      conditions: [operation('at_least_n_in_collections', { minimum: '2', collectionIds: '["c1","c2"]' })] };
     const base = { subtotal: 10000, activeVerifications: [] };
     expect(evaluateCoupon(promo, base).valid).toBe(false);
-    expect(evaluateCoupon(promo, { ...base, items: [{ quantity: 2, facetValueIds: ['1'] }] }).valid).toBe(false);
-    expect(evaluateCoupon(promo, { ...base, items: [{ quantity: 2, facetValueIds: ['1', '2'] }] }).valid).toBe(true);
+    expect(evaluateCoupon(promo, { ...base, items: [{ quantity: 1, productId: 'p1', tags: [], collectionIds: ['c1'] }] }).valid).toBe(false);
+    expect(evaluateCoupon(promo, { ...base, items: [{ quantity: 2, productId: 'p1', tags: [], collectionIds: ['c1'] }] }).valid).toBe(true);
+    expect(evaluateCoupon(promo, { ...base, items: [{ quantity: 1, productId: 'p1', tags: [], collectionIds: ['c1'] }, { quantity: 1, productId: 'p2', tags: [], collectionIds: ['c2'] }] }).valid).toBe(true);
+    expect(evaluateCoupon(promo, { ...base, items: [{ quantity: 5, productId: 'p3', tags: [], collectionIds: ['unrelated'] }] }).valid).toBe(false);
   });
 });

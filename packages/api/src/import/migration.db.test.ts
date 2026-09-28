@@ -167,8 +167,13 @@ const DD_SEED = [
   `INSERT INTO product_variant VALUES (1, 1, 'SKU-1', true, 'TRUE', false, 0, NULL, 1, 1500, 800, false, '2024-06-01')`,
   `INSERT INTO product_variant_translation VALUES (1, 'en', 'Widget Default')`,
   `INSERT INTO product_variant_price VALUES (1, 1, 'USD', 1000)`,
+  // AFF10 carries a facet-based eligibility condition (facet value 1 = 'edc',
+  // a PUBLIC facet on product 1 per product_facet_values_facet_value above) —
+  // exercises the de-Vendure translation to a native `at_least_n_in_collections`
+  // condition backed by a synthetic collection (see the promotions assertions
+  // in the "Damned Designs schema" test below).
   `INSERT INTO promotion VALUES
-     (10, 'AFF10', '[]', '[{"code":"order_percentage_discount","args":[{"name":"discount","value":"10"}]}]', NULL, NULL, NULL, NULL, 0, true, NULL),
+     (10, 'AFF10', '[{"code":"at_least_n_with_facets","args":[{"name":"minimum","value":"1"},{"name":"facets","value":"[\\"1\\"]"}]}]', '[{"code":"order_percentage_discount","args":[{"name":"discount","value":"10"}]}]', NULL, NULL, NULL, NULL, 0, true, NULL),
      (77, 'OLD20', '[]', '[{"code":"order_percentage_discount","args":[{"name":"discount","value":"20"}]}]', NULL, NULL, NULL, NULL, 0, false, NULL)`,
   `INSERT INTO "order" VALUES
      (1, 'ORD-1', 'PaymentSettled', 'USD', '2024-03-01 00:00:00', 1000, 1000, 0, 0, '{"line1":"1 Main St"}', '{"line1":"1 Main St"}', 'AFF10', 1, '2024-03-01 00:00:00', '2024-03-01 00:00:00', false),
@@ -502,6 +507,20 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     const order = await targetOne(storeId, 'order', `AND code = 'ORD-1'`);
     expect(order.promotion_id).toBe(migrationId(storeId, 'vendure:test', 'promotion', 10));
 
+    // De-Vendure: AFF10's `at_least_n_with_facets` condition (facet value 1,
+    // 'edc') is rewritten to native `at_least_n_in_collections`, backed by a
+    // synthetic, unpublished collection containing product 1 (the only
+    // product carrying that facet value). Runtime never sees a facet id.
+    const eligibilityCollectionId = migrationId(storeId, 'vendure:test', 'facet-eligibility-collection', 1);
+    const aff10 = await targetOne(storeId, 'promotion', `AND id = '${migrationId(storeId, 'vendure:test', 'promotion', 10)}'`);
+    expect(aff10.conditions).toEqual([
+      { code: 'at_least_n_in_collections', args: [{ name: 'minimum', value: '1' }, { name: 'collectionIds', value: JSON.stringify([eligibilityCollectionId]) }] },
+    ]);
+    const eligibilityCollection = await targetOne(storeId, 'collection', `AND id = '${eligibilityCollectionId}'`);
+    expect(eligibilityCollection).toMatchObject({ published: false, slug: expect.stringContaining('edc') });
+    const eligibilityMembers = await targetRows(storeId, 'collection_product', `AND collection_id = '${eligibilityCollectionId}'`);
+    expect(eligibilityMembers.map((m) => m.product_id)).toEqual([migrationId(storeId, 'vendure:test', 'product', 1)]);
+
     // Waitlist -> subscriber(kind='waitlist'), topic = the exact key the
     // restock sweep claims: restock:<imported-variant-uuid>. The variant-1
     // product has a single imported variant, so both live signups land on it.
@@ -547,6 +566,56 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     // Signup for a product that never made the catalog is named, not dropped.
     expect(excluded).toContain('unmappable-source-row:waitlist_signup');
     expect(excluded).not.toContain('source-extension-absent:blog_post');
+  });
+
+  // Migration 0080: Vendure's core schema carries no explicit sortOrder on
+  // product_option_group/product_option, so the importer (the one place
+  // allowed to know Vendure specifics — see import/catalog.ts) falls back to
+  // ascending source id as the "insertion order" proxy. Seeded here with
+  // HIGHER ids inserted FIRST into the source, specifically so a naive
+  // physical/heap-order import (no explicit ORDER BY) would land them
+  // backwards — proving the importer really orders by id, not by whatever
+  // order Postgres happens to hand rows back in.
+  it('carries source id order into option group/value position (id ascending, not source insertion order)', async () => {
+    const tag = 'd' + randomUUID().slice(0, 8);
+    await resetSource('dd', tag);
+    const client = await sourcePool.connect();
+    try {
+      // Group 20 ("Zebra") inserted before group 10 ("Apple") — id ascending
+      // must still put Apple (10) first.
+      await client.query(`INSERT INTO product_option_group VALUES (20, NULL), (10, NULL)`);
+      await client.query(`INSERT INTO product_option_groups_product_option_group VALUES (20, 1), (10, 1)`);
+      await client.query(`INSERT INTO product_option_group_translation VALUES (20, 'en', 'Zebra'), (10, 'en', 'Apple')`);
+      // Within group 10: option 200 ("Value B") inserted before option 100
+      // ("Value A") — id ascending must still put Value A first.
+      await client.query(`INSERT INTO product_option VALUES (200, 10, NULL), (100, 10, NULL), (300, 20, NULL)`);
+      await client.query(`INSERT INTO product_option_translation VALUES (200, 'en', 'Value B'), (100, 'en', 'Value A'), (300, 'en', 'Only')`);
+      await client.query(`INSERT INTO product_variant_options_product_option VALUES (1, 100), (1, 200), (1, 300)`);
+    } finally {
+      client.release();
+    }
+    const storeId = randomUUID();
+    const f = await fixtureConfig(storeId, {
+      nmi: { accountId: 'nmi-acct', mode: 'live' },
+      sezzle: { accountId: 'sez-acct', mode: 'live' },
+      stripe: { accountId: 'acct_dd', mode: 'live' },
+    });
+    const dry = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config, manifestPath: f.manifestPath });
+    await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config, manifestPath: f.applyManifestPath, apply: true, expectedDigest: dry.sourceDigest });
+
+    const groups = (await targetRows(storeId, 'product_option_group', 'ORDER BY position')).map((g) => ({ name: g.name as string, position: g.position as number }));
+    expect(groups).toEqual([{ name: 'Apple', position: 0 }, { name: 'Zebra', position: 1 }]);
+
+    const appleGroupId = migrationId(storeId, 'vendure:test', 'option-group', '1:10');
+    const client2 = await targetPool.connect();
+    let optionRows: { value: string; position: number }[];
+    try {
+      await client2.query(`SELECT set_config('app.current_store', $1, false)`, [storeId]);
+      optionRows = (await client2.query(`SELECT value, position FROM product_option WHERE group_id = $1 ORDER BY position`, [appleGroupId])).rows;
+    } finally {
+      client2.release();
+    }
+    expect(optionRows).toEqual([{ value: 'Value A', position: 0 }, { value: 'Value B', position: 1 }]);
   });
 
   // Patterns observed in the real damned_vendure clone: headers stale vs their
