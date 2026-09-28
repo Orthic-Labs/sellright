@@ -2,7 +2,7 @@ import { Slot, component$, useContext, useOnDocument, $ } from '@qwik.dev/core';
 import { AccountNav } from '~/components/account/AccountNav';
 import { RequestHandler } from '@qwik.dev/router';
 import { APP_STATE, CUSTOMER_NOT_DEFINED_ID, AUTH_TOKEN } from '~/constants';
-import { getActiveCustomerQuery } from '~/services/customer';
+import { getMe } from '~/services/customer';
 import { LocalAddressService } from '~/services/LocalAddressService';
 import { sanitizePhoneNumber } from '~/utils/validation';
 
@@ -17,15 +17,15 @@ export default component$(() => {
 
 	// T17: Load customer data on init (qinit — eager, runs right after hydration)
 	useOnDocument('qinit', $(async () => {
-		const activeCustomer = await getActiveCustomerQuery();
+		const activeCustomer = await getMe();
 		if (activeCustomer) {
 			appState.customer = {
-				title: activeCustomer.title ?? '',
-				firstName: activeCustomer.firstName,
+				title: '',
+				firstName: activeCustomer.firstName ?? '',
 				id: activeCustomer.id,
-				lastName: activeCustomer.lastName,
-				emailAddress: activeCustomer.emailAddress,
-				phoneNumber: activeCustomer.phoneNumber ?? '',
+				lastName: activeCustomer.lastName ?? '',
+				emailAddress: activeCustomer.email,
+				phoneNumber: activeCustomer.phone ?? '',
 			};
 
 			if (activeCustomer.id !== CUSTOMER_NOT_DEFINED_ID && appState.addressBook.length === 0) {
