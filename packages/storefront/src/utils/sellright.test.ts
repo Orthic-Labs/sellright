@@ -22,7 +22,6 @@ import {
 	srSearch,
 	type SrCart,
 } from './sellright';
-import { adaptProduct, adaptSearch } from './sellright-adapters';
 import { getBlogPosts, getBlogPostBySlug } from '../providers/shop/blog/blog';
 import { login } from '../providers/shop/account/account';
 import { registerCustomerFromSignup } from '../components/auth/signup-flow';
@@ -82,12 +81,6 @@ describe('migrated plugin contracts', () => {
 		expect((await srSearch({ take: 200 })).items).toHaveLength(101);
 		expect(callPath(calls[0].url)).toBe('/v1/shop/catalog/products?limit=100&offset=0');
 		expect(lastPath()).toBe('/v1/shop/catalog/products?limit=100&offset=100');
-		expect(adaptSearch({ total: 1, items: [item] }).items[0].inStock).toBe(false);
-	});
-	it('retains stable option and group identities for REST product selectors', () => {
-		const option = { id: 'option-id', code: 'option-id', name: 'Red', group: { id: 'group-id', code: 'group-id', name: 'Color' } };
-		const result = adaptProduct({ slug: 'fixture', name: 'Fixture', status: 'active', description: null, seoTitle: null, seoDescription: null, currency: 'USD', images: [], variants: [{ sku: 'RED', name: 'Red', price: 100, salePrice: null, preOrderPrice: null, shipDate: null, compareAtPrice: null, isPreOrder: false, enabled: true, options: [option] }] });
-		expect(result.variants[0].options).toEqual([{ ...option, groupId: 'group-id' }]);
 	});
 	it('passes distinct fresh challenges through login and signup providers', async () => {
 		enqueue(respond(200, { token: 'session', customer: { id: 'buyer', email: 'buyer@example.test' } }));
@@ -98,11 +91,6 @@ describe('migrated plugin contracts', () => {
 		expect(result).toEqual({ step: 'success' });
 		expect(lastBody().turnstileToken).toBe('fresh-signup-token');
 	});
-	it('keeps listing price and preorder badges attached to the same variant', () => {
-		const result = adaptSearch({ total: 1, items: [{ slug: 'widget', name: 'Widget', status: 'active', image: null, minPrice: 3000, pricingVariant: { sku: 'WIDGET', price: 5000, salePrice: 2000, preOrderPrice: 3000, isPreOrder: true, shipDate: '2027-01-01' } }] });
-		expect(result.items[0]).toMatchObject({ productVariantId: 'WIDGET', priceWithTax: { min: 5000, max: 5000 } });
-		expect(result.itemCustomFields[0]).toMatchObject({ productVariantId: 'WIDGET', preOrderPrice: 3000, isPreOrder: true });
-	});
 	it('passes bot challenge and honeypot through the email probe', async () => {
 		enqueue(respond(200, { exists: false }));
 		await srCheckEmail('a+b@example.test', 'challenge+&token', '');
@@ -112,7 +100,7 @@ describe('migrated plugin contracts', () => {
 		expect(query.get('honeypot')).toBe('');
 	});
 
-	it('loads paged blogs and featured images from SellRight, not Vendure', async () => {
+	it('loads paged blogs and featured images from the native SellRight API', async () => {
 		const post = { id: 'post', slug: 'story', title: 'Story', excerpt: null, readingTime: 2, authorName: null, featuredAsset: { id: 'asset', path: '/assets/story.jpg' }, tags: null, publishDate: '2026-01-01T00:00:00.000Z' };
 		enqueue(respond(200, { items: [post], totalItems: 30 }));
 		const result = await getBlogPosts(10, 20);
@@ -128,11 +116,6 @@ describe('migrated plugin contracts', () => {
 		await expect(getBlogPostBySlug('story')).rejects.toThrow();
 	});
 
-	it.each([3000, null])('preserves preorder metadata with preorder price %s', preOrderPrice => {
-		const product = adaptProduct({ slug: 'widget', name: 'Widget', description: null, status: 'active', seoTitle: null, seoDescription: null, currency: 'USD', images: [], variants: [{ sku: 'WIDGET', name: 'Widget', price: 5000, salePrice: 2000, preOrderPrice, shipDate: '2027-01-01T00:00:00.000Z', compareAtPrice: null, isPreOrder: true, enabled: true }] });
-		expect(product.variants[0].priceWithTax).toBe(preOrderPrice ?? 5000);
-		expect(product.variants[0].customFields).toMatchObject({ preOrderPrice, shipDate: '2027-01-01T00:00:00.000Z', isPreOrder: true });
-	});
 });
 
 describe('cart contract — append vs set', () => {

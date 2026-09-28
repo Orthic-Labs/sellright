@@ -98,7 +98,6 @@ export const CheckoutOrderSummary = component$<CheckoutOrderSummaryProps>((props
             </div>
           ) : (
             <CartTotals
-              order={undefined}
               localCart={props.localCart}
               promoPlacement="rows"
               promoExpandedSignal={props.promoExpanded}

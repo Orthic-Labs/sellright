@@ -1,8 +1,5 @@
-import { $, component$, useContext, useSignal, useComputed$, type Signal } from '@qwik.dev/core';
-import { Order } from '~/generated/graphql-shop';
+import { $, component$, useSignal, useComputed$, type Signal } from '@qwik.dev/core';
 
-import { APP_STATE } from '~/constants';
-import { applyCouponCodeMutation, removeCouponCodeMutation } from '~/providers/shop/orders/order';
 import { useCart, applyCoupon, removeCoupon, type CartContextState } from '~/contexts/CartContext';
 import { formatPrice } from '~/utils';
 import TrashIcon from '../icons/TrashIcon';
@@ -10,7 +7,6 @@ import Alert from '../alert/Alert';
 import { LoyaltyEarnHint } from '../loyalty/LoyaltyEarnHint';
 
 export default component$<{
-	order?: Order;
 	readonly?: boolean;
 	localCart?: CartContextState;
 	/** 'rows' = dark sidebar inline rows, 'default' = original style */
@@ -20,12 +16,9 @@ export default component$<{
 	 * Server-authoritative shipping cost in cents (from the shipping-methods
 	 * quote or the checkout total). `null` = not yet known (no destination
 	 * country entered) — renders a placeholder instead of a guessed number.
-	 * When omitted entirely, falls back to `activeOrder.shippingWithTax` only
-	 * (legacy Vendure-order callers).
 	 */
 	serverShippingCents?: Signal<number | null> | undefined;
-}>(({ order, readonly = false, localCart, promoPlacement = 'default', promoExpandedSignal, serverShippingCents }) => {
-	const appState = useContext(APP_STATE);
+}>(({ readonly = false, localCart, promoPlacement = 'default', promoExpandedSignal, serverShippingCents }) => {
 	const cartState = useCart();
 	const couponCodeSignal = useSignal('');
 	const errorSignal = useSignal('');
@@ -36,43 +29,19 @@ export default component$<{
 	// read) — kept as a prop for callers that already thread it through.
 	const cart = useComputed$(() => (localCart ?? cartState).cart);
 
-	const activeOrder = useComputed$(() => order || appState.activeOrder);
-
-	const activeCouponCode = useComputed$(() => {
-		if (cart.value.coupon?.applied) return cart.value.coupon.code;
-		return activeOrder.value?.couponCodes?.[0];
-	});
-	const subtotal = useComputed$(() => cart.value.subtotal || activeOrder.value?.subTotalWithTax || 0);
-	const orderTotalAfterDiscount = useComputed$(() => {
-		let total = subtotal.value - (cart.value.discountTotal || 0);
-		if (total === 0 && activeOrder.value) {
-			total = (activeOrder.value.totalWithTax || 0) - (activeOrder.value.shippingWithTax || 0);
-		}
-		return total;
-	});
+	const activeCouponCode = useComputed$(() => (cart.value.coupon?.applied ? cart.value.coupon.code : undefined));
+	const subtotal = useComputed$(() => cart.value.subtotal || 0);
+	const orderTotalAfterDiscount = useComputed$(() => subtotal.value - (cart.value.discountTotal || 0));
 
 	// Server-authoritative shipping only. `undefined` = caller didn't pass a
-	// quote signal (legacy Vendure-order display) → fall back to the order's
-	// own shippingWithTax. `null` = quote signal exists but hasn't resolved yet
-	// (e.g. no destination country) → unknown, show a placeholder, never a guess.
-	const shipping = useComputed$(() => {
-		if (serverShippingCents !== undefined) return serverShippingCents.value;
-		return activeOrder.value?.shippingWithTax || 0;
-	});
+	// quote signal → treat as 0. `null` = quote signal exists but hasn't
+	// resolved yet (e.g. no destination country) → unknown, show a
+	// placeholder, never a guess.
+	const shipping = useComputed$(() => (serverShippingCents !== undefined ? serverShippingCents.value : 0));
 	const shippingKnown = useComputed$(() => shipping.value !== null);
-	const total = useComputed$(() => {
-		const shippingAmount = shipping.value || 0;
-		const localTotal = orderTotalAfterDiscount.value + shippingAmount;
-		return localTotal || activeOrder.value?.totalWithTax || 0;
-	});
+	const total = useComputed$(() => orderTotalAfterDiscount.value + (shipping.value || 0));
 
-	const displayDiscount = useComputed$(() => {
-		if (cart.value.discountTotal) return cart.value.discountTotal;
-		if (activeOrder.value?.discounts && activeOrder.value.discounts.length > 0) {
-			return activeOrder.value.discounts[0].amountWithTax || 0;
-		}
-		return 0;
-	});
+	const displayDiscount = useComputed$(() => cart.value.discountTotal || 0);
 
 	const handleInput$ = $((_event: Event, element: HTMLInputElement) => {
 		couponCodeSignal.value = element.value;
@@ -85,50 +54,30 @@ export default component$<{
 		if (!couponCodeSignal.value) return;
 		errorSignal.value = '';
 
-		if (cart.value.lines.length > 0 || !order) {
-			try {
-				const res = await applyCoupon(cartState, couponCodeSignal.value);
-				if (res.valid) {
-					couponCodeSignal.value = '';
-					errorSignal.value = '';
-					if (promoExpandedSignal) promoExpandedSignal.value = false;
-					else promoExpanded.value = false;
-				} else {
-					errorSignal.value = res.reason || 'Invalid or expired code';
-				}
-			} catch (error) {
-				console.error('Error validating coupon:', error);
-				errorSignal.value = 'Failed to validate coupon. Please try again.';
+		try {
+			const res = await applyCoupon(cartState, couponCodeSignal.value);
+			if (res.valid) {
+				couponCodeSignal.value = '';
+				errorSignal.value = '';
+				if (promoExpandedSignal) promoExpandedSignal.value = false;
+				else promoExpanded.value = false;
+			} else {
+				errorSignal.value = res.reason || 'Invalid or expired code';
 			}
-			return;
-		}
-
-		const res = await applyCouponCodeMutation(couponCodeSignal.value);
-		if (res.__typename === 'Order') {
-			appState.activeOrder = res as Order;
-			couponCodeSignal.value = '';
-		} else {
-			errorSignal.value = res.message;
+		} catch (error) {
+			console.error('Error validating coupon:', error);
+			errorSignal.value = 'Failed to validate coupon. Please try again.';
 		}
 	});
 
-	const removeCoupon$ = $(async (code: string) => {
-		if (cart.value.lines.length > 0 || !order) {
-			await removeCoupon(cartState);
-			errorSignal.value = '';
-			return;
-		}
-
-		const res = await removeCouponCodeMutation(code);
-		if (res && res.__typename === 'Order') {
-			appState.activeOrder = res as Order;
-			errorSignal.value = '';
-		}
+	const removeCoupon$ = $(async (_code: string) => {
+		await removeCoupon(cartState);
+		errorSignal.value = '';
 	});
 
 	const isDarkRows = promoPlacement === 'rows';
 	const isPromoExpanded = promoExpandedSignal ? promoExpandedSignal.value : promoExpanded.value;
-	const currencyCode = cart.value.currency || activeOrder.value?.currencyCode || 'USD';
+	const currencyCode = cart.value.currency || 'USD';
 
 	// ── Dark sidebar row layout (checkout left panel) ──
 	if (isDarkRows) {

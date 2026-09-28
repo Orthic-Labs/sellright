@@ -1,13 +1,10 @@
 /**
  * Native catalog I/O — the storefront's shop/search/collections/PDP area talks
- * to the SellRight API exclusively through this module (built on `./client`),
- * never through `~/utils/sellright` or `~/utils/sellright-adapters` (those are
- * the Vendure-shaped strangler seam for the areas not yet converted; they are
- * removed at integration).
+ * to the SellRight API exclusively through this module (built on `./client`).
  *
- * Every export here returns a native type from `./types/catalog` — no id/
- * featuredAsset/facetValues/customFields/priceWithTax/__typename/string
- * stockLevel anywhere.
+ * Every export here returns a native type from `./types/catalog` — slug/sku
+ * identity, flat price/salePrice/preOrderPrice/isPreOrder fields, boolean
+ * stock — no legacy discriminated-union shapes anywhere.
  */
 import { sellright, SellRightError } from './client';
 import {

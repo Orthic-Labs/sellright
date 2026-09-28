@@ -1,26 +1,22 @@
 /**
  * Product/search provider for the catalog area (shop grid, search, PDP,
  * collections). Talks to the SellRight API exclusively through
- * `~/sellright/catalog` (native types, built on `~/sellright/client`) — never
- * through `~/utils/sellright` or `~/utils/sellright-adapters`.
+ * `~/sellright/catalog` (native types, built on `~/sellright/client`).
  *
  * Two kinds of exports live here:
  *  - NATIVE (getProductDetail, getProductStock, listProducts, searchProducts):
  *    used by this conversion's own owned call sites (shop, search,
- *    collections, PDP). Zero Vendure shapes — slug/sku identity, flat
+ *    collections, PDP). Slug/sku identity, flat
  *    price/salePrice/preOrderPrice/isPreOrder fields, boolean stock.
  *  - LEGACY (search, searchQueryWithTerm, getProductBySlug,
  *    getProductStockLevelsOnly): kept byte-for-byte shape-compatible with
- *    their previous (Vendure-ish) output because out-of-scope consumers this
- *    task must not edit still depend on that exact shape — the homepage
- *    (routes/index.tsx), routes/api/validate-cart, and
- *    services/local-cart-stock.ts + components/cart-contents/CartContents.tsx
- *    (cart/checkout, explicitly off-limits here). They're reimplemented
- *    against the native client below instead of importing the banned
- *    strangler-seam modules; only their *output shape* is legacy.
+ *    their previous output because the homepage (routes/index.tsx) and
+ *    routes/api/validate-cart still depend on that exact shape. They're
+ *    implemented against the native client below; only their *output shape*
+ *    is legacy.
  */
 import { fetchProductDetail, fetchProductDetailWithStock, fetchProductStock, fetchProductList, searchCatalog } from '~/sellright/catalog';
-import { effectiveVariantPrice, type CatalogListResponse, type CatalogProduct, type CatalogStockResponse } from '~/sellright/types/catalog';
+import { effectiveVariantPrice, type CatalogListResponse, type CatalogProduct } from '~/sellright/types/catalog';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Native — used by this conversion's own routes/components
@@ -222,19 +218,4 @@ export const getProductBySlug = async (slug: string): Promise<LegacyProduct | nu
     console.error('Failed to fetch product:', slug, error);
     return null;
   }
-};
-
-/** Legacy stock-only shape — kept for services/local-cart-stock.ts (cart
- *  stock revalidation, out of scope). `id` is the SKU (SellRight has no
- *  numeric variant id); `stockLevel` is the legacy stringified-boolean
- *  convention that file's `parseInt` expects. */
-export const getProductStockLevelsOnly = async (slug: string) => {
-  const stock: CatalogStockResponse | null = await fetchProductStock(slug);
-  if (!stock) throw new Error(`Stock not found for product: ${slug}`);
-  return {
-    product: {
-      id: slug,
-      variants: stock.variants.map((v) => ({ id: v.sku, stockLevel: v.inStock ? LEGACY_IN_STOCK : LEGACY_OUT_OF_STOCK })),
-    },
-  };
 };

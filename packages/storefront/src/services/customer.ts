@@ -1,13 +1,8 @@
 /**
- * Customer/account data provider — native SellRight client (PASS 3). Talks to
- * the API exclusively through `~/sellright/client`; zero Vendure shapes, no
- * `~/generated/graphql-shop` imports, no `~/utils/sellright-adapters` mapping
- * to a Vendure-ish Customer/Order. Every export returns the API's own native
- * payload (or a thin wrapper around it), and pagination carries the server's
- * real `total` — never the page array's length.
- *
- * The build guard (`guard-graphql-customer.sh`) requires this file carry no
- * runtime `graphql-tag` — it has none.
+ * Customer/account data provider — the native SellRight client. Talks to
+ * the API exclusively through `~/sellright/client`; every export returns the
+ * API's own native payload (or a thin wrapper around it), and pagination
+ * carries the server's real `total` — never the page array's length.
  */
 import { sellright, SellRightError } from '~/sellright/client';
 import { describeAccountError, type AccountError } from '~/sellright/types/account';

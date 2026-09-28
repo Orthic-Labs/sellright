@@ -22,7 +22,7 @@ vi.mock('~/sellright/catalog', () => ({
   searchCatalog: (...args: unknown[]) => state.searchCatalog(...args),
 }));
 
-import { search, searchQueryWithTerm, getProductBySlug, getProductStockLevelsOnly, getProductDetail, searchProducts, listProducts } from './products';
+import { search, searchQueryWithTerm, getProductBySlug, getProductDetail, searchProducts, listProducts } from './products';
 
 beforeEach(() => {
   state.fetchProductDetail = vi.fn();
@@ -124,18 +124,5 @@ describe('legacy getProductBySlug()', () => {
   it('returns null on any other transport error, matching pre-conversion behavior', async () => {
     state.fetchProductDetailWithStock.mockRejectedValue(new Error('network down'));
     expect(await getProductBySlug('x')).toBeNull();
-  });
-});
-
-describe('legacy getProductStockLevelsOnly()', () => {
-  it('maps native stock to the legacy stringified-boolean shape by SKU', async () => {
-    state.fetchProductStock.mockResolvedValue({ variants: [{ sku: 'S1', inStock: true, availableQuantity: 3 }, { sku: 'S2', inStock: false, availableQuantity: 0 }] });
-    const result = await getProductStockLevelsOnly('p1');
-    expect(result).toEqual({ product: { id: 'p1', variants: [{ id: 'S1', stockLevel: '999' }, { id: 'S2', stockLevel: '0' }] } });
-  });
-
-  it('throws when stock is unavailable, matching pre-conversion behavior', async () => {
-    state.fetchProductStock.mockResolvedValue(null);
-    await expect(getProductStockLevelsOnly('missing')).rejects.toThrow();
   });
 });
