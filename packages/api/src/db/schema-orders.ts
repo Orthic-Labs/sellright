@@ -11,6 +11,7 @@ import {
   unique,
   primaryKey,
 } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 import {
   adminUser,
   customer,
@@ -18,6 +19,7 @@ import {
   fulfillmentType,
   licenseStatus,
   orderState,
+  orderStatus,
   paymentState,
   productVariant,
   promotion,
@@ -71,6 +73,20 @@ export const order = pgTable(
     // order read — list/dashboard/reports/export — but restorable). Purge hard-
     // deletes. Mirrors the product/variant deletedAt convention. (migration 0033)
     deletedAt: timestamp({ withTimezone: true }),
+    // Wire-facing lifecycle status (open|completed|cancelled|archived) —
+    // Postgres STORED GENERATED column, a pure function of `state` +
+    // `deleted_at` on THIS row only. Never written by application code (the
+    // DB computes and stores it on every insert/update); see orders/status.ts
+    // for the paymentStatus/fulfillmentStatus counterparts, which depend on
+    // OTHER tables (payment/order_line/fulfillment) and so are computed at
+    // read time instead of stored (migration 0080's header comment has the
+    // full rationale). (migration 0080)
+    status: orderStatus().notNull().generatedAlwaysAs(sql`((case
+      when deleted_at is not null then 'archived'
+      when state = 'Cancelled' then 'cancelled'
+      when state = 'PendingPayment' then 'open'
+      else 'completed'
+    end)::order_status)`),
     createdAt: ts(),
     updatedAt: ts(),
   },

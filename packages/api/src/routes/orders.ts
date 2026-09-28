@@ -5,7 +5,7 @@ import { resolveStoreFromCtx } from './store-context.js';
 import { customerToken, resolveCustomer } from '../auth/session.js';
 import * as s from '../db/schema.js';
 import { timingSafeEqual as cryptoTimingSafeEqual } from 'node:crypto';
-import { loadOrderFulfillments, loadOrderLines, loadOrderPayments, loadOrderPromotionCode } from './order-facts.js';
+import { loadOrderFulfillments, loadOrderLines, loadOrderPayments, loadOrderPromotionCode, loadOrderStatusFacts } from './order-facts.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
 
 /** Constant-time string compare (avoids leaking the receipt token via timing). */
@@ -38,6 +38,13 @@ orders.openapi(
           'application/json': {
             schema: z.object({
               code: z.string(), state: z.string(), currency: z.string(),
+              // Wire-facing status split (BREAKING, pre-1.0 — see CHANGELOG.md):
+              // `state` above is the legacy combined FSM value and stays for
+              // compatibility; these three are the new, separately-tracked
+              // lifecycle/payment/fulfillment statuses (orders/status.ts).
+              status: z.enum(['open', 'completed', 'cancelled', 'archived']),
+              paymentStatus: z.enum(['pending', 'authorized', 'paid', 'partially_refunded', 'refunded', 'voided', 'failed']),
+              fulfillmentStatus: z.enum(['unfulfilled', 'partially_fulfilled', 'fulfilled', 'partially_delivered', 'delivered']),
               subtotal: z.number().int(), shippingTotal: z.number().int(), taxTotal: z.number().int(),
               discountTotal: z.number().int(), grandTotal: z.number().int(),
               placedAt: z.string().nullable(),
@@ -97,8 +104,9 @@ orders.openapi(
       const payments = await loadOrderPayments(tx, o.id);
       const fulfillments = await loadOrderFulfillments(tx, o.id);
       const promotionCode = await loadOrderPromotionCode(tx, o.promotionId);
+      const { status, paymentStatus, fulfillmentStatus } = await loadOrderStatusFacts(tx, o);
       return {
-        code: o.code, state: o.state, currency: o.currency,
+        code: o.code, state: o.state, status, paymentStatus, fulfillmentStatus, currency: o.currency,
         subtotal: o.subtotal, shippingTotal: o.shippingTotal, taxTotal: o.taxTotal, discountTotal: o.discountTotal, grandTotal: o.grandTotal,
         placedAt: o.placedAt ? o.placedAt.toISOString() : null,
         shippingAddress: o.shippingAddress ?? null, customerEmail, promotionCode,

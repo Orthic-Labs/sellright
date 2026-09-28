@@ -7,12 +7,15 @@
  * pending-looks-like-paid guess), fulfillment/tracking, preorder/ship-date,
  * and line images. Centralized here so the four call sites can't drift.
  */
-import { desc, eq, sql } from 'drizzle-orm';
+import { desc, eq, inArray, sql } from 'drizzle-orm';
 import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
+import { deriveFulfillmentStatus, derivePaymentStatus, wirePaymentState, type OrderFulfillmentStatus, type OrderPaymentStatus } from '../orders/status.js';
 
 export interface OrderPaymentFact {
   method: string;
+  /** Wire-facing (`wirePaymentState`) — `Settled` reads as `captured`.
+   *  BREAKING (pre-1.0, see CHANGELOG.md). */
   state: string;
   amount: number;
   providerRef: string | null;
@@ -33,7 +36,7 @@ export async function loadOrderPayments(tx: Tx, orderId: string): Promise<OrderP
     .from(s.payment)
     .where(eq(s.payment.orderId, orderId))
     .orderBy(desc(s.payment.createdAt));
-  return rows.map((r) => ({ ...r, createdAt: r.createdAt.toISOString() }));
+  return rows.map((r) => ({ ...r, state: wirePaymentState(r.state), createdAt: r.createdAt.toISOString() }));
 }
 
 export interface OrderFulfillmentFact {
@@ -46,6 +49,76 @@ export interface OrderFulfillmentFact {
 export async function loadOrderFulfillments(tx: Tx, orderId: string): Promise<OrderFulfillmentFact[]> {
   const rows = await tx.select().from(s.fulfillment).where(eq(s.fulfillment.orderId, orderId)).orderBy(desc(s.fulfillment.createdAt));
   return rows.map((f) => ({ state: f.state, trackingCode: f.trackingCode, carrier: f.carrier, updatedAt: f.updatedAt?.toISOString() ?? null }));
+}
+
+export interface OrderStatusFacts {
+  /** Mirrors the `order.status` STORED GENERATED column — see orders/status.ts. */
+  status: 'open' | 'completed' | 'cancelled' | 'archived';
+  paymentStatus: OrderPaymentStatus;
+  fulfillmentStatus: OrderFulfillmentStatus;
+}
+
+/** The three wire-facing status fields (order/payment/fulfillment — see
+ *  orders/status.ts) for one order, computed at read time from its OWN
+ *  payment/order_line/fulfillment rows — the same sources of truth every
+ *  other order-detail surface already reads, so this can't drift from them.
+ *  `order` only needs `state`+`deletedAt`+`status` (the last one is read
+ *  straight off the generated column rather than re-derived). */
+export async function loadOrderStatusFacts(
+  tx: Tx,
+  order: { id: string; state: 'PendingPayment' | 'Paid' | 'PartiallyRefunded' | 'Refunded' | 'Cancelled'; status: OrderStatusFacts['status'] },
+): Promise<OrderStatusFacts> {
+  const [payments, lines, fulfillments] = await Promise.all([
+    tx.select({ state: s.payment.state }).from(s.payment).where(eq(s.payment.orderId, order.id)).orderBy(desc(s.payment.createdAt)),
+    tx.select({ quantity: s.orderLine.quantity, fulfilledQty: s.orderLine.fulfilledQty, cancelledQty: s.orderLine.cancelledQty }).from(s.orderLine).where(eq(s.orderLine.orderId, order.id)),
+    tx.select({ state: s.fulfillment.state }).from(s.fulfillment).where(eq(s.fulfillment.orderId, order.id)),
+  ]);
+  return {
+    status: order.status,
+    paymentStatus: derivePaymentStatus(order.state, payments),
+    fulfillmentStatus: deriveFulfillmentStatus(lines, fulfillments),
+  };
+}
+
+/**
+ * Batched counterpart of `loadOrderStatusFacts` for LIST endpoints (admin
+ * order list, account order list) — 3 queries total (payments/order_line/
+ * fulfillment rows for every order id on the page), not 3 per row, then the
+ * exact same pure `derivePaymentStatus`/`deriveFulfillmentStatus` functions
+ * every other surface uses. Deliberately NOT a hand-rolled SQL CASE
+ * replicating that logic — one implementation, no risk of the two drifting.
+ */
+export async function loadOrderStatusFactsBatch(
+  tx: Tx,
+  orders: Array<{ id: string; state: 'PendingPayment' | 'Paid' | 'PartiallyRefunded' | 'Refunded' | 'Cancelled'; status: OrderStatusFacts['status'] }>,
+): Promise<Map<string, OrderStatusFacts>> {
+  const out = new Map<string, OrderStatusFacts>();
+  if (!orders.length) return out;
+  const ids = orders.map((o) => o.id);
+  const [payments, lines, fulfillments] = await Promise.all([
+    tx.select({ orderId: s.payment.orderId, state: s.payment.state })
+      .from(s.payment).where(inArray(s.payment.orderId, ids)).orderBy(desc(s.payment.createdAt)),
+    tx.select({ orderId: s.orderLine.orderId, quantity: s.orderLine.quantity, fulfilledQty: s.orderLine.fulfilledQty, cancelledQty: s.orderLine.cancelledQty })
+      .from(s.orderLine).where(inArray(s.orderLine.orderId, ids)),
+    tx.select({ orderId: s.fulfillment.orderId, state: s.fulfillment.state })
+      .from(s.fulfillment).where(inArray(s.fulfillment.orderId, ids)),
+  ]);
+  const bucket = <T extends { orderId: string }>(rows: T[]): Map<string, T[]> => {
+    const m = new Map<string, T[]>();
+    for (const r of rows) { const list = m.get(r.orderId); if (list) list.push(r); else m.set(r.orderId, [r]); }
+    return m;
+  };
+  const paymentsByOrder = bucket(payments);
+  const linesByOrder = bucket(lines);
+  const fulfillmentsByOrder = bucket(fulfillments);
+  for (const order of orders) {
+    out.set(order.id, {
+      status: order.status,
+      paymentStatus: derivePaymentStatus(order.state, paymentsByOrder.get(order.id) ?? []),
+      fulfillmentStatus: deriveFulfillmentStatus(linesByOrder.get(order.id) ?? [], fulfillmentsByOrder.get(order.id) ?? []),
+    });
+  }
+  return out;
 }
 
 export interface OrderLineFact {

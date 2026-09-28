@@ -8,7 +8,7 @@ import { hashPassword, verifyPassword } from '../auth/password.js';
 import { customerCsrfValid, clearCustomerCookies } from '../auth/cookies.js';
 import { createHash } from 'node:crypto';
 import { revokeDeviceRemote } from '../licensing/device-leases.js';
-import { loadOrderFulfillments, loadOrderLines, loadOrderPayments, loadOrderPromotionCode } from './order-facts.js';
+import { loadOrderFulfillments, loadOrderLines, loadOrderPayments, loadOrderPromotionCode, loadOrderStatusFacts, loadOrderStatusFactsBatch } from './order-facts.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
 
 const hashToken = (t: string) => createHash('sha256').update(t).digest('hex');
@@ -45,7 +45,14 @@ account.openapi(
     }) },
     responses: {
       200: { description: 'Orders', content: { 'application/json': { schema: z.object({
-        items: z.array(z.object({ code: z.string(), state: z.string(), currency: z.string(), grandTotal: z.number().int(), placedAt: z.string().nullable(), lines: z.number().int() })),
+        items: z.array(z.object({
+          code: z.string(), state: z.string(),
+          // Wire-facing status split (BREAKING, pre-1.0 — see CHANGELOG.md).
+          status: z.enum(['open', 'completed', 'cancelled', 'archived']),
+          paymentStatus: z.enum(['pending', 'authorized', 'paid', 'partially_refunded', 'refunded', 'voided', 'failed']),
+          fulfillmentStatus: z.enum(['unfulfilled', 'partially_fulfilled', 'fulfilled', 'partially_delivered', 'delivered']),
+          currency: z.string(), grandTotal: z.number().int(), placedAt: z.string().nullable(), lines: z.number().int(),
+        })),
         total: z.number().int(), limit: z.number().int(), offset: z.number().int(),
       }) } } },
       401: { description: 'Unauthenticated', content: { 'application/json': { schema: apiErrorSchema() } } },
@@ -68,7 +75,7 @@ account.openapi(
       const [{ total } = { total: 0 }] = await tx.select({ total: sql<number>`count(*)::int` }).from(s.order).where(where);
       const items = await tx
         .select({
-          code: s.order.code, state: s.order.state, currency: s.order.currency, grandTotal: s.order.grandTotal, placedAt: s.order.placedAt,
+          id: s.order.id, code: s.order.code, state: s.order.state, status: s.order.status, currency: s.order.currency, grandTotal: s.order.grandTotal, placedAt: s.order.placedAt,
           lines: sql<number>`count(${s.orderLine.id})::int`,
         })
         .from(s.order)
@@ -78,7 +85,14 @@ account.openapi(
         .orderBy(desc(s.order.createdAt))
         .limit(limit)
         .offset(offset);
-      return { total, items: items.map((o) => ({ ...o, placedAt: o.placedAt ? o.placedAt.toISOString() : null })) };
+      const statusFacts = await loadOrderStatusFactsBatch(tx, items);
+      return {
+        total,
+        items: items.map((o) => {
+          const facts = statusFacts.get(o.id)!;
+          return { code: o.code, state: o.state, status: o.status, paymentStatus: facts.paymentStatus, fulfillmentStatus: facts.fulfillmentStatus, currency: o.currency, grandTotal: o.grandTotal, lines: o.lines, placedAt: o.placedAt ? o.placedAt.toISOString() : null };
+        }),
+      };
     });
     if (out === null) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
     return c.json({ items: out.items, total: out.total, limit, offset }, 200);
@@ -153,7 +167,12 @@ account.openapi(
     request: { params: z.object({ code: z.string() }) },
     responses: {
       200: { description: 'Order', content: { 'application/json': { schema: z.object({
-        code: z.string(), state: z.string(), currency: z.string(),
+        code: z.string(), state: z.string(),
+        // Wire-facing status split (BREAKING, pre-1.0 — see CHANGELOG.md).
+        status: z.enum(['open', 'completed', 'cancelled', 'archived']),
+        paymentStatus: z.enum(['pending', 'authorized', 'paid', 'partially_refunded', 'refunded', 'voided', 'failed']),
+        fulfillmentStatus: z.enum(['unfulfilled', 'partially_fulfilled', 'fulfilled', 'partially_delivered', 'delivered']),
+        currency: z.string(),
         subtotal: z.number().int(), shippingTotal: z.number().int(), taxTotal: z.number().int(),
         discountTotal: z.number().int(), grandTotal: z.number().int(),
         placedAt: z.string().nullable(),
@@ -192,11 +211,12 @@ account.openapi(
       const payments = await loadOrderPayments(tx, order.id);
       const fulfillments = await loadOrderFulfillments(tx, order.id);
       const promotionCode = await loadOrderPromotionCode(tx, order.promotionId);
-      return { kind: 'ok' as const, order, lines, payments, fulfillments, promotionCode };
+      const statusFacts = await loadOrderStatusFacts(tx, order);
+      return { kind: 'ok' as const, order, lines, payments, fulfillments, promotionCode, statusFacts };
     });
     if (out.kind !== 'ok') return out.kind === 'unauth' ? errJson(c, 404, 'NOT_AUTHENTICATED', 'not authenticated') : errJson(c, 404, 'ORDER_NOT_FOUND', 'order not found');
     return c.json({
-      code: out.order.code, state: out.order.state, currency: out.order.currency,
+      code: out.order.code, state: out.order.state, status: out.statusFacts.status, paymentStatus: out.statusFacts.paymentStatus, fulfillmentStatus: out.statusFacts.fulfillmentStatus, currency: out.order.currency,
       subtotal: out.order.subtotal, shippingTotal: out.order.shippingTotal, taxTotal: out.order.taxTotal,
       discountTotal: out.order.discountTotal, grandTotal: out.order.grandTotal,
       placedAt: out.order.placedAt ? out.order.placedAt.toISOString() : null,

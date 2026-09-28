@@ -498,6 +498,13 @@
       "when": 1790000010700,
       "tag": "0079_catalog_manifest_pending",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1790000010800,
+      "tag": "0080_order_status_split",
+      "breakpoints": true
     }
   ]
 }

@@ -28,6 +28,13 @@ export const orderState = pgEnum('order_state', [
   'Refunded',
   'Cancelled',
 ]);
+// Wire-facing order lifecycle status (lowercase snake_case — API contract,
+// orders/status.ts). Purely derived from `order_state` + `deleted_at`; a
+// Postgres STORED GENERATED column (see `order.status` below), so it can
+// never drift from the FSM it's computed from and needs no application-level
+// maintenance. `order_state`/the FSM in money/fsm.ts are UNCHANGED and remain
+// the source of truth — this is a read-side projection only.
+export const orderStatus = pgEnum('order_status', ['open', 'completed', 'cancelled', 'archived']);
 export const fulfillmentState = pgEnum('fulfillment_state', ['Pending', 'Shipped', 'Delivered', 'Cancelled']);
 export const fulfillmentType = pgEnum('fulfillment_type', ['physical', 'digital_download', 'license', 'update_pass']);
 export const paymentState = pgEnum('payment_state', [
