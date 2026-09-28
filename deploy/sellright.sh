@@ -437,9 +437,31 @@ ensure_cosign() {
 # through any container.
 cosign_verify_images() {
   ensure_cosign || return 1
+  # `compose config --images <svc>` does NOT reliably filter to just that
+  # service across docker compose versions — observed in CI returning the
+  # FULL unfiltered image list (postgres first) even with a service arg
+  # given, so a naive `| head -n 1` silently verified postgres's image and
+  # reported it as "api" passing. Zip the two full, unfiltered, same-ordered
+  # lists instead: `config --services` and `config --images` both walk the
+  # same parsed service map in the same order, so pairing them by line
+  # number reliably maps each service to its own image, with no dependence
+  # on any single-service filtering behavior.
+  services_all=$(compose config --services 2>/dev/null) || { log "could not list compose services; refusing to update"; return 1; }
+  images_all=$(compose config --images 2>/dev/null) || { log "could not list compose images; refusing to update"; return 1; }
+  svc_count=$(printf '%s\n' "$services_all" | wc -l)
+  img_count=$(printf '%s\n' "$images_all" | wc -l)
+  if [ "$svc_count" -ne "$img_count" ]; then
+    log "compose services (${svc_count}) and images (${img_count}) count mismatch; refusing to update"
+    return 1
+  fi
   verified_any=0
   for svc in api admin storefront; do
-    ref=$(compose config --images "$svc" 2>/dev/null | head -n 1 || true)
+    line_no=$(printf '%s\n' "$services_all" | grep -n -x -F "$svc" | head -n 1 | cut -d: -f1)
+    if [ -z "$line_no" ]; then
+      log "service '${svc}' not found in compose config; refusing to update without verifying it"
+      return 1
+    fi
+    ref=$(printf '%s\n' "$images_all" | sed -n "${line_no}p")
     if [ -z "$ref" ]; then
       log "could not resolve the target image for service '${svc}'; refusing to update without verifying it"
       return 1

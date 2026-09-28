@@ -18,16 +18,21 @@ pass() { printf 'ok - %s\n' "$*"; }
 mkdir -p "$tmp/bin" "$tmp/home"
 echo 'x=1' > "$tmp/home/.env"
 
-# Fake `docker` covering `compose config --images <svc>`, the legacy
-# `compose images -q <svc>` (must NOT be called by the fixed code), and
+# Fake `docker` covering `compose config --services`, `compose config
+# --images` (both UNFILTERED, same order: postgres, api, admin, storefront —
+# matching the real-world CI failure this regression-tests: a naive
+# single-service filter silently returned postgres's image for "api"), the
+# legacy `compose images -q <svc>` (must NOT be called), and
 # `image inspect --format ... <ref>`.
 cat > "$tmp/bin/docker" <<'SH'
 #!/bin/sh
 args="$*"
 case "$args" in
+  *" config "*"--services"*)
+    printf '%s\n' postgres api admin storefront
+    ;;
   *" config "*"--images"*)
-    for a in "$@"; do svc="$a"; done
-    echo "target-image:${svc}"
+    printf '%s\n' postgres-image:latest target-image:api target-image:admin target-image:storefront
     ;;
   *" images -q"*)
     echo "RUNNING-CONTAINER-IMAGE-ID"
@@ -36,6 +41,7 @@ case "$args" in
     for a in "$@"; do ref="$a"; done
     case "$ref" in
       target-image:*) echo "ghcr.io/orthic-labs/sellright-x@sha256:$(printf '%064d' 1)" ;;
+      postgres-image:*) echo "ghcr.io/library/postgres@sha256:$(printf '%064d' 2)" ;;
       RUNNING-CONTAINER-IMAGE-ID) echo "ghcr.io/orthic-labs/sellright-x@sha256:$(printf '%064d' 9)" ;;
       *) echo "" ;;
     esac
@@ -47,8 +53,14 @@ chmod +x "$tmp/bin/docker"
 
 cat > "$tmp/bin/cosign" <<'SH'
 #!/bin/sh
-[ "$1" = "verify" ] && exit 0
-exit 0
+[ "$1" = "verify" ] || exit 0
+# Fail closed if ever handed postgres's digest under the "api" role — proves
+# the zip-by-line-number mapping, not just "some digest was verified".
+last="$*"
+case "$last" in
+  *"$(printf '%064d' 2)"*) exit 1 ;;
+  *) exit 0 ;;
+esac
 SH
 chmod +x "$tmp/bin/cosign"
 
@@ -64,15 +76,15 @@ grep -q '^main "\$@"$' "$SCRIPT" || fail "sellright.sh's trailing 'main \"\$@\"'
 # shellcheck disable=SC2034
 SELLRIGHT_HOME="$tmp/home"
 
-resolved="$(PATH="$tmp/bin:$PATH" compose config --images api 2>/dev/null || true)"
-[ "$resolved" = "target-image:api" ] || fail "compose config --images did not resolve as expected (got: $resolved)"
-pass "compose() plumbs through to config --images"
+resolved="$(PATH="$tmp/bin:$PATH" compose config --images 2>/dev/null | sed -n 2p || true)"
+[ "$resolved" = "target-image:api" ] || fail "compose config --images (line 2, matching 'api' in --services) did not resolve as expected (got: $resolved)"
+pass "services/images line-number pairing resolves api to its own image, not postgres's"
 
 if PATH="$tmp/bin:$PATH" cosign_verify_images >/tmp/cosign-verify.out 2>&1; then
   pass "cosign_verify_images succeeds against target (pulled) images"
 else
   cat /tmp/cosign-verify.out >&2
-  fail "cosign_verify_images should have succeeded"
+  fail "cosign_verify_images should have succeeded (each service must get its OWN image, not postgres's)"
 fi
 
 if grep -q 'RUNNING-CONTAINER-IMAGE-ID' /tmp/cosign-verify.out 2>/dev/null; then
