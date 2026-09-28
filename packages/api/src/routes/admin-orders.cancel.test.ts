@@ -132,7 +132,7 @@ describe('POST /v1/admin/orders/{code}/cancel — HARDENING FIX 1', () => {
     const res = await cancelOrder('SR-CANCEL-PAID-1');
 
     expect(res.status).toBe(409);
-    expect((res.body as { error: string }).error).toMatch(/paid order.*use Refund/i);
+    expect((res.body as { error: { message: string } }).error.message).toMatch(/paid order.*use Refund/i);
     // Nothing changed: order still Paid, payment still Settled, stock untouched.
     expect(await orderState(orderId)).toBe('Paid');
     expect(await paymentState(orderId)).toBe('Settled');

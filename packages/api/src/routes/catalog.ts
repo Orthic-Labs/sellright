@@ -6,6 +6,7 @@ import * as s from '../db/schema.js';
 import { convertMoney, rateFor, RATE_SCALE } from '../money/currency.js';
 import { variantPriceRuleFromConfig } from '../money/pricing.js';
 import { isStockLimited } from './cart.js';
+import { apiErrorSchema, errJson } from '../lib/api-error.js';
 
 // Live, uncached: computed straight from stock.on_hand/allocated on every
 // call — never persisted, never TTL'd (locked stock-architecture rule).
@@ -183,7 +184,7 @@ catalog.openapi(
     request: { params: z.object({ slug: z.string() }), query: z.object({ currency: z.string().optional() }) },
     responses: {
       200: { description: 'Product', content: { 'application/json': { schema: ProductDetail } } },
-      404: { description: 'Not found', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+      404: { description: 'Not found', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
   async (c) => {
@@ -279,7 +280,7 @@ catalog.openapi(
         variants,
       };
     });
-    if (!detail) return c.json({ error: 'not found' }, 404);
+    if (!detail) return errJson(c, 404, 'PRODUCT_NOT_FOUND', 'not found');
     return c.json(detail, 200);
   },
 );
@@ -340,7 +341,7 @@ catalog.openapi(
     },
     responses: {
       200: { description: 'Collection', content: { 'application/json': { schema: z.object({ slug: z.string(), name: z.string(), description: z.string().nullable(), seoTitle: z.string().nullable(), seoDescription: z.string().nullable(), products: z.array(ProductListItem.pick({ slug: true, name: true, minPrice: true, image: true, inStock: true, pricingVariant: true })), total: z.number().int(), page: z.number().int(), pageSize: z.number().int() }) } } },
-      404: { description: 'Not found', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+      404: { description: 'Not found', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
   async (c) => {
@@ -393,7 +394,7 @@ catalog.openapi(
           })();
       return { slug: col.slug, name: col.name, description: col.description, seoTitle: col.seoTitle, seoDescription: col.seoDescription, products, total, page, pageSize };
     });
-    if (!out) return c.json({ error: 'collection not found' }, 404);
+    if (!out) return errJson(c, 404, 'COLLECTION_NOT_FOUND', 'collection not found');
     return c.json(out, 200);
   },
 );
@@ -477,7 +478,7 @@ catalog.openapi(
         // compatibility with callers that only need the toggle.
         availableQuantity: z.number().int().nullable(),
       })) }) } } },
-      404: { description: 'Not found', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+      404: { description: 'Not found', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
   async (c) => {
@@ -497,7 +498,7 @@ catalog.openapi(
         availableQuantity: availableQuantityFor(r),
       }));
     });
-    if (out === null) return c.json({ error: 'not found' }, 404);
+    if (out === null) return errJson(c, 404, 'PRODUCT_NOT_FOUND', 'not found');
     return c.json({ variants: out }, 200);
   },
 );

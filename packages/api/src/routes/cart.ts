@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
+import type { Context } from 'hono';
 import { and, asc, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import { withStore, type Tx } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
@@ -17,6 +18,7 @@ import { env } from '../env.js';
 import { cartExpiry, cartLifecycleFromConfig } from '../cart/ttl.js';
 import { clientIp } from '../auth/rate-limit.js';
 import { cartRetryAfter, recordCartAttempt } from './apps.limit.js';
+import { apiErrorSchema, errJson } from '../lib/api-error.js';
 
 /** Per-store effective-price rule (see money/pricing.ts) — resolved from
  *  store.config.pricing.variantRule so cart and checkout price identically. */
@@ -242,7 +244,11 @@ export type CartConflictCode = z.infer<typeof CartConflictCode>;
  *  rejections: the code + current revision + a freshly re-priced snapshot so
  *  the client can recover. */
 export const CartConflictOut = z.object({
-  error: z.string(),
+  error: z.object({
+    code: z.string(),
+    message: z.string(),
+    requestId: z.string().optional(),
+  }),
   code: CartConflictCode,
   revision: z.number().int(),
   cart: CartOut,
@@ -283,8 +289,12 @@ const CONFLICT_COPY: Record<CartConflictCode, string> = {
 /** 409 body for a rejected cart mutation: the CURRENT revision + repriced
  *  snapshot so the caller can merge and retry (CART-03) or learn the cart is
  *  terminal (CART-02/CART-05). */
-async function cartConflict(tx: Tx, st: StoreCtx, row: CartRow, code: CartConflictCode, couponCode?: string, authToken?: string | null, shipCountry?: string | null) {
-  return { error: CONFLICT_COPY[code], code, revision: row.revision, cart: await cartResponse(tx, st, row, couponCode, authToken, shipCountry) };
+async function cartConflict(c: Context, tx: Tx, st: StoreCtx, row: CartRow, code: CartConflictCode, couponCode?: string, authToken?: string | null, shipCountry?: string | null) {
+  const requestId = (c.var as { requestId?: string } | undefined)?.requestId;
+  return {
+    error: { code: code.toUpperCase(), message: CONFLICT_COPY[code], ...(requestId ? { requestId } : {}) },
+    code, revision: row.revision, cart: await cartResponse(tx, st, row, couponCode, authToken, shipCountry),
+  };
 }
 
 /**
@@ -372,7 +382,7 @@ cart.openapi(
     request: { body: { content: { 'application/json': { schema: z.object({ items: z.array(CartLineIn).optional(), email: z.string().email().optional(), couponCode: z.string().optional() }) } } } },
     responses: {
       200: { description: 'Cart', content: { 'application/json': { schema: CartOut } } },
-      429: { description: 'Rate limited', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+      429: { description: 'Rate limited', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
   async (c) => {
@@ -380,7 +390,7 @@ cart.openapi(
     // an unbounded number of cart rows; legitimate shoppers never approach 60/min.
     const ip = clientIp(c);
     const retry = await cartRetryAfter(ip);
-    if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
+    if (retry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${retry}s`);
     await recordCartAttempt(ip);
     const st = await resolveStoreFromCtx(c);
     const body = c.req.valid('json');
@@ -405,7 +415,7 @@ cart.openapi(
   createRoute({
     method: 'get', path: '/v1/shop/cart/{token}', summary: 'Get a cart',
     request: { params: z.object({ token: z.string() }), query: z.object({ couponCode: z.string().optional(), shipCountry: z.string().optional() }) },
-    responses: { 200: { description: 'Cart', content: { 'application/json': { schema: CartOut } } }, 404: { description: 'Not found', content: { 'application/json': { schema: z.object({ error: z.string() }) } } } },
+    responses: { 200: { description: 'Cart', content: { 'application/json': { schema: CartOut } } }, 404: { description: 'Not found', content: { 'application/json': { schema: apiErrorSchema() } } } },
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
@@ -417,7 +427,7 @@ cart.openapi(
       if (!row) return null;
       return cartResponse(tx, st, row, couponCode, authTok, shipCountry);
     });
-    if (!out) return c.json({ error: 'cart not found' }, 404);
+    if (!out) return errJson(c, 404, 'CART_NOT_FOUND', 'cart not found');
     return c.json(out, 200);
   },
 );
@@ -435,7 +445,7 @@ cart.openapi(
     request: { params: z.object({ token: z.string() }), body: { content: { 'application/json': { schema: z.object({ lines: z.array(CartLineIn).min(1), couponCode: z.string().optional(), shipCountry: z.string().optional(), expectedRevision: z.number().int().optional() }) } } } },
     responses: {
       200: { description: 'Cart', content: { 'application/json': { schema: CartOut } } },
-      404: { description: 'Not found', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+      404: { description: 'Not found', content: { 'application/json': { schema: apiErrorSchema() } } },
       409: { description: 'Terminal, missing-revision, or stale cart', content: { 'application/json': { schema: CartConflictOut } } },
     },
   }),
@@ -452,12 +462,12 @@ cart.openapi(
       const appendsOnly = body.lines.every((l) => l.quantity > 0);
       const block = mutationBlocker(row, body.expectedRevision, { revisionRequired: !appendsOnly });
       if (block === 'missing') return { code: 404 as const };
-      if (block) return { code: 409 as const, body: await cartConflict(tx, st, row!, block, body.couponCode, authTok, body.shipCountry) };
+      if (block) return { code: 409 as const, body: await cartConflict(c, tx, st, row!, block, body.couponCode, authTok, body.shipCountry) };
       const updated = await applyLines(tx, st, row!, body.lines, { mode: body.expectedRevision == null ? 'increment' : 'set' });
-      if (!updated) return { code: 409 as const, body: await cartConflict(tx, st, row!, 'converted', body.couponCode, authTok, body.shipCountry) };
+      if (!updated) return { code: 409 as const, body: await cartConflict(c, tx, st, row!, 'converted', body.couponCode, authTok, body.shipCountry) };
       return { code: 200 as const, body: await cartResponse(tx, st, updated, body.couponCode, authTok, body.shipCountry) };
     });
-    if (out.code === 404) return c.json({ error: 'cart not found' }, 404);
+    if (out.code === 404) return errJson(c, 404, 'CART_NOT_FOUND', 'cart not found');
     if (out.code === 409) return c.json(out.body, 409);
     return c.json(out.body, 200);
   },
@@ -473,7 +483,7 @@ cart.openapi(
     request: { params: z.object({ token: z.string() }), body: { content: { 'application/json': { schema: z.object({ email: z.string().email(), expectedRevision: z.number().int().optional() }) } } } },
     responses: {
       200: { description: 'Cart', content: { 'application/json': { schema: CartOut } } },
-      404: { description: 'Not found', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+      404: { description: 'Not found', content: { 'application/json': { schema: apiErrorSchema() } } },
       409: { description: 'Converted or stale cart', content: { 'application/json': { schema: CartConflictOut } } },
     },
   }),
@@ -485,7 +495,7 @@ cart.openapi(
       const [row] = await tx.select().from(s.cart).where(eq(s.cart.token, token)).limit(1).for('update');
       const block = mutationBlocker(row, expectedRevision, { revisionRequired: true });
       if (block === 'missing') return { code: 404 as const };
-      if (block) return { code: 409 as const, body: await cartConflict(tx, st, row!, block) };
+      if (block) return { code: 409 as const, body: await cartConflict(c, tx, st, row!, block) };
       const norm = normalizeEmail(email);
       const [acct] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, norm)).limit(1);
       const [updated] = await tx
@@ -493,10 +503,10 @@ cart.openapi(
         .set({ email: norm, customerId: row!.customerId ?? acct?.id ?? null, updatedAt: new Date(), revision: sql`${s.cart.revision} + 1` })
         .where(and(eq(s.cart.id, row!.id), inArray(s.cart.status, ['active', 'abandoned'])))
         .returning();
-      if (!updated) return { code: 409 as const, body: await cartConflict(tx, st, row!, 'converted') };
+      if (!updated) return { code: 409 as const, body: await cartConflict(c, tx, st, row!, 'converted') };
       return { code: 200 as const, body: await cartResponse(tx, st, updated) };
     });
-    if (out.code === 404) return c.json({ error: 'cart not found' }, 404);
+    if (out.code === 404) return errJson(c, 404, 'CART_NOT_FOUND', 'cart not found');
     if (out.code === 409) return c.json(out.body, 409);
     return c.json(out.body, 200);
   },
@@ -514,8 +524,8 @@ cart.openapi(
     request: { params: z.object({ token: z.string() }), query: z.object({ expectedRevision: z.coerce.number().int().optional() }) },
     responses: {
       200: { description: 'Cart', content: { 'application/json': { schema: CartOut } } },
-      401: { description: 'Auth required', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
-      404: { description: 'Not found', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+      401: { description: 'Auth required', content: { 'application/json': { schema: apiErrorSchema() } } },
+      404: { description: 'Not found', content: { 'application/json': { schema: apiErrorSchema() } } },
       409: { description: 'Converted or stale cart', content: { 'application/json': { schema: CartConflictOut } } },
     },
   }),
@@ -545,7 +555,7 @@ cart.openapi(
       const row = locked.find((r) => r.id === found.id);
       const block = mutationBlocker(row, expectedRevision, { revisionRequired: true });
       if (block === 'missing') return { code: 404 as const };
-      if (block) return { code: 409 as const, body: await cartConflict(tx, st, row!, block, undefined, authTok) };
+      if (block) return { code: 409 as const, body: await cartConflict(c, tx, st, row!, block, undefined, authTok) };
 
       // Other active carts owned by this customer → fold their lines in (sum
       // on conflict), then retire them as 'merged'. The fold is a MOVE: the
@@ -574,11 +584,11 @@ cart.openapi(
       const [updated] = await tx.update(s.cart).set({ customerId: customer.id, updatedAt: new Date(), revision: sql`${s.cart.revision} + 1` })
         .where(and(eq(s.cart.id, row!.id), inArray(s.cart.status, ['active', 'abandoned'])))
         .returning();
-      if (!updated) return { code: 409 as const, body: await cartConflict(tx, st, row!, 'converted', undefined, authTok) };
+      if (!updated) return { code: 409 as const, body: await cartConflict(c, tx, st, row!, 'converted', undefined, authTok) };
       return { code: 200 as const, body: await cartResponse(tx, st, updated, undefined, authTok) };
     });
-    if (res.code === 401) return c.json({ error: 'authentication required to merge' }, 401);
-    if (res.code === 404) return c.json({ error: 'cart not found' }, 404);
+    if (res.code === 401) return errJson(c, 401, 'AUTH_REQUIRED', 'authentication required to merge');
+    if (res.code === 404) return errJson(c, 404, 'CART_NOT_FOUND', 'cart not found');
     if (res.code === 409) return c.json(res.body, 409);
     return c.json(res.body, 200);
   },

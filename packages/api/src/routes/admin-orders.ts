@@ -2,6 +2,7 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { withStore } from '../db/client.js';
+import { errJson } from '../lib/api-error.js';
 import * as s from '../db/schema.js';
 import { HttpError, J, errBody, money, Page, requireAdmin, requireStore, requireWrite, requirePermission, guard } from './admin-helpers.js';
 import { calculateOrderTotals } from '../money/totals.js';
@@ -148,7 +149,7 @@ adminOrders.openapi(
 
     if (res.kind === 'notfound') throw new HttpError(404, 'order not found');
     if (res.kind === 'badstate') throw new HttpError(409, `only unpaid (PendingPayment) orders can be edited — this one is ${res.state}`);
-    if (res.kind === 'blocked') return c.json({ error: 'insufficient stock', skus: res.skus }, 409);
+    if (res.kind === 'blocked') return errJson(c, 409, 'OUT_OF_STOCK', 'insufficient stock', { extra: { skus: res.skus } });
     return c.json({ code, grandTotal: res.grandTotal }, 200);
   }),
 );

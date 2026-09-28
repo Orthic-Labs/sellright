@@ -68,7 +68,7 @@ async function seed(): Promise<string> {
   return createAdminSession(ADMIN);
 }
 
-type BulkStockBody = { updated: { id: string; onHand: number }[] } | { error: string; missing?: string[] };
+type BulkStockBody = { updated: { id: string; onHand: number }[] } | { error: { code: string; message: string }; missing?: string[] };
 
 async function patchBulk(items: { id: string; onHand: number }[], token: string): Promise<{ status: number; body: BulkStockBody }> {
   const res = await app.request('/v1/admin/variants/stock/bulk', {
@@ -147,7 +147,7 @@ describe('PATCH /v1/admin/variants/stock/bulk', () => {
     );
     expect(status).toBe(404);
     if (!('error' in body)) throw new Error(`expected error body, got: ${JSON.stringify(body)}`);
-    expect(body.error).toMatch(new RegExp(UNKNOWN_VARIANT));
+    expect(body.error.message).toMatch(new RegExp(UNKNOWN_VARIANT));
     // V1 must be untouched — nothing partially applied.
     expect(await stockRow(V1)).toEqual({ onHand: 10 });
     expect(await movementCount(V1)).toBe(0);

@@ -235,7 +235,7 @@ afterAll(async () => {
       body: JSON.stringify({ method: 'sezzle' }),
     });
     expect(second.status).toBe(409);
-    expect((await second.json() as { error: string }).error).toMatch(/existing payment/i);
+    expect((await second.json() as { error: { message: string } }).error.message).toMatch(/existing payment/i);
 
     // The attempt row stamps account + mode identity — refunds/webhooks bind to it.
     const [row] = await withStore(STORE, async tx =>
