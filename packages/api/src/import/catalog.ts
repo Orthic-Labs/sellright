@@ -2,6 +2,7 @@
 import * as s from '../db/schema.js';
 import { parseDate } from './store.js';
 import { optionalColumn } from './source-schema.js';
+import { ASSET_KEY_SEGMENT } from './artifacts.js';
 
 const lower = (v: string | null) => (v ?? 'image').toLowerCase();
 
@@ -62,7 +63,7 @@ export async function importCatalog(ctx: ImportContext): Promise<void> {
       assetMap.set(a.id, id);
       await tx.insert(s.asset).values({
         // store the PREVIEW path (what the storefront/manifest displays), not source
-        id, storeId, type: lower(a.type), path: storeId + '/vendure/' + (a.preview ?? a.source), width: a.width ?? null, height: a.height ?? null,
+        id, storeId, type: lower(a.type), path: storeId + '/' + ASSET_KEY_SEGMENT + '/' + (a.preview ?? a.source), width: a.width ?? null, height: a.height ?? null,
       });
     }
 
