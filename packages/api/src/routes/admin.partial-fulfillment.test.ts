@@ -29,7 +29,13 @@ const ADMIN = 'eeeeeeee-eeee-eeee-eeee-00000000000a';
 const VARIANT_A = 'eeeeeeee-eeee-eeee-eeee-00000000000b';
 const VARIANT_B = 'eeeeeeee-eeee-eeee-eeee-00000000000c';
 const CUSTOMER = 'eeeeeeee-eeee-eeee-eeee-00000000000d';
-const LOCATION = 'eeeeeeee-eeee-eeee-eeee-00000000000e';
+// Zod's `.uuid()` (used on the route's `locationId` field) enforces RFC4122
+// version/variant nibbles except for the special-cased nil/max UUIDs — a
+// same-shaped-as-the-rest 'eeee...' literal fails that check where it's
+// actually validated (unlike STORE/ADMIN/VARIANT_* above, which only ever
+// reach raw SQL / withStore, never a zod .uuid() field). Version 4 + variant
+// 8 here keeps it valid while staying visually distinguishable.
+const LOCATION = 'eeeeeeee-eeee-4eee-8eee-00000000000e';
 
 const app = new OpenAPIHono();
 app.route('/', adminRoutes);
