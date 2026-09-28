@@ -2357,6 +2357,297 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/discounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List discounts */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: unknown[];
+                        };
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Create a discount */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** Format: email */
+                        affiliateEmail?: string | null;
+                        code?: string | null;
+                        conditions?: unknown[] | null;
+                        /** @default true */
+                        enabled?: boolean;
+                        endsAt?: string | null;
+                        exclusionGroup?: string | null;
+                        /** @default false */
+                        freeShipping?: boolean;
+                        perCustomerUsageLimit?: number | null;
+                        priority?: number;
+                        startsAt?: string | null;
+                        /** @enum {string} */
+                        type: "percentage" | "fixed" | "free_shipping";
+                        usageLimit?: number | null;
+                        /** @default 0 */
+                        value?: number;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            id: string;
+                        };
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Code exists */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/discounts/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Discount detail + recent usage */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": unknown;
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        /** Delete a discount (only if unused) */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            id: string;
+                        };
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description In use */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        /** Update a discount */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** Format: email */
+                        affiliateEmail?: string | null;
+                        code?: string | null;
+                        conditions?: unknown[] | null;
+                        /** @default true */
+                        enabled?: boolean;
+                        endsAt?: string | null;
+                        exclusionGroup?: string | null;
+                        /** @default false */
+                        freeShipping?: boolean;
+                        perCustomerUsageLimit?: number | null;
+                        priority?: number;
+                        startsAt?: string | null;
+                        /** @enum {string} */
+                        type?: "percentage" | "fixed" | "free_shipping";
+                        usageLimit?: number | null;
+                        /** @default 0 */
+                        value?: number;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            id: string;
+                        };
+                    };
+                };
+                /** @description Invalid value */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
     "/v1/admin/disputes": {
         parameters: {
             query?: never;
@@ -3932,11 +4223,14 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
+                    fulfillmentStatus?: "unfulfilled" | "partially_fulfilled" | "fulfilled" | "partially_delivered" | "delivered";
                     page?: number;
                     pageSize?: number;
+                    paymentStatus?: "pending" | "authorized" | "paid" | "partially_refunded" | "refunded" | "voided" | "failed";
                     preOrder?: boolean | null;
                     q?: string;
                     state?: string;
+                    status?: "open" | "completed" | "cancelled" | "archived";
                     trashed?: boolean | null;
                 };
                 header?: never;
@@ -5700,7 +5994,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List promotions */
+        /**
+         * List discounts
+         * @deprecated
+         * @description Deprecated alias for GET /v1/admin/discounts — will be removed in a future release.
+         */
         get: {
             parameters: {
                 query?: never;
@@ -5733,7 +6031,11 @@ export interface paths {
             };
         };
         put?: never;
-        /** Create a promotion */
+        /**
+         * Create a discount
+         * @deprecated
+         * @description Deprecated alias for POST /v1/admin/discounts — will be removed in a future release.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -5810,7 +6112,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Promotion detail + recent usage */
+        /**
+         * Discount detail + recent usage
+         * @deprecated
+         * @description Deprecated alias for GET /v1/admin/discounts/{id} — will be removed in a future release.
+         */
         get: {
             parameters: {
                 query?: never;
@@ -5853,7 +6159,11 @@ export interface paths {
         };
         put?: never;
         post?: never;
-        /** Delete a promotion (only if unused) */
+        /**
+         * Delete a discount (only if unused)
+         * @deprecated
+         * @description Deprecated alias for DELETE /v1/admin/discounts/{id} — will be removed in a future release.
+         */
         delete: {
             parameters: {
                 query?: never;
@@ -5907,7 +6217,11 @@ export interface paths {
         };
         options?: never;
         head?: never;
-        /** Update a promotion */
+        /**
+         * Update a discount
+         * @deprecated
+         * @description Deprecated alias for PATCH /v1/admin/discounts/{id} — will be removed in a future release.
+         */
         patch: {
             parameters: {
                 query?: never;
@@ -10449,10 +10763,16 @@ export interface paths {
                             items: {
                                 code: string;
                                 currency: string;
+                                /** @enum {string} */
+                                fulfillmentStatus: "unfulfilled" | "partially_fulfilled" | "fulfilled" | "partially_delivered" | "delivered";
                                 grandTotal: number;
                                 lines: number;
+                                /** @enum {string} */
+                                paymentStatus: "pending" | "authorized" | "paid" | "partially_refunded" | "refunded" | "voided" | "failed";
                                 placedAt: string | null;
                                 state: string;
+                                /** @enum {string} */
+                                status: "open" | "completed" | "cancelled" | "archived";
                             }[];
                             limit: number;
                             offset: number;
@@ -10515,6 +10835,8 @@ export interface paths {
                                 trackingCode: string | null;
                                 updatedAt: string | null;
                             }[];
+                            /** @enum {string} */
+                            fulfillmentStatus: "unfulfilled" | "partially_fulfilled" | "fulfilled" | "partially_delivered" | "delivered";
                             grandTotal: number;
                             lines: {
                                 image: string | null;
@@ -10534,11 +10856,15 @@ export interface paths {
                                 providerRef: string | null;
                                 state: string;
                             }[];
+                            /** @enum {string} */
+                            paymentStatus: "pending" | "authorized" | "paid" | "partially_refunded" | "refunded" | "voided" | "failed";
                             placedAt: string | null;
                             promotionCode: string | null;
                             shippingAddress?: unknown;
                             shippingTotal: number;
                             state: string;
+                            /** @enum {string} */
+                            status: "open" | "completed" | "cancelled" | "archived";
                             subtotal: number;
                             taxTotal: number;
                         };
@@ -13467,6 +13793,8 @@ export interface paths {
                                 trackingCode: string | null;
                                 updatedAt: string | null;
                             }[];
+                            /** @enum {string} */
+                            fulfillmentStatus: "unfulfilled" | "partially_fulfilled" | "fulfilled" | "partially_delivered" | "delivered";
                             grandTotal: number;
                             lines: {
                                 image: string | null;
@@ -13486,11 +13814,15 @@ export interface paths {
                                 providerRef: string | null;
                                 state: string;
                             }[];
+                            /** @enum {string} */
+                            paymentStatus: "pending" | "authorized" | "paid" | "partially_refunded" | "refunded" | "voided" | "failed";
                             placedAt: string | null;
                             promotionCode: string | null;
                             shippingAddress?: unknown;
                             shippingTotal: number;
                             state: string;
+                            /** @enum {string} */
+                            status: "open" | "completed" | "cancelled" | "archived";
                             subtotal: number;
                             taxTotal: number;
                         };

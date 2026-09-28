@@ -14,19 +14,22 @@ export default function Discounts() {
   const cur = store?.currency ?? 'USD';
   const [form, setForm] = useState<{ code: string; type: string; value: string; usageLimit: string; perCustomerUsageLimit: string } | null>(null);
 
-  const key = ['promotions', store?.slug];
-  const { data, isLoading, error } = useQuery({ queryKey: key, queryFn: () => api.get<{ items: Promo[] }>('/promotions') });
+  // De-Vendure: the API's canonical route is now /discounts (/promotions is a
+  // deprecated alias — see admin-marketing.ts). This page already called
+  // itself "Discounts"; it was only the wire path that still said promotions.
+  const key = ['discounts', store?.slug];
+  const { data, isLoading, error } = useQuery({ queryKey: key, queryFn: () => api.get<{ items: Promo[] }>('/discounts') });
   const invalidate = () => qc.invalidateQueries({ queryKey: key });
   const create = useMutation({
     mutationFn: () => {
       const f = form!; const isPct = f.type === 'percentage';
       // percentage value = the percent integer (10 = 10%); fixed value = cents.
-      return api.post('/promotions', { code: f.code, type: f.type, value: f.type === 'free_shipping' ? 0 : isPct ? Math.round(parseFloat(f.value || '0')) : Math.round(parseFloat(f.value || '0') * 100), usageLimit: f.usageLimit ? Number(f.usageLimit) : null, perCustomerUsageLimit: f.perCustomerUsageLimit ? Number(f.perCustomerUsageLimit) : null });
+      return api.post('/discounts', { code: f.code, type: f.type, value: f.type === 'free_shipping' ? 0 : isPct ? Math.round(parseFloat(f.value || '0')) : Math.round(parseFloat(f.value || '0') * 100), usageLimit: f.usageLimit ? Number(f.usageLimit) : null, perCustomerUsageLimit: f.perCustomerUsageLimit ? Number(f.perCustomerUsageLimit) : null });
     },
     onSuccess: () => { setForm(null); invalidate(); },
   });
-  const toggle = useMutation({ mutationFn: (p: Promo) => api.patch(`/promotions/${p.id}`, { enabled: !p.enabled }), onSuccess: invalidate });
-  const del = useMutation({ mutationFn: (id: string) => api.del(`/promotions/${id}`), onSuccess: invalidate });
+  const toggle = useMutation({ mutationFn: (p: Promo) => api.patch(`/discounts/${p.id}`, { enabled: !p.enabled }), onSuccess: invalidate });
+  const del = useMutation({ mutationFn: (id: string) => api.del(`/discounts/${id}`), onSuccess: invalidate });
 
   const fmtValue = (p: Promo) => p.type === 'percentage' ? `${p.value}%` : p.type === 'free_shipping' ? 'Free shipping' : money(p.value, cur);
 
