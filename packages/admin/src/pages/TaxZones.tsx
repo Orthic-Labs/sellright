@@ -80,14 +80,14 @@ export default function TaxZonesPage() {
     <>
       {confirmDialog}
       <PageHeader
-        title="Tax Zones"
+        title="Taxes"
         subtitle="Country-based tax rates applied at checkout."
         actions={
           <button
             className="btn-primary"
             onClick={() => setForm(form ? null : { ...EMPTY_FORM })}
           >
-            <Plus size={16} /> Add zone
+            <Plus size={16} /> Add rate
           </button>
         }
       />
@@ -163,7 +163,7 @@ export default function TaxZonesPage() {
 
       <div className="card overflow-hidden">
         {isLoading ? <Loading /> : error ? <ErrorNote message={(error as Error).message} /> : !data || data.items.length === 0 ? (
-          <EmptyState title="No tax zones" />
+          <EmptyState title="No taxes" />
         ) : (
           <table className="w-full">
             <thead>

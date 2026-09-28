@@ -151,6 +151,4 @@ export const money = z.number().int();
 export const Page = z.object({ items: z.array(z.unknown()), total: z.number().int(), page: z.number().int(), pageSize: z.number().int() });
 
 /** URL-safe slug from a name (admin-created products/collections). */
-export function slugify(input: string): string {
-  return input.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'item';
-}
+export { slugify } from '../lib/slug.js';

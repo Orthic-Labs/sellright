@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Trash2, Pencil } from 'lucide-react';
+import { Plus, Trash2, Pencil, X } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../auth';
 import { Loading, ErrorNote, PageHeader, EmptyState, Badge, Spinner, Modal, Field } from '../components/ui';
@@ -17,13 +17,17 @@ interface PromoDetail extends Promo {
 }
 interface ConditionArg { name: string; value: string }
 interface Condition { code: string; args?: ConditionArg[] }
+interface CollectionRow { id: string; name: string }
+interface ProductRow { id: string; name: string }
+interface Page<T> { items: T[]; total: number }
+
+export type ScopeKind = '' | 'collections' | 'products' | 'tags';
 
 /** Reads the repo's existing condition shape (money/coupon.ts evaluateCoupon)
  *  back into simple form fields — no new condition vocabulary invented here,
- *  only surfaced: `minimum_order_amount` (amount cents) and
- *  `at_least_n_with_facets` (facet value id scope + minimum qty), which is
- *  the existing product/collection-scoping primitive on main (facetValueIds
- *  are how products/collections are tagged — see productFacetIds()). */
+ *  only surfaced: `minimum_order_amount` and the native item-scope conditions
+ *  `at_least_n_in_collections` / `at_least_n_products` / `at_least_n_with_tags`,
+ *  which match on a product's real collection membership, id, or `tags`. */
 export function readCondition(conditions: unknown, code: string): Record<string, string> {
   const arr = Array.isArray(conditions) ? (conditions as Condition[]) : [];
   const c = arr.find((x) => x?.code === code);
@@ -38,12 +42,20 @@ export interface FormState {
   usageLimit: string; perCustomerUsageLimit: string;
   startsAt: string; endsAt: string;
   minOrderAmount: string;
-  facetIds: string; facetMinimum: string;
+  scope: ScopeKind;
+  scopeMinimum: string;
+  collectionIds: string[];
+  products: { id: string; name: string }[];
+  tags: string[];
+  /** Set when a saved discount still carries the retired
+   *  `at_least_n_with_facets` condition — shown as a warning in the form and
+   *  dropped on save (buildConditions only ever emits native codes). */
+  legacyFacetCondition: boolean;
   enabled: boolean;
 }
 
 function emptyForm(): FormState {
-  return { id: null, code: '', type: 'percentage', value: '', usageLimit: '', perCustomerUsageLimit: '', startsAt: '', endsAt: '', minOrderAmount: '', facetIds: '', facetMinimum: '1', enabled: true };
+  return { id: null, code: '', type: 'percentage', value: '', usageLimit: '', perCustomerUsageLimit: '', startsAt: '', endsAt: '', minOrderAmount: '', scope: '', scopeMinimum: '1', collectionIds: [], products: [], tags: [], legacyFacetCondition: false, enabled: true };
 }
 
 /** ISO datetime <-> the value a `<input type="datetime-local">` wants (no
@@ -59,18 +71,78 @@ export function fromLocalInput(v: string): string | null {
   return v ? new Date(v).toISOString() : null;
 }
 
+const parseIds = (raw: string | undefined): string[] => {
+  try {
+    const v = JSON.parse(raw ?? '[]');
+    return Array.isArray(v) ? v.map(String) : [];
+  } catch { return []; }
+};
+
+/** Maps a saved discount's `conditions` array back into form state — the
+ *  inverse of buildConditions(). Product scope ids come back as `{id, name}`
+ *  with the id as a placeholder name; the component resolves real names via
+ *  `GET /products/{id}` afterwards (no new endpoints). */
+export function hydrateForm(p: PromoDetail): FormState {
+  const minCond = readCondition(p.conditions, 'minimum_order_amount');
+  const colCond = readCondition(p.conditions, 'at_least_n_in_collections');
+  const prodCond = readCondition(p.conditions, 'at_least_n_products');
+  const tagCond = readCondition(p.conditions, 'at_least_n_with_tags');
+  const legacyCond = readCondition(p.conditions, 'at_least_n_with_facets');
+  const f = emptyForm();
+  return {
+    ...f,
+    id: p.id,
+    code: p.code ?? '', type: p.type, value: p.type === 'percentage' ? String(p.value) : p.type === 'free_shipping' ? '' : (p.value / 100).toFixed(2),
+    usageLimit: p.usageLimit != null ? String(p.usageLimit) : '', perCustomerUsageLimit: p.perCustomerUsageLimit != null ? String(p.perCustomerUsageLimit) : '',
+    startsAt: toLocalInput(p.startsAt), endsAt: toLocalInput(p.endsAt),
+    minOrderAmount: minCond.amount ? (Number(minCond.amount) / 100).toFixed(2) : '',
+    scope: colCond.collectionIds ? 'collections' : prodCond.productIds ? 'products' : tagCond.tags ? 'tags' : '',
+    scopeMinimum: colCond.minimum ?? prodCond.minimum ?? tagCond.minimum ?? '1',
+    collectionIds: parseIds(colCond.collectionIds),
+    products: parseIds(prodCond.productIds).map((id) => ({ id, name: id })),
+    tags: parseIds(tagCond.tags),
+    legacyFacetCondition: Object.keys(legacyCond).length > 0,
+    enabled: p.enabled,
+  };
+}
+
 export function buildConditions(f: FormState): unknown[] | null {
   const conds: Condition[] = [];
   const minAmount = f.minOrderAmount.trim() ? Math.round(parseFloat(f.minOrderAmount) * 100) : 0;
   if (minAmount > 0) conds.push({ code: 'minimum_order_amount', args: [{ name: 'amount', value: String(minAmount) }] });
-  const facetIds = f.facetIds.split(',').map((s) => s.trim()).filter(Boolean);
-  if (facetIds.length > 0) {
-    conds.push({ code: 'at_least_n_with_facets', args: [
-      { name: 'facets', value: JSON.stringify(facetIds) },
-      { name: 'minimum', value: String(Math.max(1, Number(f.facetMinimum) || 1)) },
+  // At most one item-scope condition per discount — emitted exactly in the
+  // shape money/coupon.ts evaluates (JSON string-array arg + `minimum`).
+  const minimum = String(Math.max(1, Number(f.scopeMinimum) || 1));
+  if (f.scope === 'collections' && f.collectionIds.length > 0) {
+    conds.push({ code: 'at_least_n_in_collections', args: [
+      { name: 'collectionIds', value: JSON.stringify(f.collectionIds) },
+      { name: 'minimum', value: minimum },
+    ] });
+  } else if (f.scope === 'products' && f.products.length > 0) {
+    conds.push({ code: 'at_least_n_products', args: [
+      { name: 'productIds', value: JSON.stringify(f.products.map((p) => p.id)) },
+      { name: 'minimum', value: minimum },
+    ] });
+  } else if (f.scope === 'tags' && f.tags.length > 0) {
+    conds.push({ code: 'at_least_n_with_tags', args: [
+      { name: 'tags', value: JSON.stringify(f.tags) },
+      { name: 'minimum', value: minimum },
     ] });
   }
   return conds.length ? conds : null;
+}
+
+/** A chosen scope with nothing selected must not save — buildConditions would
+ *  silently emit no scope condition, turning the discount into a whole-order
+ *  (store-wide) one. Blocks submit until the merchant picks an item or drops
+ *  back to Whole order. */
+export function scopeError(f: FormState): string | null {
+  if (f.scope === '') return null;
+  const empty =
+    (f.scope === 'collections' && f.collectionIds.length === 0) ||
+    (f.scope === 'products' && f.products.length === 0) ||
+    (f.scope === 'tags' && f.tags.length === 0);
+  return empty ? 'Select at least one collection, product or tag — or choose Whole order.' : null;
 }
 
 export function buildPayload(f: FormState) {
@@ -88,61 +160,100 @@ export function buildPayload(f: FormState) {
   };
 }
 
+const chipCls = 'inline-flex items-center gap-1 rounded bg-gray-100 px-2 py-0.5 text-xs text-ink';
+
 export default function Discounts() {
   const { store } = useAuth();
   const qc = useQueryClient();
   const cur = store?.currency ?? 'USD';
   const [form, setForm] = useState<FormState | null>(null);
   const [hydratedFor, setHydratedFor] = useState<string | null>(null);
-  const closeForm = () => { setForm(null); setHydratedFor(null); };
+  const [productQuery, setProductQuery] = useState('');
+  const [tagDraft, setTagDraft] = useState('');
+  const closeForm = () => { setForm(null); setHydratedFor(null); setProductQuery(''); setTagDraft(''); };
 
-  const key = ['promotions', store?.slug];
-  const { data, isLoading, error } = useQuery({ queryKey: key, queryFn: () => api.get<{ items: Promo[] }>('/promotions') });
+  // De-Vendure: the API's canonical route is /discounts (/promotions is a
+  // deprecated alias — see admin-marketing.ts). This page already called
+  // itself "Discounts"; it was only the wire path that still said promotions.
+  const key = ['discounts', store?.slug];
+  const { data, isLoading, error } = useQuery({ queryKey: key, queryFn: () => api.get<{ items: Promo[] }>('/discounts') });
   const invalidate = () => qc.invalidateQueries({ queryKey: key });
 
   const create = useMutation({
-    mutationFn: () => api.post('/promotions', buildPayload(form!)),
+    mutationFn: () => api.post('/discounts', buildPayload(form!)),
     onSuccess: () => { closeForm(); invalidate(); },
   });
   const update = useMutation({
-    mutationFn: () => api.patch(`/promotions/${form!.id}`, buildPayload(form!)),
+    mutationFn: () => api.patch(`/discounts/${form!.id}`, buildPayload(form!)),
     onSuccess: () => { closeForm(); invalidate(); },
   });
-  const toggle = useMutation({ mutationFn: (p: Promo) => api.patch(`/promotions/${p.id}`, { enabled: !p.enabled }), onSuccess: invalidate });
-  const del = useMutation({ mutationFn: (id: string) => api.del(`/promotions/${id}`), onSuccess: invalidate });
+  const toggle = useMutation({ mutationFn: (p: Promo) => api.patch(`/discounts/${p.id}`, { enabled: !p.enabled }), onSuccess: invalidate });
+  const del = useMutation({ mutationFn: (id: string) => api.del(`/discounts/${id}`), onSuccess: invalidate });
 
   const editing = useQuery({
-    queryKey: ['promotion', form?.id],
-    queryFn: () => api.get<PromoDetail>(`/promotions/${form!.id}`),
+    queryKey: ['discount', form?.id],
+    queryFn: () => api.get<PromoDetail>(`/discounts/${form!.id}`),
     enabled: !!form?.id,
   });
   // Populate the form once the detail loads (edit mode only) — exactly once
-  // per opened promotion, tracked by `hydratedFor` so a later re-render (e.g.
+  // per opened discount, tracked by `hydratedFor` so a later re-render (e.g.
   // the user editing a field) never clobbers their in-progress edits.
   useEffect(() => {
     if (!editing.data || !form || form.id !== editing.data.id || hydratedFor === editing.data.id) return;
     const p = editing.data;
-    const minCond = readCondition(p.conditions, 'minimum_order_amount');
-    const facetCond = readCondition(p.conditions, 'at_least_n_with_facets');
-    let facetIds: string[] = [];
-    try { facetIds = facetCond.facets ? JSON.parse(facetCond.facets) : []; } catch { /* ignore malformed */ }
-    setForm((f) => f && f.id === p.id ? {
-      ...f,
-      code: p.code ?? '', type: p.type, value: p.type === 'percentage' ? String(p.value) : p.type === 'free_shipping' ? '' : (p.value / 100).toFixed(2),
-      usageLimit: p.usageLimit != null ? String(p.usageLimit) : '', perCustomerUsageLimit: p.perCustomerUsageLimit != null ? String(p.perCustomerUsageLimit) : '',
-      startsAt: toLocalInput(p.startsAt), endsAt: toLocalInput(p.endsAt),
-      minOrderAmount: minCond.amount ? (Number(minCond.amount) / 100).toFixed(2) : '',
-      facetIds: facetIds.join(', '), facetMinimum: facetCond.minimum ?? '1',
-      enabled: p.enabled,
-    } : f);
+    setForm((f) => f && f.id === p.id ? hydrateForm(p) : f);
     setHydratedFor(p.id);
   }, [editing.data, form, hydratedFor]);
+
+  // Scope pickers — existing endpoints only: collections list for the
+  // collections scope, products search for the products scope.
+  const collections = useQuery({
+    queryKey: ['discount-collections', store?.slug],
+    queryFn: () => api.get<{ items: CollectionRow[] }>('/collections'),
+    enabled: form?.scope === 'collections',
+  });
+  const productResults = useQuery({
+    queryKey: ['discount-products', store?.slug, productQuery],
+    queryFn: () => api.get<Page<ProductRow>>(`/products?${new URLSearchParams({ q: productQuery, pageSize: '25' })}`),
+    enabled: form?.scope === 'products',
+  });
+  // Resolve the names of product ids saved on an existing discount so chips
+  // render names, not ids.
+  useEffect(() => {
+    if (!form || form.scope !== 'products') return;
+    const unresolved = form.products.filter((p) => p.name === p.id);
+    if (unresolved.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const names = new Map<string, string>();
+      await Promise.all(unresolved.map(async (p) => {
+        try {
+          const d = await api.get<{ name?: string; product?: { name?: string } }>(`/products/${p.id}`);
+          const name = d.name ?? d.product?.name;
+          if (name) names.set(p.id, name);
+        } catch { /* leave the id visible if the product is gone */ }
+      }));
+      if (cancelled || names.size === 0) return;
+      setForm((f) => f ? { ...f, products: f.products.map((p) => names.has(p.id) ? { ...p, name: names.get(p.id)! } : p) } : f);
+    })();
+    return () => { cancelled = true; };
+  }, [form?.id, form?.scope, form?.products]);
 
   const fmtValue = (p: Promo) => p.type === 'percentage' ? `${p.value}%` : p.type === 'free_shipping' ? 'Free shipping' : money(p.value, cur);
   const fmtWindow = (p: Promo) => {
     if (!p.startsAt && !p.endsAt) return null;
     const d = (iso?: string | null) => iso ? new Date(iso).toLocaleDateString() : '…';
     return `${d(p.startsAt)} – ${d(p.endsAt)}`;
+  };
+
+  const addTag = (raw: string) => {
+    if (!form) return;
+    const t = raw.trim();
+    if (t && !form.tags.includes(t)) setForm({ ...form, tags: [...form.tags, t] });
+    setTagDraft('');
+  };
+  const clampScopeMinimum = () => {
+    if (form && Number(form.scopeMinimum) < 1) setForm({ ...form, scopeMinimum: '1' });
   };
 
   const saving = create.isPending || update.isPending;
@@ -158,6 +269,11 @@ export default function Discounts() {
         <Modal open title={isEdit ? `Edit discount${form.code ? ` — ${form.code}` : ''}` : 'New discount'} onClose={closeForm} width="max-w-lg">
           {isEdit && editing.isLoading ? <Loading /> : (
             <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); isEdit ? update.mutate() : create.mutate(); }}>
+              {form.legacyFacetCondition && (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  This discount uses a retired facet condition that no longer applies at checkout — choose a scope and save to replace it.
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-3">
                 <Field label="Code"><input className="input" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })} placeholder="SAVE10 (blank = automatic)" /></Field>
                 <Field label="Type">
@@ -182,19 +298,94 @@ export default function Discounts() {
               <Field label={`Minimum order amount (${cur})`} hint="Blank = no minimum">
                 <input className="input" inputMode="decimal" value={form.minOrderAmount} onChange={(e) => setForm({ ...form, minOrderAmount: e.target.value })} placeholder="0.00" />
               </Field>
-              <Field label="Eligible facet value IDs" hint="Comma-separated. Scopes the discount to products/collections tagged with these facet values — blank applies to the whole order.">
-                <input className="input" value={form.facetIds} onChange={(e) => setForm({ ...form, facetIds: e.target.value })} placeholder="e.g. 3f2a…, 9c1b…" />
+              <Field label="Scope" hint="Restricts which items count toward the discount — whole order applies it to everything.">
+                <select className="input" value={form.scope} onChange={(e) => setForm({ ...form, scope: e.target.value as ScopeKind })}>
+                  <option value="">Whole order</option>
+                  <option value="collections">Collections</option>
+                  <option value="products">Products</option>
+                  <option value="tags">Tags</option>
+                </select>
+                {scopeError(form) && <p className="mt-1 text-sm text-danger">{scopeError(form)}</p>}
               </Field>
-              {form.facetIds.trim() && (
+              {form.scope === 'collections' && (
+                <Field label="Collections">
+                  <div className="space-y-2">
+                    {form.collectionIds.length > 0 && (
+                      <div className="flex flex-wrap gap-1">
+                        {form.collectionIds.map((id) => (
+                          <span key={id} className={chipCls}>
+                            {collections.data?.items.find((c) => c.id === id)?.name ?? id}
+                            <button type="button" aria-label={`Remove collection ${id}`} onClick={() => setForm({ ...form, collectionIds: form.collectionIds.filter((x) => x !== id) })}><X size={12} /></button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <select className="input" value="" onChange={(e) => {
+                      const id = e.target.value;
+                      if (id && !form.collectionIds.includes(id)) setForm({ ...form, collectionIds: [...form.collectionIds, id] });
+                    }}>
+                      <option value="">{collections.isLoading ? 'Loading…' : 'Add a collection…'}</option>
+                      {(collections.data?.items ?? []).filter((c) => !form.collectionIds.includes(c.id)).map((c) => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                </Field>
+              )}
+              {form.scope === 'products' && (
+                <Field label="Products" hint="Search by name, then pick.">
+                  <div className="space-y-2">
+                    {form.products.length > 0 && (
+                      <div className="flex flex-wrap gap-1">
+                        {form.products.map((p) => (
+                          <span key={p.id} className={chipCls}>
+                            {p.name}
+                            <button type="button" aria-label={`Remove product ${p.name}`} onClick={() => setForm({ ...form, products: form.products.filter((x) => x.id !== p.id) })}><X size={12} /></button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <input className="input" value={productQuery} onChange={(e) => setProductQuery(e.target.value)} placeholder="Search products…" />
+                    {(productResults.data?.items ?? []).filter((p) => !form.products.some((x) => x.id === p.id)).slice(0, 8).map((p) => (
+                      <button key={p.id} type="button" className="block w-full text-left rounded px-2 py-1 text-sm hover:bg-gray-50"
+                        onClick={() => { setForm({ ...form, products: [...form.products, { id: p.id, name: p.name }] }); setProductQuery(''); }}>
+                        {p.name}
+                      </button>
+                    ))}
+                  </div>
+                </Field>
+              )}
+              {form.scope === 'tags' && (
+                <Field label="Tags" hint="Press Enter after each tag name.">
+                  <div className="space-y-2">
+                    {form.tags.length > 0 && (
+                      <div className="flex flex-wrap gap-1">
+                        {form.tags.map((t) => (
+                          <span key={t} className={chipCls}>
+                            {t}
+                            <button type="button" aria-label={`Remove tag ${t}`} onClick={() => setForm({ ...form, tags: form.tags.filter((x) => x !== t) })}><X size={12} /></button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <input className="input" value={tagDraft}
+                      onChange={(e) => setTagDraft(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addTag(tagDraft); } }}
+                      onBlur={() => addTag(tagDraft)}
+                      placeholder="e.g. summer, clearance" />
+                  </div>
+                </Field>
+              )}
+              {form.scope !== '' && (
                 <Field label="Minimum matching quantity">
-                  <input className="input w-24" type="number" min={1} value={form.facetMinimum} onChange={(e) => setForm({ ...form, facetMinimum: e.target.value })} />
+                  <input className="input w-24" type="number" min={1} value={form.scopeMinimum} onChange={(e) => setForm({ ...form, scopeMinimum: e.target.value })} onBlur={clampScopeMinimum} />
                 </Field>
               )}
               <label className="flex items-center gap-2 text-sm"><input type="checkbox" className="h-4 w-4 accent-brand" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} /> Enabled</label>
               {(create.error || update.error) && <ErrorNote message={((create.error || update.error) as Error).message} />}
               <div className="flex justify-end gap-2 pt-2 border-t border-gray-100">
                 <button type="button" className="btn-ghost" onClick={closeForm}>Cancel</button>
-                <button type="submit" className="btn-primary" disabled={saving || (!isEdit && !form.code.trim() && form.type !== 'percentage' && form.type !== 'fixed' && form.type !== 'free_shipping')}>
+                <button type="submit" className="btn-primary" disabled={saving || !!scopeError(form) || (!isEdit && !form.code.trim() && form.type !== 'percentage' && form.type !== 'fixed' && form.type !== 'free_shipping')}>
                   {saving ? <Spinner className="text-white" /> : isEdit ? 'Save changes' : 'Create'}
                 </button>
               </div>
