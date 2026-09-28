@@ -1,6 +1,7 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, desc, eq, isNull, or } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
+import { errJson } from '../lib/api-error.js';
 import { resolveStore, resolveStoreForRequest, DEV_DEFAULT_STORE, type StoreCtx } from '../store-context.js';
 import { appKeyHeaderNames, deviceHeaderName, licenseHeaderName, firstHeader } from '../licensing/app-headers.js';
 import { resolveStoreWithFallback } from '../licensing/app-store-fallback.js';
@@ -110,11 +111,11 @@ apps.openapi(
     const { licenseKey, deviceId, deviceLabel } = c.req.valid('json');
     const ip = clientIp(c);
     const retry = await licenseActionRetryAfter(ip, licenseKey);
-    if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
+    if (retry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${retry}s`);
     await recordLicenseAction(ip, licenseKey);
     const out = await withStore(st.id, (tx) => activateLicenseOnDevice(tx, { storeId: st.id, appKey, licenseKey, deviceId, deviceLabel }));
-    if (out.kind === 'notfound') return c.json({ error: 'license not found' }, 404);
-    if (out.kind === 'full') return c.json({ error: 'license seat limit reached' }, 409);
+    if (out.kind === 'notfound') return errJson(c, 404, 'LICENSE_NOT_FOUND', 'license not found');
+    if (out.kind === 'full') return errJson(c, 409, 'SEAT_LIMIT_REACHED', 'license seat limit reached');
     return c.json({
       activated: true,
       ok: true,
@@ -470,7 +471,7 @@ apps.openapi(
     const { appKey } = c.req.valid('param');
     // ra-006: read license key from Authorization: Bearer header only.
     const licenseKey = bearerToken(c.req.header('authorization'));
-    if (!licenseKey) return c.json({ error: 'Missing license key — provide Authorization: Bearer <licenseKey>' }, 401);
+    if (!licenseKey) return errJson(c, 401, 'LICENSE_KEY_MISSING', 'Missing license key — provide Authorization: Bearer <licenseKey>');
     const { channel, platform } = c.req.valid('query');
     const out = await withStore(st.id, async (tx) => {
       const [lic] = await tx.select().from(s.license).where(and(eq(s.license.licenseKey, licenseKey), eq(s.license.appKey, appKey))).limit(1);
@@ -489,7 +490,7 @@ apps.openapi(
       if (!release) return { kind: 'norelease' as const };
       return { kind: 'ok' as const, release };
     });
-    if (out.kind === 'notfound') return c.json({ error: 'license not found' }, 404);
+    if (out.kind === 'notfound') return errJson(c, 404, 'LICENSE_NOT_FOUND', 'license not found');
     if (out.kind === 'ineligible') return c.json({ eligible: false, reason: 'updates_expired' }, 200);
     if (out.kind === 'norelease') return c.json({ eligible: false, reason: 'no_release' }, 200);
     return c.json({ eligible: true, version: out.release.version, manifest: out.release.manifest }, 200);
@@ -521,7 +522,7 @@ apps.openapi(
     const { appKey, artifactKey } = c.req.valid('param');
     // ra-006: read license key from Authorization: Bearer header only.
     const licenseKey = bearerToken(c.req.header('authorization'));
-    if (!licenseKey) return c.json({ error: 'Missing license key — provide Authorization: Bearer <licenseKey>' }, 401);
+    if (!licenseKey) return errJson(c, 401, 'LICENSE_KEY_MISSING', 'Missing license key — provide Authorization: Bearer <licenseKey>');
     const out = await withStore(st.id, async (tx) => {
       const [lic] = await tx.select().from(s.license).where(and(eq(s.license.licenseKey, licenseKey), eq(s.license.appKey, appKey))).limit(1);
       if (!lic) return { kind: 'notfound' as const };
@@ -540,12 +541,12 @@ apps.openapi(
       if (!artifact) return { kind: 'notfound' as const };
       return { kind: 'ok' as const, artifact };
     });
-    if (out.kind === 'forbidden') return c.json({ error: 'license is not active' }, 403);
-    if (out.kind === 'notfound') return c.json({ error: 'download not found' }, 404);
+    if (out.kind === 'forbidden') return errJson(c, 403, 'LICENSE_NOT_ACTIVE', 'license is not active');
+    if (out.kind === 'notfound') return errJson(c, 404, 'DOWNLOAD_NOT_FOUND', 'download not found');
     // ra-005: hand back a short-lived HMAC-signed URL (15 min) to the streaming
     // /v1/dl route instead of the permanent artifact path. Fail loud if the signing
     // secret isn't set — never emit an unsigned permanent link.
-    if (!downloadSigningConfigured()) return c.json({ error: 'downloads are not configured for this store' }, 503);
+    if (!downloadSigningConfigured()) return errJson(c, 503, 'DOWNLOADS_NOT_CONFIGURED', 'downloads are not configured for this store');
     c.header('Cache-Control', 'no-store');
     return c.json({
       artifactKey: out.artifact.artifactKey,

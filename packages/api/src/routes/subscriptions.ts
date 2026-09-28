@@ -21,6 +21,7 @@ import { createSubscriptionCheckout, createBillingPortal, stripeModeFromConfig, 
 import { isPaymentMethodEnabled } from '../payments/provider.js';
 import { env } from '../env.js';
 import { J, Page, errBody, requireAdmin, requireStore, guard } from './admin-helpers.js';
+import { apiErrorSchema, errJson } from '../lib/api-error.js';
 
 const orderCode = () => ('SR' + randomUUID().replace(/-/g, '').slice(0, 10)).toUpperCase();
 
@@ -40,18 +41,18 @@ subscriptions.openapi(
     request: { body: { content: { 'application/json': { schema: z.object({ variantId: z.guid() }) } } } },
     responses: {
       200: { description: 'Checkout URL', content: { 'application/json': { schema: z.object({ url: z.string() }) } } },
-      400: { description: 'Not a recurring variant', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
-      401: { description: 'Unauthenticated', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
-      409: { description: 'Stripe disabled', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
-      503: { description: 'Stripe not configured', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+      400: { description: 'Not a recurring variant', content: { 'application/json': { schema: apiErrorSchema() } } },
+      401: { description: 'Unauthenticated', content: { 'application/json': { schema: apiErrorSchema() } } },
+      409: { description: 'Stripe disabled', content: { 'application/json': { schema: apiErrorSchema() } } },
+      503: { description: 'Stripe not configured', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
     const { variantId } = c.req.valid('json');
-    if (!isPaymentMethodEnabled(st.config, 'stripe')) return c.json({ error: 'payment method disabled: stripe' }, 409);
+    if (!isPaymentMethodEnabled(st.config, 'stripe')) return errJson(c, 409, 'PAYMENT_METHOD_DISABLED', 'payment method disabled: stripe');
     const mode = stripeModeFromConfig(st.config);
-    if (!(await resolveStripeUsable(st.id, mode))) return c.json({ error: `stripe is not configured (${mode} mode)` }, 503);
+    if (!(await resolveStripeUsable(st.id, mode))) return errJson(c, 503, 'STRIPE_NOT_CONFIGURED', `stripe is not configured (${mode} mode)`);
 
     type R =
       | { kind: 'unauth' }
@@ -81,8 +82,8 @@ subscriptions.openapi(
       return { kind: 'ok', orderCode: code, priceId: v.stripePriceId, customerId: cust.id, email: cust.email };
     });
 
-    if (out.kind === 'unauth') return c.json({ error: 'not authenticated' }, 401);
-    if (out.kind === 'badVariant') return c.json({ error: 'variant is not a recurring plan' }, 400);
+    if (out.kind === 'unauth') return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
+    if (out.kind === 'badVariant') return errJson(c, 400, 'VARIANT_NOT_RECURRING', 'variant is not a recurring plan');
 
     const base = env.STOREFRONT_URL.replace(/\/$/, '');
     const session = await createSubscriptionCheckout(st.id, mode, {
@@ -104,15 +105,15 @@ subscriptions.openapi(
     method: 'post', path: '/v1/shop/account/billing-portal', summary: 'Open the billing portal',
     responses: {
       200: { description: 'Portal URL', content: { 'application/json': { schema: z.object({ url: z.string() }) } } },
-      401: { description: 'Unauthenticated', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
-      404: { description: 'No subscription', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
-      503: { description: 'Stripe not configured', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+      401: { description: 'Unauthenticated', content: { 'application/json': { schema: apiErrorSchema() } } },
+      404: { description: 'No subscription', content: { 'application/json': { schema: apiErrorSchema() } } },
+      503: { description: 'Stripe not configured', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
     const mode = stripeModeFromConfig(st.config);
-    if (!(await resolveStripeUsable(st.id, mode))) return c.json({ error: `stripe is not configured (${mode} mode)` }, 503);
+    if (!(await resolveStripeUsable(st.id, mode))) return errJson(c, 503, 'STRIPE_NOT_CONFIGURED', `stripe is not configured (${mode} mode)`);
     const out = await withStore(st.id, async (tx): Promise<{ kind: 'unauth' } | { kind: 'none' } | { kind: 'ok'; stripeCustomerId: string }> => {
       const cust = await me(tx, customerToken(c));
       if (!cust) return { kind: 'unauth' };
@@ -125,8 +126,8 @@ subscriptions.openapi(
       if (!row?.stripeCustomerId) return { kind: 'none' };
       return { kind: 'ok', stripeCustomerId: row.stripeCustomerId };
     });
-    if (out.kind === 'unauth') return c.json({ error: 'not authenticated' }, 401);
-    if (out.kind === 'none') return c.json({ error: 'no subscription found' }, 404);
+    if (out.kind === 'unauth') return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
+    if (out.kind === 'none') return errJson(c, 404, 'SUBSCRIPTION_NOT_FOUND', 'no subscription found');
     const base = env.STOREFRONT_URL.replace(/\/$/, '');
     const url = await createBillingPortal(st.id, mode, { customerId: out.stripeCustomerId, returnUrl: `${base}/account/subscriptions` });
     return c.json({ url }, 200);

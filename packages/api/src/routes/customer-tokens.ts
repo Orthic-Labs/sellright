@@ -23,6 +23,7 @@ import { customerToken, resolveCustomer } from '../auth/session.js';
 import { clientIp, loginRetryAfter, recordLoginFailure } from '../auth/rate-limit.js';
 import { verifyTurnstileToken } from '../security/turnstile.js';
 import { enqueuePasswordReset, enqueueEmailAddressChange, enqueueEmailAddressChangedNotice, resolveStorefrontUrl, type StoreEmailCtx } from '../email/dispatch.js';
+import { apiErrorSchema, errJson } from '../lib/api-error.js';
 import { env } from '../env.js';
 
 const hashToken = (t: string) => createHash('sha256').update(t).digest('hex');
@@ -69,8 +70,8 @@ customerTokens.openapi(
     request: { body: { content: { 'application/json': { schema: z.object({ email: z.string().email(), turnstileToken: z.string().optional() }) } } } },
     responses: {
       200: { description: 'Always OK', content: { 'application/json': { schema: z.object({ ok: z.boolean() }) } } },
-      403: { description: 'Bot check failed', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
-      429: { description: 'Rate limited', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+      403: { description: 'Bot check failed', content: { 'application/json': { schema: apiErrorSchema() } } },
+      429: { description: 'Rate limited', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
   async (c) => {
@@ -79,10 +80,10 @@ customerTokens.openapi(
     const email = normalizeEmail(rawEmail);
     const ip = clientIp(c);
     const retry = await loginRetryAfter(ip, `forgot:${email}`);
-    if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
+    if (retry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${retry}s`);
     if (!(await turnstileOk(st.config, turnstileToken, ip))) {
       await recordLoginFailure(ip, `forgot:${email}`);
-      return c.json({ error: 'verification failed' }, 403);
+      return errJson(c, 403, 'BOT_CHECK_FAILED', 'verification failed');
     }
     await withStore(st.id, async (tx) => {
       const [cust] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, email)).limit(1);
@@ -107,7 +108,7 @@ customerTokens.openapi(
     method: 'post', path: '/v1/shop/auth/reset-password',
     summary: 'Reset password using a one-time token',
     request: { body: { content: { 'application/json': { schema: z.object({ token: z.string().min(20), password: z.string().min(8) }) } } } },
-    responses: { 200: { description: 'OK', content: { 'application/json': { schema: z.object({ ok: z.boolean() }) } } }, 409: { description: 'Invalid/expired/used', content: { 'application/json': { schema: z.object({ error: z.string() }) } } } },
+    responses: { 200: { description: 'OK', content: { 'application/json': { schema: z.object({ ok: z.boolean() }) } } }, 409: { description: 'Invalid/expired/used', content: { 'application/json': { schema: apiErrorSchema() } } } },
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
@@ -125,7 +126,7 @@ customerTokens.openapi(
       await tx.delete(s.session).where(and(eq(s.session.customerId, row.customerId), eq(s.session.storeId, st.id)));
       return true;
     });
-    if (!ok) return c.json({ error: 'token is invalid, expired, or already used' }, 409);
+    if (!ok) return errJson(c, 409, 'TOKEN_INVALID', 'token is invalid, expired, or already used');
     return c.json({ ok: true }, 200);
   },
 );
@@ -138,8 +139,8 @@ customerTokens.openapi(
     request: { body: { content: { 'application/json': { schema: z.object({ token: z.string().min(20) }) } } } },
     responses: {
       200: { description: 'OK', content: { 'application/json': { schema: z.object({ ok: z.boolean() }) } } },
-      409: { description: 'Invalid/expired/used', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
-      429: { description: 'Rate limited', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+      409: { description: 'Invalid/expired/used', content: { 'application/json': { schema: apiErrorSchema() } } },
+      429: { description: 'Rate limited', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
   async (c) => {
@@ -152,7 +153,7 @@ customerTokens.openapi(
     // still throttles cleanly.
     const bucket = `verify:${ip}`;
     const retry = await loginRetryAfter(ip, bucket);
-    if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
+    if (retry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${retry}s`);
     const ok = await withStore(st.id, async (tx): Promise<boolean> => {
       const [row] = await tx.select({ id: s.customerToken.id, customerId: s.customerToken.customerId }).from(s.customerToken)
         .where(and(eq(s.customerToken.tokenHash, tokenHash), eq(s.customerToken.kind, 'email_verify'), gt(s.customerToken.expiresAt, new Date()), isNull(s.customerToken.usedAt))).limit(1);
@@ -161,7 +162,7 @@ customerTokens.openapi(
       await tx.update(s.customerToken).set({ usedAt: new Date() }).where(eq(s.customerToken.id, row.id));
       return true;
     });
-    if (!ok) { await recordLoginFailure(ip, bucket); return c.json({ error: 'token is invalid, expired, or already used' }, 409); }
+    if (!ok) { await recordLoginFailure(ip, bucket); return errJson(c, 409, 'TOKEN_INVALID', 'token is invalid, expired, or already used'); }
     return c.json({ ok: true }, 200);
   },
 );
@@ -180,9 +181,9 @@ customerTokens.openapi(
     request: { body: { content: { 'application/json': { schema: z.object({ newEmail: z.string().email(), password: z.string().min(1) }) } } } },
     responses: {
       200: { description: 'Verification email enqueued', content: { 'application/json': { schema: z.object({ ok: z.boolean() }) } } },
-      401: { description: 'Unauthenticated or wrong password', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
-      409: { description: 'Email unavailable', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
-      429: { description: 'Rate limited', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+      401: { description: 'Unauthenticated or wrong password', content: { 'application/json': { schema: apiErrorSchema() } } },
+      409: { description: 'Email unavailable', content: { 'application/json': { schema: apiErrorSchema() } } },
+      429: { description: 'Rate limited', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
   async (c) => {
@@ -192,7 +193,7 @@ customerTokens.openapi(
     const ip = clientIp(c);
     const bucket = `emailchange:${newEmail}`;
     const retry = await loginRetryAfter(ip, bucket);
-    if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
+    if (retry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${retry}s`);
     const out = await withStore(st.id, async (tx): Promise<'unauth' | 'wrong' | 'same' | 'taken' | 'ok'> => {
       const token = customerToken(c);
       const cust = token ? await resolveCustomer(tx, token) : null;
@@ -215,10 +216,10 @@ customerTokens.openapi(
       return 'ok';
     });
     await recordLoginFailure(ip, bucket); // mailbomb guard for the target address
-    if (out === 'unauth') return c.json({ error: 'not authenticated' }, 401);
-    if (out === 'wrong') return c.json({ error: 'password is incorrect' }, 401);
-    if (out === 'same') return c.json({ error: 'that is already your email address' }, 409);
-    if (out === 'taken') return c.json({ error: 'email address is unavailable' }, 409);
+    if (out === 'unauth') return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
+    if (out === 'wrong') return errJson(c, 401, 'PASSWORD_INCORRECT', 'password is incorrect');
+    if (out === 'same') return errJson(c, 409, 'EMAIL_SAME', 'that is already your email address');
+    if (out === 'taken') return errJson(c, 409, 'EMAIL_TAKEN', 'email address is unavailable');
     return c.json({ ok: true }, 200);
   },
 );
@@ -231,8 +232,8 @@ customerTokens.openapi(
     request: { body: { content: { 'application/json': { schema: z.object({ token: z.string().min(20) }) } } } },
     responses: {
       200: { description: 'Email changed', content: { 'application/json': { schema: z.object({ ok: z.boolean() }) } } },
-      409: { description: 'Invalid/expired/used', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
-      429: { description: 'Rate limited', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+      409: { description: 'Invalid/expired/used', content: { 'application/json': { schema: apiErrorSchema() } } },
+      429: { description: 'Rate limited', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
   async (c) => {
@@ -242,7 +243,7 @@ customerTokens.openapi(
     const ip = clientIp(c);
     const bucket = `verify-change:${ip}`;
     const retry = await loginRetryAfter(ip, bucket);
-    if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
+    if (retry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${retry}s`);
     const out = await withStore(st.id, async (tx): Promise<'invalid' | 'taken' | 'ok'> => {
       // Atomic consume: used_at flips only when the token is still pending —
       // a replayed/second click can never win the UPDATE (single-use).
@@ -281,7 +282,7 @@ customerTokens.openapi(
       }
       return 'ok';
     });
-    if (out !== 'ok') { await recordLoginFailure(ip, bucket); return c.json({ error: 'token is invalid, expired, or already used' }, 409); }
+    if (out !== 'ok') { await recordLoginFailure(ip, bucket); return errJson(c, 409, 'TOKEN_INVALID', 'token is invalid, expired, or already used'); }
     return c.json({ ok: true }, 200);
   },
 );

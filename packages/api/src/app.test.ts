@@ -40,10 +40,11 @@ describe('app error handling', () => {
     const app = await bootAppWithBoom();
 
     const res = await app.request('/boom');
-    const body = await res.json() as { error: string };
+    const body = await res.json() as { error: { code: string; message: string } };
 
     expect(res.status).toBe(500);
-    expect(body.error).toBe('internal error');
+    expect(body.error.message).toBe('internal error');
+    expect(body.error.code).toBe('INTERNAL_ERROR');
   });
 
   it('does not expose internal error messages when NODE_ENV is unset (staging footgun)', async () => {
@@ -52,10 +53,11 @@ describe('app error handling', () => {
     const app = await bootAppWithBoom();
 
     const res = await app.request('/boom');
-    const body = await res.json() as { error: string };
+    const body = await res.json() as { error: { code: string; message: string } };
 
     expect(res.status).toBe(500);
-    expect(body.error).toBe('internal error');
+    expect(body.error.message).toBe('internal error');
+    expect(body.error.code).toBe('INTERNAL_ERROR');
   });
 
   it('exposes the real error message only when DEBUG_ERRORS=1 is explicitly set', async () => {
@@ -64,10 +66,10 @@ describe('app error handling', () => {
     const app = await bootAppWithBoom();
 
     const res = await app.request('/boom');
-    const body = await res.json() as { error: string };
+    const body = await res.json() as { error: { code: string; message: string } };
 
     expect(res.status).toBe(500);
-    expect(body.error).toBe('database password leaked in stack');
+    expect(body.error.message).toBe('database password leaked in stack');
   });
 });
 
