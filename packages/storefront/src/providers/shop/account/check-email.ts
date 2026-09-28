@@ -1,9 +1,10 @@
-import { srCheckEmail } from '~/utils/sellright';
+import { sellright } from '~/sellright/client';
 
 /**
- * Pre-submit "is this email registered?" check — migrated to the SellRight REST
- * shop API (GET /v1/shop/auth/check-email). The endpoint is rate-limited
- * server-side and preserves the storefront's anti-bot challenge.
+ * Pre-submit "is this email registered?" check — native SellRight client
+ * (GET /v1/shop/auth/check-email). Rate-limited server-side; forwards the
+ * Turnstile token and honeypot value as query params so the anti-bot
+ * challenge is preserved end to end, never silently dropped.
  */
 export async function checkCustomerEmail(
 	email: string,
@@ -11,8 +12,10 @@ export async function checkCustomerEmail(
 	honeypot?: string,
 ): Promise<boolean> {
 	try {
-		const result = await srCheckEmail(email, turnstileToken, honeypot);
-		return result.exists ?? false;
+		const { data } = await sellright().GET('/v1/shop/auth/check-email', {
+			params: { query: { email, turnstileToken, honeypot } },
+		});
+		return data?.exists ?? false;
 	} catch {
 		return false;
 	}

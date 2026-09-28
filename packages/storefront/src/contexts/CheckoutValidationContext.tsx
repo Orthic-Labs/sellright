@@ -77,7 +77,18 @@ const createInitialState = (): CheckoutValidationState => ({
   isBillingAddressValid: true, // Valid by default since it's optional
   billingAddressErrors: {},
   useDifferentBilling: false,
-  isPaymentValid: false,
+  // Valid by default: payment happens AFTER the order is created (the server
+  // creates a PendingPayment order first, then the shopper's chosen method —
+  // Stripe/NMI/Sezzle — mounts and drives its own gateway call). There is no
+  // pre-submit payment form to validate anymore; nothing calls
+  // updatePaymentValidation(false, ...) in the current architecture. This
+  // used to gate the OLD raw-card NMI form's cardNumber/expiryDate/cvv
+  // fields (see paymentErrors below) — that component was retired for
+  // Collect.js tokenization, which never touches raw card fields this app
+  // could validate, so there's nothing left to check here before order
+  // creation. Defaulting this to false (as it was) permanently blocked
+  // PLACE ORDER for every checkout, on every payment method.
+  isPaymentValid: true,
   paymentErrors: {},
   isStockValid: true, // Valid by default, will be checked when needed
   stockErrors: [],

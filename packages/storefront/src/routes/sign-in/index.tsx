@@ -1,7 +1,7 @@
 import { $, component$, useSignal, useVisibleTask$ } from '@qwik.dev/core';
 import { useNavigate } from '@qwik.dev/router';
 import { registerCustomerFromSignup } from '~/components/auth/signup-flow';
-import { loginMutation, registerCustomerAccountMutation, requestPasswordResetMutation, resendVerificationMutation } from '~/providers/shop/account/account';
+import { login, requestPasswordReset, resendVerification } from '~/providers/shop/account/account';
 import { checkCustomerEmail } from '~/providers/shop/account/check-email';
 import { SignInError } from './SignInError';
 export { head } from './seo';
@@ -87,22 +87,16 @@ export default component$(() => {
 			return;
 		}
 		loading.value = true;
-		try {
-			const { login } = await loginMutation(email.value.trim(), password.value, rememberMe.value, turnstileToken.value);
-			if (login.__typename === 'CurrentUser') {
-				navigate('/account');
-			} else if ((login as any).__typename === 'NotVerifiedError') {
-				step.value = 'verify-needed';
-			} else {
-				const msg = (login as any).message?.toLowerCase() || '';
-				if (msg.includes('verify') || msg.includes('verification')) {
-					step.value = 'verify-needed';
-				} else {
-					error.value = 'Invalid email or password.';
-				}
-			}
-		} catch {
-			error.value = 'An unexpected error occurred. Please try again.';
+		const result = await login(email.value.trim(), password.value, {
+			turnstileToken: turnstileToken.value,
+			rememberMe: rememberMe.value,
+		});
+		if (result.ok) {
+			navigate('/account');
+		} else if (result.code === 'not_verified') {
+			step.value = 'verify-needed';
+		} else {
+			error.value = result.message;
 		}
 		await resetChallenge();
 		loading.value = false;
@@ -132,29 +126,11 @@ export default component$(() => {
 	const handleForgotPassword = $(async () => {
 		error.value = '';
 		loading.value = true;
-		try {
-			const result = await requestPasswordResetMutation(email.value.trim());
-			if (result?.__typename === 'Success') {
-				step.value = 'reset-sent';
-			} else {
-				// For unverified users, requestPasswordReset may fail —
-				// re-register them which re-sends verification
-				const result2 = await registerCustomerAccountMutation({
-					input: {
-						emailAddress: email.value.trim(),
-						firstName: '',
-						lastName: '',
-					},
-				});
-				if (result2?.registerCustomerAccount?.__typename === 'Success') {
-					step.value = 'reset-sent';
-				} else {
-					step.value = 'reset-sent'; // Still show success to avoid email enumeration
-				}
-			}
-		} catch {
-			step.value = 'reset-sent'; // Always show success
-		}
+		// Enumeration-safe on the API side — always resolves ok, so this always
+		// shows the same "check your email" state regardless of whether the
+		// address exists.
+		await requestPasswordReset(email.value.trim());
+		step.value = 'reset-sent';
 		loading.value = false;
 	});
 
@@ -170,7 +146,7 @@ export default component$(() => {
 
 	const handleResendVerification = $(async () => {
 		resendLoading.value = true;
-		await resendVerificationMutation(email.value.trim());
+		await resendVerification(email.value.trim());
 		resendLoading.value = false;
 		resendSent.value = true;
 	});

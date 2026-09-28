@@ -5,8 +5,8 @@ import { jsonLdOrganization } from '~/services/sellright-seo';
 import type { JsonLdSchema } from '~/types/seo.types';
 import { routeLoader$ } from '@qwik.dev/router';
 import { APP_STATE } from '~/constants';
-import { type LocalCartItem } from '~/services/LocalCartService';
-import { useLocalCart, addToLocalCart } from '~/contexts/CartContext';
+import type { CartLineEnrichment } from '~/sellright/types/cart';
+import { useCart, addToCart } from '~/contexts/CartContext';
 import { loadCountryOnDemand } from '~/utils/addressStorage';
 import { getProductBySlug, search } from '~/providers/shop/products/products';
 import { srCollections } from '~/utils/sellright';
@@ -120,7 +120,7 @@ export default component$(() => {
   useStyles$(STYLES);
 
   const appState = useContext(APP_STATE);
-  const localCart = useLocalCart();
+  const cart = useCart();
   const preorderProduct = usePreorderProduct();
   const featureProduct = useFeatureProduct();
   const featuredProducts = useFeaturedProducts();
@@ -194,27 +194,19 @@ export default component$(() => {
         return;
       }
 
-      const localCartItem: LocalCartItem = {
-        productVariantId: variant.id,
-        quantity: 1,
+      const enrichment: CartLineEnrichment = {
+        slug: product.slug,
+        image: variant.featuredAsset?.preview ?? product.featuredAsset?.preview ?? null,
+        name: variant.name,
+        options: (variant.options || []).map((o: any) => o.name).join(' / '),
         isPreOrder: true,
         shipDate: variant.customFields?.shipDate,
-        preOrderPrice: variant.customFields?.preOrderPrice,
-        productVariant: {
-          id: variant.id,
-          name: variant.name,
-          price: variant.priceWithTax || variant.price || 0,
-          stockLevel: variant.stockLevel,
-          product: { id: product.id, name: product.name, slug: product.slug },
-          options: variant.options || [],
-          featuredAsset: variant.featuredAsset || product.featuredAsset,
-        },
       };
 
-      // Cart add via the context helper — respects the LocalCart vs ServerCart
-      // strangler flag and dispatches the header-badge update itself.
-      await addToLocalCart(localCart, localCartItem);
-      localCart.hasLoadedOnce = true;
+      // Cart add via the single server-owned CartContext — dispatches the
+      // header-badge update itself (see CartContext.tsx addToCart).
+      await addToCart(cart, variant.id, 1, enrichment);
+      cart.hasLoadedOnce = true;
       appState.showCart = true;
       loadCountryOnDemand(appState);
 

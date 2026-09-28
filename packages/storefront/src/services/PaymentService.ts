@@ -1,39 +1,21 @@
-import paymentMethods from '../data/payment-methods.json';
+import { getShopConfig } from '~/providers/shop/checkout/checkout';
 
-export interface PaymentMethod {
-  id: string;
-  code: string;
-  enabled: boolean;
-  name: string;
-  description: string;
-  isEligible: boolean; // Required to match EligiblePaymentMethods type
+/**
+ * API-driven payment methods — no static JSON list. This storefront's only
+ * tender is Stripe (the Payment Element), gated on the store's own runtime
+ * config (`GET /v1/shop/config`); a store without Stripe wired shows none.
+ */
+export interface PaymentMethodOption {
+	code: 'stripe';
+	enabled: boolean;
+	name: string;
+	description: string;
 }
 
-/** SellRight/Stripe checkout flag (mirrors the checkout provider). */
-const SR_CHECKOUT_ENABLED =
-  String(import.meta.env.VITE_SR_CHECKOUT ?? '').toLowerCase() === '1' ||
-  String(import.meta.env.VITE_SR_CHECKOUT ?? '').toLowerCase() === 'true';
-
-// Stripe-only payment list for the SellRight path (NMI/Sezzle removed from THIS
-// path — they remain in payment-methods.json for the default Vendure path).
-const STRIPE_ONLY: PaymentMethod[] = [
-  { id: 'stripe', code: 'stripe', enabled: true, name: 'Card', description: 'Pay securely by card', isEligible: true },
-];
-
 export class PaymentService {
-  static getPaymentMethods(): PaymentMethod[] {
-    if (SR_CHECKOUT_ENABLED) return STRIPE_ONLY;
-    return paymentMethods.filter(method => method.enabled).map(method => ({
-      ...method,
-      isEligible: true
-    }));
-  }
-
-  static getEligiblePaymentMethods(): PaymentMethod[] {
-    if (SR_CHECKOUT_ENABLED) return STRIPE_ONLY;
-    return paymentMethods.filter(method => method.enabled).map(method => ({
-      ...method,
-      isEligible: true // All enabled methods are eligible
-    }));
-  }
+	static async getPaymentMethods(): Promise<PaymentMethodOption[]> {
+		const config = await getShopConfig();
+		if (!config.stripeConfigured) return [];
+		return [{ code: 'stripe', enabled: true, name: 'Card', description: 'Pay securely by card' }];
+	}
 }

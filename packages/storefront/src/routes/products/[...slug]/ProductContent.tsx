@@ -1,17 +1,42 @@
-import { $, component$, useComputed$, useContext, useOnDocument, useOnWindow, useSignal, useStore, useTask$ } from '@qwik.dev/core';
+import { $, component$, useComputed$, useContext, useOnDocument, useSignal, useStore, useTask$ } from '@qwik.dev/core';
 import { APP_STATE } from '~/constants';
-import { getProductStockLevelsOnly } from '~/providers/shop/products/products';
-import type { Variant } from '~/types';
-import { LocalCartService, type LocalCartItem } from '~/services/LocalCartService';
-import { useLocalCart, addToLocalCart } from '~/contexts/CartContext';
+import { getProductStock } from '~/providers/shop/products/products';
+import { mergeProductStock, type CatalogProduct, type CatalogVariant } from '~/sellright/types/catalog';
+import type { CartLineEnrichment } from '~/sellright/types/cart';
+import { useCart, addToCart } from '~/contexts/CartContext';
 import { loadCountryOnDemand } from '~/utils/addressStorage';
 import { useImageGalleryTouchHandling } from '~/utils/optimized-touch-handling';
 import { ProductPageView } from './ProductPageView';
 import { findVariant, getOptionGroups } from './product-options';
-export const ProductContent = component$(({ loaderResult }: { loaderResult: any }) => {
+import type { ProductLoaderResult } from './index';
+
+/** One gallery image — native shape (no legacy `Asset` object, no `id`;
+ *  images are matched by `preview` URL, which is unique within a product). */
+export interface GalleryImage {
+  preview: string;
+}
+
+const PLACEHOLDER_IMAGE: GalleryImage = { preview: '/asset_placeholder.webp' };
+
+/** Cart boundary: translate the native product/variant into the cart's
+ *  client-only display enrichment (`~/sellright/types/cart`). This is the
+ *  ONLY place in the catalog area that builds it — everything upstream of it
+ *  stays native, and the server cart line itself carries only `sku`/`quantity`. */
+function toCartEnrichment(product: CatalogProduct, variant: CatalogVariant, image: GalleryImage | undefined): CartLineEnrichment {
+  return {
+    slug: product.slug,
+    image: image?.preview ?? null,
+    name: variant.name,
+    options: variant.options.map((o) => o.name).join(' / '),
+    isPreOrder: variant.isPreOrder,
+    shipDate: variant.shipDate ?? undefined,
+  };
+}
+
+export const ProductContent = component$(({ loaderResult }: { loaderResult: ProductLoaderResult | { failed: true; message?: string } | null | undefined }) => {
   const appState = useContext(APP_STATE);
-  const localCart = useLocalCart();
-  if (!loaderResult || (loaderResult as any).message || !(loaderResult as any).product) {
+  const cart = useCart();
+  if (!loaderResult || 'failed' in loaderResult || !('product' in loaderResult) || !loaderResult.product) {
     return (
       <div class="min-h-[50vh] flex flex-col items-center justify-center py-16 px-4">
         <h1 class="text-2xl font-bold text-gray-900 mb-3">Product Not Found</h1>
@@ -20,33 +45,20 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: any 
       </div>
     );
   }
-  const product = useStore(loaderResult.product || loaderResult);
-  if (!product || !product.assets || !product.variants || product.variants.length === 0) {
+  const product = useStore(loaderResult.product);
+  if (!product || !product.variants || product.variants.length === 0) {
     return <div class="text-center py-8">Product not found</div>;
   }
   const isEnhancing = useSignal(false);
   const enhancementError = useSignal<string | null>(null);
-  const currentImageSig = useSignal(
-    product.featuredAsset ||
-      (product.assets.length > 0 ? product.assets[0] : { id: '', preview: '/asset_placeholder.webp', name: 'Placeholder' }),
-  );
+  const galleryImages: GalleryImage[] = product.images.length ? product.images.map((preview) => ({ preview })) : [PLACEHOLDER_IMAGE];
+  const currentImageSig = useSignal<GalleryImage>(galleryImages[0]);
   const currentImageIndex = useSignal(0);
   const groups = useComputed$(() => getOptionGroups(product.variants));
   const selectedValues = useSignal<(string | null)[]>([]);
-  const hasVariantAssets = Boolean((product as any).hasVariantAssets) ||
-    (product.variants || []).some((v: any) => (v.assets?.length || 0) > 0);
-  const baseGalleryList: any[] = (() => {
-    if (!product.featuredAsset || !product.assets) return product.assets || [];
-    const idx = product.assets.findIndex(
-      (a: any) => a.id === product.featuredAsset?.id || a.preview === product.featuredAsset?.preview,
-    );
-    if (idx === -1) return [product.featuredAsset, ...product.assets];
-    if (idx === 0) return product.assets;
-    const arr = [...product.assets];
-    const [f] = arr.splice(idx, 1);
-    return [f, ...arr];
-  })();
-  const orderedAssets = useSignal<any[]>(baseGalleryList);
+  const hasVariantAssets = product.variants.some((v) => (v.assets?.length || 0) > 0);
+  const baseGalleryList: GalleryImage[] = galleryImages;
+  const orderedAssets = useSignal<GalleryImage[]>(baseGalleryList);
   const showImageModal = useSignal(false);
   const modalImageSrc = useSignal('');
   const isImageLoading = useSignal(false);
@@ -54,7 +66,7 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: any 
   const openImageModal = $((imageSrc: string, imageIndex?: number) => {
     modalImageSrc.value = imageSrc;
     modalImageIndex.value = imageIndex ?? orderedAssets.value.findIndex(
-      (a: any) => a.preview === imageSrc.replace(/\?preset=modal$/, ''),
+      (a) => a.preview === imageSrc.replace(/\?preset=modal$/, ''),
     );
     showImageModal.value = true;
     isImageLoading.value = true;
@@ -99,13 +111,13 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: any 
     if (idx === 0 && hasVariantAssets) {
       const firstGroupName = groups.value[0]?.groupName;
       const firstSel = val;
-      let list: any[] = baseGalleryList;
+      let list: GalleryImage[] = baseGalleryList;
       if (firstGroupName && firstSel) {
         const seen = new Set<string>();
-        const union: any[] = [];
-        for (const v of product.variants as Variant[]) {
+        const union: GalleryImage[] = [];
+        for (const v of product.variants) {
           const match = v.options?.some(
-            (o: any) => o.group?.name === firstGroupName && o.name === firstSel,
+            (o) => o.group?.name === firstGroupName && o.name === firstSel,
           );
           if (!match) continue;
           for (const a of (v.assets || [])) {
@@ -135,14 +147,10 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: any 
     isEnhancing.value = true;
     enhancementError.value = null;
     try {
-      const result: any = await getProductStockLevelsOnly(product.slug);
-      const liveVariants: Array<{ id: string; stockLevel: string }> = result?.product?.variants || [];
-      if (!liveVariants.length) return;
-      const stockById = new Map(liveVariants.map(v => [String(v.id), v.stockLevel]));
-      product.variants = (product.variants || []).map((v: any) => ({
-        ...v,
-        stockLevel: stockById.get(String(v.id)) ?? '0',
-      }));
+      const stock = await getProductStock(product.slug);
+      if (!stock) return;
+      const merged = mergeProductStock(product, stock);
+      product.variants = merged.variants;
       const isCompleteSelection =
         groups.value.length > 0 &&
         selectedValues.value.length === groups.value.length &&
@@ -172,9 +180,7 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: any 
     track(() => orderedAssets.value);
     const list = orderedAssets.value;
     if (list.length === 0) return;
-    const index = list.findIndex(
-      (a: any) => a.id === currentImageSig.value.id || a.preview === currentImageSig.value.preview,
-    );
+    const index = list.findIndex((a) => a.preview === currentImageSig.value.preview);
     if (index === -1) {
       currentImageSig.value = list[0];
       currentImageIndex.value = 0;
@@ -227,31 +233,24 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: any 
   const selectedVariantIdSignal = useSignal<string | undefined>(undefined);
   useTask$(({ track }) => {
     track(() => resolvedVariant.value);
-    selectedVariantIdSignal.value = resolvedVariant.value?.id;
+    selectedVariantIdSignal.value = resolvedVariant.value?.sku;
   });
   const availableVariants = useComputed$(() => product.variants);
   const selectedVariant = useComputed$(() =>
-    availableVariants.value.find((v: Variant) => v.id === selectedVariantIdSignal.value)
+    availableVariants.value.find((v) => v.sku === selectedVariantIdSignal.value)
   );
   const isPreOrder = useComputed$(() => {
-    if (selectedVariant.value) {
-      return !!(selectedVariant.value as any)?.customFields?.isPreOrder;
-    }
-    return product.variants.some((v: any) => !!v.customFields?.isPreOrder);
+    if (selectedVariant.value) return !!selectedVariant.value.isPreOrder;
+    return product.variants.some((v) => !!v.isPreOrder);
   });
   const hasSale = useComputed$(() => {
     if (selectedVariant.value) {
-      const p = selectedVariant.value?.customFields?.salePrice;
-      return typeof p === 'number' && p > 0;
+      return typeof selectedVariant.value.salePrice === 'number' && selectedVariant.value.salePrice > 0;
     }
-    return product.variants.some((v: any) => typeof v.customFields?.salePrice === 'number' && v.customFields.salePrice > 0);
+    return product.variants.some((v) => typeof v.salePrice === 'number' && v.salePrice > 0);
   });
   const allVariantsSoldOut = useComputed$(() =>
-    product.variants.every((v: Variant) => {
-      const stock = parseInt((v as any).stockLevel || '0', 10);
-      const cf = (v as any).customFields;
-      return !cf?.isPreOrder && stock <= 0;
-    })
+    product.variants.every((v) => !v.isPreOrder && !v.inStock)
   );
   const allGroupsSelected = useComputed$(() =>
     groups.value.length > 0 && selectedValues.value.length === groups.value.length && selectedValues.value.every(v => v !== null)
@@ -260,7 +259,7 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: any 
     if (!allGroupsSelected.value) return false; // incomplete selection — never OOS
     if (!selectedVariant.value) return false;
     if (isPreOrder.value) return false;
-    return parseInt(selectedVariant.value?.stockLevel || '0', 10) <= 0;
+    return !selectedVariant.value.inStock;
   });
   const preOrderConsent = useSignal(false);
   const showCtaTooltip = useSignal(false);
@@ -274,28 +273,9 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: any 
         isAddingToCart.value = true;
         const selectedVar = selectedVariant.value;
         if (!selectedVar) throw new Error('No variant selected');
-        const rawSalePrice = selectedVar.customFields?.salePrice;
-        const rawPreOrderPrice = selectedVar.customFields?.preOrderPrice;
-        const effectiveSalePrice = typeof rawSalePrice === 'number' && rawSalePrice > 0 ? rawSalePrice : undefined;
-        const effectivePreOrderPrice = typeof rawPreOrderPrice === 'number' && rawPreOrderPrice > 0 ? rawPreOrderPrice : undefined;
-        const localCartItem: LocalCartItem = {
-          productVariantId: selectedVar.id,
-          quantity: 1,
-          isPreOrder: isPreOrder.value,
-          shipDate: selectedVar.customFields?.shipDate,
-          salePrice: effectiveSalePrice,
-          preOrderPrice: effectivePreOrderPrice,
-          productVariant: {
-            id: selectedVar.id,
-            name: selectedVar.name,
-            price: selectedVar.priceWithTax || selectedVar.price || 0,
-            stockLevel: selectedVar.stockLevel,
-            product: { id: product.id, name: product.name, slug: product.slug },
-            options: selectedVar.options || [],
-            featuredAsset: selectedVar.featuredAsset || product.featuredAsset,
-          },
-        };
-        await addToLocalCart(localCart, localCartItem);
+        const image = (selectedVar.assets?.[0]) ?? orderedAssets.value[0] ?? galleryImages[0];
+        const enrichment = toCartEnrichment(product, selectedVar, image);
+        await addToCart(cart, selectedVar.sku, 1, enrichment);
         appState.showCart = true;
         loadCountryOnDemand(appState);
         const announcement = document.createElement('div');
@@ -313,25 +293,25 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: any 
       }
     }
   });
-  useOnDocument('qinit', $(() => {
-    const variantIds = (product.variants || []).map((v: Variant) => v.id);
-    quantitySignal.value = LocalCartService.getItemQuantitiesFromStorage(variantIds);
-  }));
-  useOnWindow('cart-updated', $(() => {
-    const variantIds = (product.variants || []).map((v: Variant) => v.id);
-    quantitySignal.value = LocalCartService.getItemQuantitiesFromStorage(variantIds);
-  }));
+  // Per-SKU quantity already in the cart — derived straight from the live
+  // cart mirror (CartContext), never from local storage.
+  useTask$(({ track }) => {
+    track(() => cart.cart.lines);
+    const map: Record<string, number> = {};
+    for (const line of cart.cart.lines) map[line.sku] = (map[line.sku] ?? 0) + line.quantity;
+    quantitySignal.value = map;
+  });
   const displayPrice = useComputed$(() => {
-    if (selectedVariant.value) return selectedVariant.value.priceWithTax || selectedVariant.value.price || 0;
+    if (selectedVariant.value) return selectedVariant.value.price || 0;
     if (selectedValues.value[0] && groups.value.length > 1) {
       const gName = groups.value[0].groupName;
       const sel = selectedValues.value[0];
-      const matching = product.variants.filter((v: Variant) =>
-        v.options?.find((o: any) => o.group?.name === gName && o.name === sel)
+      const matching = product.variants.filter((v) =>
+        v.options?.find((o) => o.group?.name === gName && o.name === sel)
       );
-      if (matching.length) return Math.min(...matching.map((v: Variant) => v.priceWithTax || v.price || 0));
+      if (matching.length) return Math.min(...matching.map((v) => v.price || 0));
     }
-    return Math.min(...product.variants.map((v: Variant) => v.priceWithTax || v.price || 0));
+    return Math.min(...product.variants.map((v) => v.price || 0));
   });
   const showFromPrefix = useComputed$(() => groups.value.length > 1 && !selectedVariant.value);
   const ctaDisabled = useComputed$(() =>

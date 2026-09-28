@@ -7,7 +7,7 @@ import CheckIcon from '~/components/icons/CheckIcon';
 import EyeIcon from '~/components/icons/EyeIcon';
 import EyeSlashIcon from '~/components/icons/EyeSlashIcon';
 import { APP_STATE } from '~/constants';
-import { updateCustomerPasswordMutation } from '~/services/customer';
+import { changePassword } from '~/services/customer';
 import { createSEOHead } from '~/utils/seo';
 
 export default component$(() => {
@@ -45,31 +45,18 @@ export default component$(() => {
 		}
 
 		// API call
-		const updateCustomerPassword = await updateCustomerPasswordMutation(
-			currentPassword.value,
-			newPassword.value
-		);
+		const result = await changePassword(currentPassword.value, newPassword.value);
 
-		switch (updateCustomerPassword.__typename) {
-			case 'PasswordValidationError':
-				errorMessage.value = 'Please set a stronger new password!';
-				break;
-			case 'InvalidCredentialsError':
-				errorMessage.value = 'Current password does not match!';
-				break;
-			case 'NativeAuthStrategyError':
-				errorMessage.value = 'Login method mismatch!';
-				break;
-			default:
-				successMessage.value = 'Password updated successfully!';
-				// Clear form fields
-				currentPassword.value = '';
-				newPassword.value = '';
-				confirmPassword.value = '';
-				// Optionally redirect after a delay
-				setTimeout(() => navigate('/account'), 2000);
-				break;
+		if (!result.ok) {
+			errorMessage.value = result.message;
+			return;
 		}
+
+		successMessage.value = 'Password updated successfully!';
+		currentPassword.value = '';
+		newPassword.value = '';
+		confirmPassword.value = '';
+		setTimeout(() => navigate('/account'), 2000);
 	});
 
 	const togglePasswordFields = $(() => {

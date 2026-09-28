@@ -11,15 +11,14 @@ import { Modal } from '~/components/modal/Modal';
 import { LoyaltyBalanceCard } from '~/components/loyalty/LoyaltyBalanceCard';
 import { APP_STATE } from '~/constants';
 import {
-	requestUpdateCustomerEmailAddressMutation,
-	updateCustomerMutation,
+	requestEmailChange,
+	updateProfile,
 } from '~/providers/shop/account/account';
 import {
-	getActiveCustomerCached,
-	getActiveCustomerOrdersQuery,
+	getMeCached,
+	getOrders,
 } from '~/services/customer';
 import { ActiveCustomer } from '~/types';
-import type { Order } from '~/generated/graphql-shop';
 import { createSEOHead } from '~/utils/seo';
 import { sanitizePhoneNumber } from '~/utils/validation';
 
@@ -31,7 +30,6 @@ export default component$(() => {
 	const errorMessage = useSignal('');
 	const currentPassword = useSignal('');
 	const orderCount = useSignal(0);
-	const deliveredCount = useSignal(0);
 	const statsLoaded = useSignal(false);
 	const update = {
 		customer: {} as ActiveCustomer,
@@ -39,36 +37,31 @@ export default component$(() => {
 
 	// T17: Load account data on qinit
 	useOnDocument('qinit', $(async () => {
-		const activeCustomer = await getActiveCustomerCached();
+		const activeCustomer = await getMeCached();
 		if (activeCustomer) {
 			appState.customer = {
-				title: activeCustomer.title ?? '',
-				firstName: activeCustomer.firstName,
+				title: '',
+				firstName: activeCustomer.firstName ?? '',
 				id: activeCustomer.id,
-				lastName: activeCustomer.lastName,
-				emailAddress: activeCustomer.emailAddress,
-				phoneNumber: sanitizePhoneNumber(activeCustomer.phoneNumber),
+				lastName: activeCustomer.lastName ?? '',
+				emailAddress: activeCustomer.email,
+				phoneNumber: sanitizePhoneNumber(activeCustomer.phone ?? ''),
 			};
-			newEmail.value = activeCustomer?.emailAddress as string;
+			newEmail.value = activeCustomer.email;
 		}
 
-		const customerData = await getActiveCustomerOrdersQuery();
-		if (customerData?.orders?.items) {
-			const orders = customerData.orders.items as Order[];
-			orderCount.value = orders.length;
-			deliveredCount.value = orders.filter((order) => order.state === 'Delivered').length;
-		}
+		// Real total from the API's own pagination — never the page length.
+		const orders = await getOrders({ limit: 1 });
+		orderCount.value = orders.total;
 		statsLoaded.value = true;
 	}));
 
 	const updateCustomer = $(async (): Promise<void> => {
-		const updateInput = {
-			title: appState.customer.title,
+		await updateProfile({
 			firstName: appState.customer.firstName,
 			lastName: appState.customer.lastName,
-			phoneNumber: appState.customer.phoneNumber,
-		};
-		await updateCustomerMutation(updateInput);
+			phone: appState.customer.phoneNumber,
+		});
 
 		appState.customer.emailAddress !== newEmail.value
 			? (showModal.value = true)
@@ -76,12 +69,9 @@ export default component$(() => {
 	});
 
 	const updateEmail = $(async (password: string, newEmail: string) => {
-		const { requestUpdateCustomerEmailAddress } = await requestUpdateCustomerEmailAddressMutation(
-			password,
-			newEmail
-		);
-		if (requestUpdateCustomerEmailAddress.__typename === 'InvalidCredentialsError') {
-			errorMessage.value = requestUpdateCustomerEmailAddress.message || '';
+		const result = await requestEmailChange(newEmail, password);
+		if (!result.ok) {
+			errorMessage.value = result.message;
 		} else {
 			errorMessage.value = '';
 			isEditing.value = false;
@@ -130,79 +120,32 @@ export default component$(() => {
 			<LoyaltyBalanceCard />
 
 			<div class="mb-8">
-				<div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-					{/* Total Orders Stat */}
-					<a href="/account/orders" class="bg-white rounded-lg p-8 shadow-soft border border-gray-100/50 hover:shadow-medium transition-all duration-300 text-center group cursor-pointer no-underline">
-						<div class="flex justify-center mb-4">
-							<div class="w-12 h-12 bg-[#F5F0E8] rounded-full flex items-center justify-center transition-colors duration-300">
-								<svg class="w-6 h-6 text-[var(--color-accent)] transition-colors duration-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"></path>
-								</svg>
-							</div>
+				{/* Only what the API can actually report: the account order
+				    endpoint's real `total`. No per-status breakdown (Delivered,
+				    etc.) — the order-history list doesn't carry fulfillment state,
+				    so that count would have to be fabricated. */}
+				<a href="/account/orders" class="block max-w-xs bg-white rounded-lg p-8 shadow-soft border border-gray-100/50 hover:shadow-medium transition-all duration-300 text-center group cursor-pointer no-underline">
+					<div class="flex justify-center mb-4">
+						<div class="w-12 h-12 bg-[#F5F0E8] rounded-full flex items-center justify-center transition-colors duration-300">
+							<svg class="w-6 h-6 text-[var(--color-accent)] transition-colors duration-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"></path>
+							</svg>
 						</div>
-						<div class="text-4xl font-heading font-light text-[var(--color-accent)] mb-2">
-							{statsLoaded.value ? (
-								orderCount.value
-							) : (
-								<div class="h-10 w-16 mx-auto bg-gray-200 rounded animate-pulse" />
-							)}
-						</div>
-						<div class="text-xs uppercase tracking-wider text-gray-600 font-medium mb-3">
-							Total Orders
-						</div>
-						<div class="text-xs text-gray-500 group-hover:text-[var(--color-accent)] transition-colors">
-							View all orders →
-						</div>
-					</a>
-
-					{/* Delivered Orders Stat */}
-					<div class="bg-white rounded-lg p-8 shadow-soft border border-gray-100/50 hover:shadow-medium transition-all duration-300 text-center">
-						<div class="flex justify-center mb-4">
-							<div class="w-12 h-12 bg-[#F5F0E8] rounded-full flex items-center justify-center">
-								<svg class="w-6 h-6 text-[#141210]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-								</svg>
-							</div>
-						</div>
-						<div class="text-4xl font-heading font-light text-[#141210] mb-2">
-							{statsLoaded.value ? (
-								deliveredCount.value
-							) : (
-								<div class="h-10 w-16 mx-auto bg-gray-200 rounded animate-pulse" />
-							)}
-						</div>
-						<div class="text-xs uppercase tracking-wider text-gray-600 font-medium mb-3">
-							Delivered
-						</div>
-						<p class="text-xs text-gray-500">
-							Successfully completed
-						</p>
 					</div>
-
-					{/* Orders Stat */}
-					<div class="bg-white rounded-lg p-8 shadow-soft border border-gray-100/50 hover:shadow-medium transition-all duration-300 text-center">
-						<div class="flex justify-center mb-4">
-							<div class="w-12 h-12 bg-[#F5F0E8] rounded-full flex items-center justify-center">
-								<svg class="w-6 h-6 text-[#141210]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-								</svg>
-							</div>
-						</div>
-						<div class="text-4xl font-heading font-light text-[#141210] mb-2">
-							{statsLoaded.value ? (
-								orderCount.value
-							) : (
-								<div class="h-10 w-16 mx-auto bg-gray-200 rounded animate-pulse" />
-							)}
-						</div>
-						<div class="text-xs uppercase tracking-wider text-gray-600 font-medium mb-3">
-							Total Orders
-						</div>
-						<p class="text-xs text-gray-500">
-							Orders placed
-						</p>
+					<div class="text-4xl font-heading font-light text-[var(--color-accent)] mb-2">
+						{statsLoaded.value ? (
+							orderCount.value
+						) : (
+							<div class="h-10 w-16 mx-auto bg-gray-200 rounded animate-pulse" />
+						)}
 					</div>
-				</div>
+					<div class="text-xs uppercase tracking-wider text-gray-600 font-medium mb-3">
+						Total Orders
+					</div>
+					<div class="text-xs text-gray-500 group-hover:text-[var(--color-accent)] transition-colors">
+						View all orders →
+					</div>
+				</a>
 			</div>
 
 			{/* Email Change Modal */}

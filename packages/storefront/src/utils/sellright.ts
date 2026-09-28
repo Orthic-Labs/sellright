@@ -1,5 +1,5 @@
 /**
- * SellRight REST client (replaces the Vendure GraphQL requester for the dynamic
+ * SellRight REST client (replaces the legacy GraphQL requester for the dynamic
  * paths). SSR fetches the API directly (localhost:3300 on the box, the real
  * merchant API); the browser uses relative /v1 paths which vite/the host
  * proxies to the API (no CORS).
@@ -760,25 +760,6 @@ export const srVerifyGatewayPayment = (code: string, attemptId: string, opts: { 
     body: JSON.stringify({}),
     headers: opts.receiptToken ? { 'x-receipt-token': opts.receiptToken } : undefined,
   });
-
-// ── Guest order tracking — GET /v1/shop/track (code + email) ─────────────────
-
-export interface SrTrackedOrder {
-  code: string;
-  state: string;
-  placedAt: string | null;
-  currency: string;
-  subtotal: number;
-  shippingTotal: number;
-  taxTotal: number;
-  discountTotal: number;
-  grandTotal: number;
-  shippingAddress: { fullName?: string; line1?: string; line2?: string; streetLine1?: string; streetLine2?: string; city?: string; province?: string; postalCode?: string; country?: string; countryCode?: string; phone?: string; phoneNumber?: string } | null;
-  fulfillments: { state: string; trackingCode: string | null; carrier: string | null; updatedAt: string | null }[];
-  lines: { sku: string; name: string; quantity: number; unitPrice: number; lineTotal: number; isPreOrder: boolean; shipDate: string | null }[];
-}
-export const srTrackOrder = (code: string, email: string) =>
-  sr<SrTrackedOrder>(`/v1/shop/track?code=${encodeURIComponent(code)}&email=${encodeURIComponent(email)}`);
 
 /** POST /v1/shop/contact — honeypot/website fake-success handled server-side;
  *  429 surfaces the retry message in `error`. */

@@ -2,7 +2,7 @@ import { Slot, component$, useContext, useOnDocument, $ } from '@qwik.dev/core';
 import { AccountNav } from '~/components/account/AccountNav';
 import { RequestHandler } from '@qwik.dev/router';
 import { APP_STATE, CUSTOMER_NOT_DEFINED_ID, AUTH_TOKEN } from '~/constants';
-import { getActiveCustomerQuery } from '~/services/customer';
+import { getMe } from '~/services/customer';
 import { LocalAddressService } from '~/services/LocalAddressService';
 import { sanitizePhoneNumber } from '~/utils/validation';
 
@@ -17,45 +17,61 @@ export default component$(() => {
 
 	// T17: Load customer data on init (qinit — eager, runs right after hydration)
 	useOnDocument('qinit', $(async () => {
-		const activeCustomer = await getActiveCustomerQuery();
+		const activeCustomer = await getMe();
 		if (activeCustomer) {
 			appState.customer = {
-				title: activeCustomer.title ?? '',
-				firstName: activeCustomer.firstName,
+				title: '',
+				firstName: activeCustomer.firstName ?? '',
 				id: activeCustomer.id,
-				lastName: activeCustomer.lastName,
-				emailAddress: activeCustomer.emailAddress,
-				phoneNumber: activeCustomer.phoneNumber ?? '',
+				lastName: activeCustomer.lastName ?? '',
+				emailAddress: activeCustomer.email,
+				phoneNumber: activeCustomer.phone ?? '',
 			};
 
 			if (activeCustomer.id !== CUSTOMER_NOT_DEFINED_ID && appState.addressBook.length === 0) {
 				try {
-					await LocalAddressService.syncFromVendure(activeCustomer.id);
+					await LocalAddressService.syncFromServer(activeCustomer.id);
 					const addresses = LocalAddressService.getAddresses();
-					appState.addressBook = addresses;
+					// appState.addressBook / appState.shippingAddress use the
+					// checkout area's own long-standing field names — map the
+					// native LocalAddress shape onto them at this boundary.
+					appState.addressBook = addresses.map((a) => ({
+						id: a.id,
+						fullName: a.fullName,
+						streetLine1: a.line1,
+						streetLine2: a.line2 || '',
+						company: a.company || '',
+						city: a.city,
+						province: a.province,
+						postalCode: a.postalCode,
+						countryCode: a.country,
+						phoneNumber: a.phone || '',
+						defaultShippingAddress: a.isDefaultShipping,
+						defaultBillingAddress: a.isDefaultBilling,
+					}));
 
 					if (addresses.length > 0) {
-						const defaultShipping = addresses.find(a => a.defaultShippingAddress) || addresses[0];
-						if (defaultShipping && defaultShipping.phoneNumber) {
-							appState.customer.phoneNumber = sanitizePhoneNumber(defaultShipping.phoneNumber);
+						const defaultShipping = addresses.find(a => a.isDefaultShipping) || addresses[0];
+						if (defaultShipping && defaultShipping.phone) {
+							appState.customer.phoneNumber = sanitizePhoneNumber(defaultShipping.phone);
 						}
 
 						if (defaultShipping && !appState.shippingAddress.streetLine1) {
 							appState.shippingAddress = {
 								id: defaultShipping.id,
 								fullName: defaultShipping.fullName,
-								streetLine1: defaultShipping.streetLine1,
-								streetLine2: defaultShipping.streetLine2 || '',
+								streetLine1: defaultShipping.line1,
+								streetLine2: defaultShipping.line2 || '',
 								city: defaultShipping.city,
 								province: defaultShipping.province,
 								postalCode: defaultShipping.postalCode,
-								countryCode: defaultShipping.countryCode,
-								phoneNumber: defaultShipping.phoneNumber || '',
+								countryCode: defaultShipping.country,
+								phoneNumber: defaultShipping.phone || '',
 								company: defaultShipping.company || '',
 							};
 
 							if (typeof sessionStorage !== 'undefined') {
-								sessionStorage.setItem('countryCode', defaultShipping.countryCode);
+								sessionStorage.setItem('countryCode', defaultShipping.country);
 								sessionStorage.setItem('countrySource', 'customer');
 							}
 						}

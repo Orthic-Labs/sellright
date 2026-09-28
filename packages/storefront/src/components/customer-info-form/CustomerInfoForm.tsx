@@ -186,7 +186,7 @@ export const CustomerInfoForm = component$<CustomerInfoFormProps>(({ updateValid
               value={appState.customer?.emailAddress}
               disabled={appState.customer?.id !== CUSTOMER_NOT_DEFINED_ID}
               placeholder="Email address *"
-              onChange$={(_, el) => handleEmailChange$(el.value)}
+              onInput$={(_, el) => handleEmailChange$(el.value)}
               onBlur$={handleEmailBlur$}
               aria-invalid={!!(emailTouched.value && emailValidationError.value)}
               aria-describedby={emailTouched.value && emailValidationError.value ? 'customer-info-email-error' : undefined}
@@ -206,7 +206,7 @@ export const CustomerInfoForm = component$<CustomerInfoFormProps>(({ updateValid
               id="customer-info-phone"
               value={sanitizePhoneNumber(appState.customer?.phoneNumber)}
               placeholder={`Phone number${(appState.shippingAddress.countryCode === 'US' || appState.shippingAddress.countryCode === 'PR') ? ' (optional)' : ' *'}`}
-              onChange$={(_, el) => handlePhoneChange$(el.value)}
+              onInput$={(_, el) => handlePhoneChange$(el.value)}
               onBlur$={handlePhoneBlur$}
               aria-invalid={!!(phoneTouched.value && phoneValidationError.value)}
               aria-describedby={phoneTouched.value && phoneValidationError.value ? 'customer-info-phone-error' : undefined}
@@ -230,7 +230,7 @@ export const CustomerInfoForm = component$<CustomerInfoFormProps>(({ updateValid
               value={appState.customer?.firstName}
               disabled={appState.customer?.id !== CUSTOMER_NOT_DEFINED_ID}
               placeholder="First name *"
-              onChange$={(_, el) => handleFirstNameChange$(el.value)}
+              onInput$={(_, el) => handleFirstNameChange$(el.value)}
               onBlur$={handleFirstNameBlur$}
               aria-invalid={!!(firstNameTouched.value && firstNameValidationError.value)}
               aria-describedby={firstNameTouched.value && firstNameValidationError.value ? 'customer-info-firstName-error' : undefined}
@@ -252,7 +252,7 @@ export const CustomerInfoForm = component$<CustomerInfoFormProps>(({ updateValid
               value={appState.customer?.lastName}
               disabled={appState.customer?.id !== CUSTOMER_NOT_DEFINED_ID}
               placeholder="Last name *"
-              onChange$={(_, el) => handleLastNameChange$(el.value)}
+              onInput$={(_, el) => handleLastNameChange$(el.value)}
               onBlur$={handleLastNameBlur$}
               aria-invalid={!!(lastNameTouched.value && lastNameValidationError.value)}
               aria-describedby={lastNameTouched.value && lastNameValidationError.value ? 'customer-info-lastName-error' : undefined}

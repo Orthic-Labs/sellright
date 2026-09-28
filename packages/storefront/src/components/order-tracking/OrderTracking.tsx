@@ -1,6 +1,6 @@
 import { $, component$, useOnDocument, useSignal } from '@qwik.dev/core';
 import { useLocation } from '@qwik.dev/router';
-import { Order } from '~/generated/graphql-shop';
+import type { TrackedOrder } from '~/sellright/types/content';
 import { OrderDetails } from './OrderDetails';
 import { trackOrderServer } from '~/services/track-order.service';
 import { useStoreIdentityLoader } from '~/routes/layout';
@@ -10,7 +10,7 @@ export default component$(() => {
   const location = useLocation();
   const orderCode = useSignal('');
   const email = useSignal('');
-  const orderData = useSignal<Order | null>(null);
+  const orderData = useSignal<TrackedOrder | null>(null);
   const loading = useSignal(false);
   const error = useSignal('');
   const hasSearched = useSignal(false);

@@ -22,7 +22,7 @@ export const onPost: RequestHandler = async ({ request, json }) => {
         ];
 
         // Fetch dynamic product slugs to warm — SellRight REST catalog (generic,
-        // works for any store via x-store-slug; no Vendure /shop-api in this stack).
+        // works for any store via x-store-slug; no legacy /shop-api in this stack).
         try {
                 const response = await fetch(`${apiUrl}/v1/shop/catalog/products?limit=500`, {
                         headers: { 'x-store-slug': storeSlug, accept: 'application/json' },

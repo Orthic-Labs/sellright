@@ -1,7 +1,6 @@
 import { component$ } from '@qwik.dev/core';
-import { Order } from '~/generated/graphql-shop';
+import type { TrackedOrder } from '~/sellright/types/content';
 import { formatPrice, formatDateTime } from '~/utils';
-import { OptimizedImage } from '~/components/ui';
 import {
   formatShipDate,
   getLatestPreOrderShipDate,
@@ -13,7 +12,7 @@ import {
 } from './order-details-utils';
 
 interface OrderDetailsProps {
-  order: Order;
+  order: TrackedOrder;
 }
 
 export const OrderDetails = component$<OrderDetailsProps>(({ order }) => {
@@ -41,7 +40,7 @@ export const OrderDetails = component$<OrderDetailsProps>(({ order }) => {
         <div class="text-right">
           <div class="text-sm font-medium text-[#645541]">Order Total</div>
           <p class="text-2xl font-bold text-[#141210]">
-            {formatPrice(order.totalWithTax, order.currencyCode)}
+            {formatPrice(order.grandTotal, order.currency)}
           </p>
           <p class="text-sm text-[#7A7166]">
             {order.lines.length} item{order.lines.length !== 1 ? 's' : ''}
@@ -77,7 +76,7 @@ export const OrderDetails = component$<OrderDetailsProps>(({ order }) => {
       )}
 
       {/* Standard Tracking Notice for regular orders (when no tracking available yet) */}
-      {!trackingInfo.hasTracking && !hasPreOrderItems(order) && order.state === 'PaymentSettled' && (
+      {!trackingInfo.hasTracking && !hasPreOrderItems(order) && order.state === 'Paid' && (
         <div class="bg-[var(--color-parchment)] border border-[#E5E0D8] rounded-[3px] p-6">
           <h3 class="text-lg font-medium text-[#141210] mb-2 flex items-center gap-2">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -102,12 +101,12 @@ export const OrderDetails = component$<OrderDetailsProps>(({ order }) => {
             <div>
               <p class="text-sm font-medium text-[#141210]">Tracking Number</p>
               <a
-                href={getTrackingUrl(trackingInfo.trackingCode!)}
+                href={getTrackingUrl(trackingInfo.trackingCode)}
                 target="_blank"
                 rel="noopener noreferrer"
                 class="text-[#645541] font-mono text-lg hover:text-[#141210] underline underline-offset-2"
               >
-                {getMaskedTrackingCode(trackingInfo.trackingCode!)}
+                {getMaskedTrackingCode(trackingInfo.trackingCode)}
               </a>
             </div>
             <div>
@@ -116,7 +115,7 @@ export const OrderDetails = component$<OrderDetailsProps>(({ order }) => {
             </div>
           </div>
           <a
-            href={getTrackingUrl(trackingInfo.trackingCode!)}
+            href={getTrackingUrl(trackingInfo.trackingCode)}
             target="_blank"
             rel="noopener noreferrer"
             class="mt-4 inline-flex bg-transparent border border-[#141210] text-[#141210] px-6 py-2 rounded-[3px] hover:bg-[#F5F0E8] transition-colors duration-200 font-medium items-center gap-2"
@@ -135,39 +134,19 @@ export const OrderDetails = component$<OrderDetailsProps>(({ order }) => {
           <h3 class="text-lg font-semibold text-[#141210]">Order Items</h3>
         </div>
         <div class="divide-y divide-[#E5E0D8]">
-          {order.lines.map((line) => (
-            <div key={line.id} class="p-6 flex gap-4">
-              {/* Product image with proper aspect ratio */}
-              <div class="flex-shrink-0 w-20 border border-[#E5E0D8] rounded-[3px] overflow-hidden">
-                <div class="relative aspect-4/5">
-                  {line.featuredAsset?.preview ? (
-                    <OptimizedImage
-                      src={line.featuredAsset.preview}
-                      alt={line.productVariant.name}
-                      class="w-full h-full object-cover object-center"
-                      width={80}
-                      height={100}
-                    />
-                  ) : (
-                    <div class="w-full h-full bg-gray-100 flex items-center justify-center">
-                      <svg class="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                      </svg>
-                    </div>
-                  )}
-                </div>
-              </div>
-              {/* Product details */}
+          {order.lines.map((line, index) => (
+            <div key={`${line.sku}-${index}`} class="p-6 flex gap-4">
+              {/* Product details — guest tracking doesn't return line images */}
               <div class="flex-1 flex flex-col justify-between">
                 <div>
-                  <h4 class="font-semibold text-[#141210]">{line.productVariant.name}</h4>
-                  <p class="text-sm text-[#7A7166] mt-1">SKU: {line.productVariant.sku}</p>
+                  <h4 class="font-semibold text-[#141210]">{line.name}</h4>
+                  <p class="text-sm text-[#7A7166] mt-1">SKU: {line.sku}</p>
                   {/* Show ship date for pre-order items */}
-                  {line.productVariant?.customFields?.preOrderPrice && (
+                  {line.isPreOrder && (
                     <div class="mt-2">
-                      {line.productVariant.customFields.shipDate ? (
+                      {line.shipDate ? (
                         <p class="text-sm text-[#645541] font-medium">
-                          Expected to ship: {formatShipDate(new Date(line.productVariant.customFields.shipDate))}
+                          Expected to ship: {formatShipDate(new Date(line.shipDate))}
                         </p>
                       ) : (
                         <p class="text-sm text-[#645541] font-medium">
@@ -181,10 +160,10 @@ export const OrderDetails = component$<OrderDetailsProps>(({ order }) => {
                   <span class="text-sm text-[#645541] font-medium">Qty: {line.quantity}</span>
                   <div class="text-right">
                     <p class="font-semibold text-[#141210]">
-                      {formatPrice(line.linePriceWithTax, order.currencyCode)}
+                      {formatPrice(line.lineTotal, order.currency)}
                     </p>
                     <p class="text-sm text-[#7A7166]">
-                      {formatPrice(line.unitPriceWithTax, order.currencyCode)} each
+                      {formatPrice(line.unitPrice, order.currency)} each
                     </p>
                   </div>
                 </div>
@@ -202,19 +181,19 @@ export const OrderDetails = component$<OrderDetailsProps>(({ order }) => {
           <div class="space-y-2">
             <div class="flex justify-between text-sm">
               <span class="text-[#645541]">Subtotal</span>
-              <span class="font-medium">{formatPrice(order.subTotalWithTax, order.currencyCode)}</span>
+              <span class="font-medium">{formatPrice(order.subtotal, order.currency)}</span>
             </div>
-            {order.shippingWithTax > 0 && (
+            {order.shippingTotal > 0 && (
               <div class="flex justify-between text-sm">
                 <span class="text-[#645541]">Shipping</span>
-                <span class="font-medium">{formatPrice(order.shippingWithTax, order.currencyCode)}</span>
+                <span class="font-medium">{formatPrice(order.shippingTotal, order.currency)}</span>
               </div>
             )}
             <div class="border-t border-[#E5E0D8] pt-2">
               <div class="flex justify-between">
                 <span class="font-semibold text-[#141210]">Total</span>
                 <span class="font-semibold text-[#141210]">
-                  {formatPrice(order.totalWithTax, order.currencyCode)}
+                  {formatPrice(order.grandTotal, order.currency)}
                 </span>
               </div>
             </div>
@@ -233,17 +212,17 @@ export const OrderDetails = component$<OrderDetailsProps>(({ order }) => {
             </h3>
             <div class="text-[#645541] space-y-1 text-sm">
               <p class="font-medium text-[#141210]">{order.shippingAddress.fullName}</p>
-              <p>{order.shippingAddress.streetLine1}</p>
-              {order.shippingAddress.streetLine2 && (
-                <p>{order.shippingAddress.streetLine2}</p>
+              <p>{order.shippingAddress.line1}</p>
+              {order.shippingAddress.line2 && (
+                <p>{order.shippingAddress.line2}</p>
               )}
               <p>
                 {order.shippingAddress.city}, {order.shippingAddress.province} {order.shippingAddress.postalCode}
               </p>
               <p>{order.shippingAddress.country}</p>
-              {order.shippingAddress.phoneNumber && (
+              {order.shippingAddress.phone && (
                 <p class="text-[#7A7166] mt-2">
-                  Phone: {order.shippingAddress.phoneNumber}
+                  Phone: {order.shippingAddress.phone}
                 </p>
               )}
             </div>
@@ -252,7 +231,7 @@ export const OrderDetails = component$<OrderDetailsProps>(({ order }) => {
       </div>
 
       {/* Payment Information - More Compact */}
-      {order.payments && order.payments.length > 0 && (
+      {order.payments.length > 0 && (
         <div class="bg-white border border-[#E5E0D8] rounded-[3px] p-5">
           <h3 class="text-lg font-semibold text-[#141210] mb-3 flex items-center gap-2">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -260,18 +239,18 @@ export const OrderDetails = component$<OrderDetailsProps>(({ order }) => {
             </svg>
             Payment Information
           </h3>
-          {order.payments.map((payment) => (
-            <div key={payment.id} class="flex justify-between items-center">
+          {order.payments.map((payment, index) => (
+            <div key={`${payment.method}-${index}`} class="flex justify-between items-center">
               <div>
                 <p class="font-medium text-[#141210] text-sm">
                   {payment.method.replace(/([A-Z])/g, ' $1').trim()}
                 </p>
                 <p class="text-sm text-[#7A7166]">
-                  {payment.state} • {formatDateTime(payment.createdAt)}
+                  {payment.state} • {formatDateTime(new Date(payment.createdAt))}
                 </p>
               </div>
               <p class="font-semibold text-[#141210]">
-                {formatPrice(payment.amount, order.currencyCode)}
+                {formatPrice(payment.amount, order.currency)}
               </p>
             </div>
           ))}

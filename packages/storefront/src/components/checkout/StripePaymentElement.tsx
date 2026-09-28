@@ -2,7 +2,7 @@ import { $, component$, useSignal, useVisibleTask$, type QRL, type Signal } from
 import { loadStripe, type Stripe, type StripeElements } from '@stripe/stripe-js';
 
 /**
- * Stripe Payment Element (checkout-migration, behind VITE_SR_CHECKOUT).
+ * Stripe Payment Element — the only card tender this storefront wires up.
  *
  * loadStripe(publishableKey) → Elements(clientSecret) → mount the Payment
  * Element into a div → on `confirmTrigger` flip, stripe.confirmPayment({

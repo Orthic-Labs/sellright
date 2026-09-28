@@ -4,7 +4,7 @@ export interface EffectivePriceCustomFields {
   isPreOrder?: boolean | null;
 }
 
-// All values in cents. CF prices are stored in minor units (cents) by Vendure's
+// All values in cents. CF prices are stored in minor units (cents) by the legacy
 // `currency-form-input`, same as the native `price` field.
 export const effectiveUnitPriceCents = (
   regularCents: number,

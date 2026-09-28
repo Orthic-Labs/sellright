@@ -6,7 +6,7 @@ import { sanitizeProductDescription } from '~/utils/sanitize';
 import { availableForGroup, enhanceDescription, priceDeltaLabel, swatchColor, titleCase } from './product-options';
 import { ProductImageModal } from './ProductImageModal';import { ProductMobileBar } from './ProductMobileBar';
 import { ProductTrustBar } from './ProductTrustBar';
-import type { Variant } from '~/types';
+import { effectiveVariantPrice, type CatalogVariant } from '~/sellright/types/catalog';
 
 const SEZZLE_ENABLED = !!(import.meta.env.VITE_SEZZLE_MERCHANT_UUID as string | undefined);
 
@@ -132,10 +132,9 @@ export const ProductPageView = component$((props: Record<string, any>) => {
           {isPreOrder.value && <div class="sr-kicker">New Release</div>}
           <h1 class="sr-title">{titleCase(product.name)}</h1>
           {(() => {
-            const sv: any = selectedVariant.value;
-            const cf = sv?.customFields;
-            const sale = typeof cf?.salePrice === 'number' && cf.salePrice > 0 ? cf.salePrice : null;
-            const pre = typeof cf?.preOrderPrice === 'number' && cf.preOrderPrice > 0 ? cf.preOrderPrice : null;
+            const sv: CatalogVariant | undefined = selectedVariant.value;
+            const sale = typeof sv?.salePrice === 'number' && sv.salePrice > 0 ? sv.salePrice : null;
+            const pre = typeof sv?.preOrderPrice === 'number' && sv.preOrderPrice > 0 ? sv.preOrderPrice : null;
             const regular = displayPrice.value;
             let live = regular;
             let strike: number | null = null;
@@ -161,10 +160,9 @@ export const ProductPageView = component$((props: Record<string, any>) => {
             );
           })()}
           {SEZZLE_ENABLED && (() => {
-            const sv: any = selectedVariant.value;
-            const cf = sv?.customFields;
-            const sale = typeof cf?.salePrice === 'number' && cf.salePrice > 0 ? cf.salePrice : null;
-            const pre = typeof cf?.preOrderPrice === 'number' && cf.preOrderPrice > 0 ? cf.preOrderPrice : null;
+            const sv: CatalogVariant | undefined = selectedVariant.value;
+            const sale = typeof sv?.salePrice === 'number' && sv.salePrice > 0 ? sv.salePrice : null;
+            const pre = typeof sv?.preOrderPrice === 'number' && sv.preOrderPrice > 0 ? sv.preOrderPrice : null;
             const live = isPreOrder.value && pre ? pre : (!isPreOrder.value && sale ? sale : displayPrice.value);
             return (
               <div class="sr-sezzle-inline">
@@ -246,17 +244,17 @@ export const ProductPageView = component$((props: Record<string, any>) => {
                     </div>
                   )}
                   {!isBladeGroup && !isHandleGroup && !isColorSingle && (() => {
-                    const prices = product.variants.map((v: Variant) => v.priceWithTax || v.price || 0);
+                    const prices = product.variants.map((v: CatalogVariant) => effectiveVariantPrice(v));
                     const pricesVary = new Set(prices).size > 1;
                     return (
                     <div class="sr-pill-grid">
                       {group.values.map((val: string) => {
                         const isAvail = available.has(val);
-                        const matchingVariant = product.variants.find((v: Variant) =>
+                        const matchingVariant = product.variants.find((v: CatalogVariant) =>
                           v.options?.some((o: { name?: string }) => o.name === val)
                         );
                         const pillPrice = pricesVary && matchingVariant
-                          ? `$${((matchingVariant.priceWithTax || matchingVariant.price || 0) / 100).toFixed(0)}`
+                          ? `$${(effectiveVariantPrice(matchingVariant) / 100).toFixed(0)}`
                           : null;
                         return (
                           <button key={val}
@@ -288,7 +286,7 @@ export const ProductPageView = component$((props: Record<string, any>) => {
               />
               <label for="po-consent" class="sr-consent-text" style="cursor:pointer">
                 I understand this product will ship around{' '}
-                {selectedVariant.value?.customFields?.shipDate || 'the estimated date'}.
+                {selectedVariant.value?.shipDate || 'the estimated date'}.
               </label>
             </div>
           )}
@@ -341,7 +339,7 @@ export const ProductPageView = component$((props: Record<string, any>) => {
               </button>
               {isPreOrder.value && selectedVariant.value && (
                 <div class="sr-ship-note">
-                  Ships {selectedVariant.value?.customFields?.shipDate || 'when ready'}
+                  Ships {selectedVariant.value?.shipDate || 'when ready'}
                 </div>
               )}
               </div>
@@ -365,8 +363,8 @@ export const ProductPageView = component$((props: Record<string, any>) => {
               <div class="sr-po-dot" />
               <div class="sr-po-text">
                 <strong>Pre-order open.</strong> Production is underway.{' '}
-                {selectedVariant.value?.customFields?.shipDate
-                  ? `Estimated ship: ${selectedVariant.value.customFields.shipDate}.`
+                {selectedVariant.value?.shipDate
+                  ? `Estimated ship: ${selectedVariant.value.shipDate}.`
                   : 'Your card will be charged at the time of purchase.'}
               </div>
             </div>

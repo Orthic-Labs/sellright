@@ -1,81 +1,83 @@
-import {
-	AddPaymentToOrderMutation,
-	Order,
-	PaymentInput,
-} from '~/generated/graphql-shop';
-import {
-	AddPaymentToOrderDocument,
-	type AddPaymentToOrderMutation as AddPaymentToOrderMutationT,
-	type AddPaymentToOrderMutationVariables,
-	TransitionOrderToStateDocument,
-	type TransitionOrderToStateMutation,
-	type TransitionOrderToStateMutationVariables,
-} from '~/generated/graphql-shop-typed';
-import { requester } from '~/utils/api';
-import { CountryService } from '~/services/CountryService';
-import { ShippingService } from '~/services/ShippingService';
-import { PaymentService } from '~/services/PaymentService';
-import {
-	srCreateOrder,
-	srCreatePaymentIntent,
-	srPayOrder,
-	srCartConflict,
-	srErrorBody,
-	type SrCreatedOrder,
-} from '~/utils/sellright';
-import { ServerCartService } from '~/services/ServerCartService';
+/**
+ * Native SellRight checkout — the ONE checkout backend for this storefront.
+ * There is no legacy fallback and no "convert the local cart to an
+ * order" step: the server-cart token (when one exists) IS the order's source
+ * of truth, and POST /v1/shop/checkout creates the order directly from it.
+ *
+ * Every call here goes through `sellright()` (src/sellright/client.ts) —
+ * openapi-fetch typed against the API's own OpenAPI document — never the
+ * legacy hand-rolled `sr()` helper and never a legacy shape.
+ */
+import { sellright, idempotency, SellRightError } from '~/sellright/client';
+import { CartService } from '~/services/CartService';
+import type {
+	CheckoutRequest,
+	CheckoutResponse,
+	CheckoutConflictBody,
+	PayResponse,
+	PaymentIntentResponse,
+	GatewayAttempt,
+	GatewayVerifyResult,
+	OrderSummary,
+	ShopConfig,
+	ShopShippingMethod,
+} from '~/sellright/types/checkout';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SellRight / Stripe checkout (behind VITE_SR_CHECKOUT). The Vendure NMI/Sezzle
-// exports above stay as the DEFAULT path (flag off); these supersede them only
-// when the flag is on. NMI/Sezzle are removed from THIS path only.
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** Strangler flag: when truthy, checkout settles via SellRight + Stripe. */
-export const SR_CHECKOUT_ENABLED =
-	String(import.meta.env.VITE_SR_CHECKOUT ?? '').toLowerCase() === '1' ||
-	String(import.meta.env.VITE_SR_CHECKOUT ?? '').toLowerCase() === 'true';
-
-export interface SrCheckoutForm {
-	items?: { sku: string; quantity: number }[]; // fallback when no cart token
+export interface CheckoutForm {
+	/** Fallback line items when no server-cart token exists yet. */
+	items?: { sku: string; quantity: number }[];
 	email?: string;
 	shippingAddress?: Record<string, unknown>;
 	billingAddress?: Record<string, unknown>;
 	shippingMethodCode?: string;
 	couponCode?: string;
 	giftCardCode?: string;
-	/** Loyalty points to spend (signed-in shoppers). Re-validated server-side. */
+	/** Points to redeem — the server re-validates against the customer's actual balance. */
 	redeemPoints?: number;
 }
 
-/** One Idempotency-Key per checkout attempt. Retries of the SAME attempt reuse
- *  it (the server replays the original order); a 409 'payload_mismatch' means
- *  the semantic payload changed under a used key — the key is then rotated on
- *  the next attempt, never reused. */
+/**
+ * R19-equivalent: one Idempotency-Key per checkout attempt. Retries of the
+ * SAME attempt reuse it (the server replays the original order instead of
+ * double-charging stock); a 409 `payload_mismatch` means the semantic payload
+ * changed under a used key, so the key is rotated on the NEXT attempt only —
+ * never reused across a materially different submit.
+ */
 let checkoutAttemptKey: string | null = null;
 const attemptKey = (): string => (checkoutAttemptKey ??= crypto.randomUUID());
-const resetAttemptKey = () => { checkoutAttemptKey = null; };
+const resetAttemptKey = (): void => {
+	checkoutAttemptKey = null;
+};
+
+/** True for the 409 shapes the cart itself produced (stale/converted/merged/
+ *  revision_required) — as opposed to an unrelated 409 (e.g. out-of-stock or
+ *  shipping-unavailable) that also carries a `cart` snapshot for display but
+ *  isn't a cart-identity conflict. */
+const isCartConflict = (
+	body: CheckoutConflictBody | undefined,
+): body is CheckoutConflictBody & { code: 'converted' | 'merged' | 'stale' | 'revision_required'; cart: NonNullable<CheckoutConflictBody['cart']> } =>
+	!!body && typeof body.revision === 'number' && !!body.cart &&
+	(body.code === 'converted' || body.code === 'merged' || body.code === 'stale' || body.code === 'revision_required');
 
 /**
  * Create the order (server-priced) from the sr_cart token. The server is
- * authoritative — when a cartToken is present its lines win and the client item
- * list is ignored — and conversion is a non-append mutation: expectedRevision
- * echoes cart.revision (missing → 409 'revision_required', mismatched → 409
- * 'stale' + the current cart snapshot, which we adopt into the mirror).
- * Returns the order code, totals, paid state, and the receipt token to carry
- * to the confirmation page (?rt=).
+ * authoritative — when a cart token is present its lines win and the client
+ * item list is only the bootstrap value the schema requires. Conversion is a
+ * non-append mutation: `expectedRevision` echoes the cart's live revision
+ * (missing → 409 `revision_required`, mismatched → 409 `stale` + the current
+ * cart snapshot, which is adopted into the local mirror).
  */
-export const placeOrder = async (form: SrCheckoutForm): Promise<SrCreatedOrder> => {
-	const cart = await ServerCartService.checkoutSnapshot();
+export const placeOrder = async (form: CheckoutForm): Promise<CheckoutResponse> => {
+	const cart = await CartService.checkoutSnapshot();
 	if (cart?.status === 'merged') {
-		// The cart's lines already moved into the customer's cart at login; this
-		// token is dead. Falling back to client items here would double-submit
-		// the moved lines — discard and make the shopper re-checkout.
-		ServerCartService.discardLocal();
+		// This token's lines already moved into the customer's cart at login —
+		// falling back to the client item list here would double-submit them.
+		CartService.discard();
 		throw new Error('Your cart was merged into your account — please re-add your items.');
 	}
-	const body: Record<string, unknown> = {
-		shipping: 0,
+
+	const body: CheckoutRequest = {
+		items: form.items && form.items.length ? form.items : [{ sku: '__cart__', quantity: 1 }],
 		email: form.email,
 		shippingAddress: form.shippingAddress,
 		billingAddress: form.billingAddress,
@@ -88,207 +90,148 @@ export const placeOrder = async (form: SrCheckoutForm): Promise<SrCreatedOrder> 
 		body.cartToken = cart.token;
 		body.expectedRevision = cart.revision;
 	}
-	// /checkout requires a non-empty items[] in its schema even when cartToken
-	// drives the actual lines; pass the client mirror as the bootstrap value.
-	body.items = (form.items && form.items.length ? form.items : [{ sku: '__cart__', quantity: 1 }]);
+
 	try {
-		const created = await srCreateOrder(body, { idempotencyKey: attemptKey() });
+		const { data } = await sellright().POST('/v1/shop/checkout', {
+			body,
+			params: { header: idempotency(attemptKey()) },
+		});
 		resetAttemptKey();
-		return created;
+		return data as CheckoutResponse;
 	} catch (error) {
-		const conflict = srCartConflict(error);
-		if (conflict) {
-			if (conflict.code === 'stale' || conflict.code === 'revision_required') {
-				ServerCartService.adoptConflictCart(conflict.cart);
-				throw Object.assign(new Error('Your cart changed — please review it and try again.'), { cause: error });
+		if (error instanceof SellRightError && error.status === 409) {
+			const conflict = error.body as CheckoutConflictBody | undefined;
+			if (isCartConflict(conflict)) {
+				if (conflict.code === 'stale' || conflict.code === 'revision_required') {
+					CartService.adoptConflict(conflict.cart);
+					throw Object.assign(new Error('Your cart changed — please review it and try again.'), { cause: error });
+				}
+				// converted / merged: the server already replays the original order
+				// for a converted cart before this branch, so reaching it means the
+				// cart itself is unusable — retire the token + mirror.
+				CartService.discard();
+				throw Object.assign(new Error(error.message || 'This cart can no longer be checked out.'), { cause: error });
 			}
-			// converted/merged — the server replays the original order for a
-			// converted cart before this branch, so reaching here means the cart
-			// is unusable; retire the token + mirror.
-			ServerCartService.discardLocal();
-			throw Object.assign(new Error(conflict.error || 'This cart can no longer be checked out.'), { cause: error });
-		}
-		if (srErrorBody<{ reason?: string }>(error)?.reason === 'payload_mismatch') {
-			// The attempt mutated under a used key — rotate so the next try is a
-			// fresh idempotency identity.
-			resetAttemptKey();
+			if (conflict?.reason === 'payload_mismatch') {
+				// The attempt mutated under a used key — rotate so the NEXT try is a
+				// fresh idempotency identity (this attempt's error still propagates).
+				resetAttemptKey();
+			}
+			throw Object.assign(new Error(error.message || 'Checkout failed. Please try again.'), { cause: error });
 		}
 		throw error;
 	}
 };
 
-/** Mint (or reuse) the order's Stripe PaymentIntent → client_secret. */
-export const createPaymentIntent = async (code: string): Promise<{ clientSecret: string; intentId: string }> =>
-	srCreatePaymentIntent(code);
+/** Mint (or reuse) the order's Stripe PaymentIntent → client_secret. Only
+ *  called when POST /checkout leaves the order PendingPayment with a
+ *  non-zero total. */
+export const createPaymentIntent = async (code: string): Promise<PaymentIntentResponse> => {
+	const { data } = await sellright().POST('/v1/shop/orders/{code}/payment-intent', {
+		params: { path: { code } },
+	});
+	return data as PaymentIntentResponse;
+};
 
 /**
- * Finalize a fully-gift-card-covered order (grandTotal == 0). When a gift card
- * covers the whole total, /checkout already returns state 'Paid' — this is the
- * fallback finalizer for the (rare) case it is still PendingPayment at 0 due.
+ * Start a gateway (NMI/Sezzle) payment attempt for a PendingPayment order.
+ * NMI: `token` is the Collect.js `payment_token` (never a raw card field) —
+ * the API charges synchronously and the returned `status`/`state` reflect
+ * the immediate result. Sezzle: no `token` — the response carries
+ * `checkoutUrl`, which the caller redirects the browser to; the shopper
+ * returns to `/checkout/confirmation/{code}` with a `paymentAttempt` query
+ * param (see `verifyGatewayPayment` below).
+ *
+ * One idempotency key per attempt — a caller retrying the SAME attempt
+ * (e.g. a flaky network) must reuse the same key so the API replays the
+ * existing attempt instead of starting a second one against the gateway.
  */
-export const payWithGiftCardOnly = async (code: string): Promise<{ code: string; state: string; payment: string }> =>
-	srPayOrder(code, 'manual');
-
-// 🚀 CHECKOUT QUERY CACHE - Conservative 2-minute cache for checkout data
-const checkoutCache = new Map<string, { data: any; timestamp: number }>();
-const CHECKOUT_CACHE_DURATION = 2 * 60 * 1000; // 2 minutes (conservative for checkout)
-
-const getCachedCheckoutQuery = (key: string) => {
-	const cached = checkoutCache.get(key);
-	if (cached && Date.now() - cached.timestamp < CHECKOUT_CACHE_DURATION) {
-		return cached.data;
-	}
-	return null;
-};
-
-const setCachedCheckoutQuery = (key: string, data: any) => {
-	checkoutCache.set(key, { data, timestamp: Date.now() });
-	// Keep checkout cache small
-	if (checkoutCache.size > 20) {
-		const oldestKey = checkoutCache.keys().next().value;
-		if (oldestKey) {
-			checkoutCache.delete(oldestKey);
-		}
-	}
-};
-
-export const getAvailableCountriesQuery = async () => {
-	return await CountryService.getAvailableCountries();
-};
-
-export const addPaymentToOrderMutation = async (
-	input: PaymentInput = { method: 'standard-payment', metadata: {} }
-) => {
-	const result: AddPaymentToOrderMutation = await requester<AddPaymentToOrderMutationT, AddPaymentToOrderMutationVariables>(
-		AddPaymentToOrderDocument,
-		{ input }
-	) as AddPaymentToOrderMutation;
-
-	if (result.addPaymentToOrder && 'errorCode' in result.addPaymentToOrder) {
-		throw new Error(result.addPaymentToOrder.message || 'Payment failed');
-	}
-
-	return result.addPaymentToOrder as Order;
-};
-
-export const transitionOrderToStateMutation = async (state = 'ArrangingPayment') => {
-	console.log(`🔄 Attempting to transition order to state: ${state}`);
-
-	try {
-		const result = await requester<TransitionOrderToStateMutation, TransitionOrderToStateMutationVariables>(
-			TransitionOrderToStateDocument,
-			{ state }
-		);
-		console.log('🔄 Raw GraphQL result:', JSON.stringify(result, null, 2));
-
-		// Check if the result contains an error
-		if (result.transitionOrderToState && 'errorCode' in result.transitionOrderToState) {
-			const error = result.transitionOrderToState;
-			console.error('❌ Order state transition failed:', error);
-			throw new Error(`Order state transition failed: ${error.message} (${error.errorCode})`);
-		}
-
-		// Check if we got a successful order back
-		if (result.transitionOrderToState && 'state' in result.transitionOrderToState) {
-			console.log(`✅ Order state transition successful. New state: ${result.transitionOrderToState.state}`);
-			return result;
-		}
-
-		// If we get here, something unexpected happened
-		console.error('❌ Unexpected transition response:', result);
-		throw new Error('Unexpected response from order state transition');
-	} catch (error) {
-		console.error('❌ Error during order state transition:', error);
-		throw error;
-	}
-};
-
-export const getEligibleShippingMethodsQuery = async (countryCode: string, subtotal: number) => {
-	return ShippingService.getEligibleShippingMethods(countryCode, subtotal);
-};
-
-export const getEligiblePaymentMethodsQuery = async () => {
-	return PaymentService.getPaymentMethods();
-};
-
-// 🚀 CACHED CHECKOUT QUERIES - Conservative caching for better performance
-
-export const getAvailableCountriesCached = async () => {
-	const cacheKey = 'available-countries';
-	const cached = getCachedCheckoutQuery(cacheKey);
-	if (cached) return cached;
-
-	try {
-		const result = await getAvailableCountriesQuery();
-		setCachedCheckoutQuery(cacheKey, result);
-		return result;
-	} catch (error) {
-		console.warn('Countries cache failed, using fallback:', error);
-		const result = await getAvailableCountriesQuery();
-		setCachedCheckoutQuery(cacheKey, result);
-		return result;
-	}
-};
-
-export const getEligibleShippingMethodsCached = async (countryCode: string, subtotal: number) => {
-	const cacheKey = `eligible-shipping-methods-${countryCode}-${subtotal}`;
-	const cached = getCachedCheckoutQuery(cacheKey);
-	if (cached) return cached;
-
-	try {
-		const result = await getEligibleShippingMethodsQuery(countryCode, subtotal);
-		setCachedCheckoutQuery(cacheKey, result);
-		return result;
-	} catch (error) {
-		console.warn('Shipping methods cache failed, using fallback:', error);
-		const result = await getEligibleShippingMethodsQuery(countryCode, subtotal);
-		setCachedCheckoutQuery(cacheKey, result);
-		return result;
-	}
-};
-
-export const getEligiblePaymentMethodsCached = async () => {
-	const cacheKey = 'eligible-payment-methods';
-	const cached = getCachedCheckoutQuery(cacheKey);
-	if (cached) return cached;
-
-	try {
-		const result = await getEligiblePaymentMethodsQuery();
-		setCachedCheckoutQuery(cacheKey, result);
-		return result;
-	} catch (error) {
-		console.warn('Payment methods cache failed, using fallback:', error);
-		const result = await getEligiblePaymentMethodsQuery();
-		setCachedCheckoutQuery(cacheKey, result);
-		return result;
-	}
-};
-
-export const processNMIPayment = async (paymentToken:any) => {
-	return addPaymentToOrderMutation({
-		method: 'nmi',
-		metadata: paymentToken
+export const startGatewayPayment = async (
+	code: string,
+	method: 'nmi' | 'sezzle',
+	opts: { token?: string; idempotencyKey: string; receiptToken?: string },
+): Promise<GatewayAttempt> => {
+	const { data } = await sellright().POST('/v1/shop/orders/{code}/gateway-payment', {
+		params: {
+			path: { code },
+			header: { ...idempotency(opts.idempotencyKey), ...(opts.receiptToken ? { 'x-receipt-token': opts.receiptToken } : {}) },
+		},
+		body: { method, ...(opts.token ? { token: opts.token } : {}) },
 	});
+	return data as GatewayAttempt;
 };
 
-// Sezzle Payment Processing
-export const processSezzlePayment = async () => {
+/**
+ * Reconcile a gateway payment attempt with the provider — called right after
+ * an NMI charge to confirm its final status, and on the shopper's return
+ * from Sezzle's hosted checkout (the `paymentAttempt` query param on the
+ * confirmation route names the attempt to verify).
+ */
+export const verifyGatewayPayment = async (
+	code: string,
+	attemptId: string,
+	receiptToken?: string,
+): Promise<GatewayVerifyResult> => {
+	const { data } = await sellright().POST('/v1/shop/orders/{code}/gateway-payment/{attempt}/verify', {
+		params: {
+			path: { code, attempt: attemptId },
+			header: receiptToken ? { 'x-receipt-token': receiptToken } : {},
+		},
+	});
+	return data as GatewayVerifyResult;
+};
+
+/**
+ * Finalize a zero-due order (grandTotal === 0 — e.g. fully covered by a gift
+ * card or loyalty points). POST /checkout already returns state 'Paid' in
+ * the normal case; this is the fallback settle for the rare case it is still
+ * PendingPayment at zero due. There is no customer-facing "manual"/COD
+ * tender — the only payment method this API exposes is Stripe.
+ */
+export const settleZeroDueOrder = async (code: string): Promise<PayResponse | null> => {
 	try {
-		console.log('[Sezzle] Processing payment...');
-
-		// Add payment to order with Sezzle method
-		const paymentResult = await addPaymentToOrderMutation({
-			method: 'sezzle',
-			metadata: {}
+		const { data } = await sellright().POST('/v1/shop/orders/{code}/pay', {
+			params: { path: { code } },
+			body: { method: 'stripe' },
 		});
-
-		if (paymentResult) {
-			return paymentResult;
-		} else {
-			throw new Error('Sezzle payment initialization failed');
-		}
+		return data as PayResponse;
 	} catch (error) {
-		console.error('[Sezzle] Payment processing failed:', error);
+		// 400 'Already covered' — the server settled it first; nothing to do.
+		if (error instanceof SellRightError && error.status === 400) return null;
 		throw error;
 	}
+};
+
+/** Read the order's current state for confirmation / error-recovery reads.
+ *  Receipt-token scoped (`rt`, from `placeOrder`) OR the authed owner — a
+ *  bare code with neither is denied by the API. */
+export const getOrder = async (code: string, receiptToken?: string): Promise<OrderSummary> => {
+	const { data } = await sellright().GET('/v1/shop/orders/{code}', {
+		params: { path: { code }, query: receiptToken ? { rt: receiptToken } : {} },
+	});
+	return data as OrderSummary;
+};
+
+/** Public runtime config — decides whether Stripe is wired for this store. */
+export const getShopConfig = async (): Promise<ShopConfig> => {
+	const { data } = await sellright().GET('/v1/shop/config', {});
+	return data as ShopConfig;
+};
+
+/**
+ * Server-priced shipping methods eligible for this destination + subtotal.
+ * `discountedSubtotalWithTax` (post-coupon subtotal) is passed alongside the
+ * raw `subtotal` so a threshold rule keyed on the discounted basis (e.g. a
+ * coupon-driven free-shipping tier) is decided server-side — never guessed
+ * client-side by zeroing the rate ourselves.
+ */
+export const getEligibleShippingMethods = async (
+	countryCode: string,
+	subtotal: number,
+	discountedSubtotalWithTax?: number,
+): Promise<ShopShippingMethod[]> => {
+	const { data } = await sellright().GET('/v1/shop/shipping-methods', {
+		params: { query: { country: countryCode, subtotal, discountedSubtotalWithTax } },
+	});
+	return (data?.methods ?? []) as unknown as ShopShippingMethod[];
 };

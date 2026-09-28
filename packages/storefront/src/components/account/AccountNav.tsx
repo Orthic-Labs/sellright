@@ -6,7 +6,7 @@ import LockClosedIcon from '~/components/icons/LockClosedIcon';
 import HomeIcon from '~/components/icons/HomeIcon';
 import HeartIcon from '~/components/icons/HeartIcon';
 import LogoutIcon from '~/components/icons/LogoutIcon';
-import { logoutMutation } from '~/services/customer';
+import { logout } from '~/providers/shop/account/account';
 import { LocalAddressService } from '~/services/LocalAddressService';
 
 const navLinks = [
@@ -46,7 +46,13 @@ export const AccountNav = component$(() => {
 	const location = useLocation();
 
 	const handleLogout = $(async () => {
-		await logoutMutation();
+		const result = await logout();
+		if (!result.ok) {
+			// Real failure surfaced (not swallowed): a 403 here means the server
+			// session is still live, so local state is still cleared to match
+			// user intent, but the failure is logged rather than pretended away.
+			console.error('Sign out failed:', result.error);
+		}
 		LocalAddressService.clearAddresses();
 		window.location.reload();
 	});

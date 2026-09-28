@@ -6,7 +6,6 @@ export const APP_STATE = createContextId<AppState>('app_state');
 export const AUTH_TOKEN = 'authToken';
 export const COUNTRY_COOKIE = 'countryCode';
 export const CUSTOMER_NOT_DEFINED_ID = 'CUSTOMER_NOT_DEFINED_ID';
-export const HEADER_AUTH_TOKEN_KEY = 'vendure-auth-token';
 export const IMAGE_RESOLUTIONS = [1000, 800, 600, 400];
 export const HOMEPAGE_IMAGE = '/homepage.webp';
 export const DEFAULT_METADATA_URL = `${siteUrl}/`;
@@ -23,7 +22,7 @@ export const normalizeApiUrl = (value: string | undefined, fallback: string) => 
 };
 
 // Dev default is the SellRight API's own default port (packages/api/src/env.ts
-// PORT default), not the old Vendure-era localhost:3100 fallback.
+// PORT default), not the old legacy-era localhost:3100 fallback.
 export const SELLRIGHT_DEV_API_DEFAULT = 'http://localhost:3300';
 
 /**

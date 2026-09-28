@@ -1,10 +1,10 @@
-import { component$, useContext, useOnDocument, useOnWindow, $, useSignal, useStyles$ } from '@qwik.dev/core';
-import { LocalCartService } from '~/services/LocalCartService';
-import { useLocalCart, refreshCartStock, loadCartIfNeeded } from '~/contexts/CartContext';
+import { component$, useContext, useComputed$, useOnWindow, $, useSignal, useStyles$ } from '@qwik.dev/core';
+import { CountryPreferenceService } from '~/services/CountryPreferenceService';
+import { useCart, refreshCartStock, loadCartIfNeeded } from '~/contexts/CartContext';
 import { useLocation, Link, useNavigate } from '@qwik.dev/router';
 import { APP_STATE, CUSTOMER_NOT_DEFINED_ID } from '~/constants';
 import { useStoreIdentityLoader } from '~/routes/layout';
-import { logoutMutation } from '~/services/customer';
+import { logout as logoutAccount } from '~/providers/shop/account/account';
 import { isCheckoutPage } from '~/utils/route-helpers';
 import LogoImage from '~/media/logo.svg?jsx';
 import { useLoginModalActions } from '~/contexts/LoginModalContext';
@@ -22,20 +22,12 @@ export default component$(() => {
 	const nav = useNavigate();
 	const userMenuRef = useSignal<Element>();
 
-	const localCart = useLocalCart();
-	const cartQuantitySignal = useSignal(0);
-
-	// T2: init cart count from storage on boot
-	useOnDocument('qinit', $(() => {
-		cartQuantitySignal.value = LocalCartService.getCartQuantityFromStorage();
-	}));
-
-	// T2: live cart count updates
-	useOnWindow('cart-updated', $((event: Event) => {
-		cartQuantitySignal.value = (event as CustomEvent).detail.totalQuantity;
-	}));
-
-	const totalQuantity = cartQuantitySignal.value || appState.activeOrder?.totalQuantity || 0;
+	const cart = useCart();
+	// The cart store is reactive (useStore, single server-owned source of
+	// truth — see CartContext.tsx) so this recomputes on every mutation
+	// (add/update/remove/refresh) with no separate event listener or
+	// qinit-from-storage bootstrap needed, unlike the retired local-cart mirror.
+	const totalQuantity = useComputed$(() => cart.cart.lines.reduce((sum, line) => sum + line.quantity, 0));
 	const isOnCheckoutPage = isCheckoutPage(location.url.toString());
 	const isOnConfirmationPage = location.url.pathname.includes('/checkout/confirmation/');
 	const isHomePage = location.url.pathname === '/';
@@ -55,7 +47,8 @@ export default component$(() => {
 	}));
 
 	const logout = $(async () => {
-		await logoutMutation();
+		const result = await logoutAccount();
+		if (!result.ok) console.error('Sign out failed:', result.error);
 		window.location.reload();
 	});
 
@@ -124,24 +117,19 @@ export default component$(() => {
 								tabIndex={0}
 								onClick$={$(async () => {
 									if (!appState.shippingAddress.countryCode) {
-										appState.shippingAddress.countryCode = LocalCartService.getCountry();
+										appState.shippingAddress.countryCode = CountryPreferenceService.getCountry();
 									}
 									if (appState.showCart) {
 										appState.showCart = false;
 									} else {
-										loadCartIfNeeded(localCart);
+										loadCartIfNeeded(cart);
 										appState.showCart = true;
-										if (localCart.localCart.items.length > 0) {
-											refreshCartStock(localCart).then(() => {
-												window.dispatchEvent(new CustomEvent('cart-updated', {
-													detail: { totalQuantity: localCart.localCart.totalQuantity }
-												}));
-											}).catch(console.error);
-										}
+										// LOCKED stock rule: live refresh on every cart open, no
+										// cache/TTL/debounce — see CartContext.tsx refreshCartStock.
+										refreshCartStock(cart).catch(console.error);
 									}
-									cartQuantitySignal.value = LocalCartService.getCartQuantityFromStorage();
 								})}
-								aria-label={`${totalQuantity} items in cart`}
+								aria-label={`${totalQuantity.value} items in cart`}
 								title="View cart"
 							>
 								<svg
@@ -157,8 +145,8 @@ export default component$(() => {
 									<line x1="3" y1="6" x2="21" y2="6"/>
 									<path d="M16 10a4 4 0 01-8 0"/>
 								</svg>
-								{totalQuantity > 0 && (
-									<span class="header-badge">{totalQuantity}</span>
+								{totalQuantity.value > 0 && (
+									<span class="header-badge">{totalQuantity.value}</span>
 								)}
 							</div>
 						)}

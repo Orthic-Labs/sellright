@@ -1,7 +1,7 @@
 import { $, component$, useSignal, useStyles$, QRL, useContext, useOnWindow, useVisibleTask$ } from '@qwik.dev/core';
-import { loginMutation, registerCustomerAccountMutation, requestPasswordResetMutation } from '~/providers/shop/account/account';
+import { login, requestPasswordReset } from '~/providers/shop/account/account';
 import { checkCustomerEmail } from '~/providers/shop/account/check-email';
-import { getActiveCustomerQuery } from '~/services/customer';
+import { getMe } from '~/services/customer';
 import { APP_STATE } from '~/constants';
 import { ActiveCustomer } from '~/types';
 import { LocalAddressService } from '~/services/LocalAddressService';
@@ -109,37 +109,56 @@ export default component$<LoginModalProps>(({
     if (!password.value.trim()) { error.value = 'Please enter your password.'; return; }
     loading.value = true;
     try {
-      const { login } = await loginMutation(email.value.trim(), password.value, rememberMe.value, turnstileToken.value);
-      if (login.__typename === 'CurrentUser') {
+      const result = await login(email.value.trim(), password.value, {
+        turnstileToken: turnstileToken.value,
+        rememberMe: rememberMe.value,
+      });
+      if (result.ok) {
         try {
-          const customerData = await getActiveCustomerQuery();
+          const customerData = await getMe();
           if (customerData) {
             appState.customer = {
-              title: customerData.title ?? '',
-              firstName: customerData.firstName,
+              title: '',
+              firstName: customerData.firstName ?? '',
               id: customerData.id,
-              lastName: customerData.lastName,
-              emailAddress: customerData.emailAddress,
-              phoneNumber: customerData.phoneNumber ?? '',
+              lastName: customerData.lastName ?? '',
+              emailAddress: customerData.email,
+              phoneNumber: customerData.phone ?? '',
             } as ActiveCustomer;
             try {
               clearCustomerCacheAfterMutation();
-              await LocalAddressService.syncFromVendure(customerData.id);
+              await LocalAddressService.syncFromServer(customerData.id);
               const addresses = LocalAddressService.getAddresses();
-              appState.addressBook = addresses;
+              // appState.addressBook / appState.shippingAddress use the
+              // checkout area's own long-standing field names — map the
+              // native LocalAddress shape onto them at this boundary.
+              appState.addressBook = addresses.map((a) => ({
+                id: a.id,
+                fullName: a.fullName,
+                streetLine1: a.line1,
+                streetLine2: a.line2 || '',
+                company: a.company || '',
+                city: a.city,
+                province: a.province,
+                postalCode: a.postalCode,
+                countryCode: a.country,
+                phoneNumber: a.phone || '',
+                defaultShippingAddress: a.isDefaultShipping,
+                defaultBillingAddress: a.isDefaultBilling,
+              }));
               if (addresses.length > 0 && !appState.shippingAddress.streetLine1) {
-                const defaultShipping = addresses.find(a => a.defaultShippingAddress) || addresses[0];
+                const defaultShipping = addresses.find(a => a.isDefaultShipping) || addresses[0];
                 if (defaultShipping) {
                   appState.shippingAddress = {
                     id: defaultShipping.id,
                     fullName: defaultShipping.fullName,
-                    streetLine1: defaultShipping.streetLine1,
-                    streetLine2: defaultShipping.streetLine2 || '',
+                    streetLine1: defaultShipping.line1,
+                    streetLine2: defaultShipping.line2 || '',
                     city: defaultShipping.city,
                     province: defaultShipping.province,
                     postalCode: defaultShipping.postalCode,
-                    countryCode: defaultShipping.countryCode,
-                    phoneNumber: defaultShipping.phoneNumber || '',
+                    countryCode: defaultShipping.country,
+                    phoneNumber: defaultShipping.phone || '',
                     company: defaultShipping.company || '',
                   };
                 }
@@ -157,13 +176,10 @@ export default component$<LoginModalProps>(({
         resetAndClose();
         await onClose$();
         if (onLoginSuccess$) await onLoginSuccess$();
+      } else if (result.code === 'not_verified') {
+        error.value = 'Please verify your email address first. Check your inbox for a verification link.';
       } else {
-        const msg = (login as any).message?.toLowerCase() || '';
-        if (msg.includes('verify') || msg.includes('verification')) {
-          error.value = 'Please verify your email address first. Check your inbox for a verification link.';
-        } else {
-          error.value = 'Invalid email or password.';
-        }
+        error.value = result.message;
       }
     } catch {
       error.value = 'An error occurred. Please try again.';
@@ -194,19 +210,9 @@ export default component$<LoginModalProps>(({
   const handleForgotPassword = $(async () => {
     error.value = '';
     loading.value = true;
-    try {
-      const result = await requestPasswordResetMutation(email.value.trim());
-      if (result?.__typename === 'Success') {
-        step.value = 'reset-sent';
-      } else {
-        await registerCustomerAccountMutation({
-          input: { emailAddress: email.value.trim(), firstName: '', lastName: '' },
-        });
-        step.value = 'reset-sent';
-      }
-    } catch {
-      step.value = 'reset-sent';
-    }
+    // Enumeration-safe on the API side — always resolves ok.
+    await requestPasswordReset(email.value.trim());
+    step.value = 'reset-sent';
     loading.value = false;
   });
 

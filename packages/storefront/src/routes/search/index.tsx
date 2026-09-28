@@ -3,21 +3,23 @@ import { routeLoader$, useLocation, routeAction$, zod$, z } from '@qwik.dev/rout
 import Filters from '~/components/facet-filter-controls/Filters';
 import FiltersButton from '~/components/filters-button/FiltersButton';
 import ProductCard from '~/components/products/ProductCard';
-import { SearchResponse } from '~/generated/graphql-shop';
-import { searchQueryWithTerm } from '~/providers/shop/products/products';
+import { searchProducts } from '~/providers/shop/products/products';
+import type { CatalogListResponse } from '~/sellright/types/catalog';
 import { FacetWithValues } from '~/types';
-import { groupFacetValues } from '~/utils';
 import { createSEOHead } from '~/utils/seo';
 
+// SellRight's catalog search has no facet/facet-value aggregation (unlike the
+// old legacy SearchResponse.facetValues) — `activeFacetValueIds` is accepted
+// for URL-contract compatibility (the `f=` query param) but never actually
+// narrows results, matching prior behavior (the old adapter always returned
+// an empty facetValues array too).
 export const executeQuery = $(
-	async (term: string, activeFacetValueIds: string[]) =>
-		await searchQueryWithTerm('', term, activeFacetValueIds)
+	async (term: string): Promise<CatalogListResponse> => searchProducts({ term: term || undefined, take: 60 })
 );
 
 export const useSearchLoader = routeLoader$(async ({ query }) => {
 	const term = query.get('q') || '';
-	const activeFacetValueIds: string[] = query.get('f')?.split('-') || [];
-	const search = await executeQuery(term, activeFacetValueIds);
+	const search = await executeQuery(term);
 	return { search, query };
 });
 
@@ -48,13 +50,14 @@ export default component$(() => {
 
 	const state = useStore<{
 		showMenu: boolean;
-		search: SearchResponse;
+		search: CatalogListResponse;
 		facetValues: FacetWithValues[];
 		facetValueIds: string[];
 	}>({
 		showMenu: false,
 		search: searchLoader.value.search,
-		facetValues: groupFacetValues(searchLoader.value.search, searchLoader.value.query.get('f')?.split('-') || []),
+		// SellRight has no facet aggregation — always empty (see executeQuery).
+		facetValues: [],
 		facetValueIds: searchLoader.value.query.get('f')?.split('-') || [],
 	});
 
@@ -67,8 +70,7 @@ export default component$(() => {
 
 		// Only update if data has changed
 		if (JSON.stringify(state.facetValueIds) !== JSON.stringify(activeFacetValueIds)) {
-			state.search = await executeQuery(term, activeFacetValueIds);
-			state.facetValues = groupFacetValues(state.search, activeFacetValueIds);
+			state.search = await executeQuery(term);
 			state.facetValueIds = activeFacetValueIds;
 		}
 	});
@@ -132,11 +134,15 @@ export default component$(() => {
 					<div class="grid grid-cols-1 gap-y-10 gap-x-6 sm:grid-cols-2 lg:grid-cols-4 xl:gap-x-8">
 						{(state.search.items || []).map((item) => (
 							<ProductCard
-						key={item.productId}
-						productAsset={item.productAsset}
-						productName={item.productName}
+						key={item.slug}
+						image={item.image}
+						name={item.name}
 						slug={item.slug}
-						priceWithTax={item.priceWithTax}
+						price={item.pricingVariant?.price ?? item.minPrice}
+						inStock={item.inStock}
+						salePrice={item.pricingVariant?.salePrice ?? null}
+						preOrderPrice={item.pricingVariant?.preOrderPrice ?? null}
+						isPreOrder={!!item.pricingVariant?.isPreOrder}
 					></ProductCard>
 						))}
 					</div>

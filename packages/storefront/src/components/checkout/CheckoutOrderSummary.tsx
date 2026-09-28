@@ -28,7 +28,7 @@ export const CheckoutOrderSummary = component$<CheckoutOrderSummaryProps>((props
             </div>
             <button
               onClick$={$(() => {
-                if (props.localCart.appliedCoupon) return;
+                if (props.localCart.cart.coupon?.applied) return;
                 const willOpen = !props.promoExpanded.value;
                 props.promoExpanded.value = willOpen;
                 if (willOpen) {
@@ -98,7 +98,6 @@ export const CheckoutOrderSummary = component$<CheckoutOrderSummaryProps>((props
             </div>
           ) : (
             <CartTotals
-              order={undefined}
               localCart={props.localCart}
               promoPlacement="rows"
               promoExpandedSignal={props.promoExpanded}
@@ -109,8 +108,8 @@ export const CheckoutOrderSummary = component$<CheckoutOrderSummaryProps>((props
         {!props.pageLoading.value && (
           <LoyaltyRedeem
             redeemPoints={props.redeemPoints}
-            discountableCents={Math.max(0, (props.localCart?.localCart?.subTotal || 0) - (props.localCart?.appliedCoupon?.discountAmount || 0))}
-            currencyCode={props.localCart?.localCart?.currencyCode || 'USD'}
+            discountableCents={Math.max(0, (props.localCart?.cart?.subtotal || 0) - (props.localCart?.cart?.discountTotal || 0))}
+            currencyCode={props.localCart?.cart?.currency || 'USD'}
           />
         )}
       </div>
