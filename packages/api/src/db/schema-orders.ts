@@ -513,6 +513,13 @@ export const fulfillment = pgTable('fulfillment', {
   state: fulfillmentState().notNull().default('Pending'),
   trackingCode: text(),
   carrier: text(),
+  // ADMIN-ESSENTIALS: partial fulfillment — the location it shipped from
+  // (nullable: existing/legacy fulfillments and single-location stores don't
+  // set one) and whether the customer notification email was requested for
+  // THIS fulfillment (defaults true to match the pre-existing always-email
+  // behavior of the whole-order /fulfill route).
+  locationId: uuid().references(() => location.id),
+  notifyCustomer: boolean().notNull().default(true),
   metadata: jsonb(),
   createdAt: ts(),
   updatedAt: ts(),
@@ -547,6 +554,12 @@ export const stockMovement = pgTable('stock_movement', {
   delta: integer().notNull(),
   reason: text().notNull(),
   refOrderId: uuid().references(() => order.id),
+  // ADMIN-ESSENTIALS: who made the adjustment (admin email, or a system
+  // actor like 'gateway:reconciliation' / null for legacy call sites that
+  // predate this column). Every movement is an append-only ledger row — an
+  // adjustment is always a NEW row, never an edit of onHand/an old row, so
+  // "never overwrite silently" holds structurally, not just by convention.
+  actor: text(),
   createdAt: ts(),
 });
 

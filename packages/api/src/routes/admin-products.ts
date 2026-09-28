@@ -1,6 +1,6 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { emitProductChanged, emitVariantProductChanged } from '../webhooks/catalog.js';
-import { and, eq, ilike, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, ilike, inArray, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { HttpError, J, errBody, money, Page, requireAdmin, requireStore, requireWrite, guard } from './admin-helpers.js';
@@ -194,12 +194,12 @@ adminProducts.openapi(
       if (cur) {
         const delta = onHand - cur.onHand;
         await tx.update(s.stock).set({ onHand }).where(eq(s.stock.variantId, id));
-        if (delta !== 0) await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: id, delta, reason: 'admin_adjust' });
+        if (delta !== 0) await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: id, delta, reason: 'admin_adjust', actor: admin.email });
       } else {
         const [v] = await tx.select({ id: s.productVariant.id }).from(s.productVariant).where(eq(s.productVariant.id, id)).limit(1);
         if (!v) return false;
         await tx.insert(s.stock).values({ variantId: id, storeId: st.storeId, onHand, allocated: 0 });
-        await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: id, delta: onHand, reason: 'admin_adjust' });
+        await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: id, delta: onHand, reason: 'admin_adjust', actor: admin.email });
       }
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'variant', entityId: id, action: 'stock', data: { onHand } });
       await emitVariantProductChanged(tx, st.storeId, id);
@@ -259,10 +259,10 @@ adminProducts.openapi(
         if (cur) {
           const delta = onHand - cur.onHand;
           await tx.update(s.stock).set({ onHand }).where(eq(s.stock.variantId, id));
-          if (delta !== 0) await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: id, delta, reason: 'admin_bulk_adjust' });
+          if (delta !== 0) await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: id, delta, reason: 'admin_bulk_adjust', actor: admin.email });
         } else {
           await tx.insert(s.stock).values({ variantId: id, storeId: st.storeId, onHand, allocated: 0 });
-          await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: id, delta: onHand, reason: 'admin_bulk_adjust' });
+          await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: id, delta: onHand, reason: 'admin_bulk_adjust', actor: admin.email });
         }
         await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'variant', entityId: id, action: 'stock', data: { onHand, bulk: true } });
         await emitVariantProductChanged(tx, st.storeId, id);
@@ -281,5 +281,114 @@ adminProducts.openapi(
     // Exact variant set for this batch is known — scope the regen to just their products.
     onStockChanged(st.slug, ids);
     return c.json({ updated }, 200);
+  }),
+);
+
+// ── stock adjustments: +/- delta with a mandatory reason (admin-essentials) ──
+// Distinct from PATCH /variants/{id}/stock above (which SETS an absolute
+// on-hand value for the inline editor/CSV-style bulk-set UI and stays as-is
+// for that caller). This route is the "why did this number change" primitive:
+// every call is a signed delta, every call requires a reason, and every call
+// is one more row in stock_movement — never an edit of a previous row. That
+// makes "never overwrite silently" true structurally: there is no operation
+// in this codebase that can change on_hand without leaving a movement row
+// behind (this route, the PATCH above, fulfillment, refund restock, and
+// catalog import all insert one), and this route is additionally the only
+// one that asks the operator WHY.
+adminProducts.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/variants/{id}/stock/adjust', summary: 'Adjust variant on-hand stock by a +/- delta, with a reason',
+    request: {
+      params: z.object({ id: z.string() }),
+      body: { content: J(z.object({
+        delta: z.number().int().refine((n) => n !== 0, 'delta must be non-zero'),
+        reason: z.string().trim().min(1).max(500),
+      })) },
+    },
+    responses: {
+      200: { description: 'OK', content: J(z.object({ id: z.string(), onHand: z.number().int() })) },
+      404: { description: 'Not found', ...errBody },
+      409: { description: 'Conflict (would go negative)', ...errBody },
+      401: { description: 'Unauthorized', ...errBody },
+    },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    requireWrite(st);
+    const { id } = c.req.valid('param');
+    const { delta, reason } = c.req.valid('json');
+    const res = await withStore(st.storeId, async (tx): Promise<{ kind: 'ok'; onHand: number } | { kind: 'notfound' } | { kind: 'negative' }> => {
+      const [cur] = await tx.select().from(s.stock).where(eq(s.stock.variantId, id)).limit(1).for('update');
+      if (!cur) {
+        const [v] = await tx.select({ id: s.productVariant.id }).from(s.productVariant).where(eq(s.productVariant.id, id)).limit(1);
+        if (!v) return { kind: 'notfound' };
+        if (delta < 0) return { kind: 'negative' };
+        await tx.insert(s.stock).values({ variantId: id, storeId: st.storeId, onHand: delta, allocated: 0 });
+        await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: id, delta, reason, actor: admin.email });
+        await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'variant', entityId: id, action: 'stock_adjust', data: { delta, reason, onHand: delta } });
+        return { kind: 'ok', onHand: delta };
+      }
+      const onHand = cur.onHand + delta;
+      if (onHand < 0) return { kind: 'negative' };
+      await tx.update(s.stock).set({ onHand }).where(eq(s.stock.variantId, id));
+      await tx.insert(s.stockMovement).values({ storeId: st.storeId, variantId: id, delta, reason, actor: admin.email });
+      await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'variant', entityId: id, action: 'stock_adjust', data: { delta, reason, onHand } });
+      return { kind: 'ok', onHand };
+    });
+    if (res.kind === 'notfound') throw new HttpError(404, 'variant not found');
+    if (res.kind === 'negative') throw new HttpError(409, 'adjustment would take on-hand stock negative');
+    onStockChanged(st.slug, [id]);
+    return c.json({ id, onHand: res.onHand }, 200);
+  }),
+);
+
+// ── stock adjustment history: the append-only ledger a merchant reads to
+//    answer "why is this number what it is" — every PATCH/adjust/fulfillment/
+//    refund-restock/import write lands here (stock_movement), oldest last. ──
+adminProducts.openapi(
+  createRoute({
+    method: 'get', path: '/v1/admin/variants/{id}/stock/history', summary: 'Stock adjustment history for a variant',
+    request: { params: z.object({ id: z.string() }), query: z.object({ page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(25) }) },
+    responses: { 200: { description: 'OK', content: J(Page) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    const { id } = c.req.valid('param');
+    const { page, pageSize } = c.req.valid('query');
+    const out = await withStore(st.storeId, async (tx) => {
+      const rows = await tx.select({
+        id: s.stockMovement.id, delta: s.stockMovement.delta, reason: s.stockMovement.reason,
+        actor: s.stockMovement.actor, refOrderId: s.stockMovement.refOrderId, createdAt: s.stockMovement.createdAt,
+      }).from(s.stockMovement).where(eq(s.stockMovement.variantId, id))
+        .orderBy(desc(s.stockMovement.createdAt)).limit(pageSize).offset((page - 1) * pageSize);
+      const [cnt] = await tx.select({ n: sql<number>`count(*)::int` }).from(s.stockMovement).where(eq(s.stockMovement.variantId, id));
+      return { items: rows.map((r) => ({ ...r, createdAt: r.createdAt.toISOString() })), total: cnt?.n ?? 0, page, pageSize };
+    });
+    return c.json(out, 200);
+  }),
+);
+
+// ── per-location stock breakdown (admin-essentials) — read-only surface over
+//    the existing multi-location `stock_location` table (previously written
+//    but never rendered anywhere in the admin). Locked stock rule: reads the
+//    live table directly, same as every other stock read in this codebase —
+//    no cache, no TTL. ────────────────────────────────────────────────────────
+adminProducts.openapi(
+  createRoute({
+    method: 'get', path: '/v1/admin/variants/{id}/stock/locations', summary: 'Per-location on-hand stock for a variant',
+    request: { params: z.object({ id: z.string() }) },
+    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.object({ locationId: z.string(), name: z.string(), code: z.string(), onHand: z.number().int() })) })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    const { id } = c.req.valid('param');
+    const items = await withStore(st.storeId, (tx) =>
+      tx.select({ locationId: s.location.id, name: s.location.name, code: s.location.code, onHand: s.stockLocation.onHand })
+        .from(s.stockLocation).innerJoin(s.location, eq(s.location.id, s.stockLocation.locationId))
+        .where(eq(s.stockLocation.variantId, id)));
+    return c.json({ items }, 200);
   }),
 );

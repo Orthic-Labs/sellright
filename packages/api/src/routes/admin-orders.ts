@@ -165,8 +165,18 @@ adminOrders.openapi(createRoute({
   method: 'post', path: '/v1/admin/orders/{code}/refund', summary: 'Refund a selected payment',
   request: { params: z.object({ code: z.string() }), body: { content: J(z.object({
     idempotencyKey: z.string().min(1).max(200), paymentId: z.string().uuid().optional(), amount: money.optional(),
-    lines: z.array(z.object({ orderLineId: z.string().uuid(), quantity: z.number().int().min(1) })).optional(),
-    restock: z.boolean().default(false), reason: z.string().optional(),
+    // Per-line restock: a line's own `restock` wins when present; `restock`
+    // (top-level) is only the fallback default for lines that omit it — so a
+    // single request can restock some lines and not others (e.g. a damaged
+    // item that goes back on the shelf next to a defective one that doesn't).
+    lines: z.array(z.object({ orderLineId: z.string().uuid(), quantity: z.number().int().min(1), restock: z.boolean().optional() })).optional(),
+    restock: z.boolean().default(false),
+    // Refunded separately from the line items — e.g. "we refunded the item
+    // but the customer keeps paying nothing extra for the shipping we can't
+    // claw back from the carrier" scenario, or the reverse (refund shipping
+    // only, keep the goods).
+    shippingAmount: money.optional(),
+    reason: z.string().optional(),
   })) } }, responses: { 200: { description: 'Refund status', content: J(z.any()) }, 404: { description: 'Not found', ...errBody }, 409: { description: 'Conflict', ...errBody } },
 }), async c => guard(c, async () => {
   const { admin } = await requireAdmin(c), st = requireStore(admin, c); requireWrite(st); requirePermission(st, 'refunds');
@@ -175,7 +185,7 @@ adminOrders.openapi(createRoute({
   if (!order) throw new HttpError(404, 'Order not found');
   try {
     const result = await requestRefund({ ...body, storeId: st.storeId, orderId: order.id, actor: admin.email,
-      lines: body.lines?.map(line => ({ ...line, restock: body.restock })) });
+      lines: body.lines?.map(line => ({ ...line, restock: line.restock ?? body.restock })) });
     return c.json({ code, ...result }, 200);
   } catch (error) { if (error instanceof RefundError) throw new HttpError(error.status, error.message); throw error; }
 }));

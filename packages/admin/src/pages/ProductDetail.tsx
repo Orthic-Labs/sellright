@@ -6,6 +6,7 @@ import { api, assetUrl, uploadAsset, type ProductDetail, type VariantRow } from 
 import { useAuth } from '../auth';
 import { useToast } from '../components/Toast';
 import { PageHeader, StatusBadge, FormSection, InlineAlert, ErrorState, Loading, Field, Spinner } from '../components/ui';
+import { useConfirmDialog } from '../components/ConfirmDialog';
 
 type Draft = { name: string; status: string; description: string; variants: Record<string, { price: string; salePrice: string; isPreOrder: boolean; preOrderPrice: string; shipDate: string; enabled: boolean; onHand: string }> };
 
@@ -28,6 +29,7 @@ export default function ProductDetailPage() {
   const { store } = useAuth();
   const qc = useQueryClient();
   const toast = useToast();
+  const { confirm, dialog: confirmDialog } = useConfirmDialog();
   const cur = store?.currency ?? 'USD';
 
   const { data: p, isLoading, error } = useQuery({
@@ -120,6 +122,7 @@ export default function ProductDetailPage() {
 
   return (
     <>
+      {confirmDialog}
       <Link to="/products" className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-ink mb-3"><ArrowLeft size={15} /> Products</Link>
       <PageHeader
         stackOnMobile
@@ -128,7 +131,7 @@ export default function ProductDetailPage() {
         actions={
           <div className="flex items-center gap-2">
             <StatusBadge value={p.status} />
-            <button className="btn-danger" disabled={del.isPending || save.isPending} onClick={() => { if (confirm(`Archive product "${p.name}" and its variants? Order history is preserved.`)) del.mutate(); }}>
+            <button className="btn-danger" disabled={del.isPending || save.isPending} onClick={async () => { if (await confirm({ title: `Archive product "${p.name}"?`, description: 'Its variants will be archived too. Order history is preserved.', tone: 'danger', confirmLabel: 'Archive' })) del.mutate(); }}>
               {del.isPending ? <Spinner /> : <><Trash2 size={15} /> Archive</>}
             </button>
             <button className="btn-primary" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>
@@ -164,7 +167,7 @@ export default function ProductDetailPage() {
                         <td className="td"><CurrencyInput value={d.salePrice} placeholder="—" onChange={(val) => setV(v.id, { salePrice: val })} cur={cur} /></td>
                         <td className="td"><input className="input w-20 text-center mx-auto" type="number" min={0} value={d.onHand} onChange={(e) => setV(v.id, { onHand: e.target.value })} /></td>
                         <td className="td text-center"><input type="checkbox" className="h-4 w-4 accent-brand" checked={d.enabled} onChange={(e) => setV(v.id, { enabled: e.target.checked })} /></td>
-                        <td className="td text-right"><button className="text-gray-300 hover:text-danger" title="Delete variant" onClick={() => { if (confirm(`Delete variant ${v.sku}?`)) delVariant.mutate(v.id); }}><X size={16} /></button></td>
+                        <td className="td text-right"><button className="text-gray-300 hover:text-danger" title="Delete variant" aria-label={`Delete variant ${v.sku}`} onClick={async () => { if (await confirm({ title: `Delete variant ${v.sku}?`, tone: 'danger', confirmLabel: 'Delete' })) delVariant.mutate(v.id); }}><X size={16} /></button></td>
                       </tr>
                       <tr><td colSpan={6} className="px-3 pb-4">
                         <div className="flex flex-wrap items-end gap-4">
