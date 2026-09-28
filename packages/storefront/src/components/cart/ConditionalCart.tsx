@@ -1,5 +1,5 @@
 import { $, component$, useOnDocument } from '@qwik.dev/core';
-import { useLocalCart, loadCartIfNeeded } from '~/contexts/CartContext';
+import { useCart, loadCartIfNeeded } from '~/contexts/CartContext';
 import Cart from './Cart';
 
 interface ConditionalCartProps {
@@ -8,11 +8,11 @@ interface ConditionalCartProps {
 }
 
 export default component$<ConditionalCartProps>(({ isHomePage, showCart }) => {
-	const localCart = useLocalCart();
+	const cart = useCart();
 
 	// T20: Load cart on qinit
 	useOnDocument('qinit', $(async () => {
-		loadCartIfNeeded(localCart);
+		loadCartIfNeeded(cart);
 	}));
 
 	if (!isHomePage) {
