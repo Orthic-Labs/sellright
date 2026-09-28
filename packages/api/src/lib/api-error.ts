@@ -57,6 +57,79 @@ export function slugifyCode(message: string): string {
   return slug || 'ERROR';
 }
 
+/**
+ * Every stable, hand-picked `code` a shop-facing route (`errJson` call site)
+ * passes explicitly — see the rollout note above. This is the client's
+ * error-branching surface: registered as its own `ApiErrorCode` OpenAPI
+ * components schema (app.ts, via `app.openAPIRegistry.register`) so a
+ * generated client gets a real union type instead of `string`, without
+ * narrowing `error.code` on the wire (admin/legacy call sites still emit
+ * arbitrary `slugifyCode`-derived codes, and `error.code` stays `z.string()`
+ * everywhere at runtime — this list is documentation-only, not a validator).
+ * Keep sorted; add a new shop-facing code here when you add a new `errJson`
+ * call site — `api-error.codes.test.ts` fails the build if the two drift.
+ */
+export const SHOP_API_ERROR_CODES = [
+  'ACTIVE_SUBSCRIPTION_EXISTS',
+  'ADDRESS_NOT_FOUND',
+  'APPLE_SIGNIN_NOT_CONFIGURED',
+  'APPLE_TOKEN_INVALID',
+  'AUTH_REQUIRED',
+  'BOT_CHECK_FAILED',
+  'CART_INVALID',
+  'CART_NOT_FOUND',
+  'COLLECTION_NOT_FOUND',
+  'CSRF_INVALID',
+  'DOWNLOAD_NOT_FOUND',
+  'DOWNLOADS_NOT_CONFIGURED',
+  'EMAIL_NOT_VERIFIED',
+  'EMAIL_SAME',
+  'EMAIL_TAKEN',
+  'EMAIL_TAKEN_UNVERIFIED',
+  'GIFT_CARD_NOT_FOUND',
+  'GOOGLE_SIGNIN_NOT_CONFIGURED',
+  'GOOGLE_TOKEN_INVALID',
+  'IDEMPOTENCY_KEY_REQUIRED',
+  'IDEMPOTENCY_PAYLOAD_MISMATCH',
+  'INVALID_CREDENTIALS',
+  'INVALID_PAYMENT_REQUEST',
+  'INVITE_INVALID',
+  'LEGAL_ACCEPTANCE_REQUIRED',
+  'LICENSE_KEY_MISSING',
+  'LICENSE_NOT_ACTIVE',
+  'LICENSE_NOT_FOUND',
+  'LOYALTY_REDEEM_FAILED',
+  'MAGIC_LINK_DISABLED',
+  'MAGIC_LINK_INVALID',
+  'NOT_AUTHENTICATED',
+  'ORDER_ALREADY_PAID',
+  'ORDER_NOT_FOUND',
+  'ORDER_NOT_PAYABLE',
+  'OUT_OF_STOCK',
+  'PASSWORD_INCORRECT',
+  'PAYMENT_METHOD_DISABLED',
+  'PAYMENT_METHOD_UNKNOWN',
+  'PAYMENT_NOT_FOUND',
+  'POST_NOT_FOUND',
+  'PRODUCT_NOT_FOUND',
+  'RATE_LIMITED',
+  'SEAT_LIMIT_REACHED',
+  'SECURITY_CHECK_FAILED',
+  'SHIPPING_UNAVAILABLE',
+  'STRIPE_NOT_CONFIGURED',
+  'SUBSCRIPTION_NOT_FOUND',
+  'TOKEN_INVALID',
+  'VARIANT_NOT_RECURRING',
+] as const;
+
+export type ShopApiErrorCode = (typeof SHOP_API_ERROR_CODES)[number];
+
+/** Registered once, in app.ts, as the `ApiErrorCode` components schema —
+ *  NOT used as `error.code`'s runtime type (see the const above). */
+export function apiErrorCodeSchema() {
+  return z.enum(SHOP_API_ERROR_CODES).openapi('ApiErrorCode');
+}
+
 export interface ApiErrorFields {
   code: string;
   message: string;

@@ -47,7 +47,7 @@ import { subscriptions } from './routes/subscriptions.js';
 import { apps } from './routes/apps.js';
 import { wellKnown } from './routes/well-known.js';
 import { HttpError } from './routes/admin-helpers.js';
-import { errorEnvelope, errJson } from './lib/api-error.js';
+import { apiErrorCodeSchema, errorEnvelope, errJson } from './lib/api-error.js';
 import { csrfValid, customerCsrfValid, getCustomerSessionToken } from './auth/cookies.js';
 import { env } from './env.js';
 import { isAllowedCorsOrigin } from './cors-origins.js';
@@ -360,6 +360,11 @@ export function createApp(): OpenAPIHono {
   for (const plugin of listApiPlugins()) {
     plugin.init?.(app);
   }
+
+  // Register the stable shop-facing error codes as their own named schema
+  // (see api-error.ts's SHOP_API_ERROR_CODES) so a generated client gets a
+  // real `ApiErrorCode` union in components.schemas instead of `string`.
+  app.openAPIRegistry.register('ApiErrorCode', apiErrorCodeSchema());
 
   // Published API contract — the product surface (versioned under /v1).
   app.doc('/v1/openapi.json', {

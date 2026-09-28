@@ -44,7 +44,7 @@ describe('native catalog generation', () => {
       expect(manifestV2.products[0]).toMatchObject({
         id: product, slug: 'fixture', tags: ['edc'], inStock: true,
         priceRange: { min: { amount: 3000, currency: 'USD', taxInclusive: false }, max: { amount: 3000, currency: 'USD', taxInclusive: false } },
-        images: [{ url: '/assets/fixture/product.webp', order: 0 }],
+        images: [{ url: '/assets/fixture/product.webp', position: 0 }],
       });
       const detailV2 = JSON.parse(await readFile(join(outDir, 'current/products-v2/fixture.json'), 'utf8'));
       expect(detailV2.id).toBe(product);
