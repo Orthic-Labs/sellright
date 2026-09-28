@@ -26,7 +26,8 @@
  */
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
-import { desc, eq, sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
+import { createHash } from 'node:crypto';
 import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
 import * as s from '../db/schema.js';
@@ -220,9 +221,13 @@ describe('POST /v1/shop/auth/login', () => {
     expect(maxAge).toBeLessThanOrEqual(24 * 60 * 60);
     expect(maxAge).toBeGreaterThan(0);
     // The DB-side session row expiry matches the shortened cookie, not the
-    // store's normal 30-day policy.
-    const [cust] = await withStore(STORE, (tx) => tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, 'remember-false@auth.test')).limit(1));
-    const [session] = await withStore(STORE, (tx) => tx.select({ expiresAt: s.session.expiresAt }).from(s.session).where(eq(s.session.customerId, cust!.id)).orderBy(desc(s.session.expiresAt)).limit(1));
+    // store's normal 30-day policy. Look up by the token's own hash (not
+    // "most recent by expiresAt") — registerDirect() already created an
+    // earlier, normal-TTL session for this customer, which would otherwise
+    // sort AHEAD of the new short-lived one when ordering by expiresAt desc.
+    const { token } = await res.json() as { token: string };
+    const tokenHash = createHash('sha256').update(token).digest('hex');
+    const [session] = await withStore(STORE, (tx) => tx.select({ expiresAt: s.session.expiresAt }).from(s.session).where(eq(s.session.tokenHash, tokenHash)).limit(1));
     const ttlMs = session!.expiresAt.getTime() - Date.now();
     expect(ttlMs).toBeLessThanOrEqual(24 * 60 * 60 * 1000 + 5000); // small slack for test runtime
   });

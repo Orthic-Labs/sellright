@@ -7,7 +7,8 @@
 # two units in isolation.
 set -eu
 
-SCRIPT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)/sellright.sh"
+unset CDPATH
+SCRIPT="$(cd -- "$(dirname -- "$0")/.." && pwd)/sellright.sh"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
@@ -58,6 +59,9 @@ sed '$ { /^main "\$@"$/d }' "$SCRIPT" > "$BODY"
 grep -q '^main "\$@"$' "$SCRIPT" || fail "sellright.sh's trailing 'main \"\$@\"' line moved; update this test's sed"
 # shellcheck disable=SC1090
 . "$BODY"
+# Read by compose()/require_home() inside the sourced functions above, not
+# in this file directly — shellcheck can't see that cross-file use.
+# shellcheck disable=SC2034
 SELLRIGHT_HOME="$tmp/home"
 
 resolved="$(PATH="$tmp/bin:$PATH" compose config --images api 2>/dev/null || true)"
@@ -87,7 +91,6 @@ pass "cmd_update rejects unknown flags"
 set +e
 (
   unset SELLRIGHT_SOURCE
-  from_source=1
   : "${SELLRIGHT_SOURCE:?--from-source requires SELLRIGHT_SOURCE=/path/to/checked-out/sellright}"
 ) >/tmp/nosource.out 2>&1
 rc=$?
