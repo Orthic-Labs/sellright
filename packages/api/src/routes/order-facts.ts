@@ -10,7 +10,7 @@
 import { desc, eq, inArray, sql } from 'drizzle-orm';
 import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
-import { deriveFulfillmentStatus, derivePaymentStatus, wirePaymentState, type OrderFulfillmentStatus, type OrderPaymentStatus } from '../orders/status.js';
+import { deriveFulfillmentStatus, derivePaymentStatus, wirePaymentState, type OrderFulfillmentStatus, type OrderPaymentStatus, type OrderStatus } from '../orders/status.js';
 
 export interface OrderPaymentFact {
   method: string;
@@ -53,7 +53,7 @@ export async function loadOrderFulfillments(tx: Tx, orderId: string): Promise<Or
 
 export interface OrderStatusFacts {
   /** Mirrors the `order.status` STORED GENERATED column — see orders/status.ts. */
-  status: 'open' | 'completed' | 'cancelled' | 'archived';
+  status: OrderStatus;
   paymentStatus: OrderPaymentStatus;
   fulfillmentStatus: OrderFulfillmentStatus;
 }
@@ -63,10 +63,13 @@ export interface OrderStatusFacts {
  *  payment/order_line/fulfillment rows — the same sources of truth every
  *  other order-detail surface already reads, so this can't drift from them.
  *  `order` only needs `state`+`deletedAt`+`status` (the last one is read
- *  straight off the generated column rather than re-derived). */
+ *  straight off the generated column rather than re-derived). `order.status`
+ *  is typed `string` at the drizzle level (it's a `text()` column — see
+ *  schema-core.ts's note on why it can't be a pgEnum) but is guaranteed one
+ *  of the four OrderStatus values by the DB's own CHECK constraint. */
 export async function loadOrderStatusFacts(
   tx: Tx,
-  order: { id: string; state: 'PendingPayment' | 'Paid' | 'PartiallyRefunded' | 'Refunded' | 'Cancelled'; status: OrderStatusFacts['status'] },
+  order: { id: string; state: 'PendingPayment' | 'Paid' | 'PartiallyRefunded' | 'Refunded' | 'Cancelled'; status: string },
 ): Promise<OrderStatusFacts> {
   const [payments, lines, fulfillments] = await Promise.all([
     tx.select({ state: s.payment.state }).from(s.payment).where(eq(s.payment.orderId, order.id)).orderBy(desc(s.payment.createdAt)),
@@ -74,7 +77,7 @@ export async function loadOrderStatusFacts(
     tx.select({ state: s.fulfillment.state }).from(s.fulfillment).where(eq(s.fulfillment.orderId, order.id)),
   ]);
   return {
-    status: order.status,
+    status: order.status as OrderStatus,
     paymentStatus: derivePaymentStatus(order.state, payments),
     fulfillmentStatus: deriveFulfillmentStatus(lines, fulfillments),
   };
@@ -90,7 +93,7 @@ export async function loadOrderStatusFacts(
  */
 export async function loadOrderStatusFactsBatch(
   tx: Tx,
-  orders: Array<{ id: string; state: 'PendingPayment' | 'Paid' | 'PartiallyRefunded' | 'Refunded' | 'Cancelled'; status: OrderStatusFacts['status'] }>,
+  orders: Array<{ id: string; state: 'PendingPayment' | 'Paid' | 'PartiallyRefunded' | 'Refunded' | 'Cancelled'; status: string }>,
 ): Promise<Map<string, OrderStatusFacts>> {
   const out = new Map<string, OrderStatusFacts>();
   if (!orders.length) return out;
@@ -113,7 +116,7 @@ export async function loadOrderStatusFactsBatch(
   const fulfillmentsByOrder = bucket(fulfillments);
   for (const order of orders) {
     out.set(order.id, {
-      status: order.status,
+      status: order.status as OrderStatus,
       paymentStatus: derivePaymentStatus(order.state, paymentsByOrder.get(order.id) ?? []),
       fulfillmentStatus: deriveFulfillmentStatus(linesByOrder.get(order.id) ?? [], fulfillmentsByOrder.get(order.id) ?? []),
     });

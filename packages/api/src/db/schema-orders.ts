@@ -10,6 +10,7 @@ import {
   jsonb,
   unique,
   primaryKey,
+  check,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import {
@@ -19,7 +20,6 @@ import {
   fulfillmentType,
   licenseStatus,
   orderState,
-  orderStatus,
   paymentState,
   productVariant,
   promotion,
@@ -80,19 +80,22 @@ export const order = pgTable(
     // for the paymentStatus/fulfillmentStatus counterparts, which depend on
     // OTHER tables (payment/order_line/fulfillment) and so are computed at
     // read time instead of stored (migration 0080's header comment has the
-    // full rationale). (migration 0080)
-    status: orderStatus().notNull().generatedAlwaysAs(sql`((case
+    // full rationale). `text()`, not a pgEnum — see schema-core.ts's note by
+    // the (removed) orderStatus enum for why a GENERATED column can't resolve
+    // to a Postgres enum type. (migration 0080)
+    status: text().notNull().generatedAlwaysAs(sql`(case
       when deleted_at is not null then 'archived'
       when state = 'Cancelled' then 'cancelled'
       when state = 'PendingPayment' then 'open'
       else 'completed'
-    end)::order_status)`),
+    end)`),
     createdAt: ts(),
     updatedAt: ts(),
   },
   (t) => [
     unique('order_store_code').on(t.storeId, t.code),
     unique('order_store_idempotency').on(t.storeId, t.idempotencyKey),
+    check('order_status_check', sql`${t.status} in ('open', 'completed', 'cancelled', 'archived')`),
   ],
 );
 

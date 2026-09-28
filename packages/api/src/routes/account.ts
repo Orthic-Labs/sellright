@@ -90,7 +90,7 @@ account.openapi(
         total,
         items: items.map((o) => {
           const facts = statusFacts.get(o.id)!;
-          return { code: o.code, state: o.state, status: o.status, paymentStatus: facts.paymentStatus, fulfillmentStatus: facts.fulfillmentStatus, currency: o.currency, grandTotal: o.grandTotal, lines: o.lines, placedAt: o.placedAt ? o.placedAt.toISOString() : null };
+          return { code: o.code, state: o.state, status: facts.status, paymentStatus: facts.paymentStatus, fulfillmentStatus: facts.fulfillmentStatus, currency: o.currency, grandTotal: o.grandTotal, lines: o.lines, placedAt: o.placedAt ? o.placedAt.toISOString() : null };
         }),
       };
     });

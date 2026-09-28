@@ -29,15 +29,20 @@
 -- admin-helpers.ts), which is always correct by construction. Tracked as a
 -- deliberate follow-up if list-query performance ever requires persisting +
 -- indexing them (see CHANGELOG.md).
-CREATE TYPE "order_status" AS ENUM ('open', 'completed', 'cancelled', 'archived');
-
-ALTER TABLE "order" ADD COLUMN "status" "order_status" GENERATED ALWAYS AS (
-  (case
+--
+-- `status` is `text`, not a Postgres enum: Postgres's enum I/O/cast
+-- functions are STABLE, not IMMUTABLE (ALTER TYPE ... ADD VALUE can change
+-- the catalog), so a GENERATED ALWAYS AS expression can never resolve to an
+-- enum type — this fails at DDL time with "generation expression is not
+-- immutable" no matter how the expression casts. A CHECK constraint keeps
+-- the same closed-set guarantee an enum would have given.
+ALTER TABLE "order" ADD COLUMN "status" text GENERATED ALWAYS AS (case
     when deleted_at is not null then 'archived'
     when state = 'Cancelled' then 'cancelled'
     when state = 'PendingPayment' then 'open'
     else 'completed'
-  end)::order_status
-) STORED NOT NULL;
+  end) STORED NOT NULL;
+
+ALTER TABLE "order" ADD CONSTRAINT "order_status_check" CHECK ("status" IN ('open', 'completed', 'cancelled', 'archived'));
 
 CREATE INDEX "order_store_status_idx" ON "order" ("store_id", "status");
