@@ -45,4 +45,73 @@ describe('native catalog generation', () => {
       await rm(outDir, { recursive: true, force: true });
     }
   });
+
+  // SELLRIGHT-ISSUES P1: per-product regeneration. `variantIds` must reuse
+  // the unaffected product's entry from the current generation untouched,
+  // recompute only the affected one, and still publish one COMPLETE new
+  // generation (both products present) — never a partial/half-updated one.
+  it('scopes a regeneration to the affected product, reusing the rest of the current generation untouched', async () => {
+    const store = randomUUID();
+    const productA = randomUUID(), variantA = randomUUID();
+    const productB = randomUUID(), variantB = randomUUID();
+    const slug = `manifest-scoped-${store}`;
+    const outDir = await mkdtemp(join(tmpdir(), 'sr-manifest-scoped-db-'));
+    try {
+      await withStore(store, async tx => {
+        await tx.execute(sql`INSERT INTO store (id, slug, name, currency) VALUES (${store}, ${slug}, 'Fixture', 'USD')`);
+        await tx.execute(sql`INSERT INTO product (id, store_id, slug, name, status) VALUES (${productA}, ${store}, 'prod-a', 'Product A', 'active')`);
+        await tx.execute(sql`INSERT INTO product_variant (id, store_id, product_id, sku, name, price) VALUES (${variantA}, ${store}, ${productA}, 'A1', 'A1', 1000)`);
+        await tx.execute(sql`INSERT INTO stock (variant_id, store_id, on_hand, allocated) VALUES (${variantA}, ${store}, 5, 0)`);
+        await tx.execute(sql`INSERT INTO product (id, store_id, slug, name, status) VALUES (${productB}, ${store}, 'prod-b', 'Product B', 'active')`);
+        await tx.execute(sql`INSERT INTO product_variant (id, store_id, product_id, sku, name, price) VALUES (${variantB}, ${store}, ${productB}, 'B1', 'B1', 2000)`);
+        await tx.execute(sql`INSERT INTO stock (variant_id, store_id, on_hand, allocated) VALUES (${variantB}, ${store}, 3, 0)`);
+      });
+      const first = await publishCatalogManifest({ outDir, storeSlug: slug });
+      expect(first.products).toBe(2);
+      const firstGenB = JSON.parse(await readFile(join(outDir, 'current/products/prod-b.json'), 'utf8'));
+
+      // Only A's stock changes — B's entry must be byte-for-byte reused.
+      await withStore(store, async tx => { await tx.execute(sql`UPDATE stock SET on_hand = 0 WHERE variant_id = ${variantA}`); });
+      const scoped = await publishCatalogManifest({ outDir, storeSlug: slug, variantIds: [variantA] });
+      expect(scoped.products).toBe(2); // still a COMPLETE generation, not just the one changed product
+
+      const manifest = JSON.parse(await readFile(join(outDir, 'current/shop-catalog.json'), 'utf8'));
+      const a = manifest.products.find((p: { slug: string }) => p.slug === 'prod-a');
+      const b = manifest.products.find((p: { slug: string }) => p.slug === 'prod-b');
+      expect(a.inStock).toBe(false); // recomputed
+      expect(b.inStock).toBe(true); // reused, unaffected
+
+      const detailB = JSON.parse(await readFile(join(outDir, 'current/products/prod-b.json'), 'utf8'));
+      expect(detailB).toEqual(firstGenB); // reused verbatim — proves it was NOT re-queried/re-serialized
+
+      // Archiving the affected product's owner must DROP its entry, not
+      // leave a stale one behind, even on the scoped path.
+      await withStore(store, async tx => { await tx.execute(sql`UPDATE product SET deleted_at = now() WHERE id = ${productA}`); });
+      const afterDelete = await publishCatalogManifest({ outDir, storeSlug: slug, variantIds: [variantA] });
+      expect(afterDelete.products).toBe(1);
+      await expect(readFile(join(outDir, 'current/products/prod-a.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back to a full scan when there is no current generation to reuse from yet', async () => {
+    const store = randomUUID();
+    const product = randomUUID(), variant = randomUUID();
+    const slug = `manifest-firstpub-${store}`;
+    const outDir = await mkdtemp(join(tmpdir(), 'sr-manifest-firstpub-db-'));
+    try {
+      await withStore(store, async tx => {
+        await tx.execute(sql`INSERT INTO store (id, slug, name, currency) VALUES (${store}, ${slug}, 'Fixture', 'USD')`);
+        await tx.execute(sql`INSERT INTO product (id, store_id, slug, name, status) VALUES (${product}, ${store}, 'only-product', 'Only', 'active')`);
+        await tx.execute(sql`INSERT INTO product_variant (id, store_id, product_id, sku, name, price) VALUES (${variant}, ${store}, ${product}, 'O1', 'O1', 500)`);
+      });
+      // variantIds passed on the VERY FIRST publish — no current generation
+      // exists to reuse from, so this must still produce a complete manifest.
+      const result = await publishCatalogManifest({ outDir, storeSlug: slug, variantIds: [variant] });
+      expect(result.products).toBe(1);
+    } finally {
+      await rm(outDir, { recursive: true, force: true });
+    }
+  });
 });

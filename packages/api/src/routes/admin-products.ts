@@ -210,7 +210,8 @@ adminProducts.openapi(
     // commit — never inside the transaction above (a later throw would roll
     // the write back and the manifest would lie about a stock level that
     // never actually landed).
-    onStockChanged(st.slug);
+    // Single variant known precisely — scope the manifest regen to just its product.
+    onStockChanged(st.slug, [id]);
     return c.json({ id, onHand }, 200);
   }),
 );
@@ -277,7 +278,8 @@ adminProducts.openapi(
     // onStockChanged's own state machine (manifest/stock-hook.ts) already
     // collapses concurrent triggers into a single trailing rerun, so one call
     // after N variant writes is correct, not a missed update.
-    onStockChanged(st.slug);
+    // Exact variant set for this batch is known — scope the regen to just their products.
+    onStockChanged(st.slug, ids);
     return c.json({ updated }, 200);
   }),
 );

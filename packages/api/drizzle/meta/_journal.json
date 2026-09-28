@@ -491,6 +491,13 @@
       "when": 1790000010600,
       "tag": "0078_rate_limit_shared",
       "breakpoints": true
+    },
+    {
+      "idx": 70,
+      "version": "7",
+      "when": 1790000010700,
+      "tag": "0079_catalog_manifest_pending",
+      "breakpoints": true
     }
   ]
 }

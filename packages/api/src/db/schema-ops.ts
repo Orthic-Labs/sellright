@@ -32,6 +32,16 @@ export const rateLimitAttempt = pgTable('rate_limit_attempt', {
   attemptedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
 });
 
+// SELLRIGHT-ISSUES P1: durable retry for cross-process catalog manifest
+// regeneration triggers (migration 0079, manifest/stock-hook.ts). Same
+// "defined here for drizzle-kit, queried via raw pool elsewhere" posture as
+// rateLimitAttempt above.
+export const catalogManifestPending = pgTable('catalog_manifest_pending', {
+  storeId: uuid().primaryKey(),
+  storeSlug: text().notNull(),
+  requestedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+});
+
 // PAR-04: one row per SheerID verification attempt. The customer-facing
 // read model stays on `customer` (sheeridVerifications/activeVerifications/
 // verificationMetadata — the coupon condition reads those); this table is the

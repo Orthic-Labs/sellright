@@ -35,6 +35,7 @@ import { sweepRestockEvents } from '../routes/restock.js';
 import { withLeaderLock, type LeaderLockedJob } from './leader-lock.js';
 import { log, err as logErr } from '../lib/logger.js';
 import { publishCatalogManifest } from '../manifest/catalog.js';
+import { loadStalePendingManifestRegenerations, clearManifestRegenerationPending } from '../manifest/manifest-pending.js';
 import { reapRateLimitAttempts } from '../auth/rate-limit-backend.js';
 
 const HOUR = 3_600_000;
@@ -108,6 +109,27 @@ export function startJobScheduler(): void {
     } else {
       void withLeaderLock('catalog-manifest', () => publishCatalogManifest({ outDir: env.CATALOG_DIR!, storeSlug: env.STORE_SLUG! }), env.STORE_SLUG)
         .catch((e) => logErr.error('startup catalog publish failed', e, { job: 'catalog-manifest' }));
+      // SELLRIGHT-ISSUES P1: durable-retry drain. onStockChanged's in-process
+      // trailing-rerun state (stock-hook.ts) doesn't survive a crash between
+      // "stock changed" and "manifest republished" — catalog_manifest_pending
+      // (migration 0079) is the durable trace of that gap. Anything stale
+      // enough to prove its in-process attempt never finished gets a full
+      // regen here and its marker cleared. 90s stale threshold: a healthy
+      // run — even a full-catalog one — clears its own marker in well under
+      // that; this is a crash-recovery net, not a normal-path cadence.
+      every(2 * 60_000, 'catalog-manifest-drain', 'catalog-manifest-drain', async () => {
+        const stale = await loadStalePendingManifestRegenerations(90_000);
+        for (const p of stale) {
+          if (p.storeSlug !== env.STORE_SLUG) continue; // this deployment only publishes its own store
+          try {
+            await withLeaderLock('catalog-manifest', () => publishCatalogManifest({ outDir: env.CATALOG_DIR!, storeSlug: p.storeSlug }), p.storeSlug);
+            await clearManifestRegenerationPending(p.storeId);
+            jobLog(`[jobs:catalog-manifest-drain] recovered a lost regeneration for ${p.storeSlug} (pending since ${p.requestedAt.toISOString()})`);
+          } catch (e) {
+            logErr.error('catalog-manifest-drain retry failed — marker left in place for the next pass', e, { storeSlug: p.storeSlug });
+          }
+        }
+      });
     }
   }
   every(HOUR, 'auto-deliver', 'auto-deliver', () => autoDeliver({ apply: autoDeliverApply, days: autoDeliverDays, log: jobLog }));
