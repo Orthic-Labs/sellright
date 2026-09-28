@@ -25,6 +25,17 @@ const emailStoreCtx = (st: StoreCtx) => ({ name: st.name, currency: st.currency,
 // dies before the session it carries (cookie and DB expiry stay consistent).
 const customerCookieSeconds = (st: StoreCtx) => Math.ceil(sessionPolicy(st.config).ttlMs / 1000);
 
+// rememberMe (login only): "keep me signed in" opts INTO the store's normal
+// (long) session TTL — the default. Declining it shortens the session to
+// this fixed 1-day ceiling, min()'d against the store's own policy so a
+// store configured shorter than a day is never LENGTHENED by this flag.
+const NOT_REMEMBERED_TTL_MS = 24 * 60 * 60 * 1000;
+function loginSessionPolicy(st: StoreCtx, rememberMe: boolean) {
+  const policy = sessionPolicy(st.config);
+  if (rememberMe) return policy;
+  return { ...policy, ttlMs: Math.min(policy.ttlMs, NOT_REMEMBERED_TTL_MS) };
+}
+
 // PAR-06: per-store anti-bot. Secret lives in store.config
 // (turnstileSecretKey, or turnstile.secretKey nested); absent → feature off.
 function turnstileSecret(config: unknown): string | null {
@@ -129,7 +140,7 @@ auth.openapi(
     method: 'post',
     path: '/v1/shop/auth/login',
     summary: 'Log in',
-    request: { body: { content: { 'application/json': { schema: z.object({ email: z.string().email(), password: z.string(), turnstileToken: z.string().optional() }) } } } },
+    request: { body: { content: { 'application/json': { schema: z.object({ email: z.string().email(), password: z.string(), turnstileToken: z.string().optional(), rememberMe: z.boolean().default(true) }) } } } },
     responses: {
       200: { description: 'OK', content: { 'application/json': { schema: z.object({ token: z.string(), customer: CustomerOut }) } } },
       401: { description: 'Invalid', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
@@ -139,7 +150,7 @@ auth.openapi(
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
-    const { email: rawEmail, password, turnstileToken } = c.req.valid('json');
+    const { email: rawEmail, password, turnstileToken, rememberMe } = c.req.valid('json');
     const email = normalizeEmail(rawEmail);
     const ip = clientIp(c);
     const retry = loginRetryAfter(ip, email);
@@ -148,7 +159,7 @@ auth.openapi(
       recordLoginFailure(ip, email);
       return c.json({ error: 'verification failed' }, 403);
     }
-    const out = await withStore(st.id, async (tx): Promise<{ ok: false } | { ok: 'not_verified' } | { ok: true; token: string; customer: z.infer<typeof CustomerOut> }> => {
+    const out = await withStore(st.id, async (tx): Promise<{ ok: false } | { ok: 'not_verified' } | { ok: true; token: string; ttlMs: number; customer: z.infer<typeof CustomerOut> }> => {
       const [cust] = await tx.select({ id: s.customer.id, email: s.customer.email, firstName: s.customer.firstName, lastName: s.customer.lastName, phone: s.customer.phone, emailVerified: s.customer.emailVerified, passwordHash: s.customer.passwordHash }).from(s.customer).where(eq(s.customer.email, email)).limit(1);
       if (!cust || !(await verifyPassword(password, cust.passwordHash))) return { ok: false };
 
@@ -165,8 +176,9 @@ auth.openapi(
       // existence oracle (same 401 as a wrong password for a bad guess).
       if (!cust.emailVerified) return { ok: 'not_verified' };
 
-      const token = await createSession(tx, st.id, cust.id, sessionPolicy(st.config));
-      return { ok: true, token, customer: { id: cust.id, email: cust.email, firstName: cust.firstName, lastName: cust.lastName, phone: cust.phone, emailVerified: cust.emailVerified, isMigrated: false } };
+      const policy = loginSessionPolicy(st, rememberMe);
+      const token = await createSession(tx, st.id, cust.id, policy);
+      return { ok: true, token, ttlMs: policy.ttlMs, customer: { id: cust.id, email: cust.email, firstName: cust.firstName, lastName: cust.lastName, phone: cust.phone, emailVerified: cust.emailVerified, isMigrated: false } };
     });
     if (out.ok === false) { recordLoginFailure(ip, email); return c.json({ error: 'invalid email or password' }, 401); }
     if (out.ok === 'not_verified') {
@@ -177,7 +189,10 @@ auth.openapi(
       return c.json({ error: 'please verify your email before signing in', code: 'not_verified' as const }, 403);
     }
     clearLoginAttempts(ip, email);
-    setCustomerCookies(c, out.token, newCsrf(), customerCookieSeconds(st));
+    // Cookie Max-Age tracks the SAME (possibly shortened) TTL the session row
+    // just got — rememberMe:false must not hand out a long-lived cookie for a
+    // short-lived session.
+    setCustomerCookies(c, out.token, newCsrf(), Math.ceil(out.ttlMs / 1000));
     return c.json({ token: out.token, customer: out.customer }, 200);
   },
 );

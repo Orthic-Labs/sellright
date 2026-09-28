@@ -174,4 +174,24 @@ describe('GET /v1/shop/orders/{code} — receipt-token / owner scoping (P1)', ()
     const res = await app.request(`/v1/shop/orders/${code}`, { headers: hdr({ authorization: `Bearer ${otherToken}` }) });
     expect(res.status).toBe(404);
   });
+
+  // R18 parity: the receipt must expose REAL payment facts (method/state/
+  // decline reason), not require the caller to infer paid/pending/failed
+  // from order.state alone.
+  it('exposes real payment facts (method, state, decline reason) alongside order.state', async () => {
+    const { code, receiptToken } = await makeOrder();
+    await withStore(STORE, async (tx) => {
+      const [order] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
+      await tx.insert(s.payment).values({
+        storeId: STORE, orderId: order!.id, amount: 2100, method: 'stripe', state: 'Declined',
+        errorMessage: 'card_declined: insufficient_funds', providerRef: 'pi_test_declined',
+      });
+    });
+    const res = await app.request(`/v1/shop/orders/${code}?rt=${encodeURIComponent(receiptToken)}`, { headers: hdr() });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { payments: Array<{ method: string; state: string; errorMessage: string | null }>; fulfillments: unknown[] };
+    expect(body.payments).toHaveLength(1);
+    expect(body.payments[0]).toMatchObject({ method: 'stripe', state: 'Declined', errorMessage: 'card_declined: insufficient_funds' });
+    expect(body.fulfillments).toEqual([]);
+  });
 });
