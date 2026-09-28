@@ -8,6 +8,7 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
+import { Pool } from 'pg';
 import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
 import { invalidateStoreCache } from '../store-context.js';
@@ -185,20 +186,48 @@ describe('availableQuantity — exact live stock (not boolean-only)', () => {
     expect(afterBody.variants.find(v => v.sku === 'QTY-PHYS')!.availableQuantity).toBe(98); // 100 - 2 allocated, read live, not the earlier value
   });
 
-  // RLS scope: a request scoped to a DIFFERENT store must never see this
-  // store's stock numbers, even for an identically-slugged/named product.
-  it('never leaks another store\'s stock — RLS-scoped by store slug', async () => {
+  // RLS scope: both stock endpoints rely ENTIRELY on the `app.current_store`
+  // RLS policy for tenant isolation (no explicit store_id filter in the
+  // query) — same as every other read in this file. Driving that through
+  // app.request() doesn't prove it: CI's `database` job runs DATABASE_URL as
+  // the OWNER/superuser role (see db/rls.test.ts's own header comment),
+  // which bypasses RLS (even FORCE RLS) regardless of policy, and the app's
+  // shared `pool` always connects via DATABASE_URL. The only way to
+  // genuinely exercise the policy is the app ROLE connection
+  // (DATABASE_URL_NONOWNER), same pattern as db/rls.test.ts /
+  // db/rls-tables.test.ts — which already cover `product`/`product_variant`/
+  // `stock` generically. This test adds the SAME direct-connection proof
+  // scoped to this feature's exact query shape (product + its stock join),
+  // rather than re-asserting the app.request() 404 rls.test.ts already shows
+  // doesn't actually prove anything under the owner role.
+  it('the underlying product+stock query is RLS-scoped (proven via the enforcing app role, not the owner pool)', async () => {
+    const appPoolUrl = env.DATABASE_URL_NONOWNER ?? env.DATABASE_URL;
+    const appPool = new Pool({ connectionString: appPoolUrl });
     const otherStore = 'dddddddd-dddd-dddd-dddd-ddddddddddb1';
-    const otherSlug = 'catalog-meta-test-other';
-    await withStore(otherStore, async (tx) => {
-      await tx.execute(sql`INSERT INTO store (id, slug, name, currency) VALUES (${otherStore}, ${otherSlug}, ${otherSlug}, 'USD') ON CONFLICT (id) DO NOTHING`);
-    });
-    invalidateStoreCache();
-    // The product/variant only exist in STORE_B — a request scoped to a
-    // different store must 404, not accidentally resolve cross-tenant.
-    const res = await app.request('/v1/shop/catalog/products/qty-test/stock', { headers: { 'x-store-slug': otherSlug } });
-    expect(res.status).toBe(404);
-    const detail = await app.request('/v1/shop/catalog/products/qty-test', { headers: { 'x-store-slug': otherSlug } });
-    expect(detail.status).toBe(404);
+    try {
+      await withStore(otherStore, async (tx) => {
+        await tx.execute(sql`INSERT INTO store (id, slug, name, currency) VALUES (${otherStore}, 'catalog-meta-test-other', 'catalog-meta-test-other', 'USD') ON CONFLICT (id) DO NOTHING`);
+      });
+      const client = await appPool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query("SELECT set_config('app.current_store', $1, true)", [otherStore]);
+        // The exact WHERE shape catalog.ts's stock/detail handlers use —
+        // product lookup by slug, no explicit store_id filter, RLS-only.
+        const leaked = await client.query('SELECT id FROM product WHERE slug = $1', ['qty-test']);
+        expect(leaked.rows).toHaveLength(0); // STORE_B's product must be invisible under otherStore's context
+        // Same for the stock join itself.
+        const leakedStock = await client.query(
+          `SELECT st.on_hand FROM product_variant pv JOIN stock st ON st.variant_id = pv.id WHERE pv.sku = $1`,
+          ['QTY-PHYS'],
+        );
+        expect(leakedStock.rows).toHaveLength(0);
+        await client.query('ROLLBACK');
+      } finally {
+        client.release();
+      }
+    } finally {
+      await appPool.end();
+    }
   });
 });
