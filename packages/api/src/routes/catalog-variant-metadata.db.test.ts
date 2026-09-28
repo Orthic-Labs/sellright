@@ -71,6 +71,22 @@ describe('GET /v1/shop/catalog/products/:slug variant metadata', () => {
     await withStore(STORE, async tx => { await tx.execute(sql`UPDATE product SET status = 'draft' WHERE id = ${PRODUCT}`); });
     expect((await app.request('/v1/shop/catalog/products/lic-app', { headers: { 'x-store-slug': SLUG } })).status).toBe(404);
   });
+  it('publishes variant id + variant-level assets (needed by restock-request and PDP galleries)', async () => {
+    const asset1 = 'dddddddd-dddd-dddd-dddd-ddddddddddd6';
+    const asset2 = 'dddddddd-dddd-dddd-dddd-ddddddddddd7';
+    await withStore(STORE, async tx => {
+      await tx.execute(sql`INSERT INTO asset (id, store_id, path) VALUES (${asset1}, ${STORE}, 'v1-front.jpg'), (${asset2}, ${STORE}, 'v1-back.jpg')`);
+      await tx.execute(sql`INSERT INTO variant_asset (store_id, variant_id, asset_id, position) VALUES (${STORE}, ${VARIANT}, ${asset2}, 1), (${STORE}, ${VARIANT}, ${asset1}, 0)`);
+    });
+    const res = await app.request('/v1/shop/catalog/products/lic-app', { headers: { 'x-store-slug': SLUG } });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { variants: Array<{ id: string; sku: string; assets: Array<{ preview: string }> }> };
+    const v = body.variants.find(v => v.sku === 'LIC-1')!;
+    expect(v.id).toBe(VARIANT);
+    // Ordered by position: front (0) before back (1), regardless of insert order.
+    expect(v.assets).toEqual([{ preview: 'v1-front.jpg' }, { preview: 'v1-back.jpg' }]);
+  });
+
   it.each(['preorder', 'sale'])('uses the %s pricing rule on list and search without disabled variants', async rule => {
     await withStore(STORE, async tx => {
       await tx.execute(sql`UPDATE store SET config = ${JSON.stringify({ pricing: { variantRule: rule } })}::jsonb WHERE id = ${STORE}`);

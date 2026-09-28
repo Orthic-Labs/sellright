@@ -67,12 +67,26 @@ function productUrl(base: string, slug: string): string {
 // (store, variant, email) while pending; a new pending row is allowed again
 // after the previous one was notified/canceled (re-arm for the next cycle).
 // Always {ok:true} for existing/duplicate signups — no list enumeration.
+// R26 parity: DD's WaitlistForm signs up at the PRODUCT level when no
+// variant is selected ("any variant restocks" semantics) — exactly one of
+// variantId/productId is required. Product-level fans out to one
+// restock_request row per currently out-of-stock, enabled variant of that
+// product (mirrors the topic-based waitlist's own product->variant-topic
+// expansion below, just for this table): each row is claimed and notified
+// independently the moment ITS variant restocks, so the shopper hears about
+// whichever variant comes back first, same as choosing that variant
+// directly would have. If every variant is already purchasable, this is a
+// no-op success (nothing to wait for).
 const RestockIn = z.object({
-  variantId: z.string().uuid(),
+  variantId: z.string().uuid().optional(),
+  productId: z.string().uuid().optional(),
   email: z.string().trim().pipe(z.email()).pipe(z.string().max(320)),
   turnstileToken: z.string().optional(),
   honeypot: z.string().optional(),
   website: z.string().optional(),
+}).refine((v) => Boolean(v.variantId) !== Boolean(v.productId), {
+  message: 'exactly one of variantId or productId is required',
+  path: ['variantId'],
 });
 
 restockRoutes.openapi(
@@ -103,29 +117,49 @@ restockRoutes.openapi(
     const email = body.email.trim().toLowerCase();
 
     const result = await withStore(st.id, async (tx) => {
-      const v = await tx.execute(
-        sql`SELECT pv.id, pv.name AS variant_name, p.name AS product_name, p.slug AS product_slug,
-                   coalesce(stk.on_hand, 0) - coalesce(stk.allocated, 0) AS available
-            FROM product_variant pv
-            JOIN product p ON p.id = pv.product_id AND p.deleted_at IS NULL
-            LEFT JOIN stock stk ON stk.variant_id = pv.id
-            WHERE pv.id = ${body.variantId} AND pv.deleted_at IS NULL AND pv.enabled = true
-            LIMIT 1`,
-      );
-      const variant = v.rows[0] as { id: string; variant_name: string; product_name: string; product_slug: string; available: number } | undefined;
-      if (!variant) return 'not-found' as const;
-      // Already purchasable → the request would just linger until the NEXT
-      // cycle. No-op success (the shopper can buy it right now).
-      if (variant.available > 0) return 'in-stock' as const;
-      await tx.execute(
-        sql`INSERT INTO restock_request (store_id, variant_id, email, product_name, variant_name, product_slug, source)
-            VALUES (${st.id}, ${variant.id}, ${email}, ${variant.product_name}, ${variant.variant_name}, ${variant.product_slug}, 'storefront')
-            ON CONFLICT DO NOTHING`,
-      );
+      type VariantRow = { id: string; variant_name: string; product_name: string; product_slug: string; available: number };
+      let variants: VariantRow[];
+      if (body.variantId) {
+        const v = await tx.execute(
+          sql`SELECT pv.id, pv.name AS variant_name, p.name AS product_name, p.slug AS product_slug,
+                     coalesce(stk.on_hand, 0) - coalesce(stk.allocated, 0) AS available
+              FROM product_variant pv
+              JOIN product p ON p.id = pv.product_id AND p.deleted_at IS NULL
+              LEFT JOIN stock stk ON stk.variant_id = pv.id
+              WHERE pv.id = ${body.variantId} AND pv.deleted_at IS NULL AND pv.enabled = true
+              LIMIT 1`,
+        );
+        variants = v.rows as VariantRow[];
+      } else {
+        // Product-level ("any variant") signup: every enabled, non-deleted
+        // variant of the product — DD's WaitlistForm renders this path when
+        // the shopper hasn't picked a specific variant.
+        const v = await tx.execute(
+          sql`SELECT pv.id, pv.name AS variant_name, p.name AS product_name, p.slug AS product_slug,
+                     coalesce(stk.on_hand, 0) - coalesce(stk.allocated, 0) AS available
+              FROM product_variant pv
+              JOIN product p ON p.id = pv.product_id AND p.deleted_at IS NULL
+              LEFT JOIN stock stk ON stk.variant_id = pv.id
+              WHERE p.id = ${body.productId} AND pv.deleted_at IS NULL AND pv.enabled = true`,
+        );
+        variants = v.rows as VariantRow[];
+      }
+      if (!variants.length) return 'not-found' as const;
+      const outOfStock = variants.filter((v) => v.available <= 0);
+      // Every variant already purchasable (or a single requested variant is
+      // in stock) → the request would just linger. No-op success.
+      if (!outOfStock.length) return 'in-stock' as const;
+      for (const variant of outOfStock) {
+        await tx.execute(
+          sql`INSERT INTO restock_request (store_id, variant_id, email, product_name, variant_name, product_slug, source)
+              VALUES (${st.id}, ${variant.id}, ${email}, ${variant.product_name}, ${variant.variant_name}, ${variant.product_slug}, 'storefront')
+              ON CONFLICT DO NOTHING`,
+        );
+      }
       return 'recorded' as const;
     });
 
-    if (result === 'not-found') return c.json({ error: 'variant not found' }, 404);
+    if (result === 'not-found') return c.json({ error: body.variantId ? 'variant not found' : 'product not found' }, 404);
     return c.json({ ok: true }, 200);
   },
 );
