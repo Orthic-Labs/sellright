@@ -5,21 +5,25 @@ import { CheckoutMobileCta } from './CheckoutCta';
 import { CheckoutOrderSummary } from './CheckoutOrderSummary';
 import { CheckoutPaymentPanel } from './CheckoutPaymentPanel';
 import type { ShopConfig } from '~/sellright/types/checkout';
-import type { CheckoutPhase } from '~/hooks/useCheckout';
+import type { CheckoutPhase, PaymentMethod } from '~/hooks/useCheckout';
 
 interface CheckoutPageViewProps {
   checkoutState: any;
   checkoutValidation: any;
   formattedTotal: Signal<string | null>;
+  gatewayConfirmTrigger: Signal<number>;
+  gatewayIdempotencyKey: Signal<string>;
   hasMixedPreOrder: { value: boolean };
   shopConfig: Signal<ShopConfig | null>;
   isCartEmpty: Signal<boolean>;
   isOrderProcessing: Signal<boolean>;
   localCart: any;
+  onGatewaySuccess$: QRL<() => void>;
   onPaymentError$: QRL<(message: string) => void>;
   onPaymentProcessingChange$: QRL<(processing: boolean) => void>;
   onPlaceOrder$: QRL<() => void>;
   pageLoading: Signal<boolean>;
+  paymentMethod: Signal<PaymentMethod>;
   promoExpanded: Signal<boolean>;
   redeemPoints: Signal<number>;
   shippingCents: Signal<number | null>;

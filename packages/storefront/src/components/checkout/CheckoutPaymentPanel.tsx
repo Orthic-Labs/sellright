@@ -1,19 +1,25 @@
 import { $, component$, type QRL, type Signal } from '@qwik.dev/core';
 import { CheckoutAddresses } from '~/components/checkout/CheckoutAddresses';
 import { StripePaymentElement } from '~/components/checkout/StripePaymentElement';
+import { NMI } from '~/components/payment/NMI';
+import { Sezzle } from '~/components/payment/Sezzle';
 import type { ShopConfig } from '~/sellright/types/checkout';
-import type { CheckoutPhase } from '~/hooks/useCheckout';
+import type { CheckoutPhase, PaymentMethod } from '~/hooks/useCheckout';
 import { CheckoutDesktopCta } from './CheckoutCta';
 
 interface CheckoutPaymentPanelProps {
 	checkoutState: any;
 	checkoutValidation: any;
 	formattedTotal: Signal<string | null>;
+	gatewayConfirmTrigger: Signal<number>;
+	gatewayIdempotencyKey: Signal<string>;
 	isOrderProcessing: Signal<boolean>;
+	onGatewaySuccess$: QRL<() => void>;
 	onPaymentError$: QRL<(message: string) => void>;
 	onPaymentProcessingChange$: QRL<(processing: boolean) => void>;
 	onPlaceOrder$: QRL<() => void>;
 	pageLoading: Signal<boolean>;
+	paymentMethod: Signal<PaymentMethod>;
 	shopConfig: Signal<ShopConfig | null>;
 	srState: { phase: CheckoutPhase; code: string; receiptToken: string; clientSecret: string };
 	state: { loading: boolean; error: string | null };
@@ -21,7 +27,27 @@ interface CheckoutPaymentPanelProps {
 	stripePublishableKey: Signal<string>;
 }
 
-export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props) => (
+/** The available-method list, derived from what `GET /v1/shop/config`
+ *  actually reports for this store — never hardcoded, never assumed. */
+function availableMethods(config: ShopConfig | null): PaymentMethod[] {
+	if (!config) return [];
+	const methods: PaymentMethod[] = [];
+	if (config.stripeConfigured) methods.push('stripe');
+	if (config.gateways?.nmi) methods.push('nmi');
+	if (config.gateways?.sezzle) methods.push('sezzle');
+	return methods;
+}
+
+const METHOD_LABEL: Record<PaymentMethod, string> = {
+	stripe: 'Card',
+	nmi: 'Card',
+	sezzle: 'Installments',
+};
+
+export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props) => {
+	const methods = availableMethods(props.shopConfig.value);
+	const locked = props.srState.phase === 'paying' || props.srState.phase === 'placing';
+	return (
 	<div class="checkout-right order-1 lg:order-2 mb-8 lg:mb-0 lg:basis-[58%]">
 		<div class="checkout-right-inner" style="padding:8px 20px 32px;">
 			<div style="display:flex;align-items:center;gap:0;margin-bottom:24px;padding:4px 0;">
@@ -98,40 +124,100 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 					}}
 				>
 					<div class="overflow-hidden">
-						<div id="stripe-payment-element-section" style="scroll-margin-top:16px;">
-							{props.srState.phase === 'paying' && props.stripePublishableKey.value && props.srState.clientSecret ? (
-								<>
-									<StripePaymentElement
-										publishableKey={props.stripePublishableKey.value}
-										clientSecret={props.srState.clientSecret}
-										returnUrl={`${typeof location !== 'undefined' ? location.origin : ''}/checkout/confirmation/${props.srState.code}${props.srState.receiptToken ? `?rt=${encodeURIComponent(props.srState.receiptToken)}` : ''}`}
-										confirmTrigger={props.stripeConfirmTrigger}
-										onError$={props.onPaymentError$}
-										onProcessingChange$={props.onPaymentProcessingChange$}
-									/>
-									<button
-										type="button"
-										onClick$={$(() => { if (!props.state.loading) props.stripeConfirmTrigger.value = props.stripeConfirmTrigger.value + 1; })}
-										disabled={props.state.loading}
-										class="checkout-cta"
-										style="margin-top:14px;"
-									>
-										{props.state.loading
-											? 'Processing...'
-											: (props.formattedTotal.value ? `PAY — ${props.formattedTotal.value}` : 'PAY')}
-									</button>
-								</>
-							) : props.srState.phase === 'paying' ? (
-								<div class="payment-placeholder text-red-600" style="padding:14px 0;" role="alert">
-									No payment method is configured for this store — please contact support.
-								</div>
-							) : (
-								<div class="payment-placeholder" style="padding:14px 0;">
-									{props.srState.phase === 'placing'
-										? 'Preparing secure payment...'
-										: 'Click PLACE ORDER to continue to secure card payment.'}
-								</div>
-							)}
+						<div id="payment-method-section" style="scroll-margin-top:16px;">
+							<>
+										{methods.length > 1 && (
+											<div role="radiogroup" aria-label="Payment method" class="flex gap-2" style="margin-bottom:14px;">
+												{methods.map((m) => (
+													<button
+														key={m}
+														type="button"
+														role="radio"
+														aria-checked={props.paymentMethod.value === m}
+														disabled={locked}
+														onClick$={$(() => { if (!locked) props.paymentMethod.value = m; })}
+														class="payment-method-option"
+														style={{
+															flex: '1', padding: '10px 12px', fontSize: '13px', borderRadius: '4px', cursor: locked ? 'default' : 'pointer',
+															border: props.paymentMethod.value === m ? '1px solid var(--color-accent)' : '1px solid rgba(100,85,65,0.2)',
+															background: props.paymentMethod.value === m ? 'rgba(var(--color-accent-rgb),0.06)' : 'transparent',
+														}}
+													>
+														{METHOD_LABEL[m]}
+													</button>
+												))}
+											</div>
+										)}
+										{props.srState.phase === 'paying' && props.paymentMethod.value === 'stripe' && props.stripePublishableKey.value && props.srState.clientSecret ? (
+											<>
+												<StripePaymentElement
+													publishableKey={props.stripePublishableKey.value}
+													clientSecret={props.srState.clientSecret}
+													returnUrl={`${typeof location !== 'undefined' ? location.origin : ''}/checkout/confirmation/${props.srState.code}${props.srState.receiptToken ? `?rt=${encodeURIComponent(props.srState.receiptToken)}` : ''}`}
+													confirmTrigger={props.stripeConfirmTrigger}
+													onError$={props.onPaymentError$}
+													onProcessingChange$={props.onPaymentProcessingChange$}
+												/>
+												<button
+													type="button"
+													onClick$={$(() => { if (!props.state.loading) props.stripeConfirmTrigger.value = props.stripeConfirmTrigger.value + 1; })}
+													disabled={props.state.loading}
+													class="checkout-cta"
+													style="margin-top:14px;"
+												>
+													{props.state.loading
+														? 'Processing...'
+														: (props.formattedTotal.value ? `PAY — ${props.formattedTotal.value}` : 'PAY')}
+												</button>
+											</>
+										) : props.srState.phase === 'paying' && props.paymentMethod.value === 'nmi' && props.shopConfig.value?.gateways?.nmi ? (
+											<>
+												<NMI
+													code={props.srState.code}
+													tokenizationKey={props.shopConfig.value.gateways.nmi.tokenizationKey}
+													mode={props.shopConfig.value.gateways.nmi.mode}
+													environment={props.shopConfig.value.gateways.nmi.environment}
+													idempotencyKey={props.gatewayIdempotencyKey.value}
+													receiptToken={props.srState.receiptToken || undefined}
+													confirmTrigger={props.gatewayConfirmTrigger}
+													onError$={props.onPaymentError$}
+													onProcessingChange$={props.onPaymentProcessingChange$}
+													onSuccess$={props.onGatewaySuccess$}
+												/>
+												<button
+													type="button"
+													onClick$={$(() => { if (!props.state.loading) props.gatewayConfirmTrigger.value = props.gatewayConfirmTrigger.value + 1; })}
+													disabled={props.state.loading}
+													class="checkout-cta"
+													style="margin-top:14px;"
+												>
+													{props.state.loading
+														? 'Processing...'
+														: (props.formattedTotal.value ? `PAY — ${props.formattedTotal.value}` : 'PAY')}
+												</button>
+											</>
+										) : props.srState.phase === 'paying' && props.paymentMethod.value === 'sezzle' ? (
+											<Sezzle
+												code={props.srState.code}
+												idempotencyKey={props.gatewayIdempotencyKey.value}
+												receiptToken={props.srState.receiptToken || undefined}
+												label={props.formattedTotal.value ? `Continue — ${props.formattedTotal.value}` : 'Continue'}
+												disabled={props.state.loading}
+												onError$={props.onPaymentError$}
+												onProcessingChange$={props.onPaymentProcessingChange$}
+											/>
+										) : props.srState.phase === 'paying' ? (
+											<div class="payment-placeholder text-red-600" style="padding:14px 0;" role="alert">
+												No payment method is configured for this store — please contact support.
+											</div>
+										) : (
+											<div class="payment-placeholder" style="padding:14px 0;">
+												{props.srState.phase === 'placing'
+													? 'Preparing secure payment...'
+													: 'Click PLACE ORDER to continue to secure payment.'}
+											</div>
+										)}
+									</>
 						</div>
 					</div>
 				</div>
@@ -159,4 +245,5 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 			<CheckoutDesktopCta {...props} />
 		</div>
 	</div>
-));
+	);
+});

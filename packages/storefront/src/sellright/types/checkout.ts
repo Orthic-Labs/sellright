@@ -33,6 +33,15 @@ export type PayResponse = PayOp['responses'][200]['content']['application/json']
 type PaymentIntentOp = paths['/v1/shop/orders/{code}/payment-intent']['post'];
 export type PaymentIntentResponse = PaymentIntentOp['responses'][200]['content']['application/json'];
 
+// ── POST /v1/shop/orders/{code}/gateway-payment — start an NMI/Sezzle attempt ─
+type GatewayPaymentOp = paths['/v1/shop/orders/{code}/gateway-payment']['post'];
+export type GatewayPaymentRequest = NonNullable<GatewayPaymentOp['requestBody']>['content']['application/json'];
+export type GatewayAttempt = GatewayPaymentOp['responses'][200]['content']['application/json'];
+
+// ── POST /v1/shop/orders/{code}/gateway-payment/{attempt}/verify — reconcile ─
+type GatewayVerifyOp = paths['/v1/shop/orders/{code}/gateway-payment/{attempt}/verify']['post'];
+export type GatewayVerifyResult = GatewayVerifyOp['responses'][200]['content']['application/json'];
+
 // ── GET /v1/shop/orders/{code} — receipt-token-scoped order read ───────────
 type OrderOp = paths['/v1/shop/orders/{code}']['get'];
 export type OrderSummary = OrderOp['responses'][200]['content']['application/json'];

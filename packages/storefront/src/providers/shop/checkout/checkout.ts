@@ -16,6 +16,8 @@ import type {
 	CheckoutConflictBody,
 	PayResponse,
 	PaymentIntentResponse,
+	GatewayAttempt,
+	GatewayVerifyResult,
 	OrderSummary,
 	ShopConfig,
 	ShopShippingMethod,
@@ -129,6 +131,54 @@ export const createPaymentIntent = async (code: string): Promise<PaymentIntentRe
 		params: { path: { code } },
 	});
 	return data as PaymentIntentResponse;
+};
+
+/**
+ * Start a gateway (NMI/Sezzle) payment attempt for a PendingPayment order.
+ * NMI: `token` is the Collect.js `payment_token` (never a raw card field) —
+ * the API charges synchronously and the returned `status`/`state` reflect
+ * the immediate result. Sezzle: no `token` — the response carries
+ * `checkoutUrl`, which the caller redirects the browser to; the shopper
+ * returns to `/checkout/confirmation/{code}` with a `paymentAttempt` query
+ * param (see `verifyGatewayPayment` below).
+ *
+ * One idempotency key per attempt — a caller retrying the SAME attempt
+ * (e.g. a flaky network) must reuse the same key so the API replays the
+ * existing attempt instead of starting a second one against the gateway.
+ */
+export const startGatewayPayment = async (
+	code: string,
+	method: 'nmi' | 'sezzle',
+	opts: { token?: string; idempotencyKey: string; receiptToken?: string },
+): Promise<GatewayAttempt> => {
+	const { data } = await sellright().POST('/v1/shop/orders/{code}/gateway-payment', {
+		params: {
+			path: { code },
+			header: { ...idempotency(opts.idempotencyKey), ...(opts.receiptToken ? { 'x-receipt-token': opts.receiptToken } : {}) },
+		},
+		body: { method, ...(opts.token ? { token: opts.token } : {}) },
+	});
+	return data as GatewayAttempt;
+};
+
+/**
+ * Reconcile a gateway payment attempt with the provider — called right after
+ * an NMI charge to confirm its final status, and on the shopper's return
+ * from Sezzle's hosted checkout (the `paymentAttempt` query param on the
+ * confirmation route names the attempt to verify).
+ */
+export const verifyGatewayPayment = async (
+	code: string,
+	attemptId: string,
+	receiptToken?: string,
+): Promise<GatewayVerifyResult> => {
+	const { data } = await sellright().POST('/v1/shop/orders/{code}/gateway-payment/{attempt}/verify', {
+		params: {
+			path: { code, attempt: attemptId },
+			header: receiptToken ? { 'x-receipt-token': receiptToken } : {},
+		},
+	});
+	return data as GatewayVerifyResult;
 };
 
 /**

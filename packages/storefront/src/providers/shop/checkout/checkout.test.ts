@@ -20,7 +20,7 @@ vi.mock('~/services/CartService', () => ({
 	},
 }));
 
-import { placeOrder, settleZeroDueOrder, getOrder, createPaymentIntent } from './checkout';
+import { placeOrder, settleZeroDueOrder, getOrder, createPaymentIntent, startGatewayPayment, verifyGatewayPayment } from './checkout';
 
 // `sellright()` (openapi-fetch + the transport middleware in
 // src/sellright/client.ts) invokes the platform `fetch` as `fetch(request)`
@@ -196,5 +196,35 @@ describe('createPaymentIntent → POST /v1/shop/orders/{code}/payment-intent', (
 		const res = await createPaymentIntent('O1');
 		expect(calls[0].url).toContain('/v1/shop/orders/O1/payment-intent');
 		expect(res.clientSecret).toBe('pi_secret_123');
+	});
+});
+
+describe('startGatewayPayment → POST /v1/shop/orders/{code}/gateway-payment', () => {
+	it('nmi: sends the Collect.js token + Idempotency-Key header, no x-receipt-token when omitted', async () => {
+		enqueue(respond(200, { attemptId: '11111111-1111-1111-1111-111111111111', status: 'settled' }));
+		const res = await startGatewayPayment('O1', 'nmi', { token: 'tok_collectjs', idempotencyKey: 'idem-1' });
+		expect(calls[0].url).toContain('/v1/shop/orders/O1/gateway-payment');
+		expect(calls[0].body).toEqual({ method: 'nmi', token: 'tok_collectjs' });
+		expect(calls[0].headers.get('idempotency-key')).toBe('idem-1');
+		expect(calls[0].headers.has('x-receipt-token')).toBe(false);
+		expect(res.status).toBe('settled');
+	});
+
+	it('sezzle: sends no token, returns the hosted checkoutUrl, forwards x-receipt-token when given', async () => {
+		enqueue(respond(200, { attemptId: '22222222-2222-2222-2222-222222222222', status: 'pending', checkoutUrl: 'https://pay.example/session/abc' }));
+		const res = await startGatewayPayment('O1', 'sezzle', { idempotencyKey: 'idem-2', receiptToken: 'rt_1' });
+		expect(calls[0].body).toEqual({ method: 'sezzle' });
+		expect(calls[0].headers.get('x-receipt-token')).toBe('rt_1');
+		expect(res.checkoutUrl).toBe('https://pay.example/session/abc');
+	});
+});
+
+describe('verifyGatewayPayment → POST /v1/shop/orders/{code}/gateway-payment/{attempt}/verify', () => {
+	it('reconciles a Sezzle return by attempt id, forwarding the receipt token', async () => {
+		enqueue(respond(200, { attemptId: '22222222-2222-2222-2222-222222222222', status: 'settled' }));
+		const res = await verifyGatewayPayment('O1', '22222222-2222-2222-2222-222222222222', 'rt_1');
+		expect(calls[0].url).toContain('/v1/shop/orders/O1/gateway-payment/22222222-2222-2222-2222-222222222222/verify');
+		expect(calls[0].headers.get('x-receipt-token')).toBe('rt_1');
+		expect(res.status).toBe('settled');
 	});
 });

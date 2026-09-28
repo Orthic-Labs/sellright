@@ -1,7 +1,7 @@
 import { component$, useContext, useStore, useVisibleTask$ } from '@qwik.dev/core';
 import { Link, useLocation } from '@qwik.dev/router';
 import { CartContextId, clearCart } from '~/contexts/CartContext';
-import { getOrder } from '~/providers/shop/checkout/checkout';
+import { getOrder, verifyGatewayPayment } from '~/providers/shop/checkout/checkout';
 import type { OrderSummary, OrderAddressSnapshot } from '~/sellright/types/checkout';
 import { formatPrice } from '~/utils';
 import { OptimizedImage } from '~/components/ui';
@@ -36,6 +36,22 @@ const ConfirmationPage = component$(() => {
 			// Receipt-token scoped read (or authed owner). The token is carried as
 			// ?rt= from the placing session + the Stripe return_url.
 			const rt = loc.url.searchParams.get('rt') || undefined;
+
+			// Sezzle's hosted checkout redirects back here with `paymentAttempt`
+			// (see packages/api/src/payments/session-input.ts's completeUrl) —
+			// reconcile it before reading the order so its own webhook lag
+			// doesn't leave the shopper looking at a stale PendingPayment state
+			// any longer than necessary. A failed/late reconcile here isn't
+			// fatal — the polling loop below still catches a webhook that lands
+			// a moment later.
+			const paymentAttempt = loc.url.searchParams.get('paymentAttempt') || undefined;
+			if (paymentAttempt) {
+				try {
+					await verifyGatewayPayment(code, paymentAttempt, rt);
+				} catch (error) {
+					console.warn('[Confirmation] gateway verify failed (will still poll the order):', error);
+				}
+			}
 
 			// Tolerate webhook lag: Stripe redirects here the instant the shopper
 			// returns, but the webhook that flips the order to Paid may land a

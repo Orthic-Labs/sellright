@@ -13,7 +13,7 @@ import { createSEOHead } from '~/utils/seo';
 import { useCart, refreshCartStock, loadCartIfNeeded, useHasMixedPreOrder } from '~/contexts/CartContext';
 import { CartService } from '~/services/CartService';
 import { CheckoutValidationProvider, useCheckoutValidation, useCheckoutValidationActions } from '~/contexts/CheckoutValidationContext';
-import { useCheckout } from '~/hooks/useCheckout';
+import { useCheckout, type PaymentMethod } from '~/hooks/useCheckout';
 import { getShopConfig, getEligibleShippingMethods } from '~/providers/shop/checkout/checkout';
 import type { ShopConfig, ShopShippingMethod } from '~/sellright/types/checkout';
 import { validateBillingSection, validateCustomerSection, validateShippingSection } from '~/utils/checkout-section-validation';
@@ -43,6 +43,16 @@ const CheckoutContent = component$(() => {
 
   const stripePublishableKey = useSignal<string>('');
   const stripeConfirmTrigger = useSignal(0);
+  // Which payment method the shopper has selected — defaults once shopConfig
+  // resolves (see the useTask$ below): stripe > nmi > sezzle, whichever the
+  // store actually has configured. gatewayConfirmTrigger is the NMI
+  // equivalent of stripeConfirmTrigger; gatewayIdempotencyKey is minted once
+  // per placeOrder() attempt and reused by the NMI/Sezzle components so a
+  // retried gateway call (not a retried checkout) replays instead of
+  // double-charging.
+  const paymentMethod = useSignal<PaymentMethod>('stripe');
+  const gatewayConfirmTrigger = useSignal(0);
+  const gatewayIdempotencyKey = useSignal('');
   const pageLoading = useSignal(true);
   const promoExpanded = useSignal(false);
   // Loyalty points to spend on this order (0 = none) — set by LoyaltyRedeem,
@@ -136,6 +146,12 @@ const CheckoutContent = component$(() => {
           .then((cfg) => {
             shopConfig.value = cfg;
             if (cfg.stripePublishableKey) stripePublishableKey.value = cfg.stripePublishableKey;
+            // Default selection: prefer whichever method the store actually
+            // has configured, in this priority order. The shopper can still
+            // switch via the method selector when more than one is available.
+            if (cfg.stripeConfigured) paymentMethod.value = 'stripe';
+            else if (cfg.gateways?.nmi) paymentMethod.value = 'nmi';
+            else if (cfg.gateways?.sezzle) paymentMethod.value = 'sezzle';
           })
           .catch((e) => console.warn('[Checkout] shop-config fetch failed:', e));
 
@@ -325,7 +341,8 @@ const CheckoutContent = component$(() => {
         couponCode: localCart.cart.coupon?.applied ? localCart.cart.coupon.code : undefined,
         redeemPoints: redeemPoints.value > 0 ? redeemPoints.value : undefined,
       };
-      const phase = await placeOrderNative(form);
+      gatewayIdempotencyKey.value = crypto.randomUUID();
+      const phase = await placeOrderNative(form, paymentMethod.value);
       if (phase === 'paid') {
         showProcessingModal.value = false;
         isOrderProcessing.value = false;
@@ -338,7 +355,7 @@ const CheckoutContent = component$(() => {
         isOrderProcessing.value = false;
         state.error = null;
         setTimeout(() => {
-          document.getElementById('stripe-payment-element-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          document.getElementById('payment-method-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }, 80);
         return;
       }
@@ -365,6 +382,14 @@ const CheckoutContent = component$(() => {
     isOrderProcessing.value = isProcessing;
   });
 
+  // NMI charges synchronously (no redirect) — on a settled attempt, navigate
+  // straight to confirmation the same way the zero-due 'paid' phase does.
+  const onGatewaySuccess$ = $(async () => {
+    isOrderProcessing.value = false;
+    const rt = srState.receiptToken ? `?rt=${encodeURIComponent(srState.receiptToken)}` : '';
+    navigate(`/checkout/confirmation/${srState.code}${rt}`);
+  });
+
   return (
     <CheckoutPageView
       checkoutState={checkoutState}
@@ -374,10 +399,14 @@ const CheckoutContent = component$(() => {
       isCartEmpty={isCartEmpty}
       isOrderProcessing={isOrderProcessing}
       localCart={localCart}
+      gatewayConfirmTrigger={gatewayConfirmTrigger}
+      gatewayIdempotencyKey={gatewayIdempotencyKey}
+      onGatewaySuccess$={onGatewaySuccess$}
       onPaymentError$={onPaymentError$}
       onPaymentProcessingChange$={onPaymentProcessingChange$}
       onPlaceOrder$={placeOrder}
       pageLoading={pageLoading}
+      paymentMethod={paymentMethod}
       promoExpanded={promoExpanded}
       redeemPoints={redeemPoints}
       shippingCents={shippingCents}
