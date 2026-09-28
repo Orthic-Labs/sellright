@@ -43,7 +43,7 @@ const selectPrice = (v: { price: number; salePrice: number | null; isPreOrder: b
 // price as an explicit `{ amount, currency, taxInclusive }` (no more a bare
 // int that LOOKS tax-inclusive-flavored but isn't), compareAt/sale/preorder
 // as their own native fields instead of a Vendure-flavored `customFields`
-// grab-bag, images as `{ url, alt, order }[]`, and `inStock` as the ONLY
+// grab-bag, images as `{ url, alt, position }[]`, and `inStock` as the ONLY
 // availability signal — never a raw stock number (the zero-cache-stock rule
 // applies here exactly as everywhere else: this manifest is regenerated on
 // every StockMovementEvent with no debounce, and a client must re-check live
@@ -63,7 +63,7 @@ export interface NativeMoney {
 export interface NativeImage {
   url: string;
   alt: string | null;
-  order: number;
+  position: number;
 }
 
 export interface NativeVariantV2 {
@@ -192,9 +192,9 @@ async function buildEntries(tx: Tx, store: StoreCtx, priceRule: VariantPriceRule
 
     // ── v2 (native) — same data, native shapes; see the file-level note above. ──
     const productImages: NativeImage[] = (assetsByProduct.get(p.id) ?? [])
-      .map((a, i): NativeImage | null => { const url = assetUrl(a.path); return url ? { url, alt: null, order: i } : null; })
+      .map((a, i): NativeImage | null => { const url = assetUrl(a.path); return url ? { url, alt: null, position: i } : null; })
       .filter((x): x is NativeImage => x !== null);
-    const manifestImages: NativeImage[] = featured ? [{ url: featured, alt: null, order: 0 }] : [];
+    const manifestImages: NativeImage[] = featured ? [{ url: featured, alt: null, position: 0 }] : [];
     const variantsV2: NativeVariantV2[] = vs.map((v) => {
       const effective = selectPrice(v, priceRule);
       return {
