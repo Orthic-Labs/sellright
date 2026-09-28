@@ -1,364 +1,240 @@
 /**
- * Product/search provider — rewired from Vendure GraphQL to the SellRight REST
- * shop API (strangler, pass 1). Exported signatures are unchanged so consumers
- * (PDP, shop grid, search route, cart stock refresh) need no edits; the response
- * shapes are normalised to the Vendure-ish shapes via sellright-adapters.
- */
-import { SearchInput } from '~/generated/graphql-shop';
-import {
-  srSearch,
-  srProductBySlug,
-  srProductStock,
-} from '~/utils/sellright';
-import {
-  adaptSearch,
-  adaptProduct,
-  applyStock,
-  adaptStockOnly,
-} from '~/utils/sellright-adapters';
-
-/**
- * Core search. Accepts the legacy SearchInput shape; only term / collectionSlug /
- * skip / take / inStock are honoured (SellRight search has no facet filtering).
+ * Product/search provider for the catalog area (shop grid, search, PDP,
+ * collections). Talks to the SellRight API exclusively through
+ * `~/sellright/catalog` (native types, built on `~/sellright/client`) — never
+ * through `~/utils/sellright` or `~/utils/sellright-adapters`.
  *
- * Return type is `any` to match the legacy GraphQL provider, whose result was
- * assigned to the route's `SearchResponse`-typed state. The runtime shape (a
- * SearchResponse subset: items/totalItems/facetValues/collections/itemCustomFields)
- * is produced by adaptSearch.
+ * Two kinds of exports live here:
+ *  - NATIVE (getProductDetail, getProductStock, listProducts, searchProducts):
+ *    used by this conversion's own owned call sites (shop, search,
+ *    collections, PDP). Zero Vendure shapes — slug/sku identity, flat
+ *    price/salePrice/preOrderPrice/isPreOrder fields, boolean stock.
+ *  - LEGACY (search, searchQueryWithTerm, getProductBySlug,
+ *    getProductStockLevelsOnly): kept byte-for-byte shape-compatible with
+ *    their previous (Vendure-ish) output because out-of-scope consumers this
+ *    task must not edit still depend on that exact shape — the homepage
+ *    (routes/index.tsx), routes/api/validate-cart, and
+ *    services/local-cart-stock.ts + components/cart-contents/CartContents.tsx
+ *    (cart/checkout, explicitly off-limits here). They're reimplemented
+ *    against the native client below instead of importing the banned
+ *    strangler-seam modules; only their *output shape* is legacy.
  */
-export const search = async (searchInput: SearchInput): Promise<any> => {
-  const res = await srSearch({
+import { fetchProductDetail, fetchProductDetailWithStock, fetchProductStock, fetchProductList, searchCatalog } from '~/sellright/catalog';
+import { effectiveVariantPrice, type CatalogListResponse, type CatalogProduct, type CatalogStockResponse } from '~/sellright/types/catalog';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Native — used by this conversion's own routes/components
+// ─────────────────────────────────────────────────────────────────────────────
+
+export { fetchProductStock as getProductStock };
+
+/** Product detail shell, fail-closed stock (LOCKED rule: never block a
+ *  routeLoader$ on a stock query) — the manifest-miss fallback path for the
+ *  PDP. The client hydrates real availability afterwards via `getProductStock`. */
+export async function getProductDetail(slug: string): Promise<CatalogProduct | null> {
+  return fetchProductDetail(slug);
+}
+
+/** Plain paginated product list (no search term). */
+export async function listProducts(params: { limit?: number; offset?: number; collectionSlug?: string } = {}): Promise<CatalogListResponse> {
+  return fetchProductList(params);
+}
+
+/** Native search — term/collection/in-stock filtered. SellRight has no facet
+ *  filtering; callers that need it fall back to client-side tag filtering
+ *  against `CatalogListItem.tags`. */
+export async function searchProducts(params: {
+  term?: string;
+  collectionSlug?: string;
+  take?: number;
+  skip?: number;
+  inStock?: boolean;
+} = {}): Promise<CatalogListResponse> {
+  return searchCatalog(params);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Legacy compatibility shims — DO NOT change these output shapes without
+// updating every out-of-scope consumer listed in the file header first.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const LEGACY_IN_STOCK = '999';
+const LEGACY_OUT_OF_STOCK = '0';
+
+/** Minimal local stand-in for the legacy Vendure `SearchInput` GraphQL type —
+ *  only the fields the old provider ever read. Avoids importing generated
+ *  Vendure types into this file; callers pass plain object literals either way. */
+interface LegacySearchInput {
+  term?: string | null;
+  collectionSlug?: string | null;
+  skip?: number | null;
+  take?: number | null;
+  inStock?: boolean | null;
+}
+
+interface LegacySearchItem {
+  productId: string;
+  productName: string;
+  slug: string;
+  productVariantId: string;
+  productAsset: { id: string; preview: string } | null;
+  priceWithTax: { min: number; max: number };
+  inStock: boolean;
+  currencyCode: string;
+  facetValues: { name: string }[];
+}
+
+interface LegacySearchResponse {
+  totalItems: number;
+  items: LegacySearchItem[];
+  facetValues: never[];
+  collections: never[];
+  itemCustomFields: { productVariantId: string; salePrice: number | null; preOrderPrice: number | null; isPreOrder: boolean; shipDate: string | null }[];
+}
+
+function toLegacySearchResponse(res: CatalogListResponse): LegacySearchResponse {
+  return {
+    totalItems: res.total,
+    items: res.items.map((p) => ({
+      productId: p.slug,
+      productName: p.name,
+      slug: p.slug,
+      productVariantId: p.pricingVariant?.sku ?? p.slug,
+      productAsset: p.image ? { id: p.slug, preview: p.image } : null,
+      priceWithTax: { min: p.pricingVariant?.price ?? p.minPrice ?? 0, max: p.pricingVariant?.price ?? p.minPrice ?? 0 },
+      inStock: p.inStock === true,
+      currencyCode: 'USD',
+      facetValues: (p.tags ?? []).map((name) => ({ name })),
+    })),
+    facetValues: [],
+    collections: [],
+    itemCustomFields: res.items.flatMap((p) =>
+      p.pricingVariant
+        ? [{ productVariantId: p.pricingVariant.sku, salePrice: p.pricingVariant.salePrice, preOrderPrice: p.pricingVariant.preOrderPrice, isPreOrder: p.pricingVariant.isPreOrder, shipDate: p.pricingVariant.shipDate }]
+        : [],
+    ),
+  };
+}
+
+/** Legacy search — kept for the homepage's `search({ take: 4 })` call. */
+export const search = async (searchInput: LegacySearchInput): Promise<LegacySearchResponse> => {
+  const res = await searchCatalog({
     term: searchInput.term ?? undefined,
     collectionSlug: searchInput.collectionSlug ?? undefined,
     skip: searchInput.skip ?? undefined,
     take: searchInput.take ?? undefined,
     inStock: searchInput.inStock ?? undefined,
   });
-  return adaptSearch(res);
+  return toLegacySearchResponse(res);
 };
 
-export const searchQueryWithCollectionSlug = async (collectionSlug: string) =>
-  search({ collectionSlug });
-
+/** Legacy search-by-term — kept for `routes/search` callers still on the old
+ *  contract during this rollout, and for `routes/index.tsx` (homepage). The
+ *  `_facetValueIds` param was already unused server-side (SellRight has no
+ *  facet filtering) prior to this conversion. */
 export const searchQueryWithTerm = async (
   collectionSlug: string,
   term: string,
   _facetValueIds: string[],
-  skip: number = 0,
-  take: number = 10,
-  inStock: boolean | undefined = undefined
+  skip = 0,
+  take = 10,
+  inStock: boolean | undefined = undefined,
 ) => search({ collectionSlug, term, skip, take, inStock });
 
-export const searchOptimized = async (searchInput: SearchInput) => search(searchInput);
+interface LegacyVariant {
+  id: string;
+  name: string;
+  sku: string;
+  price: number;
+  priceWithTax: number;
+  currencyCode: string;
+  stockLevel: string;
+  options: { id: string; code: string; name: string; group: { id: string; code: string; name: string }; groupId: string }[];
+  assets: { id: string; preview: string }[];
+  featuredAsset: { id: string; preview: string } | null;
+  customFields: { salePrice: number | null; preOrderPrice: number | null; isPreOrder: boolean; shipDate: string | null };
+}
 
-// Fetch only product IDs (slugs are the stable id under SellRight)
-export const searchProductIds = async (searchInput: SearchInput) => {
-  const res = await search(searchInput);
-  return res.items.map((item: any) => item.productId);
-};
+interface LegacyProduct {
+  id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  seoTitle: string | null;
+  seoDescription: string | null;
+  featuredAsset: { id: string; preview: string } | null;
+  assets: { id: string; preview: string }[];
+  variants: LegacyVariant[];
+  facetValues: { id: string; name: string; code: string; facet: { id: string; name: string; code: string } }[];
+  customFields: Record<string, never>;
+  hasVariantAssets: boolean;
+}
 
-// Fetch specific products by IDs
-export const getSpecificProducts = async (searchInput: SearchInput) => {
-  const res = await search(searchInput);
-  return res.items;
-};
+function toLegacyProduct(detail: CatalogProduct): LegacyProduct {
+  const featuredAsset = detail.images[0] ? { id: `${detail.slug}-0`, preview: detail.images[0] } : null;
+  const assets = detail.images.map((preview, i) => ({ id: `${detail.slug}-${i}`, preview }));
+  return {
+    id: detail.slug,
+    name: detail.name,
+    slug: detail.slug,
+    description: detail.description,
+    seoTitle: detail.seoTitle,
+    seoDescription: detail.seoDescription,
+    featuredAsset,
+    assets,
+    variants: detail.variants.map((v) => ({
+      id: v.sku,
+      name: v.name,
+      sku: v.sku,
+      price: v.price,
+      priceWithTax: effectiveVariantPrice(v),
+      currencyCode: detail.currency,
+      // LOCKED stock rule: fail closed. `getProductDetail`/`fetchProductDetailWithStock`
+      // already merges live per-SKU stock (or leaves it fail-closed on error) — this
+      // reads that merged boolean, never the variant's `enabled` flag as a stock proxy.
+      stockLevel: v.inStock ? LEGACY_IN_STOCK : LEGACY_OUT_OF_STOCK,
+      options: v.options.map((option) => ({ ...option, groupId: option.group.id })),
+      assets: [],
+      featuredAsset,
+      customFields: {
+        salePrice: v.salePrice,
+        preOrderPrice: v.preOrderPrice ?? null,
+        isPreOrder: v.isPreOrder,
+        shipDate: v.shipDate ?? null,
+      },
+    })),
+    facetValues: (detail.tags ?? []).map((name) => ({ id: name, name, code: name, facet: { id: 'tags', name: 'Tags', code: 'tags' } })),
+    customFields: {},
+    hasVariantAssets: false,
+  };
+}
 
-// Optimized search with caching (cache layer unchanged; backend is now REST)
-export const optimizedSearch = async (searchInput: SearchInput) => {
-  const { ProductCacheService, productCache } = await import('~/services/ProductCacheService');
-
-  const cachedResult = productCache.get('products:search:all');
-  if (cachedResult) {
-    const cachedProducts = Object.values((cachedResult as any).products || {});
-    if (cachedProducts.length > 0) {
-      return {
-        totalItems: cachedProducts.length,
-        items: cachedProducts.map((product: any) => ({
-          productId: (product as any).productId,
-          productName: (product as any).productName,
-          slug: (product as any).slug,
-          currencyCode: 'USD' as any,
-          inStock: (product as any).inStock,
-          productAsset: (product as any).productAsset,
-          priceWithTax: (product as any).priceWithTax as any,
-        })),
-      };
-    }
-  }
-
-  const result = await search(searchInput);
-
-  const cachedProducts = result.items.map((item: any) => ({
-    productId: item.productId,
-    productName: item.productName,
-    slug: item.slug,
-    productAsset: item.productAsset
-      ? { id: item.productAsset.id, preview: item.productAsset.preview }
-      : null,
-    inStock: item.inStock,
-    priceWithTax: {
-      min: item.priceWithTax.min,
-      max: item.priceWithTax.max,
-      value: undefined,
-    },
-    lastUpdated: Date.now(),
-  }));
-
-  ProductCacheService.saveProductsToCache(cachedProducts);
-
-  return result;
-};
-
-// Return type is intentionally `any` to match the legacy GraphQL provider
-// contract that consumers (the 1900-line PDP) were written against — they read
-// loose Vendure-ish fields. The adapter still produces the correct runtime shape.
-export const getProductBySlug = async (slug: string): Promise<any> => {
+/** Legacy product-by-slug — kept for routes/index.tsx (homepage),
+ *  routes/api/validate-cart, and components/cart-contents/CartContents.tsx.
+ *  Returns `null` on not-found (404) or any other transport error, exactly
+ *  as the pre-conversion provider did, so those loaders' existing fail(404)
+ *  handling needs no changes. */
+export const getProductBySlug = async (slug: string): Promise<LegacyProduct | null> => {
   try {
-    const [detail, stock] = await Promise.all([
-      srProductBySlug(slug),
-      srProductStock(slug).catch(() => null),
-    ]);
-    const product = adaptProduct(detail);
-    return stock ? applyStock(product, stock) : product;
+    const detail = await fetchProductDetailWithStock(slug);
+    return detail ? toLegacyProduct(detail) : null;
   } catch (error) {
-    // 404 (and other transport errors) surface as null so the loader can fail(404)
     console.error('Failed to fetch product:', slug, error);
     return null;
   }
 };
 
-// SellRight catalog is keyed by slug; products are not addressable by numeric id.
-export const getProductById = async (_id: string): Promise<any> => {
-  console.warn('getProductById is not supported by the SellRight catalog (slug-keyed)');
-  return null;
-};
-
-// Fetch variant stock data only (slug)
-export const getProductVariantsBySlug = async (slug: string): Promise<any> => {
-  try {
-    const product = await getProductBySlug(slug);
-    if (product) return { id: product.id, variants: product.variants };
-    return null;
-  } catch (error) {
-    console.error('Failed to fetch product variants:', error);
-    throw error;
-  }
-};
-
-// id form unsupported under SellRight (slug-keyed)
-export const getProductVariantsById = async (_id: string) => {
-  console.warn('getProductVariantsById is not supported by the SellRight catalog (slug-keyed)');
-  return null;
-};
-
-// Cache-aware product loader with robust fallback mechanisms (cache layer unchanged)
-export const getProductBySlugWithCachedVariants = async (slug: string): Promise<any> => {
-  const { ProductCacheService } = await import('~/services/ProductCacheService');
-
-  try {
-    if (ProductCacheService.shouldUseStaleCache()) {
-      const cache = ProductCacheService.getCachedProducts();
-      if (cache) {
-        const cachedProduct: any = Object.values((cache as any).products || {}).find(
-          (p: any) => (p as any).slug === slug,
-        );
-        if (cachedProduct) {
-          return {
-            source: 'stale-cache',
-            product: {
-              id: (cachedProduct as any).productId,
-              name: (cachedProduct as any).productName,
-              slug: (cachedProduct as any).slug,
-              description: (cachedProduct as any).description,
-              featuredAsset: (cachedProduct as any).productAsset || undefined,
-              productAsset: (cachedProduct as any).productAsset,
-              assets: (cachedProduct as any).assets,
-              facetValues: (cachedProduct as any).facetValues,
-              variants: (cachedProduct as any).variants,
-            },
-            warning: 'Using cached data due to network issues',
-          };
-        }
-      }
-    }
-
-    const cache: any = ProductCacheService.getCachedProducts();
-    let cachedProduct: any = null;
-
-    if (cache) {
-      cachedProduct = Object.values((cache as any).products || {}).find(
-        (p: any) => (p as any).slug === slug,
-      ) as any;
-      if (cachedProduct && (!cachedProduct.assets || (cachedProduct.assets as any[]).length === 0)) {
-        try {
-          const fresh = await getProductBySlug(slug);
-          if (fresh?.assets?.length) {
-            cachedProduct.assets = fresh.assets;
-            if (!cachedProduct.productAsset && fresh.featuredAsset) {
-              cachedProduct.productAsset = { id: fresh.featuredAsset.id, preview: fresh.featuredAsset.preview };
-            }
-          }
-        } catch (_e) {
-          // ignore asset hydration failures and continue with cached data
-        }
-      }
-    }
-
-    if (cachedProduct && ProductCacheService.isVariantDataFresh((cachedProduct as any).productId)) {
-      return {
-        source: 'cache',
-        product: {
-          id: (cachedProduct as any).productId,
-          name: (cachedProduct as any).productName,
-          slug: (cachedProduct as any).slug,
-          description: (cachedProduct as any).description,
-          featuredAsset: (cachedProduct as any).productAsset || undefined,
-          productAsset: (cachedProduct as any).productAsset,
-          assets: (cachedProduct as any).assets,
-          facetValues: (cachedProduct as any).facetValues,
-          variants: (cachedProduct as any).variants,
-        },
-      };
-    }
-
-    if (cachedProduct) {
-      try {
-        const variantResult = await getProductVariantsBySlug(slug);
-        if (variantResult && variantResult.variants) {
-          ProductCacheService.updateProductCacheWithVariants(
-            (cachedProduct as any).productId,
-            variantResult.variants as any,
-          );
-
-          return {
-            source: 'hybrid',
-            product: {
-              id: (cachedProduct as any).productId,
-              name: (cachedProduct as any).productName,
-              slug: (cachedProduct as any).slug,
-              description: (cachedProduct as any).description,
-              featuredAsset: (cachedProduct as any).productAsset || undefined,
-              productAsset: (cachedProduct as any).productAsset,
-              assets: (cachedProduct as any).assets,
-              facetValues: (cachedProduct as any).facetValues,
-              variants: variantResult.variants,
-            },
-          };
-        }
-      } catch (variantError) {
-        console.warn('Failed to fetch variant data, falling back to full product query:', variantError);
-
-        if (ProductCacheService.isNetworkFailure(variantError)) {
-          ProductCacheService.recordNetworkFailure(variantError);
-          return {
-            source: 'stale-cache',
-            product: {
-              id: (cachedProduct as any).productId,
-              name: (cachedProduct as any).productName,
-              slug: (cachedProduct as any).slug,
-              description: (cachedProduct as any).description,
-              featuredAsset: (cachedProduct as any).productAsset || undefined,
-              productAsset: (cachedProduct as any).productAsset,
-              assets: (cachedProduct as any).assets,
-              facetValues: (cachedProduct as any).facetValues,
-              variants: (cachedProduct as any).variants,
-            },
-            warning: 'Using cached data due to network error',
-          };
-        }
-      }
-    }
-
-    // Fallback to full product query
-    try {
-      const result = await getProductBySlug(slug);
-      if (result) {
-        if (result.variants) {
-          ProductCacheService.updateProductCacheWithVariants(result.id, result.variants as any);
-        }
-        return { source: 'network', product: result };
-      }
-    } catch (networkError) {
-      console.error('Network request failed:', networkError);
-      if (ProductCacheService.isNetworkFailure(networkError)) {
-        ProductCacheService.recordNetworkFailure(networkError);
-        if (cachedProduct) {
-          console.warn('Returning stale cached data due to network failure');
-          return {
-            source: 'stale-cache',
-            product: {
-              id: (cachedProduct as any).productId,
-              name: (cachedProduct as any).productName,
-              slug: (cachedProduct as any).slug,
-              description: (cachedProduct as any).description,
-              productAsset: (cachedProduct as any).productAsset,
-              assets: (cachedProduct as any).assets,
-              facetValues: (cachedProduct as any).facetValues,
-              variants: (cachedProduct as any).variants || [],
-            },
-            warning: 'Using cached data due to network error',
-          };
-        }
-      }
-      throw networkError;
-    }
-
-    return null;
-  } catch (error) {
-    console.error('Failed to load product with cached variants:', error);
-
-    if (ProductCacheService.detectCorruption(error)) {
-      ProductCacheService.recordCorruption(error);
-    }
-
-    const cache = ProductCacheService.getCachedProducts();
-    if (cache) {
-      const cachedProduct: any = Object.values((cache as any).products || {}).find(
-        (p: any) => (p as any).slug === slug,
-      );
-      if (cachedProduct) {
-        return {
-          source: 'stale-cache',
-          product: {
-            id: (cachedProduct as any).productId,
-            name: (cachedProduct as any).productName,
-            slug: (cachedProduct as any).slug,
-            description: (cachedProduct as any).description,
-            featuredAsset: (cachedProduct as any).productAsset || undefined,
-            productAsset: (cachedProduct as any).productAsset,
-            assets: (cachedProduct as any).assets,
-            facetValues: (cachedProduct as any).facetValues,
-            variants: (cachedProduct as any).variants,
-          },
-          warning: 'Showing cached data due to system error',
-        };
-      }
-    }
-
-    try {
-      const result = await getProductBySlug(slug);
-      return {
-        source: 'fallback',
-        product: result,
-        warning: 'Data may be outdated due to previous errors',
-      };
-    } catch (fallbackError) {
-      console.error('All fallbacks failed:', fallbackError);
-      if (ProductCacheService.isNetworkFailure(fallbackError)) {
-        ProductCacheService.recordNetworkFailure(fallbackError);
-      }
-      return { source: 'error', product: null, warning: 'Unable to load product data' };
-    }
-  }
-};
-
-// Fetch stock levels only for a single product (used in cart validation + PDP live refresh)
+/** Legacy stock-only shape — kept for services/local-cart-stock.ts (cart
+ *  stock revalidation, out of scope). `id` is the SKU (SellRight has no
+ *  numeric variant id); `stockLevel` is the legacy stringified-boolean
+ *  convention that file's `parseInt` expects. */
 export const getProductStockLevelsOnly = async (slug: string) => {
-  try {
-    const stock = await srProductStock(slug);
-    return adaptStockOnly(slug, stock);
-  } catch (error) {
-    console.error('Failed to load stock levels for:', slug, error);
-    throw error;
-  }
+  const stock: CatalogStockResponse | null = await fetchProductStock(slug);
+  if (!stock) throw new Error(`Stock not found for product: ${slug}`);
+  return {
+    product: {
+      id: slug,
+      variants: stock.variants.map((v) => ({ id: v.sku, stockLevel: v.inStock ? LEGACY_IN_STOCK : LEGACY_OUT_OF_STOCK })),
+    },
+  };
 };

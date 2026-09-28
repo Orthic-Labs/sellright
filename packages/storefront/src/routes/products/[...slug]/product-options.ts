@@ -1,7 +1,8 @@
-import type { Variant } from '~/types';
+import type { CatalogVariant } from '~/sellright/types/catalog';
+import { effectiveVariantPrice } from '~/sellright/types/catalog';
 
-/** Unique option groups in Vendure order */
-export function getOptionGroups(variants: Variant[]): { groupName: string; values: string[] }[] {
+/** Unique option groups, in first-seen order across variants. */
+export function getOptionGroups(variants: CatalogVariant[]): { groupName: string; values: string[] }[] {
   const map = new Map<string, string[]>();
   for (const v of variants) {
     for (const opt of (v.options || [])) {
@@ -27,9 +28,11 @@ export function getOptionGroups(variants: Variant[]): { groupName: string; value
   }).sort((a, b) => a.groupName.localeCompare(b.groupName));
 }
 
-/** Values available for groupIndex given prior selections, stock-filtered */
+/** Values available for groupIndex given prior selections, stock-filtered.
+ *  LOCKED stock rule: a pre-order variant is always selectable regardless of
+ *  `inStock`; every other variant needs `inStock === true`. */
 export function availableForGroup(
-  variants: Variant[],
+  variants: CatalogVariant[],
   groups: { groupName: string; values: string[] }[],
   groupIndex: number,
   selected: (string | null)[],
@@ -45,10 +48,7 @@ export function availableForGroup(
       if (opt?.name !== sel) { ok = false; break; }
     }
     if (!ok) continue;
-    const stock = parseInt(v.stockLevel || '0', 10);
-    const cf = (v as any).customFields;
-    const isPreOrderVariant = !!cf?.isPreOrder;
-    if (!isPreOrderVariant && !isNaN(stock) && stock <= 0) continue;
+    if (!v.isPreOrder && !v.inStock) continue;
     const opt = v.options.find(o => o.group?.name === groups[groupIndex].groupName);
     if (opt) out.add(opt.name);
   }
@@ -57,10 +57,10 @@ export function availableForGroup(
 
 /** Find the resolved variant from all selected values */
 export function findVariant(
-  variants: Variant[],
+  variants: CatalogVariant[],
   groups: { groupName: string; values: string[] }[],
   selected: (string | null)[],
-): Variant | undefined {
+): CatalogVariant | undefined {
   // Single variant with no option groups — return it directly
   if (groups.length === 0) return variants[0];
   if (selected.some(v => !v)) return undefined;
@@ -71,13 +71,13 @@ export function findVariant(
   );
 }
 
-/** Price delta for a value in group 0 vs cheapest overall */
-export function priceDeltaLabel(variants: Variant[], groups: { groupName: string; values: string[] }[], value: string): string | null {
+/** Price delta for a value in group 0 vs cheapest overall (effective prices). */
+export function priceDeltaLabel(variants: CatalogVariant[], groups: { groupName: string; values: string[] }[], value: string): string | null {
   if (groups.length < 2) return null;
   const matching = variants.filter(v => v.options?.find(o => o.group?.name === groups[0].groupName && o.name === value));
   if (!matching.length) return null;
-  const groupMin = Math.min(...matching.map(v => v.priceWithTax || v.price || 0));
-  const allMin = Math.min(...variants.map(v => v.priceWithTax || v.price || 0));
+  const groupMin = Math.min(...matching.map(effectiveVariantPrice));
+  const allMin = Math.min(...variants.map(effectiveVariantPrice));
   const delta = groupMin - allMin;
   if (delta === 0) return null;
   return delta > 0 ? `+$${(delta / 100).toFixed(0)}` : `-$${(Math.abs(delta) / 100).toFixed(0)}`;
