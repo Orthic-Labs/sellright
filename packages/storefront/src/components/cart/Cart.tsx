@@ -1,13 +1,14 @@
-import { component$, useContext, useSignal, useStore, $, useTask$ } from '@qwik.dev/core';
+import { component$, useContext, useSignal, useStore, useComputed$, $, useTask$ } from '@qwik.dev/core';
 import { useLocation, useNavigate } from '@qwik.dev/router';
 import { APP_STATE } from '~/constants';
 import { isCheckoutPage } from '~/utils/route-helpers';
 import CartContents from '../cart-contents/CartContents';
 import { EligibleShippingMethods } from '~/types';
 import { formatPrice } from '~/utils';
-import { useLocalCart } from '~/contexts/CartContext';
+import { useCart } from '~/contexts/CartContext';
 import { CountryService } from '~/services/CountryService';
-import { LocalCartService } from '~/services/LocalCartService';
+import { CountryPreferenceService } from '~/services/CountryPreferenceService';
+import { isLineAvailable } from '~/sellright/types/cart';
 import { fetchCartShippingMethod } from './cart-shipping';
 import { policySentence } from '~/theme/theme.config';
 import { useStoreIdentityLoader } from '~/routes/layout';
@@ -18,8 +19,9 @@ export default component$(() => {
 	const location = useLocation();
 	const navigate = useNavigate();
 	const appState = useContext(APP_STATE);
-	const localCart = useLocalCart();
+	const cartState = useCart();
 	const isInEditableUrl = !isCheckoutPage(location.url.toString());
+	const totalQuantity = useComputed$(() => cartState.cart.lines.reduce((a, l) => a + l.quantity, 0));
 
 	const isNavigatingToCheckout = useSignal(false);
 	const countryCodeSignal = useSignal(appState.shippingAddress.countryCode);
@@ -42,7 +44,7 @@ export default component$(() => {
 	// T20: Restore country + load country list — useTask$ (runs once)
 	useTask$(async () => {
 		if (!appState.shippingAddress.countryCode) {
-			const stored = LocalCartService.getCountry();
+			const stored = CountryPreferenceService.getCountry();
 			appState.shippingAddress.countryCode = stored;
 			countryCodeSignal.value = stored;
 		} else {
@@ -54,18 +56,13 @@ export default component$(() => {
 		}
 	});
 
-	const hasOutOfStockItems = $(() => {
-		const items = localCart.localCart.items;
-		return items.some(
-			(item: any) => item.productVariant.stockLevel === 'OUT_OF_STOCK' || item.productVariant.stockLevel <= 0
-		);
-	});
+	const hasOutOfStockItems = $(() => cartState.cart.lines.some((line) => !isLineAvailable(line)));
 
 	const isOutOfStock = useSignal(false);
 
 	// T20: Track out-of-stock via useTask$
 	useTask$(async ({ track }) => {
-		track(() => localCart.localCart.items);
+		track(() => cartState.cart.lines);
 		track(() => appState.activeOrder);
 		isOutOfStock.value = await hasOutOfStockItems();
 	});
@@ -99,9 +96,9 @@ export default component$(() => {
 	useTask$(async ({ track, cleanup }) => {
 		const countryCode = track(() => appState.shippingAddress.countryCode);
 		const cartVisible = track(() => appState.showCart);
-		const subTotal = track(() => localCart.localCart.subTotal);
-		const appliedCoupon = track(() => localCart.appliedCoupon);
-		const orderTotalAfterDiscount = subTotal - (appliedCoupon?.discountAmount || 0);
+		const subTotal = track(() => cartState.cart.subtotal);
+		const discountTotal = track(() => cartState.cart.discountTotal);
+		const orderTotalAfterDiscount = subTotal - (discountTotal || 0);
 
 		if (!cartVisible || !countryCode || subTotal === 0) {
 			shippingState.methods = [];
@@ -177,8 +174,8 @@ export default component$(() => {
 					appState.shippingAddress.country = country.name;
 				}
 
-				const subtotal = localCart.localCart.subTotal;
-				const orderTotalAfterDiscount = subtotal - (localCart.appliedCoupon?.discountAmount || 0);
+				const subtotal = cartState.cart.subtotal;
+				const orderTotalAfterDiscount = subtotal - (cartState.cart.discountTotal || 0);
 
 				if (subtotal > 0) {
 					calculateShipping(finalCountryCode, orderTotalAfterDiscount);
@@ -224,7 +221,20 @@ export default component$(() => {
 
 						<div class="flex-1 overflow-y-auto overscroll-contain px-5 py-1 min-h-0">
 
-							{localCart.isRefreshingStock && (
+							{cartState.notice && (
+								<div class="my-2 px-3 py-1.5 bg-[#FBEFE3] flex items-start justify-between gap-2">
+									<span class="text-[11px] text-[#8a6d4a]">{cartState.notice}</span>
+									<button
+										onClick$={() => (cartState.notice = null)}
+										aria-label="Dismiss"
+										class="text-[11px] text-[#8a6d4a] underline shrink-0 cursor-pointer bg-transparent border-0"
+									>
+										Dismiss
+									</button>
+								</div>
+							)}
+
+							{cartState.isRefreshingStock && (
 								<div class="my-2 px-3 py-1.5 bg-[#F0EBE3] flex items-center gap-2">
 									<svg class="animate-spin h-3 w-3 text-[#8a6d4a] shrink-0" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
 										<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -234,7 +244,7 @@ export default component$(() => {
 								</div>
 							)}
 
-							{localCart.localCart.totalQuantity > 0 ? (
+							{totalQuantity.value > 0 ? (
 								<CartContents />
 							) : (
 								<div class="flex flex-col items-center justify-center h-full min-h-[280px] text-center px-4">
@@ -257,15 +267,8 @@ export default component$(() => {
 						</div>
 
 						{/* Compact sticky footer */}
-						{localCart.localCart.totalQuantity > 0 && isInEditableUrl && (
+						{totalQuantity.value > 0 && isInEditableUrl && (
 							<div class="border-t border-[#E5E0D8] bg-[#F0EBE3] px-5 pt-3 pb-4 shrink-0">
-
-								{/* Only claim free shipping when a coupon that actually grants it is
-								    applied — there is no order-total threshold wired up server-side,
-								    so a progress-toward-$X widget here would be a false promise. */}
-								{localCart.appliedCoupon?.freeShipping && (
-									<div class="mb-2 text-[11px] text-[#4a7c3f]">Free shipping applied with code {localCart.appliedCoupon.code}</div>
-								)}
 
 								{/* M4: Removed dynamic key to prevent re-mount on country change; M8: Added aria-label for accessibility */}
 								<div class="relative mb-2">
@@ -298,7 +301,7 @@ export default component$(() => {
 									<div class="flex justify-between items-baseline">
 										<span class="text-[11px] tracking-[0.05em] text-[#9A9288] uppercase">Subtotal</span>
 										<span class="text-[13px] font-medium text-[#1A1A1A] tabular-nums">
-											{formatPrice(localCart.localCart.subTotal, localCart.localCart.currencyCode)}
+											{formatPrice(cartState.cart.subtotal, cartState.cart.currency)}
 										</span>
 									</div>
 
@@ -309,7 +312,7 @@ export default component$(() => {
 											<span class="text-[13px] font-medium tabular-nums">
 												{shippingState.selectedMethod.priceWithTax === 0
 													? <span class="text-[#8a6d4a]">Free</span>
-													: <span class="text-[#1A1A1A]">{formatPrice(shippingState.selectedMethod.priceWithTax, localCart.localCart.currencyCode)}</span>
+													: <span class="text-[#1A1A1A]">{formatPrice(shippingState.selectedMethod.priceWithTax, cartState.cart.currency)}</span>
 												}
 											</span>
 										) : (
@@ -325,8 +328,8 @@ export default component$(() => {
 											<span class="text-[11px] tracking-[0.05em] text-[#1A1A1A] uppercase font-semibold">Total</span>
 											<span class="text-[15px] font-semibold text-[#1A1A1A] tabular-nums">
 												{formatPrice(
-													localCart.localCart.subTotal + shippingState.selectedMethod.priceWithTax,
-													localCart.localCart.currencyCode
+													cartState.cart.subtotal + shippingState.selectedMethod.priceWithTax,
+													cartState.cart.currency
 												)}
 											</span>
 										</div>
@@ -339,8 +342,8 @@ export default component$(() => {
 										isNavigatingToCheckout.value = true;
 
 										try {
-											if (localCart.localCart.items.length === 0) {
-												console.error('No items in local cart');
+											if (cartState.cart.lines.length === 0) {
+												console.error('No items in cart');
 												return;
 											}
 
@@ -364,7 +367,7 @@ export default component$(() => {
 									})}
 									disabled={isNavigatingToCheckout.value || !shippingState.selectedMethod ||
 														!appState.shippingAddress.countryCode ||
-														localCart.localCart.items.length === 0 || isOutOfStock.value}
+														cartState.cart.lines.length === 0 || isOutOfStock.value}
 									class="w-full py-3 mb-1.5 bg-[#141210] text-[#FDFAF6] text-[11px] tracking-[0.2em] uppercase font-medium
 									       hover:opacity-90 active:opacity-85
 									       disabled:opacity-40 disabled:cursor-not-allowed

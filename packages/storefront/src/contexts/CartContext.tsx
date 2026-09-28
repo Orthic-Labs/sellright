@@ -4,339 +4,201 @@ import {
   useContext,
   useContextProvider,
   useStore,
-  useOnWindow,
   useOnDocument,
   $,
-  Slot
+  Slot,
 } from '@qwik.dev/core';
-import { LocalCartService, type LocalCart, type StockValidationResult } from '~/services/LocalCartService';
-import { ServerCartService } from '~/services/ServerCartService';
+import { CartService, CartError } from '~/services/CartService';
+import { EMPTY_CART, type Cart, type CartLineEnrichment } from '~/sellright/types/cart';
 
 /**
- * Strangler flag (cart-architecture plan, Phase B): when `VITE_SERVER_CART` is
- * truthy the cart is backed by the server-authoritative ServerCartService;
- * otherwise it stays on the localStorage-only LocalCartService. The exported
- * hook shape is identical either way, so Cart.tsx / CartContents.tsx /
- * header.tsx / the product page consume the same context unchanged.
+ * Single, server-owned cart context (cart-architecture plan: strangler flag
+ * retired — CartService.getCart() is the only source of cart data, always).
+ * `cart` mirrors CartService's in-memory snapshot; components never read
+ * price/stock/coupon from anywhere else. See `~/sellright/types/cart.ts` for
+ * the full API contract and the fail-closed stock rules.
  */
-export const SERVER_CART_ENABLED =
-  String(import.meta.env.VITE_SERVER_CART ?? '').toLowerCase() === '1' ||
-  String(import.meta.env.VITE_SERVER_CART ?? '').toLowerCase() === 'true';
 
-// Applied coupon information for local cart mode
-export interface AppliedCoupon {
-  code: string;
-  discountAmount: number;
-  discountPercentage?: number;
-  freeShipping: boolean;
-  promotionName?: string;
-  promotionDescription?: string;
-}
-
-// Cart Context Interface - Only store data, not functions
 export interface CartContextState {
-  // Cart data
-  localCart: LocalCart;
-
-  // State flags
+  cart: Cart;
   isLoading: boolean;
   lastError: string | null;
-  hasLoadedOnce: boolean; // Track if cart has been loaded from localStorage
-  isRefreshingStock: boolean; // Track if stock refresh is in progress
-
-  // Stock validation results
-  lastStockValidation: Record<string, StockValidationResult>;
-
-  // Applied coupon for local cart mode
-  appliedCoupon: AppliedCoupon | null;
+  hasLoadedOnce: boolean;
+  isRefreshingStock: boolean;
+  /** Non-null exactly once, right after a mutation dropped lines the caller
+   *  didn't ask to remove — consumers must show this, then clear it. */
+  notice: string | null;
 }
 
-// Create context for state only
 export const CartContextId = createContextId<CartContextState>('cart-context');
 
-// Context Provider Component
 export const CartProvider = component$(() => {
-  // Initialize cart state
   const cartState = useStore<CartContextState>({
-    localCart: {
-      items: [],
-      totalQuantity: 0,
-      subTotal: 0,
-      currencyCode: 'USD'
-    },
+    cart: EMPTY_CART,
     isLoading: false,
     lastError: null,
     hasLoadedOnce: false,
     isRefreshingStock: false,
-    lastStockValidation: {},
-    appliedCoupon: null
+    notice: null,
   });
 
-  // Init cart on page boot. Under the server-cart flag we hydrate the optimistic
-  // mirror first (instant paint from the persisted copy) then reconcile from the
-  // server in the background (server wins). B0: ServerCartService seeds itself
-  // from any legacy local cart on the first mutation, never deleting that key.
-  useOnDocument('qinit', $(() => {
-    if (!cartState.hasLoadedOnce) {
-      try {
-        if (SERVER_CART_ENABLED) {
-          cartState.localCart = ServerCartService.getCart();
-          cartState.hasLoadedOnce = true;
-          ServerCartService.refresh()
-            .then((cart) => { cartState.localCart = cart; })
-            .catch((e) => console.error('CartContext: server cart refresh failed:', e));
-        } else {
-          cartState.localCart = LocalCartService.getCart();
-          cartState.hasLoadedOnce = true;
-        }
-      } catch (error) {
-        console.error('CartContext: Failed to load cart:', error);
-        cartState.lastError = 'Failed to load cart';
-      }
-    }
-  }));
+  // Init on page boot: paint whatever CartService already has in memory (SPA
+  // nav — instant), then always refresh from the server in the background so
+  // stock/price is live on first paint too (a fresh document load starts
+  // CartService with an empty mirror, so this is the only place the real
+  // cart — if the sr_cart cookie names one — gets loaded back in).
+  useOnDocument(
+    'qinit',
+    $(() => {
+      if (cartState.hasLoadedOnce) return;
+      cartState.cart = CartService.getCart();
+      cartState.hasLoadedOnce = true;
+      CartService.refresh()
+        .then((res) => applyResult(cartState, res))
+        .catch((e) => {
+          console.error('CartContext: initial cart refresh failed:', e);
+          cartState.lastError = 'Failed to load cart';
+        });
+    }),
+  );
 
-  // T4: Cross-tab sync via storage event (no UVT)
-  useOnWindow('storage', $((event: Event) => {
-    const e = event as StorageEvent;
-    if (e.key === 'vendure-cart' || e.key === 'vendure-country') {
-      LocalCartService.setupCrossTabSync();
-      if (cartState.hasLoadedOnce) {
-        const updatedCart = LocalCartService.getCart();
-        if (updatedCart && typeof updatedCart === 'object') {
-          cartState.localCart = {
-            items: updatedCart.items || [],
-            totalQuantity: updatedCart.totalQuantity || 0,
-            subTotal: updatedCart.subTotal || 0,
-            currencyCode: updatedCart.currencyCode || 'USD',
-            appliedCoupon: updatedCart.appliedCoupon || null
-          };
-          cartState.appliedCoupon = updatedCart.appliedCoupon || null;
-        }
-        cartState.lastError = null;
-        window.dispatchEvent(new CustomEvent('cart-updated', {
-          detail: { totalQuantity: cartState.localCart.totalQuantity }
-        }));
-      }
-    }
-  }));
-
-  // 🚀 OPTIMIZED: Removed computed values - cart totals calculated in LocalCartService
-
-  // Provide context
   useContextProvider(CartContextId, cartState);
 
   return <Slot />;
 });
 
-// Hook to use cart context
-export const useLocalCart = () => {
-  return useContext(CartContextId);
-};
-// Hook: detect if cart contains any pre-order item
+export const useCart = () => useContext(CartContextId);
+
+/** Hook: does the cart contain any pre-order line? */
 export const useHasPreOrder = () => {
-  const cart = useContext(CartContextId);
-  const has = { value: false } as { value: boolean };
-  try {
-    const items = cart.localCart.items || [];
-    has.value = items.some((it) => !!(it as any)?.isPreOrder || !!(it as any)?.productVariant?.customFields?.isPreOrder);
-  } catch {
-    has.value = false;
-  }
-  return has;
+  const { cart } = useCart();
+  return { value: cart.lines.some((l) => !!l.isPreOrder) };
 };
 
-// Hook: detect MIXED cart — at least one pre-order AND at least one regular item
+/** Hook: a MIXED cart — at least one pre-order AND at least one regular line. */
 export const useHasMixedPreOrder = () => {
-  const cart = useContext(CartContextId);
-  const has = { value: false } as { value: boolean };
-  try {
-    const items = cart.localCart.items || [];
-    const isPre = (it: any) => !!it?.isPreOrder || !!it?.productVariant?.customFields?.isPreOrder;
-    has.value = items.some(isPre) && items.some((it: any) => !isPre(it));
-  } catch {
-    has.value = false;
-  }
-  return has;
+  const { cart } = useCart();
+  const hasPreOrder = cart.lines.some((l) => !!l.isPreOrder);
+  const hasRegular = cart.lines.some((l) => !l.isPreOrder);
+  return { value: hasPreOrder && hasRegular };
 };
 
+function applyResult(cartState: CartContextState, res: { cart: Cart; dropped: string[] }): void {
+  cartState.cart = res.cart;
+  cartState.notice =
+    res.dropped.length > 0
+      ? `${res.dropped.length} item${res.dropped.length > 1 ? 's' : ''} in your cart ${res.dropped.length > 1 ? 'are' : 'is'} no longer available and ${res.dropped.length > 1 ? 'were' : 'was'} removed.`
+      : cartState.notice;
+}
 
-// 🚀 OPTIMIZED: Load cart on-demand when needed
-export const loadCartIfNeeded = $((cartState: CartContextState) => {
-  if (!cartState.hasLoadedOnce) {
-    try {
-      cartState.localCart = SERVER_CART_ENABLED ? ServerCartService.getCart() : LocalCartService.getCart();
-      // Restore applied coupon from persisted cart data
-      cartState.appliedCoupon = (cartState.localCart as any).appliedCoupon || null;
-      cartState.hasLoadedOnce = true;
-    } catch (error) {
-      console.error('❌ CartContext: Failed to load cart on-demand:', error);
-      cartState.lastError = 'Failed to load cart';
-    }
-  }
+function reportError(cartState: CartContextState, error: unknown, fallback: string): void {
+  cartState.lastError = error instanceof CartError ? error.message : error instanceof Error ? error.message : fallback;
+}
+
+export const loadCartIfNeeded = $(async (cartState: CartContextState) => {
+  if (cartState.hasLoadedOnce) return;
+  cartState.cart = CartService.getCart();
+  cartState.hasLoadedOnce = true;
 });
 
-// Refresh stock levels — always hits live backend, no debounce. Under the server
-// cart flag this re-fetches the server-priced cart (server is the source of truth).
+/** Live stock/price/coupon refresh — LOCKED to fire on cart open, checkout
+ *  entry, and pre-submit. No cache, no TTL, no debounce, ever. */
 export const refreshCartStock = $(async (cartState: CartContextState) => {
-  if (!cartState.localCart.items.length) return;
+  if (!cartState.cart.lines.length) return;
   if (cartState.isRefreshingStock) return;
 
+  cartState.isRefreshingStock = true;
   try {
-    cartState.isRefreshingStock = true;
-    const updatedCart = SERVER_CART_ENABLED
-      ? await ServerCartService.refresh()
-      : await LocalCartService.refreshAllStockLevels();
-    cartState.localCart = updatedCart;
+    const res = await CartService.refresh();
+    applyResult(cartState, res);
   } catch (error) {
     console.error('CartContext: Failed to refresh stock levels:', error);
-    cartState.lastError = 'Failed to refresh stock levels';
+    reportError(cartState, error, 'Failed to refresh stock levels');
   } finally {
     cartState.isRefreshingStock = false;
   }
 });
 
-// Helper functions that can be called from components
-export const addToLocalCart = $(async (cartState: CartContextState, item: any) => {
-  // 🚀 DEMAND-BASED: Load cart only when add to cart is clicked
+export const addToCart = $(async (cartState: CartContextState, sku: string, quantity: number, enrichment?: CartLineEnrichment) => {
   await loadCartIfNeeded(cartState);
-
   cartState.isLoading = true;
   cartState.lastError = null;
-
   try {
-    const result = SERVER_CART_ENABLED
-      ? await ServerCartService.addItem(item)
-      : LocalCartService.addItem(item);
-    cartState.localCart = result.cart;
-    cartState.lastStockValidation[item.productVariantId] = result.stockResult;
-
-    if (!result.stockResult.success) {
-      cartState.lastError = result.stockResult.error || 'Stock validation failed';
-    }
-
-    // 🚀 OPTIMIZED: Trigger header badge update via custom event
+    const res = await CartService.addLine(sku, quantity, enrichment);
+    applyResult(cartState, res);
     if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('cart-updated', {
-        detail: { totalQuantity: result.cart.totalQuantity }
-      }));
+      const total = res.cart.lines.reduce((a, l) => a + l.quantity, 0);
+      window.dispatchEvent(new CustomEvent('cart-updated', { detail: { totalQuantity: total } }));
     }
   } catch (error) {
-    cartState.lastError = error instanceof Error ? error.message : 'Failed to add item to cart';
+    reportError(cartState, error, 'Failed to add item to cart');
   } finally {
     cartState.isLoading = false;
   }
 });
 
-export const updateLocalCartQuantity = $(async (cartState: CartContextState, productVariantId: string, quantity: number) => {
-  // Load cart if not already loaded
+export const updateCartLineQuantity = $(async (cartState: CartContextState, sku: string, quantity: number) => {
   await loadCartIfNeeded(cartState);
-
   cartState.isLoading = true;
   cartState.lastError = null;
-
   try {
-    const result = SERVER_CART_ENABLED
-      ? await ServerCartService.updateItemQuantity(productVariantId, quantity)
-      : await LocalCartService.updateItemQuantity(productVariantId, quantity);
-    cartState.localCart = result.cart;
-    cartState.lastStockValidation[productVariantId] = result.stockResult;
-
-    if (!result.stockResult.success) {
-      cartState.lastError = result.stockResult.error || 'Stock validation failed';
-    }
-
-    // 🚀 OPTIMIZED: Trigger header badge update
+    const res = await CartService.updateLine(sku, quantity);
+    applyResult(cartState, res);
     if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('cart-updated', {
-        detail: { totalQuantity: result.cart.totalQuantity }
-      }));
+      const total = res.cart.lines.reduce((a, l) => a + l.quantity, 0);
+      window.dispatchEvent(new CustomEvent('cart-updated', { detail: { totalQuantity: total } }));
     }
   } catch (error) {
-    cartState.lastError = error instanceof Error ? error.message : 'Failed to update quantity';
+    reportError(cartState, error, 'Failed to update quantity');
   } finally {
     cartState.isLoading = false;
   }
 });
 
-
-export const removeFromLocalCart = $(async (cartState: CartContextState, productVariantId: string) => {
-  // Load cart if not already loaded
+export const removeCartLine = $(async (cartState: CartContextState, sku: string) => {
   await loadCartIfNeeded(cartState);
-
-  try {
-    cartState.localCart = SERVER_CART_ENABLED
-      ? await ServerCartService.removeItem(productVariantId)
-      : LocalCartService.removeItem(productVariantId);
-    // Clear validation for removed item
-    delete cartState.lastStockValidation[productVariantId];
-    cartState.lastError = null;
-
-    // 🚀 OPTIMIZED: Trigger header badge update
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('cart-updated', {
-        detail: { totalQuantity: cartState.localCart.totalQuantity }
-      }));
-    }
-  } catch (error) {
-    cartState.lastError = error instanceof Error ? error.message : 'Failed to remove item';
-  }
-});
-
-export const clearLocalCart = $(async (cartState: CartContextState) => {
-  try {
-    cartState.localCart = SERVER_CART_ENABLED
-      ? await ServerCartService.clearCart()
-      : LocalCartService.clearCart();
-    cartState.lastStockValidation = {};
-    cartState.appliedCoupon = null;
-    cartState.lastError = null;
-
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('cart-updated', {
-        detail: { totalQuantity: 0 }
-      }));
-    }
-  } catch (error) {
-    cartState.lastError = error instanceof Error ? error.message : 'Failed to clear cart';
-  }
-});
-
-export const convertLocalCartToVendureOrder = $(async (cartState: CartContextState) => {
-  cartState.isLoading = true;
   cartState.lastError = null;
-
   try {
-    // Validate stock before conversion
-    const stockValidation = LocalCartService.validateStock();
-
-    if (!stockValidation.valid) {
-      cartState.lastError = `Stock validation failed: ${stockValidation.errors.join(', ')}`;
-      return null;
+    const res = await CartService.removeLine(sku);
+    applyResult(cartState, res);
+    if (typeof window !== 'undefined') {
+      const total = res.cart.lines.reduce((a, l) => a + l.quantity, 0);
+      window.dispatchEvent(new CustomEvent('cart-updated', { detail: { totalQuantity: total } }));
     }
-
-    // Extract coupon from cart state
-    const appliedCoupon = cartState.appliedCoupon ? { code: cartState.appliedCoupon.code } : null;
-
-    // Pass coupon to conversion method
-    const order = await LocalCartService.convertToVendureOrder(appliedCoupon);
-
-    if (order) {
-      // Do NOT clear the local cart here; keep it until payment completes.
-      // This ensures Sezzle cancellations do not wipe the cart.
-      // Cart stays in localStorage — always the single source of truth.
-      cartState.lastStockValidation = {};
-      // Clear applied coupon after successful conversion
-      cartState.appliedCoupon = null;
-    } else {
-      cartState.lastError = 'Failed to create Vendure order';
-    }
-
-    return order;
   } catch (error) {
-    cartState.lastError = error instanceof Error ? error.message : 'Checkout failed';
-    return null;
-  } finally {
-    cartState.isLoading = false;
+    reportError(cartState, error, 'Failed to remove item');
+  }
+});
+
+/** Discard the cart after a successful order — the server cart is terminal
+ *  (converted) at this point, so this drops the local token/mirror rather
+ *  than mutating a cart that no longer accepts writes. */
+export const clearCart = $(async (cartState: CartContextState) => {
+  CartService.discard();
+  cartState.cart = CartService.getCart();
+  cartState.lastError = null;
+  cartState.notice = null;
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('cart-updated', { detail: { totalQuantity: 0 } }));
+  }
+});
+
+export const applyCoupon = $(async (cartState: CartContextState, code: string): Promise<{ valid: boolean; reason?: string }> => {
+  try {
+    const res = await CartService.applyCoupon(code);
+    cartState.cart = CartService.getCart();
+    return res;
+  } catch (error) {
+    reportError(cartState, error, 'Failed to validate coupon');
+    return { valid: false, reason: cartState.lastError ?? 'Failed to validate coupon' };
+  }
+});
+
+export const removeCoupon = $(async (cartState: CartContextState) => {
+  try {
+    const res = await CartService.removeCoupon();
+    applyResult(cartState, res);
+  } catch (error) {
+    reportError(cartState, error, 'Failed to remove coupon');
   }
 });

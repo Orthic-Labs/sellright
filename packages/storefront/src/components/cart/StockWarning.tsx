@@ -1,16 +1,14 @@
 import { component$, type QRL } from '@qwik.dev/core';
-import type { LocalCartItem } from '~/services/LocalCartService';
+import { isLineAvailable, remainingQuantity, type CartLine } from '~/sellright/types/cart';
 
 interface StockWarningProps {
-  item: LocalCartItem;
-  variantId: string;
-  onRemove$: QRL<(variantId: string) => void>;
+  line: CartLine;
+  sku: string;
+  onRemove$: QRL<(sku: string) => void>;
 }
 
-export const StockWarning = component$<StockWarningProps>(({ item, variantId, onRemove$ }) => {
-  const stockLevel = parseInt(item.productVariant.stockLevel || '0');
-  
-  if (stockLevel <= 0) {
+export const StockWarning = component$<StockWarningProps>(({ line, sku, onRemove$ }) => {
+  if (!isLineAvailable(line)) {
     return (
       <div class="bg-red-50 border-l-4 border-red-400 p-3 mb-2">
         <div class="flex items-center justify-between">
@@ -21,7 +19,7 @@ export const StockWarning = component$<StockWarningProps>(({ item, variantId, on
             <span class="text-red-700 text-sm font-medium">Out of stock</span>
           </div>
           <button
-            onClick$={() => onRemove$(variantId)}
+            onClick$={() => onRemove$(sku)}
             class="text-red-600 hover:text-red-800 text-sm font-medium underline"
           >
             Remove
@@ -30,14 +28,15 @@ export const StockWarning = component$<StockWarningProps>(({ item, variantId, on
       </div>
     );
   }
-  
-  if (stockLevel <= 5) {
+
+  const remaining = remainingQuantity(line);
+  if (remaining !== null && remaining <= 5) {
     return (
       <div class="mb-1">
-        <span style="font-size:11px;letter-spacing:0.5px;color:rgba(var(--color-accent-rgb),0.7)">Only {stockLevel} left</span>
+        <span style="font-size:11px;letter-spacing:0.5px;color:rgba(var(--color-accent-rgb),0.7)">Only {remaining} left</span>
       </div>
     );
   }
-  
+
   return null;
 });
