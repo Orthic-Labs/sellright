@@ -571,6 +571,112 @@ jobs:
         if: always()
         run: kill "$(cat /tmp/old-api.pid)" 2>/dev/null || true
 
+  e2e-storefront:
+    name: Storefront e2e (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: sellright_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d sellright_e2e"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      NODE_ENV: production
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/sellright_e2e
+      STOREFRONT_URL: http://127.0.0.1:4398
+      DOWNLOAD_URL_SECRET: abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
+      SELLRIGHT_MASTER_KEY: '1122334455667788112233445566778811223344556677881122334455667788'
+      ADMIN_EMAIL: e2e@example.net
+      ADMIN_PASSWORD: e2e-only-long-random-password-12345
+      BOOTSTRAP_STORE_SLUG: e2e
+      BOOTSTRAP_STORE_NAME: E2E Store
+      BOOTSTRAP_STORE_CURRENCY: USD
+      # Bare IP with no port — store-context.ts strips :port before matching
+      # config.hostnames, so this matches both the storefront's own SSR Host
+      # (127.0.0.1:4398) and the browser-side /v1/* calls the e2e fixture
+      # replays directly against the API (127.0.0.1:3300) — same bare host,
+      # different ports, both stripped to this one value.
+      BOOTSTRAP_STORE_HOSTNAMES: 127.0.0.1
+      E2E_STORE_SLUG: e2e
+      PORT: '3300'
+      HOST: '127.0.0.1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          install: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_LTS }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: Build shared + api + storefront-client + storefront
+        run: |
+          pnpm --filter @sellright/shared build
+          pnpm --filter @sellright/api build
+          pnpm --filter @sellright/storefront-client build
+          pnpm --filter @sellright/storefront run generate:placeholder-assets
+          pnpm --filter @sellright/storefront run build.types
+          pnpm --filter @sellright/storefront run build.client
+          pnpm --filter @sellright/storefront run build.server
+
+      - name: Apply migrations
+        run: pnpm --filter @sellright/api db:migrate:runtime
+
+      - name: Bootstrap the e2e store + seed the OOS/in-stock catalog fixture
+        run: |
+          node packages/api/dist/scripts/bootstrap.js
+          node packages/api/dist/scripts/seed-e2e-catalog.js
+
+      - name: Start the API
+        run: |
+          nohup node packages/api/dist/index.js > api.log 2>&1 &
+          echo $! > api.pid
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3300/v1/readyz | grep -q '"status":"ok"'; then exit 0; fi
+            sleep 1
+          done
+          echo "::error::api never became ready"; cat api.log; exit 1
+
+      - name: Install Playwright's Chromium
+        working-directory: packages/storefront
+        run: npx playwright install --with-deps chromium
+
+      - name: Run the storefront e2e suite
+        working-directory: packages/storefront
+        env:
+          PLAYWRIGHT_API_URL: http://127.0.0.1:3300
+          PLAYWRIGHT_PORT: '4398'
+        run: pnpm run test:e2e
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: playwright-report
+          path: packages/storefront/playwright-report/
+          retention-days: 7
+
+      - name: Stop the API
+        if: always()
+        run: kill "$(cat api.pid)" 2>/dev/null || true
+
   shellcheck:
     name: Shellcheck installer + CLI
     runs-on: ubuntu-latest
@@ -586,7 +692,7 @@ jobs:
   release:
     name: Build, push and sign images
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [verify, database, packaging, shellcheck]
+    needs: [verify, database, packaging, e2e-storefront, shellcheck]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -896,7 +1002,7 @@ jobs:
     # later fail-closed-cosign and forced-failure-testing additions), and
     # "NEW" is this PR's current HEAD — a realistic same-branch upgrade.
     if: github.event_name == 'pull_request'
-    needs: [verify, database, packaging, shellcheck]
+    needs: [verify, database, packaging, e2e-storefront, shellcheck]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

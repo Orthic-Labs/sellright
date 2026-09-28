@@ -91,19 +91,27 @@ app.use((req, res, next) => {
 	// Final policy:
 	//   default-src 'self'                                    — safe fallback
 	//   script-src  'self' 'nonce-<per-request>' https://js.stripe.com
+	//               https://sandbox.nmi.com https://secure.nmi.com
 	//                                                          — Qwik's inline
 	//               bootstrap + this app's inline scripts use the SSR nonce;
-	//               Stripe.js (loadStripe) is loaded from js.stripe.com
+	//               Stripe.js (loadStripe) is loaded from js.stripe.com;
+	//               NMI Collect.js (loadCollectJs) is loaded from
+	//               sandbox.nmi.com (test) / secure.nmi.com (live) — see
+	//               services/NmiCollect.ts's collectJsSrc
 	//   style-src   'self' 'unsafe-inline'                    — Qwik/Tailwind
 	//               emit inline <style> tags per-component with no nonce
 	//               support today; unsafe-inline is scoped to STYLE only
 	//   img-src     'self' data: https:                       — product/CDN images
 	//   font-src    'self'                                    — self-hosted webfonts only
-	//   connect-src 'self' https://api.stripe.com <api origin>
-	//                                                          — SellRight API + Stripe
+	//   connect-src 'self' https://api.stripe.com
+	//               https://sandbox.nmi.com https://secure.nmi.com <api origin>
+	//                                                          — SellRight API,
+	//               Stripe, and NMI Collect.js's own tokenization XHR calls
 	//   frame-src   https://js.stripe.com https://hooks.stripe.com
+	//               https://sandbox.nmi.com https://secure.nmi.com
 	//                                                          — Stripe Payment
-	//               Element / 3DS iframes
+	//               Element / 3DS iframes, NMI Collect.js's hosted card
+	//               number/expiry/cvv iframes (never this app's own PAN input)
 	//   object-src  'none'
 	//   base-uri    'self'
 	//   form-action 'self'
@@ -111,12 +119,12 @@ app.use((req, res, next) => {
 	//   upgrade-insecure-requests
 	const cspDirectives = [
 		`default-src 'self'`,
-		`script-src 'self' 'nonce-${nonce}' https://js.stripe.com`,
+		`script-src 'self' 'nonce-${nonce}' https://js.stripe.com https://sandbox.nmi.com https://secure.nmi.com`,
 		`style-src 'self' 'unsafe-inline'`,
 		`img-src 'self' data: https:`,
 		`font-src 'self'`,
-		`connect-src 'self' https://api.stripe.com${connectSrcExtra}`,
-		`frame-src https://js.stripe.com https://hooks.stripe.com`,
+		`connect-src 'self' https://api.stripe.com https://sandbox.nmi.com https://secure.nmi.com${connectSrcExtra}`,
+		`frame-src https://js.stripe.com https://hooks.stripe.com https://sandbox.nmi.com https://secure.nmi.com`,
 		`object-src 'none'`,
 		`base-uri 'self'`,
 		`worker-src 'self'`,
