@@ -1,6 +1,6 @@
 import { $, component$, useSignal } from '@qwik.dev/core';
 import XCircleIcon from '~/components/icons/XCircleIcon';
-import { resetPasswordMutation } from '~/providers/shop/account/account';
+import { resetPassword } from '~/providers/shop/account/account';
 import { createSEOHead } from '~/utils/seo';
 import { theme } from '~/theme/theme.config';
 
@@ -32,14 +32,14 @@ export default component$(() => {
 
 			loadingMessage.value = 'Verifying token...';
 
-			const resetPassword = await resetPasswordMutation(token, password.value);
+			const result = await resetPassword(token, password.value);
 
-			if (resetPassword.__typename !== 'CurrentUser') {
-				error.value = (resetPassword as any).message || 'Password reset failed. The link may have expired.';
+			if (!result.ok) {
+				error.value = result.message || 'Password reset failed. The link may have expired.';
 				isLoading.value = false;
 			} else {
 				loadingMessage.value = 'Success! Redirecting...';
-				window.location.href = '/account';
+				window.location.href = '/sign-in';
 			}
 		} catch {
 			error.value = 'An error occurred while resetting your password. Please try again.';

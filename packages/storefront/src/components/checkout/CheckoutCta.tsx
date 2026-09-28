@@ -9,7 +9,6 @@ interface CheckoutCtaProps {
   formattedTotal: Signal<string | null>;
   isOrderProcessing: Signal<boolean>;
   onPlaceOrder$: QRL<() => void>;
-  selectedPaymentMethod: Signal<string>;
   state: { loading: boolean };
 }
 
@@ -37,13 +36,9 @@ export const CheckoutDesktopCta = component$<CheckoutCtaProps>((props) => {
           </span>
         ) : (
           <span class="checkout-cta-label flex items-center justify-center">
-            {props.selectedPaymentMethod.value === 'sezzle' ? (
-              'Continue with Sezzle'
-            ) : (
-              props.formattedTotal.value
-                ? `PLACE ORDER \u2014 ${props.formattedTotal.value}`
-                : 'PLACE ORDER'
-            )}
+            {props.formattedTotal.value
+              ? `PLACE ORDER \u2014 ${props.formattedTotal.value}`
+              : 'PLACE ORDER'}
           </span>
         )}
         {!props.checkoutValidation.isAllValid && (

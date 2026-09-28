@@ -1,199 +1,155 @@
 /**
- * Customer provider — migrated from Vendure GraphQL to the SellRight REST shop
- * API (PASS 2). The exported function names + return shapes match what the
- * account pages / checkout already consume (Vendure-ish Customer/Address/Order);
- * the adapters in ~/utils/sellright-adapters do the shape mapping. The build
- * guard (guard-graphql-customer.sh) requires this file carry no runtime
- * graphql-tag — REST has none, so it passes.
+ * Customer/account data provider — native SellRight client (PASS 3). Talks to
+ * the API exclusively through `~/sellright/client`; zero Vendure shapes, no
+ * `~/generated/graphql-shop` imports, no `~/utils/sellright-adapters` mapping
+ * to a Vendure-ish Customer/Order. Every export returns the API's own native
+ * payload (or a thin wrapper around it), and pagination carries the server's
+ * real `total` — never the page array's length.
+ *
+ * The build guard (`guard-graphql-customer.sh`) requires this file carry no
+ * runtime `graphql-tag` — it has none.
  */
+import { sellright, SellRightError } from '~/sellright/client';
+import { describeAccountError, type AccountError } from '~/sellright/types/account';
 import type {
-	CreateAddressInput,
-	Customer,
-	UpdateAddressInput,
-} from '~/generated/graphql-shop';
-import {
-	srMe,
-	srGetAddresses,
-	srChangePassword,
-	srDeleteAddress,
-	srAccountOrders,
-	srAccountOrder,
-	srUpdateAddress,
-	srCreateAddress,
-	srLogout,
-	srErrorStatus,
-} from '~/utils/sellright';
-import type { Order } from '~/generated/graphql-shop';
-import {
-	adaptCustomer,
-	adaptAccountOrders,
-	adaptOrderDetail,
-	toAddressInput,
-} from '~/utils/sellright-adapters';
+	AccountOrderDetail,
+	AccountOrderList,
+	Address,
+	AuthCustomer,
+	NewAddressInput,
+	AddressPatch,
+} from '~/sellright/types/account';
 
-// 🚀 CUSTOMER QUERY CACHE - 3-minute cache for customer data
-const customerCache = new Map<string, { data: any; timestamp: number }>();
+// Query result cache — unrelated to stock/pricing data (never touches the
+// locked stock architecture); this only memoizes the current customer's own
+// profile/address/order reads for a few minutes to avoid refetching on every
+// account sub-page nav within one visit.
+const customerCache = new Map<string, { data: unknown; timestamp: number }>();
 const CUSTOMER_CACHE_DURATION = 3 * 60 * 1000; // 3 minutes
 
-const getCachedCustomerQuery = (key: string) => {
+function getCached<T>(key: string): T | null {
 	const cached = customerCache.get(key);
 	if (cached && Date.now() - cached.timestamp < CUSTOMER_CACHE_DURATION) {
-		return cached.data;
+		return cached.data as T;
 	}
 	return null;
-};
+}
 
-const setCachedCustomerQuery = (key: string, data: any) => {
+function setCached(key: string, data: unknown): void {
 	customerCache.set(key, { data, timestamp: Date.now() });
-	// Keep customer cache reasonable
 	if (customerCache.size > 30) {
 		const oldestKey = customerCache.keys().next().value;
-		if (oldestKey) {
-			customerCache.delete(oldestKey);
-		}
+		if (oldestKey) customerCache.delete(oldestKey);
 	}
-};
+}
 
-// Clear customer cache when data changes (mutations)
-const clearCustomerCache = () => {
-	customerCache.clear();
-};
+export const clearCustomerCacheAfterMutation = (): void => customerCache.clear();
 
-/** A 401 means "not logged in" — return null (the Vendure activeCustomer null). */
-const nullOn401 = (e: unknown): null => {
-	if (srErrorStatus(e) === 401) return null;
+/** A 401 means "not signed in" — resolve `null` rather than throw, mirroring
+ *  every other read below. Any other failure still propagates. */
+function nullOn401(e: unknown): null {
+	if (e instanceof SellRightError && e.status === 401) return null;
 	throw e;
-};
+}
 
-export const getActiveCustomerQuery = async (): Promise<Customer> => {
+export async function getMe(): Promise<AuthCustomer | null> {
 	try {
-		const me = await srMe();
-		return adaptCustomer(me) as unknown as Customer;
+		const { data } = await sellright().GET('/v1/shop/auth/me');
+		return data!;
 	} catch (e) {
-		return nullOn401(e) as unknown as Customer;
+		return nullOn401(e);
 	}
-};
+}
 
-export const getActiveCustomerAddressesQuery = async (): Promise<Customer> => {
+export async function getMeCached(): Promise<AuthCustomer | null> {
+	const cacheKey = 'me';
+	const cached = getCached<AuthCustomer | null>(cacheKey);
+	if (cached !== null) return cached;
+	const result = await getMe();
+	setCached(cacheKey, result);
+	return result;
+}
+
+export async function getAddresses(): Promise<Address[]> {
 	try {
-		const [me, addrs] = await Promise.all([srMe(), srGetAddresses()]);
-		return adaptCustomer(me, addrs.items) as unknown as Customer;
+		const { data } = await sellright().GET('/v1/shop/account/addresses');
+		return data?.items ?? [];
 	} catch (e) {
-		return nullOn401(e) as unknown as Customer;
+		if (e instanceof SellRightError && e.status === 401) return [];
+		throw e;
 	}
-};
+}
 
-export const updateCustomerPasswordMutation = async (
-	currentPassword: string,
-	newPassword: string
-) => {
+export type ChangePasswordResult = { ok: true } | ({ ok: false } & AccountError);
+
+export async function changePassword(currentPassword: string, newPassword: string): Promise<ChangePasswordResult> {
 	try {
-		await srChangePassword(currentPassword, newPassword);
+		await sellright().POST('/v1/shop/account/password', { body: { currentPassword, newPassword } });
 		clearCustomerCacheAfterMutation();
-		return { __typename: 'Success', success: true } as { __typename: string; message?: string; success?: boolean };
+		return { ok: true };
 	} catch (e) {
-		// 401 → wrong current password (or unauthenticated). Map to the Vendure
-		// InvalidCredentialsError the password page switches on.
-		if (srErrorStatus(e) === 401) {
-			return { __typename: 'InvalidCredentialsError', message: 'Current password is incorrect' } as { __typename: string; message?: string; success?: boolean };
-		}
+		// 401 on this endpoint means "current password is wrong" (the session
+		// itself is already known-good — account pages are behind the auth
+		// guard) — never conflate it with "unauthenticated".
+		return { ok: false, ...describeAccountError(e, { 401: 'wrong_password' }) };
+	}
+}
+
+export async function deleteAddress(id: string): Promise<{ ok: boolean }> {
+	const { data } = await sellright().DELETE('/v1/shop/account/addresses/{id}', { params: { path: { id } } });
+	clearCustomerCacheAfterMutation();
+	return data!;
+}
+
+/** Real pagination — `total` is the server's true order count, not the
+ *  returned page's array length (which under-reports past `limit` orders). */
+export async function getOrders(opts: { limit?: number; offset?: number } = {}): Promise<AccountOrderList> {
+	try {
+		const { data } = await sellright().GET('/v1/shop/account/orders', {
+			params: { query: { limit: opts.limit, offset: opts.offset } },
+		});
+		return data!;
+	} catch (e) {
+		if (e instanceof SellRightError && e.status === 401) return { items: [], total: 0, limit: opts.limit ?? 20, offset: opts.offset ?? 0 };
 		throw e;
 	}
-};
+}
 
-export const deleteCustomerAddressMutation = async (id: string) => {
-	const result = await srDeleteAddress(id);
-	clearCustomerCacheAfterMutation();
-	return result;
-};
-
-export const getActiveCustomerOrdersQuery = async (): Promise<Customer> => {
+/** Owned order detail by code (account history). Distinct from the
+ *  checkout-confirmation order lookup, which is unauthenticated/receipt-token
+ *  based and out of this file's scope. */
+export async function getOrderByCode(code: string): Promise<AccountOrderDetail | null> {
 	try {
-		const orders = await srAccountOrders();
-		// Shape like Vendure's activeCustomer.orders.items.
-		return { orders: { items: adaptAccountOrders(orders), totalItems: orders.items.length } } as unknown as Customer;
+		const { data } = await sellright().GET('/v1/shop/account/orders/{code}', { params: { path: { code } } });
+		return data!;
 	} catch (e) {
-		return nullOn401(e) as unknown as Customer;
-	}
-};
-
-/** Owned order detail by code (account history) — REST account-order endpoint.
- *  Distinct from the checkout-confirmation getOrderByCodeQuery (still Vendure),
- *  which needs payment/shipping detail this endpoint doesn't carry. */
-export const getAccountOrderByCodeQuery = async (code: string): Promise<Order | null> => {
-	try {
-		const o = await srAccountOrder(code);
-		return adaptOrderDetail(o) as unknown as Order;
-	} catch (e) {
-		if (srErrorStatus(e) === 404 || srErrorStatus(e) === 401) return null;
+		if (e instanceof SellRightError && (e.status === 404 || e.status === 401)) return null;
 		throw e;
 	}
-};
+}
 
-export const updateCustomerAddressMutation = async (
-	input: UpdateAddressInput,
-	_token?: string | undefined
-) => {
-	// UpdateAddressInput carries the Vendure address id + the changed fields.
-	const { id, ...rest } = input as UpdateAddressInput & { id: string };
-	await srUpdateAddress(id, toAddressInput(rest as any));
+export async function createAddress(input: NewAddressInput): Promise<{ id: string }> {
+	const { data } = await sellright().POST('/v1/shop/account/addresses', { body: input });
 	clearCustomerCacheAfterMutation();
-	// Callers read result.updateCustomerAddress; return the input echoed back.
-	return { updateCustomerAddress: { ...input } } as any;
-};
+	return data!;
+}
 
-export const createCustomerAddressMutation = async (
-	input: CreateAddressInput,
-	_token?: string | undefined
-) => {
-	const { id } = await srCreateAddress(toAddressInput(input as any));
+export async function updateAddress(id: string, input: AddressPatch): Promise<{ ok: boolean }> {
+	const { data } = await sellright().PATCH('/v1/shop/account/addresses/{id}', {
+		params: { path: { id } },
+		body: input,
+	});
 	clearCustomerCacheAfterMutation();
-	return { createCustomerAddress: { id, ...input } } as any;
-};
+	return data!;
+}
 
-export const logoutMutation = async () => {
-	try {
-		await srLogout();
-	} catch {
-		// logout is best-effort — a 403 (stale CSRF) still clears client state.
-	}
-	clearCustomerCache();
-	return { success: true } as any;
-};
+// ── Cached reads for account sub-pages ──────────────────────────────────────
 
-// 🚀 CACHED CUSTOMER QUERIES - Better performance for account pages
-
-export const getActiveCustomerCached = async () => {
-	const cacheKey = 'active-customer';
-	const cached = getCachedCustomerQuery(cacheKey);
+export async function getAddressesCached(): Promise<Address[]> {
+	const cacheKey = 'addresses';
+	const cached = getCached<Address[]>(cacheKey);
 	if (cached) return cached;
-
-	const result = await getActiveCustomerQuery();
-	setCachedCustomerQuery(cacheKey, result);
+	const result = await getAddresses();
+	setCached(cacheKey, result);
 	return result;
-};
-
-export const getActiveCustomerAddressesCached = async () => {
-	const cacheKey = 'customer-addresses';
-	const cached = getCachedCustomerQuery(cacheKey);
-	if (cached) return cached;
-
-	const result = await getActiveCustomerAddressesQuery();
-	setCachedCustomerQuery(cacheKey, result);
-	return result;
-};
-
-export const getActiveCustomerOrdersCached = async () => {
-	const cacheKey = 'customer-orders';
-	const cached = getCachedCustomerQuery(cacheKey);
-	if (cached) return cached;
-
-	const result = await getActiveCustomerOrdersQuery();
-	setCachedCustomerQuery(cacheKey, result);
-	return result;
-};
-
-// Clear cache after mutations that change customer data
-export const clearCustomerCacheAfterMutation = () => {
-	clearCustomerCache();
-};
+}

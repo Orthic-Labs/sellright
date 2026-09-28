@@ -1,7 +1,6 @@
 import { $, component$, useOnDocument, useSignal } from '@qwik.dev/core';
-import { useLocation } from '@qwik.dev/router';
 import XCircleIcon from '~/components/icons/XCircleIcon';
-import { updateCustomerEmailAddressMutation } from '~/providers/shop/account/account';
+import { verifyEmailChange } from '~/providers/shop/account/account';
 import { createSEOHead } from '~/utils/seo';
 
 export const head = createSEOHead({
@@ -12,18 +11,18 @@ export const head = createSEOHead({
 
 export default component$(() => {
 	const error = useSignal('');
-	const location = useLocation();
 
-	// T37: Verify email change on qinit
 	useOnDocument('qinit', $(async () => {
-		const updateCustomerEmailAddress = await updateCustomerEmailAddressMutation(
-			location.url.href.split('=')[1]
-		);
-
-		if (updateCustomerEmailAddress.__typename === 'Success') {
+		const token = new URLSearchParams(window.location.search).get('token');
+		if (!token) {
+			error.value = 'No verification token found in URL. Please check your email and click the link again.';
+			return;
+		}
+		const result = await verifyEmailChange(token);
+		if (result.ok) {
 			window.location.href = '/account';
 		} else {
-			error.value = updateCustomerEmailAddress.message;
+			error.value = result.message;
 		}
 	}));
 

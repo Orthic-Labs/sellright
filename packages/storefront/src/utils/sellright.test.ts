@@ -25,7 +25,7 @@ import {
 } from './sellright';
 import { adaptProduct, adaptSearch } from './sellright-adapters';
 import { getBlogPosts, getBlogPostBySlug } from '../providers/shop/blog/blog';
-import { loginMutation } from '../providers/shop/account/account';
+import { login } from '../providers/shop/account/account';
 import { registerCustomerFromSignup } from '../components/auth/signup-flow';
 
 type FetchCall = { url: string; init: RequestInit };
@@ -49,8 +49,17 @@ const enqueue = (...responses: Promise<Response>[]) => {
 beforeEach(() => {
 	calls.length = 0;
 	queue = [];
-	vi.stubGlobal('fetch', vi.fn(async (url: unknown, init?: RequestInit) => {
-		calls.push({ url: String(url), init: init ?? {} });
+	vi.stubGlobal('fetch', vi.fn(async (input: unknown, init?: RequestInit) => {
+		// The old `sr()` helper calls `fetch(url, init)` (two args); the native
+		// `~/sellright/client` calls `fetch(request)` (one `Request` object, via
+		// `boundedFetch`) — both real `fetch` implementations, just different
+		// valid call shapes. Normalize both to the same recorded `{url, init}`.
+		if (input instanceof Request) {
+			const body = await input.clone().text();
+			calls.push({ url: input.url, init: { method: input.method, body, headers: input.headers } });
+		} else {
+			calls.push({ url: String(input), init: init ?? {} });
+		}
 		const next = queue.shift();
 		if (!next) throw new Error('fetch called with no queued response');
 		return next;
@@ -83,7 +92,7 @@ describe('migrated plugin contracts', () => {
 	});
 	it('passes distinct fresh challenges through login and signup providers', async () => {
 		enqueue(respond(200, { token: 'session', customer: { id: 'buyer', email: 'buyer@example.test' } }));
-		await loginMutation('buyer@example.test', 'password1', true, 'fresh-login-token');
+		await login('buyer@example.test', 'password1', { rememberMe: true, turnstileToken: 'fresh-login-token' });
 		expect(lastBody().turnstileToken).toBe('fresh-login-token');
 		enqueue(respond(200, { token: 'session', customer: { id: 'buyer' } }));
 		const result = await registerCustomerFromSignup({ email: 'buyer@example.test', password: 'password1', confirmPassword: 'password1', firstName: 'Test', lastName: 'Buyer', turnstileToken: 'fresh-signup-token' });

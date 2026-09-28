@@ -5,7 +5,7 @@ import { HighlightedButton } from '~/components/buttons/HighlightedButton';
 import PlusIcon from '~/components/icons/PlusIcon';
 import { APP_STATE } from '~/constants';
 import {
-	deleteCustomerAddressMutation,
+	deleteAddress,
 } from '~/services/customer';
 import { ShippingAddress } from '~/types';
 import { createSEOHead } from '~/utils/seo';
@@ -55,7 +55,7 @@ export default component$(() => {
 							address={address}
 							onDelete$={async (id) => {
 								try {
-									await deleteCustomerAddressMutation(id);
+									await deleteAddress(id);
 									// Optimistically update state without full page reload
 									appState.addressBook = appState.addressBook.filter((a) => a.id !== id);
 								} catch (error) {

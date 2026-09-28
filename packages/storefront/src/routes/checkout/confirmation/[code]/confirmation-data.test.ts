@@ -1,13 +1,31 @@
 import { describe, expect, it, vi } from 'vitest';
 vi.mock('~/utils/seo', () => ({ createSEOHead: vi.fn() }));
-import { activeStepFromState, parseLineName } from './confirmation-data';
+import { activeStepFromState, parseLineName, isOrderSettled, isOrderTerminalUnpaid } from './confirmation-data';
 
 describe('SellRight confirmation progress', () => {
   it.each([
-    ['PendingPayment', 0], ['Paid', 1], ['Shipped', 2], ['Delivered', 3],
-    ['PaymentSettled', 1], ['PaymentAuthorized', 1],
+    ['PendingPayment', 0], ['Paid', 1], ['Shipped', 2], ['PartiallyShipped', 2], ['Delivered', 3],
+    ['Cancelled', 0], ['Declined', 0], ['AddingItems', 0], [undefined, 0],
   ])('maps %s to the correct step', (state, step) => {
-    expect(activeStepFromState(state as string)).toBe(step);
+    expect(activeStepFromState(state as string | undefined)).toBe(step);
+  });
+});
+
+describe('isOrderSettled', () => {
+  it.each([
+    ['Paid', true], ['Shipped', true], ['PartiallyShipped', true], ['Delivered', true],
+    ['PendingPayment', false], ['Cancelled', false], ['Declined', false], ['AddingItems', false], [undefined, false],
+  ])('%s → %s', (state, expected) => {
+    expect(isOrderSettled(state as string | undefined)).toBe(expected);
+  });
+});
+
+describe('isOrderTerminalUnpaid', () => {
+  it.each([
+    ['Cancelled', true], ['Declined', true],
+    ['Paid', false], ['PendingPayment', false], ['Shipped', false], [undefined, false],
+  ])('%s → %s', (state, expected) => {
+    expect(isOrderTerminalUnpaid(state as string | undefined)).toBe(expected);
   });
 });
 
