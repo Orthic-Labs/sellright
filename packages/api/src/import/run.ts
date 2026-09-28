@@ -138,6 +138,13 @@ export async function runMigration(input: {
     const assetRows = await q('SELECT id, source, preview FROM asset ORDER BY id');
     const assets = await stageVendureAssets(config.sourceAssetRoot, config.targetAssetRoot, config.storeId,
       assetRows as Array<{ id: unknown; source: string; preview: string | null }>, false);
+    // SR-08 follow-up: a source-quality file missing on disk falls back to its
+    // sibling preview (artifacts.ts) rather than dropping the asset — surface
+    // every substitution as a reviewed exclusion instead of a silent swap.
+    for (const entry of assets) {
+      if (entry.usedFallbackFrom) exclusions.push({ type: 'asset-source-fallback', table: 'asset',
+        detail: `${entry.sourcePath} missing on disk; used preview ${entry.usedFallbackFrom} instead`, count: 1 });
+    }
     const sourceDigest = digest({ config, sourceReads, assets });
     if (input.apply && sourceDigest !== input.expectedDigest) throw new Error('Source or migration configuration changed since dry run');
     const after: Record<string, unknown[]> = {};

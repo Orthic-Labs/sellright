@@ -72,20 +72,50 @@ async function readBounded(handle: FileHandle): Promise<Buffer> {
   return Buffer.concat(chunks, count);
 }
 
+/** Physical asset storage keys are namespaced storeId + '/' + ASSET_KEY_SEGMENT
+ * + '/' + <original relative path> — a neutral segment, not the source
+ * platform's name, since these keys are also the runtime-served storage
+ * path (never leak the origin system into a durable, externally-referenced
+ * identifier). Shared by catalog.ts's asset.path column value so the DB row
+ * and the physically staged file always agree. */
+export const ASSET_KEY_SEGMENT = 'media';
+
+async function readAt(root: string, relPath: string): Promise<Buffer> {
+  return withinRoot(root, relPath, false, async source => {
+    const handle = await open(source, fileFlags);
+    try { return await readBounded(handle); } finally { await handle.close(); }
+  });
+}
+
 export async function stageVendureAssets(
   sourceRoot: string, targetRoot: string, storeId: string,
   assets: Array<{ id: unknown; source: string; preview: string | null }>, apply: boolean,
 ) {
   if (!/^[0-9a-f-]{36}$/i.test(storeId)) throw new Error('Invalid target store identity');
-  const manifest: Array<{ sourcePath: string; targetPath: string; sha256: string; bytes: number }> = [];
+  const manifest: Array<{ sourcePath: string; targetPath: string; sha256: string; bytes: number; usedFallbackFrom?: string }> = [];
   const paths = new Set(assets.flatMap(a => [a.source, a.preview].filter((p): p is string => !!p)));
+  // A source-quality file can be pruned from disk (cleanup, CDN migration,
+  // etc.) while its preview survives and is still what the storefront/admin
+  // actually renders. Never drop the asset for that — fall back to the
+  // sibling preview's bytes and report the substitution (manifest
+  // `usedFallbackFrom`), which run.ts turns into an `asset-source-fallback`
+  // exclusion entry. Only ENOENT triggers the fallback; any other read
+  // failure (corrupt file, size limit, symlink rejection) still throws.
+  const previewForSource = new Map<string, string>();
+  for (const a of assets) if (a.source && a.preview) previewForSource.set(a.source, a.preview);
   for (const path of [...paths].sort()) {
-    const bytes = await withinRoot(sourceRoot, path, false, async source => {
-      const handle = await open(source, fileFlags);
-      try { return await readBounded(handle); } finally { await handle.close(); }
-    });
+    let bytes: Buffer;
+    let usedFallbackFrom: string | undefined;
+    try {
+      bytes = await readAt(sourceRoot, path);
+    } catch (error) {
+      const fallbackPath = previewForSource.get(path);
+      if (!fallbackPath || (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      bytes = await readAt(sourceRoot, fallbackPath);
+      usedFallbackFrom = fallbackPath;
+    }
     const sha256 = createHash('sha256').update(bytes).digest('hex');
-    const targetPath = storeId + '/vendure/' + path;
+    const targetPath = storeId + '/' + ASSET_KEY_SEGMENT + '/' + path;
     if (apply) await withinRoot(targetRoot, targetPath, true, async target => {
       let handle: FileHandle;
       try {
@@ -100,7 +130,7 @@ export async function stageVendureAssets(
       }
       try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); }
     });
-    manifest.push({ sourcePath: path, targetPath, sha256, bytes: bytes.length });
+    manifest.push({ sourcePath: path, targetPath, sha256, bytes: bytes.length, ...(usedFallbackFrom ? { usedFallbackFrom } : {}) });
   }
   return manifest;
 }

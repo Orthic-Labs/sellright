@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, readFile, writeFile, symlink, rm } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { stageVendureAssets } from './artifacts.js';
+import { ASSET_KEY_SEGMENT, stageVendureAssets } from './artifacts.js';
 
 const roots: string[] = [];
 const storeId = '11111111-1111-4111-8111-111111111111';
@@ -38,11 +39,37 @@ describe.skipIf(process.platform !== 'linux')('confined asset migration', () => 
     await symlink(outside, join(f.target, storeId));
     await expect(stageVendureAssets(f.source, f.target, storeId, f.assets, true)).rejects.toThrow();
     await rm(join(f.target, storeId));
-    await mkdir(join(f.target, storeId, 'vendure'), { recursive: true });
+    await mkdir(join(f.target, storeId, ASSET_KEY_SEGMENT), { recursive: true });
     const victim = join(outside, 'victim.txt');
     await writeFile(victim, 'untouched');
-    await symlink(victim, join(f.target, storeId, 'vendure', 'image.txt'));
+    await symlink(victim, join(f.target, storeId, ASSET_KEY_SEGMENT, 'image.txt'));
     await expect(stageVendureAssets(f.source, f.target, storeId, f.assets, true)).rejects.toThrow();
     expect(await readFile(victim, 'utf8')).toBe('untouched');
+  });
+  it('storage keys never contain the source platform name', async () => {
+    const f = await fixture();
+    const [entry] = await stageVendureAssets(f.source, f.target, storeId, f.assets, true);
+    expect(entry!.targetPath).toBe(`${storeId}/${ASSET_KEY_SEGMENT}/image.txt`);
+    expect(entry!.targetPath).not.toMatch(/vendure/i);
+  });
+  it('falls back to the sibling preview when the source file is missing on disk, and reports it', async () => {
+    const f = await fixture();
+    await writeFile(join(f.source, 'preview.txt'), 'preview bytes');
+    const assets = [{ id: 1, source: 'missing-source.txt', preview: 'preview.txt' }];
+    const result = await stageVendureAssets(f.source, f.target, storeId, assets, true);
+    const sourceEntry = result.find(r => r.sourcePath === 'missing-source.txt');
+    expect(sourceEntry).toBeDefined();
+    expect(sourceEntry!.usedFallbackFrom).toBe('preview.txt');
+    expect(sourceEntry!.sha256).toBe(createHash('sha256').update('preview bytes').digest('hex'));
+    const staged = await readFile(join(f.target, sourceEntry!.targetPath), 'utf8');
+    expect(staged).toBe('preview bytes');
+    // the preview's own path is still staged too, independently
+    const previewEntry = result.find(r => r.sourcePath === 'preview.txt');
+    expect(previewEntry!.usedFallbackFrom).toBeUndefined();
+  });
+  it('still throws when the source is missing and there is no preview to fall back to', async () => {
+    const f = await fixture();
+    const assets = [{ id: 1, source: 'missing-source.txt', preview: null }];
+    await expect(stageVendureAssets(f.source, f.target, storeId, assets, true)).rejects.toThrow();
   });
 });
