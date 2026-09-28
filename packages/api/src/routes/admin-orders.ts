@@ -10,6 +10,7 @@ import { reserveStockOrThrow, StockReservationError, validateReservableItems } f
 import { normalizeEmail } from '../auth/email.js';
 import { buildInvoice, buildPackingSlip, renderInvoiceHtml } from '../orders/invoice.js';
 import { evaluateCoupon } from '../money/coupon.js';
+import { couponItemsFromFacts, loadCouponMatchContext } from '../money/coupon-context.js';
 import { resolveTaxRate } from '../money/tax.js';
 import { requestRefund, RefundError } from '../payments/refunds.js';
 import { unitPrice } from './admin-order-utils.js';
@@ -132,7 +133,12 @@ adminOrders.openapi(
       let promotion;
       if (o.promotionId) {
         const [promo] = await tx.select().from(s.promotion).where(eq(s.promotion.id, o.promotionId)).limit(1);
-        if (promo) { const ev = evaluateCoupon({ type: promo.type, value: promo.value, conditions: promo.conditions, freeShipping: promo.freeShipping }, { subtotal: subtotalCents, activeVerifications: [] }); if (ev.valid && ev.promotion) promotion = ev.promotion; }
+        if (promo) {
+          const couponFacts = await loadCouponMatchContext(tx, priced.map((p) => p.v.productId));
+          const couponItems = couponItemsFromFacts(priced.map((p) => ({ quantity: p.qty, productId: p.v.productId })), couponFacts);
+          const ev = evaluateCoupon({ type: promo.type, value: promo.value, conditions: promo.conditions, freeShipping: promo.freeShipping }, { subtotal: subtotalCents, activeVerifications: [], items: couponItems });
+          if (ev.valid && ev.promotion) promotion = ev.promotion;
+        }
       }
       const totals = calculateOrderTotals({ lines: priced.map((p) => ({ unitPrice: p.unitPrice, quantity: p.qty })), shipping: o.shippingTotal, taxRate, taxInclusive: storeRow!.taxInclusive, shippingTaxable: storeRow!.shippingTaxable, promotion });
 

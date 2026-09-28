@@ -7,7 +7,8 @@ import { resolveStoreFromCtx } from './store-context.js';
 import { type StoreCtx } from '../store-context.js';
 import * as s from '../db/schema.js';
 import { calculateOrderTotals, type Promotion } from '../money/totals.js';
-import { evaluateCoupon, productFacetIds } from '../money/coupon.js';
+import { evaluateCoupon } from '../money/coupon.js';
+import { couponItemsFromFacts, loadCouponMatchContext } from '../money/coupon-context.js';
 import { selectAutomaticPromotion } from '../money/auto-discount.js';
 import { resolveTaxRate } from '../money/tax.js';
 import { selectUnitPrice, variantPriceRuleFromConfig } from '../money/pricing.js';
@@ -67,7 +68,7 @@ export async function priceCart(
   const variants = skus.length
     ? await tx
         .select({
-          sku: s.productVariant.sku, name: s.productVariant.name, price: s.productVariant.price, metafields: s.productVariant.metafields,
+          sku: s.productVariant.sku, name: s.productVariant.name, price: s.productVariant.price, productId: s.productVariant.productId,
           salePrice: s.productVariant.salePrice, isPreOrder: s.productVariant.isPreOrder,
           preOrderPrice: s.productVariant.preOrderPrice, enabled: s.productVariant.enabled,
           fulfillmentType: s.productVariant.fulfillmentType,
@@ -98,6 +99,11 @@ export async function priceCart(
   const now = new Date();
   const timeValid = and(or(isNull(s.promotion.startsAt), lte(s.promotion.startsAt, now)), or(isNull(s.promotion.endsAt), gte(s.promotion.endsAt, now)));
   const activeVerifications = opts.token ? (await resolveCustomer(tx, opts.token))?.activeVerifications ?? [] : [];
+  const couponFacts = await loadCouponMatchContext(tx, variants.map((v) => v.productId));
+  const couponItems = couponItemsFromFacts(
+    items.filter((i) => bySku.has(i.sku)).map((i) => ({ quantity: i.quantity, productId: bySku.get(i.sku)?.productId ?? null })),
+    couponFacts,
+  );
   if (opts.couponCode) {
     const [promo] = await tx
       .select()
@@ -107,7 +113,7 @@ export async function priceCart(
     if (!promo) {
       coupon = { code: opts.couponCode, applied: false, reason: 'invalid or expired code' };
     } else {
-      const ev = evaluateCoupon({ type: promo.type, value: promo.value, conditions: promo.conditions, freeShipping: promo.freeShipping }, { subtotal: availSubtotal, activeVerifications, items: items.filter(i => bySku.has(i.sku)).map(i => ({ quantity: i.quantity, facetValueIds: productFacetIds(bySku.get(i.sku)?.metafields) })) });
+      const ev = evaluateCoupon({ type: promo.type, value: promo.value, conditions: promo.conditions, freeShipping: promo.freeShipping }, { subtotal: availSubtotal, activeVerifications, items: couponItems });
       if (ev.valid && ev.promotion) { promotion = ev.promotion; coupon = { code: opts.couponCode, applied: true }; }
       else coupon = { code: opts.couponCode, applied: false, reason: ev.reason };
     }
@@ -120,7 +126,7 @@ export async function priceCart(
       .where(and(isNull(s.promotion.code), eq(s.promotion.enabled, true), timeValid));
     const best = selectAutomaticPromotion(
       autos.map((a) => ({ id: a.id, type: a.type, value: a.value, conditions: a.conditions, priority: a.priority, freeShipping: a.freeShipping })),
-      { subtotal: availSubtotal, activeVerifications, items: items.filter(i => bySku.has(i.sku)).map(i => ({ quantity: i.quantity, facetValueIds: productFacetIds(bySku.get(i.sku)?.metafields) })) },
+      { subtotal: availSubtotal, activeVerifications, items: couponItems },
     );
     if (best) promotion = { type: best.type, value: best.value, freeShipping: best.freeShipping };
   }

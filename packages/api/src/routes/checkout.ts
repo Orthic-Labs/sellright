@@ -5,7 +5,8 @@ import { withStore, type Tx } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
 import { calculateOrderTotals, type Promotion } from '../money/totals.js';
-import { evaluateCoupon, productFacetIds } from '../money/coupon.js';
+import { evaluateCoupon } from '../money/coupon.js';
+import { couponItemsFromFacts, loadCouponMatchContext } from '../money/coupon-context.js';
 import { selectAutomaticPromotion } from '../money/auto-discount.js';
 import { resolveTaxRate } from '../money/tax.js';
 import { selectUnitPrice, variantPriceRuleFromConfig } from '../money/pricing.js';
@@ -363,6 +364,8 @@ checkout.openapi(
         const v = bySku.get(i.sku)!;
         return { v, qty: i.quantity, unitPrice: selectUnitPrice(v, priceRule) };
       });
+      const couponFacts = await loadCouponMatchContext(tx, priced.map((p) => p.v.productId));
+      const couponItems = couponItemsFromFacts(priced.map((p) => ({ quantity: p.qty, productId: p.v.productId })), couponFacts);
 
       // ── Shipping: always server-authoritative. Physical carts MUST use a
       // configured method; software/digital carts never need a shipping method
@@ -436,7 +439,7 @@ checkout.openapi(
             .where(and(isNull(s.promotion.code), eq(s.promotion.enabled, true), timeValid));
           const best = selectAutomaticPromotion(
             autos.map((a) => ({ id: a.id, type: a.type, value: a.value, conditions: a.conditions, priority: a.priority, freeShipping: a.freeShipping })),
-            { subtotal: subtotalCents, activeVerifications, items: priced.map(p => ({ quantity: p.qty, facetValueIds: productFacetIds(p.v.metafields) })) },
+            { subtotal: subtotalCents, activeVerifications, items: couponItems },
           );
           promo = best ? autos.find((a) => a.id === best.id) : undefined;
         }
@@ -458,7 +461,7 @@ checkout.openapi(
           }
           const ev = evaluateCoupon(
             { type: promo.type, value: promo.value, conditions: promo.conditions, freeShipping: promo.freeShipping },
-            { subtotal: subtotalCents, activeVerifications, items: priced.map(p => ({ quantity: p.qty, facetValueIds: productFacetIds(p.v.metafields) })) },
+            { subtotal: subtotalCents, activeVerifications, items: couponItems },
           );
           // Apply only if valid AND within limits; else proceed at full price
           // (server is authoritative — the returned grandTotal is the truth).

@@ -167,8 +167,13 @@ const DD_SEED = [
   `INSERT INTO product_variant VALUES (1, 1, 'SKU-1', true, 'TRUE', false, 0, NULL, 1, 1500, 800, false, '2024-06-01')`,
   `INSERT INTO product_variant_translation VALUES (1, 'en', 'Widget Default')`,
   `INSERT INTO product_variant_price VALUES (1, 1, 'USD', 1000)`,
+  // AFF10 carries a facet-based eligibility condition (facet value 1 = 'edc',
+  // a PUBLIC facet on product 1 per product_facet_values_facet_value above) —
+  // exercises the de-Vendure translation to a native `at_least_n_in_collections`
+  // condition backed by a synthetic collection (see the promotions assertions
+  // in the "Damned Designs schema" test below).
   `INSERT INTO promotion VALUES
-     (10, 'AFF10', '[]', '[{"code":"order_percentage_discount","args":[{"name":"discount","value":"10"}]}]', NULL, NULL, NULL, NULL, 0, true, NULL),
+     (10, 'AFF10', '[{"code":"at_least_n_with_facets","args":[{"name":"minimum","value":"1"},{"name":"facets","value":"[\"1\"]"}]}]', '[{"code":"order_percentage_discount","args":[{"name":"discount","value":"10"}]}]', NULL, NULL, NULL, NULL, 0, true, NULL),
      (77, 'OLD20', '[]', '[{"code":"order_percentage_discount","args":[{"name":"discount","value":"20"}]}]', NULL, NULL, NULL, NULL, 0, false, NULL)`,
   `INSERT INTO "order" VALUES
      (1, 'ORD-1', 'PaymentSettled', 'USD', '2024-03-01 00:00:00', 1000, 1000, 0, 0, '{"line1":"1 Main St"}', '{"line1":"1 Main St"}', 'AFF10', 1, '2024-03-01 00:00:00', '2024-03-01 00:00:00', false),
@@ -501,6 +506,20 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     // unpaid-balance computation reads.
     const order = await targetOne(storeId, 'order', `AND code = 'ORD-1'`);
     expect(order.promotion_id).toBe(migrationId(storeId, 'vendure:test', 'promotion', 10));
+
+    // De-Vendure: AFF10's `at_least_n_with_facets` condition (facet value 1,
+    // 'edc') is rewritten to native `at_least_n_in_collections`, backed by a
+    // synthetic, unpublished collection containing product 1 (the only
+    // product carrying that facet value). Runtime never sees a facet id.
+    const eligibilityCollectionId = migrationId(storeId, 'vendure:test', 'facet-eligibility-collection', 1);
+    const aff10 = await targetOne(storeId, 'promotion', `AND id = '${migrationId(storeId, 'vendure:test', 'promotion', 10)}'`);
+    expect(aff10.conditions).toEqual([
+      { code: 'at_least_n_in_collections', args: [{ name: 'minimum', value: '1' }, { name: 'collectionIds', value: JSON.stringify([eligibilityCollectionId]) }] },
+    ]);
+    const eligibilityCollection = await targetOne(storeId, 'collection', `AND id = '${eligibilityCollectionId}'`);
+    expect(eligibilityCollection).toMatchObject({ published: false, slug: expect.stringContaining('edc') });
+    const eligibilityMembers = await targetRows(storeId, 'collection_product', `AND collection_id = '${eligibilityCollectionId}'`);
+    expect(eligibilityMembers.map((m) => m.product_id)).toEqual([migrationId(storeId, 'vendure:test', 'product', 1)]);
 
     // Waitlist -> subscriber(kind='waitlist'), topic = the exact key the
     // restock sweep claims: restock:<imported-variant-uuid>. The variant-1

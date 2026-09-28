@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { actionToTypeValue, classifyPromotionActions } from './catalog.js';
+import { actionToTypeValue, classifyPromotionActions, parseFacetIdsArg, translatePromotionConditions } from './catalog.js';
 
 describe('R24 — combined discount + free-shipping promotion import', () => {
   it('classifies a single discount action as single', () => {
@@ -44,5 +44,53 @@ describe('R24 — combined discount + free-shipping promotion import', () => {
 
   it('actionToTypeValue returns null for an empty action list', () => {
     expect(actionToTypeValue([])).toBeNull();
+  });
+});
+
+describe('de-Vendure — facet-condition -> native collection-condition translation', () => {
+  it('parseFacetIdsArg reads the JSON-encoded facets arg', () => {
+    expect(parseFacetIdsArg({ code: 'at_least_n_with_facets', args: [{ name: 'facets', value: '["1","2"]' }] })).toEqual(['1', '2']);
+  });
+
+  it('parseFacetIdsArg tolerates a missing/malformed facets arg', () => {
+    expect(parseFacetIdsArg({ code: 'at_least_n_with_facets' })).toEqual([]);
+    expect(parseFacetIdsArg({ code: 'at_least_n_with_facets', args: [{ name: 'facets', value: 'not json' }] })).toEqual([]);
+  });
+
+  it('translatePromotionConditions rewrites at_least_n_with_facets to at_least_n_in_collections', () => {
+    const map = new Map([['1', 'col-uuid-1'], ['2', 'col-uuid-2']]);
+    const out = translatePromotionConditions(
+      [{ code: 'at_least_n_with_facets', args: [{ name: 'minimum', value: '3' }, { name: 'facets', value: '["1","2"]' }] }],
+      map,
+    );
+    expect(out).toEqual([
+      { code: 'at_least_n_in_collections', args: [{ name: 'minimum', value: '3' }, { name: 'collectionIds', value: JSON.stringify(['col-uuid-1', 'col-uuid-2']) }] },
+    ]);
+  });
+
+  it('translatePromotionConditions leaves other conditions (minimum_order_amount, verified_customer) untouched', () => {
+    const passthrough = [
+      { code: 'minimum_order_amount', args: [{ name: 'amount', value: '1000' }] },
+      { code: 'verified_customer', args: [{ name: 'categories', value: '["military"]' }] },
+    ];
+    expect(translatePromotionConditions(passthrough, new Map())).toEqual(passthrough);
+  });
+
+  it('translatePromotionConditions drops unresolved facet ids (no surviving product) to an empty, fail-closed collectionIds list', () => {
+    const out = translatePromotionConditions(
+      [{ code: 'at_least_n_with_facets', args: [{ name: 'minimum', value: '1' }, { name: 'facets', value: '["9"]' }] }],
+      new Map(), // facet id 9 never resolved to a collection
+    );
+    expect(out).toEqual([
+      { code: 'at_least_n_in_collections', args: [{ name: 'minimum', value: '1' }, { name: 'collectionIds', value: '[]' }] },
+    ]);
+  });
+
+  it('translatePromotionConditions defaults minimum to "1" when the source omitted it', () => {
+    const out = translatePromotionConditions(
+      [{ code: 'at_least_n_with_facets', args: [{ name: 'facets', value: '["1"]' }] }],
+      new Map([['1', 'col-uuid-1']]),
+    );
+    expect(out[0]).toMatchObject({ args: [{ name: 'minimum', value: '1' }, { name: 'collectionIds', value: '["col-uuid-1"]' }] });
   });
 });
