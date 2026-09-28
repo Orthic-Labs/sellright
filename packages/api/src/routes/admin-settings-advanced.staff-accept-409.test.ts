@@ -38,6 +38,8 @@ describe('POST /v1/admin/staff/accept — invalid invite', () => {
     });
 
     expect(res.status).toBe(409);
-    expect(await res.json()).toEqual({ error: 'invite is invalid, already used, or expired' });
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe('INVITE_INVALID');
+    expect(body.error.message).toBe('invite is invalid, already used, or expired');
   });
 });

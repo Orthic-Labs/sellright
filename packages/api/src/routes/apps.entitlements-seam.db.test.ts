@@ -310,7 +310,7 @@ describe('entitlements seam — provider throws an unexpected error', () => {
     const res = await activate(app, 'dev-err-act');
     expect(res.status).toBe(500);
     const body = (await res.json()) as { error: string };
-    expect(body.error).not.toMatch(/leaked internal stack trace|secret detail/);
+    expect(JSON.stringify(body.error)).not.toMatch(/leaked internal stack trace|secret detail/);
     expect(await activationCount('dev-err-act')).toBe(0);
   });
 
@@ -326,7 +326,7 @@ describe('entitlements seam — provider throws an unexpected error', () => {
     });
     expect(res.status).toBe(500);
     const body = (await res.json()) as { error: string };
-    expect(body.error).not.toMatch(/hunter2/);
+    expect(JSON.stringify(body.error)).not.toMatch(/hunter2/);
     expect(await customerCount('err-trial@example.com')).toBe(0);
     expect(await trialLicenseCount('err-trial@example.com')).toBe(0);
   });

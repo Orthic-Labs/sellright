@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
-import { OpenAPIHono } from '@hono/zod-openapi';
-import { z } from 'zod';
+import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { bodyLimit } from 'hono/body-limit';
 import { and, eq } from 'drizzle-orm';
 import { customerToken } from '../auth/session.js';
@@ -14,6 +13,8 @@ import { recordDispute } from '../disputes/disputes.js';
 import {
   GatewayPaymentError, startGatewayPayment, readGatewayAttempt, verifyGatewayAttempt,
 } from '../payments/gateway-payment.js';
+import { apiErrorSchema, errJson, slugifyCode } from '../lib/api-error.js';
+import type { Context } from 'hono';
 
 export const gatewayPayments = new OpenAPIHono();
 gatewayPayments.use('/v1/webhooks/sezzle/*', bodyLimit({ maxSize: 262144 }));
@@ -22,42 +23,148 @@ const requestSchema = z.object({
   token: z.string().min(1).max(4096).optional(),
 }).strict();
 
-gatewayPayments.post('/v1/shop/orders/:code/gateway-payment', async c => {
-  const st = await resolveStoreFromCtx(c);
-  const retry = await attemptRetryAfter(clientIp(c), 'gateway:' + clientIp(c));
-  if (retry) return c.json({ error: 'Too many payment attempts' }, 429);
-  const key = c.req.header('idempotency-key');
-  if (!key || key.length > 200) return c.json({ error: 'Idempotency-Key required (maximum 200 characters)' }, 400);
-  const body = requestSchema.safeParse(await c.req.json().catch(() => null));
-  if (!body.success) return c.json({ error: 'Invalid payment request' }, 400);
-  try {
-    const result = await startGatewayPayment({
-      storeId: st.id, code: c.req.param('code'), config: st.config,
-      ...body.data, idempotencyKey: key, receiptToken: c.req.header('x-receipt-token'),
-      customerSession: customerToken(c),
-    });
-    return c.json(result, 200);
-  } catch (error) {
-    if (error instanceof GatewayPaymentError) return c.json({ error: error.message }, error.status);
-    throw error;
-  }
-});
+// Shared response shape for both routes below — mirrors `view()` in
+// ../payments/gateway-payment.ts: the persisted attempt row plus whatever the
+// provider-specific `result` JSON carries (Sezzle's checkoutUrl/state; NMI
+// carries neither). Documented here (SR-storefront-client audit) so the
+// generated OpenAPI contract — and the typed storefront client built from it
+// — actually cover the checkout payment path; these two routes used to be
+// plain, undocumented Hono handlers.
+const gatewayAttemptSchema = z.object({
+  attemptId: z.string().uuid(),
+  status: z.string(),
+  checkoutUrl: z.string().optional(),
+  state: z.string().optional(),
+}).openapi('GatewayAttempt');
 
-gatewayPayments.post('/v1/shop/orders/:code/gateway-payment/:attempt/verify', async c => {
-  const st = await resolveStoreFromCtx(c);
-  const retry = await attemptRetryAfter(clientIp(c), 'gateway-verify:' + clientIp(c));
-  if (retry) return c.json({ error: 'Too many verification attempts' }, 429);
-  try {
-    const input = { storeId: st.id, code: c.req.param('code'), id: c.req.param('attempt'),
-      receiptToken: c.req.header('x-receipt-token'), customerSession: customerToken(c) };
-    if (!z.string().uuid().safeParse(input.id).success) return c.json({ error: 'Payment not found' }, 404);
-    await readGatewayAttempt(input);
-    return c.json(await verifyGatewayAttempt(st.id, input.id), 200);
-  } catch (error) {
-    if (error instanceof GatewayPaymentError) return c.json({ error: error.message }, error.status);
-    throw error;
+// The verify/reconcile route's result is genuinely heterogeneous — it fans
+// out to a charge view (attemptId/status/checkoutUrl/state, same as above), a
+// Sezzle-session view, or a refund reconciliation view (attemptId/status plus
+// finalizeRefund's own fields — refundId/refundState/etc., see
+// ../payments/gateway-payment.ts's reconcileRefundAttempt). Rather than
+// hand-fork three near-duplicate schemas that will drift from the real
+// branches, this documents the two fields every branch guarantees and passes
+// the rest through — a typed client still gets `attemptId`/`status` typed,
+// plus whatever else came back as an open record.
+const gatewayVerifyResultSchema = z.object({
+  attemptId: z.string().uuid(),
+  status: z.string(),
+  checkoutUrl: z.string().optional(),
+  state: z.string().optional(),
+  refundId: z.string().optional(),
+  refundState: z.string().optional(),
+}).openapi('GatewayVerifyResult');
+
+const errorSchema = apiErrorSchema();
+
+/** GatewayPaymentError.status is a genuine union (400|404|409|503), not a
+ *  literal, at either catch site below. Passing it straight to `errJson`
+ *  collapses Hono's per-status response typing into one non-distributed
+ *  union that fails to match a route's discriminated `responses` map — this
+ *  switch forces a real status LITERAL at each call, which Hono distributes
+ *  correctly. */
+function gatewayErrorResponse(c: Context, error: GatewayPaymentError) {
+  const code = slugifyCode(error.message);
+  switch (error.status) {
+    case 400: return errJson(c, 400, code, error.message);
+    case 404: return errJson(c, 404, code, error.message);
+    case 409: return errJson(c, 409, code, error.message);
+    case 503: return errJson(c, 503, code, error.message);
   }
-});
+}
+
+
+gatewayPayments.openapi(
+  createRoute({
+    method: 'post',
+    path: '/v1/shop/orders/{code}/gateway-payment',
+    summary: 'Start a gateway payment attempt (NMI charge or Sezzle hosted session)',
+    request: {
+      params: z.object({ code: z.string() }),
+      headers: z.object({
+        'idempotency-key': z.string().min(1).max(200),
+        'x-receipt-token': z.string().optional(),
+      }),
+      body: { content: { 'application/json': { schema: requestSchema } } },
+    },
+    responses: {
+      200: { description: 'Attempt started', content: { 'application/json': { schema: gatewayAttemptSchema } } },
+      400: { description: 'Invalid request', content: { 'application/json': { schema: errorSchema } } },
+      404: { description: 'Order not found', content: { 'application/json': { schema: errorSchema } } },
+      409: { description: 'Payment method disabled', content: { 'application/json': { schema: errorSchema } } },
+      429: { description: 'Rate limited', content: { 'application/json': { schema: errorSchema } } },
+      503: { description: 'Gateway unavailable', content: { 'application/json': { schema: errorSchema } } },
+    },
+  }),
+  async (c) => {
+    const st = await resolveStoreFromCtx(c);
+    const retry = await attemptRetryAfter(clientIp(c), 'gateway:' + clientIp(c));
+    if (retry) return errJson(c, 429, 'RATE_LIMITED', 'Too many payment attempts');
+    const { 'idempotency-key': key, 'x-receipt-token': receiptToken } = c.req.valid('header');
+    const body = c.req.valid('json');
+    try {
+      const result = await startGatewayPayment({
+        storeId: st.id, code: c.req.param('code'), config: st.config,
+        ...body, idempotencyKey: key, receiptToken,
+        customerSession: customerToken(c),
+      });
+      return c.json(result, 200);
+    } catch (error) {
+      if (error instanceof GatewayPaymentError) return gatewayErrorResponse(c, error);
+      throw error;
+    }
+  },
+  // Per-route hook (NOT a global defaultHook — scoped to just this route):
+  // without it, `@hono/zod-openapi`'s default validation-failure response is
+  // `c.json({ success: false, error: <ZodError> }, 400)` — NOT this API's
+  // structured envelope — so a missing/invalid header or body would 400 with
+  // the wrong shape before the handler above ever runs. `result.target` tells
+  // us which validator failed ('header' | 'json' here) so the two failure
+  // modes keep their specific, storefront-client-documented codes instead of
+  // collapsing into one generic message.
+  (result, c) => {
+    if (result.success) return undefined;
+    if (result.target === 'header') {
+      return errJson(c, 400, 'IDEMPOTENCY_KEY_REQUIRED', 'Idempotency-Key required (maximum 200 characters)', { param: 'idempotency-key' });
+    }
+    return errJson(c, 400, 'INVALID_PAYMENT_REQUEST', 'Invalid payment request');
+  },
+);
+
+gatewayPayments.openapi(
+  createRoute({
+    method: 'post',
+    path: '/v1/shop/orders/{code}/gateway-payment/{attempt}/verify',
+    summary: 'Reconcile a gateway payment attempt with the provider',
+    request: {
+      params: z.object({ code: z.string(), attempt: z.string() }),
+      headers: z.object({ 'x-receipt-token': z.string().optional() }),
+    },
+    responses: {
+      200: { description: 'Attempt reconciled', content: { 'application/json': { schema: gatewayVerifyResultSchema } } },
+      400: { description: 'Invalid request', content: { 'application/json': { schema: errorSchema } } },
+      404: { description: 'Payment or order not found', content: { 'application/json': { schema: errorSchema } } },
+      409: { description: 'Requires separate reconciliation / environment mismatch', content: { 'application/json': { schema: errorSchema } } },
+      429: { description: 'Rate limited', content: { 'application/json': { schema: errorSchema } } },
+      503: { description: 'Gateway unavailable', content: { 'application/json': { schema: errorSchema } } },
+    },
+  }),
+  async (c) => {
+    const st = await resolveStoreFromCtx(c);
+    const retry = await attemptRetryAfter(clientIp(c), 'gateway-verify:' + clientIp(c));
+    if (retry) return errJson(c, 429, 'RATE_LIMITED', 'Too many verification attempts');
+    try {
+      const input = { storeId: st.id, code: c.req.param('code'), id: c.req.param('attempt'),
+        receiptToken: c.req.header('x-receipt-token'), customerSession: customerToken(c) };
+      if (!z.string().uuid().safeParse(input.id).success) return errJson(c, 404, 'PAYMENT_NOT_FOUND', 'Payment not found');
+      await readGatewayAttempt(input);
+      return c.json(await verifyGatewayAttempt(st.id, input.id), 200);
+    } catch (error) {
+      if (error instanceof GatewayPaymentError) return gatewayErrorResponse(c, error);
+      throw error;
+    }
+  },
+);
 
 // Signature selects the configured account. Request headers never select another tenant.
 gatewayPayments.post('/v1/webhooks/sezzle/:storeId/:accountId', async c => {

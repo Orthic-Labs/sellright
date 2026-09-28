@@ -12,6 +12,7 @@ import { setCustomerCookies, clearCustomerCookies, customerCsrfValid, newCsrf } 
 import { clientIp, loginRetryAfter, recordLoginFailure, clearLoginAttempts } from '../auth/rate-limit.js';
 import { normalizeEmail } from '../auth/email.js';
 import { createHash, randomBytes } from 'node:crypto';
+import { apiErrorSchema, errJson } from '../lib/api-error.js';
 import { enqueueEmailVerify, enqueueMagicLink, resolveStorefrontUrl } from '../email/dispatch.js';
 import { verifyTurnstileToken } from '../security/turnstile.js';
 import { env } from '../env.js';
@@ -90,9 +91,9 @@ auth.openapi(
     request: { body: { content: { 'application/json': { schema: z.object({ email: z.string().email(), password: z.string().min(8), firstName: z.string().optional(), lastName: z.string().optional(), turnstileToken: z.string().optional() }) } } } },
     responses: {
       200: { description: 'Registered', content: { 'application/json': { schema: z.object({ token: z.string(), customer: CustomerOut }) } } },
-      403: { description: 'Bot check failed', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
-      409: { description: 'Email taken', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
-      429: { description: 'Rate limited', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+      403: { description: 'Bot check failed', content: { 'application/json': { schema: apiErrorSchema() } } },
+      409: { description: 'Email taken', content: { 'application/json': { schema: apiErrorSchema() } } },
+      429: { description: 'Rate limited', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
   async (c) => {
@@ -104,11 +105,11 @@ auth.openapi(
     const regIp = clientIp(c);
     const regBucket = `register:${regIp}:${email}`;
     const regRetry = await loginRetryAfter(regIp, regBucket);
-    if (regRetry > 0) return c.json({ error: `too many attempts — try again in ${regRetry}s` }, 429);
+    if (regRetry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${regRetry}s`);
     // PAR-06: server-side Turnstile when the store config carries a secret.
     if (!(await turnstileOk(st.config, turnstileToken, regIp))) {
       await recordLoginFailure(regIp, regBucket);
-      return c.json({ error: 'verification failed' }, 403);
+      return errJson(c, 403, 'BOT_CHECK_FAILED', 'verification failed');
     }
     const passwordHash = await hashPassword(password);
     const out = await withStore(st.id, async (tx): Promise<{ taken: true } | { token: string; id: string; firstName: string | null; lastName: string | null }> => {
@@ -127,7 +128,7 @@ auth.openapi(
       await enqueueEmailVerify(tx, st.id, emailStoreCtx(st), email, { url: verifyUrl });
       return { token, id: cust!.id, firstName: cust!.firstName, lastName: cust!.lastName };
     });
-    if ('taken' in out) { await recordLoginFailure(regIp, regBucket); return c.json({ error: 'email already registered' }, 409); }
+    if ('taken' in out) { await recordLoginFailure(regIp, regBucket); return errJson(c, 409, 'EMAIL_TAKEN', 'email already registered'); }
     await clearLoginAttempts(regIp, regBucket);
     setCustomerCookies(c, out.token, newCsrf(), customerCookieSeconds(st));
     return c.json({ token: out.token, customer: { id: out.id, email, firstName: out.firstName, lastName: out.lastName, phone: null, emailVerified: false, isMigrated: false } }, 200);
@@ -143,9 +144,9 @@ auth.openapi(
     request: { body: { content: { 'application/json': { schema: z.object({ email: z.string().email(), password: z.string(), turnstileToken: z.string().optional(), rememberMe: z.boolean().default(true) }) } } } },
     responses: {
       200: { description: 'OK', content: { 'application/json': { schema: z.object({ token: z.string(), customer: CustomerOut }) } } },
-      401: { description: 'Invalid', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
-      403: { description: 'Bot check failed or email not verified', content: { 'application/json': { schema: z.object({ error: z.string(), code: z.literal('not_verified').optional() }) } } },
-      429: { description: 'Too many attempts', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+      401: { description: 'Invalid', content: { 'application/json': { schema: apiErrorSchema() } } },
+      403: { description: 'Bot check failed or email not verified', content: { 'application/json': { schema: apiErrorSchema().extend({ code: z.literal('not_verified').optional() }) } } },
+      429: { description: 'Too many attempts', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
   async (c) => {
@@ -154,10 +155,10 @@ auth.openapi(
     const email = normalizeEmail(rawEmail);
     const ip = clientIp(c);
     const retry = await loginRetryAfter(ip, email);
-    if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
+    if (retry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${retry}s`);
     if (!(await turnstileOk(st.config, turnstileToken, ip))) {
       await recordLoginFailure(ip, email);
-      return c.json({ error: 'verification failed' }, 403);
+      return errJson(c, 403, 'BOT_CHECK_FAILED', 'verification failed');
     }
     const out = await withStore(st.id, async (tx): Promise<{ ok: false } | { ok: 'not_verified' } | { ok: true; token: string; ttlMs: number; customer: z.infer<typeof CustomerOut> }> => {
       const [cust] = await tx.select({ id: s.customer.id, email: s.customer.email, firstName: s.customer.firstName, lastName: s.customer.lastName, phone: s.customer.phone, emailVerified: s.customer.emailVerified, passwordHash: s.customer.passwordHash }).from(s.customer).where(eq(s.customer.email, email)).limit(1);
@@ -180,13 +181,13 @@ auth.openapi(
       const token = await createSession(tx, st.id, cust.id, policy);
       return { ok: true, token, ttlMs: policy.ttlMs, customer: { id: cust.id, email: cust.email, firstName: cust.firstName, lastName: cust.lastName, phone: cust.phone, emailVerified: cust.emailVerified, isMigrated: false } };
     });
-    if (out.ok === false) { await recordLoginFailure(ip, email); return c.json({ error: 'invalid email or password' }, 401); }
+    if (out.ok === false) { await recordLoginFailure(ip, email); return errJson(c, 401, 'INVALID_CREDENTIALS', 'invalid email or password'); }
     if (out.ok === 'not_verified') {
       // A correct password DOES clear the login-failure counter here — this is
       // a legitimate credential, just an unverified account — so a real user
       // isn't throttled out of resending their verification email.
       await clearLoginAttempts(ip, email);
-      return c.json({ error: 'please verify your email before signing in', code: 'not_verified' as const }, 403);
+      return errJson(c, 403, 'EMAIL_NOT_VERIFIED', 'please verify your email before signing in', { extra: { code: 'not_verified' as const } });
     }
     await clearLoginAttempts(ip, email);
     // Cookie Max-Age tracks the SAME (possibly shortened) TTL the session row
@@ -210,7 +211,7 @@ auth.openapi(
     request: { body: { content: { 'application/json': { schema: z.object({ email: z.string().email() }) } } } },
     responses: {
       200: { description: 'Always OK', content: { 'application/json': { schema: z.object({ ok: z.boolean() }) } } },
-      429: { description: 'Rate limited', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+      429: { description: 'Rate limited', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
   async (c) => {
@@ -219,7 +220,7 @@ auth.openapi(
     const ip = clientIp(c);
     const bucket = `resendverify:${email}`;
     const retry = await loginRetryAfter(ip, bucket);
-    if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
+    if (retry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${retry}s`);
     await recordLoginFailure(ip, bucket);
     await withStore(st.id, async (tx) => {
       const [cust] = await tx.select({ id: s.customer.id, emailVerified: s.customer.emailVerified })
@@ -243,17 +244,17 @@ auth.openapi(
     request: { body: { content: { 'application/json': { schema: z.object({ credential: z.string().min(20) }) } } } },
     responses: {
       200: { description: 'OK', content: { 'application/json': { schema: z.object({ token: z.string(), customer: CustomerOut }) } } },
-      401: { description: 'Invalid token', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
-      409: { description: 'Not configured, or an unverified account already owns this email', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+      401: { description: 'Invalid token', content: { 'application/json': { schema: apiErrorSchema() } } },
+      409: { description: 'Not configured, or an unverified account already owns this email', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
     const clientId = await googleClientId(st.id);
-    if (!clientId) return c.json({ error: 'Google sign-in is not configured for this store' }, 409);
+    if (!clientId) return errJson(c, 409, 'GOOGLE_SIGNIN_NOT_CONFIGURED', 'Google sign-in is not configured for this store');
     const { credential } = c.req.valid('json');
     const g = await verifyGoogleIdToken(credential, clientId);
-    if (!g || !g.emailVerified) return c.json({ error: 'invalid or unverified Google token' }, 401);
+    if (!g || !g.emailVerified) return errJson(c, 401, 'GOOGLE_TOKEN_INVALID', 'invalid or unverified Google token');
     const out = await withStore(st.id, async (tx): Promise<{ kind: 'blocked' } | { kind: 'ok'; token: string; customer: z.infer<typeof CustomerOut> }> => {
       // Match by googleSub first, then link by email, else create.
       let [cust] = await tx.select().from(s.customer).where(eq(s.customer.googleSub, g.sub)).limit(1);
@@ -288,7 +289,7 @@ auth.openapi(
       return { kind: 'ok', token, customer: { id: cust.id, email: cust.email, firstName: cust.firstName, lastName: cust.lastName, phone: cust.phone, emailVerified: true, isMigrated: cust.passwordHash == null } };
     });
     if (out.kind === 'blocked') {
-      return c.json({ error: 'an account with this email already exists — sign in with your password and verify your email first' }, 409);
+      return errJson(c, 409, 'EMAIL_TAKEN_UNVERIFIED', 'an account with this email already exists — sign in with your password and verify your email first');
     }
     setCustomerCookies(c, out.token, newCsrf(), customerCookieSeconds(st));
     return c.json({ token: out.token, customer: out.customer }, 200);
@@ -312,21 +313,21 @@ auth.openapi(
     request: { body: { content: { 'application/json': { schema: z.object({ identityToken: z.string().min(20) }) } } } },
     responses: {
       200: { description: 'OK', content: { 'application/json': { schema: z.object({ token: z.string(), customer: CustomerOut }) } } },
-      401: { description: 'Invalid token', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
-      409: { description: 'Not configured, or an unverified account already owns this email', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+      401: { description: 'Invalid token', content: { 'application/json': { schema: apiErrorSchema() } } },
+      409: { description: 'Not configured, or an unverified account already owns this email', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
     const audiences = appleClientIds(st.config);
-    if (!audiences.length) return c.json({ error: 'Sign in with Apple is not configured for this store' }, 409);
+    if (!audiences.length) return errJson(c, 409, 'APPLE_SIGNIN_NOT_CONFIGURED', 'Sign in with Apple is not configured for this store');
     const { identityToken } = c.req.valid('json');
     let apple: Awaited<ReturnType<typeof verifyAppleIdentityToken>> = null;
     for (const aud of audiences) {
       apple = await verifyAppleIdentityToken(identityToken, aud);
       if (apple) break;
     }
-    if (!apple) return c.json({ error: 'invalid Apple identity token' }, 401);
+    if (!apple) return errJson(c, 401, 'APPLE_TOKEN_INVALID', 'invalid Apple identity token');
     const { sub, email: appleEmail, emailVerified } = apple;
     const out = await withStore(st.id, async (tx): Promise<{ kind: 'blocked' } | { kind: 'ok'; token: string; customer: z.infer<typeof CustomerOut> }> => {
       type CustomerRow = { id: string; email: string; first_name: string | null; last_name: string | null; phone: string | null; email_verified: boolean; password_hash: string | null };
@@ -360,7 +361,7 @@ auth.openapi(
       return { kind: 'ok', token, customer: { id: cust.id, email: cust.email, firstName: cust.first_name, lastName: cust.last_name, phone: cust.phone, emailVerified: cust.email_verified, isMigrated: cust.password_hash == null } };
     });
     if (out.kind === 'blocked') {
-      return c.json({ error: 'an account with this email already exists — sign in with your password and verify your email first' }, 409);
+      return errJson(c, 409, 'EMAIL_TAKEN_UNVERIFIED', 'an account with this email already exists — sign in with your password and verify your email first');
     }
     setCustomerCookies(c, out.token, newCsrf(), customerCookieSeconds(st));
     return c.json({ token: out.token, customer: out.customer }, 200);
@@ -380,21 +381,21 @@ auth.openapi(
     request: { body: { content: { 'application/json': { schema: z.object({ email: z.string().email() }) } } } },
     responses: {
       200: { description: 'Always OK', content: { 'application/json': { schema: z.object({ ok: z.boolean() }) } } },
-      409: { description: 'Not enabled', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
-      429: { description: 'Rate limited', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+      409: { description: 'Not enabled', content: { 'application/json': { schema: apiErrorSchema() } } },
+      429: { description: 'Rate limited', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
     const policy = magicLinkPolicy(st.config);
-    if (!policy.enabled) return c.json({ error: 'magic-link sign-in is not enabled for this store' }, 409);
+    if (!policy.enabled) return errJson(c, 409, 'MAGIC_LINK_DISABLED', 'magic-link sign-in is not enabled for this store');
     const email = normalizeEmail(c.req.valid('json').email);
     const ip = clientIp(c);
     // Attempt-counted in practice: every request records — each one can trigger
     // an outgoing email, so it's abuse-relevant whether or not an account exists.
     const bucket = `magiclink:${email}`;
     const retry = await loginRetryAfter(ip, bucket);
-    if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
+    if (retry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${retry}s`);
     await withStore(st.id, async (tx) => {
       const [cust] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, email)).limit(1);
       if (!cust) return; // enumeration-safe: identical 200, no token, no email
@@ -418,12 +419,12 @@ auth.openapi(
     request: { body: { content: { 'application/json': { schema: z.object({ token: z.string().min(20) }) } } } },
     responses: {
       200: { description: 'OK', content: { 'application/json': { schema: z.object({ token: z.string(), customer: CustomerOut }) } } },
-      409: { description: 'Invalid/expired/used or not enabled', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+      409: { description: 'Invalid/expired/used or not enabled', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
-    if (!magicLinkPolicy(st.config).enabled) return c.json({ error: 'magic-link sign-in is not enabled for this store' }, 409);
+    if (!magicLinkPolicy(st.config).enabled) return errJson(c, 409, 'MAGIC_LINK_DISABLED', 'magic-link sign-in is not enabled for this store');
     const { token: raw } = c.req.valid('json');
     const out = await withStore(st.id, async (tx): Promise<{ ok: false } | { ok: true; token: string; customer: z.infer<typeof CustomerOut> }> => {
       const consumed = await consumeMagicLink(tx, st.id, raw);
@@ -436,7 +437,7 @@ auth.openapi(
       const sessionToken = await createSession(tx, st.id, cust.id, sessionPolicy(st.config));
       return { ok: true, token: sessionToken, customer: { id: cust.id, email: cust.email, firstName: cust.firstName, lastName: cust.lastName, phone: cust.phone, emailVerified: true, isMigrated: cust.passwordHash == null } };
     });
-    if (!out.ok) return c.json({ error: 'token is invalid, expired, or already used' }, 409);
+    if (!out.ok) return errJson(c, 409, 'MAGIC_LINK_INVALID', 'token is invalid, expired, or already used');
     setCustomerCookies(c, out.token, newCsrf(), customerCookieSeconds(st));
     return c.json({ token: out.token, customer: out.customer }, 200);
   },
@@ -450,17 +451,17 @@ auth.openapi(
     summary: 'Current customer',
     responses: {
       200: { description: 'OK', content: { 'application/json': { schema: CustomerOut } } },
-      401: { description: 'Unauthenticated', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+      401: { description: 'Unauthenticated', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
     const token = customerToken(c);
-    if (!token) return c.json({ error: 'not authenticated' }, 401);
+    if (!token) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
     // /auth/me is the explicit account-refresh read — make it authoritative:
     // a renewable session extends here even outside the renew window.
     const cust = await withStore(st.id, (tx) => resolveCustomer(tx, token, true));
-    if (!cust) return c.json({ error: 'not authenticated' }, 401);
+    if (!cust) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
     return c.json({ id: cust.id, email: cust.email, firstName: cust.firstName, lastName: cust.lastName, phone: cust.phone, emailVerified: cust.emailVerified, isMigrated: cust.isMigrated }, 200);
   },
 );
@@ -475,14 +476,14 @@ auth.openapi(
     request: { query: z.object({ email: z.string().email(), turnstileToken: z.string().max(2048).optional(), honeypot: z.string().max(1024).optional() }) },
     responses: {
       200: { description: 'OK', content: { 'application/json': { schema: z.object({ exists: z.boolean() }) } } },
-      429: { description: 'Too many attempts', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+      429: { description: 'Too many attempts', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
     const ip = clientIp(c);
     const retry = await loginRetryAfter(ip, `checkemail:${ip}`);
-    if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
+    if (retry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${retry}s`);
     await recordLoginFailure(ip, `checkemail:${ip}`); // count every probe toward the throttle
     const query = c.req.valid('query');
     if (query.honeypot || !(await turnstileOk(st.config, query.turnstileToken, ip))) {
@@ -503,11 +504,11 @@ auth.openapi(
     method: 'post',
     path: '/v1/shop/auth/logout',
     summary: 'Log out',
-    responses: { 200: { description: 'OK', content: { 'application/json': { schema: z.object({ ok: z.boolean() }) } } }, 403: { description: 'CSRF', content: { 'application/json': { schema: z.object({ error: z.string() }) } } } },
+    responses: { 200: { description: 'OK', content: { 'application/json': { schema: z.object({ ok: z.boolean() }) } } }, 403: { description: 'CSRF', content: { 'application/json': { schema: apiErrorSchema() } } } },
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
-    if (!customerCsrfValid(c)) return c.json({ error: 'invalid CSRF token' }, 403);
+    if (!customerCsrfValid(c)) return errJson(c, 403, 'CSRF_INVALID', 'invalid CSRF token');
     const token = customerToken(c);
     if (token) await withStore(st.id, (tx) => deleteSession(tx, token));
     clearCustomerCookies(c);

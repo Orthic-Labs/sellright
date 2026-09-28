@@ -4,6 +4,7 @@ import { and, desc, eq } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { hashPassword } from '../auth/password.js';
+import { errJson } from '../lib/api-error.js';
 import { normalizeEmail } from '../auth/email.js';
 import {
   createAdminUser,
@@ -360,7 +361,7 @@ adminSettingsAdvanced.openapi(
     const b = c.req.valid('json');
     const inv = await findInviteByTokenHash(hashTok(b.token));
     if (!inv || inv.acceptedAt || inv.expiresAt.getTime() <= Date.now()) {
-      return c.json({ error: 'invite is invalid, already used, or expired' }, 409);
+      return errJson(c, 409, 'INVITE_INVALID', 'invite is invalid, already used, or expired');
     }
     const passwordHash = await hashPassword(b.password);
     let adminId = await findAdminIdByEmail(inv.email);

@@ -9,6 +9,7 @@ import { customerCsrfValid, clearCustomerCookies } from '../auth/cookies.js';
 import { createHash } from 'node:crypto';
 import { revokeDeviceRemote } from '../licensing/device-leases.js';
 import { loadOrderFulfillments, loadOrderLines, loadOrderPayments, loadOrderPromotionCode } from './order-facts.js';
+import { apiErrorSchema, errJson } from '../lib/api-error.js';
 
 const hashToken = (t: string) => createHash('sha256').update(t).digest('hex');
 
@@ -24,7 +25,7 @@ const Address = z.object({
   isDefaultShipping: z.boolean().optional(),
   isDefaultBilling: z.boolean().optional(),
 });
-const errSchema = z.object({ error: z.string() });
+const errSchema = apiErrorSchema();
 
 async function me(tx: Tx, token: string | null): Promise<SessionCustomer | null> {
   return token ? resolveCustomer(tx, token) : null;
@@ -47,7 +48,7 @@ account.openapi(
         items: z.array(z.object({ code: z.string(), state: z.string(), currency: z.string(), grandTotal: z.number().int(), placedAt: z.string().nullable(), lines: z.number().int() })),
         total: z.number().int(), limit: z.number().int(), offset: z.number().int(),
       }) } } },
-      401: { description: 'Unauthenticated', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+      401: { description: 'Unauthenticated', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
   async (c) => {
@@ -79,7 +80,7 @@ account.openapi(
         .offset(offset);
       return { total, items: items.map((o) => ({ ...o, placedAt: o.placedAt ? o.placedAt.toISOString() : null })) };
     });
-    if (out === null) return c.json({ error: 'not authenticated' }, 401);
+    if (out === null) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
     return c.json({ items: out.items, total: out.total, limit, offset }, 200);
   },
 );
@@ -137,7 +138,7 @@ account.openapi(
         latestVersion: latest.get(r.appKey) ?? null,
       }));
     });
-    if (out === null) return c.json({ error: 'not authenticated' }, 401);
+    if (out === null) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
     return c.json({ items: out }, 200);
   },
 );
@@ -170,7 +171,7 @@ account.openapi(
           image: z.string().nullable(), isPreOrder: z.boolean(), shipDate: z.string().nullable(),
         })),
       }) } } },
-      404: { description: 'Not found', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+      404: { description: 'Not found', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
   async (c) => {
@@ -193,7 +194,7 @@ account.openapi(
       const promotionCode = await loadOrderPromotionCode(tx, order.promotionId);
       return { kind: 'ok' as const, order, lines, payments, fulfillments, promotionCode };
     });
-    if (out.kind !== 'ok') return c.json({ error: out.kind === 'unauth' ? 'not authenticated' : 'order not found' }, 404);
+    if (out.kind !== 'ok') return out.kind === 'unauth' ? errJson(c, 404, 'NOT_AUTHENTICATED', 'not authenticated') : errJson(c, 404, 'ORDER_NOT_FOUND', 'order not found');
     return c.json({
       code: out.order.code, state: out.order.state, currency: out.order.currency,
       subtotal: out.order.subtotal, shippingTotal: out.order.shippingTotal, taxTotal: out.order.taxTotal,
@@ -227,7 +228,7 @@ account.openapi(
         isDefaultShipping: s.address.isDefaultShipping, isDefaultBilling: s.address.isDefaultBilling,
       }).from(s.address).where(eq(s.address.customerId, cust.id)).orderBy(desc(s.address.isDefaultShipping));
     });
-    if (out === null) return c.json({ error: 'not authenticated' }, 401);
+    if (out === null) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
     return c.json({ items: out }, 200);
   },
 );
@@ -256,7 +257,7 @@ account.openapi(
         .returning({ id: s.customer.id, email: s.customer.email, firstName: s.customer.firstName, lastName: s.customer.lastName, phone: s.customer.phone });
       return row ?? null;
     });
-    if (out === null) return c.json({ error: 'not authenticated' }, 401);
+    if (out === null) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
     return c.json(out, 200);
   },
 );
@@ -288,8 +289,8 @@ account.openapi(
       await tx.delete(s.session).where(and(...conds));
       return 'ok';
     });
-    if (out === 'unauth') return c.json({ error: 'not authenticated' }, 401);
-    if (out === 'wrong') return c.json({ error: 'current password is incorrect' }, 401);
+    if (out === 'unauth') return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
+    if (out === 'wrong') return errJson(c, 401, 'PASSWORD_INCORRECT', 'current password is incorrect');
     return c.json({ ok: true }, 200);
   },
 );
@@ -319,7 +320,7 @@ account.openapi(
       }).returning({ id: s.address.id });
       return row!.id;
     });
-    if (out === null) return c.json({ error: 'not authenticated' }, 401);
+    if (out === null) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
     return c.json({ id: out }, 201);
   },
 );
@@ -352,8 +353,8 @@ account.openapi(
       const res = await tx.update(s.address).set(patch).where(and(eq(s.address.id, id), eq(s.address.customerId, cust.id))).returning({ id: s.address.id });
       return res.length ? 'ok' : 'notfound';
     });
-    if (out === 'unauth') return c.json({ error: 'not authenticated' }, 401);
-    if (out === 'notfound') return c.json({ error: 'address not found' }, 404);
+    if (out === 'unauth') return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
+    if (out === 'notfound') return errJson(c, 404, 'ADDRESS_NOT_FOUND', 'address not found');
     return c.json({ ok: true }, 200);
   },
 );
@@ -378,8 +379,8 @@ account.openapi(
       const res = await tx.delete(s.address).where(and(eq(s.address.id, id), eq(s.address.customerId, cust.id))).returning({ id: s.address.id });
       return res.length ? 'ok' : 'notfound';
     });
-    if (out === 'unauth') return c.json({ error: 'not authenticated' }, 401);
-    if (out === 'notfound') return c.json({ error: 'address not found' }, 404);
+    if (out === 'unauth') return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
+    if (out === 'notfound') return errJson(c, 404, 'ADDRESS_NOT_FOUND', 'address not found');
     return c.json({ ok: true }, 200);
   },
 );
@@ -424,7 +425,7 @@ account.openapi(
       }).from(s.order).where(eq(s.order.customerId, cust.id)).orderBy(desc(s.order.createdAt));
       return { profile, addresses, orders };
     });
-    if (out === null || !out.profile) return c.json({ error: 'not authenticated' }, 401);
+    if (out === null || !out.profile) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
     return c.json({
       exportedAt: new Date().toISOString(),
       profile: { ...out.profile, createdAt: out.profile.createdAt ? out.profile.createdAt.toISOString() : null },
@@ -456,8 +457,8 @@ account.openapi(
   async (c) => {
     const st = await resolveStoreFromCtx(c);
     // Authenticate BEFORE CSRF so an unauthenticated request gets 401 (not 403).
-    if (!customerToken(c)) return c.json({ error: 'not authenticated' }, 401);
-    if (!customerCsrfValid(c)) return c.json({ error: 'invalid CSRF token' }, 403);
+    if (!customerToken(c)) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
+    if (!customerCsrfValid(c)) return errJson(c, 403, 'CSRF_INVALID', 'invalid CSRF token');
     const out = await withStore(st.id, async (tx): Promise<'unauth' | 'active_subscription' | 'ok'> => {
       const cust = await me(tx, customerToken(c));
       if (!cust) return 'unauth';
@@ -536,8 +537,8 @@ account.openapi(
       await tx.delete(s.customer).where(eq(s.customer.id, cust.id));
       return 'ok';
     });
-    if (out === 'unauth') return c.json({ error: 'not authenticated' }, 401);
-    if (out === 'active_subscription') return c.json({ error: 'cancel your active subscription before deleting your account' }, 409);
+    if (out === 'unauth') return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
+    if (out === 'active_subscription') return errJson(c, 409, 'ACTIVE_SUBSCRIPTION_EXISTS', 'cancel your active subscription before deleting your account');
     clearCustomerCookies(c);
     return c.json({ deleted: true }, 200);
   },

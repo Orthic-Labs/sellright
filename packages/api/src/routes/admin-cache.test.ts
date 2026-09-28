@@ -57,7 +57,7 @@ describe('POST /v1/admin/cache/purge', () => {
   it('fails closed (503) when CACHE_ADMIN_TOKEN is not configured', async () => {
     const { status, body } = await purge({ storeSlug: 'acme' }, 'anything');
     expect(status).toBe(503);
-    expect((body as { error: string }).error).toMatch(/not configured/i);
+    expect((body as { error: { message: string } }).error.message).toMatch(/not configured/i);
   });
 
   it('rejects a missing token (401)', async () => {

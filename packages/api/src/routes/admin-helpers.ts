@@ -4,21 +4,42 @@
  * common zod fragments live here so every admin route file uses one definition.
  */
 import { z } from '@hono/zod-openapi';
+import type { Context } from 'hono';
 import { sql } from 'drizzle-orm';
 import { bearer } from '../auth/session.js';
 import { cookie, SESSION_COOKIE } from '../auth/cookies.js';
 import { resolveAdmin, type AdminPrincipal, type AdminStoreAccess } from '../auth/admin-session.js';
+import { apiErrorSchema, errorEnvelope, slugifyCode, type HttpStatus } from '../lib/api-error.js';
 
 // Generic in the schema type so the concrete Zod type flows through to
 // createRoute — @hono/zod-openapi v1 infers `c.req.valid('json')` from it;
 // widening to z.ZodTypeAny (the old signature) collapses it to `unknown`.
 export const J = <T extends z.ZodTypeAny>(schema: T) => ({ 'application/json': { schema } });
-export const errBody = { content: J(z.object({ error: z.string() })) };
+// SR-CLIENT-1: the structured envelope (lib/api-error.ts), not a bare
+// `{ error: string }` — every route using `errBody` for its OpenAPI response
+// docs is documenting (and, via HttpError + app.ts's onError, actually
+// returning) `{ error: { code, message, param?, requestId? } }`.
+export const errBody = { content: J(apiErrorSchema()) };
 
-export type HttpStatus = 400 | 401 | 403 | 404 | 409 | 413 | 415 | 422 | 429 | 502 | 503;
+export type { HttpStatus };
+/** Central admin-surface error type, thrown and formatted once by app.ts's
+ *  `onError`. `code` is optional at the throw site — when omitted it's
+ *  derived from `message` (see `slugifyCode`), so all pre-existing
+ *  `new HttpError(status, message)` call sites keep compiling and now emit
+ *  the structured envelope for free. `extra` lets a throw site attach
+ *  sibling fields (alongside `error`, never inside it) the way the old
+ *  inline `c.json({ error, ...extra }, status)` calls did. */
 export class HttpError extends Error {
-  constructor(public status: HttpStatus, message: string) {
+  public readonly code: string;
+  constructor(
+    public status: HttpStatus,
+    message: string,
+    code?: string,
+    public param?: string,
+    public extra?: Record<string, unknown>,
+  ) {
     super(message);
+    this.code = code ?? slugifyCode(message);
   }
 }
 
@@ -115,11 +136,13 @@ export const PAID_STATES = sql`array['Paid','PartiallyRefunded','Refunded']::ord
 
 // Generic so the happy-path return type (the typed c.json union) flows through to
 // the OpenAPIHono handler; the error branch is cast into that same union.
-export async function guard<T>(c: { json: (b: unknown, status?: number) => Response }, fn: () => Promise<T>): Promise<T> {
+export async function guard<T>(c: Context, fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
   } catch (e) {
-    if (e instanceof HttpError) return c.json({ error: e.message }, e.status) as unknown as T;
+    if (e instanceof HttpError) {
+      return c.json(errorEnvelope(c, e.code, e.message, { param: e.param, extra: e.extra }), e.status) as unknown as T;
+    }
     throw e;
   }
 }

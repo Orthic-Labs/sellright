@@ -34,12 +34,40 @@ describe('native catalog generation', () => {
       const detail = JSON.parse(await readFile(join(outDir, 'current/products/fixture.json'), 'utf8'));
       expect(detail.facetValues).toEqual([{ name: 'edc', facetName: 'Tags' }]);
       expect(detail.variants[0]).toMatchObject({ id: 'FIXTURE', priceWithTax: 3000, options: [{ code: option, groupId: group, group: 'Color', name: 'Red' }] });
+
+      // SR-CLIENT-1 — v2 (native): stable UUID ids (not slug/sku), tags as a
+      // plain array, prices as { amount, currency, taxInclusive }, and
+      // compareAt/sale/preorder as independent native fields (never a
+      // Vendure-flavored customFields grab-bag).
+      const manifestV2 = JSON.parse(await readFile(join(outDir, 'current/shop-catalog.v2.json'), 'utf8'));
+      expect(manifestV2.products).toHaveLength(1);
+      expect(manifestV2.products[0]).toMatchObject({
+        id: product, slug: 'fixture', tags: ['edc'], inStock: true,
+        priceRange: { min: { amount: 3000, currency: 'USD', taxInclusive: false }, max: { amount: 3000, currency: 'USD', taxInclusive: false } },
+        images: [{ url: '/assets/fixture/product.webp', position: 0 }],
+      });
+      const detailV2 = JSON.parse(await readFile(join(outDir, 'current/products-v2/fixture.json'), 'utf8'));
+      expect(detailV2.id).toBe(product);
+      expect(detailV2.tags).toEqual(['edc']);
+      expect(detailV2.variants).toHaveLength(1);
+      expect(detailV2.variants[0]).toMatchObject({
+        id: variant, sku: 'FIXTURE',
+        price: { amount: 3000, currency: 'USD', taxInclusive: false }, // preorder rule active, preOrderPrice wins
+        compareAtPrice: { amount: 5000, currency: 'USD', taxInclusive: false }, // base price, since 3000 < 5000
+        salePrice: { amount: 2000, currency: 'USD', taxInclusive: false }, // exposed independently of which rule is active
+        preOrderPrice: { amount: 3000, currency: 'USD', taxInclusive: false },
+        isPreOrder: true,
+        options: [{ code: option, groupId: group, group: 'Color', name: 'Red' }],
+      });
+
       await withStore(store, async tx => { await tx.execute(sql`UPDATE product_variant SET enabled = false WHERE id = ${variant}`); });
       await publishCatalogManifest({ outDir, storeSlug: slug });
       expect(JSON.parse(await readFile(join(outDir, 'current/products/fixture.json'), 'utf8')).variants).toEqual([]);
+      expect(JSON.parse(await readFile(join(outDir, 'current/products-v2/fixture.json'), 'utf8')).variants).toEqual([]);
       await withStore(store, async tx => { await tx.execute(sql`UPDATE product SET deleted_at = now() WHERE id = ${product}`); });
       expect((await publishCatalogManifest({ outDir, storeSlug: slug })).products).toBe(0);
       await expect(readFile(join(outDir, 'current/products/fixture.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(outDir, 'current/products-v2/fixture.json'))).rejects.toMatchObject({ code: 'ENOENT' });
       expect((await pool.query('SELECT 1 AS ready')).rows[0].ready).toBe(1);
     } finally {
       await rm(outDir, { recursive: true, force: true });
@@ -83,6 +111,17 @@ describe('native catalog generation', () => {
 
       const detailB = JSON.parse(await readFile(join(outDir, 'current/products/prod-b.json'), 'utf8'));
       expect(detailB).toEqual(firstGenB); // reused verbatim — proves it was NOT re-queried/re-serialized
+
+      // v2 doesn't share v1's incremental-reuse optimization (always a full
+      // scan — see catalog.ts's buildEntries doc comment), so a SCOPED v1
+      // publish must still produce a CORRECT, COMPLETE v2 for both products,
+      // stock included, not just the explicitly-scoped one.
+      const manifestV2 = JSON.parse(await readFile(join(outDir, 'current/shop-catalog.v2.json'), 'utf8'));
+      expect(manifestV2.products).toHaveLength(2);
+      const av2 = manifestV2.products.find((p: { slug: string }) => p.slug === 'prod-a');
+      const bv2 = manifestV2.products.find((p: { slug: string }) => p.slug === 'prod-b');
+      expect(av2.inStock).toBe(false);
+      expect(bv2.inStock).toBe(true);
 
       // Archiving the affected product's owner must DROP its entry, not
       // leave a stale one behind, even on the scoped path.

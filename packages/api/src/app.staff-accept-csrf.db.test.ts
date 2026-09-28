@@ -41,8 +41,8 @@ describe.skipIf(!isTestDb)('POST /v1/admin/staff/accept — CSRF exemption (SEC-
     // route body instead of being blocked at the CSRF middleware.
     expect(res.status).not.toBe(403);
     expect(res.status).toBe(409);
-    const body = (await res.json()) as { error: string };
-    expect(body.error).toMatch(/invalid|expired/i);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.message).toMatch(/invalid|expired/i);
   });
 
   it('still 403s an unrelated cookie-session admin mutation with no CSRF token (regression: gate still enforced elsewhere)', async () => {
@@ -59,7 +59,8 @@ describe.skipIf(!isTestDb)('POST /v1/admin/staff/accept — CSRF exemption (SEC-
       body: JSON.stringify({ email: 'x@example.com', role: 'staff', password: 'password123' }),
     });
     expect(res.status).toBe(403);
-    const body = (await res.json()) as { error: string };
-    expect(body.error).toMatch(/csrf/i);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe('CSRF_INVALID');
+    expect(body.error.message).toMatch(/csrf/i);
   });
 });

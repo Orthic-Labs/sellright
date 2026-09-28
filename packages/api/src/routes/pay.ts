@@ -7,6 +7,7 @@ import { getProvider, isPaymentMethodEnabled } from '../payments/provider.js';
 import { applyPaymentResult, amountDueForOrder } from '../payments/settle.js';
 import { createPaymentIntent, resolveStripeUsable, stripeModeFromConfig } from '../payments/stripe.js';
 import { clientIp, loginRetryAfter } from '../auth/rate-limit.js';
+import { apiErrorSchema, errJson } from '../lib/api-error.js';
 
 export const pay = new OpenAPIHono();
 
@@ -26,10 +27,10 @@ pay.openapi(
     },
     responses: {
       200: { description: 'Paid', content: { 'application/json': { schema: z.object({ code: z.string(), state: z.string(), payment: z.string() }) } } },
-      400: { description: 'Already covered / invalid request', content: { 'application/json': { schema: z.object({ error: z.string(), state: z.string().optional() }) } } },
-      404: { description: 'Not found', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
-      409: { description: 'Not payable', content: { 'application/json': { schema: z.object({ error: z.string(), state: z.string() }) } } },
-      429: { description: 'Rate limited', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+      400: { description: 'Already covered / invalid request', content: { 'application/json': { schema: apiErrorSchema().extend({ state: z.string().optional() }) } } },
+      404: { description: 'Not found', content: { 'application/json': { schema: apiErrorSchema() } } },
+      409: { description: 'Not payable', content: { 'application/json': { schema: apiErrorSchema().extend({ state: z.string() }) } } },
+      429: { description: 'Rate limited', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
   async (c) => {
@@ -44,13 +45,13 @@ pay.openapi(
     const payIp = clientIp(c);
     const payBucket = `pay:${payIp}:${method}`;
     const payRetry = await loginRetryAfter(payIp, payBucket);
-    if (payRetry > 0) return c.json({ error: `too many payment attempts — try again in ${payRetry}s` }, 429);
+    if (payRetry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many payment attempts — try again in ${payRetry}s`);
 
     const provider = getProvider(method);
     // z.literal above makes this unreachable for a well-formed request, but keep
     // the provider guard fail-closed in case the route contract changes later.
-    if (!provider) return c.json({ error: `unknown payment method: ${method}` }, 404);
-    if (!isPaymentMethodEnabled(st.config, method)) return c.json({ error: `payment method disabled: ${method}`, state: 'Disabled' }, 409);
+    if (!provider) return errJson(c, 404, 'PAYMENT_METHOD_UNKNOWN', `unknown payment method: ${method}`);
+    if (!isPaymentMethodEnabled(st.config, method)) return errJson(c, 409, 'PAYMENT_METHOD_DISABLED', `payment method disabled: ${method}`, { extra: { state: 'Disabled' } });
 
     type R =
       | { kind: 'notfound' }
@@ -125,9 +126,9 @@ pay.openapi(
       });
     });
 
-    if (out.kind === 'notfound') return c.json({ error: 'order not found' }, 404);
-    if (out.kind === 'nodue') return c.json({ error: 'order already fully paid', state: out.state }, 400);
-    if (out.kind === 'badstate') return c.json({ error: 'order is not payable', state: out.state }, 409);
+    if (out.kind === 'notfound') return errJson(c, 404, 'ORDER_NOT_FOUND', 'order not found');
+    if (out.kind === 'nodue') return errJson(c, 400, 'ORDER_ALREADY_PAID', 'order already fully paid', { extra: { state: out.state } });
+    if (out.kind === 'badstate') return errJson(c, 409, 'ORDER_NOT_PAYABLE', 'order is not payable', { extra: { state: out.state } });
     return c.json({ code, state: out.state, payment: out.kind === 'noop' ? 'already-processed' : out.payment }, 200);
   },
 );
@@ -144,21 +145,21 @@ pay.openapi(
     request: { params: z.object({ code: z.string() }) },
     responses: {
       200: { description: 'Intent', content: { 'application/json': { schema: z.object({ clientSecret: z.string(), intentId: z.string() }) } } },
-      400: { description: 'Already covered', content: { 'application/json': { schema: z.object({ error: z.string(), state: z.string() }) } } },
-      404: { description: 'Not found', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
-      409: { description: 'Not payable', content: { 'application/json': { schema: z.object({ error: z.string(), state: z.string() }) } } },
-      503: { description: 'Stripe not configured', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+      400: { description: 'Already covered', content: { 'application/json': { schema: apiErrorSchema().extend({ state: z.string() }) } } },
+      404: { description: 'Not found', content: { 'application/json': { schema: apiErrorSchema() } } },
+      409: { description: 'Not payable', content: { 'application/json': { schema: apiErrorSchema().extend({ state: z.string() }) } } },
+      503: { description: 'Stripe not configured', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
     const { code } = c.req.valid('param');
-    if (!isPaymentMethodEnabled(st.config, 'stripe')) return c.json({ error: 'payment method disabled: stripe', state: 'Disabled' }, 409);
+    if (!isPaymentMethodEnabled(st.config, 'stripe')) return errJson(c, 409, 'PAYMENT_METHOD_DISABLED', 'payment method disabled: stripe', { extra: { state: 'Disabled' } });
     const mode = stripeModeFromConfig(st.config);
     // stripeUsable (not just secret-key present) — the same gate /shop/config
     // advertises, so the storefront never shows Stripe then gets a 503 here (and
     // vice-versa). Needs a mode-matched sk_ AND a mode-matched pk_.
-    if (!(await resolveStripeUsable(st.id, mode))) return c.json({ error: `stripe is not configured (${mode} mode)` }, 503);
+    if (!(await resolveStripeUsable(st.id, mode))) return errJson(c, 503, 'STRIPE_NOT_CONFIGURED', `stripe is not configured (${mode} mode)`);
     const prepared = await withStore(st.id, async (tx) => {
       const [o] = await tx.select({ id: s.order.id, state: s.order.state, grandTotal: s.order.grandTotal, currency: s.order.currency })
         .from(s.order).where(eq(s.order.code, code)).limit(1);
@@ -168,10 +169,10 @@ pay.openapi(
       const amountDue = await amountDueForOrder(tx, st.id, o.id, o.grandTotal);
       return { order: o, amountDue };
     });
-    if (!prepared) return c.json({ error: 'order not found' }, 404);
+    if (!prepared) return errJson(c, 404, 'ORDER_NOT_FOUND', 'order not found');
     const { order, amountDue } = prepared;
-    if (order.state !== 'PendingPayment') return c.json({ error: 'order is not payable', state: order.state }, 409);
-    if (amountDue <= 0) return c.json({ error: 'order already fully paid', state: order.state }, 400);
+    if (order.state !== 'PendingPayment') return errJson(c, 409, 'ORDER_NOT_PAYABLE', 'order is not payable', { extra: { state: order.state } });
+    if (amountDue <= 0) return errJson(c, 400, 'ORDER_ALREADY_PAID', 'order already fully paid', { extra: { state: order.state } });
     // Idempotent: key the Stripe create on the order id AND the amount so a
     // double-submit/retry reuses the order's open PaymentIntent (same
     // client_secret) instead of minting a second one — but a later call after

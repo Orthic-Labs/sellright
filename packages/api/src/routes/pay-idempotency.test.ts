@@ -257,8 +257,8 @@ describe('MONEY-3: partial-tender charge amount (no overcharge on top of a gift 
 
     const res = await app.request(`/v1/shop/orders/${code}/pay`, { method: 'POST', headers: hdr(SLUG_A), body: JSON.stringify({ method: 'stripe' }) });
     expect(res.status).toBe(400);
-    const body = await res.json() as { error: string };
-    expect(body.error).toMatch(/fully paid/);
+    const body = await res.json() as { error: { code: string; message: string } };
+    expect(body.error.message).toMatch(/fully paid/);
   });
 });
 

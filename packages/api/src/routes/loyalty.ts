@@ -8,6 +8,7 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { withStore } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import { customerToken, resolveCustomer } from '../auth/session.js';
+import { apiErrorSchema, errJson } from '../lib/api-error.js';
 import { loyaltySettingsFromConfig, pointsToCents } from '../money/loyalty.js';
 import { ledgerPage, loyaltyBalance } from '../loyalty/ledger.js';
 
@@ -39,7 +40,7 @@ loyalty.openapi(
           })),
         }) } },
       },
-      401: { description: 'Unauthenticated', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+      401: { description: 'Unauthenticated', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
   async (c) => {
@@ -53,7 +54,7 @@ loyalty.openapi(
       const rows = await ledgerPage(tx, cust.id, 25);
       return { bal, rows };
     });
-    if (!out) return c.json({ error: 'not authenticated' }, 401);
+    if (!out) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
     return c.json({
       program,
       currency: st.currency,
