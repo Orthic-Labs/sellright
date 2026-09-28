@@ -100,6 +100,12 @@ export interface NativeProductManifestEntryV2 {
   hasMultiplePrices: boolean;
   /** Availability only — see the file-level note above. Never a quantity. */
   inStock: boolean;
+  /** Any enabled variant has a sale price actually below its base price —
+   *  shop grids need only this flag for a SALE badge; the amounts live on
+   *  the variant detail entries. */
+  hasSale: boolean;
+  /** Any enabled variant is a pre-order — for a PRE-ORDER badge on grids. */
+  hasPreOrder: boolean;
   images: NativeImage[];
 }
 
@@ -227,11 +233,15 @@ async function buildEntries(tx: Tx, store: StoreCtx, priceRule: VariantPriceRule
       id: p.id, slug: p.slug, name: p.name, tags: p.tags ?? [],
       priceRange: { min: nativeMoney(min, store), max: nativeMoney(max, store) },
       hasMultiplePrices: min !== max, inStock, images: manifestImages,
+      hasSale: vs.some((v) => v.salePrice != null && v.salePrice < v.price),
+      hasPreOrder: vs.some((v) => v.isPreOrder),
     });
     detailsV2.push({
       id: p.id, slug: p.slug, name: p.name, tags: p.tags ?? [],
       priceRange: { min: nativeMoney(min, store), max: nativeMoney(max, store) },
       hasMultiplePrices: min !== max, inStock, images: productImages,
+      hasSale: vs.some((v) => v.salePrice != null && v.salePrice < v.price),
+      hasPreOrder: vs.some((v) => v.isPreOrder),
       lastUpdated: now, description: p.description, variants: variantsV2,
     });
   }
