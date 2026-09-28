@@ -46,9 +46,9 @@ describe('normalizeManifestListItem', () => {
     const out = normalizeManifestListItem({
       slug: 'edc-knife', name: 'EDC Knife', inStock: true,
       priceRange: { min: 12000, max: 15000 },
-      facetValues: [{ name: 'Bestseller', facetName: 'Tags' }, { name: 'New', facetName: 'Tags' }],
-      featuredAsset: { preview: '/assets/edc.jpg' },
-      customFields: { salePrice: 9900, preOrderPrice: null, shipDate: null, isPreOrder: false },
+      tags: ['Bestseller', 'New'],
+      featuredImage: { url: '/assets/edc.jpg' },
+      salePrice: 9900, preOrderPrice: null, shipDate: null, isPreOrder: false,
     });
     expect(out).toEqual({
       slug: 'edc-knife', name: 'EDC Knife', status: 'active', inStock: true,
@@ -69,7 +69,7 @@ describe('normalizeManifestListItem', () => {
   it('resolves an already-absolute manifest image path idempotently', () => {
     const out = normalizeManifestListItem({
       slug: 'x', name: 'X', priceRange: { min: 100, max: 100 },
-      featuredAsset: { preview: '/assets/already-resolved.jpg' },
+      featuredImage: { url: '/assets/already-resolved.jpg' },
     });
     expect(out.image).toBe('/assets/already-resolved.jpg');
   });
@@ -78,14 +78,14 @@ describe('normalizeManifestListItem', () => {
 describe('normalizeManifestProductDetail', () => {
   const raw = {
     slug: 'p1', name: 'Product One', description: 'desc',
-    featuredAsset: { preview: 'p1-0.jpg' },
+    featuredImage: { url: 'p1-0.jpg' },
     assets: [{ preview: 'p1-0.jpg' }, { preview: 'p1-1.jpg' }],
-    facetValues: [{ name: 'Sale', facetName: 'Tags' }],
+    tags: ['Sale'],
     variants: [{
-      id: 'SKU-1', sku: 'SKU-1', name: 'Default', priceWithTax: 5000,
+      id: 'SKU-1', sku: 'SKU-1', name: 'Default', price: 5000,
       options: [{ code: 'red', name: 'Red', groupId: 'color', group: 'Color' }],
       assets: [{ preview: 'v1.jpg' }],
-      customFields: { salePrice: 4500, preOrderPrice: null, shipDate: null, isPreOrder: false },
+      salePrice: 4500, preOrderPrice: null, shipDate: null, isPreOrder: false,
     }],
   };
 
@@ -109,8 +109,8 @@ describe('mergeProductStock', () => {
   const product = normalizeManifestProductDetail({
     slug: 'p1', name: 'P1', description: null, assets: [],
     variants: [
-      { id: 'A', sku: 'A', name: 'A', priceWithTax: 100, options: [], assets: [] },
-      { id: 'B', sku: 'B', name: 'B', priceWithTax: 200, options: [], assets: [] },
+      { id: 'A', sku: 'A', name: 'A', price: 100, options: [], assets: [] },
+      { id: 'B', sku: 'B', name: 'B', price: 200, options: [], assets: [] },
     ],
   });
 
@@ -144,7 +144,7 @@ describe('withUncheckedStock / UNCHECKED_STOCK', () => {
   it('forces every variant fail-closed', () => {
     const product = normalizeManifestProductDetail({
       slug: 'p1', name: 'P1', description: null, assets: [],
-      variants: [{ id: 'A', sku: 'A', name: 'A', priceWithTax: 100, options: [], assets: [] }],
+      variants: [{ id: 'A', sku: 'A', name: 'A', price: 100, options: [], assets: [] }],
     });
     const checked = mergeProductStock(product, { variants: [{ sku: 'A', inStock: true, availableQuantity: 3 }] });
     const reset = withUncheckedStock(checked);

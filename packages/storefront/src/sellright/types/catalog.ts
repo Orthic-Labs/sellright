@@ -89,27 +89,23 @@ export const UNCHECKED_STOCK = { inStock: false, availableQuantity: 0 } as const
 
 /**
  * Raw shape written by the (out-of-scope, backend) manifest publisher
- * (packages/api/src/manifest/catalog.ts) into shop-catalog.json — still
- * legacy-flavoured field names (`id`, `featuredAsset`, `priceRange`,
- * `facetValues`, `customFields`) because that's the on-disk serialization
- * format the backend happens to use today. This is the ONLY place those
- * field names may appear in the catalog area: every caller past this
- * function only ever sees a `CatalogListItem`.
+ * (packages/api/src/manifest/catalog.ts) into shop-catalog.json — the v1
+ * on-disk serialization format (flat integer-cents, `id`=slug pseudo-id).
+ * This is the ONLY place the raw file shape may appear in the catalog area:
+ * every caller past this function only ever sees a `CatalogListItem`.
  */
 export interface RawManifestListItem {
   id?: string;
   slug: string;
   name: string;
-  featuredAsset?: { preview: string } | null;
+  featuredImage?: { url: string } | null;
   priceRange?: { min: number; max: number } | null;
   inStock?: boolean;
-  facetValues?: Array<{ name: string; facetName?: string }> | null;
-  customFields?: {
-    salePrice?: number | null;
-    preOrderPrice?: number | null;
-    shipDate?: string | null;
-    isPreOrder?: boolean | null;
-  } | null;
+  tags?: string[] | null;
+  salePrice?: number | null;
+  preOrderPrice?: number | null;
+  shipDate?: string | null;
+  isPreOrder?: boolean | null;
 }
 
 /** Normalize one manifest list entry into the native `CatalogListItem` shape.
@@ -119,23 +115,22 @@ export interface RawManifestListItem {
  *  slug as the durable identity. */
 export function normalizeManifestListItem(raw: RawManifestListItem): CatalogListItem {
   const min = raw.priceRange?.min ?? null;
-  const cf = raw.customFields ?? null;
   return {
     slug: raw.slug,
     name: raw.name,
     status: 'active',
     inStock: raw.inStock === true,
-    tags: (raw.facetValues ?? []).map((fv) => fv.name),
+    tags: raw.tags ?? [],
     minPrice: min,
     pricingVariant: min == null ? null : {
       sku: raw.slug,
       price: min,
-      salePrice: cf?.salePrice ?? null,
-      preOrderPrice: cf?.preOrderPrice ?? null,
-      isPreOrder: cf?.isPreOrder ?? false,
-      shipDate: cf?.shipDate ?? null,
+      salePrice: raw.salePrice ?? null,
+      preOrderPrice: raw.preOrderPrice ?? null,
+      isPreOrder: raw.isPreOrder ?? false,
+      shipDate: raw.shipDate ?? null,
     },
-    image: resolveAssetPath(raw.featuredAsset?.preview ?? null),
+    image: resolveAssetPath(raw.featuredImage?.url ?? null),
   };
 }
 
@@ -150,22 +145,20 @@ export interface RawManifestProductDetail {
   slug: string;
   name: string;
   description: string | null;
-  featuredAsset?: { preview: string } | null;
+  featuredImage?: { url: string } | null;
   assets: Array<{ preview: string }>;
-  facetValues?: Array<{ name: string; facetName?: string }> | null;
+  tags?: string[] | null;
   variants: Array<{
     id: string; // sku
     name: string;
     sku: string;
-    priceWithTax: number; // pre-computed effective price (see note below)
+    price: number; // pre-computed effective price (see note below)
     options: Array<{ code: string; name: string; groupId: string; group: string; position?: number; groupPosition?: number }>;
     assets: Array<{ preview: string }>;
-    customFields?: {
-      salePrice?: number | null;
-      preOrderPrice?: number | null;
-      shipDate?: string | null;
-      isPreOrder?: boolean | null;
-    } | null;
+    salePrice?: number | null;
+    preOrderPrice?: number | null;
+    shipDate?: string | null;
+    isPreOrder?: boolean | null;
   }>;
 }
 
@@ -174,14 +167,14 @@ export interface RawManifestProductDetail {
  *  route merges live `/stock` data in after this.
  *
  *  Known manifest limitation: the manifest only stores each variant's
- *  pre-computed EFFECTIVE price (`priceWithTax`), not its base `price`
+ *  pre-computed EFFECTIVE `price`, not its base `price`
  *  separately from `salePrice`/`preOrderPrice`. `price` below is set to that
  *  effective value as the best available approximation (same information the
  *  pre-conversion code displayed) — the live `/v1/shop/catalog/products/{slug}`
  *  endpoint (used on cache miss) has the real, separate fields. */
 export function normalizeManifestProductDetail(raw: RawManifestProductDetail): CatalogProduct {
   const images = [
-    ...(raw.featuredAsset ? [raw.featuredAsset.preview] : []),
+    ...(raw.featuredImage ? [raw.featuredImage.url] : []),
     ...raw.assets.map((a) => a.preview),
   ]
     .map((p) => resolveAssetPath(p))
@@ -191,7 +184,7 @@ export function normalizeManifestProductDetail(raw: RawManifestProductDetail): C
     slug: raw.slug,
     name: raw.name,
     description: raw.description,
-    tags: (raw.facetValues ?? []).map((fv) => fv.name),
+    tags: raw.tags ?? [],
     status: 'active',
     seoTitle: null,
     seoDescription: null,
@@ -201,12 +194,12 @@ export function normalizeManifestProductDetail(raw: RawManifestProductDetail): C
       id: v.sku,
       sku: v.sku,
       name: v.name,
-      price: v.priceWithTax,
-      salePrice: v.customFields?.salePrice ?? null,
-      preOrderPrice: v.customFields?.preOrderPrice ?? null,
-      shipDate: v.customFields?.shipDate ?? null,
+      price: v.price,
+      salePrice: v.salePrice ?? null,
+      preOrderPrice: v.preOrderPrice ?? null,
+      shipDate: v.shipDate ?? null,
       compareAtPrice: null,
-      isPreOrder: v.customFields?.isPreOrder ?? false,
+      isPreOrder: v.isPreOrder ?? false,
       enabled: true,
       options: v.options.map((o) => ({
         id: o.code,

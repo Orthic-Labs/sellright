@@ -484,7 +484,7 @@ export interface SrBlogPost {
   excerpt: string | null;
   readingTime: number | null;
   authorName: string | null;
-  featuredAsset: { id: string; path: string } | null;
+  featuredImage: { id: string; path: string } | null;
   tags: string[] | null;
   publishDate: string | null;
 }

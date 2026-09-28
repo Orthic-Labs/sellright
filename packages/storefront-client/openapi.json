@@ -20754,7 +20754,38 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "nullable": true
+                  "type": "object",
+                  "properties": {
+                    "methods": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "code": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "rate": {
+                            "type": "integer"
+                          },
+                          "price": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "name",
+                          "rate",
+                          "price"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "methods"
+                  ]
                 }
               }
             }
