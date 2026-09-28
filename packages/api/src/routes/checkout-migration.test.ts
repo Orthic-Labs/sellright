@@ -191,7 +191,9 @@ describe('GET /v1/shop/orders/{code} — receipt-token / owner scoping (P1)', ()
     expect(res.status).toBe(200);
     const body = await res.json() as { payments: Array<{ method: string; state: string; errorMessage: string | null }>; fulfillments: unknown[] };
     expect(body.payments).toHaveLength(1);
-    expect(body.payments[0]).toMatchObject({ method: 'stripe', state: 'Declined', errorMessage: 'card_declined: insufficient_funds' });
+    // Wire-facing rename (orders/status.ts#wirePaymentState): payment.state
+    // reads lowercase on the wire — BREAKING, pre-1.0, see CHANGELOG.md.
+    expect(body.payments[0]).toMatchObject({ method: 'stripe', state: 'declined', errorMessage: 'card_declined: insufficient_funds' });
     expect(body.fulfillments).toEqual([]);
   });
 });

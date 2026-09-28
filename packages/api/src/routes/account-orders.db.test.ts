@@ -106,6 +106,9 @@ describe('GET /v1/shop/account/orders/{code} — full contract (R20)', () => {
     });
     const res = await app.request('/v1/shop/account/orders/ORD-PAGE-1', { headers: hdr() });
     const body = await res.json() as { payments: Array<{ method: string; state: string }> };
-    expect(body.payments).toMatchObject([{ method: 'nmi', state: 'Settled' }]);
+    // Wire-facing rename (orders/status.ts#wirePaymentState): the internal
+    // 'Settled' payment_state reads as 'captured' on the wire — BREAKING,
+    // pre-1.0, see CHANGELOG.md.
+    expect(body.payments).toMatchObject([{ method: 'nmi', state: 'captured' }]);
   });
 });

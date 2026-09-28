@@ -173,7 +173,7 @@ const DD_SEED = [
   // condition backed by a synthetic collection (see the promotions assertions
   // in the "Damned Designs schema" test below).
   `INSERT INTO promotion VALUES
-     (10, 'AFF10', '[{"code":"at_least_n_with_facets","args":[{"name":"minimum","value":"1"},{"name":"facets","value":"[\"1\"]"}]}]', '[{"code":"order_percentage_discount","args":[{"name":"discount","value":"10"}]}]', NULL, NULL, NULL, NULL, 0, true, NULL),
+     (10, 'AFF10', '[{"code":"at_least_n_with_facets","args":[{"name":"minimum","value":"1"},{"name":"facets","value":"[\\"1\\"]"}]}]', '[{"code":"order_percentage_discount","args":[{"name":"discount","value":"10"}]}]', NULL, NULL, NULL, NULL, 0, true, NULL),
      (77, 'OLD20', '[]', '[{"code":"order_percentage_discount","args":[{"name":"discount","value":"20"}]}]', NULL, NULL, NULL, NULL, 0, false, NULL)`,
   `INSERT INTO "order" VALUES
      (1, 'ORD-1', 'PaymentSettled', 'USD', '2024-03-01 00:00:00', 1000, 1000, 0, 0, '{"line1":"1 Main St"}', '{"line1":"1 Main St"}', 'AFF10', 1, '2024-03-01 00:00:00', '2024-03-01 00:00:00', false),

@@ -105,7 +105,7 @@ async function bothPaymentAndFulfillmentStatus(orderId: string): Promise<{ sqlPa
 
 describe('order.status GENERATED column — backfills existing-shaped inserts', () => {
   beforeEach(async () => { await wipe(); await seedStore(); });
-  afterAll(async () => { await wipe(); await pool.end(); });
+  afterAll(async () => { await wipe(); });
 
   it('PendingPayment -> open', async () => expect(await orderStatus(await seedOrder({ code: 'O1', state: 'PendingPayment' }))).toBe('open'));
   it('Paid -> completed', async () => expect(await orderStatus(await seedOrder({ code: 'O2', state: 'Paid' }))).toBe('completed'));
@@ -120,7 +120,7 @@ describe('order.status GENERATED column — backfills existing-shaped inserts', 
 
 describe('paymentStatus/fulfillmentStatus — SQL fragment agrees with the TS function', () => {
   beforeEach(async () => { await wipe(); await seedStore(); });
-  afterAll(async () => { await wipe(); await pool.end(); });
+  afterAll(async () => { await wipe(); });
 
   const cases: Array<[string, SeedOrder, OrderPaymentStatus, OrderFulfillmentStatus]> = [
     ['no payment attempt yet', { code: 'P1', state: 'PendingPayment', lines: [{ quantity: 2 }] }, 'pending', 'unfulfilled'],
@@ -156,7 +156,7 @@ describe('paymentStatus/fulfillmentStatus — SQL fragment agrees with the TS fu
 
 describe('GET /v1/admin/orders — status/paymentStatus/fulfillmentStatus filters', () => {
   beforeEach(async () => { await wipe(); await seedStore(); });
-  afterAll(async () => { await wipe(); await pool.end(); });
+  afterAll(async () => { await wipe(); });
 
   it('?paymentStatus=voided returns only the matching Cancelled-with-authorized-payment order', async () => {
     await seedOrder({ code: 'F-open', state: 'PendingPayment' });
@@ -184,3 +184,9 @@ describe('GET /v1/admin/orders — status/paymentStatus/fulfillmentStatus filter
     expect(rows.map((r) => r.code)).toEqual(['H-cancelled']);
   });
 });
+
+// One shared pool (db/client.js's module-level singleton) across all three
+// describe blocks above — end it exactly once, after everything in this file
+// has run, not per-describe (ending it early would break every later test in
+// this file, and potentially sibling test files sharing the same process).
+afterAll(async () => { await pool.end(); });
