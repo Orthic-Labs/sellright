@@ -1,0 +1,31 @@
+{
+  "name": "@sellright/storefront-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Native typed REST client for the SellRight API — types generated from /v1/openapi.json, no GraphQL.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "generate": "tsx scripts/generate.mts",
+    "generate:check": "tsx scripts/generate.mts --check"
+  },
+  "dependencies": {
+    "openapi-fetch": "^0.17.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.4",
+    "openapi-typescript": "^7.13.0",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.9"
+  }
+}
