@@ -1,6 +1,6 @@
 import { component$, useContext, useStore, useVisibleTask$ } from '@qwik.dev/core';
 import { Link, useLocation } from '@qwik.dev/router';
-import { CartContextId, clearLocalCart } from '~/contexts/CartContext';
+import { CartContextId, clearCart } from '~/contexts/CartContext';
 import { getOrder } from '~/providers/shop/checkout/checkout';
 import type { OrderSummary, OrderAddressSnapshot } from '~/sellright/types/checkout';
 import { formatPrice } from '~/utils';
@@ -49,9 +49,9 @@ const ConfirmationPage = component$(() => {
 
 			if (isOrderSettled(order.state)) {
 				// Cart already converted server-side into this order — retire the
-				// local mirror. `clearLocalCart` dispatches the cart-updated event
-				// the header badge listens for.
-				clearLocalCart(localCart);
+				// local mirror. `clearCart` dispatches the cart-updated event the
+				// header badge listens for.
+				clearCart(localCart);
 			}
 
 			store.loading = false;

@@ -6,16 +6,16 @@ import {
 import { theme } from '~/theme/theme.config';
 import { APP_STATE, COUNTRY_COOKIE } from '~/constants';
 import { getCookie } from '~/utils';
-import { getActiveCustomerQuery, getActiveCustomerAddressesQuery } from '~/services/customer';
+import { getMe, getAddresses } from '~/services/customer';
 import { CountryService } from '~/services/CountryService';
 import { CheckoutAddressProvider } from '~/contexts/CheckoutAddressContext';
 import { createSEOHead } from '~/utils/seo';
-import { useLocalCart, refreshCartStock, loadCartIfNeeded, useHasMixedPreOrder } from '~/contexts/CartContext';
+import { useCart, refreshCartStock, loadCartIfNeeded, useHasMixedPreOrder } from '~/contexts/CartContext';
+import { CartService } from '~/services/CartService';
 import { CheckoutValidationProvider, useCheckoutValidation, useCheckoutValidationActions } from '~/contexts/CheckoutValidationContext';
 import { useCheckout } from '~/hooks/useCheckout';
 import { getShopConfig, getEligibleShippingMethods } from '~/providers/shop/checkout/checkout';
 import type { ShopConfig, ShopShippingMethod } from '~/sellright/types/checkout';
-import { LocalCartService } from '~/services/LocalCartService';
 import { validateBillingSection, validateCustomerSection, validateShippingSection } from '~/utils/checkout-section-validation';
 import { CheckoutPageView } from '~/components/checkout/CheckoutPageView';
 import { CHECKOUT_STYLES } from './checkout-styles';
@@ -30,7 +30,7 @@ interface CheckoutState {
 const CheckoutContent = component$(() => {
   const navigate = useNavigate();
   const appState = useContext(APP_STATE);
-  const localCart = useLocalCart();
+  const localCart = useCart();
   const hasMixedPreOrder = useHasMixedPreOrder();
   const checkoutValidation = useCheckoutValidation();
   const validationActions = useCheckoutValidationActions();
@@ -69,9 +69,8 @@ const CheckoutContent = component$(() => {
 
   useTask$(async ({ track, cleanup }) => {
     const countryCode = track(() => appState.shippingAddress?.countryCode);
-    const subtotal = track(() => localCart.localCart.subTotal || 0);
-    const discount = track(() => localCart.appliedCoupon?.discountAmount || 0);
-    const freeShipping = track(() => !!localCart.appliedCoupon?.freeShipping);
+    const subtotal = track(() => localCart.cart.subtotal || 0);
+    const discount = track(() => localCart.cart.discountTotal || 0);
 
     if (!countryCode) {
       shippingCents.value = null;
@@ -84,19 +83,21 @@ const CheckoutContent = component$(() => {
     cleanup(() => { cancelled = true; });
 
     try {
-      const methods = await getEligibleShippingMethods(countryCode, discountedSubtotal);
+      // Both the raw and post-coupon subtotal are sent so a threshold rule
+      // keyed on the discounted basis (e.g. a coupon-driven free-shipping
+      // tier) is decided server-side — never guessed by zeroing the rate here.
+      const methods = await getEligibleShippingMethods(countryCode, subtotal, discountedSubtotal);
       if (cancelled) return;
       if (!methods.length) {
         shippingCents.value = null;
         shippingMethod.value = null;
         return;
       }
-      // Cheapest eligible — the displayed rate and the submitted method must be
-      // the same server-priced choice. A free-shipping coupon still requires a
-      // method code (the server zeroes the rate, not the requirement).
+      // Cheapest eligible — the displayed rate and the submitted method must
+      // be the same server-priced choice.
       const cheapest = methods.reduce((a, b) => (b.rate < a.rate ? b : a));
       shippingMethod.value = cheapest;
-      shippingCents.value = freeShipping ? 0 : cheapest.rate;
+      shippingCents.value = cheapest.rate;
     } catch (e) {
       if (cancelled) return;
       console.warn('[Checkout] Failed to fetch server shipping quote:', e);
@@ -106,8 +107,8 @@ const CheckoutContent = component$(() => {
   });
 
   const checkoutTotalCents = useComputed$(() => {
-    const subtotal = localCart.localCart.subTotal || 0;
-    const discount = localCart.appliedCoupon?.discountAmount || 0;
+    const subtotal = localCart.cart.subtotal || 0;
+    const discount = localCart.cart.discountTotal || 0;
     const discountedSubtotal = Math.max(subtotal - discount, 0);
 
     // Shipping unknown (no destination yet, or quote still loading/failed) —
@@ -139,7 +140,7 @@ const CheckoutContent = component$(() => {
           .catch((e) => console.warn('[Checkout] shop-config fetch failed:', e));
 
         const [customerData, countriesData] = await Promise.all([
-          getActiveCustomerQuery().catch(() => null),
+          getMe().catch(() => null),
           CountryService.getAvailableCountries().catch(() => []),
         ]);
 
@@ -148,28 +149,33 @@ const CheckoutContent = component$(() => {
         }
 
         if (customerData) {
+          // appState.customer's field names are the CheckoutAddresses form
+          // state's own shape (title/emailAddress/phoneNumber), not the native
+          // AuthCustomer wire shape (email/phone, no title) — map explicitly
+          // rather than reshaping appState, which other checkout components
+          // still bind by these names.
           appState.customer = {
-            title: customerData.title ?? '',
-            firstName: customerData.firstName,
+            title: '',
+            firstName: customerData.firstName ?? '',
             id: customerData.id,
-            lastName: customerData.lastName,
-            emailAddress: customerData.emailAddress,
-            phoneNumber: customerData.phoneNumber ?? '',
+            lastName: customerData.lastName ?? '',
+            emailAddress: customerData.email,
+            phoneNumber: customerData.phone ?? '',
           };
 
           try {
-            const addressData = await getActiveCustomerAddressesQuery();
-            const defaultShipping = addressData?.addresses?.find((a: any) => a.defaultShippingAddress);
+            const addresses = await getAddresses();
+            const defaultShipping = addresses.find((a) => a.isDefaultShipping);
             if (defaultShipping) {
               appState.shippingAddress = {
                 ...appState.shippingAddress,
-                streetLine1: defaultShipping.streetLine1 || '',
-                streetLine2: defaultShipping.streetLine2 || '',
+                streetLine1: defaultShipping.line1 || '',
+                streetLine2: defaultShipping.line2 || '',
                 city: defaultShipping.city || '',
                 province: defaultShipping.province || '',
                 postalCode: defaultShipping.postalCode || '',
-                countryCode: defaultShipping.country?.code || appState.shippingAddress.countryCode || '',
-                phoneNumber: defaultShipping.phoneNumber || customerData.phoneNumber || '',
+                countryCode: defaultShipping.country || appState.shippingAddress.countryCode || '',
+                phoneNumber: defaultShipping.phone || customerData.phone || '',
               };
             }
           } catch (e) {
@@ -191,9 +197,9 @@ const CheckoutContent = component$(() => {
           }
         }
 
-        isCartEmpty.value = localCart.localCart.items.length === 0;
+        isCartEmpty.value = localCart.cart.lines.length === 0;
 
-        if (localCart.localCart.items.length > 0) {
+        if (localCart.cart.lines.length > 0) {
           refreshCartStock(localCart).catch(error => {
             console.error('Checkout: Failed to refresh stock levels:', error);
           });
@@ -209,12 +215,12 @@ const CheckoutContent = component$(() => {
   });
 
   useTask$(async ({ track }) => {
-    track(() => localCart.localCart.items);
+    track(() => localCart.cart.lines);
 
-    isCartEmpty.value = localCart.localCart.items.length === 0;
+    isCartEmpty.value = localCart.cart.lines.length === 0;
 
-    if (localCart.localCart.items.length > 0) {
-        const stockValidation = LocalCartService.validateStock();
+    if (localCart.cart.lines.length > 0) {
+        const stockValidation = CartService.validateStock();
         validationActions.updateStockValidation(stockValidation.valid, stockValidation.errors);
     } else {
         validationActions.updateStockValidation(true, []);
@@ -288,29 +294,39 @@ const CheckoutContent = component$(() => {
         }
       }
 
-      const items = (localCart.localCart.items || [])
-        .map((it: any) => ({ sku: it.productVariantId as string, quantity: it.quantity as number }))
+      const items = localCart.cart.lines
+        .map((line) => ({ sku: line.sku, quantity: line.quantity }))
         .filter((i) => i.sku && i.quantity > 0);
       if (!items.length) throw new Error('Your cart is empty.');
       const sa: any = appState.shippingAddress || {};
+      // Native field names (line1/country) going out — appState itself stays
+      // in the CheckoutAddresses form shape (streetLine1/countryCode); this is
+      // just the outgoing request body.
       const shippingAddress = {
         fullName: `${appState.customer?.firstName || ''} ${appState.customer?.lastName || ''}`.trim(),
-        streetLine1: sa.streetLine1, streetLine2: sa.streetLine2, city: sa.city,
-        province: sa.province, postalCode: sa.postalCode, countryCode: sa.countryCode, phone: sa.phoneNumber,
+        line1: sa.streetLine1, line2: sa.streetLine2, city: sa.city,
+        province: sa.province, postalCode: sa.postalCode, country: sa.countryCode, phone: sa.phoneNumber,
       };
+      const ba: any = appState.billingAddress || {};
+      const billingAddress = checkoutValidation.useDifferentBilling
+        ? {
+            fullName: `${ba.firstName || ''} ${ba.lastName || ''}`.trim(),
+            line1: ba.streetLine1, line2: ba.streetLine2, city: ba.city,
+            province: ba.province, postalCode: ba.postalCode, country: ba.countryCode,
+          }
+        : undefined;
 
       const form = {
         items,
         email: appState.customer?.emailAddress || undefined,
         shippingAddress,
         shippingMethodCode: shippingMethod.value?.code,
-        billingAddress: checkoutValidation.useDifferentBilling ? (appState.billingAddress as any) : undefined,
-        couponCode: localCart.appliedCoupon?.code,
+        billingAddress,
+        couponCode: localCart.cart.coupon?.applied ? localCart.cart.coupon.code : undefined,
         redeemPoints: redeemPoints.value > 0 ? redeemPoints.value : undefined,
       };
       const phase = await placeOrderNative(form);
       if (phase === 'paid') {
-        try { LocalCartService.clearCart(); } catch { /* ignore */ }
         showProcessingModal.value = false;
         isOrderProcessing.value = false;
         const rt = srState.receiptToken ? `?rt=${encodeURIComponent(srState.receiptToken)}` : '';

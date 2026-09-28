@@ -9,7 +9,7 @@
  * legacy hand-rolled `sr()` helper and never a Vendure shape.
  */
 import { sellright, idempotency, SellRightError } from '~/sellright/client';
-import { ServerCartService } from '~/services/ServerCartService';
+import { CartService } from '~/services/CartService';
 import type {
 	CheckoutRequest,
 	CheckoutResponse,
@@ -66,11 +66,11 @@ const isCartConflict = (
  * cart snapshot, which is adopted into the local mirror).
  */
 export const placeOrder = async (form: CheckoutForm): Promise<CheckoutResponse> => {
-	const cart = await ServerCartService.checkoutSnapshot();
+	const cart = await CartService.checkoutSnapshot();
 	if (cart?.status === 'merged') {
 		// This token's lines already moved into the customer's cart at login —
 		// falling back to the client item list here would double-submit them.
-		ServerCartService.discardLocal();
+		CartService.discard();
 		throw new Error('Your cart was merged into your account — please re-add your items.');
 	}
 
@@ -101,13 +101,13 @@ export const placeOrder = async (form: CheckoutForm): Promise<CheckoutResponse> 
 			const conflict = error.body as CheckoutConflictBody | undefined;
 			if (isCartConflict(conflict)) {
 				if (conflict.code === 'stale' || conflict.code === 'revision_required') {
-					ServerCartService.adoptConflictCart(conflict.cart);
+					CartService.adoptConflict(conflict.cart);
 					throw Object.assign(new Error('Your cart changed — please review it and try again.'), { cause: error });
 				}
 				// converted / merged: the server already replays the original order
 				// for a converted cart before this branch, so reaching it means the
 				// cart itself is unusable — retire the token + mirror.
-				ServerCartService.discardLocal();
+				CartService.discard();
 				throw Object.assign(new Error(conflict.error || 'This cart can no longer be checked out.'), { cause: error });
 			}
 			if (conflict?.reason === 'payload_mismatch') {
@@ -168,23 +168,20 @@ export const getShopConfig = async (): Promise<ShopConfig> => {
 	return data as ShopConfig;
 };
 
-/** Server-priced shipping methods eligible for this destination + subtotal. */
+/**
+ * Server-priced shipping methods eligible for this destination + subtotal.
+ * `discountedSubtotalWithTax` (post-coupon subtotal) is passed alongside the
+ * raw `subtotal` so a threshold rule keyed on the discounted basis (e.g. a
+ * coupon-driven free-shipping tier) is decided server-side — never guessed
+ * client-side by zeroing the rate ourselves.
+ */
 export const getEligibleShippingMethods = async (
 	countryCode: string,
 	subtotal: number,
+	discountedSubtotalWithTax?: number,
 ): Promise<ShopShippingMethod[]> => {
 	const { data } = await sellright().GET('/v1/shop/shipping-methods', {
-		params: { query: { country: countryCode, subtotal } },
+		params: { query: { country: countryCode, subtotal, discountedSubtotalWithTax } },
 	});
 	return (data?.methods ?? []) as unknown as ShopShippingMethod[];
-};
-
-// ── Back-compat shims ────────────────────────────────────────────────────
-// `components/auto-shipping-selector/AutoShippingSelector.tsx` (unused —
-// dead legacy Vendure-order code, out of this area's ownership) still
-// imports this name; kept so it stays type-safe rather than deleting a file
-// this task doesn't own. Backed by the same native call as above.
-export const getEligibleShippingMethodsCached = async (countryCode: string, subtotal: number) => {
-	const methods = await getEligibleShippingMethods(countryCode, subtotal);
-	return methods.map((m) => ({ id: m.code, code: m.code, name: m.name, price: m.rate, priceWithTax: m.rate }));
 };

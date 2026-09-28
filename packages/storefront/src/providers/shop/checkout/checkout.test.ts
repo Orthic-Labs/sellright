@@ -10,13 +10,13 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 
 const snapshot = vi.fn();
-const adoptConflictCart = vi.fn();
-const discardLocal = vi.fn();
-vi.mock('~/services/ServerCartService', () => ({
-	ServerCartService: {
+const adoptConflict = vi.fn();
+const discard = vi.fn();
+vi.mock('~/services/CartService', () => ({
+	CartService: {
 		checkoutSnapshot: (...a: unknown[]) => snapshot(...a),
-		adoptConflictCart: (...a: unknown[]) => adoptConflictCart(...a),
-		discardLocal: (...a: unknown[]) => discardLocal(...a),
+		adoptConflict: (...a: unknown[]) => adoptConflict(...a),
+		discard: (...a: unknown[]) => discard(...a),
 	},
 }));
 
@@ -44,8 +44,8 @@ beforeEach(() => {
 	calls.length = 0;
 	queue = [];
 	snapshot.mockReset().mockResolvedValue({ token: 'tok_srv', revision: 5, status: 'active' });
-	adoptConflictCart.mockReset();
-	discardLocal.mockReset();
+	adoptConflict.mockReset();
+	discard.mockReset();
 	vi.stubGlobal(
 		'fetch',
 		vi.fn(async (request: Request) => {
@@ -132,29 +132,29 @@ describe('placeOrder → POST /v1/shop/checkout', () => {
 		const conflictCart = { token: 'tok_srv', revision: 9, status: 'active', currency: 'USD', subtotal: 0, discountTotal: 0, shippingTotal: 0, taxTotal: 0, grandTotal: 0, unavailable: [], coupon: null, lines: [], email: null, customerId: null };
 		enqueue(respond(409, { error: 'cart changed', code: 'stale', revision: 9, cart: conflictCart }));
 		await expect(placeOrder(form)).rejects.toThrow('cart changed');
-		expect(adoptConflictCart).toHaveBeenCalledWith(conflictCart);
-		expect(discardLocal).not.toHaveBeenCalled();
+		expect(adoptConflict).toHaveBeenCalledWith(conflictCart);
+		expect(discard).not.toHaveBeenCalled();
 	});
 
 	it('revision_required conflict adopts the snapshot the same way as stale', async () => {
 		const conflictCart = { token: 'tok_srv', revision: 1, status: 'active', currency: 'USD', subtotal: 0, discountTotal: 0, shippingTotal: 0, taxTotal: 0, grandTotal: 0, unavailable: [], coupon: null, lines: [], email: null, customerId: null };
 		enqueue(respond(409, { error: 'revision required', code: 'revision_required', revision: 1, cart: conflictCart }));
 		await expect(placeOrder(form)).rejects.toThrow('review it and try again');
-		expect(adoptConflictCart).toHaveBeenCalledWith(conflictCart);
+		expect(adoptConflict).toHaveBeenCalledWith(conflictCart);
 	});
 
 	it('converted/merged conflict discards the local mirror instead of adopting', async () => {
 		const conflictCart = { token: 'tok_srv', revision: 2, status: 'converted', currency: 'USD', subtotal: 0, discountTotal: 0, shippingTotal: 0, taxTotal: 0, grandTotal: 0, unavailable: [], coupon: null, lines: [], email: null, customerId: null };
 		enqueue(respond(409, { error: 'cart already converted', code: 'converted', revision: 2, cart: conflictCart }));
 		await expect(placeOrder(form)).rejects.toThrow('cart already converted');
-		expect(discardLocal).toHaveBeenCalled();
-		expect(adoptConflictCart).not.toHaveBeenCalled();
+		expect(discard).toHaveBeenCalled();
+		expect(adoptConflict).not.toHaveBeenCalled();
 	});
 
 	it('merged local snapshot refuses to place — no double submit of moved lines', async () => {
 		snapshot.mockResolvedValueOnce({ token: 'tok_srv', revision: 5, status: 'merged' });
 		await expect(placeOrder(form)).rejects.toThrow('merged');
-		expect(discardLocal).toHaveBeenCalled();
+		expect(discard).toHaveBeenCalled();
 		expect(calls).toHaveLength(0);
 	});
 });

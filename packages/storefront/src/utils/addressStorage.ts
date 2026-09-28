@@ -1,23 +1,26 @@
 /**
- * Centralized address storage management that respects authentication state
- * Priority: Customer saved address → LocalCartService storage
+ * Centralized address storage management that respects authentication state.
+ * Priority: Customer saved address → CountryPreferenceService storage.
+ *
+ * Native SellRight client only — `getMe`/`getAddresses` (services/customer.ts)
+ * and the native `Address` type (sellright/types/account.ts), zero Vendure
+ * shapes. Country persistence is CountryPreferenceService (localStorage),
+ * carried over from the retired LocalCartService with identical semantics.
  */
 
-import { getActiveCustomerQuery, getActiveCustomerAddressesQuery } from '~/services/customer';
-import { Address } from '~/generated/graphql-shop';
+import { getMe, getAddresses } from '~/services/customer';
+import type { Address } from '~/sellright/types/account';
 import { $ } from '@qwik.dev/core';
-import { LocalCartService } from '~/services/LocalCartService';
+import { CountryPreferenceService } from '~/services/CountryPreferenceService';
 
 export interface StoredAddressInfo {
   countryCode: string;
-  countryName?: string;
   source: 'customer' | 'session' | 'geolocation';
   isAuthenticated: boolean;
 }
 
 export interface CustomerAddress {
   countryCode: string;
-  countryName: string;
   fullName: string;
   streetLine1: string;
   streetLine2?: string;
@@ -27,133 +30,94 @@ export interface CustomerAddress {
   phoneNumber?: string;
 }
 
+const toCustomerAddress = (a: Address): CustomerAddress => ({
+  countryCode: a.country,
+  fullName: a.fullName || '',
+  streetLine1: a.line1 || '',
+  streetLine2: a.line2 || '',
+  city: a.city || '',
+  province: a.province || '',
+  postalCode: a.postalCode || '',
+  phoneNumber: a.phone || '',
+});
+
 /**
- * Load address information from customer data or LocalCartService
- * 1. If customer is authenticated, load their default shipping address
- * 2. If not authenticated or no customer address, use LocalCartService
- * 3. Return null if no data available - no automatic fallbacks
+ * Load address information from customer data or CountryPreferenceService.
+ * 1. If customer is authenticated, load their default shipping address.
+ * 2. If not authenticated or no customer address, use the stored preference.
+ * 3. Return null if no data available - no automatic fallbacks.
  */
 export async function loadPriorityAddress(): Promise<StoredAddressInfo | null> {
 	try {
-		const activeCustomer = await getActiveCustomerQuery();
-		if (activeCustomer) {
-			const customerAddresses = await getActiveCustomerAddressesQuery();
-			if (customerAddresses?.addresses) {
-				const defaultShippingAddress = customerAddresses.addresses.find(
-					(address: Address) => !!address.defaultShippingAddress,
-				);
-				if (defaultShippingAddress) {
-					const customerInfo: StoredAddressInfo = {
-						countryCode: defaultShippingAddress.country.code,
-						countryName: defaultShippingAddress.country.name,
-						source: 'customer',
-						isAuthenticated: true,
-					};
-					LocalCartService.setCountry(defaultShippingAddress.country.code);
-					return customerInfo;
-				}
+		const me = await getMe();
+		if (me) {
+			const addresses = await getAddresses();
+			const defaultShipping = addresses.find((a) => a.isDefaultShipping);
+			if (defaultShipping) {
+				CountryPreferenceService.setCountry(defaultShipping.country);
+				return { countryCode: defaultShipping.country, source: 'customer', isAuthenticated: true };
 			}
 		}
 	} catch (e) { void e; }
-	const storedCountry = LocalCartService.getCountry();
-	const isExplicit = LocalCartService.hasExplicitCountrySelection();
+	const storedCountry = CountryPreferenceService.getCountry();
+	const isExplicit = CountryPreferenceService.hasExplicitCountrySelection();
 	if (storedCountry) {
-		return {
-			countryCode: storedCountry,
-			source: 'session',
-			isAuthenticated: isExplicit,
-		};
+		return { countryCode: storedCountry, source: 'session', isAuthenticated: isExplicit };
 	}
 	return null;
 }
 
-/**
- * Get full customer address details for forms
- */
+/** Get full customer address details for forms. */
 export async function loadCustomerAddress(): Promise<CustomerAddress | null> {
 	try {
-		const activeCustomer = await getActiveCustomerQuery();
-		if (!activeCustomer) {
-			return null;
-		}
-
-		const customerAddresses = await getActiveCustomerAddressesQuery();
-
-		if (customerAddresses?.addresses) {
-			const defaultShippingAddress = customerAddresses.addresses.find(
-				(address: Address) => !!address.defaultShippingAddress,
-			);
-
-			if (defaultShippingAddress) {
-				return {
-					countryCode: defaultShippingAddress.country.code,
-					countryName: defaultShippingAddress.country.name,
-					fullName: defaultShippingAddress.fullName || '',
-					streetLine1: defaultShippingAddress.streetLine1 || '',
-					streetLine2: defaultShippingAddress.streetLine2 || '',
-					city: defaultShippingAddress.city || '',
-					province: defaultShippingAddress.province || '',
-					postalCode: defaultShippingAddress.postalCode || '',
-					phoneNumber: defaultShippingAddress.phoneNumber || '',
-				};
-			}
-		}
-
-		return null;
+		const me = await getMe();
+		if (!me) return null;
+		const addresses = await getAddresses();
+		const defaultShipping = addresses.find((a) => a.isDefaultShipping);
+		return defaultShipping ? toCustomerAddress(defaultShipping) : null;
 	} catch (_error) {
 		return null;
 	}
 }
 
-/**
- * Save user-selected country to LocalCartService
- * This ensures user preferences override geolocation
- */
+/** Save user-selected country. This ensures user preferences override geolocation. */
 export function saveUserSelectedCountry(countryCode: string): void {
-	LocalCartService.setCountry(countryCode);
+	CountryPreferenceService.setCountry(countryCode);
 }
 
-/**
- * Check if current stored country came from customer data
- */
+/** Check if current stored country came from an explicit user choice (vs a geolocation guess). */
 export function isStoredCountryFromCustomer(): boolean {
-  return LocalCartService.hasExplicitCountrySelection();
+  return CountryPreferenceService.hasExplicitCountrySelection();
 }
 
-/**
- * Clear stored address data (useful for logout)
- */
+/** Clear stored address data (useful for logout). */
 export function clearStoredAddress(): void {
-  LocalCartService.setCountryFromGeolocation('US');
+  CountryPreferenceService.setCountryFromGeolocation('US');
 }
 
 /**
- * Load country from LocalCartService only - no automatic detection
- * Only restores previously saved user selections or customer data
+ * Load country from storage only - no automatic detection.
+ * Only restores previously saved user selections or customer data.
  */
 export const loadCountryFromStorage = $(async (appState: any) => {
-  // Only run if country is not already set
   if (appState.shippingAddress.countryCode) {
     return; // Country already set
   }
-
-  // Check local cart storage for cached country
-  const storedCountry = LocalCartService.getCountry();
+  const storedCountry = CountryPreferenceService.getCountry();
   if (storedCountry) {
     appState.shippingAddress.countryCode = storedCountry;
     return;
   }
-
   // No automatic fallbacks - country will be set when user reaches checkout
 });
 
 /**
- * Load country on demand when user shows purchase intent (add to cart)
- * This handles geolocation and saves to LocalCartService for future use
+ * Load country on demand when user shows purchase intent (add to cart).
+ * This handles geolocation and saves the preference for future use.
  */
 export const loadCountryOnDemand = $(async (appState: any) => {
-	const persistedCountry = LocalCartService.getCountry();
-	const hasExplicitCountry = LocalCartService.hasExplicitCountrySelection();
+	const persistedCountry = CountryPreferenceService.getCountry();
+	const hasExplicitCountry = CountryPreferenceService.hasExplicitCountrySelection();
 
 	// Only run geolocation if country is default US and user never explicitly set
 	if ((persistedCountry && persistedCountry !== 'US') || hasExplicitCountry) {
@@ -170,9 +134,7 @@ export const loadCountryOnDemand = $(async (appState: any) => {
 
 		if (data.country_code) {
 			const countryCode = data.country_code.toUpperCase();
-
-			// Save geolocated country to local cart storage and app state
-			LocalCartService.setCountryFromGeolocation(countryCode);
+			CountryPreferenceService.setCountryFromGeolocation(countryCode);
 			appState.shippingAddress.countryCode = countryCode;
 			return;
 		}
@@ -182,17 +144,17 @@ export const loadCountryOnDemand = $(async (appState: any) => {
 
 	// Fallback to US if geolocation fails
 	appState.shippingAddress.countryCode = 'US';
-	LocalCartService.setCountryFromGeolocation('US');
+	CountryPreferenceService.setCountryFromGeolocation('US');
 });
 
 export const getOrResolveCountryCode = $(async (appState: any, countryOverride?: string) => {
 	const override = countryOverride?.toUpperCase();
 	if (override) {
-		LocalCartService.setCountry(override);
+		CountryPreferenceService.setCountry(override);
 		appState.shippingAddress.countryCode = override;
 		return override;
 	}
-	const stored = LocalCartService.getCountry();
+	const stored = CountryPreferenceService.getCountry();
 	if (stored) {
 		appState.shippingAddress.countryCode = stored;
 		return stored;
@@ -207,13 +169,13 @@ export const getOrResolveCountryCode = $(async (appState: any, countryOverride?:
 		const data: any = await Promise.race([geoPromise, timeoutPromise]);
 		if (data && data.country_code) {
 			const cc = String(data.country_code).toUpperCase();
-			LocalCartService.setCountryFromGeolocation(cc);
+			CountryPreferenceService.setCountryFromGeolocation(cc);
 			appState.shippingAddress.countryCode = cc;
 			return cc;
 		}
 	} catch (e) { void e; }
 	const cc = 'US';
-	LocalCartService.setCountryFromGeolocation(cc);
+	CountryPreferenceService.setCountryFromGeolocation(cc);
 	appState.shippingAddress.countryCode = cc;
 	return cc;
 });

@@ -2,7 +2,7 @@ import { component$, useContext, useSignal, $, type QRL, type Signal, useStore, 
 import { APP_STATE, CUSTOMER_NOT_DEFINED_ID } from '~/constants';
 import { ShippingAddress } from '~/types';
 import { isActiveCustomerValid } from '~/utils/customer-validators';
-import { LocalCartService } from '~/services/LocalCartService';
+import { CountryPreferenceService } from '~/services/CountryPreferenceService';
 import { lookupPostalCode } from '~/utils/postal-lookup';
 import { AddressCountrySelect } from './AddressCountrySelect';
 import { AddressTextInput } from './AddressTextInput';
@@ -76,7 +76,7 @@ export default component$<IProps>(({ shippingAddress, formApi, isReviewMode, onU
 			};
 			localCountryCode.value = guestData.countryCode || '';
 		} else {
-			const storedCountry = LocalCartService.getCountry();
+			const storedCountry = CountryPreferenceService.getCountry();
 			if (storedCountry && storedCountry !== appState.shippingAddress.countryCode) {
 				appState.shippingAddress.countryCode = storedCountry;
 				localCountryCode.value = storedCountry;
@@ -217,7 +217,7 @@ export default component$<IProps>(({ shippingAddress, formApi, isReviewMode, onU
 					appState.shippingAddress.countryCode = finalCountryCode;
 					localCountryCode.value = finalCountryCode;
 					
-					LocalCartService.setCountry(finalCountryCode);
+					CountryPreferenceService.setCountry(finalCountryCode);
 
 					const country = appState.availableCountries.find(c => c.code === finalCountryCode);
 					if (country) {
