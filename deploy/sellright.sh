@@ -423,45 +423,37 @@ ensure_cosign() {
 # verify_and_pull checks, re-applied here so `sellright update` never trusts
 # a pull it hasn't independently verified itself.
 #
-# Bug this fixes: `compose images -q "$svc"` resolves the image of the
-# service's CURRENTLY RUNNING container, not the tag `compose pull` just
-# repointed to those containers haven't been recreated yet at this point in
-# cmd_update (that happens later, at "5/7 starting updated services"). So the
-# old code verified the OLD, already-running (and already-verified, on a
-# previous update) image every time, never the new one — an attacker or a
-# broken registry could serve an unsigned/wrong image at the pulled tag and
-# `sellright update` would wave it through. `compose config --images`
-# resolves the image reference straight out of compose.yaml (the tag
-# `compose pull` just updated in the local Docker image cache), and
-# `docker image inspect` reads that reference directly, without going
-# through any container.
+# Bug history — read before touching image resolution here again:
+#   1. `compose images -q "$svc"` resolves the image of the service's
+#      CURRENTLY RUNNING container, not the tag `compose pull` just
+#      repointed to (containers aren't recreated until later in cmd_update,
+#      at "5/7 starting updated services"). An attacker or a broken registry
+#      could serve an unsigned/wrong image at the pulled tag and the OLD,
+#      already-verified image would get verified again while the new one
+#      still gets switched to.
+#   2. `compose config --images "$svc"` (a same-CI-run replacement attempt)
+#      does NOT reliably filter to just that service — observed in CI
+#      returning the FULL unfiltered image list regardless of the service
+#      arg, so `| head -n 1` silently verified an unrelated service's image.
+#   3. Zipping `compose config --services` with `compose config --images` by
+#      LINE NUMBER (a second same-CI-run attempt) assumed the two separate
+#      invocations enumerate services in the same order. They don't have to,
+#      and in CI they didn't — this produced a different wrong image per run
+#      (caddy, then postgres, both reported as "api").
+# Fix: `compose config --format json` renders the FULLY RESOLVED config as
+# one document; jq indexes `.services.<name>.image` directly by key — no
+# filtering flag, no cross-invocation ordering assumption, no ambiguity.
 cosign_verify_images() {
   ensure_cosign || return 1
-  # `compose config --images <svc>` does NOT reliably filter to just that
-  # service across docker compose versions — observed in CI returning the
-  # FULL unfiltered image list (postgres first) even with a service arg
-  # given, so a naive `| head -n 1` silently verified postgres's image and
-  # reported it as "api" passing. Zip the two full, unfiltered, same-ordered
-  # lists instead: `config --services` and `config --images` both walk the
-  # same parsed service map in the same order, so pairing them by line
-  # number reliably maps each service to its own image, with no dependence
-  # on any single-service filtering behavior.
-  services_all=$(compose config --services 2>/dev/null) || { log "could not list compose services; refusing to update"; return 1; }
-  images_all=$(compose config --images 2>/dev/null) || { log "could not list compose images; refusing to update"; return 1; }
-  svc_count=$(printf '%s\n' "$services_all" | wc -l)
-  img_count=$(printf '%s\n' "$images_all" | wc -l)
-  if [ "$svc_count" -ne "$img_count" ]; then
-    log "compose services (${svc_count}) and images (${img_count}) count mismatch; refusing to update"
-    return 1
-  fi
+  # jq resolves the per-service image out of the compose config JSON below.
+  # Not installed by install.sh today (a gap worth fixing there separately);
+  # fail closed with an actionable message rather than falling back to a
+  # less reliable parsing method for a security-critical read.
+  command -v jq >/dev/null 2>&1 || { log "jq not found — required to resolve target image refs; install it (e.g. 'apt-get install -y jq') and retry. Refusing to update without it."; return 1; }
+  config_json=$(compose config --format json 2>/dev/null) || { log "could not read compose config; refusing to update"; return 1; }
   verified_any=0
   for svc in api admin storefront; do
-    line_no=$(printf '%s\n' "$services_all" | grep -n -x -F "$svc" | head -n 1 | cut -d: -f1)
-    if [ -z "$line_no" ]; then
-      log "service '${svc}' not found in compose config; refusing to update without verifying it"
-      return 1
-    fi
-    ref=$(printf '%s\n' "$images_all" | sed -n "${line_no}p")
+    ref=$(printf '%s' "$config_json" | jq -r --arg svc "$svc" '.services[$svc].image // empty')
     if [ -z "$ref" ]; then
       log "could not resolve the target image for service '${svc}'; refusing to update without verifying it"
       return 1
