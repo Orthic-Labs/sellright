@@ -276,6 +276,34 @@ describe('email-address-change flow (emailAddressChangeHandler parity)', () => {
     expect(replay.status).toBe(409);
   });
 
+  it('notifies the OLD (abandoned) address once the change is confirmed, unconditionally', async () => {
+    const cust = await seedCustomer(STORE_B, 'old@b.test');
+    const token = await sessionFor(STORE_B, cust.id);
+    await requestChange(token, 'new@b.test');
+    const [reqRow] = await outbox(STORE_B);
+    const raw = tokenFrom(reqRow!);
+    // Only the request-time mail (to the NEW address) exists before confirm.
+    expect(await outbox(STORE_B)).toHaveLength(1);
+
+    const res = await app.request('/v1/shop/auth/verify-email-change', {
+      method: 'POST', headers: hdr(SLUG_B), body: JSON.stringify({ token: raw }),
+    });
+    expect(res.status).toBe(200);
+
+    const rows = await outbox(STORE_B);
+    expect(rows).toHaveLength(2);
+    const notice = rows.find((r) => r.kind === 'email_changed_notice');
+    expect(notice).toBeDefined();
+    expect(notice!.recipient).toBe('old@b.test'); // the ABANDONED address, not the new one
+    expect(notice!.payload.html).toContain('new@b.test');
+    expect(notice!.payload.html).toMatch(/did not make this change/i);
+
+    // Audit log records the previous email alongside the new one.
+    const audit = await withStore(STORE_B, (tx) =>
+      tx.execute(sql`SELECT data FROM audit_log WHERE entity = 'customer' AND action = 'email_changed' AND entity_id = ${cust.id}`));
+    expect((audit.rows[0] as { data: { previousEmail?: string } }).data.previousEmail).toBe('old@b.test');
+  });
+
   it('rejects expired and bogus tokens', async () => {
     const cust = await seedCustomer(STORE_B, 'old2@b.test');
     const token = await sessionFor(STORE_B, cust.id);

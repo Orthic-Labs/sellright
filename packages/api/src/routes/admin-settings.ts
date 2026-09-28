@@ -6,7 +6,7 @@ import { newTotpSecret, verifyTotp, otpauthUri } from '../auth/totp.js';
 import { clearAdminTotpSecret, getAdminTotpSecret, setAdminTotpSecret } from '../auth/admin-staff.js';
 import { isSupportedPaymentMethod } from '../payments/provider.js';
 import { resolveStripeConfigured, stripeModeFromConfig } from '../payments/stripe.js';
-import { invalidateStoreCache } from '../store-context.js';
+import { broadcastStoreCacheInvalidation } from '../store-context.js';
 import { env } from '../env.js';
 import { generatePreviewToken, hashPreviewToken } from '../store-publish.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireManage, guard } from './admin-helpers.js';
@@ -86,7 +86,7 @@ export async function mutateStoreConfig(
     }
     return { slug: row!.slug, next: v };
   });
-  invalidateStoreCache(slug);
+  await broadcastStoreCacheInvalidation(slug);
   return next;
 }
 
@@ -232,7 +232,7 @@ adminSettings.openapi(
         detail: () => ({ hostnames }),
       });
     }
-    invalidateStoreCache(st.slug);
+    await broadcastStoreCacheInvalidation(st.slug);
     return c.json({ ok: true }, 200);
   }),
 );

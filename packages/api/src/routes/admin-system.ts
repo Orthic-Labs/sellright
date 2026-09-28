@@ -162,20 +162,20 @@ adminSystem.openapi(
     const ip = clientIp(c);
     // Same rate-limit shape as /v1/admin/login (rate-limit.ts) — step-up IS a
     // second password check, and deserves the identical brute-force guard.
-    const retry = loginRetryAfter(ip, `stepup:${admin.id}`);
+    const retry = await loginRetryAfter(ip, `stepup:${admin.id}`);
     if (retry > 0) throw new HttpError(429, `too many attempts — try again in ${retry}s`);
 
     const { password, totp } = c.req.valid('json');
     const creds = await getAdminCredentialsById(admin.id);
     if (!creds || !(await verifyPassword(password, creds.passwordHash))) {
-      recordLoginFailure(ip, `stepup:${admin.id}`);
+      await recordLoginFailure(ip, `stepup:${admin.id}`);
       throw new HttpError(401, 'invalid password or 2FA code');
     }
     if (creds.totpSecret && (!totp || !verifyTotp(creds.totpSecret, totp, admin.id))) {
-      recordLoginFailure(ip, `stepup:${admin.id}`);
+      await recordLoginFailure(ip, `stepup:${admin.id}`);
       throw new HttpError(401, 'invalid password or 2FA code');
     }
-    clearLoginAttempts(ip, `stepup:${admin.id}`);
+    await clearLoginAttempts(ip, `stepup:${admin.id}`);
 
     await markStepUpVerified(token);
     await auditSystemAction(admin, 'step_up_verify');

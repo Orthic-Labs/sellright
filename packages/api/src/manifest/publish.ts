@@ -6,6 +6,49 @@ const GENERATION = /^[0-9a-f-]{36}$/;
 const SAFE_SLUG = /^[a-z0-9][a-z0-9_-]*$/;
 type Input = { outDir: string; storeSlug: string; manifest: unknown; details: { slug: string }[] };
 
+export interface CatalogManifestShape {
+  lastUpdated: string;
+  totalItems: number;
+  defaultSort: string;
+  products: Array<{ slug: string; [k: string]: unknown }>;
+}
+
+/**
+ * Read the CURRENT published generation's manifest + every per-product detail
+ * file, verifying the same marker (`source`/`storeSlug`) publishGeneration
+ * itself checks before ever trusting `current`. Used by catalog.ts's
+ * per-product regeneration path to reuse unaffected products' entries
+ * instead of re-querying and re-serializing the whole catalog on every
+ * stock change. Returns null when there's no current generation yet, or it
+ * fails the same foreign-pointer/marker checks publishGeneration enforces
+ * (first publish, corrupted state, wrong store) — the caller's only
+ * correct fallback in that case is a full regeneration.
+ */
+export async function readCurrentGeneration(outDir: string, storeSlug: string): Promise<{ manifest: CatalogManifestShape; details: Array<{ slug: string; [k: string]: unknown }> } | null> {
+  const root = resolve(outDir);
+  try {
+    const previous = await readlink(join(root, 'current'));
+    if (!/^generations\/[0-9a-f-]{36}$/.test(previous)) return null;
+    const dir = join(root, previous);
+    const marker = JSON.parse(await readFile(join(dir, 'marker.json'), 'utf8')) as { source?: string; storeSlug?: string };
+    if (marker.source !== 'sellright' || marker.storeSlug !== storeSlug) return null;
+    const manifest = JSON.parse(await readFile(join(dir, 'shop-catalog.json'), 'utf8')) as CatalogManifestShape;
+    const details: Array<{ slug: string; [k: string]: unknown }> = [];
+    for (const p of manifest.products) {
+      if (!SAFE_SLUG.test(p.slug)) continue; // never trust an unsafe slug even from our own prior output
+      try {
+        details.push(JSON.parse(await readFile(join(dir, 'products', `${p.slug}.json`), 'utf8')) as { slug: string; [k: string]: unknown });
+      } catch {
+        return null; // a missing/corrupt detail file means the snapshot isn't trustworthy — fall back to full regen
+      }
+    }
+    return { manifest, details };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    return null; // any other read failure (bad JSON, etc.) — same fallback
+  }
+}
+
 // Call under the catalog leader lock. Readers resolve current once per request.
 export async function publishGeneration(input: Input) {
   if (!input.outDir.trim() || !SAFE_SLUG.test(input.storeSlug)) throw new Error('Invalid catalog destination or store');

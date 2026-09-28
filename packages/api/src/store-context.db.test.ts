@@ -13,7 +13,11 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { pool, withStore } from './db/client.js';
 import { env } from './env.js';
-import { HostRoutingError, invalidateStoreCache, resolveStoreByHost, resolveStoreForRequest } from './store-context.js';
+import {
+  HostRoutingError, invalidateStoreCache, resolveStoreByHost, resolveStoreForRequest,
+  broadcastStoreCacheInvalidation, startStoreCacheInvalidationListener,
+  _stopStoreCacheInvalidationListenerForTest, _cacheSizeForTest,
+} from './store-context.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
 if (!/_test(\b|$|\?)/.test(DB)) {
@@ -116,5 +120,50 @@ describe('resolveStoreForRequest precedence (OPS-1)', () => {
     expect(env.NODE_ENV).not.toBe('production');
     const st = await resolveStoreForRequest({ host: 'unregistered.example' });
     expect(st.slug).toBe('damned');
+  });
+});
+
+// SELLRIGHT-ISSUES P2: cross-process cache invalidation via Postgres LISTEN/
+// NOTIFY (store-context.ts). Runs its own describe block (starts/stops the
+// dedicated listener client) so it can't leak an open connection into the
+// rest of this file's tests.
+describe('cross-process store cache invalidation (LISTEN/NOTIFY)', () => {
+  afterAll(async () => {
+    await _stopStoreCacheInvalidationListenerForTest();
+  });
+
+  it('a NOTIFY from one connection reaches a listener started on a different connection', async () => {
+    await startStoreCacheInvalidationListener();
+    // Warm the cache via the normal path.
+    await resolveStoreByHost(HOST);
+    expect(_cacheSizeForTest().host).toBeGreaterThan(0);
+
+    // Broadcast from a completely separate query (simulating another API
+    // process's admin-settings.ts save) — NOT the same call that warmed the
+    // cache above, and not going through the listener client at all.
+    await broadcastStoreCacheInvalidation(undefined, HOST);
+
+    // The listener is async (a Postgres notification callback) — give the
+    // event loop a tick to deliver it before asserting.
+    await new Promise((r) => setTimeout(r, 200));
+    expect(_cacheSizeForTest().host).toBe(0);
+  });
+
+  it('invalidating by slug also drops any host cache entry for that slug', async () => {
+    await startStoreCacheInvalidationListener();
+    await resolveStoreByHost(HOST);
+    expect(_cacheSizeForTest().host).toBeGreaterThan(0);
+    await broadcastStoreCacheInvalidation(SLUG);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(_cacheSizeForTest().host).toBe(0);
+  });
+
+  it('starting the listener twice is a no-op (idempotent)', async () => {
+    await startStoreCacheInvalidationListener();
+    await startStoreCacheInvalidationListener(); // must not throw / open a second client
+    await resolveStoreByHost(HOST);
+    await broadcastStoreCacheInvalidation(undefined, HOST);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(_cacheSizeForTest().host).toBe(0);
   });
 });

@@ -1,10 +1,11 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { eq, sql } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import { customerToken, resolveCustomer } from '../auth/session.js';
 import * as s from '../db/schema.js';
 import { timingSafeEqual as cryptoTimingSafeEqual } from 'node:crypto';
+import { loadOrderFulfillments, loadOrderLines, loadOrderPayments, loadOrderPromotionCode } from './order-facts.js';
 
 /** Constant-time string compare (avoids leaking the receipt token via timing). */
 function tokensMatch(a: string | null | undefined, b: string | null | undefined): boolean {
@@ -41,7 +42,21 @@ orders.openapi(
               placedAt: z.string().nullable(),
               shippingAddress: z.any(),
               customerEmail: z.string().nullable(),
-              lines: z.array(z.object({ sku: z.string(), name: z.string(), quantity: z.number().int(), unitPrice: z.number().int(), lineTotal: z.number().int(), image: z.string().nullable() })),
+              promotionCode: z.string().nullable(),
+              // R18: real payment facts — distinguish pending/paid/failed/
+              // cancelled from the actual gateway record, not an invented
+              // method or a "confirmed after N polls" heuristic.
+              payments: z.array(z.object({
+                method: z.string(), state: z.string(), amount: z.number().int(),
+                providerRef: z.string().nullable(), errorMessage: z.string().nullable(), createdAt: z.string(),
+              })),
+              fulfillments: z.array(z.object({
+                state: z.string(), trackingCode: z.string().nullable(), carrier: z.string().nullable(), updatedAt: z.string().nullable(),
+              })),
+              lines: z.array(z.object({
+                sku: z.string(), name: z.string(), quantity: z.number().int(), unitPrice: z.number().int(), lineTotal: z.number().int(),
+                image: z.string().nullable(), isPreOrder: z.boolean(), shipDate: z.string().nullable(),
+              })),
             }),
           },
         },
@@ -72,25 +87,21 @@ orders.openapi(
         const [cust] = await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, o.customerId)).limit(1);
         customerEmail = cust?.email ?? null;
       }
-      // Order lines snapshot sku/name/price at purchase time (survives the
-      // variant later being edited or deleted) but never carried an image —
-      // the confirmation page fell back to a bare placeholder icon for every
-      // line. variantId is still kept (nullable) purely to resolve imagery;
-      // prefer the variant's own photo, else the parent product's.
-      const lines = await tx
-        .select({
-          sku: s.orderLine.variantSku, name: s.orderLine.variantName, quantity: s.orderLine.quantity, unitPrice: s.orderLine.unitPrice, lineTotal: s.orderLine.lineTotal,
-          image: sql<string | null>`coalesce(
-            (select a.path from ${s.variantAsset} va join ${s.asset} a on a.id = va.asset_id where va.variant_id = ${s.orderLine.variantId} order by va.position asc limit 1),
-            (select a.path from ${s.productVariant} pv join ${s.productAsset} pa on pa.product_id = pv.product_id join ${s.asset} a on a.id = pa.asset_id where pv.id = ${s.orderLine.variantId} order by pa.position asc limit 1)
-          )`,
-        })
-        .from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
+      // Lines snapshot sku/name/price at purchase time (survives the variant
+      // later being edited or deleted); image/isPreOrder/shipDate resolve
+      // from the current variant (order-facts.ts documents the tradeoff).
+      // Sequential, not Promise.all: these share one transaction/connection —
+      // concurrent queries on the same pg connection are not safe.
+      const lines = await loadOrderLines(tx, o.id);
+      const payments = await loadOrderPayments(tx, o.id);
+      const fulfillments = await loadOrderFulfillments(tx, o.id);
+      const promotionCode = await loadOrderPromotionCode(tx, o.promotionId);
       return {
         code: o.code, state: o.state, currency: o.currency,
         subtotal: o.subtotal, shippingTotal: o.shippingTotal, taxTotal: o.taxTotal, discountTotal: o.discountTotal, grandTotal: o.grandTotal,
         placedAt: o.placedAt ? o.placedAt.toISOString() : null,
-        shippingAddress: o.shippingAddress ?? null, customerEmail, lines,
+        shippingAddress: o.shippingAddress ?? null, customerEmail, promotionCode,
+        payments, fulfillments, lines,
       };
     });
     if (!out) return c.json({ error: 'order not found' }, 404);

@@ -311,6 +311,14 @@ restart_digests() {
 
 cmd_update() {
   require_home
+  from_source=0
+  for arg in "$@"; do
+    case "$arg" in
+      --from-source) from_source=1 ;;
+      *) die "unknown argument to 'update': $arg" ;;
+    esac
+  done
+
   digests_file=$(mktemp)
   trap 'rm -f "$digests_file"' EXIT
 
@@ -323,19 +331,38 @@ cmd_update() {
   log "recording current image digests (for rollback)..."
   capture_digests > "$digests_file"
 
-  log "3/7 pulling + verifying signed images..."
-  if ! compose pull; then
-    log "pull failed; leaving maintenance on, no changes made"
-    exit 1
+  if [ "$from_source" -eq 1 ]; then
+    # Owner-operated private forks: no registry to pull signed images from,
+    # so this path builds api/admin/storefront LOCALLY from the checked-out
+    # repo at SELLRIGHT_SOURCE (compose.build.yaml, the same override file
+    # local dev and CI's verify-appliance job already use) and skips the
+    # cosign gate entirely — there is nothing to verify a signature against
+    # for an image that was never published. This is intentionally a
+    # separate, explicit flag: plain `sellright update` (no flag) must always
+    # stay on the cosign-verified registry path; a host is never silently
+    # downgraded to unverified images.
+    : "${SELLRIGHT_SOURCE:?--from-source requires SELLRIGHT_SOURCE=/path/to/checked-out/sellright}"
+    [ -f "${SELLRIGHT_SOURCE}/deploy/compose.build.yaml" ] || die "SELLRIGHT_SOURCE (${SELLRIGHT_SOURCE}) has no deploy/compose.build.yaml — not a sellright checkout?"
+    log "3/7 building images from source (${SELLRIGHT_SOURCE}), no registry pull, no cosign verify..."
+    if ! compose -f "${SELLRIGHT_SOURCE}/deploy/compose.build.yaml" build; then
+      log "source build failed; leaving maintenance on, no changes made"
+      exit 1
+    fi
+  else
+    log "3/7 pulling + verifying signed images..."
+    if ! compose pull; then
+      log "pull failed; leaving maintenance on, no changes made"
+      exit 1
+    fi
+    # WS-D's install.sh performs the authoritative cosign keyless-verify (image
+    # digest against the release workflow's OIDC identity) before ever writing
+    # an image ref into compose's env; `compose pull` here re-resolves the exact
+    # digest install.sh already verified for the configured tag. A same-tag
+    # cosign re-check is repeated here defensively so `sellright update` alone
+    # (without re-running install.sh) still never runs an image whose signature
+    # can't be verified.
+    cosign_verify_images || { log "cosign verification failed; leaving maintenance on, no changes made"; exit 1; }
   fi
-  # WS-D's install.sh performs the authoritative cosign keyless-verify (image
-  # digest against the release workflow's OIDC identity) before ever writing
-  # an image ref into compose's env; `compose pull` here re-resolves the exact
-  # digest install.sh already verified for the configured tag. A same-tag
-  # cosign re-check is repeated here defensively so `sellright update` alone
-  # (without re-running install.sh) still never runs an image whose signature
-  # can't be verified.
-  cosign_verify_images || { log "cosign verification failed; leaving maintenance on, no changes made"; exit 1; }
 
   log "4/7 migrating..."
   # shellcheck disable=SC2016 # single-quoted deliberately: $DATABASE_URL_MIGRATE
@@ -387,23 +414,51 @@ ensure_cosign() {
   command -v cosign >/dev/null 2>&1 || die "cosign install did not produce a usable binary"
 }
 
-# Keyless-signature check for the three images this compose file currently
-# resolves to. Fail-closed: missing cosign, an unresolvable image ref, or any
-# failed verification all abort the update (non-zero return) — cmd_update
-# treats that as "leave maintenance on, make no changes", never as "proceed
-# anyway". This is the same identity/issuer install.sh's own verify_and_pull
-# checks, re-applied here so `sellright update` never trusts a pull it hasn't
-# independently verified itself.
+# Keyless-signature check for the three images `compose pull` just fetched —
+# i.e. the images `compose up -d` is about to SWITCH TO, not whatever is
+# currently running. Fail-closed: missing cosign, an unresolvable image ref,
+# or any failed verification all abort the update (non-zero return) —
+# cmd_update treats that as "leave maintenance on, make no changes", never as
+# "proceed anyway". This is the same identity/issuer install.sh's own
+# verify_and_pull checks, re-applied here so `sellright update` never trusts
+# a pull it hasn't independently verified itself.
+#
+# Bug history — read before touching image resolution here again:
+#   1. `compose images -q "$svc"` resolves the image of the service's
+#      CURRENTLY RUNNING container, not the tag `compose pull` just
+#      repointed to (containers aren't recreated until later in cmd_update,
+#      at "5/7 starting updated services"). An attacker or a broken registry
+#      could serve an unsigned/wrong image at the pulled tag and the OLD,
+#      already-verified image would get verified again while the new one
+#      still gets switched to.
+#   2. `compose config --images "$svc"` (a same-CI-run replacement attempt)
+#      does NOT reliably filter to just that service — observed in CI
+#      returning the FULL unfiltered image list regardless of the service
+#      arg, so `| head -n 1` silently verified an unrelated service's image.
+#   3. Zipping `compose config --services` with `compose config --images` by
+#      LINE NUMBER (a second same-CI-run attempt) assumed the two separate
+#      invocations enumerate services in the same order. They don't have to,
+#      and in CI they didn't — this produced a different wrong image per run
+#      (caddy, then postgres, both reported as "api").
+# Fix: `compose config --format json` renders the FULLY RESOLVED config as
+# one document; jq indexes `.services.<name>.image` directly by key — no
+# filtering flag, no cross-invocation ordering assumption, no ambiguity.
 cosign_verify_images() {
   ensure_cosign || return 1
+  # jq resolves the per-service image out of the compose config JSON below.
+  # Not installed by install.sh today (a gap worth fixing there separately);
+  # fail closed with an actionable message rather than falling back to a
+  # less reliable parsing method for a security-critical read.
+  command -v jq >/dev/null 2>&1 || { log "jq not found — required to resolve target image refs; install it (e.g. 'apt-get install -y jq') and retry. Refusing to update without it."; return 1; }
+  config_json=$(compose config --format json 2>/dev/null) || { log "could not read compose config; refusing to update"; return 1; }
   verified_any=0
   for svc in api admin storefront; do
-    ref=$(compose images -q "$svc" 2>/dev/null || true)
+    ref=$(printf '%s' "$config_json" | jq -r --arg svc "$svc" '.services[$svc].image // empty')
     if [ -z "$ref" ]; then
-      log "could not resolve a running image for service '${svc}'; refusing to update without verifying it"
+      log "could not resolve the target image for service '${svc}'; refusing to update without verifying it"
       return 1
     fi
-    digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$ref" 2>/dev/null || true)
+    digest=$(docker image inspect --format '{{index .RepoDigests 0}}' "$ref" 2>/dev/null || true)
     if [ -z "$digest" ]; then
       log "could not resolve a content digest for service '${svc}' (ref: ${ref}); refusing to update without verifying it"
       return 1
@@ -440,10 +495,17 @@ Commands:
   maintenance <on|off|status>
                       Toggle or check maintenance mode directly
   functional-check    Run the post-update health checks directly
-  update              Maintenance on -> backup -> pull+verify -> migrate ->
+  update [--from-source]
+                      Maintenance on -> backup -> pull+verify -> migrate ->
                       start -> functional checks -> maintenance off.
                       Rolls back to the previous images automatically if a
                       functional check fails before reopening.
+                      --from-source builds api/admin/storefront locally from
+                      SELLRIGHT_SOURCE (a checked-out repo, via
+                      compose.build.yaml) instead of pulling+cosign-verifying
+                      registry images — for owners running private forks with
+                      no image registry. Same maintenance/backup/migrate/
+                      functional-check/rollback flow either way.
 EOF
 }
 

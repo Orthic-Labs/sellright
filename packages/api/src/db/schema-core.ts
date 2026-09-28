@@ -363,6 +363,14 @@ export const promotion = pgTable('promotion', {
   code: text(), // null = automatic
   type: promotionType().notNull(),
   value: integer().notNull(), // percent (basis points) or fixed cents
+  // R24 parity: a promotion can combine a percentage/fixed discount WITH free
+  // shipping (DD's `order_percentage_discount` + `free_shipping` action
+  // pair). `type` stays single-valued (percentage | fixed | free_shipping,
+  // unchanged) so every existing free_shipping-only promotion keeps working;
+  // this flag layers free shipping on TOP of a percentage/fixed promotion
+  // instead of requiring a second promotion model. money/totals.ts checks
+  // `type === 'free_shipping' || freeShipping` for the shipping waiver.
+  freeShipping: boolean().notNull().default(false),
   conditions: jsonb(),
   startsAt: timestamp({ withTimezone: true }),
   endsAt: timestamp({ withTimezone: true }),

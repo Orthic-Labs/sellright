@@ -11,6 +11,10 @@ export interface CartLineInput {
 export interface Promotion {
   type: 'percentage' | 'fixed' | 'free_shipping';
   value: number; // percentage: 0–100; fixed: cents; free_shipping: ignored
+  /** R24: a percentage/fixed promotion can ALSO waive shipping (DD's combined
+   *  discount + free-shipping action pair). Ignored when type is already
+   *  'free_shipping' (shipping is waived either way). */
+  freeShipping?: boolean;
 }
 
 export interface TotalsInput {
@@ -112,7 +116,7 @@ export function calculateOrderTotals(input: TotalsInput): OrderTotals {
   const discountTotal = lines.reduce((a, l) => a + l.lineDiscount, 0);
 
   const discountedSubtotal = subtotal - discountTotal;
-  const shippingTotal = promo?.type === 'free_shipping' ? 0 : input.shipping;
+  const shippingTotal = (promo?.type === 'free_shipping' || promo?.freeShipping) ? 0 : input.shipping;
   const taxableShipping = input.shippingTaxable ? shippingTotal : 0;
   const taxableBase = discountedSubtotal + taxableShipping;
   // Inclusive: the tax is already inside taxableBase — extract it (don't add).

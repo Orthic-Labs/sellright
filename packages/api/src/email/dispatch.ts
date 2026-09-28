@@ -25,6 +25,7 @@ import {
   passwordReset,
   emailVerify,
   emailAddressChange,
+  emailAddressChangedNotice,
   orderRefundConfirmation,
   magicLinkAccess,
   trialLicenseKey,
@@ -43,6 +44,7 @@ export const EMAIL_KIND = {
   PASSWORD_RESET: 'password_reset',
   EMAIL_VERIFY: 'email_verify',
   EMAIL_CHANGE: 'email_change',
+  EMAIL_CHANGED_NOTICE: 'email_changed_notice',
   MAGIC_LINK: 'magic_link',
   ORDER_REFUND_CONFIRMATION: 'order-refund-confirmation',
 } as const;
@@ -210,6 +212,23 @@ export async function enqueueEmailAddressChange(tx: Tx, storeId: string, store: 
   const rendered = emailAddressChange(ctx, data);
   return enqueueEmail(tx, storeId, {
     kind: EMAIL_KIND.EMAIL_CHANGE,
+    dedupeKey: data.dedupeKey,
+    recipient: to,
+    payload: { to, from: ctx.fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },
+  });
+}
+
+/** Security notice to the OLD address once an email change is CONFIRMED —
+ *  `to` is the address being abandoned, not the new one. See
+ *  templates.ts::emailAddressChangedNotice for why this fires unconditionally
+ *  on confirm (not on request), independent of session/consent state. */
+export async function enqueueEmailAddressChangedNotice(tx: Tx, storeId: string, store: StoreEmailCtx, to: string, data: {
+  newEmail: string; dedupeKey?: string;
+}): Promise<boolean> {
+  const ctx = emailCtx(store);
+  const rendered = emailAddressChangedNotice(ctx, data);
+  return enqueueEmail(tx, storeId, {
+    kind: EMAIL_KIND.EMAIL_CHANGED_NOTICE,
     dedupeKey: data.dedupeKey,
     recipient: to,
     payload: { to, from: ctx.fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },

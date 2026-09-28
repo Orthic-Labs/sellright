@@ -22,7 +22,7 @@ interface Condition {
 const arg = (c: Condition, name: string): string | undefined => c.args?.find((a) => a.name === name)?.value;
 
 export function evaluateCoupon(
-  promo: { type: Promotion['type']; value: number; conditions: unknown },
+  promo: { type: Promotion['type']; value: number; conditions: unknown; freeShipping?: boolean },
   ctx: CouponContext,
 ): CouponEval {
   const conditions: Condition[] = Array.isArray(promo.conditions) ? (promo.conditions as Condition[]) : [];
@@ -56,7 +56,7 @@ export function evaluateCoupon(
         return { valid: false, reason: `unsupported condition: ${cond.code}` };
     }
   }
-  return { valid: true, promotion: { type: promo.type, value: promo.value } };
+  return { valid: true, promotion: { type: promo.type, value: promo.value, freeShipping: promo.freeShipping } };
 }
 
 export function productFacetIds(metafields: unknown): string[] {

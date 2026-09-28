@@ -24,7 +24,7 @@ const requestSchema = z.object({
 
 gatewayPayments.post('/v1/shop/orders/:code/gateway-payment', async c => {
   const st = await resolveStoreFromCtx(c);
-  const retry = attemptRetryAfter(clientIp(c), 'gateway:' + clientIp(c));
+  const retry = await attemptRetryAfter(clientIp(c), 'gateway:' + clientIp(c));
   if (retry) return c.json({ error: 'Too many payment attempts' }, 429);
   const key = c.req.header('idempotency-key');
   if (!key || key.length > 200) return c.json({ error: 'Idempotency-Key required (maximum 200 characters)' }, 400);
@@ -45,7 +45,7 @@ gatewayPayments.post('/v1/shop/orders/:code/gateway-payment', async c => {
 
 gatewayPayments.post('/v1/shop/orders/:code/gateway-payment/:attempt/verify', async c => {
   const st = await resolveStoreFromCtx(c);
-  const retry = attemptRetryAfter(clientIp(c), 'gateway-verify:' + clientIp(c));
+  const retry = await attemptRetryAfter(clientIp(c), 'gateway-verify:' + clientIp(c));
   if (retry) return c.json({ error: 'Too many verification attempts' }, 429);
   try {
     const input = { storeId: st.id, code: c.req.param('code'), id: c.req.param('attempt'),

@@ -83,7 +83,7 @@ setup.openapi(
     // authentication-failure signal here (a bad token 404s exactly like a
     // route that doesn't exist), and this is a high-risk one-shot action
     // like checkout, so every request — success or failure — consumes a slot.
-    const retry = attemptRetryAfter(ip, 'setup:claim');
+    const retry = await attemptRetryAfter(ip, 'setup:claim');
     if (retry > 0) throw new HttpError(429, `too many attempts — try again in ${retry}s`);
 
     const body = c.req.valid('json');

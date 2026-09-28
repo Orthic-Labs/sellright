@@ -8,6 +8,7 @@ import { hashPassword, verifyPassword } from '../auth/password.js';
 import { customerCsrfValid, clearCustomerCookies } from '../auth/cookies.js';
 import { createHash } from 'node:crypto';
 import { revokeDeviceRemote } from '../licensing/device-leases.js';
+import { loadOrderFulfillments, loadOrderLines, loadOrderPayments, loadOrderPromotionCode } from './order-facts.js';
 
 const hashToken = (t: string) => createHash('sha256').update(t).digest('hex');
 
@@ -31,42 +32,55 @@ async function me(tx: Tx, token: string | null): Promise<SessionCustomer | null>
 
 export const account = new OpenAPIHono();
 
-// GET /v1/shop/account/orders
+// GET /v1/shop/account/orders — R20 parity: paginated (was a hard limit(50)
+// with the returned array length silently reported as the total count by
+// callers, since there was nothing else to report).
 account.openapi(
   createRoute({
     method: 'get', path: '/v1/shop/account/orders', summary: "Current customer's orders",
+    request: { query: z.object({
+      limit: z.coerce.number().int().min(1).max(50).default(20),
+      offset: z.coerce.number().int().min(0).default(0),
+    }) },
     responses: {
-      200: { description: 'Orders', content: { 'application/json': { schema: z.object({ items: z.array(z.object({ code: z.string(), state: z.string(), grandTotal: z.number().int(), placedAt: z.string().nullable(), lines: z.number().int() })) } ) } } },
+      200: { description: 'Orders', content: { 'application/json': { schema: z.object({
+        items: z.array(z.object({ code: z.string(), state: z.string(), currency: z.string(), grandTotal: z.number().int(), placedAt: z.string().nullable(), lines: z.number().int() })),
+        total: z.number().int(), limit: z.number().int(), offset: z.number().int(),
+      }) } } },
       401: { description: 'Unauthenticated', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
     },
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
+    const { limit, offset } = c.req.valid('query');
     const out = await withStore(st.id, async (tx) => {
       const cust = await me(tx, customerToken(c));
       if (!cust) return null;
+      // WP9.5: a guest order auto-linked to this account purely by email match
+      // stays hidden until the account's email is verified. Registration does
+      // NOT gate on verification, so without this an attacker who registers a
+      // victim's email would see the victim's past guest orders.
+      const where = and(
+        eq(s.order.customerId, cust.id),
+        ...(cust.emailVerified ? [] : [sql`(${s.order.metadata} ->> 'linked_via') IS DISTINCT FROM 'email_match'`]),
+      );
+      const [{ total } = { total: 0 }] = await tx.select({ total: sql<number>`count(*)::int` }).from(s.order).where(where);
       const items = await tx
         .select({
-          code: s.order.code, state: s.order.state, grandTotal: s.order.grandTotal, placedAt: s.order.placedAt,
+          code: s.order.code, state: s.order.state, currency: s.order.currency, grandTotal: s.order.grandTotal, placedAt: s.order.placedAt,
           lines: sql<number>`count(${s.orderLine.id})::int`,
         })
         .from(s.order)
         .leftJoin(s.orderLine, eq(s.orderLine.orderId, s.order.id))
-        .where(and(
-          eq(s.order.customerId, cust.id),
-          // WP9.5: a guest order auto-linked to this account purely by email match
-          // stays hidden until the account's email is verified. Registration does
-          // NOT gate on verification, so without this an attacker who registers a
-          // victim's email would see the victim's past guest orders.
-          ...(cust.emailVerified ? [] : [sql`(${s.order.metadata} ->> 'linked_via') IS DISTINCT FROM 'email_match'`]),
-        ))
+        .where(where)
         .groupBy(s.order.id)
         .orderBy(desc(s.order.createdAt))
-        .limit(50);
-      return items.map((o) => ({ ...o, placedAt: o.placedAt ? o.placedAt.toISOString() : null }));
+        .limit(limit)
+        .offset(offset);
+      return { total, items: items.map((o) => ({ ...o, placedAt: o.placedAt ? o.placedAt.toISOString() : null })) };
     });
     if (out === null) return c.json({ error: 'not authenticated' }, 401);
-    return c.json({ items: out }, 200);
+    return c.json({ items: out.items, total: out.total, limit, offset }, 200);
   },
 );
 
@@ -128,13 +142,34 @@ account.openapi(
   },
 );
 
-// GET /v1/shop/account/orders/{code}
+// GET /v1/shop/account/orders/{code} — R20 parity: full order contract
+// (currency/totals/addresses/payments/fulfillments/preorder), matching the
+// public receipt (orders.ts) and guest tracking (/v1/shop/track) instead of
+// substituting zeros/nulls for fields the adapter had simply never asked for.
 account.openapi(
   createRoute({
     method: 'get', path: '/v1/shop/account/orders/{code}', summary: 'Order detail (owned)',
     request: { params: z.object({ code: z.string() }) },
     responses: {
-      200: { description: 'Order', content: { 'application/json': { schema: z.object({ code: z.string(), state: z.string(), grandTotal: z.number().int(), lines: z.array(z.object({ sku: z.string(), name: z.string(), quantity: z.number().int(), lineTotal: z.number().int() })) }) } } },
+      200: { description: 'Order', content: { 'application/json': { schema: z.object({
+        code: z.string(), state: z.string(), currency: z.string(),
+        subtotal: z.number().int(), shippingTotal: z.number().int(), taxTotal: z.number().int(),
+        discountTotal: z.number().int(), grandTotal: z.number().int(),
+        placedAt: z.string().nullable(),
+        shippingAddress: z.any(), billingAddress: z.any(),
+        promotionCode: z.string().nullable(),
+        payments: z.array(z.object({
+          method: z.string(), state: z.string(), amount: z.number().int(),
+          providerRef: z.string().nullable(), errorMessage: z.string().nullable(), createdAt: z.string(),
+        })),
+        fulfillments: z.array(z.object({
+          state: z.string(), trackingCode: z.string().nullable(), carrier: z.string().nullable(), updatedAt: z.string().nullable(),
+        })),
+        lines: z.array(z.object({
+          sku: z.string(), name: z.string(), quantity: z.number().int(), unitPrice: z.number().int(), lineTotal: z.number().int(),
+          image: z.string().nullable(), isPreOrder: z.boolean(), shipDate: z.string().nullable(),
+        })),
+      }) } } },
       404: { description: 'Not found', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
     },
   }),
@@ -152,11 +187,22 @@ account.openapi(
         ...(cust.emailVerified ? [] : [sql`(${s.order.metadata} ->> 'linked_via') IS DISTINCT FROM 'email_match'`]),
       )).limit(1);
       if (!order) return { kind: 'notfound' as const };
-      const lines = await tx.select({ sku: s.orderLine.variantSku, name: s.orderLine.variantName, quantity: s.orderLine.quantity, lineTotal: s.orderLine.lineTotal }).from(s.orderLine).where(eq(s.orderLine.orderId, order.id));
-      return { kind: 'ok' as const, order, lines };
+      const lines = await loadOrderLines(tx, order.id);
+      const payments = await loadOrderPayments(tx, order.id);
+      const fulfillments = await loadOrderFulfillments(tx, order.id);
+      const promotionCode = await loadOrderPromotionCode(tx, order.promotionId);
+      return { kind: 'ok' as const, order, lines, payments, fulfillments, promotionCode };
     });
     if (out.kind !== 'ok') return c.json({ error: out.kind === 'unauth' ? 'not authenticated' : 'order not found' }, 404);
-    return c.json({ code: out.order.code, state: out.order.state, grandTotal: out.order.grandTotal, lines: out.lines }, 200);
+    return c.json({
+      code: out.order.code, state: out.order.state, currency: out.order.currency,
+      subtotal: out.order.subtotal, shippingTotal: out.order.shippingTotal, taxTotal: out.order.taxTotal,
+      discountTotal: out.order.discountTotal, grandTotal: out.order.grandTotal,
+      placedAt: out.order.placedAt ? out.order.placedAt.toISOString() : null,
+      shippingAddress: out.order.shippingAddress ?? null, billingAddress: out.order.billingAddress ?? null,
+      promotionCode: out.promotionCode,
+      payments: out.payments, fulfillments: out.fulfillments, lines: out.lines,
+    }, 200);
   },
 );
 

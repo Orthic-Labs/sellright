@@ -27,6 +27,7 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { eq, sql } from 'drizzle-orm';
+import { createHash } from 'node:crypto';
 import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
 import * as s from '../db/schema.js';
@@ -192,6 +193,43 @@ describe('POST /v1/shop/auth/login', () => {
       method: 'POST', headers: hdr(), body: JSON.stringify({ email: 'willverify@auth.test', password: 'rightpassword1' }),
     });
     expect(res.status).toBe(200);
+  });
+
+  // rememberMe: defaults true (the store's normal, long session TTL);
+  // false shortens the session (and its cookie's Max-Age) to a 1-day ceiling.
+  it('rememberMe defaults to true — a normal (multi-day) session', async () => {
+    await registerDirect('remember-default@auth.test', 'rightpassword1');
+    await markVerified('remember-default@auth.test');
+    const res = await app.request('/v1/shop/auth/login', {
+      method: 'POST', headers: hdr(), body: JSON.stringify({ email: 'remember-default@auth.test', password: 'rightpassword1' }),
+    });
+    expect(res.status).toBe(200);
+    const setCookie = res.headers.get('set-cookie') ?? '';
+    const maxAge = Number(/Max-Age=(\d+)/.exec(setCookie)?.[1] ?? 0);
+    expect(maxAge).toBeGreaterThan(2 * 24 * 60 * 60); // default policy is 30 days
+  });
+
+  it('rememberMe:false shortens the session to a 1-day ceiling', async () => {
+    await registerDirect('remember-false@auth.test', 'rightpassword1');
+    await markVerified('remember-false@auth.test');
+    const res = await app.request('/v1/shop/auth/login', {
+      method: 'POST', headers: hdr(), body: JSON.stringify({ email: 'remember-false@auth.test', password: 'rightpassword1', rememberMe: false }),
+    });
+    expect(res.status).toBe(200);
+    const setCookie = res.headers.get('set-cookie') ?? '';
+    const maxAge = Number(/Max-Age=(\d+)/.exec(setCookie)?.[1] ?? 0);
+    expect(maxAge).toBeLessThanOrEqual(24 * 60 * 60);
+    expect(maxAge).toBeGreaterThan(0);
+    // The DB-side session row expiry matches the shortened cookie, not the
+    // store's normal 30-day policy. Look up by the token's own hash (not
+    // "most recent by expiresAt") — registerDirect() already created an
+    // earlier, normal-TTL session for this customer, which would otherwise
+    // sort AHEAD of the new short-lived one when ordering by expiresAt desc.
+    const { token } = await res.json() as { token: string };
+    const tokenHash = createHash('sha256').update(token).digest('hex');
+    const [session] = await withStore(STORE, (tx) => tx.select({ expiresAt: s.session.expiresAt }).from(s.session).where(eq(s.session.tokenHash, tokenHash)).limit(1));
+    const ttlMs = session!.expiresAt.getTime() - Date.now();
+    expect(ttlMs).toBeLessThanOrEqual(24 * 60 * 60 * 1000 + 5000); // small slack for test runtime
   });
 });
 

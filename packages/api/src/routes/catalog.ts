@@ -58,6 +58,10 @@ const ProductListItem = z.object({
 });
 
 const Variant = z.object({
+  // Restock-request (POST /v1/shop/restock-request) and other variant-scoped
+  // calls need the real id, not just the sku — expose it alongside sku
+  // rather than requiring a second lookup.
+  id: z.string(),
   sku: z.string(),
   name: z.string(),
   price: Money,
@@ -68,6 +72,7 @@ const Variant = z.object({
   isPreOrder: z.boolean(),
   enabled: z.boolean(),
   options: z.array(z.object({ id: z.string(), code: z.string(), name: z.string(), group: z.object({ id: z.string(), code: z.string(), name: z.string() }) })),
+  assets: z.array(z.object({ preview: z.string() })),
   // Storefronts must know a variant is a software license before checkout: the
   // legal gate keys off these two, and the API rejects a licensed order that
   // arrives without an acceptance receipt. Both are product metadata, not
@@ -189,8 +194,16 @@ catalog.openapi(
         .innerJoin(s.productOption, eq(s.productOption.id, s.variantOption.optionId))
         .innerJoin(s.productOptionGroup, eq(s.productOptionGroup.id, s.productOption.groupId))
         .where(eq(s.productVariant.productId, p.id)).orderBy(asc(s.productOptionGroup.name), asc(s.productOption.value));
+      const variantAssetRows = await tx
+        .select({ variantId: s.variantAsset.variantId, path: s.asset.path, position: s.variantAsset.position })
+        .from(s.variantAsset)
+        .innerJoin(s.asset, eq(s.asset.id, s.variantAsset.assetId))
+        .innerJoin(s.productVariant, eq(s.productVariant.id, s.variantAsset.variantId))
+        .where(eq(s.productVariant.productId, p.id))
+        .orderBy(asc(s.variantAsset.position));
       const variants = (await tx
         .select({
+          id: s.productVariant.id,
           sku: s.productVariant.sku,
           name: s.productVariant.name,
           price: s.productVariant.price,
@@ -217,7 +230,7 @@ catalog.openapi(
           sql`case when ${s.productVariant.salePrice} is not null and ${s.productVariant.salePrice} > 0 then ${s.productVariant.salePrice} else ${s.productVariant.price} end`,
           asc(s.productVariant.sku),
         ))
-        .map((v) => ({ ...v, price: convertMoney(v.price, rate), salePrice: conv(v.salePrice), preOrderPrice: conv(v.preOrderPrice), shipDate: v.shipDate?.toISOString() ?? null, compareAtPrice: conv(v.compareAtPrice), options: optionRows.filter(o => o.sku === v.sku).map(o => ({ id: o.id, code: o.id, name: o.name, group: { id: o.groupId, code: o.groupId, name: o.groupName } })) }));
+        .map((v) => ({ ...v, price: convertMoney(v.price, rate), salePrice: conv(v.salePrice), preOrderPrice: conv(v.preOrderPrice), shipDate: v.shipDate?.toISOString() ?? null, compareAtPrice: conv(v.compareAtPrice), options: optionRows.filter(o => o.sku === v.sku).map(o => ({ id: o.id, code: o.id, name: o.name, group: { id: o.groupId, code: o.groupId, name: o.groupName } })), assets: variantAssetRows.filter(a => a.variantId === v.id).map(a => ({ preview: a.path })) }));
       const imgs = await tx
         .select({ path: s.asset.path })
         .from(s.productAsset)

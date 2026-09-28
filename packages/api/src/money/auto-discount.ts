@@ -14,6 +14,8 @@ export type AutoPromoRow = {
   value: number; // percentage: 0–100; fixed: cents
   conditions: unknown;
   priority: number;
+  /** R24: percentage/fixed automatic promotion that also waives shipping. */
+  freeShipping?: boolean;
 };
 
 /** Discount (cents) a promo yields on a subtotal — for RANKING only. */

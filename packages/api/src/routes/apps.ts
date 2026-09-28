@@ -109,9 +109,9 @@ apps.openapi(
     const { appKey } = c.req.valid('param');
     const { licenseKey, deviceId, deviceLabel } = c.req.valid('json');
     const ip = clientIp(c);
-    const retry = licenseActionRetryAfter(ip, licenseKey);
+    const retry = await licenseActionRetryAfter(ip, licenseKey);
     if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
-    recordLicenseAction(ip, licenseKey);
+    await recordLicenseAction(ip, licenseKey);
     const out = await withStore(st.id, (tx) => activateLicenseOnDevice(tx, { storeId: st.id, appKey, licenseKey, deviceId, deviceLabel }));
     if (out.kind === 'notfound') return c.json({ error: 'license not found' }, 404);
     if (out.kind === 'full') return c.json({ error: 'license seat limit reached' }, 409);
@@ -144,9 +144,9 @@ apps.post('/api/licenses/activate', async (c) => withEntitlementVeto(c, async ()
   // SEC: throttle per (ip, licenseKey) — blunts key-guessing/credential
   // stuffing against the activation endpoint without penalizing an
   // unrelated caller who happens to share an IP (NAT/office/VPN).
-  const retry = licenseActionRetryAfter(ip, body.licenseKey);
+  const retry = await licenseActionRetryAfter(ip, body.licenseKey);
   if (retry > 0) return c.json({ ok: false, status: 'rate_limited', message: `too many attempts — try again in ${retry}s` }, 429);
-  recordLicenseAction(ip, body.licenseKey);
+  await recordLicenseAction(ip, body.licenseKey);
   const { appKey, st } = await publicAppStore(c, body.app);
   const result = await withStore(st.id, async (tx) => {
     const activation = await activateLicenseOnDevice(tx, {
@@ -204,9 +204,9 @@ apps.on('POST', ['/api/licenses/refresh', '/v1/licenses/refresh'], async (c) => 
   const body = RefreshIn.parse(await c.req.json());
   const ip = clientIp(c);
   // SEC: throttle per (ip, activationToken) — same rationale as activate.
-  const retry = licenseActionRetryAfter(ip, body.activationToken);
+  const retry = await licenseActionRetryAfter(ip, body.activationToken);
   if (retry > 0) return c.json({ ok: false, status: 'rate_limited', message: `too many attempts — try again in ${retry}s` }, 429);
-  recordLicenseAction(ip, body.activationToken);
+  await recordLicenseAction(ip, body.activationToken);
   const { appKey, st } = await publicAppStore(c, body.app);
   const result = await withStore(st.id, async (tx) => {
     const activation = await findActivationByToken(tx, { appKey, activationToken: body.activationToken, deviceId: body.deviceId });
@@ -251,9 +251,9 @@ apps.on('POST', ['/api/licenses/deactivate', '/v1/licenses/deactivate'], async (
   const body = DeactivateIn.parse(await c.req.json());
   const ip = clientIp(c);
   // SEC: throttle per (ip, activationToken) — same rationale as activate.
-  const retry = licenseActionRetryAfter(ip, body.activationToken);
+  const retry = await licenseActionRetryAfter(ip, body.activationToken);
   if (retry > 0) return c.json({ ok: false, status: 'rate_limited', message: `too many attempts — try again in ${retry}s` }, 429);
-  recordLicenseAction(ip, body.activationToken);
+  await recordLicenseAction(ip, body.activationToken);
   const { appKey, st } = await publicAppStore(c, body.app);
   const result = await withStore(st.id, async (tx) => {
     // Hook runs BEFORE the row is removed; a veto (thrown, not returned)
@@ -296,9 +296,9 @@ apps.on('POST', ['/api/licenses/trial', '/v1/licenses/trial'], async (c) => with
 
   // SEC: trial mints a real license + sends mail per call — throttle per
   // (ip, email) BEFORE resolving the store / touching the DB.
-  const retry = trialRetryAfter(ip, email);
+  const retry = await trialRetryAfter(ip, email);
   if (retry > 0) return c.json({ ok: false, status: 'rate_limited', message: `too many attempts — try again in ${retry}s` }, 429);
-  recordTrialAttempt(ip, email);
+  await recordTrialAttempt(ip, email);
 
   const { appKey, st } = await publicAppStore(c, body.app);
 

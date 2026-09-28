@@ -1,7 +1,11 @@
 /**
- * In-memory sliding-window throttle for auth failures and high-risk shopper
- * actions. Per-process — appropriate for a single API instance; move the state
- * to Redis (or another shared limiter) before running multiple API instances.
+ * Sliding-window throttle for auth failures and high-risk shopper actions.
+ * Storage is pluggable (SELLRIGHT-ISSUES P1) — see rate-limit-backend.ts:
+ * RATE_LIMIT_BACKEND=postgres (default) shares this bucket's state across
+ * every API process; RATE_LIMIT_BACKEND=memory is an explicit single-process
+ * opt-out. Every function here is now async because of that — all existing
+ * callers already run inside an async request handler, so this only meant
+ * adding `await` at each call site, not restructuring them.
  *
  * Login/auth buckets remain failure-counted: callers explicitly record a failed
  * authentication and a successful login clears the key. Checkout/payment
@@ -9,34 +13,14 @@
  * authentication-failure signal and every request is abuse-relevant.
  */
 import { env } from '../env.js';
+import { rateLimitBackend } from './rate-limit-backend.js';
+
 const WINDOW_MS = 15 * 60 * 1000; // 15 min
 const MAX_FAILURES = 8;
-
-interface Entry { fails: number[]; }
-const store = new Map<string, Entry>();
+const BUCKET = 'auth';
 
 function keyFor(ip: string, identifier: string): string {
   return `${ip}|${identifier.toLowerCase()}`;
-}
-
-function prune(e: Entry, now: number): void {
-  e.fails = e.fails.filter((t) => now - t < WINDOW_MS);
-}
-
-function retryAfterFor(e: Entry, now: number): number {
-  if (e.fails.length < MAX_FAILURES) return 0;
-  const oldest = e.fails[0]!;
-  return Math.max(1, Math.ceil((WINDOW_MS - (now - oldest)) / 1000));
-}
-
-function cleanup(now: number): void {
-  // Opportunistic cleanup so the map cannot grow unbounded on a long-lived
-  // process receiving one-off identifiers/IPs.
-  if (store.size <= 5000) return;
-  for (const [k, v] of store) {
-    prune(v, now);
-    if (!v.fails.length) store.delete(k);
-  }
 }
 
 /**
@@ -44,17 +28,8 @@ function cleanup(now: number): void {
  * seconds when the request must be rejected; otherwise records the attempt and
  * returns 0. Exactly MAX_FAILURES attempts are allowed in a window.
  */
-export function attemptRetryAfter(ip: string, identifier: string): number {
-  const key = keyFor(ip, identifier);
-  const e = store.get(key) ?? { fails: [] };
-  const now = Date.now();
-  prune(e, now);
-  const retry = retryAfterFor(e, now);
-  if (retry > 0) return retry;
-  e.fails.push(now);
-  store.set(key, e);
-  cleanup(now);
-  return 0;
+export async function attemptRetryAfter(ip: string, identifier: string): Promise<number> {
+  return rateLimitBackend().consume(BUCKET, keyFor(ip, identifier), WINDOW_MS, MAX_FAILURES);
 }
 
 /**
@@ -63,30 +38,19 @@ export function attemptRetryAfter(ip: string, identifier: string): number {
  * checkout/pay call sites also use this function; recognize those explicit
  * namespaces and consume an attempt so their limiter cannot remain inert.
  */
-export function loginRetryAfter(ip: string, identifier: string): number {
+export async function loginRetryAfter(ip: string, identifier: string): Promise<number> {
   if (identifier.startsWith('checkout:') || identifier.startsWith('pay:')) {
     return attemptRetryAfter(ip, identifier);
   }
-
-  const e = store.get(keyFor(ip, identifier));
-  if (!e) return 0;
-  const now = Date.now();
-  prune(e, now);
-  return retryAfterFor(e, now);
+  return rateLimitBackend().check(BUCKET, keyFor(ip, identifier), WINDOW_MS, MAX_FAILURES);
 }
 
-export function recordLoginFailure(ip: string, identifier: string): void {
-  const key = keyFor(ip, identifier);
-  const e = store.get(key) ?? { fails: [] };
-  const now = Date.now();
-  prune(e, now);
-  e.fails.push(now);
-  store.set(key, e);
-  cleanup(now);
+export async function recordLoginFailure(ip: string, identifier: string): Promise<void> {
+  await rateLimitBackend().recordFailure(BUCKET, keyFor(ip, identifier), WINDOW_MS);
 }
 
-export function clearLoginAttempts(ip: string, identifier: string): void {
-  store.delete(keyFor(ip, identifier));
+export async function clearLoginAttempts(ip: string, identifier: string): Promise<void> {
+  await rateLimitBackend().clear(BUCKET, keyFor(ip, identifier));
 }
 
 /**

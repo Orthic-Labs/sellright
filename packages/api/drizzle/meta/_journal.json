@@ -477,6 +477,27 @@
       "when": 1790000010400,
       "tag": "0076_session_step_up",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1790000010500,
+      "tag": "0077_promotion_free_shipping",
+      "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1790000010600,
+      "tag": "0078_rate_limit_shared",
+      "breakpoints": true
+    },
+    {
+      "idx": 70,
+      "version": "7",
+      "when": 1790000010700,
+      "tag": "0079_catalog_manifest_pending",
+      "breakpoints": true
     }
   ]
 }

@@ -36,7 +36,7 @@ admin.openapi(
     const { email: rawEmail, password, totp } = c.req.valid('json');
     const email = normalizeEmail(rawEmail);
     const ip = clientIp(c);
-    const retry = loginRetryAfter(ip, `admin:${email}`);
+    const retry = await loginRetryAfter(ip, `admin:${email}`);
     if (retry > 0) throw new HttpError(429, `too many attempts — try again in ${retry}s`);
     const u = await findAdminByEmail(email);
     // WP1.5: do NOT confirm password validity to unauthenticated callers. The
@@ -45,12 +45,12 @@ admin.openapi(
     // enabled" via the response. The fix: treat a 2FA-enabled account with a
     // missing TOTP as a single incomplete login attempt (401, generic message).
     // The UI must always send both password and TOTP together.
-    if (!u || !(await verifyPassword(password, u.passwordHash))) { recordLoginFailure(ip, `admin:${email}`); throw new HttpError(401, 'invalid email, password, or 2FA code'); }
+    if (!u || !(await verifyPassword(password, u.passwordHash))) { await recordLoginFailure(ip, `admin:${email}`); throw new HttpError(401, 'invalid email, password, or 2FA code'); }
     if (u.totpSecret) {
-      if (!totp) { recordLoginFailure(ip, `admin:${email}`); throw new HttpError(401, 'invalid email, password, or 2FA code'); }
-      if (!verifyTotp(u.totpSecret, totp, u.id)) { recordLoginFailure(ip, `admin:${email}`); throw new HttpError(401, 'invalid email, password, or 2FA code'); }
+      if (!totp) { await recordLoginFailure(ip, `admin:${email}`); throw new HttpError(401, 'invalid email, password, or 2FA code'); }
+      if (!verifyTotp(u.totpSecret, totp, u.id)) { await recordLoginFailure(ip, `admin:${email}`); throw new HttpError(401, 'invalid email, password, or 2FA code'); }
     }
-    clearLoginAttempts(ip, `admin:${email}`);
+    await clearLoginAttempts(ip, `admin:${email}`);
     const token = await createAdminSession(u.id);
     const csrf = newCsrf();
     setAuthCookies(c, token, csrf); // httpOnly session cookie + CSRF cookie

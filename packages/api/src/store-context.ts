@@ -1,5 +1,7 @@
 import { pool } from './db/client.js';
 import { env } from './env.js';
+import { log, err as logErr } from './lib/logger.js';
+import type { PoolClient } from 'pg';
 
 export interface StoreCtx {
   id: string;
@@ -93,6 +95,86 @@ export function invalidateStoreCache(slug?: string, host?: string): void {
     }
   }
   if (host !== undefined) hostCache.delete(host);
+}
+
+// ── cross-process invalidation (SELLRIGHT-ISSUES P2) ────────────────────────
+// The 60s TTL above already bounds staleness to at most a minute even with
+// zero cross-process signaling — but the review correctly points out that's
+// "eventual", not "immediate", and settings changes (currency, tax rate,
+// hostnames, payment config) can be immediate-sensitive. Postgres LISTEN/
+// NOTIFY gives instant, zero-poll propagation for free (no Redis, no new
+// table/column, no per-request round trip) — every API process opens ONE
+// dedicated long-lived connection (same pattern as jobs/leader-lock.ts's
+// dedicated advisory-lock client: LISTEN/NOTIFY is tied to the *session*,
+// not a pool-borrowed connection that could be handed to another caller
+// mid-listen) and reacts to notifications by calling the same
+// invalidateStoreCache() used locally.
+const CHANNEL = 'store_cache_invalidate';
+let listenerClient: PoolClient | undefined;
+
+interface InvalidationPayload { slug?: string; host?: string; }
+
+/**
+ * Call this INSTEAD of invalidateStoreCache() from any settings-mutation
+ * handler — it invalidates locally (so the mutating process's own next read
+ * is fresh even before its own NOTIFY round-trips back) AND broadcasts to
+ * every other listening process. A NOTIFY failure (e.g. pool momentarily
+ * exhausted) is logged, not thrown — the mutation itself already succeeded,
+ * and the 60s TTL is still the fail-safe backstop if the broadcast is lost.
+ */
+export async function broadcastStoreCacheInvalidation(slug?: string, host?: string): Promise<void> {
+  invalidateStoreCache(slug, host);
+  try {
+    const payload: InvalidationPayload = {};
+    if (slug !== undefined) payload.slug = slug;
+    if (host !== undefined) payload.host = host;
+    await pool.query('SELECT pg_notify($1, $2)', [CHANNEL, JSON.stringify(payload)]);
+  } catch (e) {
+    logErr.error('store cache invalidation broadcast failed (60s TTL is the fallback)', e);
+  }
+}
+
+/**
+ * Start listening for invalidations from OTHER processes. Idempotent — a
+ * second call is a no-op while a listener is already active. Call once at
+ * process startup (see index.ts, alongside startJobScheduler()). Reconnects
+ * automatically on error/close so a transient connection drop doesn't
+ * silently disable cross-process invalidation for the rest of the process's
+ * life — the 60s TTL covers the gap while reconnecting either way.
+ */
+export async function startStoreCacheInvalidationListener(): Promise<void> {
+  if (listenerClient) return;
+  const client = await pool.connect();
+  listenerClient = client;
+  client.on('notification', (msg) => {
+    if (msg.channel !== CHANNEL) return;
+    try {
+      const payload = JSON.parse(msg.payload ?? '{}') as InvalidationPayload;
+      invalidateStoreCache(payload.slug, payload.host);
+    } catch (e) {
+      logErr.error('store cache invalidation payload parse failed', e);
+    }
+  });
+  const reconnect = (e?: unknown) => {
+    if (e) logErr.error('store cache invalidation listener connection lost — reconnecting', e);
+    if (listenerClient === client) listenerClient = undefined;
+    client.release(true); // true: connection is unusable, don't return it to the pool
+    setTimeout(() => { void startStoreCacheInvalidationListener(); }, 2000).unref();
+  };
+  client.on('error', reconnect);
+  client.on('end', () => reconnect());
+  await client.query(`LISTEN ${CHANNEL}`);
+  log.info('store cache invalidation listener active');
+}
+
+/** Test-only: release the listener client so tests don't leak an open handle. */
+export async function _stopStoreCacheInvalidationListenerForTest(): Promise<void> {
+  if (!listenerClient) return;
+  const client = listenerClient;
+  listenerClient = undefined;
+  client.removeAllListeners('error');
+  client.removeAllListeners('end');
+  client.release();
 }
 
 /** Test-only: peek at current cache sizes. Not part of the public surface. */

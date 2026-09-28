@@ -25,6 +25,17 @@ const emailStoreCtx = (st: StoreCtx) => ({ name: st.name, currency: st.currency,
 // dies before the session it carries (cookie and DB expiry stay consistent).
 const customerCookieSeconds = (st: StoreCtx) => Math.ceil(sessionPolicy(st.config).ttlMs / 1000);
 
+// rememberMe (login only): "keep me signed in" opts INTO the store's normal
+// (long) session TTL — the default. Declining it shortens the session to
+// this fixed 1-day ceiling, min()'d against the store's own policy so a
+// store configured shorter than a day is never LENGTHENED by this flag.
+const NOT_REMEMBERED_TTL_MS = 24 * 60 * 60 * 1000;
+function loginSessionPolicy(st: StoreCtx, rememberMe: boolean) {
+  const policy = sessionPolicy(st.config);
+  if (rememberMe) return policy;
+  return { ...policy, ttlMs: Math.min(policy.ttlMs, NOT_REMEMBERED_TTL_MS) };
+}
+
 // PAR-06: per-store anti-bot. Secret lives in store.config
 // (turnstileSecretKey, or turnstile.secretKey nested); absent → feature off.
 function turnstileSecret(config: unknown): string | null {
@@ -92,11 +103,11 @@ auth.openapi(
     // bucket (NOT per-account — an attacker could lock a real customer out).
     const regIp = clientIp(c);
     const regBucket = `register:${regIp}:${email}`;
-    const regRetry = loginRetryAfter(regIp, regBucket);
+    const regRetry = await loginRetryAfter(regIp, regBucket);
     if (regRetry > 0) return c.json({ error: `too many attempts — try again in ${regRetry}s` }, 429);
     // PAR-06: server-side Turnstile when the store config carries a secret.
     if (!(await turnstileOk(st.config, turnstileToken, regIp))) {
-      recordLoginFailure(regIp, regBucket);
+      await recordLoginFailure(regIp, regBucket);
       return c.json({ error: 'verification failed' }, 403);
     }
     const passwordHash = await hashPassword(password);
@@ -116,8 +127,8 @@ auth.openapi(
       await enqueueEmailVerify(tx, st.id, emailStoreCtx(st), email, { url: verifyUrl });
       return { token, id: cust!.id, firstName: cust!.firstName, lastName: cust!.lastName };
     });
-    if ('taken' in out) { recordLoginFailure(regIp, regBucket); return c.json({ error: 'email already registered' }, 409); }
-    clearLoginAttempts(regIp, regBucket);
+    if ('taken' in out) { await recordLoginFailure(regIp, regBucket); return c.json({ error: 'email already registered' }, 409); }
+    await clearLoginAttempts(regIp, regBucket);
     setCustomerCookies(c, out.token, newCsrf(), customerCookieSeconds(st));
     return c.json({ token: out.token, customer: { id: out.id, email, firstName: out.firstName, lastName: out.lastName, phone: null, emailVerified: false, isMigrated: false } }, 200);
   },
@@ -129,7 +140,7 @@ auth.openapi(
     method: 'post',
     path: '/v1/shop/auth/login',
     summary: 'Log in',
-    request: { body: { content: { 'application/json': { schema: z.object({ email: z.string().email(), password: z.string(), turnstileToken: z.string().optional() }) } } } },
+    request: { body: { content: { 'application/json': { schema: z.object({ email: z.string().email(), password: z.string(), turnstileToken: z.string().optional(), rememberMe: z.boolean().default(true) }) } } } },
     responses: {
       200: { description: 'OK', content: { 'application/json': { schema: z.object({ token: z.string(), customer: CustomerOut }) } } },
       401: { description: 'Invalid', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
@@ -139,16 +150,16 @@ auth.openapi(
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
-    const { email: rawEmail, password, turnstileToken } = c.req.valid('json');
+    const { email: rawEmail, password, turnstileToken, rememberMe } = c.req.valid('json');
     const email = normalizeEmail(rawEmail);
     const ip = clientIp(c);
-    const retry = loginRetryAfter(ip, email);
+    const retry = await loginRetryAfter(ip, email);
     if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
     if (!(await turnstileOk(st.config, turnstileToken, ip))) {
-      recordLoginFailure(ip, email);
+      await recordLoginFailure(ip, email);
       return c.json({ error: 'verification failed' }, 403);
     }
-    const out = await withStore(st.id, async (tx): Promise<{ ok: false } | { ok: 'not_verified' } | { ok: true; token: string; customer: z.infer<typeof CustomerOut> }> => {
+    const out = await withStore(st.id, async (tx): Promise<{ ok: false } | { ok: 'not_verified' } | { ok: true; token: string; ttlMs: number; customer: z.infer<typeof CustomerOut> }> => {
       const [cust] = await tx.select({ id: s.customer.id, email: s.customer.email, firstName: s.customer.firstName, lastName: s.customer.lastName, phone: s.customer.phone, emailVerified: s.customer.emailVerified, passwordHash: s.customer.passwordHash }).from(s.customer).where(eq(s.customer.email, email)).limit(1);
       if (!cust || !(await verifyPassword(password, cust.passwordHash))) return { ok: false };
 
@@ -165,19 +176,23 @@ auth.openapi(
       // existence oracle (same 401 as a wrong password for a bad guess).
       if (!cust.emailVerified) return { ok: 'not_verified' };
 
-      const token = await createSession(tx, st.id, cust.id, sessionPolicy(st.config));
-      return { ok: true, token, customer: { id: cust.id, email: cust.email, firstName: cust.firstName, lastName: cust.lastName, phone: cust.phone, emailVerified: cust.emailVerified, isMigrated: false } };
+      const policy = loginSessionPolicy(st, rememberMe);
+      const token = await createSession(tx, st.id, cust.id, policy);
+      return { ok: true, token, ttlMs: policy.ttlMs, customer: { id: cust.id, email: cust.email, firstName: cust.firstName, lastName: cust.lastName, phone: cust.phone, emailVerified: cust.emailVerified, isMigrated: false } };
     });
-    if (out.ok === false) { recordLoginFailure(ip, email); return c.json({ error: 'invalid email or password' }, 401); }
+    if (out.ok === false) { await recordLoginFailure(ip, email); return c.json({ error: 'invalid email or password' }, 401); }
     if (out.ok === 'not_verified') {
       // A correct password DOES clear the login-failure counter here — this is
       // a legitimate credential, just an unverified account — so a real user
       // isn't throttled out of resending their verification email.
-      clearLoginAttempts(ip, email);
+      await clearLoginAttempts(ip, email);
       return c.json({ error: 'please verify your email before signing in', code: 'not_verified' as const }, 403);
     }
-    clearLoginAttempts(ip, email);
-    setCustomerCookies(c, out.token, newCsrf(), customerCookieSeconds(st));
+    await clearLoginAttempts(ip, email);
+    // Cookie Max-Age tracks the SAME (possibly shortened) TTL the session row
+    // just got — rememberMe:false must not hand out a long-lived cookie for a
+    // short-lived session.
+    setCustomerCookies(c, out.token, newCsrf(), Math.ceil(out.ttlMs / 1000));
     return c.json({ token: out.token, customer: out.customer }, 200);
   },
 );
@@ -203,9 +218,9 @@ auth.openapi(
     const email = normalizeEmail(c.req.valid('json').email);
     const ip = clientIp(c);
     const bucket = `resendverify:${email}`;
-    const retry = loginRetryAfter(ip, bucket);
+    const retry = await loginRetryAfter(ip, bucket);
     if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
-    recordLoginFailure(ip, bucket);
+    await recordLoginFailure(ip, bucket);
     await withStore(st.id, async (tx) => {
       const [cust] = await tx.select({ id: s.customer.id, emailVerified: s.customer.emailVerified })
         .from(s.customer).where(eq(s.customer.email, email)).limit(1);
@@ -378,7 +393,7 @@ auth.openapi(
     // Attempt-counted in practice: every request records — each one can trigger
     // an outgoing email, so it's abuse-relevant whether or not an account exists.
     const bucket = `magiclink:${email}`;
-    const retry = loginRetryAfter(ip, bucket);
+    const retry = await loginRetryAfter(ip, bucket);
     if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
     await withStore(st.id, async (tx) => {
       const [cust] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, email)).limit(1);
@@ -387,7 +402,7 @@ auth.openapi(
       const url = `${resolveStorefrontUrl(emailStoreCtx(st))}${policy.path}?token=${raw}`;
       await enqueueMagicLink(tx, st.id, emailStoreCtx(st), email, { url, ttlMinutes: policy.ttlMinutes });
     });
-    recordLoginFailure(ip, bucket);
+    await recordLoginFailure(ip, bucket);
     return c.json({ ok: true }, 200);
   },
 );
@@ -466,9 +481,9 @@ auth.openapi(
   async (c) => {
     const st = await resolveStoreFromCtx(c);
     const ip = clientIp(c);
-    const retry = loginRetryAfter(ip, `checkemail:${ip}`);
+    const retry = await loginRetryAfter(ip, `checkemail:${ip}`);
     if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
-    recordLoginFailure(ip, `checkemail:${ip}`); // count every probe toward the throttle
+    await recordLoginFailure(ip, `checkemail:${ip}`); // count every probe toward the throttle
     const query = c.req.valid('query');
     if (query.honeypot || !(await turnstileOk(st.config, query.turnstileToken, ip))) {
       return c.json({ exists: false }, 200);

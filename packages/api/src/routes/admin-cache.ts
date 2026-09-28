@@ -64,7 +64,7 @@ adminCache.openapi(
     const provided = c.req.header(CACHE_ADMIN_TOKEN_HEADER);
     if (!tokenMatches(expected, provided)) throw new HttpError(401, 'invalid or missing cache admin token');
 
-    const retryAfter = attemptRetryAfter(clientIp(c), 'cache-purge');
+    const retryAfter = await attemptRetryAfter(clientIp(c), 'cache-purge');
     if (retryAfter > 0) {
       c.header('retry-after', String(retryAfter));
       throw new HttpError(429, 'rate limited — try again shortly');

@@ -5,14 +5,20 @@ import { optionalColumn } from './source-schema.js';
 
 const lower = (v: string | null) => (v ?? 'image').toLowerCase();
 
-/** Vendure action[] -> our promotion type+value (DD uses a single action). */
-function actionToTypeValue(actions: Array<{ code: string; args?: Array<{ name: string; value: string }> }>): { type: 'percentage' | 'fixed' | 'free_shipping'; value: number } | null {
-  const a = actions[0];
+/** Vendure action[] -> our promotion type+value. R24: a source promotion may
+ *  carry a discount action AND a separate free_shipping action (DD's combined
+ *  "10% off + free shipping" shape) — pick the discount action for
+ *  type/value and report whether a free_shipping action rode along, so the
+ *  caller can set promotion.freeShipping instead of dropping one benefit. */
+export function actionToTypeValue(actions: Array<{ code: string; args?: Array<{ name: string; value: string }> }>): { type: 'percentage' | 'fixed' | 'free_shipping'; value: number; freeShipping: boolean } | null {
+  const discount = actions.find((x) => x.code === 'order_percentage_discount' || x.code === 'order_fixed_discount');
+  const freeShipping = actions.some((x) => x.code === 'free_shipping');
+  const a = discount ?? actions[0];
   if (!a) return null;
   const arg = (n: string) => a.args?.find((x) => x.name === n)?.value;
-  if (a.code === 'order_percentage_discount') return { type: 'percentage', value: Number(arg('discount') ?? 0) };
-  if (a.code === 'order_fixed_discount') return { type: 'fixed', value: Number(arg('amount') ?? 0) };
-  if (a.code === 'free_shipping') return { type: 'free_shipping', value: 0 };
+  if (a.code === 'order_percentage_discount') return { type: 'percentage', value: Number(arg('discount') ?? 0), freeShipping };
+  if (a.code === 'order_fixed_discount') return { type: 'fixed', value: Number(arg('amount') ?? 0), freeShipping };
+  if (a.code === 'free_shipping') return { type: 'free_shipping', value: 0, freeShipping: false };
   return null;
 }
 
@@ -196,15 +202,15 @@ export async function importCatalog(ctx: ImportContext): Promise<void> {
     }
 
     // --- promotions (coupon-code based) ---
-    // Two source shapes are recorded as reviewed exclusions instead of
-    // failing the run: account_credit_discount promotions (the source's old
-    // store-credit mechanism — balances move to the points ledger in
-    // import/loyalty.ts) and multi-action promotions (a discount PLUS free
-    // shipping), which the single-action target promotion model cannot
-    // represent without silently dropping one of the two benefits.
+    // account_credit_discount promotions (the source's old store-credit
+    // mechanism — balances move to the points ledger in import/loyalty.ts)
+    // are recorded as a reviewed exclusion instead of failing the run.
+    // R24: multi-action promotions (a discount action PLUS a free_shipping
+    // action) are now imported faithfully — actionToTypeValue picks the
+    // discount for type/value and promotion.freeShipping carries the
+    // free-shipping benefit, instead of dropping it.
     let promoCount = 0;
     const skippedCredit: string[] = [];
-    const skippedMulti: string[] = [];
     for (const pr of await q(
       `SELECT id, "couponCode" AS code, conditions, actions, "startsAt" AS starts, "endsAt" AS ends,
               "usageLimit" AS uselimit, "perCustomerUsageLimit" AS percust, "priorityScore" AS prio
@@ -213,16 +219,16 @@ export async function importCatalog(ctx: ImportContext): Promise<void> {
       const actions = typeof pr.actions === 'string' ? JSON.parse(pr.actions) : pr.actions;
       const shape = classifyPromotionActions(actions);
       if (shape === 'account_credit') { skippedCredit.push(String(pr.id)); continue; }
-      if (shape === 'multi_action') { skippedMulti.push(String(pr.id)); continue; }
+      if (shape === 'unsupported') throw new Error('Unsupported promotion action: ' + pr.id);
       const tv = actionToTypeValue(actions);
-      if (!tv || actions.length !== 1) throw new Error('Unsupported promotion action: ' + pr.id);
+      if (!tv) throw new Error('Unsupported promotion action: ' + pr.id);
       const conditions = typeof pr.conditions === 'string' ? JSON.parse(pr.conditions) : pr.conditions;
       if (!Array.isArray(conditions) || conditions.some((condition: { code: string }) =>
         !['minimum_order_amount', 'verified_customer', 'at_least_n_with_facets'].includes(condition.code))) {
         throw new Error('Unsupported promotion condition: ' + pr.id);
       }
       await tx.insert(s.promotion).values({
-        id: ctx.id('promotion', pr.id), storeId, code: pr.code, type: tv.type, value: tv.value, conditions,
+        id: ctx.id('promotion', pr.id), storeId, code: pr.code, type: tv.type, value: tv.value, freeShipping: tv.freeShipping, conditions,
         startsAt: parseDate(pr.starts), endsAt: parseDate(pr.ends),
         usageLimit: pr.uselimit ?? null, perCustomerUsageLimit: pr.percust ?? null,
         priority: pr.prio ?? 0, enabled: true,
@@ -232,9 +238,6 @@ export async function importCatalog(ctx: ImportContext): Promise<void> {
     if (skippedCredit.length) ctx.exclusions.push({ type: 'unmappable-source-row', table: 'promotion',
       detail: `account_credit_discount promotions skipped (legacy store-credit mechanism; balances import as loyalty points): ${skippedCredit.join(',')}`,
       count: skippedCredit.length });
-    if (skippedMulti.length) ctx.exclusions.push({ type: 'unmappable-source-row', table: 'promotion',
-      detail: `multi-action promotions (order discount + free shipping) skipped; target promotions carry one action — recreate manually: ${skippedMulti.join(',')}`,
-      count: skippedMulti.length });
 
     // --- collections (skip root; parent->null if parent is root) ---
     const rootRows = await q(`SELECT id FROM collection WHERE "isRoot"=true`);

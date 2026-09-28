@@ -22,7 +22,7 @@ import { normalizeEmail } from '../auth/email.js';
 import { customerToken, resolveCustomer } from '../auth/session.js';
 import { clientIp, loginRetryAfter, recordLoginFailure } from '../auth/rate-limit.js';
 import { verifyTurnstileToken } from '../security/turnstile.js';
-import { enqueuePasswordReset, enqueueEmailAddressChange, resolveStorefrontUrl, type StoreEmailCtx } from '../email/dispatch.js';
+import { enqueuePasswordReset, enqueueEmailAddressChange, enqueueEmailAddressChangedNotice, resolveStorefrontUrl, type StoreEmailCtx } from '../email/dispatch.js';
 import { env } from '../env.js';
 
 const hashToken = (t: string) => createHash('sha256').update(t).digest('hex');
@@ -78,10 +78,10 @@ customerTokens.openapi(
     const { email: rawEmail, turnstileToken } = c.req.valid('json');
     const email = normalizeEmail(rawEmail);
     const ip = clientIp(c);
-    const retry = loginRetryAfter(ip, `forgot:${email}`);
+    const retry = await loginRetryAfter(ip, `forgot:${email}`);
     if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
     if (!(await turnstileOk(st.config, turnstileToken, ip))) {
-      recordLoginFailure(ip, `forgot:${email}`);
+      await recordLoginFailure(ip, `forgot:${email}`);
       return c.json({ error: 'verification failed' }, 403);
     }
     await withStore(st.id, async (tx) => {
@@ -94,7 +94,7 @@ customerTokens.openapi(
       // and the outbox retries delivery instead of dropping it (SR-12).
       await enqueuePasswordReset(tx, st.id, storeEmailCtx(st), email, { url, ttlHours: TTL_HOURS });
     });
-    recordLoginFailure(ip, `forgot:${email}`); // throttle: per-IP+email bucket, not per-account,
+    await recordLoginFailure(ip, `forgot:${email}`); // throttle: per-IP+email bucket, not per-account,
     // so an attacker can't lock a real customer out by spamming forgot-password,
     // but the attacker themselves is throttled.
     return c.json({ ok: true }, 200);
@@ -151,7 +151,7 @@ customerTokens.openapi(
     // the throttle for that IP, but multiple customers behind the same NAT
     // still throttles cleanly.
     const bucket = `verify:${ip}`;
-    const retry = loginRetryAfter(ip, bucket);
+    const retry = await loginRetryAfter(ip, bucket);
     if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
     const ok = await withStore(st.id, async (tx): Promise<boolean> => {
       const [row] = await tx.select({ id: s.customerToken.id, customerId: s.customerToken.customerId }).from(s.customerToken)
@@ -161,7 +161,7 @@ customerTokens.openapi(
       await tx.update(s.customerToken).set({ usedAt: new Date() }).where(eq(s.customerToken.id, row.id));
       return true;
     });
-    if (!ok) { recordLoginFailure(ip, bucket); return c.json({ error: 'token is invalid, expired, or already used' }, 409); }
+    if (!ok) { await recordLoginFailure(ip, bucket); return c.json({ error: 'token is invalid, expired, or already used' }, 409); }
     return c.json({ ok: true }, 200);
   },
 );
@@ -191,7 +191,7 @@ customerTokens.openapi(
     const newEmail = normalizeEmail(rawNewEmail);
     const ip = clientIp(c);
     const bucket = `emailchange:${newEmail}`;
-    const retry = loginRetryAfter(ip, bucket);
+    const retry = await loginRetryAfter(ip, bucket);
     if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
     const out = await withStore(st.id, async (tx): Promise<'unauth' | 'wrong' | 'same' | 'taken' | 'ok'> => {
       const token = customerToken(c);
@@ -214,7 +214,7 @@ customerTokens.openapi(
       await tx.insert(s.auditLog).values({ storeId: st.id, actor: cust.email, entity: 'customer', entityId: cust.id, action: 'email_change_requested' });
       return 'ok';
     });
-    recordLoginFailure(ip, bucket); // mailbomb guard for the target address
+    await recordLoginFailure(ip, bucket); // mailbomb guard for the target address
     if (out === 'unauth') return c.json({ error: 'not authenticated' }, 401);
     if (out === 'wrong') return c.json({ error: 'password is incorrect' }, 401);
     if (out === 'same') return c.json({ error: 'that is already your email address' }, 409);
@@ -241,7 +241,7 @@ customerTokens.openapi(
     const tokenHash = hashToken(token);
     const ip = clientIp(c);
     const bucket = `verify-change:${ip}`;
-    const retry = loginRetryAfter(ip, bucket);
+    const retry = await loginRetryAfter(ip, bucket);
     if (retry > 0) return c.json({ error: `too many attempts — try again in ${retry}s` }, 429);
     const out = await withStore(st.id, async (tx): Promise<'invalid' | 'taken' | 'ok'> => {
       // Atomic consume: used_at flips only when the token is still pending —
@@ -257,6 +257,11 @@ customerTokens.openapi(
       // claimed the address since the request was minted.
       const [clash] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, newEmail)).limit(1);
       if (clash) return 'taken';
+      // Capture the OLD address before overwriting it — the security notice
+      // below goes to the address being ABANDONED, and it's gone after the
+      // UPDATE.
+      const [before] = await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, row.customerId)).limit(1);
+      const oldEmail = before?.email ?? null;
       // The customer just proved control of the NEW address — verified by construction.
       await tx.update(s.customer).set({ email: newEmail, emailVerified: true, updatedAt: new Date() }).where(eq(s.customer.id, row.customerId));
       // Identifier changed: invalidate all sessions for this account in this
@@ -264,10 +269,19 @@ customerTokens.openapi(
       await tx.delete(s.session).where(and(eq(s.session.customerId, row.customerId), eq(s.session.storeId, st.id)));
       // Burn any other pending change links so only the consumed one ever worked.
       await tx.execute(sql`UPDATE customer_token SET used_at = now() WHERE customer_id = ${row.customerId} AND kind = ${EMAIL_CHANGE_KIND} AND used_at IS NULL`);
-      await tx.insert(s.auditLog).values({ storeId: st.id, actor: `customer:${row.customerId}`, entity: 'customer', entityId: row.customerId, action: 'email_changed', data: { email: newEmail } });
+      await tx.insert(s.auditLog).values({ storeId: st.id, actor: `customer:${row.customerId}`, entity: 'customer', entityId: row.customerId, action: 'email_changed', data: { email: newEmail, previousEmail: oldEmail } });
+      // Security notice to the OLD (abandoned) address — unconditional, not
+      // gated on session/consent: if a hijacked session made this change,
+      // the rightful owner needs to know at the address they can still read.
+      if (oldEmail && oldEmail !== newEmail) {
+        await enqueueEmailAddressChangedNotice(tx, st.id, storeEmailCtx(st), oldEmail, {
+          newEmail,
+          dedupeKey: `email-changed-notice:${row.id}`,
+        });
+      }
       return 'ok';
     });
-    if (out !== 'ok') { recordLoginFailure(ip, bucket); return c.json({ error: 'token is invalid, expired, or already used' }, 409); }
+    if (out !== 'ok') { await recordLoginFailure(ip, bucket); return c.json({ error: 'token is invalid, expired, or already used' }, 409); }
     return c.json({ ok: true }, 200);
   },
 );

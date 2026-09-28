@@ -14,7 +14,7 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { eq } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
-import { invalidateStoreCache } from '../store-context.js';
+import { broadcastStoreCacheInvalidation } from '../store-context.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireWrite, requireManage, guard } from './admin-helpers.js';
 import { DEFAULT_ROBOTS_DISALLOW, DEFAULT_STATIC_PATHS, seoConfigFromStore, type SeoConfigPatch } from '../seo/config.js';
 import { submitIndexNowUrls } from '../seo/indexnow.js';
@@ -38,7 +38,7 @@ async function mutateSeoConfig(storeId: string, actor: string, mutate: (seo: Rec
     await tx.insert(s.auditLog).values({ storeId, actor, entity: 'store', entityId: storeId, action: 'seo_config_updated', fromState: JSON.stringify(prevSeo), toState: JSON.stringify(nextSeo) });
     return { slug: row!.slug, nextSeo };
   });
-  invalidateStoreCache(slug);
+  await broadcastStoreCacheInvalidation(slug);
   return nextSeo;
 }
 

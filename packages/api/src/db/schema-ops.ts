@@ -11,11 +11,36 @@ import {
   uuid,
   text,
   integer,
+  bigint,
   timestamp,
   jsonb,
 } from 'drizzle-orm/pg-core';
 import { customer, store, ts } from './schema-core.js';
 import { order, payment } from './schema-orders.js';
+
+// SELLRIGHT-ISSUES P1: shared rate-limit backend (migration 0078,
+// src/auth/rate-limit-backend.ts). Defined here purely so `drizzle-kit
+// generate` sees a matching schema object and never proposes dropping a
+// table the app actually depends on — every read/write against it goes
+// through the raw `pool` in rate-limit-backend.ts, not this export. Global
+// infra table: no store_id, no RLS (same EXEMPT posture as session/
+// processed_event — see rls-tables.test.ts / assert-force-rls.ts).
+export const rateLimitAttempt = pgTable('rate_limit_attempt', {
+  id: bigint({ mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
+  bucket: text().notNull(),
+  key: text().notNull(),
+  attemptedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+});
+
+// SELLRIGHT-ISSUES P1: durable retry for cross-process catalog manifest
+// regeneration triggers (migration 0079, manifest/stock-hook.ts). Same
+// "defined here for drizzle-kit, queried via raw pool elsewhere" posture as
+// rateLimitAttempt above.
+export const catalogManifestPending = pgTable('catalog_manifest_pending', {
+  storeId: uuid().primaryKey(),
+  storeSlug: text().notNull(),
+  requestedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+});
 
 // PAR-04: one row per SheerID verification attempt. The customer-facing
 // read model stays on `customer` (sheeridVerifications/activeVerifications/

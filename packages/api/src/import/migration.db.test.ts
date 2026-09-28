@@ -639,7 +639,7 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     expect(details).toContain('sentinel transactionId');
   });
 
-  it('maps store-credit balances to loyalty points and excludes legacy credit / multi-action promotions', async () => {
+  it('maps store-credit balances to loyalty points, excludes legacy credit promotions, and imports combined discount+free-shipping promotions faithfully (R24)', async () => {
     await resetSource('rh', 'r' + randomUUID().slice(0, 8));
     const client = await sourcePool.connect();
     try {
@@ -667,15 +667,27 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
       manifestPath: f.applyManifestPath, apply: true, expectedDigest: dry.sourceDigest });
     expect(applied.applied).toBe(true);
 
-    // Only the single-action promotion imports; the other two are exclusions.
+    // The legacy account-credit promotion is excluded (see loyalty ledger
+    // import below); the plain discount AND the combined discount+free-ship
+    // promotion both import (R24 — combined promotions are no longer dropped).
     const promos = await targetRows(storeId, 'promotion', 'ORDER BY code');
-    expect(promos.map(p => p.code)).toEqual(['PLAIN5']);
+    expect(promos.map(p => p.code)).toEqual(['BUNDLE', 'PLAIN5']);
+    const bundle = promos.find((p) => p.code === 'BUNDLE');
+    expect(bundle).toMatchObject({ type: 'percentage', value: 15, free_shipping: true });
+    const plain = promos.find((p) => p.code === 'PLAIN5');
+    expect(plain).toMatchObject({ type: 'fixed', value: 500, free_shipping: false });
 
-    // 2550 cents at 100 points per $1 → 2550 points, one import row.
+    // R23: credit id 1 has a 100-cent PENDING reservation (account_credit_
+    // transaction row 1) — balance (2550) is NOT already net of it (only
+    // SETTLE decrements balance), so the importer must reconcile: net
+    // available = 2550 - 100 = 2450 cents -> 2450 points at 100/$1. Importing
+    // the gross 2550 would let the customer spend the reserved 100 cents
+    // again while the pre-cutover order behind the hold can still settle.
     const ledger = await targetRows(storeId, 'loyalty_ledger');
     expect(ledger).toHaveLength(1);
     const customer = await targetOne(storeId, 'customer');
-    expect(ledger[0]).toMatchObject({ kind: 'import', points: 2550, customer_id: customer.id, order_id: null });
+    expect(ledger[0]).toMatchObject({ kind: 'import', points: 2450, customer_id: customer.id, order_id: null });
+    expect(ledger[0]!.metadata).toMatchObject({ sourceBalanceCents: 2450 });
     expect(ledger[0]!.source_ref).toBe('import:account_credit:vendure:test:1');
     const store = await targetOne(storeId, 'store');
     expect(store.config.loyalty.pointsPerDollarOff).toBe(100);
@@ -684,14 +696,42 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     const ex = manifest.exclusions as Array<{ type: string; table: string; detail: string; count?: number }>;
     const find = (re: RegExp) => ex.find((e) => re.test(e.detail));
     expect(find(/account_credit_discount/)).toMatchObject({ table: 'promotion', count: 1 });
-    expect(find(/multi-action/)).toMatchObject({ table: 'promotion', count: 1 });
+    expect(find(/multi-action/)).toBeUndefined(); // R24: no longer an exclusion — imported with both benefits
     expect(find(/matches no imported customer/)).toMatchObject({ table: 'account_credit', count: 1 });
     expect(find(/disabled store credits/)).toMatchObject({ table: 'account_credit', count: 1 });
-    expect(find(/pending store-credit reservations/)).toMatchObject({ table: 'account_credit', count: 1 });
+    // R23: reports the reconciled hold, not "not replayed" (the old wording
+    // implied balances were already net, which was the bug).
+    expect(find(/pending store-credit reservations reconciled/)).toMatchObject({ table: 'account_credit', count: 1 });
 
     // Restore removes the imported ledger rows with the rest of the tenant.
     const restored = await restoreMigration({ targetUrl: TARGET_URL, manifest: manifest, apply: true });
     expect(restored.restored).toBe(true);
+    expect(await targetRows(storeId, 'loyalty_ledger')).toEqual([]);
+  });
+
+  it('R23: floors a credit at zero when pending holds exceed its balance, instead of importing negative/wrapped cents', async () => {
+    await resetSource('rh', 'r' + randomUUID().slice(0, 8));
+    const client = await sourcePool.connect();
+    try {
+      await client.query(TABLE('account_credit', ['id int PRIMARY KEY', '"promotionId" int', '"emailNormalized" varchar(320)',
+        '"currencyCode" varchar(3)', '"initialAmount" int', 'balance int', 'disabled boolean']));
+      await client.query(TABLE('account_credit_transaction', ['id int PRIMARY KEY', '"accountCreditId" int', 'kind varchar(16)',
+        'status varchar(16)', 'amount int']));
+      // Data inconsistency at cutover: a 500-cent hold against only a
+      // 300-cent balance (e.g. a hold placed before a partial settlement
+      // elsewhere reduced the balance). Must floor at 0, never go negative.
+      await client.query(`INSERT INTO account_credit VALUES (1, NULL, 'over@example.com', 'USD', 300, 300, false)`);
+      await client.query(`INSERT INTO account_credit_transaction VALUES (1, 1, 'RESERVE', 'PENDING', 500)`);
+    } finally { client.release(); }
+    const storeId = randomUUID();
+    const f = await fixtureConfig(storeId, { stripe: { accountId: 'acct_rh', mode: 'live' } });
+    const config = { ...f.config, loyalty: { enabled: true, earnRatePerDollar: 1, pointsPerDollarOff: 100, minRedeemPoints: 0,
+      maxRedeemPercentOfSubtotal: null, expiryDays: null } };
+    const dry = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config, manifestPath: f.manifestPath });
+    const applied = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config,
+      manifestPath: f.applyManifestPath, apply: true, expectedDigest: dry.sourceDigest });
+    expect(applied.applied).toBe(true);
+    // Net balance floors at 0 (never negative) -> zero cents -> no ledger row.
     expect(await targetRows(storeId, 'loyalty_ledger')).toEqual([]);
   });
 

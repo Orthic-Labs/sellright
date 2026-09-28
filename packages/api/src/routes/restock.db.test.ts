@@ -61,6 +61,17 @@ async function seedVariant(storeId: string, variantId: string, sku: string, onHa
   });
 }
 
+/** Seed ONE product with several variants (for product-level "any variant" signup tests). */
+async function seedProductWithVariants(storeId: string, productId: string, slug: string, variants: Array<{ id: string; sku: string; onHand: number }>): Promise<void> {
+  await withStore(storeId, async (tx) => {
+    await tx.execute(sql`INSERT INTO product (id, store_id, slug, name, status) VALUES (${productId}, ${storeId}, ${slug}, ${`Product ${slug}`}, 'active')`);
+    for (const v of variants) {
+      await tx.execute(sql`INSERT INTO product_variant (id, store_id, product_id, sku, name, price) VALUES (${v.id}, ${storeId}, ${productId}, ${v.sku}, ${`Variant ${v.sku}`}, 1000)`);
+      await tx.execute(sql`INSERT INTO stock (variant_id, store_id, on_hand, allocated) VALUES (${v.id}, ${storeId}, ${v.onHand}, 0)`);
+    }
+  });
+}
+
 async function setOnHand(storeId: string, variantId: string, onHand: number): Promise<void> {
   await withStore(storeId, async (tx) => {
     await tx.execute(sql`UPDATE stock SET on_hand = ${onHand} WHERE variant_id = ${variantId}`);
@@ -145,6 +156,60 @@ describe('restock request (PAR-05) — subscribe', () => {
     expect((await subscribe({ variantId: VARIANT_A, email: 'nope' })).status).toBe(400);
     expect((await subscribe({ variantId: VARIANT_A, email: 'hp@example.com', honeypot: 'x' })).status).toBe(200);
     expect(await requests(A, VARIANT_A)).toHaveLength(0);
+  });
+
+  // R26 parity: DD's WaitlistForm signs up at the product level ("any
+  // variant restocks") when no variant is chosen. productId fans out to one
+  // restock_request row per currently OOS, enabled variant.
+  describe('product-level ("any variant") signup', () => {
+    const PRODUCT = 'aaaaaaaa-0000-4000-8000-0000000000c0';
+    const V1 = 'aaaaaaaa-0000-4000-8000-0000000000c1'; // OOS
+    const V2 = 'aaaaaaaa-0000-4000-8000-0000000000c2'; // OOS
+    const V3 = 'aaaaaaaa-0000-4000-8000-0000000000c3'; // in stock
+
+    beforeEach(async () => {
+      await seedProductWithVariants(A, PRODUCT, 'restock-bundle', [
+        { id: V1, sku: 'C1', onHand: 0 },
+        { id: V2, sku: 'C2', onHand: 0 },
+        { id: V3, sku: 'C3', onHand: 5 },
+      ]);
+    });
+
+    it('signs up on every currently OOS variant, skipping in-stock ones', async () => {
+      const res = await subscribe({ productId: PRODUCT, email: 'any@example.com' });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true });
+      expect(await requests(A, V1)).toHaveLength(1);
+      expect(await requests(A, V2)).toHaveLength(1);
+      expect(await requests(A, V3)).toHaveLength(0); // already purchasable — no signup needed
+    });
+
+    it('no-ops when every variant of the product is already in stock', async () => {
+      await setOnHand(A, V1, 3);
+      await setOnHand(A, V2, 2);
+      const res = await subscribe({ productId: PRODUCT, email: 'any2@example.com' });
+      expect(res.status).toBe(200);
+      expect(await requests(A)).toHaveLength(0);
+    });
+
+    it('404s an unknown product', async () => {
+      const res = await subscribe({ productId: crypto.randomUUID(), email: 'x@example.com' });
+      expect(res.status).toBe(404);
+    });
+
+    it('400s when both or neither of variantId/productId are given', async () => {
+      expect((await subscribe({ variantId: VARIANT_A, productId: PRODUCT, email: 'x@example.com' })).status).toBe(400);
+      expect((await subscribe({ email: 'x@example.com' })).status).toBe(400);
+    });
+
+    it('notified independently: whichever OOS variant restocks first emails the signup once', async () => {
+      await subscribe({ productId: PRODUCT, email: 'any3@example.com' });
+      await setOnHand(A, V1, 4);
+      const n = await notifyRestock(A, V1);
+      expect(n).toBe(1);
+      expect(await requests(A, V1)).toMatchObject([{ status: 'notified' }]);
+      expect(await requests(A, V2)).toMatchObject([{ status: 'pending' }]); // untouched — its own variant hasn't restocked
+    });
   });
 });
 

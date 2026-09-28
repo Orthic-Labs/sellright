@@ -81,6 +81,20 @@ install_cosign() {
   chmod +x /usr/local/bin/cosign
 }
 
+# `sellright update`'s cosign_verify_images (deploy/sellright.sh) resolves
+# each service's target image via `docker compose config --format json | jq`
+# — not installed by base Ubuntu/Debian, and not covered by install_docker/
+# install_cosign above. Without it, every future `sellright update` fails
+# closed with "jq not found", which is safe but should never surprise an
+# operator on a freshly installed host.
+install_jq() {
+  if command -v jq >/dev/null 2>&1; then
+    return 0
+  fi
+  log "Installing jq..."
+  apt-get update -qq && apt-get install -y -qq jq
+}
+
 # Random URL-safe secret. $1 = byte length.
 gen_secret() {
   openssl rand -hex "$1" 2>/dev/null || head -c "$1" /dev/urandom | od -An -tx1 | tr -d ' \n'
@@ -194,6 +208,7 @@ main() {
   check_ports
   install_docker
   install_cosign
+  install_jq
   fetch_release_files
   write_env
   write_recovery_kit

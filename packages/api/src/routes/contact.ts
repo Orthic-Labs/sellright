@@ -150,9 +150,9 @@ contactRoutes.openapi(
     }
 
     const ip = clientIp(c);
-    const retry = contactRetryAfter(ip);
+    const retry = await contactRetryAfter(ip);
     if (retry > 0) return c.json({ error: `too many submissions — try again in ${retry}s` }, 429);
-    recordContactAttempt(ip);
+    await recordContactAttempt(ip);
 
     const st = await resolveStoreFromCtx(c);
 

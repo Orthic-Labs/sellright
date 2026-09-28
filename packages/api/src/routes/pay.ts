@@ -43,7 +43,7 @@ pay.openapi(
     // client retrying the SAME intent is safe (the claim short-circuits).
     const payIp = clientIp(c);
     const payBucket = `pay:${payIp}:${method}`;
-    const payRetry = loginRetryAfter(payIp, payBucket);
+    const payRetry = await loginRetryAfter(payIp, payBucket);
     if (payRetry > 0) return c.json({ error: `too many payment attempts — try again in ${payRetry}s` }, 429);
 
     const provider = getProvider(method);

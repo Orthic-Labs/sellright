@@ -4,7 +4,7 @@ import { and, desc, eq, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { assertSafeOutboundUrl, safeOutboundFetch } from '../security/outbound-url.js';
-import { invalidateStoreCache } from '../store-context.js';
+import { broadcastStoreCacheInvalidation } from '../store-context.js';
 import { HttpError, J, errBody, money, requireAdmin, requireStore, requireWrite, requireManage, requirePermission, guard, Page } from './admin-helpers.js';
 import { err as logErr } from '../lib/logger.js';
 import { syncPromotionAffiliate } from '../affiliate/onboarding.js';
@@ -16,6 +16,10 @@ const promoBodyBase = z.object({
   code: z.string().min(1).nullable().optional(), // null/omitted = AUTOMATIC discount
   type: z.enum(['percentage', 'fixed', 'free_shipping']),
   value: money.default(0), // percentage: 0–100; fixed: cents
+  // R24: layer free shipping on top of a percentage/fixed discount (DD's
+  // combined discount + free_shipping action pair). Redundant (but harmless)
+  // when type is already 'free_shipping'.
+  freeShipping: z.boolean().default(false),
   conditions: z.array(z.unknown()).nullable().optional(),
   usageLimit: z.number().int().nullable().optional(),
   perCustomerUsageLimit: z.number().int().nullable().optional(),
@@ -46,7 +50,7 @@ adminMarketing.openapi(
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c);
     const items = await withStore(st.storeId, async (tx) =>
-      tx.select({ id: s.promotion.id, code: s.promotion.code, type: s.promotion.type, value: s.promotion.value, enabled: s.promotion.enabled, usedCount: s.promotion.usedCount, usageLimit: s.promotion.usageLimit, perCustomerUsageLimit: s.promotion.perCustomerUsageLimit, startsAt: s.promotion.startsAt, endsAt: s.promotion.endsAt })
+      tx.select({ id: s.promotion.id, code: s.promotion.code, type: s.promotion.type, value: s.promotion.value, freeShipping: s.promotion.freeShipping, enabled: s.promotion.enabled, usedCount: s.promotion.usedCount, usageLimit: s.promotion.usageLimit, perCustomerUsageLimit: s.promotion.perCustomerUsageLimit, startsAt: s.promotion.startsAt, endsAt: s.promotion.endsAt })
         .from(s.promotion).orderBy(desc(s.promotion.enabled), s.promotion.code),
     );
     return c.json({ items: items.map((p) => ({ ...p, startsAt: p.startsAt?.toISOString() ?? null, endsAt: p.endsAt?.toISOString() ?? null })) }, 200);
@@ -69,7 +73,7 @@ adminMarketing.openapi(
         if (dupe) return { dupe: true as const };
       }
       const [p] = await tx.insert(s.promotion).values({
-        storeId: st.storeId, code: b.code ?? null, type: b.type, value: b.value,
+        storeId: st.storeId, code: b.code ?? null, type: b.type, value: b.value, freeShipping: b.freeShipping ?? false,
         conditions: b.conditions ?? null, usageLimit: b.usageLimit ?? null, perCustomerUsageLimit: b.perCustomerUsageLimit ?? null,
         priority: b.priority ?? 0, exclusionGroup: b.exclusionGroup ?? null,
         startsAt: b.startsAt ? new Date(b.startsAt) : null, endsAt: b.endsAt ? new Date(b.endsAt) : null, enabled: b.enabled,
@@ -104,7 +108,7 @@ adminMarketing.openapi(
         .leftJoin(s.customer, eq(s.customer.id, s.promotionUsage.customerId))
         .where(eq(s.promotionUsage.promotionId, id)).orderBy(desc(s.promotionUsage.createdAt)).limit(50);
       return {
-        id: p.id, code: p.code, type: p.type, value: p.value, conditions: p.conditions, enabled: p.enabled,
+        id: p.id, code: p.code, type: p.type, value: p.value, freeShipping: p.freeShipping, conditions: p.conditions, enabled: p.enabled,
         usedCount: p.usedCount, usageLimit: p.usageLimit, perCustomerUsageLimit: p.perCustomerUsageLimit,
         startsAt: p.startsAt?.toISOString() ?? null, endsAt: p.endsAt?.toISOString() ?? null,
         usage: usage.map((u) => ({ ...u, at: u.at.toISOString() })),
@@ -137,7 +141,7 @@ adminMarketing.openapi(
         return { kind: 'invalid' as const };
       }
       const patch: Record<string, unknown> = {};
-      for (const k of ['code', 'type', 'value', 'conditions', 'usageLimit', 'perCustomerUsageLimit', 'priority', 'exclusionGroup', 'enabled', 'affiliateEmail'] as const) if (b[k] !== undefined) patch[k] = b[k];
+      for (const k of ['code', 'type', 'value', 'freeShipping', 'conditions', 'usageLimit', 'perCustomerUsageLimit', 'priority', 'exclusionGroup', 'enabled', 'affiliateEmail'] as const) if (b[k] !== undefined) patch[k] = b[k];
       if (b.startsAt !== undefined) patch.startsAt = b.startsAt ? new Date(b.startsAt) : null;
       if (b.endsAt !== undefined) patch.endsAt = b.endsAt ? new Date(b.endsAt) : null;
       await tx.update(s.promotion).set(patch).where(eq(s.promotion.id, id));
@@ -224,7 +228,7 @@ adminMarketing.openapi(
       const config = { ...((row?.config as object) ?? {}), listmonk: safeCfg };
       await tx.update(s.store).set({ config }).where(eq(s.store.id, st.storeId));
     });
-    invalidateStoreCache(st.slug); // PERF-2 — match admin-settings.ts pattern
+    await broadcastStoreCacheInvalidation(st.slug); // PERF-2 — match admin-settings.ts pattern
     return c.json({ ok: true, lists: lists.data?.total ?? 0 }, 200);
   }),
 );
