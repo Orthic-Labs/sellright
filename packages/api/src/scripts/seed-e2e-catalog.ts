@@ -7,7 +7,10 @@
  * same store bootstrap.ts creates in CI).
  *
  * Seeds exactly two physical variants, one in stock and one out of stock —
- * the pair the e2e suite's OOS-at-shop / OOS-at-PDP assertions need. No
+ * the pair the e2e suite's OOS-at-shop / OOS-at-PDP assertions need — plus
+ * one flat-rate shipping method: checkout hard-refuses a physical order
+ * when no method exists (`not_configured`), so the payment-step e2e needs
+ * a seeded rate to get as far as order creation. No
  * payment gateway is configured here (that needs encrypted store_secret
  * rows via the real admin API, out of scope for a fixture script) — the
  * checkout e2e spec tolerates "no payment method configured" as a valid
@@ -51,6 +54,28 @@ async function main() {
 			.returning({ id: s.productVariant.id });
 		await db.insert(s.stock).values({ storeId: store.id, variantId: variant!.id, onHand: fixture.onHand });
 		console.log(`[seed-e2e-catalog] created ${fixture.slug} (onHand=${fixture.onHand})`);
+	}
+
+	// One flat-rate method so a physical order can be placed at all — the
+	// checkout route throws `not_configured` when a physical order arrives
+	// with no server shipping rows (misconfiguration guard, not a shopper
+	// choice). $5.00 flat, every country.
+	const [method] = await db
+		.select({ id: s.shippingMethod.id })
+		.from(s.shippingMethod)
+		.where(and(eq(s.shippingMethod.storeId, store.id), eq(s.shippingMethod.code, 'e2e-flat')))
+		.limit(1);
+	if (method) {
+		console.log('[seed-e2e-catalog] shipping method e2e-flat already exists — skipping');
+	} else {
+		await db.insert(s.shippingMethod).values({
+			storeId: store.id,
+			code: 'e2e-flat',
+			name: 'E2E Flat Rate',
+			calculator: { flat: 500 },
+			enabled: true,
+		});
+		console.log('[seed-e2e-catalog] created shipping method e2e-flat ($5.00 flat)');
 	}
 }
 
