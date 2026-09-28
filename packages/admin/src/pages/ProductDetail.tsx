@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Package, Trash2, Plus, X, Upload } from 'lucide-react';
+import { ArrowLeft, Package, Trash2, Plus, X, Upload, ChevronUp, ChevronDown } from 'lucide-react';
 import { api, assetUrl, uploadAsset, type ProductDetail, type VariantRow } from '../api';
 import { useAuth } from '../auth';
 import { useToast } from '../components/Toast';
@@ -244,12 +244,39 @@ export default function ProductDetailPage() {
   );
 }
 
-type OptGroup = { id: string; name: string; options: { id: string; value: string }[] };
+type OptGroup = { id: string; name: string; position: number; options: { id: string; value: string; position: number }[] };
 function OptionsEditor({ productId, storeSlug, variants }: { productId: string; storeSlug?: string; variants: { id: string; sku: string; optionIds?: string[] }[] }) {
   const qc = useQueryClient();
   const key = ['product-options', storeSlug, productId];
   const { data, isLoading } = useQuery({ queryKey: key, queryFn: () => api.get<{ groups: OptGroup[] }>(`/products/${productId}/options`) });
   const invalidate = () => qc.invalidateQueries({ queryKey: key });
+  // Merchant-controlled ordering (API migration 0080). Both mutations send
+  // the FULL current order with two adjacent entries swapped — the reorder
+  // endpoint requires an exact permutation of the current set, so a partial
+  // list (e.g. "just move this one to index 2") is rejected rather than
+  // silently dropping whichever id was omitted.
+  const reorderGroups = useMutation({
+    mutationFn: (order: string[]) => api.put(`/products/${productId}/option-groups/reorder`, { order }),
+    onSuccess: invalidate,
+  });
+  const reorderOptions = useMutation({
+    mutationFn: ({ groupId, order }: { groupId: string; order: string[] }) => api.put(`/option-groups/${groupId}/options/reorder`, { order }),
+    onSuccess: invalidate,
+  });
+  const moveGroup = (groups: OptGroup[], index: number, dir: -1 | 1) => {
+    const target = index + dir;
+    if (target < 0 || target >= groups.length) return;
+    const order = groups.map((g) => g.id);
+    [order[index], order[target]] = [order[target]!, order[index]!];
+    reorderGroups.mutate(order);
+  };
+  const moveOption = (group: OptGroup, index: number, dir: -1 | 1) => {
+    const target = index + dir;
+    if (target < 0 || target >= group.options.length) return;
+    const order = group.options.map((o) => o.id);
+    [order[index], order[target]] = [order[target]!, order[index]!];
+    reorderOptions.mutate({ groupId: group.id, order });
+  };
   // Per-variant option assignment writes through PUT and refreshes the product
   // query (variant.optionIds lives on the product detail, not the options query).
   const setVariantOptions = useMutation({
@@ -277,11 +304,27 @@ function OptionsEditor({ productId, storeSlug, variants }: { productId: string; 
     <div className="card overflow-hidden">
       <div className="px-4 py-3 border-b border-gray-100 text-sm font-semibold">Options</div>
       <div className="p-4 space-y-3">
-        {isLoading ? <Spinner /> : groups.length === 0 ? <p className="text-sm text-gray-400">No option groups yet (e.g. Size, Color).</p> : groups.map((g) => (
+        {isLoading ? <Spinner /> : groups.length === 0 ? <p className="text-sm text-gray-400">No option groups yet (e.g. Size, Color).</p> : groups.map((g, gi) => (
           <div key={g.id} className="rounded-lg border border-gray-100 p-3">
-            <div className="font-medium text-sm mb-2">{g.name}</div>
+            <div className="flex items-center gap-1 mb-2">
+              {/* Up/down reorder — the group's display order across the
+                  storefront/manifest, not alphabetical (see 0080). */}
+              <div className="flex flex-col -my-1">
+                <button type="button" aria-label={`Move ${g.name} up`} className="text-gray-400 hover:text-gray-700 disabled:opacity-30" disabled={gi === 0 || reorderGroups.isPending} onClick={() => moveGroup(groups, gi, -1)}><ChevronUp size={14} /></button>
+                <button type="button" aria-label={`Move ${g.name} down`} className="text-gray-400 hover:text-gray-700 disabled:opacity-30" disabled={gi === groups.length - 1 || reorderGroups.isPending} onClick={() => moveGroup(groups, gi, 1)}><ChevronDown size={14} /></button>
+              </div>
+              <div className="font-medium text-sm">{g.name}</div>
+            </div>
             <div className="flex flex-wrap gap-1.5 mb-2">
-              {g.options.map((o) => <span key={o.id} className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs">{o.value}</span>)}
+              {g.options.map((o, oi) => (
+                <span key={o.id} className="inline-flex items-center gap-1 rounded-full bg-gray-100 pl-1 pr-2 py-0.5 text-xs">
+                  <span className="flex flex-col">
+                    <button type="button" aria-label={`Move ${o.value} up`} className="leading-none text-gray-400 hover:text-gray-700 disabled:opacity-30" disabled={oi === 0 || reorderOptions.isPending} onClick={() => moveOption(g, oi, -1)}><ChevronUp size={10} /></button>
+                    <button type="button" aria-label={`Move ${o.value} down`} className="leading-none text-gray-400 hover:text-gray-700 disabled:opacity-30" disabled={oi === g.options.length - 1 || reorderOptions.isPending} onClick={() => moveOption(g, oi, 1)}><ChevronDown size={10} /></button>
+                  </span>
+                  {o.value}
+                </span>
+              ))}
               {g.options.length === 0 && <span className="text-xs text-gray-400">no values</span>}
             </div>
             <div className="flex gap-2">
@@ -295,7 +338,7 @@ function OptionsEditor({ productId, storeSlug, variants }: { productId: string; 
           <div><label className="label">Values (comma-sep)</label><input className="input w-44" placeholder="S, M, L" value={gValues} onChange={(e) => setGValues(e.target.value)} /></div>
           <button className="btn-primary" disabled={!gName.trim() || addGroup.isPending} onClick={() => addGroup.mutate()}>{addGroup.isPending ? <Spinner className="text-white" /> : <><Plus size={15} /> Add group</>}</button>
         </div>
-        {(addGroup.error || addValue.error || setVariantOptions.error) && <div className="text-xs text-danger">{((addGroup.error || addValue.error || setVariantOptions.error) as Error).message}</div>}
+        {(addGroup.error || addValue.error || setVariantOptions.error || reorderGroups.error || reorderOptions.error) && <div className="text-xs text-danger">{((addGroup.error || addValue.error || setVariantOptions.error || reorderGroups.error || reorderOptions.error) as Error).message}</div>}
         {(() => {
           const allValues = groups.flatMap((g) => g.options.map((o) => ({ ...o, group: g.name })));
           if (!allValues.length || !variants.length) return null;
