@@ -1,5 +1,12 @@
-// SEO Types for Frontend Integration
-// Matches backend SEO plugin response formats
+// JSON-LD schema.org types used by `~/services/seo-schemas.ts` (generators)
+// and every route that injects structured data via `~/utils/schema-injection`.
+//
+// Trimmed 2026 (SellRight content/SEO migration): removed `ProductSeoData`,
+// `CollectionSeoData`, `SeoMetadata`, `LocalBusinessSchema` (this isn't a
+// local business — see `~/services/seo-schemas.ts`), `SeoApiResponse`,
+// `SeoApiCacheConfig`, `SeoApiEndpoints` — all dead, only ever referenced by
+// the removed `seo-api.service.ts` fetch/cache layer that called stale
+// pre-`/v1` Vendure-plugin-era paths and had zero real callers.
 
 export interface JsonLdSchema {
   '@context': string;
@@ -7,49 +14,9 @@ export interface JsonLdSchema {
   [key: string]: any;
 }
 
-export interface ProductSeoData {
-  id: string;
-  name: string;
-  description: string;
-  slug: string;
-  price: number;
-  currencyCode: string;
-  image?: string;
-  brand?: string;
-  sku: string;
-  availability: 'InStock' | 'OutOfStock' | 'PreOrder';
-  category?: string;
-  updatedAt: Date;
-}
-
-export interface CollectionSeoData {
-  id: string;
-  name: string;
-  description: string;
-  slug: string;
-  updatedAt: Date;
-}
-
-export interface SeoMetadata {
-  title: string;
-  description: string;
-  keywords?: string[];
-  canonical?: string;
-  noindex?: boolean;
-  ogImage?: string;
-}
-
 export interface BreadcrumbItem {
   name: string;
   url: string;
-}
-
-export interface SeoApiResponse<T = any> {
-  success: boolean;
-  data?: T;
-  error?: string;
-  cached?: boolean;
-  timestamp?: number;
 }
 
 // Schema-specific types for different JSON-LD schemas
@@ -112,41 +79,4 @@ export interface BreadcrumbSchema extends JsonLdSchema {
     name: string;
     item: string;
   }>;
-}
-
-export interface LocalBusinessSchema extends JsonLdSchema {
-  '@type': 'LocalBusiness';
-  name: string;
-  address: {
-    '@type': 'PostalAddress';
-    streetAddress: string;
-    addressLocality: string;
-    addressRegion: string;
-    postalCode: string;
-    addressCountry: string;
-  };
-  telephone: string;
-  openingHours: string[];
-  geo?: {
-    '@type': 'GeoCoordinates';
-    latitude: number;
-    longitude: number;
-  };
-}
-
-// Cache configuration
-export interface SeoApiCacheConfig {
-  ttl: number; // Time to live in seconds
-  maxSize: number; // Maximum cache entries
-  enabled: boolean;
-}
-
-// API endpoint configuration
-export interface SeoApiEndpoints {
-  productSchema: (productId: string) => string;
-  organizationSchema: () => string;
-  websiteSchema: () => string;
-  breadcrumbSchema: (breadcrumbs: BreadcrumbItem[]) => string;
-  sitemap: (type: 'main' | 'products' | 'collections') => string;
-  robotsTxt: () => string;
 }

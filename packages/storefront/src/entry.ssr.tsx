@@ -14,6 +14,7 @@ import { renderToStream, RenderToStreamOptions } from '@qwik.dev/core/server';
 import { manifest } from '@qwik-client-manifest';
 import Root from './root';
 import { extractBase } from './utils/i18n';
+import { identityFromStaticTheme } from './theme/theme.config';
 
 // Extend RenderToStreamOptions to include the request headers this app's
 // render() actually receives.
@@ -42,8 +43,20 @@ export default function (opts: ExtendedRenderOptions) {
 		...opts,
 		base: extractBase,
 		// Use container attributes to set attributes on the html tag.
+		//
+		// The real per-request store identity/locale (WS-C — resolved by
+		// routes/layout.tsx's useStoreIdentityLoader) isn't available yet here:
+		// containerAttributes open the <html> tag before any routeLoader$ runs,
+		// and awaiting one here would add a blocking round-trip in front of
+		// every byte of the stream. So this uses the build-time static theme's
+		// locale (theme.config.ts VITE_STORE_LOCALE, single source of truth —
+		// see constants.ts DEFAULT_LOCALE for the same fallback used
+		// elsewhere) instead of a bare hardcoded string. `Head` (components/
+		// head/head.tsx) reconciles `document.documentElement.lang` against the
+		// resolved identity once it's available, for stores whose runtime
+		// locale differs from the static build default.
 		containerAttributes: {
-			lang: 'en-us',
+			lang: identityFromStaticTheme().locale,
 			...opts.containerAttributes,
 		},
 		// The CORE Qwik bootstrap-loader <script> (and its own preload

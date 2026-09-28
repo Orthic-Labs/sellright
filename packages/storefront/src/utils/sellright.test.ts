@@ -16,7 +16,6 @@ import {
 	srCartConflict,
 	srGatewayPayment,
 	srVerifyGatewayPayment,
-	srTrackOrder,
 	srContact,
 	srErrorStatus,
 	srCheckEmail,
@@ -272,18 +271,10 @@ describe('gateway payment contract', () => {
 	});
 });
 
-describe('guest tracking + contact', () => {
-	it('track passes code + email as query params', async () => {
-		enqueue(respond(200, {
-			code: 'T1', state: 'Shipped', placedAt: '2026-01-01', currency: 'USD',
-			subtotal: 100, shippingTotal: 10, taxTotal: 0, discountTotal: 0, grandTotal: 110,
-			shippingAddress: null, fulfillments: [], lines: [],
-		}));
-		const res = await srTrackOrder('T1', 'who@x.y');
-		expect(lastPath()).toBe('/v1/shop/track?code=T1&email=who%40x.y');
-		expect(res.state).toBe('Shipped');
-	});
-
+// Guest order tracking (`GET /v1/shop/track`) moved to the typed client —
+// see `~/sellright/content.ts` `trackOrder()` and its own test file,
+// `~/sellright/content.test.ts`.
+describe('contact', () => {
 	it('contact posts the form fields', async () => {
 		enqueue(respond(200, { ok: true }));
 		await srContact({ name: 'A', email: 'a@b.c', subject: 'Hi', message: 'Msg', honeypot: '' });

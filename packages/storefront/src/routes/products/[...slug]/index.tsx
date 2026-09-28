@@ -4,7 +4,7 @@ import { generateImagePreloadLinks } from '~/components/ui';
 import { getProductBySlug, getProductBySlugWithCachedVariants } from '~/providers/shop/products/products';
 import { cleanUpParams } from '~/utils';
 import { createSEOHead } from '~/utils/seo';
-import { generateBreadcrumbSchema } from '~/services/seo-api.service';
+import { generateBreadcrumbSchema } from '~/services/seo-schemas';
 import { jsonLdProduct } from '~/services/sellright-seo';
 import type { JsonLdSchema } from '~/types/seo.types';
 import { ProductContent } from './ProductContent';

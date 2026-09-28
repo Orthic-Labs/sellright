@@ -9,7 +9,7 @@ import { Link, routeLoader$ } from '@qwik.dev/router';
 import ProductCard from '~/components/products/ProductCard';
 import { getCollectionBySlug } from '~/providers/shop/collections/collections';
 import { createSEOHead } from '~/utils/seo';
-import { generateBreadcrumbSchema } from '~/services/seo-api.service';
+import { generateBreadcrumbSchema } from '~/services/seo-schemas';
 import { siteUrl, theme } from '~/theme/theme.config';
 
 export const useCollectionLoader = routeLoader$(async ({ params, status }) => {
