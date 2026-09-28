@@ -32,6 +32,9 @@ const EnvSchema = z.object({
   PGPOOL_CONNECTION_TIMEOUT_MS: z.coerce.number().int().nonnegative().default(5000),
   PGAPPNAME: z.string().trim().min(1).default('sellright-api'),
   // WP2: SMTP (all optional — mailer no-ops with a log line when unconfigured).
+  // Interface to bind. Default 0.0.0.0 (reverse proxies on a Docker bridge
+  // need it); set 127.0.0.1 for local-only instances (tests, rehearsals).
+  HOST: z.string().default('0.0.0.0'),
   SMTP_HOST: optionalEnvString,
   SMTP_PORT: z.coerce.number().int().positive().default(587),
   SMTP_USER: optionalEnvString,

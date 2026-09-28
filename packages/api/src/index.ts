@@ -17,7 +17,7 @@ registerProcessErrorHandlers();
 
 const app = createApp();
 
-const server = serve({ fetch: app.fetch, port: env.PORT }, (info) => {
+const server = serve({ fetch: app.fetch, port: env.PORT, hostname: env.HOST }, (info) => {
   // OBS-1: structured startup logs so log collectors index port + env as fields.
   log.info('api listening', { url: `http://localhost:${info.port}`, env: env.NODE_ENV, port: info.port });
   log.info('openapi published', { url: `http://localhost:${info.port}/v1/openapi.json` });
