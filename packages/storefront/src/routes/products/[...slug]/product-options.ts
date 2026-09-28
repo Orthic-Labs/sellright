@@ -1,20 +1,40 @@
 import type { Variant } from '~/types';
 
-/** Unique option groups in Vendure order */
+/**
+ * Unique option groups, in the merchant's own order (API migration 0080:
+ * `group.position` orders groups, `option.position` orders values within a
+ * group — set via the admin's option-group/value reorder controls).
+ *
+ * Both are optional fields: a manifest snapshot published before this field
+ * existed omits them, and this must still render sensibly rather than throw
+ * or silently collapse everything to one order. When position data is fully
+ * present (the normal case for anything touched after this shipped) it is
+ * authoritative and NEVER overridden by name — a merchant who orders values
+ * "L, M, S" or groups "Color, Size" must see exactly that, not an
+ * alphabetical or size-heuristic re-sort. The size-word heuristic and
+ * alphabetical-by-name sort below are legacy fallbacks ONLY for the
+ * position-less case.
+ */
 export function getOptionGroups(variants: Variant[]): { groupName: string; values: string[] }[] {
-  const map = new Map<string, string[]>();
+  const map = new Map<string, { position: number | undefined; values: Map<string, number | undefined> }>();
   for (const v of variants) {
     for (const opt of (v.options || [])) {
       const g = opt.group?.name || 'Option';
-      if (!map.has(g)) map.set(g, []);
-      const vals = map.get(g)!;
-      if (!vals.includes(opt.name)) vals.push(opt.name);
+      if (!map.has(g)) map.set(g, { position: opt.group?.position, values: new Map() });
+      const entry = map.get(g)!;
+      if (entry.position === undefined && opt.group?.position !== undefined) entry.position = opt.group.position;
+      if (!entry.values.has(opt.name)) entry.values.set(opt.name, opt.position);
     }
   }
   const SIZE_ORDER = ['xs', 'xsmall', 'x-small', 's', 'sm', 'small', 'm', 'md', 'medium', 'l', 'lg', 'large', 'xl', 'xxl', '2xl', '3xl'];
-  return Array.from(map.entries()).map(([groupName, values]) => {
-    if (groupName.toLowerCase() === 'size') {
-      values = [...values].sort((a, b) => {
+  const groups = Array.from(map.entries()).map(([groupName, { position, values }]) => {
+    const names = [...values.keys()];
+    const hasAllValuePositions = names.length > 0 && [...values.values()].every((p) => p !== undefined);
+    let sorted = names;
+    if (hasAllValuePositions) {
+      sorted = [...names].sort((a, b) => values.get(a)! - values.get(b)!);
+    } else if (groupName.toLowerCase() === 'size') {
+      sorted = [...names].sort((a, b) => {
         const ai = SIZE_ORDER.indexOf(a.toLowerCase());
         const bi = SIZE_ORDER.indexOf(b.toLowerCase());
         if (ai === -1 && bi === -1) return a.localeCompare(b);
@@ -23,8 +43,13 @@ export function getOptionGroups(variants: Variant[]): { groupName: string; value
         return ai - bi;
       });
     }
-    return { groupName, values };
-  }).sort((a, b) => a.groupName.localeCompare(b.groupName));
+    return { groupName, values: sorted, position };
+  });
+  const hasAllGroupPositions = groups.length > 0 && groups.every((g) => g.position !== undefined);
+  const ordered = hasAllGroupPositions
+    ? [...groups].sort((a, b) => a.position! - b.position!)
+    : [...groups].sort((a, b) => a.groupName.localeCompare(b.groupName));
+  return ordered.map(({ groupName, values }) => ({ groupName, values }));
 }
 
 /** Values available for groupIndex given prior selections, stock-filtered */

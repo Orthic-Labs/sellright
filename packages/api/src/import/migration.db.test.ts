@@ -568,6 +568,56 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     expect(excluded).not.toContain('source-extension-absent:blog_post');
   });
 
+  // Migration 0080: Vendure's core schema carries no explicit sortOrder on
+  // product_option_group/product_option, so the importer (the one place
+  // allowed to know Vendure specifics — see import/catalog.ts) falls back to
+  // ascending source id as the "insertion order" proxy. Seeded here with
+  // HIGHER ids inserted FIRST into the source, specifically so a naive
+  // physical/heap-order import (no explicit ORDER BY) would land them
+  // backwards — proving the importer really orders by id, not by whatever
+  // order Postgres happens to hand rows back in.
+  it('carries source id order into option group/value position (id ascending, not source insertion order)', async () => {
+    const tag = 'd' + randomUUID().slice(0, 8);
+    await resetSource('dd', tag);
+    const client = await sourcePool.connect();
+    try {
+      // Group 20 ("Zebra") inserted before group 10 ("Apple") — id ascending
+      // must still put Apple (10) first.
+      await client.query(`INSERT INTO product_option_group VALUES (20, NULL), (10, NULL)`);
+      await client.query(`INSERT INTO product_option_groups_product_option_group VALUES (20, 1), (10, 1)`);
+      await client.query(`INSERT INTO product_option_group_translation VALUES (20, 'en', 'Zebra'), (10, 'en', 'Apple')`);
+      // Within group 10: option 200 ("Value B") inserted before option 100
+      // ("Value A") — id ascending must still put Value A first.
+      await client.query(`INSERT INTO product_option VALUES (200, 10, NULL), (100, 10, NULL), (300, 20, NULL)`);
+      await client.query(`INSERT INTO product_option_translation VALUES (200, 'en', 'Value B'), (100, 'en', 'Value A'), (300, 'en', 'Only')`);
+      await client.query(`INSERT INTO product_variant_options_product_option VALUES (1, 100), (1, 200), (1, 300)`);
+    } finally {
+      client.release();
+    }
+    const storeId = randomUUID();
+    const f = await fixtureConfig(storeId, {
+      nmi: { accountId: 'nmi-acct', mode: 'live' },
+      sezzle: { accountId: 'sez-acct', mode: 'live' },
+      stripe: { accountId: 'acct_dd', mode: 'live' },
+    });
+    const dry = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config, manifestPath: f.manifestPath });
+    await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config, manifestPath: f.applyManifestPath, apply: true, expectedDigest: dry.sourceDigest });
+
+    const groups = (await targetRows(storeId, 'product_option_group', 'ORDER BY position')).map((g) => ({ name: g.name as string, position: g.position as number }));
+    expect(groups).toEqual([{ name: 'Apple', position: 0 }, { name: 'Zebra', position: 1 }]);
+
+    const appleGroupId = migrationId(storeId, 'vendure:test', 'option-group', '1:10');
+    const client2 = await targetPool.connect();
+    let optionRows: { value: string; position: number }[];
+    try {
+      await client2.query(`SELECT set_config('app.current_store', $1, false)`, [storeId]);
+      optionRows = (await client2.query(`SELECT value, position FROM product_option WHERE group_id = $1 ORDER BY position`, [appleGroupId])).rows;
+    } finally {
+      client2.release();
+    }
+    expect(optionRows).toEqual([{ value: 'Value A', position: 0 }, { value: 'Value B', position: 1 }]);
+  });
+
   // Patterns observed in the real damned_vendure clone: headers stale vs their
   // lines (settled payment corroborates lines), unresolvable drift kept at
   // header, Vendure's dummy `standard-payment` handler, 'imported' sentinel

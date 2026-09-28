@@ -84,7 +84,12 @@ const Variant = z.object({
   compareAtPrice: Money.nullable(),
   isPreOrder: z.boolean(),
   enabled: z.boolean(),
-  options: z.array(z.object({ id: z.string(), code: z.string(), name: z.string(), group: z.object({ id: z.string(), code: z.string(), name: z.string() }) })),
+  // position: merchant-controlled display order (see migration 0080) —
+  // group.position orders the groups, the outer position orders values
+  // within that group. Storefronts building a selector from the flattened
+  // per-variant options list group by group.id and sort by these, never by
+  // name.
+  options: z.array(z.object({ id: z.string(), code: z.string(), name: z.string(), position: z.number().int(), group: z.object({ id: z.string(), code: z.string(), name: z.string(), position: z.number().int() }) })),
   assets: z.array(z.object({ preview: z.string() })),
   // Storefronts must know a variant is a software license before checkout: the
   // legal gate keys off these two, and the API rejects a licensed order that
@@ -206,12 +211,19 @@ catalog.openapi(
         rate = rateFor(rates, st.currency, displayCurrency);
       }
       const conv = (v: number | null) => (v == null ? null : convertMoney(v, rate));
-      const optionRows = await tx.select({ sku: s.productVariant.sku, id: s.productOption.id, name: s.productOption.value, groupId: s.productOptionGroup.id, groupName: s.productOptionGroup.name })
+      const optionRows = await tx.select({
+        sku: s.productVariant.sku, id: s.productOption.id, name: s.productOption.value, position: s.productOption.position,
+        groupId: s.productOptionGroup.id, groupName: s.productOptionGroup.name, groupPosition: s.productOptionGroup.position,
+      })
         .from(s.variantOption)
         .innerJoin(s.productVariant, eq(s.productVariant.id, s.variantOption.variantId))
         .innerJoin(s.productOption, eq(s.productOption.id, s.variantOption.optionId))
         .innerJoin(s.productOptionGroup, eq(s.productOptionGroup.id, s.productOption.groupId))
-        .where(eq(s.productVariant.productId, p.id)).orderBy(asc(s.productOptionGroup.name), asc(s.productOption.value));
+        // Merchant-controlled order (migration 0080), id as a stable
+        // tiebreak — never alphabetical (a group/value named later in the
+        // alphabet must be able to display first, e.g. Color before Size).
+        .where(eq(s.productVariant.productId, p.id))
+        .orderBy(asc(s.productOptionGroup.position), asc(s.productOptionGroup.id), asc(s.productOption.position), asc(s.productOption.id));
       const variantAssetRows = await tx
         .select({ variantId: s.variantAsset.variantId, path: s.asset.path, position: s.variantAsset.position })
         .from(s.variantAsset)
@@ -253,7 +265,7 @@ catalog.openapi(
         ))
         .map(({ onHand, allocated, ...v }) => ({
           ...v, price: convertMoney(v.price, rate), salePrice: conv(v.salePrice), preOrderPrice: conv(v.preOrderPrice), shipDate: v.shipDate?.toISOString() ?? null, compareAtPrice: conv(v.compareAtPrice),
-          options: optionRows.filter(o => o.sku === v.sku).map(o => ({ id: o.id, code: o.id, name: o.name, group: { id: o.groupId, code: o.groupId, name: o.groupName } })),
+          options: optionRows.filter(o => o.sku === v.sku).map(o => ({ id: o.id, code: o.id, name: o.name, position: o.position, group: { id: o.groupId, code: o.groupId, name: o.groupName, position: o.groupPosition } })),
           assets: variantAssetRows.filter(a => a.variantId === v.id).map(a => ({ preview: a.path })),
           // Live, uncached (locked stock-architecture rule) — computed fresh
           // on every request straight from the stock join above, never

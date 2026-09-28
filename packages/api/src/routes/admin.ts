@@ -119,15 +119,15 @@ admin.openapi(
       conds.push((trashed ? sql`${s.order.deletedAt} is not null` : sql`${s.order.deletedAt} is null`) as never);
       if (state) conds.push(sql`${s.order.state} = ${state}` as never);
       if (status) conds.push(eq(s.order.status, status) as never);
-      if (paymentStatus) conds.push(sql`${paymentStatusSql(s.order)} = ${paymentStatus}` as never);
-      if (fulfillmentStatus) conds.push(sql`${fulfillmentStatusSql(s.order)} = ${fulfillmentStatus}` as never);
+      if (paymentStatus) conds.push(sql`${paymentStatusSql()} = ${paymentStatus}` as never);
+      if (fulfillmentStatus) conds.push(sql`${fulfillmentStatusSql()} = ${fulfillmentStatus}` as never);
       if (preOrder) conds.push(eq(s.order.isPreOrder, true) as never);
       if (q) conds.push(or(ilike(s.order.code, `%${q}%`), ilike(s.customer.email, `%${q}%`)) as never);
       const where = conds.length ? and(...conds) : undefined;
       const base = tx
         .select({
           code: s.order.code, state: s.order.state, status: s.order.status,
-          paymentStatus: paymentStatusSql(s.order), fulfillmentStatus: fulfillmentStatusSql(s.order),
+          paymentStatus: paymentStatusSql(), fulfillmentStatus: fulfillmentStatusSql(),
           isPreOrder: s.order.isPreOrder, grandTotal: s.order.grandTotal, currency: s.order.currency, placedAt: s.order.placedAt, createdAt: s.order.createdAt, email: s.customer.email,
         })
         .from(s.order)

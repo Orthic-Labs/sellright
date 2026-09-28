@@ -2,7 +2,7 @@
  * Order/payment/fulfillment status — DB integration coverage (SR order-status
  * split). Three things a pure unit test (status.test.ts) can't prove:
  *
- *  1. The Postgres STORED GENERATED `order.status` column (migration 0080)
+ *  1. The Postgres STORED GENERATED `order.status` column (migration 0081)
  *     actually computes the right value for a row inserted the way EXISTING
  *     (pre-migration-shaped) application code inserts orders — i.e. without
  *     ever mentioning `status` — which is exactly what "existing data" means
@@ -92,7 +92,7 @@ async function orderStatus(orderId: string): Promise<string> {
 async function bothPaymentAndFulfillmentStatus(orderId: string): Promise<{ sqlPaymentStatus: string; sqlFulfillmentStatus: string; tsPaymentStatus: OrderPaymentStatus; tsFulfillmentStatus: OrderFulfillmentStatus }> {
   return withStore(STORE, async (tx) => {
     const [o] = await tx.select({ state: s.order.state }).from(s.order).where(sql`${s.order.id} = ${orderId}`);
-    const [sqlRow] = await tx.select({ paymentStatus: paymentStatusSql(s.order), fulfillmentStatus: fulfillmentStatusSql(s.order) }).from(s.order).where(sql`${s.order.id} = ${orderId}`);
+    const [sqlRow] = await tx.select({ paymentStatus: paymentStatusSql(), fulfillmentStatus: fulfillmentStatusSql() }).from(s.order).where(sql`${s.order.id} = ${orderId}`);
     const payments = await tx.select({ state: s.payment.state }).from(s.payment).where(sql`${s.payment.orderId} = ${orderId}`).orderBy(sql`created_at desc`);
     const lines = await tx.select({ quantity: s.orderLine.quantity, fulfilledQty: s.orderLine.fulfilledQty, cancelledQty: s.orderLine.cancelledQty }).from(s.orderLine).where(sql`${s.orderLine.orderId} = ${orderId}`);
     const fulfillments = await tx.select({ state: s.fulfillment.state }).from(s.fulfillment).where(sql`${s.fulfillment.orderId} = ${orderId}`);
@@ -163,7 +163,7 @@ describe('GET /v1/admin/orders — status/paymentStatus/fulfillmentStatus filter
     await seedOrder({ code: 'F-voided', state: 'Cancelled', payments: ['Authorized'] });
     await seedOrder({ code: 'F-cancelled-pending', state: 'Cancelled' });
     const rows = await withStore(STORE, (tx) =>
-      tx.select({ code: s.order.code }).from(s.order).where(sql`${paymentStatusSql(s.order)} = 'voided'`),
+      tx.select({ code: s.order.code }).from(s.order).where(sql`${paymentStatusSql()} = 'voided'`),
     );
     expect(rows.map((r) => r.code)).toEqual(['F-voided']);
   });
@@ -172,7 +172,7 @@ describe('GET /v1/admin/orders — status/paymentStatus/fulfillmentStatus filter
     await seedOrder({ code: 'G-unfulfilled', state: 'Paid', lines: [{ quantity: 1 }] });
     await seedOrder({ code: 'G-delivered', state: 'Paid', lines: [{ quantity: 1, fulfilledQty: 1 }], fulfillments: ['Delivered'] });
     const rows = await withStore(STORE, (tx) =>
-      tx.select({ code: s.order.code }).from(s.order).where(sql`${fulfillmentStatusSql(s.order)} = 'delivered'`),
+      tx.select({ code: s.order.code }).from(s.order).where(sql`${fulfillmentStatusSql()} = 'delivered'`),
     );
     expect(rows.map((r) => r.code)).toEqual(['G-delivered']);
   });

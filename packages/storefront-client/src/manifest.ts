@@ -44,7 +44,11 @@ export interface NativeVariantV2 {
   preOrderPrice: NativeMoney | null;
   isPreOrder: boolean;
   shipDate: string | null;
-  options: Array<{ group: string; groupId: string; code: string; name: string }>;
+  // position: merchant-controlled order (migration 0080) — groupPosition
+  // orders the groups, position orders values within that group. Arrives
+  // pre-sorted by both; carried through so a consumer that re-groups
+  // client-side still sorts correctly without re-deriving order itself.
+  options: Array<{ group: string; groupId: string; groupPosition: number; code: string; name: string; position: number }>;
   images: NativeImage[];
 }
 

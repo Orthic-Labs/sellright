@@ -74,6 +74,52 @@ describe('native catalog generation', () => {
     }
   });
 
+  // Migration 0080: option groups/values are ordered by merchant-set
+  // `position` (id as a stable tiebreak), never alphabetically. 'Zebra' /
+  // 'Apple' and 'Large' / 'Small' are chosen so an alphabetical bug would be
+  // immediately visible as a swap in both v1 and v2 output.
+  it('orders option groups and values by position, not name, in both v1 and v2', async () => {
+    const store = randomUUID(), product = randomUUID(), variant = randomUUID();
+    const zebraGroup = randomUUID(), appleGroup = randomUUID();
+    const large = randomUUID(), small = randomUUID(), red = randomUUID(), blue = randomUUID();
+    const slug = `manifest-position-${store}`;
+    const outDir = await mkdtemp(join(tmpdir(), 'sr-manifest-position-db-'));
+    try {
+      await withStore(store, async tx => {
+        await tx.execute(sql`INSERT INTO store (id, slug, name, currency) VALUES (${store}, ${slug}, 'Fixture', 'USD')`);
+        await tx.execute(sql`INSERT INTO product (id, store_id, slug, name, status) VALUES (${product}, ${store}, 'fixture', 'Fixture', 'active')`);
+        await tx.execute(sql`INSERT INTO product_variant (id, store_id, product_id, sku, name, price) VALUES (${variant}, ${store}, ${product}, 'FIXTURE', 'V', 1000)`);
+        // Zebra Color (position 0) placed BEFORE Apple Size (position 1) —
+        // the opposite of alphabetical order.
+        await tx.execute(sql`INSERT INTO product_option_group (id, store_id, product_id, name, position) VALUES (${zebraGroup}, ${store}, ${product}, 'Zebra Color', 0), (${appleGroup}, ${store}, ${product}, 'Apple Size', 1)`);
+        // Within Zebra Color: Blue (0) before Red (1) — opposite of alphabetical.
+        await tx.execute(sql`INSERT INTO product_option (id, store_id, group_id, value, position) VALUES (${blue}, ${store}, ${zebraGroup}, 'Blue', 0), (${red}, ${store}, ${zebraGroup}, 'Red', 1)`);
+        // Within Apple Size: Large (0) before Small (1) — matches alphabetical
+        // here, so the group-order assertion is the one actually proving the fix.
+        await tx.execute(sql`INSERT INTO product_option (id, store_id, group_id, value, position) VALUES (${large}, ${store}, ${appleGroup}, 'Large', 0), (${small}, ${store}, ${appleGroup}, 'Small', 1)`);
+        await tx.execute(sql`INSERT INTO variant_option (store_id, variant_id, option_id) VALUES (${store}, ${variant}, ${blue}), (${store}, ${variant}, ${red}), (${store}, ${variant}, ${large}), (${store}, ${variant}, ${small})`);
+      });
+      await publishCatalogManifest({ outDir, storeSlug: slug });
+      const expectedOrder = [
+        { group: 'Zebra Color', name: 'Blue' },
+        { group: 'Zebra Color', name: 'Red' },
+        { group: 'Apple Size', name: 'Large' },
+        { group: 'Apple Size', name: 'Small' },
+      ];
+      const detail = JSON.parse(await readFile(join(outDir, 'current/products/fixture.json'), 'utf8'));
+      expect(detail.variants[0].options.map((o: { group: string; name: string }) => ({ group: o.group, name: o.name }))).toEqual(expectedOrder);
+      const detailV2 = JSON.parse(await readFile(join(outDir, 'current/products-v2/fixture.json'), 'utf8'));
+      expect(detailV2.variants[0].options.map((o: { group: string; name: string }) => ({ group: o.group, name: o.name }))).toEqual(expectedOrder);
+      // groupPosition/position are carried onto every option entry too, so a
+      // consumer that re-groups client-side (rather than trusting array
+      // order) still sorts correctly.
+      expect(detailV2.variants[0].options[0]).toMatchObject({ groupPosition: 0, position: 0 });
+      expect(detailV2.variants[0].options[2]).toMatchObject({ groupPosition: 1, position: 0 });
+    } finally {
+      await rm(outDir, { recursive: true, force: true });
+    }
+  });
+
   // SELLRIGHT-ISSUES P1: per-product regeneration. `variantIds` must reuse
   // the unaffected product's entry from the current generation untouched,
   // recompute only the affected one, and still publish one COMPLETE new

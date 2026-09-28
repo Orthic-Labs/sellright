@@ -162,33 +162,51 @@ export async function importCatalog(ctx: ImportContext): Promise<void> {
     }
 
     // --- option groups (linked to products) ---
+    // Ordering: Vendure's core schema carries no explicit sortOrder on
+    // product_option_group/product_option (unlike e.g. collection.position,
+    // which IS selected explicitly elsewhere in this file) — this is the
+    // ONE place in the codebase allowed to know that. `g.id`/`o.id` ascending
+    // is the best available proxy for "source insertion order": Vendure's
+    // default id strategy is an auto-increment integer, so ascending id
+    // tracks creation order. `ORDER BY l."productId", g.id` keeps each
+    // product's groups contiguous so the running per-product counter below
+    // assigns 0..n-1 in that order; same shape per-group for options.
+    const groupPosition = new Map<number, number>(); // vendure productId -> next position
     for (const g of await q(
       `SELECT g.id, l."productId" AS pid, gt.name
        FROM product_option_group g
        JOIN product_option_groups_product_option_group l ON l."productOptionGroupId"=g.id
        JOIN product_option_group_translation gt ON gt."baseId"=g.id AND gt."languageCode"=$1
-       WHERE g."deletedAt" IS NULL`, [LANG],
+       WHERE g."deletedAt" IS NULL
+       ORDER BY l."productId", g.id`, [LANG],
     )) {
       const productId = productMap.get(g.pid);
       if (!productId) continue;
       const id = ctx.id('option-group', g.pid + ':' + g.id);
       groupMap.set(g.pid + ':' + g.id, id);
-      await tx.insert(s.productOptionGroup).values({ id, storeId, productId, name: g.name });
+      const position = groupPosition.get(g.pid) ?? 0;
+      groupPosition.set(g.pid, position + 1);
+      await tx.insert(s.productOptionGroup).values({ id, storeId, productId, name: g.name, position });
     }
 
     // --- options ---
+    const optionPosition = new Map<string, number>(); // "pid:gid" -> next position
     for (const o of await q(
       `SELECT o.id, o."groupId" AS gid, l."productId" AS pid, ot.name
        FROM product_option o
        JOIN product_option_groups_product_option_group l ON l."productOptionGroupId"=o."groupId"
        JOIN product_option_translation ot ON ot."baseId"=o.id AND ot."languageCode"=$1
-       WHERE o."deletedAt" IS NULL`, [LANG],
+       WHERE o."deletedAt" IS NULL
+       ORDER BY l."productId", o."groupId", o.id`, [LANG],
     )) {
       const groupId = groupMap.get(o.pid + ':' + o.gid);
       if (!groupId) continue;
       const id = ctx.id('option', o.pid + ':' + o.id);
       optionMap.set(o.pid + ':' + o.id, id);
-      await tx.insert(s.productOption).values({ id, storeId, groupId, value: o.name });
+      const posKey = o.pid + ':' + o.gid;
+      const position = optionPosition.get(posKey) ?? 0;
+      optionPosition.set(posKey, position + 1);
+      await tx.insert(s.productOption).values({ id, storeId, groupId, value: o.name, position });
     }
 
     const [global] = await q('SELECT "trackInventory", "outOfStockThreshold" FROM global_settings');
