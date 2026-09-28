@@ -1,8 +1,9 @@
 import { component$, Signal } from '@qwik.dev/core';
 import { formatPrice } from '~/utils';
 
-export default component$<{
-  priceWithTax: any;
+interface PriceProps {
+  /** Regular unit price, integer cents. Native primary prop. */
+  price?: number | null;
   variantSig?: Signal<unknown>;
   forcedClass?: string;
   salePrice?: number | null;
@@ -10,9 +11,17 @@ export default component$<{
   isPreOrder?: boolean;
   originalPriceClass?: string;
   currencyCode?: string;
-}>(
+  /** @deprecated legacy alias for `price` — kept only for routes/index.tsx and
+   *  components/home/HomeTeeSection.tsx (out of scope for this conversion),
+   *  which still pass a Vendure-ish `priceWithTax` (plain number or, from the
+   *  legacy search adapter, a `{min,max}` pair where min always equals max).
+   *  New callers should always pass `price` instead. */
+  priceWithTax?: number | { min: number; max: number } | { value: number } | null;
+}
+
+export default component$<PriceProps>(
   ({
-    priceWithTax,
+    price,
     variantSig,
     forcedClass,
     salePrice,
@@ -20,59 +29,33 @@ export default component$<{
     isPreOrder,
     originalPriceClass,
     currencyCode,
-  }: any) => {
+    priceWithTax,
+  }) => {
     const renderPrice = (valueInCents: number) => {
       if (typeof valueInCents !== 'number' || valueInCents <= 0) return null;
       return formatPrice(valueInCents, currencyCode);
     };
 
-    const renderPriceRange = (min: number, max: number) => {
-      if (min <= 0 && max <= 0) return null;
-      return `${formatPrice(min, currencyCode)} - ${formatPrice(max, currencyCode)}`;
-    };
-
-    let regularCents: number | null = null;
-    let rangeMin: number | null = null;
-    let rangeMax: number | null = null;
-    if (typeof priceWithTax === 'number') {
-      regularCents = priceWithTax;
-    } else if (priceWithTax && typeof priceWithTax === 'object') {
-      if ('value' in priceWithTax) {
-        regularCents = (priceWithTax as any).value ?? null;
-      } else if ('min' in priceWithTax && 'max' in priceWithTax) {
-        const min = (priceWithTax as any).min as number;
-        const max = (priceWithTax as any).max as number;
-        if (typeof min === 'number' && typeof max === 'number') {
-          if (min === max) {
-            regularCents = min;
-          } else {
-            rangeMin = min;
-            rangeMax = max;
-          }
-        }
-      }
-    }
+    const regularCents = price ?? legacyToNumber(priceWithTax);
 
     const sale = typeof salePrice === 'number' && salePrice > 0 ? salePrice : null;
     const pre = typeof preOrderPrice === 'number' && preOrderPrice > 0 ? preOrderPrice : null;
 
     let liveCents: number | null = regularCents;
     let strikeCents: number | null = null;
-    if (rangeMin === null) {
-      if (isPreOrder && pre) {
-        liveCents = pre;
-        if (regularCents !== null && regularCents !== pre) strikeCents = regularCents;
-      } else if (!isPreOrder && sale) {
-        liveCents = sale;
-        if (regularCents !== null && regularCents !== sale) strikeCents = regularCents;
-      }
+    if (isPreOrder && pre) {
+      liveCents = pre;
+      if (regularCents !== null && regularCents !== pre) strikeCents = regularCents;
+    } else if (!isPreOrder && sale) {
+      liveCents = sale;
+      if (regularCents !== null && regularCents !== sale) strikeCents = regularCents;
     }
 
     const liveNode = liveCents && liveCents > 0 ? renderPrice(liveCents) : null;
 
     return (
       <div class="flex items-center justify-center" style={{ fontVariantNumeric: 'tabular-nums' }}>
-        {variantSig?.value && <div class="hidden">{JSON.stringify(variantSig.value)}</div>}
+        {variantSig?.value != null && <div class="hidden">{JSON.stringify(variantSig.value)}</div>}
 
         {strikeCents !== null && (
           <div class={`text-sm line-through mr-2 ${originalPriceClass || 'text-white/90'}`}>
@@ -80,17 +63,18 @@ export default component$<{
           </div>
         )}
 
-        {(() => {
-          if (rangeMin !== null && rangeMax !== null) {
-            const range = renderPriceRange(rangeMin, rangeMax);
-            return range ? <div class={forcedClass}>{range}</div> : null;
-          }
-          if (liveNode) {
-            return <div class={forcedClass}>{liveNode}</div>;
-          }
-          return null;
-        })()}
+        {liveNode && <div class={forcedClass}>{liveNode}</div>}
       </div>
     );
   },
 );
+
+/** @deprecated see `PriceProps.priceWithTax`. */
+function legacyToNumber(priceWithTax: PriceProps['priceWithTax']): number | null {
+  if (typeof priceWithTax === 'number') return priceWithTax;
+  if (priceWithTax && typeof priceWithTax === 'object') {
+    if ('value' in priceWithTax && typeof priceWithTax.value === 'number') return priceWithTax.value;
+    if ('min' in priceWithTax && typeof priceWithTax.min === 'number') return priceWithTax.min;
+  }
+  return null;
+}

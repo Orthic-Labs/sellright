@@ -1,5 +1,6 @@
 import { component$ } from '@qwik.dev/core';
 import { titleCase } from './product-options';
+import type { CatalogVariant } from '~/sellright/types/catalog';
 
 export const ProductMobileBar = component$((props: Record<string, any>) => {
   const {
@@ -23,10 +24,9 @@ export const ProductMobileBar = component$((props: Record<string, any>) => {
         <div class="sr-mobile-bar-name">{titleCase(product.name)}</div>
         <div class="sr-mobile-bar-price">
           {(() => {
-            const sv: any = selectedVariant.value;
-            const cf = sv?.customFields;
-            const sale = typeof cf?.salePrice === 'number' && cf.salePrice > 0 ? cf.salePrice : null;
-            const pre = typeof cf?.preOrderPrice === 'number' && cf.preOrderPrice > 0 ? cf.preOrderPrice : null;
+            const sv: CatalogVariant | undefined = selectedVariant.value;
+            const sale = typeof sv?.salePrice === 'number' && sv.salePrice > 0 ? sv.salePrice : null;
+            const pre = typeof sv?.preOrderPrice === 'number' && sv.preOrderPrice > 0 ? sv.preOrderPrice : null;
             const live = isPreOrder.value && pre ? pre : (!isPreOrder.value && sale ? sale : displayPrice.value);
             return <>{showFromPrefix.value && 'From '}${(live / 100).toFixed(0)}</>;
           })()}
