@@ -22,7 +22,7 @@ import { normalizeEmail } from '../auth/email.js';
 import { customerToken, resolveCustomer } from '../auth/session.js';
 import { clientIp, loginRetryAfter, recordLoginFailure } from '../auth/rate-limit.js';
 import { verifyTurnstileToken } from '../security/turnstile.js';
-import { enqueuePasswordReset, enqueueEmailAddressChange, resolveStorefrontUrl, type StoreEmailCtx } from '../email/dispatch.js';
+import { enqueuePasswordReset, enqueueEmailAddressChange, enqueueEmailAddressChangedNotice, resolveStorefrontUrl, type StoreEmailCtx } from '../email/dispatch.js';
 import { env } from '../env.js';
 
 const hashToken = (t: string) => createHash('sha256').update(t).digest('hex');
@@ -257,6 +257,11 @@ customerTokens.openapi(
       // claimed the address since the request was minted.
       const [clash] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, newEmail)).limit(1);
       if (clash) return 'taken';
+      // Capture the OLD address before overwriting it — the security notice
+      // below goes to the address being ABANDONED, and it's gone after the
+      // UPDATE.
+      const [before] = await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, row.customerId)).limit(1);
+      const oldEmail = before?.email ?? null;
       // The customer just proved control of the NEW address — verified by construction.
       await tx.update(s.customer).set({ email: newEmail, emailVerified: true, updatedAt: new Date() }).where(eq(s.customer.id, row.customerId));
       // Identifier changed: invalidate all sessions for this account in this
@@ -264,7 +269,16 @@ customerTokens.openapi(
       await tx.delete(s.session).where(and(eq(s.session.customerId, row.customerId), eq(s.session.storeId, st.id)));
       // Burn any other pending change links so only the consumed one ever worked.
       await tx.execute(sql`UPDATE customer_token SET used_at = now() WHERE customer_id = ${row.customerId} AND kind = ${EMAIL_CHANGE_KIND} AND used_at IS NULL`);
-      await tx.insert(s.auditLog).values({ storeId: st.id, actor: `customer:${row.customerId}`, entity: 'customer', entityId: row.customerId, action: 'email_changed', data: { email: newEmail } });
+      await tx.insert(s.auditLog).values({ storeId: st.id, actor: `customer:${row.customerId}`, entity: 'customer', entityId: row.customerId, action: 'email_changed', data: { email: newEmail, previousEmail: oldEmail } });
+      // Security notice to the OLD (abandoned) address — unconditional, not
+      // gated on session/consent: if a hijacked session made this change,
+      // the rightful owner needs to know at the address they can still read.
+      if (oldEmail && oldEmail !== newEmail) {
+        await enqueueEmailAddressChangedNotice(tx, st.id, storeEmailCtx(st), oldEmail, {
+          newEmail,
+          dedupeKey: `email-changed-notice:${row.id}`,
+        });
+      }
       return 'ok';
     });
     if (out !== 'ok') { recordLoginFailure(ip, bucket); return c.json({ error: 'token is invalid, expired, or already used' }, 409); }

@@ -62,6 +62,17 @@ export const emailAddressChange = (store: StoreCtx, data: { url: string; newEmai
      <p><a href="${escape(data.url)}" style="display:inline-block;padding:10px 16px;background:#222;color:#fff;text-decoration:none;border-radius:6px">Confirm new email</a></p>
      <p>If you didn't request this, ignore this email — your sign-in address stays the same.</p>`);
 
+// Security notice sent to the OLD address once an email-address change is
+// CONFIRMED (not on request — only after the new address proved control).
+// Independent of consent/session state: if an attacker used a hijacked
+// session to change the sign-in address, the rightful owner still receives
+// this at the address they can actually read, with a support contact.
+export const emailAddressChangedNotice = (store: StoreCtx, data: { newEmail: string }) =>
+  wrap(store, 'Your account email address was changed',
+    `<p>The sign-in email address on your ${escape(store.name)} account was changed to <strong>${escape(data.newEmail)}</strong>.</p>
+     <p>If you made this change, no action is needed.</p>
+     <p><strong>If you did not make this change</strong>, someone else may have access to your account — contact support immediately.</p>`);
+
 export const passwordReset = (store: StoreCtx, data: { url: string; ttlHours: number }) =>
   wrap(store, 'Reset your password',
     `<p>Someone (hopefully you) asked to reset your password. Click below within ${data.ttlHours} hours:</p>
