@@ -43,6 +43,27 @@ describe('calculateOrderTotals', () => {
     expect(t.grandTotal).toBe(5000);
   });
 
+  it('R24: a percentage promotion can ALSO waive shipping via freeShipping', () => {
+    const t = calculateOrderTotals({
+      lines: [{ unitPrice: 7201, quantity: 1 }],
+      shipping: 800, taxRate: 0,
+      promotion: { type: 'percentage', value: 10, freeShipping: true },
+    });
+    expect(t.discountTotal).toBe(720); // the percentage discount still applies
+    expect(t.shippingTotal).toBe(0); // AND shipping is waived
+    expect(t.grandTotal).toBe(7201 - 720);
+  });
+
+  it('R24: a fixed promotion with freeShipping:false still charges shipping', () => {
+    const t = calculateOrderTotals({
+      lines: [{ unitPrice: 5000, quantity: 1 }],
+      shipping: 800, taxRate: 0,
+      promotion: { type: 'fixed', value: 1000, freeShipping: false },
+    });
+    expect(t.shippingTotal).toBe(800);
+    expect(t.grandTotal).toBe(5000 - 1000 + 800);
+  });
+
   it('tax applies to the discounted subtotal', () => {
     const t = calculateOrderTotals({
       lines: [{ unitPrice: 10000, quantity: 1 }],

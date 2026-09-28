@@ -477,6 +477,13 @@
       "when": 1790000010400,
       "tag": "0076_session_step_up",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1790000010500,
+      "tag": "0077_promotion_free_shipping",
+      "breakpoints": true
     }
   ]
 }

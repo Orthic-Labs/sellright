@@ -105,7 +105,7 @@ export async function priceCart(
     if (!promo) {
       coupon = { code: opts.couponCode, applied: false, reason: 'invalid or expired code' };
     } else {
-      const ev = evaluateCoupon({ type: promo.type, value: promo.value, conditions: promo.conditions }, { subtotal: availSubtotal, activeVerifications, items: items.filter(i => bySku.has(i.sku)).map(i => ({ quantity: i.quantity, facetValueIds: productFacetIds(bySku.get(i.sku)?.metafields) })) });
+      const ev = evaluateCoupon({ type: promo.type, value: promo.value, conditions: promo.conditions, freeShipping: promo.freeShipping }, { subtotal: availSubtotal, activeVerifications, items: items.filter(i => bySku.has(i.sku)).map(i => ({ quantity: i.quantity, facetValueIds: productFacetIds(bySku.get(i.sku)?.metafields) })) });
       if (ev.valid && ev.promotion) { promotion = ev.promotion; coupon = { code: opts.couponCode, applied: true }; }
       else coupon = { code: opts.couponCode, applied: false, reason: ev.reason };
     }
@@ -117,10 +117,10 @@ export async function priceCart(
       .from(s.promotion)
       .where(and(isNull(s.promotion.code), eq(s.promotion.enabled, true), timeValid));
     const best = selectAutomaticPromotion(
-      autos.map((a) => ({ id: a.id, type: a.type, value: a.value, conditions: a.conditions, priority: a.priority })),
+      autos.map((a) => ({ id: a.id, type: a.type, value: a.value, conditions: a.conditions, priority: a.priority, freeShipping: a.freeShipping })),
       { subtotal: availSubtotal, activeVerifications, items: items.filter(i => bySku.has(i.sku)).map(i => ({ quantity: i.quantity, facetValueIds: productFacetIds(bySku.get(i.sku)?.metafields) })) },
     );
-    if (best) promotion = { type: best.type, value: best.value };
+    if (best) promotion = { type: best.type, value: best.value, freeShipping: best.freeShipping };
   }
 
   // Destination tax parity with checkout (checkout.ts): the ship-to country's

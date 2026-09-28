@@ -434,7 +434,7 @@ checkout.openapi(
             .from(s.promotion)
             .where(and(isNull(s.promotion.code), eq(s.promotion.enabled, true), timeValid));
           const best = selectAutomaticPromotion(
-            autos.map((a) => ({ id: a.id, type: a.type, value: a.value, conditions: a.conditions, priority: a.priority })),
+            autos.map((a) => ({ id: a.id, type: a.type, value: a.value, conditions: a.conditions, priority: a.priority, freeShipping: a.freeShipping })),
             { subtotal: subtotalCents, activeVerifications, items: priced.map(p => ({ quantity: p.qty, facetValueIds: productFacetIds(p.v.metafields) })) },
           );
           promo = best ? autos.find((a) => a.id === best.id) : undefined;
@@ -456,7 +456,7 @@ checkout.openapi(
             perCustomerOk = (usedRows[0]?.n ?? 0) < promo.perCustomerUsageLimit;
           }
           const ev = evaluateCoupon(
-            { type: promo.type, value: promo.value, conditions: promo.conditions },
+            { type: promo.type, value: promo.value, conditions: promo.conditions, freeShipping: promo.freeShipping },
             { subtotal: subtotalCents, activeVerifications, items: priced.map(p => ({ quantity: p.qty, facetValueIds: productFacetIds(p.v.metafields) })) },
           );
           // Apply only if valid AND within limits; else proceed at full price

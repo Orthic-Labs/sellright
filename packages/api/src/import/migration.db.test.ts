@@ -639,7 +639,7 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     expect(details).toContain('sentinel transactionId');
   });
 
-  it('maps store-credit balances to loyalty points and excludes legacy credit / multi-action promotions', async () => {
+  it('maps store-credit balances to loyalty points, excludes legacy credit promotions, and imports combined discount+free-shipping promotions faithfully (R24)', async () => {
     await resetSource('rh', 'r' + randomUUID().slice(0, 8));
     const client = await sourcePool.connect();
     try {
@@ -667,9 +667,15 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
       manifestPath: f.applyManifestPath, apply: true, expectedDigest: dry.sourceDigest });
     expect(applied.applied).toBe(true);
 
-    // Only the single-action promotion imports; the other two are exclusions.
+    // The legacy account-credit promotion is excluded (see loyalty ledger
+    // import below); the plain discount AND the combined discount+free-ship
+    // promotion both import (R24 — combined promotions are no longer dropped).
     const promos = await targetRows(storeId, 'promotion', 'ORDER BY code');
-    expect(promos.map(p => p.code)).toEqual(['PLAIN5']);
+    expect(promos.map(p => p.code)).toEqual(['BUNDLE', 'PLAIN5']);
+    const bundle = promos.find((p) => p.code === 'BUNDLE');
+    expect(bundle).toMatchObject({ type: 'percentage', value: 15, free_shipping: true });
+    const plain = promos.find((p) => p.code === 'PLAIN5');
+    expect(plain).toMatchObject({ type: 'fixed', value: 500, free_shipping: false });
 
     // 2550 cents at 100 points per $1 → 2550 points, one import row.
     const ledger = await targetRows(storeId, 'loyalty_ledger');
@@ -684,7 +690,7 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     const ex = manifest.exclusions as Array<{ type: string; table: string; detail: string; count?: number }>;
     const find = (re: RegExp) => ex.find((e) => re.test(e.detail));
     expect(find(/account_credit_discount/)).toMatchObject({ table: 'promotion', count: 1 });
-    expect(find(/multi-action/)).toMatchObject({ table: 'promotion', count: 1 });
+    expect(find(/multi-action/)).toBeUndefined(); // R24: no longer an exclusion — imported with both benefits
     expect(find(/matches no imported customer/)).toMatchObject({ table: 'account_credit', count: 1 });
     expect(find(/disabled store credits/)).toMatchObject({ table: 'account_credit', count: 1 });
     expect(find(/pending store-credit reservations/)).toMatchObject({ table: 'account_credit', count: 1 });
