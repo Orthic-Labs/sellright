@@ -47,6 +47,7 @@ import { subscriptions } from './routes/subscriptions.js';
 import { apps } from './routes/apps.js';
 import { wellKnown } from './routes/well-known.js';
 import { HttpError } from './routes/admin-helpers.js';
+import { errorEnvelope, errJson } from './lib/api-error.js';
 import { csrfValid, customerCsrfValid, getCustomerSessionToken } from './auth/cookies.js';
 import { env } from './env.js';
 import { isAllowedCorsOrigin } from './cors-origins.js';
@@ -113,7 +114,7 @@ export function createApp(): OpenAPIHono {
     const alwaysAllowed = path === '/v1/health' || path === '/v1/readyz' || path === '/v1/maintenance';
     const isSafeMethod = method === 'GET' || method === 'HEAD' || method === 'OPTIONS';
     if (!alwaysAllowed && !isSafeMethod && isMaintenanceOn()) {
-      return c.json({ error: 'The store is temporarily unavailable for maintenance. Please try again shortly.', maintenance: true }, 503);
+      return errJson(c, 503, 'MAINTENANCE', 'The store is temporarily unavailable for maintenance. Please try again shortly.', { extra: { maintenance: true } });
     }
     await next();
   });
@@ -131,7 +132,7 @@ export function createApp(): OpenAPIHono {
       // itself (hashed, single-use, expiry-checked in the handler) is the
       // isolation there, exactly like login/logout before a session exists.
       const exempt = p === '/v1/admin/login' || p === '/v1/admin/logout' || p === '/v1/admin/staff/accept';
-      if (!exempt && !csrfValid(c)) return c.json({ error: 'CSRF token missing or invalid' }, 403);
+      if (!exempt && !csrfValid(c)) return errJson(c, 403, 'CSRF_INVALID', 'CSRF token missing or invalid');
     }
     await next();
   });
@@ -152,7 +153,7 @@ export function createApp(): OpenAPIHono {
         p === '/v1/shop/auth/reset-password' ||
         p === '/v1/shop/auth/verify-email';
       if (!exempt && getCustomerSessionToken(c) && !customerCsrfValid(c)) {
-        return c.json({ error: 'CSRF token missing or invalid' }, 403);
+        return errJson(c, 403, 'CSRF_INVALID', 'CSRF token missing or invalid');
       }
     }
     await next();
@@ -280,7 +281,7 @@ export function createApp(): OpenAPIHono {
     // Honor it even when a route is not wrapped in guard(); otherwise a route
     // that correctly throws 400/409/etc. is silently flattened to 500.
     if (err instanceof HttpError) {
-      return c.json({ error: err.message }, err.status);
+      return c.json(errorEnvelope(c, err.code, err.message, { param: err.param, extra: err.extra }), err.status);
     }
 
     // SEC-5: gated on an explicit DEBUG_ERRORS opt-in, not NODE_ENV — a staging
@@ -295,7 +296,8 @@ export function createApp(): OpenAPIHono {
     const message = status === 404
       ? (err instanceof Error ? err.message : 'not found')
       : (expose && err instanceof Error ? err.message : 'internal error');
-    return c.json({ error: message }, status);
+    const code = status === 404 ? 'NOT_FOUND' : 'INTERNAL_ERROR';
+    return c.json(errorEnvelope(c, code, message), status);
   });
 
   // Shop catalog read API (store resolved per-request, RLS-scoped).
