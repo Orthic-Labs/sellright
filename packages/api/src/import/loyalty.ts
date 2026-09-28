@@ -47,17 +47,45 @@ export async function importLoyalty(ctx: ImportContext, settings: LoyaltySetting
     ctx.exclusions.push({ type: 'source-extension-absent', table: 'account_credit', detail: 'no store-credit plugin table in source; no balances to import' });
     return { imported: 0, points: 0 };
   }
-  const rows = (await q(
+  const sourceRows = (await q(
     `SELECT id, "emailNormalized" AS email, "currencyCode" AS currency, balance, disabled FROM account_credit ORDER BY id`,
   )) as CreditRow[];
-  const live = rows.filter((r) => !r.disabled && Number(r.balance ?? 0) > 0);
+
+  // R23 fix: `account_credit.balance` is NOT already net of pending holds —
+  // reserving credit (checkout applying a DDC- coupon to an order still in
+  // PendingPayment) writes a PENDING transaction with delta:0 and only
+  // decrements `balance` on SETTLE. So a customer with balance=2550 and a
+  // 100-cent pending reservation has 2450 cents TRULY available; importing
+  // the gross 2550 would let them spend the reserved 100 cents again while
+  // the old (pre-cutover) order can still settle and consume it too —
+  // double-counted value. Reconcile by subtracting each credit's own
+  // outstanding pending holds before converting to points.
+  let rows = sourceRows;
+  let pendingHoldCents = 0;
+  let creditsWithPendingHolds = 0;
   if (ctx.sourceColumns.has('account_credit_transaction')) {
-    const pending = await q(`SELECT count(*)::int AS n FROM account_credit_transaction WHERE status = 'PENDING'`);
-    const n = Number(pending[0]?.n ?? 0);
-    // Source balances are already net of pending reservations; the orders
-    // behind them are resolved (or not) by the order phase, never re-credited.
-    if (n > 0) exclude(`pending store-credit reservations not replayed (balances imported net of them)`, n);
+    const pendingByCredit = await q(
+      `SELECT "accountCreditId" AS credit_id, sum(amount)::int AS pending
+       FROM account_credit_transaction WHERE status = 'PENDING' GROUP BY "accountCreditId"`,
+    );
+    const pendingMap = new Map<string, number>(pendingByCredit.map((p) => [String(p.credit_id), Number(p.pending ?? 0)]));
+    if (pendingMap.size) {
+      creditsWithPendingHolds = pendingMap.size;
+      rows = sourceRows.map((r) => {
+        const pending = pendingMap.get(String(r.id)) ?? 0;
+        if (pending <= 0) return r;
+        pendingHoldCents += pending;
+        // Floor at 0: a data inconsistency (holds exceeding balance) must
+        // never import as negative or wrap to a large unsigned value.
+        return { ...r, balance: Math.max(0, Math.trunc(Number(r.balance ?? 0)) - pending) };
+      });
+      exclude(
+        `pending store-credit reservations reconciled: ${pendingHoldCents} cents held back across ${creditsWithPendingHolds} credit(s) (imported balance is net of these holds; the pre-cutover order behind each hold still settles/releases against the ORIGINAL system and must not be replayed here)`,
+        creditsWithPendingHolds,
+      );
+    }
   }
+  const live = rows.filter((r) => !r.disabled && Number(r.balance ?? 0) > 0);
   if (!live.length) return { imported: 0, points: 0 };
   if (!settings || !(settings.pointsPerDollarOff > 0)) {
     const cents = live.reduce((n, r) => n + Number(r.balance ?? 0), 0);
