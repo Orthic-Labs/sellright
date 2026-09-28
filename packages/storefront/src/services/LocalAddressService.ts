@@ -1,10 +1,10 @@
 import type { AddressSyncResult, LocalAddress, LocalAddressCache } from './local-address-types';
-import { syncAddressToVendure, syncAddressesFromVendure } from './local-address-sync';
+import { syncAddressToServer, syncAddressesFromServer } from './local-address-sync';
 export type { AddressSyncResult, LocalAddress, LocalAddressCache } from './local-address-types';
 
 // LocalAddress Service
 export class LocalAddressService {
-  private static readonly ADDRESS_KEY = 'vendure_local_addresses';
+  private static readonly ADDRESS_KEY = 'sellright_local_addresses';
   private static readonly CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
   
   // 🚀 OPTIMIZED: In-memory cache to reduce sessionStorage reads
@@ -153,10 +153,10 @@ export class LocalAddressService {
     
     // Check if this is an update (find by matching address fields)
     const existingIndex = addresses.findIndex(addr => 
-      addr.streetLine1 === address.streetLine1 &&
+      addr.line1 === address.line1 &&
       addr.city === address.city &&
       addr.postalCode === address.postalCode &&
-      addr.countryCode === address.countryCode
+      addr.country === address.country
     );
 
     let savedAddress: LocalAddress;
@@ -185,11 +185,11 @@ export class LocalAddressService {
     // Save updated addresses
     this.saveAddresses(addresses);
     
-    // If this was an update to a customer address, sync it back to Vendure
+    // If this was an update to a customer address, sync it back to the server
     if (isUpdate && savedAddress.source === 'customer') {
       // Async sync - don't block the UI
-      this.syncToVendure(savedAddress).catch(error => {
-        console.warn('Failed to sync address update to Vendure:', error);
+      this.syncToServer(savedAddress).catch(error => {
+        console.warn('Failed to sync address update to the server:', error);
       });
     }
     
@@ -216,11 +216,11 @@ export class LocalAddressService {
     addresses[addressIndex] = updatedAddress;
     this.saveAddresses(addresses);
     
-    // If this is a customer address, sync it back to Vendure
+    // If this is a customer address, sync it back to the server
     if (updatedAddress.source === 'customer') {
       // Async sync - don't block the UI
-      this.syncToVendure(updatedAddress).catch(error => {
-        console.warn('Failed to sync address update to Vendure:', error);
+      this.syncToServer(updatedAddress).catch(error => {
+        console.warn('Failed to sync address update to the server:', error);
       });
     }
     
@@ -246,8 +246,8 @@ export class LocalAddressService {
   static getDefaultShippingAddress(): LocalAddress | null {
     const addresses = this.getAddresses();
     
-    // Find address with defaultShippingAddress: true
-    const defaultShipping = addresses.find(addr => addr.defaultShippingAddress);
+    // Find address with isDefaultShipping: true
+    const defaultShipping = addresses.find(addr => addr.isDefaultShipping);
     if (defaultShipping) return defaultShipping;
     
     // Return first address if no default set
@@ -258,8 +258,8 @@ export class LocalAddressService {
   static getDefaultBillingAddress(): LocalAddress | null {
     const addresses = this.getAddresses();
     
-    // Find address with defaultBillingAddress: true
-    const defaultBilling = addresses.find(addr => addr.defaultBillingAddress);
+    // Find address with isDefaultBilling: true
+    const defaultBilling = addresses.find(addr => addr.isDefaultBilling);
     if (defaultBilling) return defaultBilling;
     
     // Fall back to default shipping if no billing default
@@ -274,15 +274,15 @@ export class LocalAddressService {
       // Update existing default shipping address
       const updated = this.updateAddress(existingDefault.id, {
         ...address,
-        defaultShippingAddress: true
+        isDefaultShipping: true
       });
       return updated!;
     } else {
       // Create new default shipping address
       return this.saveAddress({
         ...address,
-        defaultShippingAddress: true,
-        defaultBillingAddress: false
+        isDefaultShipping: true,
+        isDefaultBilling: false
       });
     }
   }
@@ -295,15 +295,15 @@ export class LocalAddressService {
       // Update existing default billing address
       const updated = this.updateAddress(existingDefault.id, {
         ...address,
-        defaultBillingAddress: true
+        isDefaultBilling: true
       });
       return updated!;
     } else {
       // Create new default billing address
       return this.saveAddress({
         ...address,
-        defaultShippingAddress: false,
-        defaultBillingAddress: true
+        isDefaultShipping: false,
+        isDefaultBilling: true
       });
     }
   }
@@ -317,9 +317,9 @@ export class LocalAddressService {
     const updatedAddresses = addresses.map(addr => {
       if (addr.id === addressId) {
         found = true;
-        return { ...addr, defaultShippingAddress: true };
+        return { ...addr, isDefaultShipping: true };
       }
-      return { ...addr, defaultShippingAddress: false };
+      return { ...addr, isDefaultShipping: false };
     });
     
     if (found) {
@@ -339,9 +339,9 @@ export class LocalAddressService {
     const updatedAddresses = addresses.map(addr => {
       if (addr.id === addressId) {
         found = true;
-        return { ...addr, defaultBillingAddress: true };
+        return { ...addr, isDefaultBilling: true };
       }
-      return { ...addr, defaultBillingAddress: false };
+      return { ...addr, isDefaultBilling: false };
     });
     
     if (found) {
@@ -352,17 +352,17 @@ export class LocalAddressService {
     return false;
   }
 
-  // Sync addresses from Vendure API (using cached customer data)
-  static async syncFromVendure(customerId?: string): Promise<void> {
-    await syncAddressesFromVendure(customerId, {
+  // Sync addresses from the server API (using cached customer data)
+  static async syncFromServer(customerId?: string): Promise<void> {
+    await syncAddressesFromServer(customerId, {
       getAddresses: () => this.getAddresses(),
       saveAddresses: (addresses, id) => this.saveAddresses(addresses, id),
     });
   }
 
-  // Push address changes to Vendure
-  static async syncToVendure(address: LocalAddress): Promise<AddressSyncResult> {
-    return syncAddressToVendure(address, {
+  // Push address changes to the server
+  static async syncToServer(address: LocalAddress): Promise<AddressSyncResult> {
+    return syncAddressToServer(address, {
       getAddresses: () => this.getAddresses(),
       saveAddresses: (addresses, id) => this.saveAddresses(addresses, id),
     });

@@ -4,15 +4,15 @@ export interface LocalAddress {
   lastName: string;
   fullName: string;
   company?: string;
-  streetLine1: string;
-  streetLine2?: string;
+  line1: string;
+  line2?: string;
   city: string;
   province: string;
   postalCode: string;
-  countryCode: string;
-  phoneNumber?: string;
-  defaultShippingAddress: boolean;
-  defaultBillingAddress: boolean;
+  country: string;
+  phone?: string;
+  isDefaultShipping: boolean;
+  isDefaultBilling: boolean;
   source: 'customer' | 'session' | 'checkout';
   lastUpdated: number;
 }

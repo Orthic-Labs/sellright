@@ -1,9 +1,9 @@
-import { $, component$, useComputed$, useContext, useOnDocument, useOnWindow, useSignal, useStore, useTask$ } from '@qwik.dev/core';
+import { $, component$, useComputed$, useContext, useOnDocument, useSignal, useStore, useTask$ } from '@qwik.dev/core';
 import { APP_STATE } from '~/constants';
 import { getProductStock } from '~/providers/shop/products/products';
 import { mergeProductStock, type CatalogProduct, type CatalogVariant } from '~/sellright/types/catalog';
-import { LocalCartService, type LocalCartItem } from '~/services/LocalCartService';
-import { useLocalCart, addToLocalCart } from '~/contexts/CartContext';
+import type { CartLineEnrichment } from '~/sellright/types/cart';
+import { useCart, addToCart } from '~/contexts/CartContext';
 import { loadCountryOnDemand } from '~/utils/addressStorage';
 import { useImageGalleryTouchHandling } from '~/utils/optimized-touch-handling';
 import { ProductPageView } from './ProductPageView';
@@ -18,36 +18,24 @@ export interface GalleryImage {
 
 const PLACEHOLDER_IMAGE: GalleryImage = { preview: '/asset_placeholder.webp' };
 
-/** Cart boundary: translate the native product/variant into the legacy
- *  `LocalCartItem` shape `services/LocalCartService.ts` + cart/checkout
- *  (out of scope for this conversion) already read. This is the ONLY place
- *  in the catalog area that produces that shape — everything upstream of it
- *  stays native. */
-function toLocalCartItem(product: CatalogProduct, variant: CatalogVariant, image: GalleryImage | undefined): LocalCartItem {
-  const salePrice = typeof variant.salePrice === 'number' && variant.salePrice > 0 ? variant.salePrice : undefined;
-  const preOrderPrice = typeof variant.preOrderPrice === 'number' && variant.preOrderPrice > 0 ? variant.preOrderPrice : undefined;
+/** Cart boundary: translate the native product/variant into the cart's
+ *  client-only display enrichment (`~/sellright/types/cart`). This is the
+ *  ONLY place in the catalog area that builds it — everything upstream of it
+ *  stays native, and the server cart line itself carries only `sku`/`quantity`. */
+function toCartEnrichment(product: CatalogProduct, variant: CatalogVariant, image: GalleryImage | undefined): CartLineEnrichment {
   return {
-    productVariantId: variant.sku,
-    quantity: 1,
+    slug: product.slug,
+    image: image?.preview ?? null,
+    name: variant.name,
+    options: variant.options.map((o) => o.name).join(' / '),
     isPreOrder: variant.isPreOrder,
     shipDate: variant.shipDate ?? undefined,
-    salePrice,
-    preOrderPrice,
-    productVariant: {
-      id: variant.sku,
-      name: variant.name,
-      price: variant.price,
-      stockLevel: variant.inStock ? '999' : '0',
-      product: { id: product.slug, name: product.name, slug: product.slug },
-      options: variant.options.map((o) => ({ id: o.code, name: o.name, group: { name: o.group.name } })),
-      featuredAsset: image ? { id: variant.sku, preview: image.preview } : null,
-    },
   };
 }
 
 export const ProductContent = component$(({ loaderResult }: { loaderResult: ProductLoaderResult | { failed: true; message?: string } | null | undefined }) => {
   const appState = useContext(APP_STATE);
-  const localCart = useLocalCart();
+  const cart = useCart();
   if (!loaderResult || 'failed' in loaderResult || !('product' in loaderResult) || !loaderResult.product) {
     return (
       <div class="min-h-[50vh] flex flex-col items-center justify-center py-16 px-4">
@@ -286,8 +274,8 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
         const selectedVar = selectedVariant.value;
         if (!selectedVar) throw new Error('No variant selected');
         const image = (selectedVar.assets?.[0]) ?? orderedAssets.value[0] ?? galleryImages[0];
-        const localCartItem = toLocalCartItem(product, selectedVar, image);
-        await addToLocalCart(localCart, localCartItem);
+        const enrichment = toCartEnrichment(product, selectedVar, image);
+        await addToCart(cart, selectedVar.sku, 1, enrichment);
         appState.showCart = true;
         loadCountryOnDemand(appState);
         const announcement = document.createElement('div');
@@ -305,14 +293,14 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
       }
     }
   });
-  useOnDocument('qinit', $(() => {
-    const variantIds = product.variants.map((v) => v.sku);
-    quantitySignal.value = LocalCartService.getItemQuantitiesFromStorage(variantIds);
-  }));
-  useOnWindow('cart-updated', $(() => {
-    const variantIds = product.variants.map((v) => v.sku);
-    quantitySignal.value = LocalCartService.getItemQuantitiesFromStorage(variantIds);
-  }));
+  // Per-SKU quantity already in the cart — derived straight from the live
+  // cart mirror (CartContext), never from local storage.
+  useTask$(({ track }) => {
+    track(() => cart.cart.lines);
+    const map: Record<string, number> = {};
+    for (const line of cart.cart.lines) map[line.sku] = (map[line.sku] ?? 0) + line.quantity;
+    quantitySignal.value = map;
+  });
   const displayPrice = useComputed$(() => {
     if (selectedVariant.value) return selectedVariant.value.price || 0;
     if (selectedValues.value[0] && groups.value.length > 1) {
