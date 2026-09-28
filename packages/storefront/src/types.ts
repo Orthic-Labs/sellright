@@ -85,6 +85,10 @@ export type ProductOptionGroup = {
 	code: string;
 	name: string;
 	options: ProductOption[];
+	/** Merchant-controlled display order among a product's option groups
+	 *  (migration 0080 on the API). Optional: a snapshot/cache built before
+	 *  this field existed omits it — callers must fall back, never crash. */
+	position?: number;
 };
 
 export type ProductOption = {
@@ -92,6 +96,9 @@ export type ProductOption = {
 	code: string;
 	name: string;
 	group?: ProductOptionGroup;
+	/** Merchant-controlled display order among a group's values. Same
+	 *  optionality note as ProductOptionGroup.position. */
+	position?: number;
 };
 
 export type Variant = {

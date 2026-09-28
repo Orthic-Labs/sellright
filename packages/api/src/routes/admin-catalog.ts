@@ -342,9 +342,16 @@ adminCatalog.openapi(
     const st = requireStore(admin, c);
     const { id } = c.req.valid('param');
     const groups = await withStore(st.storeId, async (tx) => {
-      const gs = await tx.select().from(s.productOptionGroup).where(eq(s.productOptionGroup.productId, id));
-      const opts = gs.length ? await tx.select().from(s.productOption).where(inArray(s.productOption.groupId, gs.map((g) => g.id))) : [];
-      return gs.map((g) => ({ id: g.id, name: g.name, options: opts.filter((o) => o.groupId === g.id).map((o) => ({ id: o.id, value: o.value })) }));
+      // position asc, id asc tiebreak — matches the storefront/manifest
+      // ordering rule (migration 0080); the reorder endpoints below are the
+      // only writers of position.
+      const gs = await tx.select().from(s.productOptionGroup).where(eq(s.productOptionGroup.productId, id))
+        .orderBy(asc(s.productOptionGroup.position), asc(s.productOptionGroup.id));
+      const opts = gs.length
+        ? await tx.select().from(s.productOption).where(inArray(s.productOption.groupId, gs.map((g) => g.id)))
+          .orderBy(asc(s.productOption.position), asc(s.productOption.id))
+        : [];
+      return gs.map((g) => ({ id: g.id, name: g.name, position: g.position, options: opts.filter((o) => o.groupId === g.id).map((o) => ({ id: o.id, value: o.value, position: o.position })) }));
     });
     return c.json({ groups }, 200);
   }),
@@ -362,8 +369,11 @@ adminCatalog.openapi(
     const { id } = c.req.valid('param');
     const b = c.req.valid('json');
     const gid = await withStore(st.storeId, async (tx) => {
-      const [g] = await tx.insert(s.productOptionGroup).values({ storeId: st.storeId, productId: id, name: b.name }).returning({ id: s.productOptionGroup.id });
-      if (b.values?.length) await tx.insert(s.productOption).values(b.values.map((v: string) => ({ storeId: st.storeId, groupId: g!.id, value: v })));
+      // New group is appended after the product's existing groups — never
+      // inserted mid-order underneath an admin who hasn't touched it yet.
+      const groupCount = (await tx.select({ n: count() }).from(s.productOptionGroup).where(eq(s.productOptionGroup.productId, id)))[0]?.n ?? 0;
+      const [g] = await tx.insert(s.productOptionGroup).values({ storeId: st.storeId, productId: id, name: b.name, position: groupCount }).returning({ id: s.productOptionGroup.id });
+      if (b.values?.length) await tx.insert(s.productOption).values(b.values.map((v: string, i: number) => ({ storeId: st.storeId, groupId: g!.id, value: v, position: i })));
       await emitProductChanged(tx, st.storeId, id);
       return g!.id;
     });
@@ -383,12 +393,75 @@ adminCatalog.openapi(
     const { groupId } = c.req.valid('param');
     const b = c.req.valid('json');
     const oid = await withStore(st.storeId, async (tx) => {
-      const [o] = await tx.insert(s.productOption).values({ storeId: st.storeId, groupId, value: b.value }).returning({ id: s.productOption.id });
+      // Appended after the group's existing values, same rule as the group
+      // create above.
+      const optionCount = (await tx.select({ n: count() }).from(s.productOption).where(eq(s.productOption.groupId, groupId)))[0]?.n ?? 0;
+      const [o] = await tx.insert(s.productOption).values({ storeId: st.storeId, groupId, value: b.value, position: optionCount }).returning({ id: s.productOption.id });
       const [group] = await tx.select({ productId: s.productOptionGroup.productId }).from(s.productOptionGroup).where(eq(s.productOptionGroup.id, groupId)).limit(1);
       if (group) await emitProductChanged(tx, st.storeId, group.productId);
       return o!.id;
     });
     return c.json({ id: oid }, 200);
+  }),
+);
+
+// Bulk reorder (merchant-controlled ordering, migration 0080). `order` must
+// be a permutation of the scoped parent's CURRENT children — not a partial
+// list — so a stale client can never silently drop an item's position by
+// omitting it, and an id from a different product/group can never be
+// smuggled into this product/group's ordering. Applied as `position = index`
+// for every id in one transaction (withStore wraps BEGIN..COMMIT), so a
+// reader never observes a half-reordered set.
+adminCatalog.openapi(
+  createRoute({
+    method: 'put', path: '/v1/admin/products/{id}/option-groups/reorder', summary: "Reorder a product's option groups",
+    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ order: z.array(z.string()).min(1) })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) }, 400: { description: 'Bad request', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireWrite(st);
+    const { id } = c.req.valid('param');
+    const { order } = c.req.valid('json');
+    await withStore(st.storeId, async (tx) => {
+      const current = await tx.select({ id: s.productOptionGroup.id }).from(s.productOptionGroup).where(eq(s.productOptionGroup.productId, id));
+      const currentIds = new Set(current.map((g) => g.id));
+      if (order.length !== currentIds.size || order.some((oid: string) => !currentIds.has(oid)) || new Set(order).size !== order.length) {
+        throw new HttpError(400, "order must be a permutation of the product's current option groups");
+      }
+      for (let i = 0; i < order.length; i++) {
+        await tx.update(s.productOptionGroup).set({ position: i }).where(eq(s.productOptionGroup.id, order[i]!));
+      }
+      await emitProductChanged(tx, st.storeId, id);
+    });
+    return c.json({ ok: true }, 200);
+  }),
+);
+
+adminCatalog.openapi(
+  createRoute({
+    method: 'put', path: '/v1/admin/option-groups/{groupId}/options/reorder', summary: "Reorder an option group's values",
+    request: { params: z.object({ groupId: z.string() }), body: { content: J(z.object({ order: z.array(z.string()).min(1) })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) }, 400: { description: 'Bad request', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireWrite(st);
+    const { groupId } = c.req.valid('param');
+    const { order } = c.req.valid('json');
+    await withStore(st.storeId, async (tx) => {
+      const current = await tx.select({ id: s.productOption.id }).from(s.productOption).where(eq(s.productOption.groupId, groupId));
+      const currentIds = new Set(current.map((o) => o.id));
+      if (order.length !== currentIds.size || order.some((oid: string) => !currentIds.has(oid)) || new Set(order).size !== order.length) {
+        throw new HttpError(400, "order must be a permutation of the group's current option values");
+      }
+      for (let i = 0; i < order.length; i++) {
+        await tx.update(s.productOption).set({ position: i }).where(eq(s.productOption.id, order[i]!));
+      }
+      const [group] = await tx.select({ productId: s.productOptionGroup.productId }).from(s.productOptionGroup).where(eq(s.productOptionGroup.id, groupId)).limit(1);
+      if (group) await emitProductChanged(tx, st.storeId, group.productId);
+    });
+    return c.json({ ok: true }, 200);
   }),
 );
 
