@@ -4,7 +4,7 @@ import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { newTotpSecret, verifyTotp, otpauthUri } from '../auth/totp.js';
 import { clearAdminTotpSecret, getAdminTotpSecret, setAdminTotpSecret } from '../auth/admin-staff.js';
-import { isSupportedPaymentMethod } from '../payments/provider.js';
+import { isSupportedPaymentMethod, mergePaymentMethodSetting } from '../payments/provider.js';
 import { resolveStripeConfigured, stripeModeFromConfig } from '../payments/stripe.js';
 import { broadcastStoreCacheInvalidation } from '../store-context.js';
 import { env } from '../env.js';
@@ -24,11 +24,16 @@ async function storeRow(storeId: string) {
 }
 const cfg = (row: { config: unknown }) => (row.config as Record<string, unknown> | null) ?? {};
 
-export function sanitizePaymentSettingsPatch(input: Record<string, boolean>): Record<string, boolean> {
-  const out: Record<string, boolean> = {};
-  for (const [method, enabled] of Object.entries(input)) {
+export type PaymentSettingPatch = boolean | { enabled?: boolean; mode?: 'test' | 'live' };
+export function sanitizePaymentSettingsPatch(input: Record<string, PaymentSettingPatch>): Record<string, PaymentSettingPatch> {
+  const out: Record<string, PaymentSettingPatch> = {};
+  for (const [method, value] of Object.entries(input)) {
     if (!isSupportedPaymentMethod(method)) throw new HttpError(400, `unsupported payment provider: ${method}`);
-    out[method] = enabled;
+    if (typeof value === 'object' && value.mode !== undefined && method !== 'nmi' && method !== 'sezzle') {
+      // Stripe mode lives at config.stripe.mode (PATCH /settings/payments/stripe-mode).
+      throw new HttpError(400, `mode is not configurable here for ${method}`);
+    }
+    out[method] = value;
   }
   return out;
 }
@@ -241,7 +246,7 @@ adminSettings.openapi(
 adminSettings.openapi(
   createRoute({
     method: 'patch', path: '/v1/admin/settings/payments', summary: 'Enable/disable payment providers',
-    request: { body: { content: J(z.record(z.string(), z.boolean())) } },
+    request: { body: { content: J(z.record(z.string(), z.union([z.boolean(), z.object({ enabled: z.boolean().optional(), mode: z.enum(['test', 'live']).optional() }).strict()]))) } },
     responses: { 200: { description: 'OK', content: J(z.object({ payments: z.any() })) }, 400: { description: 'Bad provider', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
@@ -252,7 +257,9 @@ adminSettings.openapi(
     await mutateStoreConfig(st.storeId, (config) => {
       // Seed the credential-free defaults so toggling a gateway never silently
       // disables cod/manual (which aren't persisted until first edited).
-      payments = { cod: true, manual: true, ...((config.payments as object) ?? {}), ...b };
+      const current: Record<string, unknown> = { cod: true, manual: true, ...((config.payments as object) ?? {}) };
+      for (const [method, value] of Object.entries(b)) current[method] = mergePaymentMethodSetting(current[method], value);
+      payments = current;
       return { ...config, payments };
     }, {
       actor: admin.email,

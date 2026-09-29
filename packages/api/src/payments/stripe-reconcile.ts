@@ -110,13 +110,8 @@ export async function applyStripeIntent(tx: Tx, storeId: string, pi: StripeInten
         const paid = await stripePaymentFor(tx, pi.id);
         await setAttempt(tx, attempt, 'settled', { paymentId: paid?.id, result: { state: 'Settled' } });
         if (order.state === 'Cancelled') {
-          // D14: settle.ts already wrote the payment_after_cancel audit row
-          // (MONEY-4); add the operator notification on top of it.
-          await recordPaymentAlert(tx, storeId, {
-            kind: 'payment_after_cancel', audit: false, actor, orderId: order.id, orderCode: code, providerRef: pi.id,
-            amount: amountDue, currency: order.currency,
-            detail: 'A Stripe payment settled after this order was cancelled. Stock was already released; refund the customer or reinstate the order manually.',
-          });
+          // D14: settle.ts writes the payment_after_cancel audit row and
+          // enqueues the operator email for every gateway — nothing to add here.
           return { outcome: 'after_cancel', orderState: applied.orderState };
         }
         return { outcome: 'settled', orderState: applied.orderState };

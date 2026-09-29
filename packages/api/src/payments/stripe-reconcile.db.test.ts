@@ -234,7 +234,8 @@ describe('D5/D6/D14: stale sweeper with tracked Stripe intents', () => {
     const out = await q((tx) => applyStripeIntent(tx, STORE, pi('pi_after_cancel', order.code, { status: 'succeeded' }), 'test'));
     expect(out.outcome).toBe('after_cancel');
     expect(await audits('payment_after_cancel')).toHaveLength(1);
-    expect(await outbox('payment_alert')).toHaveLength(1);
+    expect(await outbox('payment_alert')).toHaveLength(0); // no duplicate operator email
+    expect(await outbox('payment_after_cancel_alert')).toHaveLength(1);
     // Refund the full order through the real refund engine (manual tender so
     // no provider call is needed; the stock math is method-independent).
     await q((tx) => tx.update(s.payment).set({ method: 'manual' }).where(and(eq(s.payment.orderId, order.id), eq(s.payment.providerRef, 'pi_after_cancel'))));

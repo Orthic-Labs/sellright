@@ -137,11 +137,49 @@ export function isSupportedPaymentMethod(method: string): method is SupportedPay
 /** Payment methods are fail-closed. A store must explicitly opt a supported
  *  method in; missing config never enables a credential-free tender. Note that
  *  internal/offline providers still refuse shopper settlement even if a legacy
- *  store config happens to contain `manual`, `cod`, or `gift_card: true`. */
+ *  store config happens to contain `manual`, `cod`, or `gift_card: true`.
+ *
+ *  Two config shapes are accepted for `payments.<method>`:
+ *    - `true` / `false`                      (legacy toggle; mode defaults to test)
+ *    - `{ enabled: true, mode: 'live'|'test', <mode>: { verifiedAt } }`
+ *  The object shape is what gatewayModeFromConfig() and the settings-verify
+ *  writer (readiness `verifiedAt`) read, so both must be honored here. */
+export function paymentMethodSetting(config: unknown, method: string): { enabled: boolean; mode?: 'test' | 'live' } {
+  const payments = (config as { payments?: Record<string, unknown> } | null | undefined)?.payments;
+  const raw = payments && typeof payments === 'object' ? (payments as Record<string, unknown>)[method] : undefined;
+  if (raw === true) return { enabled: true };
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { enabled: false };
+  const obj = raw as { enabled?: unknown; mode?: unknown };
+  return {
+    enabled: obj.enabled === true,
+    ...(obj.mode === 'live' || obj.mode === 'test' ? { mode: obj.mode } : {}),
+  };
+}
+
 export function isPaymentMethodEnabled(config: unknown, method: string): boolean {
   if (!isSupportedPaymentMethod(method)) return false;
-  const payments = (config as { payments?: Record<string, boolean> } | null | undefined)?.payments;
-  return payments?.[method] === true;
+  return paymentMethodSetting(config, method).enabled;
+}
+
+/** Merge an admin patch (`true`/`false` or `{enabled?, mode?}`) into an
+ *  existing `payments.<method>` value without discarding the object shape's
+ *  other keys (per-mode `verifiedAt` readiness markers). A legacy boolean is
+ *  kept boolean when the patch is a plain boolean and nothing else is stored. */
+export function mergePaymentMethodSetting(
+  existing: unknown, patch: boolean | { enabled?: boolean; mode?: 'test' | 'live' },
+): unknown {
+  const base: Record<string, unknown> = existing && typeof existing === 'object' && !Array.isArray(existing)
+    ? { ...(existing as Record<string, unknown>) }
+    : existing === true ? { enabled: true } : {};
+  if (typeof patch === 'boolean') {
+    if (!existing || typeof existing !== 'object') return patch;
+    return { ...base, enabled: patch };
+  }
+  return {
+    ...base,
+    ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+    ...(patch.mode !== undefined ? { mode: patch.mode } : {}),
+  };
 }
 
 export function getProvider(method: string): PaymentProvider | null {

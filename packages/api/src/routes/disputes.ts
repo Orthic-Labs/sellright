@@ -18,11 +18,11 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { bodyLimit } from 'hono/body-limit';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { dispute } from '../db/schema-ops.js';
-import { resolveGatewayAccount } from '../payments/gateway-account.js';
+import { DB_ACCOUNT_ID, resolveGatewayAccount, type GatewayAccount } from '../payments/gateway-account.js';
 import { recordDispute } from '../disputes/disputes.js';
 import { J, errBody, guard, requireAdmin, requireStore } from './admin-helpers.js';
 import { err as logErr } from '../lib/logger.js';
@@ -61,14 +61,19 @@ const NmiEvent = z.object({
 disputeRoutes.post('/v1/webhooks/nmi/:storeId/:accountId', async (c) => {
   const storeId = c.req.param('storeId');
   if (!z.string().uuid().safeParse(storeId).success) return c.json({ error: 'unknown account' }, 404);
-  let account;
-  try {
-    account = await resolveGatewayAccount(storeId, 'nmi', c.req.param('accountId'));
-  } catch {
-    return c.json({ error: 'unknown account' }, 404);
+  const accountId = c.req.param('accountId');
+  // A DB-backed (one-click install) account has one credential set per mode
+  // and resolveGatewayAccount requires the mode for it — without this the
+  // route 404'd every DB-account chargeback. The signature selects the mode:
+  // only the mode whose signing key verifies is accepted.
+  const candidates: GatewayAccount[] = [];
+  for (const mode of accountId === DB_ACCOUNT_ID ? (['live', 'test'] as const) : [undefined]) {
+    try { candidates.push(await resolveGatewayAccount(storeId, 'nmi', accountId, mode)); } catch { /* not configured */ }
   }
+  if (!candidates.length) return c.json({ error: 'unknown account' }, 404);
   const raw = await c.req.text();
-  if (!verifyNmiSignature(raw, c.req.header('webhook-signature'), account.privateKey ?? '')) {
+  const account = candidates.find((a) => verifyNmiSignature(raw, c.req.header('webhook-signature'), a.privateKey ?? ''));
+  if (!account) {
     return c.json({ error: 'invalid signature' }, 401);
   }
   let parsed: unknown;
@@ -98,7 +103,11 @@ disputeRoutes.post('/v1/webhooks/nmi/:storeId/:accountId', async (c) => {
       // link it back to our payment/order ledger row.
       const [pay] = await tx.select({ id: s.payment.id, orderId: s.payment.orderId })
         .from(s.payment)
-        .where(and(eq(s.payment.providerRef, transactionId), eq(s.payment.method, 'nmi')))
+        // Transaction ids can collide across NMI accounts/modes — bind the
+        // ledger lookup to the account+mode whose key signed this event.
+        .where(and(eq(s.payment.providerRef, transactionId), eq(s.payment.method, 'nmi'),
+          sql`coalesce(${s.payment.gatewayAccount}, ${account.accountId}) = ${account.accountId}`,
+          sql`coalesce(${s.payment.gatewayMode}, ${account.mode}) = ${account.mode}`))
         .limit(1);
       let orderCode: string | null = null;
       if (pay?.orderId) {

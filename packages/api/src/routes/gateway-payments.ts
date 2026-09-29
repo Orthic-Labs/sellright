@@ -7,7 +7,7 @@ import { clientIp, attemptRetryAfter } from '../auth/rate-limit.js';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { resolveStoreFromCtx } from './store-context.js';
-import { resolveGatewayAccount } from '../payments/gateway-account.js';
+import { DB_ACCOUNT_ID, resolveGatewayAccount, type GatewayAccount } from '../payments/gateway-account.js';
 import { normalizeSezzleEvent, verifySezzleSignature } from '../payments/sezzle.js';
 import { recordDispute } from '../disputes/disputes.js';
 import {
@@ -35,6 +35,8 @@ const gatewayAttemptSchema = z.object({
   status: z.string(),
   checkoutUrl: z.string().optional(),
   state: z.string().optional(),
+  /** Customer-safe explanation for a failed/unknown attempt (decline, duplicate). */
+  message: z.string().optional(),
 }).openapi('GatewayAttempt');
 
 // The verify/reconcile route's result is genuinely heterogeneous — it fans
@@ -51,6 +53,7 @@ const gatewayVerifyResultSchema = z.object({
   status: z.string(),
   checkoutUrl: z.string().optional(),
   state: z.string().optional(),
+  message: z.string().optional(),
   refundId: z.string().optional(),
   refundState: z.string().optional(),
 }).openapi('GatewayVerifyResult');
@@ -170,14 +173,18 @@ gatewayPayments.openapi(
 gatewayPayments.post('/v1/webhooks/sezzle/:storeId/:accountId', async c => {
   const storeId = c.req.param('storeId');
   if (!z.string().uuid().safeParse(storeId).success) return c.json({ error: 'Unknown account' }, 404);
-  let account;
-  try { account = await resolveGatewayAccount(storeId, 'sezzle', c.req.param('accountId')); }
-  catch { return c.json({ error: 'Unknown account' }, 404); }
+  const accountId = c.req.param('accountId');
+  // A DB-backed account holds one credential set per mode; the signature
+  // selects the mode (same rule as the NMI chargeback webhook).
+  const candidates: GatewayAccount[] = [];
+  for (const mode of accountId === DB_ACCOUNT_ID ? (['live', 'test'] as const) : [undefined]) {
+    try { candidates.push(await resolveGatewayAccount(storeId, 'sezzle', accountId, mode)); } catch { /* not configured */ }
+  }
+  if (!candidates.length) return c.json({ error: 'Unknown account' }, 404);
   const raw = await c.req.text();
   if (Buffer.byteLength(raw) > 262144) return c.json({ error: 'Payload too large' }, 413);
-  if (!verifySezzleSignature(raw, c.req.header('sezzle-signature'), account.privateKey!)) {
-    return c.json({ error: 'Invalid signature' }, 401);
-  }
+  const account = candidates.find((a) => verifySezzleSignature(raw, c.req.header('sezzle-signature'), a.privateKey ?? ''));
+  if (!account) return c.json({ error: 'Invalid signature' }, 401);
   let payload: unknown;
   try { payload = JSON.parse(raw); } catch { return c.json({ error: 'Invalid event' }, 400); }
   // SR-06: per-event normalization, not one universal schema — documented

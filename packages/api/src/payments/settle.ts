@@ -16,6 +16,10 @@ import type { PaymentResult } from './provider.js';
 import { issueLicensesForPaidOrder } from '../licensing/issue.js';
 import { enqueuePaidEffects } from './paid-effects.js';
 import { enqueuePush, buildOrderPushPayload } from '../push/outbox.js';
+import { enqueueEmail } from '../email/outbox.js';
+import { paymentAfterCancelAlert } from '../email/templates-ops.js';
+import { operatorRecipients } from '../disputes/disputes.js';
+import { env } from '../env.js';
 
 /**
  * MONEY-3: amount still owed on an order, in cents — grandTotal minus every
@@ -168,6 +172,37 @@ export async function applyPaymentResult(
         providerRef: result.providerRef ?? null,
       },
     });
+    // D14: the audit row alone was invisible — alert operators through the
+    // transactional email outbox (same tx: a rollback drops the alert too).
+    await enqueuePaymentAfterCancelAlert(tx, storeId, {
+      orderId: order.id, orderCode: order.code ?? null, orderState: order.state,
+      method, providerRef: result.providerRef ?? null, amount, currency: order.currency,
+    });
   }
   return { orderState: order.state as OrderState, paymentState: result.state };
+}
+
+/** D14: operator email for a MONEY-4 payment_after_cancel. Deduped per
+ *  (order, provider ref, recipient) so a webhook replay never double-sends. */
+export async function enqueuePaymentAfterCancelAlert(tx: Tx, storeId: string, d: {
+  orderId: string; orderCode: string | null; orderState: string; method: string;
+  providerRef: string | null; amount: number; currency: string | null;
+}): Promise<number> {
+  const [store] = await tx.select({ name: s.store.name, currency: s.store.currency, config: s.store.config })
+    .from(s.store).where(eq(s.store.id, storeId)).limit(1);
+  const recipients = await operatorRecipients(tx, storeId);
+  const storefrontUrl = ((store?.config as { storefrontUrl?: string } | null)?.storefrontUrl) ?? env.STOREFRONT_URL;
+  const rendered = paymentAfterCancelAlert(
+    { name: store?.name ?? 'Store', currency: store?.currency ?? 'USD', storefrontUrl, fromEmail: env.SMTP_FROM ?? '' },
+    { orderCode: d.orderCode, orderState: d.orderState, method: d.method, providerRef: d.providerRef,
+      amountCents: d.amount, currency: d.currency ?? store?.currency ?? null },
+  );
+  for (const recipient of recipients) {
+    await enqueueEmail(tx, storeId, {
+      kind: 'payment_after_cancel_alert', recipient,
+      payload: { to: recipient, from: env.SMTP_FROM, subject: rendered.subject, html: rendered.html, text: rendered.text },
+      dedupeKey: `payment_after_cancel:${d.orderId}:${d.providerRef ?? 'none'}:${recipient}`,
+    });
+  }
+  return recipients.length;
 }

@@ -23,6 +23,15 @@ import { verifyNmiKey, verifySezzleKeys, verifyStripeKey } from '../payments/set
 import { ensureStripeWebhook, type StripeWebhookClient } from '../payments/stripe-webhook-provision.js';
 import { mutateStoreConfig } from './admin-settings.js';
 
+/** `payments.<provider>` may still be a legacy boolean toggle. Spreading
+ *  `true` yields `{}` — which silently DISABLED an enabled provider the
+ *  first time an operator ran test-connection. Preserve it as `enabled`. */
+function asProviderObject(v: unknown): Record<string, unknown> {
+  if (v === true) return { enabled: true };
+  if (v === false) return { enabled: false };
+  return v && typeof v === 'object' && !Array.isArray(v) ? { ...(v as Record<string, unknown>) } : {};
+}
+
 export const adminPaymentSettings = new OpenAPIHono();
 
 type Provider = 'stripe' | 'nmi' | 'sezzle';
@@ -213,7 +222,7 @@ adminPaymentSettings.openapi(
       // can't go stale-green after rotating to a bad key.
       await mutateStoreConfig(st.storeId, (config) => {
         const payments = { ...(config.payments as Record<string, unknown> | undefined) };
-        const forProvider = { ...(payments[provider] as Record<string, unknown> | undefined) };
+        const forProvider = asProviderObject(payments[provider]);
         forProvider[mode] = { ...(forProvider[mode] as Record<string, unknown> | undefined), verifiedAt: new Date().toISOString() };
         payments[provider] = forProvider;
         return { ...config, payments };
@@ -221,7 +230,7 @@ adminPaymentSettings.openapi(
     } else {
       await mutateStoreConfig(st.storeId, (config) => {
         const payments = { ...(config.payments as Record<string, unknown> | undefined) };
-        const forProvider = { ...(payments[provider] as Record<string, unknown> | undefined) };
+        const forProvider = asProviderObject(payments[provider]);
         const { [mode]: _dropped, ...restModes } = forProvider;
         payments[provider] = restModes;
         return { ...config, payments };

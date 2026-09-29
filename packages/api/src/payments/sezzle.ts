@@ -5,9 +5,9 @@ import {
   type GatewayAccount, type GatewayFetch,
 } from './gateway-account.js';
 
-type Money = { amount_in_cents: number; currency: string };
+export type Money = { amount_in_cents: number; currency: string };
 type Event = { uuid: string; amount: Money };
-interface SezzleOrder {
+export interface SezzleOrder {
   uuid: string;
   reference_id: string;
   order_amount: Money;
@@ -87,6 +87,9 @@ export function normalizeSezzleEvent(payload: unknown): NormalizedSezzleEvent | 
     receivedAt: new Date().toISOString(),
     dataType,
     orderUuid,
+    // D15: our payment_attempt id (sent as the session reference_id) — a
+    // hint only; the worker re-reads it from the authoritative provider GET.
+    referenceId: str(data?.reference_id) ?? str(data?.order_reference_id),
     malformed: data ? undefined : true,
   };
   if (isDispute) {
@@ -122,6 +125,10 @@ function pending(ref: string | null, reason: string): PaymentResult {
 export function createSezzleProvider(transport: GatewayFetch = fetch): PaymentProvider & {
   createSession(input: SezzleSessionInput): Promise<{ providerRef: string; checkoutUrl: string }>;
   getOrder(account: GatewayAccount, ref: string): Promise<SezzleOrder>;
+  /** Capture the full authorized amount (legacy-store parity, spec item 45). */
+  captureOrder(account: GatewayAccount, ref: string, money: Money, requestId: string): Promise<{ uuid?: string }>;
+  /** Release (void) an uncaptured authorization — Z12/D22. */
+  releaseOrder(account: GatewayAccount, ref: string, money: Money, requestId: string): Promise<{ uuid?: string }>;
 } {
   const base = (account: GatewayAccount) =>
     account.mode === 'test' ? 'https://sandbox.gateway.sezzle.com' : 'https://gateway.sezzle.com';
@@ -149,6 +156,10 @@ export function createSezzleProvider(transport: GatewayFetch = fetch): PaymentPr
 
   return {
     method: 'sezzle', requiresRedirect: true, getOrder,
+    captureOrder: (account, ref, money, requestId) => request<{ uuid?: string }>(account, 'POST',
+      '/order/' + encodeURIComponent(ref) + '/capture', { capture_amount: money, partial_capture: false }, requestId),
+    releaseOrder: (account, ref, money, requestId) => request<{ uuid?: string }>(account, 'POST',
+      '/order/' + encodeURIComponent(ref) + '/release', money, requestId),
     async createSession(input) {
       if (!validGatewayInput(input, 'sezzle') || !input.attemptId || !input.items.length) {
         throw new Error('Invalid Sezzle session context');

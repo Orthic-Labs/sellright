@@ -113,7 +113,10 @@ export const DB_ACCOUNT_ID = 'db';
  *  path — the NMI/Sezzle analogue of stripeModeFromConfig(). Defaults to
  *  'test' (fail-safe) until a store explicitly flips to live. */
 export function gatewayModeFromConfig(config: unknown, method: GatewayMethod): GatewayMode {
-  const m = (config as { payments?: Record<string, { mode?: unknown }> } | null | undefined)?.payments?.[method]?.mode;
+  // `payments.<method>` may be a legacy boolean (`true` → default test mode)
+  // or `{ enabled, mode }` — see provider.ts paymentMethodSetting().
+  const raw = (config as { payments?: Record<string, unknown> } | null | undefined)?.payments?.[method];
+  const m = raw && typeof raw === 'object' ? (raw as { mode?: unknown }).mode : undefined;
   return m === 'live' ? 'live' : 'test';
 }
 
