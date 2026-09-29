@@ -72,9 +72,18 @@ function every(ms: number, label: string, leaderJob: LeaderLockedJob, fn: () => 
   };
   const t = setInterval(tick, ms);
   t.unref?.(); // don't keep the event loop alive just for the scheduler
-  void tick(); // kick once at startup
+  // Kick once at startup, staggered: every leader-locked pass holds two pooled
+  // connections (advisory lock + work), so firing all jobs in the same tick
+  // exhausted the pool on boot — requests and readiness probes timed out
+  // waiting for a connection until the first passes finished.
+  const kick = setTimeout(() => void tick(), startupKicks++ * STARTUP_STAGGER_MS);
+  kick.unref?.();
   return t;
 }
+
+/** Gap between the startup passes of consecutive jobs (see every()). */
+export const STARTUP_STAGGER_MS = 750;
+let startupKicks = 0;
 
 export function startJobScheduler(): void {
   if (env.JOBS_ENABLED !== '1' || env.NODE_ENV === 'test') {
