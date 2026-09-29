@@ -35,6 +35,8 @@ const gatewayAttemptSchema = z.object({
   status: z.string(),
   checkoutUrl: z.string().optional(),
   state: z.string().optional(),
+  /** Customer-safe explanation for a failed/unknown attempt (decline, duplicate). */
+  message: z.string().optional(),
 }).openapi('GatewayAttempt');
 
 // The verify/reconcile route's result is genuinely heterogeneous — it fans
@@ -51,6 +53,7 @@ const gatewayVerifyResultSchema = z.object({
   status: z.string(),
   checkoutUrl: z.string().optional(),
   state: z.string().optional(),
+  message: z.string().optional(),
   refundId: z.string().optional(),
   refundState: z.string().optional(),
 }).openapi('GatewayVerifyResult');

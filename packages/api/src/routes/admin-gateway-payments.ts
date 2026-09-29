@@ -1,6 +1,6 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { z } from 'zod';
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { withAdvisoryLock, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { guard, HttpError, requireAdmin, requireStore, requireWrite, requirePermission } from './admin-helpers.js';
@@ -18,6 +18,15 @@ adminGatewayPayments.get('/v1/admin/payment-reconciliation', c => guard(c, async
       .orderBy(desc(s.paymentAttempt.updatedAt)).limit(100),
     events: await tx.select().from(s.gatewayEvent).where(inArray(s.gatewayEvent.status, ['pending', 'manual']))
       .orderBy(desc(s.gatewayEvent.updatedAt)).limit(100),
+    // D14: settled money on a non-payable (e.g. Cancelled) order — MONEY-4
+    // audit rows, so operators can refund or reinstate from one list.
+    paymentsAfterCancel: await tx.select({
+      id: s.auditLog.id, orderId: s.auditLog.entityId, orderCode: s.order.code,
+      orderState: s.order.state, data: s.auditLog.data, createdAt: s.auditLog.at,
+    }).from(s.auditLog)
+      .leftJoin(s.order, sql`${s.order.id}::text = ${s.auditLog.entityId}`)
+      .where(and(eq(s.auditLog.entity, 'order'), eq(s.auditLog.action, 'payment_after_cancel')))
+      .orderBy(desc(s.auditLog.at)).limit(100),
   }));
   return c.json(result);
 }));

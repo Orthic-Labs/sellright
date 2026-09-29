@@ -7456,7 +7456,11 @@ export interface paths {
             requestBody?: {
                 content: {
                     "application/json": {
-                        [key: string]: boolean;
+                        [key: string]: boolean | {
+                            enabled?: boolean;
+                            /** @enum {string} */
+                            mode?: "test" | "live";
+                        };
                     };
                 };
             };
@@ -15839,6 +15843,7 @@ export interface components {
             /** Format: uuid */
             attemptId: string;
             checkoutUrl?: string;
+            message?: string;
             state?: string;
             status: string;
         };
@@ -15846,6 +15851,7 @@ export interface components {
             /** Format: uuid */
             attemptId: string;
             checkoutUrl?: string;
+            message?: string;
             refundId?: string;
             refundState?: string;
             state?: string;

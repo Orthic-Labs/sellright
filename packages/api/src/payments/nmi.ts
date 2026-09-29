@@ -1,4 +1,5 @@
 import type { PaymentProvider, PaymentResult, RefundInput } from './provider.js';
+import { err as logErr } from '../lib/logger.js';
 import {
   boundedGatewayResponse, gatewayIdentity, validGatewayInput, nmiEnvironment,
   type GatewayAccount, type GatewayFetch,
@@ -6,7 +7,18 @@ import {
 
 const AVS_REJECT = new Set(['N', 'C']);
 const CVV_REJECT = new Set(['N']);
-const SETTLED_ERROR = /settled|batch|too late/i;
+const SETTLED_ERROR = /settled|batch|too late|original transaction not found/i;
+const CONFIG_FAULT = /authentication failed|security_key|merchant inactive/i;
+const DUPLICATE = /duplicate/i;
+/** Shopper-facing copy. Gateway response text stays in metadata only (it can
+ *  leak processor/fraud-rule detail); parity with the storefront's generic
+ *  "try a different card" message. */
+export const NMI_DECLINE_MESSAGE = 'Payment declined. Please try a different card or payment method.';
+export const NMI_DUPLICATE_MESSAGE = 'Duplicate transaction detected. Please try again.';
+export const NMI_VERIFICATION_MESSAGE = 'Payment rejected: the card address or security code did not match. Please check your details or use a different card.';
+function configFault(text: string | null, where: string) {
+  if (text && CONFIG_FAULT.test(text)) logErr.error('NMI CONFIG FAULT', undefined, { where, responseText: text.slice(0, 200) });
+}
 
 function unknownPayment(providerRef: string | null, reason: string): PaymentResult {
   return {
@@ -49,6 +61,7 @@ export function createNmiProvider(transport: GatewayFetch = fetch): PaymentProvi
       if (result.get('response') === '2') {
         return { state: 'Failed' as const, providerRef: null, errorMessage: 'NMI declined the refund' };
       }
+      configFault(result.get('responsetext'), 'refund');
       // A processor error/duplicate or approval with no reference is not proof
       // that no money moved. The durable refund attempt must remain reserved.
       return { state: 'Pending' as const, providerRef: null, errorMessage: 'NMI refund requires reconciliation' };
@@ -82,35 +95,58 @@ export function createNmiProvider(transport: GatewayFetch = fetch): PaymentProvi
       try { result = await transact(account, fields); }
       catch { return unknownPayment(null, 'sale_outcome_unknown'); }
       const ref = result.get('transactionid');
+      const responseText = result.get('responsetext');
       if (result.get('response') === '2') {
-        return { state: 'Declined', providerRef: ref, errorMessage: 'Payment declined by NMI' };
+        return { state: 'Declined', providerRef: ref, errorMessage: NMI_DECLINE_MESSAGE,
+          metadata: { responseText, responseCode: result.get('response_code') } };
+      }
+      if (result.get('response') === '3') {
+        configFault(responseText, 'sale');
+        // A duplicate-check rejection means an EARLIER identical sale may have
+        // gone through — keep the attempt reserved for reconciliation (never
+        // a free retry that could double-charge). Any other response=3 is a
+        // gateway/data error: no transaction was processed.
+        if (DUPLICATE.test(responseText ?? '')) {
+          return { ...unknownPayment(ref, 'duplicate_transaction'), errorMessage: NMI_DUPLICATE_MESSAGE,
+            metadata: { needsReconciliation: true, reason: 'duplicate_transaction', responseText } };
+        }
+        if (!ref) {
+          return { state: 'Failed', providerRef: null, errorMessage: NMI_DECLINE_MESSAGE,
+            metadata: { responseText, responseCode: result.get('response_code') } };
+        }
       }
       if (result.get('response') !== '1' || !ref) {
         return unknownPayment(ref, 'sale_response_requires_reconciliation');
       }
-      const rejected = account.mode === 'live' &&
-        (AVS_REJECT.has(result.get('avsresponse') ?? '') || CVV_REJECT.has(result.get('cvvresponse') ?? ''));
+      const avs = result.get('avsresponse'), cvv = result.get('cvvresponse');
+      const rejected = account.mode === 'live' && (AVS_REJECT.has(avs ?? '') || CVV_REJECT.has(cvv ?? ''));
       if (rejected) {
         // Never retry a monetary request or follow an ambiguous void with a
         // refund. A missing response can mean the reversal already succeeded.
         try {
           const reversed = await transact(account, { type: 'void', transactionid: ref });
           if (reversed.get('response') === '1') {
-            return { state: 'Declined', providerRef: ref, errorMessage: 'Card verification failed; payment voided',
-              metadata: { reversed: true, reversal: 'void', gateway: gatewayIdentity(account) } };
+            return { state: 'Declined', providerRef: ref, errorMessage: NMI_VERIFICATION_MESSAGE,
+              metadata: { reversed: true, reversal: 'void', avs, cvv, gateway: gatewayIdentity(account) } };
           }
+          configFault(reversed.get('responsetext'), 'void');
           if (SETTLED_ERROR.test(reversed.get('responsetext') ?? '')) {
             const refunded = await refund({
               providerRef: ref, amount: input.amount, currency: input.currency,
               gateway: account, idempotencyKey: input.attemptId + ':avs-reversal',
             });
             if (refunded.state === 'Settled') {
-              return { state: 'Declined', providerRef: ref, errorMessage: 'Card verification failed; payment refunded',
-                metadata: { reversed: true, reversal: 'refund', refundRef: refunded.providerRef, gateway: gatewayIdentity(account) } };
+              return { state: 'Declined', providerRef: ref, errorMessage: NMI_VERIFICATION_MESSAGE,
+                metadata: { reversed: true, reversal: 'refund', refundRef: refunded.providerRef, avs, cvv, gateway: gatewayIdentity(account) } };
             }
           }
         } catch { /* The original approved transaction still needs reconciliation. */ }
-        return unknownPayment(ref, 'verification_reversal_unconfirmed');
+        // Both reversals failed/ambiguous: CRITICAL — an approved charge the
+        // policy rejected is still live. Keep it reserved (reconciliation list
+        // + recovery job) rather than guessing.
+        logErr.error('NMI AVS/CVV reversal unconfirmed — manual review', undefined, { attemptId: input.attemptId, ref, avs, cvv });
+        return { ...unknownPayment(ref, 'verification_reversal_unconfirmed'),
+          metadata: { needsReconciliation: true, reason: 'verification_reversal_unconfirmed', manualReview: true, avs, cvv } };
       }
       return { state: 'Settled', providerRef: ref,
         metadata: { gateway: gatewayIdentity(account), avs: result.get('avsresponse'), cvv: result.get('cvvresponse') } };

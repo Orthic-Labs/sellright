@@ -8,6 +8,11 @@ import { ADMIN_PAYMENT_PROVIDERS } from '../lib/payment-providers';
 
 const NEEDS_KEYS = new Set(['stripe']);
 
+/** `payments.<method>` is either a legacy boolean or `{ enabled, mode, <mode>: { verifiedAt } }`. */
+function paymentEnabled(v: unknown): boolean {
+  return v === true || (!!v && typeof v === 'object' && (v as { enabled?: unknown }).enabled === true);
+}
+
 type SectionId = 'store' | 'payments' | 'shipping' | 'taxes' | 'signin' | 'security' | 'team' | 'account';
 const NAV: { group: string; items: { id: SectionId; label: string; icon: typeof Store }[] }[] = [
   { group: 'Store', items: [
@@ -105,7 +110,7 @@ export default function SettingsPage() {
             <FormSection title="Payment providers" description="Enable the methods customers can pay with at checkout.">
               <div className="divide-y divide-gray-100">
                 {ADMIN_PAYMENT_PROVIDERS.map((p) => {
-                  const on = !!cfg.payments?.[p];
+                  const on = paymentEnabled(cfg.payments?.[p]);
                   return (
                     <div key={p} className="flex items-center justify-between py-2.5">
                       <div className="flex items-center gap-2">
@@ -119,7 +124,7 @@ export default function SettingsPage() {
                   );
                 })}
               </div>
-              {!!cfg.payments?.stripe && (
+              {paymentEnabled(cfg.payments?.stripe) && (
                 <div className="pt-4 border-t border-gray-100 mt-4">
                   <Field label="Stripe mode" hint="Choose which env key set Stripe uses for payment intents, refunds, and webhook verification.">
                     <select

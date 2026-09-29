@@ -106,6 +106,9 @@
           },
           "state": {
             "type": "string"
+          },
+          "message": {
+            "type": "string"
           }
         },
         "required": [
@@ -127,6 +130,9 @@
             "type": "string"
           },
           "state": {
+            "type": "string"
+          },
+          "message": {
             "type": "string"
           },
           "refundId": {
@@ -15440,7 +15446,27 @@
               "schema": {
                 "type": "object",
                 "additionalProperties": {
-                  "type": "boolean"
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "enabled": {
+                          "type": "boolean"
+                        },
+                        "mode": {
+                          "type": "string",
+                          "enum": [
+                            "test",
+                            "live"
+                          ]
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  ]
                 }
               }
             }
