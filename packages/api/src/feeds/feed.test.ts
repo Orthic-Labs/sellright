@@ -35,6 +35,9 @@ const CFG: FeedConfig = {
   brand: 'TestBrand',
   priceRule: 'preorder',
   productUrlPattern: '/products/{slug}',
+  variantLinkParams: [],
+  titleTemplate: '',
+  itemGroupId: 'product',
   assetBaseUrl: 'https://cdn.example.com',
   googleProductCategory: 'Apparel > T-Shirts',
   productType: 'DefaultType',
@@ -170,7 +173,7 @@ describe('feedConfigFromStore', () => {
     expect(cfg.brand).toBe('My Store');
     expect(cfg.currency).toBe('EUR');
     expect(cfg.storefrontUrl).toBe('https://env.example.com');
-    expect(cfg.assetBaseUrl).toBe('https://env.example.com');
+    expect(cfg.assetBaseUrl).toBe('https://env.example.com/assets');
     expect(cfg.productUrlPattern).toBe('/products/{slug}');
   });
   it('store config overrides win; customLabels pad to five', () => {
@@ -181,5 +184,32 @@ describe('feedConfigFromStore', () => {
     expect(cfg.brand).toBe('B');
     expect(cfg.storefrontUrl).toBe('https://s.example.com'); // trailing slash stripped
     expect(cfg.customLabels).toEqual(['a', '', '', '', '']);
+  });
+});
+
+describe('store-configurable feed shaping', () => {
+  const OPTS_ROW: FeedRow = { ...ROW, sku: 'RHWQ-27', productSlug: 'shortsleeveshirt', productName: 'Core short sleeve shirt',
+    productDescription: '<p>Soft &amp; <b>light</b>—guaranteed.</p>', options: { color: 'Forest green', size: 'Large' },
+    feedTitle: "Acme Men's Short Sleeve Shirt", imagePath: 'store/media/a.png', additionalImagePaths: ['store/media/a.png', 'store/media/b.png'] };
+  const C: FeedConfig = { ...CFG, assetBaseUrl: 'https://shop.example.com/assets', productUrlPattern: '/shop/{slug}/',
+    variantLinkParams: ['color', 'size'], titleTemplate: '{feedTitle} – {Option:color} – {Option:size}', itemGroupId: 'skuBase' };
+  it('renders template title, deep link, sku-base group, plain-text description, gallery', () => {
+    const i = toFeedItem(OPTS_ROW, C);
+    expect(i.title).toBe("Acme Men's Short Sleeve Shirt – Forest Green – Large");
+    expect(i.link).toBe('https://shop.example.com/shop/shortsleeveshirt/?color=forest-green&size=large');
+    expect(i.itemGroupId).toBe('RHWQ');
+    expect(i.description).toBe('Soft & light—guaranteed.');
+    expect(i.imageLink).toBe('https://shop.example.com/assets/store/media/a.png');
+    expect(i.additionalImageLink).toBe('https://shop.example.com/assets/store/media/b.png');
+  });
+  it('drops template segments whose placeholders are empty; falls back to product name', () => {
+    const i = toFeedItem({ ...OPTS_ROW, options: { color: 'Red' }, feedTitle: null }, C);
+    expect(i.title).toBe('Core short sleeve shirt – Red');
+    expect(i.link).toBe('https://shop.example.com/shop/shortsleeveshirt/?color=red');
+  });
+  it('facebook carries additional_image_link after image_link', () => {
+    const fb = generateFeed('facebook', [toFeedItem(OPTS_ROW, C)], C).split('\n');
+    const cells = parseCsvLine(fb[1]!);
+    expect(cells[FACEBOOK_FIELDS.indexOf('additional_image_link')]).toBe('https://shop.example.com/assets/store/media/b.png');
   });
 });

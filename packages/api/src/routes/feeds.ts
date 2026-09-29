@@ -60,6 +60,7 @@ async function loadFeedRows(storeId: string): Promise<FeedRow[]> {
         productDescription: s.product.description,
         vendor: s.product.vendor,
         productType: s.product.productType,
+        productMetafields: s.product.metafields,
         imagePath: s.asset.path,
         stockAvailable: sql<number | null>`${s.stock.onHand} - ${s.stock.allocated}`,
       })
@@ -100,30 +101,38 @@ async function loadFeedRows(storeId: string): Promise<FeedRow[]> {
       optionsByVariant.set(o.variantId, m);
     }
 
-    // Gallery images: first product-asset that isn't the featured one becomes
-    // additional_image_link (Google/Pinterest support it).
+    // Images: a variant's own images (variant_asset, by position) come first —
+    // its first is the item image, the rest its gallery; otherwise the
+    // product's featured image + product gallery.
     const productIds = [...new Set(rows.map((r) => r.productId))];
     const gallery = await tx
-      .select({ productId: s.productAsset.productId, assetId: s.productAsset.assetId, path: s.asset.path })
+      .select({ productId: s.productAsset.productId, path: s.asset.path })
       .from(s.productAsset)
       .innerJoin(s.asset, eq(s.asset.id, s.productAsset.assetId))
       .where(and(inArray(s.productAsset.productId, productIds), eq(s.productAsset.storeId, storeId)))
       .orderBy(asc(s.productAsset.position));
-    const galleryByProduct = new Map<string, Array<{ assetId: string; path: string }>>();
-    for (const g of gallery) {
-      const arr = galleryByProduct.get(g.productId) ?? [];
-      arr.push({ assetId: g.assetId, path: g.path });
-      galleryByProduct.set(g.productId, arr);
-    }
+    const galleryByProduct = new Map<string, string[]>();
+    for (const g of gallery) galleryByProduct.set(g.productId, [...(galleryByProduct.get(g.productId) ?? []), g.path]);
+    const vImages = await tx
+      .select({ variantId: s.variantAsset.variantId, path: s.asset.path })
+      .from(s.variantAsset)
+      .innerJoin(s.asset, eq(s.asset.id, s.variantAsset.assetId))
+      .where(and(inArray(s.variantAsset.variantId, variantIds), eq(s.variantAsset.storeId, storeId)))
+      .orderBy(asc(s.variantAsset.position));
+    const imagesByVariant = new Map<string, string[]>();
+    for (const g of vImages) imagesByVariant.set(g.variantId, [...(imagesByVariant.get(g.variantId) ?? []), g.path]);
 
-    return rows.map((r) => {
-      const additional = (galleryByProduct.get(r.productId) ?? [])
-        .map((g) => g.path)
-        .find((p) => p && p !== r.imagePath);
+    return rows.map(({ productMetafields, ...r }) => {
+      const own = imagesByVariant.get(r.variantId) ?? [];
+      const productImages = galleryByProduct.get(r.productId) ?? [];
+      const imagePath = own[0] ?? r.imagePath ?? productImages[0] ?? null;
+      const rest = (own.length > 1 ? own : productImages).filter((p) => p && p !== imagePath);
+      const feedsMeta = (productMetafields as { feeds?: { title?: unknown } } | null)?.feeds;
       return {
         ...r,
-        imagePath: r.imagePath ?? (galleryByProduct.get(r.productId)?.[0]?.path ?? null),
-        additionalImagePath: additional ?? null,
+        imagePath,
+        additionalImagePaths: rest,
+        feedTitle: typeof feedsMeta?.title === 'string' ? feedsMeta.title : null,
         options: optionsByVariant.get(r.variantId) ?? {},
       };
     });
