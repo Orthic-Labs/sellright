@@ -146,8 +146,12 @@ export async function importCatalog(ctx: ImportContext): Promise<void> {
       tagsByProduct.set(tag.pid, values);
     }
     // --- products (en, not deleted) ---
+    // Source timestamps are kept (sitemap <lastmod>, cache versions): an import
+    // must not make every product look modified at cutover time.
+    const pts = (column: string, alias: string) => optionalColumn(ctx.sourceColumns, 'product', column, 'p', alias);
     for (const p of await q(
-      `SELECT p.id, p.enabled, p."featuredAssetId" AS fa, pt.name, pt.slug, pt.description
+      `SELECT p.id, p.enabled, p."featuredAssetId" AS fa, pt.name, pt.slug, pt.description,
+              ${pts('createdAt', 'created')}, ${pts('updatedAt', 'updated')}
        FROM product p JOIN product_translation pt ON pt."baseId"=p.id AND pt."languageCode"=$1
        WHERE p."deletedAt" IS NULL`, [LANG],
     )) {
@@ -158,6 +162,7 @@ export async function importCatalog(ctx: ImportContext): Promise<void> {
         status: p.enabled ? 'active' : 'draft',
         featuredAssetId: p.fa ? assetMap.get(p.fa) ?? null : null,
         tags: [...(tagsByProduct.get(p.id) ?? [])].sort(),
+        createdAt: parseDate(p.created) ?? undefined, updatedAt: parseDate(p.updated) ?? undefined,
       });
     }
 
