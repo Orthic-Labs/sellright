@@ -205,9 +205,12 @@ const titleCase = (v: string) => v.trim().toLowerCase().replace(/\b[a-z]/g, (c) 
 const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ',
   mdash: '—', ndash: '–', rsquo: '’', lsquo: '‘', rdquo: '”', ldquo: '“', hellip: '…' };
 export function htmlToText(html: string): string {
-  return html
-    .replace(/<(br|\/p|\/li|\/h[1-6])\s*\/?>/gi, ' ')
-    .replace(/<[^>]*>/g, '')
+  let text = html.replace(/<(br|\/p|\/li|\/h[1-6])\s*\/?>/gi, ' ');
+  // Strip tags to a fixed point (nested/overlapping fragments like "<<b>p>"),
+  // then drop any lone angle brackets left behind.
+  for (let prev = ''; prev !== text;) { prev = text; text = text.replace(/<[^<>]*>/g, ''); }
+  return text
+    .replace(/[<>]/g, '')
     .replace(/&#(\d+);/g, (_m, n) => String.fromCodePoint(Number(n)))
     .replace(/&#x([0-9a-f]+);/gi, (_m, n) => String.fromCodePoint(parseInt(n, 16)))
     .replace(/&([a-z]+);/gi, (m, name: string) => ENTITIES[name.toLowerCase()] ?? m)
