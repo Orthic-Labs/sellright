@@ -37,7 +37,11 @@ seo.openapi(
     const st = await resolveStoreFromCtx(c);
     const config = seoConfigFromStore(st);
     if (!config.siteUrl) return c.json({ error: 'siteUrl not configured for this store' }, 503);
-    return xml(c, sitemapIndexXml(config.siteUrl, ['sitemap-main.xml', 'sitemap-products.xml', 'sitemap-collections.xml', 'sitemap-blog.xml']));
+    // Only advertise the collection sitemap when the store publishes
+    // collections — storefronts without collection pages serve no
+    // /sitemap-collections.xml, and a 404 in the index is a crawl error.
+    const collections = await withStore(st.id, (tx) => listCollectionSitemapEntries(tx, st.id));
+    return xml(c, sitemapIndexXml(config.siteUrl, ['sitemap-main.xml', 'sitemap-products.xml', ...(collections.length ? ['sitemap-collections.xml'] : []), 'sitemap-blog.xml']));
   },
 );
 
@@ -58,7 +62,7 @@ seo.openapi(
     const config = seoConfigFromStore(st);
     if (!config.siteUrl) return c.json({ error: 'siteUrl not configured for this store' }, 503);
     const entries = await withStore(st.id, (tx) => listProductSitemapEntries(tx, st.id));
-    return xml(c, productsSitemapXml(config.siteUrl, entries));
+    return xml(c, productsSitemapXml(config.siteUrl, entries, config.productUrlPattern));
   },
 );
 
