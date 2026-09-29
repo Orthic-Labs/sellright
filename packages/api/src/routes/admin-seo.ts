@@ -50,6 +50,7 @@ const seoConfigOut = z.object({
   staticPaths: z.array(z.string()),
   productUrlPattern: z.string(),
   indexNowConfigured: z.boolean(),
+  robots: z.object({ header: z.array(z.string()).optional(), directives: z.array(z.string()).optional(), extra: z.string().nullable().optional(), sitemaps: z.array(z.string()).optional(), footer: z.string().nullable().optional() }),
 });
 
 adminSeo.openapi(
@@ -74,6 +75,11 @@ const patchBody = z.object({
   staticPaths: z.array(z.string()).optional(),
   productUrlPattern: z.string().refine(isProductUrlPattern, 'must be an absolute path containing {slug}, e.g. /shop/{slug}/').nullable().optional(),
   indexNowKey: z.string().regex(/^[a-f0-9]{8,128}$/i).nullable().optional(),
+  robotsHeader: z.array(z.string().max(500)).optional(),
+  robotsDirectives: z.array(z.string().max(500)).optional(),
+  robotsExtra: z.string().max(16_384).nullable().optional(),
+  robotsSitemaps: z.array(z.string().regex(/^\/?[A-Za-z0-9._\/-]+$/)).optional(),
+  robotsFooter: z.string().max(16_384).nullable().optional(),
 });
 
 adminSeo.openapi(
@@ -96,6 +102,9 @@ adminSeo.openapi(
       if (patch.staticPaths !== undefined) next.staticPaths = patch.staticPaths.length ? patch.staticPaths : [...DEFAULT_STATIC_PATHS];
       if (patch.productUrlPattern !== undefined) next.productUrlPattern = patch.productUrlPattern ?? undefined;
       if (patch.indexNowKey !== undefined) next.indexNow = { ...(seo.indexNow as object | undefined), key: patch.indexNowKey };
+      for (const k of ['robotsHeader', 'robotsDirectives', 'robotsExtra', 'robotsSitemaps', 'robotsFooter'] as const) {
+        if (patch[k] !== undefined) next[k] = patch[k] ?? undefined;
+      }
       return next;
     });
     const [row] = await withStore(st.storeId, (tx) => tx.select({ name: s.store.name, config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1));

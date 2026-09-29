@@ -97,7 +97,7 @@ seo.openapi(
     const st = await resolveStoreFromCtx(c);
     const config = seoConfigFromStore(st);
     if (!config.siteUrl) return c.json({ error: 'siteUrl not configured for this store' }, 503);
-    return c.text(robotsTxt(config.siteUrl, config.robotsDisallow), 200, { 'cache-control': 'public, max-age=300' });
+    return c.text(robotsTxt(config.siteUrl, config.robotsDisallow, config.robots), 200, { 'cache-control': 'public, max-age=300' });
   },
 );
 
