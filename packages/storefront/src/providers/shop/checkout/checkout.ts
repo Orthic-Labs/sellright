@@ -126,9 +126,11 @@ export const placeOrder = async (form: CheckoutForm): Promise<CheckoutResponse> 
 /** Mint (or reuse) the order's Stripe PaymentIntent → client_secret. Only
  *  called when POST /checkout leaves the order PendingPayment with a
  *  non-zero total. */
-export const createPaymentIntent = async (code: string): Promise<PaymentIntentResponse> => {
+export const createPaymentIntent = async (code: string, receiptToken?: string): Promise<PaymentIntentResponse> => {
+	// The API requires order ownership: the receipt token from POST /checkout
+	// (or the signed-in owner's session cookie).
 	const { data } = await sellright().POST('/v1/shop/orders/{code}/payment-intent', {
-		params: { path: { code } },
+		params: { path: { code }, header: receiptToken ? { 'x-receipt-token': receiptToken } : {} },
 	});
 	return data as PaymentIntentResponse;
 };
@@ -188,10 +190,10 @@ export const verifyGatewayPayment = async (
  * PendingPayment at zero due. There is no customer-facing "manual"/COD
  * tender — the only payment method this API exposes is Stripe.
  */
-export const settleZeroDueOrder = async (code: string): Promise<PayResponse | null> => {
+export const settleZeroDueOrder = async (code: string, receiptToken?: string): Promise<PayResponse | null> => {
 	try {
 		const { data } = await sellright().POST('/v1/shop/orders/{code}/pay', {
-			params: { path: { code } },
+			params: { path: { code }, header: receiptToken ? { 'x-receipt-token': receiptToken } : {} },
 			body: { method: 'stripe' },
 		});
 		return data as PayResponse;

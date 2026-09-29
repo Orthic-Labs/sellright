@@ -3167,6 +3167,14 @@
             "required": false,
             "name": "idempotency-key",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-receipt-token",
+            "in": "header"
           }
         ],
         "requestBody": {
@@ -3300,6 +3308,14 @@
             "required": true,
             "name": "code",
             "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-receipt-token",
+            "in": "header"
           }
         ],
         "responses": {
@@ -3387,6 +3403,82 @@
           },
           "503": {
             "description": "Stripe not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/shop/orders/{code}/payment/refresh": {
+      "post": {
+        "summary": "Re-check the order's Stripe payment with Stripe (settlement fallback)",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "code",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-receipt-token",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Refreshed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string"
+                    },
+                    "intents": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "intentId": {
+                            "type": "string"
+                          },
+                          "outcome": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "intentId",
+                          "outcome"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "state",
+                    "intents"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
             "content": {
               "application/json": {
                 "schema": {
