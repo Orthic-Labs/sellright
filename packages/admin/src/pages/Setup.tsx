@@ -3,6 +3,7 @@ import { Navigate, useSearchParams } from 'react-router-dom';
 import { auth } from '../api';
 import { useAuth } from '../auth';
 import { Spinner } from '../components/ui';
+import { appHref } from '../lib/base-path';
 
 /**
  * One-click install claim screen (plan §1.4) — screen 1 of 3. Reached via the
@@ -60,7 +61,7 @@ export default function Setup() {
       // routing from a one-shot GET /v1/setup/status on mount, so a real
       // reload is what makes it re-check and see "claimed" this time —
       // otherwise every route would keep rendering this screen.
-      window.location.assign('/onboarding');
+      window.location.assign(appHref('/onboarding'));
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : 'Claim failed');
       setBusy(false);

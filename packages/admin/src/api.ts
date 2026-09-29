@@ -1,4 +1,5 @@
 import { maybeMock } from './qa-mocks.js';
+import { appHref, currentAppPath } from './lib/base-path';
 
 // The session token lives in an httpOnly cookie (set by the API on login) — JS
 // can't read it, so XSS can't steal it. We send `credentials: 'include'` so the
@@ -38,7 +39,7 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
   if (auth.store) headers['x-store-slug'] = auth.store;
   if (method !== 'GET') { const csrf = readCookie('sr_csrf'); if (csrf) headers['x-csrf-token'] = csrf; }
   const res = await fetch(`/v1/admin${path}`, { method, headers, credentials: 'include', body: body === undefined ? undefined : JSON.stringify(body) });
-  if (res.status === 401 && !path.startsWith('/login') && location.pathname !== '/login') location.assign('/login');
+  if (res.status === 401 && !path.startsWith('/login') && currentAppPath() !== '/login') location.assign(appHref('/login'));
   const text = await res.text();
   const json = text ? JSON.parse(text) : {};
   if (!res.ok) throw new ApiError(res.status, json?.error ?? `HTTP ${res.status}`);

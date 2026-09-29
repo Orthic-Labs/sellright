@@ -54,6 +54,7 @@ import Locations from './pages/Locations';
 import TaxZones from './pages/TaxZones';
 import CurrencyRates from './pages/CurrencyRates';
 import Staff from './pages/Staff';
+import { ADMIN_BASE } from './lib/base-path';
 
 const qc = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false, staleTime: 15_000 } } });
 
@@ -152,10 +153,9 @@ function App() {
 // most of its own top-level paths — /shop, /products, /collections, /blog —
 // belong to the generic Qwik storefront there; see deploy/demo/README.md and
 // interactive-server.mjs). basename covers every <Link>/<NavLink>/navigate()
-// call in this app automatically — there is no equivalent hardcoded-href
-// landmine here the way there is in the storefront's codebase. Empty for
-// every normal deployment, so BrowserRouter keeps mounting at '/'.
-const basename = (import.meta.env.VITE_ADMIN_BASE_PATH as string | undefined)?.replace(/\/+$/, '') || undefined;
+// call; full-page navigations use lib/base-path.ts. Empty for every normal
+// deployment, so BrowserRouter keeps mounting at '/'.
+const basename = ADMIN_BASE || undefined;
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

@@ -7,6 +7,7 @@ import { money, dateTime } from '../lib/format';
 import { halfPeriodDelta, sparkHeights, totals, trendDeltaLabel, type TrendSeries } from '../lib/report-deltas';
 import { Badge, Loading, ErrorState, PageHeader, KpiCard, EmptyStateActionPanel } from '../components/ui';
 import SetupChecklist from '../components/SetupChecklist';
+import { appHref } from '../lib/base-path';
 
 // An operational signal: a count that wants action when it's non-zero.
 function OpCard({ label, count, hint, to, icon, danger }: {
@@ -151,7 +152,7 @@ export default function Dashboard() {
             </tr></thead>
             <tbody>
               {data.recentOrders.map((o) => (
-                <tr key={o.code} className="row-link" onClick={() => location.assign(`/orders/${o.code}`)}>
+                <tr key={o.code} className="row-link" onClick={() => location.assign(appHref(`/orders/${o.code}`))}>
                   <td className="td font-medium">{o.code}</td>
                   <td className="td text-gray-500">{dateTime(o.placedAt ?? o.createdAt)}</td>
                   <td className="td text-gray-600 truncate">{o.email ?? '—'}</td>
