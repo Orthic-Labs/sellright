@@ -66,8 +66,16 @@ describe('GET /v1/shop/seo/*', () => {
     }
   });
 
+  it('sitemap index omits the collection sitemap when the store publishes no collections', async () => {
+    await seedStore(STORE_A, 'seo-a', { seo: { siteUrl: 'https://a.example.com' } });
+    const xml = await (await get('/v1/shop/seo/sitemap.xml')).text();
+    expect(xml).toContain('<loc>https://a.example.com/sitemap-products.xml</loc>');
+    expect(xml).not.toContain('sitemap-collections.xml');
+  });
+
   it('sitemap index links the four sibling sitemap files at the configured siteUrl', async () => {
     await seedStore(STORE_A, 'seo-a', { seo: { siteUrl: 'https://a.example.com' } });
+    await seedCollection(STORE_A, 'published-col', true);
     const xml = await (await get('/v1/shop/seo/sitemap.xml')).text();
     expect(xml).toContain('<loc>https://a.example.com/sitemap-main.xml</loc>');
     expect(xml).toContain('<loc>https://a.example.com/sitemap-products.xml</loc>');
@@ -97,6 +105,14 @@ describe('GET /v1/shop/seo/*', () => {
     expect(xml).toMatch(/<lastmod>\d{4}-\d{2}-\d{2}T/);
     expect(xml).not.toContain('draft-widget');
     expect(xml).not.toContain('other-store-widget');
+  });
+
+  it('sitemap-products.xml follows the store\'s productUrlPattern', async () => {
+    await seedStore(STORE_A, 'seo-a', { seo: { siteUrl: 'https://a.example.com', productUrlPattern: '/shop/{slug}/' } });
+    await seedProduct(STORE_A, 'live-widget');
+    const xml = await (await get('/v1/shop/seo/sitemap-products.xml')).text();
+    expect(xml).toContain('<loc>https://a.example.com/shop/live-widget/</loc>');
+    expect(xml).not.toContain('/products/');
   });
 
   it('sitemap-collections.xml lists only published collections', async () => {

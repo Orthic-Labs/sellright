@@ -22,6 +22,61 @@ export function allocateRefundItems(total: number, weights: number[]): number[] 
   return amounts;
 }
 
+/** Source order states that assert the goods left the warehouse. */
+const SHIPPED_SOURCE_STATES: Record<string, 'Shipped' | 'Delivered'> = {
+  PartiallyShipped: 'Shipped', Shipped: 'Shipped', PartiallyDelivered: 'Delivered', Delivered: 'Delivered',
+};
+
+/**
+ * A source order can be Shipped/Delivered with no fulfillment documents at
+ * all (history carried over from the source's own earlier platform). Without
+ * a fulfillment row SellRight derives it as "unfulfilled", so years of
+ * delivered orders would read as awaiting shipment to customers and flood the
+ * admin's to-ship queue. Record one fulfillment per such order, in the
+ * order's own source state, covering only the quantity no source document
+ * already accounts for. Marked `synthetic` with the source state as its
+ * provenance; no tracking code is invented.
+ */
+async function synthesizeSourceShipments(ctx: ImportContext, fulfilledByLine: Map<string, number>) {
+  const { tx, storeId } = ctx;
+  const orders = await tx.select({ id: s.order.id, placedAt: s.order.placedAt, metadata: s.order.metadata })
+    .from(s.order).where(eq(s.order.storeId, storeId));
+  const lines = await tx.select({ id: s.orderLine.id, orderId: s.orderLine.orderId, quantity: s.orderLine.quantity,
+    cancelledQty: s.orderLine.cancelledQty }).from(s.orderLine).where(eq(s.orderLine.storeId, storeId));
+  const linesByOrder = new Map<string, typeof lines>();
+  for (const line of lines) {
+    const list = linesByOrder.get(line.orderId) ?? [];
+    list.push(line); linesByOrder.set(line.orderId, list);
+  }
+  let synthesized = 0;
+  for (const order of orders) {
+    const vendure = (order.metadata as { vendure?: { id?: unknown; state?: unknown } } | null)?.vendure;
+    const state = SHIPPED_SOURCE_STATES[String(vendure?.state)];
+    if (!state || vendure?.id == null) continue;
+    const open = (linesByOrder.get(order.id) ?? [])
+      .map(line => ({ line, remaining: line.quantity - line.cancelledQty - (fulfilledByLine.get(line.id) ?? 0) }))
+      .filter(entry => entry.remaining > 0);
+    if (!open.length) continue;
+    const fulfillmentId = ctx.id('fulfillment', 'source-state:' + String(vendure.id));
+    await tx.insert(s.fulfillment).values({ id: fulfillmentId, storeId, orderId: order.id, state,
+      trackingCode: null, carrier: null,
+      metadata: { synthetic: true, vendureOrderId: vendure.id, sourceOrderState: vendure.state },
+      createdAt: order.placedAt ?? undefined, updatedAt: order.placedAt ?? undefined });
+    for (const { line, remaining } of open) {
+      await tx.insert(s.fulfillmentLine).values({ id: ctx.id('fulfillment-line', 'source-state:' + line.id),
+        storeId, fulfillmentId, orderLineId: line.id, quantity: remaining });
+      const next = (fulfilledByLine.get(line.id) ?? 0) + remaining;
+      fulfilledByLine.set(line.id, next);
+      await tx.update(s.orderLine).set({ fulfilledQty: next }).where(eq(s.orderLine.id, line.id));
+    }
+    synthesized++;
+  }
+  if (synthesized) {
+    ctx.exclusions.push({ type: 'unmappable-source-row', table: 'fulfillment', count: synthesized,
+      detail: `${synthesized} Shipped/Delivered source orders had no fulfillment documents — one synthetic fulfillment each (metadata.synthetic, no tracking) records the source state` });
+  }
+}
+
 export async function importHistory(ctx: ImportContext) {
   const { tx, q, storeId } = ctx;
   // Explicit store_id predicates: the migration role may bypass RLS, so the
@@ -79,6 +134,7 @@ export async function importHistory(ctx: ImportContext) {
       }
     }
   }
+  await synthesizeSourceShipments(ctx, fulfilledByLine);
   for (const refund of await q('SELECT * FROM refund ORDER BY id')) {
     const payment = payments.get(ctx.id('payment', refund.paymentId));
     if (!payment) continue;

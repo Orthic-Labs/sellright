@@ -2,6 +2,7 @@
  * SEO-1: pure XML builders — no DB, no fetch, fully unit-testable. Route
  * handlers (routes/seo.ts) supply the data; these functions only serialize.
  */
+import { DEFAULT_PRODUCT_URL_PATTERN, productPath } from './config.js';
 import type { SitemapEntry } from './queries.js';
 
 const XML_HEADER = '<?xml version="1.0" encoding="UTF-8"?>';
@@ -40,8 +41,8 @@ export function mainSitemapXml(siteUrl: string, staticPaths: string[]): string {
   return urlsetXml(siteUrl, staticPaths.map((path) => ({ path })));
 }
 
-export function productsSitemapXml(siteUrl: string, entries: SitemapEntry[]): string {
-  return urlsetXml(siteUrl, entries.map((e) => ({ path: `/products/${encodeURIComponent(e.slug)}/`, lastmod: e.lastmod })));
+export function productsSitemapXml(siteUrl: string, entries: SitemapEntry[], productUrlPattern: string = DEFAULT_PRODUCT_URL_PATTERN): string {
+  return urlsetXml(siteUrl, entries.map((e) => ({ path: productPath({ productUrlPattern }, e.slug), lastmod: e.lastmod })));
 }
 
 export function collectionsSitemapXml(siteUrl: string, entries: SitemapEntry[]): string {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_ROBOTS_DISALLOW, DEFAULT_STATIC_PATHS, seoConfigFromStore } from './config.js';
+import { DEFAULT_PRODUCT_URL_PATTERN, DEFAULT_ROBOTS_DISALLOW, DEFAULT_STATIC_PATHS, productPath, seoConfigFromStore } from './config.js';
 
 describe('seoConfigFromStore', () => {
   it('returns safe defaults when config.seo is entirely absent', () => {
@@ -10,8 +10,21 @@ describe('seoConfigFromStore', () => {
       organization: { name: 'Acme', logo: null, sameAs: [] },
       robotsDisallow: [...DEFAULT_ROBOTS_DISALLOW],
       staticPaths: [...DEFAULT_STATIC_PATHS],
+      productUrlPattern: DEFAULT_PRODUCT_URL_PATTERN,
       indexNowKey: null,
     });
+  });
+
+  it('reads a storefront-specific productUrlPattern and builds encoded product paths from it', () => {
+    const config = seoConfigFromStore({ name: 'Acme', config: { seo: { productUrlPattern: '/shop/{slug}/' } } });
+    expect(config.productUrlPattern).toBe('/shop/{slug}/');
+    expect(productPath(config, 'long sleeve')).toBe('/shop/long%20sleeve/');
+  });
+
+  it('ignores a productUrlPattern that is relative, protocol-relative, or lacks exactly one {slug}', () => {
+    for (const bad of ['shop/{slug}/', '//evil.example/{slug}', '/shop/', '/{slug}/{slug}/', '/shop/{slug}?x=1', 42]) {
+      expect(seoConfigFromStore({ name: 'Acme', config: { seo: { productUrlPattern: bad } } }).productUrlPattern, String(bad)).toBe(DEFAULT_PRODUCT_URL_PATTERN);
+    }
   });
 
   it('reads seo.siteUrl, normalizes to origin (drops path/query/hash)', () => {
