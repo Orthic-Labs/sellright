@@ -12,6 +12,56 @@ if (!new URL(env.DATABASE_URL).pathname.endsWith('_test')) throw new Error('Cata
 afterAll(() => pool.end());
 
 describe('native catalog generation', () => {
+  it('publishes ordered variant images without leaking another variant gallery', async () => {
+    const store = randomUUID(), product = randomUUID();
+    const red = randomUUID(), blue = randomUUID(), plain = randomUUID();
+    const front = randomUUID(), back = randomUUID(), blueImage = randomUUID();
+    const slug = `manifest-images-${store}`;
+    const outDir = await mkdtemp(join(tmpdir(), 'sr-manifest-images-db-'));
+    try {
+      await withStore(store, async tx => {
+        await tx.execute(sql`INSERT INTO store (id, slug, name, currency) VALUES (${store}, ${slug}, 'Fixture', 'USD')`);
+        await tx.execute(sql`INSERT INTO product (id, store_id, slug, name, status) VALUES (${product}, ${store}, 'fixture', 'Fixture', 'active')`);
+        await tx.execute(sql`INSERT INTO product_variant (id, store_id, product_id, sku, name, price) VALUES
+          (${red}, ${store}, ${product}, 'RED', 'Red', 1000),
+          (${blue}, ${store}, ${product}, 'BLUE', 'Blue', 1000),
+          (${plain}, ${store}, ${product}, 'PLAIN', 'Plain', 1000)`);
+        await tx.execute(sql`INSERT INTO asset (id, store_id, type, path) VALUES
+          (${front}, ${store}, 'image', 'fixture/red-front.webp'),
+          (${back}, ${store}, 'image', '/assets/fixture/red-back.webp'),
+          (${blueImage}, ${store}, 'image', 'https://images.example.invalid/blue.webp')`);
+        // Insert the back first: gallery order must come from position.
+        await tx.execute(sql`INSERT INTO variant_asset (store_id, variant_id, asset_id, position) VALUES
+          (${store}, ${red}, ${back}, 1), (${store}, ${red}, ${front}, 0),
+          (${store}, ${blue}, ${blueImage}, 0)`);
+      });
+      const verifyImages = async () => {
+        const detail = JSON.parse(await readFile(join(outDir, 'current/products/fixture.json'), 'utf8'));
+        expect(detail.hasVariantAssets).toBe(true);
+        expect(detail.variants.find((v: { id: string }) => v.id === 'RED').assets).toEqual([
+          { preview: '/assets/fixture/red-front.webp' }, { preview: '/assets/fixture/red-back.webp' },
+        ]);
+        const native = JSON.parse(await readFile(join(outDir, 'current/products-v2/fixture.json'), 'utf8'));
+        expect(native.variants.find((v: { id: string }) => v.id === red).images).toEqual([
+          { url: '/assets/fixture/red-front.webp', alt: null, position: 0 },
+          { url: '/assets/fixture/red-back.webp', alt: null, position: 1 },
+        ]);
+        expect(native.variants.find((v: { id: string }) => v.id === blue).images).toEqual([
+          { url: 'https://images.example.invalid/blue.webp', alt: null, position: 0 },
+        ]);
+        expect(native.variants.find((v: { id: string }) => v.id === plain).images).toEqual([]);
+        expect(native.images).toEqual([]);
+      };
+      await publishCatalogManifest({ outDir, storeSlug: slug });
+      await verifyImages();
+      // Scoped publishes must preserve variant galleries too.
+      await publishCatalogManifest({ outDir, storeSlug: slug, variantIds: [red] });
+      await verifyImages();
+    } finally {
+      await rm(outDir, { recursive: true, force: true });
+    }
+  });
+
   it('publishes native prices, options, assets and current enabled products without closing the shared pool', async () => {
     const store = randomUUID(), product = randomUUID(), variant = randomUUID(), group = randomUUID(), option = randomUUID(), asset = randomUUID();
     const slug = `manifest-${store}`;
