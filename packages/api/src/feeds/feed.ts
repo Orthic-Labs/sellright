@@ -49,6 +49,19 @@ export interface FeedConfig {
   priceRule: VariantPriceRule;
   /** e.g. '/products/{slug}' — {slug} placeholder required. */
   productUrlPattern: string;
+  /** Option groups (lowercased names) appended to each item link as query
+   *  params, e.g. ['color','size'] -> ?color=forest-green&size=large, so the
+   *  link opens the PDP with that variant preselected. Empty = plain link. */
+  variantLinkParams: string[];
+  /** Item title template. Placeholders: {productName} {variantName}
+   *  {feedTitle} (product.metafields.feeds.title, else product name) and
+   *  {option:<group>} / {Option:<group>} (raw / Title Cased option value).
+   *  ' – '-joined segments whose placeholders resolve empty are dropped.
+   *  Empty = "<product> - <variant>". */
+  titleTemplate: string;
+  /** item_group_id source: 'product' (product id) or 'skuBase' (sku with a
+   *  trailing -NN removed, e.g. TEE-01 -> TEE). */
+  itemGroupId: 'product' | 'skuBase';
   /** Absolute base for asset paths (default: storefrontUrl). */
   assetBaseUrl: string;
   googleProductCategory: string;
@@ -70,6 +83,9 @@ export type FeedChannel = 'google' | 'facebook' | 'pinterest';
 interface RawFeedConfig {
   brand?: string;
   productUrlPattern?: string;
+  variantLinkParams?: string[];
+  titleTemplate?: string;
+  itemGroupId?: string;
   assetBaseUrl?: string;
   googleProductCategory?: string;
   productType?: string;
@@ -98,7 +114,12 @@ export function feedConfigFromStore(store: { name: string; currency: string; con
     brand: cfg.brand ?? store.name,
     priceRule: variantPriceRuleFromConfig(store.config),
     productUrlPattern: cfg.productUrlPattern ?? '/products/{slug}',
-    assetBaseUrl: (cfg.assetBaseUrl ?? storefrontUrl).replace(/\/+$/, ''),
+    variantLinkParams: Array.isArray(cfg.variantLinkParams) ? cfg.variantLinkParams.map((g) => String(g).trim().toLowerCase()).filter(Boolean) : [],
+    titleTemplate: typeof cfg.titleTemplate === 'string' ? cfg.titleTemplate : '',
+    itemGroupId: cfg.itemGroupId === 'skuBase' ? 'skuBase' : 'product',
+    // Asset keys are relative to the public /assets mount (the storefront
+    // renders `/assets/<key>`), so that is the default base.
+    assetBaseUrl: (cfg.assetBaseUrl ?? `${storefrontUrl}/assets`).replace(/\/+$/, ''),
     googleProductCategory: cfg.googleProductCategory ?? '',
     productType: cfg.productType ?? '',
     fbProductCategory: cfg.fbProductCategory ?? '',
@@ -138,7 +159,11 @@ export interface FeedRow {
   vendor: string | null;
   productType: string | null;
   imagePath: string | null;
-  additionalImagePath: string | null;
+  /** Gallery images other than imagePath (variant's own first, else product's). */
+  additionalImagePaths?: string[];
+  additionalImagePath?: string | null;
+  /** product.metafields.feeds.title — optional per-product feed title. */
+  feedTitle?: string | null;
   stockAvailable: number | null; // onHand - allocated; null = no stock row
   options: Record<string, string>; // lowercased group name -> value
 }
@@ -160,21 +185,76 @@ export function availabilityOf(v: Pick<FeedRow, 'fulfillmentType' | 'isPreOrder'
   return (v.stockAvailable ?? 0) > 0 ? 'in stock' : 'out of stock';
 }
 
-function absoluteUrl(path: string | null, base: string): string {
+function absoluteUrl(path: string | null | undefined, base: string): string {
   if (!path) return '';
   if (/^https?:\/\//i.test(path)) return path; // already absolute (imported/CDN asset)
-  return `${base}/${path.replace(/^\/+/, '')}`;
+  let rel = path.replace(/^\/+/, '');
+  // A key already carrying the mount segment must not get it twice.
+  if (/\/assets$/.test(base) && rel.startsWith('assets/')) rel = rel.slice('assets/'.length);
+  return `${base}/${rel}`;
 }
 
-function productLink(cfg: FeedConfig, slug: string): string {
+/** "Forest green" -> "forest-green" (the storefront's option param form). */
+export function toParamCode(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+const titleCase = (v: string) => v.trim().toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase());
+
+/** Feeds reject raw markup in `description` — reduce rich text to plain text. */
+const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ',
+  mdash: '—', ndash: '–', rsquo: '’', lsquo: '‘', rdquo: '”', ldquo: '“', hellip: '…' };
+export function htmlToText(html: string): string {
+  let text = html.replace(/<(br|\/p|\/li|\/h[1-6])\s*\/?>/gi, ' ');
+  // Strip tags to a fixed point (nested/overlapping fragments like "<<b>p>"),
+  // then drop any lone angle brackets left behind.
+  for (let prev = ''; prev !== text;) { prev = text; text = text.replace(/<[^<>]*>/g, ''); }
+  return text
+    .replace(/[<>]/g, '')
+    .replace(/&#(\d+);/g, (_m, n) => String.fromCodePoint(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_m, n) => String.fromCodePoint(parseInt(n, 16)))
+    .replace(/&([a-z]+);/gi, (m, name: string) => ENTITIES[name.toLowerCase()] ?? m)
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function productLink(cfg: FeedConfig, row: Pick<FeedRow, 'productSlug' | 'options'>): string {
   const pattern = cfg.productUrlPattern.includes('{slug}') ? cfg.productUrlPattern : '/products/{slug}';
-  return `${cfg.storefrontUrl}${pattern.replace('{slug}', encodeURIComponent(slug))}`;
+  const base = `${cfg.storefrontUrl}${pattern.replace('{slug}', encodeURIComponent(row.productSlug))}`;
+  const params = new URLSearchParams();
+  for (const group of cfg.variantLinkParams) {
+    const value = row.options[group];
+    if (value) params.set(group, toParamCode(value));
+  }
+  const qs = params.toString();
+  return qs ? `${base}${base.includes('?') ? '&' : '?'}${qs}` : base;
+}
+
+function renderTitle(row: FeedRow, cfg: FeedConfig): string {
+  const vn = row.variantName.trim();
+  if (!cfg.titleTemplate.trim()) return vn && vn !== row.productName ? `${row.productName} - ${vn}` : row.productName || vn;
+  const value = (key: string): string => {
+    if (key === 'productName') return row.productName;
+    if (key === 'variantName') return vn;
+    if (key === 'feedTitle') return row.feedTitle?.trim() || row.productName;
+    const m = /^([oO])ption:(.+)$/.exec(key);
+    if (m) { const v = row.options[m[2]!.trim().toLowerCase()] ?? ''; return m[1] === 'O' ? titleCase(v) : v; }
+    return '';
+  };
+  return cfg.titleTemplate.split(' – ')
+    .map((seg) => { let empty = false; const out = seg.replace(/\{([^}]+)\}/g, (_m, k: string) => { const v = value(k); if (!v) empty = true; return v; }); return empty ? '' : out.trim(); })
+    .filter(Boolean).join(' – ').slice(0, 150);
 }
 
 /** Shape one DB row into a feed item (channel-agnostic fields). */
 export function toFeedItem(row: FeedRow, cfg: FeedConfig): FeedItem {
   const vn = row.variantName.trim();
-  const title = vn && vn !== row.productName ? `${row.productName} - ${vn}` : row.productName || vn;
+  const title = renderTitle(row, cfg);
+  const imageLink = absoluteUrl(row.imagePath, cfg.assetBaseUrl);
+  const extra = (row.additionalImagePaths ?? (row.additionalImagePath ? [row.additionalImagePath] : []))
+    .map((p) => absoluteUrl(p, cfg.assetBaseUrl))
+    .filter((u, i, all) => u && u !== imageLink && all.indexOf(u) === i)
+    .slice(0, 10);
   const price = effectivePrice(row, cfg.priceRule);
   const onSale = row.salePrice != null && row.salePrice < row.price;
   const gtin = row.barcode?.trim() ?? '';
@@ -182,16 +262,16 @@ export function toFeedItem(row: FeedRow, cfg: FeedConfig): FeedItem {
   return {
     id: row.sku || row.variantId,
     title,
-    description: row.productDescription || row.productName || vn,
-    link: productLink(cfg, row.productSlug),
-    imageLink: absoluteUrl(row.imagePath, cfg.assetBaseUrl),
-    additionalImageLink: absoluteUrl(row.additionalImagePath, cfg.assetBaseUrl),
+    description: htmlToText(row.productDescription ?? '') || row.productName || vn,
+    link: productLink(cfg, row),
+    imageLink,
+    additionalImageLink: extra.join(','),
     price: money(price, cfg.currency),
     salePrice: onSale ? money(row.salePrice!, cfg.currency) : '',
     availability: availabilityOf(row),
     condition: 'new',
     brand: row.vendor?.trim() || cfg.brand,
-    itemGroupId: row.productId,
+    itemGroupId: cfg.itemGroupId === 'skuBase' && row.sku ? row.sku.replace(/-\d+$/, '') : row.productId,
     color: row.options['color'] ?? '',
     size: row.options['size'] ?? '',
     gtin,
@@ -220,7 +300,7 @@ export const GOOGLE_FIELDS = [
 ] as const;
 
 export const FACEBOOK_FIELDS = [
-  'id', 'title', 'description', 'availability', 'condition', 'price', 'link', 'image_link', 'brand',
+  'id', 'title', 'description', 'availability', 'condition', 'price', 'link', 'image_link', 'additional_image_link', 'brand',
   'google_product_category', 'fb_product_category', 'quantity_to_sell_on_facebook', 'sale_price',
   'sale_price_effective_date', 'item_group_id', 'gender', 'color', 'size', 'age_group', 'material',
   'pattern', 'shipping', 'shipping_weight', 'video[0].url', 'video[0].tag[0]', 'gtin',
@@ -245,7 +325,7 @@ function googleRow(i: FeedItem, cfg: FeedConfig): string {
 
 function facebookRow(i: FeedItem, cfg: FeedConfig): string {
   return csvRow([
-    i.id, i.title, i.description, i.availability, i.condition, i.price, i.link, i.imageLink, i.brand,
+    i.id, i.title, i.description, i.availability, i.condition, i.price, i.link, i.imageLink, i.additionalImageLink, i.brand,
     cfg.googleProductCategory, cfg.fbProductCategory, /* quantity_to_sell_on_facebook */ '',
     i.salePrice, /* sale_price_effective_date */ '', i.itemGroupId, cfg.gender, i.color, i.size,
     cfg.ageGroup, cfg.material, cfg.pattern, /* shipping */ '', i.shippingWeight,
