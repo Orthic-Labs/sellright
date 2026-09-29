@@ -399,9 +399,10 @@ export const srPayOrder = (code: string, method = 'cod') =>
 /** POST /v1/shop/orders/{code}/payment-intent → a Stripe PaymentIntent's
  *  client_secret (idempotent server-side on the order). Mount the Payment
  *  Element against this secret and confirm client-side. */
-export const srCreatePaymentIntent = (code: string) =>
+export const srCreatePaymentIntent = (code: string, receiptToken?: string) =>
   sr<{ clientSecret: string; intentId: string }>(`/v1/shop/orders/${encodeURIComponent(code)}/payment-intent`, {
     method: 'POST', body: JSON.stringify({}),
+    ...(receiptToken ? { headers: { 'x-receipt-token': receiptToken } } : {}),
   });
 
 /** GET /v1/shop/stripe-key → the mode-appropriate publishable key (public). */

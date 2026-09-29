@@ -7456,7 +7456,11 @@ export interface paths {
             requestBody?: {
                 content: {
                     "application/json": {
-                        [key: string]: boolean;
+                        [key: string]: boolean | {
+                            enabled?: boolean;
+                            /** @enum {string} */
+                            mode?: "test" | "live";
+                        };
                     };
                 };
             };
@@ -14516,6 +14520,7 @@ export interface paths {
                 query?: never;
                 header?: {
                     "idempotency-key"?: string;
+                    "x-receipt-token"?: string;
                 };
                 path: {
                     code: string;
@@ -14606,7 +14611,9 @@ export interface paths {
         post: {
             parameters: {
                 query?: never;
-                header?: never;
+                header?: {
+                    "x-receipt-token"?: string;
+                };
                 path: {
                     code: string;
                 };
@@ -14659,6 +14666,62 @@ export interface paths {
                 };
                 /** @description Stripe not configured */
                 503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/shop/orders/{code}/payment/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Re-check the order's Stripe payment with Stripe (settlement fallback) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    "x-receipt-token"?: string;
+                };
+                path: {
+                    code: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Refreshed */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            code: string;
+                            intents: {
+                                intentId: string;
+                                outcome: string;
+                            }[];
+                            state: string;
+                        };
+                    };
+                };
+                /** @description Not found */
+                404: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -15839,6 +15902,7 @@ export interface components {
             /** Format: uuid */
             attemptId: string;
             checkoutUrl?: string;
+            message?: string;
             state?: string;
             status: string;
         };
@@ -15846,6 +15910,7 @@ export interface components {
             /** Format: uuid */
             attemptId: string;
             checkoutUrl?: string;
+            message?: string;
             refundId?: string;
             refundState?: string;
             state?: string;

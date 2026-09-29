@@ -10,11 +10,12 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { and, eq, isNull } from 'drizzle-orm';
 import type Stripe from 'stripe';
-import { withStore } from '../db/client.js';
+import { withAdvisoryLock, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
-import { stripeCreds, stripeModeFromConfig, verifyStripeWebhook, verifyIntent, listAllStoreIds, STRIPE_REFUND_ATTEMPT_KEY, type IntentLike, type StripeMode } from '../payments/stripe.js';
+import { stripeCreds, stripeModeFromConfig, verifyStripeWebhook, listAllStoreIds, STRIPE_REFUND_ATTEMPT_KEY, type StripeMode } from '../payments/stripe.js';
+import { applyStripeIntent, type StripeIntent } from '../payments/stripe-reconcile.js';
+import { recordPaymentAlert } from '../payments/payment-alerts.js';
 import { resolveField } from '../security/settings-resolver.js';
-import { applyPaymentResult, amountDueForOrder } from '../payments/settle.js';
 import { resolveStoreIdForStripeEvent, resolveStoreIdForSubscriptionEvent, reconcileStripeRefund, recordStripeDispute, type StripeEventObj } from '../payments/webhook-reconcile.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
 import {
@@ -140,13 +141,33 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
   // once, after this whole claim transaction commits, never before.
   let stockChanged = false;
   let storeSlug: string | undefined;
-  await withStore(storeId, async (tx) => {
+  // D4-serialization: PaymentIntent events settle under the SAME per-order
+  // advisory lock /pay, reconcileStripeOrder and the Sezzle recovery capture
+  // take, so a Stripe settle and a concurrent Sezzle capture of the same order
+  // are serialized (the loser sees the order no longer payable).
+  const piOrderCode = event.type.startsWith('payment_intent.')
+    ? (event.data.object as { metadata?: { orderCode?: string } }).metadata?.orderCode : undefined;
+  const runClaim = (fn: () => Promise<void>) => piOrderCode ? withAdvisoryLock(`pay:${storeId}:${piOrderCode}`, fn) : fn();
+  await runClaim(() => withStore(storeId, async (tx) => {
     // ra-sec: bind the verifying secret's mode to the store's configured mode. A
     // webhook signed with the TEST secret must not drive payment_intent.succeeded
     // on a LIVE store (a leaked test webhook secret would otherwise let a forged
     // event settle a live order). Mismatch → ack + ignore.
     const [store] = await tx.select({ config: s.store.config, slug: s.store.slug }).from(s.store).where(eq(s.store.id, storeId)).limit(1);
-    if (!store || stripeModeFromConfig(store.config) !== verifiedMode) return;
+    if (!store) return;
+    if (stripeModeFromConfig(store.config) !== verifiedMode) {
+      // D9: still ack (a forged/stale-mode event must not be processed), but
+      // never silently — the store may have flipped test<->live with PIs in
+      // flight. Audit before the 200 so an operator can reconcile.
+      await recordPaymentAlert(tx, storeId, {
+        kind: 'stripe_mode_mismatch', email: false, actor: 'stripe:webhook', orderId: null,
+        orderCode: (event.data.object as { metadata?: { orderCode?: string } }).metadata?.orderCode ?? null,
+        providerRef: (event.data.object as { id?: string }).id ?? null, amount: null, currency: null,
+        detail: `Stripe ${verifiedMode}-mode event ignored: store is configured for ${stripeModeFromConfig(store.config)} mode`,
+        data: { eventId: event.id, eventType: event.type, verifiedMode },
+      });
+      return;
+    }
     storeSlug = store.slug;
     // Idempotency: claim the event id. A duplicate delivery is a no-op.
     const claimed = await tx
@@ -157,38 +178,20 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
     if (claimed.length === 0) return;
 
     switch (event.type) {
-      case 'payment_intent.succeeded': {
-        const pi = event.data.object as unknown as IntentLike & { metadata?: { orderCode?: string } };
-        const code = pi.metadata?.orderCode;
-        if (!code) return;
-        const [order] = await tx
-          .select({ id: s.order.id, state: s.order.state, grandTotal: s.order.grandTotal, currency: s.order.currency, customerId: s.order.customerId })
-          .from(s.order).where(eq(s.order.code, code)).limit(1);
-        // Safety net for a client that died before calling /pay. If /pay already
-        // settled it the order is Paid → skip (no duplicate payment row). Re-run
-        // the same server-side verification before trusting the event.
-        //
-        // MONEY-4: the order may have been auto-cancelled (stale-allocation TTL
-        // job, purely on created_at age) by the time this event lands, even
-        // though Stripe genuinely captured the money. Don't silently drop that —
-        // still verify + record it (applyPaymentResult flags a non-payable state
-        // with an audit_log entry instead of transitioning to Paid). Any OTHER
-        // terminal state (Paid/Refunded/PartiallyRefunded) is left alone — those
-        // are legitimate no-ops, not the money-goes-invisible bug.
-        if (!order) return;
-        if (order.state !== 'PendingPayment' && order.state !== 'Cancelled') return;
-        // MONEY-3: verify against what's actually still owed (grandTotal minus
-        // any Settled tenders already recorded, e.g. a partial gift-card
-        // draw-down), not the raw order total.
-        const amountDue = await amountDueForOrder(tx, storeId, order.id, order.grandTotal);
-        if (amountDue <= 0) return; // already fully covered by other tenders — nothing to verify/record
-        // SR-03: the verifying signature's mode IS the trusted original mode —
-        // persist it on the payment row (via verifyIntent's metadata.gateway)
-        // so a later refund never has to infer it from current store config.
-        const result = verifyIntent(pi, { orderCode: code, amount: amountDue, currency: order.currency, stripeMode: verifiedMode });
-        if (result.state === 'Settled') {
-          await applyPaymentResult(tx, { storeId, order: { ...order, code }, method: 'stripe', result, amount: amountDue });
-        }
+      // D1/D3/D4/D10: every PaymentIntent lifecycle event goes through the
+      // shared applyStripeIntent — the same idempotent path the pull-based
+      // fallback (reconcileStripeOrder) uses. succeeded settles (MONEY-3/4
+      // semantics unchanged); a verify failure or a duplicate capture is
+      // recorded + alerted instead of dropped; payment_failed/canceled release
+      // the tracked attempt; processing/requires_action hold it.
+      case 'payment_intent.succeeded':
+      case 'payment_intent.payment_failed':
+      case 'payment_intent.canceled':
+      case 'payment_intent.processing':
+      case 'payment_intent.requires_action': {
+        const pi = event.data.object as unknown as StripeIntent;
+        if (!pi.metadata?.orderCode) return;
+        await applyStripeIntent(tx, storeId, pi, verifiedMode, { actor: 'stripe:webhook' });
         return;
       }
       // Dashboard/API refunds → converge on the durable refund attempt when one
@@ -263,7 +266,7 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
       default:
         return;
     }
-  });
+  }));
   if (stockChanged && storeSlug) onStockChanged(storeSlug);
   return c.json({ received: true }, 200);
 });

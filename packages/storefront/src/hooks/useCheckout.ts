@@ -70,7 +70,7 @@ export const useCheckout = () => {
 			if (outcome.kind === 'paid') {
 				if (outcome.needsSettle) {
 					try {
-						await srSettleZeroDue(created.code);
+						await srSettleZeroDue(created.code, state.receiptToken || undefined);
 					} catch {
 						/* server may have already settled it independently */
 					}
@@ -82,7 +82,7 @@ export const useCheckout = () => {
 			if (method === 'stripe') {
 				// Card path — mint the PaymentIntent and hand the client_secret to
 				// the Stripe Payment Element (mounted by the caller).
-				const pi = await srCreatePI(created.code);
+				const pi = await srCreatePI(created.code, state.receiptToken || undefined);
 				if (!pi.clientSecret) throw new Error('Could not start the payment.');
 				state.clientSecret = pi.clientSecret;
 			}

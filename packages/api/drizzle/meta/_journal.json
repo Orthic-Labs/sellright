@@ -519,6 +519,13 @@
       "when": 1790000011000,
       "tag": "0082_admin_essentials",
       "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1790000011100,
+      "tag": "0083_stripe_intent_attempts",
+      "breakpoints": true
     }
   ]
 }

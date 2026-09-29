@@ -57,13 +57,25 @@ export async function requestRefund(input: RefundRequest) {
         if (!row) throw new RefundError(409, 'Refund reservation requires reconciliation');
         return { existing: await refundView(tx, row) };
       }
-      if (!['Paid','PartiallyRefunded','Cancelled'].includes(order.state)) throw new RefundError(409, 'Order is not refundable');
+      // A duplicate capture (D4) is refundable whatever the order's own state.
+      const refundableState = ['Paid','PartiallyRefunded','Cancelled'].includes(order.state) ||
+        (!!input.paymentId && order.state !== 'PendingPayment');
+      if (!refundableState) throw new RefundError(409, 'Order is not refundable');
       const [rma] = input.returnId ? await tx.select().from(s.returnRequest)
         .where(and(eq(s.returnRequest.id, input.returnId), eq(s.returnRequest.orderId, order.id))).for('update') : [];
       if (input.returnId && (!rma || !['requested','approved','received'].includes(rma.status) || rma.refundId)) throw new RefundError(409, 'Return already resolved');
-      const payments = await tx.select().from(s.payment).where(and(eq(s.payment.orderId, order.id), eq(s.payment.state, 'Settled'))).for('update');
-      const payment = input.paymentId ? payments.find(p => p.id === input.paymentId) : payments.length === 1 ? payments[0] : undefined;
+      const allPayments = await tx.select().from(s.payment).where(and(eq(s.payment.orderId, order.id), eq(s.payment.state, 'Settled'))).for('update');
+      // D4: a duplicate capture (payment.metadata.duplicate) is money the order
+      // never needed. It is refunded money-only (explicit paymentId): no lines,
+      // no stock/qty effects, and it never counts toward the order's tenders.
+      const payments = allPayments.filter(p => !isDuplicatePayment(p));
+      const payment = input.paymentId ? allPayments.find(p => p.id === input.paymentId) : payments.length === 1 ? payments[0] : undefined;
       if (!payment) throw new RefundError(409, payments.length > 1 ? 'Select the payment to refund' : 'No settled payment to refund');
+      const duplicate = isDuplicatePayment(payment);
+      if (!duplicate && !['Paid','PartiallyRefunded','Cancelled'].includes(order.state)) throw new RefundError(409, 'Order is not refundable');
+      if (duplicate && (input.lines?.length || input.returnId || input.restock || input.shippingAmount)) {
+        throw new RefundError(409, 'A duplicate payment is refunded money-only (no lines, restock, return or shipping)');
+      }
       if (!getProvider(payment.method)) throw new RefundError(409, 'Payment method does not support refunds');
       const mode = payment.gatewayMode;
       if (['nmi','sezzle','stripe'].includes(payment.method) && (mode !== 'test' && mode !== 'live')) throw new RefundError(409, 'Original payment mode is missing; reconcile it before refunding');
@@ -84,10 +96,10 @@ export async function requestRefund(input: RefundRequest) {
         .where(and(eq(s.refund.orderId, order.id), sql`${s.refund.state} <> 'Failed'`));
       const reservedQty = new Map<string, number>();
       for (const line of reservations) reservedQty.set(line.lineId, (reservedQty.get(line.lineId) ?? 0) + line.quantity);
-      let lines = input.lines ?? [];
+      let lines = duplicate ? [] : input.lines ?? [];
       if (rma) lines = (await tx.select().from(s.returnLine).where(eq(s.returnLine.returnId, rma.id))).map(l => ({ orderLineId: l.orderLineId, quantity: l.quantity, restock: l.restock }));
       const explicitLines = lines.length > 0;
-      if (!lines.length && (input.restock || input.amount == null || input.amount === available)) {
+      if (!duplicate && !lines.length && (input.restock || input.amount == null || input.amount === available)) {
         if (payments.length > 1 || (input.amount != null && input.amount !== available)) throw new RefundError(409, 'Choose lines when restocking a partial refund');
         lines = orderLines.map(l => ({ orderLineId: l.id, quantity: refundQuantity(l) - (reservedQty.get(l.id) ?? 0), restock: !!input.restock })).filter(l => l.quantity > 0);
       }
@@ -235,8 +247,22 @@ export async function finalizeRefund(tx: Tx, storeId: string, attemptId: string,
     }
   }
   if (attempt.method === 'gift_card') await creditGiftCardRefund(tx, storeId, order.id, refund.amount);
-  const refunds = await tx.select().from(s.refund).where(and(eq(s.refund.orderId, order.id), eq(s.refund.state, 'Settled')));
-  const payments = await tx.select().from(s.payment).where(and(eq(s.payment.orderId, order.id), eq(s.payment.state, 'Settled')));
+  const [refundedPayment] = await tx.select().from(s.payment).where(eq(s.payment.id, refund.paymentId));
+  if (refundedPayment && isDuplicatePayment(refundedPayment)) {
+    // D4 money-only: returning a duplicate capture leaves the order, its
+    // lines, stock, loyalty and licenses exactly as they were.
+    await tx.update(s.refund).set({ metadata: { ...details, effectsApplied: true, duplicate: true } }).where(eq(s.refund.id, refund.id));
+    await tx.insert(s.auditLog).values({ storeId, actor: details?.actor ?? 'gateway:reconciliation', entity: 'order', entityId: order.id,
+      action: 'duplicate_payment_refunded', fromState: order.state, toState: order.state,
+      data: { refundId: refund.id, paymentId: refundedPayment.id, amount: refund.amount, providerRef: refundedPayment.providerRef } });
+    await enqueueRefundSettledEmail(tx, storeId, refund);
+    return { refundId: refund.id, refundState: 'Settled' as const, state: order.state, refunded: refund.amount, pending: 0 };
+  }
+  const allRefunds = await tx.select().from(s.refund).where(and(eq(s.refund.orderId, order.id), eq(s.refund.state, 'Settled')));
+  const payments = (await tx.select().from(s.payment).where(and(eq(s.payment.orderId, order.id), eq(s.payment.state, 'Settled'))))
+    .filter(p => !isDuplicatePayment(p));
+  const counted = new Set(payments.map(p => p.id));
+  const refunds = allRefunds.filter(r => counted.has(r.paymentId));
   const refunded = refunds.reduce((n,r) => n+r.amount,0), captured = payments.reduce((n,p) => n+p.amount,0);
   // LOYALTY-1: restore redeemed points and reverse earned points in
   // proportion to the money refunded so far (cumulative + idempotent per
@@ -269,4 +295,9 @@ export async function finalizeRefund(tx: Tx, storeId: string, attemptId: string,
   // send twice; the early-return above already covered already-settled rows).
   await enqueueRefundSettledEmail(tx, storeId, refund);
   return { refundId: refund.id, refundState: 'Settled' as const, state, refunded: refund.amount, pending: 0 };
+}
+
+/** D4: a Stripe capture recorded as a duplicate of an already-covered order. */
+export function isDuplicatePayment(p: { metadata: unknown }): boolean {
+  return (p.metadata as { duplicate?: unknown } | null)?.duplicate === true;
 }

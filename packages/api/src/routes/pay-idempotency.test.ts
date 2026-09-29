@@ -85,7 +85,7 @@ async function makeOrder(storeId: string, opts: { code?: string; grandTotal?: nu
   const code = opts.code ?? 'SR' + Math.random().toString(16).slice(2, 12).toUpperCase();
   const id = await withStore(storeId, async (tx) => {
     const [o] = await tx.insert(s.order).values({
-      storeId, code, state: 'PendingPayment', currency: 'USD', grandTotal: opts.grandTotal ?? 2100,
+      storeId, code, state: 'PendingPayment', currency: 'USD', grandTotal: opts.grandTotal ?? 2100, receiptToken: RT,
     }).returning({ id: s.order.id });
     return o!.id;
   });
@@ -100,7 +100,9 @@ beforeEach(async () => {
 });
 afterAll(async () => { await wipe(); });
 
-const hdr = (slug: string, extra: Record<string, string> = {}) => ({ 'content-type': 'application/json', 'x-store-slug': slug, ...extra });
+// D13: /pay requires order ownership — the receipt token every test order carries.
+const RT = 'rt_pay_idempotency_receipt_token';
+const hdr = (slug: string, extra: Record<string, string> = {}) => ({ 'content-type': 'application/json', 'x-store-slug': slug, 'x-receipt-token': RT, ...extra });
 
 describe('MONEY-1: (store_id, provider_ref) unique settle', () => {
   it('two applyPaymentResult calls with the SAME (storeId, providerRef) insert exactly ONE payment row', async () => {
@@ -177,6 +179,15 @@ describe('MONEY-2: store-scoped /pay claim key', () => {
     expect(claims.rows).toHaveLength(2);
     const storeIds = claims.rows.map((r: { store_id: string }) => r.store_id).sort();
     expect(storeIds).toEqual([STORE_A, STORE_B].sort());
+  });
+
+  it('D13: /pay without the receipt token (and no owning session) reads as 404', async () => {
+    await seedStore(STORE_A, SLUG_A);
+    const { code } = await makeOrder(STORE_A);
+    const res = await app.request(`/v1/shop/orders/${code}/pay`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-store-slug': SLUG_A }, body: JSON.stringify({ method: 'stripe' }) });
+    expect(res.status).toBe(404);
+    const wrong = await app.request(`/v1/shop/orders/${code}/pay`, { method: 'POST', headers: hdr(SLUG_A, { 'x-receipt-token': 'rt_wrong_token_value_000000000000' }), body: JSON.stringify({ method: 'stripe' }) });
+    expect(wrong.status).toBe(404);
   });
 
   it('derives the claim key as pay:<storeId>:<code>:<method>', async () => {

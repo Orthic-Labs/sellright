@@ -102,8 +102,8 @@ const hdr = (extra: Record<string, string> = {}) => ({ 'content-type': 'applicat
 
 describe('POST /v1/shop/orders/{code}/payment-intent', () => {
   it('returns a clientSecret for a PendingPayment order', async () => {
-    const { code } = await makeOrder();
-    const res = await app.request(`/v1/shop/orders/${code}/payment-intent`, { method: 'POST', headers: hdr() });
+    const { code, receiptToken } = await makeOrder();
+    const res = await app.request(`/v1/shop/orders/${code}/payment-intent`, { method: 'POST', headers: hdr({ 'x-receipt-token': receiptToken }) });
     expect(res.status).toBe(200);
     const body = await res.json() as { clientSecret: string; intentId: string };
     expect(body.clientSecret).toMatch(/_secret_test$/);
@@ -116,17 +116,48 @@ describe('POST /v1/shop/orders/{code}/payment-intent', () => {
   // amount. Same order at the same amountDue still dedupes, which is what
   // idempotency has to guarantee.
   it('is idempotent — a retry at the same amountDue passes the SAME idempotencyKey → same client_secret', async () => {
-    const { code } = await makeOrder();
+    const { code, receiptToken } = await makeOrder();
     const orderId = await withStore(STORE, async (tx) => {
       const [o] = await tx.select({ id: s.order.id, grandTotal: s.order.grandTotal }).from(s.order).where(eq(s.order.code, code)).limit(1);
       return o!.id;
     });
-    const first = await (await app.request(`/v1/shop/orders/${code}/payment-intent`, { method: 'POST', headers: hdr() })).json() as { clientSecret: string };
-    const second = await (await app.request(`/v1/shop/orders/${code}/payment-intent`, { method: 'POST', headers: hdr() })).json() as { clientSecret: string };
+    const first = await (await app.request(`/v1/shop/orders/${code}/payment-intent`, { method: 'POST', headers: hdr({ 'x-receipt-token': receiptToken }) })).json() as { clientSecret: string };
+    const second = await (await app.request(`/v1/shop/orders/${code}/payment-intent`, { method: 'POST', headers: hdr({ 'x-receipt-token': receiptToken }) })).json() as { clientSecret: string };
     expect(second.clientSecret).toBe(first.clientSecret);
     expect(piCalls).toHaveLength(2);
     expect(piCalls[0]!.idempotencyKey).toBe(piCalls[1]!.idempotencyKey);
     expect(piCalls[0]!.idempotencyKey).toMatch(new RegExp(`^pi:${orderId}:\\d+$`));
+  });
+
+  it('D13: 404 without the receipt token, with a wrong token, or for a non-owning customer', async () => {
+    const { code } = await makeOrder({ customerId: CUSTOMER });
+    expect((await app.request(`/v1/shop/orders/${code}/payment-intent`, { method: 'POST', headers: hdr() })).status).toBe(404);
+    expect((await app.request(`/v1/shop/orders/${code}/payment-intent`, { method: 'POST', headers: hdr({ 'x-receipt-token': 'rt_wrong' }) })).status).toBe(404);
+    expect((await app.request(`/v1/shop/orders/${code}/payment-intent`, { method: 'POST', headers: hdr({ authorization: `Bearer ${otherToken}` }) })).status).toBe(404);
+    expect(piCalls).toHaveLength(0);
+    // The owning customer session is accepted (same rule as gateway-payment).
+    expect((await app.request(`/v1/shop/orders/${code}/payment-intent`, { method: 'POST', headers: hdr({ authorization: `Bearer ${token}` }) })).status).toBe(200);
+  });
+
+  it('D5: records the minted PaymentIntent as a durable stripe intent attempt (idempotent per PI)', async () => {
+    const { code, receiptToken } = await makeOrder();
+    await app.request(`/v1/shop/orders/${code}/payment-intent`, { method: 'POST', headers: hdr({ 'x-receipt-token': receiptToken }) });
+    await app.request(`/v1/shop/orders/${code}/payment-intent`, { method: 'POST', headers: hdr({ 'x-receipt-token': receiptToken }) });
+    const rows = await withStore(STORE, (tx) => tx.select().from(s.paymentAttempt).where(eq(s.paymentAttempt.operation, 'intent')));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ method: 'stripe', status: 'open', mode: 'test', amount: 2100 });
+    expect(rows[0]!.providerRef).toMatch(/^pi_/);
+  });
+
+  it('mints a fresh PI (suffixed key) when the replayed PI was already cancelled', async () => {
+    const { code, receiptToken } = await makeOrder();
+    const first = await (await app.request(`/v1/shop/orders/${code}/payment-intent`, { method: 'POST', headers: hdr({ 'x-receipt-token': receiptToken }) })).json() as { intentId: string };
+    await withStore(STORE, (tx) => tx.update(s.paymentAttempt).set({ status: 'cancelled' }).where(eq(s.paymentAttempt.providerRef, first.intentId)));
+    const res = await app.request(`/v1/shop/orders/${code}/payment-intent`, { method: 'POST', headers: hdr({ 'x-receipt-token': receiptToken }) });
+    expect(res.status).toBe(200);
+    const second = await res.json() as { intentId: string };
+    expect(second.intentId).not.toBe(first.intentId);
+    expect(piCalls.map((c) => c.idempotencyKey)).toEqual([piCalls[0]!.idempotencyKey, piCalls[0]!.idempotencyKey, `${piCalls[0]!.idempotencyKey}:1`]);
   });
 
   it('404 for an unknown order code', async () => {
@@ -135,9 +166,9 @@ describe('POST /v1/shop/orders/{code}/payment-intent', () => {
   });
 
   it('409 when the order is not PendingPayment', async () => {
-    const { code } = await makeOrder();
+    const { code, receiptToken } = await makeOrder();
     await withStore(STORE, async (tx) => { await tx.update(s.order).set({ state: 'Paid' }).where(eq(s.order.code, code)); });
-    const res = await app.request(`/v1/shop/orders/${code}/payment-intent`, { method: 'POST', headers: hdr() });
+    const res = await app.request(`/v1/shop/orders/${code}/payment-intent`, { method: 'POST', headers: hdr({ 'x-receipt-token': receiptToken }) });
     expect(res.status).toBe(409);
   });
 });

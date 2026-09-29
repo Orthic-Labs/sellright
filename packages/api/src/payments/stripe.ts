@@ -161,6 +161,11 @@ export function verifyIntent(pi: IntentLike, input: CreatePaymentInput): Payment
   }
   if (pi.status === 'succeeded') return { state: 'Settled', providerRef: pi.id, metadata: { latest_charge: pi.latest_charge ?? null, ...gateway } };
   if (pi.status === 'requires_capture') return { state: 'Authorized', providerRef: pi.id, metadata: gateway };
+  // D12: async payment methods (automatic_payment_methods is enabled) sit in
+  // 'processing' while money may still settle — that is Pending, never
+  // Declined. The succeeded/payment_failed webhook (or reconcileStripeOrder)
+  // resolves the Pending row later.
+  if (pi.status === 'processing') return { state: 'Pending', providerRef: pi.id, errorMessage: null, metadata: gateway };
   return { state: 'Declined', providerRef: pi.id, errorMessage: `status: ${pi.status}`, metadata: gateway };
 }
 
@@ -212,13 +217,42 @@ export const stripeProvider: PaymentProvider = {
         // second (duplicate) refund row.
         ...(input.idempotencyKey ? { metadata: { [STRIPE_REFUND_ATTEMPT_KEY]: input.idempotencyKey } } : {}),
       }, opts);
-      const state: RefundResult['state'] = r.status === 'succeeded' ? 'Settled' : r.status === 'pending' ? 'Pending' : 'Failed';
+      // D11: 'requires_action' is still in flight (the refund can yet succeed);
+      // mapping it to Failed would free the reservation and allow an over-refund.
+      const state: RefundResult['state'] = stripeRefundState(r.status ?? '');
       return { state, providerRef: r.id, errorMessage: state === 'Failed' ? `refund status: ${r.status}` : null };
     } catch (e) {
       return { state: 'Pending', providerRef: null, errorMessage: 'Stripe refund outcome requires reconciliation' };
     }
   },
 };
+
+/** Stripe refund status → our refund state. Only an explicit failure/cancel is
+ *  Failed; succeeded is Settled; everything else (pending, requires_action,
+ *  unknown future statuses) stays Pending for reconciliation (D11). */
+export function stripeRefundState(status: string): 'Settled' | 'Pending' | 'Failed' {
+  if (status === 'succeeded') return 'Settled';
+  if (status === 'failed' || status === 'canceled') return 'Failed';
+  return 'Pending';
+}
+
+/** Read-only provider truth for one PaymentIntent (settlement fallback, D1). */
+export async function retrieveStripeIntent(storeId: string, mode: StripeMode, intentId: string): Promise<IntentLike & { last_payment_error?: { message?: string | null } | null }> {
+  const client = await resolveStripeClient(storeId, mode);
+  return (await client.paymentIntents.retrieve(intentId)) as unknown as IntentLike & { last_payment_error?: { message?: string | null } | null };
+}
+
+/** Cancel an abandoned PaymentIntent at Stripe (stale sweeper, D5). Returns the
+ *  PI as Stripe reports it after the call; a PI that can no longer be cancelled
+ *  (e.g. it just succeeded) is re-retrieved instead of throwing. */
+export async function cancelStripeIntent(storeId: string, mode: StripeMode, intentId: string): Promise<IntentLike> {
+  const client = await resolveStripeClient(storeId, mode);
+  try {
+    return (await client.paymentIntents.cancel(intentId, {}, { idempotencyKey: `pi-cancel:${intentId}` })) as unknown as IntentLike;
+  } catch {
+    return (await client.paymentIntents.retrieve(intentId)) as unknown as IntentLike;
+  }
+}
 
 export interface StripeRefundLike {
   id: string;

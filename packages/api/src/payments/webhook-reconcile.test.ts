@@ -8,7 +8,8 @@ describe('refundStateFromStripe', () => {
     expect(refundStateFromStripe('pending')).toBe('Pending');
     expect(refundStateFromStripe('failed')).toBe('Failed');
     expect(refundStateFromStripe('canceled')).toBe('Failed');
-    expect(refundStateFromStripe('requires_action')).toBe('Failed');
+    // D11: requires_action is still in flight — never Failed (would free the reservation → over-refund).
+    expect(refundStateFromStripe('requires_action')).toBe('Pending');
   });
 });
 

@@ -58,6 +58,9 @@ const JOB_KEYS = {
   // SELLRIGHT-ISSUES P1: durable-retry drain for catalog_manifest_pending
   // (manifest/manifest-pending.ts).
   'catalog-manifest-drain': NAMESPACE | 15n,
+  // Payments D7/D8: stuck NMI/Sezzle attempt auto-verification
+  // (jobs/gateway-recovery.ts). 20 leaves room for parallel lanes' keys.
+  'gateway-recovery': NAMESPACE | 20n,
 } as const satisfies Record<string, bigint>;
 
 export type LeaderLockedJob = keyof typeof JOB_KEYS;

@@ -31,6 +31,7 @@ import { pool, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
 import { releaseOrderLoyalty } from '../loyalty/ledger.js';
+import { sweepStaleStripeIntents } from '../payments/stripe-reconcile.js';
 
 export type ReleaseStaleOpts = { apply: boolean; ttlMin: number; log?: (m: string) => void; batchLimit?: number };
 
@@ -54,6 +55,15 @@ export async function releaseStaleAllocations(opts: ReleaseStaleOpts): Promise<{
   let totalReleased = 0;
 
   for (const st of stores.rows) {
+    // D5: resolve tracked Stripe intents at Stripe BEFORE cancelling: a
+    // succeeded PI settles (never cancel paid money), processing/
+    // requires_action holds, anything else is cancelled at Stripe first.
+    // Stripe is called with no transaction open. Dry-run never touches Stripe;
+    // orders with unresolved intents are skipped by the claim below either way.
+    if (apply) {
+      const sw = await sweepStaleStripeIntents(st.id, cutoff, batchLimit, log);
+      if (sw.checked) log(`[release-stale] ${st.slug}: stripe intents checked=${sw.checked} settled=${sw.settled} held=${sw.held} cancelled=${sw.cancelled} errors=${sw.errors}`);
+    }
     const res = await withStore(st.id, async (tx) => {
       // Claim a batch under FOR UPDATE SKIP LOCKED: a concurrent pass (another
       // process that bypassed the leader lock, or an overlapping manual run)
@@ -64,7 +74,9 @@ export async function releaseStaleAllocations(opts: ReleaseStaleOpts): Promise<{
             WHERE state = 'PendingPayment' AND created_at < ${cutoff} AND store_id = ${st.id}
               AND NOT EXISTS (SELECT 1 FROM payment_attempt pa
                 WHERE pa.order_id = "order".id AND pa.store_id = "order".store_id
-                  AND pa.status IN ('processing', 'unknown', 'pending'))
+                  AND (pa.status IN ('processing', 'unknown', 'pending')
+                    -- D5: a tracked Stripe intent not yet resolved at Stripe
+                    OR (pa.operation = 'intent' AND pa.status IN ('open', 'failed', 'action_required'))))
               AND NOT EXISTS (SELECT 1 FROM payment p
                 WHERE p.order_id = "order".id AND p.store_id = "order".store_id
                   AND p.state IN ('Pending', 'Authorized'))
@@ -116,6 +128,13 @@ export async function releaseStaleAllocations(opts: ReleaseStaleOpts): Promise<{
                 WHERE stock.variant_id = v.variant_id AND stock.store_id = ${st.id}`,
           );
         }
+        // D6: record the released units as cancelled on the line, so a later
+        // refund of a paid-after-cancel order (MONEY-4) computes unfulfilled
+        // = 0 and never releases the same allocation a second time.
+        await tx.execute(
+          sql`UPDATE order_line SET cancelled_qty = quantity - fulfilled_qty
+              WHERE order_id IN ${orderIds} AND quantity - fulfilled_qty - cancelled_qty > 0`,
+        );
         await tx.execute(
           sql`UPDATE "order" SET state = 'Cancelled', updated_at = now() WHERE id IN ${orderIds}`,
         );

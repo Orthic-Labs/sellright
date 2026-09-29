@@ -64,3 +64,47 @@ export const affiliateTokenRotated = (store: StoreCtx, data: {
     `<p>This affiliate coupon (<strong>${escape(data.code)}</strong>) was reassigned to you. For security the previous access link was revoked — use the new one below.</p>
      <p><a href="${escape(data.accessUrl)}" style="display:inline-block;padding:10px 16px;background:#222;color:#fff;text-decoration:none;border-radius:6px">Open your dashboard</a></p>
      <p>Your new dashboard link: ${escape(data.accessUrl)}</p>`);
+
+/** Operator alert for payment money that needs manual reconciliation
+ *  (payments audit D3/D4/D14): captured funds that could not be applied to the
+ *  order automatically. Never auto-refunded — review in the gateway dashboard. */
+export const paymentAlert = (store: StoreCtx, data: {
+  kind: string;
+  title: string;
+  provider: string;
+  providerRef: string | null;
+  orderCode: string | null;
+  amountCents: number | null;
+  currency: string | null;
+  detail: string;
+}) =>
+  wrap(store, `${data.title} — ${data.orderCode ?? data.providerRef ?? 'payment'}`,
+    `<p>${escape(data.detail)}</p>
+     <table style="width:100%;border-collapse:collapse;margin:12px 0">
+       <tr><td style="padding:4px 0;color:#666">Alert</td><td>${escape(data.kind)}</td></tr>
+       <tr><td style="padding:4px 0;color:#666">Provider</td><td>${escape(data.provider)}</td></tr>
+       ${data.providerRef ? `<tr><td style="padding:4px 0;color:#666">Reference</td><td>${escape(data.providerRef)}</td></tr>` : ''}
+       ${data.orderCode ? `<tr><td style="padding:4px 0;color:#666">Order</td><td>${escape(data.orderCode)}</td></tr>` : ''}
+       <tr><td style="padding:4px 0;color:#666">Amount</td><td>${escape(money(data.amountCents, data.currency))}</td></tr>
+     </table>
+     <p>It is listed under Payment reconciliation in the admin.</p>`);
+
+/** D14: operator alert — money settled on an order that could no longer be
+ *  paid (e.g. a gateway capture landing after the stale sweeper cancelled it).
+ *  Needs a human: refund the customer or reinstate the order. */
+export const paymentAfterCancelAlert = (store: StoreCtx, data: {
+  orderCode: string | null;
+  orderState: string;
+  method: string;
+  providerRef: string | null;
+  amountCents: number;
+  currency: string | null;
+}) =>
+  wrap(store, `Payment received on ${data.orderState.toLowerCase()} order ${data.orderCode ?? ''}`.trim(),
+    `<p>A ${escape(data.method)} payment settled against an order that is <strong>${escape(data.orderState)}</strong>, so it was not marked paid. The money was recorded in the payment ledger. Refund the customer or restore the order, then resolve it under Payment reconciliation.</p>
+     <table style="width:100%;border-collapse:collapse;margin:12px 0">
+       ${data.orderCode ? `<tr><td style="padding:4px 0;color:#666">Order</td><td>${escape(data.orderCode)}</td></tr>` : ''}
+       <tr><td style="padding:4px 0;color:#666">Method</td><td>${escape(data.method)}</td></tr>
+       <tr><td style="padding:4px 0;color:#666">Reference</td><td>${escape(data.providerRef ?? 'none')}</td></tr>
+       <tr><td style="padding:4px 0;color:#666">Amount</td><td>${escape(money(data.amountCents, data.currency))}</td></tr>
+     </table>`);

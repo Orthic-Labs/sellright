@@ -35,7 +35,7 @@ export async function ownedOrder(tx: Tx, code: string, receipt?: string, custome
 }
 function view(attempt: typeof s.paymentAttempt.$inferSelect) {
   return { attemptId: attempt.id, status: attempt.status,
-    ...(attempt.result as { checkoutUrl?: string; state?: string } | null ?? {}) };
+    ...(attempt.result as { checkoutUrl?: string; state?: string; message?: string } | null ?? {}) };
 }
 
 export async function startGatewayPayment(input: {
@@ -146,7 +146,10 @@ export async function finishAttempt(storeId: string, id: string, result: Payment
     const [updated] = await tx.update(s.paymentAttempt).set({
       status, providerRef: result.providerRef,
       result: { state: applied.orderState, payment: result.state,
-        ...(status === 'unknown' ? { error: 'Payment requires reconciliation' } : {}) },
+        ...(status === 'unknown' ? { error: 'Payment requires reconciliation' } : {}),
+        // Customer-safe copy only (providers never put raw gateway text in
+        // errorMessage) — lets the storefront explain a decline/duplicate.
+        ...((status === 'failed' || status === 'unknown') && result.errorMessage ? { message: result.errorMessage } : {}) },
       updatedAt: new Date(),
     }).where(eq(s.paymentAttempt.id, id)).returning();
     return view(updated!);

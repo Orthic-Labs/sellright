@@ -24,7 +24,7 @@ import { emitEvent } from '../webhooks/emit.js';
 import { resolveStoreForGatewayEvent } from './tenant-resolution.js';
 import { finalizeRefund, enqueueRefundSettledEmail, RefundError } from './refunds.js';
 import { recordStripeDisputeAlert } from '../disputes/disputes.js';
-import { STRIPE_REFUND_ATTEMPT_KEY } from './stripe.js';
+import { STRIPE_REFUND_ATTEMPT_KEY, stripeRefundState } from './stripe.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const piId = (v: unknown): string | null => (typeof v === 'string' ? v : (v as { id?: string } | null)?.id ?? null);
@@ -102,8 +102,8 @@ export async function resolveStoreIdForSubscriptionEvent(obj: {
   return sm && UUID.test(sm) ? sm : null;
 }
 
-export const refundStateFromStripe = (status: string): 'Settled' | 'Pending' | 'Failed' =>
-  status === 'succeeded' ? 'Settled' : status === 'pending' ? 'Pending' : 'Failed';
+// D11: requires_action (and any non-terminal status) stays Pending — see stripeRefundState.
+export const refundStateFromStripe = (status: string): 'Settled' | 'Pending' | 'Failed' => stripeRefundState(status);
 
 /** Order state implied by total settled refunds vs the order total. null = no
  *  transition (nothing settled yet). Pure — money-critical, so it's unit-tested. */
@@ -290,8 +290,12 @@ async function recomputeOrderRefundState(tx: Tx, storeId: string, orderId: strin
   const [ord] = await tx.select({ state: s.order.state, grandTotal: s.order.grandTotal, code: s.order.code }).from(s.order).where(eq(s.order.id, orderId)).limit(1);
   if (!ord) return;
   const [agg] = await tx.select({ total: sql<number>`coalesce(sum(${s.refund.amount}), 0)::int` })
-    .from(s.refund).where(and(eq(s.refund.orderId, orderId), eq(s.refund.state, 'Settled')));
+    .from(s.refund).innerJoin(s.payment, eq(s.payment.id, s.refund.paymentId))
+    // D4: refunds of a duplicate capture are money-only — never order state.
+    .where(and(eq(s.refund.orderId, orderId), eq(s.refund.state, 'Settled'),
+      sql`coalesce((${s.payment.metadata}->>'duplicate')::boolean, false) = false`));
   const refunded = agg?.total ?? 0;
+  if (!refunded) return;
   const target = refundTargetState(refunded, ord.grandTotal);
   if (!target) return; // nothing settled yet — no state write, no event
   // FIX (second partial refund suppresses order.refunded): the FSM has no

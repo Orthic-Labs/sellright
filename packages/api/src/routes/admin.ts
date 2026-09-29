@@ -4,6 +4,7 @@ import { errJson } from '../lib/api-error.js';
 import { and, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
+import { cancelOrderStripeIntents } from '../payments/stripe-reconcile.js';
 import { releaseOrderLoyalty } from '../loyalty/ledger.js';
 import { bearer } from '../auth/session.js';
 import { verifyPassword } from '../auth/password.js';
@@ -586,6 +587,10 @@ admin.openapi(
       const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
       for (const l of lines) {
         const release = l.quantity - l.fulfilledQty - l.cancelledQty;
+        if (release > 0) {
+          // D6: mark released units cancelled so a later refund can't release them again.
+          await tx.update(s.orderLine).set({ cancelledQty: sql`${s.orderLine.cancelledQty} + ${release}` }).where(eq(s.orderLine.id, l.id));
+        }
         if (release > 0 && l.variantId) {
           await tx.update(s.stock).set({ allocated: sql`greatest(${s.stock.allocated} - ${release}, 0)` })
             .where(and(eq(s.stock.variantId, l.variantId), eq(s.stock.storeId, st.storeId)));
@@ -596,9 +601,11 @@ admin.openapi(
       // LOYALTY-1: release points reserved by this order (idempotent).
       await releaseOrderLoyalty(tx, st.storeId, o.id, admin.email);
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: o.id, action: 'cancel', fromState: o.state, toState: 'Cancelled' });
-      return { kind: 'ok' as const };
+      return { kind: 'ok' as const, orderId: o.id };
     });
     if (stockChanged) onStockChanged(st.slug);
+    // After commit: cancel the order's open Stripe intents (best-effort, audited).
+    if (res.kind === 'ok') await cancelOrderStripeIntents(st.storeId, res.orderId, admin.email);
     if (res.kind === 'notfound') throw new HttpError(404, 'order not found');
     if (res.kind === 'paid') throw new HttpError(409, `paid order — use Refund (state ${res.state})`);
     if (res.kind === 'badstate') throw new HttpError(409, `cannot cancel order in state ${res.state}`);

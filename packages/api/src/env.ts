@@ -284,6 +284,15 @@ const EnvSchema = z.object({
   // jobs/processed-event-reaper.ts) — never lower this without checking the
   // longest replay/retry window the payment provider guarantees.
   JOBS_PROCESSED_EVENT_REAPER_RETENTION_DAYS: z.coerce.number().int().positive().optional(),
+  // gateway-recovery job (payments D7/D8): auto-verify stuck NMI/Sezzle
+  // attempts. Applies by default (like gateway-events); '0' = dry-run log only.
+  JOBS_GATEWAY_RECOVERY_APPLY: z.enum(['0', '1']).optional(),
+  // Minimum attempt age (minutes) before recovery touches it.
+  JOBS_GATEWAY_RECOVERY_AGE_MIN: z.coerce.number().int().positive().optional(),
+  // Verification tries before an attempt is flagged for manual review.
+  JOBS_GATEWAY_RECOVERY_MAX_ATTEMPTS: z.coerce.number().int().positive().optional(),
+  // Unapproved Sezzle checkout sessions older than this (minutes) are expired.
+  SEZZLE_SESSION_EXPIRY_MIN: z.coerce.number().int().positive().optional(),
   // SEC-5: only honor CF-Connecting-IP for rate-limit/audit IP resolution when the
   // deployment is actually behind Cloudflare's edge. Without this, any store not
   // behind Cloudflare lets a client set that header itself and defeat rate limiting.

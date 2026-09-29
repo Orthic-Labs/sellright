@@ -23,6 +23,7 @@ import { isMaintenanceOn } from '../maintenance.js';
 import { autoDeliver } from './auto-deliver.js';
 import { releaseStaleAllocations } from './release-stale-allocations.js';
 import { reconcileGatewayEvents } from './reconcile-gateway-events.js';
+import { recoverGatewayAttempts } from './gateway-recovery.js';
 import { reapStuckWebhooks } from './webhook-reaper.js';
 import { reapProcessedEvents } from './processed-event-reaper.js';
 import { abandonStaleCarts, cleanupExpiredCarts } from './cart-maintenance.js';
@@ -96,6 +97,19 @@ export function startJobScheduler(): void {
   });
 
   every(60_000, 'gateway-events', 'gateway-events', reconcileGatewayEvents);
+  // D7/D8: stuck NMI/Sezzle attempts (processing/unknown/pending) are
+  // auto-verified with backoff; unapproved Sezzle sessions expire, approved
+  // ones capture (order still payable) or release. Applies by default like
+  // gateway-events — every action goes through the authoritative provider read.
+  const gatewayRecoveryApply = env.JOBS_GATEWAY_RECOVERY_APPLY !== '0';
+  every(5 * 60_000, 'gateway-recovery', 'gateway-recovery', () => recoverGatewayAttempts({
+    apply: gatewayRecoveryApply,
+    ageMin: env.JOBS_GATEWAY_RECOVERY_AGE_MIN ?? 15,
+    sezzleSessionExpiryMin: env.SEZZLE_SESSION_EXPIRY_MIN ?? 180,
+    maxAttempts: env.JOBS_GATEWAY_RECOVERY_MAX_ATTEMPTS ?? 10,
+    backoffBaseMin: 5,
+    log: jobLog,
+  }));
   // Stock is never cached/polled (locked invariant): the catalog manifest used
   // to regenerate on a 60s interval, which meant a stock change could sit
   // stale for up to a minute. It now regenerates IMMEDIATELY from
