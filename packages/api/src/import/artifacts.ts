@@ -24,6 +24,13 @@ const LIMIT = 67_108_864;
 const directoryFlags = constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW;
 const fileFlags = constants.O_RDONLY | constants.O_NOFOLLOW;
 
+/** Staged assets are public storefront media that the web server (often a
+ * different uid, e.g. nginx in a container) serves straight from ASSET_DIR —
+ * world-readable, like files written by the admin upload route. The private
+ * manifest above stays 0600. */
+export const PUBLIC_DIR_MODE = 0o755;
+export const PUBLIC_FILE_MODE = 0o644;
+
 /** Resolve children through pinned directory handles. A renamed parent or
  * swapped symlink cannot redirect subsequent reads/writes to another tree.
  * The migration runtime runs on Linux (including the supplied containers). */
@@ -35,12 +42,12 @@ async function withinRoot<T>(root: string, path: string, create: boolean,
       parts.some(part => !part || part === '.' || part === '..')) throw new Error('Unsafe asset path');
   const handles: FileHandle[] = [];
   try {
-    if (create) await mkdir(root, { recursive: true, mode: 0o700 });
+    if (create) await mkdir(root, { recursive: true, mode: PUBLIC_DIR_MODE });
     let directory = await open(resolve(root), directoryFlags);
     handles.push(directory);
     for (const part of parts.slice(0, -1)) {
       const child = '/proc/self/fd/' + directory.fd + '/' + part;
-      if (create) await mkdir(child, { mode: 0o700 }).catch(error => {
+      if (create) await mkdir(child, { mode: PUBLIC_DIR_MODE }).catch(error => {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
       });
       directory = await open(child, directoryFlags);
@@ -114,7 +121,7 @@ async function applyTargetStatus(targetRoot: string, targetPath: string, bytes: 
   return await withinRoot(targetRoot, targetPath, true, async target => {
     let handle: FileHandle;
     try {
-      handle = await open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+      handle = await open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, PUBLIC_FILE_MODE);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
       const existing = await open(target, fileFlags);
