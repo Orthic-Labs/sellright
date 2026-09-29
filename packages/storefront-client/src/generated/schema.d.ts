@@ -7037,6 +7037,7 @@ export interface paths {
                                 name: string;
                                 sameAs: string[];
                             };
+                            productUrlPattern: string;
                             robotsDisallow: string[];
                             siteUrl: string | null;
                             staticPaths: string[];
@@ -7079,6 +7080,7 @@ export interface paths {
                             name?: string;
                             sameAs?: string[];
                         };
+                        productUrlPattern?: string | null;
                         robotsDisallow?: string[];
                         /** Format: uri */
                         siteUrl?: string | null;
@@ -7101,6 +7103,7 @@ export interface paths {
                                 name: string;
                                 sameAs: string[];
                             };
+                            productUrlPattern: string;
                             robotsDisallow: string[];
                             siteUrl: string | null;
                             staticPaths: string[];
