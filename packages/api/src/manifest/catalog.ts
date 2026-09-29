@@ -94,6 +94,8 @@ export interface NativeProductManifestEntryV2 {
   name: string;
   tags: string[];
   priceRange: { min: NativeMoney; max: NativeMoney };
+  /** Opt-in display range including disabled choices; never a purchase quote. */
+  displayPriceRange?: { min: NativeMoney; max: NativeMoney };
   hasMultiplePrices: boolean;
   /** Availability only — see the file-level note above. Never a quantity. */
   inStock: boolean;
@@ -110,6 +112,8 @@ export interface NativeProductDetailV2 extends NativeProductManifestEntryV2 {
   lastUpdated: string;
   description: string | null;
   variants: NativeVariantV2[];
+  /** Opt-in disabled choices for crossed-out display only. Never purchasable. */
+  displayOnlyVariants?: NativeVariantV2[];
 }
 
 function nativeMoney(amount: number, store: Pick<StoreCtx, 'currency' | 'taxInclusive'>): NativeMoney {
@@ -143,14 +147,18 @@ async function buildEntries(tx: Tx, store: StoreCtx, priceRule: VariantPriceRule
 
   const productIds = products.map((p) => p.id);
   const assetById = new Map((await tx.select({ id: s.asset.id, path: s.asset.path }).from(s.asset).where(eq(s.asset.storeId, store.id))).map((a) => [a.id, a.path]));
-  const variants = await tx.select().from(s.productVariant)
-    .where(and(inArray(s.productVariant.productId, productIds), isNull(s.productVariant.deletedAt), eq(s.productVariant.enabled, true)))
+  const showDisabledVariants = (store.config as { catalog?: { showDisabledVariants?: boolean } } | null)?.catalog?.showDisabledVariants === true;
+  const catalogVariants = await tx.select().from(s.productVariant)
+    .where(and(inArray(s.productVariant.productId, productIds), isNull(s.productVariant.deletedAt), showDisabledVariants ? undefined : eq(s.productVariant.enabled, true)))
     .orderBy(asc(s.productVariant.sku));
+  const variants = catalogVariants.filter((v) => v.enabled);
   const variantsByProduct = group(variants, (v) => v.productId);
-  const variantIds = variants.map((v) => v.id);
+  const displayByProduct = group(catalogVariants.filter((v) => !v.enabled), (v) => v.productId);
+  const variantIds = catalogVariants.map((v) => v.id);
+  const enabledVariantIds = variants.map((v) => v.id);
   const stockByVariant = new Map(
-    variantIds.length
-      ? (await tx.select().from(s.stock).where(and(eq(s.stock.storeId, store.id), inArray(s.stock.variantId, variantIds)))).map((st) => [st.variantId, st.onHand - st.allocated])
+    enabledVariantIds.length
+      ? (await tx.select().from(s.stock).where(and(eq(s.stock.storeId, store.id), inArray(s.stock.variantId, enabledVariantIds)))).map((st) => [st.variantId, st.onHand - st.allocated])
       : [],
   );
   const vo = variantIds.length
@@ -219,7 +227,7 @@ async function buildEntries(tx: Tx, store: StoreCtx, priceRule: VariantPriceRule
       .map((a, i): NativeImage | null => { const url = assetUrl(a.path); return url ? { url, alt: null, position: i } : null; })
       .filter((x): x is NativeImage => x !== null);
     const manifestImages: NativeImage[] = featured ? [{ url: featured, alt: null, position: 0 }] : [];
-    const variantsV2: NativeVariantV2[] = vs.map((v) => {
+    const toNativeVariant = (v: typeof catalogVariants[number]): NativeVariantV2 => {
       const effective = selectPrice(v, priceRule);
       return {
         id: v.id,
@@ -236,8 +244,16 @@ async function buildEntries(tx: Tx, store: StoreCtx, priceRule: VariantPriceRule
           .map((a, i): NativeImage | null => { const url = assetUrl(a.path); return url ? { url, alt: null, position: i } : null; })
           .filter((image): image is NativeImage => image !== null),
       };
-    });
+    };
+    const variantsV2 = vs.map(toNativeVariant);
+    const displayOnlyVariants = (displayByProduct.get(p.id) ?? []).map(toNativeVariant);
+    const displayPrices = [...vs, ...(displayByProduct.get(p.id) ?? [])].map((v) => selectPrice(v, priceRule));
+    const displayMetadata = showDisabledVariants && displayPrices.length ? { displayPriceRange: {
+      min: nativeMoney(Math.min(...displayPrices), store),
+      max: nativeMoney(Math.max(...displayPrices), store),
+    } } : {};
     manifestProductsV2.push({
+      ...displayMetadata,
       id: p.id, slug: p.slug, name: p.name, tags: p.tags ?? [],
       priceRange: { min: nativeMoney(min, store), max: nativeMoney(max, store) },
       hasMultiplePrices: min !== max, inStock, images: manifestImages,
@@ -245,6 +261,8 @@ async function buildEntries(tx: Tx, store: StoreCtx, priceRule: VariantPriceRule
       hasPreOrder: vs.some((v) => v.isPreOrder),
     });
     detailsV2.push({
+      ...displayMetadata,
+      ...(showDisabledVariants ? { displayOnlyVariants } : {}),
       id: p.id, slug: p.slug, name: p.name, tags: p.tags ?? [],
       priceRange: { min: nativeMoney(min, store), max: nativeMoney(max, store) },
       hasMultiplePrices: min !== max, inStock, images: productImages,
