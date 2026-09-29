@@ -92,6 +92,9 @@ export const OPTIONAL_SOURCE_TABLES: Record<string, readonly string[]> = {
 /** Non-customFields source columns that are optional per source vintage. */
 const EXTRA_OPTIONAL_COLUMNS: Record<string, readonly string[]> = {
   order_line: ['orderPlacedQuantity'],
+  // Timestamps preserved when present (sitemap lastmod); absent = import time.
+  product: ['createdAt', 'updatedAt'],
+  blog_post: ['createdAt', 'updatedAt'],
 };
 
 /** Per-store convention: Vendure compiles declared custom fields into
