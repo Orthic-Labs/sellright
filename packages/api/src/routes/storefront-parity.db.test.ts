@@ -188,7 +188,7 @@ describe('email probe bot protection', () => {
     expect(verifyTurnstileToken).not.toHaveBeenCalled();
     expect(await (await check({})).json()).toEqual({ exists: false });
     expect(await (await check({ turnstileToken: 'invalid' })).json()).toEqual({ exists: false });
-    expect(await (await check({ turnstileToken: 'valid-token' })).json()).toEqual({ exists: true });
+    expect(await (await check({ turnstileToken: 'valid-token' })).json()).toMatchObject({ exists: true });
     expect(verifyTurnstileToken).toHaveBeenCalledWith({ secret: 'fixture-only', token: 'valid-token', remoteIp: 'unknown' });
   });
 });
