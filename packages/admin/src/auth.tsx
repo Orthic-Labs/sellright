@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { api, auth, type Me, type StoreAccess } from './api';
+import { adminHref } from './lib/base-path';
 
 interface AuthState {
   loading: boolean;
@@ -40,7 +41,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try { await api.post('/logout'); } catch { /* ignore */ }
     auth.store = null;
     setMe(null); setStoreSlug(null);
-    location.assign('/login');
+    location.assign(adminHref('/login'));
   }
 
   const store = me?.stores.find((s) => s.slug === storeSlug) ?? me?.stores[0] ?? null;
