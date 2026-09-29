@@ -4,7 +4,7 @@
  * place that ever queries stock (queries.ts::productAvailability), keeping
  * "never cache stock" enforceable at a single call site.
  */
-import type { SeoConfig } from './config.js';
+import { productPath, type SeoConfig } from './config.js';
 import type { ProductAvailability } from './queries.js';
 
 /** cents -> a schema.org Offer price string. Assumes a 2-decimal currency
@@ -40,7 +40,7 @@ export function websiteSchema(config: SeoConfig): Record<string, unknown> | null
 
 export function productSchema(config: SeoConfig, product: ProductAvailability): Record<string, unknown> | null {
   if (!config.siteUrl) return null;
-  const url = `${config.siteUrl}/products/${encodeURIComponent(product.slug)}/`;
+  const url = `${config.siteUrl}${productPath(config, product.slug)}`;
   const schema: Record<string, unknown> = {
     '@context': 'https://schema.org',
     '@type': 'Product',

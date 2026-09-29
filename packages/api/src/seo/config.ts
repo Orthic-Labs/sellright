@@ -13,6 +13,7 @@
  *       "organization": { "name": "...", "logo": "https://.../logo.png", "sameAs": ["https://instagram.com/..."] },
  *       "robotsDisallow": ["checkout", "account", ...],  // path segments, no leading/trailing slash
  *       "staticPaths": ["/", "/about/", ...],       // sitemap-main entries; storefront-specific, so config-driven
+ *       "productUrlPattern": "/shop/{slug}/",       // storefront PDP route (sitemap + JSON-LD); default /products/{slug}/
  *       "indexNow": { "key": "<32-hex-or-similar>" }
  *     }
  *   }
@@ -31,6 +32,19 @@ export const DEFAULT_ROBOTS_DISALLOW: readonly string[] = [
 
 export const DEFAULT_STATIC_PATHS: readonly string[] = ['/'];
 
+/** Storefront PDP route, as a path with a `{slug}` placeholder. */
+export const DEFAULT_PRODUCT_URL_PATTERN = '/products/{slug}/';
+
+/** A usable pattern is an absolute path carrying exactly the `{slug}` placeholder. */
+export function isProductUrlPattern(v: unknown): v is string {
+  return typeof v === 'string' && v.startsWith('/') && !v.startsWith('//') && v.split('{slug}').length === 2 && !/[\s?#]/.test(v);
+}
+
+/** Absolute path of a product page for this store's storefront. */
+export function productPath(config: Pick<SeoConfig, 'productUrlPattern'>, slug: string): string {
+  return config.productUrlPattern.replace('{slug}', encodeURIComponent(slug));
+}
+
 export interface SeoOrganization {
   name: string;
   logo: string | null;
@@ -44,6 +58,8 @@ export interface SeoConfig {
   organization: SeoOrganization;
   robotsDisallow: string[];
   staticPaths: string[];
+  /** PDP route with a `{slug}` placeholder (see DEFAULT_PRODUCT_URL_PATTERN). */
+  productUrlPattern: string;
   /** IndexNow key, or null when the store hasn't configured one. */
   indexNowKey: string | null;
 }
@@ -98,6 +114,7 @@ export function seoConfigFromStore(store: { name: string; config: unknown }): Se
     },
     robotsDisallow: stringArray(raw.robotsDisallow) ?? [...DEFAULT_ROBOTS_DISALLOW],
     staticPaths: stringArray(raw.staticPaths) ?? [...DEFAULT_STATIC_PATHS],
+    productUrlPattern: isProductUrlPattern(raw.productUrlPattern) ? raw.productUrlPattern : DEFAULT_PRODUCT_URL_PATTERN,
     indexNowKey: INDEXNOW_KEY_RE.test(indexNowKeyRaw) ? indexNowKeyRaw.toLowerCase() : null,
   };
 }
@@ -110,5 +127,6 @@ export interface SeoConfigPatch {
   organization?: Partial<SeoOrganization>;
   robotsDisallow?: string[];
   staticPaths?: string[];
+  productUrlPattern?: string | null;
   indexNowKey?: string | null;
 }

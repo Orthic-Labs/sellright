@@ -16,7 +16,7 @@ import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { broadcastStoreCacheInvalidation } from '../store-context.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireWrite, requireManage, guard } from './admin-helpers.js';
-import { DEFAULT_ROBOTS_DISALLOW, DEFAULT_STATIC_PATHS, seoConfigFromStore, type SeoConfigPatch } from '../seo/config.js';
+import { DEFAULT_ROBOTS_DISALLOW, DEFAULT_STATIC_PATHS, isProductUrlPattern, seoConfigFromStore, type SeoConfigPatch } from '../seo/config.js';
 import { submitIndexNowUrls } from '../seo/indexnow.js';
 
 export const adminSeo = new OpenAPIHono();
@@ -48,6 +48,7 @@ const seoConfigOut = z.object({
   organization: z.object({ name: z.string(), logo: z.string().nullable(), sameAs: z.array(z.string()) }),
   robotsDisallow: z.array(z.string()),
   staticPaths: z.array(z.string()),
+  productUrlPattern: z.string(),
   indexNowConfigured: z.boolean(),
 });
 
@@ -71,6 +72,7 @@ const patchBody = z.object({
   organization: z.object({ name: z.string().optional(), logo: z.string().url().nullable().optional(), sameAs: z.array(z.string().url()).optional() }).optional(),
   robotsDisallow: z.array(z.string()).optional(),
   staticPaths: z.array(z.string()).optional(),
+  productUrlPattern: z.string().refine(isProductUrlPattern, 'must be an absolute path containing {slug}, e.g. /shop/{slug}/').nullable().optional(),
   indexNowKey: z.string().regex(/^[a-f0-9]{8,128}$/i).nullable().optional(),
 });
 
@@ -92,6 +94,7 @@ adminSeo.openapi(
       if (patch.organization !== undefined) next.organization = { ...(seo.organization as object | undefined), ...patch.organization };
       if (patch.robotsDisallow !== undefined) next.robotsDisallow = patch.robotsDisallow.length ? patch.robotsDisallow : [...DEFAULT_ROBOTS_DISALLOW];
       if (patch.staticPaths !== undefined) next.staticPaths = patch.staticPaths.length ? patch.staticPaths : [...DEFAULT_STATIC_PATHS];
+      if (patch.productUrlPattern !== undefined) next.productUrlPattern = patch.productUrlPattern ?? undefined;
       if (patch.indexNowKey !== undefined) next.indexNow = { ...(seo.indexNow as object | undefined), key: patch.indexNowKey };
       return next;
     });

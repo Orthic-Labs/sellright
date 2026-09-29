@@ -21500,6 +21500,9 @@
                         "type": "string"
                       }
                     },
+                    "productUrlPattern": {
+                      "type": "string"
+                    },
                     "indexNowConfigured": {
                       "type": "boolean"
                     }
@@ -21510,6 +21513,7 @@
                     "organization",
                     "robotsDisallow",
                     "staticPaths",
+                    "productUrlPattern",
                     "indexNowConfigured"
                   ]
                 }
@@ -21578,6 +21582,10 @@
                       "type": "string"
                     }
                   },
+                  "productUrlPattern": {
+                    "type": "string",
+                    "nullable": true
+                  },
                   "indexNowKey": {
                     "type": "string",
                     "nullable": true,
@@ -21639,6 +21647,9 @@
                         "type": "string"
                       }
                     },
+                    "productUrlPattern": {
+                      "type": "string"
+                    },
                     "indexNowConfigured": {
                       "type": "boolean"
                     }
@@ -21649,6 +21660,7 @@
                     "organization",
                     "robotsDisallow",
                     "staticPaths",
+                    "productUrlPattern",
                     "indexNowConfigured"
                   ]
                 }
