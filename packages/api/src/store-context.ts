@@ -110,6 +110,7 @@ export function invalidateStoreCache(slug?: string, host?: string): void {
 // mid-listen) and reacts to notifications by calling the same
 // invalidateStoreCache() used locally.
 const CHANNEL = 'store_cache_invalidate';
+const LISTENER_RETRY_MS = 5000;
 let listenerClient: PoolClient | undefined;
 
 interface InvalidationPayload { slug?: string; host?: string; }
@@ -144,7 +145,16 @@ export async function broadcastStoreCacheInvalidation(slug?: string, host?: stri
  */
 export async function startStoreCacheInvalidationListener(): Promise<void> {
   if (listenerClient) return;
-  const client = await pool.connect();
+  let client: PoolClient;
+  try {
+    client = await pool.connect();
+  } catch (e) {
+    // A busy pool at boot (or a DB restart) must not leave the process on the
+    // 60s TTL fallback forever: retry until the LISTEN connection is up.
+    logErr.error('store cache invalidation listener could not connect — retrying', e);
+    setTimeout(() => { void startStoreCacheInvalidationListener(); }, LISTENER_RETRY_MS).unref();
+    return;
+  }
   listenerClient = client;
   client.on('notification', (msg) => {
     if (msg.channel !== CHANNEL) return;

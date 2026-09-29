@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, mkdir, readFile, writeFile, symlink, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, symlink, rm, stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -31,6 +31,17 @@ describe.skipIf(process.platform !== 'linux')('confined asset migration', () => 
     await expect(stageVendureAssets(f.source, f.target, storeId, f.assets, true)).rejects.toThrow('Existing asset differs');
     expect(await readFile(destination, 'utf8')).toBe('existing different bytes');
   });
+  it('stages public media world-readable so a web server under another uid can serve it', async () => {
+    const f = await fixture();
+    const staged = await stageVendureAssets(f.source, f.target, storeId, f.assets, true);
+    const umask = process.umask();
+    const file = join(f.target, staged.manifest[0]!.targetPath);
+    expect((await stat(file)).mode & 0o777).toBe(0o644 & ~umask);
+    for (const dir of [join(f.target, storeId), join(f.target, storeId, ASSET_KEY_SEGMENT)]) {
+      expect((await stat(dir)).mode & 0o777).toBe(0o755 & ~umask);
+    }
+  });
+
   it('rejects source symlinks and traversal', async () => {
     const f = await fixture();
     await symlink(join(f.source, 'image.txt'), join(f.source, 'link.txt'));
