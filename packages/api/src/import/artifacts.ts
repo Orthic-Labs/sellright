@@ -87,12 +87,62 @@ async function readAt(root: string, relPath: string): Promise<Buffer> {
   });
 }
 
+export interface AssetManifestEntry {
+  sourcePath: string; targetPath: string; sha256: string; bytes: number; usedFallbackFrom?: string;
+}
+/** A source (and, where applicable, its sibling preview) that could not be
+ * read from disk at all — the asset row will exist in the target DB but
+ * point at a file that was never staged. Reported so the operator reviews it
+ * before go-live (run.ts turns each entry into an `asset-missing` manifest
+ * exclusion); it never aborts the whole migration by itself. */
+export interface AssetMissingEntry { path: string; targetPath: string }
+export interface AssetStageResult {
+  manifest: AssetManifestEntry[];
+  missing: AssetMissingEntry[];
+  counts: { copied: number; skipped: number; missing: number };
+}
+
+/** Stat the target path (through the same confined handle chain as a write)
+ * and report whether a byte-identical file is already there. In apply mode
+ * a genuinely absent file is written; in dry-run mode nothing is ever
+ * created — including the intermediate directories — so a target tree that
+ * doesn't exist yet at all (first-ever run) is reported the same way: the
+ * ENOENT from `withinRoot` failing to open a missing intermediate directory
+ * is treated identically to the leaf file being missing. A rejected symlink
+ * (ELOOP/EPERM from the O_NOFOLLOW opens) always propagates, apply or not —
+ * that's a traversal attempt, not an absent file. */
+async function targetStatus(targetRoot: string, targetPath: string, apply: boolean, bytes: Buffer, sha256: string): Promise<'copied' | 'skipped'> {
+  try {
+    return await withinRoot(targetRoot, targetPath, apply, async target => {
+      try {
+        const existing = await open(target, fileFlags);
+        try {
+          if (createHash('sha256').update(await readBounded(existing)).digest('hex') !== sha256) throw new Error('Existing asset differs');
+          return 'skipped' as const;
+        } finally { await existing.close(); }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        if (apply) {
+          const handle = await open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+          try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); }
+        }
+        return 'copied' as const;
+      }
+    });
+  } catch (error) {
+    if (!apply && (error as NodeJS.ErrnoException).code === 'ENOENT') return 'copied';
+    throw error;
+  }
+}
+
 export async function stageVendureAssets(
   sourceRoot: string, targetRoot: string, storeId: string,
   assets: Array<{ id: unknown; source: string; preview: string | null }>, apply: boolean,
-) {
+): Promise<AssetStageResult> {
   if (!/^[0-9a-f-]{36}$/i.test(storeId)) throw new Error('Invalid target store identity');
-  const manifest: Array<{ sourcePath: string; targetPath: string; sha256: string; bytes: number; usedFallbackFrom?: string }> = [];
+  const manifest: AssetManifestEntry[] = [];
+  const missing: AssetMissingEntry[] = [];
+  let copied = 0, skipped = 0;
   const paths = new Set(assets.flatMap(a => [a.source, a.preview].filter((p): p is string => !!p)));
   // A source-quality file can be pruned from disk (cleanup, CDN migration,
   // etc.) while its preview survives and is still what the storefront/admin
@@ -104,33 +154,37 @@ export async function stageVendureAssets(
   const previewForSource = new Map<string, string>();
   for (const a of assets) if (a.source && a.preview) previewForSource.set(a.source, a.preview);
   for (const path of [...paths].sort()) {
+    const targetPath = storeId + '/' + ASSET_KEY_SEGMENT + '/' + path;
     let bytes: Buffer;
     let usedFallbackFrom: string | undefined;
     try {
       bytes = await readAt(sourceRoot, path);
     } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       const fallbackPath = previewForSource.get(path);
-      if (!fallbackPath || (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      bytes = await readAt(sourceRoot, fallbackPath);
-      usedFallbackFrom = fallbackPath;
+      if (fallbackPath) {
+        try {
+          bytes = await readAt(sourceRoot, fallbackPath);
+          usedFallbackFrom = fallbackPath;
+        } catch (fallbackError) {
+          if ((fallbackError as NodeJS.ErrnoException).code !== 'ENOENT') throw fallbackError;
+          missing.push({ path, targetPath });
+          continue;
+        }
+      } else {
+        // No source file, no sibling preview to fall back to: a warning, not
+        // a crash — the caller (run.ts) surfaces it as a reviewed
+        // `asset-missing` exclusion instead of aborting the entire import for
+        // one broken file. The asset DB row is still created elsewhere
+        // (catalog.ts) and will point at a path nothing ever staged.
+        missing.push({ path, targetPath });
+        continue;
+      }
     }
     const sha256 = createHash('sha256').update(bytes).digest('hex');
-    const targetPath = storeId + '/' + ASSET_KEY_SEGMENT + '/' + path;
-    if (apply) await withinRoot(targetRoot, targetPath, true, async target => {
-      let handle: FileHandle;
-      try {
-        handle = await open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-        const existing = await open(target, fileFlags);
-        try {
-          if (createHash('sha256').update(await readBounded(existing)).digest('hex') !== sha256) throw new Error('Existing asset differs');
-        } finally { await existing.close(); }
-        return;
-      }
-      try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); }
-    });
+    const status = await targetStatus(targetRoot, targetPath, apply, bytes, sha256);
+    if (status === 'copied') copied++; else skipped++;
     manifest.push({ sourcePath: path, targetPath, sha256, bytes: bytes.length, ...(usedFallbackFrom ? { usedFallbackFrom } : {}) });
   }
-  return manifest;
+  return { manifest, missing, counts: { copied, skipped, missing: missing.length } };
 }
