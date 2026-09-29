@@ -135,15 +135,26 @@ export async function runMigration(input: {
     const loyaltyRaw = loyaltyConfig ?? (storeConfig as { loyalty?: unknown }).loyalty;
     await importLoyalty(ctx, loyaltyRaw ? loyaltySettingsFromConfig({ loyalty: loyaltyRaw }) : null);
     await importSettings(ctx);
-    const assetRows = await q('SELECT id, source, preview FROM asset ORDER BY id');
-    const assets = await stageVendureAssets(config.sourceAssetRoot, config.targetAssetRoot, config.storeId,
-      assetRows as Array<{ id: unknown; source: string; preview: string | null }>, false);
+    const assetRows = await q('SELECT id, source, preview FROM asset ORDER BY id') as Array<{ id: unknown; source: string; preview: string | null }>;
+    const assets = await stageVendureAssets(config.sourceAssetRoot, config.targetAssetRoot, config.storeId, assetRows, false);
     // SR-08 follow-up: a source-quality file missing on disk falls back to its
     // sibling preview (artifacts.ts) rather than dropping the asset — surface
     // every substitution as a reviewed exclusion instead of a silent swap.
-    for (const entry of assets) {
+    for (const entry of assets.manifest) {
       if (entry.usedFallbackFrom) exclusions.push({ type: 'asset-source-fallback', table: 'asset',
         detail: `${entry.sourcePath} missing on disk; used preview ${entry.usedFallbackFrom} instead`, count: 1 });
+    }
+    // A file that is missing on disk with no working fallback is a warning,
+    // not a crash: the affected asset row still lands in the target DB (it
+    // references the same targetPath other assets are staged under) and will
+    // serve a broken image until someone backfills the file — call that out
+    // by name so review catches it before go-live instead of discovering it
+    // in production.
+    for (const entry of assets.missing) {
+      const referencedBy = assetRows.filter(a => a.source === entry.path || a.preview === entry.path).map(a => a.id);
+      exclusions.push({ type: 'asset-missing', table: 'asset',
+        detail: `${entry.path} not found on disk (no working preview fallback); asset id(s) ${referencedBy.join(', ')} will reference a missing file at ${entry.targetPath}`,
+        count: referencedBy.length || 1 });
     }
     const sourceDigest = digest({ config, sourceReads, assets });
     if (input.apply && sourceDigest !== input.expectedDigest) throw new Error('Source or migration configuration changed since dry run');
@@ -160,8 +171,7 @@ export async function runMigration(input: {
     // contains customer PII/password hashes and must never be a public CI artifact.
     await writePrivateJson(input.manifestPath, manifest);
     if (input.apply) {
-      const copied = await stageVendureAssets(config.sourceAssetRoot, config.targetAssetRoot, config.storeId,
-        assetRows as Array<{ id: unknown; source: string; preview: string | null }>, true);
+      const copied = await stageVendureAssets(config.sourceAssetRoot, config.targetAssetRoot, config.storeId, assetRows, true);
       if (digest(copied) !== digest(assets)) throw new Error('Source assets changed during migration');
       await source.query('COMMIT');
       await target.query('COMMIT');
@@ -171,7 +181,7 @@ export async function runMigration(input: {
       // (ROLLBACK) branch below. Fire-and-forget per stock-hook.ts contract.
       onStockChanged(config.slug);
     } else { await source.query('COMMIT'); await target.query('ROLLBACK'); }
-    return { applied: !!input.apply, sourceDigest, exclusions,
+    return { applied: !!input.apply, sourceDigest, exclusions, assetCounts: assets.counts,
       counts: Object.fromEntries(Object.entries(after).map(([table, rows]) => [table, rows.length])) };
   } catch (error) {
     await target?.query('ROLLBACK').catch(() => undefined);
@@ -190,8 +200,18 @@ export async function migrationCli() {
   if (!configPath || !manifestPath || !process.env.SOURCE_DATABASE_URL || !process.env.DATABASE_URL) {
     throw new Error('Required: --config, --manifest, SOURCE_DATABASE_URL and DATABASE_URL');
   }
+  const rawConfig = await readPrivateJson(configPath) as Record<string, unknown>;
+  // --source-assets / --target-assets let an operator point a rehearsal run
+  // at a scratch asset tree without editing the (0600) config file itself.
+  // Both still flow through migrationConfig's z.string().min(1) validation
+  // below — an override is just a pre-parse substitution, not a bypass.
+  const sourceAssets = process.argv.includes('--source-assets') ? arg('--source-assets') : undefined;
+  const targetAssets = process.argv.includes('--target-assets') ? arg('--target-assets') : undefined;
+  const config = migrationConfig.parse({ ...rawConfig,
+    ...(sourceAssets ? { sourceAssetRoot: sourceAssets } : {}),
+    ...(targetAssets ? { targetAssetRoot: targetAssets } : {}) });
   await runMigration({ sourceUrl: process.env.SOURCE_DATABASE_URL, targetUrl: process.env.DATABASE_URL,
-    config: migrationConfig.parse(await readPrivateJson(configPath)), manifestPath,
+    config, manifestPath,
     apply: process.argv.includes('--apply'), expectedDigest: process.argv.includes('--expected-digest') ? arg('--expected-digest') : undefined,
   }).then(result => console.log(JSON.stringify(result))).catch(() => {
     console.error('Migration stopped. Verify the destination against any prepared manifest before retrying; a lost commit response requires reconciliation.');

@@ -13,7 +13,7 @@ export function migrationId(storeId: string, sourceKey: string, entity: string, 
  * Entries land on the manifest `exclusions` list — a reviewed decision, never
  * a silent drop. */
 export interface ManifestExclusion {
-  type: 'source-extension-absent' | 'unmapped-source-field' | 'unmappable-source-row' | 'merged-duplicate' | 'not-imported' | 'asset-source-fallback';
+  type: 'source-extension-absent' | 'unmapped-source-field' | 'unmappable-source-row' | 'merged-duplicate' | 'not-imported' | 'asset-source-fallback' | 'asset-missing';
   table: string;
   detail: string;
   count?: number;
