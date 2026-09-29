@@ -621,6 +621,35 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
       .rejects.toThrow('Resolve source pending/authorized payments before cutover');
   });
 
+  it('records a synthetic fulfillment for a Delivered source order that has no fulfillment documents', async () => {
+    const tag = 'f' + randomUUID().slice(0, 8);
+    await resetSource('dd', tag);
+    await sourcePool.query(`INSERT INTO "order" VALUES (5, 'ORD-5', 'Delivered', 'USD', '2024-03-05 00:00:00', 2000, 2000, 0, 0, NULL, NULL, NULL, 1, '2024-03-05 00:00:00', '2024-03-06 00:00:00', false)`);
+    await sourcePool.query(`INSERT INTO order_line VALUES (5, 1, 5, 2, 2, 1000, false, '[]', '[]')`);
+    await sourcePool.query(`INSERT INTO payment VALUES (5, '2024-03-05 00:00:00', 5, 'nmi-payment', 'Settled', 2000, 'nmi-txn-500', '{}', NULL)`);
+    const storeId = randomUUID();
+    const f = await fixtureConfig(storeId, {
+      nmi: { accountId: 'nmi-acct', mode: 'live' },
+      sezzle: { accountId: 'sez-acct', mode: 'live' },
+      stripe: { accountId: 'acct_dd', mode: 'live' },
+    });
+    const dry = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config, manifestPath: f.manifestPath });
+    expect(dry.exclusions.some(e => e.table === 'fulfillment' && /synthetic fulfillment/.test(e.detail))).toBe(true);
+    await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config,
+      manifestPath: f.applyManifestPath, apply: true, expectedDigest: dry.sourceDigest });
+    const orderId = migrationId(storeId, 'vendure:test', 'order', 5);
+    const fulfillments = await targetRows(storeId, 'fulfillment', `AND order_id = '${orderId}'`);
+    expect(fulfillments).toHaveLength(1);
+    expect(fulfillments[0]!.state).toBe('Delivered');
+    expect(fulfillments[0]!.tracking_code).toBeNull();
+    expect(fulfillments[0]!.metadata).toMatchObject({ synthetic: true, sourceOrderState: 'Delivered' });
+    const line = await targetOne(storeId, 'order_line', `AND order_id = '${orderId}'`);
+    expect(line.fulfilled_qty).toBe(2);
+    // PaymentSettled source orders (not shipped) get nothing synthesized.
+    const settled = await targetRows(storeId, 'fulfillment', `AND order_id = '${migrationId(storeId, 'vendure:test', 'order', 1)}'`);
+    expect(settled).toHaveLength(0);
+  });
+
   it('carries source id order into option group/value position (id ascending, not source insertion order)', async () => {
     const tag = 'd' + randomUUID().slice(0, 8);
     await resetSource('dd', tag);
