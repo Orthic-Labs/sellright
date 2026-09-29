@@ -124,7 +124,7 @@ auth.openapi(
       // SR-12: enqueue the verification email in the SAME txn — a rolled-back
       // registration can't mail a dead token, and the outbox retries delivery
       // instead of dropping it on a transient SMTP failure (was inline send).
-      const verifyUrl = `${resolveStorefrontUrl(emailStoreCtx(st))}/verify-email?token=${verifyRaw}`;
+      const verifyUrl = `${resolveStorefrontUrl(emailStoreCtx(st))}/verify?token=${verifyRaw}`;
       await enqueueEmailVerify(tx, st.id, emailStoreCtx(st), email, { url: verifyUrl });
       return { token, id: cust!.id, firstName: cust!.firstName, lastName: cust!.lastName };
     });
@@ -228,7 +228,7 @@ auth.openapi(
       if (!cust || cust.emailVerified) return; // enumeration-safe: identical 200 either way
       const verifyRaw = randomBytes(32).toString('base64url');
       await tx.insert(s.customerToken).values({ storeId: st.id, customerId: cust.id, kind: 'email_verify', tokenHash: hashToken(verifyRaw), expiresAt: new Date(Date.now() + EMAIL_VERIFY_TTL_HOURS * 3600 * 1000) });
-      const verifyUrl = `${resolveStorefrontUrl(emailStoreCtx(st))}/verify-email?token=${verifyRaw}`;
+      const verifyUrl = `${resolveStorefrontUrl(emailStoreCtx(st))}/verify?token=${verifyRaw}`;
       await enqueueEmailVerify(tx, st.id, emailStoreCtx(st), email, { url: verifyUrl });
     });
     return c.json({ ok: true }, 200);
