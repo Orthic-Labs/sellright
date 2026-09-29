@@ -576,6 +576,51 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
   // physical/heap-order import (no explicit ORDER BY) would land them
   // backwards — proving the importer really orders by id, not by whatever
   // order Postgres happens to hand rows back in.
+  it('imports stale authorizations on finished orders as history, zero-stocks unstocked variants, and never queues import restocks', async () => {
+    const tag = 'a' + randomUUID().slice(0, 8);
+    await resetSource('dd', tag);
+    for (const statement of [
+      `INSERT INTO product_variant VALUES (2, 1, 'SKU-2', true, 'TRUE', false, 0, NULL, 1, NULL, NULL, false, NULL)`,
+      `INSERT INTO product_variant_translation VALUES (2, 'en', 'Widget Unstocked')`,
+      `INSERT INTO product_variant_price VALUES (2, 1, 'USD', 1200)`,
+      `INSERT INTO "order" VALUES (4, 'ORD-4', 'Cancelled', 'USD', '2024-03-04 00:00:00', 1000, 1000, 0, 0, NULL, NULL, NULL, 1, '2024-03-04 00:00:00', '2024-03-04 00:00:00', false)`,
+      `INSERT INTO order_line VALUES (4, 1, 4, 1, 1, 1000, false, '[]', '[]')`,
+      `INSERT INTO payment VALUES
+         (4, '2024-03-04 00:00:00', 4, 'sezzle', 'Authorized', 1000, 'sz-auth-4', '{}', NULL),
+         (5, '2024-03-04 00:00:00', NULL, 'sezzle', 'Authorized', 1000, 'sz-orphan-5', '{}', NULL)`,
+    ]) await sourcePool.query(statement);
+    const storeId = randomUUID();
+    const f = await fixtureConfig(storeId, {
+      nmi: { accountId: 'nmi-acct', mode: 'live' },
+      sezzle: { accountId: 'sez-acct', mode: 'live' },
+      stripe: { accountId: 'acct_dd', mode: 'live' },
+    });
+    const dry = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config, manifestPath: f.manifestPath });
+    expect(dry.exclusions.filter(e => e.table === 'payment' && /stale authorization|has no order/.test(e.detail))).toHaveLength(2);
+    const applied = await runMigration({
+      sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config,
+      manifestPath: f.applyManifestPath, apply: true, expectedDigest: dry.sourceDigest,
+    });
+    expect(applied.counts.payment).toBe(4); // the orphan authorization has no order to attach to
+    const stale = await targetOne(storeId, 'payment', `AND id = '${migrationId(storeId, 'vendure:test', 'payment', 4)}'`);
+    expect(stale.state).toBe('Authorized');
+    const unstocked = await targetOne(storeId, 'stock', `AND variant_id = '${migrationId(storeId, 'vendure:test', 'variant', 2)}'`);
+    expect([unstocked.on_hand, unstocked.allocated]).toEqual([0, 0]);
+    const events = await targetRows(storeId, 'restock_event');
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.every(e => e.processed_at !== null)).toBe(true);
+  });
+
+  it('still refuses an authorization whose order can settle after cutover', async () => {
+    const tag = 'p' + randomUUID().slice(0, 8);
+    await resetSource('dd', tag);
+    await sourcePool.query(`INSERT INTO "order" VALUES (4, 'ORD-4', 'PaymentAuthorized', 'USD', '2024-03-04 00:00:00', 1000, 1000, 0, 0, NULL, NULL, NULL, 1, '2024-03-04 00:00:00', '2024-03-04 00:00:00', false)`);
+    await sourcePool.query(`INSERT INTO payment VALUES (4, '2024-03-04 00:00:00', 4, 'sezzle', 'Authorized', 1000, 'sz-auth-4', '{}', NULL)`);
+    const f = await fixtureConfig(randomUUID(), { sezzle: { accountId: 'sez-acct', mode: 'live' } });
+    await expect(runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config, manifestPath: f.manifestPath }))
+      .rejects.toThrow('Resolve source pending/authorized payments before cutover');
+  });
+
   it('carries source id order into option group/value position (id ascending, not source insertion order)', async () => {
     const tag = 'd' + randomUUID().slice(0, 8);
     await resetSource('dd', tag);

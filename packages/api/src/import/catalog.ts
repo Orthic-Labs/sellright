@@ -280,6 +280,13 @@ export async function importCatalog(ctx: ImportContext): Promise<void> {
           return variantId ? { variantId, storeId, onHand: sl.onhand ?? 0, allocated: sl.allocated ?? 0 } : null;
         })
         .filter((x): x is NonNullable<typeof x> => x !== null);
+      // A tracked source variant with no stock_level row has zero stock at the
+      // source. Give it an explicit zero row so every imported variant has
+      // stock state (admin edits and stock reads never hit a missing row).
+      const stocked = new Set(stockRows.map((row) => row.variantId));
+      for (const variantId of variantMap.values()) {
+        if (!stocked.has(variantId)) stockRows.push({ variantId, storeId, onHand: 0, allocated: 0 });
+      }
       if (stockRows.length) await tx.insert(s.stock).values(stockRows);
     }
 
