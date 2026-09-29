@@ -46,6 +46,13 @@ export const MIGRATION_TABLES = ['asset', 'product', 'product_option_group', 'pr
   // output — captured in `after`, removed by restore.
   'restock_event'] as const;
 
+const PRE_SETTLEMENT_ORDER_STATES = new Set(['AddingItems', 'ArrangingPayment', 'PaymentAuthorized']);
+
+/** True when an unresolved source payment could still be captured after cutover. */
+export function isInFlightSourcePayment(row: { oid?: unknown; order_state?: unknown }): boolean {
+  return row.oid != null && PRE_SETTLEMENT_ORDER_STATES.has(String(row.order_state));
+}
+
 /** One source snapshot, one target transaction. No table-wide delete/truncate. */
 export async function runMigration(input: {
   sourceUrl: string; targetUrl: string; config: Config; manifestPath: string;
@@ -92,12 +99,24 @@ export async function runMigration(input: {
         channels[0]!.defaultCurrencyCode !== config.currency) {
       throw new Error('Use a dedicated single-channel source snapshot with the selected currency');
     }
-    const unresolved = await q(`SELECT id FROM payment WHERE state IN ('Created','Authorized','Pending') LIMIT 1`);
-    if (unresolved.length) throw new Error('Resolve source pending/authorized payments before cutover');
+    // A Created/Authorized/Pending payment is in flight only while its order
+    // can still settle (a pre-settlement order state). A stale
+    // authorization left on a finished order, or one with no order at all, is
+    // history: it imports as-is (reported as voided/ignored) and is listed as
+    // an exclusion for review instead of blocking the cutover.
+    const unresolved = await q(`SELECT p.id, p.state, p."orderId" AS oid, o.state AS order_state
+      FROM payment p LEFT JOIN "order" o ON o.id = p."orderId"
+      WHERE p.state IN ('Created','Authorized','Pending') ORDER BY p.id`);
+    if (unresolved.some(isInFlightSourcePayment)) throw new Error('Resolve source pending/authorized payments before cutover');
+    const staleUnresolved = unresolved.map(row => ({ type: 'unmappable-source-row' as const, table: 'payment', count: 1,
+      detail: row.oid == null
+        ? `payment ${row.id} (${row.state}) has no order; not imported`
+        : `payment ${row.id} (${row.state}) is a stale authorization on finished order ${row.oid} (${row.order_state}); imported as history, never captured` }));
     const invalidCurrency = await q('SELECT id FROM "order" WHERE "currencyCode" <> $1 LIMIT 1', [config.currency]);
     if (invalidCurrency.length) throw new Error('Source contains orders in another currency');
     const exclusions: ManifestExclusion[] = [
       { type: 'not-imported', table: 'session', detail: 'Source sessions and carts are not imported; customers re-authenticate and rebuild carts after cutover' },
+      ...staleUnresolved,
       ...unmappedCustomFields(sourceColumns).map(field => ({
         type: 'unmapped-source-field' as const, table: field.table,
         detail: `custom field "${field.column}" has no target mapping`, count: 1,
@@ -156,6 +175,10 @@ export async function runMigration(input: {
         detail: `${entry.path} not found on disk (no working preview fallback); asset id(s) ${referencedBy.join(', ')} will reference a missing file at ${entry.targetPath}`,
         count: referencedBy.length || 1 });
     }
+    // Initial stock inserts fire the 0→>0 restock trigger for every in-stock
+    // variant. Those are not restocks — the waitlist sweep must never mail
+    // imported subscribers about stock that was already there at cutover.
+    await target.query('UPDATE restock_event SET processed_at = now() WHERE store_id = $1 AND processed_at IS NULL', [config.storeId]);
     const sourceDigest = digest({ config, sourceReads, assets });
     if (input.apply && sourceDigest !== input.expectedDigest) throw new Error('Source or migration configuration changed since dry run');
     const after: Record<string, unknown[]> = {};
