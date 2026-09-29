@@ -102,35 +102,52 @@ export interface AssetStageResult {
   counts: { copied: number; skipped: number; missing: number };
 }
 
-/** Stat the target path (through the same confined handle chain as a write)
- * and report whether a byte-identical file is already there. In apply mode
- * a genuinely absent file is written; in dry-run mode nothing is ever
- * created — including the intermediate directories — so a target tree that
- * doesn't exist yet at all (first-ever run) is reported the same way: the
- * ENOENT from `withinRoot` failing to open a missing intermediate directory
- * is treated identically to the leaf file being missing. A rejected symlink
- * (ELOOP/EPERM from the O_NOFOLLOW opens) always propagates, apply or not —
- * that's a traversal attempt, not an absent file. */
-async function targetStatus(targetRoot: string, targetPath: string, apply: boolean, bytes: Buffer, sha256: string): Promise<'copied' | 'skipped'> {
-  try {
-    return await withinRoot(targetRoot, targetPath, apply, async target => {
+/** Apply mode: create-first, exactly like the pre-existing write path — the
+ * O_CREAT|O_EXCL open is attempted BEFORE any read, so there is no
+ * check-then-act window between "does it exist" and "create it": either this
+ * open wins the race and creates the file, or it loses with EEXIST and only
+ * then do we read the (now known-to-exist) file back to verify it's
+ * byte-identical. Reordering that (read-first, create-on-ENOENT) would open
+ * a real TOCTOU gap between the two opens, which is why this keeps the
+ * original ordering rather than sharing one code path with dry-run. */
+async function applyTargetStatus(targetRoot: string, targetPath: string, bytes: Buffer, sha256: string): Promise<'copied' | 'skipped'> {
+  return await withinRoot(targetRoot, targetPath, true, async target => {
+    let handle: FileHandle;
+    try {
+      handle = await open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      const existing = await open(target, fileFlags);
       try {
-        const existing = await open(target, fileFlags);
-        try {
-          if (createHash('sha256').update(await readBounded(existing)).digest('hex') !== sha256) throw new Error('Existing asset differs');
-          return 'skipped' as const;
-        } finally { await existing.close(); }
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-        if (apply) {
-          const handle = await open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-          try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); }
-        }
-        return 'copied' as const;
-      }
+        if (createHash('sha256').update(await readBounded(existing)).digest('hex') !== sha256) throw new Error('Existing asset differs');
+      } finally { await existing.close(); }
+      return 'skipped' as const;
+    }
+    try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); }
+    return 'copied' as const;
+  });
+}
+
+/** Dry-run mode: read-only report, never creates anything — not even the
+ * intermediate directories (`withinRoot`'s `create: false`), so a target
+ * tree that doesn't exist yet at all (first-ever run for a new store) hits
+ * ENOENT while opening a missing intermediate directory, treated the same as
+ * the leaf file itself being missing: both mean "would copy". Nothing is
+ * ever written here, so there is no race to avoid — a stale read only makes
+ * the printed report stale, never corrupts a file. A rejected symlink
+ * (ELOOP/EPERM from the O_NOFOLLOW opens) still propagates rather than being
+ * swallowed as ENOENT — that's a traversal attempt, not an absent file. */
+async function dryRunTargetStatus(targetRoot: string, targetPath: string, sha256: string): Promise<'copied' | 'skipped'> {
+  try {
+    return await withinRoot(targetRoot, targetPath, false, async target => {
+      const existing = await open(target, fileFlags);
+      try {
+        if (createHash('sha256').update(await readBounded(existing)).digest('hex') !== sha256) throw new Error('Existing asset differs');
+        return 'skipped' as const;
+      } finally { await existing.close(); }
     });
   } catch (error) {
-    if (!apply && (error as NodeJS.ErrnoException).code === 'ENOENT') return 'copied';
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'copied';
     throw error;
   }
 }
@@ -182,7 +199,7 @@ export async function stageVendureAssets(
       }
     }
     const sha256 = createHash('sha256').update(bytes).digest('hex');
-    const status = await targetStatus(targetRoot, targetPath, apply, bytes, sha256);
+    const status = apply ? await applyTargetStatus(targetRoot, targetPath, bytes, sha256) : await dryRunTargetStatus(targetRoot, targetPath, sha256);
     if (status === 'copied') copied++; else skipped++;
     manifest.push({ sourcePath: path, targetPath, sha256, bytes: bytes.length, ...(usedFallbackFrom ? { usedFallbackFrom } : {}) });
   }
