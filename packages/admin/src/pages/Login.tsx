@@ -3,6 +3,7 @@ import { Navigate } from 'react-router-dom';
 import { api, auth, type LoginResp } from '../api';
 import { useAuth } from '../auth';
 import { Spinner } from '../components/ui';
+import { adminHref } from '../lib/base-path';
 
 export default function Login() {
   const { me, refresh } = useAuth();
@@ -24,7 +25,7 @@ export default function Login() {
       // session is now in an httpOnly cookie; just pick the active store and load.
       auth.store = r.stores?.[0]?.slug ?? null;
       await refresh();
-      location.assign('/');
+      location.assign(adminHref('/'));
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : 'Login failed');
       setBusy(false);
