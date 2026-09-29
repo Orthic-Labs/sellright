@@ -47,7 +47,8 @@ export default function ProductDetailPage() {
         await api.patch(`/products/${p.id}`, { name: draft.name, status: draft.status, description: draft.description });
       }
       for (const v of p.variants) {
-        const d = draft.variants[v.id]!;
+        const d = draft.variants[v.id];
+        if (!d) continue; // row added after this draft was taken — nothing edited yet
         const price = toCents(d.price);
         const salePrice = d.salePrice.trim() === '' ? null : toCents(d.salePrice);
         const preOrderPrice = d.preOrderPrice.trim() === '' ? null : toCents(d.preOrderPrice);
@@ -116,7 +117,8 @@ export default function ProductDetailPage() {
   if (!p || !draft) return null;
 
   const img = assetUrl(p.assetPath);
-  const dirty = JSON.stringify(draft) !== JSON.stringify(toDraft(p));
+  const serverDraft = toDraft(p);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(serverDraft);
   const setV = (vid: string, patch: Partial<Draft['variants'][string]>) =>
     setDraft((d) => d && ({ ...d, variants: { ...d.variants, [vid]: { ...d.variants[vid]!, ...patch } } }));
 
@@ -159,7 +161,10 @@ export default function ProductDetailPage() {
                 </tr></thead>
                 <tbody>
                   {p.variants.map((v: VariantRow) => {
-                    const d = draft.variants[v.id]!;
+                    // A refetch (e.g. right after "Add variant") renders the new
+                    // row one pass before the effect above re-syncs `draft` —
+                    // fall back to the server values instead of crashing.
+                    const d = draft.variants[v.id] ?? serverDraft.variants[v.id]!;
                     return (
                       <Fragment key={v.id}><tr className="border-t border-gray-100">
                         <td className="td"><div className="font-medium truncate max-w-[14rem]">{v.name}</div><div className="text-xs text-gray-400 truncate">{v.sku}{v.allocated > 0 && ` · ${v.allocated} allocated`}</div></td>
