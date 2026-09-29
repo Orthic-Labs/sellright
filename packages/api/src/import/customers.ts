@@ -40,7 +40,10 @@ export async function importCustomers(ctx: ImportContext): Promise<void> {
         id,
         storeId: ctx.storeId,
         email: normalizeEmail(c.email),
-        passwordHash: c.password ?? null, createdAt: parseDate(c.created) ?? undefined, updatedAt: parseDate(c.updated) ?? undefined,
+        // An empty source hash is an account that never had a usable password
+        // (e.g. carried over from an earlier platform): import it as "no
+        // password" (isMigrated), so the storefront routes it to password setup.
+        passwordHash: c.password ? c.password : null, createdAt: parseDate(c.created) ?? undefined, updatedAt: parseDate(c.updated) ?? undefined,
         firstName: c.fn ?? null,
         lastName: c.ln ?? null,
         phone: c.phone ?? null,

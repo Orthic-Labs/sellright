@@ -298,6 +298,24 @@ describe('GET /v1/shop/auth/me session policy', () => {
   });
 });
 
+describe('GET /v1/shop/auth/check-email — migrated accounts', () => {
+  it('flags an existing account without a password as needing password setup', async () => {
+    await withStore(STORE, async (tx) => {
+      await tx.insert(s.customer).values({ storeId: STORE, email: 'migrated@auth.test', passwordHash: null, emailVerified: true });
+    });
+    await app.request('/v1/shop/auth/register', { method: 'POST', headers: hdr(), body: JSON.stringify({ email: 'native@auth.test', password: 'nativepassword1' }) });
+    const migrated = await (await app.request('/v1/shop/auth/check-email?email=migrated@auth.test', { headers: hdr() })).json();
+    expect(migrated).toEqual({ exists: true, needsPasswordSetup: true });
+    const native = await (await app.request('/v1/shop/auth/check-email?email=native@auth.test', { headers: hdr() })).json();
+    expect(native).toEqual({ exists: true, needsPasswordSetup: false });
+    const none = await (await app.request('/v1/shop/auth/check-email?email=nobody@auth.test', { headers: hdr() })).json();
+    expect(none).toEqual({ exists: false });
+    // A password-less account still cannot log in with any password.
+    const login = await app.request('/v1/shop/auth/login', { method: 'POST', headers: hdr(), body: JSON.stringify({ email: 'migrated@auth.test', password: 'anything-at-all' }) });
+    expect(login.status).toBe(401);
+  });
+});
+
 describe('GET /v1/shop/auth/check-email — rate limiting', () => {
   it('rate-limits after repeated probes from the same IP', async () => {
     // check-email counts EVERY probe (success or not) toward the throttle

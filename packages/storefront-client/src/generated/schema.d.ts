@@ -11560,6 +11560,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             exists: boolean;
+                            needsPasswordSetup?: boolean;
                         };
                     };
                 };

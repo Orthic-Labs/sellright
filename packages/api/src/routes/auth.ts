@@ -475,7 +475,11 @@ auth.openapi(
     summary: 'Check if an email is already registered (rate-limited)',
     request: { query: z.object({ email: z.string().email(), turnstileToken: z.string().max(2048).optional(), honeypot: z.string().max(1024).optional() }) },
     responses: {
-      200: { description: 'OK', content: { 'application/json': { schema: z.object({ exists: z.boolean() }) } } },
+      // needsPasswordSetup: the account exists but has no password (imported
+      // from another platform) — the storefront offers "set your password"
+      // (the reset-password email) instead of a password prompt that can never
+      // succeed. Only ever true alongside exists: true.
+      200: { description: 'OK', content: { 'application/json': { schema: z.object({ exists: z.boolean(), needsPasswordSetup: z.boolean().optional() }) } } },
       429: { description: 'Too many attempts', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
@@ -490,11 +494,16 @@ auth.openapi(
       return c.json({ exists: false }, 200);
     }
     const email = normalizeEmail(query.email);
-    const exists = await withStore(st.id, async (tx) => {
-      const [row] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, email)).limit(1);
-      return !!row;
+    const row = await withStore(st.id, async (tx) => {
+      const [found] = await tx.select({ passwordHash: s.customer.passwordHash, googleSub: s.customer.googleSub, appleUserId: s.customer.appleUserId })
+        .from(s.customer).where(eq(s.customer.email, email)).limit(1);
+      return found ?? null;
     });
-    return c.json({ exists }, 200);
+    if (!row) return c.json({ exists: false }, 200);
+    // Social-login accounts have no password on purpose; they sign in with
+    // their provider, so they are not "needs password setup".
+    const needsPasswordSetup = !row.passwordHash && !row.googleSub && !row.appleUserId;
+    return c.json({ exists: true, needsPasswordSetup }, 200);
   },
 );
 

@@ -4491,6 +4491,9 @@
                   "properties": {
                     "exists": {
                       "type": "boolean"
+                    },
+                    "needsPasswordSetup": {
+                      "type": "boolean"
                     }
                   },
                   "required": [
