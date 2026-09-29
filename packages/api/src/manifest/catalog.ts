@@ -173,6 +173,13 @@ async function buildEntries(tx: Tx, store: StoreCtx, priceRule: VariantPriceRule
     .where(and(eq(s.productAsset.storeId, store.id), inArray(s.productAsset.productId, productIds)))
     .orderBy(asc(s.productAsset.position));
   const assetsByProduct = group(pa, (x) => x.productId);
+  const va = variantIds.length
+    ? await tx.select({ variantId: s.variantAsset.variantId, path: s.asset.path, position: s.variantAsset.position })
+      .from(s.variantAsset).innerJoin(s.asset, eq(s.asset.id, s.variantAsset.assetId))
+      .where(and(eq(s.variantAsset.storeId, store.id), inArray(s.variantAsset.variantId, variantIds)))
+      .orderBy(asc(s.variantAsset.position), asc(s.variantAsset.assetId))
+    : [];
+  const assetsByVariant = group(va, (x) => x.variantId);
 
   const manifestProducts = [];
   const details = [];
@@ -197,11 +204,12 @@ async function buildEntries(tx: Tx, store: StoreCtx, priceRule: VariantPriceRule
       lastUpdated: now, id: p.slug, name: p.name, slug: p.slug, description: p.description,
       featuredImage: featured ? { url: featured } : null,
       assets: (assetsByProduct.get(p.id) ?? []).map((a) => ({ preview: assetUrl(a.path) })),
-      priceRange: { min, max }, tags: p.tags ?? [], hasMultiplePrices: min !== max, hasVariantAssets: false,
+      priceRange: { min, max }, tags: p.tags ?? [], hasMultiplePrices: min !== max,
+      hasVariantAssets: vs.some((v) => (assetsByVariant.get(v.id)?.length ?? 0) > 0),
       variants: vs.map((v) => ({
         id: v.sku, name: v.name, sku: v.sku, price: selectPrice(v, priceRule),
         options: (optsByVariant.get(v.id) ?? []).map((o) => ({ group: o.groupName, groupId: o.groupId, groupPosition: o.groupPosition, code: o.optionId, name: o.value, position: o.position })),
-        assets: [],
+        assets: (assetsByVariant.get(v.id) ?? []).map((a) => ({ preview: assetUrl(a.path) })),
         salePrice: v.salePrice, preOrderPrice: v.preOrderPrice, shipDate: v.shipDate, isPreOrder: v.isPreOrder,
       })),
     });
@@ -224,7 +232,9 @@ async function buildEntries(tx: Tx, store: StoreCtx, priceRule: VariantPriceRule
         isPreOrder: v.isPreOrder,
         shipDate: v.shipDate ? v.shipDate.toISOString() : null,
         options: (optsByVariant.get(v.id) ?? []).map((o) => ({ group: o.groupName, groupId: o.groupId, groupPosition: o.groupPosition, code: o.optionId, name: o.value, position: o.position })),
-        images: [],
+        images: (assetsByVariant.get(v.id) ?? [])
+          .map((a, i): NativeImage | null => { const url = assetUrl(a.path); return url ? { url, alt: null, position: i } : null; })
+          .filter((image): image is NativeImage => image !== null),
       };
     });
     manifestProductsV2.push({
