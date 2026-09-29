@@ -103,7 +103,7 @@ adminGatewayPayments.post('/v1/admin/payment-reconciliation/orders/:code/stripe-
   const store = requireStore(admin, c);
   requireWrite(store); requirePermission(store, 'refunds');
   const code = c.req.param('code');
-  const result = await reconcileStripeOrder(store.storeId, { code }, { actor: admin.email });
+  const result = await reconcileStripeOrder(store.storeId, { code }, { actor: admin.email, discover: true });
   if (!result.found) throw new HttpError(404, 'Order not found');
   await withStore(store.storeId, tx => tx.insert(s.auditLog).values({
     storeId: store.storeId, actor: admin.email, entity: 'order', entityId: code, action: 'stripe_reconcile',

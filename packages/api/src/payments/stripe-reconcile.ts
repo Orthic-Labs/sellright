@@ -29,7 +29,8 @@ import { recoveryBackoffMs } from '../jobs/gateway-recovery.js';
 import { withAdvisoryLock, withStore, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { applyPaymentResult, amountDueForOrder } from './settle.js';
-import { verifyIntent, retrieveStripeIntent, cancelStripeIntent, type IntentLike, type StripeMode } from './stripe.js';
+import { verifyIntent, retrieveStripeIntent, cancelStripeIntent, searchStripeIntentsForOrder, resolveStripeConfigured, type IntentLike, type StripeMode } from './stripe.js';
+import { isPaymentMethodEnabled } from './provider.js';
 import { recordPaymentAlert } from './payment-alerts.js';
 
 export type StripeIntent = IntentLike & { last_payment_error?: { message?: string | null } | null };
@@ -200,6 +201,7 @@ export interface ReconcileResult {
   code?: string;
   state?: string;
   intents: Array<{ intentId: string; outcome: StripeIntentOutcome | 'error'; error?: string }>;
+  discovery?: { found: number; modes: StripeMode[]; errors: string[] };
 }
 
 /**
@@ -208,8 +210,52 @@ export interface ReconcileResult {
  * it. Stripe is called with no transaction open; each apply is a short tx
  * under the order's pay advisory lock.
  */
-export async function reconcileStripeOrder(storeId: string, ref: { code: string } | { orderId: string }, opts: { actor?: string } = {}): Promise<ReconcileResult> {
-  const found = await withStore(storeId, async (tx) => {
+/**
+ * Find PaymentIntents Stripe has for this order that we never tracked (PI
+ * minted before intent tracking, or the attempt insert failed after Stripe
+ * created it) and record them as intent attempts (idempotent on the PI id).
+ * Runs Stripe Search in every mode this store has a usable secret key for,
+ * with no DB transaction open. `errors` non-empty = discovery is incomplete:
+ * callers must hold the order, never treat it as "no payment".
+ */
+export async function discoverStripeIntents(storeId: string, orderCode: string): Promise<{ found: number; modes: StripeMode[]; errors: string[] }> {
+  const out = { found: 0, modes: [] as StripeMode[], errors: [] as string[] };
+  for (const mode of ['test', 'live'] as StripeMode[]) {
+    let configured = false;
+    try { configured = await resolveStripeConfigured(storeId, mode); }
+    catch (e) { out.errors.push(`${mode}: ${e instanceof Error ? e.message : 'credential lookup failed'}`); continue; }
+    if (!configured) continue;
+    out.modes.push(mode);
+    let intents: IntentLike[];
+    try { intents = await searchStripeIntentsForOrder(storeId, mode, orderCode); }
+    catch (e) { out.errors.push(`${mode}: ${(e instanceof Error ? e.message : 'search failed').slice(0, 160)}`); continue; }
+    if (!intents.length) continue;
+    const recorded = await withStore(storeId, async (tx) => {
+      const [order] = await tx.select({ id: s.order.id, currency: s.order.currency }).from(s.order).where(eq(s.order.code, orderCode)).limit(1);
+      if (!order) return 0;
+      let n = 0;
+      for (const pi of intents) {
+        const row = await trackStripeIntent(tx, storeId, { orderId: order.id, intentId: pi.id, amount: pi.amount, currency: order.currency, mode, source: 'discovery' });
+        if (row.orderId === order.id) n++;
+      }
+      return n;
+    });
+    out.found += recorded;
+  }
+  return out;
+}
+
+/** Stripe is enabled for the store AND a usable key exists in some mode. */
+export async function stripeDiscoverable(storeId: string, config: unknown): Promise<boolean> {
+  if (!isPaymentMethodEnabled(config, 'stripe')) return false;
+  for (const mode of ['test', 'live'] as StripeMode[]) {
+    try { if (await resolveStripeConfigured(storeId, mode)) return true; } catch { return true; /* unknown → be safe: discover */ }
+  }
+  return false;
+}
+
+export async function reconcileStripeOrder(storeId: string, ref: { code: string } | { orderId: string }, opts: { actor?: string; discover?: boolean } = {}): Promise<ReconcileResult> {
+  const load = () => withStore(storeId, async (tx) => {
     const [order] = await tx.select({ id: s.order.id, code: s.order.code, state: s.order.state }).from(s.order)
       .where('code' in ref ? eq(s.order.code, ref.code) : eq(s.order.id, ref.orderId)).limit(1);
     if (!order) return null;
@@ -217,12 +263,22 @@ export async function reconcileStripeOrder(storeId: string, ref: { code: string 
       eq(s.paymentAttempt.orderId, order.id), eq(s.paymentAttempt.operation, 'intent'),
       notInArray(s.paymentAttempt.status, ['settled', 'cancelled']),
     ));
-    return { order, attempts };
+    const [anyIntent] = await tx.select({ id: s.paymentAttempt.id }).from(s.paymentAttempt).where(and(
+      eq(s.paymentAttempt.orderId, order.id), eq(s.paymentAttempt.operation, 'intent'))).limit(1);
+    return { order, attempts, tracked: !!anyIntent };
   });
+  let found = await load();
   if (!found) return { found: false, intents: [] };
+  const out: ReconcileResult = { found: true, code: found.order.code, state: found.order.state, intents: [] };
+  if (found.order.state !== 'PendingPayment' && found.order.state !== 'Cancelled') return out;
+  // Untracked order (PI minted before intent tracking, or a lost attempt
+  // insert): ask Stripe which PIs exist for it, then reconcile those.
+  if (opts.discover && !found.tracked) {
+    const d = await discoverStripeIntents(storeId, found.order.code);
+    out.discovery = d;
+    if (d.found) found = (await load())!;
+  }
   const { order, attempts } = found;
-  const out: ReconcileResult = { found: true, code: order.code, state: order.state, intents: [] };
-  if (order.state !== 'PendingPayment' && order.state !== 'Cancelled') return out;
   for (const a of attempts) {
     if (!a.providerRef) continue;
     const mode = asMode(a.mode);
@@ -311,6 +367,64 @@ export async function sweepStaleStripeIntents(storeId: string, cutoff: Date, lim
         }
       });
     }
+  }
+  return stats;
+}
+
+interface DiscoveryState { tries: number; nextAt?: string; lastError?: string; hold?: boolean; manual?: boolean; checkedAt?: string }
+
+/**
+ * Untracked-intent gap: before the stale sweeper may cancel a PendingPayment
+ * order that has NO intent attempt on a Stripe-enabled store, search Stripe
+ * for PIs bound to it. Found → recorded as intent attempts (the tracked-intent
+ * sweep then settles / holds / cancels them). Search error → the order is held
+ * (order.metadata.stripeDiscovery.hold, which the cancel claim honours) with
+ * backoff, and after STRIPE_SWEEP_MAX_TRIES flagged + alerted. Never cancels
+ * blindly.
+ */
+export async function discoverStaleUntrackedIntents(storeId: string, config: unknown, cutoff: Date, limit: number, log: (m: string) => void = () => {}, now = new Date()): Promise<{ checked: number; found: number; held: number; flagged: number }> {
+  const stats = { checked: 0, found: 0, held: 0, flagged: 0 };
+  if (!(await stripeDiscoverable(storeId, config))) return stats;
+  const rows = await withStore(storeId, (tx) => tx.select({ id: s.order.id, code: s.order.code, metadata: s.order.metadata, grandTotal: s.order.grandTotal, currency: s.order.currency })
+    .from(s.order).where(and(
+      eq(s.order.state, 'PendingPayment'), sql`${s.order.createdAt} < ${cutoff}`,
+      sql`NOT EXISTS (SELECT 1 FROM payment_attempt pa WHERE pa.order_id = ${s.order.id} AND pa.store_id = ${s.order.storeId} AND pa.operation = 'intent')`,
+      sql`coalesce((${s.order.metadata}->'stripeDiscovery'->>'manual')::boolean, false) = false`,
+      sql`coalesce((${s.order.metadata}->'stripeDiscovery'->>'nextAt')::timestamptz, '-infinity'::timestamptz) <= ${now}`,
+      // Already searched clean → not again.
+      sql`(${s.order.metadata}->'stripeDiscovery'->>'checkedAt') IS NULL`,
+    )).orderBy(asc(s.order.createdAt)).limit(limit));
+  for (const o of rows) {
+    stats.checked++;
+    const d = await discoverStripeIntents(storeId, o.code);
+    stats.found += d.found;
+    const prev = ((o.metadata as { stripeDiscovery?: DiscoveryState } | null)?.stripeDiscovery) ?? { tries: 0 };
+    let next: DiscoveryState;
+    let flag = false;
+    if (d.errors.length && !d.found) {
+      const tries = prev.tries + 1;
+      flag = tries >= STRIPE_SWEEP_MAX_TRIES;
+      next = { tries, hold: true, lastError: d.errors.join('; ').slice(0, 200),
+        ...(flag ? { manual: true } : { nextAt: new Date(now.getTime() + recoveryBackoffMs(tries, STRIPE_SWEEP_BACKOFF_MIN)).toISOString() }) };
+      stats.held++;
+      log(`[release-stale] stripe discovery for ${o.code} failed: ${next.lastError}`);
+    } else {
+      next = { tries: prev.tries, hold: false, checkedAt: now.toISOString() };
+    }
+    await withStore(storeId, async (tx) => {
+      await tx.update(s.order).set({
+        metadata: sql`coalesce(${s.order.metadata}, '{}'::jsonb) || jsonb_build_object('stripeDiscovery', ${JSON.stringify(next)}::jsonb)`,
+      }).where(eq(s.order.id, o.id));
+      if (flag) {
+        stats.flagged++;
+        await recordPaymentAlert(tx, storeId, {
+          kind: 'stripe_intent_unresolvable', actor: 'system:reservation-expiry', orderId: o.id, orderCode: o.code,
+          providerRef: null, amount: o.grandTotal, currency: o.currency,
+          detail: `Could not check Stripe for payments on this order after ${next.tries} tries (${next.lastError}). The order is held, not cancelled, until it is reconciled.`,
+          data: { tries: next.tries, discovery: true },
+        });
+      }
+    });
   }
   return stats;
 }
