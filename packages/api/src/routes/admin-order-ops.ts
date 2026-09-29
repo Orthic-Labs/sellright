@@ -328,6 +328,10 @@ adminOrderOps.openapi(
         const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
         for (const l of lines) {
           const rel = l.quantity - l.fulfilledQty - l.cancelledQty;
+          if (rel > 0) {
+            // D6: mark released units cancelled so a later refund can't release them again.
+            await tx.update(s.orderLine).set({ cancelledQty: sql`${s.orderLine.cancelledQty} + ${rel}` }).where(eq(s.orderLine.id, l.id));
+          }
           if (rel > 0 && l.variantId) {
             await tx.update(s.stock).set({ allocated: sql`greatest(${s.stock.allocated} - ${rel}, 0)` })
               .where(and(eq(s.stock.variantId, l.variantId), eq(s.stock.storeId, st.storeId)));

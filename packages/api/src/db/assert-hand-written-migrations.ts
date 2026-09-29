@@ -60,6 +60,7 @@ const HAND_WRITTEN = [
   '0080_product_option_position.sql',
   '0081_order_status_split.sql',
   '0082_admin_essentials.sql',
+  '0083_stripe_intent_attempts.sql',
 ];
 
 const MARKER = '-- HAND-WRITTEN: see docs/runbooks/migrations.md';

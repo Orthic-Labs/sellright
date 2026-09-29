@@ -24,7 +24,7 @@ import { emitEvent } from '../webhooks/emit.js';
 import { resolveStoreForGatewayEvent } from './tenant-resolution.js';
 import { finalizeRefund, enqueueRefundSettledEmail, RefundError } from './refunds.js';
 import { recordStripeDisputeAlert } from '../disputes/disputes.js';
-import { STRIPE_REFUND_ATTEMPT_KEY } from './stripe.js';
+import { STRIPE_REFUND_ATTEMPT_KEY, stripeRefundState } from './stripe.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const piId = (v: unknown): string | null => (typeof v === 'string' ? v : (v as { id?: string } | null)?.id ?? null);
@@ -102,8 +102,8 @@ export async function resolveStoreIdForSubscriptionEvent(obj: {
   return sm && UUID.test(sm) ? sm : null;
 }
 
-export const refundStateFromStripe = (status: string): 'Settled' | 'Pending' | 'Failed' =>
-  status === 'succeeded' ? 'Settled' : status === 'pending' ? 'Pending' : 'Failed';
+// D11: requires_action (and any non-terminal status) stays Pending — see stripeRefundState.
+export const refundStateFromStripe = (status: string): 'Settled' | 'Pending' | 'Failed' => stripeRefundState(status);
 
 /** Order state implied by total settled refunds vs the order total. null = no
  *  transition (nothing settled yet). Pure — money-critical, so it's unit-tested. */

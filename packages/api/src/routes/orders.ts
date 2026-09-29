@@ -7,6 +7,8 @@ import * as s from '../db/schema.js';
 import { timingSafeEqual as cryptoTimingSafeEqual } from 'node:crypto';
 import { loadOrderFulfillments, loadOrderLines, loadOrderPayments, loadOrderPromotionCode, loadOrderStatusFacts } from './order-facts.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
+import { claimReconcileSlot, reconcileStripeOrder } from '../payments/stripe-reconcile.js';
+import { log } from '../lib/logger.js';
 
 /** Constant-time string compare (avoids leaking the receipt token via timing). */
 function tokensMatch(a: string | null | undefined, b: string | null | undefined): boolean {
@@ -77,6 +79,22 @@ orders.openapi(
     const { code } = c.req.valid('param');
     const { rt } = c.req.valid('query');
     const token = customerToken(c);
+    // D1 settlement fallback: before reading, reconcile an unpaid order's
+    // tracked Stripe intents with Stripe (webhook stays primary). Owner-only,
+    // throttled per order, run with no transaction open, never fatal to the
+    // read. Payment state only — the read below is always live.
+    const pre = await withStore(st.id, async (tx) => {
+      const [o] = await tx.select({ id: s.order.id, state: s.order.state, receiptToken: s.order.receiptToken, customerId: s.order.customerId })
+        .from(s.order).where(eq(s.order.code, code)).limit(1);
+      if (!o || (o.state !== 'PendingPayment' && o.state !== 'Cancelled')) return null;
+      let ok = tokensMatch(rt, o.receiptToken);
+      if (!ok && token && o.customerId) ok = (await resolveCustomer(tx, token))?.id === o.customerId;
+      return ok ? o.id : null;
+    });
+    if (pre && claimReconcileSlot(st.id, pre)) {
+      await reconcileStripeOrder(st.id, { orderId: pre }, { actor: 'shopper:order-read' })
+        .catch((e: unknown) => log.warn('stripe reconcile on order read failed', { err: e instanceof Error ? e.message : String(e), code }));
+    }
     const out = await withStore(st.id, async (tx) => {
       const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
       if (!o) return null;

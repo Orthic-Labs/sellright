@@ -234,6 +234,34 @@ describe('POST /v1/webhooks/stripe — mode-bind guard', () => {
 
     const payments = await withStore(STORE, async (tx) => tx.select().from(s.payment).where(eq(s.payment.orderId, orderId)));
     expect(payments).toHaveLength(0);
+    // D9: the ignored event is never silent — audited before the ack.
+    const audit = await withStore(STORE, (tx) => tx.select().from(s.auditLog).where(eq(s.auditLog.action, 'stripe_mode_mismatch')));
+    expect(audit).toHaveLength(1);
+    expect(audit[0]!.data).toMatchObject({ eventId: `evt_modebind_${code}`, verifiedMode: 'test', needsReconciliation: true });
+  });
+
+  it('D3: a succeeded PI that fails verification is audited + held, not silently dropped', async () => {
+    const { code, orderId } = await seed('test');
+    const payload = JSON.stringify(piSucceededEvent({ id: `evt_d3_${code}`, orderCode: code, storeId: STORE, amount: 999 }));
+    const res = await app.request('/v1/webhooks/stripe', { method: 'POST', headers: hdr(sign(payload, TEST_WEBHOOK_SECRET)), body: payload });
+    expect(res.status).toBe(200);
+    const audit = await withStore(STORE, (tx) => tx.select().from(s.auditLog).where(eq(s.auditLog.action, 'stripe_verify_failed')));
+    expect(audit).toHaveLength(1);
+    const attempts = await withStore(STORE, (tx) => tx.select().from(s.paymentAttempt).where(eq(s.paymentAttempt.orderId, orderId)));
+    expect(attempts[0]).toMatchObject({ operation: 'intent', status: 'unknown', providerRef: `pi_${code}` });
+  });
+
+  it('D10: payment_intent.payment_failed releases the attempt and records a Declined payment', async () => {
+    const { code, orderId } = await seed('test');
+    const ev = piSucceededEvent({ id: `evt_fail_${code}`, orderCode: code, storeId: STORE });
+    const payload = JSON.stringify({ ...ev, type: 'payment_intent.payment_failed',
+      data: { object: { ...ev.data.object, status: 'requires_payment_method', last_payment_error: { message: 'Your card was declined.' } } } });
+    const res = await app.request('/v1/webhooks/stripe', { method: 'POST', headers: hdr(sign(payload, TEST_WEBHOOK_SECRET)), body: payload });
+    expect(res.status).toBe(200);
+    const attempts = await withStore(STORE, (tx) => tx.select().from(s.paymentAttempt).where(eq(s.paymentAttempt.orderId, orderId)));
+    expect(attempts[0]).toMatchObject({ status: 'failed' });
+    const payments = await withStore(STORE, (tx) => tx.select().from(s.payment).where(eq(s.payment.orderId, orderId)));
+    expect(payments[0]).toMatchObject({ state: 'Declined', errorMessage: 'Your card was declined.' });
   });
 });
 

@@ -8,6 +8,17 @@ import { applyPaymentResult, amountDueForOrder } from '../payments/settle.js';
 import { createPaymentIntent, resolveStripeUsable, stripeModeFromConfig } from '../payments/stripe.js';
 import { clientIp, loginRetryAfter } from '../auth/rate-limit.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
+import { customerToken } from '../auth/session.js';
+import { GatewayPaymentError, ownedOrder } from '../payments/gateway-payment.js';
+import { trackStripeIntent, reconcileStripeOrder, claimReconcileSlot } from '../payments/stripe-reconcile.js';
+
+/** D13: the same ownership rule gateway-payment uses — a matching receipt
+ *  token (x-receipt-token, returned by POST /checkout) or the signed-in
+ *  customer who owns the order. Anything else reads as not-found. */
+async function ownsOrder(tx: Parameters<typeof ownedOrder>[0], code: string, receipt: string | undefined, session: string | null | undefined) {
+  try { return await ownedOrder(tx, code, receipt, session); }
+  catch (e) { if (e instanceof GatewayPaymentError) return null; throw e; }
+}
 
 export const pay = new OpenAPIHono();
 
@@ -22,7 +33,7 @@ pay.openapi(
     summary: 'Pay for an order (PendingPayment -> Paid)',
     request: {
       params: z.object({ code: z.string() }),
-      headers: z.object({ 'idempotency-key': z.string().optional() }),
+      headers: z.object({ 'idempotency-key': z.string().optional(), 'x-receipt-token': z.string().optional() }),
       body: { content: { 'application/json': { schema: z.object({ method: z.literal('stripe'), token: z.unknown().optional() }) } } },
     },
     responses: {
@@ -38,6 +49,8 @@ pay.openapi(
     const { code } = c.req.valid('param');
     const { method, token } = c.req.valid('json');
     const idemKey = c.req.header('idempotency-key');
+    const receipt = c.req.header('x-receipt-token');
+    const session = customerToken(c);
     // Rate-limit: payment attempts per IP. Keyed on ip+method so a flood of
     // card-testing on one gateway doesn't trip the throttle for a different
     // method on the same IP. Idempotency keys are per-attempt, so the same
@@ -63,7 +76,7 @@ pay.openapi(
     const claimKey = idemKey ? `pay:${st.id}:${code}:${method}:${idemKey}` : `pay:${st.id}:${code}:${method}`;
     const out: R = await withAdvisoryLock(`pay:${st.id}:${code}`, async () => {
       const prepared = await withStore(st.id, async (tx) => {
-        const [order] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
+        const order = await ownsOrder(tx, code, receipt, session);
         if (!order) return { kind: 'notfound' as const };
         if (order.state !== 'PendingPayment') return { kind: 'badstate' as const, state: order.state };
         // MONEY-3: charge only what's still owed. Any settled tender already
@@ -142,7 +155,7 @@ pay.openapi(
     method: 'post',
     path: '/v1/shop/orders/{code}/payment-intent',
     summary: 'Create a Stripe PaymentIntent for an order',
-    request: { params: z.object({ code: z.string() }) },
+    request: { params: z.object({ code: z.string() }), headers: z.object({ 'x-receipt-token': z.string().optional() }) },
     responses: {
       200: { description: 'Intent', content: { 'application/json': { schema: z.object({ clientSecret: z.string(), intentId: z.string() }) } } },
       400: { description: 'Already covered', content: { 'application/json': { schema: apiErrorSchema().extend({ state: z.string() }) } } },
@@ -160,9 +173,12 @@ pay.openapi(
     // advertises, so the storefront never shows Stripe then gets a 503 here (and
     // vice-versa). Needs a mode-matched sk_ AND a mode-matched pk_.
     if (!(await resolveStripeUsable(st.id, mode))) return errJson(c, 503, 'STRIPE_NOT_CONFIGURED', `stripe is not configured (${mode} mode)`);
+    const receipt = c.req.header('x-receipt-token');
+    const session = customerToken(c);
     const prepared = await withStore(st.id, async (tx) => {
-      const [o] = await tx.select({ id: s.order.id, state: s.order.state, grandTotal: s.order.grandTotal, currency: s.order.currency })
-        .from(s.order).where(eq(s.order.code, code)).limit(1);
+      // D13: only the order's owner (receipt token / signed-in customer) can
+      // mint an intent or learn the amount due.
+      const o = await ownsOrder(tx, code, receipt, session);
       if (!o) return null;
       // MONEY-3: mint the intent for what's actually still owed, never the raw
       // order total, so an existing settled tender cannot be charged twice.
@@ -178,6 +194,43 @@ pay.openapi(
     // client_secret) instead of minting a second one — but a later call after
     // the amount due changes mints a fresh intent rather than reusing a stale one.
     const intent = await createPaymentIntent({ orderCode: code, storeId: st.id, amount: amountDue, currency: order.currency, mode, idempotencyKey: `pi:${order.id}:${amountDue}` });
+    // D5: track the PI durably (idempotent on the PI id) so the sweeper,
+    // the refresh route and admin reconciliation can find in-flight money.
+    await withStore(st.id, (tx) => trackStripeIntent(tx, st.id, { orderId: order.id, intentId: intent.intentId, amount: amountDue, currency: order.currency, mode }));
     return c.json(intent, 200);
+  },
+);
+
+// POST /v1/shop/orders/{code}/payment/refresh — D1 settlement fallback the
+// confirmation page can call: re-reads each tracked Stripe PaymentIntent for
+// this order from Stripe and settles through the webhook's idempotent path
+// (paid effects / confirmation email fire exactly once). Owner-only (receipt
+// token or signed-in customer). Payment state only — no stock or data cache.
+pay.openapi(
+  createRoute({
+    method: 'post',
+    path: '/v1/shop/orders/{code}/payment/refresh',
+    summary: 'Re-check the order\'s Stripe payment with Stripe (settlement fallback)',
+    request: { params: z.object({ code: z.string() }), headers: z.object({ 'x-receipt-token': z.string().optional() }) },
+    responses: {
+      200: { description: 'Refreshed', content: { 'application/json': { schema: z.object({
+        code: z.string(), state: z.string(),
+        intents: z.array(z.object({ intentId: z.string(), outcome: z.string() })),
+      }) } } },
+      404: { description: 'Not found', content: { 'application/json': { schema: apiErrorSchema() } } },
+    },
+  }),
+  async (c) => {
+    const st = await resolveStoreFromCtx(c);
+    const { code } = c.req.valid('param');
+    const receipt = c.req.header('x-receipt-token');
+    const session = customerToken(c);
+    const owned = await withStore(st.id, (tx) => ownsOrder(tx, code, receipt, session));
+    if (!owned) return errJson(c, 404, 'ORDER_NOT_FOUND', 'order not found');
+    // Throttled per order (at most one Stripe round-trip per window): a
+    // polling confirmation page cannot fan out into a Stripe request storm.
+    if (!claimReconcileSlot(st.id, owned.id)) return c.json({ code, state: owned.state, intents: [] }, 200);
+    const r = await reconcileStripeOrder(st.id, { orderId: owned.id }, { actor: 'shopper:refresh' });
+    return c.json({ code, state: r.state ?? owned.state, intents: r.intents.map((i) => ({ intentId: i.intentId, outcome: i.outcome })) }, 200);
   },
 );

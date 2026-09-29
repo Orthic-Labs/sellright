@@ -5,7 +5,7 @@
  * only piece that needs a sandbox key.
  */
 import { describe, expect, it } from 'vitest';
-import { verifyIntent, type IntentLike } from './stripe.js';
+import { verifyIntent, stripeRefundState, type IntentLike } from './stripe.js';
 import { manualProvider, codProvider } from './provider.js';
 
 const base = { orderCode: 'SR-ABC', amount: 2100, currency: 'usd' };
@@ -46,6 +46,20 @@ describe('verifyIntent — server-side trust boundary', () => {
 
   it('Authorized when requires_capture (auth-only flow)', () => {
     expect(verifyIntent(intent({ status: 'requires_capture' }), base).state).toBe('Authorized');
+  });
+
+  it('D12: processing (async methods) is Pending, never Declined', () => {
+    const r = verifyIntent(intent({ status: 'processing' }), base);
+    expect(r.state).toBe('Pending');
+    expect(r.providerRef).toBe('pi_123');
+  });
+
+  it('D11: stripeRefundState keeps requires_action Pending', () => {
+    expect(stripeRefundState('requires_action')).toBe('Pending');
+    expect(stripeRefundState('pending')).toBe('Pending');
+    expect(stripeRefundState('succeeded')).toBe('Settled');
+    expect(stripeRefundState('failed')).toBe('Failed');
+    expect(stripeRefundState('canceled')).toBe('Failed');
   });
 
   it('Declined on any other status', () => {

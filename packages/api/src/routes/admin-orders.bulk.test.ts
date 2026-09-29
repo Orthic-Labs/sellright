@@ -190,6 +190,13 @@ describe('bulk-cancel', () => {
     expect(body.skipped).toBe(0);
     expect(await orderState('O-CANCEL-1')).toBe('Cancelled');
     expect(await stockAllocated()).toBe(0); // 3 released
+    // D6: the released units are recorded as cancelled on the line, so a later
+    // refund of this order (payment_after_cancel) cannot release them again.
+    const cq = await withStore(STORE, async (tx) => {
+      const r = await tx.execute(sql`SELECT ol.cancelled_qty FROM order_line ol JOIN "order" o ON o.id = ol.order_id WHERE o.code = 'O-CANCEL-1'`);
+      return Number((r.rows[0] as { cancelled_qty: number }).cancelled_qty);
+    });
+    expect(cq).toBe(3);
   });
 
   it('(2) skips a Paid order (use Refund)', async () => {
