@@ -45,4 +45,9 @@ describe('robotsTxt', () => {
       '# llms.txt: https://example.com/llms.txt',
     ].join('\n') + '\n');
   });
+
+  it('keeps a trailing comment of the extra block attached to the sitemaps as their heading', () => {
+    const txt = robotsTxt('https://example.com', [], { extra: 'User-agent: GPTBot\nDisallow: /\n\n# Sitemaps' });
+    expect(txt).toContain('# Sitemaps\nSitemap: https://example.com/sitemap.xml');
+  });
 });
