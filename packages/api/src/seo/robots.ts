@@ -33,7 +33,11 @@ export function robotsTxt(siteUrl: string, disallow: string[], extras: RobotsExt
     lines.push(`Disallow: ${path}`);
   }
   if (extras.extra) lines.push('', extras.extra.replace(/\s+$/, ''));
-  lines.push('', `Sitemap: ${siteUrl}/sitemap.xml`);
+  // A comment as the extra block's last line is a heading for the sitemaps
+  // (e.g. "# Sitemaps"): keep it attached, no blank line in between.
+  const lastExtra = extras.extra?.replace(/\s+$/, '').split('\n').pop() ?? '';
+  if (!lastExtra.startsWith('#')) lines.push('');
+  lines.push(`Sitemap: ${siteUrl}/sitemap.xml`);
   for (const p of extras.sitemaps ?? []) {
     const path = p.startsWith('/') ? p : `/${p}`;
     if (path !== '/sitemap.xml') lines.push(`Sitemap: ${siteUrl}${path}`);
