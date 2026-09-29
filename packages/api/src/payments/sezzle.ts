@@ -181,6 +181,7 @@ export function createSezzleProvider(transport: GatewayFetch = fetch): PaymentPr
           customer: input.customer,
           order: {
             intent: 'CAPTURE', reference_id: input.attemptId,
+            description: `Order ${input.orderCode}`,
             items: input.items, order_amount: money(input.amount),
             shipping_amount: money(input.shipping), tax_amount: money(input.tax),
             ...(input.discount ? { discounts: [{ name: 'Order discount', amount: money(input.discount) }] } : {}),

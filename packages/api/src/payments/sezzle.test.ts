@@ -20,6 +20,20 @@ const transportFor = (value: unknown) => vi.fn()
   .mockResolvedValueOnce(json(value));
 
 describe('Sezzle port', () => {
+  it('includes the required order description when creating a checkout session', async () => {
+    const transport = transportFor({ order: {
+      uuid: 'provider-order', checkout_url: 'https://sandbox.checkout.sezzle.com/test',
+    } });
+    await createSezzleProvider(transport).createSession({
+      ...input, customer: { email: 'sandbox@example.com' },
+      items: [{ name: 'Test item', sku: 'TEST', quantity: 1,
+        price: { amount_in_cents: 1200, currency: 'USD' } }],
+      shipping: 0, tax: 0, discount: 0,
+      completeUrl: 'https://example.com/complete', cancelUrl: 'https://example.com/cancel',
+    });
+    const request = JSON.parse(transport.mock.calls[1]![1].body);
+    expect(request.order.description).toBe('Order DD1');
+  });
   it('never treats authorization as capture', async () => {
     const provider = createSezzleProvider(transportFor(order([])));
     expect((await provider.createPayment(input)).state).toBe('Authorized');
