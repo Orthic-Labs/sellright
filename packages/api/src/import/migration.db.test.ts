@@ -650,6 +650,33 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     expect(settled).toHaveLength(0);
   });
 
+  it('keeps source product and blog timestamps (sitemap lastmod) when the source has them', async () => {
+    const tag = 't' + randomUUID().slice(0, 8);
+    await resetSource('dd', tag);
+    for (const statement of [
+      `ALTER TABLE product ADD COLUMN "createdAt" timestamp, ADD COLUMN "updatedAt" timestamp`,
+      `UPDATE product SET "createdAt" = '2023-01-02 03:04:05', "updatedAt" = '2024-05-06 07:08:09'`,
+      `ALTER TABLE blog_post ADD COLUMN "createdAt" timestamp, ADD COLUMN "updatedAt" timestamp`,
+      `UPDATE blog_post SET "createdAt" = '2023-02-03 00:00:00', "updatedAt" = '2024-06-07 00:00:00' WHERE id = 1`,
+    ]) await sourcePool.query(statement);
+    const storeId = randomUUID();
+    const f = await fixtureConfig(storeId, {
+      nmi: { accountId: 'nmi-acct', mode: 'live' },
+      sezzle: { accountId: 'sez-acct', mode: 'live' },
+      stripe: { accountId: 'acct_dd', mode: 'live' },
+    });
+    const dry = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config, manifestPath: f.manifestPath });
+    await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config,
+      manifestPath: f.applyManifestPath, apply: true, expectedDigest: dry.sourceDigest });
+    const product = await targetOne(storeId, 'product');
+    expect(new Date(product.created_at).toISOString()).toBe(new Date('2023-01-02T03:04:05').toISOString());
+    expect(new Date(product.updated_at).toISOString()).toBe(new Date('2024-05-06T07:08:09').toISOString());
+    const post = await targetOne(storeId, 'blog_post', `AND slug = 'hello-world'`);
+    expect(new Date(post.updated_at).toISOString()).toBe(new Date('2024-06-07T00:00:00').toISOString());
+    const draft = await targetOne(storeId, 'blog_post', `AND slug = 'draft-post'`);
+    expect(draft.updated_at).toBeTruthy(); // NULL source timestamp → import time
+  });
+
   it('carries source id order into option group/value position (id ascending, not source insertion order)', async () => {
     const tag = 'd' + randomUUID().slice(0, 8);
     await resetSource('dd', tag);
