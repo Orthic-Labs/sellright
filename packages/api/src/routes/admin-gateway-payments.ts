@@ -20,7 +20,7 @@ adminGatewayPayments.get('/v1/admin/payment-reconciliation', c => guard(c, async
     attempts: await tx.select().from(s.paymentAttempt)
       .where(or(
         inArray(s.paymentAttempt.status, ['processing', 'pending', 'unknown']),
-        and(eq(s.paymentAttempt.operation, 'intent'), inArray(s.paymentAttempt.status, ['open', 'failed'])),
+        and(eq(s.paymentAttempt.operation, 'intent'), inArray(s.paymentAttempt.status, ['open', 'failed', 'action_required'])),
       ))
       .orderBy(desc(s.paymentAttempt.updatedAt)).limit(100),
     events: await tx.select().from(s.gatewayEvent).where(inArray(s.gatewayEvent.status, ['pending', 'manual']))

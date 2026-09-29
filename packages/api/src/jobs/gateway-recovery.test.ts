@@ -7,6 +7,8 @@ const h = vi.hoisted(() => {
     attempts: [] as Array<Record<string, unknown>>,
     updates: [] as Array<Record<string, unknown>>,
     audits: [] as Array<Record<string, unknown>>,
+    locks: [] as string[],
+    onLock: null as null | (() => void),
   };
   const chain = (kind: string, payload?: unknown): unknown => {
     const target: Record<string, unknown> = {};
@@ -32,7 +34,7 @@ const h = vi.hoisted(() => {
 vi.mock('../db/client.js', () => ({
   pool: { query: async () => ({ rows: [{ id: 'store' }] }) },
   withStore: async (_s: string, fn: (tx: unknown) => unknown) => fn(h.tx),
-  withAdvisoryLock: async (_k: string, fn: () => unknown) => fn(),
+  withAdvisoryLock: async (k: string, fn: () => unknown) => { h.state.locks.push(k); h.state.onLock?.(); return fn(); },
 }));
 const verify = vi.fn();
 const finish = vi.fn();
@@ -97,6 +99,7 @@ describe('recoverGatewayAttempts', () => {
   beforeEach(() => {
     h.state.updates.length = 0; h.state.audits.length = 0;
     verify.mockReset(); finish.mockReset();
+    h.state.locks.length = 0; h.state.onLock = null;
   });
 
   it('auto-verifies a stuck NMI attempt through verifyGatewayAttempt (D8)', async () => {
@@ -132,12 +135,27 @@ describe('recoverGatewayAttempts', () => {
     expect(sezzle.releaseOrder).not.toHaveBeenCalled();
     expect(h.state.audits[0]).toMatchObject({ action: 'sezzle_session_expired' });
   });
-  it('captures an approved Sezzle authorization then re-verifies', async () => {
+  it('captures an approved Sezzle authorization and settles it under the order pay lock', async () => {
     h.state.attempts = [{ ...attempt({ method: 'sezzle', operation: 'session', status: 'pending', providerRef: 'ord' }), code: 'C', state: 'PendingPayment', grandTotal: 1000 }];
-    verify.mockResolvedValueOnce({ status: 'pending' }).mockResolvedValueOnce({ status: 'settled' });
+    verify.mockResolvedValueOnce({ status: 'pending' });
+    finish.mockResolvedValue({ status: 'settled' });
     const sezzle = { getOrder: vi.fn().mockResolvedValue(sezzleOrder({ authorization: { approved: true } })), captureOrder: vi.fn(), releaseOrder: vi.fn() };
     expect(await recoverGatewayAttempts({ ...opts, sezzle })).toMatchObject({ resolved: 1 });
     expect(sezzle.captureOrder).toHaveBeenCalledWith(expect.anything(), 'ord', { amount_in_cents: 1000, currency: 'USD' }, 'att:capture');
+    expect(h.state.locks).toEqual(['pay:store:C']);
+    expect(finish).toHaveBeenCalledWith('store', 'att', expect.objectContaining({ state: 'Settled', providerRef: 'ord' }));
+  });
+  it('releases instead of capturing when the order stopped being payable before the lock (e.g. Stripe settled it)', async () => {
+    const row = { ...attempt({ method: 'sezzle', operation: 'session', status: 'pending', providerRef: 'ord' }), code: 'C', state: 'PendingPayment', grandTotal: 1000 };
+    h.state.attempts = [row];
+    verify.mockResolvedValue({ status: 'pending' });
+    finish.mockResolvedValue({ status: 'failed' });
+    h.state.onLock = () => { h.state.attempts = [{ ...row, state: 'Paid' }]; };
+    const sezzle = { getOrder: vi.fn().mockResolvedValue(sezzleOrder({ authorization: { approved: true } })), captureOrder: vi.fn(), releaseOrder: vi.fn() };
+    await recoverGatewayAttempts({ ...opts, sezzle });
+    expect(sezzle.captureOrder).not.toHaveBeenCalled();
+    expect(sezzle.releaseOrder).toHaveBeenCalledWith(expect.anything(), 'ord', { amount_in_cents: 1000, currency: 'USD' }, 'att:release');
+    expect(finish).toHaveBeenCalledWith('store', 'att', expect.objectContaining({ state: 'Declined', metadata: expect.objectContaining({ recovery: 'order_not_payable' }) }));
   });
   it('releases an approved Sezzle authorization on a non-payable order', async () => {
     h.state.attempts = [{ ...attempt({ method: 'sezzle', operation: 'session', status: 'pending', providerRef: 'ord' }), code: 'C', state: 'Cancelled', grandTotal: 1000 }];

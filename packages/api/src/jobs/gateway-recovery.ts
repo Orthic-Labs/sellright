@@ -127,33 +127,45 @@ async function recoverOne(storeId: string, attempt: Attempt, opts: RecoveryOptio
   if (decision.kind === 'wait') return { resolved: false, note: decision.reason };
   if (!opts.apply) return { resolved: false, note: 'dry-run:' + decision.kind };
   const money: Money = { amount_in_cents: attempt.amount, currency: attempt.currency };
-  if (decision.kind === 'capture') {
-    // Sezzle-Request-Id makes a retried capture idempotent at the provider.
-    await ops.captureOrder(account, attempt.providerRef, money, attempt.id + ':capture');
-    const after = await verifyGatewayAttempt(storeId, attempt.id);
-    return { resolved: after.status === 'settled', note: 'captured:' + after.status };
-  }
   const ref = attempt.providerRef;
+  if (decision.kind === 'capture') {
+    // Capture + settle under the order's pay lock (the same lock /pay, the
+    // Stripe webhook and reconcileStripeOrder take), re-checking payability
+    // inside it: a Stripe settle that won the race makes this a release, so
+    // the order is never charged twice.
+    const captured = await withAdvisoryLock('pay:' + storeId + ':' + ctx.code, async () => {
+      const fresh = await orderContext(storeId, attempt);
+      if (!fresh?.payable) return null;
+      // Sezzle-Request-Id makes a retried capture idempotent at the provider.
+      await ops.captureOrder(account, ref, money, attempt.id + ':capture');
+      const done = await finishAttempt(storeId, attempt.id, {
+        state: 'Settled', providerRef: ref, metadata: { recovery: 'captured' },
+      });
+      return { resolved: done.status === 'settled', note: 'captured:' + done.status };
+    });
+    if (captured) return captured;
+  }
+  const releaseReason = decision.kind === 'release' ? decision.reason : decision.kind === 'capture' ? 'order_not_payable' : null;
   return withAdvisoryLock('pay:' + storeId + ':' + ctx.code, async () => {
-    if (decision.kind === 'release') {
+    if (releaseReason) {
       await ops.releaseOrder(account, ref, money, attempt.id + ':release');
     }
     // Declined → attempt 'failed' + any Pending/Authorized payment row
     // downgraded (applyPaymentResult never downgrades Settled), which lifts
     // the hasUnresolvedPayment hold. finishAttempt is a no-op if a concurrent
     // webhook already settled the attempt.
-    const reason = decision.kind === 'release' ? decision.reason : 'session_expired';
+    const reason = releaseReason ?? 'session_expired';
     const done = await finishAttempt(storeId, attempt.id, {
       state: 'Declined', providerRef: ref,
-      errorMessage: decision.kind === 'release' ? 'Sezzle authorization released' : 'Sezzle checkout expired',
-      metadata: { recovery: reason, released: decision.kind === 'release' },
+      errorMessage: releaseReason ? 'Sezzle authorization released' : 'Sezzle checkout expired',
+      metadata: { recovery: reason, released: !!releaseReason },
     });
     await withStore(storeId, (tx) => tx.insert(s.auditLog).values({
       storeId, actor: 'system:gateway-recovery', entity: 'payment_attempt', entityId: attempt.id,
-      action: decision.kind === 'release' ? 'sezzle_authorization_released' : 'sezzle_session_expired',
+      action: releaseReason ? 'sezzle_authorization_released' : 'sezzle_session_expired',
       data: { providerRef: ref, reason, status: done.status },
     }));
-    return { resolved: done.status !== 'pending' && done.status !== 'unknown', note: decision.kind + ':' + done.status };
+    return { resolved: done.status !== 'pending' && done.status !== 'unknown', note: (releaseReason ? 'release' : 'expire') + ':' + done.status };
   });
 }
 

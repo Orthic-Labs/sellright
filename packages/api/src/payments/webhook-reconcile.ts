@@ -290,8 +290,12 @@ async function recomputeOrderRefundState(tx: Tx, storeId: string, orderId: strin
   const [ord] = await tx.select({ state: s.order.state, grandTotal: s.order.grandTotal, code: s.order.code }).from(s.order).where(eq(s.order.id, orderId)).limit(1);
   if (!ord) return;
   const [agg] = await tx.select({ total: sql<number>`coalesce(sum(${s.refund.amount}), 0)::int` })
-    .from(s.refund).where(and(eq(s.refund.orderId, orderId), eq(s.refund.state, 'Settled')));
+    .from(s.refund).innerJoin(s.payment, eq(s.payment.id, s.refund.paymentId))
+    // D4: refunds of a duplicate capture are money-only — never order state.
+    .where(and(eq(s.refund.orderId, orderId), eq(s.refund.state, 'Settled'),
+      sql`coalesce((${s.payment.metadata}->>'duplicate')::boolean, false) = false`));
   const refunded = agg?.total ?? 0;
+  if (!refunded) return;
   const target = refundTargetState(refunded, ord.grandTotal);
   if (!target) return; // nothing settled yet — no state write, no event
   // FIX (second partial refund suppresses order.refunded): the FSM has no

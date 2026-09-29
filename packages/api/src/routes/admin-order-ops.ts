@@ -6,6 +6,7 @@ import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
+import { cancelOrderStripeIntents } from '../payments/stripe-reconcile.js';
 import { releaseOrderLoyalty } from '../loyalty/ledger.js';
 import { dispute } from '../db/schema-ops.js';
 import { HttpError, J, errBody, money, Page, requireAdmin, requireStore, requireWrite, requireManage, requirePermission, guard } from './admin-helpers.js';
@@ -318,7 +319,7 @@ adminOrderOps.openapi(
     for (const code of [...new Set(codes)] as string[]) {
       // Fresh per iteration — each code is its own committed transaction.
       let stockChanged = false;
-      const r = await withStore(st.storeId, async (tx): Promise<{ ok: true } | { ok: false; error: string }> => {
+      const r = await withStore(st.storeId, async (tx): Promise<{ ok: true; orderId: string } | { ok: false; error: string }> => {
         const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
         if (!o) return { ok: false, error: 'order not found' };
         if (await hasUnresolvedPayment(tx, o.id)) return { ok: false, error: 'Resolve the pending payment before cancelling' };
@@ -342,9 +343,11 @@ adminOrderOps.openapi(
         // LOYALTY-1: release points reserved by this order (idempotent).
         await releaseOrderLoyalty(tx, st.storeId, o.id, admin.email);
         await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: o.id, action: 'cancel', fromState: o.state, toState: 'Cancelled' });
-        return { ok: true };
+        return { ok: true, orderId: o.id };
       });
       if (stockChanged) onStockChanged(st.slug);
+      // After commit: cancel the order's open Stripe intents (best-effort, audited).
+      if (r.ok) await cancelOrderStripeIntents(st.storeId, r.orderId, admin.email);
       results.push(r.ok ? { code, ok: true } : { code, ok: false, error: r.error });
     }
     const succeeded = results.filter((r) => r.ok).length;

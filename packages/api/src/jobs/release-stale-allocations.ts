@@ -76,7 +76,7 @@ export async function releaseStaleAllocations(opts: ReleaseStaleOpts): Promise<{
                 WHERE pa.order_id = "order".id AND pa.store_id = "order".store_id
                   AND (pa.status IN ('processing', 'unknown', 'pending')
                     -- D5: a tracked Stripe intent not yet resolved at Stripe
-                    OR (pa.operation = 'intent' AND pa.status IN ('open', 'failed'))))
+                    OR (pa.operation = 'intent' AND pa.status IN ('open', 'failed', 'action_required'))))
               AND NOT EXISTS (SELECT 1 FROM payment p
                 WHERE p.order_id = "order".id AND p.store_id = "order".store_id
                   AND p.state IN ('Pending', 'Authorized'))

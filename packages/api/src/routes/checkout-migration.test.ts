@@ -149,6 +149,17 @@ describe('POST /v1/shop/orders/{code}/payment-intent', () => {
     expect(rows[0]!.providerRef).toMatch(/^pi_/);
   });
 
+  it('mints a fresh PI (suffixed key) when the replayed PI was already cancelled', async () => {
+    const { code, receiptToken } = await makeOrder();
+    const first = await (await app.request(`/v1/shop/orders/${code}/payment-intent`, { method: 'POST', headers: hdr({ 'x-receipt-token': receiptToken }) })).json() as { intentId: string };
+    await withStore(STORE, (tx) => tx.update(s.paymentAttempt).set({ status: 'cancelled' }).where(eq(s.paymentAttempt.providerRef, first.intentId)));
+    const res = await app.request(`/v1/shop/orders/${code}/payment-intent`, { method: 'POST', headers: hdr({ 'x-receipt-token': receiptToken }) });
+    expect(res.status).toBe(200);
+    const second = await res.json() as { intentId: string };
+    expect(second.intentId).not.toBe(first.intentId);
+    expect(piCalls.map((c) => c.idempotencyKey)).toEqual([piCalls[0]!.idempotencyKey, piCalls[0]!.idempotencyKey, `${piCalls[0]!.idempotencyKey}:1`]);
+  });
+
   it('404 for an unknown order code', async () => {
     const res = await app.request(`/v1/shop/orders/SRDOESNOTEX/payment-intent`, { method: 'POST', headers: hdr() });
     expect(res.status).toBe(404);

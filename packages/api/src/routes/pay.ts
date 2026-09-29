@@ -193,11 +193,18 @@ pay.openapi(
     // double-submit/retry reuses the order's open PaymentIntent (same
     // client_secret) instead of minting a second one — but a later call after
     // the amount due changes mints a fresh intent rather than reusing a stale one.
-    const intent = await createPaymentIntent({ orderCode: code, storeId: st.id, amount: amountDue, currency: order.currency, mode, idempotencyKey: `pi:${order.id}:${amountDue}` });
     // D5: track the PI durably (idempotent on the PI id) so the sweeper,
     // the refresh route and admin reconciliation can find in-flight money.
-    await withStore(st.id, (tx) => trackStripeIntent(tx, st.id, { orderId: order.id, intentId: intent.intentId, amount: amountDue, currency: order.currency, mode }));
-    return c.json(intent, 200);
+    // Stripe's 24h idempotency replays a PI we already cancelled (sweeper /
+    // admin cancel): a cancelled PI can never be confirmed, so mint a fresh
+    // one under a suffixed key (pi:{orderId}:{amountDue}:{n}).
+    for (let n = 0; n < 5; n++) {
+      const key = n === 0 ? `pi:${order.id}:${amountDue}` : `pi:${order.id}:${amountDue}:${n}`;
+      const intent = await createPaymentIntent({ orderCode: code, storeId: st.id, amount: amountDue, currency: order.currency, mode, idempotencyKey: key });
+      const tracked = await withStore(st.id, (tx) => trackStripeIntent(tx, st.id, { orderId: order.id, intentId: intent.intentId, amount: amountDue, currency: order.currency, mode }));
+      if (tracked.status !== 'cancelled') return c.json(intent, 200);
+    }
+    return errJson(c, 409, 'ORDER_NOT_PAYABLE', 'order is not payable', { extra: { state: order.state } });
   },
 );
 

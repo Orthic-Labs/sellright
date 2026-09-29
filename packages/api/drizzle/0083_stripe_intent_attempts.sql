@@ -8,7 +8,7 @@
 -- (operation 'intent', method 'stripe', provider_ref = pi_...), so the stale
 -- sweeper, the shopper refresh route and the admin reconciliation list can
 -- find in-flight Stripe money. New status 'open' = minted, awaiting the
--- shopper; deliberately NOT a payment hold (hold.ts lists only
+-- shopper; 'action_required' = awaiting 3DS. Neither is a payment hold (hold.ts lists only
 -- processing/unknown/pending), so an abandoned PI never blocks admin cancel.
 --
 -- Expand-only: the widened CHECKs accept every value the previous release
@@ -18,7 +18,7 @@ ALTER TABLE payment_attempt ADD CONSTRAINT payment_attempt_operation_check
   CHECK (operation IN ('charge','session','refund','capture','void','intent'));--> statement-breakpoint
 ALTER TABLE payment_attempt DROP CONSTRAINT IF EXISTS payment_attempt_status_check;--> statement-breakpoint
 ALTER TABLE payment_attempt ADD CONSTRAINT payment_attempt_status_check
-  CHECK (status IN ('processing','unknown','pending','settled','failed','cancelled','open'));--> statement-breakpoint
+  CHECK (status IN ('processing','unknown','pending','settled','failed','cancelled','open','action_required'));--> statement-breakpoint
 CREATE UNIQUE INDEX IF NOT EXISTS payment_attempt_stripe_intent_uidx
   ON payment_attempt (store_id, provider_ref)
   WHERE operation = 'intent' AND provider_ref IS NOT NULL;

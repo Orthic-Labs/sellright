@@ -10,7 +10,7 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { and, eq, isNull } from 'drizzle-orm';
 import type Stripe from 'stripe';
-import { withStore } from '../db/client.js';
+import { withAdvisoryLock, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { stripeCreds, stripeModeFromConfig, verifyStripeWebhook, listAllStoreIds, STRIPE_REFUND_ATTEMPT_KEY, type StripeMode } from '../payments/stripe.js';
 import { applyStripeIntent, type StripeIntent } from '../payments/stripe-reconcile.js';
@@ -141,7 +141,14 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
   // once, after this whole claim transaction commits, never before.
   let stockChanged = false;
   let storeSlug: string | undefined;
-  await withStore(storeId, async (tx) => {
+  // D4-serialization: PaymentIntent events settle under the SAME per-order
+  // advisory lock /pay, reconcileStripeOrder and the Sezzle recovery capture
+  // take, so a Stripe settle and a concurrent Sezzle capture of the same order
+  // are serialized (the loser sees the order no longer payable).
+  const piOrderCode = event.type.startsWith('payment_intent.')
+    ? (event.data.object as { metadata?: { orderCode?: string } }).metadata?.orderCode : undefined;
+  const runClaim = (fn: () => Promise<void>) => piOrderCode ? withAdvisoryLock(`pay:${storeId}:${piOrderCode}`, fn) : fn();
+  await runClaim(() => withStore(storeId, async (tx) => {
     // ra-sec: bind the verifying secret's mode to the store's configured mode. A
     // webhook signed with the TEST secret must not drive payment_intent.succeeded
     // on a LIVE store (a leaked test webhook secret would otherwise let a forged
@@ -259,7 +266,7 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
       default:
         return;
     }
-  });
+  }));
   if (stockChanged && storeSlug) onStockChanged(storeSlug);
   return c.json({ received: true }, 200);
 });

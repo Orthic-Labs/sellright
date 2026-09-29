@@ -19,6 +19,7 @@ export const PAYMENT_ALERT_ACTIONS = [
   'stripe_verify_failed', // D3
   'duplicate_payment', // D4
   'stripe_mode_mismatch', // D9
+  'stripe_intent_unresolvable', // sweeper could not resolve a tracked PI
 ] as const;
 export type PaymentAlertKind = (typeof PAYMENT_ALERT_ACTIONS)[number];
 
@@ -27,6 +28,7 @@ const TITLES: Record<PaymentAlertKind, string> = {
   stripe_verify_failed: 'Stripe payment could not be verified',
   duplicate_payment: 'Duplicate payment captured',
   stripe_mode_mismatch: 'Stripe event for a different mode',
+  stripe_intent_unresolvable: 'Stripe payment could not be resolved',
 };
 
 export interface PaymentAlertInput {

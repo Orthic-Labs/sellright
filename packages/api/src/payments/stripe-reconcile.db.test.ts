@@ -8,6 +8,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const stripeState = new Map<string, Record<string, unknown>>();
 const cancelCalls: string[] = [];
+const refundCalls: string[] = [];
 vi.mock('./stripe.js', async (orig) => {
   const actual = await orig<typeof import('./stripe.js')>();
   return {
@@ -17,6 +18,10 @@ vi.mock('./stripe.js', async (orig) => {
       if (!pi) throw new Error('No such payment_intent');
       return pi;
     }),
+    stripeProvider: { ...actual.stripeProvider, refundPayment: vi.fn(async (i: { providerRef: string | null }) => {
+      refundCalls.push(i.providerRef ?? '');
+      return { state: 'Settled', providerRef: 're_' + (i.providerRef ?? 'x'), errorMessage: null };
+    }) },
     cancelStripeIntent: vi.fn(async (_s: string, _m: string, id: string) => {
       cancelCalls.push(id);
       const pi = stripeState.get(id)!;
@@ -33,7 +38,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
 import * as s from '../db/schema.js';
-import { applyStripeIntent, reconcileStripeOrder, trackStripeIntent, claimReconcileSlot } from './stripe-reconcile.js';
+import { applyStripeIntent, reconcileStripeOrder, trackStripeIntent, claimReconcileSlot, sweepStaleStripeIntents, cancelOrderStripeIntents, STRIPE_SWEEP_MAX_TRIES } from './stripe-reconcile.js';
 import { hasUnresolvedPayment } from './hold.js';
 import { releaseStaleAllocations } from '../jobs/release-stale-allocations.js';
 import { requestRefund } from './refunds.js';
@@ -51,6 +56,7 @@ beforeEach(async () => {
   await pool.query('TRUNCATE store CASCADE');
   stripeState.clear();
   cancelCalls.length = 0;
+  refundCalls.length = 0;
   await withStore(STORE, async (tx) => {
     await tx.execute(sql`INSERT INTO store (id, slug, name, config) VALUES (${STORE}, ${SLUG}, ${SLUG}, ${JSON.stringify({ notifications: { operatorEmail: 'ops@example.com' } })}::jsonb)`);
     const [p] = await tx.insert(s.product).values({ storeId: STORE, slug: 'p', name: 'P', status: 'active' }).returning({ id: s.product.id });
@@ -155,6 +161,29 @@ describe('D3/D4/D10/D18: intent outcomes', () => {
     expect((await orderOf(order.id)).state).toBe('Paid');
   });
 
+  it('D4: the duplicate is refunded money-only — no line/stock effects, order stays Paid, not counted in refund state', async () => {
+    const { order, line } = await makeOrder();
+    await q((tx) => applyStripeIntent(tx, STORE, pi('pi_orig', order.code, { status: 'succeeded' }), 'test'));
+    await q((tx) => applyStripeIntent(tx, STORE, pi('pi_dup', order.code, { status: 'succeeded' }), 'test'));
+    const dup = (await paymentsOf(order.id)).find((p) => p.providerRef === 'pi_dup')!;
+    const before = await allocated();
+    // Lines are refused for a duplicate.
+    await expect(requestRefund({ storeId: STORE, orderId: order.id, actor: 'test', idempotencyKey: 'dup-lines', paymentId: dup.id,
+      lines: [{ orderLineId: line.id, quantity: 1, restock: false }] })).rejects.toThrow(/money-only/);
+    const r = await requestRefund({ storeId: STORE, orderId: order.id, actor: 'test', idempotencyKey: 'dup-refund', paymentId: dup.id });
+    expect(r).toMatchObject({ refundState: 'Settled', state: 'Paid', refunded: 2000 });
+    expect(refundCalls).toEqual(['pi_dup']);
+    expect((await orderOf(order.id)).state).toBe('Paid');
+    expect(await allocated()).toBe(before);
+    const [l] = await q((tx) => tx.select().from(s.orderLine).where(eq(s.orderLine.id, line.id)));
+    expect(l).toMatchObject({ refundedQty: 0, cancelledQty: 0 });
+    expect(await audits('duplicate_payment_refunded')).toHaveLength(1);
+    // The original payment still refunds normally (no "select the payment"
+    // ambiguity from the duplicate) and drives the order state.
+    const full = await requestRefund({ storeId: STORE, orderId: order.id, actor: 'test', idempotencyKey: 'orig-refund' });
+    expect(full).toMatchObject({ refundState: 'Settled', state: 'Refunded', refunded: 2000 });
+  });
+
   it('D10/D18: payment_failed releases the attempt (retryable) and records a Declined row; the same PI can still settle', async () => {
     const { order } = await makeOrder();
     await track(order.id, 'pi_retry');
@@ -170,7 +199,15 @@ describe('D3/D4/D10/D18: intent outcomes', () => {
     expect(pays[0]!.state).toBe('Settled');
   });
 
-  it('D10: processing / requires_action hold the order; canceled releases', async () => {
+  it('requires_action is NOT a hold (shopper-side 3DS; cancellable)', async () => {
+    const { order } = await makeOrder();
+    const out = await q((tx) => applyStripeIntent(tx, STORE, pi('pi_3ds', order.code, { status: 'requires_action' }), 'test'));
+    expect(out.outcome).toBe('action_required');
+    expect((await attemptOf('pi_3ds')).status).toBe('action_required');
+    expect(await q((tx) => hasUnresolvedPayment(tx, order.id))).toBe(false);
+  });
+
+  it('D10: processing holds the order; canceled releases', async () => {
     const { order } = await makeOrder();
     await q((tx) => applyStripeIntent(tx, STORE, pi('pi_hold', order.code, { status: 'processing' }), 'test'));
     expect((await attemptOf('pi_hold')).status).toBe('processing');
@@ -215,12 +252,66 @@ describe('D5/D6/D14: stale sweeper with tracked Stripe intents', () => {
     expect(l!.cancelledQty).toBe(2);
   });
 
-  it('unresolvable PI (Stripe error) → order skipped, not cancelled', async () => {
+  it('unresolvable PI (Stripe error) → order skipped, backs off, then flagged + alerted after N tries', async () => {
     const { order } = await makeOrder({ ageMin: 120 });
     await track(order.id, 'pi_unknown_at_stripe');
     await releaseStaleAllocations({ apply: true, ttlMin: 60 });
     expect((await orderOf(order.id)).state).toBe('PendingPayment');
     expect(await allocated()).toBe(2);
+    const a1 = await attemptOf('pi_unknown_at_stripe');
+    expect((a1.context as { recovery: { tries: number; nextAt: string } }).recovery.tries).toBe(1);
+    // Backed off: an immediate second pass does not retry it.
+    const again = await sweepStaleStripeIntents(STORE, new Date(), 50);
+    expect(again.checked).toBe(0);
+    // Last allowed try → manual + operator alert.
+    await q((tx) => tx.update(s.paymentAttempt).set({ context: { recovery: { tries: STRIPE_SWEEP_MAX_TRIES - 1 } } }).where(eq(s.paymentAttempt.id, a1.id)));
+    const last = await sweepStaleStripeIntents(STORE, new Date(), 50);
+    expect(last).toMatchObject({ checked: 1, errors: 1, flagged: 1 });
+    expect(await audits('stripe_intent_unresolvable')).toHaveLength(1);
+    expect(await outbox('payment_alert')).toHaveLength(1);
+    expect((await sweepStaleStripeIntents(STORE, new Date(), 50)).checked).toBe(0);
+  });
+
+  it('a backed-off failing intent never starves a newer resolvable one (oldest first, failures skipped)', async () => {
+    const old = await makeOrder({ ageMin: 300 });
+    await track(old.order.id, 'pi_broken');
+    const newer = await makeOrder({ ageMin: 120 });
+    await track(newer.order.id, 'pi_ok');
+    pi('pi_ok', newer.order.code);
+    await sweepStaleStripeIntents(STORE, new Date(Date.now() - 60 * 60_000), 1); // only the oldest (fails)
+    const second = await sweepStaleStripeIntents(STORE, new Date(Date.now() - 60 * 60_000), 1);
+    expect(second.cancelled).toBe(1);
+    expect(cancelCalls).toEqual(['pi_ok']);
+  });
+
+  it('requires_action PI past TTL → cancelled at Stripe, order cancelled, stock released', async () => {
+    const { order } = await makeOrder({ ageMin: 120 });
+    await q((tx) => applyStripeIntent(tx, STORE, pi('pi_3ds_stale', order.code, { status: 'requires_action' }), 'test'));
+    await releaseStaleAllocations({ apply: true, ttlMin: 60 });
+    expect(cancelCalls).toEqual(['pi_3ds_stale']);
+    expect((await orderOf(order.id)).state).toBe('Cancelled');
+    expect(await allocated()).toBe(0);
+  });
+
+  it('open intent on an already-Cancelled order is cancelled at Stripe by the sweeper', async () => {
+    const { order } = await makeOrder();
+    await track(order.id, 'pi_on_cancelled');
+    pi('pi_on_cancelled', order.code);
+    await q((tx) => tx.update(s.order).set({ state: 'Cancelled' }).where(eq(s.order.id, order.id)));
+    await releaseStaleAllocations({ apply: true, ttlMin: 60 });
+    expect(cancelCalls).toEqual(['pi_on_cancelled']);
+    expect((await attemptOf('pi_on_cancelled')).status).toBe('cancelled');
+  });
+
+  it('admin cancel helper cancels the order\'s open PIs at Stripe (audited)', async () => {
+    const { order } = await makeOrder();
+    await track(order.id, 'pi_admin');
+    pi('pi_admin', order.code);
+    await q((tx) => tx.update(s.order).set({ state: 'Cancelled' }).where(eq(s.order.id, order.id)));
+    await cancelOrderStripeIntents(STORE, order.id, 'admin@example.com');
+    expect(cancelCalls).toEqual(['pi_admin']);
+    expect((await attemptOf('pi_admin')).status).toBe('cancelled');
+    expect(await audits('stripe_intent_cancelled')).toHaveLength(1);
   });
 
   it('D6 regression: payment after sweeper-cancel, then refund, releases the allocation only once (D14 alert fires)', async () => {
