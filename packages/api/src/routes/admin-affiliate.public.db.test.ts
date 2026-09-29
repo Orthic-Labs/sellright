@@ -63,6 +63,15 @@ async function seed() {
       VALUES (${ORDER_LINE_ID}, ${STORE_ID}, ${ORDER_ID}, ${VARIANT_ID}, 'AFF-SKU', 'Aff Product', 2, 5000, 10000, 10000)
       ON CONFLICT (id) DO NOTHING`);
 
+    // A discounted order (commission on the discounted subtotal) and a fully
+    // refunded one (earns nothing, not listed).
+    await tx.execute(sql`INSERT INTO "order" (id, store_id, code, state, subtotal, discount_total, promotion_id, placed_at)
+      VALUES ('88888888-8888-8888-8888-888888880002', ${STORE_ID}, 'ORDDISC00002', 'Paid', 4000, 600, ${PROMOTION_ID}, now())
+      ON CONFLICT (id) DO NOTHING`);
+    await tx.execute(sql`INSERT INTO "order" (id, store_id, code, state, subtotal, promotion_id, placed_at)
+      VALUES ('88888888-8888-8888-8888-888888880003', ${STORE_ID}, 'ORDREFD00003', 'Refunded', 9000, ${PROMOTION_ID}, now() - interval '1 day')
+      ON CONFLICT (id) DO NOTHING`);
+
     await tx.execute(sql`INSERT INTO affiliate_settle (id, store_id, promotion_id, amount_cents, period_end_at, settled_at, tx_ref)
       VALUES (${SETTLE_ID}, ${STORE_ID}, ${PROMOTION_ID}, 500, now(), now(), 'REF-1')
       ON CONFLICT (id) DO NOTHING`);
@@ -91,19 +100,24 @@ describe('GET /v1/shop/affiliate — public self-serve dashboard contract', () =
     expect(body.couponCode).toBe('PARITYAFF10');
     expect(body.rate).toBeCloseTo(0.1);
 
-    // subtotal 10000c * 10% = 1000c earned = $10; settled 500c = $5; unsettled = $5
-    expect(body.totals.earnedUsd).toBeCloseTo(10);
+    // (10000c + (4000c - 600c discount)) * 10% = 1340c earned; the refunded
+    // order earns nothing. Settled 500c → owed 840c.
+    expect(body.totals.earnedUsd).toBeCloseTo(13.4);
     expect(body.totals.paidUsd).toBeCloseTo(5);
-    expect(body.totals.owedUsd).toBeCloseTo(5);
-    expect(body.totals.orderCount).toBe(1);
+    expect(body.totals.owedUsd).toBeCloseTo(8.4);
+    expect(body.totals.orderCount).toBe(2);
 
-    expect(body.orders).toHaveLength(1);
-    expect(body.orders[0].redactedCode).toBe('2345'); // last 4 chars of ORDPARITY12345
-    expect(body.orders[0].code).toBeUndefined(); // never leak the full code
-    expect(body.orders[0].itemCount).toBe(2);
-    expect(body.orders[0].subtotalUsd).toBeCloseTo(100);
-    expect(body.orders[0].commissionUsd).toBeCloseTo(10);
-    expect(body.orders[0].state).toBe('Paid');
+    expect(body.orders).toHaveLength(2);
+    const full = body.orders.find((o: any) => o.redactedCode === '2345'); // last 4 chars of ORDPARITY12345
+    expect(full.code).toBeUndefined(); // never leak the full code
+    expect(full.itemCount).toBe(2);
+    expect(full.subtotalUsd).toBeCloseTo(100);
+    expect(full.commissionUsd).toBeCloseTo(10);
+    expect(full.state).toBe('Paid');
+    const discounted = body.orders.find((o: any) => o.redactedCode === '0002');
+    expect(discounted.subtotalUsd).toBeCloseTo(34);
+    expect(discounted.commissionUsd).toBeCloseTo(3.4);
+    expect(body.orders.some((o: any) => o.redactedCode === '0003')).toBe(false);
 
     expect(Array.isArray(body.topProducts)).toBe(true);
 

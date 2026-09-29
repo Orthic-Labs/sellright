@@ -1,5 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
 import { withStore } from '../db/client.js';
 import { resolveStore, DEV_DEFAULT_STORE } from '../store-context.js';
@@ -9,20 +9,25 @@ import { enqueueAffiliateMail, reassignAffiliate, syncPromotionAffiliate } from 
 
 export const adminAffiliate = new OpenAPIHono();
 
-// Commission = 10% of settled-order subtotals attributed to the affiliate's
-// promotion (matches DD's affiliate plugin). Configurable later if needed.
+// Commission = 10% of the merchandise subtotal AFTER order discounts (the
+// affiliate's own coupon included), on paid orders attributed to the
+// affiliate's promotion — matches DD's affiliate plugin, which paid on the
+// discounted subtotal and never on fully refunded or cancelled orders.
 const COMMISSION_PCT = 10;
+/** Order states that earn commission. */
+const COMMISSION_STATES = ['Paid', 'PartiallyRefunded'] as const;
+const commissionBasis = (o: { subtotal: number; discountTotal: number }) => Math.max(o.subtotal - o.discountTotal, 0);
 
-/** Earned (10% of paid-order subtotals on this promo) and settled-to-date. */
+/** Earned (10% of discounted paid-order subtotals on this promo) and settled-to-date. */
 async function affiliateAmounts(tx: { execute: Function }, promotionId: string) {
   const r = await (tx as any).execute(sql`
     select
-      coalesce((select sum(o.subtotal) from "order" o
+      coalesce((select sum(greatest(o.subtotal - o.discount_total, 0)) from "order" o
                 where o.promotion_id = ${promotionId}
-                  and o.state = any(array['Paid','PartiallyRefunded','Refunded']::order_state[])),0)::int as subtotals,
+                  and o.state = any(array['Paid','PartiallyRefunded']::order_state[])),0)::int as subtotals,
       coalesce((select sum(a.amount_cents) from affiliate_settle a where a.promotion_id = ${promotionId}),0)::int as settled,
       (select count(*) from "order" o where o.promotion_id = ${promotionId}
-         and o.state = any(array['Paid','PartiallyRefunded','Refunded']::order_state[]))::int as orders`);
+         and o.state = any(array['Paid','PartiallyRefunded']::order_state[]))::int as orders`);
   const row = (r as { rows: Array<{ subtotals: number; settled: number; orders: number }> }).rows[0]!;
   const earned = Math.round(row.subtotals * (COMMISSION_PCT / 100));
   return { earned, settled: row.settled, unsettled: earned - row.settled, orders: row.orders, subtotals: row.subtotals };
@@ -210,8 +215,9 @@ adminAffiliate.openapi(
       if (!a) return null;
       const [promo] = await tx.select({ code: s.promotion.code }).from(s.promotion).where(eq(s.promotion.id, a.promotionId)).limit(1);
       const amt = await affiliateAmounts(tx, a.promotionId);
-      const orderRows = await tx.select({ id: s.order.id, code: s.order.code, subtotal: s.order.subtotal, state: s.order.state, placedAt: s.order.placedAt, createdAt: s.order.createdAt })
-        .from(s.order).where(eq(s.order.promotionId, a.promotionId)).orderBy(desc(s.order.createdAt)).limit(100);
+      const orderRows = await tx.select({ id: s.order.id, code: s.order.code, subtotal: s.order.subtotal, discountTotal: s.order.discountTotal, state: s.order.state, placedAt: s.order.placedAt, createdAt: s.order.createdAt })
+        .from(s.order).where(and(eq(s.order.promotionId, a.promotionId), inArray(s.order.state, [...COMMISSION_STATES])))
+        .orderBy(desc(s.order.createdAt)).limit(100);
       const orderIds = orderRows.map((o) => o.id);
       const itemCountRows = orderIds.length
         ? await tx.select({ orderId: s.orderLine.orderId, qty: sql<number>`sum(${s.orderLine.quantity})::int` })
@@ -237,8 +243,8 @@ adminAffiliate.openapi(
           redactedCode: o.code.slice(-4),
           placedAt: (o.placedAt ?? o.createdAt).toISOString(),
           itemCount: itemCounts.get(o.id) ?? 0,
-          subtotalUsd: o.subtotal / 100,
-          commissionUsd: Math.round(o.subtotal * (COMMISSION_PCT / 100)) / 100,
+          subtotalUsd: commissionBasis(o) / 100,
+          commissionUsd: Math.round(commissionBasis(o) * (COMMISSION_PCT / 100)) / 100,
           state: o.state,
         })),
         // Top-sellers breakdown isn't computed yet (needs a product-level
