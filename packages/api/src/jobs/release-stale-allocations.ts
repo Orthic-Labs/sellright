@@ -31,7 +31,7 @@ import { pool, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
 import { releaseOrderLoyalty } from '../loyalty/ledger.js';
-import { sweepStaleStripeIntents } from '../payments/stripe-reconcile.js';
+import { sweepStaleStripeIntents, discoverStaleUntrackedIntents, stripeDiscoverable } from '../payments/stripe-reconcile.js';
 
 export type ReleaseStaleOpts = { apply: boolean; ttlMin: number; log?: (m: string) => void; batchLimit?: number };
 
@@ -50,7 +50,7 @@ export async function releaseStaleAllocations(opts: ReleaseStaleOpts): Promise<{
   const cutoff = new Date(Date.now() - ttlMin * 60_000);
   log(`[release-stale] mode=${apply ? 'APPLY' : 'DRY-RUN'} ttl=${ttlMin}min cutoff=${cutoff.toISOString()}`);
 
-  const stores = await pool.query<{ id: string; slug: string }>('SELECT id, slug FROM store');
+  const stores = await pool.query<{ id: string; slug: string; config: unknown }>('SELECT id, slug, config FROM store');
   let totalOrders = 0;
   let totalReleased = 0;
 
@@ -60,7 +60,15 @@ export async function releaseStaleAllocations(opts: ReleaseStaleOpts): Promise<{
     // requires_action holds, anything else is cancelled at Stripe first.
     // Stripe is called with no transaction open. Dry-run never touches Stripe;
     // orders with unresolved intents are skipped by the claim below either way.
+    // A Stripe-enabled store may only cancel an order whose Stripe side is
+    // known: it has tracked intents, or discovery searched Stripe clean.
+    const requireDiscovery = await stripeDiscoverable(st.id, st.config);
     if (apply) {
+      // Untracked-intent gap: search Stripe for PIs on stale orders that have
+      // no intent attempt (pre-tracking PIs, lost attempt inserts) so the
+      // tracked sweep below can settle/hold/cancel them.
+      const dv = await discoverStaleUntrackedIntents(st.id, st.config, cutoff, batchLimit, log);
+      if (dv.checked) log(`[release-stale] ${st.slug}: stripe discovery checked=${dv.checked} found=${dv.found} held=${dv.held} flagged=${dv.flagged}`);
       const sw = await sweepStaleStripeIntents(st.id, cutoff, batchLimit, log);
       if (sw.checked) log(`[release-stale] ${st.slug}: stripe intents checked=${sw.checked} settled=${sw.settled} held=${sw.held} cancelled=${sw.cancelled} errors=${sw.errors}`);
     }
@@ -77,6 +85,11 @@ export async function releaseStaleAllocations(opts: ReleaseStaleOpts): Promise<{
                   AND (pa.status IN ('processing', 'unknown', 'pending')
                     -- D5: a tracked Stripe intent not yet resolved at Stripe
                     OR (pa.operation = 'intent' AND pa.status IN ('open', 'failed', 'action_required'))))
+              -- untracked-intent discovery failed: hold, never cancel blindly
+              AND coalesce((metadata->'stripeDiscovery'->>'hold')::boolean, false) = false
+              AND (${!requireDiscovery}
+                OR EXISTS (SELECT 1 FROM payment_attempt pi WHERE pi.order_id = "order".id AND pi.store_id = "order".store_id AND pi.operation = 'intent')
+                OR (metadata->'stripeDiscovery'->>'checkedAt') IS NOT NULL)
               AND NOT EXISTS (SELECT 1 FROM payment p
                 WHERE p.order_id = "order".id AND p.store_id = "order".store_id
                   AND p.state IN ('Pending', 'Authorized'))

@@ -237,7 +237,7 @@ pay.openapi(
     // Throttled per order (at most one Stripe round-trip per window): a
     // polling confirmation page cannot fan out into a Stripe request storm.
     if (!claimReconcileSlot(st.id, owned.id)) return c.json({ code, state: owned.state, intents: [] }, 200);
-    const r = await reconcileStripeOrder(st.id, { orderId: owned.id }, { actor: 'shopper:refresh' });
+    const r = await reconcileStripeOrder(st.id, { orderId: owned.id }, { actor: 'shopper:refresh', discover: true });
     return c.json({ code, state: r.state ?? owned.state, intents: r.intents.map((i) => ({ intentId: i.intentId, outcome: i.outcome })) }, 200);
   },
 );

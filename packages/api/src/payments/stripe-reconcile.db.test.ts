@@ -9,6 +9,8 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 const stripeState = new Map<string, Record<string, unknown>>();
 const cancelCalls: string[] = [];
 const refundCalls: string[] = [];
+// Untracked-intent discovery seam: Stripe Search results per order code.
+const search = { configured: new Set<string>(), results: new Map<string, string[]>(), fail: false, calls: [] as string[] };
 vi.mock('./stripe.js', async (orig) => {
   const actual = await orig<typeof import('./stripe.js')>();
   return {
@@ -22,6 +24,13 @@ vi.mock('./stripe.js', async (orig) => {
       refundCalls.push(i.providerRef ?? '');
       return { state: 'Settled', providerRef: 're_' + (i.providerRef ?? 'x'), errorMessage: null };
     }) },
+    resolveStripeConfigured: vi.fn(async (_s: string, mode: string) => search.configured.has(mode)),
+    searchStripeIntentsForOrder: vi.fn(async (storeId: string, mode: string, code: string) => {
+      search.calls.push(`${mode}:${code}`);
+      if (search.fail) throw new Error('search unavailable');
+      return (search.results.get(code) ?? []).map((id) => stripeState.get(id)!)
+        .filter((pi) => (pi.metadata as { storeId?: string }).storeId === storeId);
+    }),
     cancelStripeIntent: vi.fn(async (_s: string, _m: string, id: string) => {
       cancelCalls.push(id);
       const pi = stripeState.get(id)!;
@@ -38,6 +47,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
 import * as s from '../db/schema.js';
+import { listPaymentAlerts } from './payment-alerts.js';
 import { applyStripeIntent, reconcileStripeOrder, trackStripeIntent, claimReconcileSlot, sweepStaleStripeIntents, cancelOrderStripeIntents, STRIPE_SWEEP_MAX_TRIES } from './stripe-reconcile.js';
 import { hasUnresolvedPayment } from './hold.js';
 import { releaseStaleAllocations } from '../jobs/release-stale-allocations.js';
@@ -57,6 +67,7 @@ beforeEach(async () => {
   stripeState.clear();
   cancelCalls.length = 0;
   refundCalls.length = 0;
+  search.configured.clear(); search.results.clear(); search.fail = false; search.calls.length = 0;
   await withStore(STORE, async (tx) => {
     await tx.execute(sql`INSERT INTO store (id, slug, name, config) VALUES (${STORE}, ${SLUG}, ${SLUG}, ${JSON.stringify({ notifications: { operatorEmail: 'ops@example.com' } })}::jsonb)`);
     const [p] = await tx.insert(s.product).values({ storeId: STORE, slug: 'p', name: 'P', status: 'active' }).returning({ id: s.product.id });
@@ -332,5 +343,85 @@ describe('D5/D6/D14: stale sweeper with tracked Stripe intents', () => {
     await q((tx) => tx.update(s.payment).set({ method: 'manual' }).where(and(eq(s.payment.orderId, order.id), eq(s.payment.providerRef, 'pi_after_cancel'))));
     await requestRefund({ storeId: STORE, orderId: order.id, actor: 'test', idempotencyKey: 'd6-regression', lines: [{ orderLineId: line.id, quantity: 2, restock: false }] });
     expect(await allocated()).toBe(3);
+  });
+});
+
+describe('untracked PaymentIntents (created before intent tracking / lost attempt insert)', () => {
+  const enableStripe = () => q((tx) => tx.execute(sql`UPDATE store SET config = config || ${JSON.stringify({ payments: { stripe: true } })}::jsonb WHERE id = ${STORE}`));
+  const untracked = (id: string, code: string, over: Record<string, unknown> = {}) =>
+    pi(id, code, { metadata: { orderCode: code, storeId: STORE }, ...over });
+
+  it('sweeper discovers a succeeded untracked PI and settles instead of cancelling', async () => {
+    await enableStripe(); search.configured.add('test');
+    const { order } = await makeOrder({ ageMin: 120 });
+    untracked('pi_pre_0083', order.code, { status: 'succeeded' });
+    search.results.set(order.code, ['pi_pre_0083']);
+    await releaseStaleAllocations({ apply: true, ttlMin: 60 });
+    expect(search.calls).toEqual([`test:${order.code}`]);
+    expect((await orderOf(order.id)).state).toBe('Paid');
+    expect((await attemptOf('pi_pre_0083')).status).toBe('settled');
+    expect(await allocated()).toBe(2);
+    expect(cancelCalls).toEqual([]);
+  });
+
+  it('search error → order held (never cancelled blindly), backs off, then flagged + alerted', async () => {
+    await enableStripe(); search.configured.add('test'); search.fail = true;
+    const { order } = await makeOrder({ ageMin: 120 });
+    await releaseStaleAllocations({ apply: true, ttlMin: 60 });
+    expect((await orderOf(order.id)).state).toBe('PendingPayment');
+    expect(await allocated()).toBe(2);
+    const md = (await orderOf(order.id)).metadata as { stripeDiscovery: { tries: number; hold: boolean; nextAt: string } };
+    expect(md.stripeDiscovery).toMatchObject({ tries: 1, hold: true });
+    // Backed off: an immediate re-run does not search again.
+    await releaseStaleAllocations({ apply: true, ttlMin: 60 });
+    expect(search.calls).toHaveLength(1);
+    await q((tx) => tx.execute(sql`UPDATE "order" SET metadata = jsonb_build_object('stripeDiscovery', jsonb_build_object('tries', ${STRIPE_SWEEP_MAX_TRIES - 1}::int, 'hold', true)) WHERE id = ${order.id}`));
+    await releaseStaleAllocations({ apply: true, ttlMin: 60 });
+    expect((await orderOf(order.id)).state).toBe('PendingPayment');
+    expect(await audits('stripe_intent_unresolvable')).toHaveLength(1);
+  });
+
+  it('search clean (no PI at Stripe) → order cancelled as stale; a foreign-store PI is ignored', async () => {
+    await enableStripe(); search.configured.add('test');
+    const { order } = await makeOrder({ ageMin: 120 });
+    pi('pi_other_store', order.code, { status: 'succeeded', metadata: { orderCode: order.code, storeId: 'someone-else' } });
+    search.results.set(order.code, ['pi_other_store']);
+    await releaseStaleAllocations({ apply: true, ttlMin: 60 });
+    expect((await orderOf(order.id)).state).toBe('Cancelled');
+    expect(await allocated()).toBe(0);
+  });
+
+  it('Stripe not enabled on the store → no search, stale order cancels as before', async () => {
+    search.configured.add('test');
+    const { order } = await makeOrder({ ageMin: 120 });
+    await releaseStaleAllocations({ apply: true, ttlMin: 60 });
+    expect(search.calls).toEqual([]);
+    expect((await orderOf(order.id)).state).toBe('Cancelled');
+  });
+
+  it('admin reconcile on a Cancelled order discovers a succeeded PI → MONEY-4 payment_after_cancel (audit + email + reconciliation alert)', async () => {
+    await enableStripe(); search.configured.add('live');
+    const { order } = await makeOrder();
+    await q((tx) => tx.update(s.order).set({ state: 'Cancelled' }).where(eq(s.order.id, order.id)));
+    untracked('pi_srccb', order.code, { status: 'succeeded' });
+    search.results.set(order.code, ['pi_srccb']);
+    const r = await reconcileStripeOrder(STORE, { code: order.code }, { actor: 'admin@example.com', discover: true });
+    expect(r.discovery).toMatchObject({ found: 1, modes: ['live'], errors: [] });
+    expect(r.intents).toEqual([{ intentId: 'pi_srccb', outcome: 'after_cancel' }]);
+    expect((await paymentsOf(order.id))[0]).toMatchObject({ state: 'Settled', providerRef: 'pi_srccb', gatewayMode: 'live' });
+    expect(await audits('payment_after_cancel')).toHaveLength(1);
+    expect(await outbox('payment_after_cancel_alert')).toHaveLength(1);
+    const alerts = await q((tx) => listPaymentAlerts(tx));
+    expect(alerts.map((a) => a.action)).toContain('payment_after_cancel');
+    // Tracked now: a second reconcile does not search again.
+    await reconcileStripeOrder(STORE, { code: order.code }, { discover: true });
+    expect(search.calls).toHaveLength(1);
+  });
+
+  it('reconcile without discover never searches (GET order read path)', async () => {
+    await enableStripe(); search.configured.add('test');
+    const { order } = await makeOrder();
+    await reconcileStripeOrder(STORE, { code: order.code });
+    expect(search.calls).toEqual([]);
   });
 });

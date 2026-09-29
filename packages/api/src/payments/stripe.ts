@@ -242,6 +242,29 @@ export async function retrieveStripeIntent(storeId: string, mode: StripeMode, in
   return (await client.paymentIntents.retrieve(intentId)) as unknown as IntentLike & { last_payment_error?: { message?: string | null } | null };
 }
 
+/** Discovery for PaymentIntents we never tracked (minted before intent
+ *  tracking existed, or the attempt insert failed after Stripe created the
+ *  PI): Stripe Search on the metadata every SellRight PI carries. Search is
+ *  eventually consistent (~1 min), which the stale TTL comfortably covers.
+ *  Only PIs whose metadata binds BOTH this order code and this store are
+ *  returned. Throws on any Stripe error — callers must treat that as
+ *  unresolved, never as "no payment". */
+export async function searchStripeIntentsForOrder(storeId: string, mode: StripeMode, orderCode: string): Promise<IntentLike[]> {
+  const client = await resolveStripeClient(storeId, mode);
+  const q = (v: string) => v.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  const out: IntentLike[] = [];
+  let page: string | undefined;
+  for (let i = 0; i < 5; i++) {
+    const res = await client.paymentIntents.search({ query: `metadata['orderCode']:'${q(orderCode)}'`, limit: 100, ...(page ? { page } : {}) });
+    for (const pi of res.data) {
+      if (pi.metadata?.orderCode === orderCode && pi.metadata?.storeId === storeId) out.push(pi as unknown as IntentLike);
+    }
+    if (!res.has_more || !res.next_page) break;
+    page = res.next_page;
+  }
+  return out;
+}
+
 /** Cancel an abandoned PaymentIntent at Stripe (stale sweeper, D5). Returns the
  *  PI as Stripe reports it after the call; a PI that can no longer be cancelled
  *  (e.g. it just succeeded) is re-retrieved instead of throwing. */
