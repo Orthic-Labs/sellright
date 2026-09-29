@@ -87,7 +87,7 @@ describe('email dispatch — per-store sender + storefront (SR-05)', () => {
   it('password reset / verify / shipping / change links all use the store URL', async () => {
     await withStore(STORE_B, async (tx) => {
       await enqueuePasswordReset(tx, STORE_B, ctxB, 'u@example.com', { url: 'https://b-brand.example/password-reset?token=t1', ttlHours: 2 });
-      await enqueueEmailVerify(tx, STORE_B, ctxB, 'u@example.com', { url: 'https://b-brand.example/verify-email?token=t2' });
+      await enqueueEmailVerify(tx, STORE_B, ctxB, 'u@example.com', { url: 'https://b-brand.example/verify?token=t2' });
       await enqueueShippingNotification(tx, STORE_B, ctxB, 'u@example.com', { code: 'B-200', trackingCode: 'TRK1', carrier: 'UPS' });
       await enqueueEmailAddressChange(tx, STORE_B, ctxB, 'new@example.com', { url: 'https://b-brand.example/verify-email-address-change?token=t3', newEmail: 'new@example.com', ttlHours: 24 });
     });

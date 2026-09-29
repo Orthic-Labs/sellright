@@ -196,7 +196,7 @@ describe('register → verify-email is durable + store-branded (SR-05/SR-12)', (
     expect(v).toBeDefined();
     expect(v!.recipient).toBe('newbie@b.test');
     expect(v!.payload.from).toBe('orders@b-brand.example');
-    expect(v!.payload.html).toContain('https://b-brand.example/verify-email?token=');
+    expect(v!.payload.html).toContain('https://b-brand.example/verify?token=');
     expect(v!.payload.html).not.toContain(env.STOREFRONT_URL);
   });
 });
