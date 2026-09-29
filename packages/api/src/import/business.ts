@@ -17,6 +17,7 @@ import { eq } from 'drizzle-orm';
 import * as s from '../db/schema.js';
 import { normalizeEmail } from '../auth/email.js';
 import { parseDate, parseStrArray } from './store.js';
+import { optionalColumn } from './source-schema.js';
 import type { ImportContext, ManifestExclusion } from './context.js';
 
 export async function importBusiness(ctx: ImportContext): Promise<void> {
@@ -57,7 +58,9 @@ export async function importBusiness(ctx: ImportContext): Promise<void> {
       .where(eq(s.asset.storeId, storeId))).map(row => row.id));
     for (const post of await q(
       `SELECT id, title, slug, excerpt, body, "bodyHtml", "authorName", "readingTime",
-              "featuredAssetId", tags, "isPublished", "publishDate", "seoTitle", "seoDescription"
+              "featuredAssetId", tags, "isPublished", "publishDate", "seoTitle", "seoDescription",
+              ${optionalColumn(ctx.sourceColumns, 'blog_post', 'createdAt', 'blog_post', 'created')},
+              ${optionalColumn(ctx.sourceColumns, 'blog_post', 'updatedAt', 'blog_post', 'updated')}
        FROM blog_post ORDER BY id`,
     )) {
       if (!post.title || !post.slug) throw new Error('Blog post is missing title/slug: ' + post.id);
@@ -77,6 +80,7 @@ export async function importBusiness(ctx: ImportContext): Promise<void> {
         isPublished: post.isPublished ?? false,
         publishDate: parseDate(post.publishDate),
         seoTitle: post.seoTitle ?? null, seoDescription: post.seoDescription ?? null,
+        createdAt: parseDate(post.created) ?? undefined, updatedAt: parseDate(post.updated) ?? undefined,
       });
       blogCount++;
     }
