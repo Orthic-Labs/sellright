@@ -21508,6 +21508,37 @@
                     },
                     "indexNowConfigured": {
                       "type": "boolean"
+                    },
+                    "robots": {
+                      "type": "object",
+                      "properties": {
+                        "header": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "directives": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "extra": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "sitemaps": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "footer": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      }
                     }
                   },
                   "required": [
@@ -21517,7 +21548,8 @@
                     "robotsDisallow",
                     "staticPaths",
                     "productUrlPattern",
-                    "indexNowConfigured"
+                    "indexNowConfigured",
+                    "robots"
                   ]
                 }
               }
@@ -21593,6 +21625,37 @@
                     "type": "string",
                     "nullable": true,
                     "pattern": "^[a-f0-9]{8,128}$/i"
+                  },
+                  "robotsHeader": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 500
+                    }
+                  },
+                  "robotsDirectives": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 500
+                    }
+                  },
+                  "robotsExtra": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 16384
+                  },
+                  "robotsSitemaps": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^\\/?[A-Za-z0-9._\\/-]+$"
+                    }
+                  },
+                  "robotsFooter": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 16384
                   }
                 }
               }
@@ -21655,6 +21718,37 @@
                     },
                     "indexNowConfigured": {
                       "type": "boolean"
+                    },
+                    "robots": {
+                      "type": "object",
+                      "properties": {
+                        "header": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "directives": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "extra": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "sitemaps": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "footer": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      }
                     }
                   },
                   "required": [
@@ -21664,7 +21758,8 @@
                     "robotsDisallow",
                     "staticPaths",
                     "productUrlPattern",
-                    "indexNowConfigured"
+                    "indexNowConfigured",
+                    "robots"
                   ]
                 }
               }

@@ -19,6 +19,8 @@
  *   }
  */
 
+import type { RobotsExtras } from './robots.js';
+
 export const DEFAULT_ROBOTS_DISALLOW: readonly string[] = [
   'checkout',
   'account',
@@ -62,6 +64,23 @@ export interface SeoConfig {
   productUrlPattern: string;
   /** IndexNow key, or null when the store hasn't configured one. */
   indexNowKey: string | null;
+  /** robots.txt extras (see seo/robots.ts). Empty by default. */
+  robots: RobotsExtras;
+}
+
+/** Max size of a raw robots.txt block (extra / footer). */
+const ROBOTS_BLOCK_MAX = 16_384;
+
+/** One robots.txt line: no line breaks, bounded. */
+function robotsLines(v: unknown): string[] {
+  return (stringArray(v) ?? []).filter((l) => !/[\r\n]/.test(l) && l.length <= 500);
+}
+
+/** A raw robots.txt block: normalized newlines, bounded, no NUL. */
+function robotsBlock(v: unknown): string | null {
+  if (!isNonEmptyString(v) || v.includes('\0')) return null;
+  const text = v.replace(/\r\n?/g, '\n').trim();
+  return text.length > 0 && text.length <= ROBOTS_BLOCK_MAX ? text : null;
 }
 
 /** IndexNow keys are hex strings, 8-128 chars per the spec. */
@@ -116,6 +135,13 @@ export function seoConfigFromStore(store: { name: string; config: unknown }): Se
     staticPaths: stringArray(raw.staticPaths) ?? [...DEFAULT_STATIC_PATHS],
     productUrlPattern: isProductUrlPattern(raw.productUrlPattern) ? raw.productUrlPattern : DEFAULT_PRODUCT_URL_PATTERN,
     indexNowKey: INDEXNOW_KEY_RE.test(indexNowKeyRaw) ? indexNowKeyRaw.toLowerCase() : null,
+    robots: {
+      header: robotsLines(raw.robotsHeader),
+      directives: robotsLines(raw.robotsDirectives),
+      extra: robotsBlock(raw.robotsExtra),
+      sitemaps: robotsLines(raw.robotsSitemaps).filter((p) => /^\/?[A-Za-z0-9._\/-]+$/.test(p)),
+      footer: robotsBlock(raw.robotsFooter),
+    },
   };
 }
 
@@ -129,4 +155,9 @@ export interface SeoConfigPatch {
   staticPaths?: string[];
   productUrlPattern?: string | null;
   indexNowKey?: string | null;
+  robotsHeader?: string[];
+  robotsDirectives?: string[];
+  robotsExtra?: string | null;
+  robotsSitemaps?: string[];
+  robotsFooter?: string | null;
 }

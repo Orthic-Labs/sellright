@@ -15,6 +15,24 @@ describe('seoConfigFromStore', () => {
     });
   });
 
+  it('reads robots extras and drops unsafe values (line breaks, bad sitemap paths, oversize blocks)', () => {
+    const config = seoConfigFromStore({ name: 'Acme', config: { seo: {
+      robotsHeader: ['# Robots for Acme'],
+      robotsDirectives: ['Content-Signal: search=yes', 'Evil\nDisallow: /'],
+      robotsExtra: 'User-agent: GPTBot\r\nDisallow: /',
+      robotsSitemaps: ['/sitemap-main.xml', 'https://other.example/x.xml', '/a b.xml'],
+      robotsFooter: 'x'.repeat(20_000),
+    } } });
+    expect(config.robots).toEqual({
+      header: ['# Robots for Acme'],
+      directives: ['Content-Signal: search=yes'],
+      extra: 'User-agent: GPTBot\nDisallow: /',
+      sitemaps: ['/sitemap-main.xml'],
+      footer: null,
+    });
+    expect(seoConfigFromStore({ name: 'Acme', config: null }).robots).toEqual({ header: [], directives: [], extra: null, sitemaps: [], footer: null });
+  });
+
   it('reads a storefront-specific productUrlPattern and builds encoded product paths from it', () => {
     const config = seoConfigFromStore({ name: 'Acme', config: { seo: { productUrlPattern: '/shop/{slug}/' } } });
     expect(config.productUrlPattern).toBe('/shop/{slug}/');

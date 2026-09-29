@@ -26,4 +26,23 @@ describe('robotsTxt', () => {
     expect(txt).toContain('Disallow: /checkout');
     expect(txt).not.toContain('Disallow: //checkout');
   });
+
+  it('renders per-store extras in order: header, * group directives, extra block, sitemaps, footer', () => {
+    const txt = robotsTxt('https://example.com', ['checkout'], {
+      header: ['# Robots for Example'],
+      directives: ['Content-Signal: search=yes, ai-train=no'],
+      extra: 'User-agent: GPTBot\nDisallow: /',
+      sitemaps: ['/sitemap-main.xml', 'sitemap-blog.xml', '/sitemap.xml'],
+      footer: '# llms.txt: https://example.com/llms.txt',
+    });
+    expect(txt).toBe([
+      '# Robots for Example', '',
+      'User-agent: *', 'Content-Signal: search=yes, ai-train=no', 'Allow: /', 'Disallow: /checkout', '',
+      'User-agent: GPTBot', 'Disallow: /', '',
+      'Sitemap: https://example.com/sitemap.xml',
+      'Sitemap: https://example.com/sitemap-main.xml',
+      'Sitemap: https://example.com/sitemap-blog.xml', '',
+      '# llms.txt: https://example.com/llms.txt',
+    ].join('\n') + '\n');
+  });
 });

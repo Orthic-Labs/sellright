@@ -7038,6 +7038,13 @@ export interface paths {
                                 sameAs: string[];
                             };
                             productUrlPattern: string;
+                            robots: {
+                                directives?: string[];
+                                extra?: string | null;
+                                footer?: string | null;
+                                header?: string[];
+                                sitemaps?: string[];
+                            };
                             robotsDisallow: string[];
                             siteUrl: string | null;
                             staticPaths: string[];
@@ -7081,7 +7088,12 @@ export interface paths {
                             sameAs?: string[];
                         };
                         productUrlPattern?: string | null;
+                        robotsDirectives?: string[];
                         robotsDisallow?: string[];
+                        robotsExtra?: string | null;
+                        robotsFooter?: string | null;
+                        robotsHeader?: string[];
+                        robotsSitemaps?: string[];
                         /** Format: uri */
                         siteUrl?: string | null;
                         staticPaths?: string[];
@@ -7104,6 +7116,13 @@ export interface paths {
                                 sameAs: string[];
                             };
                             productUrlPattern: string;
+                            robots: {
+                                directives?: string[];
+                                extra?: string | null;
+                                footer?: string | null;
+                                header?: string[];
+                                sitemaps?: string[];
+                            };
                             robotsDisallow: string[];
                             siteUrl: string | null;
                             staticPaths: string[];
