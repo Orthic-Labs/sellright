@@ -2,6 +2,7 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { and, eq, inArray, ne, sql } from 'drizzle-orm';
 import { withAdvisoryLock, withStore, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
+import { customerOwnsOrder } from '../auth/order-access.js';
 import { resolveCustomer } from '../auth/session.js';
 import { amountDueForOrder, applyPaymentResult } from './settle.js';
 import { getProvider, isPaymentMethodEnabled, type PaymentResult, type RefundResult } from './provider.js';
@@ -28,7 +29,7 @@ export async function ownedOrder(tx: Tx, code: string, receipt?: string, custome
   let granted = receiptMatches(receipt, order.receiptToken);
   if (!granted && customerSession && order.customerId) {
     const customer = await resolveCustomer(tx, customerSession);
-    granted = customer?.id === order.customerId;
+    granted = customerOwnsOrder(customer, order);
   }
   if (!granted) throw new GatewayPaymentError(404, 'Order not found');
   return order;

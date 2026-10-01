@@ -12852,6 +12852,64 @@ export interface paths {
         };
         trace?: never;
     };
+    "/v1/shop/cart/{token}/checkout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Recover a converted cart checkout */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    token: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Original checkout */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            code: string;
+                            couponApplied: boolean;
+                            currency: string;
+                            discountTotal: number;
+                            giftCardApplied: number;
+                            grandTotal: number;
+                            pointsDiscount: number;
+                            pointsRedeemed: number;
+                            receiptToken: string;
+                            state: string;
+                        };
+                    };
+                };
+                /** @description No converted checkout */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/shop/cart/{token}/lines": {
         parameters: {
             query?: never;

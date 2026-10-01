@@ -9,6 +9,7 @@ import { customerCsrfValid, clearCustomerCookies } from '../auth/cookies.js';
 import { createHash } from 'node:crypto';
 import { revokeDeviceRemote } from '../licensing/device-leases.js';
 import { loadOrderFulfillments, loadOrderLines, loadOrderPayments, loadOrderPromotionCode, loadOrderStatusFacts, loadOrderStatusFactsBatch } from './order-facts.js';
+import { orderProvenanceFilter } from '../auth/order-access.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
 
 const hashToken = (t: string) => createHash('sha256').update(t).digest('hex');
@@ -70,7 +71,7 @@ account.openapi(
       // victim's email would see the victim's past guest orders.
       const where = and(
         eq(s.order.customerId, cust.id),
-        ...(cust.emailVerified ? [] : [sql`(${s.order.metadata} ->> 'linked_via') IS DISTINCT FROM 'email_match'`]),
+        orderProvenanceFilter(cust),
       );
       const [{ total } = { total: 0 }] = await tx.select({ total: sql<number>`count(*)::int` }).from(s.order).where(where);
       const items = await tx
@@ -129,7 +130,7 @@ account.openapi(
           eq(s.license.customerId, cust.id),
           // Same guest-email-match guard as orders: hide licenses from orders
           // auto-linked by unverified email match.
-          ...(cust.emailVerified ? [] : [sql`(${s.order.metadata} ->> 'linked_via') IS DISTINCT FROM 'email_match'`]),
+          orderProvenanceFilter(cust),
         ))
         .orderBy(desc(s.license.createdAt))
         .limit(100);
@@ -204,7 +205,7 @@ account.openapi(
         eq(s.order.customerId, cust.id),
         // WP9.5: same email-match suppression as the list — an unverified account
         // cannot open a guest order linked to it purely by email match.
-        ...(cust.emailVerified ? [] : [sql`(${s.order.metadata} ->> 'linked_via') IS DISTINCT FROM 'email_match'`]),
+        orderProvenanceFilter(cust),
       )).limit(1);
       if (!order) return { kind: 'notfound' as const };
       const lines = await loadOrderLines(tx, order.id);
@@ -442,7 +443,7 @@ account.openapi(
       }).from(s.address).where(eq(s.address.customerId, cust.id));
       const orders = await tx.select({
         code: s.order.code, state: s.order.state, grandTotal: s.order.grandTotal, placedAt: s.order.placedAt,
-      }).from(s.order).where(eq(s.order.customerId, cust.id)).orderBy(desc(s.order.createdAt));
+      }).from(s.order).where(and(eq(s.order.customerId, cust.id), orderProvenanceFilter(cust))).orderBy(desc(s.order.createdAt));
       return { profile, addresses, orders };
     });
     if (out === null || !out.profile) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
@@ -479,9 +480,12 @@ account.openapi(
     // Authenticate BEFORE CSRF so an unauthenticated request gets 401 (not 403).
     if (!customerToken(c)) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
     if (!customerCsrfValid(c)) return errJson(c, 403, 'CSRF_INVALID', 'invalid CSRF token');
-    const out = await withStore(st.id, async (tx): Promise<'unauth' | 'active_subscription' | 'ok'> => {
+    const out = await withStore(st.id, async (tx): Promise<'unauth' | 'unverified' | 'active_subscription' | 'ok'> => {
       const cust = await me(tx, customerToken(c));
       if (!cust) return 'unauth';
+      // Erasure affects email-keyed mail and guest orders, so require proof of
+      // mailbox control before deleting data linked by email alone.
+      if (!cust.emailVerified) return 'unverified';
 
       const activeSub = await tx.select({ id: s.subscription.id })
         .from(s.subscription)
@@ -558,6 +562,7 @@ account.openapi(
       return 'ok';
     });
     if (out === 'unauth') return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
+    if (out === 'unverified') return errJson(c, 403, 'EMAIL_NOT_VERIFIED', 'Verify your email before deleting your account.');
     if (out === 'active_subscription') return errJson(c, 409, 'ACTIVE_SUBSCRIPTION_EXISTS', 'cancel your active subscription before deleting your account');
     clearCustomerCookies(c);
     return c.json({ deleted: true }, 200);

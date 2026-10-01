@@ -2,6 +2,7 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { eq } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
+import { customerOwnsOrder } from '../auth/order-access.js';
 import { customerToken, resolveCustomer } from '../auth/session.js';
 import * as s from '../db/schema.js';
 import { timingSafeEqual as cryptoTimingSafeEqual } from 'node:crypto';
@@ -84,11 +85,11 @@ orders.openapi(
     // throttled per order, run with no transaction open, never fatal to the
     // read. Payment state only — the read below is always live.
     const pre = await withStore(st.id, async (tx) => {
-      const [o] = await tx.select({ id: s.order.id, state: s.order.state, receiptToken: s.order.receiptToken, customerId: s.order.customerId })
+      const [o] = await tx.select({ id: s.order.id, state: s.order.state, receiptToken: s.order.receiptToken, customerId: s.order.customerId, metadata: s.order.metadata })
         .from(s.order).where(eq(s.order.code, code)).limit(1);
       if (!o || (o.state !== 'PendingPayment' && o.state !== 'Cancelled')) return null;
       let ok = tokensMatch(rt, o.receiptToken);
-      if (!ok && token && o.customerId) ok = (await resolveCustomer(tx, token))?.id === o.customerId;
+      if (!ok && token && o.customerId) ok = customerOwnsOrder(await resolveCustomer(tx, token), o);
       return ok ? o.id : null;
     });
     if (pre && claimReconcileSlot(st.id, pre)) {
@@ -102,7 +103,7 @@ orders.openapi(
       let granted = tokensMatch(rt, o.receiptToken);
       if (!granted && token && o.customerId) {
         const cust = await resolveCustomer(tx, token);
-        granted = !!cust && cust.id === o.customerId;
+        granted = customerOwnsOrder(cust, o);
       }
       if (!granted) return null;
       // Guest checkouts still link an order to a synthetic/matched customer

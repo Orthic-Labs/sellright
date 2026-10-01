@@ -3154,6 +3154,88 @@
         }
       }
     },
+    "/v1/shop/cart/{token}/checkout": {
+      "get": {
+        "summary": "Recover a converted cart checkout",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "token",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Original checkout",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string"
+                    },
+                    "grandTotal": {
+                      "type": "integer"
+                    },
+                    "discountTotal": {
+                      "type": "integer"
+                    },
+                    "currency": {
+                      "type": "string"
+                    },
+                    "couponApplied": {
+                      "type": "boolean"
+                    },
+                    "giftCardApplied": {
+                      "type": "integer"
+                    },
+                    "receiptToken": {
+                      "type": "string"
+                    },
+                    "pointsRedeemed": {
+                      "type": "integer"
+                    },
+                    "pointsDiscount": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "state",
+                    "grandTotal",
+                    "discountTotal",
+                    "currency",
+                    "couponApplied",
+                    "giftCardApplied",
+                    "receiptToken",
+                    "pointsRedeemed",
+                    "pointsDiscount"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No converted checkout",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/shop/orders/{code}/pay": {
       "post": {
         "summary": "Pay for an order (PendingPayment -> Paid)",

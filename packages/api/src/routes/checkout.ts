@@ -168,6 +168,8 @@ async function orderReplayResult(
   };
 }
 
+const CheckoutOut = z.object({ code: z.string(), state: z.string(), grandTotal: z.number().int(), discountTotal: z.number().int(), currency: z.string(), couponApplied: z.boolean(), giftCardApplied: z.number().int(), receiptToken: z.string(), pointsRedeemed: z.number().int(), pointsDiscount: z.number().int() });
+
 export const checkout = new OpenAPIHono();
 
 // POST /v1/shop/checkout — create an order from a cart (PendingPayment).
@@ -223,7 +225,7 @@ checkout.openapi(
     responses: {
       200: {
         description: 'Order created',
-        content: { 'application/json': { schema: z.object({ code: z.string(), state: z.string(), grandTotal: z.number().int(), discountTotal: z.number().int(), currency: z.string(), couponApplied: z.boolean(), giftCardApplied: z.number().int(), receiptToken: z.string(), pointsRedeemed: z.number().int(), pointsDiscount: z.number().int() }) } },
+        content: { 'application/json': { schema: CheckoutOut } },
       },
       400: { description: 'Malformed checkout request body or Idempotency-Key header', content: { 'application/json': { schema: apiErrorSchema() } } },
       409: { description: 'Out of stock / shipping unavailable / idempotency-payload or stale-cart conflict', content: { 'application/json': { schema: apiErrorSchema().extend({ code: z.string().optional(), skus: z.array(z.string()).optional(), reason: z.string().optional(), revision: z.number().int().optional(), cart: CartOut.optional() }) } } },
@@ -784,3 +786,29 @@ checkout.openapi(
     return errJson(c, 400, 'INVALID_CHECKOUT_REQUEST', 'Invalid checkout request');
   },
 );
+
+// Read-only recovery by the opaque cart capability. Unlike POST /checkout,
+// this can never create an order, even when the cart changed or has no priced
+// lines left (e.g. a purchased variant was subsequently removed).
+checkout.openapi(createRoute({
+  method: 'get', path: '/v1/shop/cart/{token}/checkout', summary: 'Recover a converted cart checkout',
+  request: { params: z.object({ token: z.string().min(1) }) },
+  responses: {
+    200: { description: 'Original checkout', content: { 'application/json': { schema: CheckoutOut } } },
+    404: { description: 'No converted checkout', content: { 'application/json': { schema: apiErrorSchema() } } },
+  },
+}), async c => {
+  c.header('Cache-Control', 'private, no-store');
+  const st = await resolveStoreFromCtx(c);
+  const { token } = c.req.valid('param');
+  const out = await withStore(st.id, async tx => {
+    const [row] = await tx.select({ status: s.cart.status, orderId: s.cart.convertedOrderId })
+      .from(s.cart).where(eq(s.cart.token, token)).limit(1);
+    if (row?.status !== 'converted' || !row.orderId) return null;
+    const [order] = await tx.select().from(s.order)
+      .where(and(eq(s.order.id, row.orderId), isNull(s.order.deletedAt))).limit(1);
+    return order ? { ...await orderReplayResult(tx, order), currency: order.currency } : null;
+  });
+  if (!out) return errJson(c, 404, 'ORDER_NOT_FOUND', 'order not found');
+  return c.json(out, 200);
+});
