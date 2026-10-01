@@ -40,6 +40,7 @@ loyalty.openapi(
           })),
         }) } },
       },
+      403: { description: 'Mailbox unverified', content: { 'application/json': { schema: apiErrorSchema() } } },
       401: { description: 'Unauthenticated', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
@@ -50,11 +51,13 @@ loyalty.openapi(
     const out = await withStore(st.id, async (tx) => {
       const cust = token ? await resolveCustomer(tx, token) : null;
       if (!cust) return null;
+      if (!cust.emailVerified) return 'unverified' as const;
       const bal = await loyaltyBalance(tx, cust.id);
-      const rows = await ledgerPage(tx, cust.id, 25);
+      const rows = await ledgerPage(tx, cust.id, 25, cust);
       return { bal, rows };
     });
     if (!out) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
+    if (out === 'unverified') return errJson(c, 403, 'EMAIL_NOT_VERIFIED', 'Verify your email before accessing loyalty points.');
     return c.json({
       program,
       currency: st.currency,

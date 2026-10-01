@@ -77,7 +77,7 @@ async function seed(program: Record<string, unknown> = PROGRAM) {
     await tx.execute(sql`INSERT INTO product_variant (id, store_id, product_id, sku, name, price, fulfillment_type)
       VALUES (${VARIANT}, ${STORE}, ${PRODUCT}, ${SKU}, 'Loyalty Download', ${PRICE}, 'digital_download')`);
     await tx.execute(sql`INSERT INTO stock (variant_id, store_id, on_hand, allocated) VALUES (${VARIANT}, ${STORE}, 100, 0)`);
-    await tx.execute(sql`INSERT INTO customer (id, store_id, email) VALUES (${CUSTOMER}, ${STORE}, 'member@example.com')`);
+    await tx.execute(sql`INSERT INTO customer (id, store_id, email, email_verified) VALUES (${CUSTOMER}, ${STORE}, 'member@example.com', true)`);
     token = await createSession(tx, STORE, CUSTOMER);
   });
 }
@@ -268,6 +268,27 @@ describe('manual adjust', () => {
 });
 
 describe('shop balance endpoint', () => {
+  it('guest checkout cannot award points to an unverified email match', async () => {
+    await withStore(STORE,tx=>tx.execute(sql`UPDATE customer SET email_verified=false WHERE id=${CUSTOMER}`));
+    const placed=await placeOrder({email:'member@example.com'},false); expect(placed.status).toBe(200);
+    const order=await orderByCode(placed.body.code);
+    expect((order.metadata as {loyalty:{earnPoints:number}}).loyalty.earnPoints).toBe(0);
+    await settle(placed.body.code,'guest-unproven');
+    expect((await balance()).available).toBe(0);
+  });
+  it('guest checkout still awards points to the verified matching mailbox', async () => {
+    const placed=await placeOrder({email:'member@example.com'},false); expect(placed.status).toBe(200);
+    await settle(placed.body.code,'guest-proven');
+    expect((await balance()).available).toBe(100);
+  });
+  it('refuses unverified loyalty redemption without creating an order', async () => {
+    await grant(100);
+    await withStore(STORE, tx=>tx.execute(sql`UPDATE customer SET email_verified=false WHERE id=${CUSTOMER}`));
+    const response = await app.request('/v1/shop/checkout', {method:'POST',headers:{'x-store-slug':SLUG,authorization:`Bearer ${token}`,'content-type':'application/json','idempotency-key':'unverified-redeem'},body:JSON.stringify({items:[{sku:SKU,quantity:1}],redeemPoints:50})});
+    expect(response.status).toBe(409);
+    const count=await withStore(STORE,tx=>tx.execute<{n:number}>(sql`SELECT count(*)::int AS n FROM "order"`));
+    expect(count.rows[0]?.n).toBe(0);
+  });
   it('returns the signed-in customer balance and 401s anonymous callers', async () => {
     await grant(250);
     const res = await app.request('/v1/shop/account/loyalty', { headers: { 'x-store-slug': SLUG, authorization: `Bearer ${token}` } });

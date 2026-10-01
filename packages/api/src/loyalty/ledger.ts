@@ -15,7 +15,8 @@
  *
  * Callers own the transaction (withStore → RLS scoped to the store).
  */
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, isNull, or, sql } from 'drizzle-orm';
+import { customerOwnsOrder, orderProvenanceFilter } from '../auth/order-access.js';
 import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import {
@@ -54,12 +55,15 @@ export async function lockCustomerLoyalty(tx: Tx, storeId: string, customerId: s
 }
 
 async function customerEntries(tx: Tx, customerId: string) {
+  const [customer] = await tx.select({ email: s.customer.email, emailVerified: s.customer.emailVerified }).from(s.customer).where(eq(s.customer.id, customerId)).limit(1);
+  if (!customer) return [];
   // Credits before debits on a timestamp tie: a debit can never precede the
   // credit it spends (balances never go negative), so this is the true order.
   return tx
     .select({ kind: s.loyaltyLedger.kind, points: s.loyaltyLedger.points, expiresAt: s.loyaltyLedger.expiresAt, createdAt: s.loyaltyLedger.createdAt })
     .from(s.loyaltyLedger)
-    .where(eq(s.loyaltyLedger.customerId, customerId))
+    .leftJoin(s.order, eq(s.order.id, s.loyaltyLedger.orderId))
+    .where(and(eq(s.loyaltyLedger.customerId, customerId), or(isNull(s.loyaltyLedger.orderId), and(eq(s.order.customerId, customerId), orderProvenanceFilter(customer)))))
     .orderBy(asc(s.loyaltyLedger.createdAt), sql`(${s.loyaltyLedger.points} < 0)`, asc(s.loyaltyLedger.id));
 }
 
@@ -116,6 +120,8 @@ export async function postEarnForPaidOrder(tx: Tx, storeId: string, orderId: str
     .from(s.order).where(eq(s.order.id, orderId)).limit(1);
   const snap = orderLoyaltySnapshot(order?.metadata);
   if (!order?.customerId || !snap || snap.earnPoints <= 0) return 0;
+  const [customer] = await tx.select({ id: s.customer.id, email: s.customer.email, emailVerified: s.customer.emailVerified }).from(s.customer).where(eq(s.customer.id, order.customerId)).limit(1);
+  if (!customerOwnsOrder(customer, order)) return 0;
   await lockCustomerLoyalty(tx, storeId, order.customerId);
   const inserted = await tx.insert(s.loyaltyLedger).values({
     storeId, customerId: order.customerId, orderId, kind: 'earn', points: snap.earnPoints,
@@ -220,14 +226,14 @@ export async function adjustPoints(tx: Tx, input: {
   return { id: row?.id ?? null, balance: await loyaltyBalance(tx, input.customerId, now) };
 }
 
-export async function ledgerPage(tx: Tx, customerId: string, limit = 100) {
+export async function ledgerPage(tx: Tx, customerId: string, limit = 100, customer?: { email: string; emailVerified: boolean }) {
   return tx.select({
     id: s.loyaltyLedger.id, kind: s.loyaltyLedger.kind, points: s.loyaltyLedger.points, shortfall: s.loyaltyLedger.shortfall,
     reason: s.loyaltyLedger.reason, actor: s.loyaltyLedger.actor, expiresAt: s.loyaltyLedger.expiresAt,
     createdAt: s.loyaltyLedger.createdAt, orderCode: s.order.code,
   }).from(s.loyaltyLedger)
     .leftJoin(s.order, eq(s.order.id, s.loyaltyLedger.orderId))
-    .where(and(eq(s.loyaltyLedger.customerId, customerId)))
+    .where(and(eq(s.loyaltyLedger.customerId, customerId), customer ? or(isNull(s.loyaltyLedger.orderId), and(eq(s.order.customerId, customerId), orderProvenanceFilter(customer))) : undefined))
     .orderBy(sql`${s.loyaltyLedger.createdAt} DESC`, sql`${s.loyaltyLedger.id} DESC`)
     .limit(limit);
 }

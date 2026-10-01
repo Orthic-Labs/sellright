@@ -502,7 +502,7 @@ account.openapi(
           billingAddress: null,
           metadata: sql`coalesce(${s.order.metadata}, '{}'::jsonb) || jsonb_build_object('anonymized_at', now())`,
         })
-        .where(eq(s.order.customerId, cust.id));
+        .where(and(eq(s.order.customerId, cust.id), orderProvenanceFilter(cust)));
 
       // Account erasure hardening: tombstone every device lease on every
       // license this account owns BEFORE unlinking the license from the
@@ -517,7 +517,7 @@ account.openapi(
       // every activation is revoked and the customer is deleted, or neither
       // happens (the withStore transaction wraps the whole handler).
       const ownedLicenses = await tx.select({ id: s.license.id })
-        .from(s.license).where(eq(s.license.customerId, cust.id));
+        .from(s.license).leftJoin(s.order, eq(s.order.id, s.license.orderId)).where(and(eq(s.license.customerId, cust.id), orderProvenanceFilter(cust)));
       for (const lic of ownedLicenses) {
         const activeActivations = await tx.select({ id: s.licenseActivation.id })
           .from(s.licenseActivation)
@@ -526,6 +526,10 @@ account.openapi(
           await revokeDeviceRemote(tx, { storeId: st.id, licenseId: lic.id, activationId: activation.id });
         }
       }
+
+      // Unproven old-mailbox links may still reference this account. Detach
+      // them without scrubbing the real shopper's order/address data.
+      await tx.update(s.order).set({ customerId: null }).where(eq(s.order.customerId, cust.id));
 
       // Null customer refs that are allowed to be null (kept for reporting/
       // audit shape) before deleting rows that hard-require the FK.

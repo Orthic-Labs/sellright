@@ -18,6 +18,7 @@ import { type StoreCtx } from '../store-context.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
 import { hashPassword, verifyPassword } from '../auth/password.js';
+import { orderProvenanceFilter } from '../auth/order-access.js';
 import { normalizeEmail } from '../auth/email.js';
 import { customerToken, resolveCustomer } from '../auth/session.js';
 import { clientIp, loginRetryAfter, recordLoginFailure } from '../auth/rate-limit.js';
@@ -261,8 +262,17 @@ customerTokens.openapi(
       // Capture the OLD address before overwriting it — the security notice
       // below goes to the address being ABANDONED, and it's gone after the
       // UPDATE.
-      const [before] = await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, row.customerId)).limit(1);
+      const [before] = await tx.select({ email: s.customer.email, emailVerified: s.customer.emailVerified }).from(s.customer).where(eq(s.customer.id, row.customerId)).limit(1).for('update');
       const oldEmail = before?.email ?? null;
+      // Preserve guest orders whose OLD mailbox was actually proven before
+      // changing it. Proving the NEW mailbox must never prove the old one.
+      if (before?.emailVerified) {
+        await tx.update(s.order).set({ metadata: sql`coalesce(${s.order.metadata}, '{}'::jsonb) || '{"linked_via":"verified_email"}'::jsonb` })
+          .where(and(eq(s.order.customerId, row.customerId), sql`${s.order.metadata} ->> 'linked_via' = 'email_match'`, orderProvenanceFilter(before)));
+      }
+      // Burn all outstanding tokens issued under the OLD identifier, including
+      // magic links. They cannot authorize the account's new mailbox.
+      await tx.execute(sql`UPDATE customer_token SET used_at = now() WHERE customer_id = ${row.customerId} AND used_at IS NULL`);
       // The customer just proved control of the NEW address — verified by construction.
       await tx.update(s.customer).set({ email: newEmail, emailVerified: true, updatedAt: new Date() }).where(eq(s.customer.id, row.customerId));
       // Identifier changed: invalidate all sessions for this account in this

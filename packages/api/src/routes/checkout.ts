@@ -12,6 +12,7 @@ import { resolveTaxRate } from '../money/tax.js';
 import { selectUnitPrice, variantPriceRuleFromConfig } from '../money/pricing.js';
 import { applyGiftCard } from '../money/gift-card.js';
 import { earnableCents, loyaltySettingsFromConfig, planRedemption, pointsEarned, type RedeemRejection } from '../money/loyalty.js';
+import { customerOwnsOrder } from '../auth/order-access.js';
 import { lockedAvailable, orderLoyaltySnapshot, postEarnForPaidOrder, reserveRedemption, type OrderLoyaltySnapshot } from '../loyalty/ledger.js';
 import { emitEvent } from '../webhooks/emit.js';
 import { customerToken, resolveCustomer } from '../auth/session.js';
@@ -405,6 +406,7 @@ checkout.openapi(
       const sessionCustomer = token ? await resolveCustomer(tx, token) : null;
       const activeVerifications = sessionCustomer?.activeVerifications ?? [];
       let customerId = sessionCustomer?.id ?? null;
+      let loyaltyOwner: {id: string; email: string; emailVerified: boolean} | null = sessionCustomer;
       // WP9.5: guest auto-link by email. Keep the link (so abandoned-cart
       // recovery + per-customer coupon limits work) but mark how it was linked
       // in the order metadata. The account-order list filters on this so an
@@ -412,9 +414,9 @@ checkout.openapi(
       // account until the email is verified.
       let linkedVia: 'session' | 'email_match' | null = sessionCustomer ? 'session' : null;
       if (!customerId && body.email) {
-        const [byEmail] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, normalizeEmail(body.email))).limit(1);
+        const [byEmail] = await tx.select({ id: s.customer.id, email: s.customer.email, emailVerified: s.customer.emailVerified }).from(s.customer).where(eq(s.customer.email, normalizeEmail(body.email))).limit(1);
         customerId = byEmail?.id ?? null;
-        if (customerId) linkedVia = 'email_match';
+        if (customerId) { linkedVia = 'email_match'; loyaltyOwner = byEmail ?? null; }
       }
 
       // ── Discount: explicit coupon OR best automatic; re-validate server-side
@@ -497,7 +499,7 @@ checkout.openapi(
         // THROW (not return): stock is already reserved in this txn, so a
         // rejection must roll it back — the .catch below maps it to a 409.
         if (!loyalty.enabled) throw new LoyaltyRedeemError('disabled');
-        if (!sessionCustomer) throw new LoyaltyRedeemError('not_signed_in');
+        if (!sessionCustomer?.emailVerified) throw new LoyaltyRedeemError('not_signed_in');
         const available = await lockedAvailable(tx, st.id, sessionCustomer.id);
         const plan = planRedemption({ settings: loyalty, requestedPoints: body.redeemPoints, availablePoints: available,
           discountableCents: discounted.subtotal - discounted.discountTotal });
@@ -517,7 +519,7 @@ checkout.openapi(
         ? {
             redeemPoints: redeem?.points ?? 0,
             pointsDiscount: totals.pointsDiscount,
-            earnPoints: loyalty.enabled && customerId
+            earnPoints: loyalty.enabled && customerOwnsOrder(loyaltyOwner, {customerId, metadata: { linked_via: linkedVia, contact: { email: normalizeEmail(sessionCustomer?.email ?? body.email ?? '') } }})
               ? pointsEarned(earnableCents({ subtotal: totals.subtotal, discountTotal: totals.discountTotal, taxRate, taxInclusive: st.taxInclusive }), loyalty.earnRatePerDollar)
               : 0,
             expiryDays: loyalty.expiryDays,

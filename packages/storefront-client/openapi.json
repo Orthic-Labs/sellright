@@ -6606,6 +6606,16 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "Mailbox unverified",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
         }
       }
