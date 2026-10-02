@@ -23,7 +23,7 @@
     "openapi-fetch": "^0.17.0"
   },
   "devDependencies": {
-    "@types/node": "^25.9.4",
+    "@types/node": "^25.9.8",
     "openapi-typescript": "^7.13.0",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
