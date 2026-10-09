@@ -20,10 +20,14 @@ import { customerOwnsOrder, orderProvenanceFilter } from '../auth/order-access.j
 import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import {
+  earnableCents,
   loyaltySettingsFromConfig,
+  multiplierBonusPoints,
+  pointsEarned,
   proportionalTarget,
   unpostedExpiredPoints,
   type LoyaltySettings,
+  type ProductMultiplier,
 } from '../money/loyalty.js';
 
 export type LoyaltyKind = s.LoyaltyLedgerKind;
@@ -34,6 +38,10 @@ export interface OrderLoyaltySnapshot {
   pointsDiscount: number;
   earnPoints: number;
   expiryDays: number | null;
+  /** Earn rate + product multipliers in force at checkout; lets an order edit
+   *  recompute the earn on the order's OWN terms. Absent on older snapshots. */
+  earnRatePerDollar?: number;
+  productMultipliers?: ProductMultiplier[];
 }
 
 export function orderLoyaltySnapshot(metadata: unknown): OrderLoyaltySnapshot | null {
@@ -43,6 +51,8 @@ export function orderLoyaltySnapshot(metadata: unknown): OrderLoyaltySnapshot | 
   return {
     redeemPoints: int(raw.redeemPoints), pointsDiscount: int(raw.pointsDiscount), earnPoints: int(raw.earnPoints),
     expiryDays: Number.isSafeInteger(raw.expiryDays) && (raw.expiryDays as number) > 0 ? raw.expiryDays as number : null,
+    ...(Number.isSafeInteger(raw.earnRatePerDollar) && (raw.earnRatePerDollar as number) > 0 ? { earnRatePerDollar: raw.earnRatePerDollar as number } : {}),
+    ...(Array.isArray(raw.productMultipliers) ? { productMultipliers: (raw.productMultipliers as ProductMultiplier[]).filter((m) => m && typeof m.productId === 'string' && Number(m.multiplier) > 1) } : {}),
   };
 }
 
@@ -155,7 +165,11 @@ export async function reconcileOrderLoyalty(tx: Tx, input: {
   const sum = (f: (r: typeof locked[number]) => number) => locked.reduce((n, r) => n + f(r), 0);
   const redeemed = sum((r) => (r.kind === 'redeem' ? -r.points : 0));
   const restored = sum((r) => (r.kind === 'reverse' && r.reason === 'redeem_restore' ? r.points : 0));
-  const earned = sum((r) => (r.kind === 'earn' ? r.points : 0));
+  // Earned base = the original earn row plus every order-edit earn adjustment
+  // (intended points: posted + shortfall), so a refund after an edit reverses
+  // what the edited order actually earned, never the pre-edit figure.
+  const earned = Math.max(0, sum((r) => (r.kind === 'earn' ? r.points
+    : r.kind === 'adjust' && r.reason === 'order_edit_earn' ? r.points - r.shortfall : 0)));
   const earnReversed = sum((r) => (r.kind === 'reverse' && r.reason === 'earn_reversal' ? -r.points + r.shortfall : 0));
   const now = new Date();
   const out = { ...none };
@@ -206,6 +220,64 @@ export async function reconcileRefundLoyalty(tx: Tx, input: { storeId: string; o
   });
 }
 
+/**
+ * Points an edited order should have earned, on the order's own earn terms
+ * (snapshot rate + multipliers). Null when it cannot be computed exactly: a
+ * snapshot taken before the rate was recorded has no rate to apply.
+ */
+export function editedEarnTarget(snap: OrderLoyaltySnapshot, input: {
+  subtotal: number; discountTotal: number; taxRate: number; taxInclusive: boolean; lines: Array<{ productId: string; cents: number }>;
+}): number | null {
+  if (!snap.earnRatePerDollar) return null;
+  const base = earnableCents(input);
+  return pointsEarned(base, snap.earnRatePerDollar) + multiplierBonusPoints({
+    lines: input.lines, subtotal: input.subtotal, earnableCents: base,
+    earnRatePerDollar: snap.earnRatePerDollar, multipliers: snap.productMultipliers ?? [],
+  });
+}
+
+/**
+ * Order edit changed a PAID order's merchandise: post the earn delta as an
+ * `adjust` row (reason order_edit_earn), idempotent per order_edit id
+ * (source_ref order_edit:<id>:earn). The tracked earn is the original `earn`
+ * row plus every prior edit adjustment (points - shortfall). A reduction larger
+ * than the spendable balance posts only what is available and records the rest
+ * as `shortfall` — the balance never goes negative. No-op when the order never
+ * earned (guest, program off, unpaid at the time) or the snapshot has no rate.
+ */
+export async function postEditEarnAdjustment(tx: Tx, input: {
+  storeId: string; orderId: string; editId: string; targetEarn: number; actor: string;
+}): Promise<{ delta: number; posted: number; shortfall: number }> {
+  const none = { delta: 0, posted: 0, shortfall: 0 };
+  const [order] = await tx.select({ customerId: s.order.customerId, metadata: s.order.metadata }).from(s.order).where(eq(s.order.id, input.orderId)).limit(1);
+  if (!order?.customerId) return none;
+  const snap = orderLoyaltySnapshot(order.metadata);
+  await lockCustomerLoyalty(tx, input.storeId, order.customerId);
+  const rows = await tx.select().from(s.loyaltyLedger).where(eq(s.loyaltyLedger.orderId, input.orderId));
+  if (!rows.some((r) => r.kind === 'earn')) return none;
+  const tracked = rows.reduce((n, r) => n + (r.kind === 'earn' ? r.points : r.kind === 'adjust' && r.reason === 'order_edit_earn' ? r.points - r.shortfall : 0), 0);
+  const delta = Math.max(0, input.targetEarn) - tracked;
+  if (delta === 0) return none;
+  const now = new Date();
+  if (delta > 0) {
+    const ins = await tx.insert(s.loyaltyLedger).values({
+      storeId: input.storeId, customerId: order.customerId, orderId: input.orderId, kind: 'adjust', points: delta,
+      expiresAt: snap?.expiryDays ? new Date(now.getTime() + snap.expiryDays * DAY_MS) : null,
+      sourceRef: `order_edit:${input.editId}:earn`, actor: input.actor, reason: 'order_edit_earn', createdAt: now,
+    }).onConflictDoNothing().returning({ id: s.loyaltyLedger.id });
+    return ins.length ? { delta, posted: delta, shortfall: 0 } : none;
+  }
+  await postExpiry(tx, input.storeId, order.customerId, now);
+  const { available } = await loyaltyBalance(tx, order.customerId, now);
+  const posted = Math.min(-delta, Math.max(0, available));
+  const shortfall = -delta - posted;
+  const ins = await tx.insert(s.loyaltyLedger).values({
+    storeId: input.storeId, customerId: order.customerId, orderId: input.orderId, kind: 'adjust', points: -posted, shortfall,
+    sourceRef: `order_edit:${input.editId}:earn`, actor: input.actor, reason: 'order_edit_earn', createdAt: now,
+  }).onConflictDoNothing().returning({ id: s.loyaltyLedger.id });
+  return ins.length ? { delta, posted: -posted, shortfall } : none;
+}
+
 export class LoyaltyAdjustError extends Error {}
 
 /** Manual admin adjustment (caller enforces permission + writes audit_log).
@@ -230,7 +302,7 @@ export async function ledgerPage(tx: Tx, customerId: string, limit = 100, custom
   return tx.select({
     id: s.loyaltyLedger.id, kind: s.loyaltyLedger.kind, points: s.loyaltyLedger.points, shortfall: s.loyaltyLedger.shortfall,
     reason: s.loyaltyLedger.reason, actor: s.loyaltyLedger.actor, expiresAt: s.loyaltyLedger.expiresAt,
-    createdAt: s.loyaltyLedger.createdAt, orderCode: s.order.code,
+    createdAt: s.loyaltyLedger.createdAt, orderCode: s.order.code, metadata: s.loyaltyLedger.metadata,
   }).from(s.loyaltyLedger)
     .leftJoin(s.order, eq(s.order.id, s.loyaltyLedger.orderId))
     .where(and(eq(s.loyaltyLedger.customerId, customerId), customer ? or(isNull(s.loyaltyLedger.orderId), and(eq(s.order.customerId, customerId), orderProvenanceFilter(customer))) : undefined))

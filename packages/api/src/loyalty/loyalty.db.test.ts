@@ -363,8 +363,10 @@ describe('admin', () => {
     expect((await call(t.staff, 'PUT', '/v1/admin/loyalty/settings', next)).status).toBe(403);
     const res = await call(t.owner, 'PUT', '/v1/admin/loyalty/settings', next);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual(next);
-    expect(await (await call(t.owner, 'GET', '/v1/admin/loyalty/settings')).json()).toEqual(next);
+    // Bonus-rule fields added in REWARDS-1 default when a client omits them.
+    const withDefaults = { ...next, reviewBonusPoints: 25, reviewBonusVerifiedOnly: true, signupBonusPoints: 0, signupBonusSince: null, firstOrderBonusPoints: 0, birthdayBonusPoints: 0, productMultipliers: [] };
+    expect(await res.json()).toEqual(withDefaults);
+    expect(await (await call(t.owner, 'GET', '/v1/admin/loyalty/settings')).json()).toEqual(withDefaults);
     expect((await call(t.owner, 'PUT', '/v1/admin/loyalty/settings', { ...next, pointsPerDollarOff: 0 })).status).toBe(400);
     const audits = await withStore(STORE, (tx) => tx.select().from(s.auditLog).where(eq(s.auditLog.action, 'settings_update')));
     expect(audits.at(-1)!.data).toMatchObject({ section: 'loyalty', after: { earnRatePerDollar: 3 } });

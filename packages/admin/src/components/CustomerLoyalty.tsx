@@ -15,13 +15,14 @@ export interface CustomerLoyaltyData {
   availableValue: number;
   ledger: Array<{
     id: string; kind: string; points: number; shortfall: number; reason: string | null; actor: string | null;
-    orderCode: string | null; expiresAt: string | null; createdAt: string;
+    orderCode: string | null; expiresAt: string | null; createdAt: string; rule: string | null; reversible: boolean;
   }>;
 }
 
 const KIND_LABEL: Record<string, string> = {
-  earn: 'Earned', redeem: 'Redeemed', reverse: 'Reversal', adjust: 'Adjustment', expire: 'Expired', import: 'Imported',
+  earn: 'Earned', redeem: 'Redeemed', reverse: 'Reversal', adjust: 'Adjustment', expire: 'Expired', import: 'Imported', bonus: 'Bonus',
 };
+const RULE_LABEL: Record<string, string> = { review: 'review', signup: 'sign-up', first_order: 'first order', birthday: 'birthday' };
 
 /** Per-customer points balance, append-only ledger, and a manual adjustment
  *  form (server enforces the `loyalty` permission + writes audit_log). */
@@ -38,6 +39,16 @@ export function CustomerLoyalty({ customerId }: { customerId: string }) {
       points: Number(adj!.points), reason: adj!.reason.trim(), idempotencyKey: crypto.randomUUID(),
     }),
     onSuccess: (next) => { qc.setQueryData(key, next); setAdj(null); toast.success('Points adjusted'); },
+  });
+
+  const reverse = useMutation({
+    mutationFn: (id: string) => {
+      const reason = window.prompt('Reason for reversing this bonus (recorded in the activity log)');
+      if (!reason || reason.trim().length < 3) return Promise.reject(new Error('A reason is required'));
+      return api.post<{ reversed: number; shortfall: number }>(`/loyalty/ledger/${id}/reverse`, { reason: reason.trim() });
+    },
+    onSuccess: (r) => { qc.invalidateQueries({ queryKey: key }); toast.success(r.shortfall ? `Reversed ${r.reversed} points (${r.shortfall} already spent)` : `Reversed ${r.reversed} points`); },
+    onError: (e) => { if ((e as Error).message !== 'A reason is required') toast.error('Reverse failed', (e as Error).message); },
   });
 
   if (error) return <FormSection title="Points"><InlineAlert tone="critical">{(error as Error).message}</InlineAlert></FormSection>;
@@ -73,8 +84,9 @@ export function CustomerLoyalty({ customerId }: { customerId: string }) {
             {data.ledger.map((r) => (
               <tr key={r.id} className="border-t border-gray-100" title={[r.reason, r.actor].filter(Boolean).join(' · ')}>
                 <td className="td text-gray-500">{dateTime(r.createdAt)}</td>
-                <td className="td">{KIND_LABEL[r.kind] ?? r.kind}{r.orderCode ? <span className="text-gray-500"> · {r.orderCode}</span> : null}
-                  {r.shortfall > 0 && <span className="text-warning"> · {r.shortfall} short</span>}</td>
+                <td className="td">{KIND_LABEL[r.kind] ?? r.kind}{r.rule ? <span className="text-gray-500"> · {RULE_LABEL[r.rule] ?? r.rule}</span> : null}{r.orderCode ? <span className="text-gray-500"> · {r.orderCode}</span> : null}
+                  {r.shortfall > 0 && <span className="text-warning"> · {r.shortfall} short</span>}
+                  {r.reversible && <button className="btn-ghost text-xs ml-2" disabled={reverse.isPending} onClick={() => reverse.mutate(r.id)}>Reverse</button>}</td>
                 <td className={`td text-right tnum ${r.points < 0 ? 'text-critical' : ''}`}>{r.points > 0 ? '+' : ''}{r.points.toLocaleString()}</td>
               </tr>
             ))}
