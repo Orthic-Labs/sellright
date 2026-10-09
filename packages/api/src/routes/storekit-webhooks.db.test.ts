@@ -373,3 +373,130 @@ describe('POST /v1/webhooks/apple/storekit', () => {
     expect(res.status).toBe(400);
   });
 });
+
+// ── De-fork plan 2.9: storekit_event stage log wired into the handlers ──────
+describe('storekit_event instrumentation (de-fork 2.9)', () => {
+  type Ev = { id: string; operation_id: string; stage: string; outcome: string; error: string | null; resolved_by_event_id: string | null };
+  const eventRows = () => withStore(STORE, async (tx) => {
+    const r = await tx.execute(sql`SELECT id, operation_id, stage, outcome, error, resolved_by_event_id FROM storekit_event ORDER BY created_at, id`);
+    return (r as unknown as { rows: Ev[] }).rows;
+  });
+  const unresolvedApply = async () => (await eventRows()).filter((e) => e.stage === 'apply' && e.outcome === 'failed' && !e.resolved_by_event_id);
+
+  async function linkPurchase() {
+    const token = await withStore(STORE, (tx) => createSession(tx, STORE, CUSTOMER));
+    const res = await post('/v1/shop/pro/link-storekit', { appKey: APP_KEY, signedTransactionInfo: makeJws(txnPayload()), deviceIdHash: DEVICE_HASH }, { authorization: `Bearer ${token}` });
+    expect(res.status).toBe(200);
+  }
+
+  it('a successful notification records verify ok then apply ok; a duplicate delivery records replay', async () => {
+    const jws = makeJws(notifPayload('TEST', '11111111-2222-4333-8444-555555555510'));
+    expect((await post('/v1/webhooks/apple/storekit', { signedPayload: jws })).status).toBe(200);
+    expect((await post('/v1/webhooks/apple/storekit', { signedPayload: jws })).status).toBe(200);
+    const rows = await eventRows();
+    expect(rows.map((r) => `${r.stage}:${r.outcome}`)).toEqual(['verify:ok', 'apply:ok', 'verify:ok', 'replay:ok']);
+    expect(rows[1]!.operation_id).toBe('notification:11111111-2222-4333-8444-555555555510');
+    expect(rows[3]!.operation_id).toBe(rows[1]!.operation_id);
+  });
+
+  it('a tampered notification records a verify failure and no apply row', async () => {
+    const jws = makeJws(notifPayload('TEST', '11111111-2222-4333-8444-555555555511'));
+    const [h, p] = jws.split('.');
+    const payload = JSON.parse(Buffer.from(p!, 'base64url').toString('utf8')) as Record<string, unknown>;
+    const tampered = `${h}.${b64url(Buffer.from(JSON.stringify({ ...payload, notificationUUID: 'forged' })))}.${jws.split('.')[2]}`;
+    expect((await post('/v1/webhooks/apple/storekit', { signedPayload: tampered })).status).toBe(400);
+    const rows = await eventRows();
+    expect(rows.map((r) => `${r.stage}:${r.outcome}`)).toEqual(['verify:failed']);
+    expect(rows[0]!.operation_id.startsWith('payload:')).toBe(true);
+  });
+
+  it('apply failures stay unresolved across verify successes until a committed apply', async () => {
+    await linkPurchase();
+    const refund = makeJws(notifPayload('REFUND', 'notif-refund-ev-0001', txnPayload({ revocationDate: Date.now(), revocationReason: 1 })));
+    // Force the apply to throw: any UPDATE of storekit_purchase aborts.
+    await pool.query(`CREATE OR REPLACE FUNCTION sk_ev_fail() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'forced apply failure'; END; $$ LANGUAGE plpgsql`);
+    await pool.query(`CREATE TRIGGER sk_ev_fail BEFORE UPDATE ON storekit_purchase FOR EACH ROW EXECUTE FUNCTION sk_ev_fail()`);
+    try {
+      for (let i = 0; i < 2; i++) {
+        const res = await post('/v1/webhooks/apple/storekit', { signedPayload: refund });
+        expect(res.status).toBe(500); // non-2xx: Apple retries
+      }
+      // Both attempts verified fine; both applies failed; nothing is resolved.
+      const rows = await eventRows();
+      const forNotif = rows.filter((r) => r.operation_id === 'notification:notif-refund-ev-0001' || r.stage === 'verify');
+      expect(forNotif.filter((r) => r.stage === 'verify' && r.outcome === 'ok').length).toBeGreaterThanOrEqual(2);
+      expect(await unresolvedApply()).toHaveLength(2);
+      expect((await unresolvedApply())[0]!.error).toMatch(/forced apply failure/);
+    } finally {
+      await pool.query('DROP TRIGGER IF EXISTS sk_ev_fail ON storekit_purchase');
+      await pool.query('DROP FUNCTION IF EXISTS sk_ev_fail()');
+    }
+    // The retry that finally commits resolves both, in the apply transaction.
+    expect((await post('/v1/webhooks/apple/storekit', { signedPayload: refund })).status).toBe(200);
+    expect(await unresolvedApply()).toHaveLength(0);
+    const rows = await eventRows();
+    const okApply = rows.find((r) => r.stage === 'apply' && r.outcome === 'ok' && r.operation_id === 'notification:notif-refund-ev-0001')!;
+    expect(rows.filter((r) => r.stage === 'apply' && r.outcome === 'failed').every((r) => r.resolved_by_event_id === okApply.id)).toBe(true);
+    // A late duplicate is a replay and changes nothing.
+    expect((await post('/v1/webhooks/apple/storekit', { signedPayload: refund })).status).toBe(200);
+    expect((await eventRows()).at(-1)).toMatchObject({ stage: 'replay', outcome: 'ok' });
+  });
+
+  it('link-storekit records verify ok + apply ok; a bad JWS records only a verify failure', async () => {
+    await linkPurchase();
+    expect((await eventRows()).map((r) => `${r.stage}:${r.outcome}`)).toEqual(['verify:ok', 'apply:ok']);
+    const token = await withStore(STORE, (tx) => createSession(tx, STORE, CUSTOMER));
+    const jws = makeJws(txnPayload());
+    const tampered = `${jws.split('.')[0]}.${b64url(Buffer.from(JSON.stringify({ ...txnPayload(), bundleId: 'com.attacker.evil' })))}.${jws.split('.')[2]}`;
+    expect((await post('/v1/shop/pro/link-storekit', { appKey: APP_KEY, signedTransactionInfo: tampered, deviceIdHash: DEVICE_HASH }, { authorization: `Bearer ${token}` })).status).toBe(400);
+    const rows = await eventRows();
+    expect(rows.slice(2).map((r) => `${r.stage}:${r.outcome}`)).toEqual(['verify:failed']);
+  });
+
+  it('verify-failure rows are bounded: one per payload digest per hour, and a per-(ip, app) budget (INSTR-4)', async () => {
+    const mk = (i: number) => {
+      const jws = makeJws(notifPayload('TEST', `11111111-2222-4333-8444-5555555556${String(i).padStart(2, '0')}`));
+      const [h, p, sig] = jws.split('.');
+      const payload = JSON.parse(Buffer.from(p!, 'base64url').toString('utf8')) as Record<string, unknown>;
+      return `${h}.${b64url(Buffer.from(JSON.stringify({ ...payload, notificationUUID: `forged-${i}` })))}.${sig}`;
+    };
+    const same = mk(0);
+    for (let i = 0; i < 5; i++) expect((await post('/v1/webhooks/apple/storekit', { signedPayload: same }, { 'x-forwarded-for': '203.0.113.9' })).status).toBe(400);
+    expect((await eventRows()).filter((r) => r.stage === 'verify' && r.outcome === 'failed')).toHaveLength(1);
+    for (let i = 1; i < 40; i++) await post('/v1/webhooks/apple/storekit', { signedPayload: mk(i) }, { 'x-forwarded-for': '203.0.113.9' });
+    const n = (await eventRows()).filter((r) => r.stage === 'verify' && r.outcome === 'failed').length;
+    expect(n).toBeLessThanOrEqual(30);
+    expect(n).toBeGreaterThan(1);
+  });
+
+  it('an instrumentation failure never rolls back the apply (savepoint) (INSTR-5)', async () => {
+    await linkPurchase();
+    await pool.query(`CREATE OR REPLACE FUNCTION sk_ev_block() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'event insert blocked'; END; $$ LANGUAGE plpgsql`);
+    await pool.query(`CREATE TRIGGER sk_ev_block BEFORE INSERT ON storekit_event FOR EACH ROW EXECUTE FUNCTION sk_ev_block()`);
+    try {
+      const refund = makeJws(notifPayload('REFUND', 'notif-refund-ev-0005', txnPayload({ revocationDate: Date.now(), revocationReason: 1 })));
+      expect((await post('/v1/webhooks/apple/storekit', { signedPayload: refund })).status).toBe(200);
+      const { purchase, license } = await licenseForPurchase();
+      expect(purchase!.status).toBe('revoked');
+      expect(license!.status).toBe('revoked');
+    } finally {
+      await pool.query('DROP TRIGGER IF EXISTS sk_ev_block ON storekit_event');
+      await pool.query('DROP FUNCTION IF EXISTS sk_ev_block()');
+    }
+  });
+
+  it('a definitive link refusal on retry resolves an earlier thrown apply failure (INSTR-7)', async () => {
+    const tokenA = await withStore(STORE, (tx) => createSession(tx, STORE, CUSTOMER));
+    const tokenB = await withStore(STORE, (tx) => createSession(tx, STORE, CUSTOMER_B));
+    const jws = makeJws(txnPayload());
+    const body = { appKey: APP_KEY, signedTransactionInfo: jws, deviceIdHash: DEVICE_HASH };
+    expect((await post('/v1/shop/pro/link-storekit', body, { authorization: `Bearer ${tokenA}` })).status).toBe(200);
+    // Plant an unresolved apply failure for this link operation, as a thrown failure would leave.
+    const op = (await eventRows()).find((r) => r.stage === 'apply')!.operation_id;
+    await withStore(STORE, (tx) => tx.execute(sql`INSERT INTO storekit_event (store_id, operation_id, stage, outcome, error) VALUES (${STORE}, ${op}, 'apply', 'failed', 'planted')`));
+    expect(await unresolvedApply()).toHaveLength(1);
+    // Another account's retry is a definitive 401 refusal: it concludes the operation.
+    expect((await post('/v1/shop/pro/link-storekit', body, { authorization: `Bearer ${tokenB}` })).status).toBe(401);
+    expect(await unresolvedApply()).toHaveLength(0);
+  });
+});

@@ -29,7 +29,8 @@ import * as s from '../db/schema.js';
 import { finishAttempt, verifyGatewayAttempt } from '../payments/gateway-payment.js';
 import { amountDueForOrder } from '../payments/settle.js';
 import { resolveGatewayAccount, type GatewayAccount } from '../payments/gateway-account.js';
-import { sezzleProvider, type SezzleOrder, type Money } from '../payments/sezzle.js';
+import { sezzleProvider, sezzleObservedStatus, type SezzleOrder, type Money } from '../payments/sezzle.js';
+import { recordProviderObservationDetached } from '../payments/provider-observation.js';
 
 type Attempt = typeof s.paymentAttempt.$inferSelect;
 export interface RecoveryState { tries: number; nextAt?: string; lastError?: string; manual?: boolean }
@@ -119,6 +120,8 @@ async function recoverOne(storeId: string, attempt: Attempt, opts: RecoveryOptio
   if (!ctx) return { resolved: false, note: 'order_missing' };
   const order = await ops.getOrder(account, attempt.providerRef);
   if (order.uuid !== attempt.providerRef) return { resolved: false, note: 'order_identity_mismatch' };
+  // De-fork 2.9: successful GET bound to this attempt (uuid == providerRef).
+  await recordProviderObservationDetached(storeId, { attemptId: attempt.id }, { status: sezzleObservedStatus(order, { amount: attempt.amount, currency: attempt.currency }) });
   const decision = decideSezzleRecovery({
     order, attemptReference: (attempt.context as { orderReference?: string } | null)?.orderReference ?? attempt.id,
     amount: attempt.amount, currency: attempt.currency, payable: ctx.payable,

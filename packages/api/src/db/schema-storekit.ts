@@ -8,6 +8,7 @@ import {
   jsonb,
   unique,
 } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 import { customer, store, ts } from './schema-core.js';
 import { license } from './schema-orders.js';
 
@@ -98,3 +99,23 @@ export const storekitPurchase = pgTable(
     unique('storekit_purchase_unique').on(t.storeId, t.environment, t.originalTransactionId),
   ],
 );
+
+/**
+ * StoreKit stage log (migration 0088, de-fork plan 2.9). Append-only apart from
+ * `resolvedByEventId`, which is set on a FAILED row by the writer in
+ * licensing/storekit-events.ts when a later row of the matching stage
+ * succeeds for the same (storeId, operationId):
+ *   - verify success resolves earlier VERIFY failures only;
+ *   - a committed apply success resolves earlier APPLY failures (same tx);
+ *   - replay rows never resolve anything.
+ */
+export const storekitEvent = pgTable('storekit_event', {
+  id: uuid().primaryKey().defaultRandom(),
+  storeId: uuid().notNull().references(() => store.id),
+  operationId: text().notNull(),
+  stage: text().notNull(), // 'verify' | 'apply' | 'replay'
+  outcome: text().notNull(), // 'ok' | 'failed'
+  error: text(),
+  resolvedByEventId: uuid(),
+  createdAt: timestamp({ withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+});

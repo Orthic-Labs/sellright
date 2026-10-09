@@ -21,10 +21,21 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { customerToken, resolveCustomer } from '../auth/session.js';
+import { clientIp } from '../auth/rate-limit.js';
+import { recordStorekitVerifyFailure, storekitVerifyFailureRetryAfter } from './apps.limit.js';
 import { errBody, guard, HttpError, J } from './admin-helpers.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import { applyStoreKitNotification, ensureStoreKitLicense, issueStoreKitActivation } from '../licensing/storekit-license.js';
 import { storeKitNotificationAction } from '../licensing/storekit-notifications.js';
+import {
+  recordStoreKitEventDetached,
+  recordStoreKitEventSafe,
+  recordStoreKitVerifyFailureBounded,
+  storeKitErrorText,
+  storeKitLinkOperationId,
+  storeKitNotificationOperationId,
+  storeKitPayloadOperationId,
+} from '../licensing/storekit-events.js';
 import { verifyStoreKitNotificationForDeployment, verifyStoreKitTransactionForDeployment } from '../licensing/storekit-verify.js';
 import {
   deploymentConfigFor,
@@ -77,61 +88,99 @@ storeKitWebhooks.post('/v1/webhooks/apple/storekit', async (c) => {
   const appCfg = await withStore(storeId, (tx) => loadStoreKitAppByBundleId(tx, storeId, bundleId));
   if (!appCfg) return c.json({ error: 'unknown app' }, 400);
 
+  // De-fork 2.9: every stage is recorded in storekit_event. Verify rows use a
+  // digest of the signed payload (the only identity that exists when
+  // verification fails); apply/replay rows use the verified notificationUUID.
+  const payloadOperationId = storeKitPayloadOperationId(signedPayload);
   const verified = await verifyStoreKitNotificationForDeployment(signedPayload, deploymentConfigFor(appCfg));
+  if (verified.kind !== 'ok') {
+    // Unauthenticated: bounded by payload digest (1/hr) and a per-(ip, app) budget.
+    const ip = clientIp(c);
+    await recordStoreKitVerifyFailureBounded(
+      { storeId: appCfg.storeId, operationId: payloadOperationId, error: `verify:${verified.kind}` },
+      async () => {
+        if ((await storekitVerifyFailureRetryAfter(ip, appCfg.bundleId)) > 0) return false;
+        await recordStorekitVerifyFailure(ip, appCfg.bundleId);
+        return true;
+      },
+    );
+  }
   if (verified.kind === 'retryable') return c.json({ error: 'notification verification temporarily unavailable' }, 503);
   if (verified.kind !== 'ok') return c.json({ error: 'notification verification failed' }, 400);
+  await recordStoreKitEventDetached({ storeId: appCfg.storeId, operationId: payloadOperationId, stage: 'verify', outcome: 'ok' });
+  const operationId = storeKitNotificationOperationId(verified.payload.notificationUUID);
 
-  await withStore(appCfg.storeId, async (tx) => {
-    // Idempotency: claim the notificationUUID — Apple retries non-2xx, and a
-    // duplicate delivery must be a no-op.
-    const eventId = `apple-storekit:${verified.payload.notificationUUID}`;
-    const claimed = await tx.insert(s.processedEvent).values({
-      id: eventId,
-      storeId: appCfg.storeId,
-      type: `apple.storekit.${verified.payload.notificationType}`,
-    }).onConflictDoNothing().returning({ id: s.processedEvent.id });
-    if (claimed.length === 0) return;
-
-    const action = storeKitNotificationAction(verified.payload.notificationType);
-    if (action === 'ignore' || !verified.payload.originalTransactionId || !verified.matchedEnvironment) return;
-
-    const applyInput = {
-      storeId: appCfg.storeId,
-      action,
-      environment: String(verified.matchedEnvironment),
-      originalTransactionId: verified.payload.originalTransactionId,
-      transactionId: verified.payload.transactionId,
-      notificationType: verified.payload.notificationType,
-      notificationUUID: verified.payload.notificationUUID,
-      expiresDate: verified.payload.expiresDate,
-      revocationDate: verified.payload.revocationDate,
-    };
-    let outcome = await applyStoreKitNotification(tx, applyInput);
-
-    // A renewal/restore can legitimately reference a purchase this backend
-    // never linked (it predates the link flow, or the app never posted it).
-    // Materialize the license unclaimed — the owning account can still claim
-    // it later through the link endpoint's conditional customer update.
-    if (outcome === 'no_purchase' && (action === 'renew' || action === 'restore')) {
-      const entitlement = verified.payload.productId ? appCfg.productMap[verified.payload.productId] ?? null : null;
-      await ensureStoreKitLicense(tx, {
+  try {
+    await withStore(appCfg.storeId, async (tx) => {
+      // Idempotency: claim the notificationUUID — Apple retries non-2xx, and a
+      // duplicate delivery must be a no-op.
+      const eventId = `apple-storekit:${verified.payload.notificationUUID}`;
+      const claimed = await tx.insert(s.processedEvent).values({
+        id: eventId,
         storeId: appCfg.storeId,
-        storekitAppId: appCfg.id,
-        appKey: appCfg.appKey,
-        source: {
-          originalTransactionId: verified.payload.originalTransactionId,
-          transactionId: verified.payload.transactionId,
-          bundleId: appCfg.bundleId,
-          environment: String(verified.matchedEnvironment),
-          productId: verified.payload.productId,
-          expiresDate: verified.payload.expiresDate,
-        },
-        entitlement,
-      });
-      outcome = await applyStoreKitNotification(tx, applyInput);
-    }
-    return outcome;
-  });
+        type: `apple.storekit.${verified.payload.notificationType}`,
+      }).onConflictDoNothing().returning({ id: s.processedEvent.id });
+      if (claimed.length === 0) {
+        // Replay rows never resolve an apply failure (storekit-events.ts).
+        await recordStoreKitEventSafe(tx, { storeId: appCfg.storeId, operationId, stage: 'replay', outcome: 'ok' });
+        return;
+      }
+
+      const action = storeKitNotificationAction(verified.payload.notificationType);
+      if (action === 'ignore' || !verified.payload.originalTransactionId || !verified.matchedEnvironment) {
+        await recordStoreKitEventSafe(tx, { storeId: appCfg.storeId, operationId, stage: 'apply', outcome: 'ok' });
+        return;
+      }
+
+      const applyInput = {
+        storeId: appCfg.storeId,
+        action,
+        environment: String(verified.matchedEnvironment),
+        originalTransactionId: verified.payload.originalTransactionId,
+        transactionId: verified.payload.transactionId,
+        notificationType: verified.payload.notificationType,
+        notificationUUID: verified.payload.notificationUUID,
+        expiresDate: verified.payload.expiresDate,
+        revocationDate: verified.payload.revocationDate,
+      };
+      let outcome = await applyStoreKitNotification(tx, applyInput);
+
+      // A renewal/restore can legitimately reference a purchase this backend
+      // never linked (it predates the link flow, or the app never posted it).
+      // Materialize the license unclaimed — the owning account can still claim
+      // it later through the link endpoint's conditional customer update.
+      if (outcome === 'no_purchase' && (action === 'renew' || action === 'restore')) {
+        const entitlement = verified.payload.productId ? appCfg.productMap[verified.payload.productId] ?? null : null;
+        await ensureStoreKitLicense(tx, {
+          storeId: appCfg.storeId,
+          storekitAppId: appCfg.id,
+          appKey: appCfg.appKey,
+          source: {
+            originalTransactionId: verified.payload.originalTransactionId,
+            transactionId: verified.payload.transactionId,
+            bundleId: appCfg.bundleId,
+            environment: String(verified.matchedEnvironment),
+            productId: verified.payload.productId,
+            expiresDate: verified.payload.expiresDate,
+          },
+          entitlement,
+        });
+        outcome = await applyStoreKitNotification(tx, applyInput);
+      }
+      // Committed-apply success: resolves earlier apply failures of this
+      // operation in THIS transaction (rolls back with the apply if it fails).
+      await recordStoreKitEventSafe(tx, { storeId: appCfg.storeId, operationId, stage: 'apply', outcome: 'ok' });
+      return outcome;
+    });
+  } catch (e) {
+    // The apply transaction rolled back (including the processed_event claim),
+    // so Apple's retry re-enters apply. Record the failure in its own tx and
+    // keep the original non-2xx behaviour.
+    await recordStoreKitEventDetached({
+      storeId: appCfg.storeId, operationId, stage: 'apply', outcome: 'failed', error: storeKitErrorText(e),
+    });
+    throw e;
+  }
 
   return c.json({ received: true }, 200);
 });
@@ -177,6 +226,9 @@ storeKitWebhooks.openapi(
     const st = await resolveStoreFromCtx(c);
     const body = c.req.valid('json');
 
+    // De-fork 2.9: verify + apply stages recorded in storekit_event.
+    const operationId = storeKitLinkOperationId(body.appKey, body.signedTransactionInfo);
+    let applyStarted = false;
     const out = await withStore(st.id, async (tx) => {
       const appCfg: StoreKitAppConfig | null = await loadStoreKitAppConfig(tx, st.id, body.appKey);
       if (!appCfg) return { kind: 'no_config' as const };
@@ -184,12 +236,15 @@ storeKitWebhooks.openapi(
       const verified = await verifyStoreKitTransactionForDeployment(body.signedTransactionInfo, deploymentConfigFor(appCfg));
       // Keep the failure reason as data on ONE union member so the outer
       // narrowing on `out.kind` actually collapses to 'activated'.
+      // Verify failures are unauthenticated input: recorded after the tx, bounded.
       if (verified.kind !== 'ok') return { kind: 'verify_failed' as const, reason: verified.kind };
+      await recordStoreKitEventSafe(tx, { storeId: st.id, operationId, stage: 'verify', outcome: 'ok' });
 
       const custToken = customerToken(c);
       const cust = custToken ? await resolveCustomer(tx, custToken) : null;
       if (!cust) return { kind: 'unauth' as const };
 
+      applyStarted = true;
       const entitlement = appCfg.productMap[verified.payload.productId] ?? null;
       const ensured = await ensureStoreKitLicense(tx, {
         storeId: st.id,
@@ -207,7 +262,11 @@ storeKitWebhooks.openapi(
           expiresDate: verified.payload.expiresDate,
         },
       });
-      if (ensured.kind === 'account_conflict') return { kind: 'unauth' as const };
+      if (ensured.kind === 'account_conflict') {
+        // A definitive refusal concludes this operation (resolves an earlier thrown apply).
+        await recordStoreKitEventSafe(tx, { storeId: st.id, operationId, stage: 'apply', outcome: 'ok' });
+        return { kind: 'unauth' as const };
+      }
 
       const activated = await issueStoreKitActivation(tx, {
         storeId: st.id,
@@ -216,12 +275,31 @@ storeKitWebhooks.openapi(
         deviceIdHash: body.deviceIdHash,
         deviceLabel: body.deviceLabel ?? null,
       });
+      // Seat-limit / unknown-licence refusals are definitive client-visible
+      // answers, not failures: they conclude the operation like a success, so
+      // they also resolve an earlier thrown apply failure of the same operation.
+      await recordStoreKitEventSafe(tx, { storeId: st.id, operationId, stage: 'apply', outcome: 'ok' });
       return { kind: 'activated' as const, activated, entitlement };
+    }).catch(async (e: unknown) => {
+      // The transaction rolled back; record an unexpected apply failure on its own.
+      if (applyStarted) {
+        await recordStoreKitEventDetached({ storeId: st.id, operationId, stage: 'apply', outcome: 'failed', error: storeKitErrorText(e) });
+      }
+      throw e;
     });
 
     if (out.kind === 'no_config') throw new HttpError(400, 'StoreKit purchases are not configured for this app');
     if (out.kind === 'verify_failed') {
       const r = out.reason;
+      const ip = clientIp(c);
+      await recordStoreKitVerifyFailureBounded(
+        { storeId: st.id, operationId, error: `verify:${r}` },
+        async () => {
+          if ((await storekitVerifyFailureRetryAfter(ip, body.appKey)) > 0) return false;
+          await recordStorekitVerifyFailure(ip, body.appKey);
+          return true;
+        },
+      );
       if (r === 'malformed' || r === 'bad_signature') {
         throw new HttpError(400, 'the App Store transaction could not be verified');
       }

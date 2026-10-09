@@ -9,7 +9,8 @@ import { getProvider, isPaymentMethodEnabled, type PaymentResult, type RefundRes
 import { resolveConfiguredGatewayAccount, resolveGatewayAccount, gatewayIdentity, assertGatewayEnvironment, recordedNmiEnvironment, type GatewayMethod } from './gateway-account.js';
 import { sezzleProvider } from './sezzle.js';
 import { prepareSezzleSession } from './session-input.js';
-import { queryNmiPayment } from './nmi-query.js';
+import { queryNmiPayment, queryNmiPaymentObserved } from './nmi-query.js';
+import { recordProviderObservationDetached } from './provider-observation.js';
 import { listStripeRefunds, STRIPE_REFUND_ATTEMPT_KEY } from './stripe.js';
 import { finalizeRefund } from './refunds.js';
 import { refundStateFromStripe } from './webhook-reconcile.js';
@@ -198,7 +199,11 @@ export async function verifySezzleAttempt(storeId: string, id: string) {
       attemptId: (attempt.context as { orderReference?: string } | null)?.orderReference ?? id, amount: attempt.amount,
       currency: attempt.currency, gateway: account, token: attempt.providerRef,
     });
-    return finishAttempt(storeId, id, result);
+    // De-fork 2.9: observedStatus is present only after a successful GET whose
+    // identity matched this attempt; it never reaches the ledger.
+    const { observedStatus, ...settlement } = result;
+    if (observedStatus) await recordProviderObservationDetached(storeId, { attemptId: id }, { status: observedStatus });
+    return finishAttempt(storeId, id, settlement);
   });
 }
 
@@ -374,9 +379,12 @@ export async function verifyGatewayAttempt(storeId: string, id: string) {
     const account = await resolveGatewayAccount(storeId, 'nmi', attempt.accountId, attempt.mode as 'test' | 'live');
     try { assertGatewayEnvironment(account, attempt.context); }
     catch { throw new GatewayPaymentError(409, 'Payment gateway environment changed; restore the original account configuration'); }
-    const result = await queryNmiPayment({ account, amount: attempt.amount, currency: attempt.currency,
+    const { result, observedStatus } = await queryNmiPaymentObserved({ account, amount: attempt.amount, currency: attempt.currency,
       orderReference: (attempt.context as { orderReference?: string } | null)?.orderReference ?? attempt.id,
       providerRef: attempt.providerRef });
+    // De-fork 2.9: only a successful, attempt-bound retrieval advances the
+    // observation; an unavailable query leaves the previous one in place.
+    if (observedStatus) await recordProviderObservationDetached(storeId, { attemptId: id }, { status: observedStatus });
     return finishAttempt(storeId, id, result);
   });
 }

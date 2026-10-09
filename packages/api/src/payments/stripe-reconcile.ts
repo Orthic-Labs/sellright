@@ -32,6 +32,7 @@ import { applyPaymentResult, amountDueForOrder } from './settle.js';
 import { verifyIntent, retrieveStripeIntent, cancelStripeIntent, searchStripeIntentsForOrder, resolveStripeConfigured, type IntentLike, type StripeMode } from './stripe.js';
 import { isPaymentMethodEnabled } from './provider.js';
 import { recordPaymentAlert } from './payment-alerts.js';
+import { recordProviderObservationDetached, recordProviderObservationSafe } from './provider-observation.js';
 
 export type StripeIntent = IntentLike & { last_payment_error?: { message?: string | null } | null };
 
@@ -289,6 +290,9 @@ export async function reconcileStripeOrder(storeId: string, ref: { code: string 
     const mode = asMode(a.mode);
     try {
       const pi = await retrieveStripeIntent(storeId, mode, a.providerRef);
+      // De-fork 2.9: a successful retrieval advances provider_status/observed_at
+      // (a throw above leaves the previous observation untouched).
+      await recordProviderObservationDetached(storeId, { attemptId: a.id }, { status: pi.status });
       const r = await withAdvisoryLock(`pay:${storeId}:${order.code}`, () =>
         withStore(storeId, (tx) => applyStripeIntent(tx, storeId, pi, mode, opts)));
       out.intents.push({ intentId: a.providerRef, outcome: r.outcome });
@@ -308,9 +312,13 @@ export async function reconcileStripeOrder(storeId: string, ref: { code: string 
  * runs under the order's pay advisory lock.
  */
 async function resolveIntentForCancel(storeId: string, code: string, intentId: string, mode: StripeMode, actor: string) {
+  const obsKey = { storeId, method: 'stripe', operation: 'intent', providerRef: intentId } as const;
   let pi: StripeIntent = await retrieveStripeIntent(storeId, mode, intentId);
+  await recordProviderObservationDetached(storeId, obsKey, { status: pi.status });
   if (pi.status !== 'succeeded' && !HOLD_STATUSES.has(pi.status) && pi.status !== 'canceled') {
     pi = await cancelStripeIntent(storeId, mode, intentId);
+    // The cancel response is the provider's post-cancel PaymentIntent.
+    await recordProviderObservationDetached(storeId, obsKey, { status: pi.status });
   }
   return withAdvisoryLock(`pay:${storeId}:${code}`, () =>
     withStore(storeId, (tx) => applyStripeIntent(tx, storeId, pi, mode, { actor })));
@@ -335,6 +343,7 @@ export async function cancelOpenIntentsForOrder(tx: Tx, storeId: string, orderId
   for (const a of attempts) {
     if (!a.providerRef) continue;
     const pi = await cancelStripeIntent(storeId, asMode(a.mode), a.providerRef);
+    await recordProviderObservationSafe(tx, { attemptId: a.id }, { status: pi.status });
     if (pi.status === 'canceled') {
       await setAttempt(tx, a, 'cancelled', { result: { status: pi.status, retired: 'order_edit' } });
       out.cancelled.push(a.providerRef);
