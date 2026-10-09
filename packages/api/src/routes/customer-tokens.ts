@@ -13,8 +13,9 @@
 import { grantSignupBonus } from '../loyalty/bonus.js';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { createHash, randomBytes } from 'node:crypto';
-import { and, eq, gt, isNull, sql } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
+import { withLockedSet } from '../db/locks.js';
 import { type StoreCtx } from '../store-context.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
@@ -29,6 +30,8 @@ import { apiErrorSchema, errJson } from '../lib/api-error.js';
 import { env } from '../env.js';
 
 const hashToken = (t: string) => createHash('sha256').update(t).digest('hex');
+/** Thrown inside the locked set to roll back a consume whose token customer changed. */
+class TokenCustomerMoved extends Error {}
 const TTL_HOURS = 2;
 const EMAIL_CHANGE_TTL_HOURS = 24; // bounded lifetime for the change link
 
@@ -247,53 +250,74 @@ customerTokens.openapi(
     const bucket = `verify-change:${ip}`;
     const retry = await loginRetryAfter(ip, bucket);
     if (retry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${retry}s`);
-    const out = await withStore(st.id, async (tx): Promise<'invalid' | 'taken' | 'ok'> => {
-      // Atomic consume: used_at flips only when the token is still pending —
-      // a replayed/second click can never win the UPDATE (single-use).
-      const consumed = await tx.execute(sql`UPDATE customer_token SET used_at = now()
-        WHERE token_hash = ${tokenHash} AND kind = ${EMAIL_CHANGE_KIND} AND used_at IS NULL AND expires_at > now()
-        RETURNING id, customer_id AS "customerId", payload`);
-      const row = consumed.rows[0] as { id: string; customerId: string; payload: { newEmail?: string } | null } | undefined;
-      if (!row) return 'invalid';
-      const newEmail = normalizeEmail(row.payload?.newEmail ?? '');
-      if (!newEmail) return 'invalid';
-      // Re-check availability at consume time — another account may have
-      // claimed the address since the request was minted.
-      const [clash] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, newEmail)).limit(1);
-      if (clash) return 'taken';
-      // Capture the OLD address before overwriting it — the security notice
-      // below goes to the address being ABANDONED, and it's gone after the
-      // UPDATE.
-      const [before] = await tx.select({ email: s.customer.email, emailVerified: s.customer.emailVerified }).from(s.customer).where(eq(s.customer.id, row.customerId)).limit(1).for('update');
-      const oldEmail = before?.email ?? null;
-      // Preserve guest orders whose OLD mailbox was actually proven before
-      // changing it. Proving the NEW mailbox must never prove the old one.
-      if (before?.emailVerified) {
-        await tx.update(s.order).set({ metadata: sql`coalesce(${s.order.metadata}, '{}'::jsonb) || '{"linked_via":"verified_email"}'::jsonb` })
-          .where(and(eq(s.order.customerId, row.customerId), sql`${s.order.metadata} ->> 'linked_via' = 'email_match'`, orderProvenanceFilter(before)));
-      }
-      // Burn all outstanding tokens issued under the OLD identifier, including
-      // magic links. They cannot authorize the account's new mailbox.
-      await tx.execute(sql`UPDATE customer_token SET used_at = now() WHERE customer_id = ${row.customerId} AND used_at IS NULL`);
-      // The customer just proved control of the NEW address — verified by construction.
-      await tx.update(s.customer).set({ email: newEmail, emailVerified: true, updatedAt: new Date() }).where(eq(s.customer.id, row.customerId));
-      // Identifier changed: invalidate all sessions for this account in this
-      // store (session is RLS-exempt for token lookup — filter storeId).
-      await tx.delete(s.session).where(and(eq(s.session.customerId, row.customerId), eq(s.session.storeId, st.id)));
-      // Burn any other pending change links so only the consumed one ever worked.
-      await tx.execute(sql`UPDATE customer_token SET used_at = now() WHERE customer_id = ${row.customerId} AND kind = ${EMAIL_CHANGE_KIND} AND used_at IS NULL`);
-      await tx.insert(s.auditLog).values({ storeId: st.id, actor: `customer:${row.customerId}`, entity: 'customer', entityId: row.customerId, action: 'email_changed', data: { email: newEmail, previousEmail: oldEmail } });
-      // Security notice to the OLD (abandoned) address — unconditional, not
-      // gated on session/consent: if a hijacked session made this change,
-      // the rightful owner needs to know at the address they can still read.
-      if (oldEmail && oldEmail !== newEmail) {
-        await enqueueEmailAddressChangedNotice(tx, st.id, storeEmailCtx(st), oldEmail, {
-          newEmail,
-          dedupeKey: `email-changed-notice:${row.id}`,
+    // Peek the token's customer unlocked to name the lock subject (STOREKIT §5.3).
+    // The multi-row order update below runs under {customer, scope:'orders'}; the
+    // order ids come from the set's plan and are re-checked under the locks.
+    const peeked = await withStore(st.id, async (tx) => {
+      const r = await tx.execute(sql`SELECT customer_id AS "customerId" FROM customer_token
+        WHERE token_hash = ${tokenHash} AND kind = ${EMAIL_CHANGE_KIND} AND used_at IS NULL AND expires_at > now()`);
+      return (r.rows[0] as { customerId: string } | undefined)?.customerId ?? null;
+    });
+    let out: 'invalid' | 'taken' | 'ok' = 'invalid';
+    if (peeked !== null) {
+      try {
+        out = await withLockedSet(st.id, { kind: 'customer', customerId: peeked, scope: 'orders' }, async (tx, _held, plan): Promise<'invalid' | 'taken' | 'ok'> => {
+          // Atomic consume: used_at flips only when the token is still pending —
+          // a replayed/second click can never win the UPDATE (single-use).
+          const consumed = await tx.execute(sql`UPDATE customer_token SET used_at = now()
+            WHERE token_hash = ${tokenHash} AND kind = ${EMAIL_CHANGE_KIND} AND used_at IS NULL AND expires_at > now()
+            RETURNING id, customer_id AS "customerId", payload`);
+          const row = consumed.rows[0] as { id: string; customerId: string; payload: { newEmail?: string } | null } | undefined;
+          if (!row) return 'invalid';
+          // The token's customer never changes; a mismatch means the locked set is not the
+          // customer whose orders would be updated. Throw to roll back the consume.
+          if (row.customerId !== peeked) throw new TokenCustomerMoved();
+          const newEmail = normalizeEmail(row.payload?.newEmail ?? '');
+          if (!newEmail) return 'invalid';
+          // Re-check availability at consume time — another account may have
+          // claimed the address since the request was minted.
+          const [clash] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, newEmail)).limit(1);
+          if (clash) return 'taken';
+          // Capture the OLD address before overwriting it — the security notice
+          // below goes to the address being ABANDONED, and it's gone after the
+          // UPDATE.
+          const [before] = await tx.select({ email: s.customer.email, emailVerified: s.customer.emailVerified }).from(s.customer).where(eq(s.customer.id, row.customerId)).limit(1).for('update');
+          const oldEmail = before?.email ?? null;
+          // Preserve guest orders whose OLD mailbox was actually proven before
+          // changing it. Proving the NEW mailbox must never prove the old one.
+          if (before?.emailVerified) {
+            if (plan.orderIds.length) {
+              await tx.update(s.order).set({ metadata: sql`coalesce(${s.order.metadata}, '{}'::jsonb) || '{"linked_via":"verified_email"}'::jsonb` })
+                .where(and(inArray(s.order.id, [...plan.orderIds]), eq(s.order.customerId, row.customerId), sql`${s.order.metadata} ->> 'linked_via' = 'email_match'`, orderProvenanceFilter(before)));
+            }
+          }
+          // Burn all outstanding tokens issued under the OLD identifier, including
+          // magic links. They cannot authorize the account's new mailbox.
+          await tx.execute(sql`UPDATE customer_token SET used_at = now() WHERE customer_id = ${row.customerId} AND used_at IS NULL`);
+          // The customer just proved control of the NEW address — verified by construction.
+          await tx.update(s.customer).set({ email: newEmail, emailVerified: true, updatedAt: new Date() }).where(eq(s.customer.id, row.customerId));
+          // Identifier changed: invalidate all sessions for this account in this
+          // store (session is RLS-exempt for token lookup — filter storeId).
+          await tx.delete(s.session).where(and(eq(s.session.customerId, row.customerId), eq(s.session.storeId, st.id)));
+          // Burn any other pending change links so only the consumed one ever worked.
+          await tx.execute(sql`UPDATE customer_token SET used_at = now() WHERE customer_id = ${row.customerId} AND kind = ${EMAIL_CHANGE_KIND} AND used_at IS NULL`);
+          await tx.insert(s.auditLog).values({ storeId: st.id, actor: `customer:${row.customerId}`, entity: 'customer', entityId: row.customerId, action: 'email_changed', data: { email: newEmail, previousEmail: oldEmail } });
+          // Security notice to the OLD (abandoned) address — unconditional, not
+          // gated on session/consent: if a hijacked session made this change,
+          // the rightful owner needs to know at the address they can still read.
+          if (oldEmail && oldEmail !== newEmail) {
+            await enqueueEmailAddressChangedNotice(tx, st.id, storeEmailCtx(st), oldEmail, {
+              newEmail,
+              dedupeKey: `email-changed-notice:${row.id}`,
         });
       }
       return 'ok';
-    });
+        });
+      } catch (e) {
+        if (!(e instanceof TokenCustomerMoved)) throw e;
+        out = 'invalid';
+      }
+    }
     if (out !== 'ok') { await recordLoginFailure(ip, bucket); return errJson(c, 409, 'TOKEN_INVALID', 'token is invalid, expired, or already used'); }
     return c.json({ ok: true }, 200);
   },

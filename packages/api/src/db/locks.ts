@@ -138,10 +138,13 @@ async function planOne(tx: Tx, storeId: string, subject: LockSubject): Promise<L
       return { purchases: [], licenseIds: licenses.map((r) => r.id), orderIds: orders.map((r) => r.id) };
     }
     case 'loyalty': {
+      // Only the orders whose held-back edit earn settleDeferredEditEarns (loyalty/ledger.ts)
+      // patches under the advisory: the same predicate, so the plan covers every row written.
       const orders = await tx
         .select({ id: s.order.id })
         .from(s.order)
-        .where(and(eq(s.order.storeId, storeId), eq(s.order.customerId, subject.customerId)));
+        .where(and(eq(s.order.storeId, storeId), eq(s.order.customerId, subject.customerId),
+          sql`${s.order.metadata}->'loyalty'->'deferredEarn' is not null`));
       return { purchases: [], licenseIds: [], orderIds: orders.map((r) => r.id) };
     }
     case 'checkout':
