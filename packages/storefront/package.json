@@ -38,7 +38,9 @@
 		"qwik": "qwik",
 		"postinstall": "pnpm run ensure:qwik-service-worker",
 		"test": "vitest run",
-		"test:e2e": "playwright test"
+		"e2e:build": "pnpm run generate:placeholder-assets && rm -rf dist-e2e server-e2e && SELLRIGHT_DISABLE_SSG=1 SELLRIGHT_BUILD_SUFFIX=e2e pnpm run build.client && SELLRIGHT_DISABLE_SSG=1 SELLRIGHT_BUILD_SUFFIX=e2e pnpm run build.server",
+		"test:e2e": "pnpm run e2e:build && playwright test",
+		"test:e2e:run": "playwright test"
 	},
 	"devDependencies": {
 		"@eslint/js": "^10.0.1",
