@@ -5,7 +5,7 @@ import { api, ApiError } from '../../api';
 import { useToast } from '../Toast';
 import { money } from '../../lib/format';
 import { FormSection, Field, InlineAlert, Spinner, Loading, ErrorState } from '../ui';
-import { buildOps, parseCents, WARNING_TEXT } from './ops';
+import { buildOps, parseCents, refundSelection, WARNING_TEXT } from './ops';
 import {
   emptyStaged, type AddressForm, type CommitResponse, type EditContext, type Preview, type SettlementChoice, type StagedEdit,
 } from './types';
@@ -15,20 +15,17 @@ type VariantHit = { sku: string; name: string; productName: string; unitPrice: n
 
 const signed = (cents: number, cur: string) => `${cents < 0 ? '−' : '+'}${money(Math.abs(cents), cur)}`;
 
-function useDebounced<T>(value: T, ms: number): T {
-  const [v, setV] = useState(value);
-  useEffect(() => { const t = setTimeout(() => setV(value), ms); return () => clearTimeout(t); }, [value, ms]);
-  return v;
-}
-
 /** Variant search used by "Add item" and "Swap variant". */
 function VariantPicker({ code, onPick, placeholder }: { code: string; onPick: (v: VariantHit) => void; placeholder: string }) {
   const [q, setQ] = useState('');
-  const dq = useDebounced(q.trim(), 250);
+  // No debounce: results carry live availability, which must never be a delayed read.
+  const dq = q.trim();
   const { data, isFetching } = useQuery({
     queryKey: ['order-edit-variants', code, dq],
     queryFn: () => api.get<{ items: VariantHit[] }>(`/orders/${encodeURIComponent(code)}/edit/variants?q=${encodeURIComponent(dq)}`),
     enabled: dq.length > 0,
+    staleTime: 0,
+    gcTime: 0,
   });
   return (
     <div className="space-y-2">
@@ -84,8 +81,8 @@ export function OrderEditPanel({ code, currency, initialAddress, onClose, onComm
   const ctx = ctxQ.data;
   const ops = useMemo(() => (ctx ? buildOps(ctx, st) : []), [ctx, st]);
   const opsKey = JSON.stringify(ops);
-  const dOpsKey = useDebounced(opsKey, 300);
-  const settling = dOpsKey !== opsKey;
+  // The preview includes the live stock check: no debounce, no cache.
+  const dOpsKey = opsKey;
 
   const preview = useQuery({
     queryKey: ['order-edit-preview', code, dOpsKey],
@@ -93,8 +90,9 @@ export function OrderEditPanel({ code, currency, initialAddress, onClose, onComm
     enabled: !!ctx && ops.length > 0,
     retry: false,
     staleTime: 0,
+    gcTime: 0,
   });
-  const pv = preview.data && !settling ? preview.data : null;
+  const pv = preview.data ?? null;
   const due = pv?.balance.amountDue ?? 0;
   // The settlement choices depend on the balance's sign; a flip invalidates the choice.
   const dueSign = Math.sign(due);
@@ -126,7 +124,7 @@ export function OrderEditPanel({ code, currency, initialAddress, onClose, onComm
     },
     onSuccess: (r) => {
       const s = r.settlement;
-      if (s.status === 'failed') toast.error('Order updated, but the refund failed', s.message ?? 'Issue it from the Refund panel.');
+      if (s.status === 'failed') toast.error('Order updated, but the refund failed', s.message ?? 'Retry it from the edit history below.');
       else toast.success(r.replay ? 'Edit already applied' : 'Order updated', s.type === 'refund_now' ? `Refund ${s.status}` : s.type === 'send_pay_link' ? 'Pay link sent to the customer' : undefined);
       onCommitted();
     },
@@ -147,10 +145,11 @@ export function OrderEditPanel({ code, currency, initialAddress, onClose, onComm
   }
 
   const diffFor = (id: string) => pv?.lines.find((l) => l.lineId === id);
+  const refundSel = refundSelection(pv?.refund ?? null, -due, settlement?.type === 'refund_now' ? (settlement.paymentId ?? '') : '');
   const needsSettlement = !!pv && due !== 0;
   const canCommit = !!pv && ops.length > 0 && pv.stockOk && (!needsSettlement || !!settlement)
     && !(settlementType === 'record_payment' && payAmount.trim() !== '' && parseCents(payAmount) == null)
-    && !(settlement?.type === 'refund_now' && pv.refund && !pv.refund.feasible)
+    && !(settlement?.type === 'refund_now' && !refundSel.ok)
     && !(settlement?.type === 'send_pay_link' && !pv.recipientEmail);
   const set = (patch: Partial<StagedEdit>) => setSt((s) => ({ ...s, ...patch }));
 
@@ -327,8 +326,8 @@ export function OrderEditPanel({ code, currency, initialAddress, onClose, onComm
                     ['leave_due', 'Leave the balance due (decide later)'],
                   ]).map(([v, label]) => (
                     <label key={v} className="flex items-start gap-2 text-sm">
-                      <input type="radio" name="settlement" className="mt-1 accent-brand" checked={settlementType === v} onChange={() => setSettlementType(v as SettlementChoice['type'])} disabled={v === 'refund_now' && !!pv.refund && !pv.refund.feasible} />
-                      <span>{label}{v === 'refund_now' && pv.refund && !pv.refund.feasible && <span className="block text-xs text-danger">{pv.refund.reason}</span>}
+                      <input type="radio" name="settlement" className="mt-1 accent-brand" checked={settlementType === v} onChange={() => setSettlementType(v as SettlementChoice['type'])} disabled={v === 'refund_now' && !refundSel.selectable} />
+                      <span>{label}{v === 'refund_now' && !refundSel.selectable && <span className="block text-xs text-danger">{refundSel.reason}</span>}
                         {v === 'send_pay_link' && !pv.recipientEmail && <span className="block text-xs text-danger">This order has no customer email.</span>}</span>
                     </label>
                   ))}
@@ -338,6 +337,7 @@ export function OrderEditPanel({ code, currency, initialAddress, onClose, onComm
                         <option value="">Select a payment…</option>
                         {pv.refund.payments.map((p) => <option key={p.id} value={p.id}>{p.method} — {money(p.available, currency)} refundable</option>)}
                       </select>
+                      {!refundSel.ok && refundSel.reason && <span className="block text-xs text-danger mt-1" role="alert">{refundSel.reason}</span>}
                     </Field>
                   )}
                   {settlementType === 'record_payment' && (

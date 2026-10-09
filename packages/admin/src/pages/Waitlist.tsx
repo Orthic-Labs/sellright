@@ -32,7 +32,7 @@ export default function WaitlistPage() {
 
   const invalid = !!from && !!to && from > to;
   const qs = waitlistQuery({ from, to, groupBy, ...order });
-  const { data, isLoading, error, refetch } = useQuery({ queryKey: ['waitlist', store?.slug, qs], queryFn: () => api.get<Report>(`/waitlist/report?${qs}`), enabled: !invalid });
+  const { data, isLoading, error, refetch } = useQuery({ queryKey: ['waitlist', store?.slug, qs], queryFn: () => api.get<Report>(`/waitlist/report?${qs}`), enabled: !invalid, staleTime: 0, gcTime: 0 });
 
   const pick = (p: RangePreset) => { setPreset(p); if (p === 'all') setRange({ from: '', to: '' }); else if (p !== 'custom') setRange(rangeFor(p)); };
   async function download() {

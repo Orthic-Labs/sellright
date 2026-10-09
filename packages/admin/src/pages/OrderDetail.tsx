@@ -10,6 +10,7 @@ import { money, dateTime } from '../lib/format';
 import { openOrderDocument } from '../lib/order-documents';
 import { PageHeader, StatusBadge, FormSection, InlineAlert, ErrorState, Loading, Field, Spinner } from '../components/ui';
 import { OrderEditPanel } from '../components/order-edit/OrderEditPanel';
+import { EditHistory } from '../components/order-edit/EditHistory';
 import { AddressCard } from '../components/order-edit/AddressCard';
 import type { AddressForm, OrderDetailX } from '../components/order-edit/types';
 
@@ -185,6 +186,7 @@ export default function OrderDetailPage() {
         {/* Left: items + actions + timeline */}
         <div className="lg:col-span-2 space-y-5">
           {editing && <OrderEditPanel code={o.code} currency={cur} initialAddress={pendingAddress} onClose={() => { setEditing(false); setPendingAddress(null); }} onCommitted={afterEdit} />}
+          <EditHistory code={o.code} currency={cur} payments={o.payments} onChanged={afterEdit} />
           {!editing && (<FormSection title="Items" description={`${o.lines.filter((l) => l.quantity > 0).length} line${o.lines.filter((l) => l.quantity > 0).length === 1 ? '' : 's'} on this order`}>
             <table className="w-full">
               <tbody>
