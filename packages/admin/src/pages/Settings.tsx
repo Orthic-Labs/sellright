@@ -6,6 +6,7 @@ import { useAuth } from '../auth';
 import { PageHeader, Loading, Spinner, Badge, FormSection, Field, InlineAlert } from '../components/ui';
 import { ADMIN_PAYMENT_PROVIDERS } from '../lib/payment-providers';
 import ShippingMethods from '../components/ShippingMethods';
+import { useToast } from '../components/Toast';
 
 const NEEDS_KEYS = new Set(['stripe']);
 
@@ -33,6 +34,7 @@ const NAV: { group: string; items: { id: SectionId; label: string; icon: typeof 
 export default function SettingsPage() {
   const { me, store, logout } = useAuth();
   const qc = useQueryClient();
+  const toast = useToast();
   const [section, setSection] = useState<SectionId>('store');
   const sk = ['settings-store', store?.slug];
   const { data: cfg, isLoading } = useQuery({ queryKey: sk, queryFn: () => api.get<any>('/settings/store') });
@@ -43,7 +45,12 @@ export default function SettingsPage() {
   const [tax, setTax] = useState<string | null>(null);
   const saveTax = useMutation({ mutationFn: () => api.patch('/settings/store', { taxRate: Math.round(parseFloat(tax || '0') * 100) }), onSuccess: () => { setTax(null); qc.invalidateQueries({ queryKey: sk }); } });
   const togglePay = useMutation({ mutationFn: (p: { k: string; v: boolean }) => api.patch('/settings/payments', { [p.k]: p.v }), onSuccess: () => qc.invalidateQueries({ queryKey: sk }) });
-  const setStripeMode = useMutation({ mutationFn: (mode: 'test' | 'live') => api.patch('/settings/payments/stripe-mode', { mode }), onSuccess: () => qc.invalidateQueries({ queryKey: sk }) });
+  // The API refuses a flip to live (409) until live credentials exist — surface that instead of silently snapping back.
+  const setStripeMode = useMutation({
+    mutationFn: (mode: 'test' | 'live') => api.patch('/settings/payments/stripe-mode', { mode }),
+    onSuccess: (_r, mode) => { qc.invalidateQueries({ queryKey: sk }); toast.success(`Stripe is now in ${mode} mode`); },
+    onError: (e) => { qc.invalidateQueries({ queryKey: sk }); toast.error('Could not switch Stripe mode', (e as Error).message); },
+  });
   const [gid, setGid] = useState<string | null>(null);
   const saveGoogle = useMutation({ mutationFn: () => api.patch('/settings/google', { clientId: gid }), onSuccess: () => { setGid(null); qc.invalidateQueries({ queryKey: sk }); } });
 

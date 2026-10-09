@@ -16665,12 +16665,10 @@
                     ]
                   },
                   "value": {
-                    "type": "integer",
-                    "default": 0
+                    "type": "integer"
                   },
                   "freeShipping": {
-                    "type": "boolean",
-                    "default": false
+                    "type": "boolean"
                   },
                   "conditions": {
                     "type": "array",
@@ -16703,8 +16701,7 @@
                     "nullable": true
                   },
                   "enabled": {
-                    "type": "boolean",
-                    "default": true
+                    "type": "boolean"
                   },
                   "affiliateEmail": {
                     "type": "string",
@@ -17072,12 +17069,10 @@
                     ]
                   },
                   "value": {
-                    "type": "integer",
-                    "default": 0
+                    "type": "integer"
                   },
                   "freeShipping": {
-                    "type": "boolean",
-                    "default": false
+                    "type": "boolean"
                   },
                   "conditions": {
                     "type": "array",
@@ -17110,8 +17105,7 @@
                     "nullable": true
                   },
                   "enabled": {
-                    "type": "boolean",
-                    "default": true
+                    "type": "boolean"
                   },
                   "affiliateEmail": {
                     "type": "string",

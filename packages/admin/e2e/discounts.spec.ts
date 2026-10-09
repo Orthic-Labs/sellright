@@ -147,14 +147,9 @@ test.describe('discounts', () => {
 });
 
 test.describe('discounts: status badge toggle', () => {
-	// KNOWN PRODUCT BUG (found by this suite, API side): PATCH /v1/admin/discounts/{id} validates the body with
-	// promoBodyBase.partial(); under Zod 4 the schema's .default() values survive .partial(), so a bare
-	// { enabled: false } also writes value = 0 and freeShipping = false, and a bare { value } re-enables a
-	// disabled discount. The admin's status badge sends exactly { enabled } — clicking it zeroes the discount.
-	// test.fail() keeps the suite green while the bug exists and turns red ("unexpected pass") once it is fixed,
-	// at which point this annotation should be deleted.
+	// Regression: PATCH /v1/admin/discounts/{id} used to re-apply the create schema's defaults (Zod 4 keeps .default()
+	// through .partial()), so the status badge's bare { enabled } also zeroed the discount value.
 	test('toggling the status badge must not change the discount value', async ({ page, api }) => {
-		test.fail(true, 'api: PATCH /discounts/{id} partial body re-applies schema defaults (value -> 0)');
 		const code = `E2E${uniq('tg')}`.toUpperCase();
 		await api.post('/discounts', { code, type: 'percentage', value: 15 });
 		await page.goto('/discounts');
@@ -165,11 +160,9 @@ test.describe('discounts: status badge toggle', () => {
 });
 
 test.describe('discounts: edit form freshness', () => {
-	// KNOWN PRODUCT BUG (found by this suite, admin side): the edit modal reads GET /discounts/{id} through
-	// react-query (global staleTime 15s) and saving only invalidates the *list* query, so re-opening Edit
-	// within 15s of a save shows the pre-save values — and saving again silently reverts the earlier edit.
+	// Regression: the edit modal reads GET /discounts/{id} through react-query (global staleTime 15s) and saving only
+	// invalidated the *list* query, so re-opening Edit right after a save showed the pre-save values.
 	test('re-opening Edit right after a save shows the saved values', async ({ page, api }) => {
-		test.fail(true, 'admin: Discounts.tsx does not invalidate the [discount, id] detail query after save');
 		const code = `E2E${uniq('fr')}`.toUpperCase();
 		await api.post('/discounts', { code, type: 'percentage', value: 10 });
 		await page.goto('/discounts');

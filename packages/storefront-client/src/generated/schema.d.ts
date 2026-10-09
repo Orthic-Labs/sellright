@@ -2840,11 +2840,9 @@ export interface paths {
                         affiliateEmail?: string | null;
                         code?: string | null;
                         conditions?: unknown[] | null;
-                        /** @default true */
                         enabled?: boolean;
                         endsAt?: string | null;
                         exclusionGroup?: string | null;
-                        /** @default false */
                         freeShipping?: boolean;
                         perCustomerUsageLimit?: number | null;
                         priority?: number;
@@ -2852,7 +2850,6 @@ export interface paths {
                         /** @enum {string} */
                         type?: "percentage" | "fixed" | "free_shipping";
                         usageLimit?: number | null;
-                        /** @default 0 */
                         value?: number;
                     };
                 };
@@ -7823,11 +7820,9 @@ export interface paths {
                         affiliateEmail?: string | null;
                         code?: string | null;
                         conditions?: unknown[] | null;
-                        /** @default true */
                         enabled?: boolean;
                         endsAt?: string | null;
                         exclusionGroup?: string | null;
-                        /** @default false */
                         freeShipping?: boolean;
                         perCustomerUsageLimit?: number | null;
                         priority?: number;
@@ -7835,7 +7830,6 @@ export interface paths {
                         /** @enum {string} */
                         type?: "percentage" | "fixed" | "free_shipping";
                         usageLimit?: number | null;
-                        /** @default 0 */
                         value?: number;
                     };
                 };

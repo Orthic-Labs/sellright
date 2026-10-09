@@ -91,6 +91,10 @@ test.describe('payments settings', () => {
 		const res = await attempt;
 		expect(res.status()).toBe(409);
 		expect((await res.json()).error.message).toContain('Stripe live credentials are not configured');
+		// the refusal is shown to the operator (not swallowed), and the select snaps back to the stored mode
+		await expect(toast(page, 'Could not switch Stripe mode')).toBeVisible();
+		await expect(page.getByText('Stripe live credentials are not configured').first()).toBeVisible();
+		await expect(modeSelect).toHaveValue('test');
 
 		// still on test, and the live credential set is still empty even though the test set has a key
 		expect((await api.get('/settings/store')).stripeMode).toBe('test');

@@ -177,7 +177,12 @@ export default function Discounts() {
   // itself "Discounts"; it was only the wire path that still said promotions.
   const key = ['discounts', store?.slug];
   const { data, isLoading, error } = useQuery({ queryKey: key, queryFn: () => api.get<{ items: Promo[] }>('/discounts') });
-  const invalidate = () => qc.invalidateQueries({ queryKey: key });
+  // The edit modal reads GET /discounts/{id} under ['discount', slug, id]. Any write must drop those cached details too,
+  // otherwise re-opening Edit within the global staleTime shows pre-save values and a second save silently reverts them.
+  const invalidate = () => {
+    qc.removeQueries({ queryKey: ['discount', store?.slug] });
+    return qc.invalidateQueries({ queryKey: key });
+  };
 
   const create = useMutation({
     mutationFn: () => api.post('/discounts', buildPayload(form!)),
@@ -191,9 +196,11 @@ export default function Discounts() {
   const del = useMutation({ mutationFn: (id: string) => api.del(`/discounts/${id}`), onSuccess: invalidate });
 
   const editing = useQuery({
-    queryKey: ['discount', form?.id],
+    queryKey: ['discount', store?.slug, form?.id],
     queryFn: () => api.get<PromoDetail>(`/discounts/${form!.id}`),
     enabled: !!form?.id,
+    // Always hydrate the form from a fresh read, never a cached one.
+    staleTime: 0, gcTime: 0, refetchOnMount: 'always',
   });
   // Populate the form once the detail loads (edit mode only) — exactly once
   // per opened discount, tracked by `hydratedFor` so a later re-render (e.g.

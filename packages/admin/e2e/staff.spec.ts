@@ -26,8 +26,7 @@ async function inviteViaUi(page: Page, email: string, roleLabel: 'Staff' | 'Read
 }
 
 async function acceptInvite(token: string): Promise<void> {
-	// There is no SPA screen behind the emailed /admin/accept-invite link (see the fixme below), so the
-	// invitee's client calls the public accept endpoint exactly as that screen would.
+	// Most specs accept through the public endpoint directly (fast); the accept-invite screen has its own test below.
 	const res = await fetch(`${new URL(ADMIN_URL).origin}/v1/admin/staff/accept`, {
 		method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token, password: PASSWORD }),
 	});
@@ -143,11 +142,40 @@ test.describe('staff', () => {
 		await ro.context.close();
 	});
 
-	test.fixme('the emailed accept link opens an accept-invite screen', async ({ page }) => {
-		// GAP: POST /v1/admin/staff/invites returns acceptUrl "/admin/accept-invite?token=…" (and emails
-		// STOREFRONT_URL + that path), but neither the admin SPA nor the storefront has a route for it — an invitee
-		// can only accept by calling the API by hand. Un-fixme when the screen exists.
-		await page.goto('/accept-invite?token=0000');
-		await expect(page.getByRole('button', { name: /accept|set password/i })).toBeVisible();
+	test('the emailed accept link opens an accept-invite screen that sets the password and signs the invitee in', async ({ browser, api }) => {
+		const email = `${uniq('ai')}@example.net`;
+		const inv = await api.post<{ token: string; acceptUrl: string }>('/staff/invites', { email, role: 'staff' });
+		expect(inv.acceptUrl).toBe(`/admin/accept-invite?token=${inv.token}`);
+		const context = await browser.newContext({ baseURL: ADMIN_URL, storageState: { cookies: [], origins: [] } });
+		const page = await context.newPage();
+		await page.goto(`/accept-invite?token=${inv.token}`);
+		await field(page, 'Email').fill(email);
+		await field(page, 'Password').fill('short');
+		await field(page, 'Confirm password').fill('short');
+		await page.getByRole('button', { name: 'Accept invitation' }).click();
+		await expect(page.getByText('Password must be at least 8 characters.')).toBeVisible();
+		await field(page, 'Password').fill(PASSWORD);
+		await field(page, 'Confirm password').fill(`${PASSWORD}x`);
+		await page.getByRole('button', { name: 'Accept invitation' }).click();
+		await expect(page.getByText('Passwords do not match.')).toBeVisible();
+		await field(page, 'Confirm password').fill(PASSWORD);
+		await page.getByRole('button', { name: 'Accept invitation' }).click();
+		await expect(page).toHaveURL(`${ADMIN_URL}/`, { timeout: 15_000 });
+		await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
+
+		// the invite is single-use: re-opening the same link is refused with the API's message
+		const again = await context.newPage();
+		await again.goto(`/accept-invite?token=${inv.token}`);
+		await field(again, 'Email').fill(email);
+		await field(again, 'Password').fill(PASSWORD);
+		await field(again, 'Confirm password').fill(PASSWORD);
+		await again.getByRole('button', { name: 'Accept invitation' }).click();
+		await expect(again.getByText('invite is invalid, already used, or expired')).toBeVisible();
+		await context.close();
+	});
+
+	test('the accept-invite screen without a token explains how to get one', async ({ page }) => {
+		await page.goto('/accept-invite');
+		await expect(page.getByRole('heading', { name: 'No invite token' })).toBeVisible();
 	});
 });

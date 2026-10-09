@@ -84,4 +84,25 @@ test.describe('order detail', () => {
 		]));
 		expect(doc.shipTo).toEqual(expect.arrayContaining([US_ADDRESS.fullName, US_ADDRESS.line1]));
 	});
+
+	test('the Invoice and Packing slip buttons open the printable documents in a new tab', async ({ page, api }) => {
+		const { code, grandTotal } = await createOrder(api, {
+			email: `${uniq('doc')}@example.net`, items: [{ sku: SKU.tee, quantity: 2 }, { sku: SKU.mug, quantity: 1 }],
+		});
+		await page.goto(`/orders/${code}`);
+		await expect(page.getByRole('heading', { name: code })).toBeVisible();
+
+		const [invoice] = await Promise.all([page.waitForEvent('popup'), page.getByRole('button', { name: 'Invoice' }).click()]);
+		await expect(invoice.locator('h1')).toHaveText('E2E Store');
+		await expect(invoice.locator('body')).toContainText(`INV-${code}`);
+		await expect(invoice.locator('body')).toContainText((grandTotal / 100).toFixed(2));
+		await invoice.close();
+
+		const [slip] = await Promise.all([page.waitForEvent('popup'), page.getByRole('button', { name: 'Packing slip' }).click()]);
+		await expect(slip.locator('h1')).toHaveText('E2E Store');
+		await expect(slip.locator('body')).toContainText(`PS-${code}`);
+		await expect(slip.locator('body')).toContainText(SKU.tee);
+		await expect(slip.locator('body')).toContainText(US_ADDRESS.line1);
+		await expect(slip.locator('body')).not.toContainText('$'); // a packing slip carries no prices
+	});
 });

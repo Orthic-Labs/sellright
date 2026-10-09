@@ -10,7 +10,6 @@ export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [totp, setTotp] = useState('');
-  const [need2fa, setNeed2fa] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -20,8 +19,10 @@ export default function Login() {
     e.preventDefault();
     setErr(null); setBusy(true);
     try {
-      const r = await api.post<LoginResp>('/login', { email, password, totp: need2fa ? totp : undefined });
-      if (r.twoFactorRequired) { setNeed2fa(true); setBusy(false); return; } // prompt for the 6-digit code
+      // The API answers a bad password, an unknown email AND a 2FA account that sent no code with the same generic 401
+      // (it must never reveal which accounts have 2FA), so the screen cannot wait for a "2FA required" signal. Instead
+      // the optional authentication-code field is always offered and sent together with the password.
+      const r = await api.post<LoginResp>('/login', { email, password, totp: totp || undefined });
       // session is now in an httpOnly cookie; just pick the active store and load.
       auth.store = r.stores?.[0]?.slug ?? null;
       await refresh();
@@ -45,26 +46,21 @@ export default function Login() {
             <p className="text-sm text-gray-500">Manage your stores</p>
           </div>
           {err && <div className="rounded-lg bg-danger-soft text-danger text-sm px-3 py-2 border border-danger/30">{err}</div>}
-          {!need2fa ? (
-            <>
-              <div>
-                <label className="label">Email</label>
-                <input className="input" type="email" autoFocus value={email} onChange={(e) => setEmail(e.target.value)} required />
-              </div>
-              <div>
-                <label className="label">Password</label>
-                <input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
-              </div>
-            </>
-          ) : (
-            <div>
-              <label className="label">Authentication code</label>
-              <input className="input tracking-widest text-center" inputMode="numeric" autoFocus maxLength={6} value={totp} onChange={(e) => setTotp(e.target.value.replace(/\D/g, ''))} placeholder="000000" required />
-              <p className="text-xs text-gray-400 mt-1">From your authenticator app.</p>
-            </div>
-          )}
+          <div>
+            <label className="label">Email</label>
+            <input className="input" type="email" autoFocus value={email} onChange={(e) => setEmail(e.target.value)} required />
+          </div>
+          <div>
+            <label className="label">Password</label>
+            <input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+          </div>
+          <div>
+            <label className="label">Authentication code</label>
+            <input className="input tracking-widest text-center" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={totp} onChange={(e) => setTotp(e.target.value.replace(/\D/g, ''))} placeholder="000000" />
+            <p className="text-xs text-gray-400 mt-1">Optional. If your account uses two-factor authentication, enter the 6-digit code from your authenticator app.</p>
+          </div>
           <button className="btn-primary w-full" disabled={busy}>
-            {busy ? <Spinner className="text-white" /> : need2fa ? 'Verify' : 'Sign in'}
+            {busy ? <Spinner className="text-white" /> : 'Sign in'}
           </button>
         </form>
       </div>

@@ -97,12 +97,10 @@ test.describe('customers', () => {
 		await expect(page).toHaveURL(/\/customers$/);
 	});
 
-	// KNOWN PRODUCT BUG (found by this suite): GET /v1/admin/customers/{id} does not return `tags`, so the Edit form
-	// opens with an empty Tags field, and saving any other change (say, a corrected surname) sends tags: null and
-	// silently wipes the customer's tags. test.fail() keeps the suite green until either the API returns tags or the
-	// form stops sending an untouched field; delete the annotation then.
+	// Regression: GET /v1/admin/customers/{id} used to omit `tags`, so the Edit form opened with an empty Tags field and
+	// any other save (say, a corrected surname) sent tags: null and wiped them. The API now returns tags and the form
+	// only sends tags it loaded and the user changed.
 	test('editing a name keeps the customer\'s existing tags', async ({ page, api }) => {
-		test.fail(true, 'admin/api: customer detail omits tags, so the edit form clears them on any save');
 		const email = `${uniq('ct')}@example.net`;
 		const created = await api.post<{ id: string }>('/customers', { email, firstName: 'Tara', lastName: 'Tagged', tags: ['vip'] });
 		await page.goto(`/customers/${created.id}`);

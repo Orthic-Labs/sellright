@@ -134,7 +134,7 @@ test.describe('orders index', () => {
 		expect((await api.stock(SKU.mug)).allocated).toBe(reserved.allocated - 3);
 	});
 
-	test('trash, restore and purge (paid orders cannot be purged from the UI)', async ({ page, api }) => {
+	test('trash, restore and purge (a paid order is purged only with a written reason)', async ({ page, api }) => {
 		const tag = uniq('tr');
 		const unpaid = (await createPendingOrder(api, { email: `${tag}-u@example.net` })).code;
 		const paid = (await createOrder(api, { email: `${tag}-p@example.net` })).code;
@@ -172,14 +172,24 @@ test.describe('orders index', () => {
 		await expect(toast(page, '1 order purged')).toBeVisible();
 		expect((await api.raw('GET', `/orders/${unpaid}`)).status).toBe(404);
 
-		// … while a trashed PAID order is refused (force + reason is API-only) and survives
+		// … a trashed PAID order needs force + a written reason: the dialog blocks until one is typed, Cancel leaves it alone
 		await api.post('/orders/bulk-soft-delete', { codes: [paid] });
 		await page.reload();
 		await page.getByLabel('Search code or email').fill(paid);
 		await page.getByLabel(`Select row ${paid}`).check();
 		await page.getByRole('button', { name: 'Delete permanently' }).click();
-		await page.getByRole('alertdialog').getByRole('button', { name: 'Delete permanently' }).click();
-		await expect(page.getByText(/purge requires force \+ reason/).first()).toBeVisible();
+		const forceDialog = page.getByRole('alertdialog');
+		await expect(forceDialog).toContainText('Permanently delete 1 order?');
+		await expect(forceDialog).toContainText(paid);
+		await expect(forceDialog.getByRole('button', { name: 'Delete permanently' })).toBeDisabled();
+		await forceDialog.getByRole('button', { name: 'Cancel' }).click();
 		expect((await api.raw('GET', `/orders/${paid}`)).status).toBe(200);
+
+		await page.getByRole('button', { name: 'Delete permanently' }).click();
+		await expect(forceDialog.getByRole('button', { name: 'Delete permanently' })).toBeDisabled();
+		await forceDialog.getByLabel('Reason (required)').fill('duplicate test order');
+		await forceDialog.getByRole('button', { name: 'Delete permanently' }).click();
+		await expect(toast(page, '1 order purged')).toBeVisible();
+		expect((await api.raw('GET', `/orders/${paid}`)).status).toBe(404);
 	});
 });

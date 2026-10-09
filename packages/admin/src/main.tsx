@@ -20,6 +20,7 @@ import Layout from './components/Layout';
 import { AppErrorBoundary } from './components/ErrorBoundary';
 import Login from './pages/Login';
 import Setup from './pages/Setup';
+import AcceptInvite from './pages/AcceptInvite';
 import Onboarding from './pages/Onboarding';
 import Dashboard from './pages/Dashboard';
 import Orders from './pages/Orders';
@@ -113,6 +114,7 @@ function App() {
     <Routes>
       <Route path="/login" element={<Login />} />
       <Route path="/setup" element={<Setup />} />
+      <Route path="/accept-invite" element={<AcceptInvite />} />
       <Route element={<Protected />}>
         <Route path="/onboarding" element={<Onboarding />} />
         <Route path="/" element={<Dashboard />} />

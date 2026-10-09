@@ -33,12 +33,9 @@ test.describe('admin sign-in', () => {
 	});
 
 	test('an admin with 2FA enabled can sign in by supplying the authenticator code', async ({ page, api }) => {
-		// KNOWN PRODUCT BUG (found by this suite): the API's login answers a 2FA account that sent no code with a
-		// plain 401 (WP1.5 — it deliberately never says "2FA required"), but the login screen only reveals its
-		// authentication-code field when the response says twoFactorRequired. So the field is never shown and
-		// no 2FA-enabled admin can sign in through the UI at all. Un-fail this when the screen offers the code field
-		// up front (the API contract says "the UI must always send both together").
-		test.fail(true, 'admin: Login.tsx never shows the TOTP field (server no longer returns twoFactorRequired)');
+		// The API's login answers a 2FA account that sent no code with the same plain 401 as a bad password (WP1.5 — it
+		// never says "2FA required"), so the screen always offers the optional authentication-code field and sends it
+		// together with the password. First attempt without a code is refused generically; the second carries the code.
 		const email = `${uniq('tf')}@example.net`;
 		const password = 'twofa-e2e-password-1';
 		const inv = await api.post<{ token: string }>('/staff/invites', { email, role: 'manager' });
@@ -54,12 +51,13 @@ test.describe('admin sign-in', () => {
 		await page.goto('/login');
 		await field(page, 'Email').fill(email);
 		await field(page, 'Password').fill(password);
+		await expect(field(page, 'Authentication code')).toBeVisible();
 		await page.getByRole('button', { name: 'Sign in' }).click();
+		await expect(page.getByText('invalid email, password, or 2FA code')).toBeVisible(); // no code: generic 401, no oracle
 		// a different 30s step than the one used for /2fa/enable, so replay protection is not what we measure
 		const code = totpAt(secret, totpStep() + 1);
-		await expect(field(page, 'Authentication code')).toBeVisible({ timeout: 4_000 });
 		await field(page, 'Authentication code').fill(code);
-		await page.getByRole('button', { name: 'Verify' }).click();
+		await page.getByRole('button', { name: 'Sign in' }).click();
 		await expect(page).toHaveURL(`${ADMIN_URL}/`);
 	});
 
