@@ -58,6 +58,7 @@
           "PRODUCT_NOT_FOUND",
           "PURCHASE_REQUIRED",
           "RATE_LIMITED",
+          "REJECTED_PLATFORM",
           "REVIEWS_DISABLED",
           "SEAT_LIMIT_REACHED",
           "SECURITY_CHECK_FAILED",
@@ -8776,6 +8777,16 @@
                     "expiresAt",
                     "seats"
                   ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Rejected by entitlement policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
                 }
               }
             }
