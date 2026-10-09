@@ -8073,6 +8073,293 @@
         }
       }
     },
+    "/v1/admin/customers/{id}/verification": {
+      "get": {
+        "summary": "A customer's SheerID verification state and history",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "customerId": {
+                      "type": "string"
+                    },
+                    "active": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "entries": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "category": {
+                            "type": "string"
+                          },
+                          "programId": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "discountPercent": {
+                            "type": "number",
+                            "nullable": true
+                          },
+                          "verifiedAt": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "expiresAt": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "source": {
+                            "type": "string",
+                            "enum": [
+                              "sheerid",
+                              "imported"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "category",
+                          "programId",
+                          "discountPercent",
+                          "verifiedAt",
+                          "expiresAt",
+                          "source"
+                        ]
+                      }
+                    },
+                    "attempts": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "category": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "status": {
+                            "type": "string"
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          },
+                          "expiresAt": {
+                            "type": "string",
+                            "nullable": true
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "category",
+                          "status",
+                          "createdAt",
+                          "expiresAt"
+                        ]
+                      }
+                    },
+                    "history": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "action": {
+                            "type": "string"
+                          },
+                          "actor": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "at": {
+                            "type": "string"
+                          },
+                          "categories": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "reason": {
+                            "type": "string",
+                            "nullable": true
+                          }
+                        },
+                        "required": [
+                          "action",
+                          "actor",
+                          "at",
+                          "categories",
+                          "reason"
+                        ]
+                      }
+                    },
+                    "canClear": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "customerId",
+                    "active",
+                    "entries",
+                    "attempts",
+                    "history",
+                    "canClear"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/customers/{id}/verification/clear": {
+      "post": {
+        "summary": "Clear a customer's SheerID verification (all categories, or one)",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "category": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "cleared": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "rowsRevoked": {
+                      "type": "integer"
+                    },
+                    "importedRemoved": {
+                      "type": "integer"
+                    },
+                    "active": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "cleared",
+                    "rowsRevoked",
+                    "importedRemoved",
+                    "active"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/admin/disputes": {
       "get": {
         "summary": "List recorded disputes/chargebacks",
@@ -22956,6 +23243,165 @@
         }
       }
     },
+    "/v1/admin/affiliates/{id}/stats": {
+      "get": {
+        "summary": "Affiliate sales for a date range, with per-SKU units, revenue and commission",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "to",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "range": {
+                      "type": "object",
+                      "properties": {
+                        "from": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "to": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "from",
+                        "to"
+                      ]
+                    },
+                    "commissionPct": {
+                      "type": "number"
+                    },
+                    "totals": {
+                      "type": "object",
+                      "properties": {
+                        "orders": {
+                          "type": "integer"
+                        },
+                        "units": {
+                          "type": "integer"
+                        },
+                        "revenue": {
+                          "type": "integer"
+                        },
+                        "commission": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "orders",
+                        "units",
+                        "revenue",
+                        "commission"
+                      ]
+                    },
+                    "bySku": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "sku": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "units": {
+                            "type": "integer"
+                          },
+                          "orders": {
+                            "type": "integer"
+                          },
+                          "revenue": {
+                            "type": "integer"
+                          },
+                          "commission": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "sku",
+                          "name",
+                          "units",
+                          "orders",
+                          "revenue",
+                          "commission"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "range",
+                    "commissionPct",
+                    "totals",
+                    "bySku"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/admin/affiliates/link": {
       "post": {
         "summary": "Bind a promotion to an affiliate email (or clear with email:null)",
@@ -25060,6 +25506,10 @@
                     "indexNowConfigured": {
                       "type": "boolean"
                     },
+                    "indexNowKey": {
+                      "type": "string",
+                      "nullable": true
+                    },
                     "robots": {
                       "type": "object",
                       "properties": {
@@ -25100,6 +25550,7 @@
                     "staticPaths",
                     "productUrlPattern",
                     "indexNowConfigured",
+                    "indexNowKey",
                     "robots"
                   ]
                 }
@@ -25270,6 +25721,10 @@
                     "indexNowConfigured": {
                       "type": "boolean"
                     },
+                    "indexNowKey": {
+                      "type": "string",
+                      "nullable": true
+                    },
                     "robots": {
                       "type": "object",
                       "properties": {
@@ -25310,6 +25765,7 @@
                     "staticPaths",
                     "productUrlPattern",
                     "indexNowConfigured",
+                    "indexNowKey",
                     "robots"
                   ]
                 }
@@ -25402,6 +25858,597 @@
           },
           "403": {
             "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/seo/sitemaps": {
+      "get": {
+        "summary": "Preview the generated sitemaps (files, URL counts and URLs)",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "configured": {
+                      "type": "boolean"
+                    },
+                    "siteUrl": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "indexUrl": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "totalUrls": {
+                      "type": "integer"
+                    },
+                    "files": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "url": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "main",
+                              "products",
+                              "collections",
+                              "blog"
+                            ]
+                          },
+                          "count": {
+                            "type": "integer"
+                          },
+                          "urls": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "loc": {
+                                  "type": "string"
+                                },
+                                "lastmod": {
+                                  "type": "string",
+                                  "nullable": true
+                                }
+                              },
+                              "required": [
+                                "loc",
+                                "lastmod"
+                              ]
+                            }
+                          },
+                          "truncated": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "url",
+                          "kind",
+                          "count",
+                          "urls",
+                          "truncated"
+                        ]
+                      }
+                    },
+                    "indexNowConfigured": {
+                      "type": "boolean"
+                    },
+                    "cloudflareConfigured": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "configured",
+                    "siteUrl",
+                    "indexUrl",
+                    "totalUrls",
+                    "files",
+                    "indexNowConfigured",
+                    "cloudflareConfigured"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/seo/sitemaps/refresh": {
+      "post": {
+        "summary": "Refresh sitemaps: purge the CDN copies and optionally submit every sitemap URL to IndexNow",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "indexNow": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "totalUrls": {
+                      "type": "integer"
+                    },
+                    "cdn": {
+                      "type": "object",
+                      "properties": {
+                        "configured": {
+                          "type": "boolean"
+                        },
+                        "purged": {
+                          "type": "boolean"
+                        },
+                        "urls": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": [
+                        "configured",
+                        "purged",
+                        "urls"
+                      ]
+                    },
+                    "indexNow": {
+                      "type": "object",
+                      "properties": {
+                        "attempted": {
+                          "type": "boolean"
+                        },
+                        "submitted": {
+                          "type": "integer"
+                        },
+                        "ok": {
+                          "type": "boolean",
+                          "nullable": true
+                        },
+                        "status": {
+                          "type": "integer",
+                          "nullable": true
+                        },
+                        "error": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "attempted",
+                        "submitted",
+                        "ok",
+                        "status",
+                        "error"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "totalUrls",
+                    "cdn",
+                    "indexNow"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "siteUrl not configured, or IndexNow requested without a key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/waitlist/report": {
+      "get": {
+        "summary": "Waitlist demand: signups per variant or product, pending vs notified",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "to",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "variant",
+                "product"
+              ],
+              "default": "variant"
+            },
+            "required": false,
+            "name": "groupBy",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "total",
+                "notified",
+                "canceled",
+                "product",
+                "variant",
+                "available",
+                "lastSignup",
+                "oldestPending"
+              ],
+              "default": "pending"
+            },
+            "required": false,
+            "name": "sort",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "default": "desc"
+            },
+            "required": false,
+            "name": "dir",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "groupBy": {
+                      "type": "string",
+                      "enum": [
+                        "variant",
+                        "product"
+                      ]
+                    },
+                    "range": {
+                      "type": "object",
+                      "properties": {
+                        "from": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "to": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "from",
+                        "to"
+                      ]
+                    },
+                    "summary": {
+                      "type": "object",
+                      "properties": {
+                        "pending": {
+                          "type": "integer"
+                        },
+                        "notified": {
+                          "type": "integer"
+                        },
+                        "canceled": {
+                          "type": "integer"
+                        },
+                        "unconfirmed": {
+                          "type": "integer"
+                        },
+                        "legacyClosed": {
+                          "type": "integer"
+                        },
+                        "total": {
+                          "type": "integer"
+                        },
+                        "products": {
+                          "type": "integer"
+                        },
+                        "variants": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "pending",
+                        "notified",
+                        "canceled",
+                        "unconfirmed",
+                        "legacyClosed",
+                        "total",
+                        "products",
+                        "variants"
+                      ]
+                    },
+                    "rows": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "key": {
+                            "type": "string"
+                          },
+                          "productName": {
+                            "type": "string"
+                          },
+                          "productSlug": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "variantName": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "sku": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "available": {
+                            "type": "integer",
+                            "nullable": true
+                          },
+                          "variants": {
+                            "type": "integer"
+                          },
+                          "pending": {
+                            "type": "integer"
+                          },
+                          "notified": {
+                            "type": "integer"
+                          },
+                          "canceled": {
+                            "type": "integer"
+                          },
+                          "unconfirmed": {
+                            "type": "integer"
+                          },
+                          "legacyClosed": {
+                            "type": "integer"
+                          },
+                          "total": {
+                            "type": "integer"
+                          },
+                          "lastSignupAt": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "oldestPendingAt": {
+                            "type": "string",
+                            "nullable": true
+                          }
+                        },
+                        "required": [
+                          "key",
+                          "productName",
+                          "productSlug",
+                          "variantName",
+                          "sku",
+                          "available",
+                          "variants",
+                          "pending",
+                          "notified",
+                          "canceled",
+                          "unconfirmed",
+                          "legacyClosed",
+                          "total",
+                          "lastSignupAt",
+                          "oldestPendingAt"
+                        ]
+                      }
+                    },
+                    "truncated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "groupBy",
+                    "range",
+                    "summary",
+                    "rows",
+                    "truncated"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/waitlist/report.csv": {
+      "get": {
+        "summary": "Waitlist demand report as CSV",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "to",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "variant",
+                "product"
+              ],
+              "default": "variant"
+            },
+            "required": false,
+            "name": "groupBy",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "total",
+                "notified",
+                "canceled",
+                "product",
+                "variant",
+                "available",
+                "lastSignup",
+                "oldestPending"
+              ],
+              "default": "pending"
+            },
+            "required": false,
+            "name": "sort",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "default": "desc"
+            },
+            "required": false,
+            "name": "dir",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "CSV",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
             "content": {
               "application/json": {
                 "schema": {

@@ -7,6 +7,7 @@ import { useAuth } from '../auth';
 import { useToast } from '../components/Toast';
 import { money, date, dateTime } from '../lib/format';
 import { CustomerLoyalty } from '../components/CustomerLoyalty';
+import { CustomerVerification } from '../components/CustomerVerification';
 import { PageHeader, StatusBadge, FormSection, InlineAlert, ErrorState, Loading, Field, Spinner, EmptyState, KpiCard } from '../components/ui';
 
 export default function CustomerDetailPage() {
@@ -106,6 +107,8 @@ export default function CustomerDetailPage() {
           </FormSection>
 
           <CustomerLoyalty customerId={id} />
+
+          <CustomerVerification customerId={id} />
 
           <FormSection title="Subscriptions" description={subs?.items.length ? `${subs.items.length} on file` : 'recurring plans'}>
             {!subs?.items.length ? <EmptyState title="No subscriptions" /> : subs.items.map((sub) => (

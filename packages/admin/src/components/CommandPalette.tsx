@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, ArrowRight, ShoppingBag, Package, Users, FileText, Mail, BarChart3, Gift, Award, Settings, Warehouse, HandCoins, Receipt, Webhook, Coins, RotateCcw, Layers, Percent, Boxes, Activity, Shield, Plus, Upload, ShoppingCart, BadgeCheck, Star } from 'lucide-react';
+import { Search, ArrowRight, ShoppingBag, Package, Users, FileText, Mail, BarChart3, Gift, Award, Settings, Warehouse, HandCoins, Receipt, Webhook, Coins, RotateCcw, Layers, Percent, Boxes, Activity, Shield, Plus, Upload, ShoppingCart, BadgeCheck, Star, BellRing, Globe } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../auth';
 import { useToast } from './Toast';
@@ -98,6 +98,8 @@ export function CommandPalette() {
     { id: 'go:marketing', label: 'Go to Marketing', section: 'Navigate', keywords: ['marketing','listmonk','email'], to: '/marketing', icon: Mail },
     { id: 'go:blog', label: 'Go to Blog', section: 'Navigate', keywords: ['blog','posts'], to: '/blog', icon: FileText },
     { id: 'go:reports', label: 'Go to Reports', section: 'Navigate', keywords: ['reports','analytics','sales'], to: '/reports', icon: BarChart3 },
+    { id: 'go:waitlist', label: 'Go to Waitlist demand', section: 'Navigate', keywords: ['waitlist','back in stock','restock','demand','notify'], to: '/waitlist', icon: BellRing },
+    { id: 'go:seo', label: 'Go to SEO', section: 'Navigate', keywords: ['seo','sitemap','indexnow','robots'], to: '/settings/seo', icon: Globe },
     { id: 'go:activity', label: 'Go to Activity', section: 'Navigate', keywords: ['activity','audit log'], to: '/activity', icon: Activity },
     { id: 'go:settings', label: 'Go to Settings', section: 'Navigate', keywords: ['settings','config'], to: '/settings', icon: Settings },
     { id: 'go:staff', label: 'Go to Staff', section: 'Navigate', keywords: ['staff','team','permissions','roles'], to: '/staff', icon: Shield },
