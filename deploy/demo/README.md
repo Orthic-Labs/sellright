@@ -19,7 +19,7 @@ The admin can edit product details/prices/availability, create/archive products
 and variants, adjust stock, manage discounts, fulfill/cancel/refund orders and
 inspect the synthetic customers and reports. New variant SKUs must start with
 `DEMO-` and use uppercase letters/hyphens. Media uploads, option editing, staff,
-settings, gateway configuration, exports and external integrations are disabled.
+settings, gateway configuration and external integrations are disabled; order export is allowed (see the owner-features list below).
 This is a product evaluation environment, not gateway acceptance evidence.
 
 ### Isolation and Limits

@@ -1,6 +1,6 @@
 # SellRight Features
 
-Last reviewed: 2026-09-06
+Last reviewed: 2026-10-09
 
 SellRight is a commerce backend for operators who want ownership, multi-store control, and a standard REST contract without building every commerce primitive from zero.
 
@@ -30,6 +30,12 @@ SellRight is a commerce backend for operators who want ownership, multi-store co
 | Subscriptions / recurring billing | Built | Stripe Billing; backing order → first invoice issues the license, renewals extend the entitlement; admin list + per-customer view + hosted Customer Portal. |
 | Order bulk ops | Built | Bulk cancel / trash (soft-delete) / restore / gated purge (cascade + FK-coverage guard test). |
 | Server cart lifecycle | Built | Server-authoritative cart, TTL + extend-on-activity, abandonment/cleanup jobs, checkout-reads-from-cart (fail-closed). |
+| Order editing | Built | Preview/commit edits to a paid order (lines, adjustments, coupon, shipping, address) with live stock deltas; settle by refund, manual payment, or emailed balance pay link. |
+| Balance payments | Built | Paid orders with an amount due accept `/pay`, NMI, Sezzle and Stripe payments for the balance only; `balance_due` payment status. |
+| Points and rewards | Built | Earn/redeem ledger, bonus rules (review, sign-up, first order, birthday), product multipliers, admin settings and liability dashboard, `/account/rewards`. |
+| Product reviews | Built | Moderated reviews with verified-buyer flag, admin reply, review bonus, rating aggregate. |
+| Customer returns | Built | Customer return requests in the storefront account; admin approves with optional restock. |
+| Browser e2e suites | Built | Playwright admin (54 tests) and storefront (51 tests) suites in CI. |
 | Storefront migration | In progress | Catalog, collections, cart, auth, account and checkout use the SellRight REST path; real Stripe test-key E2E remains a release receipt. |
 | Carrier labels/rates | Not built | Manual/flat-rate fulfillment exists; carrier integrations are later. |
 | Additional shopper payment providers | Deferred | Add PayPal/COD/other providers only when a concrete deployment requires them. |
@@ -48,6 +54,7 @@ The admin SPA includes pages for:
 - Reports, affiliates, import tracking.
 - Blog/content, marketing/Listmonk, webhooks.
 - Settings, staff, tax zones, currency rates.
+- Order editing, order export, tracking grid/CSV import, points program, reviews moderation, waitlist report, SEO/sitemaps, customer verification.
 
 ## Storefront Surface
 
@@ -58,7 +65,8 @@ The storefront-facing API supports:
 - cart and checkout;
 - guest and customer auth;
 - account profile and addresses;
-- order history;
+- order history, rewards balance, return requests;
+- product reviews and rating summary;
 - shipping eligibility;
 - blog/newsletter support;
 - payment intent creation and payment settlement.

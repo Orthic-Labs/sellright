@@ -101,6 +101,49 @@ must update the matching changelog in the same push.
   it on (`GET /v1/shop/config` now reports `auth.magicLink`), and `/account/magic-link` exchanges the emailed
   token for a session (the API already minted the link; the storefront had no page for it).
 
+- **Order editing** (migration 0084): `GET /v1/admin/orders/{code}/edit/context`, `GET .../edit/variants`,
+  `POST .../edit/preview` (stateless: totals, per-line diff, stock delta, balance) and `POST .../edit/commit`
+  (guarded by `expectedGrandTotal`, idempotent) edit a paid order's lines, adjustments, coupon and shipping.
+  Stock deltas are reserved live, never cached. Adjustments are labelled +/- amounts in `order_adjustment`; each
+  committed edit writes an `order_edit` row (before/after snapshot, balance, settlement). `order.shipping_override`
+  marks a hand-set shipping amount. `PUT /v1/admin/orders/{code}/address` edits an address on any non-cancelled
+  order. A balance is settled by refunding the difference, recording a manual payment, or emailing a pay link.
+- **Balance payments**: `/pay`, NMI and Sezzle accept a Paid order with a positive amount due and charge only the
+  balance. Payment status gains `balance_due` (filterable on the admin order list and export); the receipt-scoped
+  `/orders/{code}` page on the storefront takes the balance payment. Edit refunds are tagged by the server-set
+  `refund.metadata.source`, never the free-text reason, so they neither re-open the amount due nor claw points back twice.
+- **Persisted shipping method** (migration 0086): `order.shipping_method_code` / `shipping_method_name`, also set by
+  the Vendure importer. Orders created before it keep the order-edit inference fallback.
+- **Loyalty bonus rules and program dashboard**: `store.config.loyalty` gains review, sign-up, first-order and
+  birthday bonus points and per-product earn multipliers (all 0 / empty = off; `signupBonusSince` stops imported
+  accounts qualifying retroactively). Bonus ledger rows (new `bonus` kind, migration 0085) carry a deterministic
+  `source_ref` so a trigger pays once; `POST /v1/admin/loyalty/ledger/{id}/reverse` reverses a bonus without
+  re-enabling it. Customers get optional `birth_month` / `birth_day`. Admin: settings for every field plus
+  `GET /v1/admin/loyalty/summary` (issued, redeemed, outstanding, liability).
+- **Product reviews** (migration 0085, `product_review`): `GET`/`POST /v1/shop/catalog/products/{slug}/reviews`
+  (approved reviews plus rating aggregate; submissions are moderated, one per product per email). Admin queue at
+  `/v1/admin/reviews` with approve/reject, public reply (`PUT /v1/admin/reviews/{id}/reply`) and
+  `/v1/admin/reviews-settings`. Approval grants the review bonus. Product detail returns `productId`.
+- **Storefront**: `/account/rewards`, PDP reviews (AggregateRating JSON-LD only when the count is above 0),
+  earn-points notes from the store's loyalty settings, receipt-scoped balance-pay page.
+- **Owner gaps**: affiliate stats by date range with per-SKU sales (`GET /v1/admin/affiliates/{id}/stats`);
+  TipTap blog editor (lazy chunk); waitlist demand report + CSV (`/v1/admin/waitlist/report[.csv]`); sitemap
+  preview/refresh and an SEO settings card (`/v1/admin/seo/sitemaps[/refresh]`); clear a customer's SheerID
+  verification (`POST /v1/admin/customers/{id}/verification/clear`, new `customer_verification` staff permission;
+  the legacy revoke route now requires it). Admin also gains the customer list counts fix, an order export dialog
+  (date range, statuses, method, country, coupon, per-line rows, column presets), a manual tracking grid, CSV
+  tracking import with preview, a shipping rule editor, auto-deliver run-now, accept-invite page,
+  invoice/packing-slip buttons, a Stripe mode-switch error toast, and force-purge of a trashed paid order with a
+  required reason.
+- **Browser e2e suites**: admin (`packages/admin/e2e`, 13 specs / 54 `test()` blocks) and storefront
+  (`packages/storefront/e2e`, 10 specs / 51 blocks). Each starts a throwaway API over a freshly created
+  `sellright_admin_e2e` / `sellright_storefront_e2e` database on a non-superuser role and refuses
+  non-e2e targets; CI jobs `e2e-admin` and `e2e-storefront`. Storefront money specs run mock NMI/Sezzle/IndexNow
+  receivers and an SMTP sink.
+- **Demo**: new visitor tenants start with points on at the product defaults and reviews on (no review rows are
+  seeded); the demo policy allows the new owner features inside the visitor's own store (see `deploy/demo/README.md`);
+  the demo admin helper understands the `/admin` mount (login hint, sidebar links, Export).
+
 ### Changed — BREAKING (pre-1.0 API consumers)
 
 - Admin discounts API: the canonical route is now `/v1/admin/discounts`
@@ -151,6 +194,18 @@ must update the matching changelog in the same push.
 
 ### Fixed
 
+- Stripe balance payments: the PaymentIntent idempotency key now carries the settled-tender count and a settled
+  replay is skipped (a later edit raising the total by the same amount used to replay the earlier succeeded intent
+  within Stripe's 24h window); `/pay` always namespaces the balance claim by settled-tender count; `/pay` no longer
+  reports Settled for a failed or amount-mismatched intent on an already-Paid order.
+- Admin: toggling a discount's enabled flag no longer applies schema defaults (it zeroed the value); the discount
+  edit modal no longer shows stale values after save; admins with 2FA can sign in from the UI; customer detail
+  includes tags so an edit no longer wipes them. `affiliate_payouts` was missing from `UI_PERMISSION_KEYS`.
+- Storefront: the confirmation receipt poll aborts on unmount; CartService adopts only the latest snapshot (stale
+  coupon/refresh responses could resurrect a removed coupon or a discarded cart); legacy `sr()` sends
+  `sr_cust_csrf` for signed-in customers.
+- Demo: the PDP reviews read was refused by the demo policy, so the reviews block hid itself; without a catalog
+  manifest the PDP had no product id or rating (now taken from product detail and the reviews summary).
 - Admin **Returns -> Approve**: the "Restock" choice is now honoured (`POST /v1/admin/returns/{id}/approve`
   accepts `restock`); it used to be silently dropped, so the flag set when the request was opened always won.
 - Storefront **account**: a full page load of any `/account/*` page bounced signed-in customers to `/sign-in`
