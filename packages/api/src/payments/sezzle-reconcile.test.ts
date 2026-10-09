@@ -21,7 +21,7 @@ const h = vi.hoisted(() => {
     });
     return p;
   };
-  return { st, tx: { select: () => chain('select'), insert: () => chain('insert'), update: () => chain('update') } };
+  return { st, tx: { select: () => chain('select'), insert: () => chain('insert'), update: () => chain('update'), execute: () => chain('execute') } };
 });
 vi.mock('../db/client.js', () => ({
   withStore: async (_s: string, fn: (tx: unknown) => unknown) => fn(h.tx),
@@ -87,7 +87,7 @@ describe('D16 reconcileSezzleRefunds', () => {
   });
   it('records a dashboard refund money-only, recomputes state and emails', async () => {
     const row = { id: 'r1', orderId: 'o', amount: 400 };
-    h.st.selects = [[pay], [{ slug: 'dd' }], [], [], [{ state: 'Paid', grandTotal: 1000, code: 'C' }]];
+    h.st.selects = [[pay], [], [], [], [], [{ slug: 'dd' }], [], [], [{ state: 'Paid', grandTotal: 1000, code: 'C' }]];
     h.st.insertReturn = [[row]];
     const out = await reconcileSezzleRefunds(ev, refundOrder([{ uuid: 'ref1', amount: money(400) }]));
     expect(out).toEqual({ recorded: 1, finalized: 0, ambiguous: 0 });
@@ -96,7 +96,7 @@ describe('D16 reconcileSezzleRefunds', () => {
     expect(email).toHaveBeenCalledWith(h.tx, 'store', row);
   });
   it('finalizes a unique unbound pending reservation (effects once) and fires the stock hook after commit', async () => {
-    h.st.selects = [[pay], [{ slug: 'dd' }], [], [{ attemptId: 'ra', amount: 400 }]];
+    h.st.selects = [[pay], [], [], [], [], [{ slug: 'dd' }], [], [{ attemptId: 'ra', amount: 400 }]];
     finalize.mockResolvedValue({ refundState: 'Settled' });
     const out = await reconcileSezzleRefunds(ev, refundOrder([{ uuid: 'ref1', amount: money(400) }]));
     expect(out.finalized).toBe(1);
@@ -104,14 +104,14 @@ describe('D16 reconcileSezzleRefunds', () => {
     expect(stock).toHaveBeenCalledWith('dd');
   });
   it('reports ambiguous reservations instead of guessing', async () => {
-    h.st.selects = [[pay], [{ slug: 'dd' }], [], [{ attemptId: 'a1', amount: 400 }, { attemptId: 'a2', amount: 400 }]];
+    h.st.selects = [[pay], [], [], [], [], [{ slug: 'dd' }], [], [{ attemptId: 'a1', amount: 400 }, { attemptId: 'a2', amount: 400 }]];
     const out = await reconcileSezzleRefunds(ev, refundOrder([{ uuid: 'ref1', amount: money(400) }]));
     expect(out.ambiguous).toBe(1);
     expect(finalize).not.toHaveBeenCalled();
     expect(h.st.inserts).toHaveLength(0);
   });
   it('is idempotent for an already-settled refund row', async () => {
-    h.st.selects = [[pay], [{ slug: 'dd' }], [{ id: 'r', state: 'Settled' }]];
+    h.st.selects = [[pay], [], [], [], [], [{ slug: 'dd' }], [{ id: 'r', state: 'Settled' }]];
     expect(await reconcileSezzleRefunds(ev, refundOrder([{ uuid: 'ref1', amount: money(400) }]))).toEqual({ recorded: 0, finalized: 0, ambiguous: 0 });
   });
 });

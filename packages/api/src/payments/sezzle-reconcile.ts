@@ -16,6 +16,7 @@
  */
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { withAdvisoryLock, withStore, type Tx } from '../db/client.js';
+import { withLockedSet } from '../db/locks.js';
 import * as s from '../db/schema.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
 import { emitEvent } from '../webhooks/emit.js';
@@ -105,7 +106,8 @@ export async function reconcileSezzleRefunds(
   const out: SezzleRefundReconcile = { recorded: 0, finalized: 0, ambiguous: 0 };
   let stockChanged = false;
   let storeSlug: string | undefined;
-  await withAdvisoryLock('refund:' + ev.storeId + ':' + pay.orderId, () => withStore(ev.storeId, async (tx) => {
+  // X-45: the refund loop records money Sezzle already moved, so its order set runs with mustCommit.
+  await withAdvisoryLock('refund:' + ev.storeId + ':' + pay.orderId, () => withLockedSet(ev.storeId, { kind: 'order', orderId: pay.orderId }, async (tx) => {
     const [st] = await tx.select({ slug: s.store.slug }).from(s.store).where(eq(s.store.id, ev.storeId)).limit(1);
     storeSlug = st?.slug;
     for (const r of refunds) {
@@ -154,7 +156,7 @@ export async function reconcileSezzleRefunds(
       await enqueueRefundSettledEmail(tx, ev.storeId, inserted);
       out.recorded++;
     }
-  }));
+  }, { mustCommit: true }));
   // Zero-cache stock rule: only after the transaction committed.
   if (stockChanged && storeSlug) onStockChanged(storeSlug);
   return out;
