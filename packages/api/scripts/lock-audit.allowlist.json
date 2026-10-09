@@ -5,56 +5,42 @@
       "sequence": "L3:order L3:order L2:license",
       "mixed": true,
       "orderViolation": true,
-      "why": "STOREKIT \u00a75.8 #6/#21 (settlement effect; set pending step 2)"
+      "why": "STOREKIT §5.8 #6/#21 (settlement effect; set pending step 2)"
     },
     {
       "key": "src/licensing/issue.ts::issueLicensesForPaidOrder",
       "sequence": "L3:order L2:license",
       "mixed": true,
       "orderViolation": true,
-      "why": "STOREKIT \u00a75.8 #6 (settlement -> issue; effect under set pending step 2)"
+      "why": "STOREKIT §5.8 #6 (settlement -> issue; effect under set pending step 2)"
     },
     {
       "key": "src/licensing/storekit-license.ts::applyStoreKitNotification",
       "sequence": "L2:license L5:license_activation L2:license L5:license_activation L2:license",
       "mixed": false,
       "orderViolation": true,
-      "why": "STOREKIT \u00a75.8 #19 (fork-only path; set pending StoreKit lane)"
-    },
-    {
-      "key": "src/payments/gateway-payment.ts::finishAttempt",
-      "sequence": "L5:paymentAttempt L3:order",
-      "mixed": false,
-      "orderViolation": true,
-      "why": "STOREKIT \u00a75.8 #2 (order before attempt; set pending step 2)"
+      "why": "STOREKIT §5.8 #19 (fork-only path; set pending StoreKit lane)"
     },
     {
       "key": "src/payments/refunds.ts::finalizeRefund",
       "sequence": "L3:order L5:paymentAttempt L2:license L5:licenseActivation L3:order",
       "mixed": true,
       "orderViolation": true,
-      "why": "STOREKIT \u00a75.8 #8 (refund finalize; order before licence; set pending step 2)"
+      "why": "STOREKIT §5.8 #8 (refund finalize; order before licence; set pending step 2)"
     },
     {
       "key": "src/routes/account.ts::account.openapi(@478)",
       "sequence": "L3:order L3:order L2:license",
       "mixed": true,
       "orderViolation": true,
-      "why": "STOREKIT \u00a75.8 #18 (account erasure; {customer} set pending step 2)"
-    },
-    {
-      "key": "src/routes/admin-order-ops.ts::adminOrderOps.openapi(@599)",
-      "sequence": "L3:order L5:licenseActivation L2:license",
-      "mixed": true,
-      "orderViolation": true,
-      "why": "STOREKIT \u00a75.8 #17 (admin purge; {order} set pending step 2)"
+      "why": "STOREKIT §5.8 #18 (account erasure; {customer} set pending step 2)"
     },
     {
       "key": "src/routes/checkout.ts::checkout.openapi(@218)",
       "sequence": "L5:cart L3:order",
       "mixed": false,
       "orderViolation": true,
-      "why": "STOREKIT \u00a75.8 #7 (checkout cart+order; {checkout} set pending step 2)"
+      "why": "STOREKIT §5.8 #7 (checkout cart+order; {checkout} set pending step 2)"
     }
   ]
 }

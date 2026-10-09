@@ -66,6 +66,13 @@ export async function acquirePurchaseLocks(tx: Tx, purchases: readonly PurchaseI
 
 const canonical = (id: string) => id.toLowerCase();
 
+/** Unlocked order id lookup by public code (plan input for an order set; never locks). */
+export async function orderIdByCode(storeId: string, code: string): Promise<string | null> {
+  const [row] = await withStore(storeId, (tx) =>
+    tx.select({ id: s.order.id }).from(s.order).where(and(eq(s.order.storeId, storeId), eq(s.order.code, code))).limit(1));
+  return row?.id ?? null;
+}
+
 /** L2/L3: one statement per id, sorted by canonical lowercase uuid (= Postgres uuid byte order). */
 async function lockRows(tx: Tx, table: 'license' | 'order', storeId: string, ids: readonly string[]): Promise<void> {
   const sorted = [...new Set(ids.map(canonical))].sort();

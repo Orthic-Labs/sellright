@@ -12,6 +12,7 @@ import { prepareSezzleSession } from './session-input.js';
 import { queryNmiPayment } from './nmi-query.js';
 import { listStripeRefunds, STRIPE_REFUND_ATTEMPT_KEY } from './stripe.js';
 import { finalizeRefund } from './refunds.js';
+import { withLockedSet } from '../db/locks.js';
 import { refundStateFromStripe } from './webhook-reconcile.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
 
@@ -154,7 +155,12 @@ async function markUnknown(storeId: string, id: string, reason: string) {
 }
 
 export async function finishAttempt(storeId: string, id: string, result: PaymentResult) {
-  return withStore(storeId, async tx => {
+  // STOREKIT §5.8 #2: the order (L3) is locked before the attempt (L5). The attempt's
+  // order id is read unlocked for planning; the attempt itself is re-read FOR UPDATE under the set.
+  const [pre] = await withStore(storeId, tx =>
+    tx.select({ orderId: s.paymentAttempt.orderId }).from(s.paymentAttempt).where(eq(s.paymentAttempt.id, id)).limit(1));
+  if (!pre) throw new GatewayPaymentError(404, 'Payment not found');
+  return withLockedSet(storeId, { kind: 'order', orderId: pre.orderId }, async tx => {
     const [attempt] = await tx.select().from(s.paymentAttempt).where(eq(s.paymentAttempt.id, id)).limit(1).for('update');
     if (!attempt) throw new GatewayPaymentError(404, 'Payment not found');
     if (attempt.status === 'settled') return view(attempt);

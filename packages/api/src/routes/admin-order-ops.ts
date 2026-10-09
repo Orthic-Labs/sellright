@@ -5,6 +5,7 @@ import { hasUnresolvedPayment } from '../payments/hold.js';
 import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { withStore } from '../db/client.js';
+import { withLockedSet, orderIdByCode } from '../db/locks.js';
 import * as s from '../db/schema.js';
 import { cancelOrderStripeIntents } from '../payments/stripe-reconcile.js';
 import { releaseOrderLoyalty } from '../loyalty/ledger.js';
@@ -497,7 +498,8 @@ adminOrderOps.openapi(
     for (const code of [...new Set(codes)] as string[]) {
       // Fresh per iteration — each code is its own committed transaction.
       let stockChanged = false;
-      const r = await withStore(st.storeId, async (tx): Promise<{ ok: true; orderId: string } | { ok: false; error: string }> => {
+      const preId = await orderIdByCode(st.storeId, code);
+      const r = !preId ? { ok: false as const, error: 'order not found' } : await withLockedSet(st.storeId, { kind: 'order', orderId: preId }, async (tx): Promise<{ ok: true; orderId: string } | { ok: false; error: string }> => {
         const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
         if (!o) return { ok: false, error: 'order not found' };
         if (await hasUnresolvedPayment(tx, o.id)) return { ok: false, error: 'Resolve the pending payment before cancelling' };
@@ -607,7 +609,8 @@ adminOrderOps.openapi(
     const { codes, force, reason } = c.req.valid('json');
     const results: { code: string; ok: boolean; error?: string }[] = [];
     for (const code of [...new Set(codes)] as string[]) {
-      const r = await withStore(st.storeId, async (tx): Promise<{ ok: true } | { ok: false; error: string }> => {
+      const preId = await orderIdByCode(st.storeId, code);
+      const r = !preId ? { ok: false as const, error: 'order not found' } : await withLockedSet(st.storeId, { kind: 'order', orderId: preId }, async (tx): Promise<{ ok: true } | { ok: false; error: string }> => {
         const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
         if (!o) return { ok: false, error: 'order not found' };
         if (!o.deletedAt) return { ok: false, error: 'trash the order first (purge only removes trashed orders)' };
