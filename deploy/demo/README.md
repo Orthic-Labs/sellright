@@ -43,6 +43,18 @@ This is a product evaluation environment, not gateway acceptance evidence.
   reviews yet" until a real one is approved. The public reviews read (GET
   `/v1/shop/catalog/products/{slug}/reviews`) is allowed; submitting is not.
   Tenants created before this change keep their old settings until they expire.
+- Owner features usable in the visitor admin (allowlist in `interactive-policy.mjs`,
+  each body validated): points settings (+ summary / customer balance reads),
+  review moderation (approve / reject / reply / settings; the queue is empty
+  because no review rows are seeded), order edit preview + commit and order
+  address edit (commit settlement limited to `leave_due`, `leave_credit` or a
+  manual `record_payment`; `refund_now` and `send_pay_link` are rejected and the
+  server forces `notifyCustomer:false`), order export CSV/XLSX, waitlist report
+  (+CSV), SEO config/sitemap preview (read-only), blog create/update/delete
+  (HTML sanitised by the API, no featured image, at most 20 posts per visitor).
+  Still denied: SEO config save / sitemap refresh / IndexNow (CDN purge, search
+  engine calls), loyalty adjust/reverse, review delete, tracking import and
+  uploads, affiliates, emails, payments/webhooks/staff/SheerID, system/step-up.
 - All customer identity/address data is server-generated synthetic data. The
   checkout never accepts card details or user contact information.
 - Stripe/NMI/Sezzle credentials and gateway accounts are rejected; no scheduler

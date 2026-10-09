@@ -114,8 +114,8 @@ async function bounded(visitor){
   const result=await scoped(pool,visitor.id,async c=>(await c.query(`SELECT
     (SELECT count(*) FROM "order")::int AS orders,(SELECT count(*) FROM cart)::int AS carts,
     (SELECT count(*) FROM promotion)::int AS promotions,(SELECT count(*) FROM audit_log)::int AS changes,
-    (SELECT count(*) FROM product)::int AS products,(SELECT count(*) FROM product_variant)::int AS variants`)).rows[0]);
-  if(result.orders>=25||result.carts>=50||result.promotions>=25||result.changes>=250||result.products>=20||result.variants>=60)throw Error('This demo has reached its activity limit. Reset your demo to continue.');
+    (SELECT count(*) FROM product)::int AS products,(SELECT count(*) FROM product_variant)::int AS variants,(SELECT count(*) FROM blog_post)::int AS posts`)).rows[0]);
+  if(result.orders>=25||result.carts>=50||result.promotions>=25||result.changes>=250||result.products>=20||result.variants>=60||result.posts>=20)throw Error('This demo has reached its activity limit. Reset your demo to continue.');
 }
 await cleanVisitors(pool);
 const listenHost=demoBindHost(process.env.DEMO_BIND_HOST);
@@ -200,6 +200,10 @@ const server=createServer(async(req,res)=>{
           if(!shipping)return json(400,{error:'Unknown delivery method'});
           body={items:cart.lines.map(line=>({sku:line.sku,quantity:line.quantity})),shipping:shipping.calculator.flat,couponCode:body.couponCode,shipCountry:'US'};
         }
+        // Order edits never notify the (synthetic) customer: no email is queued
+        // even though SMTP is off and no dispatcher runs. The admin UI sends
+        // notifyCustomer:true by default, so this is overridden, not rejected.
+        if(/^\/v1\/admin\/orders\/[a-zA-Z0-9_-]+\/edit\/commit$/.test(url.pathname))body={...body,notifyCustomer:false};
         if(url.pathname==='/v1/shop/checkout'){
           if(!headers['idempotency-key'])return json(400,{error:'Checkout idempotency key required'});
           const cartResponse=await call(visitor,'/v1/shop/cart/'+body.cartToken);
