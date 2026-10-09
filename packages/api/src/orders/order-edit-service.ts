@@ -20,8 +20,9 @@ import { withAdvisoryLock, withStore, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { hasConfirmableIntent, hasUnresolvedPayment } from '../payments/hold.js';
 import { cancelOrderStripeIntents } from '../payments/stripe-reconcile.js';
-import { licensedLineEditViolations, reconcileEditedOrderLicenses } from '../licensing/edit-reconcile.js';
+import { licensedLineEditViolations } from '../licensing/edit-reconcile.js';
 import { amountDueForOrder, applyPaymentResult, editRefundedTotal } from '../payments/settle.js';
+import { editBalanceEffects, recordSettlementOperation } from '../payments/settlement/record.js';
 import { requestRefund, RefundError, isDuplicatePayment } from '../payments/refunds.js';
 import { editedEarnTarget, orderLoyaltySnapshot, syncEditEarn } from '../loyalty/ledger.js';
 import { editRefundReason } from '../payments/edit-refund.js';
@@ -626,7 +627,7 @@ export async function commitOrderEdit(input: CommitInput): Promise<CommitResult>
       if (settlement?.type === 'record_payment') {
         const amount = settlement.amount ?? balance;
         const r = await applyPaymentResult(tx, {
-          storeId, method: 'manual', amount,
+          storeId, method: 'manual', amount, editId,
           order: { id: o.id, state: o.state, grandTotal: t.grandTotal, currency: o.currency, customerId: o.customerId, code: o.code },
           result: { state: 'Settled', providerRef: `manual:${editId}`, metadata: { manual: { method: settlement.method, reference: settlement.reference ?? null, recordedBy: input.actor, editId } } },
         });
@@ -695,7 +696,7 @@ export async function commitOrderEdit(input: CommitInput): Promise<CommitResult>
       // balance payment will ever call the settle-side reconcile. Idempotent.
       const finalState = afterRow?.state ?? o.state;
       if ((finalState === 'Paid' || finalState === 'PartiallyRefunded') && dueNow <= 0) {
-        await reconcileEditedOrderLicenses(tx, { storeId, orderId: o.id, customerId: o.customerId ?? null, paidAt: new Date() });
+        await recordSettlementOperation(tx, { storeId, kind: 'order_edit_balance_settled', operationId: editId, mutations: [], effects: editBalanceEffects({ orderId: o.id, customerId: o.customerId ?? null, deferredEarn: false }) });
       }
       return {
         plan, refundPlan,

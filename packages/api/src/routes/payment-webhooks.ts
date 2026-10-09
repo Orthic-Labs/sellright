@@ -18,6 +18,7 @@ import { recordPaymentAlert } from '../payments/payment-alerts.js';
 import { resolveField } from '../security/settings-resolver.js';
 import { resolveStoreIdForStripeEvent, resolveStoreIdForSubscriptionEvent, reconcileStripeRefund, recordStripeDispute, type StripeEventObj } from '../payments/webhook-reconcile.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
+import { recordSettlementOperation } from '../payments/settlement/record.js';
 import {
   onCheckoutCompleted, onInvoicePaid, onInvoiceFailed, onSubscriptionUpdated, onSubscriptionDeleted,
   type CheckoutSessionLike, type InvoiceLike, type SubscriptionObjLike,
@@ -240,7 +241,7 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
         return;
       case 'invoice.paid': {
         const invoice = event.data.object as unknown as InvoiceLike;
-        await onInvoicePaid(tx, storeId, invoice);
+        await onInvoicePaid(tx, storeId, invoice, { mode: verifiedMode });
         // SR-03: subscription payments are minted inside subscriptions.ts
         // (settleFirstCycle + renewal insert) with no gateway metadata — the
         // verifying signature's mode is the only trusted source. Backfill it
@@ -249,8 +250,15 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
         // guard never overwrites an already-persisted identity.
         const invoiceRef = (typeof invoice.payment_intent === 'string' ? invoice.payment_intent : invoice.payment_intent?.id) ?? invoice.id;
         if (invoiceRef) {
-          await tx.update(s.payment).set({ gatewayMode: verifiedMode })
-            .where(and(eq(s.payment.providerRef, invoiceRef), eq(s.payment.method, 'stripe'), isNull(s.payment.gatewayMode)));
+          // Chokepoint operation `payment_mode_corrected` (monotone: only fills a NULL gateway_mode).
+          const [pay] = await tx.select({ id: s.payment.id }).from(s.payment)
+            .where(and(eq(s.payment.providerRef, invoiceRef), eq(s.payment.method, 'stripe'), isNull(s.payment.gatewayMode))).limit(1);
+          if (pay) {
+            await recordSettlementOperation(tx, {
+              storeId, kind: 'payment_mode_corrected', operationId: pay.id, effects: [],
+              mutations: [{ type: 'payment_gateway_identity', paymentId: pay.id, gatewayMode: verifiedMode }],
+            });
+          }
         }
         return;
       }

@@ -287,10 +287,11 @@ export async function finalizeRefund(tx: Tx, storeId: string, attemptId: string,
   }
   // Order editing (G13): a refund that only hands back the difference of a
   // LOWERED edit total is not an item/return refund — the order keeps its state.
-  const state = order.state === 'Cancelled' ? 'Cancelled'
-    : isEditRefund(refund.metadata) && refunded < captured ? order.state
+  // `null` = keep the current state (never writes a state value that could be 'Paid').
+  const state: 'Cancelled' | 'Refunded' | 'PartiallyRefunded' | null = order.state === 'Cancelled' ? 'Cancelled'
+    : isEditRefund(refund.metadata) && refunded < captured ? null
     : refunded >= captured ? 'Refunded' : 'PartiallyRefunded';
-  await tx.update(s.order).set({ state, updatedAt: new Date() }).where(eq(s.order.id, order.id));
+  await tx.update(s.order).set({ updatedAt: new Date(), ...(state ? { state } : {}) }).where(eq(s.order.id, order.id));
   if (details?.returnId) await tx.update(s.returnRequest).set({ status: 'refunded', refundId: refund.id, updatedAt: new Date() })
     .where(and(eq(s.returnRequest.id, details.returnId), eq(s.returnRequest.orderId, order.id)));
   await tx.update(s.refund).set({ metadata: { ...details, effectsApplied: true } }).where(eq(s.refund.id, refund.id));

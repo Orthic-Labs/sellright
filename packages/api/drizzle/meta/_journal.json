@@ -547,6 +547,13 @@
       "when": 1790000011400,
       "tag": "0086_order_shipping_method",
       "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
+      "when": 1790000011800,
+      "tag": "0090_order_pending_effect",
+      "breakpoints": true
     }
   ]
 }

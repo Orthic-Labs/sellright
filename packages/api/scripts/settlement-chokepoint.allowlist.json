@@ -1,0 +1,28 @@
+{
+  "entries": [
+    {
+      "reasonId": "A-IMPORT-ORDERS",
+      "file": "src/import/orders.ts",
+      "count": 2,
+      "kind": "historical_import",
+      "fixture": "scripts/settlement-chokepoint.fixtures/pass/a-import-orders.ts",
+      "why": "historical import: bulk order insert (state mapped from the source, may be Paid) and payment insert; never triggers fulfilment"
+    },
+    {
+      "reasonId": "A-SEED-DEMO",
+      "file": "src/scripts/seed-demo.ts",
+      "count": 1,
+      "kind": "synthetic_seed",
+      "fixture": "scripts/settlement-chokepoint.fixtures/pass/a-seed-demo.ts",
+      "why": "synthetic demo orders (conditional Paid); demo database only"
+    },
+    {
+      "reasonId": "A-EFFECT-ENGINE",
+      "file": "src/payments/settlement/effects.ts",
+      "count": 8,
+      "kind": "effects",
+      "fixture": "scripts/settlement-chokepoint.fixtures/pass/a-effect-engine.ts",
+      "why": "the pending-effects engine owns order_pending_effect status writes (claim, fence, done/retry/terminal) and the operation's licence link"
+    }
+  ]
+}
