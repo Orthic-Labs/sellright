@@ -549,14 +549,21 @@
       "breakpoints": true
     },
     {
-      "idx": 81,
+      "idx": 78,
+      "version": "7",
+      "when": 1790000011500,
+      "tag": "0087_harden_outbox_rls_nullif",
+      "breakpoints": true
+    },
+    {
+      "idx": 79,
       "version": "7",
       "when": 1790000011800,
       "tag": "0090_order_pending_effect",
       "breakpoints": true
     },
     {
-      "idx": 82,
+      "idx": 80,
       "version": "7",
       "when": 1790000011900,
       "tag": "0091_order_reservation",
