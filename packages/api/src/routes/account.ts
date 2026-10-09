@@ -1,6 +1,7 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, desc, eq, inArray, ne, or, sql } from 'drizzle-orm';
 import { withStore, type Tx } from '../db/client.js';
+import { withLockedSet } from '../db/locks.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
 import { customerToken, resolveCustomer, type SessionCustomer } from '../auth/session.js';
@@ -480,9 +481,13 @@ account.openapi(
     // Authenticate BEFORE CSRF so an unauthenticated request gets 401 (not 403).
     if (!customerToken(c)) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
     if (!customerCsrfValid(c)) return errJson(c, 403, 'CSRF_INVALID', 'invalid CSRF token');
-    const out = await withStore(st.id, async (tx): Promise<'unauth' | 'unverified' | 'active_subscription' | 'ok'> => {
+    // Peek the customer unlocked to name the lock subject (STOREKIT §5.3). The set
+    // re-resolves the session under the locks; a customer that moved restarts as 'unauth'.
+    type ErasureOutcome = 'unauth' | 'unverified' | 'active_subscription' | 'ok';
+    const peekedId = await withStore(st.id, async (tx) => (await me(tx, customerToken(c)))?.id ?? null);
+    const out: ErasureOutcome = peekedId === null ? 'unauth' : await withLockedSet(st.id, { kind: 'customer', customerId: peekedId }, async (tx): Promise<ErasureOutcome> => {
       const cust = await me(tx, customerToken(c));
-      if (!cust) return 'unauth';
+      if (!cust || cust.id !== peekedId) return 'unauth';
       // Erasure affects email-keyed mail and guest orders, so require proof of
       // mailbox control before deleting data linked by email alone.
       if (!cust.emailVerified) return 'unverified';

@@ -138,7 +138,8 @@ async function planOne(tx: Tx, storeId: string, subject: LockSubject): Promise<L
       return { purchases: [], licenseIds: licenses.map((r) => r.id), orderIds: orders.map((r) => r.id) };
     }
     case 'loyalty': {
-      // PAYMENT-TIMING 3.5 / X-46: only the customer's deferred-earn orders are locked.
+      // Only the orders whose held-back edit earn settleDeferredEditEarns (loyalty/ledger.ts)
+      // patches under the advisory: the same predicate, so the plan covers every row written.
       const orders = await tx
         .select({ id: s.order.id })
         .from(s.order)
