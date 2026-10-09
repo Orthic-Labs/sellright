@@ -357,6 +357,25 @@ describe('admin', () => {
     expect(((await view.json()) as any).ledger).toHaveLength(1);
   });
 
+  it('T-L2: an admin debit and a checkout redeem for the same customer serialize (one wins, never negative)', async () => {
+    const t = await admins();
+    await grant(1000);
+    const path = `/v1/admin/customers/${CUSTOMER}/loyalty/adjust`;
+    const [adj, checkout] = await Promise.all([
+      call(t.owner, 'POST', path, { points: -1000, reason: 'claw back' }),
+      placeOrder({ redeemPoints: 1000 }),
+    ]);
+    const adjOk = adj.status === 200;
+    const checkoutOk = checkout.status === 200;
+    expect(adjOk !== checkoutOk).toBe(true);
+    expect(adj.status === 200 || adj.status === 409).toBe(true);
+    expect(checkout.status === 200 || checkout.status === 409).toBe(true);
+    const bal = await balance();
+    expect(bal.balance).toBe(0);
+    expect(bal.available).toBe(0);
+    expect((await ledger()).filter((x) => x.points < 0)).toHaveLength(1);
+  });
+
   it('saves settings through the audited store-config path (managers only)', async () => {
     const t = await admins();
     const next = { ...PROGRAM, earnRatePerDollar: 3, maxRedeemPercentOfSubtotal: 50, expiryDays: 365 };
