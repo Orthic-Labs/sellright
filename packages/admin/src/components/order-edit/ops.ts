@@ -61,3 +61,25 @@ export function storedToForm(a: Record<string, unknown> | null): AddressForm {
     province: g('province', 'state'), postalCode: g('postalCode', 'zip'), country: g('country', 'countryCode').toUpperCase(), phone: g('phone'),
   };
 }
+
+/**
+ * Refund-now eligibility for the chosen tender. The preview cannot pick a
+ * payment itself, so with several refundable payments it reports "select which
+ * payment to refund" — which the operator must be able to act on, not a dead end.
+ * Mirrors the server's refundFeasibility (commit re-validates authoritatively).
+ */
+export function refundSelection(
+  refund: { feasible: boolean; reason?: string; payments: { id: string; available: number }[] } | null,
+  amount: number, paymentId: string,
+): { selectable: boolean; ok: boolean; reason?: string } {
+  if (!refund) return { selectable: true, ok: true };
+  if (refund.feasible) return { selectable: true, ok: true };
+  const needsPick = refund.payments.length > 1 && /select which payment/i.test(refund.reason ?? '');
+  if (!needsPick) return { selectable: false, ok: false, reason: refund.reason };
+  if (!paymentId) return { selectable: true, ok: false, reason: 'Select which payment to refund.' };
+  const p = refund.payments.find((x) => x.id === paymentId);
+  if (!p) return { selectable: true, ok: false, reason: 'The selected payment has nothing left to refund.' };
+  if (amount > p.available) return { selectable: true, ok: false, reason: 'The refund exceeds what is left on that payment.' };
+  if (amount === p.available) return { selectable: true, ok: false, reason: 'This would refund the whole payment — cancel or refund the order instead.' };
+  return { selectable: true, ok: true };
+}

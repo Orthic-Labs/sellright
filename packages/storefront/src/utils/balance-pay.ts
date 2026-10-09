@@ -34,15 +34,19 @@ export function balancePageState(input: {
 	return justPaid ? 'settled' : 'nothing-due';
 }
 
-export type BalanceMethod = 'nmi' | 'sezzle';
+export type BalanceMethod = 'stripe' | 'nmi' | 'sezzle';
 
 /**
- * Gateways the shopper can pay a balance with, in display order, from the
- * public store config. Stripe is deliberately absent: the API settles an
- * order balance only through the NMI / Sezzle gateway-payment routes.
+ * Methods the shopper can pay a balance with, in display order, from the
+ * public store config. Stripe pays through a PaymentIntent the API mints for
+ * exactly the amount due (POST /payment-intent) and settles on return
+ * (POST /pay { method: 'stripe' }); NMI and Sezzle use the gateway-payment routes.
  */
-export function availableBalanceMethods(config: Pick<ShopConfig, 'gateways'> | null | undefined): BalanceMethod[] {
+export function availableBalanceMethods(
+	config: { stripeConfigured?: boolean; stripePublishableKey?: string | null; gateways?: ShopConfig['gateways'] } | null | undefined,
+): BalanceMethod[] {
 	const out: BalanceMethod[] = [];
+	if (config?.stripeConfigured && config.stripePublishableKey?.trim()) out.push('stripe');
 	if (config?.gateways?.nmi?.tokenizationKey) out.push('nmi');
 	if (config?.gateways?.sezzle) out.push('sezzle');
 	return out;
@@ -62,4 +66,105 @@ export function receiptTokenFrom(search: URLSearchParams): string | undefined {
 /** What the order already carries toward its total, for the "Already paid" row. */
 export function alreadyPaidCents(grandTotal: number, amountDue: number): number {
 	return Math.max(0, grandTotal - Math.max(0, amountDue));
+}
+
+/** Where Stripe sends the shopper back to after a redirect-based method; the
+ *  page picks the intent up from the query Stripe appends. */
+export function balanceReturnUrl(origin: string, code: string, receiptToken: string): string {
+	return `${origin}/orders/${encodeURIComponent(code)}/?rt=${encodeURIComponent(receiptToken)}&pay=balance`;
+}
+
+/** The PaymentIntent a Stripe redirect return carries (`payment_intent` +
+ *  `redirect_status`). A failed redirect is reported as such, never as a pay. */
+export function stripeReturnFrom(search: URLSearchParams): { intentId: string; failed: boolean } | null {
+	const intentId = search.get('payment_intent')?.trim();
+	if (!intentId || !intentId.startsWith('pi_')) return null;
+	return { intentId, failed: search.get('redirect_status') === 'failed' };
+}
+
+/**
+ * After a balance payment is confirmed, read the order until the balance is
+ * gone. Stripe settles through the API (/pay verifies the intent, the webhook
+ * is the backstop), so a read right after confirming can still show the old
+ * amount due. `read` returns the order's `amountDue` (null = read failed).
+ * Resolves true as soon as nothing is due, false when the attempts run out
+ * (payment still processing — the page says so and keeps the order readable).
+ */
+export async function pollBalanceCleared(
+	read: () => Promise<number | null>,
+	signal: AbortSignal,
+	opts: { attempts?: number; sleep?: (ms: number, signal: AbortSignal) => Promise<void> } = {},
+): Promise<boolean> {
+	const attempts = opts.attempts ?? 6;
+	const sleep = opts.sleep ?? ((ms, s) => new Promise<void>((resolve) => {
+		const t = setTimeout(resolve, ms);
+		s.addEventListener('abort', () => { clearTimeout(t); resolve(); }, { once: true });
+	}));
+	for (let i = 0; i < attempts; i++) {
+		if (signal.aborted) return false;
+		const due = await read().catch(() => null);
+		if (due !== null && due <= 0) return true;
+		if (i < attempts - 1) await sleep(Math.min(1000 * (i + 1), 4000), signal);
+	}
+	return false;
+}
+
+/** Result of one reconciliation round for a confirmed Stripe PaymentIntent. */
+export type ReconcileOutcome =
+	| 'cleared' // the balance is gone: paid
+	| 'pending' // reads work but the balance has not cleared yet (still processing; NOT a failure)
+	| 'unknown' // neither the settle call nor any read produced an answer (network/server)
+	| 'failed' // the API definitively rejected this intent as not paid
+	| 'aborted';
+
+/** Typed /pay result (HTTP 200 body `payment`). Only a terminal Declined intent
+ *  is a definitive "not paid, safe to retry". Failed also covers an
+ *  amount/currency verification failure on a captured intent (money may have
+ *  moved), so it stays unknown and locked. Settled/Pending/etc. defer to reads. */
+export function classifySettlePayment(payment: string | null | undefined): 'failed' | 'unknown' {
+	return payment === 'Declined' ? 'failed' : 'unknown';
+}
+
+/** Only an explicit "this payment did not succeed" answer counts as a definitive
+ *  failure (402 Payment Required / 422). Everything else (network, 5xx, 409,
+ *  429, ...) is unknown: the money may already have moved, so the shopper is
+ *  never invited to pay again on that basis. */
+export function classifySettleStatus(status: number | null | undefined): 'failed' | 'unknown' {
+	return status === 402 || status === 422 ? 'failed' : 'unknown';
+}
+
+/**
+ * One bounded reconcile round: settle the intent (idempotent; the webhook is the
+ * backstop), then read the order until the balance clears or the attempts run
+ * out. Never throws. After a 'pending' / 'unknown' result the page shows an
+ * explicit Refresh control that runs another round for the SAME intent — it
+ * does not stop forever and it never re-enables payment.
+ */
+export async function reconcileBalance(args: {
+	settle: () => Promise<string | void>; // resolves the typed /pay payment state; rejects with the API error on failure
+	read: () => Promise<number | null>; // amountDue, null = read failed
+	statusOf: (e: unknown) => number | null;
+	signal: AbortSignal;
+	attempts?: number;
+	sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+}): Promise<ReconcileOutcome> {
+	const { settle, read, statusOf, signal } = args;
+	if (signal.aborted) return 'aborted';
+	try {
+		const payment = await settle();
+		if (typeof payment === 'string' && classifySettlePayment(payment) === 'failed') return 'failed';
+	} catch (e) {
+		if (signal.aborted) return 'aborted';
+		if (classifySettleStatus(statusOf(e)) === 'failed') return 'failed';
+		// unknown: fall through to the reads, which are the source of truth
+	}
+	let readOnce = false;
+	const cleared = await pollBalanceCleared(async () => {
+		const due = await read();
+		if (due !== null) readOnce = true;
+		return due;
+	}, signal, { attempts: args.attempts, sleep: args.sleep });
+	if (signal.aborted) return 'aborted';
+	if (cleared) return 'cleared';
+	return readOnce ? 'pending' : 'unknown';
 }

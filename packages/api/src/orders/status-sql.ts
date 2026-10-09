@@ -30,6 +30,7 @@
  * "update the test".
  */
 import { sql, type SQL } from 'drizzle-orm';
+import { usableTenderRawSql } from '../payments/tender.js';
 import { EDIT_REFUND_SOURCE } from '../payments/edit-refund.js';
 
 const orderId = sql.raw('"order"."id"');
@@ -76,7 +77,7 @@ export function fulfillmentStatusSql(): SQL<string> {
  *  order edit handed back (mirrors payments/settle.ts `amountDueForOrder`). */
 export function balanceDueSql(): SQL<number> {
   return sql<number>`("order"."grand_total"
-    - coalesce((select sum(p.amount) from payment p where p.order_id = ${orderId} and p.state = 'Settled'), 0)
+    - coalesce((select sum(p.amount) from payment p where p.order_id = ${orderId} and ${usableTenderRawSql('p')}), 0)
     + coalesce((select sum(r.amount) from refund r where r.order_id = ${orderId} and r.state <> 'Failed' and r.metadata->>'source' = ${EDIT_REFUND_SOURCE}), 0))::bigint`;
 }
 

@@ -25,7 +25,7 @@ export interface EditContext {
   shippingAddress: Partial<Record<keyof AddressForm, string | null>> | null;
   billingAddress: Partial<Record<keyof AddressForm, string | null>> | null;
   hasCustomer: boolean;
-  history: { id: string; actor: string | null; reason: string | null; balance: number; createdAt: string; grandTotalBefore: number | null; grandTotalAfter: number | null; settlement: { type?: string; status?: string } | null }[];
+  history: { id: string; actor: string | null; reason: string | null; balance: number; createdAt: string; grandTotalBefore: number | null; grandTotalAfter: number | null; settlement: { type?: string; status?: string; message?: string; paymentId?: string } | null }[];
 }
 
 export interface Totals { subtotal: number; discountTotal: number; shippingTotal: number; taxTotal: number; adjustmentTotal: number; grandTotal: number }

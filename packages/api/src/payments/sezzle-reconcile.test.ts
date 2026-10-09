@@ -33,6 +33,8 @@ const email = vi.fn();
 vi.mock('./refunds.js', () => ({
   finalizeRefund: (...a: unknown[]) => finalize(...a),
   enqueueRefundSettledEmail: (...a: unknown[]) => email(...a),
+  orderRefundBasis: async () => ({ captured: 1000, refunded: 400, editRefunded: 0 }),
+  refundStateFromBasis: (b: { captured: number; refunded: number }) => (b.refunded <= 0 ? null : b.refunded >= b.captured ? 'Refunded' : 'PartiallyRefunded'),
   RefundError: class extends Error { constructor(public status: number, m: string) { super(m); } },
 }));
 vi.mock('../webhooks/emit.js', () => ({ emitEvent: vi.fn() }));
@@ -85,7 +87,7 @@ describe('D16 reconcileSezzleRefunds', () => {
   });
   it('records a dashboard refund money-only, recomputes state and emails', async () => {
     const row = { id: 'r1', orderId: 'o', amount: 400 };
-    h.st.selects = [[pay], [{ slug: 'dd' }], [], [], [{ state: 'Paid', grandTotal: 1000, code: 'C' }], [{ total: 400 }]];
+    h.st.selects = [[pay], [{ slug: 'dd' }], [], [], [{ state: 'Paid', grandTotal: 1000, code: 'C' }]];
     h.st.insertReturn = [[row]];
     const out = await reconcileSezzleRefunds(ev, refundOrder([{ uuid: 'ref1', amount: money(400) }]));
     expect(out).toEqual({ recorded: 1, finalized: 0, ambiguous: 0 });

@@ -15,7 +15,7 @@ import { HttpError, J, errBody, money, requireAdmin, requirePermission, requireS
 import {
   AddressInput, EditOp, OrderEditError, Settlement, normalizeAddress,
 } from '../orders/order-edit.js';
-import { commitOrderEdit, loadEditContext, previewOrderEdit, saveOrderAddress, searchEditVariants } from '../orders/order-edit-service.js';
+import { commitOrderEdit, loadEditContext, retryOrderEditRefund, previewOrderEdit, saveOrderAddress, searchEditVariants } from '../orders/order-edit-service.js';
 
 export const adminOrderEdit = new OpenAPIHono();
 
@@ -130,5 +130,22 @@ adminOrderEdit.openapi(
       storeId: st.storeId, code, actor: admin.email, kind: body.kind, address: normalizeAddress(body.address),
       saveToAddressBook: body.saveToAddressBook, reason: body.reason,
     })), 200);
+  }),
+);
+
+adminOrderEdit.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/orders/{code}/edit/{editId}/refund', summary: 'Retry (or turn into credit) the failed refund of an order edit',
+    request: {
+      params: z.object({ code: z.string(), editId: z.string().uuid() }),
+      body: { content: J(z.object({ action: z.enum(['retry', 'credit']), paymentId: z.string().uuid().optional() })) },
+    }, responses,
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireWrite(st); requirePermission(st, 'refunds');
+    const { code, editId } = c.req.valid('param');
+    const body = c.req.valid('json');
+    return c.json(await translate(() => retryOrderEditRefund({ storeId: st.storeId, code, editId, actor: admin.email, action: body.action, paymentId: body.paymentId })), 200);
   }),
 );

@@ -21,8 +21,7 @@ import { canTransition, type OrderState } from '../money/fsm.js';
 import { emitEvent } from '../webhooks/emit.js';
 import { resolveGatewayAccount, type GatewayMode } from './gateway-account.js';
 import { sezzleProvider, type SezzleOrder } from './sezzle.js';
-import { finalizeRefund, enqueueRefundSettledEmail, RefundError } from './refunds.js';
-import { refundTargetState } from './webhook-reconcile.js';
+import { finalizeRefund, enqueueRefundSettledEmail, RefundError, orderRefundBasis, refundStateFromBasis } from './refunds.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -165,10 +164,9 @@ async function recomputeOrderRefundState(tx: Tx, storeId: string, orderId: strin
   const [ord] = await tx.select({ state: s.order.state, grandTotal: s.order.grandTotal, code: s.order.code })
     .from(s.order).where(eq(s.order.id, orderId)).limit(1).for('update');
   if (!ord) return;
-  const [agg] = await tx.select({ total: sql<number>`coalesce(sum(${s.refund.amount}), 0)::int` })
-    .from(s.refund).where(and(eq(s.refund.orderId, orderId), eq(s.refund.state, 'Settled')));
-  const refunded = agg?.total ?? 0;
-  const target = refundTargetState(refunded, ord.grandTotal);
+  const basis = await orderRefundBasis(tx, storeId, orderId);
+  const refunded = basis.refunded;
+  const target = refundStateFromBasis(basis);
   if (!target) return;
   if (canTransition(ord.state as OrderState, target)) {
     await tx.update(s.order).set({ state: target, updatedAt: new Date() }).where(eq(s.order.id, orderId));

@@ -7,7 +7,7 @@
  * Model (differs from the refund engine on purpose — read before changing):
  *  - An existing order_line ROW is preserved across an edit (its id keeps
  *    meaning for fulfillments / refunds / licenses). Quantity is edited IN
- *    PLACE, never below `fulfilledQty + refundedQty` (the locked units).
+ *    PLACE, never below `fulfilledQty + cancelledQty` (the locked units; refundedQty overlaps both: refunded unshipped units are cancelled, refunded shipped units stay fulfilled).
  *  - Removed UNFULFILLED units are removed from `quantity`; they are NOT parked
  *    in `cancelledQty`. The refund engine computes refundable units and the
  *    per-unit refund amount from `quantity`/`lineTotal`, so a unit that stayed
@@ -121,7 +121,7 @@ export interface EditLookups {
 }
 
 /** Units that can never be removed: shipped or refunded. */
-export const lockedQty = (l: { fulfilledQty: number; refundedQty: number }): number => l.fulfilledQty + l.refundedQty;
+export const lockedQty = (l: { fulfilledQty: number; cancelledQty: number }): number => l.fulfilledQty + l.cancelledQty;
 /** Units still open to ship/cancel (the stock allocation). */
 export const openQty = (l: { quantity: number; fulfilledQty: number; cancelledQty: number }): number =>
   Math.max(0, l.quantity - l.fulfilledQty - l.cancelledQty);

@@ -264,18 +264,7 @@ export async function finalizeRefund(tx: Tx, storeId: string, attemptId: string,
     await enqueueRefundSettledEmail(tx, storeId, refund);
     return { refundId: refund.id, refundState: 'Settled' as const, state: order.state, refunded: refund.amount, pending: 0 };
   }
-  const allRefunds = await tx.select().from(s.refund).where(and(eq(s.refund.orderId, order.id), eq(s.refund.state, 'Settled')));
-  const payments = (await tx.select().from(s.payment).where(and(eq(s.payment.orderId, order.id), eq(s.payment.state, 'Settled'))))
-    .filter(p => !isDuplicatePayment(p));
-  const counted = new Set(payments.map(p => p.id));
-  const refunds = allRefunds.filter(r => counted.has(r.paymentId));
-  // Order editing (G13): a difference refund handed back money because an edit
-  // LOWERED the order total. It is not a refund of the (edited) order, so it is
-  // excluded from `refunded` and netted out of `captured` — later item/return
-  // refunds then compute their proportion against what the edited order cost.
-  const editRefunded = refunds.filter(r => isEditRefund(r.metadata)).reduce((n,r) => n+r.amount,0);
-  const refunded = refunds.filter(r => !isEditRefund(r.metadata)).reduce((n,r) => n+r.amount,0);
-  const captured = payments.reduce((n,p) => n+p.amount,0) - editRefunded;
+  const { captured, refunded } = await orderRefundBasis(tx, storeId, order.id);
   // LOYALTY-1: restore redeemed points and reverse earned points in
   // proportion to the money refunded so far (cumulative + idempotent per
   // refund; a reversal the balance can't cover is recorded as shortfall).
@@ -318,4 +307,30 @@ export async function finalizeRefund(tx: Tx, storeId: string, attemptId: string,
 /** D4: a Stripe capture recorded as a duplicate of an already-covered order. */
 export function isDuplicatePayment(p: { metadata: unknown }): boolean {
   return (p.metadata as { duplicate?: unknown } | null)?.duplicate === true;
+}
+
+/**
+ * ONE refund-state calculation, shared by the refund finalizer and the
+ * Stripe/Sezzle dashboard reconcilers. Duplicate captures (and their refunds)
+ * are money-only and excluded; order-edit difference refunds are netted out of
+ * `captured` (the edit already lowered grandTotal) and never count as `refunded`.
+ * Order state is Refunded only when merchandise refunds cover the NET captured.
+ */
+export async function orderRefundBasis(tx: Tx, storeId: string, orderId: string): Promise<{ captured: number; refunded: number; editRefunded: number }> {
+  const allRefunds = await tx.select().from(s.refund)
+    .where(and(eq(s.refund.storeId, storeId), eq(s.refund.orderId, orderId), eq(s.refund.state, 'Settled')));
+  const payments = (await tx.select().from(s.payment)
+    .where(and(eq(s.payment.storeId, storeId), eq(s.payment.orderId, orderId), eq(s.payment.state, 'Settled'))))
+    .filter(p => !isDuplicatePayment(p));
+  const counted = new Set(payments.map(p => p.id));
+  const refunds = allRefunds.filter(r => counted.has(r.paymentId));
+  const editRefunded = refunds.filter(r => isEditRefund(r.metadata)).reduce((n, r) => n + r.amount, 0);
+  const refunded = refunds.filter(r => !isEditRefund(r.metadata)).reduce((n, r) => n + r.amount, 0);
+  return { captured: payments.reduce((n, p) => n + p.amount, 0) - editRefunded, refunded, editRefunded };
+}
+
+/** Order state implied by net-captured vs merchandise-refunded; null = nothing refunded. */
+export function refundStateFromBasis(b: { captured: number; refunded: number }): 'Refunded' | 'PartiallyRefunded' | null {
+  if (b.refunded <= 0) return null;
+  return b.captured > 0 && b.refunded >= b.captured ? 'Refunded' : 'PartiallyRefunded';
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { alreadyPaidCents, availableBalanceMethods, balancePageState, receiptTokenFrom, wantsBalancePay } from './balance-pay';
+import { alreadyPaidCents, availableBalanceMethods, balancePageState, balanceReturnUrl, classifySettlePayment, classifySettleStatus, receiptTokenFrom, reconcileBalance, stripeReturnFrom, wantsBalancePay } from './balance-pay';
 
 describe('balancePageState', () => {
 	const paid = (amountDue: number, state = 'Paid') => ({ state, amountDue });
@@ -31,12 +31,63 @@ describe('balancePageState', () => {
 
 describe('availableBalanceMethods', () => {
 	const nmi = { tokenizationKey: 'k', mode: 'test' as const, environment: 'sandbox' as const };
-	it('lists only configured gateways, never Stripe', () => {
+	it('lists configured methods in display order, Stripe first', () => {
 		expect(availableBalanceMethods({ gateways: { nmi, sezzle: true } })).toEqual(['nmi', 'sezzle']);
 		expect(availableBalanceMethods({ gateways: { nmi: null, sezzle: true } })).toEqual(['sezzle']);
 		expect(availableBalanceMethods({ gateways: { nmi: null, sezzle: false } })).toEqual([]);
 		expect(availableBalanceMethods({ gateways: { nmi: { ...nmi, tokenizationKey: '' }, sezzle: false } })).toEqual([]);
 		expect(availableBalanceMethods(null)).toEqual([]);
+	});
+	it('offers Stripe on a Stripe-only store (configured + publishable key)', () => {
+		expect(availableBalanceMethods({ stripeConfigured: true, stripePublishableKey: 'pk_test_1', gateways: { nmi: null, sezzle: false } })).toEqual(['stripe']);
+		expect(availableBalanceMethods({ stripeConfigured: true, stripePublishableKey: 'pk_test_1', gateways: { nmi, sezzle: true } })).toEqual(['stripe', 'nmi', 'sezzle']);
+	});
+	it('hides Stripe when unconfigured or keyless', () => {
+		expect(availableBalanceMethods({ stripeConfigured: false, stripePublishableKey: 'pk_test_1', gateways: { nmi: null, sezzle: false } })).toEqual([]);
+		expect(availableBalanceMethods({ stripeConfigured: true, stripePublishableKey: ' ', gateways: { nmi: null, sezzle: false } })).toEqual([]);
+		expect(availableBalanceMethods({ stripeConfigured: true, stripePublishableKey: null, gateways: { nmi: null, sezzle: false } })).toEqual([]);
+	});
+});
+
+describe('Stripe return + reconcile', () => {
+	const noSleep = async () => {};
+	const live = () => new AbortController().signal;
+	const statusOf = (e: unknown) => (e as { status?: number })?.status ?? null;
+	it('builds the return URL and reads the intent Stripe appends', () => {
+		expect(balanceReturnUrl('https://x.test', 'A 1', 'tok/1')).toBe('https://x.test/orders/A%201/?rt=tok%2F1&pay=balance');
+		expect(stripeReturnFrom(new URLSearchParams('payment_intent=pi_1&redirect_status=succeeded'))).toEqual({ intentId: 'pi_1', failed: false });
+		expect(stripeReturnFrom(new URLSearchParams('payment_intent=pi_1&redirect_status=failed'))).toEqual({ intentId: 'pi_1', failed: true });
+		expect(stripeReturnFrom(new URLSearchParams('payment_intent=evil'))).toBeNull();
+	});
+	it('ends pending, not failed, when the balance has not cleared; a later round can clear', async () => {
+		let due = 500;
+		const args = { statusOf, sleep: noSleep, attempts: 2, settle: async () => {}, read: async () => due, signal: live() };
+		expect(await reconcileBalance(args)).toBe('pending');
+		due = 0;
+		expect(await reconcileBalance(args)).toBe('cleared');
+	});
+	it('is unknown when nothing answers; failed only on 402/422', async () => {
+		const e503 = Object.assign(new Error('x'), { status: 503 });
+		expect(await reconcileBalance({ statusOf, sleep: noSleep, attempts: 2, settle: async () => { throw e503; }, read: async () => null, signal: live() })).toBe('unknown');
+		const e402 = Object.assign(new Error('x'), { status: 402 });
+		expect(await reconcileBalance({ statusOf, sleep: noSleep, settle: async () => { throw e402; }, read: async () => 500, signal: live() })).toBe('failed');
+		expect(classifySettleStatus(409)).toBe('unknown');
+	});
+	it('typed /pay Declined is failed without polling (retry with a new intent)', async () => {
+		let reads = 0;
+		const out = await reconcileBalance({ statusOf, sleep: noSleep, settle: async () => 'Declined', read: async () => { reads++; return 500; }, signal: live() });
+		expect(out).toBe('failed');
+		expect(reads).toBe(0);
+		expect(classifySettlePayment('Declined')).toBe('failed');
+	});
+	it('typed /pay Failed (amount verification after capture) stays unknown/pending, never failed', async () => {
+		expect(classifySettlePayment('Failed')).toBe('unknown');
+		expect(await reconcileBalance({ statusOf, sleep: noSleep, attempts: 2, settle: async () => 'Failed', read: async () => null, signal: live() })).toBe('unknown');
+		expect(await reconcileBalance({ statusOf, sleep: noSleep, attempts: 2, settle: async () => 'Failed', read: async () => 500, signal: live() })).toBe('pending');
+	});
+	it('typed /pay Settled clears via reads; Pending stays pending', async () => {
+		expect(await reconcileBalance({ statusOf, sleep: noSleep, settle: async () => 'Settled', read: async () => 0, signal: live() })).toBe('cleared');
+		expect(await reconcileBalance({ statusOf, sleep: noSleep, attempts: 2, settle: async () => 'Pending', read: async () => 500, signal: live() })).toBe('pending');
 	});
 });
 

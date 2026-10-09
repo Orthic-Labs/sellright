@@ -1,12 +1,17 @@
 import { $, component$, useSignal, useStore, useStyles$, useVisibleTask$ } from '@qwik.dev/core';
 import { Link, useLocation } from '@qwik.dev/router';
+import { StripePaymentElement } from '~/components/checkout/StripePaymentElement';
 import NMI from '~/components/payment/NMI';
 import Sezzle from '~/components/payment/Sezzle';
-import { getOrder, getShopConfig, verifyGatewayPayment } from '~/providers/shop/checkout/checkout';
+import { createPaymentIntent, getOrder, getShopConfig, verifyGatewayPayment } from '~/providers/shop/checkout/checkout';
+import { settleStripeBalance } from '~/providers/shop/orders/balance';
 import { getMe } from '~/services/customer';
 import { SellRightError } from '~/sellright/client';
 import type { OrderSummary, ShopConfig } from '~/sellright/types/checkout';
-import { alreadyPaidCents, availableBalanceMethods, balancePageState, receiptTokenFrom, type BalanceMethod } from '~/utils/balance-pay';
+import {
+	alreadyPaidCents, availableBalanceMethods, balancePageState, balanceReturnUrl, receiptTokenFrom, reconcileBalance, stripeReturnFrom,
+	type BalanceMethod,
+} from '~/utils/balance-pay';
 import { formatPrice } from '~/utils';
 import { createSEOHead } from '~/utils/seo';
 import { useStoreIdentityLoader } from '~/routes/layout';
@@ -20,7 +25,8 @@ import { useStoreIdentityLoader } from '~/routes/layout';
  * amount due; the browser never sends an amount. Everything shown is read
  * from the order (amountDue + the latest edit's customer-safe change list),
  * and payment goes through whichever gateways the store has enabled
- * (GET /v1/shop/config): NMI card or Sezzle.
+ * (GET /v1/shop/config): Stripe, NMI card or Sezzle. Stripe mints a PaymentIntent
+ * for the amount due, redirects back here and is settled + reconciled on return.
  */
 
 // The shared Sezzle component renders its own `.checkout-cta` button; style it
@@ -56,8 +62,17 @@ export default component$(() => {
 		method: BalanceMethod | '';
 		formError: string;
 		processing: boolean;
-	}>({ loading: true, justPaid: false, method: '', formError: '', processing: false });
+		/** Stripe: client secret of the intent minted for the amount shown. */
+		clientSecret: string;
+		intentShownDue: number;
+		/** The confirmed PaymentIntent awaiting reconciliation (payment stays locked while set). */
+		intentId: string;
+		reconciling: boolean;
+		/** The last reconcile round got no answer at all, as opposed to a clean 'still processing'. */
+		unknown: boolean;
+	}>({ loading: true, justPaid: false, method: '', formError: '', processing: false, clientSecret: '', intentShownDue: 0, intentId: '', reconciling: false, unknown: false });
 	const nmiTrigger = useSignal(0);
+	const stripeTrigger = useSignal(0);
 
 	// Re-read the order (and gateway config once). Sezzle can send the shopper
 	// back here with ?paymentAttempt=<id>: verify that attempt first so a
@@ -107,10 +122,87 @@ export default component$(() => {
 		}
 	});
 
+	/**
+	 * One bounded reconcile round for a confirmed Stripe intent (settle, then read
+	 * until the balance clears). A round that ends without an answer holds the page
+	 * with an explicit Refresh control; payment stays locked while an intent is
+	 * unresolved so a retry can never become a duplicate charge.
+	 */
+	const settleAndWait = $(async (intentId: string, rt: string, signal: AbortSignal) => {
+		state.processing = true;
+		state.reconciling = true;
+		state.intentId = intentId;
+		state.unknown = false;
+		const outcome = await reconcileBalance({
+			settle: async () => (await settleStripeBalance(code, rt, intentId))?.payment,
+			read: async () => {
+				try {
+					const o = await getOrder(code, rt, signal);
+					state.order = o;
+					return o.amountDue ?? 0;
+				} catch {
+					return null;
+				}
+			},
+			statusOf: (e) => (e instanceof SellRightError ? e.status : null),
+			signal,
+		});
+		if (signal.aborted || outcome === 'aborted') return;
+		state.reconciling = false;
+		if (outcome === 'cleared') {
+			state.processing = false;
+			state.justPaid = true;
+			state.intentId = '';
+		} else if (outcome === 'failed') {
+			// Definitive: the API says this intent did not pay. Safe to try again.
+			state.processing = false;
+			state.intentId = '';
+			state.clientSecret = '';
+			state.formError = 'Your payment was not completed. You have not been charged; please try again.';
+		} else {
+			state.processing = true;
+			state.unknown = outcome === 'unknown';
+		}
+	});
+
+	const refreshStatus = $(async () => {
+		const rt = receiptTokenFrom(loc.url.searchParams);
+		if (!rt || !state.intentId || state.reconciling) return;
+		await settleAndWait(state.intentId, rt, new AbortController().signal);
+	});
+
 	useVisibleTask$(async ({ cleanup }) => {
 		const ac = new AbortController();
 		cleanup(() => ac.abort());
 		await load(false, ac.signal);
+		// Back from Stripe's redirect: pick the intent up from the query it appends.
+		const back = stripeReturnFrom(loc.url.searchParams);
+		const rt = receiptTokenFrom(loc.url.searchParams);
+		if (back && rt && !ac.signal.aborted) {
+			if (back.failed) state.formError = 'Your payment was not completed. You have not been charged; please try again.';
+			else await settleAndWait(back.intentId, rt, ac.signal);
+		}
+	});
+
+	// Stripe: mint the PaymentIntent for the amount the shopper is looking at.
+	// Re-minted if that amount moves (the API keys intents on the amount due).
+	useVisibleTask$(async ({ track, cleanup }) => {
+		const method = track(() => state.method);
+		const due = track(() => state.order?.amountDue ?? 0);
+		const locked = track(() => state.intentId);
+		const rt = receiptTokenFrom(loc.url.searchParams);
+		if (method !== 'stripe' || !rt || due <= 0 || locked || state.justPaid) return;
+		if (state.clientSecret && state.intentShownDue === due) return;
+		let stale = false;
+		cleanup(() => { stale = true; });
+		try {
+			const intent = await createPaymentIntent(code, rt);
+			if (stale) return;
+			state.clientSecret = intent.clientSecret;
+			state.intentShownDue = due;
+		} catch {
+			if (!stale) state.formError = 'We could not start the payment. Please refresh the page and try again.';
+		}
 	});
 
 	const onSuccess = $(async () => {
@@ -126,6 +218,25 @@ export default component$(() => {
 		state.processing = p;
 	});
 
+	const payStripe = $(async () => {
+		const rt = receiptTokenFrom(loc.url.searchParams);
+		if (!rt || state.processing || !state.clientSecret) return;
+		state.formError = '';
+		// Never charge an amount the shopper has not seen: re-read, and stop if it moved.
+		try {
+			const fresh = await getOrder(code, rt);
+			if ((fresh.amountDue ?? 0) !== state.intentShownDue) {
+				state.order = fresh;
+				state.formError = (fresh.amountDue ?? 0) > 0 ? 'The amount due has changed. Please review it and pay again.' : '';
+				return;
+			}
+		} catch {
+			state.formError = 'We could not check the amount due. Please try again.';
+			return;
+		}
+		stripeTrigger.value++;
+	});
+
 	const rt = receiptTokenFrom(loc.url.searchParams);
 	const view = state.loading
 		? 'loading'
@@ -136,6 +247,7 @@ export default component$(() => {
 	const methods = availableBalanceMethods(state.config);
 	const change = order?.balanceChange;
 	const nmi = state.config?.gateways?.nmi;
+	const stripeKey = state.config?.stripePublishableKey?.trim() || '';
 
 	return (
 		<div class="sr-balance bg-[var(--color-parchment)] min-h-screen">
@@ -230,6 +342,21 @@ export default component$(() => {
 							</ul>
 						</div>
 
+						{state.intentId && (
+							<div class="mb-4 text-center">
+								<p class="text-[14px] text-[var(--color-ink)] mb-3" role="status" data-testid="balance-processing">
+									{state.reconciling
+										? 'Checking your payment…'
+										: state.unknown
+											? 'We could not confirm your payment status yet. Please do not pay again: use Refresh to check, or contact us.'
+											: 'Your payment is still being processed. Please do not pay again: use Refresh to check, or contact us.'}
+								</p>
+								{!state.reconciling && (
+									<button type="button" class="checkout-cta" data-testid="balance-refresh" onClick$={refreshStatus}>Refresh payment status</button>
+								)}
+							</div>
+						)}
+
 						{methods.length === 0 && (
 							<p class="text-[14px] text-[var(--color-ink-soft)] text-center" data-testid="balance-no-methods">
 								Online payment is not available right now. Please <Link href="/contact" class="underline">contact us</Link> to pay this balance.
@@ -240,6 +367,16 @@ export default component$(() => {
 							<div>
 								{methods.length > 1 && (
 									<div class="flex border-b border-[var(--color-card-border)] mb-5" role="tablist">
+										{methods.includes('stripe') && (
+											<button
+												type="button" role="tab" aria-selected={state.method === 'stripe'}
+												disabled={state.processing}
+												onClick$={() => { state.method = 'stripe'; state.formError = ''; }}
+												class={`${TAB} ${state.method === 'stripe' ? 'font-medium text-[var(--color-ink)] border-[var(--color-accent)]' : 'text-[var(--color-ink-soft)] border-transparent'}`}
+											>
+												Card
+											</button>
+										)}
 										{methods.includes('nmi') && (
 											<button
 												type="button" role="tab" aria-selected={state.method === 'nmi'}
@@ -263,6 +400,30 @@ export default component$(() => {
 									</div>
 								)}
 
+								{state.method === 'stripe' && stripeKey && (
+									<>
+										{state.clientSecret && (
+											<StripePaymentElement
+												key={state.clientSecret}
+												publishableKey={stripeKey}
+												clientSecret={state.clientSecret}
+												returnUrl={balanceReturnUrl(typeof location !== 'undefined' ? location.origin : '', order.code, rt ?? '')}
+												confirmTrigger={stripeTrigger}
+												onError$={onError}
+												onProcessingChange$={onProcessing}
+											/>
+										)}
+										<button
+											type="button"
+											class="checkout-cta mt-4"
+											disabled={state.processing || !state.clientSecret}
+											data-testid="balance-pay-button"
+											onClick$={payStripe}
+										>
+											{state.processing ? 'Processing...' : `Pay ${formatPrice(due, currency)}`}
+										</button>
+									</>
+								)}
 								{state.method === 'nmi' && nmi && (
 									<>
 										<NMI

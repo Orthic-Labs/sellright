@@ -41,6 +41,16 @@ describe('Waitlist demand page', () => {
     expect(document.body.textContent).toContain('out'); // out-of-stock marker for A-1
   });
 
+  it('reads stock live: staleTime 0 and gcTime 0 despite a long client default', async () => {
+    const el = document.createElement('div'); document.body.appendChild(el);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 15_000 } } });
+    await act(async () => { createRoot(el).render(<QueryClientProvider client={qc}><Waitlist /></QueryClientProvider>); });
+    await flush();
+    const q = qc.getQueryCache().findAll({ queryKey: ['waitlist'] })[0]!;
+    expect((q.options as { staleTime?: number }).staleTime).toBe(0);
+    expect((q.options as { gcTime?: number }).gcTime).toBe(0);
+  });
+
   it('clicking a header re-sorts; clicking again flips direction', async () => {
     await mount();
     await act(async () => { byText('th button', 'Total').click(); }); await flush();

@@ -495,6 +495,8 @@ account.openapi(
 
       // Anonymize orders FIRST (order rows are kept — financial records — but
       // scrubbed of the PII that links them back to this person).
+      const erasedOrderIds = (await tx.select({ id: s.order.id }).from(s.order)
+        .where(and(eq(s.order.storeId, st.id), eq(s.order.customerId, cust.id), orderProvenanceFilter(cust)))).map((o) => o.id);
       await tx.update(s.order)
         .set({
           customerId: null,
@@ -503,6 +505,23 @@ account.openapi(
           metadata: sql`coalesce(${s.order.metadata}, '{}'::jsonb) || jsonb_build_object('anonymized_at', now())`,
         })
         .where(and(eq(s.order.customerId, cust.id), orderProvenanceFilter(cust)));
+
+      // Order-edit history and address audit rows snapshot the same address
+      // PII. Drop the personal fields; amounts/lines/totals stay. Scoped to the
+      // orders just anonymized (proven ownership only), explicit store predicate.
+      if (erasedOrderIds.length) {
+        await tx.update(s.orderEdit)
+          .set({
+            before: sql`(${s.orderEdit.before}::jsonb - 'shippingAddress' - 'billingAddress' - 'addresses')`,
+            after: sql`(${s.orderEdit.after}::jsonb - 'shippingAddress' - 'billingAddress' - 'addresses')`,
+            reason: null,
+          })
+          .where(and(eq(s.orderEdit.storeId, st.id), inArray(s.orderEdit.orderId, erasedOrderIds)));
+        await tx.update(s.auditLog)
+          .set({ data: sql`(coalesce(${s.auditLog.data}::jsonb, '{}'::jsonb) - 'before' - 'after' - 'reason')` })
+          .where(and(eq(s.auditLog.storeId, st.id), eq(s.auditLog.entity, 'order'), eq(s.auditLog.action, 'edit_address'),
+            inArray(s.auditLog.entityId, erasedOrderIds)));
+      }
 
       // Account erasure hardening: tombstone every device lease on every
       // license this account owns BEFORE unlinking the license from the

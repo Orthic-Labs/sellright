@@ -22,7 +22,7 @@ import * as s from '../db/schema.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
 import { emitEvent } from '../webhooks/emit.js';
 import { resolveStoreForGatewayEvent } from './tenant-resolution.js';
-import { finalizeRefund, enqueueRefundSettledEmail, RefundError } from './refunds.js';
+import { finalizeRefund, enqueueRefundSettledEmail, RefundError, orderRefundBasis, refundStateFromBasis } from './refunds.js';
 import { recordStripeDisputeAlert } from '../disputes/disputes.js';
 import { STRIPE_REFUND_ATTEMPT_KEY, stripeRefundState } from './stripe.js';
 
@@ -289,14 +289,9 @@ export async function reconcileStripeRefund(
 async function recomputeOrderRefundState(tx: Tx, storeId: string, orderId: string): Promise<void> {
   const [ord] = await tx.select({ state: s.order.state, grandTotal: s.order.grandTotal, code: s.order.code }).from(s.order).where(eq(s.order.id, orderId)).limit(1);
   if (!ord) return;
-  const [agg] = await tx.select({ total: sql<number>`coalesce(sum(${s.refund.amount}), 0)::int` })
-    .from(s.refund).innerJoin(s.payment, eq(s.payment.id, s.refund.paymentId))
-    // D4: refunds of a duplicate capture are money-only — never order state.
-    .where(and(eq(s.refund.orderId, orderId), eq(s.refund.state, 'Settled'),
-      sql`coalesce((${s.payment.metadata}->>'duplicate')::boolean, false) = false`));
-  const refunded = agg?.total ?? 0;
-  if (!refunded) return;
-  const target = refundTargetState(refunded, ord.grandTotal);
+  const basis = await orderRefundBasis(tx, storeId, orderId);
+  const refunded = basis.refunded;
+  const target = refundStateFromBasis(basis);
   if (!target) return; // nothing settled yet — no state write, no event
   // FIX (second partial refund suppresses order.refunded): the FSM has no
   // PartiallyRefunded->PartiallyRefunded self-edge (canTransition(X, X) is

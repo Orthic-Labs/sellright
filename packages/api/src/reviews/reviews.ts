@@ -18,6 +18,7 @@ import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { normalizeEmail } from '../auth/email.js';
+import { orderProvenanceFilter } from '../auth/order-access.js';
 import { grantReviewBonus } from '../loyalty/bonus.js';
 import { loyaltyBalance } from '../loyalty/ledger.js';
 import { enqueueReviewApproved } from '../email/dispatch.js';
@@ -113,19 +114,22 @@ const PAID_STATES = ['Paid', 'PartiallyRefunded'] as const;
 
 /** Order id of a PAID order that (a) belongs to the customer / matches the
  *  guest's email and (b) contains a variant of `productId`; null otherwise. */
-export async function findPurchaseProof(tx: Tx, input: { productId: string; customerId?: string | null; email?: string | null; orderCode?: string | null }): Promise<string | null> {
+export async function findPurchaseProof(tx: Tx, input: { storeId: string; productId: string; customerId?: string | null; customer?: { email: string; emailVerified: boolean } | null; email?: string | null; orderCode?: string | null }): Promise<string | null> {
   const base = and(
     inArray(s.order.state, [...PAID_STATES]),
     sql`exists (select 1 from order_line ol join product_variant pv on pv.id = ol.variant_id where ol.order_id = ${s.order.id} and pv.product_id = ${input.productId})`,
   );
   if (input.customerId) {
-    const [o] = await tx.select({ id: s.order.id }).from(s.order).where(and(base, eq(s.order.customerId, input.customerId))).orderBy(desc(s.order.createdAt)).limit(1);
+    // Fail closed: customer-linked proof requires the mailbox provenance check
+    // (an unproven email_match link must not count as a purchase).
+    if (!input.customer) return null;
+    const [o] = await tx.select({ id: s.order.id }).from(s.order).where(and(base, eq(s.order.storeId, input.storeId), eq(s.order.customerId, input.customerId), orderProvenanceFilter(input.customer))).orderBy(desc(s.order.createdAt)).limit(1);
     return o?.id ?? null;
   }
   if (input.orderCode && input.email) {
     const email = normalizeEmail(input.email);
     const [o] = await tx.select({ id: s.order.id }).from(s.order).where(and(
-      base, eq(s.order.code, input.orderCode.trim()),
+      base, eq(s.order.storeId, input.storeId), eq(s.order.code, input.orderCode.trim()),
       sql`lower(coalesce(${s.order.metadata}->'contact'->>'email', '')) = ${email}`,
     )).limit(1);
     return o?.id ?? null;
@@ -153,11 +157,11 @@ export async function submitReview(tx: Tx, input: {
     email = normalizeEmail(input.customer.email);
     customerId = input.customer.id;
     name = input.review.name?.trim() || defaultDisplayName(input.customer);
-    orderId = await findPurchaseProof(tx, { productId: product.id, customerId: input.customer.id });
+    orderId = await findPurchaseProof(tx, { storeId: input.storeId, productId: product.id, customerId: input.customer.id, customer: input.customer });
   } else {
     if (!settings.allowGuests || !input.review.email || !input.review.orderCode) return { ok: false, reason: 'sign_in_required' };
     email = normalizeEmail(input.review.email);
-    orderId = await findPurchaseProof(tx, { productId: product.id, email, orderCode: input.review.orderCode });
+    orderId = await findPurchaseProof(tx, { storeId: input.storeId, productId: product.id, email, orderCode: input.review.orderCode });
     if (!orderId) return { ok: false, reason: 'purchase_required' }; // a guest must prove a purchase
     name = input.review.name?.trim() || 'Verified customer';
   }

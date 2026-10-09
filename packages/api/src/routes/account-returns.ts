@@ -80,7 +80,8 @@ function returnableByLine(l: Loaded): Map<string, number> {
   const out = new Map<string, number>();
   if (!RETURNABLE_ORDER_STATES.includes(l.order.state)) return out;
   for (const line of l.lines) {
-    const n = line.fulfilledQty - line.refundedQty - (inOpen.get(line.id) ?? 0);
+    // refundedQty also counts refunded UNSHIPPED units (those are cancelledQty, never fulfilled).
+    const n = line.fulfilledQty - Math.max(0, line.refundedQty - line.cancelledQty) - (inOpen.get(line.id) ?? 0);
     if (n > 0) out.set(line.id, n);
   }
   return out;
