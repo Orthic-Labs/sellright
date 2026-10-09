@@ -23,6 +23,8 @@ export type PurchaseId = { storeId: string; environment: string; originalTransac
 
 export type LockSubject =
   | { kind: 'order'; orderId: string }
+  | { kind: 'notification'; purchase: PurchaseId }
+  | { kind: 'link'; purchases: readonly PurchaseId[] }
   | { kind: 'customer'; customerId: string; scope?: 'all' | 'orders' }
   | { kind: 'checkout'; sourceLicenseId?: string }
   | { kind: 'loyalty'; customerId: string };
@@ -126,6 +128,24 @@ function subsetOf(a: LockPlanContribution, b: LockPlanContribution): boolean {
   );
 }
 
+/** StoreKit purchase subjects: the purchase identities (L1) and the licence bound to each
+ *  existing purchase row (L2). A purchase with no row yet contributes no licence. */
+async function planPurchases(tx: Tx, storeId: string, purchases: readonly PurchaseId[]): Promise<LockPlanContribution> {
+  const licenseIds: string[] = [];
+  for (const p of purchases) {
+    const rows = await tx
+      .select({ licenseId: s.storekitPurchase.licenseId })
+      .from(s.storekitPurchase)
+      .where(and(
+        eq(s.storekitPurchase.storeId, storeId),
+        eq(s.storekitPurchase.environment, p.environment),
+        eq(s.storekitPurchase.originalTransactionId, p.originalTransactionId),
+      ));
+    for (const r of rows) if (r.licenseId) licenseIds.push(r.licenseId);
+  }
+  return { purchases: [...purchases], licenseIds, orderIds: [], reservationIds: [] };
+}
+
 /** Unlocked (or under-lock) read of the rows one subject touches. */
 async function planOne(tx: Tx, storeId: string, subject: LockSubject): Promise<LockPlanContribution> {
   switch (subject.kind) {
@@ -167,6 +187,10 @@ async function planOne(tx: Tx, storeId: string, subject: LockSubject): Promise<L
         orderIds: [],
         reservationIds: [],
       };
+    case 'notification':
+      return planPurchases(tx, storeId, [subject.purchase]);
+    case 'link':
+      return planPurchases(tx, storeId, subject.purchases);
   }
 }
 

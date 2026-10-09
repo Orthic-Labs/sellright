@@ -19,7 +19,7 @@
       "sequence": "L2:license L5:license_activation L2:license L5:license_activation L2:license",
       "mixed": false,
       "orderViolation": true,
-      "why": "STOREKIT §5.8 #19 (fork-only path; set pending StoreKit lane)"
+      "why": "STOREKIT §5.8 #19: helper only; called exclusively inside withLockedSet({notification}) in routes/storekit-webhooks.ts (plan 3.5)"
     },
     {
       "key": "src/payments/refunds.ts::finalizeRefund",
