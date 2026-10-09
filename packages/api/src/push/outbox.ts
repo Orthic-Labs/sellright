@@ -11,6 +11,7 @@ import * as s from '../db/schema.js';
 import { sendApns, apnsConfigured, type ApnsEnvironment } from './apns.js';
 import { env } from '../env.js';
 import { log } from '../lib/logger.js';
+import { CANARY_MARKER, CANARY_TOPIC, assertNotReserved, assertNotReservedTopic } from '../canary/marker.js';
 
 /** Per-attempt backoff in seconds: 1m, 5m, 30m, 2h, 12h. Mirrors email. */
 const BACKOFF_S = [60, 300, 1800, 7200, 43200];
@@ -110,6 +111,8 @@ export async function enqueuePush(tx: Tx, storeId: string, args: {
   payload: object;
   kind?: 'apns' | 'live_activity';
 }): Promise<number> {
+  assertNotReservedTopic(`push topic ${args.topic}`, args.topic, false);
+  assertNotReserved(`push topic ${args.topic}`, args.payload, false);
   const kind = args.kind ?? 'apns';
   const devices = await tx
     .select({
@@ -133,6 +136,23 @@ export async function enqueuePush(tx: Tx, storeId: string, args: {
     payload: args.payload,
   })));
   return matched.length;
+}
+
+/** Canary-only push: one row to the configured test token (PLAN 7.16). Never
+ *  fans out to registered devices. Returns the outbox row id. */
+export async function enqueueCanaryPush(tx: Tx, storeId: string, args: {
+  deviceToken: string;
+  environment: string;
+  payload: object;
+}): Promise<string> {
+  const [row] = await tx.insert(s.pushOutbox).values({
+    storeId,
+    topic: CANARY_TOPIC,
+    deviceToken: args.deviceToken,
+    environment: args.environment,
+    payload: { ...args.payload, canary: true, marker: CANARY_MARKER },
+  }).returning({ id: s.pushOutbox.id });
+  return row!.id;
 }
 
 async function claimDuePushes(storeId: string, limit: number): Promise<ClaimedPush[]> {
