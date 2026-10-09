@@ -61,6 +61,7 @@ import { isMaintenanceOn, maintenanceInfo } from './maintenance.js';
 import { requestIdMiddleware, accessLogMiddleware } from './lib/request-id.js';
 import { err as logErr } from './lib/logger.js';
 import { listApiPlugins } from './plugins.js';
+import { preRoutePolicy } from './pre-route-policy.js';
 
 export const SELLRIGHT_VERSION = '0.1.0';
 
@@ -82,6 +83,9 @@ export function createApp(): OpenAPIHono {
   // path, status, duration_ms — emitted at the end so all three values are
   // known. Stays behind the request-id middleware so the line carries it.
   app.use('*', accessLogMiddleware());
+
+  // Plugin pre-route response policy (plugins.ts `errorPolicy`); no-op without one.
+  app.use('*', preRoutePolicy(listApiPlugins));
 
   // OPS-1: per-store CORS allowlist. No wildcard-with-credentials (browsers
   // reject that combination anyway, but we never even offer it). An origin is
