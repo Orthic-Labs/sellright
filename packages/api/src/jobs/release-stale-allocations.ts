@@ -32,7 +32,7 @@ import { LockSetUnstable, withLockedSet } from '../db/locks.js';
 import * as s from '../db/schema.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
 import { releaseOrderLoyalty } from '../loyalty/ledger.js';
-import { sweepStaleStripeIntents, discoverStaleUntrackedIntents, stripeDiscoverable } from '../payments/stripe-reconcile.js';
+import { sweepStaleStripeIntents, sweepStaleBalanceIntents, sweepOrphanPreMints, discoverStaleUntrackedIntents, stripeDiscoverable } from '../payments/stripe-reconcile.js';
 
 export type ReleaseStaleOpts = { apply: boolean; ttlMin: number; log?: (m: string) => void; batchLimit?: number };
 
@@ -91,6 +91,11 @@ export async function releaseStaleAllocations(opts: ReleaseStaleOpts): Promise<{
       if (dv.checked) log(`[release-stale] ${st.slug}: stripe discovery checked=${dv.checked} found=${dv.found} held=${dv.held} flagged=${dv.flagged}`);
       const sw = await sweepStaleStripeIntents(st.id, cutoff, batchLimit, log);
       if (sw.checked) log(`[release-stale] ${st.slug}: stripe intents checked=${sw.checked} settled=${sw.settled} held=${sw.held} cancelled=${sw.cancelled} errors=${sw.errors}`);
+      // PAYMENT-TIMING §5.4: balance intents on Paid orders past the deadline, and pre-mint rows (X-9) past it.
+      const bal = await sweepStaleBalanceIntents(st.id, batchLimit, log);
+      if (bal.checked) log(`[release-stale] ${st.slug}: balance intents checked=${bal.checked} settled=${bal.settled} held=${bal.held} cancelled=${bal.cancelled} errors=${bal.errors}`);
+      const orph = await sweepOrphanPreMints(st.id, batchLimit, log);
+      if (orph.checked) log(`[release-stale] ${st.slug}: pre-mint rows checked=${orph.checked} bound=${orph.bound} cancelled=${orph.cancelled} errors=${orph.errors}`);
     }
     // STOREKIT §5.4 (F1): candidates are read unlocked, then each order is taken on its
     // own under withLockedSet({order}) — the set plans its licences and locks them before

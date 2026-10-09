@@ -315,7 +315,8 @@ export async function createPaymentIntent(opts: { orderCode: string; storeId: st
   const pi = await client.paymentIntents.create({
     amount: opts.amount,
     currency: opts.currency.toLowerCase(),
-    metadata: { orderCode: opts.orderCode, storeId: opts.storeId },
+    // mintKey: the mint-loop key (PAYMENT-TIMING §4.2). Lets the orphan sweep match a pre-mint row to its PI.
+    metadata: { orderCode: opts.orderCode, storeId: opts.storeId, ...(opts.idempotencyKey ? { mintKey: opts.idempotencyKey } : {}) },
     automatic_payment_methods: { enabled: true },
   }, opts.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : undefined);
   return { clientSecret: pi.client_secret ?? '', intentId: pi.id };

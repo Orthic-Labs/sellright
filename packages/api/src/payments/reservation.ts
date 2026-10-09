@@ -13,7 +13,7 @@
 //   R5 releaseOnFullRefund consumed -> released (order Refunded, release_on_full_refund)
 // R6 (operator override, released_unverified) is an admin-route concern and is not here.
 import { and, eq, inArray, sql } from 'drizzle-orm';
-import type { Tx } from '../db/client.js';
+import { withStore, type Tx } from '../db/client.js';
 import type { HeldLocks } from '../db/locks.js';
 import * as s from '../db/schema.js';
 
@@ -155,13 +155,12 @@ export async function reserve(
 }
 
 /**
- * R2: consume the order's held reservations because the order became Paid in this tx.
- * Released rows are never consumed (I1). Returns the rows this call consumed (empty on replay).
+ * R2 core: held -> consumed for the order's held rows. Locks the order row (L3) then its held rows
+ * (L4), the global order. Caller guarantees the order is Paid|PartiallyRefunded (I3).
  */
-export async function consume(
+async function consumeCore(
   tx: Tx,
-  _held: HeldLocks,
-  input: { storeId: string; orderId: string; paymentId: string; operationId: string },
+  input: { storeId: string; orderId: string; paymentId: string | null; operationId: string },
 ): Promise<ReservationRow[]> {
   const state = await orderState(tx, input.storeId, input.orderId);
   if (!(CONSUMABLE_STATES as readonly string[]).includes(state)) {
@@ -180,6 +179,40 @@ export async function consume(
     .where(and(eq(s.orderReservation.storeId, input.storeId), eq(s.orderReservation.orderId, input.orderId),
       eq(s.orderReservation.state, 'held')))
     .returning();
+}
+
+/**
+ * R2: consume the order's held reservations because the order became Paid in this tx.
+ * Released rows are never consumed (I1). Returns the rows this call consumed (empty on replay).
+ */
+export async function consume(
+  tx: Tx,
+  _held: HeldLocks,
+  input: { storeId: string; orderId: string; paymentId: string; operationId: string },
+): Promise<ReservationRow[]> {
+  return consumeCore(tx, input);
+}
+
+/**
+ * R2 at the settlement chokepoint (PAYMENT-TIMING §3.7): called by recordSettlementOperation inside the
+ * settlement transaction, so consumption commits or rolls back with the payment row and the Paid
+ * transition. The chokepoint cannot mint HeldLocks, so this takes the order row (L3) and the held rows
+ * (L4) itself, in the global order. Returns [] (no-op) unless the order is Paid|PartiallyRefunded and
+ * holds live held rows, so orders without reservations are untouched.
+ */
+export async function consumeForSettlement(
+  tx: Tx,
+  input: { storeId: string; orderId: string; paymentId: string | null; operationId: string },
+): Promise<ReservationRow[]> {
+  // Fast path (no locks): an order without held rows is untouched by the settlement.
+  const [any] = await tx.select({ id: s.orderReservation.id }).from(s.orderReservation).where(and(
+    eq(s.orderReservation.storeId, input.storeId), eq(s.orderReservation.orderId, input.orderId),
+    eq(s.orderReservation.state, 'held'))).limit(1);
+  if (!any) return [];
+  const [o] = await tx.select({ state: s.order.state }).from(s.order)
+    .where(and(eq(s.order.id, input.orderId), eq(s.order.storeId, input.storeId))).limit(1).for('update');
+  if (!o || !(CONSUMABLE_STATES as readonly string[]).includes(o.state)) return [];
+  return consumeCore(tx, input);
 }
 
 /** R3: a cancel path asked to release. Records the request; effective only through settleRelease. */
@@ -208,6 +241,13 @@ export async function requestRelease(
 export async function settleRelease(
   tx: Tx,
   _held: HeldLocks,
+  input: { storeId: string; orderId: string; stripeDiscoverable: boolean },
+): Promise<ReservationRow[]> {
+  return settleReleaseCore(tx, input);
+}
+
+async function settleReleaseCore(
+  tx: Tx,
   input: { storeId: string; orderId: string; stripeDiscoverable: boolean },
 ): Promise<ReservationRow[]> {
   const state = await orderState(tx, input.storeId, input.orderId);
@@ -243,6 +283,38 @@ export async function release(
     .where(and(eq(s.orderReservation.storeId, input.storeId), eq(s.orderReservation.orderId, input.orderId),
       eq(s.orderReservation.state, 'held')));
   return { released, pending };
+}
+
+/** True when the order holds a held reservation with a release request (cheap, no locks). */
+export async function hasPendingRelease(storeId: string, orderId: string): Promise<boolean> {
+  return withStore(storeId, async (tx) => {
+    const [row] = await tx.select({ id: s.orderReservation.id }).from(s.orderReservation).where(and(
+      eq(s.orderReservation.storeId, storeId), eq(s.orderReservation.orderId, orderId),
+      eq(s.orderReservation.state, 'held'), sql`${s.orderReservation.releaseRequestedAt} is not null`)).limit(1);
+    return !!row;
+  });
+}
+
+/**
+ * R4 at a provider-terminal observation (PAYMENT-TIMING §5.2): a confirmed Stripe cancellation, observed
+ * by the webhook, a reconcile or a sweep, releases the order's requested holds in the SAME transaction,
+ * after the attempt has been written `cancelled`. Takes the order row (L3) then the held rows (L4), the
+ * global order. No-op unless a release was requested and the order is Cancelled|Refunded and quiescent.
+ * `stripeDiscoverable: true` is the conservative value (clause 3 applies): an unknown Stripe side holds.
+ */
+export async function releaseOnProviderTerminal(tx: Tx, input: { storeId: string; orderId: string }): Promise<ReservationRow[]> {
+  const [any] = await tx.select({ id: s.orderReservation.id }).from(s.orderReservation).where(and(
+    eq(s.orderReservation.storeId, input.storeId), eq(s.orderReservation.orderId, input.orderId),
+    eq(s.orderReservation.state, 'held'), sql`${s.orderReservation.releaseRequestedAt} is not null`)).limit(1);
+  if (!any) return [];
+  await tx.select({ id: s.order.id }).from(s.order)
+    .where(and(eq(s.order.id, input.orderId), eq(s.order.storeId, input.storeId))).limit(1).for('update');
+  return settleReleaseCore(tx, { storeId: input.storeId, orderId: input.orderId, stripeDiscoverable: true });
+}
+
+/** Standalone form of releaseOnProviderTerminal for callers that hold no transaction. */
+export async function settleOrderReleases(storeId: string, orderId: string): Promise<ReservationRow[]> {
+  return withStore(storeId, (tx) => releaseOnProviderTerminal(tx, { storeId, orderId }));
 }
 
 /** R5: a full refund releases consumed holds that asked for it. Requires the order to be Refunded. */

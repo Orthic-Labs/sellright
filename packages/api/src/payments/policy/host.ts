@@ -16,6 +16,9 @@ import type {
   BeforeCaptureInput, BeforeCaptureResult, BeforePaymentAttemptInput, PaymentPolicy, PaymentProvider, PaymentPurpose, PolicyOrder, PolicyVeto,
 } from './types.js';
 
+/** Wire code for a veto that carries no code of its own (PAYMENT-TIMING §3.6). */
+export const PAYMENT_POLICY_VETO_CODE = 'PAYMENT_POLICY_VETO';
+
 /** A policy vetoed the attempt. The caller's transaction must roll back. */
 export class PaymentPolicyVetoError extends Error {
   constructor(readonly veto: PolicyVeto) {

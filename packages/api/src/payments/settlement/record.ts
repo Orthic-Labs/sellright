@@ -12,9 +12,10 @@
  * build on any other write to these tables outside this function and the
  * enumerated, fixture-backed allowlist.
  */
-import { and, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import type { Tx } from '../../db/client.js';
 import * as s from '../../db/schema.js';
+import { consumeForSettlement } from '../reservation.js';
 import { canTransition, type OrderState } from '../../money/fsm.js';
 import { registerBuiltinEffectHandlers } from './handlers.js';
 import { enqueueEffects, executeEffectsNow, type EffectMode, type EffectRequest } from './effects.js';
@@ -89,6 +90,24 @@ export interface SettlementResult {
 
 /** Operation kinds whose operationId IS the id of the payment row the operation inserts. */
 const PAYMENT_IDENTITY_KINDS: ReadonlySet<SettlementKind> = new Set<SettlementKind>(['payment_settled', 'duplicate_capture_recorded']);
+
+/** Kinds that can move an order to Paid (or settle money on a Paid order) and so consume reservations (§3.7). */
+const CONSUMING_KINDS: ReadonlySet<SettlementKind> = new Set<SettlementKind>([
+  'payment_settled', 'order_paid_transition', 'stripe_invoice_paid', 'order_edit_balance_settled',
+]);
+
+async function latestSettledPaymentId(tx: Tx, storeId: string, orderId: string): Promise<string | null> {
+  const [p] = await tx.select({ id: s.payment.id }).from(s.payment).where(and(
+    eq(s.payment.storeId, storeId), eq(s.payment.orderId, orderId), eq(s.payment.state, 'Settled'),
+  )).orderBy(desc(s.payment.createdAt)).limit(1);
+  return p?.id ?? null;
+}
+
+async function paymentOrderId(tx: Tx, storeId: string, paymentId: string): Promise<string | null> {
+  const [p] = await tx.select({ orderId: s.payment.orderId }).from(s.payment)
+    .where(and(eq(s.payment.id, paymentId), eq(s.payment.storeId, storeId))).limit(1);
+  return p?.orderId ?? null;
+}
 
 export async function recordSettlementOperation(tx: Tx, op: SettlementOperation): Promise<SettlementResult> {
   const policy = OPERATION_POLICY[op.kind];
@@ -316,6 +335,15 @@ export async function recordSettlementOperation(tx: Tx, op: SettlementOperation)
 
   if (op.kind === 'operator_resolution' && op.resolution!.action === 'apply' && heldTargetEffects.length) {
     await tx.update(s.orderPendingEffect).set({ resolvedBy: opRow.id }).where(inArray(s.orderPendingEffect.id, heldTargetEffects));
+  }
+  // PAYMENT-TIMING §3.7 (R2): money that settles an order consumes the order's held reservations in THIS
+  // transaction. No-op for orders without held reservations and for orders that are not Paid|PartiallyRefunded
+  // after the apply (money on a cancelled order keeps its hold; I1 / payment_after_cancel).
+  if (CONSUMING_KINDS.has(op.kind)) {
+    const orderId = applied.orderId ?? op.orderId ?? (applied.paymentId ? await paymentOrderId(tx, op.storeId, applied.paymentId) : null);
+    // The Paid transition op carries no payment row of its own: the consumed payment is the order's latest Settled one.
+    const paymentId = applied.paymentId ?? (orderId ? await latestSettledPaymentId(tx, op.storeId, orderId) : null);
+    if (orderId) await consumeForSettlement(tx, { storeId: op.storeId, orderId, paymentId, operationId });
   }
   const created = await enqueueEffects(tx, op.storeId, { kind: op.kind, id: operationId }, op.effects);
   if ((op.effectMode ?? 'inline') === 'inline') await executeEffectsNow(tx, created.map((r) => r.id));
