@@ -25,7 +25,8 @@
     "deps:check": "pnpm outdated -r || true; pnpm --dir packages/admin outdated || true",
     "deps:audit": "pnpm audit --prod && pnpm --dir packages/admin audit --prod",
     "deps:update": "pnpm up -r && pnpm --dir packages/admin up",
-    "deps:update:latest": "pnpm up -r --latest && pnpm --dir packages/admin up --latest"
+    "deps:update:latest": "pnpm up -r --latest && pnpm --dir packages/admin up --latest",
+    "test:sdk-packed": "pnpm --filter @sellright/sample-plugin test"
   },
   "devDependencies": {
     "@typescript-eslint/parser": "8.70.0",
