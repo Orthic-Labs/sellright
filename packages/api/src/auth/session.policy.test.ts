@@ -13,7 +13,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { renewedSessionExpiry, sessionPolicy } from './session.js';
-import { CUSTOMER_COOKIE_MAX_AGE_SECONDS } from './cookies.js';
+import { customerCookieMaxAgeSeconds } from './cookies.js';
 import { env } from '../env.js';
 
 const DAY = 86_400_000;
@@ -75,7 +75,7 @@ describe('renewedSessionExpiry', () => {
 
 describe('customer cookie lifetime', () => {
   it('tracks the env session TTL (cookie never dies before the session)', () => {
-    expect(CUSTOMER_COOKIE_MAX_AGE_SECONDS).toBe(Math.ceil(env.SESSION_TTL_DAYS * 24 * 3600));
-    expect(CUSTOMER_COOKIE_MAX_AGE_SECONDS).toBe(30 * 86_400);
+    expect(customerCookieMaxAgeSeconds()).toBe(Math.ceil(env.SESSION_TTL_DAYS * 24 * 3600));
+    expect(customerCookieMaxAgeSeconds()).toBe(30 * 86_400);
   });
 });

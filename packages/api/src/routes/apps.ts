@@ -2,7 +2,7 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, desc, eq, isNull, or } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import { errJson } from '../lib/api-error.js';
-import { resolveStore, resolveStoreForRequest, DEV_DEFAULT_STORE, type StoreCtx } from '../store-context.js';
+import { resolveStore, resolveStoreForRequest, devDefaultStore, type StoreCtx } from '../store-context.js';
 import { appKeyHeaderNames, deviceHeaderName, licenseHeaderName, firstHeader } from '../licensing/app-headers.js';
 import { resolveStoreWithFallback } from '../licensing/app-store-fallback.js';
 import * as s from '../db/schema.js';
@@ -55,8 +55,8 @@ function appKeyFromHost(host: string | undefined): string | null {
   return first;
 }
 
-async function publicAppStore(c: { req: { header: (k: string) => string | undefined } }, explicitApp?: string | null) {
-  const appKey = explicitApp ?? firstHeader(c, appKeyHeaderNames()) ?? appKeyFromHost(c.req.header('host')) ?? DEV_DEFAULT_STORE;
+export async function publicAppStore(c: { req: { header: (k: string) => string | undefined } }, explicitApp?: string | null) {
+  const appKey = explicitApp ?? firstHeader(c, appKeyHeaderNames()) ?? appKeyFromHost(c.req.header('host')) ?? devDefaultStore();
   // Extension seam (licensing/app-store-fallback.ts): env.APPS_FALLBACK_STORE_SLUG
   // unset (the default) rethrows on an unknown appKey, so this 404s exactly as
   // before this seam existed.

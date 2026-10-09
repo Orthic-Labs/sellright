@@ -32,7 +32,9 @@ const smtpEnabled = (): boolean => {
 
 // Same policy env.ts checked at boot (email/sender-policy.ts) — empty when
 // FORBIDDEN_SENDER_DOMAINS is unset, so this is a no-op by default.
-const forbiddenSenderDomains = parseSenderDomainList(env.FORBIDDEN_SENDER_DOMAINS);
+let forbiddenSenderDomainsCache: ReturnType<typeof parseSenderDomainList> | undefined;
+const forbiddenSenderDomains = (): ReturnType<typeof parseSenderDomainList> =>
+  (forbiddenSenderDomainsCache ??= parseSenderDomainList(env.FORBIDDEN_SENDER_DOMAINS));
 
 let cachedGlobal: Transporter | null = null;
 function globalTransport(): Transporter | null {
@@ -82,7 +84,7 @@ async function resolveTransport(storeId?: string): Promise<Transporter | null> {
  *  or — when `storeId` is given — that store's own saved settings). */
 export async function sendEmail(input: SendEmailInput, storeId?: string): Promise<{ delivered: boolean; reason?: string }> {
   const from = input.from ?? env.SMTP_FROM;
-  if (isForbiddenSenderDomain(from, forbiddenSenderDomains)) {
+  if (isForbiddenSenderDomain(from, forbiddenSenderDomains())) {
     logErr.error('email blocked: forbidden sender domain', undefined, { from, to: input.to, subject: input.subject });
     return { delivered: false, reason: 'forbidden_sender_domain' };
   }

@@ -143,8 +143,26 @@ export async function broadcastStoreCacheInvalidation(slug?: string, host?: stri
  * silently disable cross-process invalidation for the rest of the process's
  * life — the 60s TTL covers the gap while reconnecting either way.
  */
+let listenerStopped = false;
+
 export async function startStoreCacheInvalidationListener(): Promise<void> {
-  if (listenerClient) return;
+  listenerStopped = false;
+  return connectStoreCacheInvalidationListener();
+}
+
+/** Shutdown step 2 (createApp): release the LISTEN connection and stop reconnecting. */
+export async function stopStoreCacheInvalidationListener(): Promise<void> {
+  listenerStopped = true;
+  if (!listenerClient) return;
+  const client = listenerClient;
+  listenerClient = undefined;
+  client.removeAllListeners('error');
+  client.removeAllListeners('end');
+  client.release(true); // destroy: the session still has LISTEN active, never pool it
+}
+
+async function connectStoreCacheInvalidationListener(): Promise<void> {
+  if (listenerClient || listenerStopped) return;
   let client: PoolClient;
   try {
     client = await pool.connect();
@@ -152,9 +170,10 @@ export async function startStoreCacheInvalidationListener(): Promise<void> {
     // A busy pool at boot (or a DB restart) must not leave the process on the
     // 60s TTL fallback forever: retry until the LISTEN connection is up.
     logErr.error('store cache invalidation listener could not connect — retrying', e);
-    setTimeout(() => { void startStoreCacheInvalidationListener(); }, LISTENER_RETRY_MS).unref();
+    setTimeout(() => { void connectStoreCacheInvalidationListener(); }, LISTENER_RETRY_MS).unref();
     return;
   }
+  if (listenerStopped) { client.release(true); return; } // stop() ran while pool.connect() was pending
   listenerClient = client;
   client.on('notification', (msg) => {
     if (msg.channel !== CHANNEL) return;
@@ -169,7 +188,7 @@ export async function startStoreCacheInvalidationListener(): Promise<void> {
     if (e) logErr.error('store cache invalidation listener connection lost — reconnecting', e);
     if (listenerClient === client) listenerClient = undefined;
     client.release(true); // true: connection is unusable, don't return it to the pool
-    setTimeout(() => { void startStoreCacheInvalidationListener(); }, 2000).unref();
+    setTimeout(() => { void connectStoreCacheInvalidationListener(); }, 2000).unref();
   };
   client.on('error', reconnect);
   client.on('end', () => reconnect());
@@ -239,7 +258,9 @@ export async function resolveStore(slug: string): Promise<StoreCtx> {
 // Extension seam: sourced from env.DEV_DEFAULT_STORE_SLUG (default 'damned' —
 // identical to the prior hardcoded value). A fork points this at its own seed
 // store via env instead of editing this file.
-export const DEV_DEFAULT_STORE = env.DEV_DEFAULT_STORE_SLUG;
+export function devDefaultStore(): string {
+  return env.DEV_DEFAULT_STORE_SLUG;
+}
 
 /**
  * Normalize a Host / X-Forwarded-Host header value: strip a trailing :port,
@@ -360,7 +381,7 @@ export async function resolveStoreForRequest(
     if (byHost) return byHost;
   }
 
-  if (!isProduction) return resolveStore(DEV_DEFAULT_STORE);
+  if (!isProduction) return resolveStore(devDefaultStore());
 
   throw new HostRoutingError(host ? `no store configured for host: ${host}` : 'missing Host header');
 }

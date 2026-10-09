@@ -65,7 +65,10 @@ const JOB_KEYS = {
   'birthday-bonus': NAMESPACE | 30n,
 } as const satisfies Record<string, bigint>;
 
-export type LeaderLockedJob = keyof typeof JOB_KEYS;
+export type EngineLeaderLockedJob = keyof typeof JOB_KEYS;
+/** Plugin jobs (plan 2.1 `jobs` phase) lock under `plugin:<name>`, hashed into the same advisory-lock space. */
+export type PluginLeaderLockedJob = `plugin:${string}`;
+export type LeaderLockedJob = EngineLeaderLockedJob | PluginLeaderLockedJob;
 
 /**
  * Run `fn` only if this process wins the advisory lock for `job`. If another
@@ -75,12 +78,14 @@ export type LeaderLockedJob = keyof typeof JOB_KEYS;
  * still uses the shared `pool`/`withStore` for its actual queries.
  */
 export async function withLeaderLock<T>(job: LeaderLockedJob, fn: () => Promise<T>, scope?: string): Promise<T | undefined> {
-  const key = JOB_KEYS[job];
+  const isPluginJob = job.startsWith('plugin:');
+  const key = isPluginJob ? `${NAMESPACE}:${job}` : JOB_KEYS[job as EngineLeaderLockedJob];
   const client = await pool.connect();
   try {
     // Per-store publishers must not suppress unrelated stores on the same DB.
+    // Plugin jobs always hash (their key is a string, not a reserved bigint).
     const lockKey = scope === undefined ? key : `${key}:${scope}`;
-    const expression = scope === undefined ? '$1' : 'hashtextextended($1, 0)';
+    const expression = scope === undefined && !isPluginJob ? '$1' : 'hashtextextended($1, 0)';
     const { rows } = await client.query<{ locked: boolean }>(`SELECT pg_try_advisory_lock(${expression}) AS locked`, [lockKey]);
     if (!rows[0]?.locked) return undefined; // another instance is leader for this tick — skip
     try {
