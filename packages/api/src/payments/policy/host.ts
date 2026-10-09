@@ -14,6 +14,9 @@ import { assertHeld, type HeldLocks } from '../../db/locks.js';
 import * as s from '../../db/schema.js';
 import type { BeforePaymentAttemptInput, PaymentPolicy, PaymentProvider, PaymentPurpose, PolicyOrder, PolicyVeto } from './types.js';
 
+/** Wire code for a veto that carries no code of its own (PAYMENT-TIMING §3.6). */
+export const PAYMENT_POLICY_VETO_CODE = 'PAYMENT_POLICY_VETO';
+
 /** A policy vetoed the attempt. The caller's transaction must roll back. */
 export class PaymentPolicyVetoError extends Error {
   constructor(readonly veto: PolicyVeto) {

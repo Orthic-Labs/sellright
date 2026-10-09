@@ -13,7 +13,7 @@ import { queryNmiPayment } from './nmi-query.js';
 import { listStripeRefunds, STRIPE_REFUND_ATTEMPT_KEY } from './stripe.js';
 import { finalizeRefund } from './refunds.js';
 import { orderIdByCode, withLockedSet, type HeldLocks } from '../db/locks.js';
-import { checkPaymentAttempt, PaymentPolicyUnavailableError, PaymentPolicyVetoError } from './policy/host.js';
+import { checkPaymentAttempt, PAYMENT_POLICY_VETO_CODE, PaymentPolicyUnavailableError, PaymentPolicyVetoError } from './policy/host.js';
 import type { PaymentProvider, PaymentPurpose, PolicyOrder } from './policy/types.js';
 import { refundStateFromStripe } from './webhook-reconcile.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
@@ -31,7 +31,7 @@ export class GatewayPaymentError extends Error {
 /** Maps a payment-policy failure to the gateway HTTP error. Anything else passes through. */
 export function gatewayErrorFromPolicy(e: unknown): unknown {
   if (e instanceof PaymentPolicyVetoError) {
-    return new GatewayPaymentError(409, e.veto.message, e.veto.code, e.veto.extra);
+    return new GatewayPaymentError(409, e.veto.message, e.veto.code || PAYMENT_POLICY_VETO_CODE, e.veto.extra);
   }
   if (e instanceof PaymentPolicyUnavailableError) {
     return new GatewayPaymentError(503, 'Payment is temporarily unavailable; retry shortly', 'PAYMENT_POLICY_UNAVAILABLE');
