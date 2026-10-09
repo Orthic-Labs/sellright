@@ -8,6 +8,7 @@
  */
 import { and, eq } from 'drizzle-orm';
 import type { Tx } from '../../db/client.js';
+import { lockSetInTx } from '../../db/locks.js';
 import * as s from '../../db/schema.js';
 import { env } from '../../env.js';
 import { normalizeEmail } from '../../auth/email.js';
@@ -108,9 +109,16 @@ const licenseIssue: LocalEffectHandler = {
   },
 };
 
-const editReconcile: LocalEffectHandler = {
+/**
+ * X-49: the order set is taken on the effect's own transaction (lockSetInTx): a covering set already
+ * held there passes through; otherwise the order's licence/order/reservation rows are locked in
+ * class order on this same transaction. Inline effects run inside the settlement set; deferred
+ * effects run in a plain transaction. No nested transaction is opened in either case.
+ */
+export const editReconcile: LocalEffectHandler = {
   async run(tx, e) {
     const p = e.payload as unknown as EditReconcilePayload;
+    await lockSetInTx(tx, e.storeId, { kind: 'order', orderId: p.orderId });
     const blocked = await requirePaidLifecycle(tx, e, p.orderId);
     if (blocked) return blocked;
     const r = await reconcileEditedOrderLicenses(tx, { storeId: e.storeId, orderId: p.orderId, customerId: p.customerId ?? null, paidAt: new Date(p.paidAt) });

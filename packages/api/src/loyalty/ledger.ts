@@ -19,6 +19,7 @@ import { and, asc, eq, isNull, or, sql } from 'drizzle-orm';
 import { customerOwnsOrder, orderProvenanceFilter } from '../auth/order-access.js';
 import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
+import { lockOrderRowsInTx } from '../db/locks.js';
 import {
   earnableCents,
   loyaltySettingsFromConfig,
@@ -338,6 +339,7 @@ export async function syncEditEarn(tx: Tx, input: {
 /** Post a held-back edit earn for ONE order if its balance is now settled.
  *  Idempotent (ledger source_ref per edit id; the marker is cleared after). */
 export async function settleDeferredEditEarnForOrder(tx: Tx, storeId: string, orderId: string): Promise<number> {
+  await lockOrderRowsInTx(tx, storeId, [orderId]); // X-49: order rows before the loyalty advisory
   const [order] = await tx.select({ customerId: s.order.customerId, metadata: s.order.metadata, state: s.order.state, grandTotal: s.order.grandTotal })
     .from(s.order).where(and(eq(s.order.id, orderId), eq(s.order.storeId, storeId))).limit(1);
   const deferred = (order?.metadata as { loyalty?: { deferredEarn?: { editId?: string; targetEarn?: number } } } | null)?.loyalty?.deferredEarn;
@@ -351,10 +353,17 @@ export async function settleDeferredEditEarnForOrder(tx: Tx, storeId: string, or
   return r.posted;
 }
 
+/**
+ * X-49: the orders this updates are locked (or already held by a covering set) BEFORE the loyalty
+ * advisory is taken, so the order rows always precede the customer advisory in lock order (the same
+ * order a refund uses: order set, then reconcileOrderLoyalty's advisory). Same transaction, no nesting.
+ */
 export async function settleDeferredEditEarns(tx: Tx, storeId: string, customerId: string, _now = new Date()): Promise<void> {
   const rows = await tx.select({ id: s.order.id }).from(s.order).where(and(
     eq(s.order.storeId, storeId), eq(s.order.customerId, customerId), sql`${s.order.metadata}->'loyalty'->'deferredEarn' is not null`,
   ));
+  if (!rows.length) return;
+  await lockOrderRowsInTx(tx, storeId, rows.map((r) => r.id));
   for (const r of rows) await settleDeferredEditEarnForOrder(tx, storeId, r.id);
 }
 

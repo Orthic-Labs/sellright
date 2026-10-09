@@ -10,6 +10,7 @@
 // acquirePurchaseLocks, exported for it). L4 rows are the reservations of the planned
 // orders (migration 0091, PAYMENT-TIMING §3.5): planned with their orders, locked after
 // L3 and after the re-plan check, so a reservation can never be locked before its order.
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { sql } from 'drizzle-orm';
 import { and, eq, inArray } from 'drizzle-orm';
 import { withStore, type Tx } from './client.js';
@@ -42,6 +43,16 @@ export class HeldLocksMissing extends Error {
 }
 
 const lockGuardActive = () => process.env.NODE_ENV !== 'production';
+
+/** X-49: the set whose fn is running, scoped to its async context. `tx` identifies the transaction. */
+interface LockSetContext { tx: Tx; held: HeldLocks; plan: LockPlanContribution }
+const lockSetContext = new AsyncLocalStorage<LockSetContext>();
+
+/** The set held on `tx` (its plan and HeldLocks), or null when no withLockedSet fn is running on `tx`. */
+export function currentLockSet(tx: Tx): { held: HeldLocks; plan: LockPlanContribution } | null {
+  const ctx = lockSetContext.getStore();
+  return ctx && ctx.tx === tx ? { held: ctx.held, plan: ctx.plan } : null;
+}
 
 /**
  * Runtime guard (STOREKIT §5.5, debug/test builds only; a no-op in production): the held brand must come
@@ -279,6 +290,50 @@ async function planFor(tx: Tx, storeId: string, subjects: readonly LockSubject[]
 }
 
 /**
+ * X-49 pass-through: true when the set held on `tx` already covers every row `subjects` plans.
+ * Re-plans the subjects on `tx` (unlocked reads) and checks them against the held plan.
+ */
+export async function lockSetCovers(tx: Tx, storeId: string, subject: LockSubject | readonly LockSubject[]): Promise<boolean> {
+  const held = currentLockSet(tx);
+  if (!held) return false;
+  const subjects = Array.isArray(subject) ? subject : [subject as LockSubject];
+  return subsetOf(await planFor(tx, storeId, subjects), held.plan);
+}
+
+/**
+ * X-49 in-transaction acquisition: when no covering set is held on `tx`, take the rows `subject` plans
+ * on THIS transaction (purchases L1, licences L2, orders L3, reservations L4; each class sorted), then
+ * re-plan under the locks. No nested transaction, so the locks commit or roll back with the caller's
+ * work. Growth under the lock throws LockSetGrew and the caller's transaction rolls back.
+ * Returns 'held' when a covering set already exists, 'locked' when it acquired the rows here.
+ */
+export async function lockSetInTx(tx: Tx, storeId: string, subject: LockSubject | readonly LockSubject[]): Promise<'held' | 'locked'> {
+  if (await lockSetCovers(tx, storeId, subject)) return 'held';
+  const subjects = Array.isArray(subject) ? subject : [subject as LockSubject];
+  const plan = await planFor(tx, storeId, subjects);
+  await acquirePurchaseLocks(tx, plan.purchases);
+  const taken = new Set<string>();
+  await lockRows(tx, 'license', storeId, plan.licenseIds, taken);
+  await lockRows(tx, 'order', storeId, plan.orderIds, taken);
+  const again = await planFor(tx, storeId, subjects);
+  if (!subsetOf(again, plan)) throw new LockSetGrew(again);
+  await lockRows(tx, 'order_reservation', storeId, plan.reservationIds ?? [], taken);
+  return 'locked';
+}
+
+/**
+ * X-49 order-row acquisition for paths that update only the orders' own rows (no licence writes):
+ * pass-through when a covering set is held on `tx`, else the order rows are locked here, sorted, on
+ * this same transaction. Taking only L3 keeps the class order when the caller already holds L2 licences.
+ */
+export async function lockOrderRowsInTx(tx: Tx, storeId: string, orderIds: readonly string[]): Promise<'held' | 'locked'> {
+  if (!orderIds.length) return 'held';
+  if (await lockSetCovers(tx, storeId, orderIds.map((orderId) => ({ kind: 'order' as const, orderId })))) return 'held';
+  await lockRows(tx, 'order', storeId, orderIds, new Set());
+  return 'locked';
+}
+
+/**
  * Plan → lock → verify. `fn` runs inside the locked transaction after L2/L3 and
  * receives the held brand. A list of subjects is planned as the union of its members.
  * Restarts on plan growth (LockSetGrew) or lock timeout (55P03), up to maxRestarts.
@@ -314,7 +369,9 @@ export async function withLockedSet<T>(
           promisedOrderIds: plan.orderIds.map(canonical),
           lockedRows: taken,
         };
-        return fn(tx, mintHeld(witness), plan);
+        const held = mintHeld(witness);
+        // X-49: the set is visible to helpers on this transaction for the duration of fn.
+        return lockSetContext.run({ tx, held, plan }, () => fn(tx, held, plan));
       });
     } catch (e) {
       if (!(e instanceof LockSetGrew) && !isLockTimeout(e)) throw e;
