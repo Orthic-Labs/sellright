@@ -11,9 +11,11 @@
         "enum": [
           "ACTIVE_SUBSCRIPTION_EXISTS",
           "ADDRESS_NOT_FOUND",
+          "ALREADY_REVIEWED",
           "APPLE_SIGNIN_NOT_CONFIGURED",
           "APPLE_TOKEN_INVALID",
           "AUTH_REQUIRED",
+          "BIRTHDAY_ALREADY_SET",
           "BOT_CHECK_FAILED",
           "CART_INVALID",
           "CART_NOT_FOUND",
@@ -30,6 +32,7 @@
           "GOOGLE_TOKEN_INVALID",
           "IDEMPOTENCY_KEY_REQUIRED",
           "IDEMPOTENCY_PAYLOAD_MISMATCH",
+          "INVALID_BIRTHDAY",
           "INVALID_CHECKOUT_REQUEST",
           "INVALID_CREDENTIALS",
           "INVALID_PAYMENT_REQUEST",
@@ -52,10 +55,13 @@
           "PAYMENT_NOT_FOUND",
           "POST_NOT_FOUND",
           "PRODUCT_NOT_FOUND",
+          "PURCHASE_REQUIRED",
           "RATE_LIMITED",
+          "REVIEWS_DISABLED",
           "SEAT_LIMIT_REACHED",
           "SECURITY_CHECK_FAILED",
           "SHIPPING_UNAVAILABLE",
+          "SIGN_IN_REQUIRED",
           "STRIPE_NOT_CONFIGURED",
           "SUBSCRIPTION_NOT_FOUND",
           "TOKEN_INVALID",
@@ -4721,6 +4727,39 @@
                         "expiryDays": {
                           "type": "integer",
                           "nullable": true
+                        },
+                        "reviewBonusPoints": {
+                          "type": "integer"
+                        },
+                        "reviewBonusVerifiedOnly": {
+                          "type": "boolean"
+                        },
+                        "signupBonusPoints": {
+                          "type": "integer"
+                        },
+                        "firstOrderBonusPoints": {
+                          "type": "integer"
+                        },
+                        "birthdayBonusPoints": {
+                          "type": "integer"
+                        },
+                        "productMultipliers": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "productId": {
+                                "type": "string"
+                              },
+                              "multiplier": {
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "productId",
+                              "multiplier"
+                            ]
+                          }
                         }
                       },
                       "required": [
@@ -4729,7 +4768,13 @@
                         "pointsPerDollarOff",
                         "minRedeemPoints",
                         "maxRedeemPercentOfSubtotal",
-                        "expiryDays"
+                        "expiryDays",
+                        "reviewBonusPoints",
+                        "reviewBonusVerifiedOnly",
+                        "signupBonusPoints",
+                        "firstOrderBonusPoints",
+                        "birthdayBonusPoints",
+                        "productMultipliers"
                       ]
                     }
                   },
@@ -5400,7 +5445,8 @@
                               "partially_refunded",
                               "refunded",
                               "voided",
-                              "failed"
+                              "failed",
+                              "balance_due"
                             ]
                           },
                           "fulfillmentStatus": {
@@ -5600,7 +5646,8 @@
                         "partially_refunded",
                         "refunded",
                         "voided",
-                        "failed"
+                        "failed",
+                        "balance_due"
                       ]
                     },
                     "fulfillmentStatus": {
@@ -5615,6 +5662,10 @@
                     },
                     "currency": {
                       "type": "string"
+                    },
+                    "shippingMethodName": {
+                      "type": "string",
+                      "nullable": true
                     },
                     "subtotal": {
                       "type": "integer"
@@ -5762,6 +5813,7 @@
                     "paymentStatus",
                     "fulfillmentStatus",
                     "currency",
+                    "shippingMethodName",
                     "subtotal",
                     "shippingTotal",
                     "taxTotal",
@@ -6529,6 +6581,39 @@
                         "expiryDays": {
                           "type": "integer",
                           "nullable": true
+                        },
+                        "reviewBonusPoints": {
+                          "type": "integer"
+                        },
+                        "reviewBonusVerifiedOnly": {
+                          "type": "boolean"
+                        },
+                        "signupBonusPoints": {
+                          "type": "integer"
+                        },
+                        "firstOrderBonusPoints": {
+                          "type": "integer"
+                        },
+                        "birthdayBonusPoints": {
+                          "type": "integer"
+                        },
+                        "productMultipliers": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "productId": {
+                                "type": "string"
+                              },
+                              "multiplier": {
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "productId",
+                              "multiplier"
+                            ]
+                          }
                         }
                       },
                       "required": [
@@ -6537,7 +6622,13 @@
                         "pointsPerDollarOff",
                         "minRedeemPoints",
                         "maxRedeemPercentOfSubtotal",
-                        "expiryDays"
+                        "expiryDays",
+                        "reviewBonusPoints",
+                        "reviewBonusVerifiedOnly",
+                        "signupBonusPoints",
+                        "firstOrderBonusPoints",
+                        "birthdayBonusPoints",
+                        "productMultipliers"
                       ]
                     },
                     "currency": {
@@ -6573,6 +6664,10 @@
                           "orderCode": {
                             "type": "string",
                             "nullable": true
+                          },
+                          "label": {
+                            "type": "string",
+                            "nullable": true
                           }
                         },
                         "required": [
@@ -6580,9 +6675,26 @@
                           "points",
                           "createdAt",
                           "expiresAt",
-                          "orderCode"
+                          "orderCode",
+                          "label"
                         ]
                       }
+                    },
+                    "birthday": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "month": {
+                          "type": "integer"
+                        },
+                        "day": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "month",
+                        "day"
+                      ]
                     }
                   },
                   "required": [
@@ -6591,7 +6703,8 @@
                     "balance",
                     "available",
                     "availableValue",
-                    "activity"
+                    "activity",
+                    "birthday"
                   ]
                 }
               }
@@ -6609,6 +6722,441 @@
           },
           "403": {
             "description": "Mailbox unverified",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/shop/account/birthday": {
+      "put": {
+        "summary": "Save the customer birthday (month + day) for the birthday bonus",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "month": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 12
+                  },
+                  "day": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 31
+                  }
+                },
+                "required": [
+                  "month",
+                  "day"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "month": {
+                      "type": "integer"
+                    },
+                    "day": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "month",
+                    "day"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid date",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Mailbox unverified",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Already set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/shop/catalog/products/{slug}/reviews": {
+      "get": {
+        "summary": "Approved reviews + rating aggregate for a product",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[a-z0-9][a-z0-9\\-_]*$/i"
+            },
+            "required": true,
+            "name": "slug",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 10
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true,
+              "minimum": 0,
+              "maximum": 10000,
+              "default": 0
+            },
+            "required": false,
+            "name": "offset",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "newest",
+                "highest",
+                "lowest"
+              ],
+              "default": "newest"
+            },
+            "required": false,
+            "name": "sort",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "allowGuests": {
+                      "type": "boolean"
+                    },
+                    "requirePurchase": {
+                      "type": "boolean"
+                    },
+                    "bonusPoints": {
+                      "type": "integer"
+                    },
+                    "average": {
+                      "type": "number"
+                    },
+                    "count": {
+                      "type": "integer"
+                    },
+                    "distribution": {
+                      "type": "object",
+                      "properties": {
+                        "1": {
+                          "type": "integer"
+                        },
+                        "2": {
+                          "type": "integer"
+                        },
+                        "3": {
+                          "type": "integer"
+                        },
+                        "4": {
+                          "type": "integer"
+                        },
+                        "5": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "1",
+                        "2",
+                        "3",
+                        "4",
+                        "5"
+                      ]
+                    },
+                    "reviews": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "authorName": {
+                            "type": "string"
+                          },
+                          "rating": {
+                            "type": "integer"
+                          },
+                          "title": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "body": {
+                            "type": "string"
+                          },
+                          "verifiedBuyer": {
+                            "type": "boolean"
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          },
+                          "reply": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "repliedAt": {
+                            "type": "string",
+                            "nullable": true
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "authorName",
+                          "rating",
+                          "title",
+                          "body",
+                          "verifiedBuyer",
+                          "createdAt",
+                          "reply",
+                          "repliedAt"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "enabled",
+                    "allowGuests",
+                    "requirePurchase",
+                    "bonusPoints",
+                    "average",
+                    "count",
+                    "distribution",
+                    "reviews"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Submit a product review",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[a-z0-9][a-z0-9\\-_]*$/i"
+            },
+            "required": true,
+            "name": "slug",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "rating": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 5
+                  },
+                  "title": {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  "body": {
+                    "type": "string",
+                    "minLength": 10,
+                    "maxLength": 5000
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 60
+                  },
+                  "email": {
+                    "type": "string",
+                    "maxLength": 254
+                  },
+                  "orderCode": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "turnstileToken": {
+                    "type": "string",
+                    "maxLength": 4096
+                  },
+                  "honeypot": {
+                    "type": "string",
+                    "maxLength": 200
+                  }
+                },
+                "required": [
+                  "rating",
+                  "body"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "approved"
+                      ]
+                    },
+                    "verifiedBuyer": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "status",
+                    "verifiedBuyer"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Security check failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign in required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Already reviewed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
             "content": {
               "application/json": {
                 "schema": {
@@ -6676,7 +7224,8 @@
                         "partially_refunded",
                         "refunded",
                         "voided",
-                        "failed"
+                        "failed",
+                        "balance_due"
                       ]
                     },
                     "fulfillmentStatus": {
@@ -6688,6 +7237,10 @@
                         "partially_delivered",
                         "delivered"
                       ]
+                    },
+                    "shippingMethodName": {
+                      "type": "string",
+                      "nullable": true
                     },
                     "subtotal": {
                       "type": "integer"
@@ -6827,6 +7380,54 @@
                           "shipDate"
                         ]
                       }
+                    },
+                    "amountDue": {
+                      "type": "integer"
+                    },
+                    "balanceChange": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "previousGrandTotal": {
+                          "type": "integer",
+                          "nullable": true
+                        },
+                        "changes": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "editedAt": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "previousGrandTotal",
+                        "changes",
+                        "editedAt"
+                      ]
+                    },
+                    "loyalty": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "earnPoints": {
+                          "type": "integer"
+                        },
+                        "redeemPoints": {
+                          "type": "integer"
+                        },
+                        "pointsDiscount": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "earnPoints",
+                        "redeemPoints",
+                        "pointsDiscount"
+                      ]
                     }
                   },
                   "required": [
@@ -6836,6 +7437,7 @@
                     "status",
                     "paymentStatus",
                     "fulfillmentStatus",
+                    "shippingMethodName",
                     "subtotal",
                     "shippingTotal",
                     "taxTotal",
@@ -6846,7 +7448,10 @@
                     "promotionCode",
                     "payments",
                     "fulfillments",
-                    "lines"
+                    "lines",
+                    "amountDue",
+                    "balanceChange",
+                    "loyalty"
                   ]
                 }
               }
@@ -8946,11 +9551,30 @@
                 "open",
                 "completed",
                 "cancelled",
-                "archived"
+                "archived",
+                "active"
               ]
             },
             "required": false,
             "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": false,
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": false,
+            "name": "to",
             "in": "query"
           },
           {
@@ -8963,11 +9587,21 @@
                 "partially_refunded",
                 "refunded",
                 "voided",
-                "failed"
+                "failed",
+                "balance_due"
               ]
             },
             "required": false,
             "name": "paymentStatus",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 120
+            },
+            "required": false,
+            "name": "shippingMethod",
             "in": "query"
           },
           {
@@ -13181,6 +13815,1207 @@
         }
       }
     },
+    "/v1/admin/orders/{code}/edit/context": {
+      "get": {
+        "summary": "Order-edit context (locks, shipping methods, history)",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "code",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "nullable": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/orders/{code}/edit/variants": {
+      "get": {
+        "summary": "Search variants to add to / swap on an order",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "code",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "required": true,
+            "name": "q",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "nullable": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/orders/{code}/edit/preview": {
+      "post": {
+        "summary": "Preview an order edit (stateless; nothing is written)",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "code",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "ops": {
+                    "type": "array",
+                    "items": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "type": "string",
+                              "enum": [
+                                "set_quantity"
+                              ]
+                            },
+                            "lineId": {
+                              "type": "string",
+                              "format": "uuid"
+                            },
+                            "quantity": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 100000
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "lineId",
+                            "quantity"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "type": "string",
+                              "enum": [
+                                "remove_line"
+                              ]
+                            },
+                            "lineId": {
+                              "type": "string",
+                              "format": "uuid"
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "lineId"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "type": "string",
+                              "enum": [
+                                "swap_variant"
+                              ]
+                            },
+                            "lineId": {
+                              "type": "string",
+                              "format": "uuid"
+                            },
+                            "sku": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "quantity": {
+                              "type": "integer",
+                              "minimum": 1
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "lineId",
+                            "sku"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "type": "string",
+                              "enum": [
+                                "add_item"
+                              ]
+                            },
+                            "sku": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "quantity": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 100000
+                            },
+                            "unitPrice": {
+                              "type": "integer",
+                              "minimum": 0
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "sku",
+                            "quantity"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "type": "string",
+                              "enum": [
+                                "apply_coupon"
+                              ]
+                            },
+                            "code": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 100
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "code"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "type": "string",
+                              "enum": [
+                                "remove_coupon"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "op"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "type": "string",
+                              "enum": [
+                                "set_shipping_method"
+                              ]
+                            },
+                            "code": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "code"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "type": "string",
+                              "enum": [
+                                "set_shipping_amount"
+                              ]
+                            },
+                            "amount": {
+                              "type": "integer",
+                              "minimum": 0
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "amount"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "type": "string",
+                              "enum": [
+                                "remove_shipping"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "op"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "type": "string",
+                              "enum": [
+                                "add_adjustment"
+                              ]
+                            },
+                            "label": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 120
+                            },
+                            "amount": {
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "label",
+                            "amount"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "type": "string",
+                              "enum": [
+                                "remove_adjustment"
+                              ]
+                            },
+                            "adjustmentId": {
+                              "type": "string",
+                              "format": "uuid"
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "adjustmentId"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "type": "string",
+                              "enum": [
+                                "set_address"
+                              ]
+                            },
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "shipping",
+                                "billing"
+                              ]
+                            },
+                            "address": {
+                              "type": "object",
+                              "properties": {
+                                "fullName": {
+                                  "type": "string",
+                                  "nullable": true,
+                                  "maxLength": 200
+                                },
+                                "line1": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200
+                                },
+                                "line2": {
+                                  "type": "string",
+                                  "nullable": true,
+                                  "maxLength": 200
+                                },
+                                "city": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 120
+                                },
+                                "province": {
+                                  "type": "string",
+                                  "nullable": true,
+                                  "maxLength": 120
+                                },
+                                "postalCode": {
+                                  "type": "string",
+                                  "nullable": true,
+                                  "maxLength": 40
+                                },
+                                "country": {
+                                  "type": "string",
+                                  "minLength": 2,
+                                  "maxLength": 2
+                                },
+                                "phone": {
+                                  "type": "string",
+                                  "nullable": true,
+                                  "maxLength": 60
+                                }
+                              },
+                              "required": [
+                                "line1",
+                                "city",
+                                "country"
+                              ]
+                            },
+                            "saveToAddressBook": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "kind",
+                            "address"
+                          ]
+                        }
+                      ]
+                    },
+                    "maxItems": 100
+                  }
+                },
+                "required": [
+                  "ops"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "nullable": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/orders/{code}/edit/commit": {
+      "post": {
+        "summary": "Commit an order edit and settle its balance",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "code",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "ops": {
+                    "type": "array",
+                    "items": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "type": "string",
+                              "enum": [
+                                "set_quantity"
+                              ]
+                            },
+                            "lineId": {
+                              "type": "string",
+                              "format": "uuid"
+                            },
+                            "quantity": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 100000
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "lineId",
+                            "quantity"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "type": "string",
+                              "enum": [
+                                "remove_line"
+                              ]
+                            },
+                            "lineId": {
+                              "type": "string",
+                              "format": "uuid"
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "lineId"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "type": "string",
+                              "enum": [
+                                "swap_variant"
+                              ]
+                            },
+                            "lineId": {
+                              "type": "string",
+                              "format": "uuid"
+                            },
+                            "sku": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "quantity": {
+                              "type": "integer",
+                              "minimum": 1
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "lineId",
+                            "sku"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "type": "string",
+                              "enum": [
+                                "add_item"
+                              ]
+                            },
+                            "sku": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "quantity": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 100000
+                            },
+                            "unitPrice": {
+                              "type": "integer",
+                              "minimum": 0
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "sku",
+                            "quantity"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "type": "string",
+                              "enum": [
+                                "apply_coupon"
+                              ]
+                            },
+                            "code": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 100
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "code"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "type": "string",
+                              "enum": [
+                                "remove_coupon"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "op"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "type": "string",
+                              "enum": [
+                                "set_shipping_method"
+                              ]
+                            },
+                            "code": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "code"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "type": "string",
+                              "enum": [
+                                "set_shipping_amount"
+                              ]
+                            },
+                            "amount": {
+                              "type": "integer",
+                              "minimum": 0
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "amount"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "type": "string",
+                              "enum": [
+                                "remove_shipping"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "op"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "type": "string",
+                              "enum": [
+                                "add_adjustment"
+                              ]
+                            },
+                            "label": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 120
+                            },
+                            "amount": {
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "label",
+                            "amount"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "type": "string",
+                              "enum": [
+                                "remove_adjustment"
+                              ]
+                            },
+                            "adjustmentId": {
+                              "type": "string",
+                              "format": "uuid"
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "adjustmentId"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "type": "string",
+                              "enum": [
+                                "set_address"
+                              ]
+                            },
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "shipping",
+                                "billing"
+                              ]
+                            },
+                            "address": {
+                              "type": "object",
+                              "properties": {
+                                "fullName": {
+                                  "type": "string",
+                                  "nullable": true,
+                                  "maxLength": 200
+                                },
+                                "line1": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200
+                                },
+                                "line2": {
+                                  "type": "string",
+                                  "nullable": true,
+                                  "maxLength": 200
+                                },
+                                "city": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 120
+                                },
+                                "province": {
+                                  "type": "string",
+                                  "nullable": true,
+                                  "maxLength": 120
+                                },
+                                "postalCode": {
+                                  "type": "string",
+                                  "nullable": true,
+                                  "maxLength": 40
+                                },
+                                "country": {
+                                  "type": "string",
+                                  "minLength": 2,
+                                  "maxLength": 2
+                                },
+                                "phone": {
+                                  "type": "string",
+                                  "nullable": true,
+                                  "maxLength": 60
+                                }
+                              },
+                              "required": [
+                                "line1",
+                                "city",
+                                "country"
+                              ]
+                            },
+                            "saveToAddressBook": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "op",
+                            "kind",
+                            "address"
+                          ]
+                        }
+                      ]
+                    },
+                    "minItems": 1,
+                    "maxItems": 100
+                  },
+                  "expectedGrandTotal": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "expectedBalance": {
+                    "type": "integer"
+                  },
+                  "idempotencyKey": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "settlement": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "enum": [
+                              "refund_now"
+                            ]
+                          },
+                          "paymentId": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        "required": [
+                          "type"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "enum": [
+                              "leave_credit"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "type"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "enum": [
+                              "send_pay_link"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "type"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "enum": [
+                              "record_payment"
+                            ]
+                          },
+                          "method": {
+                            "type": "string",
+                            "enum": [
+                              "cash",
+                              "zelle",
+                              "check",
+                              "card_phone",
+                              "other"
+                            ]
+                          },
+                          "reference": {
+                            "type": "string",
+                            "maxLength": 200
+                          },
+                          "amount": {
+                            "type": "integer",
+                            "minimum": 1
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "method"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "enum": [
+                              "leave_due"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "type"
+                        ]
+                      }
+                    ]
+                  },
+                  "notifyCustomer": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 1000
+                  }
+                },
+                "required": [
+                  "ops",
+                  "expectedGrandTotal",
+                  "idempotencyKey"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "nullable": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/orders/{code}/address": {
+      "put": {
+        "summary": "Edit an order address directly (any non-cancelled order)",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "code",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "shipping",
+                      "billing"
+                    ]
+                  },
+                  "address": {
+                    "type": "object",
+                    "properties": {
+                      "fullName": {
+                        "type": "string",
+                        "nullable": true,
+                        "maxLength": 200
+                      },
+                      "line1": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200
+                      },
+                      "line2": {
+                        "type": "string",
+                        "nullable": true,
+                        "maxLength": 200
+                      },
+                      "city": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 120
+                      },
+                      "province": {
+                        "type": "string",
+                        "nullable": true,
+                        "maxLength": 120
+                      },
+                      "postalCode": {
+                        "type": "string",
+                        "nullable": true,
+                        "maxLength": 40
+                      },
+                      "country": {
+                        "type": "string",
+                        "minLength": 2,
+                        "maxLength": 2
+                      },
+                      "phone": {
+                        "type": "string",
+                        "nullable": true,
+                        "maxLength": 60
+                      }
+                    },
+                    "required": [
+                      "line1",
+                      "city",
+                      "country"
+                    ]
+                  },
+                  "saveToAddressBook": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 1000
+                  }
+                },
+                "required": [
+                  "kind",
+                  "address"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "nullable": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/admin/draft-orders": {
       "post": {
         "summary": "Create a manual order (e.g. phone order)",
@@ -13215,8 +15050,11 @@
                     "format": "email"
                   },
                   "shipping": {
-                    "type": "integer",
-                    "default": 0
+                    "type": "integer"
+                  },
+                  "shippingMethodCode": {
+                    "type": "string",
+                    "minLength": 1
                   },
                   "shippingAddress": {
                     "type": "object",
@@ -13374,9 +15212,9 @@
         }
       }
     },
-    "/v1/admin/import-tracking": {
+    "/v1/admin/import-tracking/preview": {
       "post": {
-        "summary": "Bulk import tracking numbers (creates Shipped fulfillments)",
+        "summary": "Dry-run a tracking import (no writes): per-row verdict + items that would ship",
         "requestBody": {
           "content": {
             "application/json": {
@@ -13389,13 +15227,17 @@
                       "type": "object",
                       "properties": {
                         "code": {
-                          "type": "string"
+                          "type": "string",
+                          "maxLength": 64
                         },
                         "tracking": {
-                          "type": "string"
+                          "type": "string",
+                          "maxLength": 128
                         },
                         "carrier": {
-                          "type": "string"
+                          "type": "string",
+                          "nullable": true,
+                          "maxLength": 40
                         }
                       },
                       "required": [
@@ -13403,12 +15245,208 @@
                         "tracking"
                       ]
                     },
-                    "minItems": 1,
                     "maxItems": 5000
+                  },
+                  "csv": {
+                    "type": "string",
+                    "maxLength": 2000000
                   }
-                },
-                "required": [
-                  "rows"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "rows": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "index": {
+                            "type": "integer"
+                          },
+                          "code": {
+                            "type": "string"
+                          },
+                          "tracking": {
+                            "type": "string"
+                          },
+                          "carrier": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "carrierSource": {
+                            "type": "string",
+                            "enum": [
+                              "given",
+                              "detected",
+                              "unknown"
+                            ]
+                          },
+                          "status": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          },
+                          "items": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "sku": {
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "type": "string"
+                                },
+                                "quantity": {
+                                  "type": "integer"
+                                }
+                              },
+                              "required": [
+                                "sku",
+                                "name",
+                                "quantity"
+                              ]
+                            }
+                          },
+                          "suggestion": {
+                            "type": "string"
+                          },
+                          "customerEmail": {
+                            "type": "string",
+                            "nullable": true
+                          }
+                        },
+                        "required": [
+                          "index",
+                          "code",
+                          "tracking",
+                          "carrier",
+                          "carrierSource",
+                          "status",
+                          "message",
+                          "items"
+                        ]
+                      }
+                    },
+                    "summary": {
+                      "type": "object",
+                      "properties": {
+                        "total": {
+                          "type": "integer"
+                        },
+                        "importable": {
+                          "type": "integer"
+                        },
+                        "byStatus": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "integer"
+                          }
+                        }
+                      },
+                      "required": [
+                        "total",
+                        "importable",
+                        "byStatus"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "rows",
+                    "summary"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/import-tracking": {
+      "post": {
+        "summary": "Bulk import tracking numbers (creates Shipped fulfillments); only rows that validate are imported",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "allOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "rows": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "string",
+                              "maxLength": 64
+                            },
+                            "tracking": {
+                              "type": "string",
+                              "maxLength": 128
+                            },
+                            "carrier": {
+                              "type": "string",
+                              "nullable": true,
+                              "maxLength": 40
+                            }
+                          },
+                          "required": [
+                            "code",
+                            "tracking"
+                          ]
+                        },
+                        "maxItems": 5000
+                      },
+                      "csv": {
+                        "type": "string",
+                        "maxLength": 2000000
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "notify": {
+                        "type": "boolean",
+                        "default": true
+                      },
+                      "source": {
+                        "type": "string",
+                        "enum": [
+                          "paste",
+                          "csv",
+                          "grid"
+                        ],
+                        "default": "paste"
+                      },
+                      "fileName": {
+                        "type": "string",
+                        "maxLength": 200
+                      }
+                    }
+                  }
                 ]
               }
             }
@@ -13442,11 +15480,299 @@
                           "error"
                         ]
                       }
+                    },
+                    "emailsQueued": {
+                      "type": "integer"
+                    },
+                    "skipped": {
+                      "type": "integer"
+                    },
+                    "batchId": {
+                      "type": "string"
+                    },
+                    "rows": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "index": {
+                            "type": "integer"
+                          },
+                          "code": {
+                            "type": "string"
+                          },
+                          "tracking": {
+                            "type": "string"
+                          },
+                          "carrier": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "carrierSource": {
+                            "type": "string",
+                            "enum": [
+                              "given",
+                              "detected",
+                              "unknown"
+                            ]
+                          },
+                          "status": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          },
+                          "items": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "sku": {
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "type": "string"
+                                },
+                                "quantity": {
+                                  "type": "integer"
+                                }
+                              },
+                              "required": [
+                                "sku",
+                                "name",
+                                "quantity"
+                              ]
+                            }
+                          },
+                          "suggestion": {
+                            "type": "string"
+                          },
+                          "customerEmail": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "imported": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "index",
+                          "code",
+                          "tracking",
+                          "carrier",
+                          "carrierSource",
+                          "status",
+                          "message",
+                          "items",
+                          "imported"
+                        ]
+                      }
                     }
                   },
                   "required": [
                     "updated",
-                    "errors"
+                    "errors",
+                    "emailsQueued",
+                    "skipped",
+                    "batchId",
+                    "rows"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/import-tracking/recent": {
+      "get": {
+        "summary": "Recent tracking imports",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "nullable": true
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/fulfillment/open-orders": {
+      "get": {
+        "summary": "Paid orders awaiting shipment (unfulfilled or partially fulfilled)",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "q",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 200
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "nullable": true
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "total"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/jobs/auto-deliver": {
+      "post": {
+        "summary": "Mark old Shipped fulfillments as Delivered (dry-run by default)",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "dryRun": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "days": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 365
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "dryRun": {
+                      "type": "boolean"
+                    },
+                    "days": {
+                      "type": "integer"
+                    },
+                    "cutoff": {
+                      "type": "string"
+                    },
+                    "count": {
+                      "type": "integer"
+                    },
+                    "sample": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "code": {
+                            "type": "string"
+                          },
+                          "trackingCode": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "carrier": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "shippedAt": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "trackingCode",
+                          "carrier",
+                          "shippedAt"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "dryRun",
+                    "days",
+                    "cutoff",
+                    "count",
+                    "sample"
                   ]
                 }
               }
@@ -15912,7 +18238,59 @@
                     "minLength": 1
                   },
                   "calculator": {
-                    "nullable": true
+                    "type": "object",
+                    "properties": {
+                      "flat": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 100000000
+                      },
+                      "min": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 100000000
+                      },
+                      "max": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 100000000
+                      },
+                      "countries": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z]{2}$"
+                        },
+                        "maxItems": 300
+                      },
+                      "exclude": {
+                        "type": "boolean"
+                      },
+                      "requireCountry": {
+                        "type": "boolean"
+                      },
+                      "subtotalBasis": {
+                        "type": "string",
+                        "enum": [
+                          "pre_discount",
+                          "discounted_with_tax"
+                        ]
+                      },
+                      "taxRate": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 100000
+                      },
+                      "taxInclusive": {
+                        "type": "boolean"
+                      }
+                    },
+                    "default": {
+                      "flat": 0
+                    },
+                    "additionalProperties": {
+                      "nullable": true
+                    }
                   },
                   "enabled": {
                     "type": "boolean",
@@ -15979,10 +18357,65 @@
                 "type": "object",
                 "properties": {
                   "name": {
-                    "type": "string"
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "code": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
                   },
                   "calculator": {
-                    "nullable": true
+                    "type": "object",
+                    "properties": {
+                      "flat": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 100000000
+                      },
+                      "min": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 100000000
+                      },
+                      "max": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 100000000
+                      },
+                      "countries": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z]{2}$"
+                        },
+                        "maxItems": 300
+                      },
+                      "exclude": {
+                        "type": "boolean"
+                      },
+                      "requireCountry": {
+                        "type": "boolean"
+                      },
+                      "subtotalBasis": {
+                        "type": "string",
+                        "enum": [
+                          "pre_discount",
+                          "discounted_with_tax"
+                        ]
+                      },
+                      "taxRate": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 100000
+                      },
+                      "taxInclusive": {
+                        "type": "boolean"
+                      }
+                    },
+                    "additionalProperties": {
+                      "nullable": true
+                    }
                   },
                   "enabled": {
                     "type": "boolean"
@@ -16023,6 +18456,16 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Code in use",
             "content": {
               "application/json": {
                 "schema": {
@@ -16699,6 +19142,64 @@
                       "nullable": true,
                       "minimum": 1,
                       "maximum": 36500
+                    },
+                    "reviewBonusPoints": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 1000000,
+                      "default": 25
+                    },
+                    "reviewBonusVerifiedOnly": {
+                      "type": "boolean",
+                      "default": true
+                    },
+                    "signupBonusPoints": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 1000000,
+                      "default": 0
+                    },
+                    "signupBonusSince": {
+                      "type": "string",
+                      "nullable": true,
+                      "format": "date-time",
+                      "default": null
+                    },
+                    "firstOrderBonusPoints": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 1000000,
+                      "default": 0
+                    },
+                    "birthdayBonusPoints": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 1000000,
+                      "default": 0
+                    },
+                    "productMultipliers": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "productId": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+                          },
+                          "multiplier": {
+                            "type": "number",
+                            "minimum": 1,
+                            "maximum": 100
+                          }
+                        },
+                        "required": [
+                          "productId",
+                          "multiplier"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "maxItems": 200,
+                      "default": []
                     }
                   },
                   "required": [
@@ -16763,6 +19264,64 @@
                     "nullable": true,
                     "minimum": 1,
                     "maximum": 36500
+                  },
+                  "reviewBonusPoints": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1000000,
+                    "default": 25
+                  },
+                  "reviewBonusVerifiedOnly": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "signupBonusPoints": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1000000,
+                    "default": 0
+                  },
+                  "signupBonusSince": {
+                    "type": "string",
+                    "nullable": true,
+                    "format": "date-time",
+                    "default": null
+                  },
+                  "firstOrderBonusPoints": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1000000,
+                    "default": 0
+                  },
+                  "birthdayBonusPoints": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1000000,
+                    "default": 0
+                  },
+                  "productMultipliers": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "productId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+                        },
+                        "multiplier": {
+                          "type": "number",
+                          "minimum": 1,
+                          "maximum": 100
+                        }
+                      },
+                      "required": [
+                        "productId",
+                        "multiplier"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "maxItems": 200,
+                    "default": []
                   }
                 },
                 "required": [
@@ -16815,6 +19374,64 @@
                       "nullable": true,
                       "minimum": 1,
                       "maximum": 36500
+                    },
+                    "reviewBonusPoints": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 1000000,
+                      "default": 25
+                    },
+                    "reviewBonusVerifiedOnly": {
+                      "type": "boolean",
+                      "default": true
+                    },
+                    "signupBonusPoints": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 1000000,
+                      "default": 0
+                    },
+                    "signupBonusSince": {
+                      "type": "string",
+                      "nullable": true,
+                      "format": "date-time",
+                      "default": null
+                    },
+                    "firstOrderBonusPoints": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 1000000,
+                      "default": 0
+                    },
+                    "birthdayBonusPoints": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 1000000,
+                      "default": 0
+                    },
+                    "productMultipliers": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "productId": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+                          },
+                          "multiplier": {
+                            "type": "number",
+                            "minimum": 1,
+                            "maximum": 100
+                          }
+                        },
+                        "required": [
+                          "productId",
+                          "multiplier"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "maxItems": 200,
+                      "default": []
                     }
                   },
                   "required": [
@@ -16928,6 +19545,13 @@
                           },
                           "createdAt": {
                             "type": "string"
+                          },
+                          "rule": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "reversible": {
+                            "type": "boolean"
                           }
                         },
                         "required": [
@@ -16939,7 +19563,9 @@
                           "actor",
                           "orderCode",
                           "expiresAt",
-                          "createdAt"
+                          "createdAt",
+                          "rule",
+                          "reversible"
                         ]
                       }
                     }
@@ -17085,6 +19711,13 @@
                           },
                           "createdAt": {
                             "type": "string"
+                          },
+                          "rule": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "reversible": {
+                            "type": "boolean"
                           }
                         },
                         "required": [
@@ -17096,7 +19729,9 @@
                           "actor",
                           "orderCode",
                           "expiresAt",
-                          "createdAt"
+                          "createdAt",
+                          "rule",
+                          "reversible"
                         ]
                       }
                     }
@@ -17146,6 +19781,830 @@
           },
           "409": {
             "description": "Insufficient points",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/loyalty/summary": {
+      "get": {
+        "summary": "Points program totals: issued, redeemed, outstanding, liability",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "currency": {
+                      "type": "string"
+                    },
+                    "pointsPerDollarOff": {
+                      "type": "integer"
+                    },
+                    "issued": {
+                      "type": "integer"
+                    },
+                    "redeemed": {
+                      "type": "integer"
+                    },
+                    "restored": {
+                      "type": "integer"
+                    },
+                    "expired": {
+                      "type": "integer"
+                    },
+                    "removed": {
+                      "type": "integer"
+                    },
+                    "outstanding": {
+                      "type": "integer"
+                    },
+                    "liabilityCents": {
+                      "type": "integer"
+                    },
+                    "customersWithBalance": {
+                      "type": "integer"
+                    },
+                    "byKind": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string"
+                          },
+                          "points": {
+                            "type": "integer"
+                          },
+                          "entries": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "points",
+                          "entries"
+                        ]
+                      }
+                    },
+                    "last30Days": {
+                      "type": "object",
+                      "properties": {
+                        "issued": {
+                          "type": "integer"
+                        },
+                        "redeemed": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "issued",
+                        "redeemed"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "enabled",
+                    "currency",
+                    "pointsPerDollarOff",
+                    "issued",
+                    "redeemed",
+                    "restored",
+                    "expired",
+                    "removed",
+                    "outstanding",
+                    "liabilityCents",
+                    "customersWithBalance",
+                    "byKind",
+                    "last30Days"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/loyalty/ledger/{id}/reverse": {
+      "post": {
+        "summary": "Reverse a bonus grant",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "reversed": {
+                      "type": "integer"
+                    },
+                    "shortfall": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "reversed",
+                    "shortfall"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not reversible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/reviews": {
+      "get": {
+        "summary": "Review moderation queue",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "approved",
+                "rejected",
+                "all"
+              ],
+              "default": "pending"
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "required": false,
+            "name": "q",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            },
+            "required": false,
+            "name": "page",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 25
+            },
+            "required": false,
+            "name": "pageSize",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "productId": {
+                            "type": "string"
+                          },
+                          "productName": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "productSlug": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "customerId": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "authorName": {
+                            "type": "string"
+                          },
+                          "authorEmail": {
+                            "type": "string"
+                          },
+                          "rating": {
+                            "type": "integer"
+                          },
+                          "title": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "body": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "pending",
+                              "approved",
+                              "rejected"
+                            ]
+                          },
+                          "verifiedBuyer": {
+                            "type": "boolean"
+                          },
+                          "reply": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "repliedAt": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "bonusPoints": {
+                            "type": "integer"
+                          },
+                          "moderatedBy": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "moderatedAt": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "productId",
+                          "productName",
+                          "productSlug",
+                          "customerId",
+                          "authorName",
+                          "authorEmail",
+                          "rating",
+                          "title",
+                          "body",
+                          "status",
+                          "verifiedBuyer",
+                          "reply",
+                          "repliedAt",
+                          "bonusPoints",
+                          "moderatedBy",
+                          "moderatedAt",
+                          "createdAt"
+                        ]
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "page": {
+                      "type": "integer"
+                    },
+                    "pageSize": {
+                      "type": "integer"
+                    },
+                    "counts": {
+                      "type": "object",
+                      "properties": {
+                        "pending": {
+                          "type": "integer"
+                        },
+                        "approved": {
+                          "type": "integer"
+                        },
+                        "rejected": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "pending",
+                        "approved",
+                        "rejected"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "total",
+                    "page",
+                    "pageSize",
+                    "counts"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/reviews/{id}/approve": {
+      "post": {
+        "summary": "Approve a review",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "bonusPoints": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "bonusPoints"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/reviews/{id}/reject": {
+      "post": {
+        "summary": "Reject a review",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "bonusPoints": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "bonusPoints"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/reviews/{id}": {
+      "delete": {
+        "summary": "Delete a review",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "bonusPoints": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "bonusPoints"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/reviews/{id}/reply": {
+      "put": {
+        "summary": "Set or clear the public reply on a review",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reply": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 2000
+                  }
+                },
+                "required": [
+                  "reply"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/reviews-settings": {
+      "get": {
+        "summary": "Review settings",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean",
+                      "default": true
+                    },
+                    "allowGuests": {
+                      "type": "boolean",
+                      "default": false
+                    },
+                    "autoApprove": {
+                      "type": "boolean",
+                      "default": false
+                    },
+                    "requirePurchase": {
+                      "type": "boolean",
+                      "default": false
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Update review settings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "allowGuests": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "autoApprove": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "requirePurchase": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean",
+                      "default": true
+                    },
+                    "allowGuests": {
+                      "type": "boolean",
+                      "default": false
+                    },
+                    "autoApprove": {
+                      "type": "boolean",
+                      "default": false
+                    },
+                    "requirePurchase": {
+                      "type": "boolean",
+                      "default": false
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
             "content": {
               "application/json": {
                 "schema": {

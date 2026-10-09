@@ -10,7 +10,8 @@
 import { desc, eq, inArray, sql } from 'drizzle-orm';
 import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
-import { deriveFulfillmentStatus, derivePaymentStatus, wirePaymentState, type OrderFulfillmentStatus, type OrderPaymentStatus, type OrderStatus } from '../orders/status.js';
+import { EDIT_REFUND_SOURCE } from '../payments/edit-refund.js';
+import { deriveFulfillmentStatus, derivePaymentStatus, wirePaymentState, type OrderFulfillmentStatus, type OrderPaymentStatusWithBalance, type OrderStatus } from '../orders/status.js';
 
 export interface OrderPaymentFact {
   method: string;
@@ -51,10 +52,26 @@ export async function loadOrderFulfillments(tx: Tx, orderId: string): Promise<Or
   return rows.map((f) => ({ state: f.state, trackingCode: f.trackingCode, carrier: f.carrier, updatedAt: f.updatedAt?.toISOString() ?? null }));
 }
 
+/** Cents still owed per order (grand total - settled payments + edit-handed-back
+ *  refunds; same arithmetic as payments/settle.ts `amountDueForOrder`), batched. */
+async function amountDueByOrder(tx: Tx, ids: string[]): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (!ids.length) return out;
+  const idList = sql.join(ids.map((i) => sql`${i}::uuid`), sql`, `);
+  const r = await tx.execute(sql`
+    select o.id as id, (o.grand_total
+      - coalesce((select sum(p.amount) from payment p where p.order_id = o.id and p.state = 'Settled'), 0)
+      + coalesce((select sum(rf.amount) from refund rf where rf.order_id = o.id and rf.state <> 'Failed' and rf.metadata->>'source' = ${EDIT_REFUND_SOURCE}), 0))::bigint as due
+    from "order" o where o.id in (${idList})`);
+  for (const row of (r as unknown as { rows: Array<{ id: string; due: string | number }> }).rows) out.set(row.id, Number(row.due));
+  return out;
+}
+
 export interface OrderStatusFacts {
   /** Mirrors the `order.status` STORED GENERATED column — see orders/status.ts. */
   status: OrderStatus;
-  paymentStatus: OrderPaymentStatus;
+  /** `balance_due` when an edit left a Paid/PartiallyRefunded order owing money. */
+  paymentStatus: OrderPaymentStatusWithBalance;
   fulfillmentStatus: OrderFulfillmentStatus;
 }
 
@@ -76,9 +93,10 @@ export async function loadOrderStatusFacts(
     tx.select({ quantity: s.orderLine.quantity, fulfilledQty: s.orderLine.fulfilledQty, cancelledQty: s.orderLine.cancelledQty }).from(s.orderLine).where(eq(s.orderLine.orderId, order.id)),
     tx.select({ state: s.fulfillment.state }).from(s.fulfillment).where(eq(s.fulfillment.orderId, order.id)),
   ]);
+  const due = (await amountDueByOrder(tx, [order.id])).get(order.id) ?? 0;
   return {
     status: order.status as OrderStatus,
-    paymentStatus: derivePaymentStatus(order.state, payments),
+    paymentStatus: derivePaymentStatus(order.state, payments, due),
     fulfillmentStatus: deriveFulfillmentStatus(lines, fulfillments),
   };
 }
@@ -111,13 +129,14 @@ export async function loadOrderStatusFactsBatch(
     for (const r of rows) { const list = m.get(r.orderId); if (list) list.push(r); else m.set(r.orderId, [r]); }
     return m;
   };
+  const dueByOrder = await amountDueByOrder(tx, ids);
   const paymentsByOrder = bucket(payments);
   const linesByOrder = bucket(lines);
   const fulfillmentsByOrder = bucket(fulfillments);
   for (const order of orders) {
     out.set(order.id, {
       status: order.status as OrderStatus,
-      paymentStatus: derivePaymentStatus(order.state, paymentsByOrder.get(order.id) ?? []),
+      paymentStatus: derivePaymentStatus(order.state, paymentsByOrder.get(order.id) ?? [], dueByOrder.get(order.id) ?? 0),
       fulfillmentStatus: deriveFulfillmentStatus(linesByOrder.get(order.id) ?? [], fulfillmentsByOrder.get(order.id) ?? []),
     });
   }

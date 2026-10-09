@@ -61,6 +61,9 @@ const HAND_WRITTEN = [
   '0081_order_status_split.sql',
   '0082_admin_essentials.sql',
   '0083_stripe_intent_attempts.sql',
+  '0084_order_edit.sql',
+  '0085_reviews_and_bonuses.sql',
+  '0086_order_shipping_method.sql',
 ];
 
 const MARKER = '-- HAND-WRITTEN: see docs/runbooks/migrations.md';

@@ -61,6 +61,8 @@ const JOB_KEYS = {
   // Payments D7/D8: stuck NMI/Sezzle attempt auto-verification
   // (jobs/gateway-recovery.ts). 20 leaves room for parallel lanes' keys.
   'gateway-recovery': NAMESPACE | 20n,
+  // REWARDS-1: annual birthday bonus sweep (jobs/birthday-bonus.ts).
+  'birthday-bonus': NAMESPACE | 30n,
 } as const satisfies Record<string, bigint>;
 
 export type LeaderLockedJob = keyof typeof JOB_KEYS;

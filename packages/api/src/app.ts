@@ -17,10 +17,13 @@ import { adminDashboard } from './routes/admin-dashboard.js';
 import { adminCatalog } from './routes/admin-catalog.js';
 import { adminProducts } from './routes/admin-products.js';
 import { adminOrders } from './routes/admin-orders.js';
+import { adminOrderEdit } from './routes/admin-order-edit.js';
 import { adminOrderOps } from './routes/admin-order-ops.js';
 import { adminMarketing } from './routes/admin-marketing.js';
 import { adminSettings } from './routes/admin-settings.js';
 import { adminLoyalty } from './routes/admin-loyalty.js';
+import { reviews } from './routes/reviews.js';
+import { adminReviews } from './routes/admin-reviews.js';
 import { adminPaymentSettings } from './routes/admin-payment-settings.js';
 import { adminEmailSettings } from './routes/admin-email-settings.js';
 import { adminSettingsAdvanced } from './routes/admin-settings-advanced.js';
@@ -312,6 +315,7 @@ export function createApp(): OpenAPIHono {
   app.route('/', customerTokens);
   app.route('/', account);
   app.route('/', loyalty); // LOYALTY-1: customer points balance (redeem happens in checkout)
+  app.route('/', reviews); // REWARDS-1: product reviews (list + submit)
   app.route('/', orders);
   app.route('/', paymentWebhooks); // WP3: inbound Stripe webhooks (signature-auth, no CSRF/cookie)
   app.route('/', storeKitWebhooks); // Apple StoreKit: App Store Server Notifications + pro/link-storekit
@@ -333,10 +337,12 @@ export function createApp(): OpenAPIHono {
   app.route('/', adminProducts); // product list/detail/edit + variant pricing/stock
   app.route('/', adminCatalog); // catalog mgmt: product/variant create+delete, collections, inventory
   app.route('/', adminOrders); // orders++: refunds, draft orders, abandoned carts
+  app.route('/', adminOrderEdit); // G13/G5: Shopify-style edit of paid orders + direct address edit
   app.route('/', adminOrderOps); // draft orders, tracking import, export, bulk order operations
   app.route('/', adminMarketing); // promotions manager + Listmonk integration
   app.route('/', adminSettings); // store/tax, payments, shipping, staff/roles, notifications
   app.route('/', adminLoyalty); // LOYALTY-1: points program settings, customer ledger, manual adjust
+  app.route('/', adminReviews); // REWARDS-1: review moderation + settings
   app.route('/', adminPaymentSettings); // WS-A: encrypted per-store payment credentials, verify, Stripe webhook auto-create
   app.route('/', adminEmailSettings); // WS-A: encrypted per-store SMTP settings, presets, test send
   app.route('/', adminSettingsAdvanced); // webhooks, staff, currency rates

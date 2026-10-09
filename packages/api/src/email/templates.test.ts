@@ -3,7 +3,7 @@
  * templates — no DB, pure rendering.
  */
 import { describe, expect, it } from 'vitest';
-import { orderRefundConfirmation, emailAddressChange, type StoreCtx } from './templates.js';
+import { orderRefundConfirmation, emailAddressChange, pointsEarned, reviewApproved, type StoreCtx } from './templates.js';
 
 const store: StoreCtx = {
   name: 'Brand B',
@@ -45,5 +45,23 @@ describe('emailAddressChange (emailAddressChangeHandler parity)', () => {
     expect(m.html).toContain('new@example.com');
     expect(m.html).toContain('24 hours');
     expect(m.subject).toContain('Confirm your new email address');
+  });
+});
+
+describe('REWARDS-1 templates', () => {
+  it('pointsEarned itemizes the posting and states the new balance', () => {
+    const m = pointsEarned(store, { points: 600, balance: 1234, lines: [{ label: 'Order B-1', points: 100 }, { label: 'First order bonus', points: 500 }], accountUrl: 'https://b-brand.example/account/rewards' });
+    expect(m.subject).toContain('You earned 600 points');
+    expect(m.html).toContain('First order bonus');
+    expect(m.text).toContain('New balance: 1,234 points');
+    expect(m.html).toContain('/account/rewards');
+  });
+  it('pointsEarned escapes caller-supplied labels', () => {
+    expect(pointsEarned(store, { points: 1, balance: 1, lines: [{ label: '<script>x</script>', points: 1 }] }).html).not.toContain('<script>x');
+  });
+  it('reviewApproved mentions points only when a bonus was granted', () => {
+    expect(reviewApproved(store, { productName: 'Knife', points: 50, balance: 150 }).text).toContain('50 points');
+    expect(reviewApproved(store, { productName: 'Knife', points: 0, balance: null }).text).not.toContain('points');
+    expect(reviewApproved(store, { productName: '<b>Knife</b>', points: 0, balance: null }).html).not.toContain('<b>Knife</b>');
   });
 });

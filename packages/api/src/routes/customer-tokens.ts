@@ -10,6 +10,7 @@
  * SR-05: sender + storefront URL resolve per store (store.config.storefrontUrl
  * / emailFrom, with per-app env overrides still winning when an appKey is set).
  */
+import { grantSignupBonus } from '../loyalty/bonus.js';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { createHash, randomBytes } from 'node:crypto';
 import { and, eq, gt, isNull, sql } from 'drizzle-orm';
@@ -161,6 +162,7 @@ customerTokens.openapi(
       if (!row) return false;
       await tx.update(s.customer).set({ emailVerified: true, updatedAt: new Date() }).where(eq(s.customer.id, row.customerId));
       await tx.update(s.customerToken).set({ usedAt: new Date() }).where(eq(s.customerToken.id, row.id));
+      await grantSignupBonus(tx, st.id, row.customerId); // REWARDS-1: no-op unless the rule is on
       return true;
     });
     if (!ok) { await recordLoginFailure(ip, bucket); return errJson(c, 409, 'TOKEN_INVALID', 'token is invalid, expired, or already used'); }

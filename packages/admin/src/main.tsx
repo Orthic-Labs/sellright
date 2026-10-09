@@ -35,6 +35,7 @@ import Customers from './pages/Customers';
 import CustomerDetail from './pages/CustomerDetail';
 import DraftOrder from './pages/DraftOrder';
 import ImportTracking from './pages/ImportTracking';
+import TrackingGrid from './pages/TrackingGrid';
 import AbandonedCarts from './pages/AbandonedCarts';
 import Affiliates from './pages/Affiliates';
 import AffiliateDetail from './pages/AffiliateDetail';
@@ -49,6 +50,7 @@ import EmailSettings from './pages/EmailSettings';
 import Returns from './pages/Returns';
 import GiftCards from './pages/GiftCards';
 import Loyalty from './pages/Loyalty';
+import Reviews from './pages/Reviews';
 import Webhooks from './pages/Webhooks';
 import Locations from './pages/Locations';
 import TaxZones from './pages/TaxZones';
@@ -113,6 +115,7 @@ function App() {
         <Route path="/orders" element={<Orders />} />
         <Route path="/orders/new" element={<DraftOrder />} />
         <Route path="/orders/import-tracking" element={<ImportTracking />} />
+        <Route path="/orders/tracking-grid" element={<TrackingGrid />} />
         <Route path="/orders/:code" element={<OrderDetail />} />
         <Route path="/subscriptions" element={<Subscriptions />} />
         <Route path="/abandoned-carts" element={<AbandonedCarts />} />
@@ -134,6 +137,7 @@ function App() {
         <Route path="/returns" element={<Returns />} />
         <Route path="/gift-cards" element={<GiftCards />} />
         <Route path="/loyalty" element={<Loyalty />} />
+        <Route path="/reviews" element={<Reviews />} />
         <Route path="/locations" element={<Locations />} />
         <Route path="/tax-zones" element={<TaxZones />} />
         <Route path="/currency-rates" element={<CurrencyRates />} />

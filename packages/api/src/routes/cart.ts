@@ -12,7 +12,7 @@ import { couponItemsFromFacts, loadCouponMatchContext } from '../money/coupon-co
 import { selectAutomaticPromotion } from '../money/auto-discount.js';
 import { resolveTaxRate } from '../money/tax.js';
 import { selectUnitPrice, variantPriceRuleFromConfig } from '../money/pricing.js';
-import { earnableCents, loyaltySettingsFromConfig, pointsEarned } from '../money/loyalty.js';
+import { earnableCents, loyaltySettingsFromConfig, multiplierBonusPoints, pointsEarned } from '../money/loyalty.js';
 import { customerToken, resolveCustomer } from '../auth/session.js';
 import { normalizeEmail } from '../auth/email.js';
 import { env } from '../env.js';
@@ -163,8 +163,12 @@ export async function priceCart(
   // checkout computes the authoritative number and only registered
   // customers are credited.
   const loyalty = loyaltySettingsFromConfig(st.config);
+  const earnBase = earnableCents({ subtotal: totals.subtotal, discountTotal: totals.discountTotal, taxRate, taxInclusive: st.taxInclusive });
   const pointsToEarn = loyalty.enabled
-    ? pointsEarned(earnableCents({ subtotal: totals.subtotal, discountTotal: totals.discountTotal, taxRate, taxInclusive: st.taxInclusive }), loyalty.earnRatePerDollar)
+    ? pointsEarned(earnBase, loyalty.earnRatePerDollar) + multiplierBonusPoints({
+      lines: priced.filter((p) => p.available).map((p) => ({ productId: bySku.get(p.sku)?.productId ?? '', cents: p.unitPrice * p.quantity })),
+      subtotal: totals.subtotal, earnableCents: earnBase, earnRatePerDollar: loyalty.earnRatePerDollar, multipliers: loyalty.productMultipliers,
+    })
     : undefined;
   return {
     currency: st.currency, lines,

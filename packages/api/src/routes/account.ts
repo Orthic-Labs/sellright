@@ -1,5 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, ne, or, sql } from 'drizzle-orm';
 import { withStore, type Tx } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
@@ -50,7 +50,7 @@ account.openapi(
           code: z.string(), state: z.string(),
           // Wire-facing status split (BREAKING, pre-1.0 — see CHANGELOG.md).
           status: z.enum(['open', 'completed', 'cancelled', 'archived']),
-          paymentStatus: z.enum(['pending', 'authorized', 'paid', 'partially_refunded', 'refunded', 'voided', 'failed']),
+          paymentStatus: z.enum(['pending', 'authorized', 'paid', 'partially_refunded', 'refunded', 'voided', 'failed', 'balance_due']),
           fulfillmentStatus: z.enum(['unfulfilled', 'partially_fulfilled', 'fulfilled', 'partially_delivered', 'delivered']),
           currency: z.string(), grandTotal: z.number().int(), placedAt: z.string().nullable(), lines: z.number().int(),
         })),
@@ -171,10 +171,10 @@ account.openapi(
         code: z.string(), state: z.string(),
         // Wire-facing status split (BREAKING, pre-1.0 — see CHANGELOG.md).
         status: z.enum(['open', 'completed', 'cancelled', 'archived']),
-        paymentStatus: z.enum(['pending', 'authorized', 'paid', 'partially_refunded', 'refunded', 'voided', 'failed']),
+        paymentStatus: z.enum(['pending', 'authorized', 'paid', 'partially_refunded', 'refunded', 'voided', 'failed', 'balance_due']),
         fulfillmentStatus: z.enum(['unfulfilled', 'partially_fulfilled', 'fulfilled', 'partially_delivered', 'delivered']),
         currency: z.string(),
-        subtotal: z.number().int(), shippingTotal: z.number().int(), taxTotal: z.number().int(),
+        shippingMethodName: z.string().nullable(), subtotal: z.number().int(), shippingTotal: z.number().int(), taxTotal: z.number().int(),
         discountTotal: z.number().int(), grandTotal: z.number().int(),
         placedAt: z.string().nullable(),
         shippingAddress: z.any(), billingAddress: z.any(),
@@ -218,7 +218,7 @@ account.openapi(
     if (out.kind !== 'ok') return out.kind === 'unauth' ? errJson(c, 404, 'NOT_AUTHENTICATED', 'not authenticated') : errJson(c, 404, 'ORDER_NOT_FOUND', 'order not found');
     return c.json({
       code: out.order.code, state: out.order.state, status: out.statusFacts.status, paymentStatus: out.statusFacts.paymentStatus, fulfillmentStatus: out.statusFacts.fulfillmentStatus, currency: out.order.currency,
-      subtotal: out.order.subtotal, shippingTotal: out.order.shippingTotal, taxTotal: out.order.taxTotal,
+      shippingMethodName: out.order.shippingMethodName, subtotal: out.order.subtotal, shippingTotal: out.order.shippingTotal, taxTotal: out.order.taxTotal,
       discountTotal: out.order.discountTotal, grandTotal: out.order.grandTotal,
       placedAt: out.order.placedAt ? out.order.placedAt.toISOString() : null,
       shippingAddress: out.order.shippingAddress ?? null, billingAddress: out.order.billingAddress ?? null,
@@ -542,6 +542,8 @@ account.openapi(
       // Loyalty points are personal, non-transferable value: erasure forfeits
       // them. The ledger is append-only (UPDATE rejected), so the rows go.
       await tx.delete(s.loyaltyLedger).where(eq(s.loyaltyLedger.customerId, cust.id));
+      // Reviews carry the author's name + email: erasure removes them (REWARDS-1).
+      await tx.delete(s.productReview).where(and(eq(s.productReview.storeId, st.id), or(eq(s.productReview.customerId, cust.id), eq(s.productReview.authorEmail, cust.email))));
       await tx.delete(s.paymentMethod).where(eq(s.paymentMethod.customerId, cust.id));
       await tx.delete(s.customerToken).where(eq(s.customerToken.customerId, cust.id));
       await tx.delete(s.session).where(eq(s.session.customerId, cust.id));

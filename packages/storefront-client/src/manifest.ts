@@ -63,6 +63,8 @@ export interface NativeProductManifestEntryV2 {
   hasMultiplePrices: boolean;
   inStock: boolean;
   images: NativeImage[];
+  /** Approved-review aggregate (REWARDS-1); present only when the product has reviews. */
+  rating?: { average: number; count: number };
 }
 
 export interface NativeProductDetailV2 extends NativeProductManifestEntryV2 {

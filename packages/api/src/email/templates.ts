@@ -142,3 +142,51 @@ export const waitlistConfirm = (store: StoreCtx, data: {
      <p><a href="${escape(data.confirmUrl)}" style="display:inline-block;padding:10px 16px;background:#222;color:#fff;text-decoration:none;border-radius:6px">Confirm my spot</a></p>
      <p>Or paste this link into your browser:<br><span style="color:#666;font-size:12px;word-break:break-all">${escape(data.confirmUrl)}</span></p>
      <p>Changed your mind? <a href="${escape(data.unsubscribeUrl)}">Unsubscribe</a>.</p>`);
+
+// REWARDS-1: points earned. `lines` itemizes this posting (e.g. order points +
+// first-order bonus); `balance` is the spendable balance AFTER it. Copy states
+// only facts from the ledger — no promises beyond the program's own rules.
+export const pointsEarned = (store: StoreCtx, data: {
+  points: number; balance: number; lines: Array<{ label: string; points: number }>; accountUrl?: string;
+}) =>
+  wrap(store, `You earned ${data.points.toLocaleString('en-US')} points`,
+    `<p>Your points balance was updated.</p>
+     <table style="width:100%;border-collapse:collapse;margin:12px 0">${data.lines.map((l) => `<tr><td>${escape(l.label)}</td><td style="text-align:right">+${l.points.toLocaleString('en-US')}</td></tr>`).join('')}</table>
+     <p><strong>New balance: ${data.balance.toLocaleString('en-US')} points</strong></p>
+     ${data.accountUrl ? `<p>See your points at <a href="${escape(data.accountUrl)}">${escape(data.accountUrl)}</a></p>` : ''}`);
+
+// REWARDS-1: review approved. `points` is 0 when no bonus applied (program
+// off, guest review, or verified-buyer-only rule) — then no points copy.
+export const reviewApproved = (store: StoreCtx, data: {
+  productName: string; points: number; balance: number | null; productUrl?: string;
+}) =>
+  wrap(store, 'Your review is live',
+    `<p>Thanks for reviewing <strong>${escape(data.productName)}</strong>. Your review has been approved and is now published.</p>
+     ${data.points > 0 ? `<p>We added <strong>${data.points.toLocaleString('en-US')} points</strong> to your account${data.balance != null ? ` (balance: ${data.balance.toLocaleString('en-US')} points)` : ''}.</p>` : ''}
+     ${data.productUrl ? `<p><a href="${escape(data.productUrl)}">View your review</a></p>` : ''}`);
+
+// Order editing (G13): "your order was updated". `changes` is a pre-rendered,
+// human list of what changed (the server builds it from the line diff). When a
+// balance is owed the pay link is included; a credit is described as such.
+const money2 = (cents: number, currency: string) => `${(Math.abs(cents) / 100).toFixed(2)} ${currency}`;
+export const orderUpdated = (store: StoreCtx, data: {
+  code: string; currency: string; beforeTotal: number; afterTotal: number;
+  changes: string[]; balance: number; payUrl?: string; reason?: string | null;
+}) =>
+  wrap(store, `Your order ${data.code} was updated`,
+    `<p>We made changes to your order <strong>${escape(data.code)}</strong>.</p>
+     ${data.reason ? `<p>${escape(data.reason)}</p>` : ''}
+     ${data.changes.length ? `<ul style="padding-left:18px">${data.changes.map((c) => `<li>${escape(c)}</li>`).join('')}</ul>` : ''}
+     <p>Previous total: ${money2(data.beforeTotal, data.currency)}<br><strong>New total: ${money2(data.afterTotal, data.currency)}</strong></p>
+     ${data.balance > 0
+       ? `<p><strong>Amount due: ${money2(data.balance, data.currency)}</strong></p>${data.payUrl ? `<p><a href="${escape(data.payUrl)}" style="display:inline-block;padding:10px 16px;background:#222;color:#fff;text-decoration:none;border-radius:6px">Pay the balance</a></p><p style="color:#666;font-size:12px;word-break:break-all">${escape(data.payUrl)}</p>` : ''}`
+       : data.balance < 0 ? `<p>The difference of ${money2(data.balance, data.currency)} is being returned to you.</p>` : ''}
+     <p>View your order at <a href="${escape(store.storefrontUrl)}/orders/${escape(data.code)}">${escape(store.storefrontUrl)}/orders/${escape(data.code)}</a></p>`);
+
+// Order editing (G13): pay link for a balance, sent on its own when the
+// customer is not also getting the "order updated" summary.
+export const orderBalanceDue = (store: StoreCtx, data: { code: string; currency: string; amountDue: number; payUrl: string }) =>
+  wrap(store, `Balance due on order ${data.code}`,
+    `<p>There is a balance of <strong>${money2(data.amountDue, data.currency)}</strong> due on your order <strong>${escape(data.code)}</strong>.</p>
+     <p><a href="${escape(data.payUrl)}" style="display:inline-block;padding:10px 16px;background:#222;color:#fff;text-decoration:none;border-radius:6px">Pay the balance</a></p>
+     <p style="color:#666;font-size:12px;word-break:break-all">${escape(data.payUrl)}</p>`);

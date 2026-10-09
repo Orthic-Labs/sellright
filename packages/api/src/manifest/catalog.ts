@@ -21,6 +21,7 @@ import { resolveStore, type StoreCtx } from '../store-context.js';
 import * as s from '../db/schema.js';
 import { selectUnitPrice, variantPriceRuleFromConfig, type VariantPriceRule } from '../money/pricing.js';
 import { publishGeneration, readCurrentGeneration } from './publish.js';
+import { aggregatesForProducts } from '../reviews/reviews.js';
 
 const assetUrl = (path: string | null | undefined) => !path ? null : (/^(https?:\/\/|\/)/.test(path) ? path : `/assets/${path}`);
 const selectPrice = (v: { price: number; salePrice: number | null; isPreOrder: boolean; preOrderPrice: number | null }, rule: VariantPriceRule) =>
@@ -106,6 +107,8 @@ export interface NativeProductManifestEntryV2 {
   /** Any enabled variant is a pre-order — for a PRE-ORDER badge on grids. */
   hasPreOrder: boolean;
   images: NativeImage[];
+  /** Approved-review aggregate (REWARDS-1) — present only when the product has reviews. Feeds schema.org AggregateRating. */
+  rating?: { average: number; count: number };
 }
 
 export interface NativeProductDetailV2 extends NativeProductManifestEntryV2 {
@@ -146,6 +149,7 @@ async function buildEntries(tx: Tx, store: StoreCtx, priceRule: VariantPriceRule
   if (!products.length) return { manifestProducts: [], details: [], manifestProductsV2: [], detailsV2: [] };
 
   const productIds = products.map((p) => p.id);
+  const ratingByProduct = await aggregatesForProducts(tx, store.id, productIds);
   const assetById = new Map((await tx.select({ id: s.asset.id, path: s.asset.path }).from(s.asset).where(eq(s.asset.storeId, store.id))).map((a) => [a.id, a.path]));
   const showDisabledVariants = (store.config as { catalog?: { showDisabledVariants?: boolean } } | null)?.catalog?.showDisabledVariants === true;
   const catalogVariants = await tx.select().from(s.productVariant)
@@ -201,19 +205,23 @@ async function buildEntries(tx: Tx, store: StoreCtx, priceRule: VariantPriceRule
     const inStock = vs.some((v) => v.fulfillmentType !== 'physical' || v.isPreOrder || (stockByVariant.get(v.id) ?? 0) > 0);
     const featured = assetUrl(p.featuredAssetId ? assetById.get(p.featuredAssetId) : null);
     const v0 = [...vs].sort((a, b) => selectPrice(a, priceRule) - selectPrice(b, priceRule))[0];
+    const agg = ratingByProduct.get(p.id);
+    const ratingField = agg && agg.count > 0 ? { rating: { average: agg.average, count: agg.count } } : {};
     const cf = { salePrice: v0?.salePrice ?? null, preOrderPrice: v0?.preOrderPrice ?? null, shipDate: v0?.shipDate ?? null, isPreOrder: v0?.isPreOrder ?? false };
     manifestProducts.push({
       id: p.slug, name: p.name, slug: p.slug,
       featuredImage: featured ? { url: featured } : null,
       priceRange: { min, max }, inStock, tags: p.tags ?? [], hasMultiplePrices: min !== max,
       salePrice: cf.salePrice, preOrderPrice: cf.preOrderPrice, shipDate: cf.shipDate, isPreOrder: cf.isPreOrder,
+      ...ratingField,
     });
     details.push({
-      lastUpdated: now, id: p.slug, name: p.name, slug: p.slug, description: p.description,
+      lastUpdated: now, id: p.slug, productId: p.id, name: p.name, slug: p.slug, description: p.description,
       featuredImage: featured ? { url: featured } : null,
       assets: (assetsByProduct.get(p.id) ?? []).map((a) => ({ preview: assetUrl(a.path) })),
       priceRange: { min, max }, tags: p.tags ?? [], hasMultiplePrices: min !== max,
       hasVariantAssets: vs.some((v) => (assetsByVariant.get(v.id)?.length ?? 0) > 0),
+      ...ratingField,
       variants: vs.map((v) => ({
         id: v.sku, name: v.name, sku: v.sku, price: selectPrice(v, priceRule),
         options: (optsByVariant.get(v.id) ?? []).map((o) => ({ group: o.groupName, groupId: o.groupId, groupPosition: o.groupPosition, code: o.optionId, name: o.value, position: o.position })),
@@ -259,6 +267,7 @@ async function buildEntries(tx: Tx, store: StoreCtx, priceRule: VariantPriceRule
       hasMultiplePrices: min !== max, inStock, images: manifestImages,
       hasSale: vs.some((v) => v.salePrice != null && v.salePrice < v.price),
       hasPreOrder: vs.some((v) => v.isPreOrder),
+      ...ratingField,
     });
     detailsV2.push({
       ...displayMetadata,
@@ -269,6 +278,7 @@ async function buildEntries(tx: Tx, store: StoreCtx, priceRule: VariantPriceRule
       hasSale: vs.some((v) => v.salePrice != null && v.salePrice < v.price),
       hasPreOrder: vs.some((v) => v.isPreOrder),
       lastUpdated: now, description: p.description, variants: variantsV2,
+      ...ratingField,
     });
   }
   return { manifestProducts, details, manifestProductsV2, detailsV2 };

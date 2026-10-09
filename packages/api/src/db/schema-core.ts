@@ -10,6 +10,7 @@ import {
   uuid,
   text,
   integer,
+  smallint,
   bigint,
   boolean,
   timestamp,
@@ -340,6 +341,9 @@ export const customer = pgTable(
     sheeridVerifications: jsonb(),
     activeVerifications: text().array(),
     verificationMetadata: jsonb(),
+    // Birthday (month/day only — migration 0085) for the optional birthday bonus.
+    birthMonth: smallint(),
+    birthDay: smallint(),
     deletedAt: timestamp({ withTimezone: true }),
     createdAt: ts(),
     updatedAt: ts(),
