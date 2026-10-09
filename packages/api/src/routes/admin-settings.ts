@@ -1,5 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { newTotpSecret, verifyTotp, otpauthUri } from '../auth/totp.js';
@@ -345,6 +345,18 @@ adminSettings.openapi(
 );
 
 // ── shipping methods ─────────────────────────────────────────────────────────
+// Validates the calculator blob the admin editor sends (shipping/calculator.ts
+// is the interpreter). Unknown keys are kept (passthrough) so a future calculator
+// extension is never silently dropped by an older admin UI; known keys are typed.
+const cents = z.number().int().min(0).max(100_000_000);
+export const ShippingCalculatorSchema = z.object({
+  flat: cents.optional(), min: cents.optional(), max: cents.optional(),
+  countries: z.array(z.string().trim().regex(/^[A-Za-z]{2}$/, 'countries must be 2-letter ISO codes')).max(300).optional(),
+  exclude: z.boolean().optional(), requireCountry: z.boolean().optional(),
+  subtotalBasis: z.enum(['pre_discount', 'discounted_with_tax']).optional(),
+  taxRate: z.number().min(0).max(100_000).optional(), taxInclusive: z.boolean().optional(),
+}).passthrough().refine((c) => c.min == null || c.max == null || c.min <= c.max, { message: 'minimum subtotal cannot exceed maximum' });
+
 adminSettings.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/shipping-methods', summary: 'List shipping methods',
@@ -361,7 +373,7 @@ adminSettings.openapi(
 adminSettings.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/shipping-methods', summary: 'Create shipping method',
-    request: { body: { content: J(z.object({ code: z.string().min(1), name: z.string().min(1), calculator: z.any().default({ flat: 0 }), enabled: z.boolean().default(true) })) } },
+    request: { body: { content: J(z.object({ code: z.string().min(1), name: z.string().min(1), calculator: ShippingCalculatorSchema.default({ flat: 0 }), enabled: z.boolean().default(true) })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
@@ -380,8 +392,8 @@ adminSettings.openapi(
 adminSettings.openapi(
   createRoute({
     method: 'patch', path: '/v1/admin/shipping-methods/{id}', summary: 'Update shipping method',
-    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ name: z.string().optional(), calculator: z.any().optional(), enabled: z.boolean().optional() })) } },
-    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
+    request: { params: z.object({ id: z.string() }), body: { content: J(z.object({ name: z.string().trim().min(1).optional(), code: z.string().trim().min(1).max(64).optional(), calculator: ShippingCalculatorSchema.optional(), enabled: z.boolean().optional() })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 409: { description: 'Code in use', ...errBody }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
@@ -391,8 +403,12 @@ adminSettings.openapi(
     const ok = await withStore(st.storeId, async (tx) => {
       const [m] = await tx.select().from(s.shippingMethod).where(eq(s.shippingMethod.id, id)).limit(1);
       if (!m) return false;
+      if (b.code && b.code !== m.code) {
+        const [dup] = await tx.select({ id: s.shippingMethod.id }).from(s.shippingMethod).where(and(eq(s.shippingMethod.code, b.code), sql`${s.shippingMethod.id} <> ${id}`)).limit(1);
+        if (dup) throw new HttpError(409, `shipping method code '${b.code}' is already in use`);
+      }
       await tx.update(s.shippingMethod).set(b).where(eq(s.shippingMethod.id, id));
-      await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'shipping_method', entityId: id, action: 'update', data: { before: { name: m.name, calculator: m.calculator, enabled: m.enabled }, after: b } });
+      await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'shipping_method', entityId: id, action: 'update', data: { before: { code: m.code, name: m.name, calculator: m.calculator, enabled: m.enabled }, after: b } });
       return true;
     });
     if (!ok) throw new HttpError(404, 'shipping method not found');

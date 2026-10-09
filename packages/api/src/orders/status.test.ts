@@ -88,3 +88,21 @@ describe('wirePaymentState', () => {
     expect(wirePaymentState('SomethingNew')).toBe('somethingnew');
   });
 });
+
+describe('derivePaymentStatus — balance_due (order editing, G13)', () => {
+  it('a Paid/PartiallyRefunded order with a positive amount due is balance_due', () => {
+    expect(derivePaymentStatus('Paid', [{ state: 'Settled' }], 500)).toBe('balance_due');
+    expect(derivePaymentStatus('PartiallyRefunded', [{ state: 'Settled' }], 1)).toBe('balance_due');
+  });
+  it('zero / negative / absent amount due leaves the status unchanged', () => {
+    expect(derivePaymentStatus('Paid', [{ state: 'Settled' }], 0)).toBe('paid');
+    expect(derivePaymentStatus('Paid', [{ state: 'Settled' }], -200)).toBe('paid');
+    expect(derivePaymentStatus('Paid', [{ state: 'Settled' }])).toBe('paid');
+    expect(derivePaymentStatus('PartiallyRefunded', [], null)).toBe('partially_refunded');
+  });
+  it('never applies to unpaid, refunded or cancelled orders', () => {
+    expect(derivePaymentStatus('PendingPayment', [], 900)).toBe('pending');
+    expect(derivePaymentStatus('Refunded', [], 900)).toBe('refunded');
+    expect(derivePaymentStatus('Cancelled', [], 900)).toBe('pending');
+  });
+});

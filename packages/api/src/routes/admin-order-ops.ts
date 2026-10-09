@@ -17,7 +17,19 @@ import { normalizeEmail } from '../auth/email.js';
 import { resolveTaxRate } from '../money/tax.js';
 import { emitEvent } from '../webhooks/emit.js';
 import { enqueueShippingNotification } from '../email/dispatch.js';
-import { csvCell, inferCarrier, orderCode, unitPrice } from './admin-order-utils.js';
+import { csvCell, orderCode, unitPrice } from './admin-order-utils.js';
+import { env } from '../env.js';
+import { autoDeliverStore } from '../jobs/auto-deliver.js';
+import { fulfillmentStatusSql } from '../orders/status-sql.js';
+import {
+  DEFAULT_EXPORT_COLUMNS, DEFAULT_LINE_COLUMNS, EXPORT_ROW_CAP, exportCellValues, exportColumnCatalog, fetchExportRows,
+  parseExportColumnList, parseExportFilters, parseExportMode, resolveExportColumns,
+} from '../orders/export.js';
+import {
+  IMPORTABLE, classifyTrackingRow, normalizeOrderCode, normalizeTracking, parseTrackingCsv, precheckRow, remainingItems,
+  resolveCarrier, suggestOrderCode, type TrackingRowInput, type TrackingStatus,
+} from '../orders/tracking-import.js';
+import { shippingRate } from '../shipping/calculator.js';
 import { variantPriceRuleFromConfig } from '../money/pricing.js';
 import { issueLicensesForPaidOrder } from '../licensing/issue.js';
 import { err as logErr } from '../lib/logger.js';
@@ -38,7 +50,8 @@ adminOrderOps.openapi(
     request: { body: { content: J(z.object({
       items: z.array(z.object({ sku: z.string(), quantity: z.number().int().min(1) })).min(1),
       email: z.string().email().optional(),
-      shipping: money.default(0),
+      shipping: money.optional(), // custom amount; defaults to the chosen method's rate, else 0
+      shippingMethodCode: z.string().min(1).optional(), // persisted on the order (code + name snapshot)
       shippingAddress: z.record(z.string(), z.unknown()).optional(),
       markPaid: z.boolean().default(false), // record a manual payment immediately
     })) } },
@@ -69,12 +82,19 @@ adminOrderOps.openapi(
       const shipCountry = (body.shippingAddress as { country?: string } | null | undefined)?.country ?? null;
       const zones = await tx.select({ countries: s.taxZone.countries, rate: s.taxZone.rate, priority: s.taxZone.priority }).from(s.taxZone).where(eq(s.taxZone.enabled, true));
       const taxRate = resolveTaxRate(zones, shipCountry, storeRow.taxRate);
-      const totals = calculateOrderTotals({ lines: priced.map((p) => ({ unitPrice: p.unitPrice, quantity: p.qty })), shipping: body.shipping, taxRate, taxInclusive: storeRow.taxInclusive, shippingTaxable: storeRow.shippingTaxable });
+      let draftMethod: { code: string; name: string; calculator: unknown } | null = null;
+      if (body.shippingMethodCode) {
+        const [m] = await tx.select().from(s.shippingMethod).where(and(eq(s.shippingMethod.code, body.shippingMethodCode), eq(s.shippingMethod.enabled, true))).limit(1);
+        if (!m) throw new HttpError(400, 'unknown shipping method');
+        draftMethod = { code: m.code, name: m.name, calculator: m.calculator };
+      }
+      const draftShipping = body.shipping ?? (draftMethod ? shippingRate(draftMethod.calculator as Parameters<typeof shippingRate>[0]) : 0);
+      const totals = calculateOrderTotals({ lines: priced.map((p) => ({ unitPrice: p.unitPrice, quantity: p.qty })), shipping: draftShipping, taxRate, taxInclusive: storeRow.taxInclusive, shippingTaxable: storeRow.shippingTaxable });
       const customerId = body.email ? (await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, normalizeEmail(body.email))).limit(1))[0]?.id ?? null : null;
       const orderId = randomUUID(); const code = orderCode();
       const paid = body.markPaid;
       const paidAt = paid ? new Date() : null;
-      await tx.insert(s.order).values({ id: orderId, storeId: st.storeId, code, customerId, state: paid ? 'Paid' : 'PendingPayment', currency: st.currency, subtotal: totals.subtotal, discountTotal: totals.discountTotal, shippingTotal: totals.shippingTotal, taxTotal: totals.taxTotal, grandTotal: totals.grandTotal, placedAt: paidAt, shippingAddress: body.shippingAddress ?? null });
+      await tx.insert(s.order).values({ id: orderId, storeId: st.storeId, code, customerId, state: paid ? 'Paid' : 'PendingPayment', currency: st.currency, subtotal: totals.subtotal, discountTotal: totals.discountTotal, shippingTotal: totals.shippingTotal, taxTotal: totals.taxTotal, grandTotal: totals.grandTotal, placedAt: paidAt, shippingAddress: body.shippingAddress ?? null, shippingMethodCode: draftMethod?.code ?? null, shippingMethodName: draftMethod?.name ?? null });
       await tx.insert(s.orderLine).values(priced.map((p, idx) => ({ storeId: st.storeId, orderId, variantId: p.v.id, variantSku: p.v.sku, variantName: p.v.name, quantity: p.qty, unitPrice: p.unitPrice, lineSubtotal: totals.lines[idx]!.lineSubtotal, lineDiscount: totals.lines[idx]!.lineDiscount, lineTax: 0, lineTotal: totals.lines[idx]!.lineTotal })));
       if (paid) {
         await tx.insert(s.payment).values({ storeId: st.storeId, orderId, amount: totals.grandTotal, method: 'manual', providerRef: `admin-${code}`, state: 'Settled', metadata: { manual: true, by: admin.email } });
@@ -126,74 +146,41 @@ adminOrderOps.openapi(
 );
 
 // ── order export (CSV + XLSX) ────────────────────────────────────────────────
-// Column order shared by both formats — keep in sync with orderExportRow().
-export const ORDER_EXPORT_COLUMNS = ['code', 'date', 'email', 'state', 'preOrder', 'fulfillment', 'tracking', 'subtotal', 'discount', 'shipping', 'tax', 'total', 'currency'] as const;
+// Filters, column catalog and the row query live in orders/export.ts; both
+// formats share them. Query params: from/to (YYYY-MM-DD), days (fallback),
+// state (legacy), status, paymentStatus, fulfillmentStatus, preOrder, trashed,
+// paymentMethod, shippingMethod (code or __none__), country, coupon, q, rows=order|line, columns=a,b,c.
+// Column order shared by both formats — the default (no `columns` param) set.
+export const ORDER_EXPORT_COLUMNS = DEFAULT_EXPORT_COLUMNS;
 
-type OrderExportRow = {
-  code: string; state: string; isPreOrder: boolean; email: string | null;
-  subtotal: number; discountTotal: number; shippingTotal: number; taxTotal: number; grandTotal: number; currency: string;
-  placedAt: Date | null; createdAt: Date; tracking: string | null; fulfillmentState: string | null;
-};
+const exportFiltersFrom = (c: { req: { query: (k: string) => string | undefined } }) => parseExportFilters((k) => c.req.query(k));
 
-function parseExportQuery(c: { req: { query: (k: string) => string | undefined } }): { days: number; state?: string } {
-  const days = Math.min(3650, Math.max(1, Number(c.req.query('days') ?? '365')));
-  const state = c.req.query('state') || undefined;
-  return { days, state };
-}
-
-/** Shared query for both export formats. Same 50k-row cap as the original CSV export. */
-async function fetchOrderExportRows(storeId: string, opts: { days: number; state?: string }): Promise<OrderExportRow[]> {
-  return withStore(storeId, async (tx) => {
-    const conds = [sql`coalesce(${s.order.placedAt}, ${s.order.createdAt}) >= now() - (${opts.days} || ' days')::interval`, sql`${s.order.deletedAt} is null`] as never[];
-    if (opts.state) conds.push(sql`${s.order.state} = ${opts.state}` as never);
-    return tx
-      .select({
-        code: s.order.code, state: s.order.state, isPreOrder: s.order.isPreOrder, email: s.customer.email,
-        subtotal: s.order.subtotal, discountTotal: s.order.discountTotal, shippingTotal: s.order.shippingTotal,
-        taxTotal: s.order.taxTotal, grandTotal: s.order.grandTotal, currency: s.order.currency,
-        placedAt: s.order.placedAt, createdAt: s.order.createdAt,
-        tracking: sql<string | null>`(select f.tracking_code from fulfillment f where f.order_id = ${s.order.id} order by f.created_at desc limit 1)`,
-        fulfillmentState: sql<string | null>`(select f.state from fulfillment f where f.order_id = ${s.order.id} order by f.created_at desc limit 1)`,
-      })
-      .from(s.order).leftJoin(s.customer, eq(s.customer.id, s.order.customerId))
-      .where(and(...conds)).orderBy(desc(sql`coalesce(${s.order.placedAt}, ${s.order.createdAt})`)).limit(50000);
-  });
-}
-
-const money2dp = (n: number) => n / 100;
-
-/** Row values in ORDER_EXPORT_COLUMNS order, as native types (caller formats/escapes per format). */
-export function orderExportRowValues(r: OrderExportRow): [string, string, string, string, string, string, string, number, number, number, number, number, string] {
-  return [
-    r.code,
-    (r.placedAt ?? r.createdAt).toISOString().slice(0, 10),
-    r.email ?? '',
-    r.state,
-    r.isPreOrder ? 'yes' : '',
-    r.fulfillmentState ?? '',
-    r.tracking ?? '',
-    money2dp(r.subtotal),
-    money2dp(r.discountTotal),
-    money2dp(r.shippingTotal),
-    money2dp(r.taxTotal),
-    money2dp(r.grandTotal),
-    r.currency,
-  ];
-}
+adminOrderOps.get('/v1/admin/export/orders/columns', async (c) => {
+  try {
+    const { admin } = await requireAdmin(c);
+    requireStore(admin, c);
+    return c.json({ columns: exportColumnCatalog(), defaults: [...DEFAULT_EXPORT_COLUMNS], lineDefaults: [...DEFAULT_LINE_COLUMNS], cap: EXPORT_ROW_CAP }, 200);
+  } catch (e) {
+    if (e instanceof HttpError) return c.json({ error: e.message }, e.status);
+    throw e;
+  }
+});
 
 // Plain handler (not .openapi) so it can stream text/csv as a download.
 adminOrderOps.get('/v1/admin/export/orders', async (c) => {
   try {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c);
-    const rows = await fetchOrderExportRows(st.storeId, parseExportQuery(c));
-    const lines = [ORDER_EXPORT_COLUMNS.join(',')];
+    const mode = parseExportMode(c.req.query('rows'));
+    const cols = resolveExportColumns(parseExportColumnList(c.req.query('columns')), mode);
+    const rows = await fetchExportRows(st.storeId, exportFiltersFrom(c), mode);
+    const lines = [cols.map((x) => x.key).join(',')];
     for (const r of rows) {
-      const v = orderExportRowValues(r);
-      // money columns formatted to 2dp for the CSV, same as the original output
-      lines.push([v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7].toFixed(2), v[8].toFixed(2), v[9].toFixed(2), v[10].toFixed(2), v[11].toFixed(2), v[12]].map(csvCell).join(','));
+      // Money columns are formatted to 2dp in the CSV, same as the original output.
+      const vals = exportCellValues(cols, r, { guard: true });
+      lines.push(vals.map((v, i) => csvCell(typeof v === 'number' && cols[i]!.money ? v.toFixed(2) : v)).join(','));
     }
-    return c.body(lines.join('\n'), 200, { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="orders-${st.slug}.csv"` });
+    return c.body(lines.join('\n'), 200, { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="orders-${st.slug}.csv"`, 'x-export-rows': String(rows.length), 'x-export-capped': rows.length >= EXPORT_ROW_CAP ? '1' : '0' });
   } catch (e) {
     if (e instanceof HttpError) return c.json({ error: e.message }, e.status);
     throw e;
@@ -206,16 +193,15 @@ adminOrderOps.get('/v1/admin/export/orders.xlsx', async (c) => {
   try {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c);
-    const rows = await fetchOrderExportRows(st.storeId, parseExportQuery(c));
+    const mode = parseExportMode(c.req.query('rows'));
+    const cols = resolveExportColumns(parseExportColumnList(c.req.query('columns')), mode);
+    const rows = await fetchExportRows(st.storeId, exportFiltersFrom(c), mode);
 
     const passThrough = new PassThrough();
     const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({ stream: passThrough, useStyles: true });
     const sheet = workbook.addWorksheet('Orders');
-    sheet.columns = ORDER_EXPORT_COLUMNS.map((key) => ({ header: key, key }));
-    for (const r of rows) {
-      const v = orderExportRowValues(r);
-      sheet.addRow(v).commit();
-    }
+    sheet.columns = cols.map((x) => ({ header: x.key, key: x.key }));
+    for (const r of rows) sheet.addRow(exportCellValues(cols, r, { guard: false })).commit();
     sheet.commit();
     // Fire-and-forget: WorkbookWriter finalizes the ZIP into passThrough as rows
     // are committed; commit() below flushes the remaining central-directory bytes
@@ -227,6 +213,7 @@ adminOrderOps.get('/v1/admin/export/orders.xlsx', async (c) => {
     return c.body(webStream, 200, {
       'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'content-disposition': `attachment; filename="orders-${st.slug}.xlsx"`,
+      'x-export-rows': String(rows.length), 'x-export-capped': rows.length >= EXPORT_ROW_CAP ? '1' : '0',
     });
   } catch (e) {
     if (e instanceof HttpError) return c.json({ error: e.message }, e.status);
@@ -234,41 +221,139 @@ adminOrderOps.get('/v1/admin/export/orders.xlsx', async (c) => {
   }
 });
 
-// ── tracking CSV import (bulk fulfill -> Shipped) ────────────────────────────
+// ── tracking import (preview → confirm), open-orders grid feed, history ──────
+const TrackingRow = z.object({ code: z.string().max(64), tracking: z.string().max(128), carrier: z.string().max(40).nullish() });
+const TrackingBody = z.object({
+  rows: z.array(TrackingRow).max(5000).optional(),
+  /** Raw pasted/uploaded CSV text; parsed server-side with the same parser the tests cover. */
+  csv: z.string().max(2_000_000).optional(),
+}).refine((b) => (b.rows?.length ?? 0) > 0 || (b.csv ?? '').trim().length > 0, { message: 'provide rows or csv' });
+
+type PlanTx = Parameters<Parameters<typeof withStore>[1]>[0];
+type PlannedRow = {
+  index: number; code: string; tracking: string; carrier: string | null; carrierSource: 'given' | 'detected' | 'unknown';
+  status: TrackingStatus; message: string; items: Array<{ sku: string; name: string; quantity: number }>;
+  suggestion?: string; customerEmail?: string | null;
+  // internal (not sent to the client)
+  _order?: typeof s.order.$inferSelect; _lines?: Array<typeof s.orderLine.$inferSelect>; _fulfillments?: Array<typeof s.fulfillment.$inferSelect>;
+};
+
+async function planTrackingRows(tx: PlanTx, rowsIn: TrackingRowInput[], lock: boolean): Promise<PlannedRow[]> {
+  const out: PlannedRow[] = [];
+  const seen = new Set<string>();
+  let candidates: string[] | null = null;
+  for (let index = 0; index < rowsIn.length; index++) {
+    const raw = rowsIn[index]!;
+    const code = normalizeOrderCode(raw.code);
+    const tracking = normalizeTracking(raw.tracking);
+    const { carrier, source } = resolveCarrier({ code, tracking, carrier: raw.carrier });
+    const base = { index, code, tracking, carrier, carrierSource: source };
+    const pre = precheckRow(code, tracking);
+    if (pre) { out.push({ ...base, ...pre }); continue; }
+    if (seen.has(code)) { out.push({ ...base, status: 'duplicate_in_file', message: 'this order already appears earlier in the file', items: [] }); continue; }
+    const q = tx.select().from(s.order).where(sql`upper(${s.order.code}) = ${code}`).limit(1);
+    const [o] = await (lock ? q.for('update') : q);
+    if (!o) {
+      candidates ??= (await tx.select({ code: s.order.code }).from(s.order)
+        .where(and(isNull(s.order.deletedAt), inArray(s.order.state, ['Paid', 'PartiallyRefunded'])))
+        .orderBy(desc(s.order.createdAt)).limit(5000)).map((r) => r.code);
+      const suggestion = suggestOrderCode(code, candidates);
+      out.push({ ...base, status: 'unknown_order', message: suggestion ? `no order ${code} — did you mean ${suggestion}?` : 'order not found', items: [], ...(suggestion ? { suggestion } : {}) });
+      continue;
+    }
+    seen.add(code);
+    const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
+    const fulfillments = await tx.select().from(s.fulfillment).where(and(eq(s.fulfillment.orderId, o.id), sql`${s.fulfillment.state} <> 'Cancelled'`)).orderBy(desc(s.fulfillment.createdAt));
+    const verdict = classifyTrackingRow(tracking, {
+      state: o.state, deleted: !!o.deletedAt,
+      lines: lines.map((l) => ({ sku: l.variantSku, name: l.variantName, quantity: l.quantity, fulfilledQty: l.fulfilledQty, cancelledQty: l.cancelledQty })),
+      fulfillments: fulfillments.map((f) => ({ state: f.state, trackingCode: f.trackingCode })),
+    });
+    let customerEmail: string | null = null;
+    if (o.customerId) {
+      const [cust] = await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, o.customerId)).limit(1);
+      customerEmail = cust?.email ?? null;
+    }
+    out.push({ ...base, ...verdict, code: o.code, customerEmail, _order: o, _lines: lines, _fulfillments: fulfillments });
+  }
+  return out;
+}
+
+const publicRow = ({ _order, _lines, _fulfillments, ...r }: PlannedRow) => r;
+const summarize = (rows: PlannedRow[]) => {
+  const by: Record<string, number> = {};
+  for (const r of rows) by[r.status] = (by[r.status] ?? 0) + 1;
+  return { total: rows.length, importable: rows.filter((r) => IMPORTABLE.has(r.status)).length, byStatus: by };
+};
+const rowsFromBody = (b: z.infer<typeof TrackingBody>): TrackingRowInput[] =>
+  (b.rows?.length ? b.rows : parseTrackingCsv(b.csv ?? '')).map((r) => ({ code: r.code ?? '', tracking: r.tracking ?? '', carrier: r.carrier }));
+
+const PlannedRowSchema = z.object({
+  index: z.number().int(), code: z.string(), tracking: z.string(), carrier: z.string().nullable(), carrierSource: z.enum(['given', 'detected', 'unknown']),
+  status: z.string(), message: z.string(), items: z.array(z.object({ sku: z.string(), name: z.string(), quantity: z.number().int() })),
+  suggestion: z.string().optional(), customerEmail: z.string().nullable().optional(),
+});
+
 adminOrderOps.openapi(
   createRoute({
-    method: 'post', path: '/v1/admin/import-tracking', summary: 'Bulk import tracking numbers (creates Shipped fulfillments)',
-    request: { body: { content: J(z.object({ rows: z.array(z.object({ code: z.string(), tracking: z.string(), carrier: z.string().optional() })).min(1).max(5000) })) } },
-    responses: { 200: { description: 'OK', content: J(z.object({ updated: z.number().int(), errors: z.array(z.object({ code: z.string(), error: z.string() })) })) }, 401: { description: 'Unauthorized', ...errBody } },
+    method: 'post', path: '/v1/admin/import-tracking/preview', summary: 'Dry-run a tracking import (no writes): per-row verdict + items that would ship',
+    request: { body: { content: J(TrackingBody) } },
+    responses: { 200: { description: 'OK', content: J(z.object({ rows: z.array(PlannedRowSchema), summary: z.object({ total: z.number().int(), importable: z.number().int(), byStatus: z.record(z.string(), z.number().int()) }) })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireWrite(st);
-    const { rows } = c.req.valid('json');
+    const rows = rowsFromBody(c.req.valid('json'));
+    if (!rows.length) throw new HttpError(400, 'no rows found');
+    if (rows.length > 5000) throw new HttpError(400, 'too many rows (max 5000)');
+    const planned = await withStore(st.storeId, (tx) => planTrackingRows(tx, rows, false));
+    return c.json({ rows: planned.map(publicRow), summary: summarize(planned) } as never, 200);
+  }),
+);
+
+adminOrderOps.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/import-tracking', summary: 'Bulk import tracking numbers (creates Shipped fulfillments); only rows that validate are imported',
+    request: { body: { content: J(TrackingBody.and(z.object({
+      notify: z.boolean().default(true),
+      source: z.enum(['paste', 'csv', 'grid']).default('paste'),
+      fileName: z.string().max(200).optional(),
+    }))) } },
+    responses: { 200: { description: 'OK', content: J(z.object({
+      updated: z.number().int(), errors: z.array(z.object({ code: z.string(), error: z.string() })),
+      emailsQueued: z.number().int(), skipped: z.number().int(), batchId: z.string(), rows: z.array(PlannedRowSchema.extend({ imported: z.boolean() })),
+    })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireWrite(st);
+    const body = c.req.valid('json');
+    const rowsIn = rowsFromBody(body);
+    if (!rowsIn.length) throw new HttpError(400, 'no rows found');
+    if (rowsIn.length > 5000) throw new HttpError(400, 'too many rows (max 5000)');
+    const batchId = randomUUID();
     // One transaction for the whole batch — set true only inside the branch
-    // that actually mutates stock (a NEW fulfillment ships un-shipped units);
-    // re-marking an already-existing fulfillment Shipped never touches stock.
+    // that actually mutates stock (a NEW fulfillment ships un-shipped units).
     let stockChanged = false;
     const result = await withStore(st.storeId, async (tx) => {
-      let updated = 0; const errors: { code: string; error: string }[] = [];
       const [storeRow] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1);
       const storeCtx = { name: st.name, currency: st.currency, config: storeRow?.config ?? null };
-      for (const row of rows) {
-        const [o] = await tx.select().from(s.order).where(eq(s.order.code, row.code)).limit(1);
-        if (!o) { errors.push({ code: row.code, error: 'order not found' }); continue; }
-        if (o.state !== 'Paid' && o.state !== 'PartiallyRefunded') { errors.push({ code: row.code, error: `not shippable (${o.state})` }); continue; }
-        const carrier = row.carrier || inferCarrier(row.tracking) || null;
-        const [existing] = await tx.select().from(s.fulfillment).where(eq(s.fulfillment.orderId, o.id)).orderBy(desc(s.fulfillment.createdAt)).limit(1);
-        if (existing) {
-          // ra-023: do not regress a Delivered fulfillment back to Shipped.
-          if (existing.state === 'Delivered') { errors.push({ code: row.code, error: 'already Delivered' }); continue; }
-          await tx.update(s.fulfillment).set({ state: 'Shipped', trackingCode: row.tracking, carrier, updatedAt: new Date() }).where(eq(s.fulfillment.id, existing.id));
-        } else {
-          await tx.insert(s.fulfillment).values({ storeId: st.storeId, orderId: o.id, state: 'Shipped', trackingCode: row.tracking, carrier });
-          const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, o.id));
-          for (const l of lines) {
-            const ship = l.quantity - l.fulfilledQty - l.cancelledQty;
-            if (ship <= 0) continue;
+      // Re-plan under row locks: the preview was a snapshot, this is the truth.
+      const planned = await planTrackingRows(tx, rowsIn, true);
+      let updated = 0; let emailsQueued = 0;
+      const imported = new Set<number>();
+      for (const row of planned) {
+        if (!IMPORTABLE.has(row.status) || !row._order) continue;
+        const o = row._order;
+        let fulfillmentId: string;
+        let dedupe = `shipping_notification:${o.id}:Shipped`;
+        const shipNow = (row._lines ?? []).map((l) => ({ l, ship: l.quantity - l.fulfilledQty - l.cancelledQty })).filter((x) => x.ship > 0);
+        if (row.status === 'ready' && shipNow.length > 0) {
+          const [f] = await tx.insert(s.fulfillment).values({ storeId: st.storeId, orderId: o.id, state: 'Shipped', trackingCode: row.tracking, carrier: row.carrier, notifyCustomer: body.notify }).returning({ id: s.fulfillment.id });
+          fulfillmentId = f!.id;
+          dedupe = `shipping_notification:${fulfillmentId}:Shipped`;
+          await tx.insert(s.fulfillmentLine).values(shipNow.map(({ l, ship }) => ({ storeId: st.storeId, fulfillmentId, orderLineId: l.id, quantity: ship })));
+          for (const { l, ship } of shipNow) {
             await tx.update(s.orderLine).set({ fulfilledQty: l.quantity - l.cancelledQty }).where(eq(s.orderLine.id, l.id));
             if (l.variantId) {
               await tx.update(s.stock).set({ onHand: sql`greatest(${s.stock.onHand} - ${ship}, 0)`, allocated: sql`greatest(${s.stock.allocated} - ${ship}, 0)` }).where(and(eq(s.stock.variantId, l.variantId), eq(s.stock.storeId, st.storeId)));
@@ -276,26 +361,111 @@ adminOrderOps.openapi(
               stockChanged = true;
             }
           }
+        } else {
+          // Pending fulfillment -> Shipped, or a tracking-number correction on a Shipped one.
+          const target = (row._fulfillments ?? []).find((f) => (row.status === 'ready' ? f.state === 'Pending' : f.state === 'Shipped'));
+          if (!target) continue;
+          fulfillmentId = target.id;
+          await tx.update(s.fulfillment).set({ state: 'Shipped', trackingCode: row.tracking, carrier: row.carrier, updatedAt: new Date() }).where(eq(s.fulfillment.id, target.id));
         }
-        await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: o.id, action: 'tracking_import', toState: 'Shipped', data: { tracking: row.tracking, carrier } });
-        // WP2: emit order.shipped + best-effort email for the newly-Shipped order.
-        // `emitEvent` runs inside the same txn so the webhook delivery is
-        // committed atomically with the Shipped state transition. Guard
-        // customerId (nullable FK) before the eq().
-        await emitEvent(tx, st.storeId, 'order.shipped', { code: o.code, trackingCode: row.tracking, carrier });
-        if (o.customerId) {
-          const [cust] = await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, o.customerId)).limit(1);
-          // SR-05/SR-12: durable outbox send inside the same txn (per-store
-          // sender/links, dedupe on first Shipped transition) — never an
-          // inline post-commit send that can be lost to an SMTP blip.
-          if (cust?.email) await enqueueShippingNotification(tx, st.storeId, storeCtx, cust.email, { code: o.code, trackingCode: row.tracking, carrier, dedupeKey: `shipping_notification:${o.id}:Shipped` });
+        await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: o.id, action: 'tracking_import', toState: 'Shipped', data: { tracking: row.tracking, carrier: row.carrier, batchId, fulfillmentId, notify: body.notify } });
+        // WP2: emit order.shipped (same txn => atomic with the Shipped transition).
+        await emitEvent(tx, st.storeId, 'order.shipped', { code: o.code, trackingCode: row.tracking, carrier: row.carrier });
+        // SR-05/SR-12: durable outbox send inside the same txn — never an inline post-commit send.
+        if (body.notify && row.customerEmail) {
+          const queued = await enqueueShippingNotification(tx, st.storeId, storeCtx, row.customerEmail, { code: o.code, trackingCode: row.tracking, carrier: row.carrier, dedupeKey: dedupe });
+          if (queued) emailsQueued++;
         }
+        imported.add(row.index);
         updated++;
       }
-      return { updated, errors };
+      const skipped = planned.length - updated;
+      const errors = planned.filter((r) => !imported.has(r.index)).map((r) => ({ code: r.code || '(blank)', error: r.message }));
+      await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'tracking_import', entityId: batchId, action: 'batch', data: { source: body.source, fileName: body.fileName ?? null, total: planned.length, shipped: updated, skipped, emailsQueued, notify: body.notify, errors: errors.slice(0, 50) } });
+      return { updated, errors, emailsQueued, skipped, rows: planned.map((r) => ({ ...publicRow(r), imported: imported.has(r.index) })) };
     });
     if (stockChanged) onStockChanged(st.slug);
-    return c.json({ updated: result.updated, errors: result.errors }, 200);
+    return c.json({ ...result, batchId } as never, 200);
+  }),
+);
+
+adminOrderOps.openapi(
+  createRoute({
+    method: 'get', path: '/v1/admin/import-tracking/recent', summary: 'Recent tracking imports',
+    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.unknown()) })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    const items = await withStore(st.storeId, async (tx) => {
+      const rows = await tx.select().from(s.auditLog).where(and(eq(s.auditLog.entity, 'tracking_import'), eq(s.auditLog.action, 'batch'))).orderBy(desc(s.auditLog.at)).limit(20);
+      return rows.map((r) => ({ id: r.entityId, at: r.at.toISOString(), actor: r.actor, ...(r.data as Record<string, unknown>) }));
+    });
+    return c.json({ items }, 200);
+  }),
+);
+
+// Feed for the manual tracking grid: paid orders that still have items to ship,
+// oldest first, with the remaining items per order. NOT under /orders/{code}'s
+// namespace so it can never be shadowed by the order-detail route.
+adminOrderOps.openapi(
+  createRoute({
+    method: 'get', path: '/v1/admin/fulfillment/open-orders', summary: 'Paid orders awaiting shipment (unfulfilled or partially fulfilled)',
+    request: { query: z.object({ q: z.string().optional(), limit: z.coerce.number().int().min(1).max(500).default(200) }) },
+    responses: { 200: { description: 'OK', content: J(z.object({ items: z.array(z.unknown()), total: z.number().int() })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    const { q, limit } = c.req.valid('query');
+    const out = await withStore(st.storeId, async (tx) => {
+      const where = sql`"order"."deleted_at" is null and "order"."state" in ('Paid','PartiallyRefunded') and ${fulfillmentStatusSql()} in ('unfulfilled','partially_fulfilled')${q ? sql` and ("order"."code" ilike ${`%${q}%`} or cust.email ilike ${`%${q}%`})` : sql``}`;
+      const r = await tx.execute(sql`
+        select "order"."id" as id, "order"."code" as code, "order"."placed_at" as placed_at, "order"."created_at" as created_at, "order"."is_pre_order" as is_pre_order,
+          cust.email as email, nullif(trim(coalesce(cust.first_name, '') || ' ' || coalesce(cust.last_name, '')), '') as name,
+          "order"."shipping_address"->>'country' as country, ${fulfillmentStatusSql()} as fulfillment_status
+        from "order" left join customer cust on cust.id = "order"."customer_id"
+        where ${where}
+        order by coalesce("order"."placed_at", "order"."created_at") asc, "order"."code"
+        limit ${limit}`);
+      const orders = (r as unknown as { rows: Array<{ id: string; code: string; placed_at: Date | null; created_at: Date; is_pre_order: boolean; email: string | null; name: string | null; country: string | null; fulfillment_status: string }> }).rows;
+      const [cnt] = (await tx.execute(sql`select count(*)::int as n from "order" left join customer cust on cust.id = "order"."customer_id" where ${where}`) as unknown as { rows: Array<{ n: number }> }).rows;
+      const ids = orders.map((o) => o.id);
+      const lines = ids.length ? await tx.select().from(s.orderLine).where(inArray(s.orderLine.orderId, ids)) : [];
+      const ful = ids.length ? await tx.select({ orderId: s.fulfillment.orderId, trackingCode: s.fulfillment.trackingCode, state: s.fulfillment.state }).from(s.fulfillment).where(and(inArray(s.fulfillment.orderId, ids), sql`${s.fulfillment.state} <> 'Cancelled'`)) : [];
+      return {
+        total: cnt?.n ?? 0,
+        items: orders.map((o) => ({
+          code: o.code, placedAt: new Date(o.placed_at ?? o.created_at).toISOString(), isPreOrder: o.is_pre_order, email: o.email, name: o.name, country: o.country, fulfillmentStatus: o.fulfillment_status,
+          items: remainingItems(lines.filter((l) => l.orderId === o.id).map((l) => ({ sku: l.variantSku, name: l.variantName, quantity: l.quantity, fulfilledQty: l.fulfilledQty, cancelledQty: l.cancelledQty }))),
+          shippedTracking: ful.filter((f) => f.orderId === o.id && f.trackingCode).map((f) => f.trackingCode),
+        })),
+      };
+    });
+    return c.json(out, 200);
+  }),
+);
+
+// ── Auto-Delivered: run now, with dry-run preview (DD order-tools parity) ────
+adminOrderOps.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/jobs/auto-deliver', summary: 'Mark old Shipped fulfillments as Delivered (dry-run by default)',
+    request: { body: { content: J(z.object({ dryRun: z.boolean().default(true), days: z.number().int().min(1).max(365).optional() })) } },
+    responses: { 200: { description: 'OK', content: J(z.object({
+      dryRun: z.boolean(), days: z.number().int(), cutoff: z.string(), count: z.number().int(),
+      sample: z.array(z.object({ code: z.string(), trackingCode: z.string().nullable(), carrier: z.string().nullable(), shippedAt: z.string() })),
+    })) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireWrite(st);
+    const { dryRun, days: reqDays } = c.req.valid('json');
+    const days = reqDays ?? env.JOBS_AUTO_DELIVER_DAYS ?? 10;
+    const r = await autoDeliverStore(st.storeId, { apply: !dryRun, days, exact: dryRun, maxBatches: dryRun ? 1 : 25 });
+    if (!dryRun) {
+      await withStore(st.storeId, (tx) => tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'store', entityId: st.storeId, action: 'auto_deliver_run', data: { days, delivered: r.count } }));
+    }
+    return c.json({ dryRun, days, cutoff: r.cutoff, count: r.count, sample: r.sample }, 200);
   }),
 );
 
@@ -462,6 +632,9 @@ adminOrderOps.openapi(
         // txns are a money ledger we keep, but they FK order — null is allowed via
         // the optional reference, so detach them rather than delete the audit trail.
         await tx.delete(s.promotionUsage).where(eq(s.promotionUsage.orderId, o.id));
+        // Order editing (G13): edit history + adjustments (also ON DELETE cascade in 0084).
+        await tx.delete(s.orderEdit).where(eq(s.orderEdit.orderId, o.id));
+        await tx.delete(s.orderAdjustment).where(eq(s.orderAdjustment.orderId, o.id));
         await tx.update(s.giftCardTransaction).set({ orderId: null }).where(eq(s.giftCardTransaction.orderId, o.id));
         await tx.update(s.stockMovement).set({ refOrderId: null }).where(eq(s.stockMovement.refOrderId, o.id));
         // A converted cart points back at this order (nullable FK) — detach it so

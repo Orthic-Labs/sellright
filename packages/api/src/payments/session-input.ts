@@ -12,6 +12,8 @@ type Line = { variantName: string; variantSku: string; quantity: number; unitPri
 export function prepareSezzleSession(input: {
   order: Snapshot; lines: Line[]; account: GatewayAccount; amount: number;
   attemptId: string; storefrontUrl?: string;
+  /** Order-edit balance payment: Sezzle returns to the pay page, not checkout. */
+  balance?: boolean;
   customer?: { email: string; firstName: string | null; lastName: string | null };
 }): SezzleSessionInput {
   const { order, account, amount, attemptId } = input;
@@ -27,8 +29,10 @@ export function prepareSezzleSession(input: {
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Customer email required');
   if (!order.receiptToken || order.currency !== 'USD' || !Number.isSafeInteger(amount) ||
       amount <= 0 || amount > order.grandTotal || !input.lines.length) throw new Error('Invalid payment context');
-  const complete = new URL('/checkout/confirmation/' + encodeURIComponent(order.code), origin);
+  const balance = input.balance === true;
+  const complete = new URL((balance ? '/orders/' : '/checkout/confirmation/') + encodeURIComponent(order.code), origin);
   complete.searchParams.set('rt', order.receiptToken);
+  if (balance) complete.searchParams.set('pay', 'balance');
   complete.searchParams.set('paymentAttempt', attemptId);
   const address = (value: unknown) => {
     const a = (value ?? {}) as Record<string, unknown>;
@@ -49,7 +53,11 @@ export function prepareSezzleSession(input: {
     throw new Error('Order totals do not reconcile');
   }
   return { storeId: account.storeId, gateway: account, attemptId, orderCode: order.code,
-    amount, currency: order.currency, completeUrl: complete.href, cancelUrl: new URL('/checkout', origin).href,
+    amount, currency: order.currency, completeUrl: complete.href,
+    cancelUrl: balance ? (() => { const u = new URL('/orders/' + encodeURIComponent(order.code), origin);
+      u.searchParams.set('rt', order.receiptToken!); u.searchParams.set('pay', 'balance'); return u.href; })()
+      : new URL('/checkout', origin).href,
+    ...(balance ? { description: `Order ${order.code} balance`, discountLabel: 'Previously paid' } : {}),
     customer: { email, first_name: input.customer?.firstName, last_name: input.customer?.lastName,
       shipping_address: address(order.shippingAddress), billing_address: address(order.billingAddress ?? order.shippingAddress) },
     items, shipping: order.shippingTotal, tax,

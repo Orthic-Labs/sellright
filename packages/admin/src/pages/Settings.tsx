@@ -5,6 +5,7 @@ import { api } from '../api';
 import { useAuth } from '../auth';
 import { PageHeader, Loading, Spinner, Badge, FormSection, Field, InlineAlert } from '../components/ui';
 import { ADMIN_PAYMENT_PROVIDERS } from '../lib/payment-providers';
+import ShippingMethods from '../components/ShippingMethods';
 
 const NEEDS_KEYS = new Set(['stripe']);
 
@@ -35,7 +36,6 @@ export default function SettingsPage() {
   const [section, setSection] = useState<SectionId>('store');
   const sk = ['settings-store', store?.slug];
   const { data: cfg, isLoading } = useQuery({ queryKey: sk, queryFn: () => api.get<any>('/settings/store') });
-  const ship = useQuery({ queryKey: ['shipping', store?.slug], queryFn: () => api.get<{ items: any[] }>('/shipping-methods') });
   const staff = useQuery({ queryKey: ['staff', store?.slug], queryFn: () => api.get<{ items: any[] }>('/staff') });
 
   const [store2, setStore2] = useState<{ name: string } | null>(null);
@@ -46,10 +46,6 @@ export default function SettingsPage() {
   const setStripeMode = useMutation({ mutationFn: (mode: 'test' | 'live') => api.patch('/settings/payments/stripe-mode', { mode }), onSuccess: () => qc.invalidateQueries({ queryKey: sk }) });
   const [gid, setGid] = useState<string | null>(null);
   const saveGoogle = useMutation({ mutationFn: () => api.patch('/settings/google', { clientId: gid }), onSuccess: () => { setGid(null); qc.invalidateQueries({ queryKey: sk }); } });
-
-  const [sm, setSm] = useState<{ code: string; name: string; rate: string } | null>(null);
-  const addShip = useMutation({ mutationFn: () => api.post('/shipping-methods', { code: sm!.code, name: sm!.name, calculator: { flat: Math.round(parseFloat(sm!.rate || '0') * 100) } }), onSuccess: () => { setSm(null); ship.refetch(); } });
-  const delShip = useMutation({ mutationFn: (id: string) => api.del(`/shipping-methods/${id}`), onSuccess: () => ship.refetch() });
 
   const tfa = useQuery({ queryKey: ['2fa', me?.email], queryFn: () => api.get<{ enabled: boolean }>('/2fa') });
   const [setup, setSetup] = useState<{ secret: string; otpauthUri: string } | null>(null);
@@ -143,29 +139,7 @@ export default function SettingsPage() {
             </FormSection>
           )}
 
-          {section === 'shipping' && (
-            <FormSection title="Shipping methods" description="Flat-rate methods offered at checkout."
-              actions={canManage && !sm && <button className="btn-ghost btn-sm" onClick={() => setSm({ code: '', name: '', rate: '' })}><Plus size={14} /> Add method</button>}>
-              <div className="divide-y divide-gray-100">
-                {ship.data?.items.map((m) => (
-                  <div key={m.id} className="flex items-center justify-between py-2.5 text-sm">
-                    <span className="font-medium">{m.name} <span className="text-gray-400 text-xs font-normal">{m.code}</span></span>
-                    <span className="flex items-center gap-2"><Badge value={m.enabled ? 'active' : 'draft'} />{canManage && <button className="text-gray-300 hover:text-danger" aria-label="Delete method" onClick={() => delShip.mutate(m.id)}><Trash2 size={15} /></button>}</span>
-                  </div>
-                ))}
-                {ship.data?.items.length === 0 && !sm && <div className="text-sm text-gray-400 py-2">No shipping methods yet.</div>}
-              </div>
-              {sm && (
-                <div className="flex flex-wrap items-end gap-2 pt-1">
-                  <Field label="Code"><input className="input w-24" value={sm.code} onChange={(e) => setSm({ ...sm, code: e.target.value })} /></Field>
-                  <Field label="Name"><input className="input w-40" value={sm.name} onChange={(e) => setSm({ ...sm, name: e.target.value })} /></Field>
-                  <Field label="Rate"><input className="input w-24 tnum" value={sm.rate} onChange={(e) => setSm({ ...sm, rate: e.target.value })} placeholder="0.00" /></Field>
-                  <button className="btn-primary" disabled={addShip.isPending || !sm.code || !sm.name} onClick={() => addShip.mutate()}>{addShip.isPending ? <Spinner className="text-white" /> : 'Add'}</button>
-                  <button className="btn-ghost" onClick={() => setSm(null)}>Cancel</button>
-                </div>
-              )}
-            </FormSection>
-          )}
+          {section === 'shipping' && <ShippingMethods canManage={canManage} />}
 
           {section === 'taxes' && (
             <FormSection title="Taxes" description="A single base tax rate applied to orders."

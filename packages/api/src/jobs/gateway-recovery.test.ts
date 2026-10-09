@@ -99,7 +99,7 @@ describe('recoverGatewayAttempts', () => {
   beforeEach(() => {
     h.state.updates.length = 0; h.state.audits.length = 0;
     verify.mockReset(); finish.mockReset();
-    h.state.locks.length = 0; h.state.onLock = null;
+    h.state.locks.length = 0; h.state.onLock = null; orderCtx.due = 1000;
   });
 
   it('auto-verifies a stuck NMI attempt through verifyGatewayAttempt (D8)', async () => {
@@ -145,12 +145,21 @@ describe('recoverGatewayAttempts', () => {
     expect(h.state.locks).toEqual(['pay:store:C']);
     expect(finish).toHaveBeenCalledWith('store', 'att', expect.objectContaining({ state: 'Settled', providerRef: 'ord' }));
   });
+  it('captures an approved Sezzle BALANCE authorization on a Paid order that still owes it (order edit)', async () => {
+    h.state.attempts = [{ ...attempt({ method: 'sezzle', operation: 'session', status: 'pending', providerRef: 'ord' }), code: 'C', state: 'Paid', grandTotal: 2500 }];
+    verify.mockResolvedValueOnce({ status: 'pending' });
+    finish.mockResolvedValue({ status: 'settled' });
+    const sezzle = { getOrder: vi.fn().mockResolvedValue(sezzleOrder({ authorization: { approved: true } })), captureOrder: vi.fn(), releaseOrder: vi.fn() };
+    expect(await recoverGatewayAttempts({ ...opts, sezzle })).toMatchObject({ resolved: 1 });
+    expect(sezzle.captureOrder).toHaveBeenCalledTimes(1);
+    expect(sezzle.releaseOrder).not.toHaveBeenCalled();
+  });
   it('releases instead of capturing when the order stopped being payable before the lock (e.g. Stripe settled it)', async () => {
     const row = { ...attempt({ method: 'sezzle', operation: 'session', status: 'pending', providerRef: 'ord' }), code: 'C', state: 'PendingPayment', grandTotal: 1000 };
     h.state.attempts = [row];
     verify.mockResolvedValue({ status: 'pending' });
     finish.mockResolvedValue({ status: 'failed' });
-    h.state.onLock = () => { h.state.attempts = [{ ...row, state: 'Paid' }]; };
+    h.state.onLock = () => { h.state.attempts = [{ ...row, state: 'Paid' }]; orderCtx.due = 0; };
     const sezzle = { getOrder: vi.fn().mockResolvedValue(sezzleOrder({ authorization: { approved: true } })), captureOrder: vi.fn(), releaseOrder: vi.fn() };
     await recoverGatewayAttempts({ ...opts, sezzle });
     expect(sezzle.captureOrder).not.toHaveBeenCalled();

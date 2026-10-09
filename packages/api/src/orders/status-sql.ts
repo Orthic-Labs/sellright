@@ -30,6 +30,7 @@
  * "update the test".
  */
 import { sql, type SQL } from 'drizzle-orm';
+import { EDIT_REFUND_SOURCE } from '../payments/edit-refund.js';
 
 const orderId = sql.raw('"order"."id"');
 const orderState = sql.raw('"order"."state"');
@@ -68,5 +69,22 @@ export function fulfillmentStatusSql(): SQL<string> {
          and exists (select 1 from fulfillment f where f.order_id = ${orderId} and f.state <> 'Cancelled' and f.state <> 'Delivered') then 'partially_delivered'
     when exists (select 1 from fulfillment f where f.order_id = ${orderId} and f.state <> 'Cancelled' and f.state <> 'Delivered') then 'fulfilled'
     else 'delivered'
+  end)`;
+}
+
+/** Cents still owed on the order: grand total - settled payments + refunds an
+ *  order edit handed back (mirrors payments/settle.ts `amountDueForOrder`). */
+export function balanceDueSql(): SQL<number> {
+  return sql<number>`("order"."grand_total"
+    - coalesce((select sum(p.amount) from payment p where p.order_id = ${orderId} and p.state = 'Settled'), 0)
+    + coalesce((select sum(r.amount) from refund r where r.order_id = ${orderId} and r.state <> 'Failed' and r.metadata->>'source' = ${EDIT_REFUND_SOURCE}), 0))::bigint`;
+}
+
+/** `paymentStatusSql()` plus `balance_due` (Paid/PartiallyRefunded orders that an
+ *  edit left owing money) — the SQL twin of `derivePaymentStatus(.., amountDue)`. */
+export function paymentStatusWithBalanceSql(): SQL<string> {
+  return sql<string>`(case
+    when ${orderState} in ('Paid', 'PartiallyRefunded') and ${balanceDueSql()} > 0 then 'balance_due'
+    else ${paymentStatusSql()}
   end)`;
 }

@@ -32,7 +32,7 @@ export const migrationConfig = z.object({
   // target loyalty block) balances are listed as exclusions, not imported.
   loyalty: LoyaltySettingsSchema.optional(),
 }).strict();
-type Config = z.infer<typeof migrationConfig>;
+type Config = z.input<typeof migrationConfig>;
 export const MIGRATION_TABLES = ['asset', 'product', 'product_option_group', 'product_option', 'product_variant', 'variant_option',
   'stock', 'location', 'stock_location', 'promotion', 'collection', 'collection_product', 'product_asset', 'variant_asset',
   'customer', 'address', 'order', 'order_line', 'payment', 'fulfillment', 'fulfillment_line', 'refund', 'refund_line',

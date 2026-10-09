@@ -183,6 +183,16 @@ describe('CART-01: exactly one order per cart', () => {
     expect(await orderCount()).toBe(1);
   });
 
+  it('persists the chosen shipping method (code + name) on the order', async () => {
+    const { token, revision } = await makeCart([{ sku: SKU_P, quantity: 1 }]);
+    const r = await checkoutReq({ cartToken: token, shippingMethodCode: SHIP_CODE, expectedRevision: revision, items: [{ sku: SKU_P, quantity: 1 }] });
+    expect(r.status).toBe(200);
+    const { code } = await r.json() as { code: string };
+    const [o] = await withStore(STORE, (tx) => tx.select({ c: s.order.shippingMethodCode, n: s.order.shippingMethodName }).from(s.order).where(eq(s.order.code, code)));
+    expect(o!.c).toBe(SHIP_CODE);
+    expect(o!.n).toBeTruthy();
+  });
+
   it('concurrent same-cart checkouts reserve stock exactly once', async () => {
     const { token, revision } = await makeCart([{ sku: SKU_P, quantity: 3 }]);
     const [a, b] = await Promise.all([

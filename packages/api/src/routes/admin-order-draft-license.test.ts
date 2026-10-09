@@ -166,3 +166,23 @@ describe('draft-orders markPaid issues licenses', () => {
     expect(await licensesForCode(body.code)).toHaveLength(0);
   });
 });
+
+describe('draft-orders shipping method (migration 0086)', () => {
+  it('persists the chosen method code + name and defaults the amount to its flat rate', async () => {
+    const token = await seedStoreAndAdmin();
+    await withStore(STORE, (tx) => tx.insert(s.shippingMethod).values({ storeId: STORE, code: 'std', name: 'Standard', calculator: { flat: 700 }, enabled: true }));
+    const { status, body } = await createDraft(token, { items: [{ sku: LICENSE_SKU, quantity: 1 }], shippingMethodCode: 'std' });
+    expect(status).toBe(200);
+    const [o] = await withStore(STORE, (tx) => tx.select({ c: s.order.shippingMethodCode, n: s.order.shippingMethodName, ship: s.order.shippingTotal }).from(s.order).where(eq(s.order.code, body.code)));
+    expect(o).toMatchObject({ c: 'std', n: 'Standard', ship: 700 });
+  });
+
+  it('no method => NULLs and a 400 for an unknown code', async () => {
+    const token = await seedStoreAndAdmin();
+    const ok = await createDraft(token, { items: [{ sku: LICENSE_SKU, quantity: 1 }] });
+    const [o] = await withStore(STORE, (tx) => tx.select({ c: s.order.shippingMethodCode }).from(s.order).where(eq(s.order.code, ok.body.code)));
+    expect(o!.c).toBeNull();
+    const bad = await createDraft(token, { items: [{ sku: LICENSE_SKU, quantity: 1 }], shippingMethodCode: 'nope' });
+    expect(bad.status).toBe(400);
+  });
+});

@@ -11,9 +11,10 @@ import { selectAutomaticPromotion } from '../money/auto-discount.js';
 import { resolveTaxRate } from '../money/tax.js';
 import { selectUnitPrice, variantPriceRuleFromConfig } from '../money/pricing.js';
 import { applyGiftCard } from '../money/gift-card.js';
-import { earnableCents, loyaltySettingsFromConfig, planRedemption, pointsEarned, type RedeemRejection } from '../money/loyalty.js';
+import { earnableCents, loyaltySettingsFromConfig, multiplierBonusPoints, planRedemption, pointsEarned, type RedeemRejection } from '../money/loyalty.js';
 import { customerOwnsOrder } from '../auth/order-access.js';
-import { lockedAvailable, orderLoyaltySnapshot, postEarnForPaidOrder, reserveRedemption, type OrderLoyaltySnapshot } from '../loyalty/ledger.js';
+import { lockedAvailable, orderLoyaltySnapshot, reserveRedemption, type OrderLoyaltySnapshot } from '../loyalty/ledger.js';
+import { postPaidOrderRewards } from '../loyalty/bonus.js';
 import { emitEvent } from '../webhooks/emit.js';
 import { customerToken, resolveCustomer } from '../auth/session.js';
 import { normalizeEmail } from '../auth/email.js';
@@ -383,12 +384,14 @@ checkout.openapi(
         : [];
       let shippingAmount: number;
       let shippingCalculator: import('../shipping/calculator.js').ShippingCalculator | undefined;
+      let shippingMethodChosen: { code: string; name: string } | null = null;
       if (!requiresShipping) {
         shippingAmount = 0;
       } else if (body.shippingMethodCode) {
         const m = methods.find((x) => x.code === body.shippingMethodCode);
         if (!m) throw new ShippingUnavailableError('method_not_found');
         shippingCalculator = m.calculator as import('../shipping/calculator.js').ShippingCalculator;
+        shippingMethodChosen = { code: m.code, name: m.name };
         shippingAmount = shippingRate(m.calculator);
       } else if (methods.length > 0) {
         // Methods exist but none chosen — force an explicit, validated selection.
@@ -514,15 +517,23 @@ checkout.openapi(
       });
       // Earn snapshot: registered customers only, on merchandise after every
       // discount (promo + points), excluding shipping and tax. Posted to the
-      // ledger only when the order reaches Paid (postEarnForPaidOrder).
+      // ledger only when the order reaches Paid (postPaidOrderRewards).
       const loyaltySnap: OrderLoyaltySnapshot | null = loyalty.enabled || redeem
         ? {
             redeemPoints: redeem?.points ?? 0,
             pointsDiscount: totals.pointsDiscount,
             earnPoints: loyalty.enabled && customerOwnsOrder(loyaltyOwner, {customerId, metadata: { linked_via: linkedVia, contact: { email: normalizeEmail(sessionCustomer?.email ?? body.email ?? '') } }})
-              ? pointsEarned(earnableCents({ subtotal: totals.subtotal, discountTotal: totals.discountTotal, taxRate, taxInclusive: st.taxInclusive }), loyalty.earnRatePerDollar)
+              ? (() => {
+                const base = earnableCents({ subtotal: totals.subtotal, discountTotal: totals.discountTotal, taxRate, taxInclusive: st.taxInclusive });
+                return pointsEarned(base, loyalty.earnRatePerDollar) + multiplierBonusPoints({
+                  lines: priced.map((p) => ({ productId: p.v.productId, cents: p.unitPrice * p.qty })),
+                  subtotal: totals.subtotal, earnableCents: base, earnRatePerDollar: loyalty.earnRatePerDollar, multipliers: loyalty.productMultipliers,
+                });
+              })()
               : 0,
             expiryDays: loyalty.expiryDays,
+            earnRatePerDollar: loyalty.earnRatePerDollar,
+            ...(loyalty.productMultipliers.length ? { productMultipliers: loyalty.productMultipliers } : {}),
           }
         : null;
 
@@ -535,6 +546,7 @@ checkout.openapi(
       await tx.insert(s.order).values({
         id: orderId, storeId: st.id, code, customerId, state: 'PendingPayment', currency: st.currency,
         idempotencyKey: idemKey, promotionId: promoId, receiptToken,
+        shippingMethodCode: shippingMethodChosen?.code ?? null, shippingMethodName: shippingMethodChosen?.name ?? null,
         subtotal: totals.subtotal, discountTotal: totals.discountTotal, shippingTotal: totals.shippingTotal,
         taxTotal: totals.taxTotal, grandTotal: totals.grandTotal,
         isPreOrder: priced.some((p) => p.v.isPreOrder),
@@ -592,7 +604,7 @@ checkout.openapi(
         const paidAt = new Date();
         await tx.update(s.order).set({ state: 'Paid', placedAt: paidAt, updatedAt: paidAt }).where(eq(s.order.id, orderId));
         await issueLicensesForPaidOrder(tx, { storeId: st.id, orderId, customerId, paidAt });
-        await postEarnForPaidOrder(tx, st.id, orderId, paidAt);
+        await postPaidOrderRewards(tx, { storeId: st.id, orderId, paidAt, store: st });
         paid = true;
       } else if (body.giftCardCode) {
         // Gift card / store credit is a tender, not a discount. The launch
@@ -610,7 +622,7 @@ checkout.openapi(
               const paidAt = new Date();
               await tx.update(s.order).set({ state: 'Paid', placedAt: paidAt, updatedAt: paidAt }).where(eq(s.order.id, orderId));
               await issueLicensesForPaidOrder(tx, { storeId: st.id, orderId, customerId, paidAt });
-              await postEarnForPaidOrder(tx, st.id, orderId, paidAt);
+              await postPaidOrderRewards(tx, { storeId: st.id, orderId, paidAt, store: st });
               paid = true;
             }
           }

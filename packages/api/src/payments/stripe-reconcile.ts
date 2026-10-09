@@ -109,7 +109,10 @@ export async function applyStripeIntent(tx: Tx, storeId: string, pi: StripeInten
       await setAttempt(tx, attempt, 'settled', { paymentId: existing.id });
       return { outcome: 'already_settled', orderState: order.state };
     }
-    const payable = order.state === 'PendingPayment' || order.state === 'Cancelled';
+    // Order editing (G13): a Paid/PartiallyRefunded order with a positive amount
+    // due (an edit raised the total) accepts a balance payment; with nothing
+    // due it still falls through to the duplicate-capture handling below.
+    const payable = order.state === 'PendingPayment' || order.state === 'Cancelled' || order.state === 'Paid' || order.state === 'PartiallyRefunded';
     const amountDue = payable ? await amountDueForOrder(tx, storeId, order.id, order.grandTotal) : 0;
     if (payable && amountDue > 0) {
       const result = verifyIntent(pi, { orderCode: code, amount: amountDue, currency: order.currency, stripeMode: mode });
@@ -270,7 +273,9 @@ export async function reconcileStripeOrder(storeId: string, ref: { code: string 
   let found = await load();
   if (!found) return { found: false, intents: [] };
   const out: ReconcileResult = { found: true, code: found.order.code, state: found.order.state, intents: [] };
-  if (found.order.state !== 'PendingPayment' && found.order.state !== 'Cancelled') return out;
+  // Order editing (G13): a Paid/PartiallyRefunded order can have an open balance
+  // payment (edit raised the total) — reconcile its unresolved intents too.
+  if (!['PendingPayment', 'Cancelled', 'Paid', 'PartiallyRefunded'].includes(found.order.state)) return out;
   // Untracked order (PI minted before intent tracking, or a lost attempt
   // insert): ask Stripe which PIs exist for it, then reconcile those.
   if (opts.discover && !found.tracked) {
