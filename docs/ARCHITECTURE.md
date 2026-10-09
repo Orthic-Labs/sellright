@@ -11,7 +11,7 @@ This document describes the current product structure. Historical design and aud
 | Data | Postgres + Drizzle, integer cents for money |
 | Tenancy | `store` root entity, store-scoped tables, Postgres RLS via `app.current_store` |
 | Admin | React + Vite + Tailwind/shadcn-style components |
-| Storefront | No in-repo storefront; static catalog manifest plus merchant feeds for downstream consumers (RightSites) |
+| Storefront | Reference Qwik storefront in `packages/storefront` over the typed REST client in `packages/storefront-client`; static catalog manifest plus merchant feeds for downstream consumers (RightSites) |
 | Payments | `PaymentProvider` interface; Stripe, NMI, and Sezzle implemented; per-store gateway accounts with persisted mode/test provenance |
 | Email | Nodemailer SMTP; all transactional mail goes through the durable `email_outbox` with dedupe keys, retries, and dead-letter |
 | Jobs | Leader-locked in-process scheduler (advisory lock) for sweeps: outbox, restock, SheerID expiry, cart maintenance, Listmonk sync |
@@ -22,6 +22,8 @@ This document describes the current product structure. Historical design and aud
 packages/
   api/         Hono API, Drizzle schema, migrations, jobs, imports, OpenAPI
   admin/       React admin SPA
+  storefront/  reference Qwik storefront
+  storefront-client/  typed REST client generated from /v1/openapi.json
   shared/      shared money primitives and types
 docs/          product documentation
 ```
@@ -67,6 +69,10 @@ The schema is a full commerce schema rather than a thin catalog API. It includes
 - Commerce rules: promotions, gift cards, shipping methods, tax zones, currency rates.
 - Operator tools: blog posts, webhooks, affiliates, reports, staff invites, activity.
 - Customer-facing flows: contact submissions, restock requests/events, SheerID verifications, disputes, email-change tokens, durable email outbox.
+- Order editing (migration 0084): `order_edit` (one row per committed edit: before/after snapshot, `balance`, `settlement`, idempotency key + payload fingerprint), `order_adjustment` (labelled +/- cents applied to the grand total, replaced as a set per edit) and `order.shipping_override` (shipping amount set by hand). Both tables cascade with the order. Migration 0086 adds `order.shipping_method_code` / `shipping_method_name`.
+- Amount due: `amountDueForOrder` (`payments/settle.ts`) is grand total minus net settled tender. When positive on a Paid/PartiallyRefunded order, payment status reads `balance_due`; `/pay`, NMI, Sezzle and Stripe charge only that amount, and balance attempts are namespaced by settled-tender count so a later edit cannot replay an earlier intent.
+- Order status columns: `status` (`open|completed|cancelled|archived`) is a stored generated column; `paymentStatus` and `fulfillmentStatus` are derived at read time from payment/fulfillment rows (`orders/status.ts`, `status-sql.ts`). Only `paymentStatus` can be `balance_due`.
+- Loyalty (`store.config.loyalty`, `money/loyalty.ts`): the append-only `loyalty_ledger` is the only writer of balances; kinds are `earn|redeem|reverse|adjust|expire|import|bonus`. Bonus rules (review, sign-up, first order, birthday) post once via a deterministic `source_ref`; a reversal is a normal `reverse` row and never clears the original `source_ref`. `product_review` (migration 0085) is moderated `pending|approved|rejected`, one per product per reviewer email; the rating aggregate is derived from approved rows, never stored.
 - Software sales: licenses, activations, app releases, download artifacts.
 
 Most business tables are store-scoped. Shared registry tables that intentionally cross stores are documented and excluded from FORCE RLS only when needed.
@@ -126,6 +132,10 @@ filters; private source facets are excluded. Original facet IDs remain in
 variant metadata for migrated coupon eligibility.
 
 This keeps storefront browsing cheap and fast while preserving a transactional backend for money and account flows.
+
+## Browser E2E Harness
+
+`packages/admin/e2e` (Playwright, 13 specs) and `packages/storefront/e2e` (10 specs) run against production builds (`dist-e2e`; the storefront with SSG off). Each `start-api.mjs` drops and recreates a dedicated database (`sellright_admin_e2e` on :3399, `sellright_storefront_e2e` on :3398), migrates, bootstraps a store and owner, then serves the API from `packages/api/dist` on a non-superuser role. `assertSafeTargets` refuses any other database or port. One worker, shared database; global setup seeds through the admin API. The storefront suite also starts `mock-gateways.mjs` (NMI, Sezzle, IndexNow, webhook receiver, SMTP sink), so checkout, payment code and outbox workers are real while gateways are mocked; with `PLAYWRIGHT_API_URL` set only the storefront starts and money specs skip. CI jobs: `e2e-admin`, `e2e-storefront`.
 
 ## Security Model
 
