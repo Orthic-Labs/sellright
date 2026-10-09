@@ -4,11 +4,12 @@
  * Every mutation writes audit_log in the same transaction.
  */
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { LoyaltySettingsSchema, loyaltySettingsFromConfig, pointsToCents } from '../money/loyalty.js';
 import { adjustPoints, ledgerPage, loyaltyBalance, LoyaltyAdjustError } from '../loyalty/ledger.js';
+import { BonusReverseError, reverseBonus } from '../loyalty/bonus.js';
 import { mutateStoreConfig } from './admin-settings.js';
 import { HttpError, J, errBody, guard, requireAdmin, requireManage, requirePermission, requireStore, requireWrite } from './admin-helpers.js';
 
@@ -41,13 +42,22 @@ adminLoyalty.openapi(
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireWrite(st); requireManage(st);
-    const b = c.req.valid('json');
-    const next = await mutateStoreConfig(st.storeId, (config) => ({ ...config, loyalty: b }), {
+    const input = c.req.valid('json');
+    const next = await mutateStoreConfig(st.storeId, (config) => {
+      // The sign-up bonus only pays customers created on/after the moment it
+      // is switched on (imported/old accounts never qualify retroactively):
+      // stamp the activation time when it goes from off to on, clear it when off.
+      const prev = loyaltySettingsFromConfig(config);
+      const since = input.signupBonusPoints <= 0 ? null
+        : prev.signupBonusPoints > 0 && prev.signupBonusSince ? prev.signupBonusSince
+        : input.signupBonusSince ?? new Date().toISOString();
+      return { ...config, loyalty: { ...input, signupBonusSince: since } };
+    }, {
       actor: admin.email,
       action: 'settings_update',
       // Settings are plain numbers/booleans — no secrets — so the whole
       // before/after block is safe to persist.
-      detail: (prev) => ({ section: 'loyalty', before: loyaltySettingsFromConfig(prev), after: b }),
+      detail: (prev) => ({ section: 'loyalty', before: loyaltySettingsFromConfig(prev), after: input }),
     });
     return c.json(loyaltySettingsFromConfig(next), 200);
   }),
@@ -56,7 +66,7 @@ adminLoyalty.openapi(
 const LedgerRow = z.object({
   id: z.string(), kind: z.string(), points: z.number().int(), shortfall: z.number().int(),
   reason: z.string().nullable(), actor: z.string().nullable(), orderCode: z.string().nullable(),
-  expiresAt: z.string().nullable(), createdAt: z.string(),
+  expiresAt: z.string().nullable(), createdAt: z.string(), rule: z.string().nullable(), reversible: z.boolean(),
 });
 const CustomerLoyalty = z.object({
   customerId: z.string(), enabled: z.boolean(),
@@ -75,7 +85,12 @@ async function customerLoyalty(storeId: string, customerId: string) {
     return {
       customerId, enabled: program.enabled, balance: bal.balance, available: bal.available, pendingExpiry: bal.pendingExpiry,
       availableValue: pointsToCents(bal.available, program.pointsPerDollarOff),
-      ledger: rows.map((r) => ({ ...r, orderCode: r.orderCode ?? null, expiresAt: r.expiresAt?.toISOString() ?? null, createdAt: r.createdAt.toISOString() })),
+      ledger: rows.map(({ metadata, ...r }) => ({
+        ...r, orderCode: r.orderCode ?? null, expiresAt: r.expiresAt?.toISOString() ?? null, createdAt: r.createdAt.toISOString(),
+        rule: (metadata as { rule?: string } | null)?.rule ?? null,
+        // A bonus grant is reversible until a bonus_reversal row points at it.
+        reversible: r.kind === 'bonus' && !rows.some((x) => (x.metadata as { reversesLedgerId?: string } | null)?.reversesLedgerId === r.id),
+      })),
     };
   });
 }
@@ -137,5 +152,82 @@ adminLoyalty.openapi(
     if (res.kind === 'notfound') throw new HttpError(404, 'customer not found');
     if (res.kind === 'conflict') throw new HttpError(409, res.message);
     return c.json((await customerLoyalty(st.storeId, id))!, 200);
+  }),
+);
+
+// ── program dashboard ────────────────────────────────────────────────────────
+const Summary = z.object({
+  enabled: z.boolean(), currency: z.string(), pointsPerDollarOff: z.number().int(),
+  issued: z.number().int(), redeemed: z.number().int(), restored: z.number().int(), expired: z.number().int(), removed: z.number().int(),
+  outstanding: z.number().int(), liabilityCents: z.number().int(), customersWithBalance: z.number().int(),
+  byKind: z.array(z.object({ kind: z.string(), points: z.number().int(), entries: z.number().int() })),
+  last30Days: z.object({ issued: z.number().int(), redeemed: z.number().int() }),
+});
+
+adminLoyalty.openapi(
+  createRoute({
+    method: 'get', path: '/v1/admin/loyalty/summary', summary: 'Points program totals: issued, redeemed, outstanding, liability',
+    responses: { 200: { description: 'OK', content: J(Summary) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    const out = await withStore(st.storeId, async (tx) => {
+      const [store] = await tx.select({ config: s.store.config, currency: s.store.currency }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1);
+      const program = loyaltySettingsFromConfig(store?.config);
+      const L = s.loyaltyLedger;
+      const [t] = await tx.select({
+        issued: sql<number>`coalesce(sum(${L.points}) filter (where ${L.kind} in ('earn','import','bonus') or (${L.kind} = 'adjust' and ${L.points} > 0)), 0)::int`,
+        redeemed: sql<number>`coalesce(-sum(${L.points}) filter (where ${L.kind} = 'redeem'), 0)::int`,
+        restored: sql<number>`coalesce(sum(${L.points}) filter (where ${L.kind} = 'reverse' and ${L.reason} = 'redeem_restore'), 0)::int`,
+        expired: sql<number>`coalesce(-sum(${L.points}) filter (where ${L.kind} = 'expire'), 0)::int`,
+        removed: sql<number>`coalesce(-sum(${L.points}) filter (where (${L.kind} = 'adjust' and ${L.points} < 0) or (${L.kind} = 'reverse' and ${L.reason} <> 'redeem_restore')), 0)::int`,
+        outstanding: sql<number>`coalesce(sum(${L.points}), 0)::int`,
+        issued30: sql<number>`coalesce(sum(${L.points}) filter (where ${L.createdAt} > now() - interval '30 days' and (${L.kind} in ('earn','import','bonus') or (${L.kind} = 'adjust' and ${L.points} > 0))), 0)::int`,
+        redeemed30: sql<number>`coalesce(-sum(${L.points}) filter (where ${L.createdAt} > now() - interval '30 days' and ${L.kind} = 'redeem'), 0)::int`,
+      }).from(L).where(eq(L.storeId, st.storeId));
+      const byKind = await tx.select({ kind: L.kind, points: sql<number>`sum(${L.points})::int`, entries: sql<number>`count(*)::int` })
+        .from(L).where(eq(L.storeId, st.storeId)).groupBy(L.kind).orderBy(L.kind);
+      const holders = await tx.execute(sql`SELECT count(*)::int AS n FROM (SELECT 1 FROM loyalty_ledger WHERE store_id = ${st.storeId} GROUP BY customer_id HAVING sum(points) > 0) x`);
+      return { program, currency: store?.currency ?? 'USD', t: t!, byKind, holders: Number((holders.rows[0] as { n?: number } | undefined)?.n ?? 0) };
+    });
+    return c.json({
+      enabled: out.program.enabled, currency: out.currency, pointsPerDollarOff: out.program.pointsPerDollarOff,
+      issued: out.t.issued, redeemed: out.t.redeemed, restored: out.t.restored, expired: out.t.expired, removed: out.t.removed,
+      outstanding: out.t.outstanding, liabilityCents: pointsToCents(Math.max(0, out.t.outstanding), out.program.pointsPerDollarOff),
+      customersWithBalance: out.holders, byKind: out.byKind,
+      last30Days: { issued: out.t.issued30, redeemed: out.t.redeemed30 },
+    }, 200);
+  }),
+);
+
+adminLoyalty.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/loyalty/ledger/{id}/reverse', summary: 'Reverse a bonus grant',
+    request: { params: z.object({ id: CustomerId }), body: { content: J(z.object({ reason: z.string().trim().min(3).max(500) })) } },
+    responses: {
+      200: { description: 'OK', content: J(z.object({ reversed: z.number().int(), shortfall: z.number().int() })) },
+      404: { description: 'Not found', ...errBody }, 409: { description: 'Not reversible', ...errBody },
+      401: { description: 'Unauthorized', ...errBody }, 403: { description: 'Forbidden', ...errBody },
+    },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c); requireWrite(st); requirePermission(st, 'loyalty');
+    const { id } = c.req.valid('param');
+    const { reason } = c.req.valid('json');
+    const res = await withStore(st.storeId, async (tx) => {
+      try {
+        const r = await reverseBonus(tx, { storeId: st.storeId, ledgerId: id, actor: admin.email, reason });
+        if (r) await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'loyalty_ledger', entityId: id, action: 'loyalty_bonus_reverse', data: { ...r, reason } });
+        return r ? { kind: 'ok' as const, ...r } : { kind: 'notfound' as const };
+      } catch (e) {
+        if (e instanceof BonusReverseError) return { kind: 'conflict' as const, message: e.message };
+        throw e;
+      }
+    });
+    if (res.kind === 'notfound') throw new HttpError(404, 'ledger entry not found');
+    if (res.kind === 'conflict') throw new HttpError(409, res.message);
+    return c.json({ reversed: res.reversed, shortfall: res.shortfall }, 200);
   }),
 );

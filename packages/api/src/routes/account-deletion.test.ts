@@ -45,7 +45,7 @@ async function seed(): Promise<string> {
   let token = '';
   await withStore(STORE, async (tx) => {
     await tx.execute(sql`INSERT INTO store (id, slug, name, currency, config) VALUES (${STORE}, ${SLUG}, ${SLUG}, 'USD', '{}'::jsonb) ON CONFLICT (id) DO NOTHING`);
-    await tx.execute(sql`INSERT INTO customer (id, store_id, email, first_name, last_name) VALUES (${CUSTOMER}, ${STORE}, 'erase-me@acct.test', 'Erase', 'Me') ON CONFLICT (id) DO NOTHING`);
+    await tx.execute(sql`INSERT INTO customer (id, store_id, email, first_name, last_name, email_verified) VALUES (${CUSTOMER}, ${STORE}, 'erase-me@acct.test', 'Erase', 'Me', true) ON CONFLICT (id) DO NOTHING`);
     token = await createSession(tx, STORE, CUSTOMER);
     // one address
     await tx.execute(sql`INSERT INTO address (id, store_id, customer_id, line1, city, country) VALUES (gen_random_uuid(), ${STORE}, ${CUSTOMER}, '1 Test St', 'Testville', 'US')`);

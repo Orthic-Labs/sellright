@@ -2,6 +2,7 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { and, eq, inArray, ne, sql } from 'drizzle-orm';
 import { withAdvisoryLock, withStore, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
+import { customerOwnsOrder } from '../auth/order-access.js';
 import { resolveCustomer } from '../auth/session.js';
 import { amountDueForOrder, applyPaymentResult } from './settle.js';
 import { getProvider, isPaymentMethodEnabled, type PaymentResult, type RefundResult } from './provider.js';
@@ -14,6 +15,10 @@ import { finalizeRefund } from './refunds.js';
 import { refundStateFromStripe } from './webhook-reconcile.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
 
+/** Order editing (G13): states where a positive amount due is a balance for an
+ *  edited order rather than an unpaid order (same rule as routes/pay.ts). */
+export const isBalanceState = (state: string) => state === 'Paid' || state === 'PartiallyRefunded';
+
 export class GatewayPaymentError extends Error {
   constructor(public status: 400 | 404 | 409 | 503, message: string) { super(message); }
 }
@@ -23,12 +28,16 @@ export function receiptMatches(given: string | undefined, expected: string | nul
   return a.length === b.length && timingSafeEqual(a, b);
 }
 export async function ownedOrder(tx: Tx, code: string, receipt?: string, customerSession?: string | null) {
-  const [order] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
+  // Explicit tenant predicate as well as RLS: a BYPASSRLS/superuser pool must
+  // still never resolve another store's order by code + receipt token.
+  const [order] = await tx.select().from(s.order)
+    .where(and(eq(s.order.code, code), sql`${s.order.storeId} = nullif(current_setting('app.current_store', true), '')::uuid`))
+    .limit(1).for('update');
   if (!order || order.deletedAt) throw new GatewayPaymentError(404, 'Order not found');
   let granted = receiptMatches(receipt, order.receiptToken);
   if (!granted && customerSession && order.customerId) {
     const customer = await resolveCustomer(tx, customerSession);
-    granted = customer?.id === order.customerId;
+    granted = customerOwnsOrder(customer, order);
   }
   if (!granted) throw new GatewayPaymentError(404, 'Order not found');
   return order;
@@ -50,7 +59,23 @@ export async function startGatewayPayment(input: {
   return withAdvisoryLock('pay:' + input.storeId + ':' + input.code, async () => {
     const prepared = await withStore(input.storeId, async tx => {
       const order = await ownedOrder(tx, input.code, input.receiptToken, input.customerSession);
-      const [existing] = await tx.select().from(s.paymentAttempt).where(eq(s.paymentAttempt.idempotencyKey, input.idempotencyKey)).limit(1);
+      // Order editing (G13): a Paid / PartiallyRefunded order with a positive
+      // amount due is a BALANCE payment for an edit that raised the total. It is
+      // a second payment on the order, so its idempotency key is namespaced by
+      // the number of settled tenders (mirrors routes/pay.ts ':balance:<n>') —
+      // a later balance after another edit gets a fresh key even if a client
+      // reuses one. A raw-key hit still replays the earlier (pre-balance)
+      // attempt, so a retried checkout request keeps its old answer.
+      const balance = isBalanceState(order.state);
+      let attemptKey = input.idempotencyKey;
+      if (balance) {
+        const [n] = await tx.select({ n: sql<number>`count(*)::int` }).from(s.payment)
+          .where(and(eq(s.payment.orderId, order.id), eq(s.payment.state, 'Settled')));
+        attemptKey = `${input.idempotencyKey}:balance:${n?.n ?? 0}`;
+      }
+      const found = await tx.select().from(s.paymentAttempt)
+        .where(inArray(s.paymentAttempt.idempotencyKey, balance ? [input.idempotencyKey, attemptKey] : [input.idempotencyKey])).limit(2);
+      const existing = found.find((a) => a.idempotencyKey === input.idempotencyKey) ?? found[0];
       if (existing) {
         if (existing.orderId !== order.id || existing.method !== input.method || existing.operation !== operation ||
             existing.accountId !== account.accountId || existing.mode !== account.mode) {
@@ -60,7 +85,7 @@ export async function startGatewayPayment(input: {
         catch { throw new GatewayPaymentError(409, 'Payment gateway environment changed; restore the original account configuration'); }
         return { existing };
       }
-      if (order.state !== 'PendingPayment') throw new GatewayPaymentError(409, 'Order is not payable');
+      if (order.state !== 'PendingPayment' && !balance) throw new GatewayPaymentError(409, 'Order is not payable');
       const [active] = await tx.select({ id: s.paymentAttempt.id }).from(s.paymentAttempt)
         .where(and(eq(s.paymentAttempt.orderId, order.id), inArray(s.paymentAttempt.status, ['processing','unknown','pending']))).limit(1);
       if (active) throw new GatewayPaymentError(409, 'Resolve the existing payment before starting another');
@@ -75,7 +100,7 @@ export async function startGatewayPayment(input: {
       if (input.method === 'sezzle') {
         try {
           session = prepareSezzleSession({ order, lines, account, amount, attemptId, customer,
-            storefrontUrl: (input.config as { storefrontUrl?: string } | null)?.storefrontUrl });
+            storefrontUrl: (input.config as { storefrontUrl?: string } | null)?.storefrontUrl, balance });
         } catch (error) {
           throw new GatewayPaymentError(400, error instanceof Error ? error.message : 'Invalid checkout details');
         }
@@ -87,7 +112,7 @@ export async function startGatewayPayment(input: {
       const [attempt] = await tx.insert(s.paymentAttempt).values({
         id: attemptId, storeId: input.storeId, orderId: order.id, operation, method: input.method,
         accountId: account.accountId, mode: account.mode, amount, currency: order.currency,
-        idempotencyKey: input.idempotencyKey, fingerprint, context,
+        idempotencyKey: attemptKey, fingerprint, context,
       }).returning();
       return { attempt: attempt!, order, session };
     });

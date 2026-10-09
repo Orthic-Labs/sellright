@@ -115,3 +115,33 @@ describe('calculateOrderTotals', () => {
     expect(t.grandTotal).toBe(5000);
   });
 });
+
+describe('calculateOrderTotals — order-edit adjustments (G13)', () => {
+  const lines = [{ unitPrice: 10000, quantity: 1 }];
+  it('is byte-identical when no adjustments are passed', () => {
+    const t = calculateOrderTotals({ lines, shipping: 500, taxRate: 875 });
+    expect(Object.keys(t)).not.toContain('adjustmentTotal');
+    expect(calculateOrderTotals({ lines, shipping: 500, taxRate: 875, adjustments: [] }).grandTotal).toBe(t.grandTotal);
+  });
+  it('adds a signed, untaxed amount to the grand total (tax unchanged)', () => {
+    const base = calculateOrderTotals({ lines, shipping: 500, taxRate: 875 });
+    const t = calculateOrderTotals({ lines, shipping: 500, taxRate: 875, adjustments: [{ label: 'fee', amount: 300 }, { label: 'credit', amount: -100 }] });
+    expect(t.adjustmentTotal).toBe(200);
+    expect(t.taxTotal).toBe(base.taxTotal);
+    expect(t.grandTotal).toBe(base.grandTotal + 200);
+  });
+  it('a taxable adjustment joins the taxable base', () => {
+    const t = calculateOrderTotals({ lines, shipping: 0, taxRate: 1000, adjustments: [{ amount: 1000, taxable: true }] });
+    expect(t.taxTotal).toBe(1100);
+    expect(t.grandTotal).toBe(10000 + 1000 + 1100);
+  });
+  it('works with tax-inclusive pricing and method-specific shipping tax', () => {
+    const inc = calculateOrderTotals({ lines, shipping: 0, taxRate: 1000, taxInclusive: true, adjustments: [{ amount: -500 }] });
+    expect(inc.grandTotal).toBe(9500);
+    const ship = calculateOrderTotals({ lines, shipping: 1000, taxRate: 1000, shippingTaxRate: 500, adjustments: [{ amount: 250 }] });
+    expect(ship.grandTotal).toBe(10000 + 1000 + 1000 + 50 + 250);
+  });
+  it('the grand total never goes negative', () => {
+    expect(calculateOrderTotals({ lines, shipping: 0, taxRate: 0, adjustments: [{ amount: -50000 }] }).grandTotal).toBe(0);
+  });
+});

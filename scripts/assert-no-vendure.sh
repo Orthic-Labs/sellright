@@ -40,6 +40,7 @@ HARD_PATTERNS='graphql|gql`|@vendure|__typename'
 read -r -d '' VENDURE_WORD_ALLOWLIST <<'LIST' || true
 packages/api/src/env.ts
 packages/api/src/payments/refunds.ts
+packages/api/src/orders/order-edit-service.ts
 packages/api/src/email/mailer.test.ts
 packages/api/src/routes/admin-affiliate.public.db.test.ts
 packages/api/src/routes/customer-tokens.ts

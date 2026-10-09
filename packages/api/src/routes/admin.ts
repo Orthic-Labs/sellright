@@ -18,8 +18,9 @@ import { normalizeEmail } from '../auth/email.js';
 import { enqueueShippingNotification } from '../email/dispatch.js';
 import { emitEvent } from '../webhooks/emit.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
+import { amountDueForOrder } from '../payments/settle.js';
 import { deriveFulfillmentStatus, derivePaymentStatus, wirePaymentState } from '../orders/status.js';
-import { fulfillmentStatusSql, paymentStatusSql } from '../orders/status-sql.js';
+import { fulfillmentStatusSql, paymentStatusWithBalanceSql } from '../orders/status-sql.js';
 
 export const admin = new OpenAPIHono();
 
@@ -102,8 +103,12 @@ admin.openapi(
       state: z.string().optional(), q: z.string().optional(), preOrder: z.coerce.boolean().optional(), trashed: z.coerce.boolean().default(false),
       // Wire-facing status filters (BREAKING, pre-1.0 — see CHANGELOG.md), on
       // top of the legacy combined `state` filter above.
-      status: z.enum(['open', 'completed', 'cancelled', 'archived']).optional(),
-      paymentStatus: z.enum(['pending', 'authorized', 'paid', 'partially_refunded', 'refunded', 'voided', 'failed']).optional(),
+      // 'active' = open + completed (the owner-facing "Open": not cancelled, not archived).
+      status: z.enum(['open', 'completed', 'cancelled', 'archived', 'active']).optional(),
+      // Inclusive YYYY-MM-DD bounds (UTC) on the order date (placed, else created).
+      from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      paymentStatus: z.enum(['pending', 'authorized', 'paid', 'partially_refunded', 'refunded', 'voided', 'failed', 'balance_due']).optional(),
+      shippingMethod: z.string().max(120).optional(), // shipping_method_code; '__none__' = no recorded method
       fulfillmentStatus: z.enum(['unfulfilled', 'partially_fulfilled', 'fulfilled', 'partially_delivered', 'delivered']).optional(),
       page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(25),
     }) },
@@ -112,15 +117,19 @@ admin.openapi(
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c);
-    const { state, q, preOrder, trashed, status, paymentStatus, fulfillmentStatus, page, pageSize } = c.req.valid('query');
+    const { state, q, preOrder, trashed, status, paymentStatus, shippingMethod, fulfillmentStatus, from, to, page, pageSize } = c.req.valid('query');
     const out = await withStore(st.storeId, async (tx) => {
       const conds = [] as ReturnType<typeof eq>[];
       // Trash filter FIRST: ?trashed=1 shows ONLY soft-deleted orders; default
       // shows only live ones. Without this, trashed orders leak into every list.
       conds.push((trashed ? sql`${s.order.deletedAt} is not null` : sql`${s.order.deletedAt} is null`) as never);
       if (state) conds.push(sql`${s.order.state} = ${state}` as never);
-      if (status) conds.push(eq(s.order.status, status) as never);
-      if (paymentStatus) conds.push(sql`${paymentStatusSql()} = ${paymentStatus}` as never);
+      if (status === 'active') conds.push(sql`${s.order.status} in ('open', 'completed')` as never);
+      else if (status) conds.push(eq(s.order.status, status) as never);
+      if (from) conds.push(sql`coalesce(${s.order.placedAt}, ${s.order.createdAt}) >= ${`${from}T00:00:00Z`}::timestamptz` as never);
+      if (to) conds.push(sql`coalesce(${s.order.placedAt}, ${s.order.createdAt}) < (${`${to}T00:00:00Z`}::timestamptz + interval '1 day')` as never);
+      if (paymentStatus) conds.push(sql`${paymentStatusWithBalanceSql()} = ${paymentStatus}` as never);
+      if (shippingMethod) conds.push((shippingMethod === '__none__' ? sql`${s.order.shippingMethodCode} is null` : eq(s.order.shippingMethodCode, shippingMethod)) as never);
       if (fulfillmentStatus) conds.push(sql`${fulfillmentStatusSql()} = ${fulfillmentStatus}` as never);
       if (preOrder) conds.push(eq(s.order.isPreOrder, true) as never);
       if (q) conds.push(or(ilike(s.order.code, `%${q}%`), ilike(s.customer.email, `%${q}%`)) as never);
@@ -128,8 +137,9 @@ admin.openapi(
       const base = tx
         .select({
           code: s.order.code, state: s.order.state, status: s.order.status,
-          paymentStatus: paymentStatusSql(), fulfillmentStatus: fulfillmentStatusSql(),
+          paymentStatus: paymentStatusWithBalanceSql(), shippingMethodName: s.order.shippingMethodName, fulfillmentStatus: fulfillmentStatusSql(),
           isPreOrder: s.order.isPreOrder, grandTotal: s.order.grandTotal, currency: s.order.currency, placedAt: s.order.placedAt, createdAt: s.order.createdAt, email: s.customer.email,
+          firstName: s.customer.firstName, lastName: s.customer.lastName,
         })
         .from(s.order)
         .leftJoin(s.customer, eq(s.customer.id, s.order.customerId))
@@ -181,9 +191,16 @@ admin.openapi(
         const [cu] = await tx.select({ id: s.customer.id, email: s.customer.email, firstName: s.customer.firstName, lastName: s.customer.lastName, phone: s.customer.phone }).from(s.customer).where(eq(s.customer.id, o.customerId)).limit(1);
         customer = cu ?? null;
       }
-      const paymentStatus = derivePaymentStatus(o.state, payments);
+      // Order editing (G13): what the customer still owes after an edit (+) or is
+      // owed back (-); a positive amount reads as paymentStatus `balance_due`.
+      const amountDue = await amountDueForOrder(tx, st.storeId, o.id, o.grandTotal);
+      const adjustments = await tx.select().from(s.orderAdjustment).where(eq(s.orderAdjustment.orderId, o.id));
+      const paymentStatus = derivePaymentStatus(o.state, payments, amountDue);
       const fulfillmentStatus = deriveFulfillmentStatus(lines, fulfillments);
       return {
+        amountDue, shippingOverride: o.shippingOverride,
+        shippingMethodCode: o.shippingMethodCode, shippingMethodName: o.shippingMethodName,
+        adjustments: adjustments.map((a) => ({ id: a.id, label: a.label, amount: a.amount })),
         code: o.code, state: o.state, status: o.status, paymentStatus, fulfillmentStatus, isPreOrder: o.isPreOrder, currency: o.currency,
         subtotal: o.subtotal, discountTotal: o.discountTotal, shippingTotal: o.shippingTotal, taxTotal: o.taxTotal, grandTotal: o.grandTotal,
         placedAt: o.placedAt ? o.placedAt.toISOString() : null, createdAt: o.createdAt.toISOString(),
@@ -210,10 +227,11 @@ admin.openapi(
           lines: refundLines.filter((rl) => rl.refundId === r.id).map((rl) => ({ orderLineId: rl.orderLineId, quantity: rl.quantity, amount: rl.amount, restock: rl.restock })),
         })),
         locations: locations.map((l) => ({ id: l.id, name: l.name, code: l.code, isDefault: l.isDefault })),
-        // `data` carries internal-note text (action === 'note') — everything
+        // `data` carries internal-note text (action === 'note') and the order-edit
+        // summary (edit / edit_address / record_payment / edit_refund) — everything
         // else ignores it. Reusing audit_log keeps notes in the SAME timeline
         // as every other order event instead of a second, disconnected feed.
-        events: events.map((e) => ({ id: e.id, action: e.action, fromState: e.fromState, toState: e.toState, actor: e.actor, at: e.at.toISOString(), data: e.action === 'note' ? e.data : undefined })),
+        events: events.map((e) => ({ id: e.id, action: e.action, fromState: e.fromState, toState: e.toState, actor: e.actor, at: e.at.toISOString(), data: ['note', 'edit', 'edit_address', 'record_payment', 'edit_refund'].includes(e.action) ? e.data : undefined })),
       };
     });
     if (!out) throw new HttpError(404, 'order not found');

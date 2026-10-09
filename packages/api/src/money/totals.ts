@@ -30,6 +30,10 @@ export interface TotalsInput {
    *  tax (capped at the remaining merchandise subtotal). Distributed across
    *  lines with the largest-remainder method and folded into lineDiscount. */
   pointsDiscount?: number;
+  /** Order-edit adjustments: signed cents (+ charge, - credit) added AFTER
+   *  tax/shipping. Untaxed unless `taxable` is true (then the amount joins the
+   *  taxable base). Omitted/empty = outputs identical to before. */
+  adjustments?: Array<{ label?: string; amount: number; taxable?: boolean }>;
 }
 
 export interface LineTotals {
@@ -49,6 +53,8 @@ export interface OrderTotals {
   grandTotal: number;
   /** Portion of discountTotal that came from loyalty points (cents). */
   pointsDiscount: number;
+  /** Sum of order-edit adjustments (only present when adjustments were passed). */
+  adjustmentTotal?: number;
 }
 
 const roundHalfUp = (n: number): number => Math.round(n);
@@ -118,7 +124,12 @@ export function calculateOrderTotals(input: TotalsInput): OrderTotals {
   const discountedSubtotal = subtotal - discountTotal;
   const shippingTotal = (promo?.type === 'free_shipping' || promo?.freeShipping) ? 0 : input.shipping;
   const taxableShipping = input.shippingTaxable ? shippingTotal : 0;
-  const taxableBase = discountedSubtotal + taxableShipping;
+  const adjustments = input.adjustments ?? [];
+  const adjustmentTotal = adjustments.reduce((a, x) => a + Math.trunc(x.amount), 0);
+  const taxableAdjustments = adjustments.reduce((a, x) => a + (x.taxable ? Math.trunc(x.amount) : 0), 0);
+  // Taxable adjustments join the item base (a negative one lowers the taxed amount).
+  const itemBase = discountedSubtotal + taxableAdjustments;
+  const taxableBase = itemBase + taxableShipping;
   // Inclusive: the tax is already inside taxableBase — extract it (don't add).
   // Exclusive (default): tax is added on top.
   let taxTotal = 0;
@@ -128,20 +139,23 @@ export function calculateOrderTotals(input: TotalsInput): OrderTotals {
       : roundHalfUp((taxableBase * input.taxRate) / 10000);
   }
   let grandTotalRaw = input.taxInclusive ? discountedSubtotal + shippingTotal : discountedSubtotal + shippingTotal + taxTotal;
+  // Taxable adjustments are part of the merchandise value; untaxed ones are a
+  // flat amount on top. Either way the signed amount is added exactly once.
+  grandTotalRaw += adjustmentTotal;
   if (input.shippingTaxRate != null) {
     const itemTax = input.taxRate <= 0 ? 0 : input.taxInclusive
-      ? discountedSubtotal - roundHalfUp(discountedSubtotal * 10000 / (10000 + input.taxRate))
-      : roundHalfUp(discountedSubtotal * input.taxRate / 10000);
+      ? itemBase - roundHalfUp(itemBase * 10000 / (10000 + input.taxRate))
+      : roundHalfUp(itemBase * input.taxRate / 10000);
     const shippingInclusive = input.shippingTaxInclusive ?? input.taxInclusive;
     const shippingTax = input.shippingTaxRate <= 0 ? 0 : shippingInclusive
       ? shippingTotal - roundHalfUp(shippingTotal * 10000 / (10000 + input.shippingTaxRate))
       : roundHalfUp(shippingTotal * input.shippingTaxRate / 10000);
     taxTotal = itemTax + shippingTax;
-    grandTotalRaw = discountedSubtotal + shippingTotal + (input.taxInclusive ? 0 : itemTax) + (shippingInclusive ? 0 : shippingTax);
+    grandTotalRaw = discountedSubtotal + shippingTotal + adjustmentTotal + (input.taxInclusive ? 0 : itemTax) + (shippingInclusive ? 0 : shippingTax);
   }
   // Final floor: grandTotal must never be negative, no matter what upstream
   // discount/tax inputs produced it.
   const grandTotal = Math.max(0, grandTotalRaw);
 
-  return { lines, subtotal, discountTotal, shippingTotal, taxTotal, grandTotal, pointsDiscount };
+  return { lines, subtotal, discountTotal, shippingTotal, taxTotal, grandTotal, pointsDiscount, ...(input.adjustments ? { adjustmentTotal } : {}) };
 }

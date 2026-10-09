@@ -20,6 +20,7 @@ import { enqueueEmail } from '../email/outbox.js';
 import { paymentAfterCancelAlert } from '../email/templates-ops.js';
 import { operatorRecipients } from '../disputes/disputes.js';
 import { env } from '../env.js';
+import { EDIT_REFUND_SOURCE } from './edit-refund.js';
 
 /**
  * MONEY-3: amount still owed on an order, in cents — grandTotal minus every
@@ -35,7 +36,27 @@ export async function amountDueForOrder(tx: Tx, storeId: string, orderId: string
     .from(s.payment)
     .where(and(eq(s.payment.storeId, storeId), eq(s.payment.orderId, orderId), eq(s.payment.state, 'Settled')));
   const settled = Number(row?.total ?? 0);
-  return grandTotal - settled;
+  return grandTotal - settled + await editRefundedTotal(tx, storeId, orderId);
+}
+
+/**
+ * Order editing (G13): money already handed BACK because an edit lowered the
+ * order total (a refund tagged by payments/edit-refund.ts). The order's
+ * grandTotal was reduced by the same edit, so this refund must not read as "the
+ * customer now owes it again" — it is added back to the amount due. Refunds
+ * issued through the regular refund flow (item/return refunds, which never
+ * change grandTotal) are deliberately NOT counted: the refund engine leaves
+ * grandTotal alone, so for those the existing grandTotal - settled arithmetic
+ * is already right. Failed refunds returned no money and are ignored. Orders
+ * that were never edited cost one cheap lookup and return 0.
+ */
+export async function editRefundedTotal(tx: Tx, storeId: string, orderId: string): Promise<number> {
+  const res = await tx.execute(sql`
+    SELECT coalesce(sum(r.amount), 0)::bigint AS total
+    FROM refund r
+    WHERE r.store_id = ${storeId} AND r.order_id = ${orderId} AND r.state <> 'Failed'
+      AND r.metadata->>'source' = ${EDIT_REFUND_SOURCE}`);
+  return Number((res.rows[0] as { total?: string } | undefined)?.total ?? 0);
 }
 
 export interface SettleOrderRef {
@@ -149,6 +170,23 @@ export async function applyPaymentResult(
         }
         return { orderState: 'Paid', paymentState: 'Settled' };
       }
+      return { orderState: order.state as OrderState, paymentState: 'Settled' };
+    }
+    // Order editing (G13): a Settled tender landing on an order that is ALREADY
+    // Paid (or PartiallyRefunded) is a balance payment for an edit that raised
+    // the total. The payment row above is the ledger entry; the order state
+    // stays as is (FSM unchanged). Duplicate-capture detection for money the
+    // order did NOT need lives in the callers (they only reach here when an
+    // amount was genuinely due).
+    if ((order.state === 'Paid' || order.state === 'PartiallyRefunded') &&
+        (await amountDueForOrder(tx, storeId, order.id, order.grandTotal)) >= 0) {
+      // (amount due after this row is >= 0, i.e. it did not overpay the order;
+      // an overpayment still falls through to the MONEY-4 alert below.)
+      await tx.insert(s.auditLog).values({
+        storeId, actor: 'system:settle', entity: 'order', entityId: order.id,
+        action: 'balance_payment', fromState: order.state, toState: order.state,
+        data: { amount, method, providerRef: result.providerRef ?? null },
+      });
       return { orderState: order.state as OrderState, paymentState: 'Settled' };
     }
     // MONEY-4: real money settled (e.g. a Stripe capture landing after the

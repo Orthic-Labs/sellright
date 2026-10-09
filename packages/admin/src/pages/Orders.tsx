@@ -1,52 +1,34 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { useNavigate, Link, useSearchParams } from 'react-router-dom';
-import { Plus, Download, Upload, ShoppingCart, ShoppingBag, Trash2, Truck, CheckCircle2, Ban, RotateCcw } from 'lucide-react';
-import { api, downloadFile, type Page, type OrderRow } from '../api';
+import { Plus, Download, Upload, ShoppingCart, ShoppingBag, Trash2, Truck, CheckCircle2, Ban, RotateCcw, ListChecks, PackageCheck } from 'lucide-react';
+import { api, type Page, type OrderRow } from '../api';
 import { useAuth } from '../auth';
 import { useToast } from '../components/Toast';
 import { useConfirmDialog } from '../components/ConfirmDialog';
+import OrderExportDialog from '../components/OrderExportDialog';
+import AutoDeliverDialog from '../components/AutoDeliverDialog';
 import { money, dateTime } from '../lib/format';
 import {
-  Badge, PageHeader, Pagination, Tabs, ResourceToolbar, SearchInput, ResourceTable,
-  ActionMenu, EmptyStateActionPanel, InlineAlert, type Column, type TabDef,
+  Badge, PageHeader, Pagination, ResourceToolbar, SearchInput, ResourceTable,
+  ActionMenu, EmptyStateActionPanel, InlineAlert, type Column,
 } from '../components/ui';
+import {
+  BUILTIN_VIEWS, EMPTY_FILTERS, FULFILLMENT_OPTIONS, ORDER_OPTIONS, PAYMENT_OPTIONS, customerLabel, filtersFromParams,
+  filtersToApiQuery, filtersToParams, fulfillmentDef, orderDef, paymentDef, sameFilters, type OrderFilters,
+} from '../lib/order-status';
 
 type BulkResult = { results: { code: string; ok: boolean; error?: string }[]; succeeded: number; skipped: number };
 
-const TABS: (TabDef & { pre?: boolean })[] = [
-  { key: '', label: 'All' },
-  { key: 'PendingPayment', label: 'Pending' },
-  { key: 'Paid', label: 'Paid' },
-  { key: 'preorder', label: 'Pre-orders', pre: true },
-  { key: 'Cancelled', label: 'Cancelled' },
-  { key: 'Refunded', label: 'Refunded' },
-  { key: 'trash', label: 'Trash' },
-];
-
-// Built-in + user-defined saved views. User presets live in localStorage and
-// override nothing — URL params remain the source of truth.
-const SAVED_VIEW_KEY = 'sr_orders_saved_views_v1';
-const BUILTIN_VIEWS: { id: string; label: string; state: string; q?: string; preOrder?: boolean }[] = [
-  { id: 'all', label: 'All', state: '' },
-  { id: 'paid', label: 'Paid', state: 'Paid' },
-  { id: 'pending', label: 'Pending', state: 'PendingPayment' },
-  { id: 'preorder', label: 'Pre-orders', state: '', preOrder: true },
-  { id: 'cancelled', label: 'Cancelled', state: 'Cancelled' },
-  { id: 'refunded', label: 'Refunded', state: 'Refunded' },
-  { id: 'trash', label: 'Trash', state: 'trash' },
-];
-
-interface UserView {
-  id: string;
-  name: string;
-  state: string;
-  preOrder: boolean;
-  q: string;
-}
+// User-defined saved views live in localStorage; URL params stay the source of truth.
+const SAVED_VIEW_KEY = 'sr_orders_saved_views_v2';
+interface UserView { id: string; name: string; filters: OrderFilters }
 
 function loadUserViews(): UserView[] {
-  try { const raw = localStorage.getItem(SAVED_VIEW_KEY); return raw ? JSON.parse(raw) : []; } catch { return []; }
+  try {
+    const raw = JSON.parse(localStorage.getItem(SAVED_VIEW_KEY) ?? '[]');
+    return Array.isArray(raw) ? raw.filter((v) => v && typeof v.name === 'string' && v.filters) : [];
+  } catch { return []; }
 }
 function saveUserViews(views: UserView[]) { try { localStorage.setItem(SAVED_VIEW_KEY, JSON.stringify(views)); } catch { /* noop */ } }
 
@@ -57,46 +39,32 @@ export default function Orders() {
   const { confirm, dialog: confirmDialog } = useConfirmDialog();
   const qc = useQueryClient();
   const [params, setParams] = useSearchParams();
-  const [tab, setTab] = useState(() => {
-    if (params.get('preOrder') === '1') return 'preorder';
-    const s = params.get('state') ?? '';
-    return TABS.some((t) => t.key === s) ? s : '';
-  });
-  const [q, setQ] = useState(() => params.get('q') ?? '');
+  const paramsKey = params.toString();
+  // Memoised on the URL so dialogs seeded from `filters` don't reset on every render.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const filters = useMemo(() => filtersFromParams(params), [paramsKey]);
   const [page, setPage] = useState(1);
-  const [exporting, setExporting] = useState(false);
-  const isPre = tab === 'preorder';
-  const trashed = tab === 'trash';
-  const state = isPre || trashed ? '' : tab;
+  const [exportOpen, setExportOpen] = useState(false);
+  const [deliverOpen, setDeliverOpen] = useState(false);
+  const trashed = filters.status === 'archived';
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [userViews, setUserViews] = useState<UserView[]>(() => loadUserViews());
   const [bulkResult, setBulkResult] = useState<BulkResult | null>(null);
 
   const { data, isLoading, error, isFetching, refetch } = useQuery({
-    queryKey: ['orders', store?.slug, tab, q, page],
-    queryFn: () => api.get<Page<OrderRow>>(`/orders?${new URLSearchParams({ state, q, preOrder: isPre ? '1' : '', trashed: trashed ? '1' : '', page: String(page), pageSize: '25' })}`),
+    queryKey: ['orders', store?.slug, paramsKey, page],
+    queryFn: () => api.get<Page<OrderRow>>(`/orders?${filtersToApiQuery(filters, page)}`),
     placeholderData: keepPreviousData,
   });
 
   // Clear selection on filter/page changes — v1 doesn't carry selection across
   // pages. The bulk toolbar disappears until you re-select on the new page.
-  function changeTab(t: string) { setTab(t); setPage(1); setSelected(new Set()); setBulkResult(null); }
-  function changeQuery(v: string) { setQ(v); setPage(1); setSelected(new Set()); }
+  function setFilters(next: OrderFilters) {
+    setParams(filtersToParams(next), { replace: true });
+    setPage(1); setSelected(new Set()); setBulkResult(null);
+  }
+  const patchFilters = (p: Partial<OrderFilters>) => setFilters({ ...filters, ...p });
   function changePage(p: number) { setPage(p); setSelected(new Set()); }
-
-  async function exportCsv() {
-    setExporting(true);
-    try { await downloadFile(`/export/orders?days=365${state ? `&state=${state}` : ''}`, `orders-${store?.slug ?? 'store'}.csv`); toast.success('Export started'); }
-    catch (e) { toast.error('Export failed', (e as Error).message); }
-    finally { setExporting(false); }
-  }
-
-  async function exportXlsx() {
-    setExporting(true);
-    try { await downloadFile(`/export/orders.xlsx?days=365${state ? `&state=${state}` : ''}`, `orders-${store?.slug ?? 'store'}.xlsx`); toast.success('Export started'); }
-    catch (e) { toast.error('Export failed', (e as Error).message); }
-    finally { setExporting(false); }
-  }
 
   function exportSelectedCsv() {
     const rows = (data?.items ?? []).filter((o) => selected.has(o.code));
@@ -107,12 +75,14 @@ export default function Orders() {
       return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
     const csv = [
-      ['code', 'date', 'email', 'state', 'preOrder', 'total', 'currency'].join(','),
+      ['code', 'date', 'email', 'paymentStatus', 'fulfillmentStatus', 'shippingMethod', 'preOrder', 'total', 'currency'].join(','),
       ...rows.map((o) => [
         o.code,
         o.placedAt ?? o.createdAt,
         o.email ?? '',
-        o.state,
+        paymentDef(o.paymentStatus).label,
+        fulfillmentDef(o.fulfillmentStatus).label,
+        o.shippingMethodName ?? '',
         o.isPreOrder ? 'yes' : '',
         (o.grandTotal / 100).toFixed(2),
         o.currency,
@@ -176,22 +146,37 @@ export default function Orders() {
   const bulkPending = bulkFulfill.isPending || bulkCancel.isPending || bulkTrash.isPending || bulkRestore.isPending || bulkPurge.isPending;
 
   const columns: Column<OrderRow>[] = [
-    { key: 'code', header: 'Order', width: '20%', render: (o) => (
-      <span className="font-medium">{o.code}{o.isPreOrder && <span className="ml-1.5 align-middle text-[10px] uppercase font-semibold text-warning bg-warning-soft rounded px-1 py-0.5">pre-order</span>}</span>
-    )},
-    { key: 'date', header: 'Date', width: '22%', render: (o) => <span className="text-gray-500">{dateTime(o.placedAt ?? o.createdAt)}</span> },
-    { key: 'customer', header: 'Customer', render: (o) => <span className="text-gray-600 truncate block">{o.email ?? '—'}</span> },
-    { key: 'status', header: 'Payment', width: '16%', render: (o) => <Badge value={o.state} /> },
-    { key: 'total', header: 'Total', align: 'right', width: '15%', render: (o) => <span className="font-medium tnum">{money(o.grandTotal, o.currency)}</span> },
+    { key: 'code', header: 'Order', width: '15%', render: (o) => {
+      const od = o.status && o.status !== 'open' && o.status !== 'completed' ? orderDef(o.status) : null;
+      return (
+        <span className="font-medium">{o.code}
+          {o.isPreOrder && <span className="ml-1.5 align-middle text-[10px] uppercase font-semibold text-warning bg-warning-soft rounded px-1 py-0.5">pre-order</span>}
+          {od && <span className="ml-1.5 align-middle text-[10px] uppercase font-semibold text-muted bg-surface-2 rounded px-1 py-0.5">{od.label}</span>}
+        </span>
+      );
+    } },
+    { key: 'date', header: 'Date', width: '14%', render: (o) => <span className="text-gray-500">{dateTime(o.placedAt ?? o.createdAt)}</span> },
+    { key: 'customer', header: 'Customer', render: (o) => {
+      const c = customerLabel(o);
+      return (
+        <div className="min-w-0 leading-tight">
+          <div className="truncate font-medium text-gray-800">{c.name ?? c.email ?? '—'}</div>
+          {c.name && c.email && <div className="truncate text-xs text-gray-500">{c.email}</div>}
+        </div>
+      );
+    } },
+    { key: 'payment', header: 'Payment', width: '13%', render: (o) => { const d = paymentDef(o.paymentStatus); return <Badge value={o.paymentStatus ?? ''} tone={d.tone} label={d.label} />; } },
+    { key: 'fulfillment', header: 'Fulfillment', width: '14%', render: (o) => { const d = fulfillmentDef(o.fulfillmentStatus); return <Badge value={o.fulfillmentStatus ?? ''} tone={d.tone} label={d.label} />; } },
+    { key: 'shipping', header: 'Shipping', width: '11%', render: (o) => <span className="truncate text-gray-600">{o.shippingMethodName ?? '—'}</span> },
+    { key: 'total', header: 'Total', align: 'right', width: '11%', render: (o) => <span className="font-medium tnum">{money(o.grandTotal, o.currency)}</span> },
   ];
 
-  const isFiltered = !!q || !!tab;
+  const isFiltered = !sameFilters(filters, {}) || !!filters.q;
 
   function saveCurrentView() {
     const name = window.prompt('Name this view:');
     if (!name?.trim()) return;
-    const next: UserView = { id: `u${Date.now()}`, name: name.trim(), state, preOrder: isPre, q };
-    const updated = [...userViews, next];
+    const updated = [...userViews, { id: `u${Date.now()}`, name: name.trim(), filters: { ...filters, q: '' } }];
     setUserViews(updated);
     saveUserViews(updated);
     toast.success('View saved');
@@ -203,47 +188,43 @@ export default function Orders() {
     saveUserViews(updated);
   }
 
-  function applyView(v: { state: string; q?: string; preOrder?: boolean }) {
-    const newState = v.preOrder ? 'preorder' : v.state;
-    setTab(newState);
-    setQ(v.q ?? '');
-    setPage(1);
-    setSelected(new Set());
-    setParams(new URLSearchParams({ state: v.state, q: v.q ?? '', preOrder: v.preOrder ? '1' : '' }));
-  }
+  const dateInvalid = !!filters.from && !!filters.to && filters.from > filters.to;
 
   return (
     <>
       {confirmDialog}
-      <PageHeader title="Orders" subtitle={data ? `${data.total} total` : undefined} actions={
+      <OrderExportDialog open={exportOpen} onClose={() => setExportOpen(false)} filters={filters} />
+      <AutoDeliverDialog open={deliverOpen} onClose={() => setDeliverOpen(false)} />
+      <PageHeader title="Orders" subtitle={data ? `${data.total} ${isFiltered ? 'matching' : 'total'}` : undefined} actions={
         <div className="flex items-center gap-2">
           <ActionMenu label="Actions" items={[
-            { label: exporting ? 'Exporting…' : 'Export CSV', icon: <Download size={15} />, onClick: exportCsv, disabled: exporting },
-            { label: exporting ? 'Exporting…' : 'Export XLSX', icon: <Download size={15} />, onClick: exportXlsx, disabled: exporting },
-            { label: 'Import tracking', icon: <Upload size={15} />, to: '/orders/import-tracking' },
+            { label: 'Export orders…', icon: <Download size={15} />, onClick: () => setExportOpen(true) },
+            { label: 'Import tracking (CSV)', icon: <Upload size={15} />, to: '/orders/import-tracking' },
+            { label: 'Add tracking to open orders', icon: <ListChecks size={15} />, to: '/orders/tracking-grid' },
+            { label: 'Mark old shipments delivered…', icon: <PackageCheck size={15} />, onClick: () => setDeliverOpen(true) },
             { label: 'Abandoned carts', icon: <ShoppingCart size={15} />, to: '/abandoned-carts' },
-            { label: 'Save current as view', icon: <Plus size={15} />, onClick: saveCurrentView },
+            { label: 'Save current filters as view', icon: <Plus size={15} />, onClick: saveCurrentView },
           ]} />
           <Link to="/orders/new" className="btn-primary whitespace-nowrap"><Plus size={16} /> New order</Link>
         </div>
       } />
 
-      {/* Saved views strip */}
-      <div className="flex flex-wrap items-center gap-1.5 mb-3">
+      {/* One row of saved views: built-ins first, then yours. */}
+      <div className="flex flex-wrap items-center gap-1.5 mb-3" role="group" aria-label="Saved views">
         {BUILTIN_VIEWS.map((v) => {
-          const active = v.preOrder ? isPre && !q : v.state === 'trash' ? trashed && !q : !isPre && !trashed && state === v.state && !q;
+          const active = sameFilters(filters, v.filters);
           return (
-            <button key={v.id} className={`btn-ghost btn-sm ${active ? '!bg-brand-light !text-brand !border-brand/30' : ''}`} onClick={() => applyView(v)}>
+            <button key={v.id} title={v.title} aria-pressed={active} className={`btn-ghost btn-sm ${active ? '!bg-brand-light !text-brand !border-brand/30' : ''}`} onClick={() => setFilters({ ...EMPTY_FILTERS, ...v.filters, q: filters.q })}>
               {v.label}
             </button>
           );
         })}
-        {userViews.length > 0 && <span className="mx-1 text-gray-300">|</span>}
+        {userViews.length > 0 && <span className="mx-1 text-gray-300" aria-hidden="true">|</span>}
         {userViews.map((v) => {
-          const active = !isPre && state === v.state && q === v.q;
+          const active = sameFilters(filters, v.filters);
           return (
             <span key={v.id} className={`inline-flex items-center rounded-md border ${active ? 'bg-brand-light border-brand/30 text-brand' : 'bg-surface border-gray-300 text-gray-700'}`}>
-              <button className="px-2.5 py-1 text-xs" onClick={() => applyView(v)}>{v.name}</button>
+              <button aria-pressed={active} className="px-2.5 py-1 text-xs" onClick={() => setFilters({ ...v.filters, q: filters.q })}>{v.name}</button>
               <button aria-label={`Delete view ${v.name}`} className="px-1.5 py-1 text-gray-400 hover:text-danger" onClick={() => deleteView(v.id)}><Trash2 size={12} /></button>
             </span>
           );
@@ -251,9 +232,23 @@ export default function Orders() {
       </div>
 
       <ResourceToolbar
-        left={<Tabs tabs={TABS} value={tab} onChange={changeTab} />}
-        right={<SearchInput value={q} onChange={changeQuery} placeholder="Search code or email" />}
+        left={
+          <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Filters">
+            <FilterSelect label="Payment" value={filters.paymentStatus} onChange={(v) => patchFilters({ paymentStatus: v })} options={PAYMENT_OPTIONS} />
+            <FilterSelect label="Fulfillment" value={filters.fulfillmentStatus} onChange={(v) => patchFilters({ fulfillmentStatus: v })} options={FULFILLMENT_OPTIONS} />
+            <FilterSelect label="Order" value={filters.status} onChange={(v) => patchFilters({ status: v })} options={ORDER_OPTIONS} />
+            <label className="inline-flex items-center gap-1.5 text-xs text-gray-500">From
+              <input type="date" aria-label="Date from" className="input !py-1.5 !text-xs w-[8.5rem]" value={filters.from} max={filters.to || undefined} onChange={(e) => patchFilters({ from: e.target.value })} />
+            </label>
+            <label className="inline-flex items-center gap-1.5 text-xs text-gray-500">To
+              <input type="date" aria-label="Date to" className="input !py-1.5 !text-xs w-[8.5rem]" value={filters.to} min={filters.from || undefined} onChange={(e) => patchFilters({ to: e.target.value })} />
+            </label>
+            {isFiltered && <button className="btn-ghost btn-sm" onClick={() => setFilters(EMPTY_FILTERS)}>Clear</button>}
+          </div>
+        }
+        right={<SearchInput value={filters.q} onChange={(v) => patchFilters({ q: v })} placeholder="Search code or email" />}
       />
+      {dateInvalid && <div className="mb-3"><InlineAlert tone="attention">The start date is after the end date, so no orders can match.</InlineAlert></div>}
 
       <ResourceTable
         columns={columns}
@@ -262,7 +257,7 @@ export default function Orders() {
         onRowClick={(o) => nav(`/orders/${o.code}`)}
         // SR-14: 6 columns incl. the selection checkbox need ~40rem before
         // emails/codes stay legible; below that the card scrolls horizontally.
-        minWidth="40rem"
+        minWidth="46rem"
         loading={isLoading}
         isFetching={isFetching}
         error={error ? (error as Error).message : null}
@@ -296,7 +291,7 @@ export default function Orders() {
           )
         )}
         empty={isFiltered
-          ? <EmptyStateActionPanel icon={<ShoppingBag size={22} />} title="No matching orders" description="No orders match this filter or search. Try clearing it." actions={[{ label: 'Clear filters', variant: 'ghost', onClick: () => { changeTab(''); changeQuery(''); } }]} />
+          ? <EmptyStateActionPanel icon={<ShoppingBag size={22} />} title="No matching orders" description="No orders match this filter or search. Try clearing it." actions={[{ label: 'Clear filters', variant: 'ghost', onClick: () => setFilters(EMPTY_FILTERS) }]} />
           : <EmptyStateActionPanel icon={<ShoppingBag size={22} />} title="No orders yet" description="Orders placed in your store will appear here. You can also create an order manually." actions={[{ label: 'New order', to: '/orders/new', icon: <Plus size={16} /> }]} />}
       />
 
@@ -315,5 +310,14 @@ export default function Orders() {
 
       {data && <Pagination page={page} total={data.total} pageSize={data.pageSize} onPage={changePage} />}
     </>
+  );
+}
+
+function FilterSelect({ label, value, onChange, options }: { label: string; value: string; onChange: (v: string) => void; options: { value: string; label: string }[] }) {
+  return (
+    <select aria-label={`${label} filter`} className={`input !py-1.5 !text-xs w-auto ${value ? '!border-brand/40 !bg-brand-light/40' : ''}`} value={value} onChange={(e) => onChange(e.target.value)}>
+      <option value="">{label}: any</option>
+      {options.map((o) => <option key={o.value} value={o.value}>{label}: {o.label}</option>)}
+    </select>
   );
 }

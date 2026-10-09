@@ -11,8 +11,10 @@ import { selectAutomaticPromotion } from '../money/auto-discount.js';
 import { resolveTaxRate } from '../money/tax.js';
 import { selectUnitPrice, variantPriceRuleFromConfig } from '../money/pricing.js';
 import { applyGiftCard } from '../money/gift-card.js';
-import { earnableCents, loyaltySettingsFromConfig, planRedemption, pointsEarned, type RedeemRejection } from '../money/loyalty.js';
-import { lockedAvailable, orderLoyaltySnapshot, postEarnForPaidOrder, reserveRedemption, type OrderLoyaltySnapshot } from '../loyalty/ledger.js';
+import { earnableCents, loyaltySettingsFromConfig, multiplierBonusPoints, planRedemption, pointsEarned, type RedeemRejection } from '../money/loyalty.js';
+import { customerOwnsOrder } from '../auth/order-access.js';
+import { lockedAvailable, orderLoyaltySnapshot, reserveRedemption, type OrderLoyaltySnapshot } from '../loyalty/ledger.js';
+import { postPaidOrderRewards } from '../loyalty/bonus.js';
 import { emitEvent } from '../webhooks/emit.js';
 import { customerToken, resolveCustomer } from '../auth/session.js';
 import { normalizeEmail } from '../auth/email.js';
@@ -168,6 +170,8 @@ async function orderReplayResult(
   };
 }
 
+const CheckoutOut = z.object({ code: z.string(), state: z.string(), grandTotal: z.number().int(), discountTotal: z.number().int(), currency: z.string(), couponApplied: z.boolean(), giftCardApplied: z.number().int(), receiptToken: z.string(), pointsRedeemed: z.number().int(), pointsDiscount: z.number().int() });
+
 export const checkout = new OpenAPIHono();
 
 // POST /v1/shop/checkout — create an order from a cart (PendingPayment).
@@ -223,7 +227,7 @@ checkout.openapi(
     responses: {
       200: {
         description: 'Order created',
-        content: { 'application/json': { schema: z.object({ code: z.string(), state: z.string(), grandTotal: z.number().int(), discountTotal: z.number().int(), currency: z.string(), couponApplied: z.boolean(), giftCardApplied: z.number().int(), receiptToken: z.string(), pointsRedeemed: z.number().int(), pointsDiscount: z.number().int() }) } },
+        content: { 'application/json': { schema: CheckoutOut } },
       },
       400: { description: 'Malformed checkout request body or Idempotency-Key header', content: { 'application/json': { schema: apiErrorSchema() } } },
       409: { description: 'Out of stock / shipping unavailable / idempotency-payload or stale-cart conflict', content: { 'application/json': { schema: apiErrorSchema().extend({ code: z.string().optional(), skus: z.array(z.string()).optional(), reason: z.string().optional(), revision: z.number().int().optional(), cart: CartOut.optional() }) } } },
@@ -380,12 +384,14 @@ checkout.openapi(
         : [];
       let shippingAmount: number;
       let shippingCalculator: import('../shipping/calculator.js').ShippingCalculator | undefined;
+      let shippingMethodChosen: { code: string; name: string } | null = null;
       if (!requiresShipping) {
         shippingAmount = 0;
       } else if (body.shippingMethodCode) {
         const m = methods.find((x) => x.code === body.shippingMethodCode);
         if (!m) throw new ShippingUnavailableError('method_not_found');
         shippingCalculator = m.calculator as import('../shipping/calculator.js').ShippingCalculator;
+        shippingMethodChosen = { code: m.code, name: m.name };
         shippingAmount = shippingRate(m.calculator);
       } else if (methods.length > 0) {
         // Methods exist but none chosen — force an explicit, validated selection.
@@ -403,6 +409,7 @@ checkout.openapi(
       const sessionCustomer = token ? await resolveCustomer(tx, token) : null;
       const activeVerifications = sessionCustomer?.activeVerifications ?? [];
       let customerId = sessionCustomer?.id ?? null;
+      let loyaltyOwner: {id: string; email: string; emailVerified: boolean} | null = sessionCustomer;
       // WP9.5: guest auto-link by email. Keep the link (so abandoned-cart
       // recovery + per-customer coupon limits work) but mark how it was linked
       // in the order metadata. The account-order list filters on this so an
@@ -410,9 +417,9 @@ checkout.openapi(
       // account until the email is verified.
       let linkedVia: 'session' | 'email_match' | null = sessionCustomer ? 'session' : null;
       if (!customerId && body.email) {
-        const [byEmail] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, normalizeEmail(body.email))).limit(1);
+        const [byEmail] = await tx.select({ id: s.customer.id, email: s.customer.email, emailVerified: s.customer.emailVerified }).from(s.customer).where(eq(s.customer.email, normalizeEmail(body.email))).limit(1);
         customerId = byEmail?.id ?? null;
-        if (customerId) linkedVia = 'email_match';
+        if (customerId) { linkedVia = 'email_match'; loyaltyOwner = byEmail ?? null; }
       }
 
       // ── Discount: explicit coupon OR best automatic; re-validate server-side
@@ -495,7 +502,7 @@ checkout.openapi(
         // THROW (not return): stock is already reserved in this txn, so a
         // rejection must roll it back — the .catch below maps it to a 409.
         if (!loyalty.enabled) throw new LoyaltyRedeemError('disabled');
-        if (!sessionCustomer) throw new LoyaltyRedeemError('not_signed_in');
+        if (!sessionCustomer?.emailVerified) throw new LoyaltyRedeemError('not_signed_in');
         const available = await lockedAvailable(tx, st.id, sessionCustomer.id);
         const plan = planRedemption({ settings: loyalty, requestedPoints: body.redeemPoints, availablePoints: available,
           discountableCents: discounted.subtotal - discounted.discountTotal });
@@ -510,15 +517,23 @@ checkout.openapi(
       });
       // Earn snapshot: registered customers only, on merchandise after every
       // discount (promo + points), excluding shipping and tax. Posted to the
-      // ledger only when the order reaches Paid (postEarnForPaidOrder).
+      // ledger only when the order reaches Paid (postPaidOrderRewards).
       const loyaltySnap: OrderLoyaltySnapshot | null = loyalty.enabled || redeem
         ? {
             redeemPoints: redeem?.points ?? 0,
             pointsDiscount: totals.pointsDiscount,
-            earnPoints: loyalty.enabled && customerId
-              ? pointsEarned(earnableCents({ subtotal: totals.subtotal, discountTotal: totals.discountTotal, taxRate, taxInclusive: st.taxInclusive }), loyalty.earnRatePerDollar)
+            earnPoints: loyalty.enabled && customerOwnsOrder(loyaltyOwner, {customerId, metadata: { linked_via: linkedVia, contact: { email: normalizeEmail(sessionCustomer?.email ?? body.email ?? '') } }})
+              ? (() => {
+                const base = earnableCents({ subtotal: totals.subtotal, discountTotal: totals.discountTotal, taxRate, taxInclusive: st.taxInclusive });
+                return pointsEarned(base, loyalty.earnRatePerDollar) + multiplierBonusPoints({
+                  lines: priced.map((p) => ({ productId: p.v.productId, cents: p.unitPrice * p.qty })),
+                  subtotal: totals.subtotal, earnableCents: base, earnRatePerDollar: loyalty.earnRatePerDollar, multipliers: loyalty.productMultipliers,
+                });
+              })()
               : 0,
             expiryDays: loyalty.expiryDays,
+            earnRatePerDollar: loyalty.earnRatePerDollar,
+            ...(loyalty.productMultipliers.length ? { productMultipliers: loyalty.productMultipliers } : {}),
           }
         : null;
 
@@ -531,6 +546,7 @@ checkout.openapi(
       await tx.insert(s.order).values({
         id: orderId, storeId: st.id, code, customerId, state: 'PendingPayment', currency: st.currency,
         idempotencyKey: idemKey, promotionId: promoId, receiptToken,
+        shippingMethodCode: shippingMethodChosen?.code ?? null, shippingMethodName: shippingMethodChosen?.name ?? null,
         subtotal: totals.subtotal, discountTotal: totals.discountTotal, shippingTotal: totals.shippingTotal,
         taxTotal: totals.taxTotal, grandTotal: totals.grandTotal,
         isPreOrder: priced.some((p) => p.v.isPreOrder),
@@ -588,7 +604,7 @@ checkout.openapi(
         const paidAt = new Date();
         await tx.update(s.order).set({ state: 'Paid', placedAt: paidAt, updatedAt: paidAt }).where(eq(s.order.id, orderId));
         await issueLicensesForPaidOrder(tx, { storeId: st.id, orderId, customerId, paidAt });
-        await postEarnForPaidOrder(tx, st.id, orderId, paidAt);
+        await postPaidOrderRewards(tx, { storeId: st.id, orderId, paidAt, store: st });
         paid = true;
       } else if (body.giftCardCode) {
         // Gift card / store credit is a tender, not a discount. The launch
@@ -606,7 +622,7 @@ checkout.openapi(
               const paidAt = new Date();
               await tx.update(s.order).set({ state: 'Paid', placedAt: paidAt, updatedAt: paidAt }).where(eq(s.order.id, orderId));
               await issueLicensesForPaidOrder(tx, { storeId: st.id, orderId, customerId, paidAt });
-              await postEarnForPaidOrder(tx, st.id, orderId, paidAt);
+              await postPaidOrderRewards(tx, { storeId: st.id, orderId, paidAt, store: st });
               paid = true;
             }
           }
@@ -784,3 +800,29 @@ checkout.openapi(
     return errJson(c, 400, 'INVALID_CHECKOUT_REQUEST', 'Invalid checkout request');
   },
 );
+
+// Read-only recovery by the opaque cart capability. Unlike POST /checkout,
+// this can never create an order, even when the cart changed or has no priced
+// lines left (e.g. a purchased variant was subsequently removed).
+checkout.openapi(createRoute({
+  method: 'get', path: '/v1/shop/cart/{token}/checkout', summary: 'Recover a converted cart checkout',
+  request: { params: z.object({ token: z.string().min(1) }) },
+  responses: {
+    200: { description: 'Original checkout', content: { 'application/json': { schema: CheckoutOut } } },
+    404: { description: 'No converted checkout', content: { 'application/json': { schema: apiErrorSchema() } } },
+  },
+}), async c => {
+  c.header('Cache-Control', 'private, no-store');
+  const st = await resolveStoreFromCtx(c);
+  const { token } = c.req.valid('param');
+  const out = await withStore(st.id, async tx => {
+    const [row] = await tx.select({ status: s.cart.status, orderId: s.cart.convertedOrderId })
+      .from(s.cart).where(and(eq(s.cart.token, token), eq(s.cart.storeId, st.id))).limit(1);
+    if (row?.status !== 'converted' || !row.orderId) return null;
+    const [order] = await tx.select().from(s.order)
+      .where(and(eq(s.order.id, row.orderId), eq(s.order.storeId, st.id), isNull(s.order.deletedAt))).limit(1);
+    return order ? { ...await orderReplayResult(tx, order), currency: order.currency } : null;
+  });
+  if (!out) return errJson(c, 404, 'ORDER_NOT_FOUND', 'order not found');
+  return c.json(out, 200);
+});

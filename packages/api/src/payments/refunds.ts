@@ -10,6 +10,7 @@ import { enqueueRefundConfirmation, pickEmailAppKey } from '../email/dispatch.js
 import { normalizeEmail } from '../auth/email.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
 import { reconcileRefundLoyalty } from '../loyalty/ledger.js';
+import { isEditRefund } from './edit-refund.js';
 
 export class RefundError extends Error {
   constructor(public status: 400 | 404 | 409 | 503, message: string) { super(message); }
@@ -25,6 +26,10 @@ export interface RefundRequest {
   // "items X + shipping Y = total Z" instead of one lump sum.
   shippingAmount?: number;
   reason?: string; returnId?: string;
+  /** Server-set provenance. 'order_edit' = difference refund from an admin order
+   *  edit (G13): never accepted from a request body, so a typed reason can never
+   *  change amount-due accounting or order state. */
+  source?: 'order_edit';
 }
 export function refundQuantity(line: { quantity: number; metadata?: unknown }): number {
   const placed = (line.metadata as { vendure?: { placedQuantity?: number } } | null)?.vendure?.placedQuantity;
@@ -35,6 +40,7 @@ function requestFingerprint(input: RefundRequest) {
     orderId: input.orderId, paymentId: input.paymentId ?? null, amount: input.amount ?? null,
     lines: [...(input.lines ?? [])].sort((a,b) => a.orderLineId.localeCompare(b.orderLineId)),
     restock: !!input.restock, reason: input.reason ?? null, returnId: input.returnId ?? null,
+    source: input.source ?? null,
   })).digest('hex');
 }
 async function refundView(tx: Tx, row: typeof s.refund.$inferSelect) {
@@ -130,7 +136,7 @@ export async function requestRefund(input: RefundRequest) {
       await tx.insert(s.refund).values({ id: refundId, storeId: input.storeId, orderId: order.id, paymentId: payment.id,
         attemptId, amount, itemsAmount, shippingAmount,
         adjustmentAmount: amount - itemsAmount - shippingAmount, state: 'Pending', reason: input.reason ?? rma?.reason ?? null,
-        metadata: { actor: input.actor, returnId: input.returnId ?? null, effectsApplied: false } });
+        metadata: { actor: input.actor, returnId: input.returnId ?? null, effectsApplied: false, ...(input.source ? { source: input.source } : {}) } });
       for (const line of snapshots) await tx.insert(s.refundLine).values({ storeId: input.storeId, refundId, ...line });
       if (rma) await tx.update(s.returnRequest).set({ status: 'approved', refundId, updatedAt: new Date() }).where(eq(s.returnRequest.id, rma.id));
       return { attemptId, payment, amount, currency: payment.currency ?? order.currency };
@@ -263,11 +269,19 @@ export async function finalizeRefund(tx: Tx, storeId: string, attemptId: string,
     .filter(p => !isDuplicatePayment(p));
   const counted = new Set(payments.map(p => p.id));
   const refunds = allRefunds.filter(r => counted.has(r.paymentId));
-  const refunded = refunds.reduce((n,r) => n+r.amount,0), captured = payments.reduce((n,p) => n+p.amount,0);
+  // Order editing (G13): a difference refund handed back money because an edit
+  // LOWERED the order total. It is not a refund of the (edited) order, so it is
+  // excluded from `refunded` and netted out of `captured` — later item/return
+  // refunds then compute their proportion against what the edited order cost.
+  const editRefunded = refunds.filter(r => isEditRefund(r.metadata)).reduce((n,r) => n+r.amount,0);
+  const refunded = refunds.filter(r => !isEditRefund(r.metadata)).reduce((n,r) => n+r.amount,0);
+  const captured = payments.reduce((n,p) => n+p.amount,0) - editRefunded;
   // LOYALTY-1: restore redeemed points and reverse earned points in
   // proportion to the money refunded so far (cumulative + idempotent per
   // refund; a reversal the balance can't cover is recorded as shortfall).
-  await reconcileRefundLoyalty(tx, { storeId, orderId: order.id, refundId: refund.id, refunded, captured,
+  // Skipped for an edit difference refund: the edit already posted its own earn
+  // adjustment (order_edit_earn) and redeemed points stay as stored.
+  if (!isEditRefund(refund.metadata)) await reconcileRefundLoyalty(tx, { storeId, orderId: order.id, refundId: refund.id, refunded, captured,
     actor: details?.actor ?? 'gateway:reconciliation' });
   if (captured > 0 && refunded >= captured) {
     const now = new Date();
@@ -282,7 +296,11 @@ export async function finalizeRefund(tx: Tx, storeId: string, attemptId: string,
     }).where(and(eq(s.licenseActivation.storeId, storeId),
       inArray(s.licenseActivation.licenseId, licenses.map(l => l.id)), eq(s.licenseActivation.state, 'active')));
   }
-  const state = order.state === 'Cancelled' ? 'Cancelled' : refunded >= captured ? 'Refunded' : 'PartiallyRefunded';
+  // Order editing (G13): a refund that only hands back the difference of a
+  // LOWERED edit total is not an item/return refund — the order keeps its state.
+  const state = order.state === 'Cancelled' ? 'Cancelled'
+    : isEditRefund(refund.metadata) && refunded < captured ? order.state
+    : refunded >= captured ? 'Refunded' : 'PartiallyRefunded';
   await tx.update(s.order).set({ state, updatedAt: new Date() }).where(eq(s.order.id, order.id));
   if (details?.returnId) await tx.update(s.returnRequest).set({ status: 'refunded', refundId: refund.id, updatedAt: new Date() })
     .where(and(eq(s.returnRequest.id, details.returnId), eq(s.returnRequest.orderId, order.id)));

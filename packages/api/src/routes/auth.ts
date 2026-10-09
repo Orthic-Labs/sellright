@@ -1,4 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
+import { grantSignupBonus } from '../loyalty/bonus.js';
 import { eq, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
@@ -285,6 +286,7 @@ auth.openapi(
           cust = created!;
         }
       }
+      await grantSignupBonus(tx, st.id, cust.id); // REWARDS-1: no-op unless the rule is on
       const token = await createSession(tx, st.id, cust.id, sessionPolicy(st.config));
       return { kind: 'ok', token, customer: { id: cust.id, email: cust.email, firstName: cust.firstName, lastName: cust.lastName, phone: cust.phone, emailVerified: true, isMigrated: cust.passwordHash == null } };
     });
@@ -434,6 +436,7 @@ auth.openapi(
       // A magic-link sign-in proves control of the mailbox — treat it the same
       // as an explicit email-verify token.
       if (!cust.emailVerified) await tx.update(s.customer).set({ emailVerified: true, updatedAt: new Date() }).where(eq(s.customer.id, cust.id));
+      await grantSignupBonus(tx, st.id, cust.id); // REWARDS-1: no-op unless the rule is on
       const sessionToken = await createSession(tx, st.id, cust.id, sessionPolicy(st.config));
       return { ok: true, token: sessionToken, customer: { id: cust.id, email: cust.email, firstName: cust.firstName, lastName: cust.lastName, phone: cust.phone, emailVerified: true, isMigrated: cust.passwordHash == null } };
     });

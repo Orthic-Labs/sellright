@@ -25,6 +25,8 @@ export type OrderFulfillmentStatus = 'unfulfilled' | 'partially_fulfilled' | 'fu
 
 export const ORDER_STATUS_VALUES: readonly OrderStatus[] = ['open', 'completed', 'cancelled', 'archived'];
 export const ORDER_PAYMENT_STATUS_VALUES: readonly OrderPaymentStatus[] = ['pending', 'authorized', 'paid', 'partially_refunded', 'refunded', 'voided', 'failed'];
+/** Payment-status values filterable on list/export (adds `balance_due`, see derivePaymentStatus). */
+export const ORDER_PAYMENT_FILTER_VALUES: readonly OrderPaymentStatusWithBalance[] = [...ORDER_PAYMENT_STATUS_VALUES, 'balance_due'];
 export const ORDER_FULFILLMENT_STATUS_VALUES: readonly OrderFulfillmentStatus[] = ['unfulfilled', 'partially_fulfilled', 'fulfilled', 'partially_delivered', 'delivered'];
 
 type InternalOrderState = 'PendingPayment' | 'Paid' | 'PartiallyRefunded' | 'Refunded' | 'Cancelled';
@@ -53,7 +55,16 @@ export function deriveOrderStatus(state: InternalOrderState, deletedAt: Date | s
  * Refunded/PartiallyRefunded, never leaves it Cancelled) — reported as `paid`
  * rather than `voided`, since money did in fact move.
  */
-export function derivePaymentStatus(state: InternalOrderState, paymentsNewestFirst: Array<{ state: InternalPaymentState }>): OrderPaymentStatus {
+/** Order editing (G13): an edit can leave a Paid/PartiallyRefunded order owing
+ *  money. When the caller passes the live `balance` (cents still owed, from
+ *  `amountDueForOrder`) and it is positive, the status is `balance_due`.
+ *  Callers that don't pass it (public receipt, account list, SQL list filter)
+ *  keep the original, narrower result. */
+export type OrderPaymentStatusWithBalance = OrderPaymentStatus | 'balance_due';
+export function derivePaymentStatus(state: InternalOrderState, paymentsNewestFirst: Array<{ state: InternalPaymentState }>): OrderPaymentStatus;
+export function derivePaymentStatus(state: InternalOrderState, paymentsNewestFirst: Array<{ state: InternalPaymentState }>, amountDue: number | null | undefined): OrderPaymentStatusWithBalance;
+export function derivePaymentStatus(state: InternalOrderState, paymentsNewestFirst: Array<{ state: InternalPaymentState }>, amountDue?: number | null): OrderPaymentStatusWithBalance {
+  if ((state === 'Paid' || state === 'PartiallyRefunded') && (amountDue ?? 0) > 0) return 'balance_due';
   if (state === 'Refunded') return 'refunded';
   if (state === 'PartiallyRefunded') return 'partially_refunded';
   if (state === 'Paid') return 'paid';

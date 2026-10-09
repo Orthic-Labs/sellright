@@ -51,6 +51,13 @@ export const order = pgTable(
     // dashboard KPIs — see PAID_STATES/isDemo callers in admin-reports.ts and
     // admin-dashboard.ts. Never true for an order placed after Publish.
     isDemo: boolean().notNull().default(false),
+    // Order editing (migration 0084): true when an admin set a custom/removed
+    // shipping amount, so the amount is not re-derived from a shipping method.
+    shippingOverride: boolean().notNull().default(false),
+    // Migration 0086: the shipping method chosen at checkout / draft / edit (code
+    // + name snapshot). NULL for legacy orders and orders with no shipping line.
+    shippingMethodCode: text(),
+    shippingMethodName: text(),
     // Stripe-canonical idempotency: a client-supplied key per checkout attempt.
     // Same (store, key) -> the same order, so a double-submit can't create two.
     idempotencyKey: text(),
@@ -98,6 +105,37 @@ export const order = pgTable(
     check('order_status_check', sql`${t.status} in ('open', 'completed', 'cancelled', 'archived')`),
   ],
 );
+
+// Order editing (migration 0084). A +/- labelled amount applied to an order's
+// grand total (untaxed). Replaced as a set by each committed edit; the full
+// before/after history lives in `order_edit`. Cascades with the order.
+export const orderAdjustment = pgTable('order_adjustment', {
+  id: uuid().primaryKey().defaultRandom(),
+  storeId: uuid().notNull().references(() => store.id),
+  orderId: uuid().notNull().references(() => order.id, { onDelete: 'cascade' }),
+  label: text().notNull(),
+  amount: integer().notNull(), // cents, may be negative
+  actor: text(),
+  createdAt: ts(),
+});
+
+// One row per committed edit session: the order snapshot before/after, the
+// balance it produced and how it was settled. `idempotencyKey` makes the commit
+// replay-safe; `fingerprint` binds a key to its exact payload.
+export const orderEdit = pgTable('order_edit', {
+  id: uuid().primaryKey().defaultRandom(),
+  storeId: uuid().notNull().references(() => store.id),
+  orderId: uuid().notNull().references(() => order.id, { onDelete: 'cascade' }),
+  idempotencyKey: text(),
+  fingerprint: text(),
+  before: jsonb().notNull(),
+  after: jsonb().notNull(),
+  balance: integer().notNull().default(0), // cents: new total - net paid (+ = customer owes)
+  settlement: jsonb(),
+  reason: text(),
+  actor: text(),
+  createdAt: ts(),
+});
 
 export const orderLine = pgTable('order_line', {
   id: uuid().primaryKey().defaultRandom(),
@@ -458,7 +496,7 @@ export const giftCardTransaction = pgTable('gift_card_transaction', {
 // customer's balance is the SUM of their rows — never a stored counter. A DB
 // trigger rejects UPDATE. Program settings live in store.config.loyalty.
 // Store-scoped (FORCE RLS).
-export const loyaltyLedgerKinds = ['earn', 'redeem', 'reverse', 'adjust', 'expire', 'import'] as const;
+export const loyaltyLedgerKinds = ['earn', 'redeem', 'reverse', 'adjust', 'expire', 'import', 'bonus'] as const;
 export type LoyaltyLedgerKind = typeof loyaltyLedgerKinds[number];
 export const loyaltyLedger = pgTable('loyalty_ledger', {
   id: uuid().primaryKey().defaultRandom(),

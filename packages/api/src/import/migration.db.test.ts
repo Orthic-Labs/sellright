@@ -116,6 +116,7 @@ function buildSource(variant: Variant): string[] {
     TABLE('order_promotions_promotion', ['"orderId" int', '"promotionId" int']),
     TABLE('shipping_method', ['id int PRIMARY KEY', 'code text', 'checker text', 'calculator text', '"deletedAt" timestamp']),
     TABLE('shipping_method_translation', ['"baseId" int', '"languageCode" varchar(5)', 'name text']),
+    TABLE('shipping_line', ['id int PRIMARY KEY', '"orderId" int', '"shippingMethodId" int']),
     TABLE('tax_rate', ['id int PRIMARY KEY', 'enabled boolean', '"zoneId" int', '"categoryId" int', 'value int', '"customerGroupId" int']),
     // Plugin tables exist only where the source enabled the plugin. Both
     // stores run BlogPlugin; affiliate + waitlist are DD-only.

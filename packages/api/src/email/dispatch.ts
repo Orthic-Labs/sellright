@@ -29,6 +29,10 @@ import {
   orderRefundConfirmation,
   magicLinkAccess,
   trialLicenseKey,
+  orderUpdated,
+  orderBalanceDue,
+  pointsEarned,
+  reviewApproved,
 } from './templates.js';
 import { enqueueEmail } from './outbox.js';
 import { env } from '../env.js';
@@ -47,6 +51,10 @@ export const EMAIL_KIND = {
   EMAIL_CHANGED_NOTICE: 'email_changed_notice',
   MAGIC_LINK: 'magic_link',
   ORDER_REFUND_CONFIRMATION: 'order-refund-confirmation',
+  ORDER_UPDATED: 'order_updated',
+  ORDER_BALANCE_DUE: 'order_balance_due',
+  POINTS_EARNED: 'points_earned',
+  REVIEW_APPROVED: 'review_approved',
 } as const;
 
 export interface StoreEmailCtx {
@@ -246,6 +254,61 @@ export async function enqueueRefundConfirmation(tx: Tx, storeId: string, store: 
   const rendered = orderRefundConfirmation(ctx, data);
   return enqueueEmail(tx, storeId, {
     kind: EMAIL_KIND.ORDER_REFUND_CONFIRMATION,
+    dedupeKey: data.dedupeKey,
+    recipient: to,
+    payload: { to, from: ctx.fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },
+  });
+}
+
+export async function enqueuePointsEarned(tx: Tx, storeId: string, store: StoreEmailCtx, to: string, data: {
+  points: number; balance: number; lines: Array<{ label: string; points: number }>; dedupeKey?: string;
+}): Promise<boolean> {
+  const ctx = emailCtx(store);
+  const rendered = pointsEarned(ctx, { ...data, accountUrl: `${ctx.storefrontUrl}/account/rewards` });
+  return enqueueEmail(tx, storeId, {
+    kind: EMAIL_KIND.POINTS_EARNED,
+    dedupeKey: data.dedupeKey,
+    recipient: to,
+    payload: { to, from: ctx.fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },
+  });
+}
+
+export async function enqueueReviewApproved(tx: Tx, storeId: string, store: StoreEmailCtx, to: string, data: {
+  productName: string; productSlug: string; points: number; balance: number | null; dedupeKey?: string;
+}): Promise<boolean> {
+  const ctx = emailCtx(store);
+  const rendered = reviewApproved(ctx, { ...data, productUrl: `${ctx.storefrontUrl}/products/${encodeURIComponent(data.productSlug)}#reviews` });
+  return enqueueEmail(tx, storeId, {
+    kind: EMAIL_KIND.REVIEW_APPROVED,
+    dedupeKey: data.dedupeKey,
+    recipient: to,
+    payload: { to, from: ctx.fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },
+  });
+}
+
+/** Order editing (G13): customer "order updated" summary (diff + pay link when due). */
+export async function enqueueOrderUpdated(tx: Tx, storeId: string, store: StoreEmailCtx, to: string, data: {
+  code: string; currency: string; beforeTotal: number; afterTotal: number; changes: string[];
+  balance: number; payUrl?: string; reason?: string | null; dedupeKey?: string;
+}): Promise<boolean> {
+  const ctx = emailCtx(store);
+  const rendered = orderUpdated(ctx, data);
+  return enqueueEmail(tx, storeId, {
+    kind: EMAIL_KIND.ORDER_UPDATED,
+    dedupeKey: data.dedupeKey,
+    recipient: to,
+    payload: { to, from: ctx.fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },
+  });
+}
+
+/** Order editing (G13): stand-alone pay link for a balance. */
+export async function enqueueOrderBalanceDue(tx: Tx, storeId: string, store: StoreEmailCtx, to: string, data: {
+  code: string; currency: string; amountDue: number; payUrl: string; dedupeKey?: string;
+}): Promise<boolean> {
+  const ctx = emailCtx(store);
+  const rendered = orderBalanceDue(ctx, data);
+  return enqueueEmail(tx, storeId, {
+    kind: EMAIL_KIND.ORDER_BALANCE_DUE,
     dedupeKey: data.dedupeKey,
     recipient: to,
     payload: { to, from: ctx.fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },

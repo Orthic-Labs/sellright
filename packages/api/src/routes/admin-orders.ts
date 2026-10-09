@@ -1,5 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { withStore } from '../db/client.js';
 import { errJson } from '../lib/api-error.js';
@@ -38,9 +38,11 @@ async function loadOrderForDoc(storeId: string, code: string) {
     const lines = await tx
       .select({ variantSku: s.orderLine.variantSku, variantName: s.orderLine.variantName, quantity: s.orderLine.quantity, unitPrice: s.orderLine.unitPrice, lineTotal: s.orderLine.lineTotal })
       .from(s.orderLine)
-      .where(eq(s.orderLine.orderId, order.id));
+      // Order editing (G13): a line edited down to 0 stays on the order (row preserved) but is not a document line.
+      .where(and(eq(s.orderLine.orderId, order.id), gt(s.orderLine.quantity, 0)));
+    const adjustments = await tx.select({ label: s.orderAdjustment.label, amount: s.orderAdjustment.amount }).from(s.orderAdjustment).where(eq(s.orderAdjustment.orderId, order.id));
     const [storeRow] = await tx.select({ name: s.store.name, slug: s.store.slug }).from(s.store).where(eq(s.store.id, storeId)).limit(1);
-    return { order, lines, store: { name: storeRow?.name ?? 'Store', slug: storeRow?.slug ?? '' } };
+    return { order, lines, adjustments, store: { name: storeRow?.name ?? 'Store', slug: storeRow?.slug ?? '' } };
   });
 }
 
@@ -58,7 +60,9 @@ adminOrders.openapi(
     const data = await loadOrderForDoc(st.storeId, code);
     if (!data) throw new HttpError(404, 'order not found');
     
-    const doc = buildInvoice(data.order as never, data.lines, data.store);
+    // Order-edit adjustments are not line items, but the invoice must add up to the grand total — list them as lines.
+    const invoiceLines = [...data.lines, ...data.adjustments.map((a) => ({ variantSku: '', variantName: a.label, quantity: 1, unitPrice: a.amount, lineTotal: a.amount }))];
+    const doc = buildInvoice(data.order as never, invoiceLines, data.store);
     if (format === 'html') return c.html(renderInvoiceHtml(doc));
     return c.json(doc, 200);
   }),

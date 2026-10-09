@@ -32,6 +32,7 @@ import { deliverEmails } from '../email/outbox.js';
 import { deliverPushes } from '../push/outbox.js';
 import { listmonkSync } from './listmonk-sync.js';
 import { sheeridExpirySweep } from './sheerid-expiry.js';
+import { birthdayBonusSweep } from './birthday-bonus.js';
 import { sweepRestockEvents } from '../routes/restock.js';
 import { withLeaderLock, type LeaderLockedJob } from './leader-lock.js';
 import { log, err as logErr } from '../lib/logger.js';
@@ -188,6 +189,8 @@ export function startJobScheduler(): void {
   // customers' active_verifications — drops verified_customer coupon
   // eligibility for lapsed verifications. Hourly: expiry granularity is days.
   every(HOUR, 'sheerid-expiry', 'sheerid-expiry', () => sheeridExpirySweep({ log: jobLog }));
+  // REWARDS-1: birthday bonus (once per customer per year; no-op while the rule is off).
+  every(HOUR, 'birthday-bonus', 'birthday-bonus', () => birthdayBonusSweep({ log: jobLog }));
   // PAR-5: the stock trigger queues restock_event rows on <=0→>0 transitions;
   // this drains them into one-shot customer notifications (claim inside the
   // txn — crash-safe, no double-notify).

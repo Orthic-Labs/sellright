@@ -120,6 +120,18 @@ export async function importOrders(ctx: ImportContext): Promise<void> {
       netPaidByOrder.set(oid, (netPaidByOrder.get(oid) ?? 0) - Number(row.refunded));
     }
 
+    // The shipping method each source order was placed with (first shipping line
+    // by id; Vendure orders carry one). Code + English name snapshot, so imported
+    // history shows the method and order edits need not infer it from the total.
+    const shippingByOrder = new Map<number, { code: string | null; name: string | null }>();
+    for (const row of await q(
+      `SELECT DISTINCT ON (sl."orderId") sl."orderId" AS oid, m.code AS code, t.name AS name
+       FROM shipping_line sl
+       JOIN shipping_method m ON m.id = sl."shippingMethodId"
+       LEFT JOIN shipping_method_translation t ON t."baseId" = m.id AND t."languageCode" = 'en'
+       ORDER BY sl."orderId", sl.id`,
+    )) shippingByOrder.set(Number(row.oid), { code: row.code ?? null, name: row.name ?? null });
+
     const orderRows = sourceOrders.map((o) => {
       if (!['Cancelled','Refunded','PartiallyRefunded','PaymentSettled','PartiallyShipped','Shipped','PartiallyDelivered','Delivered','PaymentAuthorized','Modifying'].includes(o.state)) {
         throw new Error('Unsupported source order state: ' + o.state);
@@ -144,6 +156,8 @@ export async function importOrders(ctx: ImportContext): Promise<void> {
         subtotal: sub, discountTotal: 0, shippingTotal: ship,
         taxTotal: sourceSubTotalWithTax - sub + (shipt - ship), grandTotal: sourceSubTotalWithTax + shipt,
         isPreOrder: o.ispre ?? false,
+        shippingMethodCode: shippingByOrder.get(Number(o.id))?.code ?? null,
+        shippingMethodName: shippingByOrder.get(Number(o.id))?.name ?? null,
         shippingAddress: address(o.shipaddr), billingAddress: address(o.billaddr),
         placedAt: parseDate(o.placed),
       };

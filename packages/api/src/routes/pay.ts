@@ -1,5 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { withAdvisoryLock, withStore } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
@@ -21,6 +21,10 @@ async function ownsOrder(tx: Parameters<typeof ownedOrder>[0], code: string, rec
 }
 
 export const pay = new OpenAPIHono();
+
+/** Order editing (G13): states where a positive amount due is a balance for an
+ *  edited order rather than an unpaid order. */
+const isBalanceState = (state: string) => state === 'Paid' || state === 'PartiallyRefunded';
 
 // POST /v1/shop/orders/{code}/pay — take payment for an order, idempotent.
 // At launch Stripe is the only shopper-capable gateway. Offline/internal
@@ -73,16 +77,28 @@ pay.openapi(
       | { kind: 'noop'; state: string }
       | { kind: 'ok'; state: string; payment: string };
 
-    const claimKey = idemKey ? `pay:${st.id}:${code}:${method}:${idemKey}` : `pay:${st.id}:${code}:${method}`;
+    const baseClaimKey = idemKey ? `pay:${st.id}:${code}:${method}:${idemKey}` : `pay:${st.id}:${code}:${method}`;
     const out: R = await withAdvisoryLock(`pay:${st.id}:${code}`, async () => {
+      let claimKey = baseClaimKey;
       const prepared = await withStore(st.id, async (tx) => {
         const order = await ownsOrder(tx, code, receipt, session);
         if (!order) return { kind: 'notfound' as const };
-        if (order.state !== 'PendingPayment') return { kind: 'badstate' as const, state: order.state };
+        // Order editing (G13): an edit that raised the total leaves a Paid /
+        // PartiallyRefunded order with a balance; the shopper pays ONLY that.
+        const balanceState = isBalanceState(order.state);
+        if (order.state !== 'PendingPayment' && !balanceState) return { kind: 'badstate' as const, state: order.state };
         // MONEY-3: charge only what's still owed. Any settled tender already
         // recorded against this order is deducted before gateway capture.
         const amountDue = await amountDueForOrder(tx, st.id, order.id, order.grandTotal);
-        if (amountDue <= 0) return { kind: 'nodue' as const, state: order.state };
+        if (amountDue <= 0) return balanceState ? { kind: 'badstate' as const, state: order.state } : { kind: 'nodue' as const, state: order.state };
+        // A balance payment is a SECOND payment on the order, so the default
+        // per-order claim (already taken by the first payment) must not
+        // swallow it: key it on the number of settled tenders so far.
+        if (balanceState && !idemKey) {
+          const [n] = await tx.select({ n: sql<number>`count(*)::int` }).from(s.payment)
+            .where(and(eq(s.payment.orderId, order.id), eq(s.payment.state, 'Settled')));
+          claimKey = `${baseClaimKey}:balance:${n?.n ?? 0}`;
+        }
         const [existing] = await tx
           .select({ id: s.processedEvent.id })
           .from(s.processedEvent)
@@ -115,7 +131,7 @@ pay.openapi(
         // flag. Any other non-payable state, or a non-Settled result, still
         // short-circuits as before (nothing was actually charged).
         const cancelledButSettled = order.state === 'Cancelled' && result.state === 'Settled';
-        if (order.state !== 'PendingPayment' && !cancelledButSettled) return { kind: 'badstate', state: order.state };
+        if (order.state !== 'PendingPayment' && !cancelledButSettled && !isBalanceState(order.state)) return { kind: 'badstate', state: order.state };
         const claimed = await tx
           .insert(s.processedEvent)
           .values({ id: claimKey, storeId: st.id, type: 'payment' })
@@ -187,8 +203,13 @@ pay.openapi(
     });
     if (!prepared) return errJson(c, 404, 'ORDER_NOT_FOUND', 'order not found');
     const { order, amountDue } = prepared;
-    if (order.state !== 'PendingPayment') return errJson(c, 409, 'ORDER_NOT_PAYABLE', 'order is not payable', { extra: { state: order.state } });
-    if (amountDue <= 0) return errJson(c, 400, 'ORDER_ALREADY_PAID', 'order already fully paid', { extra: { state: order.state } });
+    if (order.state !== 'PendingPayment' && !isBalanceState(order.state)) return errJson(c, 409, 'ORDER_NOT_PAYABLE', 'order is not payable', { extra: { state: order.state } });
+    if (amountDue <= 0) {
+      // A Paid order with nothing owed is simply not payable (no balance); an
+      // unpaid order already covered by other tenders keeps the 400.
+      if (order.state !== 'PendingPayment') return errJson(c, 409, 'ORDER_NOT_PAYABLE', 'order is not payable', { extra: { state: order.state } });
+      return errJson(c, 400, 'ORDER_ALREADY_PAID', 'order already fully paid', { extra: { state: order.state } });
+    }
     // Idempotent: key the Stripe create on the order id AND the amount so a
     // double-submit/retry reuses the order's open PaymentIntent (same
     // client_secret) instead of minting a second one — but a later call after

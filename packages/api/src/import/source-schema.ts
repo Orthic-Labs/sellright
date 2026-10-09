@@ -73,6 +73,8 @@ export const REQUIRED_SOURCE_COLUMNS: Record<string, readonly string[]> = {
   order_promotions_promotion: ['orderId', 'promotionId'],
   shipping_method: ['id', 'code', 'checker', 'calculator', 'deletedAt'],
   shipping_method_translation: ['baseId', 'languageCode', 'name'],
+  // The order's chosen method (persisted on the imported order, migration 0086).
+  shipping_line: ['id', 'orderId', 'shippingMethodId'],
   tax_rate: ['id', 'enabled', 'zoneId', 'categoryId', 'value', 'customerGroupId'],
 };
 

@@ -238,6 +238,12 @@ adminReports.openapi(
 );
 
 // ── customers: list / detail ─────────────────────────────────────────────────
+// Hardcoded qualifier on purpose: drizzle renders `${s.customer.id}` as the BARE
+// `"id"` in a single-table select, and inside the correlated subqueries below
+// (`from "order" o`) a bare `"id"` binds to `o.id`, so `o.customer_id = "id"`
+// was always false and every customer showed orders:0 / spent:0 (C1). Same
+// trap documented in orders/status-sql.ts.
+const CUSTOMER_ID = sql.raw('"customer"."id"');
 adminReports.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/customers', summary: 'List customers',
@@ -255,8 +261,8 @@ adminReports.openapi(
       const rows = await tx
         .select({
           id: s.customer.id, email: s.customer.email, firstName: s.customer.firstName, lastName: s.customer.lastName, createdAt: s.customer.createdAt,
-          orders: sql<number>`(select count(*) from "order" o where o.customer_id = ${s.customer.id} and o.state = any(${PAID_STATES}) and o.is_demo = false)::int`,
-          spent: sql<number>`coalesce((select sum(o.grand_total) from "order" o where o.customer_id = ${s.customer.id} and o.state = any(${PAID_STATES}) and o.is_demo = false),0)::int`,
+          orders: sql<number>`(select count(*) from "order" o where o.customer_id = ${CUSTOMER_ID} and o.state = any(${PAID_STATES}) and o.is_demo = false)::int`,
+          spent: sql<number>`coalesce((select sum(o.grand_total) from "order" o where o.customer_id = ${CUSTOMER_ID} and o.state = any(${PAID_STATES}) and o.is_demo = false),0)::int`,
         })
         .from(s.customer)
         .where(where)

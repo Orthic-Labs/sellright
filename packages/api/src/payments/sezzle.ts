@@ -24,6 +24,9 @@ export interface SezzleSessionInput extends CreatePaymentInput {
   discount: number;
   completeUrl: string;
   cancelUrl: string;
+  /** Order-edit balance payments describe themselves and label the credit. */
+  description?: string;
+  discountLabel?: string;
 }
 
 export function verifySezzleSignature(raw: string, signature: string | undefined, key: string): boolean {
@@ -181,9 +184,10 @@ export function createSezzleProvider(transport: GatewayFetch = fetch): PaymentPr
           customer: input.customer,
           order: {
             intent: 'CAPTURE', reference_id: input.attemptId,
+            description: input.description ?? `Order ${input.orderCode}`,
             items: input.items, order_amount: money(input.amount),
             shipping_amount: money(input.shipping), tax_amount: money(input.tax),
-            ...(input.discount ? { discounts: [{ name: 'Order discount', amount: money(input.discount) }] } : {}),
+            ...(input.discount ? { discounts: [{ name: input.discountLabel ?? 'Order discount', amount: money(input.discount) }] } : {}),
           },
         });
       if (!result.order?.uuid || !result.order.checkout_url) throw new Error('Sezzle session response is incomplete');

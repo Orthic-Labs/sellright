@@ -8,7 +8,7 @@ import { resolveConfiguredGatewayAccount, nmiEnvironment } from '../payments/gat
 import { isPaymentMethodEnabled } from '../payments/provider.js';
 import { stripeModeFromConfig, resolveStripePublishableForClient, resolveStripeUsable } from '../payments/stripe.js';
 import { loyaltySettingsFromConfig } from '../money/loyalty.js';
-import { PublicLoyaltySettings } from './loyalty.js';
+import { PublicLoyaltySettings, publicLoyalty } from './loyalty.js';
 import { canViewStorefront, isStorePublished, StoreNotPublishedError } from '../store-publish.js';
 import { storeIdentityFromConfig, StoreIdentitySchema } from './store-identity.js';
 
@@ -54,7 +54,7 @@ shopConfig.openapi(
     const loyalty = loyaltySettingsFromConfig(st.config);
     return c.json({
       gateways: { nmi, sezzle },
-      loyalty: loyalty.enabled ? loyalty : null,
+      loyalty: loyalty.enabled ? publicLoyalty(loyalty) : null,
       stripeMode: mode,
       stripePublishableKey: await resolveStripePublishableForClient(st.id, mode),
       stripeConfigured: isPaymentMethodEnabled(st.config, 'stripe') && (await resolveStripeUsable(st.id, mode)),

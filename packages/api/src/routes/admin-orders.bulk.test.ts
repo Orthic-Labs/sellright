@@ -343,7 +343,7 @@ describe('bulk-purge (cascade)', () => {
   // the purge does not delete-or-unlink.
   it('purge handles every FK that references order (fails when a new FK is added)', async () => {
     const HANDLED = new Set([
-      'order_line', 'license', 'payment', 'payment_attempt', 'refund', 'return_request', 'fulfillment', 'promotion_usage', // delete-cascaded
+      'order_line', 'license', 'payment', 'payment_attempt', 'refund', 'return_request', 'fulfillment', 'promotion_usage', 'order_edit', 'order_adjustment', // delete-cascaded
       'cart', 'stock_movement', 'gift_card_transaction', 'subscription', 'dispute', // unlinked (nullable) back-refs
     ]);
     const r = await pool.query(

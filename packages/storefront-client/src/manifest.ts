@@ -58,15 +58,21 @@ export interface NativeProductManifestEntryV2 {
   name: string;
   tags: string[];
   priceRange: { min: NativeMoney; max: NativeMoney };
+  /** Opt-in display range including disabled choices; never a purchase quote. */
+  displayPriceRange?: { min: NativeMoney; max: NativeMoney };
   hasMultiplePrices: boolean;
   inStock: boolean;
   images: NativeImage[];
+  /** Approved-review aggregate (REWARDS-1); present only when the product has reviews. */
+  rating?: { average: number; count: number };
 }
 
 export interface NativeProductDetailV2 extends NativeProductManifestEntryV2 {
   lastUpdated: string;
   description: string | null;
   variants: NativeVariantV2[];
+  /** Opt-in disabled choices for crossed-out display only. Never purchasable. */
+  displayOnlyVariants?: NativeVariantV2[];
 }
 
 export interface NativeCatalogManifestV2 {

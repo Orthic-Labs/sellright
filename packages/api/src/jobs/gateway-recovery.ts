@@ -100,7 +100,7 @@ async function orderContext(storeId: string, attempt: Attempt) {
     const [order] = await tx.select().from(s.order).where(eq(s.order.id, attempt.orderId)).limit(1);
     if (!order) return null;
     const due = await amountDueForOrder(tx, storeId, order.id, order.grandTotal);
-    return { code: order.code, payable: order.state === 'PendingPayment' && due === attempt.amount };
+    return { code: order.code, payable: (order.state === 'PendingPayment' || order.state === 'Paid' || order.state === 'PartiallyRefunded') && due === attempt.amount };
   });
 }
 
