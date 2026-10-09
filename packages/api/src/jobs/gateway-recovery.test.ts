@@ -45,6 +45,15 @@ vi.mock('../payments/gateway-payment.js', () => ({
 const orderCtx = { state: 'PendingPayment', due: 1000 };
 vi.mock('../payments/settle.js', () => ({ amountDueForOrder: async () => orderCtx.due }));
 vi.mock('../payments/gateway-account.js', () => ({ resolveGatewayAccount: async () => ({ method: 'sezzle', mode: 'test' }) }));
+// The capture decision runs in a lock set on the same stub transaction; the policy allows (default).
+vi.mock('../db/locks.js', async (original) => ({
+  ...await original<typeof import('../db/locks.js')>(),
+  withLockedSet: async (_s: string, _subject: unknown, fn: (tx: unknown, held: unknown, plan: unknown) => unknown) => fn(h.tx, {}, {}),
+}));
+vi.mock('../payments/policy/host.js', async (original) => ({
+  ...await original<typeof import('../payments/policy/host.js')>(),
+  runBeforeCapture: async () => ({ action: 'capture' }),
+}));
 
 import { decideSezzleRecovery, recoverGatewayAttempts, recoveryBackoffMs, recoveryDue } from './gateway-recovery.js';
 

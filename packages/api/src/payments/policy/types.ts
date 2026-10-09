@@ -5,8 +5,9 @@
 // transaction the caller owns: they never call a provider, never write payment/payment_attempt
 // rows, and see the order row already locked through a HeldLocks brand (db/locks.ts).
 //
-// Step 4 wires only `beforePaymentAttempt`. Later hooks (beforeCapture, authorizeInvoiceEffect,
-// revalidateForIssuance, reservation projections) are added with their call sites.
+// Step 4 wired `beforePaymentAttempt`; step 5 adds `beforeCapture` (Sezzle, decision tx in the
+// recovery job). Later hooks (authorizeInvoiceEffect, revalidateForIssuance, reservation projections)
+// are added with their call sites.
 import type { Tx } from '../../db/client.js';
 import type { HeldLocks } from '../../db/locks.js';
 import type { ReservationRow } from '../reservation.js';
@@ -56,9 +57,32 @@ export type BeforePaymentAttemptResult =
   | { readonly allow: true }
   | { readonly allow: false; readonly veto: PolicyVeto };
 
+/**
+ * Immediately before the engine issues a provider capture (Sezzle only; PAYMENT-TIMING §4.4).
+ * `attempt.providerRef` is the Sezzle order uuid the capture targets.
+ */
+export interface BeforeCaptureInput {
+  readonly provider: 'sezzle';
+  /** Order row already locked FOR UPDATE by the caller under `held`. */
+  readonly order: PolicyOrder;
+  readonly attempt: { readonly id: string; readonly amount: number; readonly currency: string; readonly providerRef: string };
+  readonly reservations: readonly ReservationRow[];
+  readonly held: HeldLocks;
+}
+
+/**
+ * `capture`: the engine captures. `cancel`: the engine releases the Sezzle authorisation instead;
+ * `reason` is a machine code persisted in payment_attempt.context.capture_decision.
+ */
+export type BeforeCaptureResult =
+  | { readonly action: 'capture' }
+  | { readonly action: 'cancel'; readonly reason: string };
+
 export interface PaymentPolicy {
   /** Unique registration id (e.g. 'sellright-default', 'rightsuite'). */
   readonly id: string;
   /** Runs before any attempt row, replay lookup, provider session or intent creation. */
   beforePaymentAttempt(tx: Tx, i: BeforePaymentAttemptInput): Promise<BeforePaymentAttemptResult>;
+  /** Optional: absent means capture (default allow). Runs inside the recovery decision transaction. */
+  beforeCapture?(tx: Tx, i: BeforeCaptureInput): Promise<BeforeCaptureResult>;
 }

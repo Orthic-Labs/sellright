@@ -25,8 +25,11 @@
  */
 import { and, asc, eq, inArray, lt, sql } from 'drizzle-orm';
 import { pool, withAdvisoryLock, withStore } from '../db/client.js';
+import { withLockedSet } from '../db/locks.js';
 import * as s from '../db/schema.js';
 import { finishAttempt, verifyGatewayAttempt } from '../payments/gateway-payment.js';
+import { PaymentPolicyUnavailableError, runBeforeCapture } from '../payments/policy/host.js';
+import type { BeforeCaptureResult } from '../payments/policy/types.js';
 import { amountDueForOrder } from '../payments/settle.js';
 import { resolveGatewayAccount, type GatewayAccount } from '../payments/gateway-account.js';
 import { sezzleProvider, type SezzleOrder, type Money } from '../payments/sezzle.js';
@@ -128,44 +131,97 @@ async function recoverOne(storeId: string, attempt: Attempt, opts: RecoveryOptio
   if (!opts.apply) return { resolved: false, note: 'dry-run:' + decision.kind };
   const money: Money = { amount_in_cents: attempt.amount, currency: attempt.currency };
   const ref = attempt.providerRef;
-  if (decision.kind === 'capture') {
-    // Capture + settle under the order's pay lock (the same lock /pay, the
-    // Stripe webhook and reconcileStripeOrder take), re-checking payability
-    // inside it: a Stripe settle that won the race makes this a release, so
-    // the order is never charged twice.
-    const captured = await withAdvisoryLock('pay:' + storeId + ':' + ctx.code, async () => {
-      const fresh = await orderContext(storeId, attempt);
-      if (!fresh?.payable) return null;
-      // Sezzle-Request-Id makes a retried capture idempotent at the provider.
-      await ops.captureOrder(account, ref, money, attempt.id + ':capture');
-      const done = await finishAttempt(storeId, attempt.id, {
-        state: 'Settled', providerRef: ref, metadata: { recovery: 'captured' },
-      });
-      return { resolved: done.status === 'settled', note: 'captured:' + done.status };
-    });
-    if (captured) return captured;
-  }
-  const releaseReason = decision.kind === 'release' ? decision.reason : decision.kind === 'capture' ? 'order_not_payable' : null;
+  // The pay: advisory lock (D4) serialises this with /pay, the Stripe webhook and reconcileStripeOrder.
+  // Inside it, a capture first runs its decision in its own lock-set transaction (decideSezzleCapture),
+  // which COMMITS before the provider capture HTTP call: no row lock is held across HTTP. The capture
+  // record (finishAttempt) takes its own lock set with mustCommit (X-45).
   return withAdvisoryLock('pay:' + storeId + ':' + ctx.code, async () => {
-    if (releaseReason) {
+    let cancelReason: string | null = decision.kind === 'release' ? decision.reason : null;
+    if (decision.kind === 'capture') {
+      const verdict = await decideSezzleCapture(storeId, attempt, ref);
+      if (verdict.action === 'unavailable') return { resolved: false, note: 'capture_deferred:' + verdict.reason };
+      if (verdict.action === 'capture') {
+        // Sezzle-Request-Id makes a retried capture idempotent at the provider.
+        await ops.captureOrder(account, ref, money, attempt.id + ':capture');
+        const done = await finishAttempt(storeId, attempt.id, {
+          state: 'Settled', providerRef: ref, metadata: { recovery: 'captured' },
+        });
+        return { resolved: done.status === 'settled', note: 'captured:' + done.status };
+      }
+      cancelReason = verdict.reason;
+    }
+    if (cancelReason) {
       await ops.releaseOrder(account, ref, money, attempt.id + ':release');
     }
     // Declined → attempt 'failed' + any Pending/Authorized payment row
     // downgraded (applyPaymentResult never downgrades Settled), which lifts
     // the hasUnresolvedPayment hold. finishAttempt is a no-op if a concurrent
     // webhook already settled the attempt.
-    const reason = releaseReason ?? 'session_expired';
+    const reason = cancelReason ?? 'session_expired';
     const done = await finishAttempt(storeId, attempt.id, {
       state: 'Declined', providerRef: ref,
-      errorMessage: releaseReason ? 'Sezzle authorization released' : 'Sezzle checkout expired',
-      metadata: { recovery: reason, released: !!releaseReason },
+      errorMessage: cancelReason ? 'Sezzle authorization released' : 'Sezzle checkout expired',
+      metadata: { recovery: reason, released: !!cancelReason },
     });
     await withStore(storeId, (tx) => tx.insert(s.auditLog).values({
       storeId, actor: 'system:gateway-recovery', entity: 'payment_attempt', entityId: attempt.id,
-      action: releaseReason ? 'sezzle_authorization_released' : 'sezzle_session_expired',
+      action: cancelReason ? 'sezzle_authorization_released' : 'sezzle_session_expired',
       data: { providerRef: ref, reason, status: done.status },
     }));
-    return { resolved: done.status !== 'pending' && done.status !== 'unknown', note: (releaseReason ? 'release' : 'expire') + ':' + done.status };
+    return { resolved: done.status !== 'pending' && done.status !== 'unknown', note: (cancelReason ? 'release' : 'expire') + ':' + done.status };
+  });
+}
+
+type CaptureVerdict =
+  | { action: 'capture' }
+  | { action: 'cancel'; reason: string }
+  | { action: 'unavailable'; reason: string };
+
+/**
+ * Decision transaction for an engine-issued Sezzle capture (PAYMENT-TIMING §4.4, placement step 1).
+ * Runs under withLockedSet({order}): re-reads the attempt (FOR UPDATE), the order's payability and its
+ * reservations, calls the payment policy's beforeCapture and persists context.capture_decision in the
+ * same transaction. A persisted decision is final: a crash after the provider capture resumes as
+ * capture (no re-asking the policy, no release of a captured order). A policy hook failure defers the
+ * capture to a later tick.
+ */
+async function decideSezzleCapture(storeId: string, attempt: Attempt, ref: string): Promise<CaptureVerdict> {
+  return withLockedSet(storeId, { kind: 'order', orderId: attempt.orderId }, async (tx, held): Promise<CaptureVerdict> => {
+    const [row] = await tx.select().from(s.paymentAttempt).where(eq(s.paymentAttempt.id, attempt.id)).limit(1).for('update');
+    if (!row) return { action: 'unavailable', reason: 'attempt_missing' };
+    const prior = (row.context as { capture_decision?: { action?: string; reason?: string } } | null)?.capture_decision;
+    if (prior?.action === 'capture') return { action: 'capture' };
+    if (prior?.action === 'cancel') return { action: 'cancel', reason: prior.reason ?? 'policy' };
+
+    const [order] = await tx.select().from(s.order).where(eq(s.order.id, attempt.orderId)).limit(1);
+    if (!order) return { action: 'unavailable', reason: 'order_missing' };
+    const due = await amountDueForOrder(tx, storeId, order.id, order.grandTotal);
+    const payable = (order.state === 'PendingPayment' || order.state === 'Paid' || order.state === 'PartiallyRefunded') && due === attempt.amount;
+    if (!payable) return { action: 'cancel', reason: 'order_not_payable' };
+
+    const reservations = await tx.select().from(s.orderReservation).where(and(
+      eq(s.orderReservation.storeId, storeId), eq(s.orderReservation.orderId, order.id)));
+    let verdict: BeforeCaptureResult;
+    try {
+      verdict = await runBeforeCapture(tx, {
+        provider: 'sezzle',
+        order: { id: order.id, storeId, code: order.code, state: order.state, currency: order.currency,
+          grandTotal: order.grandTotal, customerId: order.customerId, metadata: order.metadata },
+        attempt: { id: attempt.id, amount: attempt.amount, currency: attempt.currency, providerRef: ref },
+        reservations, held,
+      });
+    } catch (e) {
+      if (e instanceof PaymentPolicyUnavailableError) return { action: 'unavailable', reason: 'policy_unavailable' };
+      throw e;
+    }
+    const at = new Date().toISOString();
+    const persisted = verdict.action === 'capture'
+      ? { action: 'capture', at }
+      : { action: 'cancel', reason: `policy:${verdict.reason}`, at };
+    await tx.update(s.paymentAttempt).set({
+      context: sql`coalesce(${s.paymentAttempt.context}, '{}'::jsonb) || jsonb_build_object('capture_decision', ${JSON.stringify(persisted)}::jsonb)`,
+    }).where(eq(s.paymentAttempt.id, attempt.id));
+    return verdict.action === 'capture' ? { action: 'capture' } : { action: 'cancel', reason: `policy:${verdict.reason}` };
   });
 }
 

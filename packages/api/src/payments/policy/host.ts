@@ -12,7 +12,9 @@ import { and, eq, sql } from 'drizzle-orm';
 import type { Tx } from '../../db/client.js';
 import { assertHeld, type HeldLocks } from '../../db/locks.js';
 import * as s from '../../db/schema.js';
-import type { BeforePaymentAttemptInput, PaymentPolicy, PaymentProvider, PaymentPurpose, PolicyOrder, PolicyVeto } from './types.js';
+import type {
+  BeforeCaptureInput, BeforeCaptureResult, BeforePaymentAttemptInput, PaymentPolicy, PaymentProvider, PaymentPurpose, PolicyOrder, PolicyVeto,
+} from './types.js';
 
 /** A policy vetoed the attempt. The caller's transaction must roll back. */
 export class PaymentPolicyVetoError extends Error {
@@ -73,6 +75,21 @@ export async function runBeforePaymentAttempt(tx: Tx, input: BeforePaymentAttemp
     const result = await inSavepoint(tx, policy.id, () => policy.beforePaymentAttempt(tx, input));
     if (!result.allow) throw new PaymentPolicyVetoError(result.veto);
   }
+}
+
+/**
+ * Runs every registered policy's beforeCapture in registration order inside the caller's decision
+ * transaction. The first `cancel` wins; otherwise the result is `capture`. A policy without the hook
+ * allows. Throws PaymentPolicyUnavailableError on a hook failure (the capture must then not be issued).
+ */
+export async function runBeforeCapture(tx: Tx, input: BeforeCaptureInput): Promise<BeforeCaptureResult> {
+  await assertHeld(tx, input.held);
+  for (const policy of policies) {
+    if (!policy.beforeCapture) continue;
+    const result = await inSavepoint(tx, policy.id, () => policy.beforeCapture!(tx, input));
+    if (result.action === 'cancel') return result;
+  }
+  return { action: 'capture' };
 }
 
 /**

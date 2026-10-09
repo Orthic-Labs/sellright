@@ -10,6 +10,9 @@ export const sellrightDefaultPaymentPolicy: PaymentPolicy = {
   async beforePaymentAttempt() {
     return { allow: true };
   },
+  async beforeCapture() {
+    return { action: 'capture' };
+  },
 };
 
 /** Installs sellright-default once. Idempotent; called by createApp() before plugins init. */

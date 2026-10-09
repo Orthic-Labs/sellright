@@ -61,6 +61,21 @@ async function moneyOrderIds(storeId: string, event: Stripe.Event): Promise<stri
     }
     case 'charge.dispute.created':
       return orderIdsForStripePayments(storeId, [piRef(obj.payment_intent)]);
+    case 'invoice.paid': {
+      // A subscription invoice settles the subscription's backing order (first cycle: Paid transition and
+      // licence issue; renewal: its payment row). The subscription row is read unlocked for planning; when
+      // none exists yet, the order named by the subscription metadata is planned (onInvoicePaid creates the
+      // row against that order). An orderless subscription or invoice returns [] and keeps the plain path.
+      const subRef = piRef(obj.subscription);
+      if (subRef) {
+        const [sub] = await withStore(storeId, (tx) => tx.select({ orderId: s.subscription.orderId }).from(s.subscription)
+          .where(and(eq(s.subscription.storeId, storeId), eq(s.subscription.stripeSubscriptionId, subRef))).limit(1));
+        if (sub) return sub.orderId ? [sub.orderId] : [];
+      }
+      const code = (obj.subscription_details as { metadata?: { orderCode?: string } } | undefined)?.metadata?.orderCode;
+      const id = code ? await orderIdByCode(storeId, code) : null;
+      return id ? [id] : [];
+    }
     default:
       return [];
   }
