@@ -16729,6 +16729,7 @@ export interface paths {
                                 previousGrandTotal: number | null;
                             } | null;
                             code: string;
+                            contactEmail: string | null;
                             currency: string;
                             customerEmail: string | null;
                             discountTotal: number;

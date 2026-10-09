@@ -46,6 +46,14 @@ export const activeStepFromState = (state?: string): number => {
  }
 };
 
+/** The address the "confirmation is on its way" line names: the order's contact email (`contactEmail`, where the API
+ *  sends order mail; guests have no customer record), then the linked account email, then the address this browser
+ *  session just entered at checkout. */
+export const resolveConfirmationEmail = (
+  order: { customerEmail?: string | null; contactEmail?: string | null },
+  sessionEmail?: string | null,
+): string | null => order.contactEmail || order.customerEmail || sessionEmail || null;
+
 /** True once the order has actually settled — gates the "clear the cart"
  *  side effect on the confirmation page. Never treat PendingPayment (still
  *  polling) or a terminal Cancelled/Declined order as settled. */

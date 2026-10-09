@@ -1,5 +1,6 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, desc, eq, gt } from 'drizzle-orm';
+import { resolveOrderRecipient } from '../orders/recipient.js';
 import { withStore } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import { customerOwnsOrder } from '../auth/order-access.js';
@@ -56,6 +57,8 @@ orders.openapi(
               placedAt: z.string().nullable(),
               shippingAddress: z.any(),
               customerEmail: z.string().nullable(),
+              /** Where order mail goes: the checkout contact email (guests), else the account email. Same receipt/owner scope as the rest of this read. */
+              contactEmail: z.string().nullable(),
               promotionCode: z.string().nullable(),
               // R18: real payment facts — distinguish pending/paid/failed/
               // cancelled from the actual gateway record, not an invented
@@ -122,6 +125,7 @@ orders.openapi(
         const [cust] = await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, o.customerId)).limit(1);
         customerEmail = cust?.email ?? null;
       }
+      const contactEmail = await resolveOrderRecipient(tx, o);
       // Lines snapshot sku/name/price at purchase time (survives the variant
       // later being edited or deleted); image/isPreOrder/shipDate resolve
       // from the current variant (order-facts.ts documents the tradeoff).
@@ -145,7 +149,7 @@ orders.openapi(
         code: o.code, state: o.state, status, paymentStatus, fulfillmentStatus, currency: o.currency,
         shippingMethodName: o.shippingMethodName, subtotal: o.subtotal, shippingTotal: o.shippingTotal, taxTotal: o.taxTotal, discountTotal: o.discountTotal, grandTotal: o.grandTotal,
         placedAt: o.placedAt ? o.placedAt.toISOString() : null,
-        shippingAddress: o.shippingAddress ?? null, customerEmail, promotionCode,
+        shippingAddress: o.shippingAddress ?? null, customerEmail, contactEmail, promotionCode,
         payments, fulfillments, lines, amountDue: due, balanceChange,
         loyalty: (() => { const l = orderLoyaltySnapshot(o.metadata); return l ? { earnPoints: l.earnPoints, redeemPoints: l.redeemPoints, pointsDiscount: l.pointsDiscount } : null; })(),
       };

@@ -9,13 +9,17 @@ import { SellRightError } from '~/sellright/client';
  * browser-only shape as `StripePaymentElement`: hosted iframes replace the
  * raw card inputs (Collect.js never lets a PAN reach this app), tokenize on
  * `confirmTrigger`, then charge via the native gateway-payment API.
+ *
+ * One Idempotency-Key per PAY submit (per tokenized card): the API replays a known key, so a key shared across
+ * submits would make every PAY after a decline return the same decline and the shopper could never pay with
+ * another card. A second trigger while a submit is still in flight (double click) is the SAME attempt and is
+ * dropped, so one click's key is never used by two requests.
  */
 export interface NMIProps {
 	code: string;
 	tokenizationKey: string;
 	mode: 'test' | 'live';
 	environment: 'sandbox' | 'production';
-	idempotencyKey: string;
 	receiptToken?: string;
 	/** Flip (increment) to trigger tokenization + charge. */
 	confirmTrigger: Signal<number>;
@@ -29,6 +33,7 @@ export const NMI = component$<NMIProps>((props) => {
 	const ready = useSignal(false);
 	const collectRef = useSignal<unknown>(null);
 	const getTokenRef = useSignal<unknown>(null);
+	const submitting = useSignal(false);
 
 	useVisibleTask$(async () => {
 		try {
@@ -52,17 +57,19 @@ export const NMI = component$<NMIProps>((props) => {
 	useVisibleTask$(async ({ track }) => {
 		const t = track(() => props.confirmTrigger.value);
 		if (!t || !ready.value) return;
+		if (submitting.value) return; // double click: the attempt already in flight is this one
 		const getToken = getTokenRef.value as (() => Promise<string>) | null;
 		if (!getToken) {
 			await props.onError$('Payment is not ready yet.');
 			return;
 		}
+		submitting.value = true;
 		await props.onProcessingChange$?.(true);
 		try {
 			const token = await getToken();
 			const result = await startGatewayPayment(props.code, 'nmi', {
 				token,
-				idempotencyKey: props.idempotencyKey,
+				idempotencyKey: crypto.randomUUID(), // a new card submit is a new attempt
 				receiptToken: props.receiptToken,
 			});
 			if (result.status === 'settled') {
@@ -74,6 +81,7 @@ export const NMI = component$<NMIProps>((props) => {
 			const message = e instanceof SellRightError ? e.message : (e instanceof Error ? e.message : 'Card payment failed.');
 			await props.onError$(message);
 		} finally {
+			submitting.value = false;
 			await props.onProcessingChange$?.(false);
 		}
 	});

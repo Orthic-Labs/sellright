@@ -7268,6 +7268,10 @@
                       "type": "string",
                       "nullable": true
                     },
+                    "contactEmail": {
+                      "type": "string",
+                      "nullable": true
+                    },
                     "promotionCode": {
                       "type": "string",
                       "nullable": true
@@ -7445,6 +7449,7 @@
                     "grandTotal",
                     "placedAt",
                     "customerEmail",
+                    "contactEmail",
                     "promotionCode",
                     "payments",
                     "fulfillments",

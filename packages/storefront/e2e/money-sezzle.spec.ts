@@ -1,7 +1,7 @@
 import { test, expect, skipExternal } from './fixtures';
 import { eventually, readRows, sentEmails, SKU, uniq, PRODUCT } from './support/api';
 import { mock, postSezzleWebhook, signedSezzleWebhook } from './support/mock';
-import { addToCart, fillShipping, goToCheckout, placeOrder, recoverFormIfWiped } from './support/flows';
+import { addToCart, fillShipping, goToCheckout, placeOrder } from './support/flows';
 import { STORE_URL } from './support/env.mjs';
 import type { AdminApi } from './support/api';
 
@@ -38,7 +38,6 @@ test.describe('#8 Sezzle', () => {
 		await expect(startButton).toContainText('$30.00');
 
 		// Clicking it asks the API for a Sezzle session, then sends the browser to Sezzle's hosted checkout.
-		await recoverFormIfWiped(page);
 		await startButton.click();
 		await page.waitForURL(/sandbox\.checkout\.sezzle\.com/, { timeout: 15_000 });
 		const redirect = new URL(page.url());
@@ -94,7 +93,6 @@ test.describe('#8 Sezzle', () => {
 		await fillShipping(page, `${uniq('sezret')}@example.net`);
 		await page.getByRole('radio', { name: /installments/i }).click();
 		const placed = await placeOrder(page);
-		await recoverFormIfWiped(page);
 		await page.getByRole('button', { name: /^continue/i }).click();
 		await page.waitForURL(/sandbox\.checkout\.sezzle\.com/, { timeout: 15_000 });
 		const session = (await mock.sezzleSessions()).find((s) => s.complete_url.includes(placed.code))!;

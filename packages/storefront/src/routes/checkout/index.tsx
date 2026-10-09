@@ -14,6 +14,7 @@ import { useCart, refreshCartStock, loadCartIfNeeded, useHasMixedPreOrder } from
 import { CartService } from '~/services/CartService';
 import { CheckoutValidationProvider, useCheckoutValidation, useCheckoutValidationActions } from '~/contexts/CheckoutValidationContext';
 import { useCheckout, type PaymentMethod } from '~/hooks/useCheckout';
+import { formatCents } from '~/hooks/checkout-total';
 import { getShopConfig, getEligibleShippingMethods } from '~/providers/shop/checkout/checkout';
 import type { ShopConfig, ShopShippingMethod } from '~/sellright/types/checkout';
 import { validateBillingSection, validateCustomerSection, validateShippingSection } from '~/utils/checkout-section-validation';
@@ -46,13 +47,14 @@ const CheckoutContent = component$(() => {
   // Which payment method the shopper has selected — defaults once shopConfig
   // resolves (see the useTask$ below): stripe > nmi > sezzle, whichever the
   // store actually has configured. gatewayConfirmTrigger is the NMI
-  // equivalent of stripeConfirmTrigger; gatewayIdempotencyKey is minted once
-  // per placeOrder() attempt and reused by the NMI/Sezzle components so a
-  // retried gateway call (not a retried checkout) replays instead of
-  // double-charging.
+  // equivalent of stripeConfirmTrigger. The NMI/Sezzle components mint their
+  // own Idempotency-Key per PAY submit — a key shared across submits would
+  // replay a declined attempt forever (see components/payment/NMI.tsx).
   const paymentMethod = useSignal<PaymentMethod>('stripe');
   const gatewayConfirmTrigger = useSignal(0);
-  const gatewayIdempotencyKey = useSignal('');
+  // Changed-total consent: the shopper's explicit OK of the server total when
+  // it differs from the estimate they saw (reset on every PLACE ORDER).
+  const totalConfirmed = useSignal(false);
   const pageLoading = useSignal(true);
   const promoExpanded = useSignal(false);
   // Loyalty points to spend on this order (0 = none) — set by LoyaltyRedeem,
@@ -129,10 +131,13 @@ const CheckoutContent = component$(() => {
     return discountedSubtotal + shipping;
   });
 
+  // Once the order exists its server-priced grandTotal is the amount that will
+  // be charged, so every total on the page shows THAT, never the estimate.
   const formattedTotal = useComputed$(() => {
-    const cents = checkoutTotalCents.value || 0;
+    const orderPlaced = srState.phase === 'paying' && srState.grandTotal > 0;
+    const cents = (orderPlaced ? srState.grandTotal : checkoutTotalCents.value) || 0;
     if (cents === 0) return null;
-    return '$' + (cents / 100).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    return formatCents(cents);
   });
 
   useVisibleTask$(async () => {
@@ -341,7 +346,7 @@ const CheckoutContent = component$(() => {
         couponCode: localCart.cart.coupon?.applied ? localCart.cart.coupon.code : undefined,
         redeemPoints: redeemPoints.value > 0 ? redeemPoints.value : undefined,
       };
-      gatewayIdempotencyKey.value = crypto.randomUUID();
+      totalConfirmed.value = false;
       // When shop-config says the store has no gateway at all, don't mint a
       // doomed Stripe PaymentIntent (it 503s and bounces the shopper back to
       // the shipping step with a raw API error). Place the order unpaid and
@@ -349,7 +354,9 @@ const CheckoutContent = component$(() => {
       // "no payment method configured" state.
       const cfg = shopConfig.value;
       const anyGatewayConfigured = !cfg || !!cfg.stripeConfigured || !!cfg.gateways?.nmi || !!cfg.gateways?.sezzle;
-      const phase = await placeOrderNative(form, anyGatewayConfigured ? paymentMethod.value : null);
+      // The total on screen right now is what the shopper agreed to; the order
+      // comes back server-priced and the PAY step gates on any difference.
+      const phase = await placeOrderNative(form, anyGatewayConfigured ? paymentMethod.value : null, checkoutTotalCents.value || 0);
       if (phase === 'paid') {
         showProcessingModal.value = false;
         isOrderProcessing.value = false;
@@ -365,6 +372,12 @@ const CheckoutContent = component$(() => {
           document.getElementById('payment-method-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }, 80);
         return;
+      }
+      if (srState.stockConflict) {
+        // Someone else took the stock between this shopper's cart and PLACE ORDER:
+        // re-read the live cart so the line stops saying "Only N left" and shows
+        // its real (sold-out) state. Live read — nothing is cached.
+        await refreshCartStock(localCart);
       }
       throw new Error(srState.error || 'Checkout failed. Please try again.');
     } catch (error) {
@@ -407,7 +420,7 @@ const CheckoutContent = component$(() => {
       isOrderProcessing={isOrderProcessing}
       localCart={localCart}
       gatewayConfirmTrigger={gatewayConfirmTrigger}
-      gatewayIdempotencyKey={gatewayIdempotencyKey}
+      totalConfirmed={totalConfirmed}
       onGatewaySuccess$={onGatewaySuccess$}
       onPaymentError$={onPaymentError$}
       onPaymentProcessingChange$={onPaymentProcessingChange$}

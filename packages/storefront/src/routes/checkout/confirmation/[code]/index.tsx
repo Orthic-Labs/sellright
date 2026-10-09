@@ -5,7 +5,8 @@ import { getOrder, verifyGatewayPayment } from '~/providers/shop/checkout/checko
 import type { OrderSummary, OrderAddressSnapshot } from '~/sellright/types/checkout';
 import { formatPrice } from '~/utils';
 import { OptimizedImage } from '~/components/ui';
-import { TIMELINE, activeStepFromState, parseLineName, isOrderSettled, isOrderTerminalUnpaid, assetUrl, readOrderUntilSettled } from './confirmation-data';
+import { TIMELINE, activeStepFromState, parseLineName, isOrderSettled, isOrderTerminalUnpaid, assetUrl, readOrderUntilSettled, resolveConfirmationEmail } from './confirmation-data';
+import { APP_STATE } from '~/constants';
 import { createSEOHead } from '~/utils/seo';
 import { useStoreIdentityLoader } from '~/routes/layout';
 
@@ -23,6 +24,7 @@ const ConfirmationPage = component$(() => {
 	const loc = useLocation();
 	const { code } = loc.params;
 	const localCart = useContext(CartContextId);
+	const appState = useContext(APP_STATE);
 	const store = useStore<{
 		order?: OrderSummary;
 		loading: boolean;
@@ -144,6 +146,7 @@ const ConfirmationPage = component$(() => {
 				const activeStep = activeStepFromState(order.state);
 				const addr = order.shippingAddress as OrderAddressSnapshot | null | undefined;
 				const fullName = addr?.fullName || '';
+				const contactEmail = resolveConfirmationEmail(order, appState.customer?.emailAddress);
 
 				return (
 				<div class="max-w-3xl mx-auto pt-8 sm:pt-12 pb-24 px-6">
@@ -160,9 +163,9 @@ const ConfirmationPage = component$(() => {
 						<p class="text-[#5b5a56] text-sm mb-1">
 							Your order <span class="font-medium text-[var(--color-ink)]">#{order.code}</span> is confirmed
 						</p>
-						{order.customerEmail && (
+						{contactEmail && (
 							<p class="text-[#7a7873] text-xs">
-								A confirmation is on its way to {order.customerEmail}
+								A confirmation is on its way to {contactEmail}
 							</p>
 						)}
 					</div>
@@ -262,8 +265,8 @@ const ConfirmationPage = component$(() => {
 						<div>
 							<h3 class="font-mono text-[11px] tracking-[0.14em] uppercase text-[#5b5a56] mb-2">Contact</h3>
 							<p class="text-sm text-[var(--color-ink)]">{fullName || '—'}</p>
-							{order.customerEmail && (
-								<p class="text-xs text-[#5b5a56] mt-0.5">{order.customerEmail}</p>
+							{contactEmail && (
+								<p class="text-xs text-[#5b5a56] mt-0.5">{contactEmail}</p>
 							)}
 						</div>
 

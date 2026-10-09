@@ -1,5 +1,6 @@
 import { $, useStore } from '@qwik.dev/core';
 import {
+	isOutOfStockConflict,
 	placeOrder as srPlaceOrder,
 	createPaymentIntent as srCreatePI,
 	settleZeroDueOrder as srSettleZeroDue,
@@ -42,6 +43,10 @@ export const useCheckout = () => {
 		receiptToken: '' as string,
 		clientSecret: '' as string,
 		grandTotal: 0,
+		/** Cents the shopper saw on the page when they pressed PLACE ORDER (0 = no total was shown) — the changed-total gate compares the order's grandTotal against it. */
+		shownTotal: 0,
+		/** The last PLACE ORDER was refused 409 OUT_OF_STOCK — the caller must re-read live stock for the cart. */
+		stockConflict: false,
 		method: null as PaymentMethod | null,
 		error: null as string | null,
 	});
@@ -54,9 +59,11 @@ export const useCheckout = () => {
 	 * so the caller can mount the right payment UI ('paying') or navigate
 	 * straight to confirmation ('paid').
 	 */
-	const placeOrder = $(async (form: CheckoutForm, method: PaymentMethod | null = 'stripe'): Promise<CheckoutPhase> => {
+	const placeOrder = $(async (form: CheckoutForm, method: PaymentMethod | null = 'stripe', shownTotalCents = 0): Promise<CheckoutPhase> => {
 		state.phase = 'placing';
 		state.error = null;
+		state.stockConflict = false;
+		state.shownTotal = shownTotalCents;
 		checkoutState.isLoading = true;
 		try {
 			const created = await srPlaceOrder(form);
@@ -93,6 +100,7 @@ export const useCheckout = () => {
 		} catch (error) {
 			const msg = error instanceof Error ? error.message : 'Checkout failed. Please try again.';
 			state.error = msg;
+			state.stockConflict = isOutOfStockConflict(error);
 			checkoutState.error = msg;
 			state.phase = 'error';
 			return 'error';

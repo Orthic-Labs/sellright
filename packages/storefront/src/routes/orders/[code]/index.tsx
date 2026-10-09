@@ -57,9 +57,6 @@ export default component$(() => {
 		processing: boolean;
 	}>({ loading: true, justPaid: false, method: '', formError: '', processing: false });
 	const nmiTrigger = useSignal(0);
-	// One idempotency key per payment attempt: the API replays the SAME attempt
-	// for a repeated key, so a retry after a decline must carry a fresh one.
-	const attemptKey = useSignal('');
 
 	// Re-read the order (and gateway config once). Sezzle can send the shopper
 	// back here with ?paymentAttempt=<id>: verify that attempt first so a
@@ -103,7 +100,6 @@ export default component$(() => {
 	useVisibleTask$(async ({ cleanup }) => {
 		const ac = new AbortController();
 		cleanup(() => ac.abort());
-		attemptKey.value = crypto.randomUUID();
 		await load(false, ac.signal);
 	});
 
@@ -115,7 +111,6 @@ export default component$(() => {
 	});
 	const onError = $((message: string) => {
 		state.formError = message;
-		attemptKey.value = crypto.randomUUID(); // a failed attempt is never replayed
 	});
 	const onProcessing = $((p: boolean) => {
 		state.processing = p;
@@ -265,7 +260,6 @@ export default component$(() => {
 											tokenizationKey={nmi.tokenizationKey}
 											mode={nmi.mode}
 											environment={nmi.environment}
-											idempotencyKey={attemptKey.value}
 											receiptToken={rt}
 											confirmTrigger={nmiTrigger}
 											onError$={onError}
@@ -279,7 +273,6 @@ export default component$(() => {
 											data-testid="balance-pay-button"
 											onClick$={() => {
 												state.formError = '';
-												attemptKey.value = crypto.randomUUID();
 												nmiTrigger.value++;
 											}}
 										>
@@ -290,7 +283,6 @@ export default component$(() => {
 								{state.method === 'sezzle' && (
 									<Sezzle
 										code={order.code}
-										idempotencyKey={attemptKey.value}
 										receiptToken={rt}
 										label={`Continue to Sezzle · ${formatPrice(due, currency)}`}
 										disabled={state.processing}

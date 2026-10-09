@@ -49,6 +49,16 @@ const resetAttemptKey = (): void => {
 	checkoutAttemptKey = null;
 };
 
+/** True when POST /checkout was refused because a line's stock is gone (409 OUT_OF_STOCK). `placeOrder` rethrows its
+ *  failures wrapped in a plain Error whose `cause` is the API error, so look at both. The caller must then re-read
+ *  the live cart: its mirror still holds the stock it showed before the sale that emptied the shelf. */
+export const isOutOfStockConflict = (error: unknown): boolean => {
+	for (const candidate of [error, (error as { cause?: unknown } | null)?.cause]) {
+		if (candidate instanceof SellRightError && candidate.status === 409 && candidate.code === 'OUT_OF_STOCK') return true;
+	}
+	return false;
+};
+
 /** True for the 409 shapes the cart itself produced (stale/converted/merged/
  *  revision_required) — as opposed to an unrelated 409 (e.g. out-of-stock or
  *  shipping-unavailable) that also carries a `cart` snapshot for display but

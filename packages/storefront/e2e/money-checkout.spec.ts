@@ -83,13 +83,10 @@ test.describe('#1 guest checkout, NMI card', () => {
 		expect(await sentConfirmationCount(api, email)).toBe(0);
 	});
 
-	// PRODUCT BUG (found by this suite, storefront side): the Idempotency-Key for the gateway call is minted once per
-	// PLACE ORDER (routes/checkout/index.tsx gatewayIdempotencyKey) and reused by every PAY click. The API replays the
-	// attempt for a known key, so after a decline the PAY button can only ever return the same decline — the shopper
-	// has to start over. Expected: PAY with another card pays. Remove test.fail()
-	// when the NMI component mints a fresh key per tokenization.
-	test('KNOWN BUG: after a decline, PAY with another card should pay (it replays the declined attempt)', async ({ apiProxyPage: page, api }) => {
-		test.fail(true, 'gatewayIdempotencyKey is reused across PAY clicks, so the API replays the decline');
+	// Regression (was a product bug found by this suite): the Idempotency-Key for the gateway call used to be minted once
+	// per PLACE ORDER and reused by every PAY click, so the API replayed the declined attempt and the shopper could never
+	// pay with another card. Each PAY submit now carries its own key.
+	test('after a decline, PAY with another card pays (each PAY submit is its own gateway attempt)', async ({ apiProxyPage: page, api }) => {
 		await addToCart(page, PRODUCT.mug.slug);
 		await goToCheckout(page);
 		await fillShipping(page, `${uniq('retry')}@example.net`);
@@ -229,14 +226,10 @@ test.describe('#3 changed-total consent gate', () => {
 		}
 	});
 
-	// PRODUCT GAP (found by this suite, storefront side): once the order exists the PAY step keeps showing the client's own
-	// estimate (subtotal - discount + re-quoted shipping, routes/checkout/index.tsx checkoutTotalCents) instead of the
-	// order's grandTotal (useCheckout keeps it in state.grandTotal but nothing renders it). When the two differ — a stale
-	// quote, tax, any server-side adjustment — the shopper is charged an amount they were never shown and there is no
-	// "your total changed, confirm" step. Expected: after PLACE ORDER the button/summary show the order total, and a total
-	// that moved requires an explicit second confirmation. Remove test.fail() when the PAY step renders the order total.
-	test('KNOWN BUG: when the order total differs from the estimate, the PAY step shows the order total before the shopper pays', async ({ apiProxyPage: page, api }) => {
-		test.fail(true, 'the PAY button renders the client estimate, not the order total');
+	// Regression (was a product gap found by this suite): once the order exists the PAY step used to keep showing the
+	// client's own estimate instead of the order's grandTotal, and a total that moved needed no confirmation. Now the
+	// button/summary show the order total, and charging waits for an explicit confirmation of the old-vs-new amounts.
+	test('when the order total differs from the estimate, the PAY step shows the order total and waits for the shopper to confirm it', async ({ apiProxyPage: page, api }) => {
 		const flatId = await staleShippingQuote(page, api);
 		try {
 			await addToCart(page, PRODUCT.shirt.slug);
@@ -245,6 +238,14 @@ test.describe('#3 changed-total consent gate', () => {
 			const placed = await placeOrder(page);
 			expect(placed.grandTotal).toBe(3300);
 			await expect(payButton(page)).toContainText('$33.00', { timeout: 5_000 });
+			// The old and the new amount are spelled out, and PAY stays locked until the shopper confirms the new one.
+			const notice = page.getByTestId('total-changed');
+			await expect(notice).toContainText('$30.00');
+			await expect(notice).toContainText('$33.00');
+			await expect(payButton(page)).toBeDisabled();
+			expect((await mock.nmiCalls()).filter((c) => c.type === 'sale')).toHaveLength(0);
+			await page.getByRole('checkbox', { name: /i confirm i will be charged \$33\.00/i }).check();
+			await expect(payButton(page)).toBeEnabled();
 		} finally {
 			await api.patch(`/shipping-methods/${flatId}`, { calculator: { flat: 500 } });
 		}

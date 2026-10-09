@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 vi.mock('~/utils/seo', () => ({ createSEOHead: vi.fn() }));
-import { activeStepFromState, parseLineName, isOrderSettled, isOrderTerminalUnpaid, readOrderUntilSettled, sleepAbortable } from './confirmation-data';
+import { activeStepFromState, parseLineName, isOrderSettled, isOrderTerminalUnpaid, readOrderUntilSettled, resolveConfirmationEmail, sleepAbortable } from './confirmation-data';
 
 describe('SellRight confirmation progress', () => {
   it.each([
@@ -124,5 +124,20 @@ describe('sleepAbortable', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('resolveConfirmationEmail', () => {
+  it('prefers the order contact email (where order mail is sent), then the account email', () => {
+    expect(resolveConfirmationEmail({ customerEmail: 'acct@example.net', contactEmail: 'c@example.net' }, 'typed@example.net')).toBe('c@example.net');
+    expect(resolveConfirmationEmail({ customerEmail: 'acct@example.net', contactEmail: null }, 'typed@example.net')).toBe('acct@example.net');
+  });
+  it('a guest order (no customer record) falls back to the order contact email, then the session email', () => {
+    expect(resolveConfirmationEmail({ customerEmail: null, contactEmail: 'guest@example.net' }, 'typed@example.net')).toBe('guest@example.net');
+    expect(resolveConfirmationEmail({ customerEmail: null }, 'typed@example.net')).toBe('typed@example.net');
+  });
+  it('is null when nothing names an address', () => {
+    expect(resolveConfirmationEmail({ customerEmail: null }, '')).toBeNull();
+    expect(resolveConfirmationEmail({}, undefined)).toBeNull();
   });
 });

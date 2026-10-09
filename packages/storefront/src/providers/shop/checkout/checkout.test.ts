@@ -20,7 +20,7 @@ vi.mock('~/services/CartService', () => ({
 	},
 }));
 
-import { placeOrder, settleZeroDueOrder, getOrder, createPaymentIntent, startGatewayPayment, verifyGatewayPayment } from './checkout';
+import { isOutOfStockConflict, placeOrder, settleZeroDueOrder, getOrder, createPaymentIntent, startGatewayPayment, verifyGatewayPayment } from './checkout';
 
 // `sellright()` (openapi-fetch + the transport middleware in
 // src/sellright/client.ts) invokes the platform `fetch` as `fetch(request)`
@@ -126,6 +126,16 @@ describe('placeOrder → POST /v1/shop/checkout', () => {
 		await placeOrder(form);
 		const keys = calls.map((c) => c.headers.get('idempotency-key'));
 		expect(keys[1]).toBe(keys[0]);
+	});
+
+	it('marks an OUT_OF_STOCK refusal (and only that) so the caller re-reads live stock', async () => {
+		enqueue(respond(409, { error: { code: 'OUT_OF_STOCK', message: 'SKU1 is out of stock' }, skus: ['SKU1'] }), respond(409, { error: { code: 'CART_STALE', message: 'cart changed' }, reason: 'payload_mismatch' }));
+		const outOfStock = await placeOrder(form).catch((e) => e);
+		expect(isOutOfStockConflict(outOfStock)).toBe(true);
+		const other = await placeOrder(form).catch((e) => e);
+		expect(isOutOfStockConflict(other)).toBe(false);
+		expect(isOutOfStockConflict(new Error('SKU1 is out of stock'))).toBe(false);
+		expect(isOutOfStockConflict(undefined)).toBe(false);
 	});
 
 	it('stale-cart conflict adopts the server snapshot and tells the shopper to review', async () => {

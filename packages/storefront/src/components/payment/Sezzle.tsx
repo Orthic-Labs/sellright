@@ -9,10 +9,12 @@ import { SellRightError } from '~/sellright/client';
  * shopper returns to `/checkout/confirmation/{code}?paymentAttempt=...`
  * (see `session-input.ts`'s `completeUrl`), where the confirmation route
  * calls `verifyGatewayPayment` to reconcile the session.
+ *
+ * Each click that starts a session mints its own Idempotency-Key (a key reused across clicks would replay a failed
+ * start forever); `isStarting` makes a double click the same single attempt.
  */
 export interface SezzleProps {
 	code: string;
-	idempotencyKey: string;
 	receiptToken?: string;
 	label?: string;
 	disabled?: boolean;
@@ -29,7 +31,7 @@ export const Sezzle = component$<SezzleProps>((props) => {
 		await props.onProcessingChange$?.(true);
 		try {
 			const result = await startGatewayPayment(props.code, 'sezzle', {
-				idempotencyKey: props.idempotencyKey,
+				idempotencyKey: crypto.randomUUID(),
 				receiptToken: props.receiptToken,
 			});
 			if (result.checkoutUrl) {

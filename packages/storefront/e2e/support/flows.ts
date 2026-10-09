@@ -22,27 +22,7 @@ export async function goToCheckout(page: Page): Promise<void> {
 	await expect(page.getByRole('heading', { name: /shipping details/i })).toBeVisible();
 }
 
-const entered = new WeakMap<Page, { email: string; who: { first: string; last: string } }>();
-
-/**
- * PRODUCT BUG (intermittent, ~1 in 2 runs here): right after PLACE ORDER creates the order, the checkout page can
- * re-initialise its customer section — email / first / last name go blank, the form turns invalid and the payment
- * section collapses behind "Complete your shipping address to see payment options", leaving PAY unclickable even though
- * the order exists (observed as the cart conversion re-render racing the follow-up shipping-quote fetch). A shopper
- * would re-enter their details; so does this helper, once, so the money path under test can continue. The order is
- * unchanged by it (same code, same total). Remove when the checkout keeps the form through order creation.
- */
-export async function recoverFormIfWiped(page: Page): Promise<boolean> {
-	const kept = entered.get(page);
-	if (!kept) return false;
-	await page.waitForTimeout(700); // let the post-order re-render land
-	if (await page.getByLabel(/email address/i).inputValue()) return false;
-	await fillShipping(page, kept.email, kept.who);
-	return true;
-}
-
 export async function fillShipping(page: Page, email: string, who = { first: 'Ada', last: 'Lovelace' }): Promise<void> {
-	entered.set(page, { email, who });
 	// The form hydrates (and the signed-in lookup resolves) a beat after it first paints, and a re-render in that window
 	// clears typed values — so fill, then prove the values stuck and the form validates, retrying the whole fill otherwise.
 	await expect(async () => {
@@ -94,8 +74,13 @@ export async function applyPromoAtCheckout(page: Page, code: string): Promise<vo
 	await page.getByRole('button', { name: /^apply$/i }).click();
 }
 
-/** Click PAY (after making sure the form survived order creation, see recoverFormIfWiped). */
+/**
+ * Click PAY. When the order total moved between the estimate the shopper saw and the server's price, the PAY step asks
+ * for an explicit confirmation of the new total first (checkbox + message); a shopper ticks it, so this does too.
+ */
 export async function clickPay(page: Page): Promise<void> {
-	await recoverFormIfWiped(page);
+	await payButton(page).waitFor(); // the PAY step and any changed-total notice render in the same pass
+	const consent = page.getByRole('checkbox', { name: /i confirm i will be charged/i });
+	if (await consent.isVisible().catch(() => false)) await consent.check();
 	await payButton(page).click();
 }
