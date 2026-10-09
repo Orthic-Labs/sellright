@@ -26,6 +26,15 @@ export const pay = new OpenAPIHono();
  *  edited order rather than an unpaid order. */
 const isBalanceState = (state: string) => state === 'Paid' || state === 'PartiallyRefunded';
 
+/** Settled tenders on an order — the per-attempt namespace for a balance payment
+ *  (each settled balance moves it on, so the next edit's balance is a fresh
+ *  attempt for both our claim and Stripe's PaymentIntent idempotency). */
+async function settledTenderCount(tx: Parameters<typeof ownedOrder>[0], orderId: string): Promise<number> {
+  const [n] = await tx.select({ n: sql<number>`count(*)::int` }).from(s.payment)
+    .where(and(eq(s.payment.orderId, orderId), eq(s.payment.state, 'Settled')));
+  return n?.n ?? 0;
+}
+
 // POST /v1/shop/orders/{code}/pay — take payment for an order, idempotent.
 // At launch Stripe is the only shopper-capable gateway. Offline/internal
 // tenders (manual, COD, gift_card) have separate lifecycle/accounting semantics
@@ -94,10 +103,12 @@ pay.openapi(
         // A balance payment is a SECOND payment on the order, so the default
         // per-order claim (already taken by the first payment) must not
         // swallow it: key it on the number of settled tenders so far.
-        if (balanceState && !idemKey) {
-          const [n] = await tx.select({ n: sql<number>`count(*)::int` }).from(s.payment)
-            .where(and(eq(s.payment.orderId, order.id), eq(s.payment.state, 'Settled')));
-          claimKey = `${baseClaimKey}:balance:${n?.n ?? 0}`;
+        // The namespace applies to a client-supplied idempotency key too: a
+        // stable key (one per order page) would otherwise swallow the second
+        // balance. Replays of the SAME attempt keep the same count, so they
+        // still dedupe; a settled balance moves the count on.
+        if (balanceState) {
+          claimKey = `${baseClaimKey}:balance:${await settledTenderCount(tx, order.id)}`;
         }
         const [existing] = await tx
           .select({ id: s.processedEvent.id })
@@ -146,7 +157,11 @@ pay.openapi(
           result,
           amount: prepared.amountDue,
         });
-        if (applied.orderState === 'Paid') return { kind: 'ok', state: 'Paid', payment: 'Settled' };
+        // A balance payment lands on an order that is ALREADY Paid, so the order
+        // state alone says nothing about this attempt: report Settled only when
+        // THIS tender settled (a declined/failed balance attempt must not read
+        // as success to the storefront).
+        if (applied.orderState === 'Paid' && applied.paymentState === 'Settled') return { kind: 'ok', state: 'Paid', payment: 'Settled' };
         if ((result.state === 'Declined' || result.state === 'Failed') && !idemKey) {
           await tx.delete(s.processedEvent).where(and(eq(s.processedEvent.id, claimKey), eq(s.processedEvent.type, 'payment')));
         }
@@ -199,10 +214,13 @@ pay.openapi(
       // MONEY-3: mint the intent for what's actually still owed, never the raw
       // order total, so an existing settled tender cannot be charged twice.
       const amountDue = await amountDueForOrder(tx, st.id, o.id, o.grandTotal);
-      return { order: o, amountDue };
+      // A balance (Paid / PartiallyRefunded) is its own attempt per settled
+      // tender; see the key comment below.
+      const balanceTenders = isBalanceState(o.state) ? await settledTenderCount(tx, o.id) : null;
+      return { order: o, amountDue, balanceTenders };
     });
     if (!prepared) return errJson(c, 404, 'ORDER_NOT_FOUND', 'order not found');
-    const { order, amountDue } = prepared;
+    const { order, amountDue, balanceTenders } = prepared;
     if (order.state !== 'PendingPayment' && !isBalanceState(order.state)) return errJson(c, 409, 'ORDER_NOT_PAYABLE', 'order is not payable', { extra: { state: order.state } });
     if (amountDue <= 0) {
       // A Paid order with nothing owed is simply not payable (no balance); an
@@ -219,11 +237,18 @@ pay.openapi(
     // Stripe's 24h idempotency replays a PI we already cancelled (sweeper /
     // admin cancel): a cancelled PI can never be confirmed, so mint a fresh
     // one under a suffixed key (pi:{orderId}:{amountDue}:{n}).
+    // Order editing: a balance PI is keyed on the settled-tender count too. A
+    // later edit can raise the total by the SAME amount again; keyed on
+    // (order, amount) alone Stripe would replay the earlier, already-succeeded
+    // PI inside its 24h window and the shopper could never pay the new balance.
+    // A replay that resolves to an already-settled attempt is skipped the same
+    // way a cancelled one is.
+    const base = balanceTenders === null ? `pi:${order.id}:${amountDue}` : `pi:${order.id}:${amountDue}:bal${balanceTenders}`;
     for (let n = 0; n < 5; n++) {
-      const key = n === 0 ? `pi:${order.id}:${amountDue}` : `pi:${order.id}:${amountDue}:${n}`;
+      const key = n === 0 ? base : `${base}:${n}`;
       const intent = await createPaymentIntent({ orderCode: code, storeId: st.id, amount: amountDue, currency: order.currency, mode, idempotencyKey: key });
       const tracked = await withStore(st.id, (tx) => trackStripeIntent(tx, st.id, { orderId: order.id, intentId: intent.intentId, amount: amountDue, currency: order.currency, mode }));
-      if (tracked.status !== 'cancelled') return c.json(intent, 200);
+      if (tracked.status !== 'cancelled' && !(balanceTenders !== null && tracked.status === 'settled')) return c.json(intent, 200);
     }
     return errJson(c, 409, 'ORDER_NOT_PAYABLE', 'order is not payable', { extra: { state: order.state } });
   },
