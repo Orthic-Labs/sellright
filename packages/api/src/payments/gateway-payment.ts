@@ -248,8 +248,10 @@ async function reconcileRefundAttempt(storeId: string, id: string) {
   return withAdvisoryLock('refund:' + storeId + ':' + first.attempt.orderId, async () => {
     // Re-read inside the lock — a concurrent finalize (request retry or
     // webhook) may have settled the reservation while we waited.
+    // Unlocked re-read: the row lock is taken by the order set below (an attempt lock here
+    // would precede the order lock, STOREKIT §5.1).
     const fresh = await withStore(storeId, async tx => {
-      const [attempt] = await tx.select().from(s.paymentAttempt).where(eq(s.paymentAttempt.id, id)).limit(1).for('update');
+      const [attempt] = await tx.select().from(s.paymentAttempt).where(eq(s.paymentAttempt.id, id)).limit(1);
       const [refund] = await tx.select().from(s.refund).where(eq(s.refund.attemptId, id)).limit(1);
       const [payment] = refund ? await tx.select().from(s.payment).where(eq(s.payment.id, refund.paymentId)).limit(1) : [];
       // Provider refs already claimed by OTHER refund rows on this payment —
@@ -272,7 +274,7 @@ async function reconcileRefundAttempt(storeId: string, id: string) {
       result = { state: 'Pending', providerRef: refund.providerRef ?? attempt.providerRef,
         errorMessage: 'Provider verification unavailable' };
     }
-    const { finalized, storeSlug } = await withStore(storeId, async tx => {
+    const { finalized, storeSlug } = await withLockedSet(storeId, { kind: 'order', orderId: attempt.orderId }, async tx => {
       const view = await finalizeRefund(tx, storeId, id, result);
       const [store] = await tx.select({ slug: s.store.slug }).from(s.store).where(eq(s.store.id, storeId)).limit(1);
       return { finalized: view, storeSlug: store?.slug };
