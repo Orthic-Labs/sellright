@@ -21,7 +21,7 @@ import { z } from '@hono/zod-openapi';
 import { calculateOrderTotals, type OrderTotals, type Promotion } from '../money/totals.js';
 
 export class OrderEditError extends Error {
-  constructor(public status: 400 | 404 | 409, public code: string, message: string, public extra?: Record<string, unknown>) {
+  constructor(public status: 400 | 404 | 409 | 503, public code: string, message: string, public extra?: Record<string, unknown>) {
     super(message);
     this.name = 'OrderEditError';
   }

@@ -20,6 +20,22 @@ vi.mock('../manifest/stock-hook.js', () => ({
   onStockChanged: (storeSlug: string) => { onStockChangedCalls.push(storeSlug); },
 }));
 
+// STOREKIT §5.4 (F1): one order's lock set can be made unstable on demand, to prove
+// the job skips that order instead of failing the pass.
+const lockHook = vi.hoisted(() => ({ failFor: null as string | null }));
+vi.mock('../db/locks.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../db/locks.js')>();
+  return {
+    ...actual,
+    withLockedSet: (...args: Parameters<typeof actual.withLockedSet>) => {
+      const subject = args[1];
+      const orderId = !Array.isArray(subject) && (subject as { kind?: string }).kind === 'order' ? (subject as { orderId: string }).orderId : null;
+      if (orderId && orderId === lockHook.failFor) return Promise.reject(new actual.LockSetUnstable());
+      return actual.withLockedSet(...args);
+    },
+  };
+});
+
 import { sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
@@ -166,5 +182,22 @@ describe('releaseStaleAllocations concurrency (OPS-2)', () => {
     // returns, so it's safe to fire the hook synchronously afterwards.
     await releaseStaleAllocations({ apply: true, ttlMin: 60 });
     expect(onStockChangedCalls).toEqual([SLUG]);
+  });
+
+  it('skips an order whose lock set is unstable and still releases the rest of the batch', async () => {
+    await seedStoreAndStock(10);
+    const blocked = await seedStaleOrder('STALE-SKIP-A', 5);
+    await seedStaleOrder('STALE-SKIP-B', 5);
+    lockHook.failFor = blocked;
+    try {
+      const r = await releaseStaleAllocations({ apply: true, ttlMin: 60 });
+      expect(r.skipped).toBe(1);
+      expect(r.orders).toBe(1);
+      expect(r.released).toBe(5);
+      expect(await orderStates()).toEqual(['PendingPayment', 'Cancelled']);
+      expect(await stockAllocated()).toBe(5);
+    } finally {
+      lockHook.failFor = null;
+    }
   });
 });
