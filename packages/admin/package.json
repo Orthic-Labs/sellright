@@ -13,10 +13,17 @@
     "build": "tsc -b && vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "preview": "vite preview --port 4200 --host"
+    "preview": "vite preview --port 4200 --host",
+    "e2e:build": "SELLRIGHT_BUILD_SUFFIX=e2e vite build",
+    "test:e2e": "pnpm run e2e:build && playwright test"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.103.1",
+    "@tiptap/core": "3.31.3",
+    "@tiptap/extension-image": "3.31.3",
+    "@tiptap/pm": "3.31.3",
+    "@tiptap/react": "3.31.3",
+    "@tiptap/starter-kit": "3.31.3",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -24,6 +31,7 @@
     "react-router-dom": "^7.18.4"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.7",
     "@vitejs/plugin-react": "^4.7.0",

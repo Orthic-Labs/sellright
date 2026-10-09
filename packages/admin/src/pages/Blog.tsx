@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2 } from 'lucide-react';
 import { api } from '../api';
@@ -6,6 +6,9 @@ import { useAuth } from '../auth';
 import { Loading, ErrorNote, PageHeader, EmptyState, Badge, Spinner } from '../components/ui';
 import { useConfirmDialog } from '../components/ConfirmDialog';
 import { date } from '../lib/format';
+
+// Editor (TipTap/ProseMirror) is its own chunk, fetched only when a post is opened.
+const BlogEditor = lazy(() => import('../components/blog-editor/BlogEditor'));
 
 interface Post { id: string; title: string; slug: string; isPublished: boolean; publishDate: string | null; authorName: string | null; }
 interface Draft { id?: string; title: string; body: string; excerpt: string; isPublished: boolean; }
@@ -37,7 +40,12 @@ export default function Blog() {
         <div className="card p-4 mb-5 space-y-3 max-w-3xl">
           <div><label className="label">Title</label><input className="input" value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} /></div>
           <div><label className="label">Excerpt</label><input className="input" value={draft.excerpt} onChange={(e) => setDraft({ ...draft, excerpt: e.target.value })} /></div>
-          <div><label className="label">Body (HTML)</label><textarea className="input min-h-[240px] font-mono text-sm" value={draft.body} onChange={(e) => setDraft({ ...draft, body: e.target.value })} /></div>
+          <div>
+            <label className="label">Body</label>
+            <Suspense fallback={<Loading label="Loading editor" />}>
+              <BlogEditor key={draft.id ?? 'new'} value={draft.body} onChange={(body) => setDraft((d) => (d ? { ...d, body } : d))} />
+            </Suspense>
+          </div>
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" className="h-4 w-4 accent-brand" checked={draft.isPublished} onChange={(e) => setDraft({ ...draft, isPublished: e.target.checked })} /> Published</label>
           {save.error && <ErrorNote message={(save.error as Error).message} />}
           <div className="flex gap-2">
