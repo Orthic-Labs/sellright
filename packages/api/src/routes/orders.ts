@@ -94,7 +94,7 @@ orders.openapi(
     // read. Payment state only — the read below is always live.
     const pre = await withStore(st.id, async (tx) => {
       const [o] = await tx.select({ id: s.order.id, state: s.order.state, receiptToken: s.order.receiptToken, customerId: s.order.customerId, metadata: s.order.metadata })
-        .from(s.order).where(eq(s.order.code, code)).limit(1);
+        .from(s.order).where(and(eq(s.order.code, code), eq(s.order.storeId, st.id))).limit(1);
       if (!o || (o.state !== 'PendingPayment' && o.state !== 'Cancelled')) return null;
       let ok = tokensMatch(rt, o.receiptToken);
       if (!ok && token && o.customerId) ok = customerOwnsOrder(await resolveCustomer(tx, token), o);
@@ -105,7 +105,7 @@ orders.openapi(
         .catch((e: unknown) => log.warn('stripe reconcile on order read failed', { err: e instanceof Error ? e.message : String(e), code }));
     }
     const out = await withStore(st.id, async (tx) => {
-      const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
+      const [o] = await tx.select().from(s.order).where(and(eq(s.order.code, code), eq(s.order.storeId, st.id))).limit(1);
       if (!o) return null;
       // Grant: receipt-token match OR authed ownership. Else treat as not-found.
       let granted = tokensMatch(rt, o.receiptToken);

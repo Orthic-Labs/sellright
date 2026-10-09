@@ -39,7 +39,7 @@ overrides:
   # GHSA-2v37-7h3g-55p8 — sanitize-html/postcss permits vulnerable nanoid 3.x.
   nanoid: ^3.3.18
   # brace-expansion via @typescript-eslint devDependency â€” fix >= 5.0.8.
-  brace-expansion: ^5.0.8
+  brace-expansion: ^5.0.12
   # GHSA-w5hq-g745-h8pq — exceljs pins uuid <11.1.1; 11.x keeps the CJS build exceljs requires.
   uuid: ^11.1.1
   # GHSA-f88m-g3jw-g9cj / GHSA-rgj7-g3m4-5g8c / GHSA-g89c-p67h-r497 / GHSA-2jg2-4ch7-h545 —
@@ -49,4 +49,10 @@ overrides:
   # vite-imagetools -> sharp<0.35 into `pnpm audit --prod` scope as a separate,
   # older resolution. Force every sharp in the tree to the patched version
   # instead of only the direct one.
-  sharp: ^0.35.4
+  sharp: ^0.35.5
+  # GHSA-p98j-92pf-mc4p / GHSA-6688-9rhm-gjv2 — isomorphic-dompurify pins dompurify <=3.4.15.
+  dompurify: ^3.4.16
+  # source-map-js <1.2.2 (high) via postcss/vite in the storefront prod tree.
+  source-map-js: ^1.2.2
+  # shell-quote <1.11.0 (critical) via a transitive prod dependency.
+  shell-quote: ^1.11.0

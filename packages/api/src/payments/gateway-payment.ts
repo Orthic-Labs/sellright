@@ -28,7 +28,11 @@ export function receiptMatches(given: string | undefined, expected: string | nul
   return a.length === b.length && timingSafeEqual(a, b);
 }
 export async function ownedOrder(tx: Tx, code: string, receipt?: string, customerSession?: string | null) {
-  const [order] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
+  // Explicit tenant predicate as well as RLS: a BYPASSRLS/superuser pool must
+  // still never resolve another store's order by code + receipt token.
+  const [order] = await tx.select().from(s.order)
+    .where(and(eq(s.order.code, code), sql`${s.order.storeId} = nullif(current_setting('app.current_store', true), '')::uuid`))
+    .limit(1).for('update');
   if (!order || order.deletedAt) throw new GatewayPaymentError(404, 'Order not found');
   let granted = receiptMatches(receipt, order.receiptToken);
   if (!granted && customerSession && order.customerId) {

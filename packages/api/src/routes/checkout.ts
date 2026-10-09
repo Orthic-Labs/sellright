@@ -817,10 +817,10 @@ checkout.openapi(createRoute({
   const { token } = c.req.valid('param');
   const out = await withStore(st.id, async tx => {
     const [row] = await tx.select({ status: s.cart.status, orderId: s.cart.convertedOrderId })
-      .from(s.cart).where(eq(s.cart.token, token)).limit(1);
+      .from(s.cart).where(and(eq(s.cart.token, token), eq(s.cart.storeId, st.id))).limit(1);
     if (row?.status !== 'converted' || !row.orderId) return null;
     const [order] = await tx.select().from(s.order)
-      .where(and(eq(s.order.id, row.orderId), isNull(s.order.deletedAt))).limit(1);
+      .where(and(eq(s.order.id, row.orderId), eq(s.order.storeId, st.id), isNull(s.order.deletedAt))).limit(1);
     return order ? { ...await orderReplayResult(tx, order), currency: order.currency } : null;
   });
   if (!out) return errJson(c, 404, 'ORDER_NOT_FOUND', 'order not found');
