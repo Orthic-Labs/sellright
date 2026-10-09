@@ -17,6 +17,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { and, asc, desc, eq, gte, ilike, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import { withAdvisoryLock, withStore, type Tx } from '../db/client.js';
+import { LockSetUnstable, orderIdByCode, withLockedSet } from '../db/locks.js';
 import * as s from '../db/schema.js';
 import { hasConfirmableIntent, hasUnresolvedPayment } from '../payments/hold.js';
 import { cancelOrderStripeIntents } from '../payments/stripe-reconcile.js';
@@ -109,6 +110,20 @@ type PricedTotals = { subtotal: number; discountTotal: number; shippingTotal: nu
 export function totalsInert(a: PricedTotals, b: PricedTotals): boolean {
   return a.subtotal === b.subtotal && a.discountTotal === b.discountTotal && a.shippingTotal === b.shippingTotal
     && a.taxTotal === b.taxTotal && a.grandTotal === b.grandTotal;
+}
+
+/** A set that cannot be taken within its restarts (lock timeout or plan churn) is a
+ *  transient 503 for the caller, never a partial edit (STOREKIT §5.2). */
+const orderBusy = (e: unknown): never => {
+  if (e instanceof LockSetUnstable) throw new OrderEditError(503, 'ORDER_BUSY', 'the order is busy — try again in a moment');
+  throw e;
+};
+
+/** Order id for a set subject (unlocked read). A missing order is the same 404 as the plan. */
+async function lockableOrderId(storeId: string, code: string): Promise<string> {
+  const id = await orderIdByCode(storeId, code);
+  if (!id) throw new OrderEditError(404, 'ORDER_NOT_FOUND', 'order not found');
+  return id;
 }
 
 export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: EditOpT[], opts: { lock: boolean }): Promise<EditPlan> {
@@ -492,7 +507,10 @@ export async function commitOrderEdit(input: CommitInput): Promise<CommitResult>
   return withAdvisoryLock(`pay:${storeId}:${input.code}`, async () => {
     let stockChanged = false;
     type Applied = { result: CommitResult; plan: EditPlan | null; refundPlan?: { amount: number; paymentId: string } };
-    const applied: Applied = await withStore(storeId, async (tx): Promise<Applied> => {
+    // STOREKIT §5.8 #15: the order's licences (L2) are planned and locked before the
+    // order row (L3); the plan/lock/verify set owns the transaction.
+    const orderId = await lockableOrderId(storeId, input.code);
+    const applied: Applied = await withLockedSet(storeId, { kind: 'order', orderId }, async (tx): Promise<Applied> => {
       // Replay: the stored edit wins over re-applying (the total already moved).
       const [prior] = await tx.select().from(s.orderEdit).where(and(eq(s.orderEdit.storeId, storeId), eq(s.orderEdit.idempotencyKey, input.idempotencyKey))).limit(1);
       if (prior) {
@@ -702,7 +720,7 @@ export async function commitOrderEdit(input: CommitInput): Promise<CommitResult>
         plan, refundPlan,
         result: { editId, code: o.code, state: afterRow?.state ?? o.state, grandTotal: t.grandTotal, previousGrandTotal: o.grandTotal, balance, amountDue: dueNow, settlement: outcome, replay: false, emailQueued },
       };
-    }).catch((e: unknown) => { stockChanged = false; throw e; });
+    }).catch((e: unknown) => { stockChanged = false; return orderBusy(e); });
 
     if (stockChanged) { const { onStockChanged } = await import('../manifest/stock-hook.js'); onStockChanged(input.storeSlug); }
 
@@ -753,7 +771,8 @@ export interface RetryEditRefundInput {
 export async function retryOrderEditRefund(input: RetryEditRefundInput): Promise<{ editId: string; state: string; amountDue: number; settlement: SettlementOutcome }> {
   const { storeId } = input;
   return withAdvisoryLock(`pay:${storeId}:${input.code}`, async () => {
-    const ctx = await withStore(storeId, async (tx) => {
+    const orderId = await lockableOrderId(storeId, input.code);
+    const ctx = await withLockedSet(storeId, { kind: 'order', orderId }, async (tx) => {
       const [o] = await tx.select().from(s.order).where(and(eq(s.order.storeId, storeId), eq(s.order.code, input.code))).limit(1).for('update');
       if (!o || o.deletedAt) throw new OrderEditError(404, 'ORDER_NOT_FOUND', 'order not found');
       const [edit] = await tx.select().from(s.orderEdit).where(and(eq(s.orderEdit.storeId, storeId), eq(s.orderEdit.orderId, o.id), eq(s.orderEdit.id, input.editId))).limit(1);
@@ -771,7 +790,7 @@ export async function retryOrderEditRefund(input: RetryEditRefundInput): Promise
       const attempts = await tx.select({ id: s.paymentAttempt.id }).from(s.paymentAttempt)
         .where(and(eq(s.paymentAttempt.storeId, storeId), sql`${s.paymentAttempt.idempotencyKey} like ${`refund:order-edit:${edit.idempotencyKey}:retry:%`}`));
       return { o, edit, st, amountDue, refundable, attempt: attempts.length + 1 };
-    });
+    }).catch(orderBusy);
     const { o, edit, st } = ctx;
     const finish = async (out: SettlementOutcome, auditAction: string) => withStore(storeId, async (tx) => {
       await tx.update(s.orderEdit).set({ settlement: out as object }).where(eq(s.orderEdit.id, edit.id));

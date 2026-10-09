@@ -54,8 +54,8 @@ describe.skipIf(!isTestDb)('T-L2 interleaving under withLockedSet', () => {
     expect(results.sort()).toEqual(['x', 'y']);
     // Each start is immediately preceded by the other's end (no overlap).
     expect(events[1]).toMatch(/:end$/);
-    expect(events[0].split(':')[0]).toBe(events[1].split(':')[0]);
-    expect(events[2].split(':')[1]).toBe('start');
+    expect(events[0]!.split(':')[0]).toBe(events[1]!.split(':')[0]);
+    expect(events[2]!.split(':')[1]).toBe('start');
   }, 20000);
 
   it('opposite subject orders in concurrent sets never deadlock (planned as one sorted union)', async () => {
