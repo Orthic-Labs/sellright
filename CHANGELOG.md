@@ -12,6 +12,7 @@ must update the matching changelog in the same push.
 
 ### Added
 
+- **Release registration policy host**: the engine owns `POST /v1/admin/apps/releases`; plugins supply `ApiPlugin.releaseRegistration` (app/channel claims, tenant-bound service credential, validation hook, optional `repointArtifacts`). Startup fails on conflicting claims or a re-registered host route. Admin-session republish of the same `(app, channel, platform, version)` is now an upsert (was a unique-violation error); `download_artifact` conflicts still keep the existing row unless the policy opts in. See `docs/policies/RELEASE-REGISTRATION.md`.
 - Admin essentials for running real stores:
   - **Refunds**: per-line quantity + independent per-line restock toggle
     (a single refund can restock one line and not another), a separate

@@ -14,6 +14,7 @@
  * so an unconfigured deployment's `createApp()` output is unchanged.
  */
 import type { OpenAPIHono } from '@hono/zod-openapi';
+import type { ReleaseRegistrationPolicy } from './releases/registration-policy.js';
 
 export interface ApiPlugin {
   /** Unique plugin name (diagnostics only; also guards against double-registration). */
@@ -27,6 +28,13 @@ export interface ApiPlugin {
    * of its own.
    */
   init?: (app: OpenAPIHono) => void;
+  /**
+   * Release registration policy (docs/policies/RELEASE-REGISTRATION.md): claims
+   * apps/channels on the engine-hosted `POST /v1/admin/apps/releases`, supplies
+   * a tenant-bound service credential and a validation hook. `createApp()`
+   * throws at startup if two plugins claim the same app or route.
+   */
+  releaseRegistration?: ReleaseRegistrationPolicy;
 }
 
 const registered: ApiPlugin[] = [];

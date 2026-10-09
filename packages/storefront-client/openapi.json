@@ -8995,8 +8995,62 @@
       }
     },
     "/v1/admin/apps/releases": {
+      "get": {
+        "summary": "List app releases",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "appKey",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "channel",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Releases",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "nullable": true
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
       "post": {
-        "summary": "Create an app release manifest",
+        "summary": "Create (or republish) an app release manifest",
         "requestBody": {
           "content": {
             "application/json": {
@@ -9056,7 +9110,10 @@
                 "required": [
                   "appKey",
                   "version"
-                ]
+                ],
+                "additionalProperties": {
+                  "nullable": true
+                }
               }
             }
           }
@@ -9080,6 +9137,16 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid payload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "401": {
             "description": "Unauthorized",
             "content": {
@@ -9089,53 +9156,9 @@
                 }
               }
             }
-          }
-        }
-      },
-      "get": {
-        "summary": "List app releases",
-        "parameters": [
-          {
-            "schema": {
-              "type": "string"
-            },
-            "required": false,
-            "name": "appKey",
-            "in": "query"
           },
-          {
-            "schema": {
-              "type": "string"
-            },
-            "required": false,
-            "name": "channel",
-            "in": "query"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Releases",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "items": {
-                      "type": "array",
-                      "items": {
-                        "nullable": true
-                      }
-                    }
-                  },
-                  "required": [
-                    "items"
-                  ]
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
+          "403": {
+            "description": "Forbidden",
             "content": {
               "application/json": {
                 "schema": {
