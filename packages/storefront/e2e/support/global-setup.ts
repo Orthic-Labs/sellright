@@ -1,5 +1,5 @@
-import { AdminApi, SHIPPING, SKU, writeSetup } from './api';
-import { NMI, SEZZLE_ACCOUNT, STORE_URL, EXTERNAL_API, HOOK_URL } from './env.mjs';
+import { AdminApi, SHIPPING, SKU } from './api';
+import { NMI, SEZZLE, STORE_URL, EXTERNAL_API, HOOK_URL } from './env.mjs';
 
 /**
  * Runs once per `playwright test` after the webServers are up (the API was just rebuilt from a fresh database by
@@ -35,11 +35,9 @@ export default async function globalSetup() {
 	// The keys are fake; the API process only ever reaches the local mock (see support/preload.mjs).
 	await api.patch('/settings/payments', { nmi: { enabled: true, mode: 'test' }, sezzle: { enabled: true, mode: 'test' } });
 	await api.put('/payments/settings/nmi/test', { fields: NMI });
-	// Sezzle: credentials are server-configured (GATEWAY_ACCOUNTS_JSON, see start-api.mjs); the store selects the account.
-	await writeSetup(api, `UPDATE store SET config = config || jsonb_build_object('paymentAccounts', coalesce(config->'paymentAccounts', '{}'::jsonb) || jsonb_build_object('sezzle', $1::text)) WHERE slug = $2`, [SEZZLE_ACCOUNT, api.slug]);
-	// Sezzle's return URLs are built from store.config.storefrontUrl, and no admin endpoint writes it (set by the importer
-	// in production), so the fresh store gets it the same way the importer would: a direct config write.
-	await writeSetup(api, `UPDATE store SET config = config || jsonb_build_object('storefrontUrl', $1::text) WHERE slug = $2`, [STORE_URL, api.slug]);
+	await api.put('/payments/settings/sezzle/sandbox', { fields: SEZZLE });
+	// Sezzle's return URLs are built from the store's public storefront URL (admin Settings > Store).
+	await api.patch('/settings/store', { storefrontUrl: STORE_URL });
 
 	// The merchant's webhook receiver (order.* events). A signing secret is shown once at creation, so setup owns the
 	// endpoint and hands the secret to the specs through the environment (workers start after global setup).

@@ -36,8 +36,8 @@ export const OWNER_PASSWORD = 'e2e-owner-password-12345';
 // outbound fetch.
 export const NMI = { securityKey: 'e2e-nmi-security-key', tokenizationKey: 'e2e-nmi-tokenization-key', privateKey: 'e2e-nmi-webhook-secret' };
 export const SEZZLE = { publicKey: 'e2e-sezzle-public-key', privateKey: 'e2e-sezzle-private-key' };
-/** accountId of the server-configured Sezzle account (GATEWAY_ACCOUNTS_JSON) — also the segment of the webhook URL. */
-export const SEZZLE_ACCOUNT = 'e2e-sezzle';
+/** accountId of the admin-saved (encrypted store_secret) Sezzle account — the API's DB_ACCOUNT_ID — also the segment of the webhook URL. */
+export const SEZZLE_ACCOUNT = 'db';
 
 /** An address that passes the API's SSRF guard (it is public) but that the API preload reroutes to the mock's
  *  webhook receiver. Nothing is ever sent to it for real. */

@@ -40,8 +40,12 @@ export default function SettingsPage() {
   const { data: cfg, isLoading } = useQuery({ queryKey: sk, queryFn: () => api.get<any>('/settings/store') });
   const staff = useQuery({ queryKey: ['staff', store?.slug], queryFn: () => api.get<{ items: any[] }>('/staff') });
 
-  const [store2, setStore2] = useState<{ name: string } | null>(null);
-  const saveStore = useMutation({ mutationFn: () => api.patch('/settings/store', { name: store2!.name }), onSuccess: () => { setStore2(null); qc.invalidateQueries({ queryKey: sk }); } });
+  const [store2, setStore2] = useState<{ name: string; storefrontUrl: string } | null>(null);
+  const saveStore = useMutation({
+    mutationFn: () => api.patch('/settings/store', { name: store2!.name, storefrontUrl: store2!.storefrontUrl.trim() }),
+    onSuccess: () => { setStore2(null); qc.invalidateQueries({ queryKey: sk }); },
+    onError: (e) => toast.error('Could not save store profile', (e as Error).message),
+  });
   const [tax, setTax] = useState<string | null>(null);
   const saveTax = useMutation({ mutationFn: () => api.patch('/settings/store', { taxRate: Math.round(parseFloat(tax || '0') * 100) }), onSuccess: () => { setTax(null); qc.invalidateQueries({ queryKey: sk }); } });
   const togglePay = useMutation({ mutationFn: (p: { k: string; v: boolean }) => api.patch('/settings/payments', { [p.k]: p.v }), onSuccess: () => qc.invalidateQueries({ queryKey: sk }) });
@@ -98,14 +102,20 @@ export default function SettingsPage() {
                 <button className="btn-primary" disabled={saveStore.isPending || !store2.name.trim()} onClick={() => saveStore.mutate()}>{saveStore.isPending ? <Spinner className="text-white" /> : 'Save'}</button>
               </>}>
               {store2 ? (
-                <Field label="Store name" htmlFor="s-name"><input id="s-name" className="input max-w-md" value={store2.name} onChange={(e) => setStore2({ name: e.target.value })} /></Field>
+                <div className="space-y-4">
+                  <Field label="Store name" htmlFor="s-name"><input id="s-name" className="input max-w-md" value={store2.name} onChange={(e) => setStore2({ ...store2, name: e.target.value })} /></Field>
+                  <Field label="Storefront URL" htmlFor="s-url" hint="The public address of your storefront (https://…). Used for payment return links and links in emails. Leave empty to clear.">
+                    <input id="s-url" className="input max-w-md" type="url" inputMode="url" placeholder="https://shop.example.com" value={store2.storefrontUrl} onChange={(e) => setStore2({ ...store2, storefrontUrl: e.target.value })} />
+                  </Field>
+                </div>
               ) : (
                 <dl className="space-y-2.5 text-sm">
                   <div className="flex justify-between max-w-md"><dt className="text-gray-500">Name</dt><dd className="font-medium">{cfg.name}</dd></div>
                   <div className="flex justify-between max-w-md"><dt className="text-gray-500">Currency</dt><dd className="font-medium">{cfg.currency}</dd></div>
+                  <div className="flex justify-between max-w-md gap-4"><dt className="text-gray-500">Storefront URL</dt><dd className="font-medium break-all text-right">{cfg.storefrontUrl ?? <span className="text-gray-400 font-normal">Not set</span>}</dd></div>
                 </dl>
               )}
-              {!store2 && canManage && <button className="btn-ghost btn-sm" onClick={() => setStore2({ name: cfg.name })}>Edit profile</button>}
+              {!store2 && canManage && <button className="btn-ghost btn-sm" onClick={() => setStore2({ name: cfg.name, storefrontUrl: cfg.storefrontUrl ?? '' })}>Edit profile</button>}
             </FormSection>
           )}
 

@@ -9643,6 +9643,7 @@ export interface paths {
                         hostnames?: string[];
                         name?: string;
                         shippingTaxable?: boolean;
+                        storefrontUrl?: string | null;
                         taxInclusive?: boolean;
                         taxRate?: number;
                     };

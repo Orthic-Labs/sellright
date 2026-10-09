@@ -4,6 +4,7 @@ import * as s from '../db/schema.js';
 import { normalizeEmail } from '../auth/email.js';
 import { hashPassword } from '../auth/password.js';
 import { env } from '../env.js';
+import { normalizeStorefrontUrl } from '../lib/storefront-url.js';
 
 function parseHostnames(raw: string | undefined): string[] {
   if (!raw) return [];
@@ -53,6 +54,8 @@ async function main(): Promise<void> {
   const name = env.BOOTSTRAP_STORE_NAME?.trim() || slug;
   const currency = env.BOOTSTRAP_STORE_CURRENCY ?? 'USD';
   const hostnames = parseHostnames(env.BOOTSTRAP_STORE_HOSTNAMES);
+  const storefrontUrl = env.BOOTSTRAP_STORE_URL ? normalizeStorefrontUrl(env.BOOTSTRAP_STORE_URL) : null;
+  if (env.BOOTSTRAP_STORE_URL && !storefrontUrl) throw new Error('BOOTSTRAP_STORE_URL must be an https URL (http only for localhost)');
 
   let [store] = await db.select({ id: s.store.id }).from(s.store).where(eq(s.store.slug, slug)).limit(1);
   if (!store) {
@@ -65,6 +68,7 @@ async function main(): Promise<void> {
       // is the payment layer's default until an operator explicitly flips live.
       config: {
         hostnames,
+        ...(storefrontUrl ? { storefrontUrl } : {}),
         payments: { stripe: true },
         stripe: { mode: 'test' },
       },

@@ -208,6 +208,8 @@ const EnvSchema = z.object({
   BOOTSTRAP_STORE_NAME: optionalEnvString,
   BOOTSTRAP_STORE_CURRENCY: z.preprocess(emptyToUndefined, z.string().regex(/^[A-Za-z]{3}$/).transform((v) => v.toUpperCase()).optional()),
   BOOTSTRAP_STORE_HOSTNAMES: optionalEnvString,
+  // Public storefront URL written to store.config.storefrontUrl on first-run bootstrap (https; http only for loopback).
+  BOOTSTRAP_STORE_URL: optionalEnvString,
   // Import scripts: Vendure source DB (read-only clone used by catalog/customers/orders importers).
   SOURCE_DATABASE_URL: z.string().url().optional(),
   // Import scripts: TRUNCATE guard override — BOTH --force argv AND ALLOW_FORCE_TRUNCATE=1

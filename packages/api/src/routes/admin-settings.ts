@@ -8,6 +8,7 @@ import { isSupportedPaymentMethod, mergePaymentMethodSetting } from '../payments
 import { resolveStripeConfigured, stripeModeFromConfig } from '../payments/stripe.js';
 import { broadcastStoreCacheInvalidation } from '../store-context.js';
 import { env } from '../env.js';
+import { normalizeStorefrontUrl } from '../lib/storefront-url.js';
 import { generatePreviewToken, hashPreviewToken } from '../store-publish.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireManage, guard } from './admin-helpers.js';
 // Circular with admin-system.ts (which imports mutateStoreConfig from here)
@@ -179,6 +180,7 @@ adminSettings.openapi(
       stripeMode: stripeModeFromConfig(config),
       notifications: (config.notifications as object) ?? {},
       googleClientId: (config.googleClientId as string) ?? null,
+      storefrontUrl: typeof config.storefrontUrl === 'string' ? config.storefrontUrl : null,
     }, 200);
   }),
 );
@@ -195,13 +197,26 @@ adminSettings.openapi(
       // this body below. Previously nothing on the admin surface could ever
       // set this after bootstrap.js's one-time BOOTSTRAP_STORE_HOSTNAMES.
       hostnames: z.array(z.string().trim().min(1)).optional(),
+      // Public storefront URL (config.storefrontUrl): Sezzle/Stripe return
+      // URLs and email links are built from it. https only (http allowed for
+      // loopback); null or "" clears it.
+      storefrontUrl: z.string().trim().max(2048).nullable().optional(),
     })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireManage(st);
-    const { hostnames, ...b } = c.req.valid('json');
+    const { hostnames, storefrontUrl: storefrontUrlRaw, ...b } = c.req.valid('json');
+    let storefrontUrl: string | null | undefined;
+    if (storefrontUrlRaw !== undefined) {
+      if (storefrontUrlRaw === null || storefrontUrlRaw === '') storefrontUrl = null;
+      else {
+        const normalised = normalizeStorefrontUrl(storefrontUrlRaw);
+        if (!normalised) throw new HttpError(400, 'storefrontUrl must be an https URL without credentials, query or fragment');
+        storefrontUrl = normalised;
+      }
+    }
     await withStore(st.storeId, async (tx) => {
       // SR-16: lock the row and snapshot the touched columns so the audit row
       // carries a truthful before/after — name/currency/tax flags only, never
@@ -235,6 +250,16 @@ adminSettings.openapi(
         actor: admin.email,
         action: 'settings_update_hostnames',
         detail: () => ({ hostnames }),
+      });
+    }
+    if (storefrontUrl !== undefined) {
+      await mutateStoreConfig(st.storeId, (config) => {
+        const { storefrontUrl: _drop, ...rest } = config;
+        return storefrontUrl === null ? rest : { ...rest, storefrontUrl };
+      }, {
+        actor: admin.email,
+        action: 'settings_update_storefront_url',
+        detail: (prev, next) => ({ before: prev.storefrontUrl ?? null, after: next.storefrontUrl ?? null }),
       });
     }
     await broadcastStoreCacheInvalidation(st.slug);

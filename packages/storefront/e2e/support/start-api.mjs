@@ -10,7 +10,7 @@ import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import {
   API_DIR, API_PORT, DB_ADMIN_URL, DB_APP_URL, DB_NAME, DB_OWNER_URL, MOCK_URL, OWNER_EMAIL, OWNER_PASSWORD, RUN_DIR,
-  SMTP_PORT, STORE_SLUG, STORE_URL, HOOK_SENTINEL, SEZZLE, SEZZLE_ACCOUNT, assertSafeTargets, STOREFRONT_DIR,
+  SMTP_PORT, STORE_SLUG, STORE_URL, HOOK_SENTINEL, assertSafeTargets, STOREFRONT_DIR,
 } from './env.mjs';
 
 assertSafeTargets();
@@ -96,23 +96,6 @@ runStep('migrate.js', DB_OWNER_URL);
 runStep('bootstrap.js', DB_OWNER_URL);
 await grantAppRole();
 
-// Sezzle credentials come from server configuration (GATEWAY_ACCOUNTS_JSON + store.config.paymentAccounts, set in
-// global-setup). They cannot be saved through the admin Payments API: that endpoint stores Sezzle keys under the
-// 'sandbox'/'production' modes, while the runtime resolver reads 'test'/'live' (product bug, see the money-sezzle spec).
-// The account JSON is keyed by store id, which only exists after bootstrap.
-async function gatewayAccountsJson() {
-  const c = new Client({ connectionString: DB_OWNER_URL });
-  await c.connect();
-  try {
-    const { rows } = await c.query('SELECT id FROM store WHERE slug = $1', [STORE_SLUG]);
-    if (!rows[0]) throw new Error(`bootstrap did not create store ${STORE_SLUG}`);
-    return JSON.stringify([{ accountId: SEZZLE_ACCOUNT, storeId: rows[0].id, method: 'sezzle', mode: 'test', publicKey: SEZZLE.publicKey, privateKey: SEZZLE.privateKey }]);
-  } finally {
-    await c.end();
-  }
-}
-const gatewayAccounts = await gatewayAccountsJson();
-
 // cwd is the git-ignored run dir so the API never picks up packages/api/.env (dotenv reads ./.env)
 // and its relative ASSET_DIR / MAINTENANCE_FLAG_FILE / DOWNLOAD_DIR stay out of the checkout.
 const child = spawn(process.execPath, ['--import', join(STOREFRONT_DIR, 'e2e', 'support', 'preload.mjs'), apiEntry], {
@@ -135,7 +118,6 @@ const child = spawn(process.execPath, ['--import', join(STOREFRONT_DIR, 'e2e', '
     SMTP_HOST: '127.0.0.1',
     SMTP_PORT: String(SMTP_PORT),
     SMTP_FROM: 'shop@e2e.example.net',
-    GATEWAY_ACCOUNTS_JSON: gatewayAccounts,
   },
   stdio: 'inherit',
 });

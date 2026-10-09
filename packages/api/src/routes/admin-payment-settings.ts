@@ -9,7 +9,7 @@
  * mode/field/outcome.
  */
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, inArray } from 'drizzle-orm';
 import Stripe from 'stripe';
 import { withStore, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
@@ -18,7 +18,7 @@ import { HttpError, J, errBody, guard, requireAdmin, requireManage, requireStore
 import { encryptSecret, decryptSecret, last4 as computeLast4, type EncryptedSecret } from '../security/secret-crypto.js';
 import { resolveField, isEnvManaged, type FieldScope } from '../security/settings-resolver.js';
 import { stripeCreds } from '../payments/stripe.js';
-import { configuredGatewayAccount } from '../payments/gateway-account.js';
+import { configuredGatewayAccount, resolveSezzleField, sezzleSecretModes } from '../payments/gateway-account.js';
 import { verifyNmiKey, verifySezzleKeys, verifyStripeKey } from '../payments/settings-verify.js';
 import { ensureStripeWebhook, type StripeWebhookClient } from '../payments/stripe-webhook-provision.js';
 import { mutateStoreConfig } from './admin-settings.js';
@@ -90,7 +90,7 @@ adminPaymentSettings.openapi(
           if (!envManaged) {
             const rows = await withStore(st.storeId, (tx) => tx.select({ last4: s.storeSecret.last4 })
               .from(s.storeSecret)
-              .where(and(eq(s.storeSecret.storeId, st.storeId), eq(s.storeSecret.provider, provider), eq(s.storeSecret.mode, mode), eq(s.storeSecret.field, field)))
+              .where(and(eq(s.storeSecret.storeId, st.storeId), eq(s.storeSecret.provider, provider), inArray(s.storeSecret.mode, provider === 'sezzle' ? sezzleSecretModes(mode) : [mode]), eq(s.storeSecret.field, field)))
               .limit(1));
             configured = rows.length > 0;
             last4Val = rows[0]?.last4 ?? null;
@@ -204,8 +204,8 @@ adminPaymentSettings.openapi(
         return verifyNmiKey(securityKey.value, mode === 'test' ? 'sandbox' : 'production');
       }
       // sezzle
-      const pub = await resolveField(tx, scopeFor(st.storeId, 'sezzle', mode, 'publicKey'), undefined);
-      const priv = await resolveField(tx, scopeFor(st.storeId, 'sezzle', mode, 'privateKey'), undefined);
+      const pub = await resolveSezzleField(tx, st.storeId, mode, 'publicKey');
+      const priv = await resolveSezzleField(tx, st.storeId, mode, 'privateKey');
       if (!pub.value || !priv.value) return { ok: false, error: 'Public/private key not fully configured' };
       return verifySezzleKeys(pub.value, priv.value, mode as 'sandbox' | 'production');
     });

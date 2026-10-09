@@ -136,12 +136,8 @@ test.describe('#5 partial fulfillment with tracking + notify', () => {
 		expect((await api.order(placed.code)).fulfillmentStatus).toBe('fulfilled');
 	});
 
-	// PRODUCT GAP (found by this suite): the shipping email is only queued when the order has a customer record
-	// (routes/admin.ts: `if (body.notifyCustomer && o.customerId)`), but a guest checkout leaves customerId null — the
-	// address lives in order.metadata.contact.email, which the refund email already falls back to. Remove test.fail()
-	// when the shipping path uses the same recipient fallback.
-	test('KNOWN BUG: a guest order shipped with notify on should get a shipping email', async ({ api }) => {
-		test.fail(true, 'shipping_notification is only enqueued for orders with customerId; guest checkouts have none');
+	// Guest checkouts have no customerId; the shipping email goes to order.metadata.contact.email, like the refund email.
+	test('a guest order shipped with notify on gets a shipping email', async ({ api }) => {
 		const email = `${uniq('shipguest')}@example.net`;
 		const placed = await paidOrder({ email, items: [{ sku: SKU.book, quantity: 1 }] });
 		const line = ((await api.order(placed.code)).lines as OrderLine[])[0]!;

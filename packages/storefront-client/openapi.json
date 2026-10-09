@@ -18193,6 +18193,11 @@
                       "type": "string",
                       "minLength": 1
                     }
+                  },
+                  "storefrontUrl": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 2048
                   }
                 }
               }
