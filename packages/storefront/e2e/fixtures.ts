@@ -36,8 +36,13 @@ async function installApiProxy(page: Page): Promise<void> {
 			const resHeaders: Record<string, string> = {};
 			res.headers.forEach((value, key) => {
 				if (key.toLowerCase() === 'content-encoding') return; // undici already decoded the body
+				if (key.toLowerCase() === 'set-cookie') return; // handled below: forEach cannot carry more than one
 				resHeaders[key] = value;
 			});
+			// An API answer can set several cookies (session + csrf); a plain header map keeps only the last one, which
+			// silently dropped the HttpOnly session cookie. Playwright takes multiple Set-Cookie values newline-joined.
+			const cookies = res.headers.getSetCookie();
+			if (cookies.length) resHeaders['set-cookie'] = cookies.join('\n');
 			await route.fulfill({ status: res.status, headers: resHeaders, body });
 		} catch (error) {
 			await route.fulfill({ status: 502, contentType: 'application/json', body: JSON.stringify({ error: { code: 'PROXY_FAILED', message: String(error) } }) });

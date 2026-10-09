@@ -29,6 +29,7 @@ import { env } from '../env.js';
 import * as s from '../db/schema.js';
 import { invalidateStoreCache } from '../store-context.js';
 import { auth } from '../routes/auth.js';
+import { shopConfig } from '../routes/shop-config.js';
 import { mintMagicLink } from './magic-link.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
@@ -46,6 +47,7 @@ const hashToken = (t: string) => createHash('sha256').update(t).digest('hex');
 
 const app = new OpenAPIHono();
 app.route('/', auth);
+app.route('/', shopConfig);
 
 async function wipe() {
   await pool.query('TRUNCATE store CASCADE');
@@ -213,5 +215,15 @@ describe('POST /v1/shop/auth/magic-link/consume', () => {
     expect((await consume(SLUG_ON, 'bogus-token-value-that-is-long')).status).toBe(409);
     // and the fresh token still works afterward in its own store
     expect((await consume(SLUG_ON, fresh)).status).toBe(200);
+  });
+});
+
+describe('GET /v1/shop/config advertises whether sign-in links are on', () => {
+  // The storefront offers "email me a sign-in link" only when this says true — never a button that answers 409.
+  const flag = async (slug: string) =>
+    ((await (await app.request('/v1/shop/config', { headers: hdr(slug) })).json()) as { auth: { magicLink: boolean } }).auth.magicLink;
+  it('is true for a store that enabled it and false for one that did not', async () => {
+    expect(await flag(SLUG_ON)).toBe(true);
+    expect(await flag(SLUG_OFF)).toBe(false);
   });
 });

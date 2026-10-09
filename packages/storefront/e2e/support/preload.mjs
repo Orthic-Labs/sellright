@@ -1,7 +1,8 @@
 // Loaded into the e2e API process only (`node --import ./preload.mjs dist/index.js`, see start-api.mjs).
 // It is the whole "gateway seam": no API source is touched, and nothing here exists in a normal run.
 //
-//  1. fetch: the sandbox gateway hosts (sandbox.nmi.com, sandbox.gateway.sezzle.com) are rewritten to the local mock
+//  1. fetch: the sandbox gateway hosts (sandbox.nmi.com, sandbox.gateway.sezzle.com) and the IndexNow endpoint
+//     (api.indexnow.org — a search engine must never be pinged from a test) are rewritten to the local mock
 //     (E2E_MOCK_URL). Every other non-loopback fetch THROWS — a real gateway (secure.nmi.com, gateway.sezzle.com,
 //     api.stripe.com …) can never be reached from this process, whatever mode a spec flips.
 //  2. http.request: outbound webhooks go through safeOutboundFetch, which (correctly) refuses private addresses, so
@@ -17,7 +18,7 @@ if (process.env.NODE_ENV === 'production' && process.env.SR_E2E_PRELOAD !== '1')
 }
 
 const mock = new URL(process.env.E2E_MOCK_URL ?? 'http://127.0.0.1:3397');
-const SANDBOX = { 'sandbox.nmi.com': '/nmi', 'sandbox.gateway.sezzle.com': '/sezzle' };
+const SANDBOX = { 'sandbox.nmi.com': '/nmi', 'sandbox.gateway.sezzle.com': '/sezzle', 'api.indexnow.org': '/indexnow' };
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
 
 const realFetch = globalThis.fetch;

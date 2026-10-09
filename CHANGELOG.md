@@ -92,6 +92,14 @@ must update the matching changelog in the same push.
   unpublished native collections at migration time and rewrites the
   condition to `at_least_n_in_collections` — the facet id never reaches a
   live store.
+- **Customer return requests** (storefront + API): `GET`/`POST /v1/shop/account/orders/{code}/returns`
+  let a signed-in customer ask to return units that have shipped (only paid orders, only shipped and
+  not-yet-refunded units, never the same unit in two open requests) and read each request's status
+  (requested / approved / received / refunded / rejected) on their account order page. Requests land in the
+  admin Returns queue unchanged; the shopper never chooses restock. New error code `NOT_RETURNABLE`.
+- **Sign-in links in the storefront**: the sign-in page offers "Email me a sign-in link" when the store has
+  it on (`GET /v1/shop/config` now reports `auth.magicLink`), and `/account/magic-link` exchanges the emailed
+  token for a session (the API already minted the link; the storefront had no page for it).
 
 ### Changed — BREAKING (pre-1.0 API consumers)
 
@@ -143,6 +151,14 @@ must update the matching changelog in the same push.
 
 ### Fixed
 
+- Admin **Returns -> Approve**: the "Restock" choice is now honoured (`POST /v1/admin/returns/{id}/approve`
+  accepts `restock`); it used to be silently dropped, so the flag set when the request was opened always won.
+- Storefront **account**: a full page load of any `/account/*` page bounced signed-in customers to `/sign-in`
+  (the server-side guard looked for a cookie name the API never sets); the address book could not add or
+  edit an address (empty country list, missing name/phone fields, server-side write rejected by CSRF) and
+  showed stale lists; the order detail page failed to render on a direct load (invalid `<div>` inside `<p>`);
+  the bare `/orders/{code}` link in order emails was a dead end and now leads to the account order or the
+  order-tracking lookup.
 - NMI refund reconciliation requires successful matching refund evidence,
   rather than treating a known transaction reference as settlement.
 - Gateway replay and verification reject endpoint changes with a controlled

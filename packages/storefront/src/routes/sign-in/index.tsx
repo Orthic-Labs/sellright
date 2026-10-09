@@ -1,14 +1,15 @@
 import { $, component$, useSignal, useVisibleTask$ } from '@qwik.dev/core';
 import { useNavigate } from '@qwik.dev/router';
 import { registerCustomerFromSignup } from '~/components/auth/signup-flow';
-import { login, requestPasswordReset, resendVerification } from '~/providers/shop/account/account';
+import { login, requestMagicLink, requestPasswordReset, resendVerification } from '~/providers/shop/account/account';
+import { getShopConfig } from '~/providers/shop/checkout/checkout';
 import { checkCustomerEmail } from '~/providers/shop/account/check-email';
 import { SignInError } from './SignInError';
 export { head } from './seo';
 
 const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY || '';
 
-type Step = 'email' | 'signin' | 'signup' | 'success' | 'reset-sent' | 'verify-needed';
+type Step = 'email' | 'signin' | 'signup' | 'success' | 'reset-sent' | 'magic-sent' | 'verify-needed';
 
 export default component$(() => {
 	const navigate = useNavigate();
@@ -27,9 +28,19 @@ export default component$(() => {
 	const resendLoading = useSignal(false);
 	const resendSent = useSignal(false);
 	const widgetId = useSignal<string>();
+	/** Whether this store has passwordless sign-in links switched on (GET /v1/shop/config) — offered only when it has. */
+	const magicLinkEnabled = useSignal(false);
 	const resetChallenge = $(() => {
 		turnstileToken.value = '';
 		if (widgetId.value) (window as any).turnstile?.reset(widgetId.value);
+	});
+
+	useVisibleTask$(async () => {
+		try {
+			magicLinkEnabled.value = !!(await getShopConfig()).auth?.magicLink;
+		} catch {
+			magicLinkEnabled.value = false; // fail closed: no link option rather than one that errors
+		}
 	});
 
 	// Load Turnstile
@@ -132,6 +143,16 @@ export default component$(() => {
 		await requestPasswordReset(email.value.trim());
 		step.value = 'reset-sent';
 		loading.value = false;
+	});
+
+	const handleMagicLink = $(async () => {
+		error.value = '';
+		loading.value = true;
+		// Enumeration-safe on the API side (identical 200 for an unknown address) — so is the screen that follows.
+		const result = await requestMagicLink(email.value.trim());
+		loading.value = false;
+		if (result.ok) step.value = 'magic-sent';
+		else error.value = result.message;
 	});
 
 	const handleBack = $(() => {
@@ -259,6 +280,18 @@ export default component$(() => {
 								>
 									{loading.value ? 'Signing in...' : 'Sign In'}
 								</button>
+								{magicLinkEnabled.value && (
+									<button
+										key={`magic-link-${loading.value}`}
+										type="button"
+										onClick$={handleMagicLink}
+										disabled={loading.value}
+										data-testid="magic-link-request"
+										class="w-full text-center text-sm text-gray-600 hover:text-gray-800 underline cursor-pointer disabled:opacity-60"
+									>
+										Email me a sign-in link instead
+									</button>
+								)}
 							</div>
 						</div>
 					)}
@@ -376,6 +409,27 @@ export default component$(() => {
 							>
 								{resendLoading.value ? 'Sending...' : resendSent.value ? 'Verification email sent' : 'Resend verification email'}
 							</button>
+							<button
+								onClick$={handleBack}
+								class="text-sm text-gray-600 hover:text-gray-800 underline cursor-pointer"
+							>
+								Back to sign in
+							</button>
+						</div>
+					)}
+
+					{/* ── Step: sign-in link sent ── */}
+					{step.value === 'magic-sent' && (
+						<div class="text-center py-4" data-testid="magic-link-sent">
+							<div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-[var(--color-parchment)] mb-4">
+								<svg class="h-6 w-6 text-[var(--color-accent)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+								</svg>
+							</div>
+							<h2 class="text-lg font-medium text-gray-900 mb-2">Check your email</h2>
+							<p class="text-sm text-gray-600 mb-6">
+								If an account exists for <span class="font-medium">{email.value}</span>, we've sent a link that signs you in. It works once and expires soon.
+							</p>
 							<button
 								onClick$={handleBack}
 								class="text-sm text-gray-600 hover:text-gray-800 underline cursor-pointer"

@@ -193,3 +193,9 @@ export async function paidOrder(o: { email: string; items?: Array<{ sku: string;
 	if (paid.status !== 200 || paid.body.state !== 'Paid') throw new ApiFailure(paid.status, paid.body, `pay ${placed.code}`);
 	return placed;
 }
+
+/** Wait for a mail in the SMTP sink addressed to `email` that `pick` accepts (default: any), newest first. */
+export async function mailTo(email: string, pick: (m: import('./mock').MockMail) => boolean = () => true, what = 'mail'): Promise<import('./mock').MockMail> {
+	const { mock } = await import('./mock');
+	return eventually(async () => [...(await mock.mails())].reverse().find((m) => m.envelopeTo.some((t) => t.toLowerCase() === email.toLowerCase()) && pick(m)), `${what} for ${email} in the SMTP sink`);
+}

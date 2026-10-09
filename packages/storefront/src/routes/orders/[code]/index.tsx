@@ -3,6 +3,7 @@ import { Link, useLocation } from '@qwik.dev/router';
 import NMI from '~/components/payment/NMI';
 import Sezzle from '~/components/payment/Sezzle';
 import { getOrder, getShopConfig, verifyGatewayPayment } from '~/providers/shop/checkout/checkout';
+import { getMe } from '~/services/customer';
 import { SellRightError } from '~/sellright/client';
 import type { OrderSummary, ShopConfig } from '~/sellright/types/checkout';
 import { alreadyPaidCents, availableBalanceMethods, balancePageState, receiptTokenFrom, type BalanceMethod } from '~/utils/balance-pay';
@@ -64,7 +65,16 @@ export default component$(() => {
 	const load = $(async (afterPayment: boolean, signal?: AbortSignal) => {
 		const rt = receiptTokenFrom(loc.url.searchParams);
 		if (!rt) {
-			state.loading = false;
+			// A pay link (`?pay=balance`) that lost its receipt token is simply broken: say so, show nothing. The BARE
+			// /orders/{code} link, though, is what every order email carries, and it has no token by design — so instead
+			// of a dead end, send the shopper where they can see the order: their account when signed in, otherwise the
+			// order-tracking lookup with the number filled in (they confirm the checkout email there).
+			if (loc.url.searchParams.get('pay') === 'balance') {
+				state.loading = false;
+				return;
+			}
+			const me = await getMe().catch(() => null);
+			window.location.replace(me ? `/account/orders/${encodeURIComponent(code)}` : `/track-order?orderCode=${encodeURIComponent(code)}`);
 			return;
 		}
 		try {

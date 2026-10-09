@@ -11,6 +11,7 @@ import type {
 	AccountOrderList,
 	Address,
 	AuthCustomer,
+	OrderReturns,
 	NewAddressInput,
 	AddressPatch,
 } from '~/sellright/types/account';
@@ -120,6 +121,32 @@ export async function getOrderByCode(code: string): Promise<AccountOrderDetail |
 	} catch (e) {
 		if (e instanceof SellRightError && (e.status === 404 || e.status === 401)) return null;
 		throw e;
+	}
+}
+
+/** What can still be returned on an owned order + the return requests made so far (live, never cached). */
+export async function getOrderReturns(code: string): Promise<OrderReturns | null> {
+	try {
+		const { data } = await sellright().GET('/v1/shop/account/orders/{code}/returns', { params: { path: { code } } });
+		return data!;
+	} catch (e) {
+		if (e instanceof SellRightError && (e.status === 404 || e.status === 401)) return null;
+		throw e;
+	}
+}
+
+export type RequestReturnResult = { ok: true; id: string } | ({ ok: false } & AccountError);
+
+/** Ask to return shipped units of an owned order. 409 = nothing (or not that many) can be returned. */
+export async function requestOrderReturn(
+	code: string,
+	input: { lines: Array<{ sku: string; quantity: number }>; reason: string },
+): Promise<RequestReturnResult> {
+	try {
+		const { data } = await sellright().POST('/v1/shop/account/orders/{code}/returns', { params: { path: { code } }, body: input });
+		return { ok: true, id: data!.id };
+	} catch (e) {
+		return { ok: false, ...describeAccountError(e, { 409: 'not_returnable' }) };
 	}
 }
 

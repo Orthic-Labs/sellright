@@ -8,6 +8,7 @@ import { gatewayPayments } from './routes/gateway-payments.js';
 import { adminGatewayPayments } from './routes/admin-gateway-payments.js';
 import { auth } from './routes/auth.js';
 import { account } from './routes/account.js';
+import { accountReturns } from './routes/account-returns.js';
 import { loyalty } from './routes/loyalty.js';
 import { orders } from './routes/orders.js';
 import { admin } from './routes/admin.js';
@@ -315,6 +316,7 @@ export function createApp(): OpenAPIHono {
   app.route('/', shopConfig);
   app.route('/', customerTokens);
   app.route('/', account);
+  app.route('/', accountReturns); // customer-side return requests (the merchant side is admin-orders.ts)
   app.route('/', loyalty); // LOYALTY-1: customer points balance (redeem happens in checkout)
   app.route('/', reviews); // REWARDS-1: product reviews (list + submit)
   app.route('/', orders);

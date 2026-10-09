@@ -8158,6 +8158,7 @@ export interface paths {
                     "application/json": {
                         /** Format: uuid */
                         paymentId?: string;
+                        restock?: boolean;
                     };
                 };
             };
@@ -13579,6 +13580,144 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/shop/account/orders/{code}/returns": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Returnable units and return requests for an owned order */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    code: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                createdAt: string;
+                                id: string;
+                                lines: {
+                                    name: string;
+                                    quantity: number;
+                                    sku: string;
+                                }[];
+                                reason: string | null;
+                                /** @enum {string} */
+                                status: "requested" | "approved" | "rejected" | "received" | "refunded";
+                                updatedAt: string;
+                            }[];
+                            returnable: {
+                                name: string;
+                                quantity: number;
+                                sku: string;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Unauthenticated */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Request a return for shipped units of an owned order */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    code: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        lines: {
+                            quantity: number;
+                            sku: string;
+                        }[];
+                        reason: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Requested */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            id: string;
+                            /** @enum {string} */
+                            status: "requested";
+                        };
+                    };
+                };
+                /** @description Unauthenticated */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Nothing returnable / quantity too high */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/shop/account/password": {
         parameters: {
             query?: never;
@@ -16200,6 +16339,9 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            auth: {
+                                magicLink: boolean;
+                            };
                             gateways: {
                                 nmi: {
                                     /** @enum {string} */
@@ -18372,7 +18514,7 @@ export interface components {
             };
         };
         /** @enum {string} */
-        ApiErrorCode: "ACTIVE_SUBSCRIPTION_EXISTS" | "ADDRESS_NOT_FOUND" | "ALREADY_REVIEWED" | "APPLE_SIGNIN_NOT_CONFIGURED" | "APPLE_TOKEN_INVALID" | "AUTH_REQUIRED" | "BIRTHDAY_ALREADY_SET" | "BOT_CHECK_FAILED" | "CART_INVALID" | "CART_NOT_FOUND" | "COLLECTION_NOT_FOUND" | "CSRF_INVALID" | "DOWNLOAD_NOT_FOUND" | "DOWNLOADS_NOT_CONFIGURED" | "EMAIL_NOT_VERIFIED" | "EMAIL_SAME" | "EMAIL_TAKEN" | "EMAIL_TAKEN_UNVERIFIED" | "GIFT_CARD_NOT_FOUND" | "GOOGLE_SIGNIN_NOT_CONFIGURED" | "GOOGLE_TOKEN_INVALID" | "IDEMPOTENCY_KEY_REQUIRED" | "IDEMPOTENCY_PAYLOAD_MISMATCH" | "INVALID_BIRTHDAY" | "INVALID_CHECKOUT_REQUEST" | "INVALID_CREDENTIALS" | "INVALID_PAYMENT_REQUEST" | "INVITE_INVALID" | "LEGAL_ACCEPTANCE_REQUIRED" | "LICENSE_KEY_MISSING" | "LICENSE_NOT_ACTIVE" | "LICENSE_NOT_FOUND" | "LOYALTY_REDEEM_FAILED" | "MAGIC_LINK_DISABLED" | "MAGIC_LINK_INVALID" | "NOT_AUTHENTICATED" | "ORDER_ALREADY_PAID" | "ORDER_NOT_FOUND" | "ORDER_NOT_PAYABLE" | "OUT_OF_STOCK" | "PASSWORD_INCORRECT" | "PAYMENT_METHOD_DISABLED" | "PAYMENT_METHOD_UNKNOWN" | "PAYMENT_NOT_FOUND" | "POST_NOT_FOUND" | "PRODUCT_NOT_FOUND" | "PURCHASE_REQUIRED" | "RATE_LIMITED" | "REVIEWS_DISABLED" | "SEAT_LIMIT_REACHED" | "SECURITY_CHECK_FAILED" | "SHIPPING_UNAVAILABLE" | "SIGN_IN_REQUIRED" | "STRIPE_NOT_CONFIGURED" | "SUBSCRIPTION_NOT_FOUND" | "TOKEN_INVALID" | "VARIANT_NOT_RECURRING";
+        ApiErrorCode: "ACTIVE_SUBSCRIPTION_EXISTS" | "ADDRESS_NOT_FOUND" | "ALREADY_REVIEWED" | "APPLE_SIGNIN_NOT_CONFIGURED" | "APPLE_TOKEN_INVALID" | "AUTH_REQUIRED" | "BIRTHDAY_ALREADY_SET" | "BOT_CHECK_FAILED" | "CART_INVALID" | "CART_NOT_FOUND" | "COLLECTION_NOT_FOUND" | "CSRF_INVALID" | "DOWNLOAD_NOT_FOUND" | "DOWNLOADS_NOT_CONFIGURED" | "EMAIL_NOT_VERIFIED" | "EMAIL_SAME" | "EMAIL_TAKEN" | "EMAIL_TAKEN_UNVERIFIED" | "GIFT_CARD_NOT_FOUND" | "GOOGLE_SIGNIN_NOT_CONFIGURED" | "GOOGLE_TOKEN_INVALID" | "IDEMPOTENCY_KEY_REQUIRED" | "IDEMPOTENCY_PAYLOAD_MISMATCH" | "INVALID_BIRTHDAY" | "INVALID_CHECKOUT_REQUEST" | "INVALID_CREDENTIALS" | "INVALID_PAYMENT_REQUEST" | "INVITE_INVALID" | "LEGAL_ACCEPTANCE_REQUIRED" | "LICENSE_KEY_MISSING" | "LICENSE_NOT_ACTIVE" | "LICENSE_NOT_FOUND" | "LOYALTY_REDEEM_FAILED" | "MAGIC_LINK_DISABLED" | "MAGIC_LINK_INVALID" | "NOT_AUTHENTICATED" | "NOT_RETURNABLE" | "ORDER_ALREADY_PAID" | "ORDER_NOT_FOUND" | "ORDER_NOT_PAYABLE" | "OUT_OF_STOCK" | "PASSWORD_INCORRECT" | "PAYMENT_METHOD_DISABLED" | "PAYMENT_METHOD_UNKNOWN" | "PAYMENT_NOT_FOUND" | "POST_NOT_FOUND" | "PRODUCT_NOT_FOUND" | "PURCHASE_REQUIRED" | "RATE_LIMITED" | "REVIEWS_DISABLED" | "SEAT_LIMIT_REACHED" | "SECURITY_CHECK_FAILED" | "SHIPPING_UNAVAILABLE" | "SIGN_IN_REQUIRED" | "STRIPE_NOT_CONFIGURED" | "SUBSCRIPTION_NOT_FOUND" | "TOKEN_INVALID" | "VARIANT_NOT_RECURRING";
         GatewayAttempt: {
             /** Format: uuid */
             attemptId: string;

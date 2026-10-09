@@ -191,11 +191,11 @@ async function createReturn(code: string, lineId: string, quantity = 1): Promise
   return b.id;
 }
 
-async function approveReturn(id: string): Promise<{ status: number; body: unknown }> {
+async function approveReturn(id: string, body: Record<string, unknown> = {}): Promise<{ status: number; body: unknown }> {
   const res = await app.request(`/v1/admin/returns/${id}/approve`, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'x-store-slug': SLUG, 'content-type': 'application/json' },
-    body: '{}',
+    body: JSON.stringify(body),
   });
   return { status: res.status, body: await res.json() };
 }
@@ -316,6 +316,39 @@ describe('POST /v1/admin/orders/{code}/refund — idempotency key', () => {
     // one call that happens.
     for (const call of refundCalls) expect(call.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/);
     expect(await refundRowCount(orderId)).toBe(1);
+  });
+});
+
+async function returnLineRestock(returnId: string): Promise<boolean[]> {
+  return withStore(STORE, async (tx) => {
+    const r = await tx.execute(sql`SELECT restock FROM return_line WHERE return_id = ${returnId}`);
+    return (r.rows as Array<{ restock: boolean }>).map((x) => x.restock);
+  });
+}
+
+describe('POST /v1/admin/returns/{id}/approve — the Returns page "Restock" choice', () => {
+  // The admin Returns page sends { restock } with Approve; the request schema used to strip it, so the flag chosen when
+  // the request was OPENED always won (and a customer-opened request is never pre-restocked).
+  it('an explicit restock on approve overrides the flag the request was opened with, in both directions', async () => {
+    const a = await seedPaidOrder('SR-RET-RS1');
+    const opened = await createReturn('SR-RET-RS1', a.lineId, 1); // opened with restock: true
+    expect(await returnLineRestock(opened)).toEqual([true]);
+    expect((await approveReturn(opened, { restock: false })).status).toBe(200);
+    expect(await returnLineRestock(opened)).toEqual([false]);
+
+    const b = await seedPaidOrder('SR-RET-RS2');
+    const second = await createReturn('SR-RET-RS2', b.lineId, 1);
+    await withStore(STORE, (tx) => tx.execute(sql`UPDATE return_line SET restock = false WHERE return_id = ${second}`)); // as a customer-opened request
+    expect((await approveReturn(second, { restock: true })).status).toBe(200);
+    expect(await returnLineRestock(second)).toEqual([true]);
+  });
+
+  it('approving without a restock choice leaves the request\'s own flag alone', async () => {
+    const { lineId } = await seedPaidOrder('SR-RET-RS3');
+    const id = await createReturn('SR-RET-RS3', lineId, 1);
+    await withStore(STORE, (tx) => tx.execute(sql`UPDATE return_line SET restock = false WHERE return_id = ${id}`));
+    expect((await approveReturn(id)).status).toBe(200);
+    expect(await returnLineRestock(id)).toEqual([false]);
   });
 });
 

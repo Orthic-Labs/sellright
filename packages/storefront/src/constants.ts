@@ -3,7 +3,10 @@ import { ENV_VARIABLES } from './env';
 import { AppState } from './types';
 import { theme, siteUrl } from './theme/theme.config';
 export const APP_STATE = createContextId<AppState>('app_state');
-export const AUTH_TOKEN = 'authToken';
+/** The API's HttpOnly customer-session cookie (`CUST_COOKIE` in packages/api/src/auth/cookies.ts). The server-side
+ *  guards (account layout, auth loader) can only see a signed-in shopper through THIS name; `authToken` was a leftover
+ *  from the previous backend and made every full page load of /account/* bounce to /sign-in. */
+export const AUTH_TOKEN = 'sr_cust';
 export const COUNTRY_COOKIE = 'countryCode';
 export const CUSTOMER_NOT_DEFINED_ID = 'CUSTOMER_NOT_DEFINED_ID';
 export const IMAGE_RESOLUTIONS = [1000, 800, 600, 400];
