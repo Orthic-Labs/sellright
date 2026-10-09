@@ -547,6 +547,13 @@
       "when": 1790000011400,
       "tag": "0086_order_shipping_method",
       "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "7",
+      "when": 1790000011500,
+      "tag": "0087_harden_outbox_rls_nullif",
+      "breakpoints": true
     }
   ]
 }
