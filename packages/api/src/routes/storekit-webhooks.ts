@@ -20,7 +20,7 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { withStore, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
-import { withLockedSet, LockSetUnstable, type PurchaseId } from '../db/locks.js';
+import { withLockedSet, LockSetUnstable, assertHeld, type PurchaseId } from '../db/locks.js';
 import { customerToken, resolveCustomer } from '../auth/session.js';
 import { errBody, guard, HttpError, J } from './admin-helpers.js';
 import { resolveStoreFromCtx } from './store-context.js';
@@ -35,7 +35,7 @@ import {
   type StoreKitAppConfig,
 } from '../licensing/storekit-config.js';
 import { storeKitPolicyFor, type LinkOutcome, type HttpResult, type VerifiedProofSet } from '../licensing/storekit/policy.js';
-import '../licensing/storekit/default-policy.js'; // registers sellright-default
+import { installDefaultStoreKitPolicy } from '../licensing/storekit/default-policy.js';
 
 export const storeKitWebhooks = new OpenAPIHono();
 
@@ -103,6 +103,7 @@ storeKitWebhooks.post('/v1/webhooks/apple/storekit', async (c) => {
     return c.json({ received: true }, 200);
   }
 
+  installDefaultStoreKitPolicy();
   const policy = storeKitPolicyFor(appCfg.appKey);
   const applyInput = {
     storeId: appCfg.storeId,
@@ -122,6 +123,7 @@ storeKitWebhooks.post('/v1/webhooks/apple/storekit', async (c) => {
       // retries non-2xx, and a duplicate delivery must be a no-op.
       const claimed = await claim(tx);
       if (claimed.length === 0) return;
+      await assertHeld(tx, held);
 
       const restoreActivations = policy.cascade
         ? (await policy.cascade(tx, held, { purchase, licenseId: plan.licenseIds[0] ?? null, appKey: appCfg.appKey, action, now: new Date() })).restoreActivations
@@ -140,6 +142,7 @@ storeKitWebhooks.post('/v1/webhooks/apple/storekit', async (c) => {
           purchase,
         });
         if (decision.materialize) {
+          await assertHeld(tx, held);
           await policy.issue(tx, held, {
             purpose: 'materialize',
             storeId: appCfg.storeId,
@@ -198,7 +201,7 @@ storeKitWebhooks.openapi(
     method: 'post', path: '/v1/shop/pro/link-storekit',
     summary: 'Link a VERIFIED App Store purchase to the signed-in account and activate this device',
     request: {
-      body: { content: J(LinkStoreKitIn) },
+      body: { content: J(LinkStoreKitIn.loose()) },
     },
     responses: {
       200: { description: 'Linked', content: J(z.object({ ok: z.boolean(), activationToken: z.string(), lease: LeaseOut })) },
@@ -211,6 +214,7 @@ storeKitWebhooks.openapi(
   async (c) => guard(c, async () => {
     const st = await resolveStoreFromCtx(c);
     const body = c.req.valid('json');
+    installDefaultStoreKitPolicy();
     const policy = storeKitPolicyFor(body.appKey);
 
     // Engine steps A–C: no transaction is open while Apple is verified.
@@ -225,7 +229,7 @@ storeKitWebhooks.openapi(
 async function linkOutcome(
   c: Parameters<typeof customerToken>[0],
   storeId: string,
-  body: z.infer<typeof LinkStoreKitIn>,
+  body: z.infer<typeof LinkStoreKitIn> & Record<string, unknown>,
   policy: ReturnType<typeof storeKitPolicyFor>,
 ): Promise<LinkOutcome> {
   const appCfg: StoreKitAppConfig | null = await withStore(storeId, (tx) => loadStoreKitAppConfig(tx, storeId, body.appKey));
@@ -238,11 +242,20 @@ async function linkOutcome(
   const cust = custToken ? await withStore(storeId, (tx) => resolveCustomer(tx, custToken)) : null;
   if (!cust) return { kind: 'unauth' };
 
+  // Policy-declared request fields (linkRequestExtension), parsed here so a malformed extension is a
+  // validation outcome after the customer check, like every other pre-transaction rejection.
+  let extensions: Record<string, unknown> = {};
+  if (policy.linkRequestExtension) {
+    const parsed = z.object(policy.linkRequestExtension).safeParse(body);
+    if (!parsed.success) return { kind: 'validation', status: 400, message: 'invalid link request' };
+    extensions = parsed.data;
+  }
+
   // Engine step D: policy validation (may verify paired proofs; no DB writes).
   const validation = await policy.validateLink({
     storeId,
     appCfg,
-    request: { ...body, extensions: {} },
+    request: { ...body, extensions },
     primary: verified.payload,
     customerId: cust.id,
     verifyPaired: (jws) => verifyStoreKitTransactionForDeployment(jws, deploymentConfigFor(appCfg)),
@@ -255,7 +268,9 @@ async function linkOutcome(
   const entitlement = appCfg.productMap[proofs.primary.productId] ?? null;
   let issued;
   try {
-    issued = await withLockedSet(storeId, { kind: 'link', purchases }, (tx, held) => policy.issue(tx, held, {
+    issued = await withLockedSet(storeId, { kind: 'link', purchases }, async (tx, held) => {
+      await assertHeld(tx, held);
+      return policy.issue(tx, held, {
       purpose: 'link',
       storeId,
       appCfg,
@@ -264,7 +279,8 @@ async function linkOutcome(
       entitlement,
       device: { deviceIdHash: body.deviceIdHash, platform: body.platform ?? null, label: body.deviceLabel ?? null },
       facts: validation.facts,
-    }));
+      });
+    });
   } catch (e) {
     if (e instanceof LockSetUnstable) return { kind: 'lock_unstable' };
     throw e;

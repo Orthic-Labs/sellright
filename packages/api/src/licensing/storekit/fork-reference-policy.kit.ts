@@ -10,14 +10,15 @@
 // Not reproduced (recorded in docs/policies/STOREKIT-POLICY.md): device lease issuance,
 // order-released credit (releasedUpgradeOrder), reservations, route-level request
 // extension merge, lockPlan dependents cascade.
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
+import { z } from 'zod';
 import type { Tx } from '../../db/client.js';
-import type { HeldLocks } from '../../db/locks.js';
+import type { HeldLocks, LockPlanContribution, LockSubject, PurchaseId } from '../../db/locks.js';
 import * as s from '../../db/schema.js';
 import { ensureStoreKitLicense, issueStoreKitActivation, storeKitLicenseKey, type VerifiedStoreKitLicenseSource } from '../storekit-license.js';
 import type { StoreKitTransactionPayload } from '../storekit-verify.js';
 import { sellrightRespond, sourceFromTransaction } from './default-policy.js';
-import type { HttpResult, IssueInput, IssueResult, LinkOutcome, StoreKitPolicy } from './policy.js';
+import type { HttpResult, IssueInput, IssueResult, LinkOutcome, NotificationChange, StoreKitPolicy } from './policy.js';
 
 export const FORK_PRODUCTS = {
   mobile: 'app.heardright.pro.ios.lifetime',
@@ -83,6 +84,12 @@ async function issueForkLink(tx: Tx, i: Extract<IssueInput, { purpose: 'link' }>
       customerId: i.customerId, entitlement: null, source: sourceFromTransaction(mobile),
     });
     if (ensuredMobile.kind !== 'ok') return { kind: 'account_conflict' };
+    // The paired mobile licence must still be an active, unexpired source (fork storekit-license.ts:101–103).
+    const [mobileNow] = await tx.select({ status: s.license.status, expiresAt: s.license.expiresAt })
+      .from(s.license).where(eq(s.license.id, ensuredMobile.id)).limit(1);
+    if (!mobileNow || mobileNow.status !== 'active' || (mobileNow.expiresAt && mobileNow.expiresAt.getTime() <= Date.now())) {
+      return { kind: 'rejected', code: 'mobile_source_required' };
+    }
     mobileLicenseId = ensuredMobile.id;
   }
 
@@ -112,9 +119,84 @@ async function issueForkLink(tx: Tx, i: Extract<IssueInput, { purpose: 'link' }>
   };
 }
 
+
+const NONE: LockPlanContribution = { purchases: [], licenseIds: [], orderIds: [] };
+
+/** Licences whose upgrade credit points at one of `sourceIds` (fork query: storekit-license.ts:421). */
+async function dependentsOf(tx: Tx, storeId: string, sourceIds: readonly string[]): Promise<{ id: string; orderId: string | null }[]> {
+  if (!sourceIds.length) return [];
+  const rows = await tx.select({ id: s.license.id, orderId: s.license.orderId }).from(s.license).where(and(
+    eq(s.license.storeId, storeId),
+    eq(s.license.appKey, FORK_APP_KEY),
+    sql`${s.license.metadata}->>'mobile_upgrade_source_id' IN (${sql.join(sourceIds.map((id) => sql`${id}`), sql`, `)})`,
+  ));
+  return rows;
+}
+
+/** Root licences bound to a purchase identity. */
+async function rootLicenseOf(tx: Tx, p: PurchaseId): Promise<string[]> {
+  const rows = await tx.select({ licenseId: s.storekitPurchase.licenseId }).from(s.storekitPurchase).where(and(
+    eq(s.storekitPurchase.storeId, p.storeId),
+    eq(s.storekitPurchase.environment, p.environment),
+    eq(s.storekitPurchase.originalTransactionId, p.originalTransactionId),
+  ));
+  return rows.map((r) => r.licenseId).filter((id): id is string => !!id);
+}
+
+/** Plan contribution (STOREKIT §5.3 rightsuite): the dependents of the bound licence(s) and their orders. */
+export async function forkLockPlan(tx: Tx, subject: LockSubject): Promise<LockPlanContribution> {
+  if (subject.kind === 'notification' || subject.kind === 'link') {
+    const purchases = subject.kind === 'notification' ? [subject.purchase] : subject.purchases;
+    const storeId = purchases[0]?.storeId;
+    if (!storeId) return NONE;
+    const roots = (await Promise.all(purchases.map((p) => rootLicenseOf(tx, p)))).flat();
+    const deps = await dependentsOf(tx, storeId, roots);
+    return { purchases: [], licenseIds: deps.map((d) => d.id), orderIds: deps.flatMap((d) => (d.orderId ? [d.orderId] : [])) };
+  }
+  if (subject.kind === 'order') {
+    const [ord] = await tx.select({ storeId: s.order.storeId, metadata: s.order.metadata }).from(s.order).where(eq(s.order.id, subject.orderId)).limit(1);
+    const sourceId = (ord?.metadata as Record<string, unknown> | null)?.mobile_upgrade_source_id;
+    if (!ord || typeof sourceId !== 'string') return NONE;
+    const [src] = await tx.select({ metadata: s.license.metadata }).from(s.license).where(eq(s.license.id, sourceId)).limit(1);
+    const m = record(src?.metadata);
+    const purchases: PurchaseId[] = typeof m.storekit_original_transaction_id === 'string' && typeof m.storekit_environment === 'string'
+      ? [{ storeId: ord.storeId, environment: m.storekit_environment, originalTransactionId: m.storekit_original_transaction_id }]
+      : [];
+    const siblings = await dependentsOf(tx, ord.storeId, [sourceId]);
+    return {
+      purchases,
+      licenseIds: [sourceId, ...siblings.map((d) => d.id)],
+      orderIds: siblings.flatMap((d) => (d.orderId ? [d.orderId] : [])),
+    };
+  }
+  return NONE;
+}
+
+/** Dependent cascade (fork storekit-license.ts:415–427, :478): revoke or expire takes the source and its
+ *  dependents to revoked and tombstones their active activations (generation bump). Restore touches no dependent
+ *  and never un-tombstones activations. The root's storekit_purchase_revoked flag mirrors the fork's metadata. */
+export async function forkCascade(tx: Tx, c: NotificationChange): Promise<{ restoreActivations: boolean }> {
+  const root = c.licenseId;
+  if (root && (c.action === 'revoke' || c.action === 'restore')) {
+    await mergeLicenseMetadata(tx, root, { storekit_purchase_revoked: c.action === 'revoke' });
+  }
+  if (root && (c.action === 'revoke' || c.action === 'expire')) {
+    const deps = await dependentsOf(tx, c.purchase.storeId, [root]);
+    const ids = [root, ...deps.map((d) => d.id)];
+    await tx.update(s.license).set({ status: 'revoked', updatedAt: c.now }).where(inArray(s.license.id, ids));
+    await tx.execute(sql`
+      UPDATE license_activation
+      SET state = 'revoked', revoked_at = ${c.now}, generation = generation + 1
+      WHERE state = 'active' AND license_id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
+    `);
+  }
+  return { restoreActivations: false };
+}
+
 export const forkReferencePolicy: StoreKitPolicy = {
   id: 'rightsuite-fork-reference',
   appKeys: [FORK_APP_KEY],
+  linkRequestExtension: { signedMobileTransactionInfo: z.string().min(20).optional() },
   async validateLink(i) {
     const platform = i.request.platform;
     if (platform && platform !== 'ios' && platform !== 'ipados') {
@@ -135,6 +217,9 @@ export const forkReferencePolicy: StoreKitPolicy = {
     if (i.productId === FORK_PRODUCTS.upgrade) return { materialize: false };
     return { materialize: true, entitlement: i.productId ? i.appCfg.productMap[i.productId] ?? null : null };
   },
+  async lockPlan(tx, subject): Promise<LockPlanContribution> {
+    return forkLockPlan(tx, subject);
+  },
   async issue(tx, _held: HeldLocks, i) {
     if (i.purpose === 'materialize') {
       if (!scopeOf(i.source.productId ?? '')) return { kind: 'rejected', code: 'invalid_product' };
@@ -147,8 +232,8 @@ export const forkReferencePolicy: StoreKitPolicy = {
     }
     return issueForkLink(tx, i);
   },
-  async cascade() {
-    return { restoreActivations: false };
+  async cascade(tx, _held: HeldLocks, c: NotificationChange) {
+    return forkCascade(tx, c);
   },
   respond(o: LinkOutcome): HttpResult {
     // Fork wire: any non-ok, non-account-conflict issue result is the invalid-purchase 400.

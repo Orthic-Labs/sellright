@@ -61,6 +61,7 @@ import { isMaintenanceOn, maintenanceInfo } from './maintenance.js';
 import { requestIdMiddleware, accessLogMiddleware } from './lib/request-id.js';
 import { err as logErr } from './lib/logger.js';
 import { listApiPlugins } from './plugins.js';
+import { installDefaultStoreKitPolicy } from './licensing/storekit/default-policy.js';
 
 export const SELLRIGHT_VERSION = '0.1.0';
 
@@ -364,6 +365,9 @@ export function createApp(): OpenAPIHono {
   // plugin path never shadows a built-in one on an exact-path conflict. Empty
   // by default — nothing is registered unless a fork calls registerApiPlugin()
   // from its own entrypoint before createApp() runs.
+  // StoreKit fallback policy (sellright-default) is installed before plugins run, so a plugin's
+  // init() registers its own appKey policy (ApiPlugin.init, STOREKIT §3). A plugin may not add a second fallback.
+  installDefaultStoreKitPolicy();
   for (const plugin of listApiPlugins()) {
     if (plugin.routes) app.route('/', plugin.routes);
   }

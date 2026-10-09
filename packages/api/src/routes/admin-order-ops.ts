@@ -647,6 +647,8 @@ adminOrderOps.openapi(
         // Order editing (G13): edit history + adjustments (also ON DELETE cascade in 0084).
         await tx.delete(s.orderEdit).where(eq(s.orderEdit.orderId, o.id));
         await tx.delete(s.orderAdjustment).where(eq(s.orderAdjustment.orderId, o.id));
+        // Payment reservations (PAYMENT-TIMING): deleted before the order; the lock set already holds them (L4).
+        await tx.delete(s.orderReservation).where(eq(s.orderReservation.orderId, o.id));
         await tx.update(s.giftCardTransaction).set({ orderId: null }).where(eq(s.giftCardTransaction.orderId, o.id));
         await tx.update(s.stockMovement).set({ refOrderId: null }).where(eq(s.stockMovement.refOrderId, o.id));
         // A converted cart points back at this order (nullable FK) — detach it so

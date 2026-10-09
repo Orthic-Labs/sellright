@@ -63,14 +63,34 @@ Reproduces, through the policy contract and the built-in route:
 - credit used by a different upgrade key (`storekit-license.ts:115–122`, metadata part)
 - restore does not re-activate tombstoned devices (`storekit-license.ts:478`)
 
+## Extension, lock plan, registration, guard (STOREKIT §3, §5.3, §5.5)
+
+- Route-level request extension: a policy's `linkRequestExtension` zod shape is parsed per request after the
+  customer check; failures are a 400 `invalid link request`. The kit's `signedMobileTransactionInfo` reaches
+  `validateLink` through `request.extensions`.
+- `linkResponseExtension` is typed only. The OpenAPI document is built at startup from static route definitions,
+  so extension shapes are not merged into the published spec (open).
+- `lockPlan` hooks: every registered policy's `lockPlan` is unioned into the plan of each subject
+  (`db/locks.ts` `registerLockPlanContributor`). The kit adds, for notifications and links, the upgrade dependents of
+  the bound licence (and their orders), and for an order subject the upgrade source, its Apple purchase and siblings.
+- Registration: the default fallback is installed by `createApp()` (`installDefaultStoreKitPolicy`, idempotent)
+  before plugins run; no registration happens at module load. Plugins register through `ApiPlugin.init`.
+- `assertHeld` (debug/test only; no-op when `NODE_ENV=production`): the engine calls it before every `issue` and
+  `cascade`. It checks the brand came from `withLockedSet` in the same transaction, that promised purchase advisory
+  keys are granted in `pg_locks`, and that promised L2/L3 rows were taken by this set (row locks are not visible in
+  `pg_locks`, so rows are checked by bookkeeping).
+- Dependent cascade (kit `cascade`): revoke or expire takes the source and its dependents to `revoked` and tombstones
+  active activations with a generation bump; restore touches no dependent and never un-tombstones.
+- The kit rejects a paired mobile licence that is not active and unexpired (fork `storekit-license.ts:101–103`).
+
 ## Not done (open against STOREKIT §8)
 
-- Route-level request and response extension merge (`linkRequestExtension`, `linkResponseExtension`). The fork's `signedMobileTransactionInfo` therefore reaches `validateLink` only programmatically; tests drive the paired proof through `issue` directly.
-- `lockPlan` contributions from policies (dependent licences and orders). The default policy has none, and the kit does not lock dependents.
-- Order-released credit (`releasedUpgradeOrder`) and `order_reservation` (PAYMENT-TIMING §3.2–3.4, migration 0089).
-- Device lease credential and `issueDeviceLease`; the kit issues activations, so heardright lease wire is not reproduced.
-- T-K2 randomised interleavings (≥200 seeds) with capture and the upgrade order; only a 5-round concurrent-notification check exists.
-- T-K4 golden recordings from the old runtime; T-K5 lock-set growth with `pg_locks` checks; T-K7 `LockOrderRecorder`; T-K8 `storekit_event`; T-K9 zero open transactions during verification (pool instrumentation); T-K11 `validUpgradeOrder`; T-K12 cascade ordering with tombstones; T-K14 rollback compatibility; T-K15 sandbox/platform matrix; T-K16 pairwise interleaving matrix.
-- Runtime `assertHeld` guard and the ESLint ban on lock statements (§5.5).
-- Plugin registration through `ApiPlugin.init(app)`. Registration is module-level for now.
-- The `lock-audit` allow-list still records `applyStoreKitNotification` (#19). It is called only under the set, but the static audit does not follow calls.
+- `linkResponseExtension` in the published OpenAPI document (see above).
+- Order-released credit (`releasedUpgradeOrder`), `order_reservation` and the settlement leg of T-K2 (PAYMENT-TIMING
+  §3.2–3.4, migration 0089): owned by the payment lanes.
+- T-K11 `validUpgradeOrder`: depends on reservations and is owned by the payment lanes.
+- Device lease credential and `issueDeviceLease`; heardright lease wire is not reproduced.
+- T-K4 heardright goldens from the old runtime (only the default-policy goldens exist, recorded from HEAD).
+- T-K7 `LockOrderRecorder`, T-K8 `storekit_event`, T-K14 rollback compatibility, T-K15 sandbox/platform matrix,
+  T-K16 pairwise interleaving matrix: prerequisites not in this lane.
+- The `lock-audit` allow-list still records `applyStoreKitNotification` (#19).

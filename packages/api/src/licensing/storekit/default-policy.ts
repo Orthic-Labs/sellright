@@ -4,7 +4,7 @@
 // tombstoned devices, and the SellRight wire mapping.
 import { issueStoreKitActivation, ensureStoreKitLicense, type VerifiedStoreKitLicenseSource } from '../storekit-license.js';
 import type { StoreKitTransactionPayload } from '../storekit-verify.js';
-import { registerStoreKitPolicy, type HttpResult, type IssueInput, type IssueResult, type LinkOutcome, type StoreKitPolicy } from './policy.js';
+import { registerStoreKitPolicy, storeKitFallbackPolicy, type HttpResult, type IssueInput, type IssueResult, type LinkOutcome, type StoreKitPolicy } from './policy.js';
 
 /** Engine source mapping for a verified transaction (fields SellRight stores on the purchase row). */
 export function sourceFromTransaction(p: StoreKitTransactionPayload): VerifiedStoreKitLicenseSource {
@@ -134,4 +134,8 @@ export const sellrightDefaultPolicy: StoreKitPolicy = {
   respond: sellrightRespond,
 };
 
-registerStoreKitPolicy(sellrightDefaultPolicy);
+/** Installs sellright-default as the fallback policy. Idempotent: a no-op when a fallback already exists
+ *  (a plugin may register its own fallback first). Called by the route and by createApp(); never at import. */
+export function installDefaultStoreKitPolicy(): void {
+  if (!storeKitFallbackPolicy()) registerStoreKitPolicy(sellrightDefaultPolicy);
+}

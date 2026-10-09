@@ -13,6 +13,9 @@ import type { HeldLocks, PurchaseId } from '../../db/locks.js';
 import type { StoreKitAppConfig, StoreKitProductEntitlement } from '../storekit-config.js';
 import type { StoreKitTransactionPayload, VerifyStoreKitResult } from '../storekit-verify.js';
 import type { VerifiedStoreKitLicenseSource } from '../storekit-license.js';
+import type { ZodType } from 'zod';
+import type { LockPlanContribution, LockSubject } from '../../db/locks.js';
+import { registerLockPlanContributor } from '../../db/locks.js';
 
 export interface VerifiedProofSet {
   readonly primary: StoreKitTransactionPayload;
@@ -130,8 +133,14 @@ export interface StoreKitPolicy {
   readonly id: string;
   /** appKeys this policy serves. Omitted = the fallback policy (at most one). */
   readonly appKeys?: readonly string[];
+  /** Zod shape merged into the link request. Parsed per request; failures are a 400 validation outcome. */
+  readonly linkRequestExtension?: Readonly<Record<string, ZodType>>;
+  /** Zod shape describing extra link response fields. Documentation/OpenAPI shape; respond() owns the body. */
+  readonly linkResponseExtension?: Readonly<Record<string, ZodType>>;
   validateLink(i: ValidateLinkInput): Promise<LinkValidation>;
   decideMaterialize(i: DecideMaterializeInput): MaterializeDecision;
+  /** Extra dependent licences/orders to lock with a subject (STOREKIT §5.3). Runs unlocked and again under the locks. */
+  lockPlan?(tx: Tx, subject: LockSubject): Promise<LockPlanContribution>;
   issue(tx: Tx, held: HeldLocks, i: IssueInput): Promise<IssueResult>;
   cascade?(tx: Tx, held: HeldLocks, c: NotificationChange): Promise<CascadeResult>;
   respond(o: LinkOutcome): HttpResult;
@@ -154,6 +163,11 @@ export function registerStoreKitPolicy(p: StoreKitPolicy): void {
   for (const k of p.appKeys) byAppKey.set(k, p);
 }
 
+/** The registered fallback policy, if any. */
+export function storeKitFallbackPolicy(): StoreKitPolicy | null {
+  return fallback;
+}
+
 /** Policy serving an appKey: its own registration, else the fallback. */
 export function storeKitPolicyFor(appKey: string): StoreKitPolicy {
   const p = byAppKey.get(appKey) ?? fallback;
@@ -166,3 +180,24 @@ export function _resetStoreKitPoliciesForTests(): void {
   byAppKey.clear();
   fallback = null;
 }
+
+function registeredPolicies(): StoreKitPolicy[] {
+  const all = new Set<StoreKitPolicy>(byAppKey.values());
+  if (fallback) all.add(fallback);
+  return [...all];
+}
+
+// Every registered policy's lockPlan joins the engine's plan (STOREKIT §5.3, plan plus union).
+registerLockPlanContributor(async (tx, subject) => {
+  let out: LockPlanContribution = { purchases: [], licenseIds: [], orderIds: [] };
+  for (const p of registeredPolicies()) {
+    if (!p.lockPlan) continue;
+    const c = await p.lockPlan(tx, subject);
+    out = {
+      purchases: [...out.purchases, ...c.purchases],
+      licenseIds: [...out.licenseIds, ...c.licenseIds],
+      orderIds: [...out.orderIds, ...c.orderIds],
+    };
+  }
+  return out;
+});

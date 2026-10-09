@@ -17,7 +17,61 @@ import * as s from './schema.js';
 
 declare const heldBrand: unique symbol;
 export type HeldLocks = { readonly [heldBrand]: true };
-const mintHeld = (): HeldLocks => ({}) as HeldLocks;
+
+/** What withLockedSet promised and actually took, keyed by the HeldLocks object (STOREKIT §5.5). */
+interface Witness {
+  tx: Tx | null;                        // the transaction the locks were taken in (set once fn starts)
+  advisoryHashes: bigint[];             // L1 keys acquired with pg_advisory_xact_lock
+  promisedLicenseIds: string[];         // L2 rows promised by the plan
+  promisedOrderIds: string[];           // L3 rows promised by the plan
+  lockedRows: Set<string>;              // `license:<id>` / `order:<id>` taken by lockRows in this tx
+}
+const witnesses = new WeakMap<object, Witness>();
+const mintHeld = (w: Witness): HeldLocks => {
+  const held = {} as HeldLocks;
+  witnesses.set(held, w);
+  return held;
+};
+
+/** Thrown by assertHeld when a hook runs without the locks its plan promised. */
+export class HeldLocksMissing extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'HeldLocksMissing';
+  }
+}
+
+const lockGuardActive = () => process.env.NODE_ENV !== 'production';
+
+/**
+ * Runtime guard (STOREKIT §5.5, debug/test builds only; a no-op in production): the held brand must come
+ * from withLockedSet in this same transaction, every promised L1 advisory key must be granted to this
+ * backend in pg_locks, and every promised L2/L3 row must have been taken by lockRows in this transaction.
+ * Row locks are not visible in pg_locks, so rows are checked by bookkeeping, not by the catalogue.
+ */
+export async function assertHeld(tx: Tx, held: HeldLocks): Promise<void> {
+  if (!lockGuardActive()) return;
+  const w = witnesses.get(held);
+  if (!w) throw new HeldLocksMissing('HeldLocks was not minted by withLockedSet');
+  if (w.tx !== tx) throw new HeldLocksMissing('HeldLocks belongs to a different transaction');
+  for (const id of w.promisedLicenseIds) {
+    if (!w.lockedRows.has(`license:${id.toLowerCase()}`)) throw new HeldLocksMissing(`license ${id} not locked by this set`);
+  }
+  for (const id of w.promisedOrderIds) {
+    if (!w.lockedRows.has(`order:${id.toLowerCase()}`)) throw new HeldLocksMissing(`order ${id} not locked by this set`);
+  }
+  if (w.advisoryHashes.length) {
+    const { rows } = await tx.execute(
+      sql`SELECT classid::text AS hi, objid::text AS lo FROM pg_locks WHERE locktype = 'advisory' AND pid = pg_backend_pid() AND granted`,
+    );
+    const granted = new Set(
+      (rows as { hi: string; lo: string }[]).map((r) => BigInt.asIntN(64, (BigInt(r.hi) << 32n) | BigInt(r.lo)).toString()),
+    );
+    for (const h of w.advisoryHashes) {
+      if (!granted.has(BigInt.asIntN(64, h).toString())) throw new HeldLocksMissing(`purchase advisory ${h} not granted`);
+    }
+  }
+}
 
 export type PurchaseId = { storeId: string; environment: string; originalTransactionId: string };
 
@@ -33,7 +87,8 @@ export interface LockPlanContribution {
   readonly purchases: readonly PurchaseId[];
   readonly licenseIds: readonly string[];
   readonly orderIds: readonly string[];
-  readonly reservationIds: readonly string[];
+  /** Contributors never add reservations; the planner derives L4 from the planned orders. */
+  readonly reservationIds?: readonly string[];
 }
 
 export class LockSetGrew extends Error {
@@ -57,9 +112,9 @@ export const purchaseLockKey = (p: PurchaseId): string =>
   `${p.storeId}:${p.environment}:${p.originalTransactionId}`;
 
 /** L1: transaction advisory locks, sorted ascending by the 64-bit hash, de-duplicated. */
-export async function acquirePurchaseLocks(tx: Tx, purchases: readonly PurchaseId[]): Promise<void> {
+export async function acquirePurchaseLocks(tx: Tx, purchases: readonly PurchaseId[]): Promise<bigint[]> {
   const keys = [...new Set(purchases.map(purchaseLockKey))];
-  if (!keys.length) return;
+  if (!keys.length) return [];
   const { rows } = await tx.execute(
     sql`SELECT hashtextextended(k, 0)::text AS h FROM unnest(${sql.param(keys)}::text[]) AS k`,
   );
@@ -67,6 +122,7 @@ export async function acquirePurchaseLocks(tx: Tx, purchases: readonly PurchaseI
     a < b ? -1 : a > b ? 1 : 0,
   );
   for (const h of hashes) await tx.execute(sql`SELECT pg_advisory_xact_lock(${h.toString()}::bigint)`);
+  return hashes;
 }
 
 const canonical = (id: string) => id.toLowerCase();
@@ -84,6 +140,7 @@ async function lockRows(
   table: 'license' | 'order' | 'order_reservation',
   storeId: string,
   ids: readonly string[],
+  taken: Set<string>,
 ): Promise<void> {
   const sorted = [...new Set(ids.map(canonical))].sort();
   for (const id of sorted) {
@@ -94,6 +151,7 @@ async function lockRows(
     } else {
       await tx.execute(sql`SELECT 1 FROM ${s.orderReservation} WHERE id = ${id} AND store_id = ${storeId} FOR UPDATE`);
     }
+    taken.add(`${table}:${id}`);
   }
 }
 
@@ -111,19 +169,19 @@ function union(a: LockPlanContribution, b: LockPlanContribution): LockPlanContri
     purchases: [...a.purchases, ...b.purchases],
     licenseIds: [...new Set([...a.licenseIds, ...b.licenseIds])],
     orderIds: [...new Set([...a.orderIds, ...b.orderIds])],
-    reservationIds: [...new Set([...a.reservationIds, ...b.reservationIds])],
+    reservationIds: [...new Set([...(a.reservationIds ?? []), ...(b.reservationIds ?? [])])],
   };
 }
 
 function subsetOf(a: LockPlanContribution, b: LockPlanContribution): boolean {
   const setB = new Set(b.licenseIds.map(canonical));
   const setO = new Set(b.orderIds.map(canonical));
-  const setR = new Set(b.reservationIds.map(canonical));
+  const setR = new Set((b.reservationIds ?? []).map(canonical));
   const setP = new Set(b.purchases.map(purchaseLockKey));
   return (
     a.licenseIds.every((id) => setB.has(canonical(id))) &&
     a.orderIds.every((id) => setO.has(canonical(id))) &&
-    a.reservationIds.every((id) => setR.has(canonical(id))) &&
+    (a.reservationIds ?? []).every((id) => setR.has(canonical(id))) &&
     a.purchases.every((p) => setP.has(purchaseLockKey(p)))
   );
 }
@@ -194,9 +252,21 @@ async function planOne(tx: Tx, storeId: string, subject: LockSubject): Promise<L
   }
 }
 
+/** Extra plan contributors (registered policies' lockPlan hooks, STOREKIT §5.3). Empty by default. */
+export type LockPlanContributor = (tx: Tx, subject: LockSubject) => Promise<LockPlanContribution>;
+const contributors: LockPlanContributor[] = [];
+
+/** Register a plan contributor. Called once per module by the policy host; never per request. */
+export function registerLockPlanContributor(fn: LockPlanContributor): void {
+  contributors.push(fn);
+}
+
 async function planFor(tx: Tx, storeId: string, subjects: readonly LockSubject[]): Promise<LockPlanContribution> {
   let plan: LockPlanContribution = EMPTY;
-  for (const subject of subjects) plan = union(plan, await planOne(tx, storeId, subject));
+  for (const subject of subjects) {
+    plan = union(plan, await planOne(tx, storeId, subject));
+    for (const contribute of contributors) plan = union(plan, await contribute(tx, subject));
+  }
   // L4: every planned order's reservations (an order's holds are locked with the order).
   if (plan.orderIds.length) {
     const rows = await tx
@@ -228,15 +298,23 @@ export async function withLockedSet<T>(
   for (let attempt = 0; ; attempt++) {
     try {
       return await withStore(storeId, async (tx) => {
+        const taken = new Set<string>();
         if (opts.mustCommit) await tx.execute(sql`SET LOCAL lock_timeout = 0`);
         else await tx.execute(sql`SET LOCAL lock_timeout = '5s'`);
-        await acquirePurchaseLocks(tx, plan.purchases); // L1
-        await lockRows(tx, 'license', storeId, plan.licenseIds); // L2
-        await lockRows(tx, 'order', storeId, plan.orderIds); // L3
+        const advisoryHashes = await acquirePurchaseLocks(tx, plan.purchases); // L1
+        await lockRows(tx, 'license', storeId, plan.licenseIds, taken); // L2
+        await lockRows(tx, 'order', storeId, plan.orderIds, taken); // L3
         const again = await planFor(tx, storeId, subjects); // re-plan UNDER the locks
         if (!subsetOf(again, plan)) throw new LockSetGrew(again); // rollback releases every lock
-        await lockRows(tx, 'order_reservation', storeId, plan.reservationIds); // L4
-        return fn(tx, mintHeld(), plan);
+        await lockRows(tx, 'order_reservation', storeId, plan.reservationIds ?? [], taken); // L4
+        const witness: Witness = {
+          tx,
+          advisoryHashes,
+          promisedLicenseIds: plan.licenseIds.map(canonical),
+          promisedOrderIds: plan.orderIds.map(canonical),
+          lockedRows: taken,
+        };
+        return fn(tx, mintHeld(witness), plan);
       });
     } catch (e) {
       if (!(e instanceof LockSetGrew) && !isLockTimeout(e)) throw e;
