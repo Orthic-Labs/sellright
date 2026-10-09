@@ -1,4 +1,5 @@
 const id = '[a-zA-Z0-9_-]+';
+const uuid = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
 const reads = new RegExp(`^/v1/admin/(me|dashboard|products|variants|collections|inventory|orders|customers|reports|activity|locations|promotions|returns)(/${id})?(/(movements|options))?$`);
 // The generic storefront's read-only browse/receipt surface. Deliberately
 // excludes /v1/shop/auth/*, /account/*, /stripe-key, /*/payment-intent,
@@ -8,6 +9,14 @@ const reads = new RegExp(`^/v1/admin/(me|dashboard|products|variants|collections
 // per-product reviews READ (GET .../reviews) is allowed so the PDP reviews
 // block renders; submitting a review (POST) stays denied — the demo has no
 // customer accounts to sign in with.
+// Owner features the admin SPA renders on top of core commerce: points
+// (summary/settings/per-customer balance), review moderation queue+settings,
+// order-edit context + variant picker, waitlist demand report (+CSV), SEO
+// config/sitemap PREVIEW, blog list/detail. All reads, all store-scoped.
+const featureReads = new RegExp(`^/v1/admin/(loyalty/(settings|summary)|customers/${id}/loyalty|reviews|reviews-settings|orders/${id}/edit/(context|variants)|waitlist/report(\\.csv)?|seo/(config|sitemaps)|blog|blog/${id})$`);
+// Order export dialog: column catalog + the CSV and XLSX downloads. Exact
+// paths only — every other path containing /export stays denied.
+const exportReads = /^\/v1\/admin\/export\/orders(\.xlsx|\/columns)?$/;
 const shopReads = new RegExp(`^/v1/shop/(config|shipping-methods|currencies|catalog/collections|catalog/products(/${id})?(/stock|/reviews)?|catalog/search|collections/${id}|cart/[a-f0-9-]{36}|orders/${id}|blog(/${id})?)$`);
 export function interactiveRequest(method, path) {
   // Explicit, defense-in-depth: installation-admin/system routes (recovery
@@ -19,19 +28,97 @@ export function interactiveRequest(method, path) {
   // check that can't be silently widened by a future regex edit to `reads`.
   if (/^\/v1\/admin\/system(\/|$)/.test(path) || path === '/v1/admin/step-up') return false;
   if (['GET', 'HEAD'].includes(method)) {
+    if (exportReads.test(path)) return true;
     if (path.includes('/export')) return false;
-    return reads.test(path) || shopReads.test(path);
+    return reads.test(path) || featureReads.test(path) || shopReads.test(path);
   }
   if (method === 'POST') return ['/v1/shop/cart', '/v1/shop/cart/estimate', '/v1/shop/checkout', '/v1/admin/promotions', '/v1/admin/products'].includes(path) ||
     new RegExp(`^/v1/admin/products/${id}/variants$`).test(path) ||
-    new RegExp(`^/v1/admin/orders/${id}/(refund|fulfill|cancel)$`).test(path);
+    new RegExp(`^/v1/admin/orders/${id}/(refund|fulfill|cancel)$`).test(path) ||
+    // Owner features. NOT allowed here: /v1/admin/reviews/{id} DELETE, loyalty
+    // adjust/reverse, SEO config PATCH / indexnow submit / sitemaps refresh.
+    path === '/v1/admin/blog' ||
+    new RegExp(`^/v1/admin/reviews/${uuid}/(approve|reject)$`).test(path) ||
+    new RegExp(`^/v1/admin/orders/${id}/edit/(preview|commit)$`).test(path);
+  if (method === 'PUT') return path === '/v1/admin/loyalty/settings' || path === '/v1/admin/reviews-settings' ||
+    new RegExp(`^/v1/admin/reviews/${uuid}/reply$`).test(path) ||
+    new RegExp(`^/v1/admin/orders/${id}/address$`).test(path);
   if (method === 'PATCH') return /^\/v1\/shop\/cart\/[a-f0-9-]{36}\/lines$/.test(path) ||
-    new RegExp(`^/v1/admin/(products|variants|promotions)/${id}(/stock)?$`).test(path);
-  return method === 'DELETE' && new RegExp(`^/v1/admin/(promotions|products|variants)/${id}$`).test(path);
+    new RegExp(`^/v1/admin/(products|variants|promotions)/${id}(/stock)?$`).test(path) ||
+    new RegExp(`^/v1/admin/blog/${uuid}$`).test(path);
+  return method === 'DELETE' && (new RegExp(`^/v1/admin/(promotions|products|variants)/${id}$`).test(path) || new RegExp(`^/v1/admin/blog/${uuid}$`).test(path));
 }
 const only = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).every(k => keys.includes(k));
 const text = (value, max = 160) => value == null || (typeof value === 'string' && value.length <= max && !/[<>]/.test(value));
+
+const isUuid = v => typeof v === 'string' && new RegExp(`^${uuid}$`).test(v);
+const int = (v, min, max) => Number.isInteger(v) && v >= min && v <= max;
+const optInt = (v, min, max) => v == null || int(v, min, max);
+const optBool = v => v == null || typeof v === 'boolean';
+const nonEmpty = (v, max) => typeof v === 'string' && v.trim().length > 0 && text(v, max);
+const iso = v => v == null || (typeof v === 'string' && v.length <= 40 && /^\d{4}-\d\d-\d\dT[\d:.]+(Z|[+-]\d\d:\d\d)$/.test(v) && !Number.isNaN(Date.parse(v)));
+// Owner-feature bodies (points, reviews, order edit, blog). Each is bounded the
+// same way as the commerce bodies above and rejects anything with an outbound
+// side effect: settlement refund_now (gateway refund) and send_pay_link (pay
+// link email) are not in the allowed set, so they fail validation here.
+const settingsBody = b => only(b, ['enabled', 'earnRatePerDollar', 'pointsPerDollarOff', 'minRedeemPoints', 'maxRedeemPercentOfSubtotal', 'expiryDays', 'reviewBonusPoints', 'reviewBonusVerifiedOnly', 'signupBonusPoints', 'signupBonusSince', 'firstOrderBonusPoints', 'birthdayBonusPoints', 'productMultipliers']) &&
+  typeof b.enabled === 'boolean' && optBool(b.reviewBonusVerifiedOnly) &&
+  optInt(b.earnRatePerDollar, 0, 100) && optInt(b.pointsPerDollarOff, 1, 10000) && optInt(b.minRedeemPoints, 0, 1000000) &&
+  optInt(b.maxRedeemPercentOfSubtotal, 1, 100) && optInt(b.expiryDays, 1, 3650) &&
+  ['reviewBonusPoints', 'signupBonusPoints', 'firstOrderBonusPoints', 'birthdayBonusPoints'].every(k => optInt(b[k], 0, 10000)) &&
+  iso(b.signupBonusSince) &&
+  (b.productMultipliers == null || (Array.isArray(b.productMultipliers) && b.productMultipliers.length <= 20 &&
+    b.productMultipliers.every(m => only(m, ['productId', 'multiplier']) && isUuid(m.productId) && typeof m.multiplier === 'number' && m.multiplier >= 1 && m.multiplier <= 100)));
+const addressBody = a => only(a, ['fullName', 'line1', 'line2', 'city', 'province', 'postalCode', 'country', 'phone']) &&
+  nonEmpty(a.line1, 200) && nonEmpty(a.city, 120) && typeof a.country === 'string' && /^[A-Za-z]{2}$/.test(a.country) &&
+  text(a.fullName, 200) && text(a.line2, 200) && text(a.province, 120) && text(a.postalCode, 40) && text(a.phone, 60);
+const sku = v => typeof v === 'string' && /^DEMO-[A-Z-]+$/.test(v);
+const editOp = o => {
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return false;
+  switch (o.op) {
+    case 'set_quantity': return only(o, ['op', 'lineId', 'quantity']) && isUuid(o.lineId) && int(o.quantity, 0, 1000);
+    case 'remove_line': return only(o, ['op', 'lineId']) && isUuid(o.lineId);
+    case 'swap_variant': return only(o, ['op', 'lineId', 'sku', 'quantity']) && isUuid(o.lineId) && sku(o.sku) && optInt(o.quantity, 1, 1000);
+    case 'add_item': return only(o, ['op', 'sku', 'quantity', 'unitPrice']) && sku(o.sku) && int(o.quantity, 1, 1000) && optInt(o.unitPrice, 0, 100000);
+    case 'apply_coupon': return only(o, ['op', 'code']) && nonEmpty(o.code, 32);
+    case 'remove_coupon': case 'remove_shipping': return only(o, ['op']);
+    case 'set_shipping_method': return only(o, ['op', 'code']) && nonEmpty(o.code, 32);
+    case 'set_shipping_amount': return only(o, ['op', 'amount']) && int(o.amount, 0, 100000);
+    case 'add_adjustment': return only(o, ['op', 'label', 'amount']) && nonEmpty(o.label, 120) && int(o.amount, -100000, 100000) && o.amount !== 0;
+    case 'remove_adjustment': return only(o, ['op', 'adjustmentId']) && isUuid(o.adjustmentId);
+    case 'set_address': return only(o, ['op', 'kind', 'address', 'saveToAddressBook']) && ['shipping', 'billing'].includes(o.kind) && addressBody(o.address) && optBool(o.saveToAddressBook);
+    default: return false;
+  }
+};
+const opList = (ops, min) => Array.isArray(ops) && ops.length >= min && ops.length <= 30 && ops.every(editOp);
+// Only settlements with no gateway call and no email: leave the balance due,
+// leave it as store credit, or record an off-platform (manual) payment.
+const settlement = s => s == null || (s && typeof s === 'object' && !Array.isArray(s) && (
+  (['leave_due', 'leave_credit'].includes(s.type) && only(s, ['type'])) ||
+  (s.type === 'record_payment' && only(s, ['type', 'method', 'reference', 'amount']) && ['cash', 'zelle', 'check', 'card_phone', 'other'].includes(s.method) && text(s.reference, 200) && optInt(s.amount, 1, 10000000))));
+const blogBody = (b, patch) => only(b, ['title', 'slug', 'excerpt', 'body', 'authorName', 'tags', 'isPublished', 'publishDate', 'seoTitle', 'seoDescription', 'featuredAssetId', ...(patch ? ['id', 'expectedRevision'] : [])]) &&
+  (patch ? (b.title == null || nonEmpty(b.title, 200)) : nonEmpty(b.title, 200)) &&
+  (b.slug == null || (typeof b.slug === 'string' && /^[a-zA-Z0-9-]{1,100}$/.test(b.slug))) &&
+  text(b.excerpt, 500) && text(b.authorName, 100) && text(b.seoTitle, 200) && text(b.seoDescription, 500) &&
+  // The body is editor HTML, so < and > are legitimate; the API sanitises it
+  // on save (sanitizeBlogHtml). Bounded well under the 12 KB request cap.
+  (b.body == null || (typeof b.body === 'string' && b.body.length <= 8000)) &&
+  (b.tags == null || (Array.isArray(b.tags) && b.tags.length <= 10 && b.tags.every(t => text(t, 32)))) &&
+  optBool(b.isPublished) && iso(b.publishDate) && b.featuredAssetId == null &&
+  (b.id == null || isUuid(b.id)) && (b.expectedRevision == null || (typeof b.expectedRevision === 'string' && /^[a-f0-9]{64}$/.test(b.expectedRevision)));
 export function interactiveBody(path, body) {
+  if (path === '/v1/admin/loyalty/settings') return settingsBody(body);
+  if (path === '/v1/admin/reviews-settings') return only(body, ['enabled', 'allowGuests', 'autoApprove', 'requirePurchase']) && Object.values(body).every(v => typeof v === 'boolean');
+  if (new RegExp(`^/v1/admin/reviews/${uuid}/(approve|reject)$`).test(path)) return only(body, []);
+  if (new RegExp(`^/v1/admin/reviews/${uuid}/reply$`).test(path)) return only(body, ['reply']) && 'reply' in body && (body.reply === null || (typeof body.reply === 'string' && text(body.reply, 2000)));
+  if (new RegExp(`^/v1/admin/orders/${id}/edit/preview$`).test(path)) return only(body, ['ops']) && opList(body.ops, 0);
+  if (new RegExp(`^/v1/admin/orders/${id}/edit/commit$`).test(path)) return only(body, ['ops', 'expectedGrandTotal', 'expectedBalance', 'idempotencyKey', 'settlement', 'notifyCustomer', 'reason']) &&
+    opList(body.ops, 1) && int(body.expectedGrandTotal, 0, 10000000) && optInt(body.expectedBalance, -10000000, 10000000) &&
+    typeof body.idempotencyKey === 'string' && body.idempotencyKey.length >= 1 && body.idempotencyKey.length <= 100 && /^[A-Za-z0-9_.:-]+$/.test(body.idempotencyKey) &&
+    settlement(body.settlement) && optBool(body.notifyCustomer) && text(body.reason, 1000);
+  if (new RegExp(`^/v1/admin/orders/${id}/address$`).test(path)) return only(body, ['kind', 'address', 'saveToAddressBook', 'reason']) && ['shipping', 'billing'].includes(body.kind) && addressBody(body.address) && optBool(body.saveToAddressBook) && text(body.reason, 1000);
+  if (path === '/v1/admin/blog') return blogBody(body, false);
+  if (new RegExp(`^/v1/admin/blog/${uuid}$`).test(path)) return blogBody(body, true);
   if(path==='/v1/shop/cart/estimate')return only(body,['cartToken','shippingMethodCode','couponCode'])&&/^[a-f0-9-]{36}$/.test(body.cartToken)&&['standard','express'].includes(body.shippingMethodCode)&&text(body.couponCode,32);
   if (path === '/v1/admin/products') return only(body,['name','slug','description','status']) && text(body.name) && text(body.slug,100) && text(body.description,2000);
   if (/^\/v1\/admin\/products\/[^/]+\/variants$/.test(path)) return only(body,['sku','name','price','onHand']) && /^DEMO-[A-Z-]+$/.test(body.sku) && text(body.name) && Number.isInteger(body.price) && body.price>=0 && body.price<=100000 && Number.isInteger(body.onHand) && body.onHand>=0 && body.onHand<=1000;
