@@ -24,7 +24,7 @@
  *   cancelled  PI cancelled at Stripe
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { and, asc, eq, inArray, notInArray, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, notInArray, or, sql } from 'drizzle-orm';
 import { recoveryBackoffMs } from '../jobs/gateway-recovery.js';
 import { withAdvisoryLock, withStore, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
@@ -54,10 +54,15 @@ const STRIPE_SWEEP_BACKOFF_MIN = 5;
 
 const asMode = (m: string): StripeMode => (m === 'live' ? 'live' : 'test');
 
-/** Record a minted PI against its order (idempotent on the PI id). */
+/** Record a minted PI against its order (idempotent on the PI id). An attempt already bound to this
+ *  PI (a pre-mint row, or an earlier track) is returned as is, never duplicated. */
 export async function trackStripeIntent(tx: Tx, storeId: string, a: {
   orderId: string; intentId: string; amount: number; currency: string; mode: StripeMode; source?: string;
 }): Promise<Attempt> {
+  const [bound] = await tx.select().from(s.paymentAttempt).where(and(
+    eq(s.paymentAttempt.providerRef, a.intentId), eq(s.paymentAttempt.operation, 'intent'),
+  )).limit(1).for('update');
+  if (bound) return bound;
   await tx.insert(s.paymentAttempt).values({
     storeId, orderId: a.orderId, operation: 'intent', method: 'stripe', accountId: 'stripe', mode: a.mode,
     amount: Math.max(1, a.amount), currency: a.currency.toUpperCase(),
@@ -69,6 +74,55 @@ export async function trackStripeIntent(tx: Tx, storeId: string, a: {
     eq(s.paymentAttempt.providerRef, a.intentId), eq(s.paymentAttempt.operation, 'intent'),
   )).limit(1).for('update');
   if (!row) throw new Error('stripe intent attempt missing after insert');
+  return row;
+}
+
+/**
+ * PAYMENT-TIMING §4.2 (decision X-9): the pre-mint attempt row for one mint-loop iteration, written
+ * after the beforePaymentAttempt hook and before the PaymentIntent is minted. Status `open`, no
+ * provider ref, so the order is non-quiescent from this commit. Idempotent on the iteration key:
+ * a replay of the same mint key collapses onto the same row.
+ */
+export async function openStripePreMint(tx: Tx, storeId: string, a: {
+  orderId: string; iterationKey: string; amount: number; currency: string; mode: StripeMode;
+}): Promise<Attempt> {
+  const idempotencyKey = `stripe-pi-pending:${a.iterationKey}`;
+  await tx.insert(s.paymentAttempt).values({
+    storeId, orderId: a.orderId, operation: 'intent', method: 'stripe', accountId: 'stripe', mode: a.mode,
+    amount: Math.max(1, a.amount), currency: a.currency.toUpperCase(), idempotencyKey,
+    fingerprint: createHash('sha256').update(idempotencyKey).digest('hex'),
+    status: 'open', providerRef: null, context: { source: 'payment-intent', preMint: true },
+  }).onConflictDoNothing();
+  const [row] = await tx.select().from(s.paymentAttempt).where(and(
+    eq(s.paymentAttempt.storeId, storeId), eq(s.paymentAttempt.idempotencyKey, idempotencyKey),
+  )).limit(1).for('update');
+  if (!row || row.orderId !== a.orderId) throw new Error('stripe pre-mint attempt is missing or belongs to another order');
+  return row;
+}
+
+/**
+ * Binds a pre-mint row to the PaymentIntent it minted (same transaction as the track). When an
+ * attempt already tracks this PI (a normal idempotent replay under a different key), the pending row
+ * never had a provider object: it is marked cancelled with `superseded_by` and the existing attempt
+ * is returned. Otherwise the pending row itself takes the provider ref.
+ */
+export async function bindStripePreMint(tx: Tx, storeId: string, a: {
+  pendingAttemptId: string; orderId: string; intentId: string; amount: number; currency: string; mode: StripeMode;
+}): Promise<Attempt> {
+  const [existing] = await tx.select().from(s.paymentAttempt).where(and(
+    eq(s.paymentAttempt.providerRef, a.intentId), eq(s.paymentAttempt.operation, 'intent'),
+  )).limit(1).for('update');
+  if (existing?.id === a.pendingAttemptId) return existing;
+  if (existing) {
+    await tx.update(s.paymentAttempt).set({
+      status: 'cancelled', result: { superseded_by: existing.id }, updatedAt: new Date(),
+    }).where(and(eq(s.paymentAttempt.id, a.pendingAttemptId), isNull(s.paymentAttempt.providerRef)));
+    return existing;
+  }
+  const [row] = await tx.update(s.paymentAttempt).set({ providerRef: a.intentId, updatedAt: new Date() })
+    .where(and(eq(s.paymentAttempt.id, a.pendingAttemptId), isNull(s.paymentAttempt.providerRef), eq(s.paymentAttempt.orderId, a.orderId)))
+    .returning();
+  if (!row) throw new Error('stripe pre-mint attempt could not be bound');
   return row;
 }
 

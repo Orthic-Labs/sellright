@@ -12,7 +12,9 @@ import { prepareSezzleSession } from './session-input.js';
 import { queryNmiPayment } from './nmi-query.js';
 import { listStripeRefunds, STRIPE_REFUND_ATTEMPT_KEY } from './stripe.js';
 import { finalizeRefund } from './refunds.js';
-import { withLockedSet } from '../db/locks.js';
+import { orderIdByCode, withLockedSet, type HeldLocks } from '../db/locks.js';
+import { checkPaymentAttempt, PaymentPolicyUnavailableError, PaymentPolicyVetoError } from './policy/host.js';
+import type { PaymentProvider, PaymentPurpose, PolicyOrder } from './policy/types.js';
 import { refundStateFromStripe } from './webhook-reconcile.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
 
@@ -21,8 +23,34 @@ import { onStockChanged } from '../manifest/stock-hook.js';
 export const isBalanceState = (state: string) => state === 'Paid' || state === 'PartiallyRefunded';
 
 export class GatewayPaymentError extends Error {
-  constructor(public status: 400 | 404 | 409 | 503, message: string) { super(message); }
+  /** Stable wire code when the call site has one (policy vetoes); otherwise derived from the message. */
+  constructor(public status: 400 | 404 | 409 | 503, message: string,
+    public code?: string, public extra?: { readonly state?: string }) { super(message); }
 }
+
+/** Maps a payment-policy failure to the gateway HTTP error. Anything else passes through. */
+export function gatewayErrorFromPolicy(e: unknown): unknown {
+  if (e instanceof PaymentPolicyVetoError) {
+    return new GatewayPaymentError(409, e.veto.message, e.veto.code, e.veto.extra);
+  }
+  if (e instanceof PaymentPolicyUnavailableError) {
+    return new GatewayPaymentError(503, 'Payment is temporarily unavailable; retry shortly', 'PAYMENT_POLICY_UNAVAILABLE');
+  }
+  return e;
+}
+
+/** Runs the beforePaymentAttempt hook for a payment path (policy host, inside the caller's tx). */
+export async function policyBeforeAttempt(
+  tx: Tx, held: HeldLocks,
+  provider: PaymentProvider, purpose: PaymentPurpose, order: PolicyOrder,
+): Promise<void> {
+  try {
+    await checkPaymentAttempt(tx, held, { provider, purpose, order });
+  } catch (e) {
+    throw gatewayErrorFromPolicy(e);
+  }
+}
+
 export function receiptMatches(given: string | undefined, expected: string | null): boolean {
   if (!given || !expected) return false;
   const a = Buffer.from(given), b = Buffer.from(expected);
@@ -58,7 +86,11 @@ export async function startGatewayPayment(input: {
   catch { throw new GatewayPaymentError(503, 'Payment account is not configured'); }
   const operation = input.method === 'sezzle' ? 'session' : 'charge';
   return withAdvisoryLock('pay:' + input.storeId + ':' + input.code, async () => {
-    const prepared = await withStore(input.storeId, async tx => {
+    // Plan → lock → verify (PAYMENT-TIMING §3.5): the order id is read unlocked for planning, then
+    // the order set is taken before ownership, the policy hook and the attempt insert.
+    const orderId = await orderIdByCode(input.storeId, input.code);
+    if (!orderId) throw new GatewayPaymentError(404, 'Order not found');
+    const prepared = await withLockedSet(input.storeId, { kind: 'order', orderId }, async (tx, held) => {
       const order = await ownedOrder(tx, input.code, input.receiptToken, input.customerSession);
       // Order editing (G13): a Paid / PartiallyRefunded order with a positive
       // amount due is a BALANCE payment for an edit that raised the total. It is
@@ -68,6 +100,8 @@ export async function startGatewayPayment(input: {
       // reuses one. A raw-key hit still replays the earlier (pre-balance)
       // attempt, so a retried checkout request keeps its old answer.
       const balance = isBalanceState(order.state);
+      // Policy veto point (PAYMENT-TIMING §3.6): before the replay lookup, so a replay is vetoed too.
+      await policyBeforeAttempt(tx, held, input.method, balance ? 'balance' : 'checkout', order);
       let attemptKey = input.idempotencyKey;
       if (balance) {
         const [n] = await tx.select({ n: sql<number>`count(*)::int` }).from(s.payment)
