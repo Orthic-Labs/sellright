@@ -15597,6 +15597,7 @@ export interface paths {
                             description: string | null;
                             images: string[];
                             name: string;
+                            productId?: string;
                             seoDescription: string | null;
                             seoTitle: string | null;
                             slug: string;

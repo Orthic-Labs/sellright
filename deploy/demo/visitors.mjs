@@ -27,6 +27,24 @@ export async function assertInteractiveDatabase(pool) {
   }
   return rows;
 }
+// Rewards defaults every NEW demo tenant starts with, so the storefront's
+// "Earn N points" note and reviews block are visible without the visitor
+// configuring anything. Mirrors the product defaults (1 point per $1, 10
+// points = $1, never expire) — only `enabled` differs from the API's
+// DEFAULT_LOYALTY_SETTINGS. Reviews are switched on (moderated, signed-in
+// only — the API defaults); NO review rows are ever seeded, so the product
+// pages honestly read "No reviews yet" until a real one is approved.
+export const demoRewardsConfig = Object.freeze({
+  loyalty: Object.freeze({
+    enabled: true,
+    earnRatePerDollar: 1,
+    pointsPerDollarOff: 10,
+    minRedeemPoints: 0,
+    maxRedeemPercentOfSubtotal: null,
+    expiryDays: null,
+  }),
+  reviews: Object.freeze({ enabled: true, allowGuests: false, autoApprove: false, requirePurchase: false }),
+});
 export async function visitorFor(pool, token) {
   if (!/^[a-f0-9]{64}$/.test(token ?? '')) return null;
   const {rows:[row]} = await pool.query(`SELECT s.id,s.slug,s.config,a.id AS admin_id,se.expires_at
@@ -47,6 +65,7 @@ export async function provisionVisitor(pool) {
     await c.query('INSERT INTO store(id,slug,name,currency,config) VALUES($1,$2,$3,$4,$5)', [id,slug,'Everyday Supply','USD',{
       demo:true,demoSession:1,expiresAt,adminId,csrfHash:hash(csrf),storefrontUrl:'https://demo.sellright.cc/shop',
       payments:{stripe:false,nmi:false,sezzle:false,cod:false,manual:false},
+      loyalty:{...demoRewardsConfig.loyalty},reviews:{...demoRewardsConfig.reviews},
     }]);
     // is_installation_admin explicitly false (not just the column default):
     // a demo visitor — reachable with the publicly-known admin/admin

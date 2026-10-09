@@ -2,7 +2,8 @@ import { component$, useStyles$ } from '@qwik.dev/core';
 import { routeLoader$, type StaticGenerateHandler } from '@qwik.dev/router';
 import { generateImagePreloadLinks } from '~/components/ui';
 import { getProductDetail } from '~/providers/shop/products/products';
-import { manifestProductMeta, normalizeManifestProductDetail, type CatalogProduct, type RawManifestProductDetail } from '~/sellright/types/catalog';
+import { getProductReviews } from '~/providers/shop/rewards/rewards';
+import { liveProductMeta, manifestProductMeta, normalizeManifestProductDetail, type CatalogProduct, type RawManifestProductDetail } from '~/sellright/types/catalog';
 import { withAggregateRating } from '~/utils/rewards';
 import { cleanUpParams } from '~/utils';
 import { createSEOHead } from '~/utils/seo';
@@ -19,11 +20,12 @@ export interface ProductLoaderResult {
   product: CatalogProduct;
   source: 'manifest' | 'network';
   warning: string | null;
-  /** Real product UUID (keys loyalty product multipliers); null when the
-   *  loader fell back to the live API (its detail has no product-level id). */
+  /** Real product UUID (keys loyalty product multipliers); from the manifest,
+   *  or the live detail response. Null only against an older API. */
   productId: string | null;
   /** Approved-review aggregate for the rating link + AggregateRating JSON-LD;
-   *  null when the product is unreviewed or the manifest is unavailable. */
+   *  null when the product is unreviewed or reviews are off/unreadable. On the
+   *  live-API path it comes from the reviews endpoint summary. */
   rating: { average: number; count: number } | null;
 }
 
@@ -64,7 +66,11 @@ export const useProductLoader = routeLoader$(async ({ params, fail, status }) =>
       status(404);
       return fail(404, { message: `Product not found: ${slug}` });
     }
-    return { product, source: 'network' as const, warning: null, productId: null, rating: null };
+    // No manifest: take the product id from the detail response and the
+    // rating from the reviews endpoint (null on any failure — reviews must
+    // never block or fail the PDP shell).
+    const reviews = await getProductReviews(slug, { limit: 1 }).catch(() => null);
+    return { product, source: 'network' as const, warning: null, ...liveProductMeta(product, reviews) };
   } catch (error) {
     console.error('Product loader error:', error);
     status(404);

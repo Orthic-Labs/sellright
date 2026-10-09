@@ -32,6 +32,12 @@ test('the generic storefront can browse and read receipts, but never accounts, a
   for (const path of ['/v1/shop/auth/me', '/v1/shop/auth/login', '/v1/shop/account/orders', '/v1/shop/account/addresses', '/v1/shop/stripe-key', '/v1/shop/newsletter-signup', '/v1/shop/contact', '/v1/shop/track', '/v1/shop/orders/SR1/gateway-payment'])
     assert.equal(interactiveRequest('GET', path), false, path);
 });
+test('the public product reviews read is allowed; submitting a review is not',()=>{
+  assert.equal(interactiveRequest('GET','/v1/shop/catalog/products/desk-tray/reviews'),true);
+  for(const method of ['POST','PATCH','DELETE'])assert.equal(interactiveRequest(method,'/v1/shop/catalog/products/desk-tray/reviews'),false,method);
+  assert.equal(interactiveRequest('GET','/v1/shop/catalog/products/desk-tray/reviews/extra'),false);
+  assert.equal(interactiveRequest('GET','/v1/admin/reviews'),false);
+});
 test('checkout accepts only cart references and server-known delivery choices, never identity or prices',()=>{
   const body={cartToken:'de000000-0000-4000-8000-000000000001',expectedRevision:0,shippingMethodCode:'standard'};
   assert.equal(interactiveBody('/v1/shop/checkout',body),true);

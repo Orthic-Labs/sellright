@@ -72,6 +72,11 @@ describe('GET /v1/shop/catalog/products/:slug variant metadata', () => {
     await withStore(STORE, async tx => { await tx.execute(sql`UPDATE product SET status = 'draft' WHERE id = ${PRODUCT}`); });
     expect((await app.request('/v1/shop/catalog/products/lic-app', { headers: { 'x-store-slug': SLUG } })).status).toBe(404);
   });
+  it('publishes the product id (keys loyalty multipliers for the manifest-less PDP)', async () => {
+    const res = await app.request('/v1/shop/catalog/products/lic-app', { headers: { 'x-store-slug': SLUG } });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ productId: PRODUCT, slug: 'lic-app' });
+  });
   it('publishes variant id + variant-level assets (needed by restock-request and PDP galleries)', async () => {
     const asset1 = 'dddddddd-dddd-dddd-dddd-ddddddddddd6';
     const asset2 = 'dddddddd-dddd-dddd-dddd-ddddddddddd7';

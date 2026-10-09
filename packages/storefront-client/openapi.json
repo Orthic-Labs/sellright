@@ -455,6 +455,9 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "productId": {
+                      "type": "string"
+                    },
                     "slug": {
                       "type": "string"
                     },

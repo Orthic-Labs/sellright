@@ -176,6 +176,24 @@ export interface ManifestProductMeta {
   rating: { average: number; count: number } | null;
 }
 
+/** Product-level meta for the live-API (no catalog manifest) PDP path: the
+ *  product UUID comes from the detail response (`productId`, absent on an
+ *  older API), the rating from the public reviews endpoint's aggregate. The
+ *  rating is null — never an empty/zero one — when reviews are switched off,
+ *  the product has no approved reviews, or the reviews read failed
+ *  (`reviews` null). Mirrors `manifestProductMeta` so both paths feed the
+ *  same rating link + AggregateRating JSON-LD. */
+export function liveProductMeta(
+  product: { productId?: string | null },
+  reviews: { enabled?: boolean; average: number; count: number } | null | undefined,
+): ManifestProductMeta {
+  const usable = !!reviews && reviews.enabled !== false && reviews.count > 0 && reviews.average > 0;
+  return {
+    productId: product.productId || null,
+    rating: reviews && usable ? { average: reviews.average, count: reviews.count } : null,
+  };
+}
+
 export function manifestProductMeta(raw: Pick<RawManifestProductDetail, 'productId' | 'rating'>): ManifestProductMeta {
   const r = raw.rating;
   return {
@@ -203,6 +221,7 @@ export function normalizeManifestProductDetail(raw: RawManifestProductDetail): C
     .filter((p): p is string => p != null);
 
   return {
+    ...(raw.productId ? { productId: raw.productId } : {}),
     slug: raw.slug,
     name: raw.name,
     description: raw.description,
