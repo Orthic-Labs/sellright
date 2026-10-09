@@ -136,6 +136,14 @@ describe('POST /v1/shop/account/orders/{code}/returns', () => {
     expect((await (await get('RET-MINE')).json() as { returnable: unknown[] }).returnable).toEqual([]);
   });
 
+  it('an unshipped (cancelled) refund does not consume shipped return eligibility', async () => {
+    await withStore(STORE, (tx) => tx.execute(sql`UPDATE order_line SET refunded_qty = 1, cancelled_qty = 1 WHERE id = ${L_SHIPPED}`));
+    expect((await (await get('RET-MINE')).json() as { returnable: Array<{ quantity: number }> }).returnable[0]!.quantity).toBe(2);
+    expect((await post('RET-MINE', { lines: [{ sku: 'SKU-A', quantity: 2 }], reason: 'both shipped units' })).status).toBe(201);
+    await withStore(STORE, (tx) => tx.execute(sql`UPDATE order_line SET refunded_qty = 2 WHERE id = ${L_SHIPPED}`)); // one shipped unit also refunded
+    expect((await (await get('RET-MINE')).json() as { returnable: unknown[] }).returnable).toEqual([]);
+  });
+
   it('validates the body (reason and at least one line are required)', async () => {
     expect((await post('RET-MINE', { lines: [], reason: 'nothing' })).status).toBe(400);
     expect((await post('RET-MINE', { lines: [{ sku: 'SKU-A', quantity: 1 }] })).status).toBe(400);

@@ -26,7 +26,7 @@ const code = (fn: () => unknown) => { try { fn(); } catch (e) { return (e as Ord
 
 describe('applyEditOps', () => {
   it('set_quantity edits in place, preserving the row and never going below fulfilled + refunded', () => {
-    const w = base([line(L1, 'A', 4, { fulfilledQty: 1, refundedQty: 1 })]);
+    const w = base([line(L1, 'A', 4, { fulfilledQty: 1, refundedQty: 1, cancelledQty: 1 })]);
     expect(lockedQty(w.lines[0]!)).toBe(2);
     expect(applyEditOps(w, [{ op: 'set_quantity', lineId: L1, quantity: 2 }], lookups()).lines[0]).toMatchObject({ id: L1, quantity: 2 });
     expect(code(() => applyEditOps(w, [{ op: 'set_quantity', lineId: L1, quantity: 1 }], lookups()))).toBe('LINE_LOCKED');

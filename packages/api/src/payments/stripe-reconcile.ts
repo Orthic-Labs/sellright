@@ -316,6 +316,35 @@ async function resolveIntentForCancel(storeId: string, code: string, intentId: s
     withStore(storeId, (tx) => applyStripeIntent(tx, storeId, pi, mode, { actor })));
 }
 
+/**
+ * Order editing: retire every confirmable Stripe intent minted for the order
+ * (its amount basis is about to change). Cancels each at Stripe and marks the
+ * local attempt cancelled. Caller MUST hold the `pay:{storeId}:{code}` advisory
+ * lock (the edit commit does; /payment-intent takes the same lock). An intent
+ * that already succeeded/is processing cannot be cancelled: it is returned in
+ * `captured` (never marked cancelled) so the caller can refuse the edit and
+ * reconcile the money instead of silently stranding it.
+ */
+export async function cancelOpenIntentsForOrder(tx: Tx, storeId: string, orderId: string): Promise<{ cancelled: string[]; captured: string[] }> {
+  const out = { cancelled: [] as string[], captured: [] as string[] };
+  const attempts = await tx.select().from(s.paymentAttempt).where(and(
+    eq(s.paymentAttempt.storeId, storeId), eq(s.paymentAttempt.orderId, orderId),
+    eq(s.paymentAttempt.operation, 'intent'), eq(s.paymentAttempt.method, 'stripe'),
+    inArray(s.paymentAttempt.status, [...SWEEPABLE_INTENT_STATUSES, 'processing']),
+  )).for('update');
+  for (const a of attempts) {
+    if (!a.providerRef) continue;
+    const pi = await cancelStripeIntent(storeId, asMode(a.mode), a.providerRef);
+    if (pi.status === 'canceled') {
+      await setAttempt(tx, a, 'cancelled', { result: { status: pi.status, retired: 'order_edit' } });
+      out.cancelled.push(a.providerRef);
+    } else {
+      out.captured.push(a.providerRef);
+    }
+  }
+  return out;
+}
+
 interface SweepRecovery { tries: number; nextAt?: string; lastError?: string; manual?: boolean }
 
 /**

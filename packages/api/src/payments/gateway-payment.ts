@@ -93,13 +93,16 @@ export async function startGatewayPayment(input: {
       if (amount <= 0) throw new GatewayPaymentError(409, 'Order is already paid');
       if (input.method === 'nmi' && !input.token) throw new GatewayPaymentError(400, 'Payment token required');
       const lines = await tx.select().from(s.orderLine).where(eq(s.orderLine.orderId, order.id));
+      const adjustments = input.method === 'sezzle'
+        ? await tx.select({ label: s.orderAdjustment.label, amount: s.orderAdjustment.amount }).from(s.orderAdjustment)
+          .where(and(eq(s.orderAdjustment.orderId, order.id), eq(s.orderAdjustment.storeId, input.storeId))) : [];
       const [customer] = order.customerId
         ? await tx.select().from(s.customer).where(eq(s.customer.id, order.customerId)).limit(1) : [];
       const attemptId = randomUUID();
       let session;
       if (input.method === 'sezzle') {
         try {
-          session = prepareSezzleSession({ order, lines, account, amount, attemptId, customer,
+          session = prepareSezzleSession({ order, lines, adjustments, account, amount, attemptId, customer,
             storefrontUrl: (input.config as { storefrontUrl?: string } | null)?.storefrontUrl, balance });
         } catch (error) {
           throw new GatewayPaymentError(400, error instanceof Error ? error.message : 'Invalid checkout details');

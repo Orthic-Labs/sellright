@@ -65,8 +65,16 @@ export async function grantReviewBonus(tx: Tx, storeId: string, reviewId: string
   const { program } = await storeProgram(tx, storeId);
   if (!program.enabled || program.reviewBonusPoints <= 0) return none;
   if (program.reviewBonusVerifiedOnly && !r.verifiedBuyer) return none;
-  const [cust] = await tx.select({ deletedAt: s.customer.deletedAt }).from(s.customer).where(eq(s.customer.id, r.customerId)).limit(1);
+  const [cust] = await tx.select({ id: s.customer.id, email: s.customer.email, emailVerified: s.customer.emailVerified, deletedAt: s.customer.deletedAt }).from(s.customer).where(eq(s.customer.id, r.customerId)).limit(1);
   if (!cust || cust.deletedAt) return none;
+  if (program.reviewBonusVerifiedOnly) {
+    // Re-validate purchase proof at grant time: provenance may have changed
+    // since submission (or the stored flag predates the provenance check).
+    if (!r.orderId) return none;
+    const [ord] = await tx.select({ customerId: s.order.customerId, metadata: s.order.metadata }).from(s.order)
+      .where(and(eq(s.order.id, r.orderId), eq(s.order.storeId, storeId))).limit(1);
+    if (!ord || !customerOwnsOrder(cust, ord)) return none;
+  }
   const ledgerId = await postBonus(tx, {
     storeId, customerId: r.customerId, points: program.reviewBonusPoints, rule: 'review',
     sourceRef: `bonus:review:${reviewId}`, expiryDays: program.expiryDays, metadata: { reviewId, productId: r.productId },
@@ -159,23 +167,36 @@ export async function grantBirthdayBonuses(tx: Tx, storeId: string, now = new Da
   if (!program.enabled || program.birthdayBonusPoints <= 0) return 0;
   const month = now.getUTCMonth() + 1; const day = now.getUTCDate(); const year = now.getUTCFullYear();
   const days = month === 2 && day === 28 && !isLeap(year) ? [28, 29] : [day];
-  const due = await tx.select({ id: s.customer.id, email: s.customer.email }).from(s.customer)
-    .where(and(eq(s.customer.birthMonth, month), inArray(s.customer.birthDay, days), eq(s.customer.emailVerified, true), sql`${s.customer.deletedAt} IS NULL`))
-    .limit(2000);
+  const BATCH = 500;
   let granted = 0;
-  for (const c of due) {
-    const id = await postBonus(tx, {
-      storeId, customerId: c.id, points: program.birthdayBonusPoints, rule: 'birthday',
-      sourceRef: `bonus:birthday:${c.id}:${year}`, expiryDays: program.expiryDays, metadata: { year }, at: now,
-    });
-    if (!id) continue;
-    granted++;
-    const { available } = await loyaltyBalance(tx, c.id, now);
-    await enqueuePointsEarned(tx, storeId, { name, currency, config }, c.email, {
-      points: program.birthdayBonusPoints, balance: available,
-      lines: [{ label: BONUS_LABELS.birthday, points: program.birthdayBonusPoints }],
-      dedupeKey: `points_earned:bonus:${id}`,
-    });
+  let after: string | null = null; // keyset cursor: guarantees termination
+  for (;;) {
+    // Exclude customers already granted this year so a full batch of
+    // processed customers can never starve the rest; drain until empty.
+    const due: Array<{ id: string; email: string }> = await tx.select({ id: s.customer.id, email: s.customer.email }).from(s.customer)
+      .where(and(
+        eq(s.customer.storeId, storeId), eq(s.customer.birthMonth, month), inArray(s.customer.birthDay, days),
+        eq(s.customer.emailVerified, true), sql`${s.customer.deletedAt} IS NULL`,
+        after ? sql`${s.customer.id} > ${after}` : sql`true`,
+        sql`NOT EXISTS (SELECT 1 FROM loyalty_ledger ll WHERE ll.store_id = ${storeId} AND ll.customer_id = ${s.customer.id} AND ll.source_ref = 'bonus:birthday:' || ${s.customer.id}::text || ':' || ${String(year)})`,
+      ))
+      .orderBy(s.customer.id).limit(BATCH);
+    for (const c of due) {
+      const id = await postBonus(tx, {
+        storeId, customerId: c.id, points: program.birthdayBonusPoints, rule: 'birthday',
+        sourceRef: `bonus:birthday:${c.id}:${year}`, expiryDays: program.expiryDays, metadata: { year }, at: now,
+      });
+      if (!id) continue;
+      granted++;
+      const { available } = await loyaltyBalance(tx, c.id, now);
+      await enqueuePointsEarned(tx, storeId, { name, currency, config }, c.email, {
+        points: program.birthdayBonusPoints, balance: available,
+        lines: [{ label: BONUS_LABELS.birthday, points: program.birthdayBonusPoints }],
+        dedupeKey: `points_earned:bonus:${id}`,
+      });
+    }
+    if (due.length < BATCH) break;
+    after = due[due.length - 1]!.id;
   }
   return granted;
 }

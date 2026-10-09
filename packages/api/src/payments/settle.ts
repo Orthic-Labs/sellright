@@ -14,6 +14,8 @@ import * as s from '../db/schema.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
 import type { PaymentResult } from './provider.js';
 import { issueLicensesForPaidOrder } from '../licensing/issue.js';
+import { settleDeferredEditEarnForOrder } from '../loyalty/ledger.js';
+import { reconcileEditedOrderLicenses } from '../licensing/edit-reconcile.js';
 import { enqueuePaidEffects } from './paid-effects.js';
 import { enqueuePush, buildOrderPushPayload } from '../push/outbox.js';
 import { enqueueEmail } from '../email/outbox.js';
@@ -21,6 +23,7 @@ import { paymentAfterCancelAlert } from '../email/templates-ops.js';
 import { operatorRecipients } from '../disputes/disputes.js';
 import { env } from '../env.js';
 import { EDIT_REFUND_SOURCE } from './edit-refund.js';
+import { usableTenderSql } from './tender.js';
 
 /**
  * MONEY-3: amount still owed on an order, in cents — grandTotal minus every
@@ -34,7 +37,7 @@ export async function amountDueForOrder(tx: Tx, storeId: string, orderId: string
   const [row] = await tx
     .select({ total: sql<string>`coalesce(sum(${s.payment.amount}), 0)` })
     .from(s.payment)
-    .where(and(eq(s.payment.storeId, storeId), eq(s.payment.orderId, orderId), eq(s.payment.state, 'Settled')));
+    .where(and(eq(s.payment.storeId, storeId), eq(s.payment.orderId, orderId), usableTenderSql));
   const settled = Number(row?.total ?? 0);
   return grandTotal - settled + await editRefundedTotal(tx, storeId, orderId);
 }
@@ -180,6 +183,16 @@ export async function applyPaymentResult(
     // amount was genuinely due).
     if ((order.state === 'Paid' || order.state === 'PartiallyRefunded') &&
         (await amountDueForOrder(tx, storeId, order.id, order.grandTotal)) >= 0) {
+      const due = await amountDueForOrder(tx, storeId, order.id, order.grandTotal);
+      // Entitlements follow money: once the edit's balance is fully covered,
+      // issue licenses for added licensed lines (idempotent) and revoke any
+      // stranded on removed lines.
+      if (due === 0) {
+        await reconcileEditedOrderLicenses(tx, { storeId, orderId: order.id, customerId: order.customerId ?? null, paidAt: new Date() });
+      }
+      // Points deferred on a leave_due addition post once the balance clears
+      // (no-op unless the order carries a deferred edit earn).
+      await settleDeferredEditEarnForOrder(tx, storeId, order.id);
       // (amount due after this row is >= 0, i.e. it did not overpay the order;
       // an overpayment still falls through to the MONEY-4 alert below.)
       await tx.insert(s.auditLog).values({

@@ -13,3 +13,13 @@ export async function hasUnresolvedPayment(tx: Tx, orderId: string): Promise<boo
   )).limit(1);
   return !!payment;
 }
+
+/** Stripe intents minted for the order that can still be confirmed (open,
+ *  failed-retryable or awaiting 3DS). An order edit must retire these first. */
+export async function hasConfirmableIntent(tx: Tx, storeId: string, orderId: string): Promise<boolean> {
+  const [attempt] = await tx.select({ id: s.paymentAttempt.id }).from(s.paymentAttempt).where(and(
+    eq(s.paymentAttempt.storeId, storeId), eq(s.paymentAttempt.orderId, orderId), eq(s.paymentAttempt.operation, 'intent'),
+    inArray(s.paymentAttempt.status, ['open', 'failed', 'action_required']),
+  )).limit(1);
+  return !!attempt;
+}

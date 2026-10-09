@@ -41,4 +41,21 @@ describe('Sezzle session preflight', () => {
       expect(() => prepareSezzleSession({ ...base, storefrontUrl })).toThrow('URL');
     }
   });
+  it('edited order: drops zero-quantity lines and represents positive adjustment + prior payment', () => {
+    // $10 line kept, $20 line removed (qty 0), +$5 adjustment, shipping 0, total 1500, $10 already paid
+    const edited = { ...order, subtotal: 1000, shippingTotal: 0, taxTotal: 0, grandTotal: 1500 };
+    const r = prepareSezzleSession({ ...base, order: edited, amount: 500,
+      lines: [{ variantName: 'A', variantSku: 'a', quantity: 1, unitPrice: 1000 }, { variantName: 'B', variantSku: 'b', quantity: 0, unitPrice: 2000 }],
+      adjustments: [{ label: 'Rush', amount: 500 }], balance: true });
+    const total = r.items.reduce((n, i) => n + i.price.amount_in_cents * i.quantity, 0) + r.shipping + r.tax - r.discount;
+    expect(r.items).toHaveLength(2);
+    expect(total).toBe(500);
+  });
+  it('edited order with a negative adjustment reconciles to the balance', () => {
+    const edited = { ...order, subtotal: 1000, shippingTotal: 0, taxTotal: 0, grandTotal: 800 };
+    const r = prepareSezzleSession({ ...base, order: edited, amount: 800,
+      lines: [{ variantName: 'A', variantSku: 'a', quantity: 1, unitPrice: 1000 }], adjustments: [{ label: 'Goodwill', amount: -200 }] });
+    const total = r.items.reduce((n, i) => n + i.price.amount_in_cents * i.quantity, 0) + r.shipping + r.tax - r.discount;
+    expect(total).toBe(800);
+  });
 });

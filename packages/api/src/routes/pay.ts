@@ -206,51 +206,55 @@ pay.openapi(
     if (!(await resolveStripeUsable(st.id, mode))) return errJson(c, 503, 'STRIPE_NOT_CONFIGURED', `stripe is not configured (${mode} mode)`);
     const receipt = c.req.header('x-receipt-token');
     const session = customerToken(c);
-    const prepared = await withStore(st.id, async (tx) => {
-      // D13: only the order's owner (receipt token / signed-in customer) can
-      // mint an intent or learn the amount due.
-      const o = await ownsOrder(tx, code, receipt, session);
-      if (!o) return null;
-      // MONEY-3: mint the intent for what's actually still owed, never the raw
-      // order total, so an existing settled tender cannot be charged twice.
-      const amountDue = await amountDueForOrder(tx, st.id, o.id, o.grandTotal);
-      // A balance (Paid / PartiallyRefunded) is its own attempt per settled
-      // tender; see the key comment below.
-      const balanceTenders = isBalanceState(o.state) ? await settledTenderCount(tx, o.id) : null;
-      return { order: o, amountDue, balanceTenders };
+    // Serialize with an order-edit commit (same pay:{store}:{code} lock): the
+    // amount read and the remote intent mint must not straddle a repricing.
+    return withAdvisoryLock(`pay:${st.id}:${code}`, async () => {
+      const prepared = await withStore(st.id, async (tx) => {
+        // D13: only the order's owner (receipt token / signed-in customer) can
+        // mint an intent or learn the amount due.
+        const o = await ownsOrder(tx, code, receipt, session);
+        if (!o) return null;
+        // MONEY-3: mint the intent for what's actually still owed, never the raw
+        // order total, so an existing settled tender cannot be charged twice.
+        const amountDue = await amountDueForOrder(tx, st.id, o.id, o.grandTotal);
+        // A balance (Paid / PartiallyRefunded) is its own attempt per settled
+        // tender; see the key comment below.
+        const balanceTenders = isBalanceState(o.state) ? await settledTenderCount(tx, o.id) : null;
+        return { order: o, amountDue, balanceTenders };
+      });
+      if (!prepared) return errJson(c, 404, 'ORDER_NOT_FOUND', 'order not found');
+      const { order, amountDue, balanceTenders } = prepared;
+      if (order.state !== 'PendingPayment' && !isBalanceState(order.state)) return errJson(c, 409, 'ORDER_NOT_PAYABLE', 'order is not payable', { extra: { state: order.state } });
+      if (amountDue <= 0) {
+        // A Paid order with nothing owed is simply not payable (no balance); an
+        // unpaid order already covered by other tenders keeps the 400.
+        if (order.state !== 'PendingPayment') return errJson(c, 409, 'ORDER_NOT_PAYABLE', 'order is not payable', { extra: { state: order.state } });
+        return errJson(c, 400, 'ORDER_ALREADY_PAID', 'order already fully paid', { extra: { state: order.state } });
+      }
+      // Idempotent: key the Stripe create on the order id AND the amount so a
+      // double-submit/retry reuses the order's open PaymentIntent (same
+      // client_secret) instead of minting a second one — but a later call after
+      // the amount due changes mints a fresh intent rather than reusing a stale one.
+      // D5: track the PI durably (idempotent on the PI id) so the sweeper,
+      // the refresh route and admin reconciliation can find in-flight money.
+      // Stripe's 24h idempotency replays a PI we already cancelled (sweeper /
+      // admin cancel): a cancelled PI can never be confirmed, so mint a fresh
+      // one under a suffixed key (pi:{orderId}:{amountDue}:{n}).
+      // Order editing: a balance PI is keyed on the settled-tender count too. A
+      // later edit can raise the total by the SAME amount again; keyed on
+      // (order, amount) alone Stripe would replay the earlier, already-succeeded
+      // PI inside its 24h window and the shopper could never pay the new balance.
+      // A replay that resolves to an already-settled attempt is skipped the same
+      // way a cancelled one is.
+      const base = balanceTenders === null ? `pi:${order.id}:${amountDue}` : `pi:${order.id}:${amountDue}:bal${balanceTenders}`;
+      for (let n = 0; n < 5; n++) {
+        const key = n === 0 ? base : `${base}:${n}`;
+        const intent = await createPaymentIntent({ orderCode: code, storeId: st.id, amount: amountDue, currency: order.currency, mode, idempotencyKey: key });
+        const tracked = await withStore(st.id, (tx) => trackStripeIntent(tx, st.id, { orderId: order.id, intentId: intent.intentId, amount: amountDue, currency: order.currency, mode }));
+        if (tracked.status !== 'cancelled' && !(balanceTenders !== null && tracked.status === 'settled')) return c.json(intent, 200);
+      }
+      return errJson(c, 409, 'ORDER_NOT_PAYABLE', 'order is not payable', { extra: { state: order.state } });
     });
-    if (!prepared) return errJson(c, 404, 'ORDER_NOT_FOUND', 'order not found');
-    const { order, amountDue, balanceTenders } = prepared;
-    if (order.state !== 'PendingPayment' && !isBalanceState(order.state)) return errJson(c, 409, 'ORDER_NOT_PAYABLE', 'order is not payable', { extra: { state: order.state } });
-    if (amountDue <= 0) {
-      // A Paid order with nothing owed is simply not payable (no balance); an
-      // unpaid order already covered by other tenders keeps the 400.
-      if (order.state !== 'PendingPayment') return errJson(c, 409, 'ORDER_NOT_PAYABLE', 'order is not payable', { extra: { state: order.state } });
-      return errJson(c, 400, 'ORDER_ALREADY_PAID', 'order already fully paid', { extra: { state: order.state } });
-    }
-    // Idempotent: key the Stripe create on the order id AND the amount so a
-    // double-submit/retry reuses the order's open PaymentIntent (same
-    // client_secret) instead of minting a second one — but a later call after
-    // the amount due changes mints a fresh intent rather than reusing a stale one.
-    // D5: track the PI durably (idempotent on the PI id) so the sweeper,
-    // the refresh route and admin reconciliation can find in-flight money.
-    // Stripe's 24h idempotency replays a PI we already cancelled (sweeper /
-    // admin cancel): a cancelled PI can never be confirmed, so mint a fresh
-    // one under a suffixed key (pi:{orderId}:{amountDue}:{n}).
-    // Order editing: a balance PI is keyed on the settled-tender count too. A
-    // later edit can raise the total by the SAME amount again; keyed on
-    // (order, amount) alone Stripe would replay the earlier, already-succeeded
-    // PI inside its 24h window and the shopper could never pay the new balance.
-    // A replay that resolves to an already-settled attempt is skipped the same
-    // way a cancelled one is.
-    const base = balanceTenders === null ? `pi:${order.id}:${amountDue}` : `pi:${order.id}:${amountDue}:bal${balanceTenders}`;
-    for (let n = 0; n < 5; n++) {
-      const key = n === 0 ? base : `${base}:${n}`;
-      const intent = await createPaymentIntent({ orderCode: code, storeId: st.id, amount: amountDue, currency: order.currency, mode, idempotencyKey: key });
-      const tracked = await withStore(st.id, (tx) => trackStripeIntent(tx, st.id, { orderId: order.id, intentId: intent.intentId, amount: amountDue, currency: order.currency, mode }));
-      if (tracked.status !== 'cancelled' && !(balanceTenders !== null && tracked.status === 'settled')) return c.json(intent, 200);
-    }
-    return errJson(c, 409, 'ORDER_NOT_PAYABLE', 'order is not payable', { extra: { state: order.state } });
   },
 );
 

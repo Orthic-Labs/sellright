@@ -30,11 +30,13 @@ vi.mock('../payments/provider.js', async (importOriginal) => {
     },
     async refundPayment(input: { providerRef: string | null; amount: number; idempotencyKey?: string }) {
       refundCalls.push({ providerRef: input.providerRef, amount: input.amount, idempotencyKey: input.idempotencyKey });
+      if (failNextRefund) { failNextRefund = false; return { state: 'Failed' as const, providerRef: null }; }
       return { state: 'Settled' as const, providerRef: `re_${refundCalls.length}` };
     },
   };
   return { ...actual, getProvider: (m: string) => (m === 'stripe' ? stripeTest : actual.getProvider(m)) };
 });
+let failNextRefund = false;
 const stockHook = vi.hoisted(() => ({ onStockChanged: vi.fn() }));
 vi.mock('../manifest/stock-hook.js', () => stockHook);
 
@@ -75,7 +77,7 @@ async function seed() {
   });
 }
 
-interface SeedLine { sku: string; qty: number; fulfilled?: number; refunded?: number }
+interface SeedLine { sku: string; qty: number; fulfilled?: number; refunded?: number; cancelled?: number }
 interface SeedPay { amount: number; method?: string; ref?: string }
 async function makeOrder(o: {
   code?: string; state?: 'PendingPayment' | 'Paid' | 'PartiallyRefunded' | 'Refunded' | 'Cancelled'; lines?: SeedLine[]; shipping?: number;
@@ -105,10 +107,10 @@ async function makeOrder(o: {
       const lt = t.lines[i]!;
       await tx.insert(s.orderLine).values({
         storeId: STORE, orderId: ord!.id, variantId: V[l.sku]!.id, variantSku: l.sku, variantName: `Widget ${l.sku}`, quantity: l.qty, unitPrice: price(l.sku),
-        lineSubtotal: lt.lineSubtotal, lineDiscount: lt.lineDiscount, lineTotal: lt.lineTotal, fulfilledQty: l.fulfilled ?? 0, refundedQty: l.refunded ?? 0,
+        lineSubtotal: lt.lineSubtotal, lineDiscount: lt.lineDiscount, lineTotal: lt.lineTotal, fulfilledQty: l.fulfilled ?? 0, refundedQty: l.refunded ?? 0, cancelledQty: l.cancelled ?? 0,
       });
       // The order holds an allocation for its open (unfulfilled) units.
-      await tx.update(s.stock).set({ allocated: sql`${s.stock.allocated} + ${l.qty - (l.fulfilled ?? 0)}` }).where(eq(s.stock.variantId, V[l.sku]!.id));
+      await tx.update(s.stock).set({ allocated: sql`${s.stock.allocated} + ${l.qty - (l.fulfilled ?? 0) - (l.cancelled ?? 0)}` }).where(eq(s.stock.variantId, V[l.sku]!.id));
     }
     const pays = o.payments === 'full' || (o.payments === undefined && state !== 'PendingPayment') ? [{ amount: t.grandTotal }] : o.payments ?? [];
     for (const [i, p] of pays.entries()) {
@@ -141,7 +143,7 @@ async function expectErr(p: Promise<unknown>, code: string) {
 
 beforeEach(async () => {
   clearLoginAttempts('unknown', 'pay:unknown');
-  refundCalls.length = 0; chargeCalls.length = 0; stockHook.onStockChanged.mockClear();
+  refundCalls.length = 0; chargeCalls.length = 0; failNextRefund = false; stockHook.onStockChanged.mockClear();
   V = {};
   await wipe(); await seed();
 });
@@ -208,7 +210,7 @@ describe('line operations', () => {
   });
 
   it('fulfilled and refunded quantity is locked; only the unfulfilled units move stock', async () => {
-    const o = await makeOrder({ lines: [{ sku: 'A', qty: 4, fulfilled: 1, refunded: 1 }] });
+    const o = await makeOrder({ lines: [{ sku: 'A', qty: 4, fulfilled: 1, refunded: 1, cancelled: 1 }] });
     const l = (await linesOf(o.code))[0]!;
     const alloc = (await stock('A')).allocated; // 3 open
     await expectErr(previewOrderEdit(STORE, o.code, [{ op: 'set_quantity', lineId: l.id, quantity: 1 }]), 'LINE_LOCKED');
@@ -630,13 +632,14 @@ describe('loyalty earn follows an edit of a Paid order', () => {
     const o = await earnedOrder();
     const l = (await linesOf(o.code))[0]!;
     const input = { idempotencyKey: 'loy-up' };
-    const r = await commit(o.code, [{ op: 'set_quantity', lineId: l.id, quantity: 4 }], input, { type: 'leave_due' }); // 4000 -> 40 pts
+    const pay = { type: 'record_payment', method: 'cash' } as const;
+    const r = await commit(o.code, [{ op: 'set_quantity', lineId: l.id, quantity: 4 }], input, pay); // 4000 -> 40 pts, paid in full
     expect(r.replay).toBe(false);
     const adj = (await ledger(o.customerId!)).filter((x) => x.kind === 'adjust');
     expect(adj).toHaveLength(1);
     expect(adj[0]).toMatchObject({ points: 20, reason: 'order_edit_earn', orderId: o.id });
     expect(adj[0]!.sourceRef).toBe(`order_edit:${r.editId}:earn`);
-    const again = await commit(o.code, [{ op: 'set_quantity', lineId: l.id, quantity: 4 }], input, { type: 'leave_due' });
+    const again = await commit(o.code, [{ op: 'set_quantity', lineId: l.id, quantity: 4 }], input, pay);
     expect(again.replay).toBe(true);
     expect((await ledger(o.customerId!)).filter((x) => x.kind === 'adjust')).toHaveLength(1);
     expect(await balance(o.customerId!)).toBe(40);
@@ -647,7 +650,7 @@ describe('loyalty earn follows an edit of a Paid order', () => {
     const l = (await linesOf(o.code))[0]!;
     await commit(o.code, [{ op: 'set_quantity', lineId: l.id, quantity: 1 }], {}, { type: 'leave_credit' }); // 1000 -> 10 pts: -10
     expect(await balance(o.customerId!)).toBe(10);
-    await commit(o.code, [{ op: 'set_quantity', lineId: l.id, quantity: 4 }], {}, { type: 'leave_due' }); // back up: +30
+    await commit(o.code, [{ op: 'set_quantity', lineId: l.id, quantity: 4 }], {}, { type: 'record_payment', method: 'cash' }); // back up: +30
     expect(await balance(o.customerId!)).toBe(40);
   });
 
@@ -704,5 +707,91 @@ describe('loyalty earn follows an edit of a Paid order', () => {
     const l = (await linesOf(o.code))[0]!;
     await commit(o.code, [{ op: 'set_quantity', lineId: l.id, quantity: 4 }], {}, { type: 'leave_due' });
     expect((await ledger(o.customerId!)).filter((x) => x.kind === 'adjust')).toHaveLength(0);
+  });
+});
+
+describe('review fixes: refunded/fulfilled overlap, loyalty deferral, failed edit refund', () => {
+  const SNAP = { redeemPoints: 0, pointsDiscount: 0, earnPoints: 20, expiryDays: null, earnRatePerDollar: 1 };
+  const ledger = (customerId: string) => withStore(STORE, (tx) => tx.select().from(s.loyaltyLedger).where(eq(s.loyaltyLedger.customerId, customerId)));
+  const balance = async (customerId: string) => (await ledger(customerId)).reduce((n, r) => n + r.points, 0);
+  const setLoyalty = (id: string, snap: Record<string, unknown>) => withStore(STORE, (tx) => tx.update(s.order).set({ metadata: { contact: { email: 'cust@example.test' }, loyalty: snap } }).where(eq(s.order.id, id)));
+
+  it('fulfil -> return-refund -> edit: removing the refunded line never increases quantity or reserves stock', async () => {
+    const { requestRefund } = await import('../payments/refunds.js');
+    const o = await makeOrder({ lines: [{ sku: 'A', qty: 1 }, { sku: 'B', qty: 1 }] });
+    const la = (await linesOf(o.code)).find((x) => x.variantSku === 'A')!;
+    await withStore(STORE, async (tx) => {
+      await tx.update(s.orderLine).set({ fulfilledQty: 1 }).where(eq(s.orderLine.id, la.id));
+      await tx.update(s.stock).set({ allocated: sql`${s.stock.allocated} - 1` }).where(eq(s.stock.variantId, V.A!.id));
+    });
+    await requestRefund({ storeId: STORE, orderId: o.id, actor: 'owner@example.test', idempotencyKey: 'ret-A', amount: 1000, lines: [{ orderLineId: la.id, quantity: 1, restock: false }] });
+    const refunded = (await linesOf(o.code)).find((x) => x.id === la.id)!;
+    expect(refunded).toMatchObject({ quantity: 1, fulfilledQty: 1, refundedQty: 1, cancelledQty: 0 });
+    const allocBefore = (await stock('A')).allocated;
+    const prev = await previewOrderEdit(STORE, o.code, [{ op: 'remove_line', lineId: la.id }]);
+    expect(prev.lines.find((l) => l.lineId === la.id)).toMatchObject({ beforeQty: 1, afterQty: 1 });
+    await commit(o.code, [{ op: 'remove_line', lineId: la.id }], {}, undefined);
+    const after = (await linesOf(o.code)).find((x) => x.id === la.id)!;
+    expect(after.quantity).toBe(1);
+    expect((await stock('A')).allocated).toBe(allocBefore);
+  });
+
+  it('unpaid edit -> later payment earns on the edited merchandise', async () => {
+    const o = await makeOrder({ state: 'PendingPayment', customer: true, lines: [{ sku: 'A', qty: 2 }] });
+    await setLoyalty(o.id, SNAP);
+    const l = (await linesOf(o.code))[0]!;
+    await commit(o.code, [{ op: 'set_quantity', lineId: l.id, quantity: 4 }], {}, { type: 'leave_due' }); // 4000 -> 40
+    expect((await orderRow(o.code)).metadata).toMatchObject({ loyalty: { earnPoints: 40 } });
+    expect(await ledger(o.customerId!)).toHaveLength(0);
+    const { postEarnForPaidOrder } = await import('../loyalty/ledger.js');
+    expect(await withStore(STORE, (tx) => postEarnForPaidOrder(tx, STORE, o.id))).toBe(40);
+  });
+
+  it('leave_due addition: points not spendable until settled, then available', async () => {
+    const o = await makeOrder({ customer: true, lines: [{ sku: 'A', qty: 2 }] });
+    await setLoyalty(o.id, SNAP);
+    await withStore(STORE, (tx) => tx.insert(s.loyaltyLedger).values({ storeId: STORE, customerId: o.customerId!, orderId: o.id, kind: 'earn', points: 20, sourceRef: `earn:${o.id}`, actor: 'system:order-paid', reason: 'order_paid' }));
+    const l = (await linesOf(o.code))[0]!;
+    await commit(o.code, [{ op: 'set_quantity', lineId: l.id, quantity: 4 }], {}, { type: 'leave_due' });
+    expect(await balance(o.customerId!)).toBe(20); // +20 held back
+    const { lockedAvailable } = await import('../loyalty/ledger.js');
+    expect(await withStore(STORE, (tx) => lockedAvailable(tx, STORE, o.customerId!))).toBe(20);
+    // balance payment lands (what settle.ts records for a paid-order balance)
+    await withStore(STORE, (tx) => tx.insert(s.payment).values({ storeId: STORE, orderId: o.id, amount: 2000, method: 'stripe', state: 'Settled', providerRef: 'pi_bal_x', gatewayMode: 'test', currency: 'USD' }));
+    expect(await withStore(STORE, (tx) => lockedAvailable(tx, STORE, o.customerId!))).toBe(40);
+    expect(await withStore(STORE, (tx) => lockedAvailable(tx, STORE, o.customerId!))).toBe(40); // idempotent
+    expect((await ledger(o.customerId!)).filter((x) => x.kind === 'adjust')).toHaveLength(1);
+  });
+
+  it('failed edit refund -> retry succeeds with order_edit provenance; amountDue and loyalty right', async () => {
+    const { retryOrderEditRefund } = await import('./order-edit-service.js');
+    const o = await makeOrder({ customer: true, lines: [{ sku: 'A', qty: 2 }] });
+    await setLoyalty(o.id, SNAP);
+    await withStore(STORE, (tx) => tx.insert(s.loyaltyLedger).values({ storeId: STORE, customerId: o.customerId!, orderId: o.id, kind: 'earn', points: 20, sourceRef: `earn:${o.id}`, actor: 'system:order-paid', reason: 'order_paid' }));
+    const l = (await linesOf(o.code))[0]!;
+    failNextRefund = true;
+    const r = await commit(o.code, [{ op: 'set_quantity', lineId: l.id, quantity: 1 }], {}, { type: 'refund_now' });
+    expect(r.settlement).toMatchObject({ status: 'failed', refundState: 'Failed' });
+    expect(r.amountDue).toBe(-1000);
+    const out = await retryOrderEditRefund({ storeId: STORE, code: o.code, editId: r.editId, actor: 'owner@example.test', action: 'retry' });
+    expect(out.settlement).toMatchObject({ type: 'refund_now', status: 'settled', amount: 1000 });
+    expect(out.amountDue).toBe(0);
+    expect(out.state).toBe('Paid');
+    const refunds = await withStore(STORE, (tx) => tx.select().from(s.refund));
+    expect(refunds.filter((x) => x.state === 'Settled')).toHaveLength(1);
+    expect((refunds.find((x) => x.state === 'Settled')!.metadata as { source?: string }).source).toBe('order_edit');
+    expect(await balance(o.customerId!)).toBe(10); // edit earn reduction only, no extra clawback
+    await expectErr(retryOrderEditRefund({ storeId: STORE, code: o.code, editId: r.editId, actor: 'x', action: 'retry' }), 'REFUND_NOT_RETRYABLE');
+  });
+
+  it('failed edit refund can be turned into credit', async () => {
+    const { retryOrderEditRefund } = await import('./order-edit-service.js');
+    const o = await makeOrder({ lines: [{ sku: 'A', qty: 2 }] });
+    const l = (await linesOf(o.code))[0]!;
+    failNextRefund = true;
+    const r = await commit(o.code, [{ op: 'set_quantity', lineId: l.id, quantity: 1 }], {}, { type: 'refund_now' });
+    const out = await retryOrderEditRefund({ storeId: STORE, code: o.code, editId: r.editId, actor: 'x', action: 'credit' });
+    expect(out.settlement).toMatchObject({ type: 'leave_credit', status: 'credit' });
+    expect(out.amountDue).toBe(-1000);
   });
 });

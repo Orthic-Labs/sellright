@@ -10,6 +10,7 @@
 import { desc, eq, inArray, sql } from 'drizzle-orm';
 import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
+import { usableTenderRawSql } from '../payments/tender.js';
 import { EDIT_REFUND_SOURCE } from '../payments/edit-refund.js';
 import { deriveFulfillmentStatus, derivePaymentStatus, wirePaymentState, type OrderFulfillmentStatus, type OrderPaymentStatusWithBalance, type OrderStatus } from '../orders/status.js';
 
@@ -60,7 +61,7 @@ async function amountDueByOrder(tx: Tx, ids: string[]): Promise<Map<string, numb
   const idList = sql.join(ids.map((i) => sql`${i}::uuid`), sql`, `);
   const r = await tx.execute(sql`
     select o.id as id, (o.grand_total
-      - coalesce((select sum(p.amount) from payment p where p.order_id = o.id and p.state = 'Settled'), 0)
+      - coalesce((select sum(p.amount) from payment p where p.order_id = o.id and ${usableTenderRawSql('p')}), 0)
       + coalesce((select sum(rf.amount) from refund rf where rf.order_id = o.id and rf.state <> 'Failed' and rf.metadata->>'source' = ${EDIT_REFUND_SOURCE}), 0))::bigint as due
     from "order" o where o.id in (${idList})`);
   for (const row of (r as unknown as { rows: Array<{ id: string; due: string | number }> }).rows) out.set(row.id, Number(row.due));
