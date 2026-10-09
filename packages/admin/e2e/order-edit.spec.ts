@@ -70,7 +70,7 @@ test.describe('edit a paid order', () => {
 		expect(bySku).toMatchObject({ [SKU.tee]: 2, [SKU.mug]: 1 });
 		// timeline records the edit with its reason
 		await expect(page.getByText('Order edited')).toBeVisible();
-		await expect(page.getByText(/Customer asked for a second tee and a mug/)).toBeVisible();
+		await expect(page.getByText(/Customer asked for a second tee and a mug/).first()).toBeVisible();
 
 		// live stock moved by exactly the unfulfilled delta (+1 tee, +1 mug reserved)
 		expect((await api.stock(SKU.tee)).allocated).toBe(tee0.allocated + 1);

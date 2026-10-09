@@ -58,4 +58,18 @@ describe('Sezzle session preflight', () => {
     const total = r.items.reduce((n, i) => n + i.price.amount_in_cents * i.quantity, 0) + r.shipping + r.tax - r.discount;
     expect(total).toBe(800);
   });
+  it('adjustment-only edited order: removed line + positive adjustment prepares a balance session', () => {
+    // $100 line removed (qty 0), +$150 adjustment, $100 already paid -> $50 balance
+    const edited = { ...order, subtotal: 0, shippingTotal: 0, taxTotal: 0, grandTotal: 150 };
+    const r = prepareSezzleSession({ ...base, order: edited, amount: 50, balance: true,
+      lines: [{ variantName: 'A', variantSku: 'a', quantity: 0, unitPrice: 10000 }], adjustments: [{ label: 'Custom work', amount: 150 }] });
+    const total = r.items.reduce((n, i) => n + i.price.amount_in_cents * i.quantity, 0) + r.shipping + r.tax - r.discount;
+    expect(r.items).toHaveLength(1);
+    expect(total).toBe(50);
+  });
+  it('still rejects an order with no payable items at all', () => {
+    const edited = { ...order, subtotal: 0, shippingTotal: 0, taxTotal: 0, grandTotal: 100 };
+    expect(() => prepareSezzleSession({ ...base, order: edited, amount: 100,
+      lines: [{ variantName: 'A', variantSku: 'a', quantity: 0, unitPrice: 1000 }] })).toThrow();
+  });
 });

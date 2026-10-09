@@ -117,6 +117,14 @@ export type ReconcileOutcome =
 	| 'failed' // the API definitively rejected this intent as not paid
 	| 'aborted';
 
+/** Typed /pay result (HTTP 200 body `payment`). Only a terminal Declined intent
+ *  is a definitive "not paid, safe to retry". Failed also covers an
+ *  amount/currency verification failure on a captured intent (money may have
+ *  moved), so it stays unknown and locked. Settled/Pending/etc. defer to reads. */
+export function classifySettlePayment(payment: string | null | undefined): 'failed' | 'unknown' {
+	return payment === 'Declined' ? 'failed' : 'unknown';
+}
+
 /** Only an explicit "this payment did not succeed" answer counts as a definitive
  *  failure (402 Payment Required / 422). Everything else (network, 5xx, 409,
  *  429, ...) is unknown: the money may already have moved, so the shopper is
@@ -133,7 +141,7 @@ export function classifySettleStatus(status: number | null | undefined): 'failed
  * does not stop forever and it never re-enables payment.
  */
 export async function reconcileBalance(args: {
-	settle: () => Promise<void>; // rejects with the API error on failure
+	settle: () => Promise<string | void>; // resolves the typed /pay payment state; rejects with the API error on failure
 	read: () => Promise<number | null>; // amountDue, null = read failed
 	statusOf: (e: unknown) => number | null;
 	signal: AbortSignal;
@@ -143,7 +151,8 @@ export async function reconcileBalance(args: {
 	const { settle, read, statusOf, signal } = args;
 	if (signal.aborted) return 'aborted';
 	try {
-		await settle();
+		const payment = await settle();
+		if (typeof payment === 'string' && classifySettlePayment(payment) === 'failed') return 'failed';
 	} catch (e) {
 		if (signal.aborted) return 'aborted';
 		if (classifySettleStatus(statusOf(e)) === 'failed') return 'failed';

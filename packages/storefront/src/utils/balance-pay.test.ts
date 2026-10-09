@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { alreadyPaidCents, availableBalanceMethods, balancePageState, balanceReturnUrl, classifySettleStatus, receiptTokenFrom, reconcileBalance, stripeReturnFrom, wantsBalancePay } from './balance-pay';
+import { alreadyPaidCents, availableBalanceMethods, balancePageState, balanceReturnUrl, classifySettlePayment, classifySettleStatus, receiptTokenFrom, reconcileBalance, stripeReturnFrom, wantsBalancePay } from './balance-pay';
 
 describe('balancePageState', () => {
 	const paid = (amountDue: number, state = 'Paid') => ({ state, amountDue });
@@ -72,6 +72,22 @@ describe('Stripe return + reconcile', () => {
 		const e402 = Object.assign(new Error('x'), { status: 402 });
 		expect(await reconcileBalance({ statusOf, sleep: noSleep, settle: async () => { throw e402; }, read: async () => 500, signal: live() })).toBe('failed');
 		expect(classifySettleStatus(409)).toBe('unknown');
+	});
+	it('typed /pay Declined is failed without polling (retry with a new intent)', async () => {
+		let reads = 0;
+		const out = await reconcileBalance({ statusOf, sleep: noSleep, settle: async () => 'Declined', read: async () => { reads++; return 500; }, signal: live() });
+		expect(out).toBe('failed');
+		expect(reads).toBe(0);
+		expect(classifySettlePayment('Declined')).toBe('failed');
+	});
+	it('typed /pay Failed (amount verification after capture) stays unknown/pending, never failed', async () => {
+		expect(classifySettlePayment('Failed')).toBe('unknown');
+		expect(await reconcileBalance({ statusOf, sleep: noSleep, attempts: 2, settle: async () => 'Failed', read: async () => null, signal: live() })).toBe('unknown');
+		expect(await reconcileBalance({ statusOf, sleep: noSleep, attempts: 2, settle: async () => 'Failed', read: async () => 500, signal: live() })).toBe('pending');
+	});
+	it('typed /pay Settled clears via reads; Pending stays pending', async () => {
+		expect(await reconcileBalance({ statusOf, sleep: noSleep, settle: async () => 'Settled', read: async () => 0, signal: live() })).toBe('cleared');
+		expect(await reconcileBalance({ statusOf, sleep: noSleep, attempts: 2, settle: async () => 'Pending', read: async () => 500, signal: live() })).toBe('pending');
 	});
 });
 

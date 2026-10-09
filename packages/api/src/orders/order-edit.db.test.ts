@@ -30,6 +30,7 @@ vi.mock('../payments/provider.js', async (importOriginal) => {
     },
     async refundPayment(input: { providerRef: string | null; amount: number; idempotencyKey?: string }) {
       refundCalls.push({ providerRef: input.providerRef, amount: input.amount, idempotencyKey: input.idempotencyKey });
+      if (nextRefundPending) { nextRefundPending = false; return { state: 'Pending' as const, providerRef: `re_pend_${refundCalls.length}` }; }
       if (failNextRefund) { failNextRefund = false; return { state: 'Failed' as const, providerRef: null }; }
       return { state: 'Settled' as const, providerRef: `re_${refundCalls.length}` };
     },
@@ -37,6 +38,16 @@ vi.mock('../payments/provider.js', async (importOriginal) => {
   return { ...actual, getProvider: (m: string) => (m === 'stripe' ? stripeTest : actual.getProvider(m)) };
 });
 let failNextRefund = false;
+let nextRefundPending = false;
+const intentSpy = vi.hoisted(() => ({ calls: [] as string[], cancel: true }));
+vi.mock('../payments/stripe-reconcile.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../payments/stripe-reconcile.js')>();
+  const { withStore: ws } = await import('../db/client.js');
+  return { ...actual, cancelOrderStripeIntents: async (storeId: string, orderId: string) => {
+    intentSpy.calls.push(orderId);
+    if (intentSpy.cancel) await ws(storeId, (tx) => tx.execute(sql`update payment_attempt set status = 'cancelled' where order_id = ${orderId} and operation = 'intent'`));
+  } };
+});
 const stockHook = vi.hoisted(() => ({ onStockChanged: vi.fn() }));
 vi.mock('../manifest/stock-hook.js', () => stockHook);
 
@@ -69,6 +80,7 @@ async function seed() {
       V[sku] = { id: v!.id, sku };
     };
     await mk('A', 1000, 20); await mk('B', 2000, 20); await mk('C', 500, 1);
+    await mk('L', 1000, 0, { fulfillmentType: 'license', appKey: 'testapp' }); await mk('M', 1000, 0, { fulfillmentType: 'license', appKey: 'testapp' });
     await tx.insert(s.shippingMethod).values([
       { storeId: STORE, code: 'std', name: 'Standard', calculator: { flat: 500 } },
       { storeId: STORE, code: 'exp', name: 'Express', calculator: { flat: 1500 } },
@@ -86,7 +98,7 @@ async function makeOrder(o: {
   const code = o.code ?? 'SR' + Math.random().toString(16).slice(2, 12).toUpperCase();
   const state = o.state ?? 'Paid';
   const lines = o.lines ?? [{ sku: 'A', qty: 2 }];
-  const price = (sku: string) => (sku === 'A' ? 1000 : sku === 'B' ? 2000 : 500);
+  const price = (sku: string) => (sku === 'A' || sku === 'L' || sku === 'M' ? 1000 : sku === 'B' ? 2000 : 500);
   const promo = o.promotion ? { type: 'percentage' as const, value: 10 } : null;
   const t = calculateOrderTotals({ lines: lines.map((l) => ({ unitPrice: price(l.sku), quantity: l.qty })), shipping: o.shipping ?? 500, taxRate: o.taxRate ?? 0, promotion: promo });
   return withStore(STORE, async (tx) => {
@@ -143,7 +155,7 @@ async function expectErr(p: Promise<unknown>, code: string) {
 
 beforeEach(async () => {
   clearLoginAttempts('unknown', 'pay:unknown');
-  refundCalls.length = 0; chargeCalls.length = 0; failNextRefund = false; stockHook.onStockChanged.mockClear();
+  refundCalls.length = 0; chargeCalls.length = 0; failNextRefund = false; nextRefundPending = false; intentSpy.calls.length = 0; intentSpy.cancel = true; stockHook.onStockChanged.mockClear();
   V = {};
   await wipe(); await seed();
 });
@@ -793,5 +805,125 @@ describe('review fixes: refunded/fulfilled overlap, loyalty deferral, failed edi
     const out = await retryOrderEditRefund({ storeId: STORE, code: o.code, editId: r.editId, actor: 'x', action: 'credit' });
     expect(out.settlement).toMatchObject({ type: 'leave_credit', status: 'credit' });
     expect(out.amountDue).toBe(-1000);
+  });
+});
+
+describe('round-2 review fixes: intents, license issuance, async refunds', () => {
+  const addIntent = (orderId: string, status: string, n = 1) => withStore(STORE, (tx) => tx.insert(s.paymentAttempt).values({
+    storeId: STORE, orderId, operation: 'intent', method: 'stripe', accountId: 'acct', mode: 'test', amount: 2500, currency: 'USD',
+    idempotencyKey: `intent-${orderId}-${status}-${n}`, fingerprint: 'fp', status, providerRef: `pi_${n}_${status}`,
+  }));
+  const intentStatuses = (orderId: string) => withStore(STORE, async (tx) => (await tx.select().from(s.paymentAttempt).where(eq(s.paymentAttempt.orderId, orderId))).map((a) => a.status));
+  const toCanada = { fullName: 'N', line1: '9 New St', city: 'Toronto', province: 'ON', postalCode: 'M5V', country: 'CA', phone: null, line2: null };
+  const sameCountry = { fullName: 'N', line1: '9 New St', city: 'Dallas', province: 'TX', postalCode: '75001', country: 'US', phone: null, line2: null };
+  const taxCA = () => withStore(STORE, (tx) => tx.insert(s.taxZone).values({ storeId: STORE, name: 'CA', countries: ['CA'], rate: 500 }));
+
+  it('country-change (tax repricing) retires an open intent before committing', async () => {
+    const o = await makeOrder({}); await taxCA(); await addIntent(o.id, 'open');
+    const r = await commit(o.code, [{ op: 'set_address', kind: 'shipping', address: toCanada }], {}, { type: 'leave_due' });
+    expect(r.replay).toBe(false);
+    expect(intentSpy.calls).toEqual([o.id]);
+    expect(await intentStatuses(o.id)).toEqual(['cancelled']);
+  });
+
+  it('country-change is held by a processing payment and by an intent that survives retirement', async () => {
+    const o = await makeOrder({}); await taxCA(); await addIntent(o.id, 'processing');
+    const op: EditOpT = { op: 'set_address', kind: 'shipping', address: toCanada };
+    await expectErr(previewOrderEdit(STORE, o.code, [op]), 'PAYMENT_UNRESOLVED');
+    const o2 = await makeOrder({}); await addIntent(o2.id, 'open', 2);
+    intentSpy.cancel = false; // gateway could not cancel it
+    const prev = await previewOrderEdit(STORE, o2.code, [op]);
+    await expectErr(commitOrderEdit({ storeId: STORE, storeSlug: SLUG, code: o2.code, actor: 'a', ops: [op], expectedGrandTotal: prev.after.grandTotal, idempotencyKey: 'surv', notifyCustomer: false, settlement: { type: 'leave_due' } }), 'PAYMENT_UNRESOLVED');
+    expect((await orderRow(o2.code)).shippingAddress).toMatchObject({ country: 'US' });
+  });
+
+  it('a monetarily inert address edit neither retires nor is blocked by an open intent', async () => {
+    const o = await makeOrder({}); await addIntent(o.id, 'open');
+    const r = await commit(o.code, [{ op: 'set_address', kind: 'shipping', address: sameCountry }]);
+    expect(r.replay).toBe(false);
+    expect(intentSpy.calls).toEqual([]);
+    expect(await intentStatuses(o.id)).toEqual(['open']);
+  });
+
+  it('an idempotent replay or stale preview never cancels a newer intent', async () => {
+    const o = await makeOrder({}); const l = (await linesOf(o.code))[0]!;
+    const ops: EditOpT[] = [{ op: 'set_quantity', lineId: l.id, quantity: 3 }];
+    const r1 = await commit(o.code, ops, { idempotencyKey: 'same-key' }, { type: 'leave_due' });
+    expect(r1.replay).toBe(false);
+    await addIntent(o.id, 'open'); intentSpy.calls.length = 0;
+    const r2 = await commitOrderEdit({ storeId: STORE, storeSlug: SLUG, code: o.code, actor: 'owner@example.test', ops, expectedGrandTotal: r1.grandTotal, idempotencyKey: 'same-key', notifyCustomer: true, settlement: { type: 'leave_due' } });
+    expect(r2.replay).toBe(true);
+    expect(intentSpy.calls).toEqual([]);
+    expect(await intentStatuses(o.id)).toEqual(['open']);
+    await expectErr(commitOrderEdit({ storeId: STORE, storeSlug: SLUG, code: o.code, actor: 'a', ops: [{ op: 'set_quantity', lineId: l.id, quantity: 4 }], expectedGrandTotal: 1, idempotencyKey: 'stale-1', notifyCustomer: false, settlement: { type: 'leave_due' } }), 'PREVIEW_STALE');
+    expect(intentSpy.calls).toEqual([]);
+  });
+
+  it('swapping a $100 physical line for a $100 licensed line issues exactly one license (zero balance)', async () => {
+    const o = await makeOrder({ lines: [{ sku: 'A', qty: 1 }] });
+    const l = (await linesOf(o.code))[0]!;
+    const op: EditOpT = { op: 'swap_variant', lineId: l.id, sku: 'L' } as EditOpT;
+    const r = await commit(o.code, [op]);
+    expect(r.amountDue).toBe(0);
+    const lic = () => withStore(STORE, (tx) => tx.select().from(s.license).where(eq(s.license.orderId, o.id)));
+    expect(await lic()).toHaveLength(1);
+    // a later zero-balance edit never double-issues
+    await commit(o.code, [{ op: 'set_shipping_method', code: 'std' }]);
+    expect(await lic()).toHaveLength(1);
+  });
+
+  it('a licensed addition covered by credit issues; an unpaid balance does not', async () => {
+    const o = await makeOrder({ lines: [{ sku: 'B', qty: 1 }] }); // paid 2500
+    const rm = (await linesOf(o.code))[0]!;
+    const r = await commit(o.code, [{ op: 'add_item', sku: 'L', quantity: 1 }, { op: 'set_quantity', lineId: rm.id, quantity: 0 }], {}, { type: 'leave_credit' });
+    expect(r.amountDue).toBeLessThanOrEqual(0);
+    expect(await withStore(STORE, (tx) => tx.select().from(s.license).where(eq(s.license.orderId, o.id)))).toHaveLength(1);
+    const o2 = await makeOrder({ lines: [{ sku: 'A', qty: 1 }] });
+    await commit(o2.code, [{ op: 'add_item', sku: 'M', quantity: 1 }], {}, { type: 'leave_due' });
+    expect(await withStore(STORE, (tx) => tx.select().from(s.license).where(eq(s.license.orderId, o2.id)))).toHaveLength(0);
+  });
+
+  it('a line that ever carried a (revoked) license cannot be repointed to another variant', async () => {
+    const o = await makeOrder({ lines: [{ sku: 'L', qty: 1 }] });
+    const l = (await linesOf(o.code))[0]!;
+    await withStore(STORE, (tx) => tx.insert(s.license).values({ storeId: STORE, orderId: o.id, orderLineId: l.id, appKey: 'testapp', licenseKey: 'SR-TESTAPP-REVOKED', status: 'revoked' }));
+    await expectErr(previewOrderEdit(STORE, o.code, [{ op: 'swap_variant', lineId: l.id, sku: 'M' } as EditOpT]), 'LINE_LICENSED');
+    // quantity changes on a fully revoked line are not blocked
+    await previewOrderEdit(STORE, o.code, [{ op: 'set_quantity', lineId: l.id, quantity: 2 }]);
+  });
+
+  async function pendingEditRefund() {
+    const o = await makeOrder({ lines: [{ sku: 'A', qty: 2 }] });
+    const l = (await linesOf(o.code))[0]!;
+    nextRefundPending = true;
+    const r = await commit(o.code, [{ op: 'set_quantity', lineId: l.id, quantity: 1 }], {}, { type: 'refund_now' });
+    expect(r.settlement).toMatchObject({ status: 'pending', refundState: 'Pending' });
+    const refund = await withStore(STORE, async (tx) => (await tx.select().from(s.refund).where(eq(s.refund.orderId, o.id)))[0]!);
+    return { o, r, refund };
+  }
+  const finalize = async (attemptId: string, state: 'Settled' | 'Failed') => {
+    const { finalizeRefund } = await import('../payments/refunds.js');
+    await withStore(STORE, (tx) => finalizeRefund(tx, STORE, attemptId, { state, providerRef: null } as never));
+  };
+  const historySettlement = async (code: string, editId: string) => (await loadEditContext(STORE, code)).history.find((h) => h.id === editId)!.settlement as { status: string; refundState?: string };
+
+  it('Pending -> Failed edit refund shows failed in history and is retryable', async () => {
+    const { retryOrderEditRefund } = await import('./order-edit-service.js');
+    const { o, r, refund } = await pendingEditRefund();
+    expect(await historySettlement(o.code, r.editId)).toMatchObject({ status: 'pending' });
+    await expectErr(retryOrderEditRefund({ storeId: STORE, code: o.code, editId: r.editId, actor: 'x', action: 'retry' }), 'REFUND_NOT_RETRYABLE');
+    await finalize(refund.attemptId!, 'Failed');
+    expect(await historySettlement(o.code, r.editId)).toMatchObject({ status: 'failed', refundState: 'Failed' });
+    const out = await retryOrderEditRefund({ storeId: STORE, code: o.code, editId: r.editId, actor: 'x', action: 'retry' });
+    expect(out.settlement).toMatchObject({ type: 'refund_now', status: 'settled', amount: 1000 });
+    expect(out.amountDue).toBe(0);
+  });
+
+  it('Pending -> Settled edit refund shows settled and is not retryable', async () => {
+    const { retryOrderEditRefund } = await import('./order-edit-service.js');
+    const { o, r, refund } = await pendingEditRefund();
+    await finalize(refund.attemptId!, 'Settled');
+    expect(await historySettlement(o.code, r.editId)).toMatchObject({ status: 'settled', refundState: 'Settled' });
+    await expectErr(retryOrderEditRefund({ storeId: STORE, code: o.code, editId: r.editId, actor: 'x', action: 'retry' }), 'REFUND_NOT_RETRYABLE');
   });
 });

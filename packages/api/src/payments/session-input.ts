@@ -36,7 +36,7 @@ export function prepareSezzleSession(input: {
   const email = metadata?.contact?.email || input.customer?.email;
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Customer email required');
   if (!order.receiptToken || order.currency !== 'USD' || !Number.isSafeInteger(amount) ||
-      amount <= 0 || amount > order.grandTotal || !lines.length) throw new Error('Invalid payment context');
+      amount <= 0 || amount > order.grandTotal) throw new Error('Invalid payment context');
   const balance = input.balance === true;
   const complete = new URL((balance ? '/orders/' : '/checkout/confirmation/') + encodeURIComponent(order.code), origin);
   complete.searchParams.set('rt', order.receiptToken);
@@ -65,6 +65,7 @@ export function prepareSezzleSession(input: {
   // session total still equals the balance being charged.
   const items = [...lineItems, ...adjustments.filter(a => a.amount > 0).map(a => ({
     name: a.label, sku: 'adjustment', quantity: 1, price: { amount_in_cents: a.amount, currency: order.currency } }))];
+  if (!items.length) throw new Error('Invalid payment context');
   const credits = adjustments.filter(a => a.amount < 0).reduce((n, a) => n - a.amount, 0);
   return { storeId: account.storeId, gateway: account, attemptId, orderCode: order.code,
     amount, currency: order.currency, completeUrl: complete.href,

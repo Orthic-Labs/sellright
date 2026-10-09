@@ -94,14 +94,14 @@ describe('erasure scrubs order-edit and address-audit snapshots', () => {
 });
 
 describe('birthday batching', () => {
-  it('drains >batch eligible customers across runs and never grants twice', async () => {
+  it('drains >batch (and above the old 2000 selection limit) eligible customers across runs and never grants twice', async () => {
     await seed(true, 'session');
     await withStore(STORE, (tx) => tx.execute(sql`INSERT INTO customer (store_id, email, email_verified, birth_month, birth_day)
-      SELECT ${STORE}, 'b' || g || '@example.test', true, 3, 5 FROM generate_series(1, 1203) g`));
+      SELECT ${STORE}, 'b' || g || '@example.test', true, 3, 5 FROM generate_series(1, 2100) g`));
     const now = new Date('2027-03-05T10:00:00Z');
-    expect(await withStore(STORE, (tx) => grantBirthdayBonuses(tx, STORE, now))).toBe(1203);
+    expect(await withStore(STORE, (tx) => grantBirthdayBonuses(tx, STORE, now))).toBe(2100);
     expect(await withStore(STORE, (tx) => grantBirthdayBonuses(tx, STORE, now))).toBe(0);
     const n = await withStore(STORE, (tx) => tx.execute<{ c: string }>(sql`SELECT count(*)::text c FROM loyalty_ledger WHERE source_ref LIKE 'bonus:birthday:%'`));
-    expect(n.rows[0]!.c).toBe('1203');
+    expect(n.rows[0]!.c).toBe('2100');
   });
 });

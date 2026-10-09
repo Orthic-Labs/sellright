@@ -16,11 +16,19 @@ import { issueLicensesForPaidOrder } from './issue.js';
 
 export interface ProposedLine { id: string; variantId: string | null; quantity: number }
 
-/** Order-line ids whose proposed state would strand issued (non-revoked) licenses. */
+/** Order-line ids whose proposed state would strand issued licenses.
+ *  - removal / quantity below the NON-REVOKED count is refused;
+ *  - repointing a line at another variant is refused if the line EVER carried
+ *    an order license (revoked ones included): issuance counts every row ever
+ *    issued per line, so a revoked grant would otherwise silently suppress the
+ *    replacement variant's entitlement after the customer paid for it. */
 export async function licensedLineEditViolations(tx: Tx, storeId: string, orderId: string, proposed: ProposedLine[]): Promise<string[]> {
-  const rows = await tx.select({ lineId: s.license.orderLineId, n: sql<number>`count(*)::int` }).from(s.license)
+  const rows = await tx.select({
+    lineId: s.license.orderLineId,
+    live: sql<number>`(count(*) filter (where ${s.license.status} <> 'revoked'))::int`,
+  }).from(s.license)
     .where(and(eq(s.license.storeId, storeId), eq(s.license.orderId, orderId), eq(s.license.source, 'order'),
-      sql`${s.license.status} <> 'revoked'`, sql`${s.license.orderLineId} is not null`))
+      sql`${s.license.orderLineId} is not null`))
     .groupBy(s.license.orderLineId);
   if (!rows.length) return [];
   const lines = await tx.select({ id: s.orderLine.id, variantId: s.orderLine.variantId }).from(s.orderLine)
@@ -31,7 +39,8 @@ export async function licensedLineEditViolations(tx: Tx, storeId: string, orderI
   for (const r of rows) {
     const id = r.lineId!;
     const p = next.get(id);
-    if (!p || p.quantity < r.n || (current.has(id) && (current.get(id) ?? null) !== (p.variantId ?? null))) bad.push(id);
+    const repointed = !!p && current.has(id) && (current.get(id) ?? null) !== (p.variantId ?? null);
+    if (repointed || (r.live > 0 && (!p || p.quantity < r.live))) bad.push(id);
   }
   return bad;
 }

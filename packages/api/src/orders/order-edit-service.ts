@@ -20,7 +20,7 @@ import { withAdvisoryLock, withStore, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { hasConfirmableIntent, hasUnresolvedPayment } from '../payments/hold.js';
 import { cancelOrderStripeIntents } from '../payments/stripe-reconcile.js';
-import { licensedLineEditViolations } from '../licensing/edit-reconcile.js';
+import { licensedLineEditViolations, reconcileEditedOrderLicenses } from '../licensing/edit-reconcile.js';
 import { amountDueForOrder, applyPaymentResult, editRefundedTotal } from '../payments/settle.js';
 import { requestRefund, RefundError, isDuplicatePayment } from '../payments/refunds.js';
 import { editedEarnTarget, orderLoyaltySnapshot, syncEditEarn } from '../loyalty/ledger.js';
@@ -103,6 +103,13 @@ type OrderMeta = {
 
 const asFacts = (v: VariantRow): VariantFacts => v;
 
+type PricedTotals = { subtotal: number; discountTotal: number; shippingTotal: number; taxTotal: number; grandTotal: number };
+/** True when the edit leaves every priced total (so the amount basis) unchanged. */
+export function totalsInert(a: PricedTotals, b: PricedTotals): boolean {
+  return a.subtotal === b.subtotal && a.discountTotal === b.discountTotal && a.shippingTotal === b.shippingTotal
+    && a.taxTotal === b.taxTotal && a.grandTotal === b.grandTotal;
+}
+
 export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: EditOpT[], opts: { lock: boolean }): Promise<EditPlan> {
   const [order] = opts.lock
     ? await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update')
@@ -112,12 +119,6 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
   const addressOnly = ops.length > 0 && ops.every((o) => o.op === 'set_address');
   if (!addressOnly && await hasUnresolvedPayment(tx, order.id)) {
     throw new OrderEditError(409, 'PAYMENT_UNRESOLVED', 'resolve the pending payment before editing this order');
-  }
-  // A committing edit changes the amount basis: no Stripe intent minted at the
-  // old amount may stay confirmable (commitOrderEdit retires them first; one
-  // that could not be cancelled, or was minted since, blocks the edit).
-  if (opts.lock && !addressOnly && await hasConfirmableIntent(tx, storeId, order.id)) {
-    throw new OrderEditError(409, 'PAYMENT_UNRESOLVED', 'an open card payment for the old amount could not be cancelled yet — retry in a moment');
   }
   const meta = (order.metadata ?? {}) as OrderMeta;
 
@@ -242,6 +243,21 @@ export async function planOrderEdit(tx: Tx, storeId: string, code: string, ops: 
     promotion, pointsDiscount: Math.max(0, Math.floor(meta.loyalty?.pointsDiscount ?? 0)), baseShipping,
   });
   const t = priced.totals;
+
+  // A pure address edit is exempt from the payment holds ONLY while it is
+  // monetarily inert: a shipping-country change re-prices tax, so it holds and
+  // retires intents exactly like an item edit. Any priced total moving changes
+  // the amount basis: no Stripe intent minted at the old amount may stay
+  // confirmable (commitOrderEdit retires them first; one that could not be
+  // cancelled, or was minted since, blocks the edit).
+  const moneyInert = totalsInert(
+    { subtotal: order.subtotal, discountTotal: order.discountTotal, shippingTotal: order.shippingTotal, taxTotal: order.taxTotal, grandTotal: order.grandTotal }, t);
+  if (addressOnly && !moneyInert && await hasUnresolvedPayment(tx, order.id)) {
+    throw new OrderEditError(409, 'PAYMENT_UNRESOLVED', 'resolve the pending payment before editing this order');
+  }
+  if (opts.lock && !moneyInert && await hasConfirmableIntent(tx, storeId, order.id)) {
+    throw new OrderEditError(409, 'PAYMENT_UNRESOLVED', 'an open card payment for the old amount could not be cancelled yet — retry in a moment');
+  }
 
   // ── issued licenses: a line that already carries a non-revoked license may
   // not be removed, reduced or repointed at another variant; entitlements are
@@ -381,6 +397,24 @@ export interface SettlementOutcome {
   type: string; status: 'none' | 'recorded' | 'settled' | 'pending' | 'failed' | 'sent' | 'due' | 'credit';
   amount?: number; paymentId?: string; refundId?: string; refundState?: string; message?: string; paymentMethod?: string; reference?: string | null;
 }
+/**
+ * The stored settlement is a snapshot taken when the edit committed; an async
+ * refund (Pending) later settles or fails in the shared refund finalizer, which
+ * knows nothing about order_edit. Derive the live outcome from the linked refund
+ * row so history shows the truth and a failed refund becomes retryable.
+ */
+export async function liveEditSettlement(tx: Tx, storeId: string, st: SettlementOutcome): Promise<SettlementOutcome> {
+  if (st.type !== 'refund_now' || !st.refundId) return st;
+  const [r] = await tx.select({ state: s.refund.state }).from(s.refund)
+    .where(and(eq(s.refund.storeId, storeId), eq(s.refund.id, st.refundId))).limit(1);
+  if (!r) return st;
+  const status = r.state === 'Settled' ? 'settled' : r.state === 'Failed' ? 'failed' : 'pending';
+  if (status === st.status && r.state === st.refundState) return st;
+  const { message: _m, ...rest } = st;
+  return { ...rest, refundState: r.state, status,
+    ...(status === 'failed' ? { message: 'the gateway declined the refund — retry it from the order edit, or leave it as credit' } : {}) };
+}
+
 export interface CommitResult {
   editId: string; code: string; state: string; grandTotal: number; previousGrandTotal: number;
   /** Balance at commit time (+ owed, - credit). */
@@ -437,8 +471,21 @@ export async function commitOrderEdit(input: CommitInput): Promise<CommitResult>
   // Retire confirmable Stripe intents (minted at the pre-edit amount) BEFORE the
   // edit: Stripe I/O must run with no pay lock held (the sweep takes it). A
   // capture that already succeeded settles against the still-unedited total.
-  // Skipped for pure address edits and idempotent replays.
-  if (input.ops.some((o) => o.op !== 'set_address')) await retireOrderIntents(storeId, input.code, input.actor);
+  // Only a NEW edit (no stored replay for the key) whose preview matches and
+  // whose priced totals change retires anything: an idempotent replay or a
+  // stale/invalid request must never cancel a newer legitimate intent. The
+  // locked commit below re-validates everything and keeps the survivor check.
+  const retire = await withStore(storeId, async (tx) => {
+    const [prior] = await tx.select({ id: s.orderEdit.id }).from(s.orderEdit)
+      .where(and(eq(s.orderEdit.storeId, storeId), eq(s.orderEdit.idempotencyKey, input.idempotencyKey))).limit(1);
+    if (prior) return false;
+    const plan = await planOrderEdit(tx, storeId, input.code, input.ops, { lock: false });
+    if (plan.after.totals.grandTotal !== input.expectedGrandTotal) {
+      throw new OrderEditError(409, 'PREVIEW_STALE', 'the order changed since the preview — review the new totals and try again', { grandTotal: plan.after.totals.grandTotal, balance: plan.balance.amountDue });
+    }
+    return !totalsInert(plan.before.totals, plan.after.totals);
+  });
+  if (retire) await retireOrderIntents(storeId, input.code, input.actor);
   // The pay advisory lock serializes this commit with an in-flight /pay for the
   // same order, so the charge amount and the total can never disagree mid-edit.
   return withAdvisoryLock(`pay:${storeId}:${input.code}`, async () => {
@@ -450,7 +497,7 @@ export async function commitOrderEdit(input: CommitInput): Promise<CommitResult>
       if (prior) {
         const [o] = await tx.select().from(s.order).where(eq(s.order.id, prior.orderId)).limit(1);
         if (!o || o.code !== input.code || prior.fingerprint !== fp) throw new OrderEditError(409, 'IDEMPOTENCY_KEY_REUSED', 'this idempotency key was used for a different edit');
-        const st = (prior.settlement ?? { type: 'none', status: 'none' }) as SettlementOutcome;
+        const st = await liveEditSettlement(tx, storeId, (prior.settlement ?? { type: 'none', status: 'none' }) as SettlementOutcome);
         const dueNow = await amountDueForOrder(tx, storeId, o.id, o.grandTotal);
         const before = prior.before as OrderSnapshot;
         const result: CommitResult = { editId: prior.id, code: o.code, state: o.state, grandTotal: o.grandTotal, previousGrandTotal: before.totals.grandTotal, balance: prior.balance, amountDue: dueNow, settlement: st, replay: true, emailQueued: false };
@@ -642,6 +689,14 @@ export async function commitOrderEdit(input: CommitInput): Promise<CommitResult>
       await emitEvent(tx, storeId, 'order.updated', { code: o.code, editId, previousGrandTotal: o.grandTotal, grandTotal: t.grandTotal, balance, currency: o.currency, reason: input.reason ?? null });
 
       const dueNow = await amountDueForOrder(tx, storeId, o.id, t.grandTotal);
+      // Entitlements follow money: a Paid/PartiallyRefunded order that is fully
+      // funded after this edit (zero-balance swaps, credit-covered additions,
+      // manual payments) gets licenses for its licensed lines now — no later
+      // balance payment will ever call the settle-side reconcile. Idempotent.
+      const finalState = afterRow?.state ?? o.state;
+      if ((finalState === 'Paid' || finalState === 'PartiallyRefunded') && dueNow <= 0) {
+        await reconcileEditedOrderLicenses(tx, { storeId, orderId: o.id, customerId: o.customerId ?? null, paidAt: new Date() });
+      }
       return {
         plan, refundPlan,
         result: { editId, code: o.code, state: afterRow?.state ?? o.state, grandTotal: t.grandTotal, previousGrandTotal: o.grandTotal, balance, amountDue: dueNow, settlement: outcome, replay: false, emailQueued },
@@ -702,7 +757,7 @@ export async function retryOrderEditRefund(input: RetryEditRefundInput): Promise
       if (!o || o.deletedAt) throw new OrderEditError(404, 'ORDER_NOT_FOUND', 'order not found');
       const [edit] = await tx.select().from(s.orderEdit).where(and(eq(s.orderEdit.storeId, storeId), eq(s.orderEdit.orderId, o.id), eq(s.orderEdit.id, input.editId))).limit(1);
       if (!edit) throw new OrderEditError(404, 'EDIT_NOT_FOUND', 'order edit not found');
-      const st = (edit.settlement ?? {}) as SettlementOutcome;
+      const st = await liveEditSettlement(tx, storeId, (edit.settlement ?? {}) as SettlementOutcome);
       if (st.type !== 'refund_now' || st.status !== 'failed') throw new OrderEditError(409, 'REFUND_NOT_RETRYABLE', 'this edit has no failed refund to recover');
       const amountDue = await amountDueForOrder(tx, storeId, o.id, o.grandTotal);
       if (amountDue >= 0) throw new OrderEditError(409, 'NOTHING_OWED', 'nothing is currently owed back on this order');
@@ -803,7 +858,7 @@ export async function loadEditContext(storeId: string, code: string) {
       shipping: { amount: o.shippingTotal, override: o.shippingOverride, methodCode: o.shippingMethodCode ?? meta.shipping?.methodCode ?? null },
       shippingMethods: methods.map((m) => ({ code: m.code, name: m.name, rate: shippingRate(m.calculator) })),
       amountDue, shippingAddress: readAddress(o.shippingAddress), billingAddress: readAddress(o.billingAddress), hasCustomer: !!o.customerId,
-      history: history.map((h) => ({ id: h.id, actor: h.actor, reason: h.reason, balance: h.balance, settlement: h.settlement, createdAt: h.createdAt.toISOString(), grandTotalBefore: (h.before as { totals?: { grandTotal?: number } }).totals?.grandTotal ?? null, grandTotalAfter: (h.after as { totals?: { grandTotal?: number } }).totals?.grandTotal ?? null })),
+      history: await Promise.all(history.map(async (h) => ({ id: h.id, actor: h.actor, reason: h.reason, balance: h.balance, settlement: h.settlement ? await liveEditSettlement(tx, storeId, h.settlement as SettlementOutcome) : h.settlement, createdAt: h.createdAt.toISOString(), grandTotalBefore: (h.before as { totals?: { grandTotal?: number } }).totals?.grandTotal ?? null, grandTotalAfter: (h.after as { totals?: { grandTotal?: number } }).totals?.grandTotal ?? null }))),
     };
   });
 }

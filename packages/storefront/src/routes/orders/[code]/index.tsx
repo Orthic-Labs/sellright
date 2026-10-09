@@ -134,7 +134,7 @@ export default component$(() => {
 		state.intentId = intentId;
 		state.unknown = false;
 		const outcome = await reconcileBalance({
-			settle: async () => { await settleStripeBalance(code, rt, intentId); },
+			settle: async () => (await settleStripeBalance(code, rt, intentId))?.payment,
 			read: async () => {
 				try {
 					const o = await getOrder(code, rt, signal);
