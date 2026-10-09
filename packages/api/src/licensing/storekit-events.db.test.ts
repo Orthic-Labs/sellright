@@ -94,10 +94,8 @@ describe('storekit_event resolution', () => {
     expect(await unresolvedApply(A)).toHaveLength(1);
   });
 
-  it('RLS: a store cannot read another store\'s events', async () => {
-    await rec(A, { operationId: OP, stage: 'apply', outcome: 'failed', error: 'boom' });
-    expect(await events(B)).toHaveLength(0);
-  });
+  // Tenant isolation for storekit_event is covered by src/db/rls-tables.test.ts, which
+  // discovers every store-scoped table and checks it as the non-owner NOBYPASSRLS role.
 
   it('only failed rows may carry a resolver (CHECK)', async () => {
     const ok = await rec(A, { operationId: OP, stage: 'apply', outcome: 'ok' });
