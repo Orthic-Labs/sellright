@@ -25,6 +25,8 @@ import {
 const TOKEN_COOKIE = 'sr_cart';
 /** Pre-native cart key, read exactly once for a lossless one-time migration. */
 const LEGACY_CART_KEY = 'sellright_legacy_local_cart';
+/** Reason returned by `applyCoupon` when a newer cart request replaced it mid-flight. */
+export const COUPON_SUPERSEDED = 'The cart changed while checking that code. Please try again.';
 
 export class CartError extends Error {
   constructor(
@@ -43,6 +45,19 @@ export class CartService {
   private static couponCode: string | null = null;
   private static enrichment = new Map<string, CartLineEnrichment>();
   private static listeners = new Set<() => void>();
+  /**
+   * Request-sequence guard for server-snapshot reads. Two reads in flight at
+   * once (a stock refresh racing a coupon apply/remove, a checkout-entry read
+   * racing either) can land out of order; without a guard the OLDER response
+   * overwrites the newer mirror — a coupon the shopper just applied vanishes
+   * from the totals (or one they just removed reappears). Every read claims a
+   * number before it is sent (`claimSeq`) and only adopts its response while
+   * that number is still the latest (`isCurrent`). Any adoption or discard
+   * bumps the counter too, so a read issued before a mutation completed (or
+   * before the cart was discarded after checkout) can never overwrite it.
+   * This orders RESPONSES only — it is not a cache and holds no stock data.
+   */
+  private static snapshotSeq = 0;
 
   // ── subscription ──────────────────────────────────────────────────────
   static onChange(cb: () => void): () => void {
@@ -58,6 +73,14 @@ export class CartService {
         console.error('[CartService] onChange listener failed:', e);
       }
     }
+  }
+
+  private static claimSeq(): number {
+    return ++this.snapshotSeq;
+  }
+
+  private static isCurrent(seq: number): boolean {
+    return seq === this.snapshotSeq;
   }
 
   // ── read accessors ───────────────────────────────────────────────────
@@ -111,6 +134,7 @@ export class CartService {
     const prior = new Set(this.cart.lines.map((l) => l.sku));
     const next = new Set(server.lines.map((l) => l.sku));
     const dropped = [...prior].filter((sku) => sku !== expectedRemoval && !next.has(sku));
+    this.snapshotSeq++; // supersede any read issued before this snapshot landed
     this.cart = this.toCart(server);
     this.writeTokenCookie(server.token);
     // Keep enrichment only for lines still present — stale entries would leak
@@ -125,6 +149,7 @@ export class CartService {
   /** Drop the token + mirror locally — no network call. Used for terminal
    *  carts (converted/merged) and 404s (expired cart). */
   static discard(): void {
+    this.snapshotSeq++; // a read still in flight must not resurrect the discarded cart
     this.clearTokenCookie();
     this.couponCode = null;
     this.enrichment.clear();
@@ -207,11 +232,14 @@ export class CartService {
   /** Ensure the mirror's revision is live (cold start reads it via GET). */
   private static async ensureRevision(token: string): Promise<number> {
     if (this.cart.token === token && this.cart.revision) return this.cart.revision;
+    const seq = this.claimSeq();
     const { data } = await sellright().GET('/v1/shop/cart/{token}', {
       params: { path: { token }, query: this.couponCode ? { couponCode: this.couponCode } : {} },
     });
     if (!data) throw new CartError('not_found', 'Cart not found');
-    this.adopt(data);
+    // The revision is still the right base for the mutation that asked for it;
+    // only the mirror write is skipped when a newer request has superseded us.
+    if (this.isCurrent(seq)) this.adopt(data);
     return data.revision;
   }
 
@@ -315,11 +343,14 @@ export class CartService {
   static async refresh(): Promise<CartMutationResult> {
     const token = this.readTokenCookie();
     if (!token) return { cart: this.cart, dropped: [] };
+    const seq = this.claimSeq();
     try {
       const { data } = await sellright().GET('/v1/shop/cart/{token}', {
         params: { path: { token }, query: this.couponCode ? { couponCode: this.couponCode } : {} },
       });
       if (!data) throw new CartError('not_found', 'Cart not found');
+      // Superseded by a newer read/mutation/discard: its result is the truth.
+      if (!this.isCurrent(seq)) return { cart: this.cart, dropped: [] };
       const dropped = this.adopt(data);
       return { cart: this.cart, dropped };
     } catch (e) {
@@ -335,8 +366,12 @@ export class CartService {
    *  client-side guess. */
   static async applyCoupon(code: string): Promise<{ valid: boolean; reason?: string }> {
     const token = await this.ensureCart();
+    const seq = this.claimSeq();
     const { data } = await sellright().GET('/v1/shop/cart/{token}', { params: { path: { token }, query: { couponCode: code } } });
     if (!data) throw new CartError('not_found', 'Cart not found');
+    // A newer read/mutation/removal started while this validated: adopting
+    // (or remembering the code) now would overwrite what the shopper did last.
+    if (!this.isCurrent(seq)) return { valid: false, reason: COUPON_SUPERSEDED };
     this.adopt(data);
     if (data.coupon?.applied) {
       this.couponCode = data.coupon.code;
@@ -350,9 +385,11 @@ export class CartService {
     this.couponCode = null;
     const token = this.readTokenCookie();
     if (!token) return { cart: this.cart, dropped: [] };
+    const seq = this.claimSeq();
     try {
       const { data } = await sellright().GET('/v1/shop/cart/{token}', { params: { path: { token } } });
       if (!data) throw new CartError('not_found', 'Cart not found');
+      if (!this.isCurrent(seq)) return { cart: this.cart, dropped: [] };
       const dropped = this.adopt(data);
       return { cart: this.cart, dropped };
     } catch (e) {
@@ -390,12 +427,15 @@ export class CartService {
   static async checkoutSnapshot(): Promise<{ token: string; revision: number; status: string } | null> {
     const token = this.readTokenCookie();
     if (!token) return null;
+    const seq = this.claimSeq();
     try {
       const { data } = await sellright().GET('/v1/shop/cart/{token}', {
         params: { path: { token }, query: this.couponCode ? { couponCode: this.couponCode } : {} },
       });
       if (!data) return null;
-      this.adopt(data);
+      // The revision/status are facts about THIS response and stay valid as
+      // the checkout base; only the mirror write yields to a newer request.
+      if (this.isCurrent(seq)) this.adopt(data);
       return { token, revision: data.revision, status: data.status };
     } catch (e) {
       if (e instanceof SellRightError && e.status === 404) this.discard();

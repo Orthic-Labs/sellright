@@ -173,12 +173,14 @@ export const verifyGatewayPayment = async (
 	code: string,
 	attemptId: string,
 	receiptToken?: string,
+	signal?: AbortSignal,
 ): Promise<GatewayVerifyResult> => {
 	const { data } = await sellright().POST('/v1/shop/orders/{code}/gateway-payment/{attempt}/verify', {
 		params: {
 			path: { code, attempt: attemptId },
 			header: receiptToken ? { 'x-receipt-token': receiptToken } : {},
 		},
+		signal,
 	});
 	return data as GatewayVerifyResult;
 };
@@ -207,9 +209,10 @@ export const settleZeroDueOrder = async (code: string, receiptToken?: string): P
 /** Read the order's current state for confirmation / error-recovery reads.
  *  Receipt-token scoped (`rt`, from `placeOrder`) OR the authed owner — a
  *  bare code with neither is denied by the API. */
-export const getOrder = async (code: string, receiptToken?: string): Promise<OrderSummary> => {
+export const getOrder = async (code: string, receiptToken?: string, signal?: AbortSignal): Promise<OrderSummary> => {
 	const { data } = await sellright().GET('/v1/shop/orders/{code}', {
 		params: { path: { code }, query: receiptToken ? { rt: receiptToken } : {} },
+		signal,
 	});
 	return data as OrderSummary;
 };

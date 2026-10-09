@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 vi.mock('~/utils/seo', () => ({ createSEOHead: vi.fn() }));
-import { activeStepFromState, parseLineName, isOrderSettled, isOrderTerminalUnpaid } from './confirmation-data';
+import { activeStepFromState, parseLineName, isOrderSettled, isOrderTerminalUnpaid, readOrderUntilSettled, sleepAbortable } from './confirmation-data';
 
 describe('SellRight confirmation progress', () => {
   it.each([
@@ -48,5 +48,81 @@ describe('parseLineName', () => {
 
   it('falls back to "Product" for an empty variant name', () => {
     expect(parseLineName('')).toEqual({ productName: 'Product', variantLabel: '' });
+  });
+});
+
+describe('readOrderUntilSettled (abortable receipt poll)', () => {
+  const noSleep = async () => {};
+
+  it('returns the first read when the order is already settled', async () => {
+    const read = vi.fn(async () => ({ state: 'Paid' }));
+    const out = await readOrderUntilSettled(read, new AbortController().signal, { sleep: noSleep });
+    expect(out).toEqual({ state: 'Paid' });
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-reads while PendingPayment, then returns the settled order', async () => {
+    const states = ['PendingPayment', 'PendingPayment', 'Paid'];
+    const read = vi.fn(async () => ({ state: states.shift()! }));
+    const out = await readOrderUntilSettled(read, new AbortController().signal, { sleep: noSleep });
+    expect(out).toEqual({ state: 'Paid' });
+    expect(read).toHaveBeenCalledTimes(3);
+  });
+
+  it('gives up after the attempt budget and returns the last (still pending) read', async () => {
+    const read = vi.fn(async () => ({ state: 'PendingPayment' }));
+    const out = await readOrderUntilSettled(read, new AbortController().signal, { attempts: 3, sleep: noSleep });
+    expect(out).toEqual({ state: 'PendingPayment' });
+    expect(read).toHaveBeenCalledTimes(4); // first read + 3 re-reads
+  });
+
+  it('stops polling and resolves null the moment the signal aborts (page unmounted)', async () => {
+    const ac = new AbortController();
+    const read = vi.fn(async () => ({ state: 'PendingPayment' }));
+    const sleep = vi.fn(async () => { ac.abort(); });
+    const out = await readOrderUntilSettled(read, ac.signal, { sleep });
+    expect(out).toBeNull();
+    expect(read).toHaveBeenCalledTimes(1); // no read after the abort
+  });
+
+  it('makes no request at all when already aborted, and passes the signal to read', async () => {
+    const ac = new AbortController();
+    ac.abort();
+    const read = vi.fn(async () => ({ state: 'Paid' }));
+    expect(await readOrderUntilSettled(read, ac.signal)).toBeNull();
+    expect(read).not.toHaveBeenCalled();
+
+    const live = new AbortController();
+    const read2 = vi.fn(async (_s: AbortSignal) => ({ state: 'Paid' }));
+    await readOrderUntilSettled(read2, live.signal);
+    expect(read2).toHaveBeenCalledWith(live.signal);
+  });
+});
+
+describe('sleepAbortable', () => {
+  it('resolves early on abort and leaves no timer behind', async () => {
+    vi.useFakeTimers();
+    try {
+      const ac = new AbortController();
+      let resolved = false;
+      const p = sleepAbortable(60_000, ac.signal).then(() => { resolved = true; });
+      expect(vi.getTimerCount()).toBe(1);
+      ac.abort();
+      await p;
+      expect(resolved).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('resolves after the delay when not aborted', async () => {
+    vi.useFakeTimers();
+    try {
+      const p = sleepAbortable(1500, new AbortController().signal);
+      await vi.advanceTimersByTimeAsync(1500);
+      await expect(p).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

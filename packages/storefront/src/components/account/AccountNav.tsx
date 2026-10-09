@@ -1,15 +1,23 @@
-import { $, component$ } from '@qwik.dev/core';
+import { $, component$, useSignal, useVisibleTask$ } from '@qwik.dev/core';
 import { Link, useLocation } from '@qwik.dev/router';
 import ShoppingBagIcon from '~/components/icons/ShoppingBagIcon';
 import MapPinIcon from '~/components/icons/MapPinIcon';
 import LockClosedIcon from '~/components/icons/LockClosedIcon';
 import HomeIcon from '~/components/icons/HomeIcon';
+import GiftIcon from '~/components/icons/GiftIcon';
 import HeartIcon from '~/components/icons/HeartIcon';
 import LogoutIcon from '~/components/icons/LogoutIcon';
+import { loadLoyaltyProgram } from '~/components/loyalty/loyalty-program';
 import { logout } from '~/providers/shop/account/account';
 import { LocalAddressService } from '~/services/LocalAddressService';
 
-const navLinks = [
+const navLinks: Array<{
+	title: string;
+	href: string;
+	icon: typeof HomeIcon;
+	showOnMobile: boolean;
+	requiresRewards?: boolean;
+}> = [
 	{
 		title: 'Overview',
 		href: '/account',
@@ -29,6 +37,14 @@ const navLinks = [
 		showOnMobile: true,
 	},
 	{
+		title: 'Rewards',
+		href: '/account/rewards',
+		icon: GiftIcon,
+		showOnMobile: true,
+		/** Only listed while the store's points program is on. */
+		requiresRewards: true,
+	},
+	{
 		title: 'Password',
 		href: '/account/password',
 		icon: LockClosedIcon,
@@ -44,6 +60,12 @@ const navLinks = [
 
 export const AccountNav = component$(() => {
 	const location = useLocation();
+	// The Rewards link only exists while the store runs a points program (the
+	// page itself still works by URL for anyone holding points after it ends).
+	const rewardsOn = useSignal(false);
+	useVisibleTask$(async () => {
+		rewardsOn.value = !!(await loadLoyaltyProgram());
+	});
 
 	const handleLogout = $(async () => {
 		const result = await logout();
@@ -61,7 +83,7 @@ export const AccountNav = component$(() => {
 		<div class="sticky top-20 sm:top-16 z-40 border-b border-gray-200 bg-white">
 			<div class="max-w-[1400px] mx-auto">
 				<nav class="flex items-center justify-between gap-3 sm:gap-6 lg:gap-8 overflow-x-auto scrollbar-hide px-2 sm:px-6 lg:px-8" style="-webkit-overflow-scrolling: touch;">
-					{navLinks.map((link) => {
+					{navLinks.filter((link) => !link.requiresRewards || rewardsOn.value).map((link) => {
 						const locationPathname = location.url.pathname;
 						const normalizedLocation = locationPathname.replace(/\/$/, '');
 						const normalizedHref = link.href.replace(/\/$/, '');

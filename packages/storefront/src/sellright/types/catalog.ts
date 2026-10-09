@@ -142,6 +142,10 @@ export function normalizeManifestListItem(raw: RawManifestListItem): CatalogList
  * normalizer fills the safe native defaults documented inline.
  */
 export interface RawManifestProductDetail {
+  /** Real product UUID (keys loyalty product multipliers). Absent on older snapshots. */
+  productId?: string;
+  /** Approved-review aggregate — present only when the product has reviews. */
+  rating?: { average: number; count: number } | null;
   slug: string;
   name: string;
   description: string | null;
@@ -160,6 +164,24 @@ export interface RawManifestProductDetail {
     shipDate?: string | null;
     isPreOrder?: boolean | null;
   }>;
+}
+
+/** Product-level facts the manifest carries that `CatalogProduct` (the live
+ *  catalog-detail shape) has no field for: the product UUID (loyalty
+ *  multipliers are keyed on it) and the approved-review aggregate (feeds the
+ *  PDP rating link + schema.org AggregateRating). `rating` is null when the
+ *  product is unreviewed — never an empty/zero rating. */
+export interface ManifestProductMeta {
+  productId: string | null;
+  rating: { average: number; count: number } | null;
+}
+
+export function manifestProductMeta(raw: Pick<RawManifestProductDetail, 'productId' | 'rating'>): ManifestProductMeta {
+  const r = raw.rating;
+  return {
+    productId: raw.productId ?? null,
+    rating: r && r.count > 0 && r.average > 0 ? { average: r.average, count: r.count } : null,
+  };
 }
 
 /** Normalize a manifest product-detail payload into the native `CatalogProduct`

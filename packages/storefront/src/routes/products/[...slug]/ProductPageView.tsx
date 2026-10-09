@@ -3,15 +3,18 @@ import { OptimizedImage } from '~/components/ui';
 import Alert from '~/components/alert/Alert';
 import CheckIcon from '~/components/icons/CheckIcon';
 import { sanitizeProductDescription } from '~/utils/sanitize';
-import { availableForGroup, enhanceDescription, priceDeltaLabel, swatchColor, titleCase } from './product-options';
+import { availableForGroup, enhanceDescription, liveUnitPrice, priceDeltaLabel, swatchColor, titleCase } from './product-options';
 import { ProductImageModal } from './ProductImageModal';import { ProductMobileBar } from './ProductMobileBar';
 import { ProductTrustBar } from './ProductTrustBar';
 import { effectiveVariantPrice, type CatalogVariant } from '~/sellright/types/catalog';
+import { LoyaltyPdpEarn } from '~/components/loyalty/LoyaltyPdpEarn';
+import { ProductReviews } from '~/components/reviews/ProductReviews';
+import { starString } from '~/utils/rewards';
 
 const SEZZLE_ENABLED = !!(import.meta.env.VITE_SEZZLE_MERCHANT_UUID as string | undefined);
 
 export const ProductPageView = component$((props: Record<string, any>) => {
-  const { addItemToOrderErrorSignal, allVariantsSoldOut, changeImage, closeImageModal, ctaClass, ctaDisabled, ctaTooltipFading, currentImageIndex, currentImageSig, displayPrice, galleryRef, groups, handleAddToCart, handleDotClick$, handleGalleryItemClick$, handleGalleryScroll, handleGroupSelect$, handleThumbClick$, handleTouchEnd$, handleTouchMove$, handleTouchStart$, hasSale, isAddingToCart, isImageLoading, isOutOfStock, isPreOrder, modalImageIndex, modalImageSrc, navigateModal, openImageModal, orderedAssets, preOrderConsent, product, quantitySignal, selectedValues, selectedVariant, selectedVariantIdSignal, showCtaTooltip, showFromPrefix, showImageModal } = props;
+  const { addItemToOrderErrorSignal, allVariantsSoldOut, changeImage, closeImageModal, ctaClass, ctaDisabled, ctaTooltipFading, currentImageIndex, currentImageSig, displayPrice, galleryRef, groups, handleAddToCart, handleDotClick$, handleGalleryItemClick$, handleGalleryScroll, handleGroupSelect$, handleThumbClick$, handleTouchEnd$, handleTouchMove$, handleTouchStart$, hasSale, isAddingToCart, isImageLoading, isOutOfStock, isPreOrder, modalImageIndex, modalImageSrc, navigateModal, openImageModal, orderedAssets, preOrderConsent, product, productId, quantitySignal, rating, selectedValues, selectedVariant, selectedVariantIdSignal, showCtaTooltip, showFromPrefix, showImageModal } = props;
   return (
     <div class="sr-pdp">
       <div class="sr-layout">
@@ -131,6 +134,18 @@ export const ProductPageView = component$((props: Record<string, any>) => {
         <div class="sr-info-col">
           {isPreOrder.value && <div class="sr-kicker">New Release</div>}
           <h1 class="sr-title">{titleCase(product.name)}</h1>
+          {rating && rating.count > 0 && (
+            <a
+              href="#reviews"
+              class="inline-flex items-center gap-2 -mt-3 mb-3 text-[13px] no-underline"
+              style="color:var(--mid)"
+              aria-label={`${rating.average.toFixed(1)} out of 5 stars, ${rating.count} ${rating.count === 1 ? 'review' : 'reviews'}`}
+              data-testid="pdp-rating-link"
+            >
+              <span style="color:var(--gold);letter-spacing:2px;font-size:16px" aria-hidden="true">{starString(rating.average)}</span>
+              <span>{rating.average.toFixed(1)} ({rating.count})</span>
+            </a>
+          )}
           {(() => {
             const sv: CatalogVariant | undefined = selectedVariant.value;
             const sale = typeof sv?.salePrice === 'number' && sv.salePrice > 0 ? sv.salePrice : null;
@@ -159,6 +174,11 @@ export const ProductPageView = component$((props: Record<string, any>) => {
               </div>
             );
           })()}
+          <LoyaltyPdpEarn
+            cents={liveUnitPrice(selectedVariant.value, !!isPreOrder.value, displayPrice.value)}
+            productId={productId}
+            from={!!showFromPrefix.value && !hasSale.value && !isPreOrder.value}
+          />
           {SEZZLE_ENABLED && (() => {
             const sv: CatalogVariant | undefined = selectedVariant.value;
             const sale = typeof sv?.salePrice === 'number' && sv.salePrice > 0 ? sv.salePrice : null;
@@ -371,6 +391,7 @@ export const ProductPageView = component$((props: Record<string, any>) => {
           )}
         </div>{/* end sr-info-col */}
       </div>{/* end sr-layout */}
+      {product?.slug && <ProductReviews slug={product.slug} productName={product.name || 'this product'} />}
       <ProductMobileBar
         allVariantsSoldOut={allVariantsSoldOut}
         ctaClass={ctaClass}
