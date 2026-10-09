@@ -39,7 +39,7 @@ test.describe('#8 Sezzle', () => {
 
 		// Clicking it asks the API for a Sezzle session, then sends the browser to Sezzle's hosted checkout.
 		await startButton.click();
-		await page.waitForURL(/sandbox\.checkout\.sezzle\.com/, { timeout: 15_000 });
+		await page.waitForURL(/^https:\/\/sandbox\.checkout\.sezzle\.com\//, { timeout: 15_000 });
 		const redirect = new URL(page.url());
 		expect(redirect.protocol).toBe('https:');
 		expect(redirect.hostname).toBe('sandbox.checkout.sezzle.com');
@@ -94,7 +94,7 @@ test.describe('#8 Sezzle', () => {
 		await page.getByRole('radio', { name: /installments/i }).click();
 		const placed = await placeOrder(page);
 		await page.getByRole('button', { name: /^continue/i }).click();
-		await page.waitForURL(/sandbox\.checkout\.sezzle\.com/, { timeout: 15_000 });
+		await page.waitForURL(/^https:\/\/sandbox\.checkout\.sezzle\.com\//, { timeout: 15_000 });
 		const session = (await mock.sezzleSessions()).find((s) => s.complete_url.includes(placed.code))!;
 
 		// A shopper who abandons the hosted page and returns without approving is NOT paid.

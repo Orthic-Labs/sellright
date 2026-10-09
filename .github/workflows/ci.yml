@@ -581,41 +581,22 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: sellright_e2e
+          POSTGRES_DB: postgres
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U postgres -d sellright_e2e"
+          --health-cmd "pg_isready -U postgres"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 12
     env:
-      NODE_ENV: production
-      # Privileged (superuser) URL: migrate/bootstrap/seed need to create
-      # tables/roles. The compiled server itself refuses to boot on this URL
-      # (SR-01's own-role guard, packages/api/src/db/client.ts) — it gets the
-      # dedicated NOSUPERUSER NOBYPASSRLS app role instead (created below,
-      # same as the `database` job above), which is what DATABASE_URL is set
-      # to for every step after that role exists.
-      MIGRATE_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/sellright_e2e
-      DATABASE_URL: postgres://sellright_app:sellright_app@127.0.0.1:5432/sellright_e2e
-      STOREFRONT_URL: http://127.0.0.1:4398
-      DOWNLOAD_URL_SECRET: abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
-      SELLRIGHT_MASTER_KEY: '1122334455667788112233445566778811223344556677881122334455667788'
-      ADMIN_EMAIL: e2e@example.net
-      ADMIN_PASSWORD: e2e-only-long-random-password-12345
-      BOOTSTRAP_STORE_SLUG: e2e
-      BOOTSTRAP_STORE_NAME: E2E Store
-      BOOTSTRAP_STORE_CURRENCY: USD
-      # Bare IP with no port — store-context.ts strips :port before matching
-      # config.hostnames, so this matches both the storefront's own SSR Host
-      # (127.0.0.1:4398) and the browser-side /v1/* calls the e2e fixture
-      # replays directly against the API (127.0.0.1:3300) — same bare host,
-      # different ports, both stripped to this one value.
-      BOOTSTRAP_STORE_HOSTNAMES: 127.0.0.1
-      E2E_STORE_SLUG: e2e
-      PORT: '3300'
-      HOST: '127.0.0.1'
+      # packages/storefront/playwright.config.ts starts everything itself: the mock gateways (NMI / Sezzle / webhook
+      # receiver / SMTP sink), a throwaway API from packages/api/dist (e2e/support/start-api.mjs drops + recreates
+      # `sellright_storefront_e2e`, migrates, bootstraps the e2e store + owner, then serves as the NOSUPERUSER
+      # NOBYPASSRLS role below) and the storefront production build. Money-path specs place real orders against it.
+      E2E_DB_ADMIN_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+      E2E_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/sellright_storefront_e2e
+      E2E_APP_DATABASE_URL: postgres://sellright_app:sellright_app@127.0.0.1:5432/sellright_storefront_e2e
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -633,49 +614,11 @@ jobs:
       - name: Install workspace
         run: pnpm install --frozen-lockfile
 
-      - name: Build shared + api + storefront-client + storefront
+      - name: Build shared + api + storefront-client
         run: |
           pnpm --filter @sellright/shared build
           pnpm --filter @sellright/api build
           pnpm --filter @sellright/storefront-client build
-          pnpm --filter @sellright/storefront run generate:placeholder-assets
-          pnpm --filter @sellright/storefront run build.types
-          pnpm --filter @sellright/storefront run build.client
-          pnpm --filter @sellright/storefront run build.server
-
-      - name: Apply migrations
-        env:
-          DATABASE_URL: ${{ env.MIGRATE_DATABASE_URL }}
-        run: pnpm --filter @sellright/api db:migrate:runtime
-
-      - name: Bootstrap the e2e store + seed the OOS/in-stock catalog fixture
-        env:
-          DATABASE_URL: ${{ env.MIGRATE_DATABASE_URL }}
-        run: |
-          node packages/api/dist/scripts/bootstrap.js
-          node packages/api/dist/scripts/seed-e2e-catalog.js
-
-      - name: Create non-owner RLS app role (same as the `database` job)
-        env:
-          PGPASSWORD: postgres
-        run: |
-          psql -h 127.0.0.1 -U postgres -d sellright_e2e <<'SQL'
-          CREATE ROLE sellright_app LOGIN PASSWORD 'sellright_app' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
-          GRANT CONNECT ON DATABASE sellright_e2e TO sellright_app;
-          GRANT USAGE ON SCHEMA public TO sellright_app;
-          GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO sellright_app;
-          GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO sellright_app;
-          SQL
-
-      - name: Start the API
-        run: |
-          nohup node packages/api/dist/index.js > api.log 2>&1 &
-          echo $! > api.pid
-          for attempt in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:3300/v1/readyz | grep -q '"status":"ok"'; then exit 0; fi
-            sleep 1
-          done
-          echo "::error::api never became ready"; cat api.log; exit 1
 
       - name: Install Playwright's Chromium
         working-directory: packages/storefront
@@ -683,9 +626,7 @@ jobs:
 
       - name: Run the storefront e2e suite
         working-directory: packages/storefront
-        env:
-          PLAYWRIGHT_API_URL: http://127.0.0.1:3300
-          PLAYWRIGHT_PORT: '4398'
+        # `test:e2e` builds the storefront (SSG off) into server-e2e/dist-e2e, then runs the suite.
         run: pnpm run test:e2e
 
       - name: Upload Playwright report on failure
@@ -701,10 +642,6 @@ jobs:
             packages/storefront/playwright-report/
             packages/storefront/test-results/
           retention-days: 7
-
-      - name: Stop the API
-        if: always()
-        run: kill "$(cat api.pid)" 2>/dev/null || true
 
   e2e-admin:
     name: Admin e2e (Playwright)

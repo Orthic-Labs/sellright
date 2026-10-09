@@ -122,7 +122,8 @@ createHttp(async (req, res) => {
     }
     json(res, 404, { error: 'not found' });
   } catch (error) {
-    json(res, 500, { error: String(error) });
+    console.error('mock-gateways handler error', error);
+    json(res, 500, { error: 'mock handler error' });
   }
 }).listen(MOCK_PORT, '127.0.0.1', () => console.log(`[mock] gateways + webhook receiver on :${MOCK_PORT}`));
 

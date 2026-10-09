@@ -40,7 +40,7 @@ describe('blog editor schema', () => {
       const out = roundTrip(c);
       const again = roundTrip(out);
       expect(again).toBe(out); // idempotent after first normalisation
-      expect(out.replace(/ (target|rel)="[^"]*"/g, '')).toContain(c.replace(/ (target|rel)="[^"]*"/g, '').replace(/<li><p>/g, '<li><p>'));
+      expect(out.replace(/ (target|rel)="[^"]*"/g, '')).toContain(c.replace(/ (target|rel)="[^"]*"/g, ''));
     }
   });
   it('emits empty string for an empty document', () => { expect(roundTrip('')).toBe(''); });
