@@ -10,13 +10,14 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { and, eq, isNull } from 'drizzle-orm';
 import type Stripe from 'stripe';
-import { withAdvisoryLock, withStore } from '../db/client.js';
+import { withAdvisoryLock, withStore, type Tx } from '../db/client.js';
+import { orderIdByCode, withLockedSet, type LockSubject } from '../db/locks.js';
 import * as s from '../db/schema.js';
 import { stripeCreds, stripeModeFromConfig, verifyStripeWebhook, listAllStoreIds, STRIPE_REFUND_ATTEMPT_KEY, type StripeMode } from '../payments/stripe.js';
 import { applyStripeIntent, type StripeIntent } from '../payments/stripe-reconcile.js';
 import { recordPaymentAlert } from '../payments/payment-alerts.js';
 import { resolveField } from '../security/settings-resolver.js';
-import { resolveStoreIdForStripeEvent, resolveStoreIdForSubscriptionEvent, reconcileStripeRefund, recordStripeDispute, type StripeEventObj } from '../payments/webhook-reconcile.js';
+import { resolveStoreIdForStripeEvent, resolveStoreIdForSubscriptionEvent, reconcileStripeRefund, recordStripeDispute, orderIdsForStripePayments, type StripeEventObj } from '../payments/webhook-reconcile.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
 import { recordSettlementOperation } from '../payments/settlement/record.js';
 import {
@@ -37,6 +38,33 @@ const SUBSCRIPTION_EVENT_TYPES = new Set([
   'customer.subscription.updated',
   'customer.subscription.deleted',
 ]);
+
+const piRef = (v: unknown): string | null => (typeof v === 'string' ? v : (v as { id?: string } | null)?.id ?? null);
+
+/** Order(s) a money-recording event settles, refunds or disputes (X-45 / X-48). Planning reads
+ *  only: nothing here locks. An event with no stored order yields [] and keeps the existing path. */
+async function moneyOrderIds(storeId: string, event: Stripe.Event): Promise<string[]> {
+  const obj = event.data.object as unknown as Record<string, unknown>;
+  switch (event.type) {
+    case 'payment_intent.succeeded': {
+      const code = (obj as { metadata?: { orderCode?: string } }).metadata?.orderCode;
+      const id = code ? await orderIdByCode(storeId, code) : null;
+      return id ? [id] : [];
+    }
+    case 'refund.created':
+    case 'refund.updated':
+      return orderIdsForStripePayments(storeId, [piRef(obj.payment_intent)]);
+    case 'charge.refunded': {
+      const chPi = piRef(obj.payment_intent);
+      const refunds = ((obj.refunds as { data?: Array<{ payment_intent?: unknown }> } | undefined)?.data ?? []);
+      return orderIdsForStripePayments(storeId, refunds.map((r) => piRef(r.payment_intent) ?? chPi));
+    }
+    case 'charge.dispute.created':
+      return orderIdsForStripePayments(storeId, [piRef(obj.payment_intent)]);
+    default:
+      return [];
+  }
+}
 
 export const paymentWebhooks = new OpenAPIHono();
 
@@ -149,7 +177,14 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
   const piOrderCode = event.type.startsWith('payment_intent.')
     ? (event.data.object as { metadata?: { orderCode?: string } }).metadata?.orderCode : undefined;
   const runClaim = (fn: () => Promise<void>) => piOrderCode ? withAdvisoryLock(`pay:${storeId}:${piOrderCode}`, fn) : fn();
-  await runClaim(() => withStore(storeId, async (tx) => {
+  // X-45: an event that records provider-moved money runs under withLockedSet with mustCommit
+  // (the provider has already moved the money, so the claim waits for its locks and never 409s).
+  // Events with no stored order keep the plain withStore path.
+  const orderIds = await moneyOrderIds(storeId, event);
+  const runMoney = (fn: (tx: Tx) => Promise<void>): Promise<void> => orderIds.length
+    ? withLockedSet(storeId, orderIds.map((orderId): LockSubject => ({ kind: 'order', orderId })), (tx) => fn(tx), { mustCommit: true })
+    : withStore(storeId, fn);
+  await runClaim(() => runMoney(async (tx) => {
     // ra-sec: bind the verifying secret's mode to the store's configured mode. A
     // webhook signed with the TEST secret must not drive payment_intent.succeeded
     // on a LIVE store (a leaked test webhook secret would otherwise let a forged
