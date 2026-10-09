@@ -36,6 +36,13 @@ This is a product evaluation environment, not gateway acceptance evidence.
   account and tenant rows, transactionally in foreign-key dependency order.
   Cleanup runs every minute and removes expired visitors. The baseline `demo`
   tenant cannot be reset. Cleanup failure fails readiness closed.
+- New visitor tenants start with the points program on at the product defaults
+  (1 point per $1, 10 points = $1 off, never expire) and reviews switched on
+  (`demoRewardsConfig` in `visitors.mjs`), so the PDP shows "Earn N points" and
+  a Reviews section. No review rows are ever seeded: products read "No
+  reviews yet" until a real one is approved. The public reviews read (GET
+  `/v1/shop/catalog/products/{slug}/reviews`) is allowed; submitting is not.
+  Tenants created before this change keep their old settings until they expire.
 - All customer identity/address data is server-generated synthetic data. The
   checkout never accepts card details or user contact information.
 - Stripe/NMI/Sezzle credentials and gateway accounts are rejected; no scheduler

@@ -105,6 +105,8 @@ const Variant = z.object({
 });
 
 const ProductDetail = z.object({
+  /** Product UUID — keys loyalty product multipliers on the storefront. Optional so a storefront built against this contract tolerates an older API. */
+  productId: z.string().optional(),
   slug: z.string(),
   name: z.string(),
   description: z.string().nullable(),
@@ -280,6 +282,7 @@ catalog.openapi(
         .where(eq(s.productAsset.productId, p.id))
         .orderBy(asc(s.productAsset.position));
       return {
+        productId: p.id,
         slug: p.slug,
         name: p.name,
         description: p.description,

@@ -4,8 +4,11 @@ const reads = new RegExp(`^/v1/admin/(me|dashboard|products|variants|collections
 // excludes /v1/shop/auth/*, /account/*, /stripe-key, /*/payment-intent,
 // /*/gateway-payment, /newsletter-signup, /contact, /track — none of those
 // are needed for browse -> cart -> checkout -> receipt, and the demo never
-// wires customer accounts, real payment providers, email or SMS.
-const shopReads = new RegExp(`^/v1/shop/(config|shipping-methods|currencies|catalog/collections|catalog/products(/${id})?(/stock)?|catalog/search|collections/${id}|cart/[a-f0-9-]{36}|orders/${id}|blog(/${id})?)$`);
+// wires customer accounts, real payment providers, email or SMS. The public
+// per-product reviews READ (GET .../reviews) is allowed so the PDP reviews
+// block renders; submitting a review (POST) stays denied — the demo has no
+// customer accounts to sign in with.
+const shopReads = new RegExp(`^/v1/shop/(config|shipping-methods|currencies|catalog/collections|catalog/products(/${id})?(/stock|/reviews)?|catalog/search|collections/${id}|cart/[a-f0-9-]{36}|orders/${id}|blog(/${id})?)$`);
 export function interactiveRequest(method, path) {
   // Explicit, defense-in-depth: installation-admin/system routes (recovery
   // kit — the master key — checklist, publish, off-site-backup confirmation)
