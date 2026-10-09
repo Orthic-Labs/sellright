@@ -20,6 +20,17 @@ vi.mock('../db/client.js', async (original) => ({
     return run({ select: () => query });
   },
 }));
+// Start path plans the order set first (orderIdByCode, withLockedSet). The fixture tx stands in for
+// the locked transaction; the lock set itself is covered by db/locks tests.
+vi.mock('../db/locks.js', async (original) => ({
+  ...await original<typeof import('../db/locks.js')>(),
+  orderIdByCode: async () => 'order',
+  withLockedSet: async (storeId: string, _subject: unknown, run: (tx: unknown, held: unknown, plan: unknown) => Promise<unknown>) => {
+    const { withStore } = await import('../db/client.js');
+    return withStore(storeId, (tx) => run(tx, {}, {}));
+  },
+  assertHeld: async () => undefined,
+}));
 vi.mock('./gateway-account.js', async (original) => {
   const fixtureAccount = {
     storeId: 'store', accountId: 'nmi-test', method: 'nmi', mode: 'test',
