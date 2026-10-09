@@ -134,7 +134,7 @@ export function normalizeAddress(a: AddressInputT): Address {
   };
 }
 
-/** Read an order's stored address JSON (canonical or Vendure-ish keys) as Address. */
+/** Read an order's stored address JSON (canonical or imported-order keys) as Address. */
 export function readAddress(raw: unknown): Address | null {
   if (!raw || typeof raw !== 'object') return null;
   const a = raw as Record<string, unknown>;
