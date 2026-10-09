@@ -76,21 +76,19 @@ Report requested states actually reached. Say "done" only when each requested st
 - Lead with outcome, keep replies brief, & omit forced closing filler.
 - Never fabricate quotes, statistics, testimonials, stories, or evidence.
 - Open real visual artifacts for Adrian's approval.
-- Deliver docs, reports, & analyses as Markdown; publish an Artifact page only when Adrian explicitly asks for one.
+- Deliver docs, reports & analyses as Markdown; publish Artifact pages only on Adrian's explicit request.
 - ETA: agentic critical-path wall clock only; forbid human/engineer days, ranges, & serial lane sums.
 - Create process files only when Adrian or protocol requires them; else use chat & execution output. Keep plans proportional; line-rate maps only for contracts.
 - On ceiling breach, Arcane emits `BUDGET_STOP`; reduce or redo first. Authenticated waits pause active time; user retry & build caps persist across agents & retries; generic variance never exceeds them.
-- Retire Luna at its rollover threshold; preserve patches & hand off fresh.
 - Delegate hands-on work to Haiku (Claude) or Luna (Codex); use Sonnet or Terra when a mistake would still compile but be wrong or unsafe (security, signing, entitlements, privileged code, OS frameworks, spec-bound protocols) or after one failed attempt. Never delegate to Opus or Fable.
 
 ## Bootstrap & toolchains
 - After clone, pull, or a missing required dependency, run `python3 tools/setup-workspace.py` (Mac) or `py -3.11 tools\setup-workspace.py` (Windows), then `workspace-doctor`; optional missing commands never trigger setup.
 - Treat Legion checkouts as development-only; bind installed behavior only from stable `current` roots (see `docs/architecture/development-installed-product-boundary.md`).
-- Install no workspace toolchain ad hoc.
-- Let nearest `packageManager`, `engines`, `rust-toolchain.toml`, or repository venv override workspace defaults.
+- Install no workspace toolchain ad hoc; let nearest `packageManager`, `engines`, `rust-toolchain.toml`, or repository venv override workspace defaults.
 - Default to Node 26.8.x, pnpm 11.24.0, `python3` on Mac, & `py -3.11` on Windows.
 - Use pnpm in pnpm repositories & run package CLIs through `pnpm exec`, never npm or npx.
-- Read `docs/rules/rightkit.md` before any Rust/Cargo command; managed private-repository Rust uses `rightkit cargo|rustc|rustdoc <args>`; direct tools & bypasses are denied.
+- Read `docs/rules/rightkit.md` before any Rust/Cargo command or new capability; run `rightkit owns <capability>` & reuse the owner; only Adrian changes ownership policy. Private-repo Rust uses `rightkit cargo|rustc|rustdoc <args>`.
 - Local public builds need 30m idle; queued/running/recent builds force CI; see `docs/rules/rightkit.md`.
 - Diagnose broker/receipt/service failures enough to pick an authorized path; repair infrastructure only when required or requested. Change, commit, push, or activate RightKit only with Adrian's express approval; a blocked build is not approval: report diagnosis & fix, & stop. Package-manager children inherit RightKit.
 - Launch no visible Windows console for background automation.
@@ -113,7 +111,7 @@ Report requested states actually reached. Say "done" only when each requested st
 - Read `docs/rules/release-signing.md` before any release, signing, installer, updater, or publication work in any repository.
 - Build/sign on native hosts: public releases use RightKit CI; private builds use `win` or `ssh mac`. Never initiate browser/Azure authentication or cross-compile. Publish public products through GitHub Releases & private products through R2; follow `docs/rules/release-signing.md`.
 - Use RightKit `right-release` from primary checkout with manifest-pinned pnpm; never build signing or installer machinery inside a product repository.
-- Select explicit `patch` or `update`; keep build or seal separate from upload; publish only an exact build named by Adrian's current request through its configured provider, & upload no test artifact.
+- Select explicit `patch` or `update`; keep build or seal separate from upload, QA the exact commit first; publish only an exact build named by Adrian's current request through its configured provider, & upload no test artifact.
 
 ## Plans authored outside this workspace
 - Start apps, capabilities & external plans from RightKit; integrate, never rebuild; drop provisioned gates. See `docs/RIGHTKIT-SHARED-PLATFORM.md`.
