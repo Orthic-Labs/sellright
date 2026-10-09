@@ -70,7 +70,7 @@
 		"vitest": "4.1.9"
 	},
 	"dependencies": {
-		"@qwik.dev/core": "2.0.0-beta.35",
+		"@qwik.dev/core": "2.0.0-rc.0",
 		"@qwik.dev/router": "2.0.0-beta.35",
 		"@sellright/storefront-client": "workspace:*",
 		"@stripe/stripe-js": "^4.10.0",
