@@ -23,12 +23,13 @@
  *   settled    recorded on the ledger
  *   cancelled  PI cancelled at Stripe
  */
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { and, asc, eq, inArray, notInArray, or, sql } from 'drizzle-orm';
 import { recoveryBackoffMs } from '../jobs/gateway-recovery.js';
 import { withAdvisoryLock, withStore, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { applyPaymentResult, amountDueForOrder } from './settle.js';
+import { recordSettlementOperation } from './settlement/record.js';
 import { verifyIntent, retrieveStripeIntent, cancelStripeIntent, searchStripeIntentsForOrder, resolveStripeConfigured, type IntentLike, type StripeMode } from './stripe.js';
 import { isPaymentMethodEnabled } from './provider.js';
 import { recordPaymentAlert } from './payment-alerts.js';
@@ -144,12 +145,19 @@ export async function applyStripeIntent(tx: Tx, storeId: string, pi: StripeInten
     // different PI, or fully covered by other tenders) is a double charge.
     // Record the money on the ledger (flagged duplicate, so the normal refund
     // flow can return it) and alert the operator. No auto-refund.
-    const [dup] = await tx.insert(s.payment).values({
-      storeId, orderId: order.id, amount: pi.amount, method: 'stripe', providerRef: pi.id, state: 'Settled',
-      gatewayMode: mode, currency: pi.currency.toUpperCase(),
-      metadata: { duplicate: true, latest_charge: pi.latest_charge ?? null, gateway: { mode } },
-      errorMessage: 'duplicate payment — order was already covered',
-    }).onConflictDoNothing().returning({ id: s.payment.id });
+    // Chokepoint operation `duplicate_capture_recorded` (payment.id): ledger row
+    // only — eligible for no issuance or any other fulfilment effect.
+    const dupId = randomUUID();
+    const rec = await recordSettlementOperation(tx, {
+      storeId, kind: 'duplicate_capture_recorded', operationId: dupId, effects: [],
+      mutations: [{ type: 'payment_insert', rows: [{
+        id: dupId, storeId, orderId: order.id, amount: pi.amount, method: 'stripe', providerRef: pi.id, state: 'Settled',
+        gatewayMode: mode, currency: pi.currency.toUpperCase(),
+        metadata: { duplicate: true, latest_charge: pi.latest_charge ?? null, gateway: { mode } },
+        errorMessage: 'duplicate payment — order was already covered',
+      }] }],
+    });
+    const dup = rec.created ? { id: dupId } : undefined;
     const paymentId = dup?.id ?? (await stripePaymentFor(tx, pi.id))?.id;
     await setAttempt(tx, attempt, 'settled', { paymentId, result: { state: 'Settled', duplicate: true } });
     if (dup) {

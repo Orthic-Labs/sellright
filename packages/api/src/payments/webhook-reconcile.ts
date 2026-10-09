@@ -107,7 +107,7 @@ export const refundStateFromStripe = (status: string): 'Settled' | 'Pending' | '
 
 /** Order state implied by total settled refunds vs the order total. null = no
  *  transition (nothing settled yet). Pure — money-critical, so it's unit-tested. */
-export function refundTargetState(refundedTotal: number, grandTotal: number): OrderState | null {
+export function refundTargetState(refundedTotal: number, grandTotal: number): 'Refunded' | 'PartiallyRefunded' | null {
   if (refundedTotal <= 0) return null;
   return refundedTotal >= grandTotal ? 'Refunded' : 'PartiallyRefunded';
 }

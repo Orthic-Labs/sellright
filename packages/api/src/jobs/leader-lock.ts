@@ -63,6 +63,8 @@ const JOB_KEYS = {
   'gateway-recovery': NAMESPACE | 20n,
   // REWARDS-1: annual birthday bonus sweep (jobs/birthday-bonus.ts).
   'birthday-bonus': NAMESPACE | 30n,
+  // De-fork 2.8: pending-effects drain (payments/settlement/effects.ts runEffectsPass).
+  'pending-effects': NAMESPACE | 40n,
 } as const satisfies Record<string, bigint>;
 
 export type LeaderLockedJob = keyof typeof JOB_KEYS;

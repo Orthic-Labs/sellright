@@ -19,6 +19,8 @@
     "db:assert-rls": "tsx src/db/assert-force-rls.ts",
     "db:assert-hand-written": "tsx src/db/assert-hand-written-migrations.ts",
     "assert:shop-isolation": "node scripts/assert-shop-route-isolation.mjs",
+    "assert:settlement": "node scripts/assert-settlement-chokepoint.mjs",
+    "effects:worker": "node dist/scripts/effects-worker.js",
     "import:preflight": "tsx src/import/preflight.ts",
     "import:vendure": "tsx src/import/run.ts",
     "import:restore": "tsx src/import/restore.ts"

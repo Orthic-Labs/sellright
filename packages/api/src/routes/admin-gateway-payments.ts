@@ -6,6 +6,7 @@ import * as s from '../db/schema.js';
 import { guard, HttpError, requireAdmin, requireStore, requireWrite, requirePermission } from './admin-helpers.js';
 import { GatewayPaymentError, verifyGatewayAttempt } from '../payments/gateway-payment.js';
 import { listPaymentAlerts } from '../payments/payment-alerts.js';
+import { listEffectsNeedingAttention, requeueTerminalEffect } from '../payments/settlement/effects.js';
 import { reconcileStripeOrder } from '../payments/stripe-reconcile.js';
 
 export const adminGatewayPayments = new OpenAPIHono();
@@ -27,6 +28,9 @@ adminGatewayPayments.get('/v1/admin/payment-reconciliation', c => guard(c, async
       .orderBy(desc(s.gatewayEvent.updatedAt)).limit(100),
     // D3/D4/D9/D14: money that could not be applied automatically.
     alerts: await listPaymentAlerts(tx, 100),
+    // Plan 2.8: settlement effects (issuance, renewal extension, loyalty, notification) that
+    // exhausted their retries or are held for review — terminal, or retrying after a failure.
+    effects: await listEffectsNeedingAttention(tx, 100),
     // D14: settled money on a non-payable (e.g. Cancelled) order — MONEY-4
     // audit rows, so operators can refund or reinstate from one list.
     paymentsAfterCancel: await tx.select({
@@ -38,6 +42,21 @@ adminGatewayPayments.get('/v1/admin/payment-reconciliation', c => guard(c, async
       .orderBy(desc(s.auditLog.at)).limit(100),
   }));
   return c.json(result);
+}));
+
+adminGatewayPayments.post('/v1/admin/payment-reconciliation/effects/:id/retry', c => guard(c, async () => {
+  const { admin } = await requireAdmin(c);
+  const store = requireStore(admin, c);
+  requireWrite(store); requirePermission(store, 'refunds');
+  const id = c.req.param('id');
+  if (!z.string().uuid().safeParse(id).success) throw new HttpError(404, 'Effect not found');
+  const queued = await withStore(store.storeId, async tx => {
+    const ok = await requeueTerminalEffect(tx, id);
+    if (ok) await tx.insert(s.auditLog).values({ storeId: store.storeId, actor: admin.email, entity: 'order_pending_effect', entityId: id, action: 'effect_requeued' });
+    return ok;
+  });
+  if (!queued) throw new HttpError(409, 'Effect is not awaiting manual review');
+  return c.json({ queued: true });
 }));
 
 adminGatewayPayments.post('/v1/admin/payment-reconciliation/:id/verify', c => guard(c, async () => {

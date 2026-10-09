@@ -1,5 +1,6 @@
 /**
- * Subscription lifecycle — the issue-then-extend heart. A subscription IS a
+ * Subscription lifecycle — the issue-then-extend heart (invoice.paid is one frozen
+ * settlement operation per invoice; see recordInvoicePaid). A subscription IS a
  * backing SellRight order whose payment recurs:
  *   - checkout.session.completed → upsert our `subscription` row (incomplete)
  *   - invoice.paid (first cycle)  → settle the backing order via the EXISTING
@@ -15,12 +16,14 @@
  * NOT ordered, so onInvoicePaid CREATE-OR-FINDs the subscription rather than
  * assuming checkout.session.completed ran first.
  */
-import { eq, sql } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
-import { applyPaymentResult } from './settle.js';
-import { extendEntitlement } from '../licensing/renewal.js';
-import type { PaymentResult } from './provider.js';
+import { amountDueForOrder, recordPaymentAfterCancel } from './settle.js';
+import { canTransition, type OrderState } from '../money/fsm.js';
+import { editBalanceEffects, paidOrderEffects, recordSettlementOperation, type SettlementMutation } from './settlement/record.js';
+import type { EffectRequest } from './settlement/effects.js';
+import { classificationForBillingReason, classifyInvoice, invoiceHistoryPolicy, type InvoiceKey } from './settlement/invoice.js';
 
 // ── minimal Stripe shapes (kept SDK-light + testable) ────────────────────────
 export interface CheckoutSessionLike {
@@ -35,6 +38,8 @@ export interface InvoiceLike {
   payment_intent?: string | { id?: string } | null;
   billing_reason?: string | null;
   amount_paid?: number | null;
+  currency?: string | null;
+  status_transitions?: { paid_at?: number | null } | null;
   subscription_details?: { metadata?: { storeId?: string; orderCode?: string; customerId?: string } | null } | null;
   lines?: { data?: Array<{ price?: { id?: string } | null; period?: { end?: number } | null }> } | null;
 }
@@ -116,23 +121,10 @@ export async function onCheckoutCompleted(tx: Tx, storeId: string, session: Chec
   await audit(tx, storeId, 'subscription_checkout_completed', subId, { orderId, stripeCustomerId });
 }
 
-/** Read back the single license issued for an order (after settle). */
-async function licenseForOrder(tx: Tx, orderId: string): Promise<{ id: string; orderLineId: string | null; expiresAt: Date | null; updatesUntil: Date | null } | null> {
-  const [row] = await tx
-    .select({ id: s.license.id, orderLineId: s.license.orderLineId, expiresAt: s.license.expiresAt, updatesUntil: s.license.updatesUntil })
-    .from(s.license).where(eq(s.license.orderId, orderId)).limit(1);
-  return row ?? null;
-}
+/** Webhook-derived context for the invoice operation (the verified signature's mode is the only trusted source). */
+export interface InvoiceContext { mode?: 'test' | 'live'; accountId?: string }
 
-/**
- * invoice.paid — CREATE-OR-FIND the subscription (events are unordered), then
- * dispatch to settleFirstCycle or extendRenewal based on whether a license is
- * already linked. Always sets status=active + currentPeriodEnd. The
- * create-or-find + dispatch coordinator stays here; the per-cycle work is
- * extracted so the seam is unit-testable and future arms (paused, proration,
- * dunning retry) don't pile on in one 70-line function.
- */
-export async function onInvoicePaid(tx: Tx, storeId: string, invoice: InvoiceLike): Promise<void> {
+export async function onInvoicePaid(tx: Tx, storeId: string, invoice: InvoiceLike, ctx: InvoiceContext = {}): Promise<void> {
   const subId = idOf(invoice.subscription);
   if (!subId) return;
   // create-or-find — never assume checkout.session.completed already ran.
@@ -148,14 +140,7 @@ export async function onInvoicePaid(tx: Tx, storeId: string, invoice: InvoiceLik
     await audit(tx, storeId, 'subscription_created_from_invoice', subId, { orderId });
   }
 
-  if (!sub.licenseId) {
-    await settleFirstCycle(tx, storeId, sub, invoice);
-  } else {
-    // sub.licenseId was just narrowed to string by the !sub.licenseId branch
-    // above; carry that contract into extendRenewal explicitly so the inner
-    // function's eq() doesn't need a `!` non-null assertion.
-    await extendRenewal(tx, storeId, sub, sub.licenseId, invoice);
-  }
+  await recordInvoicePaid(tx, storeId, sub, invoice, ctx);
 
   // Common post-cycle write: mark active + sync the current period. Each arm
   // is responsible for its own arm-specific audit (subscription_activated /
@@ -169,119 +154,184 @@ export async function onInvoicePaid(tx: Tx, storeId: string, invoice: InvoiceLik
   }).where(eq(s.subscription.id, sub.id));
 }
 
+type SubscriptionRow = typeof s.subscription.$inferSelect;
+
 /**
- * First cycle (no linked license yet) — settle the backing order through the
- * existing applyPaymentResult path, which transitions PendingPayment→Paid and
- * issues the per-line license, then link the freshly-issued license back to
- * the subscription. If the subscription has no backing order (orphaned
- * invoice.paid), we still record period+status so renewals work for the next
- * cycle. applyPaymentResult no-ops the transition if the order is already
- * Paid (a duplicate invoice.paid re-settle), and issueLicensesForPaidOrder's
- * own per-orderLine guard prevents a double-issue.
+ * The `stripe_invoice_paid` operation (plan 2.8): ONE operation per invoice id,
+ * recorded BEFORE any cycle dispatch, whichever path observes it and however
+ * many times. The first observation classifies the invoice (invoice.ts: Stripe's
+ * billing_reason; legacy/unknown reasons against the initial-invoice evidence)
+ * and freezes the classification and its authorized effect set on the operation
+ * row; every later observation is a replay that mutates nothing — so a
+ * first-cycle invoice redelivered after the licence is linked can no longer be
+ * mistaken for a renewal. Authorized entitlement: first_cycle = the backing
+ * order's Paid transition (licence issue, loyalty, notification), renewal = one
+ * `license_extend` effect (precondition checked at execution), adjustment = money
+ * only. Money goes to `payment` on the backing order, or to
+ * `subscription_invoice_payment` when there is none. The InvoiceHistoryPolicy port
+ * (pre-adoption baseline) can hold or pre-apply an invoice instead.
  */
-async function settleFirstCycle(
-  tx: Tx,
-  storeId: string,
-  sub: typeof s.subscription.$inferSelect,
-  invoice: InvoiceLike,
-): Promise<void> {
+async function recordInvoicePaid(tx: Tx, storeId: string, sub: SubscriptionRow, invoice: InvoiceLike, ctx: InvoiceContext): Promise<void> {
   const subId = sub.stripeSubscriptionId;
-  if (!sub.orderId) {
-    await audit(tx, storeId, 'subscription_invoice_no_order', subId, { invoiceId: invoice.id });
+  const [stored] = await tx.select({ id: s.settlementOperation.id, classification: s.settlementOperation.classification }).from(s.settlementOperation).where(and(
+    eq(s.settlementOperation.storeId, storeId), eq(s.settlementOperation.operationKind, 'stripe_invoice_paid'), eq(s.settlementOperation.operationId, invoice.id),
+  )).limit(1);
+  if (stored) {
+    // Replay: frozen. A differing observed classification is ignored and audited.
+    const observed = classificationForBillingReason(invoice.billing_reason);
+    if (observed && stored.classification && observed !== stored.classification) {
+      await audit(tx, storeId, 'settlement_classification_replayed', subId, { invoiceId: invoice.id, stored: stored.classification, observed });
+    }
     return;
   }
-  const [order] = await tx
-    .select({ id: s.order.id, state: s.order.state, grandTotal: s.order.grandTotal, currency: s.order.currency, customerId: s.order.customerId })
-    .from(s.order).where(eq(s.order.id, sub.orderId)).limit(1);
-  if (!order) return;
 
-  const result: PaymentResult = {
-    state: 'Settled',
-    providerRef: idOf(invoice.payment_intent) ?? invoice.id,
-    metadata: { stripeInvoiceId: invoice.id, amountPaid: invoice.amount_paid ?? null },
+  const [order] = sub.orderId
+    ? await tx.select().from(s.order).where(eq(s.order.id, sub.orderId)).limit(1)
+    : [];
+  const [priorFirst] = sub.orderId
+    ? await tx.select({ id: s.settlementOperation.id }).from(s.settlementOperation).where(and(
+        eq(s.settlementOperation.storeId, storeId), eq(s.settlementOperation.operationKind, 'stripe_invoice_paid'),
+        eq(s.settlementOperation.classification, 'first_cycle'), eq(s.settlementOperation.orderId, sub.orderId))).limit(1)
+    : [];
+  const key: InvoiceKey = {
+    storeId, accountId: ctx.accountId ?? 'default', mode: ctx.mode ?? 'live', invoiceId: invoice.id, stripeSubscriptionId: subId,
+    local: { licenceLinked: sub.licenseId != null, priorFirstCycleForOrder: priorFirst != null },
   };
-  await applyPaymentResult(tx, { storeId, order, method: 'stripe', result });
-
-  if (invoice.amount_paid != null && invoice.amount_paid !== order.grandTotal) {
-    await audit(tx, storeId, 'subscription_amount_mismatch', subId, { invoiceId: invoice.id, amountPaid: invoice.amount_paid, grandTotal: order.grandTotal });
+  const policy = invoiceHistoryPolicy();
+  const classified = await classifyInvoice(tx, key, invoice.billing_reason);
+  // Main's dispatch was licence-driven: with no licence linked (and no earlier first cycle for the order) a
+  // cycle invoice is the first cycle (issue + link), never an extension of a licence that does not exist.
+  const classification = classified.classification === 'renewal' && !key.local.licenceLinked && !key.local.priorFirstCycleForOrder
+    ? 'first_cycle' as const : classified.classification;
+  const hold = classification === classified.classification ? classified.hold : undefined;
+  const decision = await policy.disposition(tx, key, classification);
+  if (decision.disposition === 'pending_at_frontier' || decision.entitlementAction === 'defer' || decision.moneyAction === 'defer') {
+    return; // not recorded until its invoice.paid arrives under the candidate
   }
-  const lic = await licenseForOrder(tx, order.id);
-  await tx.update(s.subscription).set({
-    licenseId: lic?.id ?? null,
-    updatedAt: new Date(),
-  }).where(eq(s.subscription.id, sub.id));
-  await audit(tx, storeId, 'subscription_activated', subId, { orderId: order.id, licenseId: lic?.id ?? null });
-}
 
-/**
- * Renewal cycle (license already linked) — extend the license's expiresAt +
- * updatesUntil by the variant's duration days, stacking on the later of
- * current end or now (so renewing early adds time, renewing after a lapse
- * restarts from now). extendEntitlement is pure and unit-tested; this
- * function only does the tx wiring.
- */
-async function extendRenewal(
-  tx: Tx,
-  storeId: string,
-  sub: typeof s.subscription.$inferSelect,
-  licenseId: string,
-  invoice: InvoiceLike,
-): Promise<void> {
-  const subId = sub.stripeSubscriptionId;
-  const [lic] = await tx
-    .select({ id: s.license.id, orderLineId: s.license.orderLineId, expiresAt: s.license.expiresAt, updatesUntil: s.license.updatesUntil })
-    .from(s.license).where(eq(s.license.id, licenseId)).limit(1);
-  if (!lic) return;
-  // orderLineId is nullable now that orderless (admin/storekit) issuance
-  // exists; a subscription license always originates from an order line, but
-  // the guard keeps the nullable type honest.
-  const [variant] = lic.orderLineId == null ? [undefined] : await tx
-    .select({ licenseDurationDays: s.productVariant.licenseDurationDays, updatesDurationDays: s.productVariant.updatesDurationDays })
-    .from(s.orderLine)
-    .innerJoin(s.productVariant, eq(s.productVariant.id, s.orderLine.variantId))
-    .where(eq(s.orderLine.id, lic.orderLineId)).limit(1);
-  const now = new Date();
-  const expiresAt = extendEntitlement(lic.expiresAt, variant?.licenseDurationDays ?? null, now);
-  const updatesUntil = extendEntitlement(lic.updatesUntil, variant?.updatesDurationDays ?? null, now);
-  await tx.update(s.license).set({ expiresAt, updatesUntil, updatedAt: now }).where(eq(s.license.id, lic.id));
+  const providerRef = idOf(invoice.payment_intent) ?? invoice.id;
+  const amountPaid = invoice.amount_paid ?? 0;
+  const paidAt = epochToDate(invoice.status_transitions?.paid_at);
+  const common = { storeId, kind: 'stripe_invoice_paid' as const, operationId: invoice.id, classification, provider: { account: key.accountId, mode: key.mode, ref: providerRef } };
+  const review = (reason: string): EffectRequest => ({ kind: 'admin_review', payload: { reason, invoiceId: invoice.id, classification, disposition: decision.disposition, stripeSubscriptionId: subId } });
+  const orphanRow = (extra: Record<string, unknown>) => ({
+    storeId, orderId: sub.orderId ?? null, stripeAccountId: key.accountId, mode: key.mode, stripeSubscriptionId: subId,
+    invoiceId: invoice.id, providerRef, amount: amountPaid, currency: invoice.currency?.toUpperCase() ?? null,
+    state: 'Settled' as const, paidAt, billingReason: invoice.billing_reason ?? null, origin: 'live' as const,
+    disposition: decision.disposition, frontierId: decision.frontierId ?? null,
+    metadata: { orphan: true, reason: 'no_backing_order', ...extra },
+  });
+  // ledger row for a renewal / adjustment: on the backing order when there is one, else orderless
+  const moneyMutation = (meta: Record<string, unknown>, backfilled = false): SettlementMutation => order
+    ? { type: 'payment_insert', rows: [{
+        storeId, orderId: order.id, amount: amountPaid, method: 'stripe', providerRef, state: 'Settled',
+        gatewayMode: key.mode, currency: invoice.currency?.toUpperCase() ?? order.currency,
+        ...(backfilled && paidAt ? { createdAt: paidAt } : {}),
+        metadata: { stripeInvoiceId: invoice.id, ...meta },
+      }] }
+    : { type: 'invoice_payment_record', row: orphanRow(meta) };
+  const heldMoney = decision.moneyAction === 'hold_money' || decision.moneyAction === 'none';
 
-  // FIX (renewal never writes a payment ledger row): before this, ONLY
-  // settleFirstCycle ever called applyPaymentResult / inserted into s.payment —
-  // a renewal only extended the license. So on cycle 4+, admin-orders.ts's
-  // refund route (which targets the most recent Settled s.payment for the
-  // order) still pointed at the CYCLE-1 charge, and every later cycle's money
-  // was effectively unrefundable. Every settled renewal invoice now inserts
-  // its own payment row (this cycle's amount + providerRef), same shape as
-  // applyPaymentResult's insert in payments/settle.ts, so refunds can target
-  // the correct cycle. Idempotent via the SAME partial unique index
-  // (storeId, providerRef) WHERE providerRef IS NOT NULL that settle.ts
-  // relies on — a redelivered invoice.paid is a no-op insert, not a
-  // duplicate ledger row.
-  if (sub.orderId) {
-    const providerRef = idOf(invoice.payment_intent) ?? invoice.id;
-    const inserted = await tx
-      .insert(s.payment)
-      .values({
-        storeId,
-        orderId: sub.orderId,
-        amount: invoice.amount_paid ?? 0,
-        method: 'stripe',
-        providerRef,
-        state: 'Settled',
-        metadata: { stripeInvoiceId: invoice.id, renewal: true },
-      })
-      .onConflictDoNothing()
-      .returning({ id: s.payment.id });
-    if (inserted.length === 0) {
+  // ── historical dispositions (pre-adoption baseline): never an automatic effect ──
+  if (decision.disposition !== 'new') {
+    const mutations: SettlementMutation[] = [];
+    if (decision.moneyAction === 'record_order_payment' && order) mutations.push(moneyMutation({ billing_reason: invoice.billing_reason ?? null, backfilled: true, disposition: decision.disposition, frontier: decision.frontierId ?? null }, true));
+    else if (decision.moneyAction === 'record_orderless' || (decision.moneyAction === 'record_order_payment' && !order)) mutations.push({ type: 'invoice_payment_record', row: { ...orphanRow({}), origin: 'historical_backfill' } });
+    await recordSettlementOperation(tx, {
+      ...common, disposition: decision.disposition, orderId: sub.orderId ?? undefined, mutations,
+      effects: decision.disposition === 'applied' || decision.disposition === 'ignored_non_subscription' || decision.disposition === 'voided'
+        ? [] : [review(decision.reason ?? decision.disposition)],
+    });
+    return;
+  }
+
+  if (classification === 'unresolved') {
+    await recordSettlementOperation(tx, { ...common, disposition: 'unresolved', orderId: sub.orderId ?? undefined, mutations: [], effects: [review(hold ?? 'unresolved')] });
+    return;
+  }
+
+  if (classification === 'first_cycle') {
+    if (!order) {
+      // formerly the silent `subscription_invoice_no_order` / `!order` returns: now an explicit hold
+      await audit(tx, storeId, 'subscription_invoice_no_order', subId, { invoiceId: invoice.id });
+      await recordSettlementOperation(tx, {
+        ...common, orderId: sub.orderId ?? undefined,
+        mutations: heldMoney ? [] : [{ type: 'invoice_payment_record', row: orphanRow({}) }],
+        effects: [review('first-cycle invoice has no backing order')],
+      });
+      return;
+    }
+    // First cycle settles the backing order the way the settle path did (SETTLEMENT-OPS 4, main's settleFirstCycle):
+    //  - a transition to Paid issues the licence (license_issue), loyalty and notification;
+    //  - a payment on an order already in the paid lifecycle is a balance payment: the balance_payment audit,
+    //    edit reconcile only once the balance is cleared, the deferred edit earn, and MONEY-4 on overpayment;
+    //  - anything else records the money only (MONEY-4 when the order can no longer become Paid).
+    // In every branch the subscription is linked to the order's licence (link-only: nothing issued here).
+    const remaining = (await amountDueForOrder(tx, storeId, order.id, order.grandTotal)) - order.grandTotal;
+    const payable = canTransition(order.state as OrderState, 'Paid');
+    const transitions = payable && remaining <= 0;
+    const balance = !payable && (order.state === 'Paid' || order.state === 'PartiallyRefunded') && remaining >= 0;
+    const paidAtNow = new Date();
+    const payment: SettlementMutation = { type: 'payment_insert', rows: [{
+      storeId, orderId: order.id, amount: order.grandTotal, method: 'stripe', providerRef, state: 'Settled',
+      gatewayMode: null, currency: order.currency, metadata: { stripeInvoiceId: invoice.id, amountPaid: invoice.amount_paid ?? null },
+    }] };
+    const link = { operationKind: 'stripe_invoice_paid', operationId: invoice.id, stripeSubscriptionId: subId };
+    const issueLink = (issueNow: boolean): EffectRequest => ({ kind: 'license_issue', payload: {
+      orderId: order.id, customerId: order.customerId ?? null, paidAt: paidAtNow.toISOString(), link, ...(issueNow ? {} : { issue: false }),
+    } });
+    const fanout = paidOrderEffects({ orderId: order.id, customerId: order.customerId ?? null, paidAt: paidAtNow, variant: 'settle' });
+    const balanceEffects = editBalanceEffects({ orderId: order.id, customerId: order.customerId ?? null })
+      .filter((e) => e.kind !== 'edit_reconcile' || remaining === 0);
+    const recorded = await recordSettlementOperation(tx, {
+      ...common, orderId: order.id,
+      mutations: transitions ? [payment, { type: 'order_paid', orderId: order.id, placedAt: paidAtNow }] : [payment],
+      effects: transitions ? [issueLink(true), fanout[1]!, fanout[2]!]
+        : balance ? [issueLink(false), ...balanceEffects]
+        : [issueLink(false)],
+    });
+    if (!recorded.created) return;
+    if (balance) {
+      await tx.insert(s.auditLog).values({
+        storeId, actor: 'system:settle', entity: 'order', entityId: order.id,
+        action: 'balance_payment', fromState: order.state, toState: order.state,
+        data: { amount: order.grandTotal, method: 'stripe', providerRef },
+      });
+    }
+    if (invoice.amount_paid != null && invoice.amount_paid !== order.grandTotal) {
+      await audit(tx, storeId, 'subscription_amount_mismatch', subId, { invoiceId: invoice.id, amountPaid: invoice.amount_paid, grandTotal: order.grandTotal });
+    }
+    // MONEY-4: captured money on an order that can no longer transition to Paid (and is not a balance) is never silent
+    if (!payable && !balance) {
+      await recordPaymentAfterCancel(tx, storeId, order, { method: 'stripe', providerRef, amount: order.grandTotal });
+    }
+    return;
+  }
+
+  // renewal / adjustment
+  const heldByLegacyReason = hold != null;
+  if (classification === 'renewal') {
+    // The renewal ledger row keeps main's shape: gateway identity and currency are not set on it.
+    const renewalMoney: SettlementMutation = order
+      ? { type: 'payment_insert', rows: [{ storeId, orderId: order.id, amount: amountPaid, method: 'stripe', providerRef, state: 'Settled', metadata: { stripeInvoiceId: invoice.id, renewal: true } }] }
+      : moneyMutation({ renewal: true });
+    const rec = await recordSettlementOperation(tx, {
+      ...common, orderId: sub.orderId ?? undefined,
+      mutations: [renewalMoney],
+      effects: [{ kind: 'license_extend', payload: { stripeSubscriptionId: subId, invoiceId: invoice.id, ...(order ? {} : { noOrder: true }) } }],
+    });
+    if (order && rec.created && rec.paymentId === undefined) {
+      // a second invoice carrying this payment reference: the ledger row already exists (main's duplicate audit)
       await audit(tx, storeId, 'subscription_renewal_payment_duplicate', subId, { invoiceId: invoice.id, providerRef });
     }
-  } else {
-    // Orphaned subscription (no backing order) — nothing to attach a payment
-    // row to; still record that the cycle happened for the audit trail.
-    await audit(tx, storeId, 'subscription_renewal_no_order', subId, { invoiceId: invoice.id });
+    return;
   }
-
-  await audit(tx, storeId, 'subscription_renewed', subId, { licenseId: lic.id, expiresAt, updatesUntil });
+  await audit(tx, storeId, 'subscription_invoice_adjustment', subId, { invoiceId: invoice.id, billingReason: invoice.billing_reason ?? null });
+  await recordSettlementOperation(tx, {
+    ...common, orderId: sub.orderId ?? undefined,
+    mutations: [moneyMutation({ adjustment: true })],
+    effects: heldByLegacyReason ? [review(hold!)] : [],
+  });
 }
 
 /** invoice.payment_failed — past_due (dunning). Do NOT revoke the license. */
