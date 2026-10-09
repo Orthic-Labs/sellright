@@ -706,6 +706,78 @@ jobs:
         if: always()
         run: kill "$(cat api.pid)" 2>/dev/null || true
 
+  e2e-admin:
+    name: Admin e2e (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      # packages/admin/playwright.config.ts starts the API (packages/api/dist) and the built admin itself;
+      # e2e/support/start-api.mjs drops + recreates `sellright_admin_e2e`, migrates, bootstraps the e2e store and
+      # owner, then serves as the NOSUPERUSER NOBYPASSRLS role below (the API refuses to serve as a superuser).
+      E2E_DB_ADMIN_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+      E2E_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/sellright_admin_e2e
+      E2E_APP_DATABASE_URL: postgres://sellright_app:sellright_app@127.0.0.1:5432/sellright_admin_e2e
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          install: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_LTS }}
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            packages/admin/pnpm-lock.yaml
+
+      - name: Install core workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: Install admin
+        run: pnpm --dir packages/admin install --frozen-lockfile
+
+      - name: Build shared + api
+        run: |
+          pnpm --filter @sellright/shared build
+          pnpm --filter @sellright/api build
+
+      - name: Install Playwright's Chromium
+        working-directory: packages/admin
+        run: pnpm exec playwright install --with-deps chromium
+
+      # `test:e2e` builds the admin SPA into dist-e2e (production build, SELLRIGHT_BUILD_SUFFIX=e2e) and runs the
+      # suite; Playwright's webServer entries start the API and `vite preview`, globalSetup seeds + signs in.
+      - name: Run the admin e2e suite
+        working-directory: packages/admin
+        run: pnpm run test:e2e
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: admin-playwright-report
+          path: |
+            packages/admin/playwright-report/
+            packages/admin/test-results/
+          retention-days: 7
+
   shellcheck:
     name: Shellcheck installer + CLI
     runs-on: ubuntu-latest
