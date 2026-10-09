@@ -7,14 +7,17 @@
   reset.onclick=async()=>{if(!confirm('Reset your sample store?'))return;const csrf=document.cookie.split('; ').find(v=>v.startsWith('sr_csrf='))?.slice(8);const r=await fetch('/demo/reset',{method:'POST',headers:{'content-type':'application/json','x-csrf-token':csrf??''},body:'{}'});if(r.ok){localStorage.removeItem('sellright-demo-cart');location.assign('/shop');}else alert('Could not reset the demo. Please retry.');};
   bar.append(label,shop,reset);document.body.append(bar);
   style.textContent+='[aria-live].fixed.top-3{top:54px!important}';
-  const allowed=['/','/orders','/products','/inventory','/customers','/reports','/activity','/collections','/discounts'];
+  // The admin SPA is mounted at /admin on the demo (BrowserRouter basename), so
+  // compare app paths with that prefix stripped.
+  const appPath=(pathname)=>pathname.replace(/^\/admin(?=\/|$)/,'')||'/';
+  const allowed=['/','/orders','/products','/inventory','/customers','/reports','/activity','/collections','/discounts','/loyalty','/reviews','/blog','/waitlist','/settings/seo'];
   function trimNavigation(){
-    document.querySelectorAll('aside a').forEach(a=>{const path=new URL(a.href).pathname;if(!allowed.includes(path))a.style.display='none';});
+    document.querySelectorAll('aside a').forEach(a=>{const path=appPath(new URL(a.href).pathname);if(!allowed.includes(path))a.style.display='none';});
     document.querySelectorAll('input[type=file]').forEach(input=>{input.disabled=true;const label=input.closest('label');if(label){label.title='File uploads are disabled in the public demo';label.style.opacity='.45';label.style.pointerEvents='none';}});
-    document.querySelectorAll('button').forEach(b=>{if(['Add group','Set as featured','Remove from gallery'].includes(b.textContent.trim())||['Set as featured','Remove from gallery'].includes(b.title)||/^(Export|Import|Upload)\b/.test(b.textContent.trim())){b.disabled=true;b.title='External files and option editing are unavailable in this demo';}});
+    document.querySelectorAll('button').forEach(b=>{if(['Add group','Set as featured','Remove from gallery'].includes(b.textContent.trim())||['Set as featured','Remove from gallery'].includes(b.title)||/^(Import|Upload)\b/.test(b.textContent.trim())){b.disabled=true;b.title='External files and option editing are unavailable in this demo';}});
   }
   function injectLoginHint(){
-    if(!location.pathname.startsWith('/login'))return;
+    if(!appPath(location.pathname).startsWith('/login'))return;
     const form=document.querySelector('form');
     if(!form)return;
     // The real Login page's email field is type="email" + required, so the
