@@ -187,7 +187,7 @@ export async function finishAttempt(storeId: string, id: string, result: Payment
       updatedAt: new Date(),
     }).where(eq(s.paymentAttempt.id, id)).returning();
     return view(updated!);
-  });
+  }, { mustCommit: true }); // X-45: every caller runs after the provider has moved money.
 }
 
 export async function verifySezzleAttempt(storeId: string, id: string) {

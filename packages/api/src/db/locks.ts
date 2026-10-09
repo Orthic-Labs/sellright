@@ -138,10 +138,12 @@ async function planOne(tx: Tx, storeId: string, subject: LockSubject): Promise<L
       return { purchases: [], licenseIds: licenses.map((r) => r.id), orderIds: orders.map((r) => r.id) };
     }
     case 'loyalty': {
+      // PAYMENT-TIMING 3.5 / X-46: only the customer's deferred-earn orders are locked.
       const orders = await tx
         .select({ id: s.order.id })
         .from(s.order)
-        .where(and(eq(s.order.storeId, storeId), eq(s.order.customerId, subject.customerId)));
+        .where(and(eq(s.order.storeId, storeId), eq(s.order.customerId, subject.customerId),
+          sql`${s.order.metadata}->'loyalty'->'deferredEarn' is not null`));
       return { purchases: [], licenseIds: [], orderIds: orders.map((r) => r.id) };
     }
     case 'checkout':
@@ -159,19 +161,24 @@ async function planFor(tx: Tx, storeId: string, subjects: readonly LockSubject[]
  * Plan → lock → verify. `fn` runs inside the locked transaction after L2/L3 and
  * receives the held brand. A list of subjects is planned as the union of its members.
  * Restarts on plan growth (LockSetGrew) or lock timeout (55P03), up to maxRestarts.
+ *
+ * `mustCommit` (X-45): for a transaction that records money a provider has already
+ * moved. No lock_timeout is set (the statement waits for the holder), and plan growth
+ * is retried until the set is stable, so the call never surfaces LockSetUnstable.
  */
 export async function withLockedSet<T>(
   storeId: string,
   subject: LockSubject | readonly LockSubject[],
   fn: (tx: Tx, held: HeldLocks, plan: LockPlanContribution) => Promise<T>,
-  opts: { maxRestarts?: number } = {},
+  opts: { maxRestarts?: number; mustCommit?: boolean } = {},
 ): Promise<T> {
   const subjects = Array.isArray(subject) ? subject : [subject as LockSubject];
   let plan = await withStore(storeId, (tx) => planFor(tx, storeId, subjects));
   for (let attempt = 0; ; attempt++) {
     try {
       return await withStore(storeId, async (tx) => {
-        await tx.execute(sql`SET LOCAL lock_timeout = '5s'`);
+        if (opts.mustCommit) await tx.execute(sql`SET LOCAL lock_timeout = 0`);
+        else await tx.execute(sql`SET LOCAL lock_timeout = '5s'`);
         await acquirePurchaseLocks(tx, plan.purchases); // L1
         await lockRows(tx, 'license', storeId, plan.licenseIds); // L2
         await lockRows(tx, 'order', storeId, plan.orderIds); // L3
@@ -181,6 +188,13 @@ export async function withLockedSet<T>(
       });
     } catch (e) {
       if (!(e instanceof LockSetGrew) && !isLockTimeout(e)) throw e;
+      if (opts.mustCommit) {
+        // No lock_timeout in this mode, so only growth can arrive here. The plan
+        // strictly grows over a finite row set, so the retry loop terminates.
+        if (!(e instanceof LockSetGrew)) throw e;
+        plan = union(plan, e.grown);
+        continue;
+      }
       if (attempt >= (opts.maxRestarts ?? 3)) throw new LockSetUnstable();
       plan = e instanceof LockSetGrew ? union(plan, e.grown) : plan;
     }

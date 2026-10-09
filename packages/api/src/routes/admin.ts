@@ -2,7 +2,7 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { hasUnresolvedPayment } from '../payments/hold.js';
 import { errJson } from '../lib/api-error.js';
 import { and, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
-import { withStore } from '../db/client.js';
+import { withAdvisoryLock, withStore } from '../db/client.js';
 import { withLockedSet, orderIdByCode } from '../db/locks.js';
 import * as s from '../db/schema.js';
 import { cancelOrderStripeIntents } from '../payments/stripe-reconcile.js';
@@ -592,7 +592,9 @@ admin.openapi(
     // Unlocked id lookup, then the order set (STOREKIT §5.8 #11): the order is
     // re-read FOR UPDATE under the set, so a concurrent edit cannot slip between.
     const orderId = await orderIdByCode(st.storeId, code);
-    const res = !orderId ? { kind: 'notfound' as const } : await withLockedSet(st.storeId, { kind: 'order', orderId }, async (tx) => {
+    // X-46: the L0 pay advisory (same key as /pay and gateway recovery) is taken before the order set,
+    // so a cancel serialises with an in-flight payment or capture for this order.
+    const res = !orderId ? { kind: 'notfound' as const } : await withAdvisoryLock(`pay:${st.storeId}:${code}`, () => withLockedSet(st.storeId, { kind: 'order', orderId }, async (tx) => {
       const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
       if (!o) return { kind: 'notfound' as const };
       // Only unpaid orders can be cancelled directly — cancelling releases stock
@@ -621,7 +623,7 @@ admin.openapi(
       await releaseOrderLoyalty(tx, st.storeId, o.id, admin.email);
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: o.id, action: 'cancel', fromState: o.state, toState: 'Cancelled' });
       return { kind: 'ok' as const, orderId: o.id };
-    });
+    }));
     if (stockChanged) onStockChanged(st.slug);
     // After commit: cancel the order's open Stripe intents (best-effort, audited).
     if (res.kind === 'ok') await cancelOrderStripeIntents(st.storeId, res.orderId, admin.email);

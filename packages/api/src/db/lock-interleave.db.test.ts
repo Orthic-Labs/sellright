@@ -54,8 +54,8 @@ describe.skipIf(!isTestDb)('T-L2 interleaving under withLockedSet', () => {
     expect(results.sort()).toEqual(['x', 'y']);
     // Each start is immediately preceded by the other's end (no overlap).
     expect(events[1]).toMatch(/:end$/);
-    expect(events[0].split(':')[0]).toBe(events[1].split(':')[0]);
-    expect(events[2].split(':')[1]).toBe('start');
+    expect(events[0]!.split(':')[0]).toBe(events[1]!.split(':')[0]);
+    expect(events[2]!.split(':')[1]).toBe('start');
   }, 20000);
 
   it('opposite subject orders in concurrent sets never deadlock (planned as one sorted union)', async () => {
@@ -78,4 +78,35 @@ describe.skipIf(!isTestDb)('T-L2 interleaving under withLockedSet', () => {
     });
     await expect(Promise.all([order, licence])).resolves.toEqual(['order', 'customer']);
   }, 20000);
+
+  // Checkout's subject shape ({checkout} + the session customer's {loyalty}, the set
+  // routes/checkout.ts takes when points are redeemed) against an admin cancel of one
+  // of that customer's orders ({order}). Both plan ORDER_A; the checkout set also plans
+  // ORDER_B (all of the customer's orders), so the union is acquired in one sorted order.
+  it('checkout set and admin-cancel set on the same order serialize in both orders, no deadlock', async () => {
+    // The loyalty subject locks only deferred-earn orders (X-46), so ORDER_A carries one.
+    await withStore(STORE, (tx) => tx.execute(sql`UPDATE "order" SET metadata = '{"loyalty":{"deferredEarn":{"editId":"t"}}}'::jsonb WHERE id = ${ORDER_A}`));
+    for (let round = 0; round < 5; round++) {
+      const events: string[] = [];
+      const checkout = withLockedSet(STORE, [{ kind: 'checkout' }, { kind: 'loyalty', customerId: CUSTOMER }], async (tx) => {
+        events.push('checkout:start');
+        await pause(60);
+        await tx.execute(sql`UPDATE "order" SET state = state WHERE id = ${ORDER_A}`);
+        events.push('checkout:end');
+        return 'checkout';
+      });
+      const cancel = withLockedSet(STORE, { kind: 'order', orderId: ORDER_A }, async (tx) => {
+        events.push('cancel:start');
+        await tx.execute(sql`UPDATE "order" SET state = state WHERE id = ${ORDER_A}`);
+        await pause(60);
+        events.push('cancel:end');
+        return 'cancel';
+      });
+      await expect(Promise.all([checkout, cancel])).resolves.toEqual(['checkout', 'cancel']);
+      // No overlap: each start is preceded by the other set's end.
+      expect(events).toHaveLength(4);
+      expect(events[1]!.endsWith(':end')).toBe(true);
+      expect(events[2]!.endsWith(':start')).toBe(true);
+    }
+  }, 30000);
 });

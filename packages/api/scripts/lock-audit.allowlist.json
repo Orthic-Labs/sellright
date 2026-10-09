@@ -34,13 +34,6 @@
       "mixed": true,
       "orderViolation": true,
       "why": "STOREKIT §5.8 #18 (account erasure; {customer} set pending step 2)"
-    },
-    {
-      "key": "src/routes/checkout.ts::checkout.openapi(@218)",
-      "sequence": "L5:cart L3:order",
-      "mixed": false,
-      "orderViolation": true,
-      "why": "STOREKIT §5.8 #7 (checkout cart+order; {checkout} set pending step 2)"
     }
   ]
 }

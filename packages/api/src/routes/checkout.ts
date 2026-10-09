@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, count, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import { withStore, type Tx } from '../db/client.js';
+import { LockSetUnstable, withLockedSet, type LockSubject } from '../db/locks.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
 import { calculateOrderTotals, type Promotion } from '../money/totals.js';
@@ -230,7 +231,7 @@ checkout.openapi(
 
     const fingerprint = checkoutFingerprint(body);
 
-    type Result = { blocked: string[] } | { shippingError: string } | { cartError: string } | { legalError: string } | { loyaltyError: RedeemRejection } | { cartConflict: { code: 'stale' | 'revision_required'; snapshot: z.infer<typeof CartOut> } } | { fingerprintConflict: true } | { code: string; state: string; grandTotal: number; discountTotal: number; couponApplied: boolean; replay?: boolean; giftCardApplied?: number; receiptToken: string; pointsRedeemed?: number; pointsDiscount?: number };
+    type Result = { blocked: string[] } | { shippingError: string } | { cartError: string } | { legalError: string } | { loyaltyError: RedeemRejection } | { cartConflict: { code: 'stale' | 'revision_required'; snapshot: z.infer<typeof CartOut> } } | { fingerprintConflict: true } | { lockRetry: true } | { code: string; state: string; grandTotal: number; discountTotal: number; couponApplied: boolean; replay?: boolean; giftCardApplied?: number; receiptToken: string; pointsRedeemed?: number; pointsDiscount?: number };
     // Zero-cache stock rule: set true only by a reserveStockOrThrow call whose
     // surrounding transaction actually reaches COMMIT. Every path below that
     // aborts the transaction (idempotency replay via unique-violation,
@@ -238,7 +239,19 @@ checkout.openapi(
     // resets it to false in the .catch — a rolled-back reservation never
     // happened and must never trigger a manifest regeneration.
     let stockChanged = false;
-    const out = await withStore(st.id, async (tx): Promise<Result> => {
+    // STOREKIT §5.8 #7 / PAYMENT-TIMING §3.5: the whole checkout transaction runs under the
+    // {checkout} set (no licence subject in the standalone engine; the fork's policies extend
+    // the plan). When points are redeemed, the session customer's loyalty set joins the plan
+    // (N3-1) so its orders are locked (L3) before lockedAvailable takes the loyalty advisory.
+    // The customer is peeked unlocked; a different customer under the lock fails closed below.
+    const peekedCustomerId = body.redeemPoints && token
+      ? await withStore(st.id, async (tx) => (await resolveCustomer(tx, token))?.id ?? null)
+      : null;
+    const subjects: LockSubject[] = [
+      { kind: 'checkout' },
+      ...(peekedCustomerId ? [{ kind: 'loyalty' as const, customerId: peekedCustomerId }] : []),
+    ];
+    const out = await withLockedSet(st.id, subjects, async (tx): Promise<Result> => {
       // Idempotency: same key -> the same order (also guarded by a unique index),
       // bound to the request fingerprint — a reused key with a different payload
       // is a conflict, not a replay of an order the client didn't resubmit.
@@ -483,6 +496,9 @@ checkout.openapi(
         // rejection must roll it back — the .catch below maps it to a 409.
         if (!loyalty.enabled) throw new LoyaltyRedeemError('disabled');
         if (!sessionCustomer?.emailVerified) throw new LoyaltyRedeemError('not_signed_in');
+        // The loyalty set was planned for the peeked customer; a different session
+        // customer under the lock cannot be covered, so the attempt is retried.
+        if (sessionCustomer.id !== peekedCustomerId) throw new LockSetUnstable();
         const available = await lockedAvailable(tx, st.id, sessionCustomer.id);
         const plan = planRedemption({ settings: loyalty, requestedPoints: body.redeemPoints, availablePoints: available,
           discountableCents: discounted.subtotal - discounted.discountTotal });
@@ -678,6 +694,7 @@ checkout.openapi(
           throw e;
         });
       }
+      if (e instanceof LockSetUnstable) return { lockRetry: true };
       if (e instanceof StockReservationError) return { blocked: e.skus };
       if (e instanceof ShippingUnavailableError) return { shippingError: e.reason };
       if (e instanceof LoyaltyRedeemError) return { loyaltyError: e.reason };
@@ -692,6 +709,7 @@ checkout.openapi(
     if ('legalError' in out) return errJson(c, 422, 'LEGAL_ACCEPTANCE_REQUIRED', out.legalError);
     if ('loyaltyError' in out) return errJson(c, 409, 'LOYALTY_REDEEM_FAILED', 'points could not be redeemed', { extra: { reason: out.loyaltyError } });
     if ('blocked' in out) return errJson(c, 409, 'OUT_OF_STOCK', 'unavailable or out of stock', { extra: { skus: out.blocked } });
+    if ('lockRetry' in out) return errJson(c, 409, 'CHECKOUT_RETRY', 'checkout is busy, retry shortly');
     if ('fingerprintConflict' in out) return errJson(c, 409, 'IDEMPOTENCY_PAYLOAD_MISMATCH', 'idempotency-key was already used with a different payload', { extra: { reason: 'payload_mismatch' } });
     if ('cartConflict' in out) return errJson(
       c, 409,

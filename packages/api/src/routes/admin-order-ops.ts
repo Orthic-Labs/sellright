@@ -4,7 +4,7 @@ import ExcelJS from 'exceljs';
 import { hasUnresolvedPayment } from '../payments/hold.js';
 import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
-import { withStore } from '../db/client.js';
+import { withAdvisoryLock, withStore } from '../db/client.js';
 import { withLockedSet, orderIdByCode } from '../db/locks.js';
 import * as s from '../db/schema.js';
 import { cancelOrderStripeIntents } from '../payments/stripe-reconcile.js';
@@ -499,7 +499,8 @@ adminOrderOps.openapi(
       // Fresh per iteration — each code is its own committed transaction.
       let stockChanged = false;
       const preId = await orderIdByCode(st.storeId, code);
-      const r = !preId ? { ok: false as const, error: 'order not found' } : await withLockedSet(st.storeId, { kind: 'order', orderId: preId }, async (tx): Promise<{ ok: true; orderId: string } | { ok: false; error: string }> => {
+      // X-46: L0 pay advisory per order (one at a time, never nested across codes), before its lock set.
+      const r = !preId ? { ok: false as const, error: 'order not found' } : await withAdvisoryLock(`pay:${st.storeId}:${code}`, () => withLockedSet(st.storeId, { kind: 'order', orderId: preId }, async (tx): Promise<{ ok: true; orderId: string } | { ok: false; error: string }> => {
         const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
         if (!o) return { ok: false, error: 'order not found' };
         if (await hasUnresolvedPayment(tx, o.id)) return { ok: false, error: 'Resolve the pending payment before cancelling' };
@@ -524,7 +525,7 @@ adminOrderOps.openapi(
         await releaseOrderLoyalty(tx, st.storeId, o.id, admin.email);
         await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: o.id, action: 'cancel', fromState: o.state, toState: 'Cancelled' });
         return { ok: true, orderId: o.id };
-      });
+      }));
       if (stockChanged) onStockChanged(st.slug);
       // After commit: cancel the order's open Stripe intents (best-effort, audited).
       if (r.ok) await cancelOrderStripeIntents(st.storeId, r.orderId, admin.email);

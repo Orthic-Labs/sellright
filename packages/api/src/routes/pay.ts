@@ -1,6 +1,7 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, eq, sql } from 'drizzle-orm';
 import { withAdvisoryLock, withStore } from '../db/client.js';
+import { LockSetUnstable, orderIdByCode, withLockedSet } from '../db/locks.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
 import { getProvider, isPaymentMethodEnabled } from '../payments/provider.js';
@@ -87,9 +88,12 @@ pay.openapi(
       | { kind: 'ok'; state: string; payment: string };
 
     const baseClaimKey = idemKey ? `pay:${st.id}:${code}:${method}:${idemKey}` : `pay:${st.id}:${code}:${method}`;
-    const out: R = await withAdvisoryLock(`pay:${st.id}:${code}`, async () => {
+    // STOREKIT §5.8 #3 / PAYMENT-TIMING §3.5: the order id is read unlocked for planning
+    // only. Ownership, state and the claim are re-checked under the order set.
+    const out: R | 'retry' = await withAdvisoryLock(`pay:${st.id}:${code}`, async (): Promise<R> => {
       let claimKey = baseClaimKey;
-      const prepared = await withStore(st.id, async (tx) => {
+      const preId = await orderIdByCode(st.id, code);
+      const prepared = !preId ? { kind: 'notfound' as const } : await withLockedSet(st.id, { kind: 'order', orderId: preId }, async (tx) => {
         const order = await ownsOrder(tx, code, receipt, session);
         if (!order) return { kind: 'notfound' as const };
         // Order editing (G13): an edit that raised the total leaves a Paid /
@@ -132,7 +136,7 @@ pay.openapi(
         stripeMode: stripeModeFromConfig(st.config),
       });
 
-      return withStore(st.id, async (tx): Promise<R> => {
+      return withLockedSet(st.id, { kind: 'order', orderId: prepared.order.id }, async (tx): Promise<R> => {
         const [order] = await tx.select().from(s.order).where(eq(s.order.id, prepared.order.id)).limit(1).for('update');
         if (!order) return { kind: 'notfound' };
         // MONEY-4: the order may have been auto-cancelled (stale-allocation TTL
@@ -167,9 +171,10 @@ pay.openapi(
         }
         if (cancelledButSettled) return { kind: 'badstate', state: 'Cancelled' };
         return { kind: 'ok', state: applied.orderState, payment: result.state };
-      });
-    });
+      }, { mustCommit: true }); // X-45: the gateway has already charged; this record must commit.
+    }).catch((e: unknown) => { if (e instanceof LockSetUnstable) return 'retry' as const; throw e; });
 
+    if (out === 'retry') return errJson(c, 409, 'PAYMENT_RETRY', 'payment is busy, retry shortly', { extra: { state: 'Retry' } });
     if (out.kind === 'notfound') return errJson(c, 404, 'ORDER_NOT_FOUND', 'order not found');
     if (out.kind === 'nodue') return errJson(c, 400, 'ORDER_ALREADY_PAID', 'order already fully paid', { extra: { state: out.state } });
     if (out.kind === 'badstate') return errJson(c, 409, 'ORDER_NOT_PAYABLE', 'order is not payable', { extra: { state: out.state } });
@@ -209,7 +214,11 @@ pay.openapi(
     // Serialize with an order-edit commit (same pay:{store}:{code} lock): the
     // amount read and the remote intent mint must not straddle a repricing.
     return withAdvisoryLock(`pay:${st.id}:${code}`, async () => {
-      const prepared = await withStore(st.id, async (tx) => {
+      // STOREKIT §5.8 #4: the order id is read unlocked for planning; ownership and
+      // the amount due are read under the order set, so the intent is minted for a
+      // stable order.
+      const preId = await orderIdByCode(st.id, code);
+      const prepared = !preId ? null : await withLockedSet(st.id, { kind: 'order', orderId: preId }, async (tx) => {
         // D13: only the order's owner (receipt token / signed-in customer) can
         // mint an intent or learn the amount due.
         const o = await ownsOrder(tx, code, receipt, session);
@@ -254,6 +263,9 @@ pay.openapi(
         if (tracked.status !== 'cancelled' && !(balanceTenders !== null && tracked.status === 'settled')) return c.json(intent, 200);
       }
       return errJson(c, 409, 'ORDER_NOT_PAYABLE', 'order is not payable', { extra: { state: order.state } });
+    }).catch((e: unknown) => {
+      if (e instanceof LockSetUnstable) return errJson(c, 409, 'PAYMENT_RETRY', 'payment is busy, retry shortly', { extra: { state: 'Retry' } });
+      throw e;
     });
   },
 );
