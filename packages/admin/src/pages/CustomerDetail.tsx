@@ -7,6 +7,7 @@ import { useAuth } from '../auth';
 import { useToast } from '../components/Toast';
 import { money, date, dateTime } from '../lib/format';
 import { CustomerLoyalty } from '../components/CustomerLoyalty';
+import { CustomerVerification } from '../components/CustomerVerification';
 import { PageHeader, StatusBadge, FormSection, InlineAlert, ErrorState, Loading, Field, Spinner, EmptyState, KpiCard } from '../components/ui';
 
 export default function CustomerDetailPage() {
@@ -25,9 +26,16 @@ export default function CustomerDetailPage() {
     queryKey: ['customer-subs', store?.slug, id],
     queryFn: () => api.get<{ items: { id: string; status: string; priceId: string | null; currentPeriodEnd: string | null; cancelAtPeriodEnd: boolean }[] }>(`/subscriptions?customerId=${id}`),
   });
-  const [edit, setEdit] = useState<{ firstName: string; lastName: string; phone: string; tags: string } | null>(null);
+  const [edit, setEdit] = useState<{ firstName: string; lastName: string; phone: string; tags: string; tagsLoaded: string | null } | null>(null);
   const save = useMutation({
-    mutationFn: () => api.patch(`/customers/${id}`, { firstName: edit!.firstName || null, lastName: edit!.lastName || null, phone: edit!.phone || null, tags: edit!.tags ? edit!.tags.split(',').map((t) => t.trim()).filter(Boolean) : null }),
+    // Tags are only sent when the field was loaded from the API AND edited; an untouched (or never-loaded) field must not
+    // reach the PATCH, otherwise a name-only save would overwrite the stored tags.
+    mutationFn: () => {
+      const e = edit!;
+      const body: Record<string, unknown> = { firstName: e.firstName || null, lastName: e.lastName || null, phone: e.phone || null };
+      if (e.tagsLoaded !== null && e.tags !== e.tagsLoaded) body.tags = e.tags ? e.tags.split(',').map((t) => t.trim()).filter(Boolean) : null;
+      return api.patch(`/customers/${id}`, body);
+    },
     onSuccess: () => { setEdit(null); qc.invalidateQueries({ queryKey: ['customer', store?.slug, id] }); toast.success('Customer saved'); },
     onError: (e) => toast.error('Save failed', (e as Error).message),
   });
@@ -47,7 +55,7 @@ export default function CustomerDetailPage() {
         actions={
           <div className="flex items-center gap-2">
             {c.emailVerified && <StatusBadge value="active" label="Verified" />}
-            <button className="btn-ghost" onClick={() => setEdit({ firstName: c.firstName ?? '', lastName: c.lastName ?? '', phone: c.phone ?? '', tags: (c as any).tags?.join(', ') ?? '' })}><Pencil size={15} /> Edit</button>
+            <button className="btn-ghost" onClick={() => setEdit({ firstName: c.firstName ?? '', lastName: c.lastName ?? '', phone: c.phone ?? '', tags: c.tags?.join(', ') ?? '', tagsLoaded: Array.isArray(c.tags) ? c.tags.join(', ') : null })}><Pencil size={15} /> Edit</button>
           </div>
         }
       />
@@ -106,6 +114,8 @@ export default function CustomerDetailPage() {
           </FormSection>
 
           <CustomerLoyalty customerId={id} />
+
+          <CustomerVerification customerId={id} />
 
           <FormSection title="Subscriptions" description={subs?.items.length ? `${subs.items.length} on file` : 'recurring plans'}>
             {!subs?.items.length ? <EmptyState title="No subscriptions" /> : subs.items.map((sub) => (

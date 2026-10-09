@@ -126,9 +126,13 @@ export function requireStepUp(admin: AdminPrincipal): void {
  * capability (e.g. discounts or refunds) without making them a full manager.
  */
 export function requirePermission(st: AdminStoreAccess, action: string): void {
-  if (ADMIN_ROLES.has(st.role)) return;
-  if (st.permissions?.[action] === true) return;
+  if (hasPermission(st, action)) return;
   throw new HttpError(403, `role '${st.role}' lacks the '${action}' permission`);
+}
+
+/** Non-throwing twin of requirePermission (e.g. so a read endpoint can tell the UI whether to offer an action). */
+export function hasPermission(st: AdminStoreAccess, action: string): boolean {
+  return ADMIN_ROLES.has(st.role) || st.permissions?.[action] === true;
 }
 
 // Order states that count as revenue-bearing (paid lifecycle).

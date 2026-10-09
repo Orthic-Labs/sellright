@@ -120,6 +120,28 @@ export function gatewayModeFromConfig(config: unknown, method: GatewayMethod): G
   return m === 'live' ? 'live' : 'test';
 }
 
+/** The admin Payments settings page stores Sezzle credentials under the
+ *  provider's own spelling (`sandbox` / `production`), while the runtime
+ *  resolver and store.config.payments.sezzle.mode speak `test` / `live`.
+ *  Rows are sealed with their mode string in the encryption purpose, so each
+ *  spelling is read under its own scope: the admin spelling first, then the
+ *  legacy `test`/`live` spelling that staged stores may already hold. */
+export function sezzleSecretModes(mode: GatewayMode | string): string[] {
+  if (mode === 'test' || mode === 'sandbox') return ['sandbox', 'test'];
+  if (mode === 'live' || mode === 'production') return ['production', 'live'];
+  return [mode];
+}
+
+export async function resolveSezzleField(tx: Tx, storeId: string, mode: GatewayMode | string, field: string) {
+  let last = { value: '', source: 'unset' as 'env' | 'db' | 'unset' };
+  for (const m of sezzleSecretModes(mode)) {
+    const r = await resolveField(tx, { storeId, provider: 'sezzle', mode: m, field }, undefined);
+    if (r.value) return r;
+    last = r;
+  }
+  return last;
+}
+
 async function dbGatewayAccount(tx: Tx, storeId: string, method: GatewayMethod, mode: GatewayMode): Promise<GatewayAccount> {
   if (method === 'nmi') {
     const securityKey = await resolveField(tx, { storeId, provider: 'nmi', mode, field: 'securityKey' }, undefined);
@@ -136,8 +158,8 @@ async function dbGatewayAccount(tx: Tx, storeId: string, method: GatewayMethod, 
       privateKey: privateKey.value || undefined,
     };
   }
-  const publicKey = await resolveField(tx, { storeId, provider: 'sezzle', mode, field: 'publicKey' }, undefined);
-  const privateKey = await resolveField(tx, { storeId, provider: 'sezzle', mode, field: 'privateKey' }, undefined);
+  const publicKey = await resolveSezzleField(tx, storeId, mode, 'publicKey');
+  const privateKey = await resolveSezzleField(tx, storeId, mode, 'privateKey');
   if (!publicKey.value || !privateKey.value) throw new Error('Sezzle keys are not configured');
   return { accountId: DB_ACCOUNT_ID, storeId, method: 'sezzle', mode, publicKey: publicKey.value, privateKey: privateKey.value };
 }

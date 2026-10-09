@@ -7,6 +7,7 @@ import { lookupPostalCode } from '~/utils/postal-lookup';
 import { AddressCountrySelect } from './AddressCountrySelect';
 import { AddressTextInput } from './AddressTextInput';
 import { loadGuestShippingAddress, saveGuestShippingAddress } from './address-guest-storage';
+import { guestRestorePatch } from './guest-restore';
 import {
  ValidationErrors,
  isShippingAddressFieldsValid,
@@ -53,28 +54,18 @@ export default component$<IProps>(({ shippingAddress, formApi, isReviewMode, onU
 	const hasUserInteracted = useSignal(false);
 	const postalLookupSeq = useSignal(0);
 
+	// Not run-once: the qwikloader re-dispatches `qinit` to any element that re-acquires the listener after boot, so
+	// this fires again when the payment panel re-renders after PLACE ORDER. guestRestorePatch only ever fills empty
+	// fields (+ the remembered country), so a re-run can't blank what the shopper typed.
 	useOnDocument('qinit', $(async () => {
 		if (appState.customer?.id && appState.customer.id !== CUSTOMER_NOT_DEFINED_ID) return;
 
 		const guestData = await loadGuestShippingAddress();
 		if (guestData) {
-			appState.customer = {
-				...appState.customer,
-				firstName: guestData.firstName || '',
-				lastName: guestData.lastName || '',
-				emailAddress: guestData.emailAddress || ''
-			};
-			appState.shippingAddress = {
-				...appState.shippingAddress,
-				streetLine1: guestData.streetLine1 || '',
-				streetLine2: guestData.streetLine2 || '',
-				city: guestData.city || '',
-				province: guestData.province || '',
-				postalCode: guestData.postalCode || '',
-				countryCode: guestData.countryCode || '',
-				phoneNumber: guestData.phoneNumber || ''
-			};
-			localCountryCode.value = guestData.countryCode || '';
+			const patch = guestRestorePatch(appState.customer, appState.shippingAddress, guestData);
+			if (Object.keys(patch.customer).length) appState.customer = { ...appState.customer, ...patch.customer };
+			if (Object.keys(patch.shipping).length) appState.shippingAddress = { ...appState.shippingAddress, ...patch.shipping };
+			if (patch.shipping.countryCode) localCountryCode.value = patch.shipping.countryCode;
 		} else {
 			const storedCountry = CountryPreferenceService.getCountry();
 			if (storedCountry && storedCountry !== appState.shippingAddress.countryCode) {

@@ -118,6 +118,11 @@ describe('guest email-match provenance across all order access paths', () => {
     expect((await get('/v1/shop/orders/GUEST-MATCH')).status).toBe(200);
     expect((await withStore(STORE, tx => ownedOrder(tx, 'GUEST-MATCH', undefined, token))).code).toBe('GUEST-MATCH');
   });
+  it('receipt-scoped order read exposes the checkout contact email for guests', async () => {
+    const res = await app.request('/v1/shop/orders/GUEST-MATCH?rt=receipt-capability', { headers: { 'x-store-slug': SLUG } });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { contactEmail: string | null }).contactEmail).toBe('victim@example.test');
+  });
   it('receipt and session grants remain tenant-scoped under RLS', async () => {
     const res = await app.request('/v1/shop/orders/GUEST-MATCH?rt=receipt-capability', { headers: { ...headers(), 'x-store-slug': 'other-provenance-test' } });
     expect(res.status).toBe(404);

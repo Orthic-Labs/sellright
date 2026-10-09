@@ -3,7 +3,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, ShoppingBag, Package, Layers, Boxes, Users, Settings, ChevronDown,
   LogOut, Store, Percent, Mail, BarChart3, Activity, Search, HandCoins, FileText,
-  RotateCcw, Gift, Award, Webhook, Warehouse, Receipt, Coins, Shield, Menu, X, CreditCard, Star,
+  RotateCcw, Gift, Award, Webhook, Warehouse, Receipt, Coins, Shield, Menu, X, CreditCard, Star, BellRing, Globe,
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../auth';
@@ -42,12 +42,14 @@ const GROUPS: NavGroup[] = [
   ]},
   { id: 'insights', label: 'Insights', items: [
     { to: '/reports', label: 'Reports', icon: BarChart3 },
+    { to: '/waitlist', label: 'Waitlist', icon: BellRing },
     { to: '/activity', label: 'Activity', icon: Activity },
   ]},
   { id: 'config', label: 'Configuration', items: [
     { to: '/settings', label: 'Settings', icon: Settings },
     { to: '/settings/payments', label: 'Payments', icon: HandCoins },
     { to: '/settings/email', label: 'Email', icon: Mail },
+    { to: '/settings/seo', label: 'SEO', icon: Globe },
     { to: '/staff', label: 'Staff', icon: Shield },
     { to: '/tax-zones', label: 'Taxes', icon: Receipt },
     { to: '/currency-rates', label: 'Currencies', icon: Coins },
@@ -84,6 +86,8 @@ const SECTION_PREFIXES: ReadonlyArray<readonly [string, string]> = [
   ['/activity', 'Activity'],
   ['/settings/payments', 'Payments'],
   ['/settings/email', 'Email'],
+  ['/settings/seo', 'SEO'],
+  ['/waitlist', 'Waitlist'],
   ['/settings', 'Settings'],
   ['/staff', 'Staff'],
   ['/tax-zones', 'Taxes'],

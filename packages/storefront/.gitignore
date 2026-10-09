@@ -69,3 +69,6 @@ lerna-debug.log*
 /src/media/homelast.png
 /public/og-image.jpg
 /public/social-image.jpg
+
+# Storefront e2e throwaway runtime (API cwd)
+e2e/.run/

@@ -74,3 +74,24 @@ describe('GET /v1/admin/customers aggregates', () => {
     expect(d.spent).toBe(buyer.spent);
   });
 });
+
+describe('customer tags round-trip', () => {
+  it('detail returns the stored tags and a tag-less PATCH leaves them untouched', async () => {
+    const h = { ...headers(), 'content-type': 'application/json' };
+    const created = await app.request('/v1/admin/customers', { method: 'POST', headers: h, body: JSON.stringify({ email: 'tagged@customers.test', firstName: 'Tara', tags: ['vip', 'wholesale'] }) });
+    expect(created.status).toBe(200);
+    const { id } = (await created.json()) as { id: string };
+
+    const before = (await (await app.request(`/v1/admin/customers/${id}`, { headers: headers() })).json()) as { tags: string[] };
+    expect(before.tags).toEqual(['vip', 'wholesale']);
+
+    const patched = await app.request(`/v1/admin/customers/${id}`, { method: 'PATCH', headers: h, body: JSON.stringify({ lastName: 'Renamed' }) });
+    expect(patched.status).toBe(200);
+    const after = (await (await app.request(`/v1/admin/customers/${id}`, { headers: headers() })).json()) as { tags: string[]; lastName: string };
+    expect(after.lastName).toBe('Renamed');
+    expect(after.tags).toEqual(['vip', 'wholesale']);
+
+    const lurker = (await (await app.request(`/v1/admin/customers/${LURKER}`, { headers: headers() })).json()) as { tags: string[] };
+    expect(lurker.tags).toEqual([]);
+  });
+});

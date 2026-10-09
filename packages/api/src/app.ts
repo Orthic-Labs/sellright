@@ -43,6 +43,7 @@ import { seo } from './routes/seo.js';
 import { cacheVersion } from './routes/cache-version.js';
 import { adminCache } from './routes/admin-cache.js';
 import { adminSeo } from './routes/admin-seo.js';
+import { adminWaitlist } from './routes/admin-waitlist.js';
 import { customerTokens } from './routes/customer-tokens.js';
 import { paymentWebhooks } from './routes/payment-webhooks.js';
 import { storeKitWebhooks } from './routes/storekit-webhooks.js';
@@ -355,6 +356,7 @@ export function createApp(): OpenAPIHono {
   app.route('/', shopExtra); // shop: guest tracking, public blog, shipping eligibility, newsletter
   app.route('/', subscriberRoutes); // subscriber confirm + unsubscribe (SUBSCRIBER-1)
   app.route('/', adminSeo); // SEO-1: admin SEO config + admin-triggered IndexNow submit
+  app.route('/', adminWaitlist); // G10: waitlist demand report + CSV
 
   // Extension seam (plugins.ts): mounted AFTER every built-in route above, so a
   // plugin path never shadows a built-in one on an exact-path conflict. Empty

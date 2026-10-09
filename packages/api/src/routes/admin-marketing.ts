@@ -47,6 +47,10 @@ function checkPromoValueBound(type: string | undefined, value: number | undefine
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['value'], message: 'percentage promotion value must be between 0 and 100' });
   }
 }
+// PATCH body: every field optional with NO defaults. Zod 4 keeps `.default()` through `.partial()`, so a bare
+// { enabled: false } used to also write value = 0 / freeShipping = false and a bare { value } re-enabled a disabled
+// discount. Re-declare the defaulted fields as plain schemas before `.partial()` so only fields in the request apply.
+const promoPatchBody = promoBodyBase.extend({ value: money, freeShipping: z.boolean(), enabled: z.boolean() }).partial();
 const promoBody = promoBodyBase.superRefine((val, ctx) => checkPromoValueBound(val.type, val.value, ctx));
 
 for (const path of ['/v1/admin/discounts', '/v1/admin/promotions']) {
@@ -136,7 +140,7 @@ for (const path of ['/v1/admin/discounts', '/v1/admin/promotions']) {
     createRoute({
       method: 'patch', path: `${path}/{id}`, summary: 'Update a discount',
       ...(deprecated ? { deprecated: true as const, description: 'Deprecated alias for PATCH /v1/admin/discounts/{id} — will be removed in a future release.' } : {}),
-      request: { params: z.object({ id: z.string() }), body: { content: J(promoBodyBase.partial()) } },
+      request: { params: z.object({ id: z.string() }), body: { content: J(promoPatchBody) } },
       responses: { 200: { description: 'OK', content: J(z.object({ id: z.string() })) }, 404: { description: 'Not found', ...errBody }, 400: { description: 'Invalid value', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
     }),
     async (c) => guard(c, async () => {

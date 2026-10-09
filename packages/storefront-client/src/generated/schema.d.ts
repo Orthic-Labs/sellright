@@ -604,6 +604,94 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/affiliates/{id}/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Affiliate sales for a date range, with per-SKU units, revenue and commission */
+        get: {
+            parameters: {
+                query?: {
+                    from?: string;
+                    to?: string;
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            bySku: {
+                                commission: number;
+                                name: string;
+                                orders: number;
+                                revenue: number;
+                                sku: string;
+                                units: number;
+                            }[];
+                            commissionPct: number;
+                            range: {
+                                from: string | null;
+                                to: string | null;
+                            };
+                            totals: {
+                                commission: number;
+                                orders: number;
+                                revenue: number;
+                                units: number;
+                            };
+                        };
+                    };
+                };
+                /** @description Bad range */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/admin/affiliates/link": {
         parameters: {
             query?: never;
@@ -2185,6 +2273,166 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/customers/{id}/verification": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A customer's SheerID verification state and history */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            active: string[];
+                            attempts: {
+                                category: string | null;
+                                createdAt: string;
+                                expiresAt: string | null;
+                                id: string;
+                                status: string;
+                            }[];
+                            canClear: boolean;
+                            customerId: string;
+                            entries: {
+                                category: string;
+                                discountPercent: number | null;
+                                expiresAt: string | null;
+                                programId: string | null;
+                                /** @enum {string} */
+                                source: "sheerid" | "imported";
+                                verifiedAt: string | null;
+                            }[];
+                            history: {
+                                action: string;
+                                actor: string | null;
+                                at: string;
+                                categories: string[];
+                                reason: string | null;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/customers/{id}/verification/clear": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Clear a customer's SheerID verification (all categories, or one) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        category?: string;
+                        reason: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            active: string[];
+                            cleared: string[];
+                            importedRemoved: number;
+                            rowsRevoked: number;
+                        };
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/admin/dashboard": {
         parameters: {
             query?: never;
@@ -2592,11 +2840,9 @@ export interface paths {
                         affiliateEmail?: string | null;
                         code?: string | null;
                         conditions?: unknown[] | null;
-                        /** @default true */
                         enabled?: boolean;
                         endsAt?: string | null;
                         exclusionGroup?: string | null;
-                        /** @default false */
                         freeShipping?: boolean;
                         perCustomerUsageLimit?: number | null;
                         priority?: number;
@@ -2604,7 +2850,6 @@ export interface paths {
                         /** @enum {string} */
                         type?: "percentage" | "fixed" | "free_shipping";
                         usageLimit?: number | null;
-                        /** @default 0 */
                         value?: number;
                     };
                 };
@@ -7575,11 +7820,9 @@ export interface paths {
                         affiliateEmail?: string | null;
                         code?: string | null;
                         conditions?: unknown[] | null;
-                        /** @default true */
                         enabled?: boolean;
                         endsAt?: string | null;
                         exclusionGroup?: string | null;
-                        /** @default false */
                         freeShipping?: boolean;
                         perCustomerUsageLimit?: number | null;
                         priority?: number;
@@ -7587,7 +7830,6 @@ export interface paths {
                         /** @enum {string} */
                         type?: "percentage" | "fixed" | "free_shipping";
                         usageLimit?: number | null;
-                        /** @default 0 */
                         value?: number;
                     };
                 };
@@ -8538,6 +8780,7 @@ export interface paths {
                         "application/json": {
                             contactEmail: string | null;
                             indexNowConfigured: boolean;
+                            indexNowKey: string | null;
                             organization: {
                                 logo: string | null;
                                 name: string;
@@ -8616,6 +8859,7 @@ export interface paths {
                         "application/json": {
                             contactEmail: string | null;
                             indexNowConfigured: boolean;
+                            indexNowKey: string | null;
                             organization: {
                                 logo: string | null;
                                 name: string;
@@ -8706,6 +8950,154 @@ export interface paths {
                 };
                 /** @description Forbidden */
                 403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/seo/sitemaps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Preview the generated sitemaps (files, URL counts and URLs) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            cloudflareConfigured: boolean;
+                            configured: boolean;
+                            files: {
+                                count: number;
+                                /** @enum {string} */
+                                kind: "main" | "products" | "collections" | "blog";
+                                name: string;
+                                truncated: boolean;
+                                url: string;
+                                urls: {
+                                    lastmod: string | null;
+                                    loc: string;
+                                }[];
+                            }[];
+                            indexNowConfigured: boolean;
+                            indexUrl: string | null;
+                            siteUrl: string | null;
+                            totalUrls: number;
+                        };
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/seo/sitemaps/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Refresh sitemaps: purge the CDN copies and optionally submit every sitemap URL to IndexNow */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @default false */
+                        indexNow?: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            cdn: {
+                                configured: boolean;
+                                purged: boolean;
+                                urls: string[];
+                            };
+                            indexNow: {
+                                attempted: boolean;
+                                error: string | null;
+                                ok: boolean | null;
+                                status: number | null;
+                                submitted: number;
+                            };
+                            totalUrls: number;
+                        };
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description siteUrl not configured, or IndexNow requested without a key */
+                409: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -9251,6 +9643,7 @@ export interface paths {
                         hostnames?: string[];
                         name?: string;
                         shippingTaxable?: boolean;
+                        storefrontUrl?: string | null;
                         taxInclusive?: boolean;
                         taxRate?: number;
                     };
@@ -11497,6 +11890,161 @@ export interface paths {
                 };
             };
         };
+        trace?: never;
+    };
+    "/v1/admin/waitlist/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Waitlist demand: signups per variant or product, pending vs notified */
+        get: {
+            parameters: {
+                query?: {
+                    dir?: "asc" | "desc";
+                    from?: string;
+                    groupBy?: "variant" | "product";
+                    sort?: "pending" | "total" | "notified" | "canceled" | "product" | "variant" | "available" | "lastSignup" | "oldestPending";
+                    to?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {string} */
+                            groupBy: "variant" | "product";
+                            range: {
+                                from: string | null;
+                                to: string | null;
+                            };
+                            rows: {
+                                available: number | null;
+                                canceled: number;
+                                key: string;
+                                lastSignupAt: string | null;
+                                legacyClosed: number;
+                                notified: number;
+                                oldestPendingAt: string | null;
+                                pending: number;
+                                productName: string;
+                                productSlug: string | null;
+                                sku: string | null;
+                                total: number;
+                                unconfirmed: number;
+                                variantName: string | null;
+                                variants: number;
+                            }[];
+                            summary: {
+                                canceled: number;
+                                legacyClosed: number;
+                                notified: number;
+                                pending: number;
+                                products: number;
+                                total: number;
+                                unconfirmed: number;
+                                variants: number;
+                            };
+                            truncated: boolean;
+                        };
+                    };
+                };
+                /** @description Bad range */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/waitlist/report.csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Waitlist demand report as CSV */
+        get: {
+            parameters: {
+                query?: {
+                    dir?: "asc" | "desc";
+                    from?: string;
+                    groupBy?: "variant" | "product";
+                    sort?: "pending" | "total" | "notified" | "canceled" | "product" | "variant" | "available" | "lastSignup" | "oldestPending";
+                    to?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description CSV */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "text/csv": string;
+                    };
+                };
+                /** @description Bad range */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/v1/admin/webhooks": {
@@ -16181,6 +16729,7 @@ export interface paths {
                                 previousGrandTotal: number | null;
                             } | null;
                             code: string;
+                            contactEmail: string | null;
                             currency: string;
                             customerEmail: string | null;
                             discountTotal: number;

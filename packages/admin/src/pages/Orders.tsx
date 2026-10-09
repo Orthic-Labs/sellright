@@ -6,6 +6,7 @@ import { api, type Page, type OrderRow } from '../api';
 import { useAuth } from '../auth';
 import { useToast } from '../components/Toast';
 import { useConfirmDialog } from '../components/ConfirmDialog';
+import { useForcePurgeDialog, isPaidPurgeState } from '../components/ForcePurgeDialog';
 import OrderExportDialog from '../components/OrderExportDialog';
 import AutoDeliverDialog from '../components/AutoDeliverDialog';
 import { money, dateTime } from '../lib/format';
@@ -37,6 +38,7 @@ export default function Orders() {
   const nav = useNavigate();
   const toast = useToast();
   const { confirm, dialog: confirmDialog } = useConfirmDialog();
+  const { ask: askForcePurge, dialog: forcePurgeDialog } = useForcePurgeDialog();
   const qc = useQueryClient();
   const [params, setParams] = useSearchParams();
   const paramsKey = params.toString();
@@ -131,6 +133,14 @@ export default function Orders() {
   const bulkRestore = useMutation({ mutationFn: () => bulkOrderAction('bulk-restore'), onSuccess: onBulkDone('restored'), onError: onBulkErr });
   const bulkPurge = useMutation({
     mutationFn: async () => {
+      // A paid order can only be purged with force + a reason (API rule), so ask for the reason up front instead of
+      // letting the request fail. Unpaid-only selections keep the plain confirm.
+      const paidCodes = (data?.items ?? []).filter((o) => selected.has(o.code) && isPaidPurgeState(o.state)).map((o) => o.code);
+      if (paidCodes.length > 0) {
+        const reason = await askForcePurge(selected.size, paidCodes);
+        if (reason === null) throw new Error('cancelled');
+        return bulkOrderAction('bulk-purge', { force: true, reason });
+      }
       const ok = await confirm({
         title: `Permanently delete ${selected.size} order${selected.size === 1 ? '' : 's'}?`,
         description: 'This cannot be undone.',
@@ -193,6 +203,7 @@ export default function Orders() {
   return (
     <>
       {confirmDialog}
+      {forcePurgeDialog}
       <OrderExportDialog open={exportOpen} onClose={() => setExportOpen(false)} filters={filters} />
       <AutoDeliverDialog open={deliverOpen} onClose={() => setDeliverOpen(false)} />
       <PageHeader title="Orders" subtitle={data ? `${data.total} ${isFiltered ? 'matching' : 'total'}` : undefined} actions={

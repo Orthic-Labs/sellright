@@ -137,6 +137,7 @@ services:
       BOOTSTRAP_STORE_NAME: ${BOOTSTRAP_STORE_NAME:-}
       BOOTSTRAP_STORE_CURRENCY: ${BOOTSTRAP_STORE_CURRENCY:-USD}
       BOOTSTRAP_STORE_HOSTNAMES: ${BOOTSTRAP_STORE_HOSTNAMES:-}
+      BOOTSTRAP_STORE_URL: ${BOOTSTRAP_STORE_URL:-}
       FUNCTIONAL_CHECK_STORE_SLUG: ${FUNCTIONAL_CHECK_STORE_SLUG:-}
       # Test/CI-only escape hatch (see packages/api/src/env.ts) to deterministically
       # fail `sellright functional-check` without a real broken migration —

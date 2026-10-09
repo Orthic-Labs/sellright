@@ -46,6 +46,14 @@ export const activeStepFromState = (state?: string): number => {
  }
 };
 
+/** The address the "confirmation is on its way" line names: the order's contact email (`contactEmail`, where the API
+ *  sends order mail; guests have no customer record), then the linked account email, then the address this browser
+ *  session just entered at checkout. */
+export const resolveConfirmationEmail = (
+  order: { customerEmail?: string | null; contactEmail?: string | null },
+  sessionEmail?: string | null,
+): string | null => order.contactEmail || order.customerEmail || sessionEmail || null;
+
 /** True once the order has actually settled — gates the "clear the cart"
  *  side effect on the confirmation page. Never treat PendingPayment (still
  *  polling) or a terminal Cancelled/Declined order as settled. */
@@ -59,3 +67,44 @@ export const isOrderTerminalUnpaid = (state?: string): boolean => state === 'Can
  *  the API's own static asset mount (`/assets/<path>`). Local to this route
  *  so confirmation has no dependency on the legacy `sr()` REST helper. */
 export const assetUrl = (path: string): string => (/^(https?:\/\/|\/)/.test(path) ? path : `/assets/${path}`);
+
+/** Resolves after `ms`, or immediately once `signal` aborts (never leaves a
+ *  timer running behind an unmounted page). */
+export const sleepAbortable = (ms: number, signal: AbortSignal): Promise<void> =>
+  new Promise<void>((resolve) => {
+    if (signal.aborted) return resolve();
+    const done = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal.addEventListener('abort', done, { once: true });
+  });
+
+/**
+ * Read an order, re-reading while it is still PendingPayment (the gateway /
+ * webhook that flips it to Paid may land a moment after the shopper does).
+ * This NEVER upgrades the displayed state itself — it only re-reads.
+ *
+ * Abortable: when `signal` aborts (the page unmounted / navigated away) the
+ * loop stops at once — no further requests, no sleeping timer — and the
+ * result is `null`, which callers must treat as "page is gone, touch
+ * nothing". `read` receives the signal so an in-flight request is cancelled
+ * too.
+ */
+export async function readOrderUntilSettled<T extends { state: string }>(
+  read: (signal: AbortSignal) => Promise<T>,
+  signal: AbortSignal,
+  opts: { attempts?: number; delayMs?: number; sleep?: (ms: number, signal: AbortSignal) => Promise<void> } = {},
+): Promise<T | null> {
+  const { attempts = 8, delayMs = 1500, sleep = sleepAbortable } = opts;
+  if (signal.aborted) return null;
+  let order = await read(signal);
+  for (let i = 0; i < attempts && order.state === 'PendingPayment'; i++) {
+    await sleep(delayMs, signal);
+    if (signal.aborted) return null;
+    order = await read(signal);
+  }
+  return signal.aborted ? null : order;
+}

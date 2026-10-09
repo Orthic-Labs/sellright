@@ -299,7 +299,7 @@ adminReports.openapi(
         .where(eq(s.order.customerId, id));
       const orders = await tx.select({ code: s.order.code, state: s.order.state, grandTotal: s.order.grandTotal, currency: s.order.currency, placedAt: s.order.placedAt, createdAt: s.order.createdAt }).from(s.order).where(eq(s.order.customerId, id)).orderBy(desc(s.order.createdAt)).limit(50);
       return {
-        id: cu.id, email: cu.email, firstName: cu.firstName, lastName: cu.lastName, phone: cu.phone, emailVerified: cu.emailVerified, createdAt: cu.createdAt.toISOString(),
+        id: cu.id, email: cu.email, firstName: cu.firstName, lastName: cu.lastName, phone: cu.phone, tags: cu.tags ?? [], emailVerified: cu.emailVerified, createdAt: cu.createdAt.toISOString(),
         orderCount: stats?.orderCount ?? 0, spent: stats?.spent ?? 0,
         addresses: addresses.map((a) => ({ fullName: a.fullName, line1: a.line1, line2: a.line2, city: a.city, province: a.province, postalCode: a.postalCode, country: a.country, phone: a.phone })),
         orders: orders.map((o) => ({ ...o, placedAt: o.placedAt ? o.placedAt.toISOString() : null, createdAt: o.createdAt.toISOString() })),

@@ -5,6 +5,7 @@ import { NMI } from '~/components/payment/NMI';
 import { Sezzle } from '~/components/payment/Sezzle';
 import type { ShopConfig } from '~/sellright/types/checkout';
 import type { CheckoutPhase, PaymentMethod } from '~/hooks/useCheckout';
+import { totalChange, formatCents } from '~/hooks/checkout-total';
 import { CheckoutDesktopCta } from './CheckoutCta';
 
 interface CheckoutPaymentPanelProps {
@@ -12,7 +13,7 @@ interface CheckoutPaymentPanelProps {
 	checkoutValidation: any;
 	formattedTotal: Signal<string | null>;
 	gatewayConfirmTrigger: Signal<number>;
-	gatewayIdempotencyKey: Signal<string>;
+	totalConfirmed: Signal<boolean>;
 	isOrderProcessing: Signal<boolean>;
 	onGatewaySuccess$: QRL<() => void>;
 	onPaymentError$: QRL<(message: string) => void>;
@@ -21,7 +22,7 @@ interface CheckoutPaymentPanelProps {
 	pageLoading: Signal<boolean>;
 	paymentMethod: Signal<PaymentMethod>;
 	shopConfig: Signal<ShopConfig | null>;
-	srState: { phase: CheckoutPhase; code: string; receiptToken: string; clientSecret: string };
+	srState: { phase: CheckoutPhase; code: string; receiptToken: string; clientSecret: string; grandTotal: number; shownTotal: number };
 	state: { loading: boolean; error: string | null };
 	stripeConfirmTrigger: Signal<number>;
 	stripePublishableKey: Signal<string>;
@@ -47,6 +48,12 @@ const METHOD_LABEL: Record<PaymentMethod, string> = {
 export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props) => {
 	const methods = availableMethods(props.shopConfig.value);
 	const locked = props.srState.phase === 'paying' || props.srState.phase === 'placing';
+	// Once the order exists the amount charged is ITS server-priced grandTotal — never the estimate the shopper
+	// saw while filling the form. When the two differ, charging waits for the shopper's explicit confirmation.
+	const paying = props.srState.phase === 'paying';
+	const change = totalChange(props.srState.shownTotal, props.srState.grandTotal);
+	const chargeLabel = paying && props.srState.grandTotal > 0 ? formatCents(props.srState.grandTotal) : null;
+	const needsConsent = paying && change.changed && !props.totalConfirmed.value;
 	return (
 	<div class="checkout-right order-1 lg:order-2 mb-8 lg:mb-0 lg:basis-[58%]">
 		<div class="checkout-right-inner" style="padding:8px 20px 32px;">
@@ -126,6 +133,27 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 					<div class="overflow-hidden">
 						<div id="payment-method-section" style="scroll-margin-top:16px;">
 							<>
+										{paying && change.changed && (
+											<div
+												role="alert"
+												data-testid="total-changed"
+												style="margin-bottom:14px;padding:12px 16px;border-radius:6px;border:1px solid rgba(var(--color-accent-rgb),0.35);background:rgba(var(--color-accent-rgb),0.06);font-size:13px;color:#141210;font-family:var(--font-body);"
+											>
+												<p style="margin:0 0 8px;font-weight:500;">Your order total changed.</p>
+												<p style="margin:0 0 10px;">
+													You were shown {formatCents(change.shownCents)}; the order total is now {formatCents(change.chargeCents)}.
+												</p>
+												<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;">
+													<input
+														type="checkbox"
+														checked={props.totalConfirmed.value}
+														onChange$={(_, el) => { props.totalConfirmed.value = el.checked; }}
+														style="flex:none;width:16px;height:16px;margin-top:1px;border:1px solid rgba(100,85,65,0.55);border-radius:2px;background-color:#fff;cursor:pointer;"
+													/>
+													<span>I confirm I will be charged {formatCents(change.chargeCents)}</span>
+												</label>
+											</div>
+										)}
 										{methods.length > 1 && (
 											<div role="radiogroup" aria-label="Payment method" class="flex gap-2" style="margin-bottom:14px;">
 												{methods.map((m) => (
@@ -160,14 +188,18 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 												/>
 												<button
 													type="button"
-													onClick$={$(() => { if (!props.state.loading) props.stripeConfirmTrigger.value = props.stripeConfirmTrigger.value + 1; })}
-													disabled={props.state.loading}
+													onClick$={$(() => {
+														if (props.state.loading) return;
+														if (totalChange(props.srState.shownTotal, props.srState.grandTotal).changed && !props.totalConfirmed.value) return;
+														props.stripeConfirmTrigger.value = props.stripeConfirmTrigger.value + 1;
+													})}
+													disabled={props.state.loading || needsConsent}
 													class="checkout-cta"
 													style="margin-top:14px;"
 												>
 													{props.state.loading
 														? 'Processing...'
-														: (props.formattedTotal.value ? `PAY — ${props.formattedTotal.value}` : 'PAY')}
+														: (chargeLabel ? `PAY — ${chargeLabel}` : 'PAY')}
 												</button>
 											</>
 										) : props.srState.phase === 'paying' && props.paymentMethod.value === 'nmi' && props.shopConfig.value?.gateways?.nmi ? (
@@ -177,7 +209,6 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 													tokenizationKey={props.shopConfig.value.gateways.nmi.tokenizationKey}
 													mode={props.shopConfig.value.gateways.nmi.mode}
 													environment={props.shopConfig.value.gateways.nmi.environment}
-													idempotencyKey={props.gatewayIdempotencyKey.value}
 													receiptToken={props.srState.receiptToken || undefined}
 													confirmTrigger={props.gatewayConfirmTrigger}
 													onError$={props.onPaymentError$}
@@ -186,23 +217,26 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 												/>
 												<button
 													type="button"
-													onClick$={$(() => { if (!props.state.loading) props.gatewayConfirmTrigger.value = props.gatewayConfirmTrigger.value + 1; })}
-													disabled={props.state.loading}
+													onClick$={$(() => {
+														if (props.state.loading) return;
+														if (totalChange(props.srState.shownTotal, props.srState.grandTotal).changed && !props.totalConfirmed.value) return;
+														props.gatewayConfirmTrigger.value = props.gatewayConfirmTrigger.value + 1;
+													})}
+													disabled={props.state.loading || needsConsent}
 													class="checkout-cta"
 													style="margin-top:14px;"
 												>
 													{props.state.loading
 														? 'Processing...'
-														: (props.formattedTotal.value ? `PAY — ${props.formattedTotal.value}` : 'PAY')}
+														: (chargeLabel ? `PAY — ${chargeLabel}` : 'PAY')}
 												</button>
 											</>
 										) : props.srState.phase === 'paying' && props.paymentMethod.value === 'sezzle' ? (
 											<Sezzle
 												code={props.srState.code}
-												idempotencyKey={props.gatewayIdempotencyKey.value}
 												receiptToken={props.srState.receiptToken || undefined}
-												label={props.formattedTotal.value ? `Continue — ${props.formattedTotal.value}` : 'Continue'}
-												disabled={props.state.loading}
+												label={chargeLabel ? `Continue — ${chargeLabel}` : 'Continue'}
+												disabled={props.state.loading || needsConsent}
 												onError$={props.onPaymentError$}
 												onProcessingChange$={props.onPaymentProcessingChange$}
 											/>

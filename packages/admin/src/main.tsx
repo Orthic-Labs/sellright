@@ -20,6 +20,7 @@ import Layout from './components/Layout';
 import { AppErrorBoundary } from './components/ErrorBoundary';
 import Login from './pages/Login';
 import Setup from './pages/Setup';
+import AcceptInvite from './pages/AcceptInvite';
 import Onboarding from './pages/Onboarding';
 import Dashboard from './pages/Dashboard';
 import Orders from './pages/Orders';
@@ -43,6 +44,8 @@ import Discounts from './pages/Discounts';
 import Marketing from './pages/Marketing';
 import Blog from './pages/Blog';
 import Reports from './pages/Reports';
+import Waitlist from './pages/Waitlist';
+import Seo from './pages/Seo';
 import Activity from './pages/Activity';
 import SettingsPage from './pages/Settings';
 import PaymentsSettings from './pages/PaymentsSettings';
@@ -111,6 +114,7 @@ function App() {
     <Routes>
       <Route path="/login" element={<Login />} />
       <Route path="/setup" element={<Setup />} />
+      <Route path="/accept-invite" element={<AcceptInvite />} />
       <Route element={<Protected />}>
         <Route path="/onboarding" element={<Onboarding />} />
         <Route path="/" element={<Dashboard />} />
@@ -135,6 +139,7 @@ function App() {
         <Route path="/marketing" element={<Marketing />} />
         <Route path="/blog" element={<Blog />} />
         <Route path="/reports" element={<Reports />} />
+        <Route path="/waitlist" element={<Waitlist />} />
         <Route path="/activity" element={<Activity />} />
         <Route path="/returns" element={<Returns />} />
         <Route path="/gift-cards" element={<GiftCards />} />
@@ -148,6 +153,7 @@ function App() {
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/settings/payments" element={<PaymentsSettings />} />
         <Route path="/settings/email" element={<EmailSettings />} />
+        <Route path="/settings/seo" element={<Seo />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

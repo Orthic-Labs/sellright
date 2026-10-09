@@ -7,6 +7,7 @@ import { useAuth } from '../auth';
 import { money, dateTime } from '../lib/format';
 import { Loading, ErrorNote, Badge, Spinner } from '../components/ui';
 import { useConfirmDialog } from '../components/ConfirmDialog';
+import { AffiliateSkuStats } from '../components/AffiliateSkuStats';
 
 interface Detail {
   id: string; email: string; code: string; accessToken: string; commissionPct: number;
@@ -51,6 +52,8 @@ export default function AffiliateDetailPage() {
           <button className="btn-ghost" aria-label="Copy dashboard link" onClick={() => navigator.clipboard?.writeText(dashUrl)}><Copy size={15} /></button>
         </div>
       </div>
+
+      <div className="mb-5"><AffiliateSkuStats affiliateId={id} /></div>
 
       <div className="grid lg:grid-cols-3 gap-5">
         <div className="lg:col-span-2 card overflow-hidden">

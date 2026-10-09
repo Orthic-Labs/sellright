@@ -21,3 +21,9 @@ export function currentAdminPath(): string {
   const p = location.pathname;
   return base && (p === base || p.startsWith(`${base}/`)) ? p.slice(base.length) || '/' : p;
 }
+
+/** Screens that render without a session: the 401 from the initial /me probe must not bounce the visitor to /login. */
+export function isPublicAdminPath(): boolean {
+  const p = currentAdminPath();
+  return p === '/login' || p === '/accept-invite';
+}

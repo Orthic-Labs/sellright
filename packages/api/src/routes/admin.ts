@@ -16,6 +16,7 @@ import { setAuthCookies, clearAuthCookies, newCsrf, cookie, csrfValid, SESSION_C
 import { verifyTotp } from '../auth/totp.js';
 import { normalizeEmail } from '../auth/email.js';
 import { enqueueShippingNotification } from '../email/dispatch.js';
+import { resolveOrderRecipient } from '../orders/recipient.js';
 import { emitEvent } from '../webhooks/emit.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
 import { amountDueForOrder } from '../payments/settle.js';
@@ -326,19 +327,19 @@ admin.openapi(
       // the notification can no longer be lost to an SMTP blip after the state
       // committed (the old inline send failed silently).
       // Webhook fires for ALL orders (3rd-party fulfillment/analytics subscribers);
-      // the customer email is gated on customerId (nullable FK → eq() needs guard).
+      // the customer email goes to the resolved recipient (contact email, else account).
       if (state === 'Shipped' && advancingToShipped) {
         await emitEvent(tx, st.storeId, 'order.shipped', { code, trackingCode: trackingCode ?? null, carrier: carrier ?? null });
-        if (o.customerId) {
-          const [cust] = await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, o.customerId)).limit(1);
-          if (cust?.email) {
-            const [storeRow] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1);
-            // SR-05: per-store sender + storefront URL from store.config.
-            await enqueueShippingNotification(tx, st.storeId,
-              { name: st.name, currency: st.currency, config: storeRow?.config ?? null },
-              cust.email,
-              { code, trackingCode: trackingCode ?? null, carrier: carrier ?? null, dedupeKey: `shipping_notification:${o.id}:Shipped` });
-          }
+        // Guests have no customerId: resolveOrderRecipient falls back to the
+        // checkout contact email, exactly like the refund email.
+        const recipient = await resolveOrderRecipient(tx, o);
+        if (recipient) {
+          const [storeRow] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1);
+          // SR-05: per-store sender + storefront URL from store.config.
+          await enqueueShippingNotification(tx, st.storeId,
+            { name: st.name, currency: st.currency, config: storeRow?.config ?? null },
+            recipient,
+            { code, trackingCode: trackingCode ?? null, carrier: carrier ?? null, dedupeKey: `shipping_notification:${o.id}:Shipped` });
         }
       }
       return { kind: 'ok' as const, fid, state };
@@ -446,15 +447,13 @@ admin.openapi(
       // shipment on the same order must send its own email, not be treated as
       // a duplicate of the first.
       await emitEvent(tx, st.storeId, 'order.shipped', { code, trackingCode: body.trackingCode ?? null, carrier: body.carrier ?? null, partial: true });
-      if (body.notifyCustomer && o.customerId) {
-        const [cust] = await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, o.customerId)).limit(1);
-        if (cust?.email) {
-          const [storeRow] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1);
-          await enqueueShippingNotification(tx, st.storeId,
-            { name: st.name, currency: st.currency, config: storeRow?.config ?? null },
-            cust.email,
-            { code, trackingCode: body.trackingCode ?? null, carrier: body.carrier ?? null, dedupeKey: `shipping_notification:${fulfillmentId}:Shipped` });
-        }
+      const recipient = body.notifyCustomer ? await resolveOrderRecipient(tx, o) : null;
+      if (recipient) {
+        const [storeRow] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1);
+        await enqueueShippingNotification(tx, st.storeId,
+          { name: st.name, currency: st.currency, config: storeRow?.config ?? null },
+          recipient,
+          { code, trackingCode: body.trackingCode ?? null, carrier: body.carrier ?? null, dedupeKey: `shipping_notification:${fulfillmentId}:Shipped` });
       }
       return { kind: 'ok', fulfillmentId };
     });
@@ -548,15 +547,13 @@ admin.openapi(
         // Shipped transition (durable retry, no post-commit silent drop).
         if (o.state === 'Shipped' && advancingToShipped) {
           await emitEvent(tx, st.storeId, 'order.shipped', { code: o.code, trackingCode: o.trackingCode ?? null, carrier: o.carrier ?? null });
-          if (order.customerId) {
-            const [cust] = await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, order.customerId)).limit(1);
-            if (cust?.email) {
-              const [storeRow] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1);
-              await enqueueShippingNotification(tx, st.storeId,
-                { name: st.name, currency: st.currency, config: storeRow?.config ?? null },
-                cust.email,
-                { code: o.code, trackingCode: o.trackingCode ?? null, carrier: o.carrier ?? null, dedupeKey: `shipping_notification:${order.id}:Shipped` });
-            }
+          const recipient = await resolveOrderRecipient(tx, order);
+          if (recipient) {
+            const [storeRow] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1);
+            await enqueueShippingNotification(tx, st.storeId,
+              { name: st.name, currency: st.currency, config: storeRow?.config ?? null },
+              recipient,
+              { code: o.code, trackingCode: o.trackingCode ?? null, carrier: o.carrier ?? null, dedupeKey: `shipping_notification:${order.id}:Shipped` });
           }
         }
         return { kind: 'ok', state: o.state };

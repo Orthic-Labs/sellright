@@ -4,6 +4,7 @@ import {
   effectiveVariantPrice,
   normalizeManifestListItem,
   normalizeManifestProductDetail,
+  manifestProductMeta,
   mergeProductStock,
   withUncheckedStock,
   UNCHECKED_STOCK,
@@ -149,5 +150,20 @@ describe('withUncheckedStock / UNCHECKED_STOCK', () => {
     const checked = mergeProductStock(product, { variants: [{ sku: 'A', inStock: true, availableQuantity: 3 }] });
     const reset = withUncheckedStock(checked);
     expect(reset.variants[0]).toMatchObject(UNCHECKED_STOCK);
+  });
+});
+
+describe('manifestProductMeta', () => {
+  it('carries the product id and an approved-review aggregate', () => {
+    expect(manifestProductMeta({ productId: 'p-1', rating: { average: 4.5, count: 3 } })).toEqual({
+      productId: 'p-1',
+      rating: { average: 4.5, count: 3 },
+    });
+  });
+  it('never invents a rating: absent, zero-count and zero-average all read as null', () => {
+    expect(manifestProductMeta({})).toEqual({ productId: null, rating: null });
+    expect(manifestProductMeta({ rating: null })).toEqual({ productId: null, rating: null });
+    expect(manifestProductMeta({ rating: { average: 5, count: 0 } }).rating).toBeNull();
+    expect(manifestProductMeta({ rating: { average: 0, count: 2 } }).rating).toBeNull();
   });
 });

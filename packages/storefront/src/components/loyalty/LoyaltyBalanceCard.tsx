@@ -36,6 +36,7 @@ export const LoyaltyBalanceCard = component$(() => {
 					{d.program.expiryDays ? ` Points expire ${d.program.expiryDays} days after they are earned.` : ''}
 				</p>
 			)}
+			<a href="/account/rewards" class="inline-block mt-3 text-sm text-[var(--color-accent)] underline" data-testid="loyalty-rewards-link">View rewards</a>
 			{d.activity.length > 0 && (
 				<ul class="mt-4 divide-y divide-gray-100 text-sm">
 					{d.activity.slice(0, 5).map((row, i) => (

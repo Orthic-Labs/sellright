@@ -18,6 +18,9 @@ import { broadcastStoreCacheInvalidation } from '../store-context.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireWrite, requireManage, guard } from './admin-helpers.js';
 import { DEFAULT_ROBOTS_DISALLOW, DEFAULT_STATIC_PATHS, isProductUrlPattern, seoConfigFromStore, type SeoConfigPatch } from '../seo/config.js';
 import { submitIndexNowUrls } from '../seo/indexnow.js';
+import { listBlogSitemapEntries, listCollectionSitemapEntries, listProductSitemapEntries } from '../seo/queries.js';
+import { allSitemapUrls, buildSitemapPreview, sitemapPurgeUrls, type SitemapInputs } from '../seo/sitemap-preview.js';
+import { purgeCloudflareUrls, resolveCloudflareConfig } from '../cache/cloudflare-purge.js';
 
 export const adminSeo = new OpenAPIHono();
 
@@ -50,6 +53,9 @@ const seoConfigOut = z.object({
   staticPaths: z.array(z.string()),
   productUrlPattern: z.string(),
   indexNowConfigured: z.boolean(),
+  // The IndexNow key is a public verification token (served at /<key>.txt), so
+  // returning it is not a secret leak; the admin SEO page masks it by default.
+  indexNowKey: z.string().nullable(),
   robots: z.object({ header: z.array(z.string()).optional(), directives: z.array(z.string()).optional(), extra: z.string().nullable().optional(), sitemaps: z.array(z.string()).optional(), footer: z.string().nullable().optional() }),
 });
 
@@ -137,5 +143,102 @@ adminSeo.openapi(
     if (!config.indexNowKey) throw new HttpError(409, 'IndexNow is not configured for this store — set indexNowKey via PATCH /v1/admin/seo/config first');
     const result = await submitIndexNowUrls(config, urls);
     return c.json(result, 200);
+  }),
+);
+
+// ── G11: sitemap preview + refresh ───────────────────────────────────────────
+// Sitemaps are generated live from the database on every request (routes/seo.ts),
+// so there is nothing to "rebuild". Refresh therefore means: drop the copies the
+// CDN may still hold (Cloudflare purge, when configured) and optionally tell
+// search engines (IndexNow, when a key is configured).
+
+async function loadSitemapInputs(storeId: string, config: ReturnType<typeof seoConfigFromStore>): Promise<SitemapInputs> {
+  return withStore(storeId, async (tx) => ({
+    staticPaths: config.staticPaths,
+    productUrlPattern: config.productUrlPattern,
+    products: await listProductSitemapEntries(tx, storeId),
+    collections: await listCollectionSitemapEntries(tx, storeId),
+    blog: await listBlogSitemapEntries(tx, storeId),
+  }));
+}
+
+const previewFile = z.object({
+  name: z.string(), url: z.string(), kind: z.enum(['main', 'products', 'collections', 'blog']), count: z.number().int(),
+  urls: z.array(z.object({ loc: z.string(), lastmod: z.string().nullable() })), truncated: z.boolean(),
+});
+const sitemapsOut = z.object({
+  configured: z.boolean(),
+  siteUrl: z.string().nullable(),
+  indexUrl: z.string().nullable(),
+  totalUrls: z.number().int(),
+  files: z.array(previewFile),
+  indexNowConfigured: z.boolean(),
+  cloudflareConfigured: z.boolean(),
+});
+
+adminSeo.openapi(
+  createRoute({
+    method: 'get', path: '/v1/admin/seo/sitemaps', summary: 'Preview the generated sitemaps (files, URL counts and URLs)',
+    responses: { 200: { description: 'OK', content: J(sitemapsOut) }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    const [row] = await withStore(st.storeId, (tx) => tx.select({ name: s.store.name, config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1));
+    const config = seoConfigFromStore(row!);
+    const flags = { indexNowConfigured: config.indexNowKey != null, cloudflareConfigured: resolveCloudflareConfig(st.slug) != null };
+    if (!config.siteUrl) return c.json({ configured: false, siteUrl: null, indexUrl: null, totalUrls: 0, files: [], ...flags }, 200);
+    const preview = buildSitemapPreview(config.siteUrl, await loadSitemapInputs(st.storeId, config));
+    return c.json({ configured: true, siteUrl: preview.siteUrl, indexUrl: preview.indexUrl, totalUrls: preview.totalUrls, files: preview.files, ...flags }, 200);
+  }),
+);
+
+const refreshOut = z.object({
+  totalUrls: z.number().int(),
+  cdn: z.object({ configured: z.boolean(), purged: z.boolean(), urls: z.array(z.string()) }),
+  indexNow: z.object({ attempted: z.boolean(), submitted: z.number().int(), ok: z.boolean().nullable(), status: z.number().int().nullable(), error: z.string().nullable() }),
+});
+
+adminSeo.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/seo/sitemaps/refresh', summary: 'Refresh sitemaps: purge the CDN copies and optionally submit every sitemap URL to IndexNow',
+    request: { body: { content: J(z.object({ indexNow: z.boolean().default(false) })) } },
+    responses: {
+      200: { description: 'OK', content: J(refreshOut) },
+      409: { description: 'siteUrl not configured, or IndexNow requested without a key', ...errBody },
+      401: { description: 'Unauthorized', ...errBody }, 403: { description: 'Forbidden', ...errBody },
+    },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    requireWrite(st);
+    const { indexNow } = c.req.valid('json');
+    const [row] = await withStore(st.storeId, (tx) => tx.select({ name: s.store.name, config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1));
+    const config = seoConfigFromStore(row!);
+    if (!config.siteUrl) throw new HttpError(409, 'siteUrl is not configured for this store — set it via PATCH /v1/admin/seo/config first');
+    if (indexNow && !config.indexNowKey) throw new HttpError(409, 'IndexNow is not configured for this store — set indexNowKey via PATCH /v1/admin/seo/config first');
+
+    const inputs = await loadSitemapInputs(st.storeId, config);
+    const preview = buildSitemapPreview(config.siteUrl, inputs, 0);
+
+    // purgeCloudflareUrls never throws; false covers both "no Cloudflare config" and "rejected".
+    const cdnConfigured = resolveCloudflareConfig(st.slug) != null;
+    const purgeUrls = sitemapPurgeUrls(preview);
+    const purged = cdnConfigured ? await purgeCloudflareUrls(st.slug, purgeUrls) : false;
+
+    let indexNowOut = { attempted: false, submitted: 0, ok: null as boolean | null, status: null as number | null, error: null as string | null };
+    if (indexNow) {
+      // IndexNow caps one submission at 10,000 URLs.
+      const urls = allSitemapUrls(inputs, config.siteUrl).slice(0, 10_000);
+      const r = await submitIndexNowUrls(config, urls);
+      indexNowOut = { attempted: true, submitted: r.ok ? urls.length : 0, ok: r.ok, status: r.status ?? null, error: r.error ?? null };
+    }
+
+    await withStore(st.storeId, (tx) => tx.insert(s.auditLog).values({
+      storeId: st.storeId, actor: admin.email, entity: 'store', entityId: st.storeId, action: 'sitemaps_refreshed',
+      data: { totalUrls: preview.totalUrls, cdnConfigured, cdnPurged: purged, indexNow: indexNowOut },
+    }));
+    return c.json({ totalUrls: preview.totalUrls, cdn: { configured: cdnConfigured, purged, urls: purgeUrls }, indexNow: indexNowOut }, 200);
   }),
 );

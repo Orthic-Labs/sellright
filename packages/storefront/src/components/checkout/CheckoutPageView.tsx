@@ -12,7 +12,7 @@ interface CheckoutPageViewProps {
   checkoutValidation: any;
   formattedTotal: Signal<string | null>;
   gatewayConfirmTrigger: Signal<number>;
-  gatewayIdempotencyKey: Signal<string>;
+  totalConfirmed: Signal<boolean>;
   hasMixedPreOrder: { value: boolean };
   shopConfig: Signal<ShopConfig | null>;
   isCartEmpty: Signal<boolean>;
@@ -28,7 +28,7 @@ interface CheckoutPageViewProps {
   redeemPoints: Signal<number>;
   shippingCents: Signal<number | null>;
   showProcessingModal: Signal<boolean>;
-  srState: { phase: CheckoutPhase; code: string; receiptToken: string; clientSecret: string };
+  srState: { phase: CheckoutPhase; code: string; receiptToken: string; clientSecret: string; grandTotal: number; shownTotal: number };
   state: { loading: boolean; error: string | null };
   stripeConfirmTrigger: Signal<number>;
   stripePublishableKey: Signal<string>;

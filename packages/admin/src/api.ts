@@ -1,5 +1,5 @@
 import { maybeMock } from './qa-mocks.js';
-import { adminHref, currentAdminPath } from './lib/base-path';
+import { adminHref, isPublicAdminPath } from './lib/base-path';
 
 // The session token lives in an httpOnly cookie (set by the API on login) — JS
 // can't read it, so XSS can't steal it. We send `credentials: 'include'` so the
@@ -53,7 +53,7 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
   if (auth.store) headers['x-store-slug'] = auth.store;
   if (method !== 'GET') { const csrf = readCookie('sr_csrf'); if (csrf) headers['x-csrf-token'] = csrf; }
   const res = await fetch(`/v1/admin${path}`, { method, headers, credentials: 'include', body: body === undefined ? undefined : JSON.stringify(body) });
-  if (res.status === 401 && !path.startsWith('/login') && currentAdminPath() !== '/login') location.assign(adminHref('/login'));
+  if (res.status === 401 && !path.startsWith('/login') && !isPublicAdminPath()) location.assign(adminHref('/login'));
   const text = await res.text();
   const json = text ? JSON.parse(text) : {};
   if (!res.ok) throw apiError(res.status, json, `HTTP ${res.status}`);
@@ -140,6 +140,8 @@ export interface ProductDetail { id: string; slug: string; name: string; descrip
 export interface CustomerRow { id: string; email: string; firstName: string | null; lastName: string | null; createdAt: string; orders: number; spent: number; }
 export interface CustomerDetail {
   id: string; email: string; firstName: string | null; lastName: string | null; phone: string | null; emailVerified: boolean; createdAt: string;
+  /** Absent on older API builds; the edit form never sends tags it did not load. */
+  tags?: string[] | null;
   orderCount: number; spent: number;
   addresses: { fullName: string | null; line1: string; line2: string | null; city: string; province: string | null; postalCode: string | null; country: string; phone: string | null }[];
   orders: OrderRow[];
@@ -162,4 +164,18 @@ export interface RecoveryKit { kitId: string | null; generatedAt: string; master
 export function assetUrl(path: string | null): string | null {
   if (!path) return null;
   return path.startsWith('http') ? path : `/assets/${path.replace(/^\/+/, '')}`;
+}
+
+/** GET a non-JSON body (e.g. the invoice's ?format=html) with the session cookie + active-store header. */
+export async function apiText(path: string): Promise<string> {
+  const headers: Record<string, string> = {};
+  if (auth.store) headers['x-store-slug'] = auth.store;
+  const res = await fetch(`/v1/admin${path}`, { headers, credentials: 'include' });
+  const text = await res.text();
+  if (!res.ok) {
+    let json: Record<string, unknown> | null = null;
+    try { json = text ? JSON.parse(text) : null; } catch { /* not JSON */ }
+    throw apiError(res.status, json, `HTTP ${res.status}`);
+  }
+  return text;
 }

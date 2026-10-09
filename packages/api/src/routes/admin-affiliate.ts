@@ -6,6 +6,8 @@ import { resolveStore, DEV_DEFAULT_STORE } from '../store-context.js';
 import * as s from '../db/schema.js';
 import { HttpError, J, errBody, money, requireAdmin, requireStore, requireWrite, requirePermission, guard, slugify } from './admin-helpers.js';
 import { enqueueAffiliateMail, reassignAffiliate, syncPromotionAffiliate } from '../affiliate/onboarding.js';
+import { affiliateRangeStats } from '../affiliate/stats.js';
+import { dayRangeError } from '../lib/day-range.js';
 
 export const adminAffiliate = new OpenAPIHono();
 
@@ -111,6 +113,43 @@ adminAffiliate.openapi(
     });
     if (!out) throw new HttpError(404, 'affiliate not found');
     return c.json(out, 200);
+  }),
+);
+
+// ── stats by date range, with per-SKU sales (G8) ─────────────────────────────
+const SkuRow = z.object({ sku: z.string(), name: z.string(), units: z.number().int(), orders: z.number().int(), revenue: money, commission: money });
+const StatsOut = z.object({
+  range: z.object({ from: z.string().nullable(), to: z.string().nullable() }),
+  commissionPct: z.number(),
+  totals: z.object({ orders: z.number().int(), units: z.number().int(), revenue: money, commission: money }),
+  bySku: z.array(SkuRow),
+});
+
+adminAffiliate.openapi(
+  createRoute({
+    method: 'get', path: '/v1/admin/affiliates/{id}/stats', summary: 'Affiliate sales for a date range, with per-SKU units, revenue and commission',
+    request: {
+      params: z.object({ id: z.string().uuid() }),
+      // Inclusive UTC days (same convention as the order export). Omit both for lifetime.
+      query: z.object({ from: z.string().optional(), to: z.string().optional() }),
+    },
+    responses: { 200: { description: 'OK', content: J(StatsOut) }, 400: { description: 'Bad range', ...errBody }, 404: { description: 'Not found', ...errBody }, 401: { description: 'Unauthorized', ...errBody } },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const st = requireStore(admin, c);
+    const { id } = c.req.valid('param');
+    const range = c.req.valid('query');
+    const bad = dayRangeError(range);
+    if (bad) throw new HttpError(400, bad);
+    const out = await withStore(st.storeId, async (tx) => {
+      const [a] = await tx.select({ promotionId: s.affiliate.promotionId }).from(s.affiliate)
+        .where(and(eq(s.affiliate.id, id), eq(s.affiliate.storeId, st.storeId))).limit(1);
+      if (!a) return null;
+      return affiliateRangeStats(tx, st.storeId, a.promotionId, range, COMMISSION_PCT);
+    });
+    if (!out) throw new HttpError(404, 'affiliate not found');
+    return c.json({ ...out, commissionPct: COMMISSION_PCT }, 200);
   }),
 );
 

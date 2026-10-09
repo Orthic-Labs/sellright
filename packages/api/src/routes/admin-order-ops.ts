@@ -17,6 +17,7 @@ import { normalizeEmail } from '../auth/email.js';
 import { resolveTaxRate } from '../money/tax.js';
 import { emitEvent } from '../webhooks/emit.js';
 import { enqueueShippingNotification } from '../email/dispatch.js';
+import { resolveOrderRecipient } from '../orders/recipient.js';
 import { csvCell, orderCode, unitPrice } from './admin-order-utils.js';
 import { env } from '../env.js';
 import { autoDeliverStore } from '../jobs/auto-deliver.js';
@@ -269,11 +270,8 @@ async function planTrackingRows(tx: PlanTx, rowsIn: TrackingRowInput[], lock: bo
       lines: lines.map((l) => ({ sku: l.variantSku, name: l.variantName, quantity: l.quantity, fulfilledQty: l.fulfilledQty, cancelledQty: l.cancelledQty })),
       fulfillments: fulfillments.map((f) => ({ state: f.state, trackingCode: f.trackingCode })),
     });
-    let customerEmail: string | null = null;
-    if (o.customerId) {
-      const [cust] = await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, o.customerId)).limit(1);
-      customerEmail = cust?.email ?? null;
-    }
+    // Guests have no customerId: contact email from checkout, else the account email.
+    const customerEmail = await resolveOrderRecipient(tx, o);
     out.push({ ...base, ...verdict, code: o.code, customerEmail, _order: o, _lines: lines, _fulfillments: fulfillments });
   }
   return out;

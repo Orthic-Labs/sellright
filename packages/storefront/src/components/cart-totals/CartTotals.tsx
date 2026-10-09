@@ -166,7 +166,7 @@ export default component$<{
 						{shippingKnown.value ? formatPrice(shipping.value || 0, currencyCode) : 'Calculated at next step'}
 					</dd>
 				</div>
-				<LoyaltyEarnHint eligibleCents={orderTotalAfterDiscount.value} dark />
+				<LoyaltyEarnHint eligibleCents={orderTotalAfterDiscount.value} serverPoints={cart.value.pointsToEarn} dark />
 			</dl>
 		);
 	}
@@ -252,7 +252,7 @@ export default component$<{
 				<dt class="font-medium">Total</dt>
 				<dd class="font-medium text-gray-900">{formatPrice(total.value, currencyCode)}</dd>
 			</div>
-			<LoyaltyEarnHint eligibleCents={orderTotalAfterDiscount.value} />
+			<LoyaltyEarnHint eligibleCents={orderTotalAfterDiscount.value} serverPoints={cart.value.pointsToEarn} />
 		</dl>
 	);
 });

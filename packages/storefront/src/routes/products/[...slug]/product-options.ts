@@ -108,6 +108,21 @@ export function priceDeltaLabel(variants: CatalogVariant[], groups: { groupName:
   return delta > 0 ? `+$${(delta / 100).toFixed(0)}` : `-$${(Math.abs(delta) / 100).toFixed(0)}`;
 }
 
+/** The unit price (cents) the PDP is currently quoting: the pre-order price
+ *  on a pre-order, the sale price on a sale variant, otherwise `regular`
+ *  (the displayed base/"from" price). Mirrors what the price row renders. */
+export function liveUnitPrice(
+  variant: Pick<CatalogVariant, 'salePrice' | 'preOrderPrice'> | null | undefined,
+  isPreOrder: boolean,
+  regular: number,
+): number {
+  const sale = typeof variant?.salePrice === 'number' && variant.salePrice > 0 ? variant.salePrice : null;
+  const pre = typeof variant?.preOrderPrice === 'number' && variant.preOrderPrice > 0 ? variant.preOrderPrice : null;
+  if (isPreOrder && pre) return pre;
+  if (!isPreOrder && sale) return sale;
+  return regular;
+}
+
 /** Derive a CSS color from a swatch value name */
 export function swatchColor(name: string): string {
   const n = name.toLowerCase();

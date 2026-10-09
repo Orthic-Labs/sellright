@@ -1,12 +1,13 @@
 import { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Truck, CheckCircle2, XCircle, StickyNote, Pencil } from 'lucide-react';
+import { ArrowLeft, Truck, CheckCircle2, XCircle, StickyNote, Pencil, FileText, Package } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../auth';
 import { useToast } from '../components/Toast';
 import { useConfirmDialog } from '../components/ConfirmDialog';
 import { money, dateTime } from '../lib/format';
+import { openOrderDocument } from '../lib/order-documents';
 import { PageHeader, StatusBadge, FormSection, InlineAlert, ErrorState, Loading, Field, Spinner } from '../components/ui';
 import { OrderEditPanel } from '../components/order-edit/OrderEditPanel';
 import { AddressCard } from '../components/order-edit/AddressCard';
@@ -158,6 +159,10 @@ export default function OrderDetailPage() {
   const canEditAddress = o.state !== 'Cancelled';
   const amountDue = o.amountDue ?? 0;
 
+  const openDoc = (kind: 'invoice' | 'packing-slip') => {
+    openOrderDocument(o.code, kind).catch((e) => toast.error(kind === 'invoice' ? 'Could not open the invoice' : 'Could not open the packing slip', getErrorMessage(e)));
+  };
+
   return (
     <>
       {confirmDialog}
@@ -169,6 +174,8 @@ export default function OrderDetailPage() {
           <StatusBadge value={o.state} />{latestFulfillment && <StatusBadge value={latestFulfillment.state} />}
           {amountDue > 0 && <StatusBadge value="balance_due" tone="attention" label="Balance due" />}
           {canEditItems && !editing && <button className="btn-ghost btn-sm" onClick={() => setEditing(true)}><Pencil size={13} /> Edit order</button>}
+          <button className="btn-ghost btn-sm" onClick={() => openDoc('invoice')}><FileText size={13} /> Invoice</button>
+          <button className="btn-ghost btn-sm" onClick={() => openDoc('packing-slip')}><Package size={13} /> Packing slip</button>
         </div>}
       />
 

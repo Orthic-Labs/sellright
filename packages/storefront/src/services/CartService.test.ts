@@ -6,7 +6,7 @@
  * jsdom supplies `document.cookie` + `localStorage`.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CartService, CartError } from './CartService';
+import { CartService, CartError, COUPON_SUPERSEDED } from './CartService';
 import { isLineAvailable, remainingQuantity, canRequestQuantity, type ServerCart, type ServerCartLine } from '~/sellright/types/cart';
 
 // `~/sellright/client.ts` wraps server-side requests in a `new Request(...)`
@@ -278,6 +278,110 @@ describe('coupon apply/remove — server-priced', () => {
 		await CartService.removeCoupon();
 		expect(calls[calls.length - 1].url).not.toContain('couponCode=');
 		expect(CartService.getCart().coupon).toBeNull();
+	});
+});
+
+/**
+ * Request-sequence guard: server-snapshot reads that overlap must never let an
+ * OLDER response overwrite a newer one (the coupon "revalidation race"). Each
+ * test holds responses open with deferreds so the arrival order is explicit.
+ */
+describe('overlapping reads — request-sequence guard', () => {
+	const deferred = () => {
+		let resolve!: (r: Response) => void;
+		const promise = new Promise<Response>((r) => { resolve = r; });
+		return { promise, resolve };
+	};
+	const appliedCoupon = { code: 'SAVE10', applied: true } as const;
+	const waitForCalls = (n: number) => vi.waitFor(() => expect(calls.length).toBeGreaterThanOrEqual(n));
+
+	it('a stale refresh (sent before the coupon apply) cannot wipe the applied coupon, whichever lands last', async () => {
+		setCookie('tok_srv');
+		const refreshRes = deferred();
+		const applyRes = deferred();
+		enqueue(refreshRes.promise, applyRes.promise);
+
+		const refreshP = CartService.refresh();
+		const applyP = CartService.applyCoupon('SAVE10');
+		await waitForCalls(2);
+
+		applyRes.resolve(await respond(200, serverCart({ revision: 2, coupon: appliedCoupon, discountTotal: 250, grandTotal: 2250 })));
+		expect(await applyP).toEqual({ valid: true });
+		refreshRes.resolve(await respond(200, serverCart({ revision: 1, coupon: null })));
+		const refreshed = await refreshP;
+
+		expect(refreshed.dropped).toEqual([]);
+		expect(CartService.getCart().coupon).toEqual(appliedCoupon);
+		expect(CartService.getCart().revision).toBe(2);
+	});
+
+	it('removing a coupon beats an older in-flight apply: the late apply is ignored and its code is not remembered', async () => {
+		setCookie('tok_srv');
+		const applyRes = deferred();
+		const removeRes = deferred();
+		enqueue(applyRes.promise, removeRes.promise, respond(200, serverCart({ coupon: null })));
+
+		const applyP = CartService.applyCoupon('SAVE10');
+		await waitForCalls(1);
+		const removeP = CartService.removeCoupon();
+		await waitForCalls(2);
+
+		removeRes.resolve(await respond(200, serverCart({ revision: 2, coupon: null })));
+		await removeP;
+		applyRes.resolve(await respond(200, serverCart({ revision: 1, coupon: appliedCoupon })));
+		const applied = await applyP;
+
+		expect(applied).toEqual({ valid: false, reason: COUPON_SUPERSEDED });
+		expect(CartService.getCart().coupon).toBeNull();
+		// The late apply must not have re-armed the coupon for later reads.
+		await CartService.refresh();
+		expect(calls[calls.length - 1].url).not.toContain('couponCode=');
+	});
+
+	it('a refresh still in flight when the cart is discarded cannot resurrect it', async () => {
+		setCookie('tok_srv');
+		const refreshRes = deferred();
+		enqueue(refreshRes.promise);
+
+		const refreshP = CartService.refresh();
+		await waitForCalls(1);
+		CartService.discard();
+		refreshRes.resolve(await respond(200, serverCart()));
+		await refreshP;
+
+		expect(CartService.getCart().lines).toHaveLength(0);
+		expect(document.cookie).not.toContain('sr_cart=tok_srv');
+	});
+
+	it('a read issued while a mutation was in flight cannot overwrite the mutation result', async () => {
+		setCookie('tok_srv');
+		enqueue(respond(200, serverCart({ revision: 1 }))); // seed the mirror
+		await CartService.refresh();
+
+		const patchRes = deferred();
+		const refreshRes = deferred();
+		enqueue(patchRes.promise, refreshRes.promise);
+		const updateP = CartService.updateLine('SKU1', 2);
+		await waitForCalls(2);
+		const refreshP = CartService.refresh();
+		await waitForCalls(3);
+
+		const two = [{ sku: 'SKU1', name: 'Widget', quantity: 2, unitPrice: 2500, lineSubtotal: 5000, lineDiscount: 0, lineTotal: 5000, available: true, availableQuantity: 999 }];
+		patchRes.resolve(await respond(200, serverCart({ revision: 2, lines: two, subtotal: 5000 })));
+		await updateP;
+		refreshRes.resolve(await respond(200, serverCart({ revision: 1 }))); // computed before the PATCH landed
+		await refreshP;
+
+		expect(CartService.getCart().lines[0]?.quantity).toBe(2);
+		expect(CartService.getCart().revision).toBe(2);
+	});
+
+	it('sequential reads are unaffected (each adopts its own response)', async () => {
+		setCookie('tok_srv');
+		enqueue(respond(200, serverCart({ revision: 1 })), respond(200, serverCart({ revision: 2 })));
+		await CartService.refresh();
+		await CartService.refresh();
+		expect(CartService.getCart().revision).toBe(2);
 	});
 });
 

@@ -49,6 +49,16 @@ const resetAttemptKey = (): void => {
 	checkoutAttemptKey = null;
 };
 
+/** True when POST /checkout was refused because a line's stock is gone (409 OUT_OF_STOCK). `placeOrder` rethrows its
+ *  failures wrapped in a plain Error whose `cause` is the API error, so look at both. The caller must then re-read
+ *  the live cart: its mirror still holds the stock it showed before the sale that emptied the shelf. */
+export const isOutOfStockConflict = (error: unknown): boolean => {
+	for (const candidate of [error, (error as { cause?: unknown } | null)?.cause]) {
+		if (candidate instanceof SellRightError && candidate.status === 409 && candidate.code === 'OUT_OF_STOCK') return true;
+	}
+	return false;
+};
+
 /** True for the 409 shapes the cart itself produced (stale/converted/merged/
  *  revision_required) — as opposed to an unrelated 409 (e.g. out-of-stock or
  *  shipping-unavailable) that also carries a `cart` snapshot for display but
@@ -173,12 +183,14 @@ export const verifyGatewayPayment = async (
 	code: string,
 	attemptId: string,
 	receiptToken?: string,
+	signal?: AbortSignal,
 ): Promise<GatewayVerifyResult> => {
 	const { data } = await sellright().POST('/v1/shop/orders/{code}/gateway-payment/{attempt}/verify', {
 		params: {
 			path: { code, attempt: attemptId },
 			header: receiptToken ? { 'x-receipt-token': receiptToken } : {},
 		},
+		signal,
 	});
 	return data as GatewayVerifyResult;
 };
@@ -207,9 +219,10 @@ export const settleZeroDueOrder = async (code: string, receiptToken?: string): P
 /** Read the order's current state for confirmation / error-recovery reads.
  *  Receipt-token scoped (`rt`, from `placeOrder`) OR the authed owner — a
  *  bare code with neither is denied by the API. */
-export const getOrder = async (code: string, receiptToken?: string): Promise<OrderSummary> => {
+export const getOrder = async (code: string, receiptToken?: string, signal?: AbortSignal): Promise<OrderSummary> => {
 	const { data } = await sellright().GET('/v1/shop/orders/{code}', {
 		params: { path: { code }, query: receiptToken ? { rt: receiptToken } : {} },
+		signal,
 	});
 	return data as OrderSummary;
 };

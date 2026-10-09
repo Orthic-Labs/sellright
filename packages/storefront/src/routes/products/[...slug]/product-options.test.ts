@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { availableForGroup, findVariant, getOptionGroups, priceDeltaLabel } from './product-options';
+import { availableForGroup, findVariant, getOptionGroups, liveUnitPrice, priceDeltaLabel } from './product-options';
 import type { CatalogVariant } from '~/sellright/types/catalog';
 
 // Loose option literals: `position`/`group.position` are required on the wire
@@ -156,5 +156,17 @@ describe('priceDeltaLabel — effective price, not raw price', () => {
 		// L (1000) vs the overall min (S's effective 500) — delta should reflect
 		// the sale price, not S's raw $1000 price (which would give +$0).
 		expect(priceDeltaLabel([s, l], groups, 'L')).toBe('+$5');
+	});
+});
+
+describe('liveUnitPrice', () => {
+	it('quotes the pre-order price on a pre-order, the sale price on a sale, else the regular price', () => {
+		expect(liveUnitPrice({ salePrice: 800, preOrderPrice: null }, false, 1000)).toBe(800);
+		expect(liveUnitPrice({ salePrice: null, preOrderPrice: 700 }, true, 1000)).toBe(700);
+		expect(liveUnitPrice({ salePrice: 800, preOrderPrice: 700 }, true, 1000)).toBe(700);
+		expect(liveUnitPrice({ salePrice: 800, preOrderPrice: 700 }, false, 1000)).toBe(800);
+		expect(liveUnitPrice({ salePrice: null, preOrderPrice: null }, false, 1000)).toBe(1000);
+		expect(liveUnitPrice({ salePrice: 0, preOrderPrice: 0 }, true, 1000)).toBe(1000);
+		expect(liveUnitPrice(undefined, false, 1000)).toBe(1000);
 	});
 });

@@ -2,7 +2,8 @@ import { component$, useStyles$ } from '@qwik.dev/core';
 import { routeLoader$, type StaticGenerateHandler } from '@qwik.dev/router';
 import { generateImagePreloadLinks } from '~/components/ui';
 import { getProductDetail } from '~/providers/shop/products/products';
-import { normalizeManifestProductDetail, type CatalogProduct, type RawManifestProductDetail } from '~/sellright/types/catalog';
+import { manifestProductMeta, normalizeManifestProductDetail, type CatalogProduct, type RawManifestProductDetail } from '~/sellright/types/catalog';
+import { withAggregateRating } from '~/utils/rewards';
 import { cleanUpParams } from '~/utils';
 import { createSEOHead } from '~/utils/seo';
 import { generateBreadcrumbSchema } from '~/services/seo-schemas';
@@ -18,6 +19,12 @@ export interface ProductLoaderResult {
   product: CatalogProduct;
   source: 'manifest' | 'network';
   warning: string | null;
+  /** Real product UUID (keys loyalty product multipliers); null when the
+   *  loader fell back to the live API (its detail has no product-level id). */
+  productId: string | null;
+  /** Approved-review aggregate for the rating link + AggregateRating JSON-LD;
+   *  null when the product is unreviewed or the manifest is unavailable. */
+  rating: { average: number; count: number } | null;
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -46,7 +53,7 @@ export const useProductLoader = routeLoader$(async ({ params, fail, status }) =>
   // once the client checks in.
   try {
     const raw = await readCatalogSnapshot<RawManifestProductDetail>(`products/${slug}.json`);
-    return { product: normalizeManifestProductDetail(raw), source: 'manifest' as const, warning: null };
+    return { product: normalizeManifestProductDetail(raw), source: 'manifest' as const, warning: null, ...manifestProductMeta(raw) };
   } catch {
     // File doesn't exist or failed to parse — fall back to the live API.
   }
@@ -57,7 +64,7 @@ export const useProductLoader = routeLoader$(async ({ params, fail, status }) =>
       status(404);
       return fail(404, { message: `Product not found: ${slug}` });
     }
-    return { product, source: 'network' as const, warning: null };
+    return { product, source: 'network' as const, warning: null, productId: null, rating: null };
   } catch (error) {
     console.error('Product loader error:', error);
     status(404);
@@ -129,7 +136,12 @@ export const head = ({ resolveValue, url: _url }: { resolveValue: any; url: URL 
   ]);
 
   const schemas: JsonLdSchema[] = [breadcrumbSchema];
-  if (productJsonLd) schemas.push(productJsonLd);
+  if (productJsonLd) {
+    // The API's Product JSON-LD carries offers but no review aggregate; add
+    // AggregateRating from the manifest only when the product has approved
+    // reviews (never an empty/zero rating).
+    schemas.push(withAggregateRating(productJsonLd, loaderResult?.rating));
+  }
 
   const canonicalUrl = `${siteUrl}/products/${product?.slug || ''}/`;
   return createSEOHead({
