@@ -76,19 +76,21 @@ function Protected() {
 /**
  * Plan §1.4: "while unclaimed, the admin UI shows only the claim screen."
  * Checked once per load via GET /v1/setup/status (pre-auth, cheap): 200 means
- * still unclaimed (every route — including /login — renders Setup instead);
- * 404/network-error means claimed (or the check itself failed, which fails
- * OPEN to the normal app rather than locking out an already-claimed install
- * on a transient blip). Setup.tsx flips this cache entry to `true` right
- * after a successful claim, before navigating, so the very next render
- * already sees the normal app — no extra round-trip.
+ * still unclaimed (every route — including /login — renders Setup instead).
+ * ANY other outcome — 404 (claimed), 401/403 (a front door such as the public
+ * demo's policy that refuses installation routes), 5xx, network error — fails
+ * OPEN to the normal app rather than locking out an already-claimed install.
+ * Only a positive "unclaimed" answer may show the claim screen. Setup.tsx
+ * flips this cache entry to `true` right after a successful claim, before
+ * navigating, so the very next render already sees the normal app — no extra
+ * round-trip.
  */
 function useIsClaimed(): { loading: boolean; claimed: boolean } {
   const [state, setState] = useState<{ loading: boolean; claimed: boolean }>({ loading: true, claimed: true });
   useEffect(() => {
     let cancelled = false;
     fetch('/v1/setup/status', { credentials: 'include' })
-      .then((res) => { if (!cancelled) setState({ loading: false, claimed: res.status === 404 }); })
+      .then((res) => { if (!cancelled) setState({ loading: false, claimed: res.status !== 200 }); })
       .catch(() => { if (!cancelled) setState({ loading: false, claimed: true }); });
     return () => { cancelled = true; };
   }, []);
