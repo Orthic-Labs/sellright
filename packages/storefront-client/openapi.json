@@ -45,6 +45,7 @@
           "MAGIC_LINK_DISABLED",
           "MAGIC_LINK_INVALID",
           "NOT_AUTHENTICATED",
+          "NOT_RETURNABLE",
           "ORDER_ALREADY_PAID",
           "ORDER_NOT_FOUND",
           "ORDER_NOT_PAYABLE",
@@ -4779,6 +4780,17 @@
                         "birthdayBonusPoints",
                         "productMultipliers"
                       ]
+                    },
+                    "auth": {
+                      "type": "object",
+                      "properties": {
+                        "magicLink": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "magicLink"
+                      ]
                     }
                   },
                   "required": [
@@ -4786,7 +4798,8 @@
                     "stripePublishableKey",
                     "stripeConfigured",
                     "gateways",
-                    "loyalty"
+                    "loyalty",
+                    "auth"
                   ]
                 }
               }
@@ -6540,6 +6553,260 @@
           },
           "409": {
             "description": "Active subscription must be cancelled first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/shop/account/orders/{code}/returns": {
+      "get": {
+        "summary": "Returnable units and return requests for an owned order",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "code",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "returnable": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "sku": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "quantity": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "sku",
+                          "name",
+                          "quantity"
+                        ]
+                      }
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "requested",
+                              "approved",
+                              "rejected",
+                              "received",
+                              "refunded"
+                            ]
+                          },
+                          "reason": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          },
+                          "updatedAt": {
+                            "type": "string"
+                          },
+                          "lines": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "sku": {
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "type": "string"
+                                },
+                                "quantity": {
+                                  "type": "integer"
+                                }
+                              },
+                              "required": [
+                                "sku",
+                                "name",
+                                "quantity"
+                              ]
+                            }
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "status",
+                          "reason",
+                          "createdAt",
+                          "updatedAt",
+                          "lines"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "returnable",
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Request a return for shipped units of an owned order",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "required": true,
+            "name": "code",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "lines": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "sku": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "quantity": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 100000
+                        }
+                      },
+                      "required": [
+                        "sku",
+                        "quantity"
+                      ]
+                    },
+                    "minItems": 1,
+                    "maxItems": 100
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 2000
+                  }
+                },
+                "required": [
+                  "lines",
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Requested",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "requested"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "status"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Nothing returnable / quantity too high",
             "content": {
               "application/json": {
                 "schema": {
@@ -14015,6 +14282,9 @@
                   "paymentId": {
                     "type": "string",
                     "format": "uuid"
+                  },
+                  "restock": {
+                    "type": "boolean"
                   }
                 }
               }

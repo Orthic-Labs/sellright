@@ -2,6 +2,7 @@
 //
 //   /nmi/*      NMI Payment API (sandbox.nmi.com)         -> POST /nmi/api/transact.php
 //   /sezzle/*   Sezzle gateway (sandbox.gateway.sezzle.com) -> /sezzle/v2/{authentication,session,order/...}
+//   /indexnow/* IndexNow (api.indexnow.org)               -> POST /indexnow/indexnow, recorded; answers 200
 //   /hook/*     the "customer's" webhook receiver (order.shipped, ...), see preload.mjs for how the API reaches it
 //   :SMTP_PORT  an SMTP sink, so the real nodemailer path + email_outbox 'sent' transition run for real
 //   /control/*  inspection + steering for specs (see support/mock.ts)
@@ -12,7 +13,7 @@ import { createServer as createSmtp } from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { MOCK_PORT, SMTP_PORT, NMI, SEZZLE } from './env.mjs';
 
-const state = { calls: [], hooks: [], mails: [], sezzle: new Map(), nmiTx: new Map(), seq: 1000, hookFailures: 0 };
+const state = { calls: [], hooks: [], mails: [], indexnow: [], sezzle: new Map(), nmiTx: new Map(), seq: 1000, hookFailures: 0 };
 
 const json = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
 const readBody = (req) => new Promise((resolve) => { const c = []; req.on('data', (d) => c.push(d)); req.on('end', () => resolve(Buffer.concat(c).toString('utf8'))); });
@@ -92,6 +93,7 @@ function control(req, res, path, raw) {
   if (path === '/calls') return json(res, 200, { calls: state.calls.filter((c) => !url.searchParams.get('service') || c.service === url.searchParams.get('service')) });
   if (path === '/hooks') return json(res, 200, { hooks: state.hooks });
   if (path === '/mails') return json(res, 200, { mails: state.mails });
+  if (path === '/indexnow') return json(res, 200, { submissions: state.indexnow });
   if (path === '/sezzle/sessions') return json(res, 200, { sessions: [...state.sezzle.values()] });
   if (path === '/sezzle/capture' && req.method === 'POST') {
     // The shopper approved + Sezzle auto-captured (intent CAPTURE): from now on the authoritative GET reports it.
@@ -101,7 +103,7 @@ function control(req, res, path, raw) {
     if (!o.captures.length) o.captures.push({ uuid: randomUUID(), amount: money(o.amount, o.currency) });
     return json(res, 200, sezzleOrderView(o));
   }
-  if (path === '/reset' && req.method === 'POST') { state.calls = []; state.hooks = []; state.mails = []; state.hookFailures = 0; return json(res, 200, { ok: true }); }
+  if (path === '/reset' && req.method === 'POST') { state.calls = []; state.hooks = []; state.mails = []; state.indexnow = []; state.hookFailures = 0; return json(res, 200, { ok: true }); }
   // Make the next N webhook deliveries answer 500 (delivery must retry / not be marked delivered).
   if (path === '/hooks/fail' && req.method === 'POST') { state.hookFailures = JSON.parse(raw).count ?? 1; return json(res, 200, { ok: true }); }
   json(res, 404, { error: 'unknown control path ' + path });
@@ -114,6 +116,11 @@ createHttp(async (req, res) => {
     if (path === '/health') return json(res, 200, { ok: true });
     if (path.startsWith('/nmi/')) return nmi(req, res, path.slice(4), raw);
     if (path.startsWith('/sezzle/')) return sezzle(req, res, path.slice(7), raw);
+    if (path.startsWith('/indexnow/')) {
+      let body = null; try { body = JSON.parse(raw); } catch { /* recorded as null */ }
+      state.indexnow.push({ method: req.method, path, headers: req.headers, body, at: Date.now() });
+      return json(res, 200, { ok: true });
+    }
     if (path.startsWith('/control/')) return control(req, res, path.slice(8), raw);
     if (path.startsWith('/hook')) {
       state.hooks.push({ path, headers: req.headers, body: raw, at: Date.now() });

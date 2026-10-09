@@ -1,5 +1,6 @@
 import { $, component$, useOnDocument, useSignal } from '@qwik.dev/core';
 import { useLocation } from '@qwik.dev/router';
+import { OrderReturnsPanel } from '~/components/account/OrderReturns';
 import { OptimizedImage } from '~/components/ui';
 import { getOrderByCode } from '~/services/customer';
 import type { AccountOrderDetail } from '~/sellright/types/account';
@@ -58,13 +59,15 @@ export default component$(() => {
 						</span>
 					)}
 				</div>
-				<p class="mb-4">
+				{/* A <div>, not a <p>: the loading skeleton is a <div>, and a <div> inside a <p> makes the browser close the <p>
+				    early, so the server HTML no longer matches what Qwik resumes (Q27) and the whole order failed to render. */}
+				<div class="mb-4">
 					{o ? (
 						<>Placed on{' '}<span class="text-xl font-semibold">{formatDate(o.placedAt)}</span></>
 					) : (
 						<div class="h-6 w-64 bg-gray-200 rounded animate-pulse" />
 					)}
-				</p>
+				</div>
 				{o && isPreOrder(o.lines) && (
 					<p class="text-sm text-[#645541] font-medium mb-4">
 						This order includes a pre-order item.
@@ -169,6 +172,7 @@ export default component$(() => {
 					))}
 				</div>
 			)}
+			{o && <OrderReturnsPanel code={o.code} />}
 			<div class="w-full bg-gray-100 p-8">
 				<p class="mb-4 text-gray-600">Shipping Address</p>
 				{o ? (

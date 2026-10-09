@@ -9,9 +9,11 @@ import { defineConfig, devices } from '@playwright/test';
  * in CI or locally.
  *
  * Two modes:
- *  - fresh (default): Playwright starts a mock-gateway process (NMI / Sezzle / webhook receiver / SMTP sink), a
+ *  - fresh (default): Playwright starts a mock-gateway process (NMI / Sezzle / IndexNow / webhook receiver / SMTP sink), a
  *    throwaway API on :3398 over a freshly created `sellright_storefront_e2e` database (like the admin suite), and the
- *    storefront. Money-path specs run here: real checkout, real payment code, real outbox workers, mocked gateways.
+ *    storefront. Money-path, account (register / sign-in / magic link / address book / returns / rewards / reviews) and
+ *    content (blog / sitemap / IndexNow) specs run here: real checkout, real payment code, real outbox workers, mocked
+ *    gateways, and a mock of the IndexNow endpoint so no search engine is ever pinged.
  *  - external (PLAYWRIGHT_API_URL set): only the storefront is started and forwarded to that API; the money-path
  *    specs (which need the mock gateways and a database they own) skip themselves.
  *

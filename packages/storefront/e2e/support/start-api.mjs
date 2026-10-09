@@ -118,6 +118,8 @@ const child = spawn(process.execPath, ['--import', join(STOREFRONT_DIR, 'e2e', '
     SMTP_HOST: '127.0.0.1',
     SMTP_PORT: String(SMTP_PORT),
     SMTP_FROM: 'shop@e2e.example.net',
+    // Passwordless sign-in is OFF unless a deployment (or store.config.auth) opts in; the account specs exercise it.
+    MAGIC_LINK_ENABLED: 'true',
   },
   stdio: 'inherit',
 });

@@ -49,6 +49,27 @@ export async function logout(): Promise<LogoutResult> {
 	}
 }
 
+/** Ask for a one-time sign-in link by email. Enumeration-safe on the API side (identical 200 whether or not the address
+ *  has an account); a store that has not switched the feature on answers 409. */
+export async function requestMagicLink(email: string): Promise<SimpleResult> {
+	try {
+		await sellright().POST('/v1/shop/auth/magic-link/request', { body: { email } });
+		return { ok: true };
+	} catch (e) {
+		return { ok: false, ...describeAccountError(e, { 409: 'magic_link_disabled' }) };
+	}
+}
+
+/** Exchange the one-time token from the emailed link for a session (the API sets the session cookies). */
+export async function consumeMagicLink(token: string): Promise<LoginResult> {
+	try {
+		const { data } = await sellright().POST('/v1/shop/auth/magic-link/consume', { body: { token } });
+		return { ok: true, customer: data!.customer };
+	} catch (e) {
+		return { ok: false, ...describeAccountError(e, { 409: 'invalid_token' }) };
+	}
+}
+
 export type RegisterInput = {
 	email: string;
 	password: string;

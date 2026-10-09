@@ -60,6 +60,12 @@ export type AccountOrderList = Json<'/v1/shop/account/orders', 'get', 200>;
 /** A single owned order, in full (payments, fulfillments, lines). */
 export type AccountOrderDetail = Json<'/v1/shop/account/orders/{code}', 'get', 200>;
 
+/** Units still returnable on an owned order + the return requests made so far (each with its status). */
+export type OrderReturns = Json<'/v1/shop/account/orders/{code}/returns', 'get', 200>;
+
+/** One return request on an order. */
+export type OrderReturnRequest = OrderReturns['items'][number];
+
 /** Points balance + recent activity for the current customer. */
 export type LoyaltyBalance = Json<'/v1/shop/account/loyalty', 'get', 200>;
 
@@ -78,6 +84,8 @@ export type AccountErrorCode =
 	| 'email_unavailable'
 	| 'unauthenticated'
 	| 'not_found'
+	| 'magic_link_disabled'
+	| 'not_returnable'
 	| 'unknown';
 
 export interface AccountError {
@@ -97,6 +105,8 @@ const DEFAULT_MESSAGE: Record<AccountErrorCode, string> = {
 	email_unavailable: 'That email address is unavailable.',
 	unauthenticated: 'Please sign in and try again.',
 	not_found: 'Not found.',
+	magic_link_disabled: 'Sign-in links are not available right now. Please use your password.',
+	not_returnable: 'Those items cannot be returned.',
 	unknown: 'Something went wrong. Please try again.',
 };
 

@@ -212,4 +212,39 @@ describe('providers/shop/account/account — native SellRight client', () => {
 		expect(result.firstName).toBe('New');
 		expect(urlOf(mockedFetch)).toContain('/v1/shop/account/me');
 	});
+
+	it('requestMagicLink posts the email to the magic-link request endpoint and maps a 409 to magic_link_disabled', async () => {
+		const mockedFetch = vi.fn(async () => jsonResponse(200, { ok: true }));
+		vi.stubGlobal('fetch', mockedFetch);
+		const { requestMagicLink } = await import('./account');
+		await expect(requestMagicLink('a@b.com')).resolves.toEqual({ ok: true });
+		expect(urlOf(mockedFetch)).toContain('/v1/shop/auth/magic-link/request');
+		expect((await bodyOf(mockedFetch)).email).toBe('a@b.com');
+
+		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(409, { error: { code: 'MAGIC_LINK_DISABLED', message: 'off' } })));
+		vi.resetModules();
+		const again = await import('./account');
+		const off = await again.requestMagicLink('a@b.com');
+		expect(off.ok).toBe(false);
+		if (!off.ok) expect(off.code).toBe('magic_link_disabled');
+	});
+
+	it('consumeMagicLink posts the token, returns the customer, and maps a 409 to invalid_token', async () => {
+		const mockedFetch = vi.fn(async () =>
+			jsonResponse(200, { token: 't', customer: { id: 'c1', email: 'a@b.com', firstName: null, lastName: null, phone: null, emailVerified: true, isMigrated: false } }),
+		);
+		vi.stubGlobal('fetch', mockedFetch);
+		const { consumeMagicLink } = await import('./account');
+		const ok = await consumeMagicLink('x'.repeat(30));
+		expect(ok).toEqual({ ok: true, customer: expect.objectContaining({ id: 'c1' }) });
+		expect(urlOf(mockedFetch)).toContain('/v1/shop/auth/magic-link/consume');
+		expect((await bodyOf(mockedFetch)).token).toBe('x'.repeat(30));
+
+		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(409, { error: { code: 'MAGIC_LINK_INVALID', message: 'used' } })));
+		vi.resetModules();
+		const again = await import('./account');
+		const bad = await again.consumeMagicLink('y'.repeat(30));
+		expect(bad.ok).toBe(false);
+		if (!bad.ok) expect(bad.code).toBe('invalid_token');
+	});
 });

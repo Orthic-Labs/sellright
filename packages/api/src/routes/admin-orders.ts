@@ -256,13 +256,19 @@ adminOrders.openapi(
 
 adminOrders.openapi(createRoute({
   method: 'post', path: '/v1/admin/returns/{id}/approve', summary: 'Approve a return and reserve its refund',
-  request: { params: z.object({ id: z.string().uuid() }), body: { content: J(z.object({ paymentId: z.string().uuid().optional() })) }, },
+  request: { params: z.object({ id: z.string().uuid() }), body: { content: J(z.object({ paymentId: z.string().uuid().optional(), restock: z.boolean().optional() })) }, },
   responses: { 200: { description: 'Refund status', content: J(z.any()) }, 404: { description: 'Not found', ...errBody }, 409: { description: 'Conflict', ...errBody } },
 }), async c => guard(c, async () => {
   const { admin } = await requireAdmin(c), st = requireStore(admin, c); requireWrite(st); requirePermission(st, 'refunds');
   const { id } = c.req.valid('param'), body = c.req.valid('json');
   const [rma] = await withStore(st.storeId, tx => tx.select().from(s.returnRequest).where(eq(s.returnRequest.id, id)));
   if (!rma) throw new HttpError(404, 'Return not found');
+  // The Returns page's "Restock" checkbox decides whether the returned units go back on the shelf; it used to be
+  // dropped by the request schema, so the flag set when the request was opened always won. An explicit choice
+  // here overrides every line of an unresolved request (a resolved one is refused by the refund engine below).
+  if (body.restock !== undefined && ['requested', 'approved', 'received'].includes(rma.status) && !rma.refundId) {
+    await withStore(st.storeId, (tx) => tx.update(s.returnLine).set({ restock: body.restock! }).where(eq(s.returnLine.returnId, id)));
+  }
   try {
     const result = await requestRefund({ storeId: st.storeId, orderId: rma.orderId, actor: admin.email,
       idempotencyKey: 'return:' + id, returnId: id, paymentId: body.paymentId });
