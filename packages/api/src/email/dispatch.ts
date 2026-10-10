@@ -35,6 +35,7 @@ import {
   trialLicenseKey,
 } from './templates.js';
 import { enqueueEmail } from './outbox.js';
+import { resolveEmailTheme } from './theme.js';
 import { env } from '../env.js';
 import type { Tx } from '../db/client.js';
 
@@ -137,6 +138,7 @@ function emailCtx(store: StoreEmailCtx) {
     currency: store.currency,
     storefrontUrl: resolveStorefrontUrl(store),
     fromEmail: resolveFromEmail(store),
+    theme: resolveEmailTheme(store.config),
     storeId: store.storeId,
   };
 }
