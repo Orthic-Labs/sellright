@@ -19,7 +19,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createPrivateKey, sign as cryptoSign, X509Certificate, createHash } from 'node:crypto';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { Environment, SignedDataVerifier } from '@apple/app-store-server-library';
@@ -30,6 +30,7 @@ import { eq } from 'drizzle-orm';
 import { createSession } from '../auth/session.js';
 import { storeKitWebhooks } from './storekit-webhooks.js';
 import { _setStoreKitVerifierOverrideForTests } from '../licensing/storekit-config.js';
+import { DENY_NOTFOUND, clearEntitlementPolicy, denyPlatform, registerEntitlementPolicy, type EntitlementPath } from '../licensing/entitlement-policy.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
 if (!/_test(\b|$|\?)/.test(DB)) {
@@ -285,6 +286,31 @@ describe('POST /v1/shop/pro/link-storekit', () => {
     expect(first.status).toBe(200);
     const second = await post('/v1/shop/pro/link-storekit', { appKey: APP_KEY, signedTransactionInfo: jws, deviceIdHash: DEVICE_HASH }, { authorization: `Bearer ${tokenB}` });
     expect(second.status).toBe(401);
+  });
+});
+
+describe('POST /v1/shop/pro/link-storekit consults the entitlement policy (P36-2)', () => {
+  afterEach(() => clearEntitlementPolicy());
+
+  it('consults path "storekit_link" before minting an activation; a deny grants no activation', async () => {
+    const token = await withStore(STORE, (tx) => createSession(tx, STORE, CUSTOMER));
+    const seen: EntitlementPath[] = [];
+    registerEntitlementPolicy({ id: 'deny-storekit', authorize: (ctx) => { seen.push(ctx.path); return ctx.path === 'storekit_link' ? denyPlatform('storekit link refused by policy') : { allow: true }; } });
+    const res = await post('/v1/shop/pro/link-storekit', {
+      appKey: APP_KEY, signedTransactionInfo: makeJws(txnPayload()), deviceIdHash: DEVICE_HASH, platform: 'ios',
+    }, { authorization: `Bearer ${token}` });
+    expect(res.status).toBe(400);
+    expect(seen).toEqual(['storekit_link']);
+    const rows = await withStore(STORE, (tx) => tx.execute(sql`SELECT count(*)::int AS n FROM license_activation`));
+    expect((rows.rows[0] as { n: number }).n).toBe(0);
+
+    registerEntitlementPolicy({ id: 'deny-notfound', authorize: () => DENY_NOTFOUND });
+    const res2 = await post('/v1/shop/pro/link-storekit', {
+      appKey: APP_KEY, signedTransactionInfo: makeJws(txnPayload()), deviceIdHash: DEVICE_HASH,
+    }, { authorization: `Bearer ${token}` });
+    expect(res2.status).toBe(400);
+    const rows2 = await withStore(STORE, (tx) => tx.execute(sql`SELECT count(*)::int AS n FROM license_activation`));
+    expect((rows2.rows[0] as { n: number }).n).toBe(0);
   });
 });
 
