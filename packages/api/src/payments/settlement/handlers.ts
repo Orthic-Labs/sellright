@@ -8,7 +8,7 @@
  */
 import { and, eq } from 'drizzle-orm';
 import type { Tx } from '../../db/client.js';
-import { lockSetInTx } from '../../db/locks.js';
+import { currentLockSet, lockSetCovers, lockSetInTx, withLockedSetInTx, type HeldLocks, type LockSubject } from '../../db/locks.js';
 import * as s from '../../db/schema.js';
 import { env } from '../../env.js';
 import { normalizeEmail } from '../../auth/email.js';
@@ -24,7 +24,10 @@ import { orderConfirmation as orderConfirmationTpl } from '../../email/templates
 import { enqueueEmail } from '../../email/outbox.js';
 import { enqueuePush, buildOrderPushPayload, buildOrderLiveActivityPayload } from '../../push/outbox.js';
 import { emitOrderPaidEvent, sendOrderConfirmationAndEnrol } from '../paid-effects.js';
-import { recordOperationLicense, registerEffectHandler, backoffSeconds, type EffectOutcome, type EffectRow, type LocalEffectHandler } from './effects.js';
+import { runAuthorizeInvoiceEffect, runRevalidateForIssuance } from '../policy/host.js';
+import { PaymentPolicyUnavailableError } from '../policy/registry.js';
+import type { PolicyOrder } from '../policy/types.js';
+import { recordOperationLicense, registerEffectHandler, backoffSeconds, runningInline, type EffectOutcome, type EffectRow, type LocalEffectHandler } from './effects.js';
 
 /** Mirror of email/dispatch.ts::parseAppMap (kept local: no internal export just for this path). */
 function parseAppFromMap(raw: string | undefined, appKey: string | null | undefined): string | undefined {
@@ -83,31 +86,127 @@ async function requirePaidLifecycle(tx: Tx, e: EffectRow, orderId: string): Prom
   return undefined;
 }
 
+// ── policy gates (PAYMENT-TIMING §3.7.5, §4.5) ──────────────────────────────
+// The engine asks the registered policy before an entitlement changes. Money is never gated here:
+// these hooks run in the effect's own transaction, after the payment is recorded.
+
+/** Subscription invoice id an operation was recorded for ('stripe_invoice_paid:<invoice.id>'). */
+const invoiceIdOf = (operationId: string) => operationId.replace(/^stripe_invoice_paid:/, '');
+
+const policyOrderOf = (o: typeof s.order.$inferSelect): PolicyOrder => ({
+  id: o.id, storeId: o.storeId, code: o.code, state: o.state, currency: o.currency,
+  grandTotal: o.grandTotal, customerId: o.customerId, metadata: o.metadata,
+});
+
+/** Writes the policy's admin task as an audit row (the effect's admin_review row carries the code). */
+async function auditPolicyTask(tx: Tx, e: EffectRow, task: { title: string; detail: string }, code: string): Promise<void> {
+  await tx.insert(s.auditLog).values({
+    storeId: e.storeId, actor: 'system:policy', entity: 'order_pending_effect', entityId: e.id,
+    action: 'policy_admin_task', data: { title: task.title, detail: task.detail, code, effectKind: e.effectKind, operationId: e.operationId },
+  });
+}
+
+/** A policy that cannot answer (SAVEPOINT-isolated failure) keeps the effect pending: a bounded retry, then terminal. */
+async function guardPolicy(run: () => Promise<EffectOutcome>): Promise<EffectOutcome> {
+  try {
+    return await run();
+  } catch (err) {
+    if (err instanceof PaymentPolicyUnavailableError) return { retry: { reason: 'policy_unavailable' } };
+    throw err;
+  }
+}
+
+/**
+ * Issuance gate: a first-cycle subscription invoice is authorised first, then the order's reservations and
+ * state are revalidated. Returns a terminal outcome, or undefined to proceed. A policy that cannot answer is a
+ * bounded retry (the worker goes terminal after MAX_ATTEMPTS).
+ */
+async function issuanceGate(tx: Tx, e: EffectRow, p: LicenseIssuePayload, held: HeldLocks): Promise<EffectOutcome> {
+  return guardPolicy(async () => {
+    if (p.link) {
+      const [sub] = await tx.select().from(s.subscription)
+        .where(and(eq(s.subscription.storeId, e.storeId), eq(s.subscription.stripeSubscriptionId, p.link.stripeSubscriptionId))).limit(1);
+      const [lic] = await tx.select().from(s.license)
+        .where(and(eq(s.license.storeId, e.storeId), eq(s.license.orderId, p.orderId))).limit(1);
+      const order = await loadOrder(tx, e.storeId, p.orderId);
+      const decision = await runAuthorizeInvoiceEffect(tx, {
+        storeId: e.storeId, operationId: e.operationId, effectKind: 'issuance', cycle: 'first_cycle',
+        invoice: { id: invoiceIdOf(e.operationId), subscriptionId: p.link.stripeSubscriptionId, paymentIntentId: null, billingReason: null, amountPaid: null, periodEnd: null },
+        subscription: sub
+          ? { id: sub.stripeSubscriptionId, status: sub.status, licenseId: sub.licenseId, orderId: sub.orderId }
+          : { id: p.link.stripeSubscriptionId, status: 'absent', licenseId: null, orderId: null },
+        license: lic ? { id: lic.id, status: lic.status, expiresAt: lic.expiresAt, updatesUntil: lic.updatesUntil, metadata: lic.metadata } : null,
+        order: policyOrderOf(order), held,
+      });
+      if (decision.decision === 'terminal') {
+        await auditPolicyTask(tx, e, decision.adminTask, decision.code);
+        return { terminal: decision.code };
+      }
+    }
+    const order = await loadOrder(tx, e.storeId, p.orderId);
+    const reservations = await tx.select().from(s.orderReservation)
+      .where(and(eq(s.orderReservation.storeId, e.storeId), eq(s.orderReservation.orderId, p.orderId)));
+    const verdict = await runRevalidateForIssuance(tx, { order: policyOrderOf(order), reservations, held });
+    if (!verdict.ok) {
+      if (verdict.audit) {
+        await tx.insert(s.auditLog).values({
+          storeId: e.storeId, actor: 'system:policy', entity: 'order', entityId: p.orderId,
+          action: verdict.audit.action, data: verdict.audit.data,
+        });
+      }
+      return { terminal: verdict.code };
+    }
+    return undefined;
+  });
+}
+
+/**
+ * Lock-order detector (PAYMENT-TIMING §3.5). An inline effect runs inside its settlement's transaction, after the
+ * settlement has already locked rows. A lock-taking licence effect that is not covered by a set already held on
+ * that transaction would take L2/L1 after L3/L4 (inversion) and cannot retry a deadlock (X-45). In test builds
+ * this throws; production keeps the behaviour unchanged (the set is acquired in-transaction as before).
+ */
+async function assertInlineCovered(tx: Tx, storeId: string, subject: LockSubject, effectKind: string): Promise<void> {
+  if (!runningInline(tx)) return;
+  if (currentLockSet(tx) && (await lockSetCovers(tx, storeId, subject))) return;
+  if (process.env.NODE_ENV === 'test') throw new Error(`inline lock-taking effect without a covering lock set: ${effectKind}`);
+}
+
 const licenseIssue: LocalEffectHandler = {
   async run(tx, e) {
     const p = e.payload as unknown as LicenseIssuePayload;
     // Link-only (issue === false) mirrors the first-cycle path of a subscription invoice that does not
     // transition the order: the existing licence (if any) is linked and the activation audited, nothing issued.
-    const linkOnly = p.issue === false;
-    if (!linkOnly) {
-      const blocked = await requirePaidLifecycle(tx, e, p.orderId);
-      if (blocked) return blocked;
-    }
-    const issued = linkOnly ? [] : await issueLicensesForPaidOrder(tx, { storeId: e.storeId, orderId: p.orderId, customerId: p.customerId ?? null, paidAt: new Date(p.paidAt) });
-    if (!p.link) return { done: { result: { issued } } };
-    // First-cycle subscription invoice: link the (freshly issued or pre-existing) licence to the subscription.
-    const [lic] = await tx.select({ id: s.license.id }).from(s.license)
-      .where(and(eq(s.license.storeId, e.storeId), eq(s.license.orderId, p.orderId))).limit(1);
-    await tx.update(s.subscription).set({ licenseId: lic?.id ?? null, updatedAt: new Date() })
-      .where(and(eq(s.subscription.storeId, e.storeId), eq(s.subscription.stripeSubscriptionId, p.link.stripeSubscriptionId)));
-    if (lic) await recordOperationLicense(tx, e.storeId, { kind: p.link.operationKind, id: p.link.operationId }, lic.id);
-    await tx.insert(s.auditLog).values({
-      storeId: e.storeId, actor: 'stripe:webhook', entity: 'subscription', entityId: p.link.stripeSubscriptionId,
-      action: 'subscription_activated', data: { orderId: p.orderId, licenseId: lic?.id ?? null },
+    if (p.issue === false) return linkLicense(tx, e, p, []);
+    const blocked = await requirePaidLifecycle(tx, e, p.orderId);
+    if (blocked) return blocked;
+    // Issuance runs under the order's lock set (PAYMENT-TIMING §3.5): the policy gate and the issue see the
+    // same locked rows. Inline effects pass through the settlement's own set.
+    await assertInlineCovered(tx, e.storeId, { kind: 'order', orderId: p.orderId }, 'license_issue');
+    return withLockedSetInTx(tx, e.storeId, { kind: 'order', orderId: p.orderId }, async (inner, held) => {
+      const gate = await issuanceGate(inner, e, p, held);
+      if (gate) return gate;
+      const issued = await issueLicensesForPaidOrder(inner, { storeId: e.storeId, orderId: p.orderId, customerId: p.customerId ?? null, paidAt: new Date(p.paidAt) });
+      return linkLicense(inner, e, p, issued);
     });
-    return { done: { result: { issued, licenseId: lic?.id ?? null } } };
   },
 };
+
+/** Links the order's licence to a first-cycle subscription (when the payload asks) and returns the outcome. */
+async function linkLicense(tx: Tx, e: EffectRow, p: LicenseIssuePayload, issued: unknown): Promise<EffectOutcome> {
+  if (!p.link) return { done: { result: { issued } } };
+  // First-cycle subscription invoice: link the (freshly issued or pre-existing) licence to the subscription.
+  const [lic] = await tx.select({ id: s.license.id }).from(s.license)
+    .where(and(eq(s.license.storeId, e.storeId), eq(s.license.orderId, p.orderId))).limit(1);
+  await tx.update(s.subscription).set({ licenseId: lic?.id ?? null, updatedAt: new Date() })
+    .where(and(eq(s.subscription.storeId, e.storeId), eq(s.subscription.stripeSubscriptionId, p.link.stripeSubscriptionId)));
+  if (lic) await recordOperationLicense(tx, e.storeId, { kind: p.link.operationKind, id: p.link.operationId }, lic.id);
+  await tx.insert(s.auditLog).values({
+    storeId: e.storeId, actor: 'stripe:webhook', entity: 'subscription', entityId: p.link.stripeSubscriptionId,
+    action: 'subscription_activated', data: { orderId: p.orderId, licenseId: lic?.id ?? null },
+  });
+  return { done: { result: { issued, licenseId: lic?.id ?? null } } };
+}
 
 /**
  * X-49: the order set is taken on the effect's own transaction (lockSetInTx): a covering set already
@@ -215,10 +314,35 @@ const licenseExtend: LocalEffectHandler = {
     if (!sub?.licenseId) {
       return { retry: { reason: 'licence_not_linked', delayMs: backoffSeconds(e.attempts) * 1000, horizonMs: LICENSE_EXTEND_RETRY_HORIZON_MS } };
     }
-    const [lic] = await tx
-      .select({ id: s.license.id, status: s.license.status, orderLineId: s.license.orderLineId, expiresAt: s.license.expiresAt, updatesUntil: s.license.updatesUntil })
-      .from(s.license).where(eq(s.license.id, sub.licenseId)).limit(1);
+    // The licence row is locked before it is read or extended (PAYMENT-TIMING §3.5): the effect's own set.
+    const licenseId = sub.licenseId;
+    await assertInlineCovered(tx, e.storeId, { kind: 'checkout', sourceLicenseId: licenseId }, 'license_extend');
+    return withLockedSetInTx(tx, e.storeId, { kind: 'checkout', sourceLicenseId: licenseId }, (inner, held) => extendLicence(inner, e, p, licenseId, held));
+  },
+};
+
+/** Renewal body under the licence lock: policy authorisation first, then the extension (money is already recorded). */
+async function extendLicence(tx: Tx, e: EffectRow, p: LicenseExtendPayload, licenseId: string, held: HeldLocks): Promise<EffectOutcome> {
+  return guardPolicy(async () => {
+    const [lic] = await tx.select().from(s.license).where(eq(s.license.id, licenseId)).limit(1);
     if (!lic) return { terminal: 'licence_missing' };
+    const [sub] = await tx.select().from(s.subscription)
+      .where(and(eq(s.subscription.storeId, e.storeId), eq(s.subscription.stripeSubscriptionId, p.stripeSubscriptionId))).limit(1);
+    const [order] = lic.orderId == null ? [] : await tx.select().from(s.order)
+      .where(and(eq(s.order.id, lic.orderId), eq(s.order.storeId, e.storeId))).limit(1);
+    const decision = await runAuthorizeInvoiceEffect(tx, {
+      storeId: e.storeId, operationId: e.operationId, effectKind: 'renewal_extension', cycle: 'renewal',
+      invoice: { id: p.invoiceId, subscriptionId: p.stripeSubscriptionId, paymentIntentId: null, billingReason: null, amountPaid: null, periodEnd: null },
+      subscription: sub
+        ? { id: sub.stripeSubscriptionId, status: sub.status, licenseId: sub.licenseId, orderId: sub.orderId }
+        : { id: p.stripeSubscriptionId, status: 'absent', licenseId: null, orderId: null },
+      license: { id: lic.id, status: lic.status, expiresAt: lic.expiresAt, updatesUntil: lic.updatesUntil, metadata: lic.metadata },
+      order: order ? policyOrderOf(order) : null, held,
+    });
+    if (decision.decision === 'terminal') {
+      await auditPolicyTask(tx, e, decision.adminTask, decision.code);
+      return { terminal: decision.code };
+    }
     // A revoked licence is extended like any other (main's extendRenewal never checked status): the
     // renewal is the subscription's money and its record; revocation decisions stay with the operator.
     // orderLineId is nullable (orderless admin/storekit issuance); a subscription licence always originates from an order line.
@@ -238,8 +362,8 @@ const licenseExtend: LocalEffectHandler = {
     if (p.noOrder) await audit('subscription_renewal_no_order', { invoiceId: p.invoiceId });
     await audit('subscription_renewed', { licenseId: lic.id, expiresAt, updatesUntil, invoiceId: p.invoiceId, effectId: e.id });
     return { done: { result: { licenseId: lic.id, expiresAt, updatesUntil, t } } };
-  },
-};
+  });
+}
 
 let registered = false;
 /** Idempotent; called by settlement.ts so any process that can record an operation can also execute inline. */

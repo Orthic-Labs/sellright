@@ -12,6 +12,7 @@
 import { randomUUID } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
 import type { Tx } from '../db/client.js';
+import { withLockedSetInTx } from '../db/locks.js';
 import * as s from '../db/schema.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
 import type { PaymentResult } from './provider.js';
@@ -72,6 +73,16 @@ export interface SettleOrderRef {
 }
 
 export async function applyPaymentResult(
+  tx: Tx,
+  opts: { storeId: string; order: SettleOrderRef; method: string; result: PaymentResult; amount?: number; editId?: string },
+): Promise<{ orderState: OrderState; paymentState: PaymentResult['state'] }> {
+  // PAYMENT-TIMING §3.5: the order's set (L2 licences, L3 order, L4 reservations) is held on this transaction BEFORE
+  // the order row is read FOR UPDATE below, so an inline issuance never takes L2 after L3. Pass-through when the
+  // caller already holds a covering set (webhook, /pay, order edit, gateway finish).
+  return withLockedSetInTx(tx, opts.storeId, { kind: 'order', orderId: opts.order.id }, () => applyPaymentResultLocked(tx, opts));
+}
+
+async function applyPaymentResultLocked(
   tx: Tx,
   // `amount` is the amount ACTUALLY charged for this capture. Optional for
   // callers that always settle the order's full grandTotal in one shot; defaults

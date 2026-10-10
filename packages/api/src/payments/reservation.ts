@@ -14,8 +14,11 @@
 // R6 (operator override, released_unverified) is an admin-route concern and is not here.
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { withStore, type Tx } from '../db/client.js';
-import type { HeldLocks } from '../db/locks.js';
+import { withLockedSetInTx, type HeldLocks } from '../db/locks.js';
 import * as s from '../db/schema.js';
+import { dispatchReservationTransitions } from './policy/transitions.js';
+import { PaymentPolicyUnavailableError } from './policy/registry.js';
+import { err as logErr } from '../lib/logger.js';
 
 export type ReservationRow = typeof s.orderReservation.$inferSelect;
 export type ReservationState = 'held' | 'consumed' | 'released';
@@ -151,6 +154,7 @@ export async function reserve(
       expiresAt: input.expiresAt ?? null,
     })
     .returning();
+  await dispatchReservationTransitions(tx, [row!], null, 'held', 'reserved');
   return row!;
 }
 
@@ -161,12 +165,13 @@ export async function reserve(
 async function consumeCore(
   tx: Tx,
   input: { storeId: string; orderId: string; paymentId: string | null; operationId: string },
+  opts: { isolateProjection?: boolean } = {},
 ): Promise<ReservationRow[]> {
   const state = await orderState(tx, input.storeId, input.orderId);
   if (!(CONSUMABLE_STATES as readonly string[]).includes(state)) {
     throw new ReservationRuleError(`cannot consume reservations of a ${state} order (I3: consume implies Paid)`);
   }
-  return tx
+  const consumed = await tx
     .update(s.orderReservation)
     .set({
       state: 'consumed',
@@ -179,6 +184,25 @@ async function consumeCore(
     .where(and(eq(s.orderReservation.storeId, input.storeId), eq(s.orderReservation.orderId, input.orderId),
       eq(s.orderReservation.state, 'held')))
     .returning();
+  if (!opts.isolateProjection) {
+    await dispatchReservationTransitions(tx, consumed, 'held', 'consumed', 'consumed');
+    return consumed;
+  }
+  // Settlement records money the provider already moved (X-45): it must commit. R2 leaves the rollback
+  // projection unchanged (§3.3), so a failing projection is rolled back to its own savepoint (inSavepoint),
+  // logged and audited, and the settlement proceeds.
+  try {
+    await dispatchReservationTransitions(tx, consumed, 'held', 'consumed', 'consumed');
+  } catch (e) {
+    if (!(e instanceof PaymentPolicyUnavailableError)) throw e;
+    logErr.error('reservation consume projection failed; settlement continues', e, { orderId: input.orderId, operationId: input.operationId });
+    await tx.insert(s.auditLog).values({
+      storeId: input.storeId, actor: 'system:policy', entity: 'order', entityId: input.orderId,
+      action: 'reservation_projection_failed',
+      data: { cause: 'consumed', operationId: input.operationId, reservationIds: consumed.map((r) => r.id) },
+    });
+  }
+  return consumed;
 }
 
 /**
@@ -212,7 +236,7 @@ export async function consumeForSettlement(
   const [o] = await tx.select({ state: s.order.state }).from(s.order)
     .where(and(eq(s.order.id, input.orderId), eq(s.order.storeId, input.storeId))).limit(1).for('update');
   if (!o || !(CONSUMABLE_STATES as readonly string[]).includes(o.state)) return [];
-  return consumeCore(tx, input);
+  return consumeCore(tx, input, { isolateProjection: true });
 }
 
 /** R3: a cancel path asked to release. Records the request; effective only through settleRelease. */
@@ -262,11 +286,13 @@ async function settleReleaseCore(
     stripeDiscoverable: input.stripeDiscoverable,
   });
   if (!quiescent) return [];
-  return tx
+  const released = await tx
     .update(s.orderReservation)
     .set({ state: 'released', releasedAt: sql`now()`, providerTerminalAt: sql`now()`, updatedAt: sql`now()` })
     .where(inArray(s.orderReservation.id, pending.map((r) => r.id)))
     .returning();
+  await dispatchReservationTransitions(tx, released, 'held', 'released', state === 'Refunded' ? 'order_refunded' : 'order_cancelled');
+  return released;
 }
 
 /** R3 + R4 in one call: the cancel path's entry point. Returns the rows still held with a request. */
@@ -325,12 +351,137 @@ export async function releaseOnFullRefund(
 ): Promise<ReservationRow[]> {
   const state = await orderState(tx, input.storeId, input.orderId);
   if (state !== 'Refunded') return [];
-  return tx
+  const released = await tx
     .update(s.orderReservation)
     .set({ state: 'released', releasedAt: sql`now()`, updatedAt: sql`now()` })
     .where(and(eq(s.orderReservation.storeId, input.storeId), eq(s.orderReservation.orderId, input.orderId),
       eq(s.orderReservation.state, 'consumed'), eq(s.orderReservation.releaseOnFullRefund, true)))
     .returning();
+  await dispatchReservationTransitions(tx, released, 'consumed', 'released', 'order_refunded');
+  return released;
+}
+
+/**
+ * R5 at a refund that moved the order to Refunded (X-45): the refund records money the provider already
+ * moved, so a failing projection must NOT abort it. The release runs in its own savepoint; a
+ * PaymentPolicyUnavailableError rolls the release back, keeps the rows `consumed`, marks them with
+ * release_requested_at (so the reservation-release sweep retries), and audits the failure with an admin
+ * task. Other errors still abort the caller's transaction.
+ */
+export async function releaseOnFullRefundOrDefer(
+  tx: Tx,
+  held: HeldLocks,
+  input: { storeId: string; orderId: string; refundId?: string | null },
+): Promise<{ released: ReservationRow[]; deferred: boolean }> {
+  await tx.execute(sql`SAVEPOINT reservation_r5`);
+  try {
+    const released = await releaseOnFullRefund(tx, held, input);
+    await tx.execute(sql`RELEASE SAVEPOINT reservation_r5`);
+    return { released, deferred: false };
+  } catch (e) {
+    await tx.execute(sql`ROLLBACK TO SAVEPOINT reservation_r5`);
+    await tx.execute(sql`RELEASE SAVEPOINT reservation_r5`);
+    if (!(e instanceof PaymentPolicyUnavailableError)) throw e;
+    const deferred = await tx.update(s.orderReservation)
+      .set({
+        releaseRequestedAt: sql`coalesce(${s.orderReservation.releaseRequestedAt}, now())`,
+        releaseReason: sql`coalesce(${s.orderReservation.releaseReason}, 'order_refunded')`,
+        updatedAt: sql`now()`,
+      })
+      .where(and(eq(s.orderReservation.storeId, input.storeId), eq(s.orderReservation.orderId, input.orderId),
+        eq(s.orderReservation.state, 'consumed'), eq(s.orderReservation.releaseOnFullRefund, true)))
+      .returning({ id: s.orderReservation.id });
+    if (deferred.length) {
+      const detail = `release of ${deferred.length} reservation(s) deferred after a refund: projection unavailable; the sweep retries`;
+      await tx.insert(s.auditLog).values({
+        storeId: input.storeId, actor: 'system:policy', entity: 'order', entityId: input.orderId,
+        action: 'reservation_projection_failed',
+        data: { cause: 'order_refunded', refundId: input.refundId ?? null, reservationIds: deferred.map((r) => r.id) },
+      });
+      await tx.insert(s.auditLog).values({
+        storeId: input.storeId, actor: 'system:policy', entity: 'order', entityId: input.orderId,
+        action: 'policy_admin_task',
+        data: { title: 'Reservation release pending after refund', detail, code: 'reservation_projection_failed' },
+      });
+    }
+    return { released: [], deferred: true };
+  }
+}
+
+/**
+ * R5 for a refund path whose transaction already runs under the order's lock set (finalizeRefund's contract,
+ * the webhook and sezzle reconcilers): passes through that set, or takes it for this transaction.
+ */
+export async function releaseOnFullRefundInSet(
+  tx: Tx,
+  input: { storeId: string; orderId: string; refundId?: string | null },
+): Promise<{ released: ReservationRow[]; deferred: boolean }> {
+  return withLockedSetInTx(tx, input.storeId, { kind: 'order', orderId: input.orderId }, (t, held) => releaseOnFullRefundOrDefer(t, held, input));
+}
+
+/**
+ * R6 (PAYMENT-TIMING §5.3.3): operator override. Releases the order's held rows while provider state is
+ * unverified. Requires a Cancelled order and a reason of at least 10 characters. Money that lands later
+ * follows I1 (recorded, payment_after_cancel).
+ */
+export async function overrideRelease(
+  tx: Tx,
+  _held: HeldLocks,
+  input: { storeId: string; orderId: string; reason: string },
+): Promise<ReservationRow[]> {
+  if (input.reason.trim().length < 10) throw new ReservationRuleError('override reason must be at least 10 characters');
+  const state = await orderState(tx, input.storeId, input.orderId);
+  if (state !== 'Cancelled') throw new ReservationRuleError(`operator override requires a Cancelled order (order is ${state})`);
+  const released = await tx
+    .update(s.orderReservation)
+    .set({
+      state: 'released', releasedAt: sql`now()`, providerTerminalAt: sql`now()`, releasedUnverified: true,
+      releaseReason: `operator_override: ${input.reason.trim()}`, updatedAt: sql`now()`,
+    })
+    .where(and(eq(s.orderReservation.storeId, input.storeId), eq(s.orderReservation.orderId, input.orderId),
+      eq(s.orderReservation.state, 'held')))
+    .returning();
+  await dispatchReservationTransitions(tx, released, 'held', 'released', 'operator_override');
+  return released;
+}
+
+/**
+ * Purge gate (PAYMENT-TIMING §3.5, R2-1): true when the order holds a held reservation whose provider work
+ * could still move money. The caller refuses the purge in that case. Evaluated under the order lock.
+ * `stripeDiscoverable` is the caller's pre-transaction stripeDiscoverable(storeId, config) (no I/O here).
+ */
+export async function purgeBlockedByReservations(
+  tx: Tx,
+  storeId: string,
+  orderId: string,
+  opts: { stripeDiscoverable: boolean },
+): Promise<boolean> {
+  const [held] = await tx.select({ id: s.orderReservation.id }).from(s.orderReservation).where(and(
+    eq(s.orderReservation.storeId, storeId), eq(s.orderReservation.orderId, orderId),
+    eq(s.orderReservation.state, 'held'))).limit(1);
+  if (!held) return false;
+  return !(await providerQuiescent(tx, storeId, orderId, { stripeDiscoverable: opts.stripeDiscoverable }));
+}
+
+/**
+ * Purge (PAYMENT-TIMING §3.5): every reservation of the order is projected as released (cause order_purged)
+ * and deleted, before the order row (FK). Runs under the order's lock set (the caller holds HeldLocks).
+ */
+export async function purgeReservations(
+  tx: Tx,
+  _held: HeldLocks,
+  input: { storeId: string; orderId: string },
+): Promise<ReservationRow[]> {
+  const rows = await tx.select().from(s.orderReservation).where(and(
+    eq(s.orderReservation.storeId, input.storeId), eq(s.orderReservation.orderId, input.orderId)));
+  for (const row of rows) {
+    await dispatchReservationTransitions(tx, [{ ...row, state: 'released' }], row.state, 'released', 'order_purged');
+  }
+  if (rows.length) {
+    await tx.delete(s.orderReservation).where(and(
+      eq(s.orderReservation.storeId, input.storeId), eq(s.orderReservation.orderId, input.orderId)));
+  }
+  return rows;
 }
 
 /** Live (held or consumed) reservations, optionally narrowed. Read-only; no lock brand needed. */

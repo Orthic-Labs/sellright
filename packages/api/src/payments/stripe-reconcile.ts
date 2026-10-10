@@ -27,6 +27,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { and, asc, eq, inArray, isNotNull, isNull, notInArray, or, sql } from 'drizzle-orm';
 import { recoveryBackoffMs } from '../jobs/gateway-recovery.js';
 import { withAdvisoryLock, withStore, type Tx } from '../db/client.js';
+import { withLockedSetInTx } from '../db/locks.js';
 import * as s from '../db/schema.js';
 import { applyPaymentResult, amountDueForOrder } from './settle.js';
 import { recordSettlementOperation } from './settlement/record.js';
@@ -162,6 +163,16 @@ async function stripePaymentFor(tx: Tx, intentId: string) {
 export async function applyStripeIntent(tx: Tx, storeId: string, pi: StripeIntent, mode: StripeMode, opts: { actor?: string } = {}): Promise<{ outcome: StripeIntentOutcome; orderState?: string }> {
   const code = pi.metadata?.orderCode;
   if (!code) return { outcome: 'ignored' };
+  // PAYMENT-TIMING §3.5: the order's set is taken on this transaction before the order row is locked (the id is read
+  // unlocked for planning; the row itself is re-read FOR UPDATE under the set). Pass-through under the webhook's set.
+  const [planned] = await tx.select({ id: s.order.id }).from(s.order).where(eq(s.order.code, code)).limit(1);
+  if (!planned) return { outcome: 'ignored' };
+  return withLockedSetInTx(tx, storeId, { kind: 'order', orderId: planned.id }, () => applyStripeIntentLocked(tx, storeId, pi, mode, code, opts));
+}
+
+async function applyStripeIntentLocked(
+  tx: Tx, storeId: string, pi: StripeIntent, mode: StripeMode, code: string, opts: { actor?: string },
+): Promise<{ outcome: StripeIntentOutcome; orderState?: string }> {
   const [order] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
   if (!order) return { outcome: 'ignored' };
   const attempt = await trackStripeIntent(tx, storeId, {

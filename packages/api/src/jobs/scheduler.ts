@@ -22,6 +22,7 @@ import { env } from '../env.js';
 import { isMaintenanceOn } from '../maintenance.js';
 import { autoDeliver } from './auto-deliver.js';
 import { releaseStaleAllocations } from './release-stale-allocations.js';
+import { reservationReleaseSweep } from './reservation-release-sweep.js';
 import { reconcileGatewayEvents } from './reconcile-gateway-events.js';
 import { recoverGatewayAttempts } from './gateway-recovery.js';
 import { reapStuckWebhooks } from './webhook-reaper.js';
@@ -196,6 +197,8 @@ export function startJobScheduler(extraJobs: ReadonlyArray<PluginJob & { plugin:
   }
   every(state, HOUR, 'auto-deliver', 'auto-deliver', () => autoDeliver({ apply: autoDeliverApply, days: autoDeliverDays, log: jobLog }));
   every(state, 15 * 60_000, 'release-stale', 'release-stale', () => releaseStaleAllocations({ apply: releaseApply, ttlMin: releaseTtlMin, log: jobLog }));
+  // PAYMENT-TIMING §5.2: safety net for release requests and R5 projections deferred by a failing policy hook.
+  every(state, 15 * 60_000, 'reservation-release-sweep', 'reservation-release-sweep', () => reservationReleaseSweep({ log: jobLog }));
   // Cart lifecycle: flag inactive non-empty carts abandoned (emits cart.abandoned
   // for recovery) + hard-delete idle/empty carts past their TTL. Always applies
   // (no dry-run flag): abandonment is reversible (a returning shopper re-activates

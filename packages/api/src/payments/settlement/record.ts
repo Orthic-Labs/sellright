@@ -339,13 +339,19 @@ export async function recordSettlementOperation(tx: Tx, op: SettlementOperation)
   // PAYMENT-TIMING §3.7 (R2): money that settles an order consumes the order's held reservations in THIS
   // transaction. No-op for orders without held reservations and for orders that are not Paid|PartiallyRefunded
   // after the apply (money on a cancelled order keeps its hold; I1 / payment_after_cancel).
+  let consumedReservationIds: string[] = [];
   if (CONSUMING_KINDS.has(op.kind)) {
     const orderId = applied.orderId ?? op.orderId ?? (applied.paymentId ? await paymentOrderId(tx, op.storeId, applied.paymentId) : null);
     // The Paid transition op carries no payment row of its own: the consumed payment is the order's latest Settled one.
     const paymentId = applied.paymentId ?? (orderId ? await latestSettledPaymentId(tx, op.storeId, orderId) : null);
-    if (orderId) await consumeForSettlement(tx, { storeId: op.storeId, orderId, paymentId, operationId });
+    if (orderId) consumedReservationIds = (await consumeForSettlement(tx, { storeId: op.storeId, orderId, paymentId, operationId })).map((r) => r.id);
   }
-  const created = await enqueueEffects(tx, op.storeId, { kind: op.kind, id: operationId }, op.effects);
+  // PAYMENT-TIMING §3.7.1: issuance-class effects carry the reservations this settlement consumed (informational;
+  // the effect re-reads and revalidates them under its own lock set).
+  const effects = consumedReservationIds.length
+    ? op.effects.map((eff) => (eff.kind === 'license_issue' ? { ...eff, payload: { ...eff.payload, reservationIds: consumedReservationIds } } : eff))
+    : op.effects;
+  const created = await enqueueEffects(tx, op.storeId, { kind: op.kind, id: operationId }, effects);
   if ((op.effectMode ?? 'inline') === 'inline') await executeEffectsNow(tx, created.map((r) => r.id));
   return {
     created: true, replayed: false, operationRowId: opRow.id, paymentId: applied.paymentId,

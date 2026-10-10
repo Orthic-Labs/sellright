@@ -8,11 +8,12 @@ const assertHeld = vi.fn(async () => undefined);
 vi.mock('../../db/locks.js', async (importOriginal) => ({ ...(await importOriginal<typeof import('../../db/locks.js')>()), assertHeld: (...a: unknown[]) => assertHeld(...(a as [])) }));
 
 import {
-  PaymentPolicyUnavailableError, PaymentPolicyVetoError, _resetPaymentPoliciesForTests, registerPaymentPolicy,
-  registeredPaymentPolicies, runBeforePaymentAttempt,
+  PaymentPolicyCompositionError, PaymentPolicyUnavailableError, PaymentPolicyVetoError, _resetPaymentPoliciesForTests, registerPaymentPolicy,
+  registeredPaymentPolicies, runAuthorizeInvoiceEffect, runBeforePaymentAttempt, runRevalidateForIssuance, runShapeSettlementResponse,
 } from './host.js';
+import { dispatchReservationTransition } from './transitions.js';
 import { SELLRIGHT_DEFAULT_POLICY_ID, installDefaultPaymentPolicy } from './default-policy.js';
-import type { BeforePaymentAttemptInput, PaymentPolicy } from './types.js';
+import type { AuthorizeInvoiceEffectInput, BeforePaymentAttemptInput, PaymentPolicy, RevalidateForIssuanceInput } from './types.js';
 
 const dialect = new PgDialect();
 const executed: string[] = [];
@@ -98,3 +99,52 @@ describe('runBeforePaymentAttempt', () => {
     expect(executed).toEqual(['SAVEPOINT policy_hook', 'ROLLBACK TO SAVEPOINT policy_hook', 'RELEASE SAVEPOINT policy_hook']);
   });
 });
+
+describe('composition of the new hooks (pure)', () => {
+  it('a duplicate reservation identity across policies is a composition error, raised before any reservation is created', async () => {
+    const req = { kind: 'k', ownerKey: 'o' };
+    registerPaymentPolicy({ id: 'first', async beforePaymentAttempt() { return { allow: true, reserve: [req] }; } });
+    registerPaymentPolicy({ id: 'second', async beforePaymentAttempt() { return { allow: true, reserve: [req] }; } });
+    const err = await runBeforePaymentAttempt(fakeTx, input).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(PaymentPolicyCompositionError);
+    expect((err as PaymentPolicyCompositionError).policyIds).toEqual(['first', 'second']);
+  });
+
+  it('a terminal invoice decision wins in registration order; the default is apply', async () => {
+    const seen: string[] = [];
+    registerPaymentPolicy({ id: 'ok', async beforePaymentAttempt() { return { allow: true }; }, async authorizeInvoiceEffect() { seen.push('ok'); return { decision: 'apply' }; } });
+    registerPaymentPolicy({ id: 'stop', async beforePaymentAttempt() { return { allow: true }; }, async authorizeInvoiceEffect() { seen.push('stop'); return { decision: 'terminal', code: 'X', adminTask: { title: 't', detail: 'd' } }; } });
+    registerPaymentPolicy({ id: 'late', async beforePaymentAttempt() { return { allow: true }; }, async authorizeInvoiceEffect() { seen.push('late'); return { decision: 'apply' }; } });
+    const out = await runAuthorizeInvoiceEffect(fakeTx, { held: {} as HeldLocks } as AuthorizeInvoiceEffectInput);
+    expect(out).toMatchObject({ decision: 'terminal', code: 'X' });
+    expect(seen).toEqual(['ok', 'stop']);
+  });
+
+  it('no policy answering terminal means apply, and a failing authorisation hook is unavailable', async () => {
+    expect(await runAuthorizeInvoiceEffect(fakeTx, { held: {} as HeldLocks } as AuthorizeInvoiceEffectInput)).toEqual({ decision: 'apply' });
+    registerPaymentPolicy({ id: 'broken', async beforePaymentAttempt() { return { allow: true }; }, async authorizeInvoiceEffect() { throw new Error('x'); } });
+    await expect(runAuthorizeInvoiceEffect(fakeTx, { held: {} as HeldLocks } as AuthorizeInvoiceEffectInput)).rejects.toBeInstanceOf(PaymentPolicyUnavailableError);
+  });
+
+  it('the first failed issuance revalidation wins; the default is ok', async () => {
+    expect(await runRevalidateForIssuance(fakeTx, { held: {} as HeldLocks } as RevalidateForIssuanceInput)).toEqual({ ok: true });
+    registerPaymentPolicy({ id: 'bad', async beforePaymentAttempt() { return { allow: true }; }, async revalidateForIssuance() { return { ok: false, code: 'BAD' }; } });
+    registerPaymentPolicy({ id: 'later', async beforePaymentAttempt() { return { allow: true }; }, async revalidateForIssuance() { return { ok: false, code: 'LATER' }; } });
+    expect(await runRevalidateForIssuance(fakeTx, { held: {} as HeldLocks } as RevalidateForIssuanceInput)).toEqual({ ok: false, code: 'BAD' });
+  });
+
+  it('response shaping: the first override wins; a failing shaping hook is no override and never throws', async () => {
+    registerPaymentPolicy({ id: 'broken', async beforePaymentAttempt() { return { allow: true }; }, async shapeSettlementResponse() { throw new Error('x'); } });
+    registerPaymentPolicy({ id: 'first', async beforePaymentAttempt() { return { allow: true }; }, async shapeSettlementResponse() { return { status: 409, code: 'ORDER_NOT_PAYABLE' }; } });
+    registerPaymentPolicy({ id: 'second', async beforePaymentAttempt() { return { allow: true }; }, async shapeSettlementResponse() { return { status: 409, code: 'OTHER' }; } });
+    const out = await runShapeSettlementResponse(fakeTx, { route: 'pay', order: {} as never, recordedPaymentId: null, held: {} as HeldLocks });
+    expect(out).toEqual({ status: 409, code: 'ORDER_NOT_PAYABLE' });
+  });
+
+  it('a transition projection failure surfaces as unavailable (the transition must not commit without its projection)', async () => {
+    registerPaymentPolicy({ id: 'proj', async beforePaymentAttempt() { return { allow: true }; }, async onReservationTransition() { throw new Error('x'); } });
+    const row = { id: 'r' } as never;
+    await expect(dispatchReservationTransition(fakeTx, { reservation: row, from: null, to: 'held', cause: 'reserved' })).rejects.toBeInstanceOf(PaymentPolicyUnavailableError);
+  });
+});
+

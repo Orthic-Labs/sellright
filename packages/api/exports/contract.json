@@ -1128,6 +1128,83 @@
       "kind": "function",
       "disposition": "public",
       "surface": "storekit"
+    },
+    {
+      "module": "payments/policy/host",
+      "symbol": "PaymentPolicyCompositionError",
+      "kind": "class",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/reservation",
+      "symbol": "ReservationRow",
+      "kind": "type",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/types",
+      "symbol": "AuthorizeInvoiceEffectInput",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/types",
+      "symbol": "InvoiceCycle",
+      "kind": "type",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/types",
+      "symbol": "InvoiceEffectDecision",
+      "kind": "type",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/types",
+      "symbol": "ReservationRequest",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/types",
+      "symbol": "ReservationTransition",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/types",
+      "symbol": "RevalidateForIssuanceInput",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/types",
+      "symbol": "RevalidateForIssuanceResult",
+      "kind": "type",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/types",
+      "symbol": "SettlementResponseInput",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/types",
+      "symbol": "SettlementResponseOverride",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "payments"
     }
   ]
 }

@@ -134,16 +134,31 @@ export async function executeEffectsNow(tx: Tx, effectIds: readonly string[]): P
   if (!effectIds.length) return;
   const rows = await tx.select().from(s.orderPendingEffect)
     .where(and(inArray(s.orderPendingEffect.id, [...effectIds]), eq(s.orderPendingEffect.status, 'pending')));
-  for (const row of rows.sort((a, b) => effectRank(a.effectKind) - effectRank(b.effectKind))) {
-    const handler = handlers.get(row.effectKind);
-    if (handler?.mode === 'external') continue;
-    if (!handler) throw new Error(`no handler registered for effect kind "${row.effectKind}"`);
-    const [claimed] = await tx.update(s.orderPendingEffect).set({
-      status: 'processing', claimToken: randomUUID(), claimedAt: new Date(), attempts: row.attempts + 1, updatedAt: new Date(),
-    }).where(and(eq(s.orderPendingEffect.id, row.id), eq(s.orderPendingEffect.status, 'pending'))).returning();
-    if (!claimed) continue;
-    await applyOutcome(tx, claimed, await handler.run(tx, claimed));
+  // Marks this transaction as running inline so a lock-taking handler can assert it holds a covering set.
+  const wasInline = inlineTxs.has(tx);
+  inlineTxs.add(tx);
+  try {
+    for (const row of rows.sort((a, b) => effectRank(a.effectKind) - effectRank(b.effectKind))) {
+      const handler = handlers.get(row.effectKind);
+      if (handler?.mode === 'external') continue;
+      if (!handler) throw new Error(`no handler registered for effect kind "${row.effectKind}"`);
+      const [claimed] = await tx.update(s.orderPendingEffect).set({
+        status: 'processing', claimToken: randomUUID(), claimedAt: new Date(), attempts: row.attempts + 1, updatedAt: new Date(),
+      }).where(and(eq(s.orderPendingEffect.id, row.id), eq(s.orderPendingEffect.status, 'pending'))).returning();
+      if (!claimed) continue;
+      await applyOutcome(tx, claimed, await handler.run(tx, claimed));
+    }
+  } finally {
+    if (!wasInline) inlineTxs.delete(tx);
   }
+}
+
+/** Transactions currently inside executeEffectsNow (inline effects). WeakSet: no reference outlives its transaction. */
+const inlineTxs = new WeakSet<Tx>();
+
+/** True while an inline effect runs on `tx` (executeEffectsNow). Deferred worker transactions are never inline. */
+export function runningInline(tx: Tx): boolean {
+  return inlineTxs.has(tx);
 }
 
 async function applyOutcome(tx: Tx, row: EffectRow, out: EffectOutcome): Promise<'done' | 'retry' | 'terminal'> {

@@ -5,7 +5,8 @@ import { and, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
 import { withAdvisoryLock, withStore } from '../db/client.js';
 import { withLockedSet, orderIdByCode } from '../db/locks.js';
 import * as s from '../db/schema.js';
-import { cancelOrderStripeIntents } from '../payments/stripe-reconcile.js';
+import { cancelOrderStripeIntents, stripeDiscoverable } from '../payments/stripe-reconcile.js';
+import { release } from '../payments/reservation.js';
 import { releaseOrderLoyalty } from '../loyalty/ledger.js';
 import { bearer } from '../auth/session.js';
 import { verifyPassword } from '../auth/password.js';
@@ -592,9 +593,12 @@ admin.openapi(
     // Unlocked id lookup, then the order set (STOREKIT §5.8 #11): the order is
     // re-read FOR UPDATE under the set, so a concurrent edit cannot slip between.
     const orderId = await orderIdByCode(st.storeId, code);
+    // PAYMENT-TIMING §3.4: quiescence is evaluated with the stripe discovery flag computed before the transaction (no I/O inside it).
+    const [cancelStore] = orderId ? await withStore(st.storeId, (tx) => tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1)) : [];
+    const stripeDiscover = orderId ? await stripeDiscoverable(st.storeId, cancelStore?.config ?? {}) : false;
     // X-46: the L0 pay advisory (same key as /pay and gateway recovery) is taken before the order set,
     // so a cancel serialises with an in-flight payment or capture for this order.
-    const res = !orderId ? { kind: 'notfound' as const } : await withAdvisoryLock(`pay:${st.storeId}:${code}`, () => withLockedSet(st.storeId, { kind: 'order', orderId }, async (tx) => {
+    const res = !orderId ? { kind: 'notfound' as const } : await withAdvisoryLock(`pay:${st.storeId}:${code}`, () => withLockedSet(st.storeId, { kind: 'order', orderId }, async (tx, held) => {
       const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
       if (!o) return { kind: 'notfound' as const };
       // Only unpaid orders can be cancelled directly — cancelling releases stock
@@ -622,6 +626,8 @@ admin.openapi(
       // LOYALTY-1: release points reserved by this order (idempotent).
       await releaseOrderLoyalty(tx, st.storeId, o.id, admin.email);
       await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'order', entityId: o.id, action: 'cancel', fromState: o.state, toState: 'Cancelled' });
+      // PAYMENT-TIMING §5.2 (R3/R4): request the release; it takes effect now if provider work is quiescent, else the sweep settles it.
+      await release(tx, held, { storeId: st.storeId, orderId: o.id, reason: 'order_cancelled', stripeDiscoverable: stripeDiscover });
       return { kind: 'ok' as const, orderId: o.id };
     }));
     if (stockChanged) onStockChanged(st.slug);

@@ -12,6 +12,9 @@ must update the matching changelog in the same push.
 
 ### Added
 
+- **Payment policy hooks (PAYMENT-TIMING §3.1)**: `PaymentPolicy` gains `authorizeInvoiceEffect` (subscription entitlement effects, effects worker), `revalidateForIssuance` (issuance effects, under the order lock set), `onReservationTransition` (projection in the transition's own transaction), `shapeSettlementResponse` (`/pay` response shaping only) and `lockPlan` (lock-set plan contributor). `beforePaymentAttempt` may return `reserve` requests; the engine creates the `order_reservation` rows in the same transaction. Placement tenders (zero total, gift card, admin manual `markPaid`, order-edit `record_payment`) run the placement check. Defaults allow, apply, ok and no-op, so SellRight standalone behaviour is unchanged. Exported from `@sellright/api/payments`.
+- Admin order purge refuses while a held reservation has provider work that could still move money, and releases the order's reservations (projected as `order_purged`) before the order row is deleted.
+
 - **Release registration policy host**: the engine owns `POST /v1/admin/apps/releases`; plugins supply `ApiPlugin.releaseRegistration` (app/channel claims, tenant-bound service credential, validation hook, optional `repointArtifacts`). Startup fails on conflicting claims or a re-registered host route. Admin-session republish of the same `(app, channel, platform, version)` is now an upsert (was a unique-violation error); `download_artifact` conflicts still keep the existing row unless the policy opts in. See `docs/policies/RELEASE-REGISTRATION.md`.
 - Entitlement authorization policy: one plugin policy consulted by every activation, refresh, update-feed, lease, trial and StoreKit link path. The default policy changes nothing.
 - `/v1/licenses/activate` alias for licence activation.
@@ -188,6 +191,7 @@ must update the matching changelog in the same push.
   exclusions instead of failing the run.
 
 ### Changed
+- `POST /v1/shop/orders/{code}/pay`: a settled tender is recorded before the reply. A payment policy may shape that reply to a 409 (for example `ORDER_NOT_PAYABLE`); with no override the success body is unchanged.
 
 - Malformed typed extensions on trial and activation requests return 400 `INVALID_REQUEST` instead of 500.
 - NMI test profiles can use an existing merchant account on the production

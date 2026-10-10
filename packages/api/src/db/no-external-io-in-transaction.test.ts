@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync } from 'node:fs';
-import { dirname, join, relative } from 'node:path';
+import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
@@ -11,7 +11,14 @@ const FORBIDDEN_IDENTIFIERS = new Set([
   'safeOutboundFetch',
   'sendApns',
   'sendEmail',
+  // PAYMENT-TIMING §3.1: provider calls a payment policy hook must never make (by convention until now).
+  'captureOrder',
+  'releaseOrder',
+  'cancelStripeIntent',
+  'createPaymentIntent',
 ]);
+/** Payment policy modules run every hook inside a transaction, so every call in them is checked, not only withStore callbacks. */
+const POLICY_DIR = `${sep}payments${sep}policy${sep}`;
 const FORBIDDEN_METHODS = new Set(['createPayment', 'refundPayment']);
 
 function sourceFiles(dir: string): string[] {
@@ -38,6 +45,19 @@ function externalCallsInsideStoreTransaction(path: string): string[] {
     ts.ScriptKind.TS,
   );
   const violations: string[] = [];
+  if (path.includes(POLICY_DIR)) {
+    const whole = (node: ts.Node): void => {
+      if (ts.isCallExpression(node)) {
+        const name = callName(node);
+        if (name && (FORBIDDEN_IDENTIFIERS.has(name) || FORBIDDEN_METHODS.has(name))) {
+          const position = source.getLineAndCharacterOfPosition(node.getStart(source));
+          violations.push(`${relative(SRC_ROOT, path)}:${position.line + 1} (${name}, policy module)`);
+        }
+      }
+      ts.forEachChild(node, whole);
+    };
+    whole(source);
+  }
 
   function inspectStoreCallback(node: ts.Node): void {
     if (ts.isCallExpression(node)) {

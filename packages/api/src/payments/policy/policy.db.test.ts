@@ -47,10 +47,17 @@ vi.mock('../provider.js', async (importOriginal) => {
       return { state: 'Settled' as const, providerRef: `nmi_tx_${nmiCalls.length}`, metadata: {} };
     },
   };
+  // Stripe /pay: the verified intent is taken as settled (the real verify call needs Stripe).
+  const stripeMock = {
+    method: 'stripe', requiresRedirect: false,
+    async createPayment(input: { token?: unknown }) {
+      return { state: 'Settled' as const, providerRef: String(input.token), metadata: {} };
+    },
+  };
   return {
     ...actual,
     isPaymentMethodEnabled: () => true,
-    getProvider: (m: string) => (m === 'nmi' ? nmiMock : actual.getProvider(m)),
+    getProvider: (m: string) => (m === 'nmi' ? nmiMock : m === 'stripe' ? stripeMock : actual.getProvider(m)),
   };
 });
 
@@ -255,3 +262,53 @@ describe('pre-mint helpers', () => {
     expect(await attemptsFor(id)).toHaveLength(2);
   });
 });
+
+describe('POST /pay: shapeSettlementResponse (PAYMENT-TIMING §4.2, T-V4)', () => {
+  const payReq = (code: string, token: string) => app.request(`/v1/shop/orders/${code}/pay`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-store-slug': SLUG, 'x-receipt-token': RT },
+    body: JSON.stringify({ method: 'stripe', token }),
+  });
+  const orderRow = (id: string) => withStore(STORE, (tx) => tx.select().from(s.order).where(eq(s.order.id, id)).limit(1)).then((r) => r[0]!);
+  const settledPayments = (id: string) => withStore(STORE, (tx) => tx.select().from(s.payment)
+    .where(sql`${s.payment.orderId} = ${id} AND ${s.payment.state} = 'Settled'`));
+
+  it('money is recorded first; the policy shapes the response to a 409 with the wire code', async () => {
+    const id = await makeOrder('PP9');
+    registerPaymentPolicy({
+      id: 'shaper',
+      async beforePaymentAttempt() { return { allow: true }; },
+      async shapeSettlementResponse(_tx, i) {
+        expect(i.route).toBe('pay');
+        expect(i.recordedPaymentId).not.toBeNull();
+        return { status: 409, code: 'ORDER_NOT_PAYABLE', extra: { state: 'MobileCreditInvalid' } };
+      },
+    });
+    const res = await payReq('PP9', 'pi_shape_1');
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ error: { code: 'ORDER_NOT_PAYABLE' }, state: 'MobileCreditInvalid' });
+    expect((await orderRow(id)).state).toBe('Paid');
+    expect(await settledPayments(id)).toHaveLength(1);
+  });
+
+  it('without an override the success body is unchanged', async () => {
+    await makeOrder('PP10');
+    const res = await payReq('PP10', 'pi_shape_2');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ code: 'PP10', state: 'Paid', payment: 'Settled' });
+  });
+
+  it('a failing shaping hook never rolls the recorded money back: the default success body is returned', async () => {
+    const id = await makeOrder('PP11');
+    registerPaymentPolicy({
+      id: 'broken-shaper',
+      async beforePaymentAttempt() { return { allow: true }; },
+      async shapeSettlementResponse() { throw new Error('shaping failed'); },
+    });
+    const res = await payReq('PP11', 'pi_shape_3');
+    expect(res.status).toBe(200);
+    expect((await orderRow(id)).state).toBe('Paid');
+    expect(await settledPayments(id)).toHaveLength(1);
+  });
+});
+

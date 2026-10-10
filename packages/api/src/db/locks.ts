@@ -167,12 +167,26 @@ async function lockRows(
 }
 
 /** drizzle wraps driver errors ("Failed query: …") and keeps the pg error on `cause`. */
-function isLockTimeout(e: unknown): boolean {
+/** True when `e` or any error on its `cause` chain (5 levels) carries one of `codes`; outer wrappers may have their own code. */
+function hasPgCode(e: unknown, codes: readonly string[]): boolean {
   for (let cur: unknown = e, depth = 0; cur && typeof cur === 'object' && depth < 5; depth++) {
-    if ((cur as { code?: string }).code === '55P03') return true;
+    const code = (cur as { code?: unknown }).code;
+    if (typeof code === 'string' && codes.includes(code)) return true;
     cur = (cur as { cause?: unknown }).cause;
   }
   return false;
+}
+
+function isLockTimeout(e: unknown): boolean {
+  return hasPgCode(e, ['55P03']);
+}
+
+/**
+ * Postgres deadlock_detected (40P01) or serialization_failure (40001). The aborted transaction rolled back, releasing
+ * every lock it held, so restarting it is safe: money recording is idempotent by operation id (X-45 backstop).
+ */
+export function isDeadlockOrSerializationFailure(e: unknown): boolean {
+  return hasPgCode(e, ['40P01', '40001']);
 }
 
 function union(a: LockPlanContribution, b: LockPlanContribution): LockPlanContribution {
@@ -322,6 +336,40 @@ export async function lockSetInTx(tx: Tx, storeId: string, subject: LockSubject 
 }
 
 /**
+ * In-transaction form of withLockedSet for helpers that run on an existing transaction (effects, inline
+ * settlement, placement tenders). A covering set already held on `tx` is reused (the HeldLocks brand of that set);
+ * otherwise the subject's rows are locked on this same transaction in class order (L1 → L2 → L3 → L4), re-planned
+ * under the locks, and the brand is minted for `fn`. Growth under the lock throws LockSetGrew, which rolls the
+ * caller's transaction back.
+ */
+export async function withLockedSetInTx<T>(
+  tx: Tx,
+  storeId: string,
+  subject: LockSubject | readonly LockSubject[],
+  fn: (tx: Tx, held: HeldLocks, plan: LockPlanContribution) => Promise<T>,
+): Promise<T> {
+  const covering = currentLockSet(tx);
+  if (covering && (await lockSetCovers(tx, storeId, subject))) return fn(tx, covering.held, covering.plan);
+  const subjects = Array.isArray(subject) ? subject : [subject as LockSubject];
+  const plan = await planFor(tx, storeId, subjects);
+  const advisoryHashes = await acquirePurchaseLocks(tx, plan.purchases);
+  const taken = new Set<string>();
+  await lockRows(tx, 'license', storeId, plan.licenseIds, taken);
+  await lockRows(tx, 'order', storeId, plan.orderIds, taken);
+  const again = await planFor(tx, storeId, subjects);
+  if (!subsetOf(again, plan)) throw new LockSetGrew(again);
+  await lockRows(tx, 'order_reservation', storeId, plan.reservationIds ?? [], taken);
+  const held = mintHeld({
+    tx,
+    advisoryHashes,
+    promisedLicenseIds: plan.licenseIds.map(canonical),
+    promisedOrderIds: plan.orderIds.map(canonical),
+    lockedRows: taken,
+  });
+  return lockSetContext.run({ tx, held, plan }, () => fn(tx, held, plan));
+}
+
+/**
  * X-49 order-row acquisition for paths that update only the orders' own rows (no licence writes):
  * pass-through when a covering set is held on `tx`, else the order rows are locked here, sorted, on
  * this same transaction. Taking only L3 keeps the class order when the caller already holds L2 licences.
@@ -350,6 +398,7 @@ export async function withLockedSet<T>(
 ): Promise<T> {
   const subjects = Array.isArray(subject) ? subject : [subject as LockSubject];
   let plan = await withStore(storeId, (tx) => planFor(tx, storeId, subjects));
+  let transientRetries = 0;
   for (let attempt = 0; ; attempt++) {
     try {
       return await withStore(storeId, async (tx) => {
@@ -374,6 +423,13 @@ export async function withLockedSet<T>(
         return lockSetContext.run({ tx, held, plan }, () => fn(tx, held, plan));
       });
     } catch (e) {
+      if (isDeadlockOrSerializationFailure(e)) {
+        // Backstop: restart the whole transaction (the rollback released every lock). Bounded, with jitter.
+        if (transientRetries >= (opts.maxRestarts ?? 3)) throw e;
+        transientRetries++;
+        await new Promise((resolve) => setTimeout(resolve, 10 + Math.floor(Math.random() * 40) * transientRetries));
+        continue;
+      }
       if (!(e instanceof LockSetGrew) && !isLockTimeout(e)) throw e;
       if (opts.mustCommit) {
         // No lock_timeout in this mode, so only growth can arrive here. The plan

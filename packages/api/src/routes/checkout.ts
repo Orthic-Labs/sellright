@@ -28,6 +28,10 @@ import { legalManifestForApp } from '../legal/manifests.js';
 import { isStorePublished } from '../store-publish.js';
 import { cartResponse, CartOut } from './cart.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
+import { checkPlacement } from '../payments/policy/host.js';
+import { PaymentPolicyUnavailableError, PaymentPolicyVetoError } from '../payments/policy/registry.js';
+import { ReservationConflict } from '../payments/reservation.js';
+import type { PolicyOrder, PolicyVeto } from '../payments/policy/types.js';
 
 /**
  * Canonical address shape for the order snapshot — matches the `address` table
@@ -231,7 +235,7 @@ checkout.openapi(
 
     const fingerprint = checkoutFingerprint(body);
 
-    type Result = { blocked: string[] } | { shippingError: string } | { cartError: string } | { legalError: string } | { loyaltyError: RedeemRejection } | { cartConflict: { code: 'stale' | 'revision_required'; snapshot: z.infer<typeof CartOut> } } | { fingerprintConflict: true } | { lockRetry: true } | { code: string; state: string; grandTotal: number; discountTotal: number; couponApplied: boolean; replay?: boolean; giftCardApplied?: number; receiptToken: string; pointsRedeemed?: number; pointsDiscount?: number };
+    type Result = { blocked: string[] } | { shippingError: string } | { cartError: string } | { legalError: string } | { loyaltyError: RedeemRejection } | { policyVeto: PolicyVeto } | { policyUnavailable: true } | { reservationConflict: true } | { cartConflict: { code: 'stale' | 'revision_required'; snapshot: z.infer<typeof CartOut> } } | { fingerprintConflict: true } | { lockRetry: true } | { code: string; state: string; grandTotal: number; discountTotal: number; couponApplied: boolean; replay?: boolean; giftCardApplied?: number; receiptToken: string; pointsRedeemed?: number; pointsDiscount?: number };
     // Zero-cache stock rule: set true only by a reserveStockOrThrow call whose
     // surrounding transaction actually reaches COMMIT. Every path below that
     // aborts the transaction (idempotency replay via unique-violation,
@@ -247,8 +251,12 @@ checkout.openapi(
     const peekedCustomerId = body.redeemPoints && token
       ? await withStore(st.id, async (tx) => (await resolveCustomer(tx, token))?.id ?? null)
       : null;
+    // The order this request creates is named up front, so its set (PAYMENT-TIMING §3.5) is held before any
+    // row is written: the inline Paid transition and its licence issue then pass through the request's set.
+    const newOrderId = randomUUID();
     const subjects: LockSubject[] = [
       { kind: 'checkout' },
+      { kind: 'order', orderId: newOrderId },
       ...(peekedCustomerId ? [{ kind: 'loyalty' as const, customerId: peekedCustomerId }] : []),
     ];
     const out = await withLockedSet(st.id, subjects, async (tx): Promise<Result> => {
@@ -533,7 +541,7 @@ checkout.openapi(
           }
         : null;
 
-      const orderId = randomUUID();
+      const orderId = newOrderId;
       const code = orderCode();
       // High-entropy receipt token (32 bytes, base64url) → scopes the public
       // order-by-code read on the confirmation page (carried as ?rt=). Never
@@ -627,11 +635,14 @@ checkout.openapi(
       // transaction and executed before it commits, so a rolled-back order never
       // dings a phone or sends an email, exactly as before. Runs after the order
       // and cart events so webhook rows keep their order (created -> paid).
+      // Placement tenders (PAYMENT-TIMING §4.6): the policy checks the order before any tender is recorded.
+      const placementOrder: PolicyOrder = { id: orderId, storeId: st.id, code, state: 'PendingPayment', currency: st.currency, grandTotal: totals.grandTotal, customerId, metadata: {} };
       const paidEffects = (paidAt: Date) => paidOrderEffects({
         orderId, customerId, paidAt, variant: 'checkout', guestEmail: body.email ?? null,
         itemCount: priced.reduce((n, p) => n + p.qty, 0),
       });
       if (totals.grandTotal === 0) {
+        await checkPlacement(tx, st.id, placementOrder, 'zero_total');
         const paidAt = new Date();
         await recordSettlementOperation(tx, {
           storeId: st.id, kind: 'order_paid_transition', operationId: orderId, orderId,
@@ -644,6 +655,7 @@ checkout.openapi(
         if (gc) {
           const appn = applyGiftCard({ balance: gc.balance, enabled: gc.enabled, expiresAt: gc.expiresAt }, totals.grandTotal, new Date());
           if (appn.applicable) {
+            await checkPlacement(tx, st.id, placementOrder, 'gift_card');
             const covered = appn.remainingDue <= 0;
             const paidAt = new Date();
             const tenderId = randomUUID();
@@ -698,6 +710,11 @@ checkout.openapi(
       if (e instanceof StockReservationError) return { blocked: e.skus };
       if (e instanceof ShippingUnavailableError) return { shippingError: e.reason };
       if (e instanceof LoyaltyRedeemError) return { loyaltyError: e.reason };
+      // PAYMENT-TIMING §3.6: a placement veto rolled the whole checkout back; the request is refused, statelessly.
+      if (e instanceof PaymentPolicyVetoError) return { policyVeto: e.veto };
+      if (e instanceof PaymentPolicyUnavailableError) return { policyUnavailable: true };
+      // PAYMENT-TIMING §3.3 R1: the reservation is held by another live order, or released for this one.
+      if (e instanceof ReservationConflict) return { reservationConflict: true };
       throw e;
     });
     // Fire AFTER the transaction that actually reserved stock has committed —
@@ -708,6 +725,9 @@ checkout.openapi(
     if ('cartError' in out) return errJson(c, 409, 'CART_INVALID', out.cartError);
     if ('legalError' in out) return errJson(c, 422, 'LEGAL_ACCEPTANCE_REQUIRED', out.legalError);
     if ('loyaltyError' in out) return errJson(c, 409, 'LOYALTY_REDEEM_FAILED', 'points could not be redeemed', { extra: { reason: out.loyaltyError } });
+    if ('policyVeto' in out) return errJson(c, 409, out.policyVeto.code, out.policyVeto.message, { extra: { state: out.policyVeto.extra?.state ?? out.policyVeto.code } });
+    if ('policyUnavailable' in out) return errJson(c, 409, 'PAYMENT_POLICY_UNAVAILABLE', 'payment is temporarily unavailable, retry shortly');
+    if ('reservationConflict' in out) return errJson(c, 409, 'RESERVATION_CONFLICT', 'an item in this order is reserved by another order');
     if ('blocked' in out) return errJson(c, 409, 'OUT_OF_STOCK', 'unavailable or out of stock', { extra: { skus: out.blocked } });
     if ('lockRetry' in out) return errJson(c, 409, 'CHECKOUT_RETRY', 'checkout is busy, retry shortly');
     if ('fingerprintConflict' in out) return errJson(c, 409, 'IDEMPOTENCY_PAYLOAD_MISMATCH', 'idempotency-key was already used with a different payload', { extra: { reason: 'payload_mismatch' } });

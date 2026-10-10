@@ -1,82 +1,66 @@
-// Payment policy host (de-fork plan 3.4; PAYMENT-TIMING.md §3.1 composition and SAVEPOINT rules).
+// Payment policy host (de-fork plan 3.4; PAYMENT-TIMING.md §3.1, §3.6, §3.7).
 //
 // Mirrors licensing/storekit/policy.ts: policies register at startup (createApp / plugin init),
 // duplicate ids are a startup error, and every hook runs inside the caller's transaction.
 //
-// Composition: policies run in registration order; the first veto wins and throws
-// PaymentPolicyVetoError, so the caller's transaction rolls back (no attempt row, no provider call).
-// Each hook runs in SAVEPOINT policy_hook: a SQL or runtime error inside plugin code rolls back
-// to the savepoint and surfaces as PaymentPolicyUnavailableError (-> 503 on payment routes),
-// so the outer transaction is never left aborted.
-import { and, eq, sql } from 'drizzle-orm';
+// Composition: policies run in registration order. The first veto (or first terminal invoice decision,
+// or first failed issuance revalidation) wins. `reserve` requests are unioned across policies; a duplicate
+// (kind, ownerKey) is a composition error. Each hook runs in SAVEPOINT policy_hook: a SQL or runtime
+// error inside plugin code rolls back to the savepoint and surfaces as PaymentPolicyUnavailableError
+// (or, for response shaping, as "no override"), so the outer transaction is never left aborted.
+import { and, eq } from 'drizzle-orm';
 import type { Tx } from '../../db/client.js';
-import { assertHeld, type HeldLocks } from '../../db/locks.js';
+import {
+  assertHeld, registerLockPlanContributor, withLockedSetInTx, type HeldLocks, type LockPlanContribution, type LockSubject,
+} from '../../db/locks.js';
 import * as s from '../../db/schema.js';
+import { reserve, type ReservationRow } from '../reservation.js';
+import {
+  _resetPaymentPoliciesForTests, inSavepoint, PaymentPolicyCompositionError, PaymentPolicyUnavailableError,
+  PaymentPolicyVetoError, registeredPaymentPolicies, registerPaymentPolicy,
+} from './registry.js';
 import type {
-  BeforeCaptureInput, BeforeCaptureResult, BeforePaymentAttemptInput, PaymentPolicy, PaymentProvider, PaymentPurpose, PolicyOrder, PolicyVeto,
+  AuthorizeInvoiceEffectInput, BeforeCaptureInput, BeforeCaptureResult, BeforePaymentAttemptInput, InvoiceEffectDecision,
+  PaymentPolicy, PaymentProvider, PaymentPurpose, PolicyOrder, ReservationRequest, RevalidateForIssuanceInput,
+  RevalidateForIssuanceResult, SettlementResponseInput, SettlementResponseOverride,
 } from './types.js';
 
-/** Wire code for a veto that carries no code of its own (PAYMENT-TIMING §3.6). */
-export const PAYMENT_POLICY_VETO_CODE = 'PAYMENT_POLICY_VETO';
+export {
+  _resetPaymentPoliciesForTests, PAYMENT_POLICY_VETO_CODE, PaymentPolicyCompositionError, PaymentPolicyUnavailableError,
+  PaymentPolicyVetoError, registeredPaymentPolicies, registerPaymentPolicy,
+} from './registry.js';
 
-/** A policy vetoed the attempt. The caller's transaction must roll back. */
-export class PaymentPolicyVetoError extends Error {
-  constructor(readonly veto: PolicyVeto) {
-    super(veto.message);
-    this.name = 'PaymentPolicyVetoError';
-  }
-}
-
-/** A policy hook failed (SQL or runtime error). Nothing it wrote is persisted. */
-export class PaymentPolicyUnavailableError extends Error {
-  constructor(readonly policyId: string, readonly reason: unknown) {
-    super(`payment policy "${policyId}" is unavailable`);
-    this.name = 'PaymentPolicyUnavailableError';
-  }
-}
-
-const policies: PaymentPolicy[] = [];
-
-/** Register a payment policy. Startup error on a duplicate id. */
-export function registerPaymentPolicy(p: PaymentPolicy): void {
-  const existing = policies.find((x) => x.id === p.id);
-  if (existing) throw new Error(`payment policy "${p.id}" is already registered`);
-  policies.push(p);
-}
-
-/** Registered policies in registration order (diagnostics and tests). */
-export function registeredPaymentPolicies(): readonly PaymentPolicy[] {
-  return [...policies];
-}
-
-/** Test seam: drop every registration. */
-export function _resetPaymentPoliciesForTests(): void {
-  policies.length = 0;
-}
-
-async function inSavepoint<T>(tx: Tx, policyId: string, fn: () => Promise<T>): Promise<T> {
-  await tx.execute(sql`SAVEPOINT policy_hook`);
-  try {
-    const out = await fn();
-    await tx.execute(sql`RELEASE SAVEPOINT policy_hook`);
-    return out;
-  } catch (cause) {
-    await tx.execute(sql`ROLLBACK TO SAVEPOINT policy_hook`);
-    await tx.execute(sql`RELEASE SAVEPOINT policy_hook`);
-    throw new PaymentPolicyUnavailableError(policyId, cause);
-  }
-}
+// Policies are consulted through the registry, so registration order is the only composition rule.
+const policies = (): readonly PaymentPolicy[] => registeredPaymentPolicies();
 
 /**
- * Runs every registered policy's beforePaymentAttempt in registration order, inside the
- * caller's preparation transaction. Returns normally when every policy allows.
- * Throws PaymentPolicyVetoError on the first veto, PaymentPolicyUnavailableError on a hook failure.
+ * Runs every registered policy's beforePaymentAttempt in registration order, inside the caller's
+ * preparation transaction, then creates the reservations the allowing policies requested (R1, §3.3).
+ * Throws PaymentPolicyVetoError on the first veto, PaymentPolicyUnavailableError on a hook failure, and
+ * PaymentPolicyCompositionError when two policies request the same reservation identity.
  */
 export async function runBeforePaymentAttempt(tx: Tx, input: BeforePaymentAttemptInput): Promise<void> {
   await assertHeld(tx, input.held);
-  for (const policy of policies) {
+  const requests: { policyId: string; request: ReservationRequest }[] = [];
+  for (const policy of policies()) {
     const result = await inSavepoint(tx, policy.id, () => policy.beforePaymentAttempt(tx, input));
     if (!result.allow) throw new PaymentPolicyVetoError(result.veto);
+    for (const request of result.reserve ?? []) requests.push({ policyId: policy.id, request });
+  }
+  if (!requests.length) return;
+  const seen = new Map<string, string>();
+  for (const { policyId, request } of requests) {
+    const key = `${request.kind}\u0000${request.ownerKey}`;
+    const first = seen.get(key);
+    if (first !== undefined) throw new PaymentPolicyCompositionError(request.kind, request.ownerKey, [first, policyId]);
+    seen.set(key, policyId);
+  }
+  for (const { request } of requests) {
+    await reserve(tx, input.held, {
+      storeId: input.order.storeId, orderId: input.order.id, kind: request.kind, ownerKey: request.ownerKey,
+      holder: request.holder ? { ...request.holder } : undefined,
+      releaseOnFullRefund: request.releaseOnFullRefund ?? false, expiresAt: request.expiresAt ?? null,
+    });
   }
 }
 
@@ -87,13 +71,77 @@ export async function runBeforePaymentAttempt(tx: Tx, input: BeforePaymentAttemp
  */
 export async function runBeforeCapture(tx: Tx, input: BeforeCaptureInput): Promise<BeforeCaptureResult> {
   await assertHeld(tx, input.held);
-  for (const policy of policies) {
+  for (const policy of policies()) {
     if (!policy.beforeCapture) continue;
     const result = await inSavepoint(tx, policy.id, () => policy.beforeCapture!(tx, input));
     if (result.action === 'cancel') return result;
   }
   return { action: 'capture' };
 }
+
+/**
+ * Subscription entitlement effect authorisation (PAYMENT-TIMING §4.5). The first `terminal` decision wins;
+ * otherwise `apply`. Throws PaymentPolicyUnavailableError on a hook failure: the effects worker turns that
+ * into a bounded retry, then terminal.
+ */
+export async function runAuthorizeInvoiceEffect(tx: Tx, input: AuthorizeInvoiceEffectInput): Promise<InvoiceEffectDecision> {
+  await assertHeld(tx, input.held);
+  for (const policy of policies()) {
+    if (!policy.authorizeInvoiceEffect) continue;
+    const decision = await inSavepoint(tx, policy.id, () => policy.authorizeInvoiceEffect!(tx, input));
+    if (decision.decision === 'terminal') return decision;
+  }
+  return { decision: 'apply' };
+}
+
+/**
+ * Issuance revalidation when an issuance effect executes (PAYMENT-TIMING §3.7.5). The first failure wins;
+ * otherwise ok. Throws PaymentPolicyUnavailableError on a hook failure (retry, then terminal).
+ */
+export async function runRevalidateForIssuance(tx: Tx, input: RevalidateForIssuanceInput): Promise<RevalidateForIssuanceResult> {
+  await assertHeld(tx, input.held);
+  for (const policy of policies()) {
+    if (!policy.revalidateForIssuance) continue;
+    const result = await inSavepoint(tx, policy.id, () => policy.revalidateForIssuance!(tx, input));
+    if (!result.ok) return result;
+  }
+  return { ok: true };
+}
+
+/**
+ * /pay response shaping (PAYMENT-TIMING §4.2). The money is already recorded in this transaction, so a
+ * failing hook must not roll the record back: it is treated as "no override" and the default success body
+ * is returned. The first override wins.
+ */
+export async function runShapeSettlementResponse(tx: Tx, input: SettlementResponseInput): Promise<SettlementResponseOverride | null> {
+  await assertHeld(tx, input.held);
+  for (const policy of policies()) {
+    if (!policy.shapeSettlementResponse) continue;
+    try {
+      const override = await inSavepoint(tx, policy.id, () => policy.shapeSettlementResponse!(tx, input));
+      if (override) return override;
+    } catch (e) {
+      if (!(e instanceof PaymentPolicyUnavailableError)) throw e;
+    }
+  }
+  return null;
+}
+
+// Every registered policy's lockPlan joins the engine's plan (STOREKIT §5.3). Read-only by contract.
+registerLockPlanContributor(async (tx, subject: LockSubject) => {
+  let out: LockPlanContribution = { purchases: [], licenseIds: [], orderIds: [], reservationIds: [] };
+  for (const policy of policies()) {
+    if (!policy.lockPlan) continue;
+    const c = await inSavepoint(tx, policy.id, () => policy.lockPlan!(tx, subject));
+    out = {
+      purchases: [...out.purchases, ...c.purchases],
+      licenseIds: [...out.licenseIds, ...c.licenseIds],
+      orderIds: [...out.orderIds, ...c.orderIds],
+      reservationIds: [...(out.reservationIds ?? []), ...(c.reservationIds ?? [])],
+    };
+  }
+  return out;
+});
 
 /**
  * Entry point for payment paths: loads the order's reservations under the held lock set and runs
@@ -103,9 +151,19 @@ export async function runBeforeCapture(tx: Tx, input: BeforeCaptureInput): Promi
 export async function checkPaymentAttempt(tx: Tx, held: HeldLocks, a: {
   provider: PaymentProvider; purpose: PaymentPurpose; order: PolicyOrder;
 }): Promise<void> {
-  const reservations = await tx.select().from(s.orderReservation)
+  const reservations: ReservationRow[] = await tx.select().from(s.orderReservation)
     .where(and(eq(s.orderReservation.storeId, a.order.storeId), eq(s.orderReservation.orderId, a.order.id)));
   await runBeforePaymentAttempt(tx, {
     provider: a.provider, purpose: a.purpose, order: a.order, reservations, held,
   });
+}
+
+/**
+ * Placement tender check (PAYMENT-TIMING §4.6): zero total, gift card, admin manual `markPaid` and order-edit
+ * `record_payment`. Runs in the caller's transaction, inside the order's lock set (the caller's set when one
+ * covers the order). A veto throws PaymentPolicyVetoError, so the caller's whole transaction rolls back.
+ */
+export async function checkPlacement(tx: Tx, storeId: string, order: PolicyOrder, provider: 'zero_total' | 'gift_card' | 'manual'): Promise<void> {
+  await withLockedSetInTx(tx, storeId, { kind: 'order', orderId: order.id }, (inner, held) =>
+    checkPaymentAttempt(inner, held, { provider, purpose: 'placement', order }));
 }

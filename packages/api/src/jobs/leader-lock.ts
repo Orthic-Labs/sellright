@@ -65,6 +65,8 @@ const JOB_KEYS = {
   'birthday-bonus': NAMESPACE | 30n,
   // De-fork 2.8: pending-effects drain (payments/settlement/effects.ts runEffectsPass).
   'pending-effects': NAMESPACE | 40n,
+  // PAYMENT-TIMING §5.2 safety net: requested reservation releases and failed R5 projections (jobs/reservation-release-sweep.ts).
+  'reservation-release-sweep': NAMESPACE | 41n,
 } as const satisfies Record<string, bigint>;
 
 export type EngineLeaderLockedJob = keyof typeof JOB_KEYS;
