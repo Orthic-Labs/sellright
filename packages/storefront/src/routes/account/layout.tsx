@@ -6,8 +6,13 @@ import { getMe } from '~/services/customer';
 import { LocalAddressService } from '~/services/LocalAddressService';
 import { sanitizePhoneNumber } from '~/utils/validation';
 
-// T16: Server-side auth guard — redirect to /sign-in if no token
-export const onRequest: RequestHandler = async ({ cookie, redirect }) => {
+/** /account/* pages that must work before a session exists (they use layout-public.tsx). */
+const PUBLIC_ACCOUNT_PATHS = new Set(['/account/magic-link']);
+
+// T16: Server-side auth guard — redirect to /sign-in if no token. A named layout (index@public.tsx) only swaps the
+// chrome: this layout's onRequest still runs for every /account/* route, so the public pages are exempted here.
+export const onRequest: RequestHandler = async ({ cookie, redirect, url }) => {
+	if (PUBLIC_ACCOUNT_PATHS.has(url.pathname.replace(/\/+$/, ''))) return;
 	const token = cookie.get(AUTH_TOKEN)?.value;
 	if (!token) throw redirect(302, '/sign-in');
 };
