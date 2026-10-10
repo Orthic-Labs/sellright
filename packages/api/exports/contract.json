@@ -1205,6 +1205,55 @@
       "kind": "interface",
       "disposition": "public",
       "surface": "payments"
+    },
+    {
+      "module": "payments/policy/types",
+      "symbol": "CheckoutExtensionSchema",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/types",
+      "symbol": "PolicyCustomer",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/types",
+      "symbol": "CheckoutLine",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/types",
+      "symbol": "CheckoutOrderInput",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/types",
+      "symbol": "CheckoutPriceAdjustment",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/types",
+      "symbol": "CheckoutOrderResult",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/types",
+      "symbol": "CheckoutReplayInput",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "payments"
     }
   ]
 }
