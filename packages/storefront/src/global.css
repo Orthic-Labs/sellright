@@ -692,3 +692,31 @@ only screen and (device-width: 414px) and (device-height: 896px) and (-webkit-de
   scrollbar-width: thin;
   scrollbar-color: var(--color-accent) #0A0A0A;
 }
+
+/* Button readiness (shared, owner-approved 2026-10-10).
+   NOT READY = aria-disabled="true": light neutral fill, muted text, no shadow, no hover change, not-allowed cursor.
+   READY = the button's own accent fill + white text + its hover (set by the button's own classes).
+   LOADING = the native disabled attribute without aria-disabled: stays READY-styled, cursor progress. */
+.btn-ready:disabled:not([aria-disabled="true"]) {
+  cursor: progress !important;
+}
+.btn-ready[aria-disabled="true"],
+.btn-ready[aria-disabled="true"]:hover,
+.btn-ready[aria-disabled="true"]:focus,
+.btn-ready[aria-disabled="true"]:active {
+  background-color: #E7E5E4 !important;
+  background-image: none !important;
+  border-color: transparent !important;
+  color: #A8A29E !important;
+  box-shadow: none !important;
+  opacity: 1 !important;
+  transform: none !important;
+  cursor: not-allowed !important;
+}
+.link-ready[aria-disabled="true"],
+.link-ready[aria-disabled="true"]:hover {
+  color: #A8A29E !important;
+  text-decoration-color: #A8A29E !important;
+  opacity: 1 !important;
+  cursor: not-allowed !important;
+}

@@ -36,11 +36,12 @@ test.describe('#21 customer return request -> admin approve -> refund -> custome
 		await expect(panel).toBeVisible({ timeout: 15_000 });
 		await panel.getByRole('button', { name: /request a return/i }).click();
 
-		// Nothing chosen / no reason: refused in the form, nothing is sent.
-		await panel.getByRole('button', { name: /send return request/i }).click();
+		// Nothing chosen / no reason: refused in the form, nothing is sent. The button is aria-disabled (not ready), so
+		// force the click through to exercise the form's own guard.
+		await panel.getByRole('button', { name: /send return request/i }).click({ force: true });
 		await expect(panel.getByRole('alert')).toContainText(/choose at least one item/i);
 		await panel.getByLabel(/quantity of e2e shirt to return/i).selectOption('1');
-		await panel.getByRole('button', { name: /send return request/i }).click();
+		await panel.getByRole('button', { name: /send return request/i }).click({ force: true });
 		await expect(panel.getByRole('alert')).toContainText(/tell us briefly why/i);
 		expect((await returnsFor(api, 'requested')).items.filter((r) => r.orderCode === placed.code)).toHaveLength(0);
 

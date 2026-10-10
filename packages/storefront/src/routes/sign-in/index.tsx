@@ -64,6 +64,10 @@ export default component$(() => {
 	});
 
 	const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+	// Readiness: the same rules the handlers enforce, so a grey button never submits and a ready one always does.
+	const emailReady = emailRegex.test(email.value.trim());
+	const passwordReady = password.value.trim().length > 0;
+	const signupReady = emailReady && firstName.value.trim().length > 0 && lastName.value.trim().length > 0 && password.value.length >= 8 && password.value === confirmPassword.value;
 
 	const handleEmailContinue = $(async () => {
 		error.value = '';
@@ -218,7 +222,8 @@ export default component$(() => {
 									key={`email-continue-${loading.value}`}
 									onClick$={handleEmailContinue}
 									disabled={loading.value}
-									class="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-[var(--color-accent)] hover:bg-[#4F3B26] focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-[var(--color-accent)] transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+									aria-disabled={emailReady ? 'false' : 'true'}
+									class="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-[var(--color-accent)] hover:bg-[#4F3B26] focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-[var(--color-accent)] transition-colors cursor-pointer btn-ready"
 								>
 									{loading.value ? 'Checking...' : 'Continue'}
 								</button>
@@ -263,8 +268,9 @@ export default component$(() => {
 									<button
 										key={`password-reset-${loading.value}`}
 										onClick$={handleForgotPassword}
-										disabled={loading.value}
-										class="text-sm text-gray-600 hover:text-gray-800 cursor-pointer underline"
+										disabled={loading.value || !emailReady}
+										aria-disabled={emailReady ? 'false' : 'true'}
+										class="link-ready text-sm text-gray-600 hover:text-gray-800 cursor-pointer underline"
 									>
 										Forgot password?
 									</button>
@@ -276,7 +282,8 @@ export default component$(() => {
 									key={`signin-submit-${loading.value}`}
 									onClick$={handleSignIn}
 									disabled={loading.value}
-									class="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-[var(--color-accent)] hover:bg-[#4F3B26] focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-[var(--color-accent)] transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+									aria-disabled={passwordReady ? 'false' : 'true'}
+									class="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-[var(--color-accent)] hover:bg-[#4F3B26] focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-[var(--color-accent)] transition-colors cursor-pointer btn-ready"
 								>
 									{loading.value ? 'Signing in...' : 'Sign In'}
 								</button>
@@ -285,9 +292,10 @@ export default component$(() => {
 										key={`magic-link-${loading.value}`}
 										type="button"
 										onClick$={handleMagicLink}
-										disabled={loading.value}
+						disabled={loading.value || !emailReady}
+						aria-disabled={emailReady ? 'false' : 'true'}
 										data-testid="magic-link-request"
-										class="w-full text-center text-sm text-gray-600 hover:text-gray-800 underline cursor-pointer disabled:opacity-60"
+										class="link-ready w-full text-center text-sm text-gray-600 hover:text-gray-800 underline cursor-pointer"
 									>
 										Email me a sign-in link instead
 									</button>
@@ -360,7 +368,8 @@ export default component$(() => {
 									key={`signup-submit-${loading.value}`}
 									onClick$={handleSignUp}
 									disabled={loading.value}
-									class="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-[var(--color-accent)] hover:bg-[#4F3B26] focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-[var(--color-accent)] transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+									aria-disabled={signupReady ? 'false' : 'true'}
+									class="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-[var(--color-accent)] hover:bg-[#4F3B26] focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-[var(--color-accent)] transition-colors cursor-pointer btn-ready"
 								>
 									{loading.value ? 'Creating account...' : 'Create Account'}
 								</button>
@@ -405,7 +414,8 @@ export default component$(() => {
 							<button
 								onClick$={handleResendVerification}
 								disabled={resendLoading.value || resendSent.value}
-								class="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-[var(--color-accent)] hover:bg-[#4F3B26] focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-[var(--color-accent)] transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed mb-3"
+								aria-disabled={resendSent.value ? 'true' : 'false'}
+								class="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-[var(--color-accent)] hover:bg-[#4F3B26] focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-[var(--color-accent)] transition-colors cursor-pointer btn-ready mb-3"
 							>
 								{resendLoading.value ? 'Sending...' : resendSent.value ? 'Verification email sent' : 'Resend verification email'}
 							</button>
