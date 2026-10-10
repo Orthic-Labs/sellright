@@ -1,29 +1,14 @@
 import { $, component$, useSignal, useStore, useTask$ } from '@qwik.dev/core';
-import { routeLoader$ } from '@qwik.dev/router';
 import ProductCard from '~/components/products/ProductCard';
 import { searchProducts } from '~/providers/shop/products/products';
 import type { CatalogListItem } from '~/sellright/types/catalog';
 import { FacetWithValues } from '~/types';
 import Filters from '~/components/Filters';
-import { loadBrowseCatalog } from '~/services/browse-catalog';
 import { theme } from '~/theme/theme.config';
-export { head, onStaticGenerate } from './seo';
+import { useCatalogLoader } from '~/platform/shop';
 
-// ── Catalog manifest loader (SSR) ──────────────────────────────
-// Reads the pre-generated shop-catalog.json at SSR time, normalized to the
-// native CatalogListItem shape regardless of source (manifest or live-API
-// fallback — see services/browse-catalog.ts). SellRight's opt-in publisher
-// refreshes every minute. Stale/foreign snapshots fall back to the live API;
-// stock is rechecked before checkout.
-// Products are in the HTML on first byte — no client-side API call needed.
-export const useCatalogLoader = routeLoader$(async ({ error }) => {
- try {
-  const parsed = await loadBrowseCatalog();
-  return { ...parsed, fallback: false };
- } catch {
-  throw error(503, 'Catalog temporarily unavailable');
- }
-});
+export { useCatalogLoader };
+export { head, onStaticGenerate } from '~/platform/shop';
 
 // Category filter labels are generic and store-configurable (VITE_SHOP_CATEGORIES,
 // comma-separated) — matched against product tags client-side. Neutral default

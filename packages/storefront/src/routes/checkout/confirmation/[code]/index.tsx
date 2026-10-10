@@ -7,18 +7,8 @@ import { formatPrice } from '~/utils';
 import { OptimizedImage } from '~/components/ui';
 import { TIMELINE, activeStepFromState, parseLineName, isOrderSettled, isOrderTerminalUnpaid, assetUrl, readOrderUntilSettled, resolveConfirmationEmail } from './confirmation-data';
 import { APP_STATE } from '~/constants';
-import { createSEOHead } from '~/utils/seo';
-import { useStoreIdentityLoader } from '~/routes/layout';
 
-export const head = ({ params, resolveValue }: { params: { code: string }; resolveValue: any }) => {
-	const identity = resolveValue(useStoreIdentityLoader);
-	return createSEOHead({
-		title: 'Order Confirmation',
-		description: `Thank you for your order${params?.code ? ' #' + params.code : ''} at ${identity.storeName}. View your order summary and details.`,
-		noindex: true,
-		identity,
-	});
-};
+export { confirmationHead as head } from '~/platform/checkout';
 
 const ConfirmationPage = component$(() => {
 	const loc = useLocation();

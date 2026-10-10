@@ -1,7 +1,7 @@
 import { $, component$, useSignal, useVisibleTask$ } from '@qwik.dev/core';
 import { getMe } from '~/services/customer';
 import { getProductReviews, submitProductReview } from '~/providers/shop/rewards/rewards';
-import { SellRightError } from '~/sellright/client';
+import { SellRightError } from '~/platform/errors';
 import type { ReviewList } from '~/sellright/types/rewards';
 import { theme } from '~/theme/theme.config';
 import { pointsLabel, reviewDate, reviewErrorMessage, starString, validateReviewDraft } from '~/utils/rewards';

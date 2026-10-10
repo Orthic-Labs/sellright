@@ -1,15 +1,10 @@
 import { $, component$, useContext, useStore, useStyles$, useTask$, useVisibleTask$, useSignal, useComputed$ } from '@qwik.dev/core';
-import {
-  useNavigate,
-  type DocumentHead
-} from '@qwik.dev/router';
-import { theme } from '~/theme/theme.config';
+import { useNavigate } from '@qwik.dev/router';
 import { APP_STATE, COUNTRY_COOKIE } from '~/constants';
 import { getCookie } from '~/utils';
 import { getMe, getAddresses } from '~/services/customer';
 import { CountryService } from '~/services/CountryService';
 import { CheckoutAddressProvider } from '~/contexts/CheckoutAddressContext';
-import { createSEOHead } from '~/utils/seo';
 import { useCart, refreshCartStock, loadCartIfNeeded, useHasMixedPreOrder } from '~/contexts/CartContext';
 import { CartService } from '~/services/CartService';
 import { CheckoutValidationProvider, useCheckoutValidation, useCheckoutValidationActions } from '~/contexts/CheckoutValidationContext';
@@ -452,11 +447,4 @@ export default component$(() => {
   );
 });
 
-export const head = (): DocumentHead => {
-  return createSEOHead({
-    title: 'Checkout',
-    description: `Complete your purchase at ${theme.storeName}.`,
-    noindex: true,
-    links: []
-  });
-};
+export { head } from '~/platform/checkout';
