@@ -39,18 +39,81 @@ export interface SignedPayload {
   entitlement_stage?: EntitlementStage;
   license_issued_at?: number;
   confirmation_due_at?: number | null;
+  /** Policy-supplied scope claim (entitlement-policy.ts `claims`). Omitted by the default policy. */
+  entitlement_scope?: 'mobile' | 'full';
 }
 
-// Canonical signing order. KEEP IDENTICAL to the client verifier's field order.
-const FIELD_ORDER: (keyof SignedPayload)[] = [
+// ── FROZEN v:2 wire format (plan 3.7) ────────────────────────────────────────
+// Canonical signing order. KEEP IDENTICAL to the shipped native verifiers'
+// field order. The order below is pinned by `sign.golden.test.ts` and
+// `test-vectors/signed-v2.golden.json`; any change fails CI. Optional claims
+// are omitted (never `null`-filled) when absent, so a token minted under the
+// default policy is byte-identical to every token minted before the policy
+// seam existed. New claims may only be APPENDED at the end and only as
+// optional; anything else is a new format version (below), never an edit.
+export const V2_FIELD_ORDER = Object.freeze([
   'v', 'id', 'app', 'tier', 'features', 'device_id', 'iat', 'exp',
   'license_kind', 'entitlement_stage', 'license_issued_at', 'confirmation_due_at',
-];
+  'entitlement_scope',
+] as const);
+
+// ── Capability-negotiated format versions ────────────────────────────────────
+// v:2 is built in and can never be replaced. A future format registers itself
+// here; it is only EVER emitted to a client that offered that version
+// (`x-entitlement-versions` request header, parsed by `parseOfferedVersions`),
+// so clients that predate it keep receiving v:2 tokens their verifiers accept.
+export interface SignedFormat {
+  v: number;
+  /** Canonical signing order for this version. */
+  fieldOrder: readonly string[];
+  /** Extra claims this format adds on top of the v:2 claim set. */
+  extraClaims?(e: EntitlementInput): Record<string, unknown>;
+}
+
+const formats = new Map<number, SignedFormat>([[2, { v: 2, fieldOrder: V2_FIELD_ORDER }]]);
+
+export function registerSignedFormat(format: SignedFormat): void {
+  if (!Number.isInteger(format.v) || format.v <= 2) throw new Error('signed format version must be an integer > 2 (v:2 is frozen)');
+  if (formats.has(format.v)) throw new Error(`signed format v:${format.v} is already registered`);
+  if (new Set(format.fieldOrder).size !== format.fieldOrder.length) throw new Error('signed format fieldOrder has duplicates');
+  // A client must never be able to pick a weaker format by offering it: every
+  // v:2 claim (incl. entitlement_scope) must be carried by a negotiated format.
+  const missing = V2_FIELD_ORDER.filter((k) => !format.fieldOrder.includes(k));
+  if (missing.length) throw new Error(`signed format v:${format.v} must carry every v:2 claim; missing: ${missing.join(', ')}`);
+  formats.set(format.v, { ...format, fieldOrder: Object.freeze([...format.fieldOrder]) });
+}
+
+/** Test/deploy seam: drop every registered format except the built-in v:2. */
+export function resetSignedFormatsForTest(): void {
+  for (const v of [...formats.keys()]) if (v !== 2) formats.delete(v);
+}
+
+export function supportedSignedVersions(): number[] {
+  return [...formats.keys()].sort((a, b) => a - b);
+}
+
+/** Parse the `x-entitlement-versions` header ("2,3") into the offered list; undefined when absent/garbage. */
+export function parseOfferedVersions(header: string | null | undefined): number[] | undefined {
+  if (!header) return undefined;
+  const out = header.split(',').map((p) => p.trim()).filter((p) => /^\d{1,6}$/.test(p)).map(Number);
+  return out.length ? out : undefined;
+}
+
+/** Highest version both sides support. No offer, or no overlap => 2 (the frozen default). */
+export function negotiateSignedVersion(offered?: readonly number[] | null): number {
+  if (!offered?.length) return 2;
+  let best = 2;
+  for (const v of offered) if (formats.has(v) && v > best) best = v;
+  return best;
+}
 
 /** The exact compact-JSON bytes that get signed (fixed field order, no whitespace). */
 export function canonicalPayload(p: SignedPayload): string {
+  const order = formats.get(p.v)?.fieldOrder;
+  if (!order) throw new Error(`unsupported signed token version v:${p.v}`);
+  const src = p as unknown as Record<string, unknown>;
   const ordered: Record<string, unknown> = {};
-  for (const k of FIELD_ORDER) ordered[k] = p[k];
+  for (const k of order) ordered[k] = src[k];
   return JSON.stringify(ordered);
 }
 
@@ -129,6 +192,10 @@ export interface EntitlementInput {
   entitlementStage?: EntitlementStage;
   licenseIssuedAtUnix?: number;
   confirmationDueAtUnix?: number | null;
+  /** Policy claim (entitlement-policy.ts). Omitted => claim absent => default-policy bytes. */
+  entitlementScope?: 'mobile' | 'full';
+  /** Format versions the client offered (capability negotiation). Omitted => v:2. */
+  offeredVersions?: readonly number[] | null;
 }
 
 // SEC: default lowered from 30d to 7d to tighten the offline-revocation window
@@ -148,8 +215,14 @@ export function signEntitlement(e: EntitlementInput, now: number = Date.now()): 
   // Never let the offline token outlive the license's hard expiry.
   const exp = e.tokenExpiresAtUnix
     ?? (e.expiresAtUnix != null ? Math.min(rollingExp, e.expiresAtUnix) : rollingExp);
+  const v = negotiateSignedVersion(e.offeredVersions);
+  // Format extras go FIRST so they can add claims but never override a v:2 one.
+  const extras = Object.fromEntries(
+    Object.entries(v > 2 ? formats.get(v)?.extraClaims?.(e) ?? {} : {}).filter(([k]) => !(V2_FIELD_ORDER as readonly string[]).includes(k)),
+  );
   const payload: SignedPayload = {
-    v: 2,
+    ...(extras as Partial<SignedPayload>),
+    v,
     id: e.licenseId,
     app: e.app,
     tier: e.tier,
@@ -161,6 +234,7 @@ export function signEntitlement(e: EntitlementInput, now: number = Date.now()): 
     ...(e.entitlementStage ? { entitlement_stage: e.entitlementStage } : {}),
     ...(e.licenseIssuedAtUnix != null ? { license_issued_at: e.licenseIssuedAtUnix } : {}),
     ...(e.confirmationDueAtUnix !== undefined ? { confirmation_due_at: e.confirmationDueAtUnix } : {}),
+    ...(e.entitlementScope ? { entitlement_scope: e.entitlementScope } : {}),
   };
   return signToken(payload, key);
 }

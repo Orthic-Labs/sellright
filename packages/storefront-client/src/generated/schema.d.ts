@@ -10947,6 +10947,100 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/system/canary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Emit delivery canaries through the real outbox paths (installation administrators only; 1 per channel per minute per store) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        channels: ("email" | "webhook" | "push")[];
+                        kinds?: ("order_confirmation" | "trial_license_key" | "shipping_notification" | "password_reset")[];
+                        slot: number;
+                    };
+                };
+            };
+            responses: {
+                /** @description Enqueued */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            rows: {
+                                /** @enum {string} */
+                                channel: "email" | "webhook" | "push";
+                                id: string;
+                                /** @enum {string} */
+                                kind?: "order_confirmation" | "trial_license_key" | "shipping_notification" | "password_reset";
+                            }[];
+                            skipped: {
+                                /** @enum {string} */
+                                channel: "email" | "webhook" | "push";
+                                reason: string;
+                            }[];
+                            slot: number;
+                        };
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Forbidden — installation administrator required */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Canary recipient not configured or refused */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Rate limited (1 per channel per minute) */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/admin/system/checklist": {
         parameters: {
             query?: never;
@@ -12445,6 +12539,15 @@ export interface paths {
                             status: string;
                             updatesUntil: string | null;
                         };
+                    };
+                };
+                /** @description Rejected by entitlement policy */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
                     };
                 };
                 /** @description Not found */
@@ -18598,7 +18701,7 @@ export interface components {
             };
         };
         /** @enum {string} */
-        ApiErrorCode: "ACTIVE_SUBSCRIPTION_EXISTS" | "ADDRESS_NOT_FOUND" | "ALREADY_REVIEWED" | "APPLE_SIGNIN_NOT_CONFIGURED" | "APPLE_TOKEN_INVALID" | "AUTH_REQUIRED" | "BIRTHDAY_ALREADY_SET" | "BOT_CHECK_FAILED" | "CART_INVALID" | "CART_NOT_FOUND" | "COLLECTION_NOT_FOUND" | "CSRF_INVALID" | "DOWNLOAD_NOT_FOUND" | "DOWNLOADS_NOT_CONFIGURED" | "EMAIL_NOT_VERIFIED" | "EMAIL_SAME" | "EMAIL_TAKEN" | "EMAIL_TAKEN_UNVERIFIED" | "GIFT_CARD_NOT_FOUND" | "GOOGLE_SIGNIN_NOT_CONFIGURED" | "GOOGLE_TOKEN_INVALID" | "IDEMPOTENCY_KEY_REQUIRED" | "IDEMPOTENCY_PAYLOAD_MISMATCH" | "INVALID_BIRTHDAY" | "INVALID_CHECKOUT_REQUEST" | "INVALID_CREDENTIALS" | "INVALID_PAYMENT_REQUEST" | "INVITE_INVALID" | "LEGAL_ACCEPTANCE_REQUIRED" | "LICENSE_KEY_MISSING" | "LICENSE_NOT_ACTIVE" | "LICENSE_NOT_FOUND" | "LOYALTY_REDEEM_FAILED" | "MAGIC_LINK_DISABLED" | "MAGIC_LINK_INVALID" | "NOT_AUTHENTICATED" | "NOT_RETURNABLE" | "ORDER_ALREADY_PAID" | "ORDER_NOT_FOUND" | "ORDER_NOT_PAYABLE" | "OUT_OF_STOCK" | "PASSWORD_INCORRECT" | "PAYMENT_METHOD_DISABLED" | "PAYMENT_METHOD_UNKNOWN" | "PAYMENT_NOT_FOUND" | "POST_NOT_FOUND" | "PRODUCT_NOT_FOUND" | "PURCHASE_REQUIRED" | "RATE_LIMITED" | "REVIEWS_DISABLED" | "SEAT_LIMIT_REACHED" | "SECURITY_CHECK_FAILED" | "SHIPPING_UNAVAILABLE" | "SIGN_IN_REQUIRED" | "STRIPE_NOT_CONFIGURED" | "SUBSCRIPTION_NOT_FOUND" | "TOKEN_INVALID" | "VARIANT_NOT_RECURRING";
+        ApiErrorCode: "ACTIVE_SUBSCRIPTION_EXISTS" | "ADDRESS_NOT_FOUND" | "ALREADY_REVIEWED" | "APPLE_SIGNIN_NOT_CONFIGURED" | "APPLE_TOKEN_INVALID" | "AUTH_REQUIRED" | "BIRTHDAY_ALREADY_SET" | "BOT_CHECK_FAILED" | "CART_INVALID" | "CART_NOT_FOUND" | "COLLECTION_NOT_FOUND" | "CSRF_INVALID" | "DOWNLOAD_NOT_FOUND" | "DOWNLOADS_NOT_CONFIGURED" | "EMAIL_NOT_VERIFIED" | "EMAIL_SAME" | "EMAIL_TAKEN" | "EMAIL_TAKEN_UNVERIFIED" | "GIFT_CARD_NOT_FOUND" | "GOOGLE_SIGNIN_NOT_CONFIGURED" | "GOOGLE_TOKEN_INVALID" | "IDEMPOTENCY_KEY_REQUIRED" | "IDEMPOTENCY_PAYLOAD_MISMATCH" | "INVALID_BIRTHDAY" | "INVALID_CHECKOUT_REQUEST" | "INVALID_CREDENTIALS" | "INVALID_PAYMENT_REQUEST" | "INVITE_INVALID" | "LEGAL_ACCEPTANCE_REQUIRED" | "LICENSE_KEY_MISSING" | "LICENSE_NOT_ACTIVE" | "LICENSE_NOT_FOUND" | "LOYALTY_REDEEM_FAILED" | "MAGIC_LINK_DISABLED" | "MAGIC_LINK_INVALID" | "NOT_AUTHENTICATED" | "NOT_RETURNABLE" | "ORDER_ALREADY_PAID" | "ORDER_NOT_FOUND" | "ORDER_NOT_PAYABLE" | "OUT_OF_STOCK" | "PASSWORD_INCORRECT" | "PAYMENT_METHOD_DISABLED" | "PAYMENT_METHOD_UNKNOWN" | "PAYMENT_NOT_FOUND" | "POST_NOT_FOUND" | "PRODUCT_NOT_FOUND" | "PURCHASE_REQUIRED" | "RATE_LIMITED" | "REJECTED_PLATFORM" | "REVIEWS_DISABLED" | "SEAT_LIMIT_REACHED" | "SECURITY_CHECK_FAILED" | "SHIPPING_UNAVAILABLE" | "SIGN_IN_REQUIRED" | "STRIPE_NOT_CONFIGURED" | "SUBSCRIPTION_NOT_FOUND" | "TOKEN_INVALID" | "VARIANT_NOT_RECURRING";
         GatewayAttempt: {
             /** Format: uuid */
             attemptId: string;

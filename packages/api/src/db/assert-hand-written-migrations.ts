@@ -65,6 +65,7 @@ const HAND_WRITTEN = [
   '0085_reviews_and_bonuses.sql',
   '0086_order_shipping_method.sql',
   '0089_installation_setting.sql',
+  '0087_harden_outbox_rls_nullif.sql',
 ];
 
 const MARKER = '-- HAND-WRITTEN: see docs/runbooks/migrations.md';
