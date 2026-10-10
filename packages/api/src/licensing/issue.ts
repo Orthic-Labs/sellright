@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { buildLicenseGrants, type FulfillmentType } from './entitlements.js';
@@ -79,4 +79,25 @@ export async function issueLicensesForPaidOrder(
     metadata: withCurrentDevicePolicy(grant.appKey, grant.metadata) as object | null,
   })));
   return toIssue.length;
+}
+
+/**
+ * Shallow-merges a payment policy's metadata patch into every licence of the order (pre-existing and freshly
+ * issued alike). Runs in the issuance transaction, under the order's lock set. Returns the licences patched.
+ */
+export async function applyLicenseMetadataPatch(
+  tx: Tx,
+  opts: { storeId: string; orderId: string },
+  patch: Readonly<Record<string, unknown>>,
+): Promise<number> {
+  const rows = await tx
+    .select({ id: s.license.id, metadata: s.license.metadata })
+    .from(s.license)
+    .where(and(eq(s.license.storeId, opts.storeId), eq(s.license.orderId, opts.orderId)));
+  for (const row of rows) {
+    const current = row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata)
+      ? row.metadata as Record<string, unknown> : {};
+    await tx.update(s.license).set({ metadata: { ...current, ...patch } as object }).where(eq(s.license.id, row.id));
+  }
+  return rows.length;
 }

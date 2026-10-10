@@ -12,7 +12,7 @@ import { currentLockSet, lockSetCovers, lockSetInTx, withLockedSetInTx, type Hel
 import * as s from '../../db/schema.js';
 import { env } from '../../env.js';
 import { normalizeEmail } from '../../auth/email.js';
-import { issueLicensesForPaidOrder } from '../../licensing/issue.js';
+import { applyLicenseMetadataPatch, issueLicensesForPaidOrder } from '../../licensing/issue.js';
 import { reconcileEditedOrderLicenses } from '../../licensing/edit-reconcile.js';
 import { extendEntitlement } from '../../licensing/renewal.js';
 import { bootstrapAccountAndQueueAccessMail } from '../../licensing/account-bootstrap.js';
@@ -116,13 +116,17 @@ async function guardPolicy(run: () => Promise<EffectOutcome>): Promise<EffectOut
   }
 }
 
+/** Outcome of the issuance gate: a terminal/retry outcome to return, or proceed (with the licence metadata patch). */
+type IssuanceGate = { outcome: EffectOutcome } | { proceed: true; metadataPatch?: Readonly<Record<string, unknown>> };
+
 /**
  * Issuance gate: a first-cycle subscription invoice is authorised first, then the order's reservations and
- * state are revalidated. Returns a terminal outcome, or undefined to proceed. A policy that cannot answer is a
- * bounded retry (the worker goes terminal after MAX_ATTEMPTS).
+ * state are revalidated. Returns a terminal outcome, or proceed. A policy that cannot answer
+ * (PaymentPolicyUnavailableError) is a bounded retry (the worker goes terminal after MAX_ATTEMPTS). A
+ * composition conflict is not caught here: it throws, the effect's transaction rolls back and it retries.
  */
-async function issuanceGate(tx: Tx, e: EffectRow, p: LicenseIssuePayload, held: HeldLocks): Promise<EffectOutcome> {
-  return guardPolicy(async () => {
+async function issuanceGate(tx: Tx, e: EffectRow, p: LicenseIssuePayload, held: HeldLocks): Promise<IssuanceGate> {
+  try {
     if (p.link) {
       const [sub] = await tx.select().from(s.subscription)
         .where(and(eq(s.subscription.storeId, e.storeId), eq(s.subscription.stripeSubscriptionId, p.link.stripeSubscriptionId))).limit(1);
@@ -140,7 +144,7 @@ async function issuanceGate(tx: Tx, e: EffectRow, p: LicenseIssuePayload, held: 
       });
       if (decision.decision === 'terminal') {
         await auditPolicyTask(tx, e, decision.adminTask, decision.code);
-        return { terminal: decision.code };
+        return { outcome: { terminal: decision.code } };
       }
     }
     const order = await loadOrder(tx, e.storeId, p.orderId);
@@ -154,10 +158,13 @@ async function issuanceGate(tx: Tx, e: EffectRow, p: LicenseIssuePayload, held: 
           action: verdict.audit.action, data: verdict.audit.data,
         });
       }
-      return { terminal: verdict.code };
+      return { outcome: { terminal: verdict.code } };
     }
-    return undefined;
-  });
+    return { proceed: true, metadataPatch: verdict.metadataPatch };
+  } catch (err) {
+    if (err instanceof PaymentPolicyUnavailableError) return { outcome: { retry: { reason: 'policy_unavailable' } } };
+    throw err;
+  }
 }
 
 /**
@@ -185,8 +192,9 @@ const licenseIssue: LocalEffectHandler = {
     await assertInlineCovered(tx, e.storeId, { kind: 'order', orderId: p.orderId }, 'license_issue');
     return withLockedSetInTx(tx, e.storeId, { kind: 'order', orderId: p.orderId }, async (inner, held) => {
       const gate = await issuanceGate(inner, e, p, held);
-      if (gate) return gate;
+      if ('outcome' in gate) return gate.outcome;
       const issued = await issueLicensesForPaidOrder(inner, { storeId: e.storeId, orderId: p.orderId, customerId: p.customerId ?? null, paidAt: new Date(p.paidAt) });
+      if (gate.metadataPatch) await applyLicenseMetadataPatch(inner, { storeId: e.storeId, orderId: p.orderId }, gate.metadataPatch);
       return linkLicense(inner, e, p, issued);
     });
   },
