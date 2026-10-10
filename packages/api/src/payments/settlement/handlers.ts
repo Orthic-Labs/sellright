@@ -24,7 +24,7 @@ import { orderConfirmation as orderConfirmationTpl } from '../../email/templates
 import { enqueueEmail } from '../../email/outbox.js';
 import { enqueuePush, buildOrderPushPayload, buildOrderLiveActivityPayload } from '../../push/outbox.js';
 import { emitOrderPaidEvent, sendOrderConfirmationAndEnrol } from '../paid-effects.js';
-import { runAuthorizeInvoiceEffect, runRevalidateForIssuance } from '../policy/host.js';
+import { runAuthorizeInvoiceEffect, runEntitlementReversal, runRevalidateForIssuance } from '../policy/host.js';
 import { PaymentPolicyUnavailableError } from '../policy/registry.js';
 import type { PolicyOrder } from '../policy/types.js';
 import { recordOperationLicense, registerEffectHandler, backoffSeconds, runningInline, type EffectOutcome, type EffectRow, type LocalEffectHandler } from './effects.js';
@@ -55,6 +55,9 @@ export interface LoyaltyEarnPayload {
   variant: 'settle' | 'checkout' | 'deferred_edit'; orderId: string; paidAt?: string;
 }
 export interface NotificationPayload { variant: 'settle' | 'checkout'; orderId: string; guestEmail?: string | null; itemCount?: number }
+/** entitlement_reversal payload: the order whose entitlement is reversed, and why. Immutable identity fields only. */
+export interface EntitlementReversalPayload { orderId: string; reason: 'full_refund' | 'chargeback' }
+
 export interface LicenseExtendPayload { stripeSubscriptionId: string; invoiceId: string; noOrder?: boolean }
 
 /** How long a renewal waits for its subscription's licence link before going terminal (live-mode webhook retry horizon). */
@@ -233,6 +236,28 @@ export const editReconcile: LocalEffectHandler = {
   },
 };
 
+/**
+ * Entitlement reversal (full refund or lost chargeback). Runs on the effect's own transaction under the order's lock set
+ * (the policies' lockPlan contributes the licences). Policy hooks run in registration order; a policy that cannot answer
+ * is a bounded retry, then terminal with an admin_review row (engine markRetryOrTerminal). The money and the order state
+ * were recorded by the caller and are never touched here.
+ */
+const entitlementReversal: LocalEffectHandler = {
+  async run(tx, e) {
+    const p = e.payload as unknown as EntitlementReversalPayload;
+    await assertInlineCovered(tx, e.storeId, { kind: 'order', orderId: p.orderId }, 'entitlement_reversal');
+    return withLockedSetInTx(tx, e.storeId, { kind: 'order', orderId: p.orderId }, async (inner, held) => {
+      try {
+        await runEntitlementReversal(inner, { storeId: e.storeId, orderId: p.orderId, reason: p.reason, operationId: e.operationId, held });
+      } catch (err) {
+        if (err instanceof PaymentPolicyUnavailableError) return { retry: { reason: 'policy_unavailable' } };
+        throw err;
+      }
+      return { done: { result: { reason: p.reason } } };
+    });
+  },
+};
+
 const loyaltyEarn: LocalEffectHandler = {
   async run(tx, e) {
     const p = e.payload as unknown as LoyaltyEarnPayload;
@@ -383,4 +408,5 @@ export function registerBuiltinEffectHandlers(): void {
   registerEffectHandler('loyalty_earn', loyaltyEarn);
   registerEffectHandler('notification', notification);
   registerEffectHandler('license_extend', licenseExtend);
+  registerEffectHandler('entitlement_reversal', entitlementReversal);
 }

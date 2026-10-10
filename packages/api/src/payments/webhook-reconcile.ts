@@ -20,6 +20,7 @@ import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { type Tx, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
+import { recordSettlementOperation } from './settlement/record.js';
 import { emitEvent } from '../webhooks/emit.js';
 import { resolveStoreForGatewayEvent } from './tenant-resolution.js';
 import { finalizeRefund, enqueueRefundSettledEmail, RefundError, orderRefundBasis, refundStateFromBasis } from './refunds.js';
@@ -318,11 +319,17 @@ async function recomputeOrderRefundState(tx: Tx, storeId: string, orderId: strin
   // reconcileStripeRefund actually recorded; only gate the state WRITE on
   // canTransition (writing a state the order is already in would be a
   // meaningless no-op update, not an error).
+  const reachesRefunded = target === 'Refunded' && canTransition(ord.state as OrderState, 'Refunded');
   if (canTransition(ord.state as OrderState, target)) {
     await tx.update(s.order).set({ state: target, updatedAt: new Date() }).where(eq(s.order.id, orderId));
   }
   // PAYMENT-TIMING §3.3 R5: a full refund releases consumed holds that asked for it (no-op unless the order is Refunded).
   if (target === 'Refunded') await releaseOnFullRefundInSet(tx, { storeId, orderId });
+  // Entitlement reversal on the first transition to Refunded (worker effect; identity = order, so replays are no-ops).
+  if (reachesRefunded) await recordSettlementOperation(tx, {
+    storeId, kind: 'order_refunded', operationId: orderId, orderId, mutations: [],
+    effects: [{ kind: 'entitlement_reversal', payload: { orderId, reason: 'full_refund' } }], effectMode: 'deferred',
+  });
   await emitEvent(tx, storeId, 'order.refunded', { code: ord.code, amount: refunded, state: target, source: 'stripe_dashboard' });
 }
 
@@ -334,7 +341,14 @@ export interface DisputeDescriptor { disputeId: string; amount: number; reason: 
  *  audit + order.dispute_opened event + operator email, all idempotent on
  *  (store, provider, disputeId) so provider retries are no-ops. */
 export async function recordStripeDispute(tx: Tx, storeId: string, d: DisputeDescriptor): Promise<void> {
-  await recordStripeDisputeAlert(tx, storeId, d);
+  const res = await recordStripeDisputeAlert(tx, storeId, d);
+  // Fork parity: a chargeback that is OPENED reverses the order's entitlement (not only a lost one). Only the first
+  // observation of the dispute reaches here (res.created); the operation identity makes a replay add nothing.
+  // The order is in moneyOrderIds(charge.dispute.created), so the webhook's lock set already covers it.
+  if (res.created && res.orderId) await recordSettlementOperation(tx, {
+    storeId, kind: 'dispute_opened', operationId: `stripe_dispute:${d.disputeId}`, orderId: res.orderId, mutations: [],
+    effects: [{ kind: 'entitlement_reversal', payload: { orderId: res.orderId, reason: 'chargeback' } }], effectMode: 'deferred',
+  });
 }
 
 export { STRIPE_REFUND_ATTEMPT_KEY };

@@ -156,7 +156,7 @@ export async function recordStripeDisputeAlert(tx: Tx, storeId: string, d: {
   let orderCode: string | null = null;
   if (d.piId) {
     const [pay] = await tx.select({ id: s.payment.id, orderId: s.payment.orderId })
-      .from(s.payment).where(eq(s.payment.providerRef, d.piId)).limit(1);
+      .from(s.payment).where(and(eq(s.payment.storeId, storeId), eq(s.payment.method, 'stripe'), eq(s.payment.providerRef, d.piId))).limit(1);
     paymentId = pay?.id ?? null;
     orderId = pay?.orderId ?? null;
     if (orderId) {
