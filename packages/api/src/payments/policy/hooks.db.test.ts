@@ -354,3 +354,79 @@ describe('issuance effects are gated by the policy (PAYMENT-TIMING §3.7.5)', ()
     expect(lic!.expiresAt!.toISOString()).toBe('2030-01-01T00:00:00.000Z');
   });
 });
+
+describe('issuance metadata patch and gate on a licensed order (PAYMENT-TIMING §3.7.5)', () => {
+  const O_QTY2 = '7a100000-0000-0000-0000-00000000000b';
+  const O_NOPATCH = '7a100000-0000-0000-0000-00000000000c';
+  const O_CONFLICT = '7a100000-0000-0000-0000-00000000000d';
+  const O_BLOCKED = '7a100000-0000-0000-0000-00000000000e';
+
+  /** A Paid order with one licence line of `qty` seats: the real issuance creates `qty` licence rows. */
+  async function seedLicensedOrder(orderId: string, code: string, qty: number): Promise<void> {
+    await withStore(STORE, async (tx) => {
+      await tx.execute(sql`INSERT INTO "order" (id, store_id, code, state, grand_total) VALUES (${orderId}, ${STORE}, ${code}, 'Paid', 1000)`);
+      const p = (await tx.execute(sql`INSERT INTO product (id, store_id, slug, name, status) VALUES (gen_random_uuid(), ${STORE}, ${'p-' + code}, 'P', 'active') RETURNING id`)).rows[0] as { id: string };
+      const v = (await tx.execute(sql`INSERT INTO product_variant (id, store_id, product_id, sku, name, price, app_key, fulfillment_type)
+        VALUES (gen_random_uuid(), ${STORE}, ${p.id}, ${'SKU-' + code}, 'Lic', 1000, 'app', 'license') RETURNING id`)).rows[0] as { id: string };
+      await tx.execute(sql`INSERT INTO order_line (store_id, order_id, variant_id, variant_sku, variant_name, quantity, unit_price, line_subtotal, line_total)
+        VALUES (${STORE}, ${orderId}, ${v.id}, ${'SKU-' + code}, 'Lic', ${qty}, 1000, ${1000 * qty}, ${1000 * qty})`);
+    });
+  }
+  const licencesOf = (orderId: string) => withStore(STORE, (tx) => tx.select().from(s.license).where(eq(s.license.orderId, orderId)));
+  /** Forces the effect's next attempt to be the terminal one (attempts = MAX_ATTEMPTS - 1, due now). */
+  const primeLastAttempt = (effectId: string) => withStore(STORE, (tx) => tx.execute(sql`UPDATE order_pending_effect SET attempts = 7, next_attempt_at = now() WHERE id = ${effectId}`));
+  const issuePayload = (orderId: string) => ({ orderId, customerId: null, paidAt: new Date().toISOString() });
+
+  it('a patch from the policy is shallow-merged into every licence the order has', async () => {
+    await seedLicensedOrder(O_QTY2, 'LIC-Q2', 2);
+    registerPaymentPolicy({
+      id: 'patcher', async beforePaymentAttempt() { return { allow: true }; },
+      async revalidateForIssuance() { return { ok: true, metadataPatch: { mobile_upgrade_order_id: O_QTY2, patched: true } }; },
+    });
+    const [eff] = await enqueue(O_QTY2, 'license_issue', issuePayload(O_QTY2), 'order_paid_transition', 'op-patch-1');
+    await drain();
+    expect((await effectRow(eff!.id)).status).toBe('done');
+    const rows = await licencesOf(O_QTY2);
+    expect(rows).toHaveLength(2);
+    for (const r of rows) expect(r.metadata).toMatchObject({ mobile_upgrade_order_id: O_QTY2, patched: true });
+  });
+
+  it('no patch from any policy leaves licence metadata untouched', async () => {
+    await seedLicensedOrder(O_NOPATCH, 'LIC-NP', 1);
+    registerPaymentPolicy({ id: 'no-patch', async beforePaymentAttempt() { return { allow: true }; }, async revalidateForIssuance() { return { ok: true }; } });
+    const [eff] = await enqueue(O_NOPATCH, 'license_issue', issuePayload(O_NOPATCH), 'order_paid_transition', 'op-nopatch-1');
+    await drain();
+    expect((await effectRow(eff!.id)).status).toBe('done');
+    const rows = await licencesOf(O_NOPATCH);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.metadata ?? {}).not.toHaveProperty('patched');
+  });
+
+  it('conflicting patch keys are a composition error: no licence rows, retried, then terminal', async () => {
+    await seedLicensedOrder(O_CONFLICT, 'LIC-CF', 1);
+    registerPaymentPolicy({ id: 'cf-a', async beforePaymentAttempt() { return { allow: true }; }, async revalidateForIssuance() { return { ok: true, metadataPatch: { k: 'a' } }; } });
+    registerPaymentPolicy({ id: 'cf-b', async beforePaymentAttempt() { return { allow: true }; }, async revalidateForIssuance() { return { ok: true, metadataPatch: { k: 'b' } }; } });
+    const [eff] = await enqueue(O_CONFLICT, 'license_issue', issuePayload(O_CONFLICT), 'order_paid_transition', 'op-cf-1');
+    await drain();
+    expect(await effectRow(eff!.id)).toMatchObject({ status: 'pending', lastError: expect.stringContaining('composition conflict') });
+    expect(await licencesOf(O_CONFLICT)).toHaveLength(0);
+    await primeLastAttempt(eff!.id);
+    await drain();
+    expect(await effectRow(eff!.id)).toMatchObject({ status: 'terminal', lastError: expect.stringContaining('composition conflict') });
+    expect(await licencesOf(O_CONFLICT)).toHaveLength(0);
+  });
+
+  it('ok:false blocks issuance before any licence row is written, and the policy audit is recorded', async () => {
+    await seedLicensedOrder(O_BLOCKED, 'LIC-BK', 1);
+    registerPaymentPolicy({
+      id: 'blocker', async beforePaymentAttempt() { return { allow: true }; },
+      async revalidateForIssuance() { return { ok: false, code: 'SOURCE_GONE', audit: { action: 'blocked_upgrade', data: { reason: 'gone' } } }; },
+    });
+    const [eff] = await enqueue(O_BLOCKED, 'license_issue', issuePayload(O_BLOCKED), 'order_paid_transition', 'op-bk-1');
+    await drain();
+    expect(await effectRow(eff!.id)).toMatchObject({ status: 'terminal', lastError: 'SOURCE_GONE' });
+    expect(await licencesOf(O_BLOCKED)).toHaveLength(0);
+    const audits = await withStore(STORE, (tx) => tx.select().from(s.auditLog).where(eq(s.auditLog.action, 'blocked_upgrade')));
+    expect(audits.some((a) => a.entityId === O_BLOCKED && a.actor === 'system:policy')).toBe(true);
+  });
+});

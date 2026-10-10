@@ -25,10 +25,10 @@ export class PaymentPolicyUnavailableError extends Error {
   }
 }
 
-/** Two policies asked for the same reservation identity (kind, ownerKey) in one composition. */
+/** Two policies asked for the same identity (kind, ownerKey) in one composition: a reservation or a licence metadata key. */
 export class PaymentPolicyCompositionError extends Error {
   constructor(readonly kind: string, readonly ownerKey: string, readonly policyIds: readonly string[]) {
-    super(`duplicate reservation (${kind}, ${ownerKey}) requested by policies ${policyIds.join(', ')}`);
+    super(`composition conflict on (${kind}, ${ownerKey}) requested by policies ${policyIds.join(', ')}`);
     this.name = 'PaymentPolicyCompositionError';
   }
 }

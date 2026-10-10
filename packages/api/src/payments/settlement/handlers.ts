@@ -12,7 +12,7 @@ import { currentLockSet, lockSetCovers, lockSetInTx, withLockedSetInTx, type Hel
 import * as s from '../../db/schema.js';
 import { env } from '../../env.js';
 import { normalizeEmail } from '../../auth/email.js';
-import { issueLicensesForPaidOrder } from '../../licensing/issue.js';
+import { applyLicenseMetadataPatch, issueLicensesForPaidOrder } from '../../licensing/issue.js';
 import { reconcileEditedOrderLicenses } from '../../licensing/edit-reconcile.js';
 import { extendEntitlement } from '../../licensing/renewal.js';
 import { bootstrapAccountAndQueueAccessMail } from '../../licensing/account-bootstrap.js';
@@ -24,7 +24,7 @@ import { orderConfirmation as orderConfirmationTpl } from '../../email/templates
 import { enqueueEmail } from '../../email/outbox.js';
 import { enqueuePush, buildOrderPushPayload, buildOrderLiveActivityPayload } from '../../push/outbox.js';
 import { emitOrderPaidEvent, sendOrderConfirmationAndEnrol } from '../paid-effects.js';
-import { runAuthorizeInvoiceEffect, runRevalidateForIssuance } from '../policy/host.js';
+import { runAuthorizeInvoiceEffect, runEntitlementReversal, runRevalidateForIssuance } from '../policy/host.js';
 import { PaymentPolicyUnavailableError } from '../policy/registry.js';
 import type { PolicyOrder } from '../policy/types.js';
 import { recordOperationLicense, registerEffectHandler, backoffSeconds, runningInline, type EffectOutcome, type EffectRow, type LocalEffectHandler } from './effects.js';
@@ -55,6 +55,9 @@ export interface LoyaltyEarnPayload {
   variant: 'settle' | 'checkout' | 'deferred_edit'; orderId: string; paidAt?: string;
 }
 export interface NotificationPayload { variant: 'settle' | 'checkout'; orderId: string; guestEmail?: string | null; itemCount?: number }
+/** entitlement_reversal payload: the order whose entitlement is reversed, and why. Immutable identity fields only. */
+export interface EntitlementReversalPayload { orderId: string; reason: 'full_refund' | 'chargeback' }
+
 export interface LicenseExtendPayload { stripeSubscriptionId: string; invoiceId: string; noOrder?: boolean }
 
 /** How long a renewal waits for its subscription's licence link before going terminal (live-mode webhook retry horizon). */
@@ -116,13 +119,17 @@ async function guardPolicy(run: () => Promise<EffectOutcome>): Promise<EffectOut
   }
 }
 
+/** Outcome of the issuance gate: a terminal/retry outcome to return, or proceed (with the licence metadata patch). */
+type IssuanceGate = { outcome: EffectOutcome } | { proceed: true; metadataPatch?: Readonly<Record<string, unknown>> };
+
 /**
  * Issuance gate: a first-cycle subscription invoice is authorised first, then the order's reservations and
- * state are revalidated. Returns a terminal outcome, or undefined to proceed. A policy that cannot answer is a
- * bounded retry (the worker goes terminal after MAX_ATTEMPTS).
+ * state are revalidated. Returns a terminal outcome, or proceed. A policy that cannot answer
+ * (PaymentPolicyUnavailableError) is a bounded retry (the worker goes terminal after MAX_ATTEMPTS). A
+ * composition conflict is not caught here: it throws, the effect's transaction rolls back and it retries.
  */
-async function issuanceGate(tx: Tx, e: EffectRow, p: LicenseIssuePayload, held: HeldLocks): Promise<EffectOutcome> {
-  return guardPolicy(async () => {
+async function issuanceGate(tx: Tx, e: EffectRow, p: LicenseIssuePayload, held: HeldLocks): Promise<IssuanceGate> {
+  try {
     if (p.link) {
       const [sub] = await tx.select().from(s.subscription)
         .where(and(eq(s.subscription.storeId, e.storeId), eq(s.subscription.stripeSubscriptionId, p.link.stripeSubscriptionId))).limit(1);
@@ -140,7 +147,7 @@ async function issuanceGate(tx: Tx, e: EffectRow, p: LicenseIssuePayload, held: 
       });
       if (decision.decision === 'terminal') {
         await auditPolicyTask(tx, e, decision.adminTask, decision.code);
-        return { terminal: decision.code };
+        return { outcome: { terminal: decision.code } };
       }
     }
     const order = await loadOrder(tx, e.storeId, p.orderId);
@@ -154,10 +161,13 @@ async function issuanceGate(tx: Tx, e: EffectRow, p: LicenseIssuePayload, held: 
           action: verdict.audit.action, data: verdict.audit.data,
         });
       }
-      return { terminal: verdict.code };
+      return { outcome: { terminal: verdict.code } };
     }
-    return undefined;
-  });
+    return { proceed: true, metadataPatch: verdict.metadataPatch };
+  } catch (err) {
+    if (err instanceof PaymentPolicyUnavailableError) return { outcome: { retry: { reason: 'policy_unavailable' } } };
+    throw err;
+  }
 }
 
 /**
@@ -185,8 +195,9 @@ const licenseIssue: LocalEffectHandler = {
     await assertInlineCovered(tx, e.storeId, { kind: 'order', orderId: p.orderId }, 'license_issue');
     return withLockedSetInTx(tx, e.storeId, { kind: 'order', orderId: p.orderId }, async (inner, held) => {
       const gate = await issuanceGate(inner, e, p, held);
-      if (gate) return gate;
+      if ('outcome' in gate) return gate.outcome;
       const issued = await issueLicensesForPaidOrder(inner, { storeId: e.storeId, orderId: p.orderId, customerId: p.customerId ?? null, paidAt: new Date(p.paidAt) });
+      if (gate.metadataPatch) await applyLicenseMetadataPatch(inner, { storeId: e.storeId, orderId: p.orderId }, gate.metadataPatch);
       return linkLicense(inner, e, p, issued);
     });
   },
@@ -222,6 +233,28 @@ export const editReconcile: LocalEffectHandler = {
     if (blocked) return blocked;
     const r = await reconcileEditedOrderLicenses(tx, { storeId: e.storeId, orderId: p.orderId, customerId: p.customerId ?? null, paidAt: new Date(p.paidAt) });
     return { done: { result: { ...r } } };
+  },
+};
+
+/**
+ * Entitlement reversal (full refund or lost chargeback). Runs on the effect's own transaction under the order's lock set
+ * (the policies' lockPlan contributes the licences). Policy hooks run in registration order; a policy that cannot answer
+ * is a bounded retry, then terminal with an admin_review row (engine markRetryOrTerminal). The money and the order state
+ * were recorded by the caller and are never touched here.
+ */
+const entitlementReversal: LocalEffectHandler = {
+  async run(tx, e) {
+    const p = e.payload as unknown as EntitlementReversalPayload;
+    await assertInlineCovered(tx, e.storeId, { kind: 'order', orderId: p.orderId }, 'entitlement_reversal');
+    return withLockedSetInTx(tx, e.storeId, { kind: 'order', orderId: p.orderId }, async (inner, held) => {
+      try {
+        await runEntitlementReversal(inner, { storeId: e.storeId, orderId: p.orderId, reason: p.reason, operationId: e.operationId, held });
+      } catch (err) {
+        if (err instanceof PaymentPolicyUnavailableError) return { retry: { reason: 'policy_unavailable' } };
+        throw err;
+      }
+      return { done: { result: { reason: p.reason } } };
+    });
   },
 };
 
@@ -375,4 +408,5 @@ export function registerBuiltinEffectHandlers(): void {
   registerEffectHandler('loyalty_earn', loyaltyEarn);
   registerEffectHandler('notification', notification);
   registerEffectHandler('license_extend', licenseExtend);
+  registerEffectHandler('entitlement_reversal', entitlementReversal);
 }

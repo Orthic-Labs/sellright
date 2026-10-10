@@ -20,7 +20,7 @@ import {
   PaymentPolicyVetoError, registeredPaymentPolicies, registerPaymentPolicy,
 } from './registry.js';
 import type {
-  AuthorizeInvoiceEffectInput, BeforeCaptureInput, BeforeCaptureResult, BeforePaymentAttemptInput, InvoiceEffectDecision,
+  AuthorizeInvoiceEffectInput, BeforeCaptureInput, EntitlementReversalInput, BeforeCaptureResult, BeforePaymentAttemptInput, InvoiceEffectDecision,
   PaymentPolicy, PaymentProvider, PaymentPurpose, PolicyOrder, ReservationRequest, RevalidateForIssuanceInput,
   RevalidateForIssuanceResult, SettlementResponseInput, SettlementResponseOverride,
 } from './types.js';
@@ -95,17 +95,32 @@ export async function runAuthorizeInvoiceEffect(tx: Tx, input: AuthorizeInvoiceE
 }
 
 /**
- * Issuance revalidation when an issuance effect executes (PAYMENT-TIMING §3.7.5). The first failure wins;
- * otherwise ok. Throws PaymentPolicyUnavailableError on a hook failure (retry, then terminal).
+ * Issuance revalidation when an issuance effect executes (PAYMENT-TIMING §3.7.5). The first failure wins and
+ * blocks issuance. Otherwise `ok`, carrying the merged metadata patch of the policies that returned one; the
+ * same key patched by two policies is a PaymentPolicyCompositionError. Throws PaymentPolicyUnavailableError on
+ * a hook failure (retry, then terminal).
  */
 export async function runRevalidateForIssuance(tx: Tx, input: RevalidateForIssuanceInput): Promise<RevalidateForIssuanceResult> {
   await assertHeld(tx, input.held);
+  const patches: { policyId: string; patch: Readonly<Record<string, unknown>> }[] = [];
   for (const policy of policies()) {
     if (!policy.revalidateForIssuance) continue;
     const result = await inSavepoint(tx, policy.id, () => policy.revalidateForIssuance!(tx, input));
     if (!result.ok) return result;
+    if (result.metadataPatch) patches.push({ policyId: policy.id, patch: result.metadataPatch });
   }
-  return { ok: true };
+  if (!patches.length) return { ok: true };
+  const merged: Record<string, unknown> = {};
+  const owner = new Map<string, string>();
+  for (const { policyId, patch } of patches) {
+    for (const [key, value] of Object.entries(patch)) {
+      const first = owner.get(key);
+      if (first !== undefined) throw new PaymentPolicyCompositionError('licence.metadata', key, [first, policyId]);
+      owner.set(key, policyId);
+      merged[key] = value;
+    }
+  }
+  return { ok: true, metadataPatch: merged };
 }
 
 /**
@@ -142,6 +157,19 @@ registerLockPlanContributor(async (tx, subject: LockSubject) => {
   }
   return out;
 });
+
+/**
+ * Entitlement reversal (full refund or lost chargeback). Every registered policy's onEntitlementReversal runs in
+ * registration order, each in SAVEPOINT policy_hook. A hook failure throws PaymentPolicyUnavailableError and the
+ * caller (the effects handler) decides retry or terminal. Absent hooks are a no-op.
+ */
+export async function runEntitlementReversal(tx: Tx, input: EntitlementReversalInput): Promise<void> {
+  await assertHeld(tx, input.held);
+  for (const policy of policies()) {
+    if (!policy.onEntitlementReversal) continue;
+    await inSavepoint(tx, policy.id, () => policy.onEntitlementReversal!(tx, input));
+  }
+}
 
 /**
  * Entry point for payment paths: loads the order's reservations under the held lock set and runs
