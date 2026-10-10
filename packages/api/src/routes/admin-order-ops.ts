@@ -74,7 +74,10 @@ adminOrderOps.openapi(
     // actually commits happened — reset in .catch below, since every path
     // there means the attempt's transaction rolled back.
     let stockChanged = false;
-    const res = await withStore(st.storeId, async (tx) => {
+    // PAYMENT-TIMING §3.5: the new order is named before the transaction, so its set is held before any row is written
+    // and the inline licence issue (executeEffectsNow below) passes through this set instead of taking L2 after L3.
+    const newOrderId = randomUUID();
+    const res = await withLockedSet(st.storeId, { kind: 'order', orderId: newOrderId }, async (tx) => {
       const variants = await tx.select().from(s.productVariant).where(and(inArray(s.productVariant.sku, skus), isNull(s.productVariant.deletedAt)));
       const bySku = new Map(variants.map((v) => [v.sku, v]));
       const blocked = validateReservableItems(items, bySku);
@@ -98,7 +101,7 @@ adminOrderOps.openapi(
       const draftShipping = body.shipping ?? (draftMethod ? shippingRate(draftMethod.calculator as Parameters<typeof shippingRate>[0]) : 0);
       const totals = calculateOrderTotals({ lines: priced.map((p) => ({ unitPrice: p.unitPrice, quantity: p.qty })), shipping: draftShipping, taxRate, taxInclusive: storeRow.taxInclusive, shippingTaxable: storeRow.shippingTaxable });
       const customerId = body.email ? (await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, normalizeEmail(body.email))).limit(1))[0]?.id ?? null : null;
-      const orderId = randomUUID(); const code = orderCode();
+      const orderId = newOrderId; const code = orderCode();
       const paid = body.markPaid;
       const paidAt = paid ? new Date() : null;
       // Chokepoint operation `order_paid_transition` (order.id): an order created directly in

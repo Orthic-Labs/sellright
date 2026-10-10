@@ -8,7 +8,7 @@
  */
 import { and, eq } from 'drizzle-orm';
 import type { Tx } from '../../db/client.js';
-import { lockSetInTx, withLockedSetInTx, type HeldLocks } from '../../db/locks.js';
+import { currentLockSet, lockSetCovers, lockSetInTx, withLockedSetInTx, type HeldLocks, type LockSubject } from '../../db/locks.js';
 import * as s from '../../db/schema.js';
 import { env } from '../../env.js';
 import { normalizeEmail } from '../../auth/email.js';
@@ -27,7 +27,7 @@ import { emitOrderPaidEvent, sendOrderConfirmationAndEnrol } from '../paid-effec
 import { runAuthorizeInvoiceEffect, runRevalidateForIssuance } from '../policy/host.js';
 import { PaymentPolicyUnavailableError } from '../policy/registry.js';
 import type { PolicyOrder } from '../policy/types.js';
-import { recordOperationLicense, registerEffectHandler, backoffSeconds, type EffectOutcome, type EffectRow, type LocalEffectHandler } from './effects.js';
+import { recordOperationLicense, registerEffectHandler, backoffSeconds, runningInline, type EffectOutcome, type EffectRow, type LocalEffectHandler } from './effects.js';
 
 /** Mirror of email/dispatch.ts::parseAppMap (kept local: no internal export just for this path). */
 function parseAppFromMap(raw: string | undefined, appKey: string | null | undefined): string | undefined {
@@ -160,6 +160,18 @@ async function issuanceGate(tx: Tx, e: EffectRow, p: LicenseIssuePayload, held: 
   });
 }
 
+/**
+ * Lock-order detector (PAYMENT-TIMING §3.5). An inline effect runs inside its settlement's transaction, after the
+ * settlement has already locked rows. A lock-taking licence effect that is not covered by a set already held on
+ * that transaction would take L2/L1 after L3/L4 (inversion) and cannot retry a deadlock (X-45). In test builds
+ * this throws; production keeps the behaviour unchanged (the set is acquired in-transaction as before).
+ */
+async function assertInlineCovered(tx: Tx, storeId: string, subject: LockSubject, effectKind: string): Promise<void> {
+  if (!runningInline(tx)) return;
+  if (currentLockSet(tx) && (await lockSetCovers(tx, storeId, subject))) return;
+  if (process.env.NODE_ENV === 'test') throw new Error(`inline lock-taking effect without a covering lock set: ${effectKind}`);
+}
+
 const licenseIssue: LocalEffectHandler = {
   async run(tx, e) {
     const p = e.payload as unknown as LicenseIssuePayload;
@@ -170,6 +182,7 @@ const licenseIssue: LocalEffectHandler = {
     if (blocked) return blocked;
     // Issuance runs under the order's lock set (PAYMENT-TIMING §3.5): the policy gate and the issue see the
     // same locked rows. Inline effects pass through the settlement's own set.
+    await assertInlineCovered(tx, e.storeId, { kind: 'order', orderId: p.orderId }, 'license_issue');
     return withLockedSetInTx(tx, e.storeId, { kind: 'order', orderId: p.orderId }, async (inner, held) => {
       const gate = await issuanceGate(inner, e, p, held);
       if (gate) return gate;
@@ -303,6 +316,7 @@ const licenseExtend: LocalEffectHandler = {
     }
     // The licence row is locked before it is read or extended (PAYMENT-TIMING §3.5): the effect's own set.
     const licenseId = sub.licenseId;
+    await assertInlineCovered(tx, e.storeId, { kind: 'checkout', sourceLicenseId: licenseId }, 'license_extend');
     return withLockedSetInTx(tx, e.storeId, { kind: 'checkout', sourceLicenseId: licenseId }, (inner, held) => extendLicence(inner, e, p, licenseId, held));
   },
 };

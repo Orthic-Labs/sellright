@@ -18,6 +18,7 @@
  */
 import { and, eq } from 'drizzle-orm';
 import type { Tx } from '../db/client.js';
+import { withLockedSetInTx, type LockSubject } from '../db/locks.js';
 import * as s from '../db/schema.js';
 import { amountDueForOrder, recordPaymentAfterCancel } from './settle.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
@@ -172,6 +173,17 @@ type SubscriptionRow = typeof s.subscription.$inferSelect;
  * (pre-adoption baseline) can hold or pre-apply an invoice instead.
  */
 async function recordInvoicePaid(tx: Tx, storeId: string, sub: SubscriptionRow, invoice: InvoiceLike, ctx: InvoiceContext): Promise<void> {
+  // PAYMENT-TIMING §3.5: the backing order (L3, with its licences and reservations) and the subscription's licence
+  // (L2, for a renewal's extension) are held on this transaction before any row is read FOR UPDATE. The inline
+  // issuance / extension then pass through; the L2 licence never follows an L3 lock. Pass-through under the webhook set.
+  const subjects: LockSubject[] = [
+    ...(sub.orderId ? [{ kind: 'order' as const, orderId: sub.orderId }] : []),
+    ...(sub.licenseId ? [{ kind: 'checkout' as const, sourceLicenseId: sub.licenseId }] : []),
+  ];
+  return withLockedSetInTx(tx, storeId, subjects, () => recordInvoicePaidLocked(tx, storeId, sub, invoice, ctx));
+}
+
+async function recordInvoicePaidLocked(tx: Tx, storeId: string, sub: SubscriptionRow, invoice: InvoiceLike, ctx: InvoiceContext): Promise<void> {
   const subId = sub.stripeSubscriptionId;
   const [stored] = await tx.select({ id: s.settlementOperation.id, classification: s.settlementOperation.classification }).from(s.settlementOperation).where(and(
     eq(s.settlementOperation.storeId, storeId), eq(s.settlementOperation.operationKind, 'stripe_invoice_paid'), eq(s.settlementOperation.operationId, invoice.id),

@@ -250,8 +250,12 @@ checkout.openapi(
     const peekedCustomerId = body.redeemPoints && token
       ? await withStore(st.id, async (tx) => (await resolveCustomer(tx, token))?.id ?? null)
       : null;
+    // The order this request creates is named up front, so its set (PAYMENT-TIMING §3.5) is held before any
+    // row is written: the inline Paid transition and its licence issue then pass through the request's set.
+    const newOrderId = randomUUID();
     const subjects: LockSubject[] = [
       { kind: 'checkout' },
+      { kind: 'order', orderId: newOrderId },
       ...(peekedCustomerId ? [{ kind: 'loyalty' as const, customerId: peekedCustomerId }] : []),
     ];
     const out = await withLockedSet(st.id, subjects, async (tx): Promise<Result> => {
@@ -536,7 +540,7 @@ checkout.openapi(
           }
         : null;
 
-      const orderId = randomUUID();
+      const orderId = newOrderId;
       const code = orderCode();
       // High-entropy receipt token (32 bytes, base64url) → scopes the public
       // order-by-code read on the confirmation page (carried as ?rt=). Never

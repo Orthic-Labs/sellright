@@ -167,12 +167,26 @@ async function lockRows(
 }
 
 /** drizzle wraps driver errors ("Failed query: …") and keeps the pg error on `cause`. */
-function isLockTimeout(e: unknown): boolean {
+function pgErrorCode(e: unknown): string | undefined {
   for (let cur: unknown = e, depth = 0; cur && typeof cur === 'object' && depth < 5; depth++) {
-    if ((cur as { code?: string }).code === '55P03') return true;
+    const code = (cur as { code?: string }).code;
+    if (code) return code;
     cur = (cur as { cause?: unknown }).cause;
   }
-  return false;
+  return undefined;
+}
+
+function isLockTimeout(e: unknown): boolean {
+  return pgErrorCode(e) === '55P03';
+}
+
+/**
+ * Postgres deadlock_detected (40P01) or serialization_failure (40001). The aborted transaction rolled back, releasing
+ * every lock it held, so restarting it is safe: money recording is idempotent by operation id (X-45 backstop).
+ */
+export function isDeadlockOrSerializationFailure(e: unknown): boolean {
+  const code = pgErrorCode(e);
+  return code === '40P01' || code === '40001';
 }
 
 function union(a: LockPlanContribution, b: LockPlanContribution): LockPlanContribution {
@@ -384,6 +398,7 @@ export async function withLockedSet<T>(
 ): Promise<T> {
   const subjects = Array.isArray(subject) ? subject : [subject as LockSubject];
   let plan = await withStore(storeId, (tx) => planFor(tx, storeId, subjects));
+  let transientRetries = 0;
   for (let attempt = 0; ; attempt++) {
     try {
       return await withStore(storeId, async (tx) => {
@@ -408,6 +423,13 @@ export async function withLockedSet<T>(
         return lockSetContext.run({ tx, held, plan }, () => fn(tx, held, plan));
       });
     } catch (e) {
+      if (isDeadlockOrSerializationFailure(e)) {
+        // Backstop: restart the whole transaction (the rollback released every lock). Bounded, with jitter.
+        if (transientRetries >= (opts.maxRestarts ?? 3)) throw e;
+        transientRetries++;
+        await new Promise((resolve) => setTimeout(resolve, 10 + Math.floor(Math.random() * 40) * transientRetries));
+        continue;
+      }
       if (!(e instanceof LockSetGrew) && !isLockTimeout(e)) throw e;
       if (opts.mustCommit) {
         // No lock_timeout in this mode, so only growth can arrive here. The plan

@@ -81,6 +81,23 @@ async function moneyOrderIds(storeId: string, event: Stripe.Event): Promise<stri
   }
 }
 
+/**
+ * Lock subjects for a money-moving event (X-45 / PAYMENT-TIMING §3.5): the orders it settles, plus the licence a
+ * subscription renewal extends (L2 is planned here so it is taken before any L3 order row, never after).
+ */
+async function moneyLockSubjects(storeId: string, event: Stripe.Event): Promise<LockSubject[]> {
+  const subjects: LockSubject[] = (await moneyOrderIds(storeId, event)).map((orderId): LockSubject => ({ kind: 'order', orderId }));
+  if (event.type === 'invoice.paid') {
+    const subRef = piRef((event.data.object as unknown as Record<string, unknown>).subscription);
+    if (subRef) {
+      const [sub] = await withStore(storeId, (tx) => tx.select({ licenseId: s.subscription.licenseId }).from(s.subscription)
+        .where(and(eq(s.subscription.storeId, storeId), eq(s.subscription.stripeSubscriptionId, subRef))).limit(1));
+      if (sub?.licenseId) subjects.push({ kind: 'checkout', sourceLicenseId: sub.licenseId });
+    }
+  }
+  return subjects;
+}
+
 export const paymentWebhooks = new OpenAPIHono();
 
 paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
@@ -195,9 +212,9 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
   // X-45: an event that records provider-moved money runs under withLockedSet with mustCommit
   // (the provider has already moved the money, so the claim waits for its locks and never 409s).
   // Events with no stored order keep the plain withStore path.
-  const orderIds = await moneyOrderIds(storeId, event);
-  const runMoney = (fn: (tx: Tx) => Promise<void>): Promise<void> => orderIds.length
-    ? withLockedSet(storeId, orderIds.map((orderId): LockSubject => ({ kind: 'order', orderId })), (tx) => fn(tx), { mustCommit: true })
+  const moneySubjects = await moneyLockSubjects(storeId, event);
+  const runMoney = (fn: (tx: Tx) => Promise<void>): Promise<void> => moneySubjects.length
+    ? withLockedSet(storeId, moneySubjects, (tx) => fn(tx), { mustCommit: true })
     : withStore(storeId, fn);
   await runClaim(() => runMoney(async (tx) => {
     // ra-sec: bind the verifying secret's mode to the store's configured mode. A
