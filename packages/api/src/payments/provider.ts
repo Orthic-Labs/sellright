@@ -16,6 +16,13 @@ export interface PaymentResult {
   providerRef: string | null;
   metadata?: unknown;
   errorMessage?: string | null;
+  /**
+   * De-fork 2.9: the provider's own status for the attempt, present ONLY when
+   * this result came from a successful provider retrieval bound to the
+   * attempt (Sezzle GET order whose identity matched). Consumers advance
+   * payment_attempt.provider_status from it; it is never persisted elsewhere.
+   */
+  observedStatus?: string;
 }
 
 export interface CreatePaymentInput {

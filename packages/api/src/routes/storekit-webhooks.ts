@@ -22,10 +22,21 @@ import { withStore, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { withLockedSet, LockSetUnstable, assertHeld, type PurchaseId } from '../db/locks.js';
 import { customerToken, resolveCustomer } from '../auth/session.js';
+import { clientIp } from '../auth/rate-limit.js';
+import { recordStorekitVerifyFailure, storekitVerifyFailureRetryAfter } from './apps.limit.js';
 import { errBody, guard, HttpError, J } from './admin-helpers.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import { applyStoreKitNotification } from '../licensing/storekit-license.js';
 import { storeKitNotificationAction } from '../licensing/storekit-notifications.js';
+import {
+  recordStoreKitEventDetached,
+  recordStoreKitEventSafe,
+  recordStoreKitVerifyFailureBounded,
+  storeKitErrorText,
+  storeKitLinkOperationId,
+  storeKitNotificationOperationId,
+  storeKitPayloadOperationId,
+} from '../licensing/storekit-events.js';
 import { verifyStoreKitNotificationForDeployment, verifyStoreKitTransactionForDeployment, type StoreKitTransactionPayload } from '../licensing/storekit-verify.js';
 import {
   deploymentConfigFor,
@@ -80,9 +91,27 @@ storeKitWebhooks.post('/v1/webhooks/apple/storekit', async (c) => {
   const appCfg = await withStore(storeId, (tx) => loadStoreKitAppByBundleId(tx, storeId, bundleId));
   if (!appCfg) return c.json({ error: 'unknown app' }, 400);
 
+  // De-fork 2.9: every stage is recorded in storekit_event. Verify rows use a
+  // digest of the signed payload (the only identity that exists when
+  // verification fails); apply/replay rows use the verified notificationUUID.
+  const payloadOperationId = storeKitPayloadOperationId(signedPayload);
   const verified = await verifyStoreKitNotificationForDeployment(signedPayload, deploymentConfigFor(appCfg));
+  if (verified.kind !== 'ok') {
+    // Unauthenticated: bounded by payload digest (1/hr) and a per-(ip, app) budget.
+    const ip = clientIp(c);
+    await recordStoreKitVerifyFailureBounded(
+      { storeId: appCfg.storeId, operationId: payloadOperationId, error: `verify:${verified.kind}` },
+      async () => {
+        if ((await storekitVerifyFailureRetryAfter(ip, appCfg.bundleId)) > 0) return false;
+        await recordStorekitVerifyFailure(ip, appCfg.bundleId);
+        return true;
+      },
+    );
+  }
   if (verified.kind === 'retryable') return c.json({ error: 'notification verification temporarily unavailable' }, 503);
   if (verified.kind !== 'ok') return c.json({ error: 'notification verification failed' }, 400);
+  await recordStoreKitEventDetached({ storeId: appCfg.storeId, operationId: payloadOperationId, stage: 'verify', outcome: 'ok' });
+  const operationId = storeKitNotificationOperationId(verified.payload.notificationUUID);
 
   const p = verified.payload;
   const eventId = `apple-storekit:${p.notificationUUID}`;
@@ -99,7 +128,13 @@ storeKitWebhooks.post('/v1/webhooks/apple/storekit', async (c) => {
 
   // Nothing to apply: only the claim (idempotency record) is written.
   if (action === 'ignore' || !purchase) {
-    await withStore(appCfg.storeId, async (tx) => { await claim(tx); });
+    await withStore(appCfg.storeId, async (tx) => {
+      const claimed = await claim(tx);
+      // De-fork 2.9: a replay never resolves an apply failure; a first delivery concludes the operation.
+      await recordStoreKitEventSafe(tx, {
+        storeId: appCfg.storeId, operationId, stage: claimed.length === 0 ? 'replay' : 'apply', outcome: 'ok',
+      });
+    });
     return c.json({ received: true }, 200);
   }
 
@@ -122,7 +157,11 @@ storeKitWebhooks.post('/v1/webhooks/apple/storekit', async (c) => {
       // Idempotency: claim the notificationUUID inside the locked set. Apple
       // retries non-2xx, and a duplicate delivery must be a no-op.
       const claimed = await claim(tx);
-      if (claimed.length === 0) return;
+      if (claimed.length === 0) {
+        // Replay rows never resolve an apply failure (storekit-events.ts).
+        await recordStoreKitEventSafe(tx, { storeId: appCfg.storeId, operationId, stage: 'replay', outcome: 'ok' });
+        return;
+      }
       await assertHeld(tx, held);
 
       const restoreActivations = policy.cascade
@@ -160,10 +199,16 @@ storeKitWebhooks.post('/v1/webhooks/apple/storekit', async (c) => {
           outcome = await applyStoreKitNotification(tx, applyInput, { restoreActivations });
         }
       }
+      // Committed-apply success: resolves earlier apply failures of this operation in THIS transaction.
+      await recordStoreKitEventSafe(tx, { storeId: appCfg.storeId, operationId, stage: 'apply', outcome: 'ok' });
       return outcome;
     });
   } catch (e) {
     if (e instanceof LockSetUnstable) return c.json({ error: 'purchase is being updated; retry shortly' }, 503);
+    // The apply transaction rolled back (including the claim), so Apple's retry re-enters apply.
+    await recordStoreKitEventDetached({
+      storeId: appCfg.storeId, operationId, stage: 'apply', outcome: 'failed', error: storeKitErrorText(e),
+    });
     throw e;
   }
 
@@ -235,8 +280,23 @@ async function linkOutcome(
   const appCfg: StoreKitAppConfig | null = await withStore(storeId, (tx) => loadStoreKitAppConfig(tx, storeId, body.appKey));
   if (!appCfg) return { kind: 'no_config' };
 
+  // De-fork 2.9: verify and apply stages recorded in storekit_event.
+  const operationId = storeKitLinkOperationId(body.appKey, body.signedTransactionInfo);
   const verified = await verifyStoreKitTransactionForDeployment(body.signedTransactionInfo, deploymentConfigFor(appCfg));
-  if (verified.kind !== 'ok') return { kind: 'verify_failed', reason: verified.kind };
+  if (verified.kind !== 'ok') {
+    // Unauthenticated input: bounded by payload digest and a per-(ip, app) budget.
+    const ip = clientIp(c as Parameters<typeof clientIp>[0]);
+    await recordStoreKitVerifyFailureBounded(
+      { storeId, operationId, error: `verify:${verified.kind}` },
+      async () => {
+        if ((await storekitVerifyFailureRetryAfter(ip, body.appKey)) > 0) return false;
+        await recordStorekitVerifyFailure(ip, body.appKey);
+        return true;
+      },
+    );
+    return { kind: 'verify_failed', reason: verified.kind };
+  }
+  await recordStoreKitEventDetached({ storeId, operationId, stage: 'verify', outcome: 'ok' });
 
   const custToken = customerToken(c);
   const cust = custToken ? await withStore(storeId, (tx) => resolveCustomer(tx, custToken)) : null;
@@ -270,7 +330,7 @@ async function linkOutcome(
   try {
     issued = await withLockedSet(storeId, { kind: 'link', purchases }, async (tx, held) => {
       await assertHeld(tx, held);
-      return policy.issue(tx, held, {
+      const result = await policy.issue(tx, held, {
       purpose: 'link',
       storeId,
       appCfg,
@@ -280,9 +340,13 @@ async function linkOutcome(
       device: { deviceIdHash: body.deviceIdHash, platform: body.platform ?? null, label: body.deviceLabel ?? null },
       facts: validation.facts,
       });
+      // Issued or definitively refused (seat limit, conflict): either concludes the operation.
+      await recordStoreKitEventSafe(tx, { storeId, operationId, stage: 'apply', outcome: 'ok' });
+      return result;
     });
   } catch (e) {
     if (e instanceof LockSetUnstable) return { kind: 'lock_unstable' };
+    await recordStoreKitEventDetached({ storeId, operationId, stage: 'apply', outcome: 'failed', error: storeKitErrorText(e) });
     throw e;
   }
   if (issued.kind === 'ok') {
