@@ -23,6 +23,18 @@ const DB = process.env.DATABASE_URL as string;
 assertTestDatabase(DB, 'create-app.db.test.ts');
 
 const baseEnv = (extra: Record<string, string | undefined> = {}) => ({ ...process.env, NODE_ENV: 'test', ...extra });
+
+// CI runs the db project as a superuser (DATABASE_URL). The runtime privilege check (plan 2.6) has its own tests;
+// every other createApp here passes the test-only override when the configured role is privileged.
+async function rolePrivileged(url: string): Promise<boolean> {
+  const c = new pg.Client({ connectionString: url });
+  try {
+    await c.connect();
+    const r = await c.query('SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user');
+    return Boolean(r.rows[0]?.rolsuper || r.rows[0]?.rolbypassrls);
+  } finally { await c.end().catch(() => undefined); }
+}
+const rt = (await rolePrivileged(DB)) ? { allowPrivilegedRuntimeRole: true } : {};
 const here = dirname(fileURLToPath(import.meta.url));
 
 let engine: EngineApp | undefined;
@@ -60,7 +72,7 @@ describe('createApp lifecycle', () => {
     expect(envOrigin()).toBeUndefined();
     expect(poolsInitialised()).toBe(false);
     const log: string[] = [];
-    engine = await createApp({ plugins: [recordingPlugin(log)], env: baseEnv({ PGAPPNAME: 'sdk-lifecycle-test' }) });
+    engine = await createApp({ ...rt, plugins: [recordingPlugin(log)], env: baseEnv({ PGAPPNAME: 'sdk-lifecycle-test' }) });
     expect(envOrigin()).toBe('explicit');
     expect(poolsInitialised()).toBe(true);
     expect(log).toEqual(['configure', 'preRoute', 'routes', 'schema', 'services']);
@@ -88,7 +100,15 @@ describe('createApp lifecycle', () => {
 
   it('shuts down in order: stop admitting -> cancel jobs -> drain HTTP -> plugin hooks -> resources -> pool', async () => {
     const log: string[] = [];
-    engine = await createApp({ plugins: [recordingPlugin(log)], env: baseEnv({ NODE_ENV: 'development', JOBS_ENABLED: '1' }) });
+    // NODE_ENV=development (so jobs run) refuses the privileged-role override: where DATABASE_URL is privileged
+    // (CI), boot as the dedicated non-owner app role instead.
+    const appUrl = Object.keys(rt).length ? process.env.DATABASE_URL_NONOWNER : DB;
+    if (!appUrl) return; // no unprivileged role reachable in this environment
+    engine = await createApp({
+      plugins: [recordingPlugin(log)],
+      env: baseEnv({ NODE_ENV: 'development', JOBS_ENABLED: '1', DATABASE_URL: appUrl }),
+      ...(appUrl === DB ? {} : { migrations: 'skip' as const }),
+    });
     await engine.start({ listen: { port: 0, hostname: '127.0.0.1' } });
     expect(getEngineState()?.jobs().names).toContain('rec:tick');
     await new Promise((r) => setTimeout(r, 400));
@@ -112,37 +132,37 @@ describe('createApp lifecycle', () => {
   }, 30_000);
 
   it('verifies every migration track; pending migrations stop boot and release the runtime', async () => {
-    await expect(createApp({ env: baseEnv(), migrationsTable: 'definitely_missing_journal' })).rejects.toBeInstanceOf(PendingMigrationsError);
+    await expect(createApp({ ...rt, env: baseEnv(), migrationsTable: 'definitely_missing_journal' })).rejects.toBeInstanceOf(PendingMigrationsError);
     expect(poolsInitialised()).toBe(false);
     expect(envOrigin()).toBeUndefined();
     // a plugin track whose journal table is absent is also refused
     const folder = join(here, '..', '..', '..', 'sample-plugin', 'drizzle');
     const plugin: EnginePlugin = { name: 'pending-track', migrations: { folder, table: '__never_applied' } };
-    await expect(createApp({ env: baseEnv(), plugins: [plugin] })).rejects.toThrow(/pending-track/);
+    await expect(createApp({ ...rt, env: baseEnv(), plugins: [plugin] })).rejects.toThrow(/pending-track/);
     // skip mode does not look
-    engine = await createApp({ env: baseEnv(), migrationsTable: 'definitely_missing_journal', migrations: 'skip' });
+    engine = await createApp({ ...rt, env: baseEnv(), migrationsTable: 'definitely_missing_journal', migrations: 'skip' });
     expect(engine.phase).toBe('created');
   });
 
   it('rejects a second createApp while one is active, and a runtime touched before createApp', async () => {
-    engine = await createApp({ env: baseEnv() });
-    await expect(createApp({ env: baseEnv() })).rejects.toMatchObject({ code: 'ENGINE_ACTIVE' });
+    engine = await createApp({ ...rt, env: baseEnv() });
+    await expect(createApp({ ...rt, env: baseEnv() })).rejects.toMatchObject({ code: 'ENGINE_ACTIVE' });
     await engine.shutdown();
     engine = undefined;
 
     _resetEnvForTest();
     const { env } = await import('../env.js');
     void env.NODE_ENV; // implicit init, as an import-time touch would do
-    await expect(createApp({ env: baseEnv() })).rejects.toMatchObject({ code: 'RUNTIME_PREINITIALISED' });
+    await expect(createApp({ ...rt, env: baseEnv() })).rejects.toMatchObject({ code: 'RUNTIME_PREINITIALISED' });
   });
 
   it('validates plugins: names, duplicates, engine version, table collisions', async () => {
     const mk = (over: Partial<EnginePlugin>): EnginePlugin => ({ name: 'p', ...over });
-    await expect(createApp({ env: baseEnv(), plugins: [mk({ name: 'Bad Name' })] })).rejects.toMatchObject({ code: 'PLUGIN_NAME' });
-    await expect(createApp({ env: baseEnv(), plugins: [mk({}), mk({})] })).rejects.toMatchObject({ code: 'PLUGIN_DUPLICATE' });
-    await expect(createApp({ env: baseEnv(), plugins: [mk({ engineVersion: '9.9.9' })] })).rejects.toMatchObject({ code: 'PLUGIN_ENGINE_VERSION' });
+    await expect(createApp({ ...rt, env: baseEnv(), plugins: [mk({ name: 'Bad Name' })] })).rejects.toMatchObject({ code: 'PLUGIN_NAME' });
+    await expect(createApp({ ...rt, env: baseEnv(), plugins: [mk({}), mk({})] })).rejects.toMatchObject({ code: 'PLUGIN_DUPLICATE' });
+    await expect(createApp({ ...rt, env: baseEnv(), plugins: [mk({ engineVersion: '9.9.9' })] })).rejects.toMatchObject({ code: 'PLUGIN_ENGINE_VERSION' });
     const clash = pgTable('store', { id: uuid().primaryKey(), x: text() });
-    await expect(createApp({ env: baseEnv(), plugins: [mk({ schema: { clash } })] })).rejects.toMatchObject({ code: 'SCHEMA_COLLISION' });
+    await expect(createApp({ ...rt, env: baseEnv(), plugins: [mk({ schema: { clash } })] })).rejects.toMatchObject({ code: 'SCHEMA_COLLISION' });
     expect(poolsInitialised()).toBe(false);
   });
 });
@@ -172,7 +192,10 @@ describe('privilege check (plan 2.6)', () => {
   });
 
   it('accepts the unprivileged runtime role without any override', async () => {
-    engine = await createApp({ env: baseEnv() });
+    // Where DATABASE_URL is privileged (CI), use the dedicated non-owner app role for this check.
+    const appUrl = Object.keys(rt).length ? process.env.DATABASE_URL_NONOWNER : DB;
+    if (!appUrl) return; // no unprivileged role reachable in this environment
+    engine = await createApp({ env: baseEnv({ DATABASE_URL: appUrl }), migrations: 'skip' });
     const r = await engine.ctx.pool.query('SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user');
     expect(r.rows[0]).toEqual({ rolsuper: false, rolbypassrls: false });
   });
@@ -181,7 +204,7 @@ describe('privilege check (plan 2.6)', () => {
 describe('system endpoints inside a composed engine (plan 2.7)', () => {
   it('merges plugin effectiveConfig sections and reports engine state', async () => {
     const log: string[] = [];
-    engine = await createApp({ env: baseEnv(), plugins: [recordingPlugin(log)] });
+    engine = await createApp({ ...rt, env: baseEnv(), plugins: [recordingPlugin(log)] });
     await engine.start({ listen: { port: 0, hostname: '127.0.0.1' } });
     const { hashPassword } = await import('../auth/password.js');
     const { createAdminSession } = await import('../auth/admin-session.js');
@@ -214,7 +237,7 @@ describe('route inventory (plan 2.5)', () => {
   const GOLDEN = join(here, 'route-inventory.golden.json');
 
   it('matches the checked-in engine inventory; every OpenAPI operation has a route; plugin .get/.on routes are listed', async () => {
-    engine = await createApp({ env: baseEnv(), plugins: [recordingPlugin([])] });
+    engine = await createApp({ ...rt, env: baseEnv(), plugins: [recordingPlugin([])] });
     const inv = await routeInventory(engine.app);
     const key = (r: { method: string; path: string }) => `${r.method} ${r.path}`;
     expect(inv.orphanedOpenApi).toEqual([]);

@@ -3,6 +3,7 @@
  * replaces the old index.ts-level shutdown.test.ts. Real createApp + real Postgres.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import pg from 'pg';
 import { assertTestDatabase } from '../db/rls-test-utils.js';
 import { _resetEnvForTest } from '../env.js';
 import { _resetPoolsForTest, poolsInitialised } from '../db/client.js';
@@ -12,6 +13,18 @@ import type { EngineApp } from './types.js';
 
 assertTestDatabase(process.env.DATABASE_URL ?? '', 'signals.db.test.ts');
 const env = () => ({ ...process.env, NODE_ENV: 'test' });
+const DB = process.env.DATABASE_URL as string;
+// CI runs the db project as a superuser (DATABASE_URL). The runtime privilege check (plan 2.6) has its own tests;
+// every other createApp here passes the test-only override when the configured role is privileged.
+async function rolePrivileged(url: string): Promise<boolean> {
+  const c = new pg.Client({ connectionString: url });
+  try {
+    await c.connect();
+    const r = await c.query('SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user');
+    return Boolean(r.rows[0]?.rolsuper || r.rows[0]?.rolbypassrls);
+  } finally { await c.end().catch(() => undefined); }
+}
+const rt = (await rolePrivileged(DB)) ? { allowPrivilegedRuntimeRole: true } : {};
 let engine: EngineApp | undefined;
 
 afterEach(async () => {
@@ -31,7 +44,7 @@ const exited = (spy: ReturnType<typeof vi.spyOn>) => new Promise<number>((resolv
 describe.each(['SIGTERM', 'SIGINT'] as const)('%s', (sig) => {
   it('drains HTTP, closes the pool, then exits 0', async () => {
     const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
-    engine = await createApp({ env: env() });
+    engine = await createApp({ ...rt, env: env() });
     await engine.start({ listen: { port: 0, hostname: '127.0.0.1' }, handleSignals: true });
     process.emit(sig);
     expect(await exited(exit)).toBe(0);
@@ -44,7 +57,7 @@ describe.each(['SIGTERM', 'SIGINT'] as const)('%s', (sig) => {
 describe('edge cases', () => {
   it('a straggler reading env after shutdown gets the value, not a throw (review F4)', async () => {
     const { env: liveEnv } = await import('../env.js');
-    engine = await createApp({ env: env() });
+    engine = await createApp({ ...rt, env: env() });
     await engine.shutdown();
     expect(liveEnv.NODE_ENV).toBe('test');
     expect(isEngineClosed()).toBe(true);
@@ -53,7 +66,7 @@ describe('edge cases', () => {
   it('a second SIGTERM during shutdown is ignored (single exit)', async () => {
     const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    engine = await createApp({ env: env(), plugins: [{ name: 'slow', shutdown: () => new Promise((r) => setTimeout(r, 200)) }] });
+    engine = await createApp({ ...rt, env: env(), plugins: [{ name: 'slow', shutdown: () => new Promise((r) => setTimeout(r, 200)) }] });
     await engine.start({ listen: { port: 0, hostname: '127.0.0.1' }, handleSignals: true });
     process.emit('SIGTERM');
     process.emit('SIGTERM');
@@ -67,7 +80,7 @@ describe('edge cases', () => {
     const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     let release: () => void = () => undefined;
-    engine = await createApp({ env: env(), plugins: [{ name: 'hang', shutdown: () => new Promise<void>((r) => { release = r; }) }] });
+    engine = await createApp({ ...rt, env: env(), plugins: [{ name: 'hang', shutdown: () => new Promise<void>((r) => { release = r; }) }] });
     await engine.start({ listen: { port: 0, hostname: '127.0.0.1' }, handleSignals: true, shutdownTimeoutMs: 150 });
     process.emit('SIGTERM');
     expect(await exited(exit)).toBe(1);
