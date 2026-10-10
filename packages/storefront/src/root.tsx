@@ -22,7 +22,7 @@ export default component$<RootProps>(({ nonce }) => {
 					Skip to main content
 				</a>
 				<RouterOutlet />
-				<ServiceWorkerRegister />
+				<ServiceWorkerRegister nonce={nonce} />
 			</body>
 		</QwikRouterProvider>
 	);

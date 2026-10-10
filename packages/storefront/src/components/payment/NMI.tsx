@@ -3,6 +3,7 @@ import { loadCollectJs, prepareCardTokenization } from '~/services/NmiCollect';
 import { startGatewayPayment } from '~/providers/shop/checkout/checkout';
 import type { GatewayAttempt } from '~/sellright/types/checkout';
 import { SellRightError } from '~/sellright/client';
+import { nextConfirm } from './confirm-trigger';
 
 /**
  * Generic card-gateway payment (NMI via Collect.js). Same imperative,
@@ -34,6 +35,8 @@ export const NMI = component$<NMIProps>((props) => {
 	const collectRef = useSignal<unknown>(null);
 	const getTokenRef = useSignal<unknown>(null);
 	const submitting = useSignal(false);
+	// Baseline = the parent's signal at mount: it survives payment-method switches, so a stale confirm must not replay.
+	const handledTrigger = useSignal(props.confirmTrigger.value);
 
 	useVisibleTask$(async () => {
 		try {
@@ -52,11 +55,15 @@ export const NMI = component$<NMIProps>((props) => {
 		} catch (e) {
 			await props.onError$(e instanceof Error ? e.message : 'Card payment failed to load.');
 		}
-	});
+	}, { strategy: 'document-ready' }); // mount Collect.js as soon as the form renders, not on first intersection/interaction
 
 	useVisibleTask$(async ({ track }) => {
 		const t = track(() => props.confirmTrigger.value);
-		if (!t || !ready.value) return;
+		// A confirm that arrives before the fields are ready is held, not dropped: it runs once they are.
+		const isReady = track(() => ready.value);
+		const decision = nextConfirm(t, isReady, handledTrigger.value);
+		if (!decision.run) return;
+		handledTrigger.value = decision.baseline;
 		if (submitting.value) return; // double click: the attempt already in flight is this one
 		const getToken = getTokenRef.value as (() => Promise<string>) | null;
 		if (!getToken) {
