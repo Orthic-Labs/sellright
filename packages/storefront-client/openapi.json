@@ -4454,6 +4454,9 @@
                   "email": {
                     "type": "string",
                     "format": "email"
+                  },
+                  "turnstileToken": {
+                    "type": "string"
                   }
                 },
                 "required": [
@@ -4478,6 +4481,16 @@
                   "required": [
                     "ok"
                   ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Bot check failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
                 }
               }
             }

@@ -51,9 +51,9 @@ export async function logout(): Promise<LogoutResult> {
 
 /** Ask for a one-time sign-in link by email. Enumeration-safe on the API side (identical 200 whether or not the address
  *  has an account); a store that has not switched the feature on answers 409. */
-export async function requestMagicLink(email: string): Promise<SimpleResult> {
+export async function requestMagicLink(email: string, turnstileToken?: string): Promise<SimpleResult> {
 	try {
-		await sellright().POST('/v1/shop/auth/magic-link/request', { body: { email } });
+		await sellright().POST('/v1/shop/auth/magic-link/request', { body: { email, turnstileToken } });
 		return { ok: true };
 	} catch (e) {
 		return { ok: false, ...describeAccountError(e, { 409: 'magic_link_disabled' }) };
@@ -150,9 +150,9 @@ export async function resetPassword(token: string, password: string): Promise<Si
 
 /** The API is enumeration-safe (always 200) — mirror that unconditionally, do
  *  not leak account existence on a transient failure either. */
-export async function requestPasswordReset(email: string): Promise<{ ok: true }> {
+export async function requestPasswordReset(email: string, turnstileToken?: string): Promise<{ ok: true }> {
 	try {
-		await sellright().POST('/v1/shop/auth/forgot-password', { body: { email } });
+		await sellright().POST('/v1/shop/auth/forgot-password', { body: { email, turnstileToken } });
 	} catch {
 		// enumeration-safe: no-op
 	}

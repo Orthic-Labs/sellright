@@ -221,6 +221,12 @@ describe('providers/shop/account/account — native SellRight client', () => {
 		expect(urlOf(mockedFetch)).toContain('/v1/shop/auth/magic-link/request');
 		expect((await bodyOf(mockedFetch)).email).toBe('a@b.com');
 
+		// The Turnstile token travels with the request so a Turnstile-protected store accepts it.
+		const tokenFetch = vi.fn(async () => jsonResponse(200, { ok: true }));
+		vi.stubGlobal('fetch', tokenFetch);
+		await expect(requestMagicLink('a@b.com', 'tok-ml')).resolves.toEqual({ ok: true });
+		expect((await bodyOf(tokenFetch)).turnstileToken).toBe('tok-ml');
+
 		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(409, { error: { code: 'MAGIC_LINK_DISABLED', message: 'off' } })));
 		vi.resetModules();
 		const again = await import('./account');
