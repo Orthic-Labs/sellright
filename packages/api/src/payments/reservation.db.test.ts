@@ -348,18 +348,7 @@ describe.skipIf(!isTestDb)('order reservations (PAYMENT-TIMING §3.2–§3.4)', 
   });
 
   describe('tenant isolation (RLS)', () => {
-    it('store B cannot read store A reservations', async () => {
-      await reserveFor(ORDER_1);
-      const seenByB = await withStore(OTHER_STORE, (tx) => tx.select().from(s.orderReservation));
-      expect(seenByB).toEqual([]);
-    });
-
-    it('store A cannot insert a reservation under store B', async () => {
-      await expectRlsRejection(
-        withStore(STORE, (tx) => tx.execute(sql`INSERT INTO order_reservation (store_id, order_id, kind, owner_key) VALUES (${OTHER_STORE}, ${ORDER_OTHER}, ${KIND}, 'x')`)),
-      );
-    });
-
+    // Checked through the non-owner role only: CI runs as a superuser, which bypasses RLS.
     it('the non-owner app role sees and writes only its own store', async () => {
       await reserveFor(ORDER_1);
       const rows = await withStoreApp(OTHER_STORE, (tx) => tx.execute(sql`SELECT id FROM order_reservation`));

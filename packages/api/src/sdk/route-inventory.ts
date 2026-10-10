@@ -25,7 +25,9 @@ export interface RouteInventory {
   orphanedOpenApi: InventoryRoute[];
 }
 
-const toOpenApiPath = (p: string): string => p.replace(/:([A-Za-z0-9_]+)(\{[^}]*\})?/g, '{$1}');
+// Per segment with an anchored pattern, so matching stays linear (CodeQL js/polynomial-redos).
+const toOpenApiPath = (p: string): string =>
+  p.split('/').map((seg) => seg.replace(/^:([A-Za-z0-9_]+)(?:\{[^}]*\})?/, '{$1}')).join('/');
 const key = (r: InventoryRoute): string => `${r.method} ${r.path}`;
 const sortRoutes = (rs: InventoryRoute[]): InventoryRoute[] => [...rs].sort((a, b) => key(a).localeCompare(key(b)));
 
