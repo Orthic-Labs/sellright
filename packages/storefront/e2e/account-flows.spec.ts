@@ -46,8 +46,13 @@ test.describe.serial('#19 account: register, verify, sign in', () => {
 		expect(new URL(link).pathname).toBe('/account/magic-link');
 		await sentEmails(api, email, 'magic_link');
 
-		await page.goto(link);
-		await page.waitForURL(/\/account\/?$/, { timeout: 20_000 });
+		// The link is opened the way a shopper opens the email: in a fresh, signed-out browser. The /account server guard
+		// must let it through (no redirect to /sign-in); the page then exchanges the token and lands on /account.
+		const fresh = await browser.newContext();
+		const shopper = await prepareShopperPage(await fresh.newPage());
+		await shopper.goto(link);
+		await shopper.waitForURL(/\/account\/?$/, { timeout: 20_000 });
+		await fresh.close();
 
 		// The link is single-use: a second visit (fresh browser context, so signed out) is refused.
 		const other = await browser.newContext();
