@@ -92,7 +92,9 @@ export async function sendEmail(input: SendEmailInput, storeId?: string): Promis
     return { delivered: false, reason: 'smtp_not_configured' };
   }
   try {
-    await tx.sendMail({ from, ...input });
+    // `from` last: a caller passing `from: undefined` (key present) must not
+    // blank the resolved sender — the spread order here previously let it win.
+    await tx.sendMail({ ...input, from });
     return { delivered: true };
   } catch (e) {
     logErr.error('email error', e, { to: input.to, subject: input.subject });
