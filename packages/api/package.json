@@ -42,6 +42,10 @@
       "types": "./dist/exports/storekit.d.ts",
       "default": "./dist/exports/storekit.js"
     },
+    "./effects": {
+      "types": "./dist/exports/effects.d.ts",
+      "default": "./dist/exports/effects.js"
+    },
     "./ops": {
       "types": "./dist/exports/ops.d.ts",
       "default": "./dist/exports/ops.js"

@@ -1268,6 +1268,34 @@
       "kind": "interface",
       "disposition": "public",
       "surface": "payments"
+    },
+    {
+      "module": "licensing/storekit/default-policy",
+      "symbol": "sellrightDefaultPolicy",
+      "kind": "const",
+      "disposition": "public",
+      "surface": "storekit"
+    },
+    {
+      "module": "licensing/storekit/default-policy",
+      "symbol": "LINK_MESSAGES",
+      "kind": "const",
+      "disposition": "public",
+      "surface": "storekit"
+    },
+    {
+      "module": "payments/settlement/effects",
+      "symbol": "runEffectsPass",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "effects"
+    },
+    {
+      "module": "payments/settlement/effects",
+      "symbol": "countOpenEffects",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "effects"
     }
   ]
 }
