@@ -24,6 +24,7 @@ import { configuredGatewayAccount } from '../payments/gateway-account.js';
 import { stripeCreds } from '../payments/stripe.js';
 import { HttpError, J, errBody, guard, requireAdmin, requireInstallationAdmin, requireStepUp, requireStore } from './admin-helpers.js';
 import { mutateStoreConfig } from './admin-settings.js';
+import { CANARY_CHANNELS, CANARY_EMAIL_KINDS, canaryRetryAfter, emitHealthCanary, recordCanaryEmit } from '../canary/health-canary.js';
 
 export const adminSystem = new OpenAPIHono();
 
@@ -220,3 +221,45 @@ adminSystem.openapi(
   }),
 );
 
+
+// Health canary (PLAN 7.16, I-8). Installation administrators only. Enqueues
+// one row per channel (and per email kind) through the real outbox paths,
+// addressed only to store.config.health.canary.*. One emit per channel per
+// minute per store.
+const CanaryBody = z.object({
+  slot: z.number().int().min(0),
+  channels: z.array(z.enum(CANARY_CHANNELS)).min(1).max(CANARY_CHANNELS.length),
+  kinds: z.array(z.enum(CANARY_EMAIL_KINDS)).min(1).max(CANARY_EMAIL_KINDS.length).optional(),
+});
+
+adminSystem.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/system/canary', summary: 'Emit delivery canaries through the real outbox paths (installation administrators only; 1 per channel per minute per store)',
+    request: { body: { content: J(CanaryBody) } },
+    responses: {
+      200: { description: 'Enqueued', content: J(z.object({
+        slot: z.number().int(),
+        rows: z.array(z.object({ channel: z.enum(CANARY_CHANNELS), kind: z.enum(CANARY_EMAIL_KINDS).optional(), id: z.string() })),
+        skipped: z.array(z.object({ channel: z.enum(CANARY_CHANNELS), reason: z.string() })),
+      })) },
+      401: { description: 'Unauthorized', ...errBody },
+      403: { description: 'Forbidden — installation administrator required', ...errBody },
+      422: { description: 'Canary recipient not configured or refused', ...errBody },
+      429: { description: 'Rate limited (1 per channel per minute)', ...errBody },
+    },
+  }),
+  async (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    requireInstallationAdmin(admin);
+    const st = requireStore(admin, c);
+    const body = c.req.valid('json');
+    const retryAfterSeconds = await canaryRetryAfter(st.storeId, body.channels);
+    if (retryAfterSeconds > 0) {
+      throw new HttpError(429, 'canary rate limit: one emit per channel per minute', 'canary_rate_limited', undefined, { retryAfterSeconds });
+    }
+    const result = await emitHealthCanary(st.storeId, body);
+    await recordCanaryEmit(st.storeId, body.channels);
+    await auditSystemAction(admin, 'health_canary_emit');
+    return c.json(result, 200);
+  }),
+);
