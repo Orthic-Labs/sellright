@@ -192,6 +192,9 @@ export async function runOnCheckoutOrder(tx: Tx, i: {
   return { metadata, adjustments, promotionReplacement: promotionReplacement?.replacement ?? null };
 }
 
+/** True when a registered policy runs onCheckoutOrder, so it may replace the promotion after discount-dependent checks ran. */
+export const hasCheckoutOrderPolicy = (): boolean => policies().some((p) => p.onCheckoutOrder);
+
 /** True when a registered policy gates checkout replays (authorization or a legacy fingerprint), so a replay needs the stored order's own lock set. */
 export const hasCheckoutReplayPolicy = (): boolean => policies().some((p) => p.checkoutReplayAllowed || p.legacyCheckoutFingerprint);
 

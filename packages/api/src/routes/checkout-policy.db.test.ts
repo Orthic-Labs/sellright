@@ -976,6 +976,178 @@ describe('checkout policy wire parity (X-57 ruling)', () => {
     });
   });
 
+  // Discount-dependent checks (shipping eligibility on a discounted basis, loyalty redemption) are decided against the
+  // EFFECTIVE promotion: the replacement when a policy replaces it, otherwise the one that applied. The upgrade price is 3000 of 4900.
+  describe('promotion replacement decides discount-dependent shipping eligibility and loyalty redemption', () => {
+    const PHYS_VARIANT = 'cccccccc-3333-3333-3333-3333333333b4';
+    const PHYS_SKU = 'POLICY-PHYS-1';
+    const shipBody = { items: [{ sku: PHYS_SKU, quantity: 1 }], email: 'buyer@example.com', shippingMethodCode: 'std', extensions: EXT_BODY };
+
+    async function seedPhysical(calculator: Record<string, unknown>): Promise<void> {
+      await withStore(STORE, async (tx) => {
+        await tx.execute(sql`INSERT INTO product_variant (id, store_id, product_id, sku, name, price, fulfillment_type)
+          VALUES (${PHYS_VARIANT}, ${STORE}, ${PRODUCT}, ${PHYS_SKU}, 'Policy Physical', ${PRICE}, 'physical')`);
+        await tx.execute(sql`INSERT INTO stock (variant_id, store_id, on_hand, allocated) VALUES (${PHYS_VARIANT}, ${STORE}, 100, 0)`);
+        await tx.execute(sql`INSERT INTO shipping_method (id, store_id, code, name, calculator, enabled)
+          VALUES (gen_random_uuid(), ${STORE}, 'std', 'Standard', ${JSON.stringify({ flat: 0, subtotalBasis: 'discounted_with_tax', ...calculator })}::jsonb, true)`);
+      });
+    }
+    const noReplacement = () => policy({ async onCheckoutOrder() { return {}; } });
+    // A request with no policy registered must not carry a policy extension block (the engine refuses unknown extensions).
+    const noExt = <T extends { extensions?: unknown }>(b: T) => { const { extensions: _drop, ...rest } = b; return rest; };
+    const replaceWith = (fixedDiscount: number) => policy({ async onCheckoutOrder() { return { replacePromotion: { fixedDiscount } }; } });
+    const notEligible = { error: { code: 'SHIPPING_UNAVAILABLE' }, reason: 'not_eligible' };
+
+    it('a replacement that drops the discounted total below the minimum rejects a method the displaced promotion qualified', async () => {
+      await seedPhysical({ min: 4000 });
+      expect((await post(noExt(shipBody))).status).toBe(200); // control, no policy: 4900 >= 4000
+      await wipe(); await seed(); invalidateStoreCache(); await seedPhysical({ min: 4000 });
+      registerPaymentPolicy(replacingPolicy());
+      const res = await post(shipBody);
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject(notEligible);
+      expect(await count('order')).toBe(0);
+    });
+
+    it('a replacement that lifts the discounted total over the minimum grants a method the displaced promotion disqualified', async () => {
+      await seedPhysical({ min: 3000 });
+      await addPromotion(null, 60); // 4900 -> 1960 < 3000
+      const control = await post(noExt(shipBody));
+      expect(control.status).toBe(409);
+      expect(await control.json()).toMatchObject(notEligible);
+      registerPaymentPolicy(replacingPolicy()); // effective total 3000 >= 3000
+      const res = await post(shipBody);
+      expect(res.status).toBe(200);
+      const code = (await res.json() as { code: string }).code;
+      expect(await orderRow(code)).toMatchObject({ discount_total: 1900, shipping_total: 0, grand_total: 3000, promotion_id: null });
+    });
+
+    it('a replacement that brings the discounted total under the maximum grants a method the displaced promotion disqualified', async () => {
+      await seedPhysical({ max: 3500 });
+      const control = await post(noExt(shipBody)); // no promotion: 4900 > 3500
+      expect(control.status).toBe(409);
+      expect(await control.json()).toMatchObject(notEligible);
+      registerPaymentPolicy(replacingPolicy());
+      expect((await post(shipBody)).status).toBe(200); // 3000 <= 3500
+    });
+
+    it('a replacement that pushes the discounted total over the maximum rejects a method the displaced promotion qualified', async () => {
+      await seedPhysical({ max: 3500 });
+      await addPromotion(null, 60); // 1960 <= 3500
+      expect((await post(noExt(shipBody))).status).toBe(200); // control
+      await wipe(); await seed(); invalidateStoreCache(); await seedPhysical({ max: 3500 }); await addPromotion(null, 60);
+      registerPaymentPolicy(replaceWith(0)); // price stays 4900 > 3500
+      const res = await post(shipBody);
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject(notEligible);
+      expect(await count('order')).toBe(0);
+    });
+
+    it('a policy that does not replace keeps the preliminary rejection', async () => {
+      await seedPhysical({ min: 3000 });
+      await addPromotion(null, 60);
+      registerPaymentPolicy(noReplacement());
+      const res = await post(shipBody);
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject(notEligible);
+    });
+
+    it('a pre-discount basis is unaffected by a replacement: the rejection stands', async () => {
+      await seedPhysical({ min: 6000, subtotalBasis: 'pre_discount' });
+      registerPaymentPolicy(replaceWith(0));
+      const res = await post(shipBody);
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject(notEligible);
+    });
+
+    describe('loyalty redemption', () => {
+      const loyaltyCfg = (minRedeemPoints: number) => ({ loyalty: { enabled: true, earnRatePerDollar: 10, pointsPerDollarOff: 10, minRedeemPoints, maxRedeemPercentOfSubtotal: null, expiryDays: null } });
+      const redeemBody = (points: number) => ({ ...base, extensions: EXT_BODY, redeemPoints: points });
+      async function member(): Promise<{ authorization: string }> {
+        const token = await signedInCustomer();
+        await withStore(STORE, (tx) => tx.execute(sql`INSERT INTO loyalty_ledger (store_id, customer_id, kind, points, reason) VALUES (${STORE}, ${CUSTOMER}, 'adjust', 1000, 'test')`));
+        return { authorization: `Bearer ${token}` };
+      }
+      async function redeemRows(): Promise<Array<{ points: number }>> {
+        return withStore(STORE, async (tx) => (await tx.execute(sql`SELECT points FROM loyalty_ledger WHERE store_id = ${STORE} AND kind = 'redeem'`)).rows as Array<{ points: number }>);
+      }
+      const rejected = (reason: string) => ({ error: { code: 'LOYALTY_REDEEM_FAILED' }, reason });
+
+      it('nothing_to_discount before the replacement becomes a valid redemption after it', async () => {
+        await setStore(0, false, loyaltyCfg(0));
+        await addPromotion(null, 100); // discountable 0 -> nothing_to_discount
+        const auth = await member();
+        const control = await post(noExt(redeemBody(250)), auth);
+        expect(control.status).toBe(409);
+        expect(await control.json()).toMatchObject(rejected('nothing_to_discount'));
+        registerPaymentPolicy(replacingPolicy()); // discountable 3000: 250 points buy 2500
+        const res = await post(redeemBody(250), auth);
+        expect(res.status).toBe(200);
+        const body = await res.json() as { code: string };
+        expect(body).toMatchObject({ pointsRedeemed: 250, pointsDiscount: 2500, discountTotal: 1900 + 2500, grandTotal: 500, couponApplied: false });
+        expect((await orderRow(body.code)).metadata.loyalty).toMatchObject({ redeemPoints: 250, pointsDiscount: 2500 });
+        expect(await redeemRows()).toEqual([{ points: -250 }]);
+      });
+
+      it('below_minimum before the replacement becomes a valid redemption after it', async () => {
+        await setStore(0, false, loyaltyCfg(200));
+        await addPromotion(null, 96); // discountable 196 -> 20 points < 200 minimum
+        const auth = await member();
+        const control = await post(noExt(redeemBody(250)), auth);
+        expect(control.status).toBe(409);
+        expect(await control.json()).toMatchObject(rejected('below_minimum'));
+        registerPaymentPolicy(replacingPolicy());
+        const res = await post(redeemBody(250), auth);
+        expect(res.status).toBe(200);
+        expect(await res.json()).toMatchObject({ pointsRedeemed: 250, pointsDiscount: 2500 });
+        expect(await redeemRows()).toEqual([{ points: -250 }]);
+      });
+
+      it('a preliminary rejection that the replacement does not cure stays rejected, with no order and no ledger row', async () => {
+        await setStore(0, false, loyaltyCfg(0));
+        await addPromotion(null, 100);
+        const auth = await member();
+        registerPaymentPolicy(replaceWith(PRICE)); // replaced discountable is still 0
+        const res = await post(redeemBody(250), auth);
+        expect(res.status).toBe(409);
+        expect(await res.json()).toMatchObject(rejected('nothing_to_discount'));
+        expect(await count('order')).toBe(0);
+        expect(await redeemRows()).toEqual([]);
+      });
+
+      it('a policy that does not replace leaves the preliminary rejection standing', async () => {
+        await setStore(0, false, loyaltyCfg(0));
+        await addPromotion(null, 100);
+        const auth = await member();
+        registerPaymentPolicy(noReplacement());
+        const res = await post(redeemBody(250), auth);
+        expect(res.status).toBe(409);
+        expect(await res.json()).toMatchObject(rejected('nothing_to_discount'));
+        expect(await count('order')).toBe(0);
+      });
+
+      it('the balance check is not deferred: a request above the balance is rejected even when the replacement would fit it', async () => {
+        await setStore(0, false, loyaltyCfg(0));
+        const auth = await member(); // balance 1000
+        registerPaymentPolicy(replacingPolicy());
+        const res = await post(redeemBody(2000), auth);
+        expect(res.status).toBe(409);
+        expect(await res.json()).toMatchObject(rejected('insufficient_balance'));
+        expect(await count('order')).toBe(0);
+      });
+
+      it('authentication is not deferred: a guest redemption is rejected before the policy hook runs', async () => {
+        await setStore(0, false, loyaltyCfg(0));
+        let hookRan = false;
+        registerPaymentPolicy(policy({ async onCheckoutOrder() { hookRan = true; return { replacePromotion: { fixedDiscount: 1900 } }; } }));
+        const res = await post(redeemBody(250));
+        expect(res.status).toBe(409);
+        expect(await res.json()).toMatchObject(rejected('not_signed_in'));
+        expect(hookRan).toBe(false);
+      });
+    });
+  });
+
   it('with no policy registered the full row set is the same as before (totals, lines, no adjustment, no usage)', async () => {
     await setStore(1000, false);
     const res = await post(base);

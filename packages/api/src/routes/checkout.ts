@@ -28,7 +28,7 @@ import { legalManifestForApp } from '../legal/manifests.js';
 import { isStorePublished } from '../store-publish.js';
 import { cartResponse, CartOut } from './cart.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
-import { checkPlacement, hasCheckoutReplayPolicy, parseCheckoutExtensions, runCheckoutEligibility, runCheckoutReplayAllowed, runLegacyCheckoutFingerprints, runOnCheckoutOrder } from '../payments/policy/host.js';
+import { checkPlacement, hasCheckoutOrderPolicy, hasCheckoutReplayPolicy, parseCheckoutExtensions, runCheckoutEligibility, runCheckoutReplayAllowed, runLegacyCheckoutFingerprints, runOnCheckoutOrder } from '../payments/policy/host.js';
 import { PaymentPolicyRefusalError, PaymentPolicyUnavailableError, PaymentPolicyVetoError } from '../payments/policy/registry.js';
 import { ReservationConflict } from '../payments/reservation.js';
 import type { CheckoutFingerprintBasis, CheckoutRefusal, CheckoutReplayOrigin, PolicyCustomer, PolicyOrder, PolicyVeto } from '../payments/policy/types.js';
@@ -599,8 +599,14 @@ checkout.openapi(
 
       const discounted = calculateOrderTotals({ lines: priced.map(p => ({ unitPrice: p.unitPrice, quantity: p.qty })),
         shipping: 0, taxRate, taxInclusive: st.taxInclusive, promotion });
+      // A discount-dependent rejection is deferred only while a policy that may replace the promotion is registered;
+      // it is decided once the effective promotion is known (below). With no such policy it throws here, as always.
+      let shippingRejectionDeferred = false;
       if (shippingCalculator && !isMethodEligible(shippingCalculator, { subtotal: subtotalCents, country: shipCountry,
-        discountedSubtotalWithTax: discounted.grandTotal })) throw new ShippingUnavailableError('not_eligible');
+        discountedSubtotalWithTax: discounted.grandTotal })) {
+        if (shippingCalculator.subtotalBasis === 'discounted_with_tax' && hasCheckoutOrderPolicy()) shippingRejectionDeferred = true;
+        else throw new ShippingUnavailableError('not_eligible');
+      }
 
       // ── Loyalty points (LOYALTY-1) ────────────────────────────────────────
       // Redemption: session customers only (an email-matched guest link is
@@ -612,6 +618,7 @@ checkout.openapi(
       const loyalty = loyaltySettingsFromConfig(st.config);
       let redeem: { points: number; discountCents: number } | null = null;
       let availablePoints = 0;
+      let redeemRejectionDeferred: RedeemRejection | null = null;
       if (body.redeemPoints) {
         // THROW (not return): stock is already reserved in this txn, so a
         // rejection must roll it back — the .catch below maps it to a 409.
@@ -623,8 +630,12 @@ checkout.openapi(
         availablePoints = await lockedAvailable(tx, st.id, sessionCustomer.id);
         const plan = planRedemption({ settings: loyalty, requestedPoints: body.redeemPoints, availablePoints,
           discountableCents: discounted.subtotal - discounted.discountTotal });
-        if (!plan.ok) throw new LoyaltyRedeemError(plan.reason);
-        redeem = { points: plan.points, discountCents: plan.discountCents };
+        // Balance and authentication rejections stay here. The discount-dependent ones (nothing_to_discount,
+        // below_minimum) wait for the effective promotion only while a promotion-replacing policy may exist.
+        if (!plan.ok) {
+          if ((plan.reason === 'nothing_to_discount' || plan.reason === 'below_minimum') && hasCheckoutOrderPolicy()) redeemRejectionDeferred = plan.reason;
+          else throw new LoyaltyRedeemError(plan.reason);
+        } else redeem = { points: plan.points, discountCents: plan.discountCents };
       }
       let totalsInput = {
         shippingTaxRate: shippingCalculator?.taxRate, shippingTaxInclusive: shippingCalculator?.taxInclusive,
@@ -719,9 +730,13 @@ checkout.openapi(
       if (replacement) {
         promotion = { type: 'fixed', value: replacement.fixedDiscount };
         promoId = null;
-        if (redeem && body.redeemPoints) {
-          const replaced = calculateOrderTotals({ lines: priced.map((p) => ({ unitPrice: p.unitPrice, quantity: p.qty })),
-            shipping: 0, taxRate, taxInclusive: st.taxInclusive, promotion });
+        const replaced = calculateOrderTotals({ lines: priced.map((p) => ({ unitPrice: p.unitPrice, quantity: p.qty })),
+          shipping: 0, taxRate, taxInclusive: st.taxInclusive, promotion });
+        // Discount-dependent shipping eligibility, on the effective promotion's discounted merchandise total (either direction).
+        if (shippingCalculator && (shippingRejectionDeferred || shippingCalculator.subtotalBasis === 'discounted_with_tax')
+          && !isMethodEligible(shippingCalculator, { subtotal: subtotalCents, country: shipCountry,
+            discountedSubtotalWithTax: replaced.grandTotal })) throw new ShippingUnavailableError('not_eligible');
+        if ((redeem || redeemRejectionDeferred) && body.redeemPoints) {
           const plan = planRedemption({ settings: loyalty, requestedPoints: body.redeemPoints, availablePoints,
             discountableCents: replaced.subtotal - replaced.discountTotal });
           if (!plan.ok) throw new LoyaltyRedeemError(plan.reason);
@@ -733,6 +748,10 @@ checkout.openapi(
         for (const [idx, l] of totals.lines.entries()) {
           await tx.update(s.orderLine).set({ lineDiscount: l.lineDiscount, lineTotal: l.lineTotal }).where(eq(s.orderLine.id, lineIds[idx]!));
         }
+      } else {
+        // No replacement: the deferred rejections stand, shipping first as before.
+        if (shippingRejectionDeferred) throw new ShippingUnavailableError('not_eligible');
+        if (redeemRejectionDeferred) throw new LoyaltyRedeemError(redeemRejectionDeferred);
       }
       if (checkoutPolicy.adjustments.length) {
         totals = calculateOrderTotals({ ...totalsInput, adjustments: checkoutPolicy.adjustments.map((a) => ({ label: a.label, amount: a.amount })) });
