@@ -10947,6 +10947,76 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/system/build-info": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Build identity of the running artifact (installation administrator + store owner) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            build: {
+                                dirty: boolean;
+                                node: string;
+                                sha: string;
+                                time: string;
+                            } | null;
+                            engine: {
+                                /** @enum {string} */
+                                name: "@sellright/api";
+                                version: string;
+                            };
+                            migrationHead: string | null;
+                            migrationJournalSha256: string | null;
+                            node: string;
+                            plugins: string[];
+                        };
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/admin/system/canary": {
         parameters: {
             query?: never;
@@ -11142,6 +11212,72 @@ export interface paths {
                 };
             };
         };
+        trace?: never;
+    };
+    "/v1/admin/system/effective-config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Effective configuration projection config/v1 — secrets as fingerprints only (installation administrator + store owner) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            deployment: {
+                                [key: string]: unknown;
+                            };
+                            intended: {
+                                [key: string]: unknown;
+                            };
+                            /** @enum {string} */
+                            schema: "config/v1";
+                            store: {
+                                slug: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/v1/admin/system/recovery-kit": {

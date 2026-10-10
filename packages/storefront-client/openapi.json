@@ -11306,6 +11306,186 @@
         }
       }
     },
+    "/v1/admin/system/build-info": {
+      "get": {
+        "summary": "Build identity of the running artifact (installation administrator + store owner)",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "engine": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "enum": [
+                            "@sellright/api"
+                          ]
+                        },
+                        "version": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "version"
+                      ]
+                    },
+                    "build": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "sha": {
+                          "type": "string"
+                        },
+                        "dirty": {
+                          "type": "boolean"
+                        },
+                        "time": {
+                          "type": "string"
+                        },
+                        "node": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "sha",
+                        "dirty",
+                        "time",
+                        "node"
+                      ]
+                    },
+                    "node": {
+                      "type": "string"
+                    },
+                    "migrationJournalSha256": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "migrationHead": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "plugins": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "engine",
+                    "build",
+                    "node",
+                    "migrationJournalSha256",
+                    "migrationHead",
+                    "plugins"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/system/effective-config": {
+      "get": {
+        "summary": "Effective configuration projection config/v1 — secrets as fingerprints only (installation administrator + store owner)",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "schema": {
+                      "type": "string",
+                      "enum": [
+                        "config/v1"
+                      ]
+                    },
+                    "store": {
+                      "type": "object",
+                      "properties": {
+                        "slug": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "slug"
+                      ]
+                    },
+                    "intended": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "nullable": true
+                      }
+                    },
+                    "deployment": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "nullable": true
+                      }
+                    }
+                  },
+                  "required": [
+                    "schema",
+                    "store",
+                    "intended",
+                    "deployment"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/admin/dashboard": {
       "get": {
         "summary": "Store dashboard KPIs",
