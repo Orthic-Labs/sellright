@@ -101,3 +101,13 @@ docker compose --env-file deploy/.env -f deploy/compose.yaml up -d
 ```
 
 Do **not** add `-v` to `down` during normal operations; `down -v` deletes named volumes. CI exercises a full down/up cycle and verifies that the bootstrap store identity plus asset and download sentinels survive.
+
+## Turnstile (anti-bot) policy
+
+Turnstile gates the public routes `POST /v1/shop/auth/forgot-password`, `POST /v1/shop/auth/resend-verification`, `POST /v1/shop/newsletter-signup`, `GET /v1/shop/track`, `POST /v1/shop/contact`, `POST /v1/shop/restock-request`, and the auth paths. The secret comes from the store config (`turnstileSecretKey`) or the env `TURNSTILE_SECRET_KEY`.
+
+- A store with a secret: a missing or invalid token returns `403 BOT_CHECK_FAILED` (contact/restock: `400`). Verification fails closed on any siteverify error.
+- A store with no secret, `NODE_ENV=production`: **fails closed** (the gated routes return 403) unless the operator sets `TURNSTILE_DISABLED=true`. The API logs a startup warning when that opt-out is set in production.
+- Dev/test with no secret: passes (unchanged).
+
+Deploy notes: any environment without a Turnstile secret (demo, staging, self-host without a site key) must set `TURNSTILE_DISABLED=true` or a `TURNSTILE_SECRET_KEY`, or the storefront forms will reject every submission. The demo's `deploy/demo/configure.mjs` sets it; an existing `runtime.json` (written with `wx`) must be updated by hand.

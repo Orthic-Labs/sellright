@@ -281,8 +281,8 @@ export const srResetPassword = (token: string, password: string) =>
 export const srVerifyEmail = (token: string) =>
   sr<{ ok: boolean }>('/v1/shop/auth/verify-email', { method: 'POST', body: JSON.stringify({ token }) });
 
-export const srResendVerification = (email: string) =>
-  sr<{ ok: boolean }>('/v1/shop/auth/resend-verification', { method: 'POST', body: JSON.stringify({ email }) });
+export const srResendVerification = (email: string, turnstileToken?: string) =>
+  sr<{ ok: boolean }>('/v1/shop/auth/resend-verification', { method: 'POST', body: JSON.stringify(turnstileToken ? { email, turnstileToken } : { email }) });
 
 /** PATCH /v1/shop/account/me — profile (firstName/lastName/phone). */
 export const srUpdateProfile = (body: { firstName?: string | null; lastName?: string | null; phone?: string | null }) =>
@@ -378,8 +378,8 @@ export const srShippingMethods = (country?: string, subtotal = 0) => {
 export const srCurrencies = () =>
   sr<{ base: string; currencies: { currency: string; rate: number }[] }>('/v1/shop/currencies');
 
-export const srNewsletterSignup = (email: string, name?: string) =>
-  sr<{ ok: boolean }>('/v1/shop/newsletter-signup', { method: 'POST', body: JSON.stringify(name ? { email, name } : { email }) });
+export const srNewsletterSignup = (email: string, name?: string, turnstileToken?: string) =>
+  sr<{ ok: boolean }>('/v1/shop/newsletter-signup', { method: 'POST', body: JSON.stringify({ email, ...(name ? { name } : {}), ...(turnstileToken ? { turnstileToken } : {}) }) });
 
 export interface SrCreatedOrder {
   code: string; state: string; grandTotal: number; currency: string;
