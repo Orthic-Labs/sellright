@@ -53,6 +53,7 @@ export function sellrightRespond(o: LinkOutcome): HttpResult {
       const r = o.result;
       if (r.kind === 'account_conflict') return { status: 401, message: LINK_MESSAGES.unauth };
       if (r.code === 'seat_limit') return { status: 409, message: LINK_MESSAGES.seatLimit };
+      if (r.code === 'platform_rejected' && r.reason) return { status: 400, message: r.reason };
       return { status: 400, message: LINK_MESSAGES.notActivated };
     }
     case 'issued': {
@@ -117,8 +118,11 @@ export const sellrightDefaultPolicy: StoreKitPolicy = {
       licenseKey: ensured.licenseKey,
       deviceIdHash: i.device.deviceIdHash,
       deviceLabel: i.device.label,
+      platform: i.device.platform ?? undefined,
     });
     if (activated.kind === 'notfound') return { kind: 'rejected', code: 'notfound' };
+    // Entitlement policy (de-fork 3.6): a platform the policy refuses is a 400 with its reason.
+    if (activated.kind === 'rejected_platform') return { kind: 'rejected', code: 'platform_rejected', reason: activated.reason };
     if (activated.kind === 'full') return { kind: 'rejected', code: 'seat_limit' };
     return {
       kind: 'ok',

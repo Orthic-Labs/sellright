@@ -105,9 +105,10 @@ async function issueForkLink(tx: Tx, i: Extract<IssueInput, { purpose: 'link' }>
 
   const activated = await issueStoreKitActivation(tx, {
     storeId: i.storeId, appKey: FORK_APP_KEY, licenseKey: ensured.licenseKey,
-    deviceIdHash: i.device.deviceIdHash, deviceLabel: i.device.label,
+    deviceIdHash: i.device.deviceIdHash, deviceLabel: i.device.label, platform: i.device.platform ?? undefined,
   });
   if (activated.kind === 'notfound') return { kind: 'rejected', code: 'notfound' };
+  if (activated.kind === 'rejected_platform') return { kind: 'rejected', code: 'platform_rejected', reason: activated.reason };
   if (activated.kind === 'full') return { kind: 'rejected', code: 'seat_limit' };
   const disclosed = primary.environment === 'Production' && scope === 'full' ? { licenseKey: ensured.licenseKey } : {};
   return {

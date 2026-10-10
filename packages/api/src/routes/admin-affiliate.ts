@@ -2,7 +2,7 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
 import { withStore } from '../db/client.js';
-import { resolveStore, DEV_DEFAULT_STORE } from '../store-context.js';
+import { resolveStore, devDefaultStore } from '../store-context.js';
 import * as s from '../db/schema.js';
 import { HttpError, J, errBody, money, requireAdmin, requireStore, requireWrite, requirePermission, guard, slugify } from './admin-helpers.js';
 import { enqueueAffiliateMail, reassignAffiliate, syncPromotionAffiliate } from '../affiliate/onboarding.js';
@@ -246,7 +246,7 @@ adminAffiliate.openapi(
     responses: { 200: { description: 'OK', content: J(z.any()) }, 404: { description: 'Not found', ...errBody } },
   }),
   async (c) => guard(c, async () => {
-    const slug = c.req.header('x-store-slug') ?? DEV_DEFAULT_STORE;
+    const slug = c.req.header('x-store-slug') ?? devDefaultStore();
     const ctx = await resolveStore(slug);
     const { t } = c.req.valid('query');
     const out = await withStore(ctx.id, async (tx) => {

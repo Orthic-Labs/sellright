@@ -12,6 +12,9 @@ must update the matching changelog in the same push.
 
 ### Added
 
+- Entitlement authorization policy: one plugin policy consulted by every activation, refresh, update-feed, lease, trial and StoreKit link path. The default policy changes nothing.
+- `/v1/licenses/activate` alias for licence activation.
+- Signed entitlement formats above v2 can be negotiated with `x-entitlement-versions`; unnegotiated clients always receive byte-identical v2 tokens.
 - Admin essentials for running real stores:
   - **Refunds**: per-line quantity + independent per-line restock toggle
     (a single refund can restock one line and not another), a separate
@@ -185,6 +188,7 @@ must update the matching changelog in the same push.
 
 ### Changed
 
+- Malformed typed extensions on trial and activation requests return 400 `INVALID_REQUEST` instead of 500.
 - NMI test profiles can use an existing merchant account on the production
   endpoint with per-transaction test mode. Endpoint identity is retained for
   replay, reconciliation and refunds.

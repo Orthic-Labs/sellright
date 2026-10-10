@@ -1,0 +1,145 @@
+{
+  "schemaVersion": 1,
+  "fixedNowMs": 1791547200000,
+  "publicKeyBase64url": "NYFwD6JaHpCLY0qtUAzuYxdtTgYzxhz8Ai-ZhA6hTD4",
+  "v2FieldOrder": [
+    "v",
+    "id",
+    "app",
+    "tier",
+    "features",
+    "device_id",
+    "iat",
+    "exp",
+    "license_kind",
+    "entitlement_stage",
+    "license_issued_at",
+    "confirmation_due_at",
+    "entitlement_scope"
+  ],
+  "tokens": [
+    {
+      "name": "v2_minimal_default_policy",
+      "input": {
+        "licenseId": "00000000-0000-4000-8000-000000000001",
+        "app": "heardright",
+        "tier": "pro",
+        "features": [
+          "wake_word",
+          "voice_commands"
+        ],
+        "deviceId": "compat-device-1",
+        "ttlSeconds": 604800
+      },
+      "canonical": "{\"v\":2,\"id\":\"00000000-0000-4000-8000-000000000001\",\"app\":\"heardright\",\"tier\":\"pro\",\"features\":[\"wake_word\",\"voice_commands\"],\"device_id\":\"compat-device-1\",\"iat\":1791547200,\"exp\":1792152000}",
+      "token": "eyJ2IjoyLCJpZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsImFwcCI6ImhlYXJkcmlnaHQiLCJ0aWVyIjoicHJvIiwiZmVhdHVyZXMiOlsid2FrZV93b3JkIiwidm9pY2VfY29tbWFuZHMiXSwiZGV2aWNlX2lkIjoiY29tcGF0LWRldmljZS0xIiwiaWF0IjoxNzkxNTQ3MjAwLCJleHAiOjE3OTIxNTIwMDB9.vOmSpbOq3b_buTLCKbez3aeOZZ7_DGfP9X43i-blvoED2zaQXRep1XlxElFm1uNgZ_rn-1nZJnnzxidUX0VkCg"
+    },
+    {
+      "name": "v2_expiry_clamped",
+      "input": {
+        "licenseId": "00000000-0000-4000-8000-000000000001",
+        "app": "heardright",
+        "tier": "pro",
+        "features": [
+          "wake_word",
+          "voice_commands"
+        ],
+        "deviceId": "compat-device-1",
+        "ttlSeconds": 604800,
+        "expiresAtUnix": 1791633600
+      },
+      "canonical": "{\"v\":2,\"id\":\"00000000-0000-4000-8000-000000000001\",\"app\":\"heardright\",\"tier\":\"pro\",\"features\":[\"wake_word\",\"voice_commands\"],\"device_id\":\"compat-device-1\",\"iat\":1791547200,\"exp\":1791633600}",
+      "token": "eyJ2IjoyLCJpZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsImFwcCI6ImhlYXJkcmlnaHQiLCJ0aWVyIjoicHJvIiwiZmVhdHVyZXMiOlsid2FrZV93b3JkIiwidm9pY2VfY29tbWFuZHMiXSwiZGV2aWNlX2lkIjoiY29tcGF0LWRldmljZS0xIiwiaWF0IjoxNzkxNTQ3MjAwLCJleHAiOjE3OTE2MzM2MDB9.1MQ5OmeS-EXlKMkkfJI2lwFrQxPbLoHJyqYreOTya8gmrYk6tJ0XXE0eH4GJCR5PByeNh2Mg532saU9dUMlOBQ"
+    },
+    {
+      "name": "v2_lifecycle_claims",
+      "input": {
+        "licenseId": "00000000-0000-4000-8000-000000000001",
+        "app": "heardright",
+        "tier": "pro",
+        "features": [
+          "wake_word",
+          "voice_commands"
+        ],
+        "deviceId": "compat-device-1",
+        "licenseKind": "term",
+        "entitlementStage": "time_bound",
+        "licenseIssuedAtUnix": 1791460800,
+        "confirmationDueAtUnix": 1792152000,
+        "tokenExpiresAtUnix": 1792152000
+      },
+      "canonical": "{\"v\":2,\"id\":\"00000000-0000-4000-8000-000000000001\",\"app\":\"heardright\",\"tier\":\"pro\",\"features\":[\"wake_word\",\"voice_commands\"],\"device_id\":\"compat-device-1\",\"iat\":1791547200,\"exp\":1792152000,\"license_kind\":\"term\",\"entitlement_stage\":\"time_bound\",\"license_issued_at\":1791460800,\"confirmation_due_at\":1792152000}",
+      "token": "eyJ2IjoyLCJpZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsImFwcCI6ImhlYXJkcmlnaHQiLCJ0aWVyIjoicHJvIiwiZmVhdHVyZXMiOlsid2FrZV93b3JkIiwidm9pY2VfY29tbWFuZHMiXSwiZGV2aWNlX2lkIjoiY29tcGF0LWRldmljZS0xIiwiaWF0IjoxNzkxNTQ3MjAwLCJleHAiOjE3OTIxNTIwMDAsImxpY2Vuc2Vfa2luZCI6InRlcm0iLCJlbnRpdGxlbWVudF9zdGFnZSI6InRpbWVfYm91bmQiLCJsaWNlbnNlX2lzc3VlZF9hdCI6MTc5MTQ2MDgwMCwiY29uZmlybWF0aW9uX2R1ZV9hdCI6MTc5MjE1MjAwMH0.uGQltjH4dVTKvItjL5_1JJqg4DhNleT1iAWG0eIozoC5iBVvsIZpNvneSPL-0H72s4QUZl4aNLYpMr_gBi_bAw"
+    },
+    {
+      "name": "v2_lifecycle_null_confirmation",
+      "input": {
+        "licenseId": "00000000-0000-4000-8000-000000000001",
+        "app": "heardright",
+        "tier": "pro",
+        "features": [
+          "wake_word",
+          "voice_commands"
+        ],
+        "deviceId": "compat-device-1",
+        "licenseKind": "term",
+        "entitlementStage": "time_bound",
+        "licenseIssuedAtUnix": 1791460800,
+        "confirmationDueAtUnix": null,
+        "tokenExpiresAtUnix": 1792152000
+      },
+      "canonical": "{\"v\":2,\"id\":\"00000000-0000-4000-8000-000000000001\",\"app\":\"heardright\",\"tier\":\"pro\",\"features\":[\"wake_word\",\"voice_commands\"],\"device_id\":\"compat-device-1\",\"iat\":1791547200,\"exp\":1792152000,\"license_kind\":\"term\",\"entitlement_stage\":\"time_bound\",\"license_issued_at\":1791460800,\"confirmation_due_at\":null}",
+      "token": "eyJ2IjoyLCJpZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsImFwcCI6ImhlYXJkcmlnaHQiLCJ0aWVyIjoicHJvIiwiZmVhdHVyZXMiOlsid2FrZV93b3JkIiwidm9pY2VfY29tbWFuZHMiXSwiZGV2aWNlX2lkIjoiY29tcGF0LWRldmljZS0xIiwiaWF0IjoxNzkxNTQ3MjAwLCJleHAiOjE3OTIxNTIwMDAsImxpY2Vuc2Vfa2luZCI6InRlcm0iLCJlbnRpdGxlbWVudF9zdGFnZSI6InRpbWVfYm91bmQiLCJsaWNlbnNlX2lzc3VlZF9hdCI6MTc5MTQ2MDgwMCwiY29uZmlybWF0aW9uX2R1ZV9hdCI6bnVsbH0.QPc4p4zM-FzVbuygv4mxm5oDqKs50KV9_Y-JC4QsWffaGDxhxIDG2j9SCC45rJaF1y1g6w1PN872BhNo2fVRCg"
+    },
+    {
+      "name": "v2_scope_mobile",
+      "input": {
+        "licenseId": "00000000-0000-4000-8000-000000000001",
+        "app": "heardright",
+        "tier": "pro",
+        "features": [
+          "wake_word",
+          "voice_commands"
+        ],
+        "deviceId": "compat-device-1",
+        "ttlSeconds": 604800,
+        "entitlementScope": "mobile"
+      },
+      "canonical": "{\"v\":2,\"id\":\"00000000-0000-4000-8000-000000000001\",\"app\":\"heardright\",\"tier\":\"pro\",\"features\":[\"wake_word\",\"voice_commands\"],\"device_id\":\"compat-device-1\",\"iat\":1791547200,\"exp\":1792152000,\"entitlement_scope\":\"mobile\"}",
+      "token": "eyJ2IjoyLCJpZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsImFwcCI6ImhlYXJkcmlnaHQiLCJ0aWVyIjoicHJvIiwiZmVhdHVyZXMiOlsid2FrZV93b3JkIiwidm9pY2VfY29tbWFuZHMiXSwiZGV2aWNlX2lkIjoiY29tcGF0LWRldmljZS0xIiwiaWF0IjoxNzkxNTQ3MjAwLCJleHAiOjE3OTIxNTIwMDAsImVudGl0bGVtZW50X3Njb3BlIjoibW9iaWxlIn0.xdOa4eWa7z8n0NOScU93_8I67b3yh3Xj24FkTIS6uNIj-E7CtrB6aR1wFCgRdeUTD-og4B9MPNZaoHs9aLQ5Bw"
+    },
+    {
+      "name": "v2_all_claims",
+      "input": {
+        "licenseId": "00000000-0000-4000-8000-000000000001",
+        "app": "heardright",
+        "tier": "pro",
+        "features": [
+          "wake_word",
+          "voice_commands"
+        ],
+        "deviceId": "compat-device-1",
+        "licenseKind": "term",
+        "entitlementStage": "time_bound",
+        "licenseIssuedAtUnix": 1791460800,
+        "confirmationDueAtUnix": 1792152000,
+        "tokenExpiresAtUnix": 1792152000,
+        "entitlementScope": "full"
+      },
+      "canonical": "{\"v\":2,\"id\":\"00000000-0000-4000-8000-000000000001\",\"app\":\"heardright\",\"tier\":\"pro\",\"features\":[\"wake_word\",\"voice_commands\"],\"device_id\":\"compat-device-1\",\"iat\":1791547200,\"exp\":1792152000,\"license_kind\":\"term\",\"entitlement_stage\":\"time_bound\",\"license_issued_at\":1791460800,\"confirmation_due_at\":1792152000,\"entitlement_scope\":\"full\"}",
+      "token": "eyJ2IjoyLCJpZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsImFwcCI6ImhlYXJkcmlnaHQiLCJ0aWVyIjoicHJvIiwiZmVhdHVyZXMiOlsid2FrZV93b3JkIiwidm9pY2VfY29tbWFuZHMiXSwiZGV2aWNlX2lkIjoiY29tcGF0LWRldmljZS0xIiwiaWF0IjoxNzkxNTQ3MjAwLCJleHAiOjE3OTIxNTIwMDAsImxpY2Vuc2Vfa2luZCI6InRlcm0iLCJlbnRpdGxlbWVudF9zdGFnZSI6InRpbWVfYm91bmQiLCJsaWNlbnNlX2lzc3VlZF9hdCI6MTc5MTQ2MDgwMCwiY29uZmlybWF0aW9uX2R1ZV9hdCI6MTc5MjE1MjAwMCwiZW50aXRsZW1lbnRfc2NvcGUiOiJmdWxsIn0.MoHnTdYX1p9PvDRqAGTCtkS8sDMNT7taS1aq_bZ0Rt0xu3mof-YYXSZcm0-7YWQ2JLO8JQDlylBswNbTwyaRAw"
+    }
+  ],
+  "leases": [
+    {
+      "name": "lease_default_policy",
+      "canonical": "{\"leaseId\":\"00000000-0000-4000-8000-0000000000a1\",\"deviceIdHash\":\"c71da430419be2357f9656e909647013db8be7c21653ff1b4b9c9bd1a69b712d\",\"pool\":\"computer\",\"issuedAt\":\"2026-10-09T12:00:00.000Z\",\"expiresAt\":\"2026-10-16T12:00:00.000Z\",\"graceSeconds\":1209600,\"generation\":0}",
+      "signature": "58HWWzN3NY4V6waCFVYdlnnJ8oN7OxQd6ceYHUzItfPCVDnKLk-eHjUvLr3bQhUmbh98u96J4nHRsnJ0JEw_AA"
+    },
+    {
+      "name": "lease_scope_mobile",
+      "canonical": "{\"leaseId\":\"00000000-0000-4000-8000-0000000000a1\",\"deviceIdHash\":\"c71da430419be2357f9656e909647013db8be7c21653ff1b4b9c9bd1a69b712d\",\"pool\":\"mobile\",\"issuedAt\":\"2026-10-09T12:00:00.000Z\",\"expiresAt\":\"2026-10-16T12:00:00.000Z\",\"graceSeconds\":1209600,\"generation\":0,\"entitlementScope\":\"mobile\"}",
+      "signature": "o2Q5pe24fGdPqRNVxiaCgnfhjR_z8a5grtf6BCE_ygLree7oBh8qzww3pgu2JTnzqWPbtT57ryW1De6_koM1Cg"
+    }
+  ]
+}

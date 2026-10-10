@@ -79,6 +79,10 @@ export interface ActivateEntitlementContext {
   activationToken: string;
   deviceId: string;
   now: Date;
+  /** Policy-declared typed request extensions (entitlement-policy.ts). */
+  ext?: Readonly<Record<string, unknown>>;
+  /** Token format versions the client offered; pass to signEntitlement({ offeredVersions }). */
+  offeredVersions?: readonly number[];
 }
 
 export interface RefreshEntitlementContext {
@@ -89,6 +93,8 @@ export interface RefreshEntitlementContext {
   /** Present only when the caller supplied one (older/free clients may omit it). */
   deviceId: string | null;
   now: Date;
+  ext?: Readonly<Record<string, unknown>>;
+  offeredVersions?: readonly number[];
 }
 
 export interface DeactivateEntitlementContext {

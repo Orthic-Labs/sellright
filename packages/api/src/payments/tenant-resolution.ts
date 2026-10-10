@@ -5,6 +5,7 @@
  * provider-account-bound lookup (SECURITY DEFINER or dedicated role), never a
  * broad BYPASSRLS read.
  */
+import { onEngineClose } from '../resources.js';
 import { Pool } from 'pg';
 import { env } from '../env.js';
 
@@ -36,18 +37,27 @@ const REF_MAX = 200;
 // resolution off the request pool's connection budget; the underlying
 // SECURITY DEFINER function (migration 0053, strict since 0060) does the
 // cross-tenant read and returns only a store_id.
-const tenantPool = new Pool({
-  connectionString: env.DATABASE_URL_NONOWNER ?? env.DATABASE_URL,
-  application_name: `${env.PGAPPNAME}-tenant-resolution`,
-  max: 2,
-  idleTimeoutMillis: env.PGPOOL_IDLE_TIMEOUT_MS,
-  connectionTimeoutMillis: env.PGPOOL_CONNECTION_TIMEOUT_MS,
-  allowExitOnIdle: true,
-});
-
-tenantPool.on('error', (err) => {
-  console.error('[pg tenant-resolution pool error]', err);
-});
+let tenantPoolInstance: Pool | undefined;
+function tenantPool(): Pool {
+  if (tenantPoolInstance) return tenantPoolInstance;
+  const p = new Pool({
+    connectionString: env.DATABASE_URL_NONOWNER ?? env.DATABASE_URL,
+    application_name: `${env.PGAPPNAME}-tenant-resolution`,
+    max: 2,
+    idleTimeoutMillis: env.PGPOOL_IDLE_TIMEOUT_MS,
+    connectionTimeoutMillis: env.PGPOOL_CONNECTION_TIMEOUT_MS,
+    allowExitOnIdle: true,
+  });
+  p.on('error', (err) => {
+    console.error('[pg tenant-resolution pool error]', err);
+  });
+  tenantPoolInstance = p;
+  onEngineClose('tenant-resolution-pool', async () => {
+    tenantPoolInstance = undefined;
+    await p.end();
+  });
+  return p;
+}
 
 function normalizeRef(value: string | null | undefined): string | null {
   if (typeof value !== 'string') return null;
@@ -75,7 +85,7 @@ export async function resolveStoreForGatewayEvent(
   const accountRef = normalizeRef(refs.accountRef);
   const mode = refs.mode === 'test' || refs.mode === 'live' ? refs.mode : null;
   if (!paymentRef && !subscriptionRef && !accountRef) return null;
-  const { rows } = await tenantPool.query<{ store_id: string | null }>(
+  const { rows } = await tenantPool().query<{ store_id: string | null }>(
     'SELECT public.resolve_store_for_gateway_event($1, $2, $3, $4, $5) AS store_id',
     [provider, paymentRef, subscriptionRef, accountRef, mode],
   );

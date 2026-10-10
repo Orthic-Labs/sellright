@@ -28,13 +28,14 @@ import {
   emailAddressChangedNotice,
   orderRefundConfirmation,
   magicLinkAccess,
-  trialLicenseKey,
   orderUpdated,
   orderBalanceDue,
   pointsEarned,
   reviewApproved,
+  trialLicenseKey,
 } from './templates.js';
 import { enqueueEmail } from './outbox.js';
+import { resolveEmailTheme } from './theme.js';
 import { env } from '../env.js';
 import type { Tx } from '../db/client.js';
 
@@ -55,6 +56,9 @@ export const EMAIL_KIND = {
   ORDER_BALANCE_DUE: 'order_balance_due',
   POINTS_EARNED: 'points_earned',
   REVIEW_APPROVED: 'review_approved',
+  /** Free-trial Pro key. Production sends it inline via sendTrialKey (apps.ts);
+   *  this outbox kind exists for the health canary (PLAN 7.16) only. */
+  TRIAL_LICENSE_KEY: 'trial_license_key',
 } as const;
 
 export interface StoreEmailCtx {
@@ -134,6 +138,7 @@ function emailCtx(store: StoreEmailCtx) {
     currency: store.currency,
     storefrontUrl: resolveStorefrontUrl(store),
     fromEmail: resolveFromEmail(store),
+    theme: resolveEmailTheme(store.config),
     storeId: store.storeId,
   };
 }
@@ -146,13 +151,14 @@ export async function enqueueOrderConfirmation(tx: Tx, storeId: string, store: S
   code: string; grandTotal: number; currency: string;
   lines: Array<{ name: string; quantity: number; lineTotal: number }>;
   dedupeKey?: string;
-}): Promise<boolean> {
+}, canary = false): Promise<boolean> {
   const ctx = emailCtx(store);
   const rendered = orderConfirmation(ctx, data);
   return enqueueEmail(tx, storeId, {
     kind: EMAIL_KIND.ORDER_CONFIRMATION,
     dedupeKey: data.dedupeKey,
     recipient: to,
+    canary,
     payload: { to, from: ctx.fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },
   });
 }
@@ -160,26 +166,28 @@ export async function enqueueOrderConfirmation(tx: Tx, storeId: string, store: S
 export async function enqueueShippingNotification(tx: Tx, storeId: string, store: StoreEmailCtx, to: string, data: {
   code: string; trackingCode: string | null; carrier: string | null;
   dedupeKey?: string;
-}): Promise<boolean> {
+}, canary = false): Promise<boolean> {
   const ctx = emailCtx(store);
   const rendered = shippingNotification(ctx, data);
   return enqueueEmail(tx, storeId, {
     kind: EMAIL_KIND.SHIPPING_NOTIFICATION,
     dedupeKey: data.dedupeKey,
     recipient: to,
+    canary,
     payload: { to, from: ctx.fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },
   });
 }
 
 export async function enqueuePasswordReset(tx: Tx, storeId: string, store: StoreEmailCtx, to: string, data: {
   url: string; ttlHours: number; dedupeKey?: string;
-}): Promise<boolean> {
+}, canary = false): Promise<boolean> {
   const ctx = emailCtx(store);
   const rendered = passwordReset(ctx, data);
   return enqueueEmail(tx, storeId, {
     kind: EMAIL_KIND.PASSWORD_RESET,
     dedupeKey: data.dedupeKey,
     recipient: to,
+    canary,
     payload: { to, from: ctx.fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },
   });
 }
@@ -311,6 +319,20 @@ export async function enqueueOrderBalanceDue(tx: Tx, storeId: string, store: Sto
     kind: EMAIL_KIND.ORDER_BALANCE_DUE,
     dedupeKey: data.dedupeKey,
     recipient: to,
+    payload: { to, from: ctx.fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },
+  });
+}
+
+/** Trial Pro key through the outbox. Canary-only today (see EMAIL_KIND.TRIAL_LICENSE_KEY). */
+export async function enqueueTrialLicenseKey(tx: Tx, storeId: string, store: StoreEmailCtx, to: string, data: {
+  key: string; days: number; pricingUrl?: string;
+}, canary = false): Promise<boolean> {
+  const ctx = emailCtx(store);
+  const rendered = trialLicenseKey(ctx, { ...data, pricingUrl: data.pricingUrl ?? `${ctx.storefrontUrl}/pricing` });
+  return enqueueEmail(tx, storeId, {
+    kind: EMAIL_KIND.TRIAL_LICENSE_KEY,
+    recipient: to,
+    canary,
     payload: { to, from: ctx.fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },
   });
 }

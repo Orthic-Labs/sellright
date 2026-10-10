@@ -101,7 +101,7 @@ export type IssueResult =
       readonly disclosed: Readonly<Record<string, unknown>>;
     }
   | { readonly kind: 'account_conflict' }
-  | { readonly kind: 'rejected'; readonly code: 'notfound' | 'seat_limit' | 'invalid_product' | 'mobile_source_required' | 'credit_used' | 'platform_rejected' };
+  | { readonly kind: 'rejected'; readonly code: 'notfound' | 'seat_limit' | 'invalid_product' | 'mobile_source_required' | 'credit_used' | 'platform_rejected'; readonly reason?: string };
 
 export interface NotificationChange {
   readonly purchase: PurchaseId;

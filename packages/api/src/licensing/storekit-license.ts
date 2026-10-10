@@ -9,6 +9,7 @@ import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import type { StoreKitProductEntitlement } from './storekit-config.js';
 import { hashActivationToken, newActivationToken } from './tokens.js';
+import { authorizeEntitlement } from './entitlement-policy.js';
 
 export interface VerifiedStoreKitLicenseSource {
   originalTransactionId: string;
@@ -183,6 +184,7 @@ export type StoreKitActivationResult =
       lic: { id: string; expiresAt: Date | null; metadata: unknown };
     }
   | { kind: 'notfound' }
+  | { kind: 'rejected_platform'; reason: string }
   | { kind: 'full' };
 
 /** Activate a device against a StoreKit-minted license. Self-contained on
@@ -204,6 +206,8 @@ export async function issueStoreKitActivation(
     licenseKey: string;
     deviceIdHash: string;
     deviceLabel?: string | null;
+    /** Platform hint from the link request; the policy sees 'ios' when absent. */
+    platform?: string;
   },
 ): Promise<StoreKitActivationResult> {
   const licResult = await tx.execute(sql`
@@ -223,6 +227,20 @@ export async function issueStoreKitActivation(
     return { kind: 'notfound' as const };
   }
   const lic = { id: rawLic.id, expiresAt, metadata: rawLic.metadata };
+
+  // Entitlement authorization policy (plan 3.6): a StoreKit link grants an
+  // activation credential, so it consults the same policy as every other
+  // granting path BEFORE any token is minted or seat consumed.
+  const decision = await authorizeEntitlement({
+    path: 'storekit_link', tx, storeId: input.storeId, platform: input.platform ?? 'ios', pool: 'mobile',
+    ext: {}, now: new Date(),
+    license: { id: rawLic.id, appKey: input.appKey, status: rawLic.status, seats: rawLic.seats, expiresAt, metadata: rawLic.metadata },
+  });
+  if (!decision.allow) {
+    return decision.kind === 'rejected_platform'
+      ? { kind: 'rejected_platform' as const, reason: decision.reason }
+      : { kind: 'notfound' as const };
+  }
 
   const activationToken = newActivationToken();
   const activationTokenHash = hashActivationToken(activationToken);
