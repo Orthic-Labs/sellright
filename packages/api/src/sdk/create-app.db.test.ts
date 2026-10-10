@@ -100,7 +100,15 @@ describe('createApp lifecycle', () => {
 
   it('shuts down in order: stop admitting -> cancel jobs -> drain HTTP -> plugin hooks -> resources -> pool', async () => {
     const log: string[] = [];
-    engine = await createApp({ ...rt, plugins: [recordingPlugin(log)], env: baseEnv({ NODE_ENV: 'development', JOBS_ENABLED: '1' }) });
+    // NODE_ENV=development (so jobs run) refuses the privileged-role override: where DATABASE_URL is privileged
+    // (CI), boot as the dedicated non-owner app role instead.
+    const appUrl = Object.keys(rt).length ? process.env.DATABASE_URL_NONOWNER : DB;
+    if (!appUrl) return; // no unprivileged role reachable in this environment
+    engine = await createApp({
+      plugins: [recordingPlugin(log)],
+      env: baseEnv({ NODE_ENV: 'development', JOBS_ENABLED: '1', DATABASE_URL: appUrl }),
+      ...(appUrl === DB ? {} : { migrations: 'skip' as const }),
+    });
     await engine.start({ listen: { port: 0, hostname: '127.0.0.1' } });
     expect(getEngineState()?.jobs().names).toContain('rec:tick');
     await new Promise((r) => setTimeout(r, 400));
