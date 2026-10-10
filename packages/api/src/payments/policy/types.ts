@@ -14,6 +14,10 @@
 //   shapeSettlementResponse    routes/pay.ts (response shaping only, after money is recorded)
 //   lockPlan                   db/locks.ts (STOREKIT §5.3 plan contributor)
 //   onEntitlementReversal      payments/settlement/handlers.ts (entitlement_reversal effect, worker; full refund or lost chargeback)
+//   checkoutEligibility        routes/checkout.ts (before any discount, loyalty or tax step)
+//   onCheckoutOrder            routes/checkout.ts (after the order and line inserts; refusal, promotion replacement, adjustment)
+//   checkoutReplayAllowed      routes/checkout.ts (the three idempotency replay sites; origin-aware, structured refusal)
+//   legacyCheckoutFingerprint  routes/checkout.ts (idempotency replay sites, after replay authorization)
 import type { Tx } from '../../db/client.js';
 import type { HeldLocks, LockPlanContribution, LockSubject } from '../../db/locks.js';
 import type { ReservationRow } from '../reservation.js';
@@ -195,15 +199,65 @@ export interface CheckoutLine {
   readonly unitPrice: number;
 }
 
+/**
+ * The checkout request's discount and tender intent exactly as the client sent it (zod-validated), whether or not
+ * a coupon, gift card or points redemption ends up applying. A policy that forbids a combination reads it here
+ * rather than inferring it from what applied.
+ */
+export interface CheckoutRequestIntent {
+  readonly couponCode?: string;
+  readonly giftCardCode?: string;
+  readonly redeemPoints?: number;
+}
+
+/**
+ * A checkout refusal with its own wire shape. Distinct from PolicyVeto, whose 409 + `state` defaults belong to
+ * placement and payment vetoes: a refusal answers with exactly `status`, `code`, `message`, and `extra` as top-level
+ * siblings of `error`. No `state` is added unless the policy supplies one in `extra`.
+ */
+export interface CheckoutRefusal {
+  readonly status: 409 | 422;
+  readonly code: string;
+  readonly message: string;
+  readonly extra?: Readonly<Record<string, unknown>>;
+}
+
 export interface CheckoutOrderInput {
-  /** The order row inserted by the engine, pre-adjustment (grandTotal before any policy price adjustment). */
+  /**
+   * The order row inserted by the engine, pre-adjustment and pre-replacement: its grandTotal is before any policy
+   * price adjustment and before any `replacePromotion` result.
+   */
   readonly order: PolicyOrder;
   readonly lines: readonly CheckoutLine[];
   /** This policy's validated extension block, or undefined when the request carried none. */
   readonly extensions: unknown;
   readonly customer: PolicyCustomer | null;
+  /** The request's couponCode / giftCardCode / redeemPoints as sent. */
+  readonly intent: CheckoutRequestIntent;
   readonly held: HeldLocks;
 }
+
+/**
+ * Runs before any discount, loyalty or tax processing, in the checkout transaction (stock already reserved, no order
+ * row yet). The order does not exist, so this is request eligibility only: a refusal rolls the checkout back with the
+ * refusal's own status and code, and no loyalty or promotion step can substitute a different error first.
+ */
+export interface CheckoutEligibilityInput {
+  readonly storeId: string;
+  readonly currency: string;
+  readonly lines: readonly CheckoutLine[];
+  /** This policy's validated extension block, or undefined when the request carried none. */
+  readonly extensions: unknown;
+  /** The signed-in session customer, or null (an email-matched guest is not a session customer). */
+  readonly customer: PolicyCustomer | null;
+  /** The request's couponCode / giftCardCode / redeemPoints as sent. */
+  readonly intent: CheckoutRequestIntent;
+  readonly held: HeldLocks;
+}
+
+export type CheckoutEligibilityResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly refusal: CheckoutRefusal };
 
 /** An order-level price adjustment row (`order_adjustment`). Minor units, may be negative. Untaxed. */
 export interface CheckoutPriceAdjustment {
@@ -212,19 +266,91 @@ export interface CheckoutPriceAdjustment {
   readonly amount: number;
 }
 
+/**
+ * Replaces whatever promotion the engine applied (coupon or automatic) with a fixed merchandise discount, before tax,
+ * as if it were the order's promotion. The displaced promotion's attribution and usage are dropped: no promotionId on
+ * the order, no promotion_usage row, no used_count increment. `fixedDiscount` is minor units, a non-negative integer
+ * (0 still displaces the promotion); the totals function caps it at the merchandise subtotal.
+ */
+export interface CheckoutPromotionReplacement {
+  readonly fixedDiscount: number;
+}
+
 export interface CheckoutOrderResult {
+  /** Placement-style veto: 409 with `state` defaulting to the code. Use `refusal` for any other wire shape. */
   readonly veto?: PolicyVeto;
+  /** A refusal with its own status and extras. Mutually exclusive with `veto`. */
+  readonly refusal?: CheckoutRefusal;
   /** Merged into order.metadata. Keys owned by the engine, or claimed by another policy, are refused. */
   readonly metadata?: Readonly<Record<string, unknown>>;
   readonly reserve?: readonly ReservationRequest[];
+  /**
+   * The engine recomputes and persists discount, tax and grand totals, per-line discount and total, and the loyalty
+   * earn snapshot, and clears the promotion before settlement. At most one policy may replace the promotion.
+   * Applied before `priceAdjustment`.
+   */
+  readonly replacePromotion?: CheckoutPromotionReplacement;
   readonly priceAdjustment?: CheckoutPriceAdjustment;
 }
+
+/** Which replay site is asking: same Idempotency-Key, an already-converted cart, or the loser of a unique-key race. */
+export type CheckoutReplayOrigin = 'idempotency_key' | 'converted_cart' | 'unique_violation';
 
 export interface CheckoutReplayInput {
   readonly existingOrder: PolicyOrder;
   /** This policy's validated extension block for the replayed request, or undefined. */
   readonly extensions: unknown;
   readonly customer: PolicyCustomer | null;
+  readonly origin: CheckoutReplayOrigin;
+  readonly held: HeldLocks;
+}
+
+/**
+ * A structured replay refusal. Unset `status` is 422 and unset `code` is LEGAL_ACCEPTANCE_REQUIRED, so a policy
+ * normally supplies only the `message` it wants the caller to see for this origin.
+ */
+export interface CheckoutReplayRefusal {
+  readonly allow: false;
+  readonly message: string;
+  readonly code?: string;
+  readonly status?: 409 | 422;
+  readonly extra?: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * The canonical, normalized request the engine fingerprints (everything but `extensions`): key order is the hashed
+ * order, `items` is null when a cartToken is present, `redeemPoints` is present only when truthy, email and addresses
+ * are normalized, and `legalAcceptance` is key-sorted JSON. The engine hashes
+ * sha256(JSON.stringify({ ...basis, ...(extensions present ? { extensions } : {}) })).
+ */
+export interface CheckoutFingerprintBasis {
+  readonly v: 1;
+  readonly cartToken: string | null;
+  readonly items: ReadonlyArray<{ readonly sku: string; readonly quantity: number }> | null;
+  readonly couponCode: string | null;
+  readonly giftCardCode: string | null;
+  readonly redeemPoints?: number;
+  readonly shippingMethodCode: string | null;
+  readonly email: string | null;
+  readonly shippingAddress: Readonly<Record<string, unknown>> | null;
+  readonly billingAddress: Readonly<Record<string, unknown>> | null;
+  readonly legalAcceptance: unknown;
+}
+
+/**
+ * Asks a policy for the fingerprint an order created by an earlier deployment would have stored for this request.
+ * Consulted only at an idempotency replay (never the converted-cart site), only after every replay policy allowed the
+ * replay, and only when the normal fingerprint does not match the stored one.
+ */
+export interface CheckoutLegacyFingerprintInput {
+  /** The stored order whose key is being replayed; the candidate is compared with this order's stored fingerprint only. */
+  readonly existingOrder: PolicyOrder;
+  /** This policy's validated extension block for the replayed request, or undefined. */
+  readonly extensions: unknown;
+  readonly customer: PolicyCustomer | null;
+  readonly origin: Exclude<CheckoutReplayOrigin, 'converted_cart'>;
+  /** The complete normalized request, as hashed for a new order. */
+  readonly request: CheckoutFingerprintBasis;
   readonly held: HeldLocks;
 }
 
@@ -254,15 +380,27 @@ export interface PaymentPolicy {
    */
   readonly checkoutExtensions?: CheckoutExtensionSchema;
   /**
+   * Optional: request eligibility, run in SAVEPOINT before any discount, loyalty or tax step (see CheckoutEligibilityInput).
+   * A refusal rolls the whole checkout back with the refusal's own status and code.
+   */
+  checkoutEligibility?(tx: Tx, i: CheckoutEligibilityInput): Promise<CheckoutEligibilityResult>;
+  /**
    * Optional: runs inside the checkout transaction right after the order and line inserts, in SAVEPOINT.
-   * A veto rolls the whole checkout back (409 with the veto code); reserve requests become held rows.
+   * A veto or refusal rolls the whole checkout back; reserve requests become held rows.
    */
   onCheckoutOrder?(tx: Tx, i: CheckoutOrderInput): Promise<CheckoutOrderResult>;
   /**
    * Optional: consulted at every idempotency replay site (same key, converted cart, unique-violation race)
-   * before the existing order is returned. False refuses the replay (422 LEGAL_ACCEPTANCE_REQUIRED).
+   * before the existing order is returned. `true` allows. `false` refuses with 422 LEGAL_ACCEPTANCE_REQUIRED and the
+   * engine's generic message; a CheckoutReplayRefusal refuses with the policy's own message, code and status.
+   * `i.origin` names the site so the policy can choose its rule and message per origin.
    */
-  checkoutReplayAllowed?(tx: Tx, i: CheckoutReplayInput): Promise<boolean>;
+  checkoutReplayAllowed?(tx: Tx, i: CheckoutReplayInput): Promise<boolean | CheckoutReplayRefusal>;
+  /**
+   * Optional: a legacy fingerprint candidate for the stored order (null = none). See CheckoutLegacyFingerprintInput.
+   * The engine never rewrites or waives the stored fingerprint: the candidate is accepted only by exact equality with it.
+   */
+  legacyCheckoutFingerprint?(tx: Tx, i: CheckoutLegacyFingerprintInput): Promise<string | null>;
   /** Runs before any attempt row, replay lookup, provider session or intent creation. */
   beforePaymentAttempt(tx: Tx, i: BeforePaymentAttemptInput): Promise<BeforePaymentAttemptResult>;
   /** Optional: absent means capture (default allow). Runs inside the recovery decision transaction. */

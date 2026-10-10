@@ -1270,6 +1270,69 @@
       "surface": "payments"
     },
     {
+      "module": "payments/policy/types",
+      "symbol": "CheckoutRefusal",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/types",
+      "symbol": "CheckoutRequestIntent",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/types",
+      "symbol": "CheckoutEligibilityInput",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/types",
+      "symbol": "CheckoutEligibilityResult",
+      "kind": "type",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/types",
+      "symbol": "CheckoutPromotionReplacement",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/types",
+      "symbol": "CheckoutReplayOrigin",
+      "kind": "type",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/types",
+      "symbol": "CheckoutReplayRefusal",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/types",
+      "symbol": "CheckoutFingerprintBasis",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/types",
+      "symbol": "CheckoutLegacyFingerprintInput",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
       "module": "licensing/storekit/default-policy",
       "symbol": "sellrightDefaultPolicy",
       "kind": "const",

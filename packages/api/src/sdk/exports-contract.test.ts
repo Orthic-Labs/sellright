@@ -32,9 +32,9 @@ function barrelExports(surface: string): string[] {
 const exported = new Map(SURFACES.map((s) => [s, barrelExports(s)]));
 
 describe('exports contract', () => {
-  it('matches the pinned totals (0.1 graph 86 symbols + policy-registrar exports + StoreKit policy helpers + payment hook contract types + reversal hook types + checkout policy hook types (X-57) + effects worker pair + StoreKit default policy/messages: 185 = 167 public / 3 moved / 15 replaced)', () => {
+  it('matches the pinned totals (0.1 graph 86 symbols + policy-registrar exports + StoreKit policy helpers + payment hook contract types + reversal hook types + checkout policy hook types (X-57) + checkout wire-parity hook types (refusal, intent, eligibility, promotion replacement, replay origin/refusal, fingerprint basis, legacy fingerprint) + effects worker pair + StoreKit default policy/messages: 194 = 176 public / 3 moved / 15 replaced)', () => {
     const by = (d: string) => contract.symbols.filter((s) => s.disposition === d).length;
-    expect([contract.symbols.length, by('public'), by('moved'), by('replaced')]).toEqual([185, 167, 3, 15]);
+    expect([contract.symbols.length, by('public'), by('moved'), by('replaced')]).toEqual([194, 176, 3, 15]);
   });
 
   it('exports every public symbol from its surface', () => {

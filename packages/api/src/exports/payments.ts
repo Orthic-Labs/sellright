@@ -8,8 +8,10 @@ export {
 export type { ReservationRow } from '../payments/reservation.js';
 export type {
   AuthorizeInvoiceEffectInput, BeforeCaptureInput, BeforeCaptureResult, BeforePaymentAttemptInput,
-  BeforePaymentAttemptResult, CheckoutExtensionSchema, CheckoutLine, CheckoutOrderInput, CheckoutOrderResult,
-  CheckoutPriceAdjustment, CheckoutReplayInput, InvoiceCycle, InvoiceEffectDecision, PaymentPolicy, PaymentProvider,
+  BeforePaymentAttemptResult, CheckoutEligibilityInput, CheckoutEligibilityResult, CheckoutExtensionSchema,
+  CheckoutFingerprintBasis, CheckoutLegacyFingerprintInput, CheckoutLine, CheckoutOrderInput, CheckoutOrderResult,
+  CheckoutPriceAdjustment, CheckoutPromotionReplacement, CheckoutRefusal, CheckoutReplayInput, CheckoutReplayOrigin,
+  CheckoutReplayRefusal, CheckoutRequestIntent, InvoiceCycle, InvoiceEffectDecision, PaymentPolicy, PaymentProvider,
   PaymentPurpose, PolicyCustomer, PolicyOrder, PolicyVeto, ReservationRequest, EntitlementReversalInput,
   EntitlementReversalReason,
   ReservationTransition, RevalidateForIssuanceInput, RevalidateForIssuanceResult, SettlementResponseInput, SettlementResponseOverride,
