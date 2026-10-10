@@ -98,6 +98,9 @@ adminOrderEdit.openapi(
     const body = c.req.valid('json');
     // Money leaving the business needs the same permission as the Refund panel.
     if (body.settlement?.type === 'refund_now') { requirePermission(st, 'refunds'); requireHuman(admin); } // D11: agents never move money out
+    // D10: an agent is never the source of truth that money arrived. record_payment writes a manual (unverified) tender and can
+    // turn an unpaid order Paid, exactly like a draft's markPaid; only a human may assert it.
+    if (body.settlement?.type === 'record_payment') requireHuman(admin);
     const result = await translate(() => commitOrderEdit({
       storeId: st.storeId, storeSlug: st.slug, code, actor: admin.email, ops: body.ops,
       expectedGrandTotal: body.expectedGrandTotal, expectedBalance: body.expectedBalance, idempotencyKey: body.idempotencyKey,

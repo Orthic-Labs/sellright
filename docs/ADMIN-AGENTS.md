@@ -22,6 +22,7 @@ Create a **service token** (Zero Trust → Access → Service Auth) and send `CF
 - **Cancel or purge** orders. Trash and restore are fine.
 - **Move money out**: refunds, order-edit refunds (including `settlement: refund_now` on an otherwise ordinary edit), return approval (it reserves a refund — rejecting a return is fine), affiliate payouts.
 - **Re-drive settlement**: payment-reconciliation verify / retry / reconcile.
+- **Record a manual payment** on an order edit (`settlement: record_payment`): same rule as below, an agent never asserts that money arrived.
 - **Turn a draft into a paid order** (`markPaid`): that is a fulfilment request and, for licensed products, a licence. The agent prepares; a human approves. A customer paying through the storefront moves it automatically.
 - **Issue credit**: adjust or reverse loyalty points; enable a gift card or change its balance. An agent may *create* a gift card, but it starts disabled until a human enables it.
 - **Entitlements**: issue or revoke licences, release held reservations, revoke or clear verifications.

@@ -183,6 +183,21 @@ describe('agent seats', () => {
     expect(((await h.json()) as { state: string }).state).toBe('Paid');
   });
 
+  it('mixed route (D10): an order edit that records a manual payment is refused for an agent; nothing is paid', async () => {
+    const a = await createAgent();
+    const draft = (await (await req('POST', '/v1/admin/draft-orders', a.token, { items: [{ sku: 'SKU-A', quantity: 1 }] })).json()) as { code: string; state: string; grandTotal: number };
+    expect(draft.state).toBe('PendingPayment');
+    const payments = () => count(A, 'payment');
+    const before = await payments();
+    const body = { ops: [{ op: 'set_address', kind: 'shipping', address: { line1: '2 New St', city: 'Austin', country: 'US' } }], expectedGrandTotal: draft.grandTotal, idempotencyKey: 'agent-edit-record', notifyCustomer: false, settlement: { type: 'record_payment', method: 'cash' } };
+    for (const code of [draft.code, ORDER_EDIT]) {
+      const r = await req('POST', `/v1/admin/orders/${code}/edit/commit`, a.token, { ...body, idempotencyKey: `agent-edit-record-${code}`, expectedGrandTotal: code === ORDER_EDIT ? 2000 : draft.grandTotal });
+      expect([code, r.status, await errMessage(r)]).toEqual([code, 403, expect.stringMatching(/agents cannot/)]);
+    }
+    expect(await payments()).toBe(before);
+    expect(((await withStore(A, async (tx) => (await tx.execute(sql`SELECT state FROM "order" WHERE code = ${draft.code}`)).rows[0])) as { state: string }).state).toBe('PendingPayment');
+  });
+
   it('mixed route (D11): an order edit with settlement refund_now is refused for an agent even with the refunds grant', async () => {
     const a = await createAgent();
     expect((await req('PUT', `/v1/admin/staff/${a.adminUserId}/permissions`, ownerToken, { permissions: { refunds: true } })).status).toBe(200);
