@@ -59,7 +59,13 @@ export function normaliseTableRef(ref: string | MigrationTableRef | undefined): 
 
 /** Plugin journal table default: `__drizzle_migrations_<name>` with non-identifier characters folded to `_`. */
 export function defaultPluginTable(pluginName: string): string {
-  return `__drizzle_migrations_${pluginName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')}`.slice(0, 63);
+  const folded = pluginName.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+  // Trim edge underscores without a backtracking regex (CodeQL js/polynomial-redos).
+  let start = 0;
+  let end = folded.length;
+  while (start < end && folded[start] === '_') start++;
+  while (end > start && folded[end - 1] === '_') end--;
+  return `__drizzle_migrations_${folded.slice(start, end)}`.slice(0, 63);
 }
 
 export function resolveTracks(
