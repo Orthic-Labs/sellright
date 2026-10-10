@@ -35,6 +35,8 @@ import {
   trialLicenseKey,
 } from './templates.js';
 import { enqueueEmail } from './outbox.js';
+import { afterCommit } from '../db/after-commit.js';
+import { wakeEmailDelivery } from './wake.js';
 import { resolveEmailTheme } from './theme.js';
 import { env } from '../env.js';
 import type { Tx } from '../db/client.js';
@@ -154,13 +156,15 @@ export async function enqueueOrderConfirmation(tx: Tx, storeId: string, store: S
 }, canary = false): Promise<boolean> {
   const ctx = emailCtx(store);
   const rendered = orderConfirmation(ctx, data);
-  return enqueueEmail(tx, storeId, {
+  const inserted = await enqueueEmail(tx, storeId, {
     kind: EMAIL_KIND.ORDER_CONFIRMATION,
     dedupeKey: data.dedupeKey,
     recipient: to,
     canary,
     payload: { to, from: ctx.fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },
   });
+  if (inserted) afterCommit(tx, wakeEmailDelivery);
+  return inserted;
 }
 
 export async function enqueueShippingNotification(tx: Tx, storeId: string, store: StoreEmailCtx, to: string, data: {
@@ -183,13 +187,15 @@ export async function enqueuePasswordReset(tx: Tx, storeId: string, store: Store
 }, canary = false): Promise<boolean> {
   const ctx = emailCtx(store);
   const rendered = passwordReset(ctx, data);
-  return enqueueEmail(tx, storeId, {
+  const inserted = await enqueueEmail(tx, storeId, {
     kind: EMAIL_KIND.PASSWORD_RESET,
     dedupeKey: data.dedupeKey,
     recipient: to,
     canary,
     payload: { to, from: ctx.fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },
   });
+  if (inserted) afterCommit(tx, wakeEmailDelivery);
+  return inserted;
 }
 
 export async function enqueueEmailVerify(tx: Tx, storeId: string, store: StoreEmailCtx, to: string, data: {
@@ -197,12 +203,14 @@ export async function enqueueEmailVerify(tx: Tx, storeId: string, store: StoreEm
 }): Promise<boolean> {
   const ctx = emailCtx(store);
   const rendered = emailVerify(ctx, data);
-  return enqueueEmail(tx, storeId, {
+  const inserted = await enqueueEmail(tx, storeId, {
     kind: EMAIL_KIND.EMAIL_VERIFY,
     dedupeKey: data.dedupeKey,
     recipient: to,
     payload: { to, from: ctx.fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },
   });
+  if (inserted) afterCommit(tx, wakeEmailDelivery);
+  return inserted;
 }
 
 /** Passwordless sign-in link. Enqueued inside the request txn so the email
@@ -213,12 +221,14 @@ export async function enqueueMagicLink(tx: Tx, storeId: string, store: StoreEmai
 }): Promise<boolean> {
   const ctx = emailCtx(store);
   const rendered = magicLinkAccess(ctx, { url: data.url, ttlMinutes: data.ttlMinutes, isNewAccount: data.isNewAccount ?? false });
-  return enqueueEmail(tx, storeId, {
+  const inserted = await enqueueEmail(tx, storeId, {
     kind: EMAIL_KIND.MAGIC_LINK,
     dedupeKey: data.dedupeKey,
     recipient: to,
     payload: { to, from: ctx.fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },
   });
+  if (inserted) afterCommit(tx, wakeEmailDelivery);
+  return inserted;
 }
 
 export async function enqueueEmailAddressChange(tx: Tx, storeId: string, store: StoreEmailCtx, to: string, data: {
@@ -315,12 +325,14 @@ export async function enqueueOrderBalanceDue(tx: Tx, storeId: string, store: Sto
 }): Promise<boolean> {
   const ctx = emailCtx(store);
   const rendered = orderBalanceDue(ctx, data);
-  return enqueueEmail(tx, storeId, {
+  const inserted = await enqueueEmail(tx, storeId, {
     kind: EMAIL_KIND.ORDER_BALANCE_DUE,
     dedupeKey: data.dedupeKey,
     recipient: to,
     payload: { to, from: ctx.fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },
   });
+  if (inserted) afterCommit(tx, wakeEmailDelivery);
+  return inserted;
 }
 
 /** Trial Pro key through the outbox. Canary-only today (see EMAIL_KIND.TRIAL_LICENSE_KEY). */
