@@ -34,6 +34,8 @@ describe('withLockedSet deadlock/serialization restart', () => {
     expect(isDeadlockOrSerializationFailure(Object.assign(new Error('wrap'), { cause: { code: '40P01' } }))).toBe(true);
     expect(isDeadlockOrSerializationFailure(Object.assign(new Error('x'), { code: '55P03' }))).toBe(false);
     expect(isDeadlockOrSerializationFailure(new Error('plain'))).toBe(false);
+    // an outer wrapper with its own (non-Postgres) code must not hide the driver error underneath
+    expect(isDeadlockOrSerializationFailure(Object.assign(new Error('http'), { code: 'INTERNAL', cause: { code: '40P01' } }))).toBe(true);
   });
 
   it('restarts the transaction after a transient deadlock and returns the successful run', async () => {

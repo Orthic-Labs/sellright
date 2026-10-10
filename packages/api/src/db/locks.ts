@@ -167,17 +167,18 @@ async function lockRows(
 }
 
 /** drizzle wraps driver errors ("Failed query: …") and keeps the pg error on `cause`. */
-function pgErrorCode(e: unknown): string | undefined {
+/** True when `e` or any error on its `cause` chain (5 levels) carries one of `codes`; outer wrappers may have their own code. */
+function hasPgCode(e: unknown, codes: readonly string[]): boolean {
   for (let cur: unknown = e, depth = 0; cur && typeof cur === 'object' && depth < 5; depth++) {
-    const code = (cur as { code?: string }).code;
-    if (code) return code;
+    const code = (cur as { code?: unknown }).code;
+    if (typeof code === 'string' && codes.includes(code)) return true;
     cur = (cur as { cause?: unknown }).cause;
   }
-  return undefined;
+  return false;
 }
 
 function isLockTimeout(e: unknown): boolean {
-  return pgErrorCode(e) === '55P03';
+  return hasPgCode(e, ['55P03']);
 }
 
 /**
@@ -185,8 +186,7 @@ function isLockTimeout(e: unknown): boolean {
  * every lock it held, so restarting it is safe: money recording is idempotent by operation id (X-45 backstop).
  */
 export function isDeadlockOrSerializationFailure(e: unknown): boolean {
-  const code = pgErrorCode(e);
-  return code === '40P01' || code === '40001';
+  return hasPgCode(e, ['40P01', '40001']);
 }
 
 function union(a: LockPlanContribution, b: LockPlanContribution): LockPlanContribution {
