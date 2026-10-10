@@ -13,6 +13,7 @@ import { onStockChanged } from '../manifest/stock-hook.js';
 import { reconcileRefundLoyalty } from '../loyalty/ledger.js';
 import { isEditRefund } from './edit-refund.js';
 import { releaseOnFullRefundInSet } from './reservation.js';
+import { recordSettlementOperation } from './settlement/record.js';
 
 export class RefundError extends Error {
   constructor(public status: 400 | 404 | 409 | 503, message: string) { super(message); }
@@ -302,6 +303,11 @@ export async function finalizeRefund(tx: Tx, storeId: string, attemptId: string,
   await tx.update(s.order).set({ updatedAt: new Date(), ...(state ? { state } : {}) }).where(eq(s.order.id, order.id));
   // PAYMENT-TIMING §3.3 R5: a full refund releases the consumed holds that asked for it (deferred, not aborted, on a projection failure).
   if (state === 'Refunded') await releaseOnFullRefundInSet(tx, { storeId, orderId: order.id, refundId: refund.id });
+  // Entitlement reversal for a full refund (worker effect; never runs in this transaction, X-45). One per order.
+  if (state === 'Refunded') await recordSettlementOperation(tx, {
+    storeId, kind: 'order_refunded', operationId: order.id, orderId: order.id, mutations: [],
+    effects: [{ kind: 'entitlement_reversal', payload: { orderId: order.id, reason: 'full_refund' } }], effectMode: 'deferred',
+  });
   if (details?.returnId) await tx.update(s.returnRequest).set({ status: 'refunded', refundId: refund.id, updatedAt: new Date() })
     .where(and(eq(s.returnRequest.id, details.returnId), eq(s.returnRequest.orderId, order.id)));
   await tx.update(s.refund).set({ metadata: { ...details, effectsApplied: true } }).where(eq(s.refund.id, refund.id));

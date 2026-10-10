@@ -20,7 +20,7 @@ import {
   PaymentPolicyVetoError, registeredPaymentPolicies, registerPaymentPolicy,
 } from './registry.js';
 import type {
-  AuthorizeInvoiceEffectInput, BeforeCaptureInput, BeforeCaptureResult, BeforePaymentAttemptInput, InvoiceEffectDecision,
+  AuthorizeInvoiceEffectInput, BeforeCaptureInput, EntitlementReversalInput, BeforeCaptureResult, BeforePaymentAttemptInput, InvoiceEffectDecision,
   PaymentPolicy, PaymentProvider, PaymentPurpose, PolicyOrder, ReservationRequest, RevalidateForIssuanceInput,
   RevalidateForIssuanceResult, SettlementResponseInput, SettlementResponseOverride,
 } from './types.js';
@@ -142,6 +142,19 @@ registerLockPlanContributor(async (tx, subject: LockSubject) => {
   }
   return out;
 });
+
+/**
+ * Entitlement reversal (full refund or lost chargeback). Every registered policy's onEntitlementReversal runs in
+ * registration order, each in SAVEPOINT policy_hook. A hook failure throws PaymentPolicyUnavailableError and the
+ * caller (the effects handler) decides retry or terminal. Absent hooks are a no-op.
+ */
+export async function runEntitlementReversal(tx: Tx, input: EntitlementReversalInput): Promise<void> {
+  await assertHeld(tx, input.held);
+  for (const policy of policies()) {
+    if (!policy.onEntitlementReversal) continue;
+    await inSavepoint(tx, policy.id, () => policy.onEntitlementReversal!(tx, input));
+  }
+}
 
 /**
  * Entry point for payment paths: loads the order's reservations under the held lock set and runs

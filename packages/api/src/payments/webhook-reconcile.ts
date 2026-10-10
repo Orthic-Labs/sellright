@@ -20,6 +20,7 @@ import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { type Tx, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
+import { recordSettlementOperation } from './settlement/record.js';
 import { emitEvent } from '../webhooks/emit.js';
 import { resolveStoreForGatewayEvent } from './tenant-resolution.js';
 import { finalizeRefund, enqueueRefundSettledEmail, RefundError, orderRefundBasis, refundStateFromBasis } from './refunds.js';
@@ -318,11 +319,17 @@ async function recomputeOrderRefundState(tx: Tx, storeId: string, orderId: strin
   // reconcileStripeRefund actually recorded; only gate the state WRITE on
   // canTransition (writing a state the order is already in would be a
   // meaningless no-op update, not an error).
+  const reachesRefunded = target === 'Refunded' && canTransition(ord.state as OrderState, 'Refunded');
   if (canTransition(ord.state as OrderState, target)) {
     await tx.update(s.order).set({ state: target, updatedAt: new Date() }).where(eq(s.order.id, orderId));
   }
   // PAYMENT-TIMING §3.3 R5: a full refund releases consumed holds that asked for it (no-op unless the order is Refunded).
   if (target === 'Refunded') await releaseOnFullRefundInSet(tx, { storeId, orderId });
+  // Entitlement reversal on the first transition to Refunded (worker effect; identity = order, so replays are no-ops).
+  if (reachesRefunded) await recordSettlementOperation(tx, {
+    storeId, kind: 'order_refunded', operationId: orderId, orderId, mutations: [],
+    effects: [{ kind: 'entitlement_reversal', payload: { orderId, reason: 'full_refund' } }], effectMode: 'deferred',
+  });
   await emitEvent(tx, storeId, 'order.refunded', { code: ord.code, amount: refunded, state: target, source: 'stripe_dashboard' });
 }
 

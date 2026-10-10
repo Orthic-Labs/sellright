@@ -25,6 +25,7 @@ import { emitEvent } from '../webhooks/emit.js';
 import { enqueueEmail } from '../email/outbox.js';
 import { disputeAlert } from '../email/templates-ops.js';
 import { env } from '../env.js';
+import { recordSettlementOperation } from '../payments/settlement/record.js';
 
 export interface DisputeInput {
   provider: 'stripe' | 'nmi' | (string & {});
@@ -135,6 +136,23 @@ export async function recordDispute(tx: Tx, storeId: string, d: DisputeInput): P
     await tx.update(dispute).set({ notifiedAt: new Date() }).where(eq(dispute.id, inserted.id));
   }
   return { created: true, disputeId: inserted.id, orderId: d.orderId ?? null, notified: recipients.length };
+}
+
+/**
+ * A chargeback decided against the merchant (status `lost`). Marks the dispute row and records the settlement operation
+ * (identity = dispute id) whose deferred `entitlement_reversal` effect reverses the order's entitlement. Money is not
+ * moved here. Replays are no-ops: the operation identity dedupes the effect. No upstream ingestion path calls this yet.
+ */
+export async function recordDisputeLost(tx: Tx, storeId: string, disputeId: string): Promise<void> {
+  const [d] = await tx.select({ id: dispute.id, orderId: dispute.orderId }).from(dispute)
+    .where(and(eq(dispute.storeId, storeId), eq(dispute.id, disputeId))).limit(1).for('update');
+  if (!d) throw new Error('dispute not found');
+  await tx.update(dispute).set({ status: 'lost', updatedAt: new Date() }).where(eq(dispute.id, d.id));
+  if (!d.orderId) return;
+  await recordSettlementOperation(tx, {
+    storeId, kind: 'dispute_lost', operationId: d.id, orderId: d.orderId, mutations: [],
+    effects: [{ kind: 'entitlement_reversal', payload: { orderId: d.orderId, reason: 'chargeback' } }], effectMode: 'deferred',
+  });
 }
 
 /**

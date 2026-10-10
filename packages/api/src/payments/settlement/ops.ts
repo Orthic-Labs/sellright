@@ -22,6 +22,8 @@ export const SETTLEMENT_KINDS = [
   'payment_mode_corrected',
   'order_purge',
   'operator_resolution',
+  'order_refunded',
+  'dispute_lost',
 ] as const;
 export type SettlementKind = (typeof SETTLEMENT_KINDS)[number];
 
@@ -36,6 +38,7 @@ export const EFFECT_KINDS = [
   'edit_reconcile',
   'loyalty_earn',
   'notification',
+  'entitlement_reversal',
   'admin_review',
 ] as const;
 export type EffectKind = (typeof EFFECT_KINDS)[number];
@@ -100,6 +103,18 @@ export const OPERATION_POLICY = {
   // Admin hard purge of an order: payments are snapshotted on the operation row FIRST (so invoice
   // evidence survives), then the payment rows and the order row are deleted.
   order_purge: { identity: 'order.id', mutations: ['order_purge'], effects: [] },
+  // The order reached Refunded (full refund, or a dashboard refund that covers the net captured). One per order: Refunded is terminal.
+  order_refunded: {
+    identity: 'order.id',
+    mutations: [],
+    effects: ['entitlement_reversal'],
+  },
+  // A chargeback recorded as lost. Identity is the dispute row id; money is never moved here.
+  dispute_lost: {
+    identity: 'dispute.id',
+    mutations: [],
+    effects: ['entitlement_reversal'],
+  },
   // A human decision executing the held entitlement/money of a terminal / hold_money target.
   operator_resolution: {
     identity: '<target_kind>:<target_id>:<resolution_id>',

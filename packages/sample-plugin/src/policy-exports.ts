@@ -12,8 +12,8 @@ import {
   type EntitlementPolicy,
 } from '@sellright/api/licensing';
 import {
-  registerPaymentPolicy, type BeforeCaptureResult, type InvoiceEffectDecision, type PaymentPolicy, type ReservationRequest,
-  type RevalidateForIssuanceResult, type SettlementResponseOverride,
+  registerPaymentPolicy, type BeforeCaptureResult, type EntitlementReversalInput, type InvoiceEffectDecision, type PaymentPolicy,
+  type ReservationRequest, type RevalidateForIssuanceResult, type SettlementResponseOverride,
 } from '@sellright/api/payments';
 import type { ReleaseRegistrationPolicy } from '@sellright/api/http';
 
@@ -42,6 +42,7 @@ export type PolicyTypeProof = {
   invoiceDecision: InvoiceEffectDecision;
   revalidate: RevalidateForIssuanceResult;
   settlementOverride: SettlementResponseOverride;
+  entitlementReversal: EntitlementReversalInput;
   release: ReleaseRegistrationPolicy;
   storeKitSource: VerifiedStoreKitLicenseSource;
   storeKitPayload: StoreKitTransactionPayload;
