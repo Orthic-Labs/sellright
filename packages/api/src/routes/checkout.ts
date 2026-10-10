@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, count, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import { withStore, type Tx } from '../db/client.js';
+import { LockSetUnstable, withLockedSet, type LockSubject } from '../db/locks.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
 import { calculateOrderTotals, type Promotion } from '../money/totals.js';
@@ -14,39 +15,19 @@ import { applyGiftCard } from '../money/gift-card.js';
 import { earnableCents, loyaltySettingsFromConfig, multiplierBonusPoints, planRedemption, pointsEarned, type RedeemRejection } from '../money/loyalty.js';
 import { customerOwnsOrder } from '../auth/order-access.js';
 import { lockedAvailable, orderLoyaltySnapshot, reserveRedemption, type OrderLoyaltySnapshot } from '../loyalty/ledger.js';
-import { postPaidOrderRewards } from '../loyalty/bonus.js';
 import { emitEvent } from '../webhooks/emit.js';
+import { paidOrderEffects, recordSettlementOperation, type PaymentInsert } from '../payments/settlement/record.js';
 import { customerToken, resolveCustomer } from '../auth/session.js';
 import { normalizeEmail } from '../auth/email.js';
 import { reserveStockOrThrow, StockReservationError, validateReservableItems } from '../orders/stock-reservation.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
 import { isMethodEligible, shippingRate, ShippingUnavailableError } from '../shipping/calculator.js';
-import { pickEmailAppKey } from '../email/dispatch.js';
-import { orderConfirmation as orderConfirmationTpl } from '../email/templates.js';
-import { enqueueEmail } from '../email/outbox.js';
-import { enqueuePush, buildOrderPushPayload, buildOrderLiveActivityPayload } from '../push/outbox.js';
-import { env } from '../env.js';
 import { clientIp, loginRetryAfter } from '../auth/rate-limit.js';
-import { issueLicensesForPaidOrder } from '../licensing/issue.js';
-import { bootstrapAccountAndQueueAccessMail } from '../licensing/account-bootstrap.js';
 import { legalReceiptForOrder, type OrderLegalReceipt } from '../legal/acceptance.js';
 import { legalManifestForApp } from '../legal/manifests.js';
 import { isStorePublished } from '../store-publish.js';
 import { cartResponse, CartOut } from './cart.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
-
-/** Mirror of email/dispatch.ts::parseAppMap — duplicated here to avoid an
- * internal export just for the outbox enqueue path. */
-function parseAppFromMap(raw: string | undefined, appKey: string | null | undefined): string | undefined {
-  const key = appKey?.trim().toLowerCase();
-  if (!key || !raw?.trim()) return undefined;
-  for (const entry of raw.split(/[,\n;]/)) {
-    const idx = entry.indexOf('=');
-    if (idx <= 0) continue;
-    if (entry.slice(0, idx).trim().toLowerCase() === key) return entry.slice(idx + 1).trim();
-  }
-  return undefined;
-}
 
 /**
  * Canonical address shape for the order snapshot — matches the `address` table
@@ -250,7 +231,7 @@ checkout.openapi(
 
     const fingerprint = checkoutFingerprint(body);
 
-    type Result = { blocked: string[] } | { shippingError: string } | { cartError: string } | { legalError: string } | { loyaltyError: RedeemRejection } | { cartConflict: { code: 'stale' | 'revision_required'; snapshot: z.infer<typeof CartOut> } } | { fingerprintConflict: true } | { code: string; state: string; grandTotal: number; discountTotal: number; couponApplied: boolean; replay?: boolean; giftCardApplied?: number; receiptToken: string; pointsRedeemed?: number; pointsDiscount?: number };
+    type Result = { blocked: string[] } | { shippingError: string } | { cartError: string } | { legalError: string } | { loyaltyError: RedeemRejection } | { cartConflict: { code: 'stale' | 'revision_required'; snapshot: z.infer<typeof CartOut> } } | { fingerprintConflict: true } | { lockRetry: true } | { code: string; state: string; grandTotal: number; discountTotal: number; couponApplied: boolean; replay?: boolean; giftCardApplied?: number; receiptToken: string; pointsRedeemed?: number; pointsDiscount?: number };
     // Zero-cache stock rule: set true only by a reserveStockOrThrow call whose
     // surrounding transaction actually reaches COMMIT. Every path below that
     // aborts the transaction (idempotency replay via unique-violation,
@@ -258,7 +239,19 @@ checkout.openapi(
     // resets it to false in the .catch — a rolled-back reservation never
     // happened and must never trigger a manifest regeneration.
     let stockChanged = false;
-    const out = await withStore(st.id, async (tx): Promise<Result> => {
+    // STOREKIT §5.8 #7 / PAYMENT-TIMING §3.5: the whole checkout transaction runs under the
+    // {checkout} set (no licence subject in the standalone engine; the fork's policies extend
+    // the plan). When points are redeemed, the session customer's loyalty set joins the plan
+    // (N3-1) so its orders are locked (L3) before lockedAvailable takes the loyalty advisory.
+    // The customer is peeked unlocked; a different customer under the lock fails closed below.
+    const peekedCustomerId = body.redeemPoints && token
+      ? await withStore(st.id, async (tx) => (await resolveCustomer(tx, token))?.id ?? null)
+      : null;
+    const subjects: LockSubject[] = [
+      { kind: 'checkout' },
+      ...(peekedCustomerId ? [{ kind: 'loyalty' as const, customerId: peekedCustomerId }] : []),
+    ];
+    const out = await withLockedSet(st.id, subjects, async (tx): Promise<Result> => {
       // Idempotency: same key -> the same order (also guarded by a unique index),
       // bound to the request fingerprint — a reused key with a different payload
       // is a conflict, not a replay of an order the client didn't resubmit.
@@ -503,6 +496,9 @@ checkout.openapi(
         // rejection must roll it back — the .catch below maps it to a 409.
         if (!loyalty.enabled) throw new LoyaltyRedeemError('disabled');
         if (!sessionCustomer?.emailVerified) throw new LoyaltyRedeemError('not_signed_in');
+        // The loyalty set was planned for the peeked customer; a different session
+        // customer under the lock cannot be covered, so the attempt is retried.
+        if (sessionCustomer.id !== peekedCustomerId) throw new LockSetUnstable();
         const available = await lockedAvailable(tx, st.id, sessionCustomer.id);
         const plan = planRedemption({ settings: loyalty, requestedPoints: body.redeemPoints, availablePoints: available,
           discountableCents: discounted.subtotal - discounted.discountTotal });
@@ -595,40 +591,6 @@ checkout.openapi(
       let giftCardApplied = 0;
       let paid = false;
 
-      // A server-computed zero-total order has no payment operation to perform.
-      // Settle it atomically here so the browser never has to invent a Paid
-      // state and digital/license fulfillment follows the same issuance path as
-      // a real settled tender. No synthetic zero-value payment ledger row is
-      // created because no money moved.
-      if (totals.grandTotal === 0) {
-        const paidAt = new Date();
-        await tx.update(s.order).set({ state: 'Paid', placedAt: paidAt, updatedAt: paidAt }).where(eq(s.order.id, orderId));
-        await issueLicensesForPaidOrder(tx, { storeId: st.id, orderId, customerId, paidAt });
-        await postPaidOrderRewards(tx, { storeId: st.id, orderId, paidAt, store: st });
-        paid = true;
-      } else if (body.giftCardCode) {
-        // Gift card / store credit is a tender, not a discount. The launch
-        // invariant requires it to cover the full amount due; applyGiftCard
-        // returns inapplicable without drawing when the balance is insufficient.
-        const [gc] = await tx.select().from(s.giftCard).where(eq(s.giftCard.code, body.giftCardCode)).limit(1).for('update');
-        if (gc) {
-          const appn = applyGiftCard({ balance: gc.balance, enabled: gc.enabled, expiresAt: gc.expiresAt }, totals.grandTotal, new Date());
-          if (appn.applicable) {
-            await tx.insert(s.payment).values({ storeId: st.id, orderId, amount: appn.applied, method: 'gift_card', state: 'Settled' });
-            await tx.update(s.giftCard).set({ balance: appn.newBalance, updatedAt: new Date() }).where(eq(s.giftCard.id, gc.id));
-            await tx.insert(s.giftCardTransaction).values({ storeId: st.id, giftCardId: gc.id, orderId, amount: -appn.applied });
-            giftCardApplied = appn.applied;
-            if (appn.remainingDue <= 0) {
-              const paidAt = new Date();
-              await tx.update(s.order).set({ state: 'Paid', placedAt: paidAt, updatedAt: paidAt }).where(eq(s.order.id, orderId));
-              await issueLicensesForPaidOrder(tx, { storeId: st.id, orderId, customerId, paidAt });
-              await postPaidOrderRewards(tx, { storeId: st.id, orderId, paidAt, store: st });
-              paid = true;
-            }
-          }
-        }
-      }
-
       // Cart → order conversion (atomic with the order): retire the cart + emit
       // a lifecycle event so funnel analytics / recovery can mark it converted.
       // The row lock was taken above and the UPDATE is status-guarded, so this
@@ -649,90 +611,64 @@ checkout.openapi(
 
       // Webhook events (transactional outbox — enqueued in the same txn).
       await emitEvent(tx, st.id, 'order.created', { code, grandTotal: totals.grandTotal, currency: st.currency });
-      if (paid) await emitEvent(tx, st.id, 'order.paid', { code, grandTotal: totals.grandTotal, currency: st.currency });
-
-      // Purchase → account bootstrap for the SYNCHRONOUS paid paths (zero-total
-      // order, full gift-card cover): they settle here and never reach
-      // payments/settle.ts's Paid branch (where enqueuePaidEffects runs this
-      // for the async paths), so they call it directly. Idempotent per order —
-      // a session/email-match checkout already carries customerId and no-ops —
-      // and the claim mail is dedupeKey'd in the outbox.
-      if (paid) {
-        await bootstrapAccountAndQueueAccessMail(tx, { storeId: st.id, orderId, existingCustomerId: customerId });
-      }
-
-      // Mobile push, same txn / same reasoning as the email outbox below: a
-      // rolled-back order must not ding anyone's phone. Only the money-real
-      // event pushes — 'order.created' fires for unpaid/pending orders too, and
-      // an alert per abandoned checkout attempt would train operators to ignore
-      // the app. No-ops when no device is registered for the store.
-      if (paid) {
-        await enqueuePush(tx, st.id, {
-          topic: 'order.paid',
-          payload: buildOrderPushPayload({ topic: 'order.paid', code, grandTotal: totals.grandTotal, currency: st.currency }),
+      // ── settlement of a server-settled order ────────────────────────────────────
+      // A server-computed zero-total order has no payment operation to perform.
+      // Settle it atomically here so the browser never has to invent a Paid
+      // state and digital/license fulfillment follows the same issuance path as
+      // a real settled tender. No synthetic zero-value payment ledger row is
+      // created because no money moved. A gift card / store credit is a tender,
+      // not a discount: the launch invariant requires it to cover the full amount
+      // due (applyGiftCard returns inapplicable without drawing otherwise).
+      //
+      // Both go through the settlement chokepoint (payments/settlement.ts): the
+      // Paid transition (operation: order.id) and its fan-out — issuance, account
+      // bootstrap, loyalty rewards, and the order.paid event / owner push + Live
+      // Activity / confirmation email — are effect rows written in THIS
+      // transaction and executed before it commits, so a rolled-back order never
+      // dings a phone or sends an email, exactly as before. Runs after the order
+      // and cart events so webhook rows keep their order (created -> paid).
+      const paidEffects = (paidAt: Date) => paidOrderEffects({
+        orderId, customerId, paidAt, variant: 'checkout', guestEmail: body.email ?? null,
+        itemCount: priced.reduce((n, p) => n + p.qty, 0),
+      });
+      if (totals.grandTotal === 0) {
+        const paidAt = new Date();
+        await recordSettlementOperation(tx, {
+          storeId: st.id, kind: 'order_paid_transition', operationId: orderId, orderId,
+          mutations: [{ type: 'order_paid', orderId, placedAt: paidAt, updatedAt: paidAt }],
+          effects: paidEffects(paidAt),
         });
-        // Live Activity (Dynamic Island) for the same order — a separate token
-        // family, so a device registered for both gets one alert AND one
-        // activity. No-ops for devices below iOS 17.2 (they never register a
-        // push-to-start token).
-        await enqueuePush(tx, st.id, {
-          topic: 'order.paid',
-          kind: 'live_activity',
-          payload: buildOrderLiveActivityPayload({
-            code,
-            grandTotal: totals.grandTotal,
-            currency: st.currency,
-            // `priced` is the server-repriced line set the order was actually
-            // built from — body lines are client-supplied and may not exist on
-            // the cart-token path at all.
-            itemCount: priced.reduce((n, p) => n + p.qty, 0),
-          }),
-        });
-      }
-
-      // REL-4: order-confirmation email goes through the email outbox. Enqueue
-      // inside this txn so a rollback drops the email too — never send for an
-      // order that didn't actually pay. Best-effort recipient: the customer's
-      // email if linked, else the guest email on the request. No SMTP at this
-      // call site — the scheduler (jobs/scheduler.ts) delivers with retry +
-      // dead-letter, mirroring the webhook_outbox claim.
-      if (paid) {
-        const [cust] = customerId
-          ? await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, customerId)).limit(1)
-          : [];
-        const recipient = normalizeEmail(cust?.email ?? body.email ?? '');
-        if (recipient) {
-          const lines = await tx
-            .select({
-              name: s.orderLine.variantName,
-              quantity: s.orderLine.quantity,
-              lineTotal: s.orderLine.lineTotal,
-              appKey: s.productVariant.appKey,
-            })
-            .from(s.orderLine)
-            .leftJoin(s.productVariant, eq(s.productVariant.id, s.orderLine.variantId))
-            .where(eq(s.orderLine.orderId, orderId));
-          const appKey = pickEmailAppKey(lines.map((line) => line.appKey));
-          // Mirror dispatch.ts's emailCtx() — derive the same per-store sender
-          // and storefront URL the inline path produced, so the rendered email
-          // is byte-identical to before (constraint: do NOT change the body).
-          const fromEmail = env.EMAIL_FROM_BY_APP
-            ? parseAppFromMap(env.EMAIL_FROM_BY_APP, appKey) ?? env.SMTP_FROM
-            : env.SMTP_FROM;
-          const storefrontUrl = env.STOREFRONT_URL_BY_APP
-            ? parseAppFromMap(env.STOREFRONT_URL_BY_APP, appKey) ?? env.STOREFRONT_URL
-            : env.STOREFRONT_URL;
-          const rendered = orderConfirmationTpl(
-            { name: st.name, currency: st.currency, storefrontUrl, fromEmail },
-            { code, grandTotal: totals.grandTotal, currency: st.currency, lines: lines.map(({ name, quantity, lineTotal }) => ({ name, quantity, lineTotal })) },
-          );
-          await enqueueEmail(tx, st.id, {
-            kind: 'order_confirmation',
-            recipient,
-            payload: { to: recipient, from: fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },
-          });
+        paid = true;
+      } else if (body.giftCardCode) {
+        const [gc] = await tx.select().from(s.giftCard).where(eq(s.giftCard.code, body.giftCardCode)).limit(1).for('update');
+        if (gc) {
+          const appn = applyGiftCard({ balance: gc.balance, enabled: gc.enabled, expiresAt: gc.expiresAt }, totals.grandTotal, new Date());
+          if (appn.applicable) {
+            const covered = appn.remainingDue <= 0;
+            const paidAt = new Date();
+            const tenderId = randomUUID();
+            const tender: PaymentInsert = { id: tenderId, storeId: st.id, orderId, amount: appn.applied, method: 'gift_card', state: 'Settled' };
+            // The tender and (when it covers the order) the Paid transition are one chokepoint operation.
+            if (covered) {
+              await recordSettlementOperation(tx, {
+                storeId: st.id, kind: 'order_paid_transition', operationId: orderId, orderId,
+                mutations: [{ type: 'payment_insert', rows: [tender] }, { type: 'order_paid', orderId, placedAt: paidAt, updatedAt: paidAt }],
+                effects: paidEffects(paidAt),
+              });
+            } else {
+              await recordSettlementOperation(tx, {
+                storeId: st.id, kind: 'payment_settled', operationId: tenderId, effects: [],
+                mutations: [{ type: 'payment_insert', rows: [tender] }],
+              });
+            }
+            await tx.update(s.giftCard).set({ balance: appn.newBalance, updatedAt: new Date() }).where(eq(s.giftCard.id, gc.id));
+            await tx.insert(s.giftCardTransaction).values({ storeId: st.id, giftCardId: gc.id, orderId, amount: -appn.applied });
+            giftCardApplied = appn.applied;
+            if (covered) paid = true;
+          }
         }
       }
+
       return { code, state: paid ? 'Paid' : 'PendingPayment', grandTotal: totals.grandTotal, discountTotal: totals.discountTotal, couponApplied: promoId != null, giftCardApplied, receiptToken,
         pointsRedeemed: redeem?.points ?? 0, pointsDiscount: totals.pointsDiscount };
     }).catch(async (e: unknown): Promise<Result> => {
@@ -758,6 +694,7 @@ checkout.openapi(
           throw e;
         });
       }
+      if (e instanceof LockSetUnstable) return { lockRetry: true };
       if (e instanceof StockReservationError) return { blocked: e.skus };
       if (e instanceof ShippingUnavailableError) return { shippingError: e.reason };
       if (e instanceof LoyaltyRedeemError) return { loyaltyError: e.reason };
@@ -772,6 +709,7 @@ checkout.openapi(
     if ('legalError' in out) return errJson(c, 422, 'LEGAL_ACCEPTANCE_REQUIRED', out.legalError);
     if ('loyaltyError' in out) return errJson(c, 409, 'LOYALTY_REDEEM_FAILED', 'points could not be redeemed', { extra: { reason: out.loyaltyError } });
     if ('blocked' in out) return errJson(c, 409, 'OUT_OF_STOCK', 'unavailable or out of stock', { extra: { skus: out.blocked } });
+    if ('lockRetry' in out) return errJson(c, 409, 'CHECKOUT_RETRY', 'checkout is busy, retry shortly');
     if ('fingerprintConflict' in out) return errJson(c, 409, 'IDEMPOTENCY_PAYLOAD_MISMATCH', 'idempotency-key was already used with a different payload', { extra: { reason: 'payload_mismatch' } });
     if ('cartConflict' in out) return errJson(
       c, 409,

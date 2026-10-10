@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createSezzleProvider, normalizeSezzleEvent, verifySezzleSignature } from './sezzle.js';
+import { createSezzleProvider, normalizeSezzleEvent, sezzleObservedStatus, verifySezzleSignature } from './sezzle.js';
 import { createHmac } from 'node:crypto';
 
 const gateway = {
@@ -119,5 +119,38 @@ describe('normalizeSezzleEvent — SR-06', () => {
   it('an event with no envelope uuid still normalizes (caller substitutes a body-hash id)', () => {
     const n = normalizeSezzleEvent({ event: 'order.captured', data: { uuid: 'ord-uuid-4' } });
     expect(n).toMatchObject({ eventId: null, providerRef: 'ord-uuid-4', eventType: 'order.captured' });
+  });
+});
+
+describe('Sezzle provider observation (de-fork 2.9)', () => {
+  const cap = (n: number) => ({ uuid: `c${n}`, amount: { amount_in_cents: n, currency: 'USD' } });
+  const exp = { amount: 1200, currency: 'USD' };
+  it('uses the 4.6 vocabulary: captured, declined, held, open, unresolved:<reason>', () => {
+    expect(sezzleObservedStatus({ authorization: { approved: true, captures: [cap(1200)] } }, exp)).toBe('captured');
+    expect(sezzleObservedStatus({ checkout_status: 'denied' }, exp)).toBe('declined');
+    expect(sezzleObservedStatus({ checkout_status: 'deleted' }, exp)).toBe('declined');
+    expect(sezzleObservedStatus({ authorization: { approved: true } }, exp)).toBe('held');
+    expect(sezzleObservedStatus({ checkout_status: 'created' }, exp)).toBe('open');
+    expect(sezzleObservedStatus({}, exp)).toBe('open');
+  });
+  it('a partial/excess capture, dispute, refund or expired authorization is never terminal-captured (INSTR-3)', () => {
+    expect(sezzleObservedStatus({ authorization: { approved: true, captures: [cap(600)] } }, exp)).toBe('unresolved:partial_or_excess_capture');
+    expect(sezzleObservedStatus({ authorization: { approved: true, captures: [cap(1200), cap(5)] } }, exp)).toBe('unresolved:partial_or_excess_capture');
+    expect(sezzleObservedStatus({ authorization: { approved: true, captures: [cap(1200)] }, dispute: { id: 1 } }, exp)).toBe('unresolved:refund_or_dispute');
+    expect(sezzleObservedStatus({ authorization: { approved: true, captures: [cap(1200)], refunds: [cap(1)] } }, exp)).toBe('unresolved:refund_or_dispute');
+    expect(sezzleObservedStatus({ authorization: { approved: true, expiration: '2000-01-01T00:00:00Z' } }, exp)).toBe('unresolved:authorization_expired');
+  });
+  it('reports observedStatus only for a retrieved order bound to this attempt', async () => {
+    const ok = await createSezzleProvider(transportFor(order([]))).createPayment(input);
+    expect(ok.observedStatus).toBe('held'); // approved, no captures
+    const mismatch = await createSezzleProvider(transportFor({ ...order([]), reference_id: 'another-order' })).createPayment(input);
+    expect(mismatch.state).toBe('Pending');
+    expect(mismatch.observedStatus).toBeUndefined();
+  });
+  it('reports nothing when the provider call fails', async () => {
+    const failing = vi.fn().mockRejectedValue(new Error('network'));
+    const r = await createSezzleProvider(failing).createPayment(input);
+    expect(r.state).toBe('Pending');
+    expect(r.observedStatus).toBeUndefined();
   });
 });

@@ -27,7 +27,7 @@ function keyFor(ip: string, identifier: string): string {
   return `${ip}|${identifier.toLowerCase()}`;
 }
 
-function makeKeyedLimiter(bucket: string, windowMs: number, maxAttempts: number) {
+export function makeKeyedLimiter(bucket: string, windowMs: number, maxAttempts: number) {
   return {
     /** Throw-free check: retryAfterSeconds>0 while the (ip, identifier) pair is over budget. */
     retryAfter: (ip: string, identifier = ''): Promise<number> =>
@@ -43,6 +43,7 @@ const HOUR = 60 * MIN;
 const trial = makeKeyedLimiter('apps-trial', HOUR, 5); // 5/hr per (ip, email)
 const licenseAction = makeKeyedLimiter('apps-license-action', 15 * MIN, 20); // 20/15min per (ip, licenseKey)
 const cart = makeKeyedLimiter('apps-cart', MIN, 60); // 60/min per ip
+const storekitVerifyFailure = makeKeyedLimiter('storekit-verify-failure', HOUR, 30); // 30/hr per (ip, app)
 
 export const trialRetryAfter = trial.retryAfter;
 export const recordTrialAttempt = trial.record;
@@ -50,3 +51,5 @@ export const licenseActionRetryAfter = licenseAction.retryAfter;
 export const recordLicenseAction = licenseAction.record;
 export const cartRetryAfter = cart.retryAfter;
 export const recordCartAttempt = cart.record;
+export const storekitVerifyFailureRetryAfter = storekitVerifyFailure.retryAfter;
+export const recordStorekitVerifyFailure = storekitVerifyFailure.record;

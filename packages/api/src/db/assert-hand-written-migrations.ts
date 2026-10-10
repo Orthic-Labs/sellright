@@ -64,7 +64,11 @@ const HAND_WRITTEN = [
   '0084_order_edit.sql',
   '0085_reviews_and_bonuses.sql',
   '0086_order_shipping_method.sql',
+  '0090_order_pending_effect.sql',
+  '0091_order_reservation.sql',
+  '0089_installation_setting.sql',
   '0087_harden_outbox_rls_nullif.sql',
+  '0088_defork_instrumentation.sql',
 ];
 
 const MARKER = '-- HAND-WRITTEN: see docs/runbooks/migrations.md';

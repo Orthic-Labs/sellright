@@ -67,12 +67,16 @@ const errorSchema = apiErrorSchema();
  *  switch forces a real status LITERAL at each call, which Hono distributes
  *  correctly. */
 function gatewayErrorResponse(c: Context, error: GatewayPaymentError) {
-  const code = slugifyCode(error.message);
+  const code = error.code ?? slugifyCode(error.message);
+  const opts = error.extra ? { extra: error.extra } : {};
+  // A payment-policy veto without its own code (PAYMENT-TIMING §3.6): the stable wire code, as a literal
+  // so the ApiErrorCode union documents it.
+  if (error.status === 409 && code === 'PAYMENT_POLICY_VETO') return errJson(c, 409, 'PAYMENT_POLICY_VETO', error.message, opts);
   switch (error.status) {
-    case 400: return errJson(c, 400, code, error.message);
-    case 404: return errJson(c, 404, code, error.message);
-    case 409: return errJson(c, 409, code, error.message);
-    case 503: return errJson(c, 503, code, error.message);
+    case 400: return errJson(c, 400, code, error.message, opts);
+    case 404: return errJson(c, 404, code, error.message, opts);
+    case 409: return errJson(c, 409, code, error.message, opts);
+    case 503: return errJson(c, 503, code, error.message, opts);
   }
 }
 

@@ -16,8 +16,8 @@
  * execute exactly once. Dashboard-initiated refunds (no reservation) are
  * recorded money-only as before.
  */
-import { and, eq, isNull, sql } from 'drizzle-orm';
-import { type Tx } from '../db/client.js';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { type Tx, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
 import { emitEvent } from '../webhooks/emit.js';
@@ -29,6 +29,20 @@ import { STRIPE_REFUND_ATTEMPT_KEY, stripeRefundState } from './stripe.js';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const piId = (v: unknown): string | null => (typeof v === 'string' ? v : (v as { id?: string } | null)?.id ?? null);
 const subIdOf = (v: unknown): string | null => (typeof v === 'string' ? v : (v as { id?: string } | null)?.id ?? null);
+
+/** X-48: unlocked plan input for a Stripe refund or dispute event. Returns the order id(s) of the
+ *  stored payment(s) whose provider ref is one of `piIds`. Reads only and never locks; an empty result
+ *  means no stored payment yet, and the caller keeps the existing pay advisory path. */
+export async function orderIdsForStripePayments(
+  storeId: string, piIds: ReadonlyArray<string | null | undefined>,
+): Promise<string[]> {
+  const refs = [...new Set(piIds.filter((p): p is string => typeof p === 'string' && p.length > 0))];
+  if (!refs.length) return [];
+  const rows = await withStore(storeId, (tx) => tx.select({ orderId: s.payment.orderId }).from(s.payment).where(and(
+    eq(s.payment.storeId, storeId), eq(s.payment.method, 'stripe'), inArray(s.payment.providerRef, refs),
+  )));
+  return [...new Set(rows.map((r) => r.orderId))];
+}
 
 export interface StripeEventObj {
   id?: string;
@@ -107,7 +121,7 @@ export const refundStateFromStripe = (status: string): 'Settled' | 'Pending' | '
 
 /** Order state implied by total settled refunds vs the order total. null = no
  *  transition (nothing settled yet). Pure — money-critical, so it's unit-tested. */
-export function refundTargetState(refundedTotal: number, grandTotal: number): OrderState | null {
+export function refundTargetState(refundedTotal: number, grandTotal: number): 'Refunded' | 'PartiallyRefunded' | null {
   if (refundedTotal <= 0) return null;
   return refundedTotal >= grandTotal ? 'Refunded' : 'PartiallyRefunded';
 }

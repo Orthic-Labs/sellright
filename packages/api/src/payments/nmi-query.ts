@@ -65,7 +65,43 @@ export function verifyNmiQuery(xml: string, input: Query): PaymentResult {
   } catch { return unresolved(fallback, 'invalid_query_response'); }
 }
 
-export async function queryNmiPayment(input: Query, transport: GatewayFetch = fetch): Promise<PaymentResult> {
+/** NMI charge label from the verified query result: only an identity-matched
+ *  transaction reaches here. */
+export function nmiObservedLabel(result: { state: string; metadata?: unknown }): string {
+  if (result.state === 'Settled') return 'settled';
+  if (result.state === 'Failed') return 'failed';
+  const reason = (result.metadata as { reason?: string } | null | undefined)?.reason;
+  return `unresolved:${reason ?? 'pending'}`;
+}
+
+/**
+ * De-fork 2.9: the provider-side `condition` of THE transaction this query
+ * identifies, or null when the response does not identify exactly this
+ * attempt's transaction (zero/duplicate transactions, identity mismatch,
+ * malformed XML). Pure; used only to advance payment_attempt.provider_status
+ * after a successful retrieval.
+ */
+export function readNmiObservation(xml: string, input: Query): string | null {
+  try {
+    if (/<!DOCTYPE|<!ENTITY/i.test(xml) || Buffer.byteLength(xml) > 1048576) return null;
+    const doc = new DOMParser({ onError: () => { throw new Error('Invalid NMI XML'); } })
+      .parseFromString(xml, 'text/xml');
+    const root = doc.documentElement;
+    if (!root || root.tagName !== 'nm_response') return null;
+    const transactions = children(root, 'transaction');
+    if (transactions.length !== 1) return null;
+    const transaction = transactions[0]!;
+    const ref = value(transaction, 'transaction_id');
+    if (!ref || value(transaction, 'order_id') !== input.orderReference ||
+        (input.providerRef && ref !== input.providerRef) || value(transaction, 'currency') !== input.currency) return null;
+    return value(transaction, 'condition') || 'unknown';
+  } catch { return null; }
+}
+
+/** queryNmiPayment plus the observed provider status (null = no successful, attempt-bound retrieval). */
+export async function queryNmiPaymentObserved(
+  input: Query, transport: GatewayFetch = fetch,
+): Promise<{ result: PaymentResult; observedStatus: string | null }> {
   try {
     if (input.account.method !== 'nmi' || !input.account.securityKey || !input.orderReference) throw new Error('Missing query context');
     const body = new URLSearchParams({ security_key: input.account.securityKey,
@@ -78,6 +114,14 @@ export async function queryNmiPayment(input: Query, transport: GatewayFetch = fe
       method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: body.toString(), signal: AbortSignal.timeout(15000), redirect: 'error',
     });
-    return verifyNmiQuery(await boundedGatewayResponse(response), input);
-  } catch { return unresolved(input.providerRef ?? null, 'query_unavailable'); }
+    const xml = await boundedGatewayResponse(response);
+    const result = verifyNmiQuery(xml, input);
+    // Identity gate first (null = response is not this attempt's transaction),
+    // then the normalised 4.6 label from the verified result.
+    return { result, observedStatus: readNmiObservation(xml, input) === null ? null : nmiObservedLabel(result) };
+  } catch { return { result: unresolved(input.providerRef ?? null, 'query_unavailable'), observedStatus: null }; }
+}
+
+export async function queryNmiPayment(input: Query, transport: GatewayFetch = fetch): Promise<PaymentResult> {
+  return (await queryNmiPaymentObserved(input, transport)).result;
 }

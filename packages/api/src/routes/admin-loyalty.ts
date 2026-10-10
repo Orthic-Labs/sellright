@@ -6,6 +6,7 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { eq, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
+import { LockSetUnstable, withLockedSet } from '../db/locks.js';
 import * as s from '../db/schema.js';
 import { LoyaltySettingsSchema, loyaltySettingsFromConfig, pointsToCents } from '../money/loyalty.js';
 import { adjustPoints, ledgerPage, loyaltyBalance, LoyaltyAdjustError } from '../loyalty/ledger.js';
@@ -132,7 +133,15 @@ adminLoyalty.openapi(
     const st = requireStore(admin, c); requireWrite(st); requirePermission(st, 'loyalty');
     const { id } = c.req.valid('param');
     const b = c.req.valid('json');
-    const res = await withStore(st.storeId, async (tx) => {
+    // Unlocked peek names the lock subject (the path id); the set then takes the
+    // customer's deferred-earn orders under the lock, so an admin adjustment and a
+    // checkout redemption for the same customer serialize (T-L2).
+    const exists = await withStore(st.storeId, async (tx) => {
+      const [cust] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.id, id)).limit(1);
+      return !!cust;
+    });
+    if (!exists) throw new HttpError(404, 'customer not found');
+    const res = await withLockedSet(st.storeId, { kind: 'loyalty', customerId: id }, async (tx) => {
       const [cust] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.id, id)).limit(1);
       if (!cust) return { kind: 'notfound' as const };
       const [store] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1);
@@ -148,7 +157,11 @@ adminLoyalty.openapi(
         if (e instanceof LoyaltyAdjustError) return { kind: 'conflict' as const, message: e.message };
         throw e;
       }
+    }).catch((e: unknown) => {
+      if (e instanceof LockSetUnstable) return { kind: 'busy' as const };
+      throw e;
     });
+    if (res.kind === 'busy') throw new HttpError(409, 'loyalty account is busy, retry shortly');
     if (res.kind === 'notfound') throw new HttpError(404, 'customer not found');
     if (res.kind === 'conflict') throw new HttpError(409, res.message);
     return c.json((await customerLoyalty(st.storeId, id))!, 200);

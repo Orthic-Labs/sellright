@@ -52,11 +52,20 @@ export async function reconcileEditedOrderLicenses(
   tx: Tx, opts: { storeId: string; orderId: string; customerId: string | null; paidAt?: Date },
 ): Promise<{ issued: number; revoked: number }> {
   const now = new Date();
-  const revokedRows = await tx.update(s.license).set({ status: 'revoked', updatedAt: now })
-    .where(and(eq(s.license.storeId, opts.storeId), eq(s.license.orderId, opts.orderId), eq(s.license.source, 'order'),
-      sql`${s.license.status} <> 'revoked'`,
-      sql`exists (select 1 from order_line ol where ol.id = ${s.license.orderLineId} and ol.store_id = ${opts.storeId} and ol.quantity <= 0)`))
-    .returning({ id: s.license.id });
+  // L2 before the order (STOREKIT §5.1/§5.2): the caller holds the order's set, which
+  // already locked every licence of the order. Re-locking the stranded rows here, one
+  // statement per id in ascending canonical-uuid order, keeps this UPDATE deterministic
+  // even when the caller is not the set (no unordered multi-row UPDATE).
+  const stranded = and(eq(s.license.storeId, opts.storeId), eq(s.license.orderId, opts.orderId), eq(s.license.source, 'order'),
+    sql`${s.license.status} <> 'revoked'`,
+    sql`exists (select 1 from order_line ol where ol.id = ${s.license.orderLineId} and ol.store_id = ${opts.storeId} and ol.quantity <= 0)`);
+  const candidates = await tx.select({ id: s.license.id }).from(s.license).where(stranded);
+  for (const id of candidates.map((c) => c.id.toLowerCase()).sort()) {
+    await tx.execute(sql`SELECT 1 FROM license WHERE id = ${id} AND store_id = ${opts.storeId} FOR UPDATE`);
+  }
+  const revokedRows = candidates.length
+    ? await tx.update(s.license).set({ status: 'revoked', updatedAt: now }).where(stranded).returning({ id: s.license.id })
+    : [];
   if (revokedRows.length) await tx.update(s.licenseActivation).set({
     state: 'revoked', revokedAt: now, updatedAt: now, generation: sql`${s.licenseActivation.generation} + 1`,
   }).where(and(eq(s.licenseActivation.storeId, opts.storeId),

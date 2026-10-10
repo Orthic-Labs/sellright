@@ -88,7 +88,7 @@ async function claimDueEmails(storeId: string, limit: number): Promise<ClaimedEm
   return withStore(storeId, async (tx) => {
     const claim = await tx.execute(
       sql`UPDATE email_outbox eo
-          SET status = 'processing', attempts = eo.attempts + 1, updated_at = now()
+          SET status = 'processing', attempts = eo.attempts + 1, updated_at = now(), claimed_at = now()
           WHERE eo.id IN (
             SELECT id FROM email_outbox
             WHERE (status = 'pending' AND next_attempt_at <= now())
@@ -112,7 +112,7 @@ async function finalizeEmail(
     if (outcome.ok) {
       const rows = await tx
         .update(s.emailOutbox)
-        .set({ status: 'sent', sentAt: new Date(), updatedAt: new Date(), lastError: null })
+        .set({ status: 'sent', sentAt: new Date(), updatedAt: new Date(), lastError: null, claimedAt: null })
         .where(and(
           eq(s.emailOutbox.id, delivery.id),
           eq(s.emailOutbox.status, 'processing'),
@@ -132,6 +132,9 @@ async function finalizeEmail(
         status: giveUp ? 'dead' : 'pending',
         nextAttemptAt: new Date(Date.now() + backoff * 1000),
         updatedAt: new Date(),
+        // De-fork 2.9: release the claim; stamp the first failure once.
+        claimedAt: null,
+        firstFailedAt: sql`coalesce(${s.emailOutbox.firstFailedAt}, now())`,
       })
       .where(and(
         eq(s.emailOutbox.id, delivery.id),

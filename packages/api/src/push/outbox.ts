@@ -159,7 +159,7 @@ async function claimDuePushes(storeId: string, limit: number): Promise<ClaimedPu
   return withStore(storeId, async (tx) => {
     const claim = await tx.execute(
       sql`UPDATE push_outbox po
-          SET status = 'processing', attempts = po.attempts + 1, updated_at = now()
+          SET status = 'processing', attempts = po.attempts + 1, updated_at = now(), claimed_at = now()
           WHERE po.id IN (
             SELECT id FROM push_outbox
             WHERE (status = 'pending' AND next_attempt_at <= now())
@@ -193,7 +193,7 @@ async function finalizePush(
     if (outcome.kind === 'sent') {
       const rows = await tx
         .update(s.pushOutbox)
-        .set({ status: 'sent', sentAt: new Date(), updatedAt: new Date(), lastError: null })
+        .set({ status: 'sent', sentAt: new Date(), updatedAt: new Date(), lastError: null, claimedAt: null })
         .where(currentAttempt)
         .returning({ id: s.pushOutbox.id });
       return { result: rows.length ? 'sent' : 'stale', pruned: 0 };
@@ -202,7 +202,11 @@ async function finalizePush(
     if (outcome.kind === 'unregistered') {
       const rows = await tx
         .update(s.pushOutbox)
-        .set({ status: 'dead', lastError: outcome.error, updatedAt: new Date() })
+        .set({
+          status: 'dead', lastError: outcome.error, updatedAt: new Date(),
+          // De-fork 2.9: release the claim; stamp the first failure once.
+          claimedAt: null, firstFailedAt: sql`coalesce(${s.pushOutbox.firstFailedAt}, now())`,
+        })
         .where(currentAttempt)
         .returning({ id: s.pushOutbox.id });
       if (!rows.length) return { result: 'stale', pruned: 0 };
@@ -222,6 +226,9 @@ async function finalizePush(
         status: giveUp ? 'dead' : 'pending',
         nextAttemptAt: new Date(Date.now() + backoff * 1000),
         updatedAt: new Date(),
+        // De-fork 2.9: release the claim; stamp the first failure once.
+        claimedAt: null,
+        firstFailedAt: sql`coalesce(${s.pushOutbox.firstFailedAt}, now())`,
       })
       .where(currentAttempt)
       .returning({ id: s.pushOutbox.id });

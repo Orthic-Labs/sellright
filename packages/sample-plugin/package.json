@@ -1,0 +1,37 @@
+{
+  "name": "@sellright/sample-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Reference engine plugin: uses ONLY the public @sellright/api exports. Its packed-artifact test is the Phase 2 acceptance gate (plan 2.2).",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+    "./package.json": "./package.json"
+  },
+  "files": ["dist", "drizzle"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@hono/zod-openapi": "^1.6.3",
+    "@sellright/api": "0.1.0",
+    "drizzle-orm": "^0.45.2",
+    "pg": "^8.23.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@hono/zod-openapi": "^1.6.3",
+    "@sellright/api": "workspace:*",
+    "@types/node": "^25.9.4",
+    "@types/pg": "^8.23.1",
+    "drizzle-orm": "^0.45.2",
+    "pg": "^8.23.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.9",
+    "zod": "^4.6.5"
+  }
+}

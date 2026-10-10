@@ -66,7 +66,7 @@ async function claimDueWebhooks(storeId: string, limit: number): Promise<Claimed
     // ever delivered; the reaper then recycled every row forever.)
     const claim = await tx.execute(
       sql`UPDATE webhook_delivery wd
-          SET status = 'processing', attempts = wd.attempts + 1
+          SET status = 'processing', attempts = wd.attempts + 1, claimed_at = now(), updated_at = now()
           FROM webhook_endpoint we
           WHERE we.id = wd.endpoint_id
             AND wd.id IN (
@@ -97,7 +97,7 @@ async function finalizeWebhookDelivery(
 ): Promise<'delivered' | 'retry' | 'dead'> {
   return withStore(storeId, async (tx) => {
     if (outcome.ok) {
-      await tx.update(s.webhookDelivery).set({ status: 'delivered', deliveredAt: new Date() }).where(eq(s.webhookDelivery.id, d.id));
+      await tx.update(s.webhookDelivery).set({ status: 'delivered', deliveredAt: new Date(), claimedAt: null, updatedAt: new Date() }).where(eq(s.webhookDelivery.id, d.id));
       return 'delivered';
     }
     // `d.attempts` is the post-claim value (incremented at claim time); use it
@@ -108,6 +108,10 @@ async function finalizeWebhookDelivery(
       lastError: String(outcome.error instanceof Error ? outcome.error.message : outcome.error),
       status: giveUp ? 'failed' : 'pending',
       nextAttemptAt: new Date(Date.now() + backoff * 1000),
+      // De-fork 2.9: release the claim; stamp the first failure once.
+      claimedAt: null,
+      firstFailedAt: sql`coalesce(${s.webhookDelivery.firstFailedAt}, now())`,
+      updatedAt: new Date(),
     }).where(eq(s.webhookDelivery.id, d.id));
     return giveUp ? 'dead' : 'retry';
   });

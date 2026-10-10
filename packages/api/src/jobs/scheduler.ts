@@ -29,6 +29,8 @@ import { reapProcessedEvents } from './processed-event-reaper.js';
 import { abandonStaleCarts, cleanupExpiredCarts } from './cart-maintenance.js';
 import { deliverWebhooks } from '../webhooks/emit.js';
 import { deliverEmails } from '../email/outbox.js';
+import { runEffectsPass } from '../payments/settlement/effects.js';
+import '../payments/settlement/record.js'; // registers the built-in effect handlers
 import { deliverPushes } from '../push/outbox.js';
 import { listmonkSync } from './listmonk-sync.js';
 import { sheeridExpirySweep } from './sheerid-expiry.js';
@@ -204,6 +206,13 @@ export function startJobScheduler(extraJobs: ReadonlyArray<PluginJob & { plugin:
     if (ab.abandoned || cl.deleted) jobLog(`[jobs:cart] abandoned=${ab.abandoned} purged=${cl.deleted}`);
   });
   every(state, 60_000, 'webhooks', 'webhooks', () => deliverWebhooks({ log: jobLog })); // push due webhook deliveries every minute
+  // De-fork 2.8: settlement effects left pending (deferred mode, "not ready" retries such as a renewal
+  // delivered before its first invoice, reclaimed stale claims). Claims are SKIP LOCKED + token-fenced,
+  // so this is safe alongside a stand-alone `scripts/effects-worker`.
+  every(state, 15_000, 'pending-effects', 'pending-effects', async () => {
+    const r = await runEffectsPass({ log: jobLog });
+    if (r.done || r.retry || r.terminal) jobLog(`[jobs:effects] done=${r.done} retry=${r.retry} terminal=${r.terminal}`);
+  });
   // REL-4: push due email_outbox rows every minute — retry/dead-letter the
   // order-confirmation path. Mirrors the webhook claim pattern (FOR UPDATE
   // SKIP LOCKED, exponential backoff, dead-letter after MAX_ATTEMPTS).

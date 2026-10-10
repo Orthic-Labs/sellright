@@ -52,6 +52,7 @@ import { applyStripeIntent, reconcileStripeOrder, trackStripeIntent, claimReconc
 import { hasUnresolvedPayment } from './hold.js';
 import { releaseStaleAllocations } from '../jobs/release-stale-allocations.js';
 import { requestRefund } from './refunds.js';
+import { recordProviderObservation } from './provider-observation.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
 if (!/_test(\b|$|\?)/.test(DB)) {
@@ -423,5 +424,78 @@ describe('untracked PaymentIntents (created before intent tracking / lost attemp
     const { order } = await makeOrder();
     await reconcileStripeOrder(STORE, { code: order.code });
     expect(search.calls).toEqual([]);
+  });
+});
+
+// ── De-fork plan 2.9: provider_status / provider_observed_at ────────────────
+describe('provider observation (advanced only by a successful provider retrieval)', () => {
+  const obs = async (ref: string) => {
+    const a = await attemptOf(ref);
+    return { status: a.providerStatus, at: a.providerObservedAt };
+  };
+
+  it('a successful retrieve records the provider status and a fresh timestamp', async () => {
+    const { order } = await makeOrder();
+    await track(order.id, 'pi_obs1');
+    expect(await obs('pi_obs1')).toEqual({ status: null, at: null });
+    pi('pi_obs1', order.code, { status: 'requires_payment_method', last_payment_error: { message: 'declined' } });
+    const before = Date.now();
+    await reconcileStripeOrder(STORE, { code: order.code });
+    const o = await obs('pi_obs1');
+    expect(o.status).toBe('requires_payment_method');
+    expect(o.at!.getTime()).toBeGreaterThanOrEqual(before - 1000);
+    // The local attempt moved to 'failed' independently of the provider status.
+    expect((await attemptOf('pi_obs1')).status).toBe('failed');
+  });
+
+  it('a failed retrieval leaves the previous observation untouched (it ages, never refreshes)', async () => {
+    const { order } = await makeOrder();
+    await track(order.id, 'pi_obs2');
+    pi('pi_obs2', order.code, { status: 'requires_payment_method', last_payment_error: { message: 'declined' } });
+    await reconcileStripeOrder(STORE, { code: order.code });
+    const first = await obs('pi_obs2');
+    await new Promise((r) => setTimeout(r, 20));
+    stripeState.delete('pi_obs2'); // retrieve now throws 'No such payment_intent'
+    const r = await reconcileStripeOrder(STORE, { code: order.code });
+    expect(r.intents[0]).toMatchObject({ intentId: 'pi_obs2', outcome: 'error' });
+    const second = await obs('pi_obs2');
+    expect(second.status).toBe(first.status);
+    expect(second.at!.getTime()).toBe(first.at!.getTime());
+  });
+
+  it('a failed first retrieval leaves the pair NULL', async () => {
+    const { order } = await makeOrder();
+    await track(order.id, 'pi_obs3'); // Stripe knows nothing of it → retrieve throws
+    await reconcileStripeOrder(STORE, { code: order.code });
+    expect(await obs('pi_obs3')).toEqual({ status: null, at: null });
+  });
+
+  it('applying a webhook-style snapshot (no retrieval) never advances the observation', async () => {
+    const { order } = await makeOrder();
+    await track(order.id, 'pi_obs4');
+    const snap = pi('pi_obs4', order.code, { status: 'processing' });
+    await q((tx) => applyStripeIntent(tx, STORE, snap, 'test'));
+    expect((await attemptOf('pi_obs4')).status).toBe('processing');
+    expect(await obs('pi_obs4')).toEqual({ status: null, at: null });
+  });
+
+  it('the sweeper records the retrieved status, then the post-cancel status', async () => {
+    const { order } = await makeOrder({ ageMin: 120 });
+    await track(order.id, 'pi_obs5');
+    pi('pi_obs5', order.code); // requires_payment_method, no error → open → swept → cancelled at Stripe
+    await sweepStaleStripeIntents(STORE, new Date(Date.now() - 60 * 60_000), 50);
+    expect(cancelCalls).toEqual(['pi_obs5']);
+    expect((await obs('pi_obs5')).status).toBe('canceled');
+  });
+
+  it('is monotonic: an older observation never overwrites a newer one', async () => {
+    const { order } = await makeOrder();
+    await track(order.id, 'pi_obs6');
+    const a = await attemptOf('pi_obs6');
+    const newer = new Date(Date.now());
+    const older = new Date(Date.now() - 60_000);
+    expect(await q((tx) => recordProviderObservation(tx, { attemptId: a.id }, { status: 'processing', observedAt: newer }))).toBe(true);
+    expect(await q((tx) => recordProviderObservation(tx, { attemptId: a.id }, { status: 'requires_action', observedAt: older }))).toBe(false);
+    expect((await obs('pi_obs6')).status).toBe('processing');
   });
 });

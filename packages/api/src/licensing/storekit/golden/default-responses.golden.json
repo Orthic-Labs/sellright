@@ -1,0 +1,334 @@
+{
+  "link ok (sandbox)": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "activationToken": "<token>",
+      "lease": {
+        "leaseId": "<id>",
+        "deviceIdHash": "528981df4d28cccb3e470598b7bade59ca3794e7dd2a5ebad282302d11d63efb",
+        "pool": "mobile",
+        "entitlement": "pro",
+        "issuedAt": "<ts>",
+        "expiresAt": null,
+        "graceSeconds": 0,
+        "generation": 0,
+        "signature": null
+      }
+    },
+    "state": {
+      "purchases": [
+        "active"
+      ],
+      "licenses": [
+        "active"
+      ],
+      "activations": [
+        "active"
+      ],
+      "claims": 0
+    }
+  },
+  "link ok, platform hint ignored by default": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "activationToken": "<token>",
+      "lease": {
+        "leaseId": "<id>",
+        "deviceIdHash": "528981df4d28cccb3e470598b7bade59ca3794e7dd2a5ebad282302d11d63efb",
+        "pool": "mobile",
+        "entitlement": "pro",
+        "issuedAt": "<ts>",
+        "expiresAt": null,
+        "graceSeconds": 0,
+        "generation": 0,
+        "signature": null
+      }
+    },
+    "state": {
+      "purchases": [
+        "active"
+      ],
+      "licenses": [
+        "active"
+      ],
+      "activations": [
+        "active"
+      ],
+      "claims": 0
+    }
+  },
+  "link repeated by the same account": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "activationToken": "<token>",
+      "lease": {
+        "leaseId": "<id>",
+        "deviceIdHash": "528981df4d28cccb3e470598b7bade59ca3794e7dd2a5ebad282302d11d63efb",
+        "pool": "mobile",
+        "entitlement": "pro",
+        "issuedAt": "<ts>",
+        "expiresAt": null,
+        "graceSeconds": 0,
+        "generation": 0,
+        "signature": null
+      }
+    },
+    "state": {
+      "purchases": [
+        "active"
+      ],
+      "licenses": [
+        "active"
+      ],
+      "activations": [
+        "active"
+      ],
+      "claims": 0
+    }
+  },
+  "link by another account conflicts": {
+    "status": 401,
+    "body": {
+      "error": {
+        "code": "NOT_AUTHENTICATED_OR_PURCHASE_ALREADY_LINKED_TO_A_DIFFERENT_ACCO",
+        "message": "not authenticated, or purchase already linked to a different account"
+      }
+    },
+    "state": {
+      "purchases": [
+        "active"
+      ],
+      "licenses": [
+        "active"
+      ],
+      "activations": [
+        "active"
+      ],
+      "claims": 0
+    }
+  },
+  "link unauthenticated": {
+    "status": 401,
+    "body": {
+      "error": {
+        "code": "NOT_AUTHENTICATED_OR_PURCHASE_ALREADY_LINKED_TO_A_DIFFERENT_ACCO",
+        "message": "not authenticated, or purchase already linked to a different account"
+      }
+    },
+    "state": {
+      "purchases": [],
+      "licenses": [],
+      "activations": [],
+      "claims": 0
+    }
+  },
+  "link unknown app key": {
+    "status": 400,
+    "body": {
+      "error": {
+        "code": "STOREKIT_PURCHASES_ARE_NOT_CONFIGURED_FOR_THIS_APP",
+        "message": "StoreKit purchases are not configured for this app"
+      }
+    },
+    "state": {
+      "purchases": [],
+      "licenses": [],
+      "activations": [],
+      "claims": 0
+    }
+  },
+  "link wrong bundle": {
+    "status": 400,
+    "body": {
+      "error": {
+        "code": "THIS_TRANSACTION_WAS_NOT_ISSUED_FOR_THIS_APP",
+        "message": "this transaction was not issued for this app"
+      }
+    },
+    "state": {
+      "purchases": [],
+      "licenses": [],
+      "activations": [],
+      "claims": 0
+    }
+  },
+  "link revoked by Apple": {
+    "status": 422,
+    "body": {
+      "error": {
+        "code": "THIS_PURCHASE_WAS_REFUNDED_OR_REVOKED_BY_APPLE",
+        "message": "this purchase was refunded or revoked by Apple"
+      }
+    },
+    "state": {
+      "purchases": [],
+      "licenses": [],
+      "activations": [],
+      "claims": 0
+    }
+  },
+  "link tampered JWS": {
+    "status": 400,
+    "body": {
+      "error": {
+        "code": "THE_APP_STORE_TRANSACTION_COULD_NOT_BE_VERIFIED",
+        "message": "the App Store transaction could not be verified"
+      }
+    },
+    "state": {
+      "purchases": [],
+      "licenses": [],
+      "activations": [],
+      "claims": 0
+    }
+  },
+  "link malformed body": {
+    "status": 400,
+    "body": {
+      "success": false,
+      "error": {
+        "name": "ZodError",
+        "message": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"signedTransactionInfo\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"deviceIdHash\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  }\n]"
+      }
+    },
+    "state": {
+      "purchases": [],
+      "licenses": [],
+      "activations": [],
+      "claims": 0
+    }
+  },
+  "notification REFUND for linked purchase": {
+    "status": 200,
+    "body": {
+      "received": true
+    },
+    "state": {
+      "purchases": [
+        "revoked"
+      ],
+      "licenses": [
+        "revoked"
+      ],
+      "activations": [
+        "revoked"
+      ],
+      "claims": 1
+    }
+  },
+  "notification replayed UUID is a no-op": {
+    "status": 200,
+    "body": {
+      "received": true
+    },
+    "state": {
+      "purchases": [
+        "revoked"
+      ],
+      "licenses": [
+        "revoked"
+      ],
+      "activations": [
+        "revoked"
+      ],
+      "claims": 1
+    }
+  },
+  "notification REFUND then REFUND_REVERSED": {
+    "status": 200,
+    "body": {
+      "received": true
+    },
+    "state": {
+      "purchases": [
+        "active"
+      ],
+      "licenses": [
+        "active"
+      ],
+      "activations": [
+        "active"
+      ],
+      "claims": 2
+    }
+  },
+  "notification DID_RENEW for unlinked purchase materializes": {
+    "status": 200,
+    "body": {
+      "received": true
+    },
+    "state": {
+      "purchases": [
+        "active"
+      ],
+      "licenses": [
+        "active"
+      ],
+      "activations": [],
+      "claims": 1
+    }
+  },
+  "notification REFUND for unlinked purchase does not materialize": {
+    "status": 200,
+    "body": {
+      "received": true
+    },
+    "state": {
+      "purchases": [],
+      "licenses": [],
+      "activations": [],
+      "claims": 1
+    }
+  },
+  "notification ignored type claims only": {
+    "status": 200,
+    "body": {
+      "received": true
+    },
+    "state": {
+      "purchases": [],
+      "licenses": [],
+      "activations": [],
+      "claims": 1
+    }
+  },
+  "notification missing signedPayload": {
+    "status": 400,
+    "body": {
+      "error": "missing signedPayload"
+    },
+    "state": {
+      "purchases": [],
+      "licenses": [],
+      "activations": [],
+      "claims": 0
+    }
+  },
+  "notification tampered JWS": {
+    "status": 400,
+    "body": {
+      "error": "notification verification failed"
+    },
+    "state": {
+      "purchases": [],
+      "licenses": [],
+      "activations": [],
+      "claims": 0
+    }
+  },
+  "notification for unknown bundle": {
+    "status": 400,
+    "body": {
+      "error": "unknown app"
+    },
+    "state": {
+      "purchases": [],
+      "licenses": [],
+      "activations": [],
+      "claims": 0
+    }
+  }
+}

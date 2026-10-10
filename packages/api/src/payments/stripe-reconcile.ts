@@ -23,15 +23,19 @@
  *   settled    recorded on the ledger
  *   cancelled  PI cancelled at Stripe
  */
-import { createHash } from 'node:crypto';
-import { and, asc, eq, inArray, notInArray, or, sql } from 'drizzle-orm';
+import { createHash, randomUUID } from 'node:crypto';
+import { and, asc, eq, inArray, isNotNull, isNull, notInArray, or, sql } from 'drizzle-orm';
 import { recoveryBackoffMs } from '../jobs/gateway-recovery.js';
 import { withAdvisoryLock, withStore, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { applyPaymentResult, amountDueForOrder } from './settle.js';
+import { recordSettlementOperation } from './settlement/record.js';
 import { verifyIntent, retrieveStripeIntent, cancelStripeIntent, searchStripeIntentsForOrder, resolveStripeConfigured, type IntentLike, type StripeMode } from './stripe.js';
 import { isPaymentMethodEnabled } from './provider.js';
 import { recordPaymentAlert } from './payment-alerts.js';
+import { releaseOnProviderTerminal } from './reservation.js';
+import { env } from '../env.js';
+import { recordProviderObservationDetached, recordProviderObservationSafe } from './provider-observation.js';
 
 export type StripeIntent = IntentLike & { last_payment_error?: { message?: string | null } | null };
 
@@ -53,10 +57,15 @@ const STRIPE_SWEEP_BACKOFF_MIN = 5;
 
 const asMode = (m: string): StripeMode => (m === 'live' ? 'live' : 'test');
 
-/** Record a minted PI against its order (idempotent on the PI id). */
+/** Record a minted PI against its order (idempotent on the PI id). An attempt already bound to this
+ *  PI (a pre-mint row, or an earlier track) is returned as is, never duplicated. */
 export async function trackStripeIntent(tx: Tx, storeId: string, a: {
   orderId: string; intentId: string; amount: number; currency: string; mode: StripeMode; source?: string;
 }): Promise<Attempt> {
+  const [bound] = await tx.select().from(s.paymentAttempt).where(and(
+    eq(s.paymentAttempt.providerRef, a.intentId), eq(s.paymentAttempt.operation, 'intent'),
+  )).limit(1).for('update');
+  if (bound) return bound;
   await tx.insert(s.paymentAttempt).values({
     storeId, orderId: a.orderId, operation: 'intent', method: 'stripe', accountId: 'stripe', mode: a.mode,
     amount: Math.max(1, a.amount), currency: a.currency.toUpperCase(),
@@ -71,6 +80,56 @@ export async function trackStripeIntent(tx: Tx, storeId: string, a: {
   return row;
 }
 
+/**
+ * PAYMENT-TIMING §4.2 (decision X-9): the pre-mint attempt row for one mint-loop iteration, written
+ * after the beforePaymentAttempt hook and before the PaymentIntent is minted. Status `open`, no
+ * provider ref, so the order is non-quiescent from this commit. Idempotent on the iteration key:
+ * a replay of the same mint key collapses onto the same row.
+ */
+export async function openStripePreMint(tx: Tx, storeId: string, a: {
+  orderId: string; iterationKey: string; amount: number; currency: string; mode: StripeMode;
+}): Promise<Attempt> {
+  const idempotencyKey = `stripe-pi-pending:${a.iterationKey}`;
+  await tx.insert(s.paymentAttempt).values({
+    storeId, orderId: a.orderId, operation: 'intent', method: 'stripe', accountId: 'stripe', mode: a.mode,
+    amount: Math.max(1, a.amount), currency: a.currency.toUpperCase(), idempotencyKey,
+    fingerprint: createHash('sha256').update(idempotencyKey).digest('hex'),
+    status: 'open', providerRef: null, context: { source: 'payment-intent', preMint: true },
+  }).onConflictDoNothing();
+  const [row] = await tx.select().from(s.paymentAttempt).where(and(
+    eq(s.paymentAttempt.storeId, storeId), eq(s.paymentAttempt.idempotencyKey, idempotencyKey),
+  )).limit(1).for('update');
+  if (!row || row.orderId !== a.orderId) throw new Error('stripe pre-mint attempt is missing or belongs to another order');
+  return row;
+}
+
+/**
+ * Binds a pre-mint row to the PaymentIntent it minted (same transaction as the track). When an
+ * attempt already tracks this PI (a normal idempotent replay under a different key), the pending row
+ * never had a provider object: it is marked cancelled with `superseded_by` and the existing attempt
+ * is returned. Otherwise the pending row itself takes the provider ref.
+ */
+export async function bindStripePreMint(tx: Tx, storeId: string, a: {
+  pendingAttemptId: string; orderId: string; intentId: string; amount: number; currency: string; mode: StripeMode;
+}): Promise<Attempt> {
+  const [existing] = await tx.select().from(s.paymentAttempt).where(and(
+    eq(s.paymentAttempt.providerRef, a.intentId), eq(s.paymentAttempt.operation, 'intent'),
+  )).limit(1).for('update');
+  if (existing?.id === a.pendingAttemptId) return existing;
+  if (existing) {
+    await tx.update(s.paymentAttempt).set({
+      status: 'cancelled', result: { superseded_by: existing.id }, updatedAt: new Date(),
+    }).where(and(eq(s.paymentAttempt.id, a.pendingAttemptId), isNull(s.paymentAttempt.providerRef)));
+    return existing;
+  }
+  // The row keeps its pending iteration key: a replay of the same mint key must find this row (T-S7 collapse).
+  const [row] = await tx.update(s.paymentAttempt).set({ providerRef: a.intentId, updatedAt: new Date() })
+    .where(and(eq(s.paymentAttempt.id, a.pendingAttemptId), isNull(s.paymentAttempt.providerRef), eq(s.paymentAttempt.orderId, a.orderId)))
+    .returning();
+  if (!row) throw new Error('stripe pre-mint attempt could not be bound');
+  return row;
+}
+
 async function setAttempt(tx: Tx, attempt: Attempt, status: string, extra: { paymentId?: string; result?: Record<string, unknown> } = {}) {
   // Monotonic: a settled intent never moves again (out-of-order events).
   if (attempt.status === 'settled' && status !== 'settled') return;
@@ -79,6 +138,14 @@ async function setAttempt(tx: Tx, attempt: Attempt, status: string, extra: { pay
     ...(extra.paymentId ? { paymentId: extra.paymentId } : {}),
     ...(extra.result ? { result: extra.result } : {}),
   }).where(eq(s.paymentAttempt.id, attempt.id));
+  // PAYMENT-TIMING §5.2: a confirmed provider cancellation is a provider-terminal event. Release the
+  // order's requested holds in this transaction (no-op unless the order is terminal and quiescent).
+  if (status === 'cancelled') await releaseOnProviderTerminal(tx, { storeId: attempt.storeId, orderId: attempt.orderId });
+}
+
+/** PAYMENT-TIMING §5.4 / decision X-10: the age after which an unconfirmed PaymentIntent is cancelled at Stripe. */
+export function paymentIntentDeadlineMin(): number {
+  return env.PAYMENT_INTENT_DEADLINE_MIN ?? 60;
 }
 
 async function stripePaymentFor(tx: Tx, intentId: string) {
@@ -144,12 +211,19 @@ export async function applyStripeIntent(tx: Tx, storeId: string, pi: StripeInten
     // different PI, or fully covered by other tenders) is a double charge.
     // Record the money on the ledger (flagged duplicate, so the normal refund
     // flow can return it) and alert the operator. No auto-refund.
-    const [dup] = await tx.insert(s.payment).values({
-      storeId, orderId: order.id, amount: pi.amount, method: 'stripe', providerRef: pi.id, state: 'Settled',
-      gatewayMode: mode, currency: pi.currency.toUpperCase(),
-      metadata: { duplicate: true, latest_charge: pi.latest_charge ?? null, gateway: { mode } },
-      errorMessage: 'duplicate payment — order was already covered',
-    }).onConflictDoNothing().returning({ id: s.payment.id });
+    // Chokepoint operation `duplicate_capture_recorded` (payment.id): ledger row
+    // only — eligible for no issuance or any other fulfilment effect.
+    const dupId = randomUUID();
+    const rec = await recordSettlementOperation(tx, {
+      storeId, kind: 'duplicate_capture_recorded', operationId: dupId, effects: [],
+      mutations: [{ type: 'payment_insert', rows: [{
+        id: dupId, storeId, orderId: order.id, amount: pi.amount, method: 'stripe', providerRef: pi.id, state: 'Settled',
+        gatewayMode: mode, currency: pi.currency.toUpperCase(),
+        metadata: { duplicate: true, latest_charge: pi.latest_charge ?? null, gateway: { mode } },
+        errorMessage: 'duplicate payment — order was already covered',
+      }] }],
+    });
+    const dup = rec.created ? { id: dupId } : undefined;
     const paymentId = dup?.id ?? (await stripePaymentFor(tx, pi.id))?.id;
     await setAttempt(tx, attempt, 'settled', { paymentId, result: { state: 'Settled', duplicate: true } });
     if (dup) {
@@ -289,6 +363,9 @@ export async function reconcileStripeOrder(storeId: string, ref: { code: string 
     const mode = asMode(a.mode);
     try {
       const pi = await retrieveStripeIntent(storeId, mode, a.providerRef);
+      // De-fork 2.9: a successful retrieval advances provider_status/observed_at
+      // (a throw above leaves the previous observation untouched).
+      await recordProviderObservationDetached(storeId, { attemptId: a.id }, { status: pi.status });
       const r = await withAdvisoryLock(`pay:${storeId}:${order.code}`, () =>
         withStore(storeId, (tx) => applyStripeIntent(tx, storeId, pi, mode, opts)));
       out.intents.push({ intentId: a.providerRef, outcome: r.outcome });
@@ -308,9 +385,13 @@ export async function reconcileStripeOrder(storeId: string, ref: { code: string 
  * runs under the order's pay advisory lock.
  */
 async function resolveIntentForCancel(storeId: string, code: string, intentId: string, mode: StripeMode, actor: string) {
+  const obsKey = { storeId, method: 'stripe', operation: 'intent', providerRef: intentId } as const;
   let pi: StripeIntent = await retrieveStripeIntent(storeId, mode, intentId);
+  await recordProviderObservationDetached(storeId, obsKey, { status: pi.status });
   if (pi.status !== 'succeeded' && !HOLD_STATUSES.has(pi.status) && pi.status !== 'canceled') {
     pi = await cancelStripeIntent(storeId, mode, intentId);
+    // The cancel response is the provider's post-cancel PaymentIntent.
+    await recordProviderObservationDetached(storeId, obsKey, { status: pi.status });
   }
   return withAdvisoryLock(`pay:${storeId}:${code}`, () =>
     withStore(storeId, (tx) => applyStripeIntent(tx, storeId, pi, mode, { actor })));
@@ -335,6 +416,7 @@ export async function cancelOpenIntentsForOrder(tx: Tx, storeId: string, orderId
   for (const a of attempts) {
     if (!a.providerRef) continue;
     const pi = await cancelStripeIntent(storeId, asMode(a.mode), a.providerRef);
+    await recordProviderObservationSafe(tx, { attemptId: a.id }, { status: pi.status });
     if (pi.status === 'canceled') {
       await setAttempt(tx, a, 'cancelled', { result: { status: pi.status, retired: 'order_edit' } });
       out.cancelled.push(a.providerRef);
@@ -379,27 +461,133 @@ export async function sweepStaleStripeIntents(storeId: string, cutoff: Date, lim
       stats.errors++;
       const msg = (e instanceof Error ? e.message : 'error').slice(0, 200);
       log(`[release-stale] stripe intent ${attempt.providerRef} unresolved: ${msg}`);
-      const prev = (attempt.context as { recovery?: SweepRecovery } | null)?.recovery;
-      const tries = (prev?.tries ?? 0) + 1;
-      const manual = tries >= STRIPE_SWEEP_MAX_TRIES;
-      const next: SweepRecovery = { tries, lastError: msg, ...(manual ? { manual: true }
-        : { nextAt: new Date(now.getTime() + recoveryBackoffMs(tries, STRIPE_SWEEP_BACKOFF_MIN)).toISOString() }) };
-      await withStore(storeId, async (tx) => {
-        const updated = await tx.update(s.paymentAttempt).set({
-          context: sql`coalesce(${s.paymentAttempt.context}, '{}'::jsonb) || jsonb_build_object('recovery', ${JSON.stringify(next)}::jsonb)`,
-          updatedAt: new Date(),
-        }).where(and(eq(s.paymentAttempt.id, attempt.id), inArray(s.paymentAttempt.status, [...SWEEPABLE_INTENT_STATUSES])))
-          .returning({ id: s.paymentAttempt.id });
-        if (manual && updated.length) {
-          stats.flagged++;
-          await recordPaymentAlert(tx, storeId, {
-            kind: 'stripe_intent_unresolvable', actor: 'system:reservation-expiry', orderId, orderCode: code,
-            providerRef: attempt.providerRef, amount: attempt.amount, currency: attempt.currency,
-            detail: `The stale-order sweeper could not resolve this Stripe PaymentIntent after ${tries} tries (${msg}). The order is held until it is reconciled.`,
-            data: { tries },
-          });
-        }
+      if (await recordIntentSweepFailure(storeId, { attempt, orderId, code, msg, now, actor: 'system:reservation-expiry' })) stats.flagged++;
+    }
+  }
+  return stats;
+}
+
+/**
+ * Sweeper failure bookkeeping (shared by the stale, balance and orphan sweeps): exponential backoff in
+ * context.recovery, then manual after STRIPE_SWEEP_MAX_TRIES with a payment alert. Returns true when
+ * the attempt was flagged manual by this call.
+ */
+async function recordIntentSweepFailure(storeId: string, a: { attempt: Attempt; orderId: string; code: string; msg: string; now: Date; actor: string }): Promise<boolean> {
+  const prev = (a.attempt.context as { recovery?: SweepRecovery } | null)?.recovery;
+  const tries = (prev?.tries ?? 0) + 1;
+  const manual = tries >= STRIPE_SWEEP_MAX_TRIES;
+  const next: SweepRecovery = { tries, lastError: a.msg, ...(manual ? { manual: true }
+    : { nextAt: new Date(a.now.getTime() + recoveryBackoffMs(tries, STRIPE_SWEEP_BACKOFF_MIN)).toISOString() }) };
+  let flagged = false;
+  await withStore(storeId, async (tx) => {
+    const updated = await tx.update(s.paymentAttempt).set({
+      context: sql`coalesce(${s.paymentAttempt.context}, '{}'::jsonb) || jsonb_build_object('recovery', ${JSON.stringify(next)}::jsonb)`,
+      updatedAt: new Date(),
+    }).where(and(eq(s.paymentAttempt.id, a.attempt.id), inArray(s.paymentAttempt.status, [...SWEEPABLE_INTENT_STATUSES])))
+      .returning({ id: s.paymentAttempt.id });
+    if (manual && updated.length) {
+      flagged = true;
+      await recordPaymentAlert(tx, storeId, {
+        kind: 'stripe_intent_unresolvable', actor: a.actor, orderId: a.orderId, orderCode: a.code,
+        providerRef: a.attempt.providerRef, amount: a.attempt.amount, currency: a.attempt.currency,
+        detail: `The sweeper could not resolve this Stripe PaymentIntent after ${tries} tries (${a.msg}). The order is held until it is reconciled.`,
+        data: { tries },
       });
+    }
+  });
+  return flagged;
+}
+
+/**
+ * PAYMENT-TIMING §5.4 (G1): balance intents minted on Paid / PartiallyRefunded orders (routes/pay.ts)
+ * older than the deadline are resolved at Stripe exactly like checkout intents: a succeeded PI settles,
+ * a processing / requires_capture PI holds (never cancelled), anything else is cancelled at Stripe.
+ * Failures back off and go manual after STRIPE_SWEEP_MAX_TRIES.
+ */
+export async function sweepStaleBalanceIntents(storeId: string, limit: number, log: (m: string) => void = () => {}, now = new Date(), deadlineMin = paymentIntentDeadlineMin()): Promise<{ checked: number; settled: number; held: number; cancelled: number; errors: number; flagged: number }> {
+  const stats = { checked: 0, settled: 0, held: 0, cancelled: 0, errors: 0, flagged: 0 };
+  const cutoff = new Date(now.getTime() - deadlineMin * 60_000);
+  const rows = await withStore(storeId, (tx) => tx.select({
+    attempt: s.paymentAttempt, code: s.order.code, orderId: s.order.id,
+  }).from(s.paymentAttempt).innerJoin(s.order, eq(s.order.id, s.paymentAttempt.orderId)).where(and(
+    eq(s.paymentAttempt.operation, 'intent'), inArray(s.paymentAttempt.status, [...SWEEPABLE_INTENT_STATUSES]),
+    isNotNull(s.paymentAttempt.providerRef),
+    inArray(s.order.state, ['Paid', 'PartiallyRefunded']),
+    sql`${s.paymentAttempt.createdAt} < ${cutoff}`,
+    sql`coalesce((${s.paymentAttempt.context}->'recovery'->>'manual')::boolean, false) = false`,
+    sql`coalesce((${s.paymentAttempt.context}->'recovery'->>'nextAt')::timestamptz, '-infinity'::timestamptz) <= ${now}`,
+  )).orderBy(asc(s.paymentAttempt.createdAt)).limit(limit));
+  for (const { attempt, code, orderId } of rows) {
+    if (!attempt.providerRef) continue;
+    stats.checked++;
+    try {
+      const applied = await resolveIntentForCancel(storeId, code, attempt.providerRef, asMode(attempt.mode), 'system:balance-intent-sweep');
+      if (['settled', 'already_settled', 'after_cancel', 'duplicate', 'verify_failed'].includes(applied.outcome)) stats.settled++;
+      else if (applied.outcome === 'held') stats.held++;
+      else if (applied.outcome === 'cancelled') stats.cancelled++;
+    } catch (e) {
+      stats.errors++;
+      const msg = (e instanceof Error ? e.message : 'error').slice(0, 200);
+      log(`[balance-intent] ${attempt.providerRef} unresolved: ${msg}`);
+      if (await recordIntentSweepFailure(storeId, { attempt, orderId, code, msg, now, actor: 'system:balance-intent-sweep' })) stats.flagged++;
+    }
+  }
+  return stats;
+}
+
+/**
+ * PAYMENT-TIMING §4.2 / X-9: a pre-mint row (open, provider_ref NULL, key stripe-pi-pending:<mintKey>)
+ * older than the deadline means the mint either never happened or its bind was lost. Search Stripe for
+ * the order's PaymentIntent carrying this mint key (metadata.mintKey, set by createPaymentIntent):
+ *   found             -> bind the row to that PI (bindStripePreMint); the tracked-intent sweeps take over
+ *   clean search      -> the row is cancelled (no provider object exists) and the order's holds are released
+ *                        if a release was requested
+ *   untracked PI with no mint key matching the row's amount -> ambiguous: fail closed (backoff / manual)
+ *   search error      -> backoff, then manual after STRIPE_SWEEP_MAX_TRIES
+ */
+export async function sweepOrphanPreMints(storeId: string, limit: number, log: (m: string) => void = () => {}, now = new Date(), deadlineMin = paymentIntentDeadlineMin()): Promise<{ checked: number; bound: number; cancelled: number; errors: number; flagged: number }> {
+  const stats = { checked: 0, bound: 0, cancelled: 0, errors: 0, flagged: 0 };
+  const cutoff = new Date(now.getTime() - deadlineMin * 60_000);
+  const rows = await withStore(storeId, (tx) => tx.select({
+    attempt: s.paymentAttempt, code: s.order.code, orderId: s.order.id,
+  }).from(s.paymentAttempt).innerJoin(s.order, eq(s.order.id, s.paymentAttempt.orderId)).where(and(
+    eq(s.paymentAttempt.operation, 'intent'), eq(s.paymentAttempt.method, 'stripe'),
+    eq(s.paymentAttempt.status, 'open'), isNull(s.paymentAttempt.providerRef),
+    sql`${s.paymentAttempt.createdAt} < ${cutoff}`,
+    sql`coalesce((${s.paymentAttempt.context}->'recovery'->>'manual')::boolean, false) = false`,
+    sql`coalesce((${s.paymentAttempt.context}->'recovery'->>'nextAt')::timestamptz, '-infinity'::timestamptz) <= ${now}`,
+  )).orderBy(asc(s.paymentAttempt.createdAt)).limit(limit));
+  for (const { attempt, code, orderId } of rows) {
+    stats.checked++;
+    const mintKey = attempt.idempotencyKey.startsWith('stripe-pi-pending:') ? attempt.idempotencyKey.slice('stripe-pi-pending:'.length) : null;
+    if (!mintKey) { log(`[orphan-premint] ${attempt.id} has no mint key; skipped`); continue; }
+    const mode = asMode(attempt.mode);
+    try {
+      const intents = await searchStripeIntentsForOrder(storeId, mode, code);
+      const byKey = intents.find((pi) => (pi.metadata as Record<string, string> | null)?.mintKey === mintKey);
+      if (byKey) {
+        await withStore(storeId, (tx) => bindStripePreMint(tx, storeId, {
+          pendingAttemptId: attempt.id, orderId, intentId: byKey.id, amount: attempt.amount, currency: attempt.currency, mode,
+        }));
+        stats.bound++;
+        continue;
+      }
+      // An untracked PI on this order without a mint key (minted before keys were recorded) could be ours:
+      // with the same amount, never cancel blindly.
+      const legacy = intents.filter((pi) => !(pi.metadata as Record<string, string> | null)?.mintKey && pi.amount === attempt.amount);
+      if (legacy.length) throw new Error(`untracked PaymentIntent ${legacy[0]!.id} without mint key may be this attempt`);
+      await withStore(storeId, async (tx) => {
+        await tx.update(s.paymentAttempt).set({
+          status: 'cancelled', result: { orphan: 'no_intent_found', resolved_at: now.toISOString() }, updatedAt: now,
+        }).where(and(eq(s.paymentAttempt.id, attempt.id), eq(s.paymentAttempt.status, 'open'), isNull(s.paymentAttempt.providerRef)));
+        await releaseOnProviderTerminal(tx, { storeId, orderId });
+      });
+      stats.cancelled++;
+    } catch (e) {
+      stats.errors++;
+      const msg = (e instanceof Error ? e.message : 'error').slice(0, 200);
+      log(`[orphan-premint] ${attempt.id} unresolved: ${msg}`);
+      if (await recordIntentSweepFailure(storeId, { attempt, orderId, code, msg, now, actor: 'system:reservation-expiry' })) stats.flagged++;
     }
   }
   return stats;

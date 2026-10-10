@@ -558,6 +558,34 @@
     {
       "idx": 79,
       "version": "7",
+      "when": 1790000011600,
+      "tag": "0088_defork_instrumentation",
+      "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "7",
+      "when": 1790000011700,
+      "tag": "0089_installation_setting",
+      "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
+      "when": 1790000011800,
+      "tag": "0090_order_pending_effect",
+      "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1790000011900,
+      "tag": "0091_order_reservation",
+      "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "7",
       "when": 1790000012000,
       "tag": "0092_runtime_artifact_identity",
       "breakpoints": true

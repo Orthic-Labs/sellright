@@ -274,6 +274,8 @@ const EnvSchema = z.object({
   JOBS_RELEASE_STALE_APPLY: z.enum(['0', '1']).optional(),
   // release-stale-allocations job: unpaid-order age threshold in minutes.
   JOBS_RELEASE_STALE_TTL_MIN: z.coerce.number().int().positive().optional(),
+  // PAYMENT-TIMING §5.4 (decision X-10): age after which an unconfirmed Stripe PaymentIntent is cancelled at Stripe. Default 60.
+  PAYMENT_INTENT_DEADLINE_MIN: z.coerce.number().int().positive().optional(),
   // webhook-reaper job: actually reset stuck processing rows (default: dry-run).
   JOBS_WEBHOOK_REAPER_APPLY: z.enum(['0', '1']).optional(),
   // webhook-reaper job: grace period in minutes before a processing row is considered stuck.

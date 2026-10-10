@@ -10,14 +10,16 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { and, eq, isNull } from 'drizzle-orm';
 import type Stripe from 'stripe';
-import { withAdvisoryLock, withStore } from '../db/client.js';
+import { withAdvisoryLock, withStore, type Tx } from '../db/client.js';
+import { orderIdByCode, withLockedSet, type LockSubject } from '../db/locks.js';
 import * as s from '../db/schema.js';
 import { stripeCreds, stripeModeFromConfig, verifyStripeWebhook, listAllStoreIds, STRIPE_REFUND_ATTEMPT_KEY, type StripeMode } from '../payments/stripe.js';
 import { applyStripeIntent, type StripeIntent } from '../payments/stripe-reconcile.js';
 import { recordPaymentAlert } from '../payments/payment-alerts.js';
 import { resolveField } from '../security/settings-resolver.js';
-import { resolveStoreIdForStripeEvent, resolveStoreIdForSubscriptionEvent, reconcileStripeRefund, recordStripeDispute, type StripeEventObj } from '../payments/webhook-reconcile.js';
+import { resolveStoreIdForStripeEvent, resolveStoreIdForSubscriptionEvent, reconcileStripeRefund, recordStripeDispute, orderIdsForStripePayments, type StripeEventObj } from '../payments/webhook-reconcile.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
+import { recordSettlementOperation } from '../payments/settlement/record.js';
 import {
   onCheckoutCompleted, onInvoicePaid, onInvoiceFailed, onSubscriptionUpdated, onSubscriptionDeleted,
   type CheckoutSessionLike, type InvoiceLike, type SubscriptionObjLike,
@@ -36,6 +38,48 @@ const SUBSCRIPTION_EVENT_TYPES = new Set([
   'customer.subscription.updated',
   'customer.subscription.deleted',
 ]);
+
+const piRef = (v: unknown): string | null => (typeof v === 'string' ? v : (v as { id?: string } | null)?.id ?? null);
+
+/** Order(s) a money-recording event settles, refunds or disputes (X-45 / X-48). Planning reads
+ *  only: nothing here locks. An event with no stored order yields [] and keeps the existing path. */
+async function moneyOrderIds(storeId: string, event: Stripe.Event): Promise<string[]> {
+  const obj = event.data.object as unknown as Record<string, unknown>;
+  switch (event.type) {
+    case 'payment_intent.succeeded': {
+      const code = (obj as { metadata?: { orderCode?: string } }).metadata?.orderCode;
+      const id = code ? await orderIdByCode(storeId, code) : null;
+      return id ? [id] : [];
+    }
+    case 'refund.created':
+    case 'refund.updated':
+      return orderIdsForStripePayments(storeId, [piRef(obj.payment_intent)]);
+    case 'charge.refunded': {
+      const chPi = piRef(obj.payment_intent);
+      const refunds = ((obj.refunds as { data?: Array<{ payment_intent?: unknown }> } | undefined)?.data ?? []);
+      return orderIdsForStripePayments(storeId, refunds.map((r) => piRef(r.payment_intent) ?? chPi));
+    }
+    case 'charge.dispute.created':
+      return orderIdsForStripePayments(storeId, [piRef(obj.payment_intent)]);
+    case 'invoice.paid': {
+      // A subscription invoice settles the subscription's backing order (first cycle: Paid transition and
+      // licence issue; renewal: its payment row). The subscription row is read unlocked for planning; when
+      // none exists yet, the order named by the subscription metadata is planned (onInvoicePaid creates the
+      // row against that order). An orderless subscription or invoice returns [] and keeps the plain path.
+      const subRef = piRef(obj.subscription);
+      if (subRef) {
+        const [sub] = await withStore(storeId, (tx) => tx.select({ orderId: s.subscription.orderId }).from(s.subscription)
+          .where(and(eq(s.subscription.storeId, storeId), eq(s.subscription.stripeSubscriptionId, subRef))).limit(1));
+        if (sub) return sub.orderId ? [sub.orderId] : [];
+      }
+      const code = (obj.subscription_details as { metadata?: { orderCode?: string } } | undefined)?.metadata?.orderCode;
+      const id = code ? await orderIdByCode(storeId, code) : null;
+      return id ? [id] : [];
+    }
+    default:
+      return [];
+  }
+}
 
 export const paymentWebhooks = new OpenAPIHono();
 
@@ -148,7 +192,14 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
   const piOrderCode = event.type.startsWith('payment_intent.')
     ? (event.data.object as { metadata?: { orderCode?: string } }).metadata?.orderCode : undefined;
   const runClaim = (fn: () => Promise<void>) => piOrderCode ? withAdvisoryLock(`pay:${storeId}:${piOrderCode}`, fn) : fn();
-  await runClaim(() => withStore(storeId, async (tx) => {
+  // X-45: an event that records provider-moved money runs under withLockedSet with mustCommit
+  // (the provider has already moved the money, so the claim waits for its locks and never 409s).
+  // Events with no stored order keep the plain withStore path.
+  const orderIds = await moneyOrderIds(storeId, event);
+  const runMoney = (fn: (tx: Tx) => Promise<void>): Promise<void> => orderIds.length
+    ? withLockedSet(storeId, orderIds.map((orderId): LockSubject => ({ kind: 'order', orderId })), (tx) => fn(tx), { mustCommit: true })
+    : withStore(storeId, fn);
+  await runClaim(() => runMoney(async (tx) => {
     // ra-sec: bind the verifying secret's mode to the store's configured mode. A
     // webhook signed with the TEST secret must not drive payment_intent.succeeded
     // on a LIVE store (a leaked test webhook secret would otherwise let a forged
@@ -240,7 +291,7 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
         return;
       case 'invoice.paid': {
         const invoice = event.data.object as unknown as InvoiceLike;
-        await onInvoicePaid(tx, storeId, invoice);
+        await onInvoicePaid(tx, storeId, invoice, { mode: verifiedMode });
         // SR-03: subscription payments are minted inside subscriptions.ts
         // (settleFirstCycle + renewal insert) with no gateway metadata — the
         // verifying signature's mode is the only trusted source. Backfill it
@@ -249,8 +300,15 @@ paymentWebhooks.post('/v1/webhooks/stripe', async (c) => {
         // guard never overwrites an already-persisted identity.
         const invoiceRef = (typeof invoice.payment_intent === 'string' ? invoice.payment_intent : invoice.payment_intent?.id) ?? invoice.id;
         if (invoiceRef) {
-          await tx.update(s.payment).set({ gatewayMode: verifiedMode })
-            .where(and(eq(s.payment.providerRef, invoiceRef), eq(s.payment.method, 'stripe'), isNull(s.payment.gatewayMode)));
+          // Chokepoint operation `payment_mode_corrected` (monotone: only fills a NULL gateway_mode).
+          const [pay] = await tx.select({ id: s.payment.id }).from(s.payment)
+            .where(and(eq(s.payment.providerRef, invoiceRef), eq(s.payment.method, 'stripe'), isNull(s.payment.gatewayMode))).limit(1);
+          if (pay) {
+            await recordSettlementOperation(tx, {
+              storeId, kind: 'payment_mode_corrected', operationId: pay.id, effects: [],
+              mutations: [{ type: 'payment_gateway_identity', paymentId: pay.id, gatewayMode: verifiedMode }],
+            });
+          }
         }
         return;
       }

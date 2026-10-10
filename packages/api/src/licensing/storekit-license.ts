@@ -332,6 +332,7 @@ export interface StoreKitNotificationApplyInput {
 export async function applyStoreKitNotification(
   tx: Tx,
   input: StoreKitNotificationApplyInput,
+  opts: { restoreActivations?: boolean } = {},
 ): Promise<'applied' | 'no_purchase' | 'ignored'> {
   if (input.action === 'ignore') return 'ignored';
 
@@ -397,11 +398,14 @@ export async function applyStoreKitNotification(
       // REFUND_REVERSED: un-tombstone activations revoked by the earlier
       // cascade so already-paired devices work again without re-linking.
       // generation stays bumped — stale pre-revoke leases stay rejected.
-      await tx.execute(sql`
-        UPDATE license_activation
-        SET state = 'active', revoked_at = NULL
-        WHERE license_id = ${purchase.licenseId} AND state = 'revoked'
-      `);
+      // Policy seam (STOREKIT §3 cascade): a policy may keep tombstones on restore.
+      if (opts.restoreActivations !== false) {
+        await tx.execute(sql`
+          UPDATE license_activation
+          SET state = 'active', revoked_at = NULL
+          WHERE license_id = ${purchase.licenseId} AND state = 'revoked'
+        `);
+      }
     }
     return 'applied';
   }

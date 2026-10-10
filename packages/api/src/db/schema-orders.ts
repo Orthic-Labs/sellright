@@ -407,6 +407,11 @@ export const webhookDelivery = pgTable('webhook_delivery', {
   nextAttemptAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   deliveredAt: timestamp({ withTimezone: true }),
   createdAt: ts(),
+  // 0088 (de-fork 2.9 instrumentation). Written by the workers/reaper only
+  // (no trigger: old workers leave it stale, which projections treat conservatively).
+  updatedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  claimedAt: timestamp({ withTimezone: true }), // set at claim, NULL on release
+  firstFailedAt: timestamp({ withTimezone: true }), // set once, at the first failure
 });
 
 // REL-4 (DISPATCH.md): email outbox mirroring the webhook pattern. Enqueued
@@ -428,6 +433,9 @@ export const emailOutbox = pgTable('email_outbox', {
   sentAt: timestamp({ withTimezone: true }),
   createdAt: ts(),
   updatedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  // 0088 (de-fork 2.9 instrumentation).
+  claimedAt: timestamp({ withTimezone: true }), // set at claim, NULL on release
+  firstFailedAt: timestamp({ withTimezone: true }), // set once, at the first failure
 });
 
 // APNs device tokens for the admin iOS app (0039). One row per physical device;
@@ -465,6 +473,9 @@ export const pushOutbox = pgTable('push_outbox', {
   sentAt: timestamp({ withTimezone: true }),
   createdAt: ts(),
   updatedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  // 0088 (de-fork 2.9 instrumentation).
+  claimedAt: timestamp({ withTimezone: true }), // set at claim, NULL on release
+  firstFailedAt: timestamp({ withTimezone: true }), // set once, at the first failure
 });
 
 // Gift cards / store credit. A code carries a redeemable cent balance; checkout
