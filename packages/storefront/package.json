@@ -13,7 +13,7 @@
 		"node": ">=24.15 <25"
 	},
 	"scripts": {
-		"clean": "node -e \"const fs=require('fs');for(const p of ['dist','server','.cache'])fs.rmSync(p,{recursive:true,force:true});\"",
+		"clean": "node scripts/clean.mjs",
 		"generate:placeholder-assets": "node scripts/generate-placeholder-assets.mjs",
 		"prebuild": "pnpm run generate:placeholder-assets",
 		"predev": "pnpm run generate:placeholder-assets",
@@ -34,6 +34,7 @@
 		"serve": "node server/entry.express.js",
 		"qwik": "qwik",
 		"test": "vitest run",
+		"test:scripts": "node --test scripts/*.test.mjs",
 		"e2e:build": "pnpm run generate:placeholder-assets && rm -rf dist-e2e server-e2e && SELLRIGHT_DISABLE_SSG=1 SELLRIGHT_BUILD_SUFFIX=e2e pnpm run build.client && SELLRIGHT_DISABLE_SSG=1 SELLRIGHT_BUILD_SUFFIX=e2e pnpm run build.server",
 		"test:e2e": "pnpm run e2e:build && playwright test",
 		"test:e2e:run": "playwright test"

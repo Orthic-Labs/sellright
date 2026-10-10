@@ -1,5 +1,5 @@
 import { test as base, expect, type Page } from '@playwright/test';
-import { API_URL, EXTERNAL_API, STORE_URL } from './support/env.mjs';
+import { API_TAP, EXTERNAL_API, SHOP_API_URL, STORE_URL } from './support/env.mjs';
 import { AdminApi, clientIp } from './support/api';
 
 /**
@@ -21,8 +21,10 @@ async function installApiProxy(page: Page): Promise<void> {
 	await page.route((url) => url.origin === origin && url.pathname.startsWith('/v1/'), async (route) => {
 		const req = route.request();
 		const url = new URL(req.url());
-		const target = API_URL + url.pathname + url.search;
+		const target = SHOP_API_URL + url.pathname + url.search;
 		const headers: Record<string, string> = { ...req.headers(), 'x-real-ip': ip };
+		// Only with the API tap (E2E_API_TAP=1): lets it tell browser-side calls from the storefront server's own; it strips the header.
+		if (API_TAP) headers['x-e2e-origin'] = 'browser';
 		delete headers['host'];
 		delete headers['content-length'];
 		try {

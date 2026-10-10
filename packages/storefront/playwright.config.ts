@@ -19,12 +19,28 @@ import { defineConfig, devices } from '@playwright/test';
  *
  * Never points at :3300, sellright_dev, dd_sellright, rh_sellright, sellright_demo or rightsites (assertSafeTargets).
  */
-import { API_URL, EXTERNAL_API, MOCK_PORT, STORE_PORT, STORE_URL, assertSafeTargets } from './e2e/support/env.mjs';
+import { API_TAP, API_URL, CATALOG_DIR, EXTERNAL_API, FS_LOG_FILE, MOCK_PORT, SHOP_API_URL, STORE_PORT, STORE_URL, SUPPORT_DIR, TAP_URL, assertSafeTargets } from './e2e/support/env.mjs';
 
 assertSafeTargets();
 
+// Every webServer command is built from SUPPORT_DIR (E2E_SUPPORT_DIR, default e2e/support of this checkout), so a run
+// can use the support files of a pinned read-only checkout; see e2e/support/env.mjs for the E2E_* overrides.
+const support = (file: string) => JSON.stringify(`${SUPPORT_DIR}/${file}`);
+
 // Dev loop: E2E_REUSE_SERVERS=1 keeps an already-running mock/API/storefront triple (the API database is NOT reset).
 const reuse = !!process.env.E2E_REUSE_SERVERS && !process.env.CI;
+
+// Recording reverse proxy in front of the API (E2E_API_TAP=1). Started after the API, before the storefront.
+const apiTap = {
+	command: `node ${support('api-tap.mjs')}`,
+	url: `${TAP_URL}/__tap/health`,
+	reuseExistingServer: reuse,
+	timeout: 30_000,
+	gracefulShutdown: { signal: 'SIGTERM' as const, timeout: 5_000 },
+	stdout: 'pipe' as const,
+	stderr: 'pipe' as const,
+	name: 'api-tap',
+};
 
 const storefrontServer = {
 	// `pnpm run e2e:build` (part of `pnpm test:e2e`) builds server-e2e/dist-e2e: the production build with SSG off, so
@@ -39,10 +55,14 @@ const storefrontServer = {
 		PORT: String(STORE_PORT),
 		HOST: '127.0.0.1',
 		NODE_ENV: 'production',
-		SELLRIGHT_API_URL: API_URL,
+		// The API tap (E2E_API_TAP=1) sits between the storefront and the API so server-side calls are recorded too.
+		SELLRIGHT_API_URL: SHOP_API_URL,
 		// Never inherit the operator's published catalog snapshot (a real store's manifest would shadow this
 		// suite's database): with no directory the shop reads the live API, which is what a fresh CI store does.
-		CATALOG_DIR: '',
+		// E2E_CATALOG_DIR opts in to the harness-owned directory the real publisher writes (see start-api.mjs).
+		CATALOG_DIR: CATALOG_DIR ?? '',
+		// fs tap (E2E_FS_TAP=1): records every marker.json / shop-catalog*.json read of the storefront server.
+		...(process.env.E2E_FS_TAP === '1' ? { E2E_FS_LOG: FS_LOG_FILE, NODE_OPTIONS: `--import=${SUPPORT_DIR}/fs-tap.mjs` } : {}),
 	},
 };
 
@@ -72,11 +92,11 @@ export default defineConfig({
 	webServer: process.env.PLAYWRIGHT_SKIP_WEBSERVER
 		? undefined
 		: EXTERNAL_API
-			? [storefrontServer]
+			? [...(API_TAP ? [apiTap] : []), storefrontServer]
 			: [
 					{
 						// Mock NMI + Sezzle + webhook receiver + SMTP sink: the only "gateways" the API can reach.
-						command: 'node e2e/support/mock-gateways.mjs',
+						command: `node ${support('mock-gateways.mjs')}`,
 						url: `http://127.0.0.1:${MOCK_PORT}/health`,
 						reuseExistingServer: reuse,
 						timeout: 30_000,
@@ -87,7 +107,7 @@ export default defineConfig({
 					},
 					{
 						// Fresh API + database per run (drops/recreates sellright_storefront_e2e, migrates, bootstraps, serves).
-						command: 'node e2e/support/start-api.mjs',
+						command: `node ${support('start-api.mjs')}`,
 						url: `${API_URL}/v1/readyz`,
 						reuseExistingServer: reuse,
 						timeout: 120_000,
@@ -96,6 +116,7 @@ export default defineConfig({
 						stderr: 'pipe',
 						name: 'api',
 					},
+					...(API_TAP ? [apiTap] : []),
 					storefrontServer,
 				],
 });

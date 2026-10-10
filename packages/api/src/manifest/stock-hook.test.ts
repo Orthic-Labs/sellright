@@ -8,7 +8,8 @@
  * manifest/catalog.db.test.ts and manifest/publish.test.ts). Runs in the
  * `unit` lane — no database required.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // vi.mock factories are hoisted above every other top-level statement in this
 // file, including plain `const`/`let` declarations — referencing one directly
@@ -172,5 +173,52 @@ describe('onStockChanged — zero-cache manifest signal', () => {
       const secondCall = publishSpy.mock.calls[1]![0];
       expect(secondCall.variantIds).toBeUndefined(); // full regen, not a partial variant list
     });
+  });
+});
+
+// Storefront plan A9 scenario 10 — the burst oracle. Not "one generation per change": the first trigger starts a
+// generation immediately with no timer of any kind, and any burst during an in-flight generation collapses into exactly
+// one trailing generation whose merged scope covers every trigger. Observation only: nothing in stock-hook.ts changes.
+describe('burst oracle (plan A9 scenario 10)', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('(a) the first trigger publishes immediately and arms no timer', async () => {
+    vi.useFakeTimers();
+    onStockChanged('demo-store', ['v1']);
+    expect(vi.getTimerCount(), 'onStockChanged must not arm a debounce/TTL timer').toBe(0);
+    await flush(30); // microtasks only: no timer is advanced
+    expect(publishSpy).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('(b) K triggers during one in-flight generation produce exactly one trailing generation covering all K variants', async () => {
+    const K = 12;
+    let calls = 0;
+    const resolvers: Array<(v: { generation: string; products: number }) => void> = [];
+    publishSpy.mockImplementation(() => new Promise((resolve) => { calls++; resolvers.push(resolve); }));
+
+    onStockChanged('demo-store', ['v0']);
+    await flush(30);
+    expect(calls).toBe(1); // in flight, held open by the test's deferred promise
+    const ids = Array.from({ length: K }, (_, i) => `burst-${i}`);
+    for (const id of ids) onStockChanged('demo-store', [id]);
+    await flush(30);
+    expect(calls, 'triggers during a run must not start their own generations').toBe(1);
+
+    resolvers[0]!({ generation: 'g1', products: 1 });
+    await vi.waitFor(() => expect(calls).toBe(2));
+    const trailing = publishSpy.mock.calls[1]![0];
+    expect(new Set(trailing.variantIds)).toEqual(new Set(ids));
+
+    resolvers[1]!({ generation: 'g2', products: 1 });
+    await flush(30);
+    expect(calls, 'no third generation: nothing arrived during the trailing run').toBe(2);
+  });
+
+  it('(d) static guard: stock-hook.ts contains no setTimeout/setInterval CALL (comments excluded)', () => {
+    const source = readFileSync(new URL('./stock-hook.ts', import.meta.url), 'utf8');
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+    expect(code).not.toMatch(/\b(setTimeout|setInterval|setImmediate)\s*\(/);
+    expect(code).not.toMatch(/\bdebounce|\bthrottle/i);
   });
 });

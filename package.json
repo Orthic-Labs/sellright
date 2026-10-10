@@ -15,6 +15,7 @@
     "verify:db": "pnpm --filter @sellright/api db:assert-rls && pnpm --filter @sellright/api db:assert-hand-written && pnpm --filter @sellright/api assert:shop-isolation && pnpm --filter @sellright/api assert:settlement",
     "verify": "pnpm verify:static && pnpm verify:db",
     "assert:no-vendure": "bash scripts/assert-no-vendure.sh",
+    "assert:no-node-eval": "bash scripts/assert-no-node-eval.sh",
     "dev": "pnpm --filter @sellright/api dev",
     "admin:typecheck": "pnpm --dir packages/admin typecheck",
     "admin:build": "pnpm --dir packages/admin build",
