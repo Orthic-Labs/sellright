@@ -32,7 +32,8 @@
  *    the rows pending for the worker (jobs/scheduler.ts, scripts/effects-worker.ts).
  */
 import { randomUUID } from 'node:crypto';
-import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, notInArray, sql } from 'drizzle-orm';
+import type { Pool } from 'pg';
 import { pool, withStore, type Tx } from '../../db/client.js';
 import * as s from '../../db/schema.js';
 import { emitEvent } from '../../webhooks/emit.js';
@@ -340,6 +341,24 @@ export async function runEffectsPass(opts: { limit?: number; rounds?: number; lo
     }
   }
   return totals;
+}
+
+/**
+ * Rows not yet `done`/`terminal`, across every store: the effects worker's heartbeat `queue_open` and its `--drain` exit.
+ * `order_pending_effect` is row-level-secured per store, so the count runs inside each store's context (a bare query on
+ * the runtime role would see zero rows). `db` only lists the stores; it defaults to the engine pool.
+ */
+export async function countOpenEffects(db: Pick<Pool, 'query'> = pool): Promise<number> {
+  const stores = await db.query<{ id: string }>('SELECT id FROM store');
+  let open = 0;
+  for (const st of stores.rows) {
+    open += await withStore(st.id, async (tx) => {
+      const [row] = await tx.select({ n: sql<number>`count(*)::int` }).from(s.orderPendingEffect)
+        .where(and(eq(s.orderPendingEffect.storeId, st.id), notInArray(s.orderPendingEffect.status, ['done', 'terminal'])));
+      return row?.n ?? 0;
+    });
+  }
+  return open;
 }
 
 // ── admin side ───────────────────────────────────────────────────────────────
