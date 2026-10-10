@@ -1,5 +1,5 @@
 // Homepage - Refined editorial design
-import { component$, useStyles$, useSignal, useContext, $ } from '@qwik.dev/core';
+import { component$, useStyles$, useSignal, useContext, useVisibleTask$, $ } from '@qwik.dev/core';
 import { createSEOHead } from '~/utils/seo';
 import { jsonLdOrganization } from '~/services/sellright-seo';
 import type { JsonLdSchema } from '~/types/seo.types';
@@ -10,6 +10,7 @@ import { useCart, addToCart } from '~/contexts/CartContext';
 import { loadCountryOnDemand } from '~/utils/addressStorage';
 import { getProductBySlug, search } from '~/providers/shop/products/products';
 import { srCollections } from '~/utils/sellright';
+import { mountTurnstile, resetTurnstile, TURNSTILE_SITE_KEY } from '~/utils/turnstile-widget';
 import { stripHtml } from '~/utils/sanitize';
 import { STYLES } from '~/components/home/homepage-styles';
 import { HomeHero } from '~/components/home/HomeHero';
@@ -144,6 +145,11 @@ export default component$(() => {
   const nlHoneypot = useSignal('');
   const nlState = useSignal<'idle' | 'sending' | 'success' | 'error'>('idle');
   const nlError = useSignal('');
+  const nlToken = useSignal('');
+
+  useVisibleTask$(() => {
+    mountTurnstile('nl-turnstile', (t) => { nlToken.value = t; }, () => { nlToken.value = ''; });
+  });
 
   const handleNewsletterSubmit = $(async () => {
     if (nlState.value === 'sending') return;
@@ -153,8 +159,16 @@ export default component$(() => {
       nlState.value = 'error';
       return;
     }
+    if (TURNSTILE_SITE_KEY && !nlToken.value) {
+      nlError.value = 'Please complete the security check.';
+      nlState.value = 'error';
+      return;
+    }
+    const token = nlToken.value;
     nlState.value = 'sending';
     nlError.value = '';
+    nlToken.value = '';
+    resetTurnstile();
     try {
       const res = await fetch('/newsletter-signup', {
         method: 'POST',
@@ -162,10 +176,13 @@ export default component$(() => {
         body: JSON.stringify({
           email,
           honeypot: nlHoneypot.value,
+          turnstileToken: token,
         }),
       });
       if (!res.ok) {
-        const msg = res.status === 429 ? 'Too many signups from this IP. Try again in an hour.' : 'Subscription failed. Please try again.';
+        const msg = res.status === 429
+          ? 'Too many signups from this IP. Try again in an hour.'
+          : res.status === 403 ? 'Security check failed. Please try again.' : 'Subscription failed. Please try again.';
         nlError.value = msg;
         nlState.value = 'error';
         return;
@@ -348,10 +365,11 @@ export default component$(() => {
                 required
                 disabled={nlState.value === 'sending'}
               />
+              <div id="nl-turnstile" class="min-h-[65px] w-full"></div>
               <button
                 type="submit"
                 class="nl-submit"
-                disabled={nlState.value === 'sending'}
+                disabled={nlState.value === 'sending' || (!!TURNSTILE_SITE_KEY && !nlToken.value)}
               >
                 {nlState.value === 'sending' ? 'Subscribing…' : nlState.value === 'success' ? 'Subscribed ✓' : 'Subscribe'}
               </button>

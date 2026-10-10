@@ -55,6 +55,13 @@ async function turnstileOk(config: unknown, token: string | undefined, remoteIp:
   return verifyTurnstileToken({ secret, token: token ?? null, remoteIp }); // fail closed on failure
 }
 
+/** Strict variant: no secret → verifyTurnstileToken's policy (production fails
+ *  closed unless TURNSTILE_DISABLED=true). Used by resend-verification; the
+ *  shared turnstileOk above is left untouched for register/sign-in/magic-link. */
+async function turnstileGate(config: unknown, token: string | undefined, remoteIp: string): Promise<boolean> {
+  return verifyTurnstileToken({ secret: turnstileSecret(config), token: token ?? null, remoteIp });
+}
+
 /** The store's Google OAuth client id (store config or env GOOGLE_CLIENT_ID).
  *  Reads the store row through withStore so it is RLS-scoped to the resolved store. */
 async function googleClientId(storeId: string): Promise<string | null> {
@@ -209,20 +216,25 @@ auth.openapi(
     method: 'post',
     path: '/v1/shop/auth/resend-verification',
     summary: 'Resend the email verification link',
-    request: { body: { content: { 'application/json': { schema: z.object({ email: z.string().email() }) } } } },
+    request: { body: { content: { 'application/json': { schema: z.object({ email: z.string().email(), turnstileToken: z.string().max(2048).optional() }) } } } },
     responses: {
       200: { description: 'Always OK', content: { 'application/json': { schema: z.object({ ok: z.boolean() }) } } },
+      403: { description: 'Bot check failed', content: { 'application/json': { schema: apiErrorSchema() } } },
       429: { description: 'Rate limited', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
-    const email = normalizeEmail(c.req.valid('json').email);
+    const { email: rawEmail, turnstileToken } = c.req.valid('json');
+    const email = normalizeEmail(rawEmail);
     const ip = clientIp(c);
     const bucket = `resendverify:${email}`;
     const retry = await loginRetryAfter(ip, bucket);
     if (retry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${retry}s`);
     await recordLoginFailure(ip, bucket);
+    if (!(await turnstileGate(st.config, turnstileToken, ip))) {
+      return errJson(c, 403, 'BOT_CHECK_FAILED', 'verification failed');
+    }
     await withStore(st.id, async (tx) => {
       const [cust] = await tx.select({ id: s.customer.id, emailVerified: s.customer.emailVerified })
         .from(s.customer).where(eq(s.customer.email, email)).limit(1);
