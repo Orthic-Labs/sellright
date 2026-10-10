@@ -12,15 +12,16 @@
 //
 //   --base accepts a storefront package directory, a repo-layout directory (holds packages/storefront), or, with --pin
 //   [--repo <git repo>], a git archive of that pin (default repo /home/vendure/sites/sellright).
-//   --out may not be inside the base or brand directory.
-import { mkdirSync, readFileSync } from 'node:fs';
+//   --out may not be inside the base or brand directory, nor (with --pin) the source repository; it is validated before any
+//   directory is created and never goes through a symlink.
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseLayers } from '../compose/lib/layers.mjs';
-import { ComposeError, isInside, realDir, safeWrite, readJson, pretty } from '../compose/lib/util.mjs';
+import { ComposeError, realDir, readJson, pretty, resolveOutputPath, writeOutputFile } from '../compose/lib/util.mjs';
 import { checkRecords, dispositionsText, parseCsv, renderCsv, skeletonRecords } from './reconcile.mjs';
 import { buildUnion } from './union.mjs';
-import { gitInfo, loadBaseTree, walkBrand } from './tree.mjs';
+import { DEFAULT_REPO, gitInfo, loadBaseTree, walkBrand } from './tree.mjs';
 
 const WITH_VALUE = new Set(['--base', '--brand', '--out', '--json-out', '--merge', '--reconcile', '--layers', '--pin', '--repo']);
 const USAGE = 'usage: inventory.mjs --base <dir> --brand <dir> (--out <csv> [--merge csv] [--json-out f] | --reconcile <csv> --check [--require-clean] | --reconcile <csv> --dispositions --out <json>)\n       options: --layers <layers.json> --pin <sha> [--repo <git repo>] --exports-all --no-git --help\n';
@@ -39,23 +40,8 @@ export function parseArgs(argv) {
 	return a;
 }
 
-function assertOutOutside(out, dirs) {
-	const abs = path.resolve(out);
-	const parent = path.dirname(abs);
-	let realParent;
-	try {
-		realParent = realDir(parent, 'output directory');
-	} catch {
-		realParent = parent;
-	}
-	const target = path.join(realParent, path.basename(abs));
-	for (const d of dirs.filter(Boolean)) if (isInside(d, target)) throw new ComposeError('out-inside-input', `${out} is inside ${d}; the inputs are read only`);
-}
-
-function writeOut(out, data) {
-	const abs = path.resolve(out);
-	mkdirSync(path.dirname(abs), { recursive: true });
-	safeWrite(path.dirname(abs), path.basename(abs), data);
+function writeOut(out, data, inputRoots) {
+	writeOutputFile(out, inputRoots, data);
 }
 
 export function summarise(union, extra = []) {
@@ -88,7 +74,8 @@ export async function main(argv, { out = (s) => process.stdout.write(s), err = (
 
 	const brandDir = realDir(v('--brand'), 'brand dir');
 	const baseDirReal = v('--base') ? realDir(v('--base'), 'base dir') : null;
-	for (const k of ['--out', '--json-out']) if (v(k)) assertOutOutside(v(k), [brandDir, baseDirReal]);
+	const inputRoots = [brandDir, baseDirReal, v('--pin') ? realDir(v('--repo') ?? DEFAULT_REPO, 'repo') : null].filter(Boolean);
+	for (const k of ['--out', '--json-out']) if (v(k)) resolveOutputPath(v(k), inputRoots);
 
 	const base = loadBaseTree({ baseDir: baseDirReal, repo: v('--repo'), pin: v('--pin') });
 	try {
@@ -116,7 +103,7 @@ export async function main(argv, { out = (s) => process.stdout.write(s), err = (
 			out(`${summarise(union, [gitLine])}\n${res.problems.length} problem(s), ${unknown} unknown\n`);
 			if (res.problems.length > 0) return 1;
 			if (toDisp) {
-				writeOut(v('--out'), dispositionsText(records));
+				writeOut(v('--out'), dispositionsText(records), inputRoots);
 				out(`dispositions written to ${v('--out')}\n`);
 			}
 			return 0;
@@ -131,7 +118,7 @@ export async function main(argv, { out = (s) => process.stdout.write(s), err = (
 			}
 		}
 		const records = skeletonRecords(union, previous);
-		writeOut(v('--out'), renderCsv(records));
+		writeOut(v('--out'), renderCsv(records), inputRoots);
 		if (v('--json-out')) {
 			const json = {
 				version: 1,
@@ -141,7 +128,7 @@ export async function main(argv, { out = (s) => process.stdout.write(s), err = (
 				counts: union.counts,
 				rows: union.rows.map((r) => ({ ...r, related: r.related, d7Hits: r.d7Hits })),
 			};
-			writeOut(v('--json-out'), pretty(json));
+			writeOut(v('--json-out'), pretty(json), inputRoots);
 		}
 		const unknown = records.filter((r) => r.disposition === 'unknown' || r.d7_class === 'unknown').length;
 		out(`${summarise(union, [gitLine])}\nskeleton written to ${v('--out')}: ${records.length} rows, ${unknown} still unknown\n`);

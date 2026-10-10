@@ -6,7 +6,7 @@ import { getMe, getAddresses } from '~/services/customer';
 import { CountryService } from '~/services/CountryService';
 import { CheckoutAddressProvider } from '~/contexts/CheckoutAddressContext';
 import { useCart, refreshCartStock, loadCartIfNeeded, useHasMixedPreOrder } from '~/contexts/CartContext';
-import { CartService } from '~/services/CartService';
+import { validateCheckoutStock } from '~/hooks/pre-submit-stock';
 import { CheckoutValidationProvider, useCheckoutValidation, useCheckoutValidationActions } from '~/contexts/CheckoutValidationContext';
 import { useCheckout, type PaymentMethod } from '~/hooks/useCheckout';
 import { INSTALLMENT_PROVIDER } from '~/platform/payments/labels';
@@ -233,11 +233,13 @@ const CheckoutContent = component$(() => {
 
   useTask$(async ({ track }) => {
     track(() => localCart.cart.lines);
+    // A converted cart recovers its own order (see validateCheckoutStock); its status arrives with the live read.
+    track(() => localCart.cart.status);
 
     isCartEmpty.value = localCart.cart.lines.length === 0;
 
     if (localCart.cart.lines.length > 0) {
-        const stockValidation = CartService.validateStock();
+        const stockValidation = validateCheckoutStock();
         validationActions.updateStockValidation(stockValidation.valid, stockValidation.errors);
     } else {
         validationActions.updateStockValidation(true, []);

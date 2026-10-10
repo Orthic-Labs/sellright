@@ -3,19 +3,23 @@ import { expect, request, test, type APIRequestContext, type APIResponse } from 
 /**
  * A10 — production smoke, GET only. Run by the operator after a real build against the live server:
  *
- *   SMOKE_TARGET_URL=http://127.0.0.1:4340 SMOKE_HOST=rottenhand.com SMOKE_PDP_PATH=/shop/<slug> \
+ *   SMOKE_TARGET_URL=http://127.0.0.1:4340 SMOKE_HOST=rottenhand.com SMOKE_PDP_PATH=/shop/<slug>/ \
  *     pnpm exec playwright test -c e2e/prod-smoke.config.ts
  *
  * Environment:
  *   SMOKE_TARGET_URL   required. Without it every check is skipped, and a skip is MISSING COVERAGE, not a pass: each skipped
  *                      test carries a `missing-coverage` annotation and the reason shows in the report.
  *   SMOKE_HOST         optional Host header (the loopback port serves the brand whose Host it is sent).
- *   SMOKE_PDP_PATH     optional product page path (`/products/<slug>` or `/shop/<slug>`). A brand without a PDP, or an operator
+ *   SMOKE_PDP_PATH     optional product page path (`/products/<slug>/` or `/shop/<slug>/`; a missing trailing slash is added). A brand without a PDP, or an operator
  *                      who did not set it, gets a reported skip.
- *   SMOKE_PRIVATE_PATH optional private order page path, default `/checkout/confirmation/smoke-probe` (a code that is not an
+ *   SMOKE_PRIVATE_PATH optional private order page path, default `/checkout/confirmation/smoke-probe/` (a code that is not an
  *                      order; the page must still be served `private, no-store`).
  *   SMOKE_EXPECT_STOCK_PRIVATE=1  also assert the stock-bearing documents (home, shop, PDP) are `private, no-cache` with no
  *                      CDN cache header (plan A9a). Off by default: it is a statement about the build under test.
+ *
+ * Page routes are slash-terminated: the Qwik router keeps its default trailing-slash behaviour (vite.config.ts sets no
+ * `trailingSlash: false`), so `/shop` answers 301 to `/shop/`. Redirects stay disabled here, so every page is requested at its
+ * canonical slash-terminated path and a 301 on a canonical path is a failure. File endpoints (sitemap.xml, robots.txt) have none.
  *
  * What it never does: no POST/PUT/PATCH/DELETE, no cart, no account, no form, no browser. Every request goes through `get()`,
  * which refuses any path that is not on the explicit ALLOWLIST below. Cookies the server sets stay in this run's own request
@@ -26,21 +30,24 @@ import { expect, request, test, type APIRequestContext, type APIResponse } from 
 
 const TARGET = (process.env.SMOKE_TARGET_URL ?? '').trim();
 const HOST = (process.env.SMOKE_HOST ?? '').trim();
-const PDP_PATH = (process.env.SMOKE_PDP_PATH ?? '').trim();
-const PRIVATE_PATH = (process.env.SMOKE_PRIVATE_PATH ?? '/checkout/confirmation/smoke-probe').trim();
+/** Page routes are canonical with a trailing slash; the operator may omit it. Anything with a query, fragment or file extension is left to the allowlist. */
+export const canonicalPage = (p: string): string => (p === '' || p.endsWith('/') || /[?#]/.test(p) || /\.[a-z0-9]+$/i.test(p) ? p : `${p}/`);
+
+const PDP_PATH = canonicalPage((process.env.SMOKE_PDP_PATH ?? '').trim());
+const PRIVATE_PATH = canonicalPage((process.env.SMOKE_PRIVATE_PATH ?? '/checkout/confirmation/smoke-probe').trim());
 const STRICT_STOCK = process.env.SMOKE_EXPECT_STOCK_PRIVATE === '1';
 const MISSING = 'missing coverage: SMOKE_TARGET_URL is not set, so this check did not run';
 
 /** The only paths a request may name. No query string, no fragment, no `..`. */
 export const ALLOWLIST: readonly RegExp[] = [
 	/^\/$/,
-	/^\/shop$/,
-	/^\/sign-in$/,
-	/^\/track-order$/,
+	/^\/shop\/$/,
+	/^\/sign-in\/$/,
+	/^\/track-order\/$/,
 	/^\/sitemap\.xml$/,
 	/^\/robots\.txt$/,
-	/^\/(products|shop)\/[a-z0-9][a-z0-9_-]*(\/[a-z0-9][a-z0-9_-]*)*$/,
-	/^\/checkout\/confirmation\/[A-Za-z0-9_-]{1,64}$/,
+	/^\/(products|shop)\/[a-z0-9][a-z0-9_-]*(\/[a-z0-9][a-z0-9_-]*)*\/$/,
+	/^\/checkout\/confirmation\/[A-Za-z0-9_-]{1,64}\/$/,
 ];
 
 export const isAllowed = (p: string): boolean => p.startsWith('/') && !/[?#]|\.\./.test(p) && ALLOWLIST.some((re) => re.test(p));
@@ -95,8 +102,19 @@ function expectStockPrivate(res: APIResponse, what: string): void {
 }
 
 test('allowlist: only the named GET paths pass, nothing with a query, fragment or traversal', () => {
-	for (const ok of ['/', '/shop', '/shop/some-product', '/products/a-b/c', '/sign-in', '/track-order', '/sitemap.xml', '/robots.txt', '/checkout/confirmation/smoke-probe']) expect(isAllowed(ok), ok).toBe(true);
-	for (const bad of ['/cart', '/checkout', '/account', '/sign-in?x=1', '/shop/../admin', '/v1/shop/cart', '/api/anything', '/newsletter-signup', '/shop/', '//evil.example', 'https://evil.example/']) expect(isAllowed(bad), bad).toBe(false);
+	for (const ok of ['/', '/shop/', '/shop/some-product/', '/products/a-b/c/', '/sign-in/', '/track-order/', '/sitemap.xml', '/robots.txt', '/checkout/confirmation/smoke-probe/']) expect(isAllowed(ok), ok).toBe(true);
+	for (const bad of ['/cart', '/checkout', '/account', '/sign-in/?x=1', '/shop/../admin/', '/v1/shop/cart/', '/api/anything/', '/newsletter-signup/', '/shop', '/sign-in', '/track-order', '/shop/some-product', '/checkout/confirmation/smoke-probe', '//evil.example', 'https://evil.example/']) expect(isAllowed(bad), bad).toBe(false);
+});
+
+test('canonical paths: operator-supplied page paths gain the trailing slash, the private default is slash-terminated and allowed, redirects stay off', () => {
+	expect(canonicalPage('/shop/some-product')).toBe('/shop/some-product/');
+	expect(canonicalPage('/products/a-b/')).toBe('/products/a-b/');
+	expect(canonicalPage('')).toBe('');
+	expect(canonicalPage('/sitemap.xml')).toBe('/sitemap.xml');
+	expect(PRIVATE_PATH).toMatch(/\/$/);
+	if (!process.env.SMOKE_PRIVATE_PATH) expect(PRIVATE_PATH).toBe('/checkout/confirmation/smoke-probe/');
+	expect(isAllowed(canonicalPage('/checkout/confirmation/smoke-probe'))).toBe(true);
+	expect(isAllowed(canonicalPage('/shop/some-product'))).toBe(true);
 });
 
 test('home renders', async () => {
@@ -108,9 +126,9 @@ test('home renders', async () => {
 
 test('shop renders', async () => {
 	requireTarget();
-	const res = await get('/shop');
-	await expectHtml(res, 'GET /shop');
-	expectStockPrivate(res, 'GET /shop');
+	const res = await get('/shop/');
+	await expectHtml(res, 'GET /shop/');
+	expectStockPrivate(res, 'GET /shop/');
 });
 
 test('a product page renders', async () => {
@@ -127,12 +145,12 @@ test('a product page renders', async () => {
 
 test('sign-in renders', async () => {
 	requireTarget();
-	await expectHtml(await get('/sign-in'), 'GET /sign-in');
+	await expectHtml(await get('/sign-in/'), 'GET /sign-in/');
 });
 
 test('track-order renders', async () => {
 	requireTarget();
-	await expectHtml(await get('/track-order'), 'GET /track-order');
+	await expectHtml(await get('/track-order/'), 'GET /track-order/');
 });
 
 test('sitemap is served as XML', async () => {

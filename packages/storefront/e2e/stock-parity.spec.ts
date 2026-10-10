@@ -183,6 +183,12 @@ test.describe('3. cart and checkout stock checks', () => {
 		await addToCart(page, p.slug);
 		await goToCheckout(page); // entry 1
 		await markDocument(page, 'doc-entry');
+		// Place Order is aria-disabled here (shipping/customer fields are empty), so it says nothing about stock. The proof is
+		// the line itself: this product's own row in the order summary is present and not marked out of stock now ...
+		// the cart line is an <li> carrying the product name ("Parity <tag>", unique per test); the name link is not always rendered
+		const line = page.locator('li').filter({ hasText: `Parity ${p.slug.replace(/^par-/, '')}` });
+		await expect(line, 'entry 1: the product line is in the order summary').toHaveCount(1);
+		await expect(line.getByText(/out of stock/i), 'entry 1: the line is available').toHaveCount(0);
 
 		await spaToShop(page); // leave checkout without a document load
 		await cartButton(page).click();
@@ -196,7 +202,8 @@ test.describe('3. cart and checkout stock checks', () => {
 
 		expect(await sameDocument(page), 'entry 2 must be an SPA navigation in the same document (no reload)').toBe('doc-entry');
 		await expect.poll(async () => (await apiLog.since(mark, STOCK_PATTERNS.cartRead, { origin: 'browser' })).length, { message: 'second entry in the same document must issue a NEW live cart read after the mark' }).toBeGreaterThanOrEqual(1);
-		await expect.poll(async () => droppedNotice.test(await page.locator('body').innerText()) || (await placeOrderButton(page).count()) === 0 || !(await placeOrderButton(page).isEnabled().catch(() => true)), { message: 'the changed availability must show' }).toBe(true);
+		// ... and after the second entry it is gone or shows its own "Out of stock": only a fresh live read can cause either.
+		await expect.poll(async () => (await line.count()) === 0 || (await line.getByText(/out of stock/i).count()) > 0, { message: `the line for ${p.sku} must be removed or marked out of stock after the second entry` }).toBe(true);
 		expect(await sameDocument(page), 'still the same document after the read').toBe('doc-entry');
 	});
 

@@ -120,6 +120,67 @@ export function realDir(p, what = 'directory') {
 	return realpathSync(p);
 }
 
+/** Realpath of the deepest existing ancestor of `p` plus the missing tail, so a path not created yet still resolves. */
+export function canonicalPath(p) {
+	let cur = path.resolve(p);
+	const tail = [];
+	for (;;) {
+		try {
+			return path.join(realpathSync(cur), ...tail.reverse());
+		} catch {
+			const parent = path.dirname(cur);
+			if (parent === cur) return path.resolve(p);
+			tail.push(path.basename(cur));
+			cur = parent;
+		}
+	}
+}
+
+/**
+ * Validates an output file path before anything is created. Every existing component is lstat-checked (a symlink or
+ * non-directory ancestor, and a symlink or directory target, are refused, so nothing is created through a link) and the
+ * canonical destination is checked against every input root, existing or not. Returns { root, rel, abs }: `root` is the
+ * deepest existing real directory and `rel` the missing remainder, ready for `safeWrite`.
+ */
+export function resolveOutputPath(out, inputRoots, what = 'output') {
+	const abs = path.resolve(out);
+	const { root: fsRoot } = path.parse(abs);
+	const parts = abs.slice(fsRoot.length).split(path.sep).filter(Boolean);
+	if (parts.length === 0) throw new ComposeError('not-a-file', `${what} path ${out} has no file name`);
+	let cur = fsRoot;
+	let existing = 0;
+	for (let i = 0; i < parts.length; i++) {
+		const next = path.join(cur, parts[i]);
+		let st;
+		try {
+			st = lstatSync(next);
+		} catch {
+			break;
+		}
+		const last = i === parts.length - 1;
+		if (st.isSymbolicLink()) throw new ComposeError('symlink', `${what} path ${out} goes through a symlink: ${next}`);
+		if (last && st.isDirectory()) throw new ComposeError('not-a-file', `${what} path ${out} is a directory`);
+		if (!last && !st.isDirectory()) throw new ComposeError('not-a-dir', `${what} path ${out}: ${next} is not a directory`);
+		cur = next;
+		existing = i + 1;
+	}
+	const dest = canonicalPath(abs);
+	for (const d of inputRoots.filter(Boolean)) {
+		if (isInside(canonicalPath(d), dest) || isInside(path.resolve(d), abs)) throw new ComposeError('out-inside-input', `${out} is inside ${d}; the inputs are read only`);
+	}
+	// A file that already exists is its own last component: its directory is the write root.
+	const rootParts = Math.min(existing, parts.length - 1);
+	const root = path.join(fsRoot, ...parts.slice(0, rootParts));
+	return { root, rel: parts.slice(rootParts).join('/'), abs };
+}
+
+/** Writes `data` to a validated output path; missing directories are created only below its real root. */
+export function writeOutputFile(out, inputRoots, data, what = 'output') {
+	const r = resolveOutputPath(out, inputRoots, what);
+	safeWrite(r.root, r.rel, data);
+	return r.abs;
+}
+
 /**
  * Lists regular files below root without following symlinks. A symlink or a
  * special file anywhere in the walked set throws. `skip(rel, isDir)` prunes

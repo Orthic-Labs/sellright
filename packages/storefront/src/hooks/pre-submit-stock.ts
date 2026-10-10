@@ -22,7 +22,17 @@ export class PreSubmitStockError extends Error {
  */
 export const refreshStockBeforeSubmit = async (): Promise<void> => {
 	await CartService.refresh();
-	if (CartService.getCart().status === 'converted') return;
-	const check = CartService.validateStock();
+	const check = validateCheckoutStock();
 	if (!check.valid) throw new PreSubmitStockError(check.errors[0] || 'Some items are no longer available.');
+};
+
+/**
+ * Synchronous stock verdict over the cart mirror, which is always the last live server response (never cached). The
+ * checkout validation task and the pre-submit read share it so the gate and the submission agree: a cart the server
+ * reports `converted` is recovering its OWN order (its lines' `available` already excludes that order's allocation), so
+ * availability is not a precondition; any other or missing status is a new order and stays fail-closed.
+ */
+export const validateCheckoutStock = (): { valid: boolean; errors: string[] } => {
+	if (CartService.getCart().status === 'converted') return { valid: true, errors: [] };
+	return CartService.validateStock();
 };

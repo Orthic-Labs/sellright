@@ -1,7 +1,7 @@
 // node --test tools/bump/bump.test.mjs   (cwd: packages/storefront)
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -218,6 +218,45 @@ test('cli: --out and --json-out written, --check summary and exit code, inputs u
 		await assert.rejects(main(['--brand', w.layer, '--to', w.NEW, '--repo', w.repo, '--json-out', path.join(w.repo, 'r.json')], sink), /out-inside-input/);
 		assert.ok(equalSnapshots(before.layer, snapshot(w.layer)));
 		assert.ok(equalSnapshots(before.repo, snapshot(path.join(w.repo, SF))));
+	} finally {
+		w.cleanup();
+	}
+});
+
+test('cli: --out is validated before any directory is created: symlink into an input, and the effective build dir, are refused', async () => {
+	const w = world();
+	try {
+		const sink = { out: () => {}, err: () => {}, loadEnv: miniLoadEnv };
+		const run = (...extra) => main(['--brand', w.layer, '--to', w.NEW, '--repo', w.repo, ...extra], sink);
+		// A symlink outside the inputs that points into the layer: the absent child must not be created inside it.
+		const link = path.join(w.root, 'outside-link');
+		symlinkSync(w.layer, link);
+		await assert.rejects(run('--out', path.join(link, 'new', 'report.md')), /symlink|out-inside-input/);
+		assert.ok(!existsSync(path.join(w.layer, 'new')), 'nothing was created inside the layer through the link');
+		await assert.rejects(run('--json-out', path.join(link, 'deep', 'er', 'r.json')), /symlink|out-inside-input/);
+		assert.ok(!existsSync(path.join(w.layer, 'deep')));
+		// A link to an input repo, an existing link target and a link as the final component are refused as well.
+		const repoLink = path.join(w.root, 'repo-link');
+		symlinkSync(w.repo, repoLink);
+		await assert.rejects(run('--out', path.join(repoLink, 'r.md')), /symlink|out-inside-input/);
+		writeFileSync(path.join(w.root, 'target.md'), 'keep');
+		symlinkSync(path.join(w.root, 'target.md'), path.join(w.root, 'final-link.md'));
+		await assert.rejects(run('--out', path.join(w.root, 'final-link.md')), /symlink/);
+		assert.equal(readFileSync(path.join(w.root, 'target.md'), 'utf8'), 'keep');
+
+		// Default build dir (sibling of the layer, per brand.json buildDir), existing file and not-yet-created path.
+		const defaultBuild = path.join(path.dirname(w.layer), 'store');
+		write(defaultBuild, 'package.json', '{}');
+		await assert.rejects(run('--out', path.join(defaultBuild, 'package.json')), /out-inside-input/);
+		assert.equal(readFileSync(path.join(defaultBuild, 'package.json'), 'utf8'), '{}');
+		await assert.rejects(run('--out', path.join(defaultBuild, 'sub', 'report.md')), /out-inside-input/);
+		assert.ok(!existsSync(path.join(defaultBuild, 'sub')));
+		// Explicit --build-dir replaces the default as the guarded input.
+		const explicit = path.join(w.root, 'explicit-build');
+		write(explicit, 'x.txt', 'x');
+		await assert.rejects(run('--build-dir', explicit, '--out', path.join(explicit, 'x.txt')), /out-inside-input/);
+		assert.equal(readFileSync(path.join(explicit, 'x.txt'), 'utf8'), 'x');
+		await assert.rejects(run('--build-dir', explicit, '--out', path.join(link, 'a', 'b.md')), /symlink|out-inside-input/);
 	} finally {
 		w.cleanup();
 	}

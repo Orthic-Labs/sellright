@@ -15,7 +15,7 @@
 // review item, not a failure. The scratch build, harness, parity and screenshot steps are not run by this tool; their
 // section is `not-run` and lists the commands.
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TOOL_VERSION, dryRun } from '../compose/compose.mjs';
@@ -23,7 +23,7 @@ import { assertPinExists, openBase } from '../compose/lib/base.mjs';
 import { checkDrift, describeDrift, formatDriftReport } from '../compose/lib/drift-core.mjs';
 import { layerHashes } from '../compose/lib/history.mjs';
 import { loadLayer, validateBrand } from '../compose/lib/layer.mjs';
-import { ComposeError, PIN_RE, Problems, isInside, pretty, realDir, safeWrite } from '../compose/lib/util.mjs';
+import { ComposeError, PIN_RE, Problems, pretty, realDir, resolveOutputPath, writeOutputFile } from '../compose/lib/util.mjs';
 import {
 	ENV_SCHEMA,
 	affectedConsumers,
@@ -418,16 +418,10 @@ export function parseArgs(argv) {
 	return a;
 }
 
-function assertOutOutside(out, dirs) {
-	const abs = path.resolve(out);
-	let parent = path.dirname(abs);
-	try {
-		parent = realDir(parent, 'output directory');
-	} catch {
-		/* not created yet */
-	}
-	const target = path.join(parent, path.basename(abs));
-	for (const d of dirs) if (isInside(d, target)) throw new ComposeError('out-inside-input', `${out} is inside ${d}; the inputs are read only`);
+/** The build directory the report reads as an immutable input: explicit --build-dir, else <parent of the layer>/<brand.json buildDir>. */
+export function effectiveBuildDir(layerDir, explicit) {
+	if (explicit) return path.resolve(explicit);
+	return path.join(path.dirname(layerDir), loadLayer(layerDir).brand.buildDir);
 }
 
 export async function main(argv, { out = (s) => process.stdout.write(s), err = (s) => process.stderr.write(s), loadEnv } = {}) {
@@ -441,14 +435,11 @@ export async function main(argv, { out = (s) => process.stdout.write(s), err = (
 	if (v('--from')) assertFullSha(v('--from'), '--from');
 	const layerReal = realDir(v('--brand'), 'brand layer');
 	const repoReal = realDir(v('--repo') ?? DEFAULT_REPO, 'repo');
-	for (const k of ['--out', '--json-out']) if (v(k)) assertOutOutside(v(k), [layerReal, repoReal]);
+	const inputRoots = [layerReal, repoReal, effectiveBuildDir(layerReal, v('--build-dir'))];
+	for (const k of ['--out', '--json-out']) if (v(k)) resolveOutputPath(v(k), inputRoots);
 
 	const report = await buildReport({ layerDir: layerReal, to: v('--to'), from: v('--from'), repo: repoReal, buildDir: v('--build-dir'), loadEnv });
-	const write = (file, text) => {
-		const abs = path.resolve(file);
-		mkdirSync(path.dirname(abs), { recursive: true });
-		safeWrite(path.dirname(abs), path.basename(abs), text);
-	};
+	const write = (file, text) => writeOutputFile(file, inputRoots, text);
 	if (v('--out')) write(v('--out'), renderMarkdown(report));
 	if (v('--json-out')) write(v('--json-out'), reportJson(report));
 	if (a.flags.has('--check')) {

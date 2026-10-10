@@ -1,7 +1,7 @@
 // node --test tools/inventory/inventory.test.mjs   (cwd: packages/storefront)
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -275,6 +275,40 @@ test('toDispositions: compose classes, base-only and runtime rows left out', () 
 	assert.equal(d['a.ts'].class, 'superseded');
 	assert.equal(d['c.ts'].class, 'brand-l3');
 	assert.equal(d['d.ts'].class, 'dropped');
+});
+
+test('cli: --out is validated before any directory is created: symlink into an input, and the pin source repo, are refused', async () => {
+	const w = world();
+	try {
+		const sink = { out: () => {}, err: () => {} };
+		const run = (...extra) => main(['--base', w.base, '--brand', w.brand, '--no-git', ...extra], sink);
+		const link = path.join(w.root, 'outside-link');
+		symlinkSync(w.brand, link);
+		await assert.rejects(run('--out', path.join(link, 'new', 'r.csv')), /symlink|out-inside-input/);
+		assert.ok(!existsSync(path.join(w.brand, 'new')), 'nothing was created inside the brand tree through the link');
+		await assert.rejects(run('--out', path.join(w.root, 'ok.csv'), '--json-out', path.join(link, 'deep', 'er', 'i.json')), /symlink|out-inside-input/);
+		assert.ok(!existsSync(path.join(w.brand, 'deep')));
+		const baseLink = path.join(w.root, 'base-link');
+		symlinkSync(w.base, baseLink);
+		await assert.rejects(run('--out', path.join(baseLink, 'r.csv')), /symlink|out-inside-input/);
+		writeFileSync(path.join(w.root, 'target.csv'), 'keep');
+		symlinkSync(path.join(w.root, 'target.csv'), path.join(w.root, 'final-link.csv'));
+		await assert.rejects(run('--out', path.join(w.root, 'final-link.csv')), /symlink/);
+		assert.equal(readFileSync(path.join(w.root, 'target.csv'), 'utf8'), 'keep');
+
+		// Pinned inventory: the source repository (explicit or default) is an input root.
+		const repo = path.join(w.root, 'pin-repo');
+		mkdirSync(repo, { recursive: true });
+		writeFileSync(path.join(repo, 'existing.csv'), 'keep');
+		const pinned = (...extra) => main(['--pin', 'a'.repeat(40), '--repo', repo, '--brand', w.brand, '--no-git', ...extra], sink);
+		await assert.rejects(pinned('--out', path.join(repo, 'existing.csv')), /out-inside-input/);
+		assert.equal(readFileSync(path.join(repo, 'existing.csv'), 'utf8'), 'keep');
+		await assert.rejects(pinned('--out', path.join(repo, 'sub', 'new.csv')), /out-inside-input/);
+		assert.ok(!existsSync(path.join(repo, 'sub')));
+		await assert.rejects(pinned('--out', path.join(w.root, 'ok.csv'), '--json-out', path.join(repo, 'j.json')), /out-inside-input/);
+	} finally {
+		w.cleanup();
+	}
 });
 
 test('cli: skeleton, check, dispositions; inputs untouched; --out inside an input refused', async () => {
