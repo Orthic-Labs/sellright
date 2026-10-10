@@ -134,6 +134,23 @@ test('placement: an overlay code file in L1 or in no layer is rejected, a non-co
   }
 });
 
+test('placement: a declared deploy file may sit in no layer; nothing else is exempted', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sr-deploy-'));
+  try {
+    for (const rel of ['ecosystem.config.cjs', 'src/theme/t.ts', 'src/routes/x/index.tsx']) {
+      fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+      fs.writeFileSync(path.join(root, rel), 'module.exports = {};\n');
+    }
+    const rules = (files, deployFiles) => checkOverlayImports({ root, layers, files, deployFiles }).findings.map((f) => `${f.file} ${f.rule}`).sort();
+    assert.deepEqual(rules(['ecosystem.config.cjs']), ['ecosystem.config.cjs layer-unclassified'], 'undeclared: still rejected');
+    assert.deepEqual(rules(['ecosystem.config.cjs'], ['ecosystem.config.cjs']), [], 'declared deploy file is accepted');
+    assert.deepEqual(rules(['src/theme/t.ts'], ['ecosystem.config.cjs']), ['src/theme/t.ts layer-unclassified'], 'a source file that is not declared stays strict');
+    assert.deepEqual(rules(['src/routes/x/index.tsx'], ['src/routes/x/index.tsx']), ['src/routes/x/index.tsx layer-l1-overlay'], 'declaring an L1 file does not unlock it');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('a symlink or a missing file in the overlay list is a finding, not a silent skip', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sr-link-'));
   try {

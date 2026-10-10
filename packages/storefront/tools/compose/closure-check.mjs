@@ -7,8 +7,19 @@
 // brand's build script (brand.json "buildScript"). Not resolved: binaries on the
 // package path (vite, tsc, eslint, ...), and tokens containing shell variables;
 // those are listed under `unresolved`.
+//
+// A called path that is not in the composed tree is not always missing:
+//   generated artifacts   the top segment is runtime state (server/entry.express.js, dist/...): produced
+//                         by the build or the running process, never a composition input. Listed under
+//                         `generatedArtifacts`.
+//   excluded tooling      the path sits under a composition exclusion (brand.json baseExclude, default
+//                         `tools`): repository-only tooling that compose deliberately does not ship.
+//                         Accepted ONLY in the base's own package.json scripts that the brand did not patch
+//                         (a script the brand writes, and the brand build script, must run in the tree
+//                         that is built). Listed under `excludedTooling`.
 import path from 'node:path';
-import { Problems } from './lib/util.mjs';
+import { DEFAULT_BASE_EXCLUDE } from './lib/base.mjs';
+import { Problems, isRuntimeName } from './lib/util.mjs';
 
 const EVAL_FLAGS = /^(-e|--eval|-p|--print|-pe|-ep|--eval=.*|--print=.*)$/;
 const FILE_EXT = /\.(mjs|cjs|js|sh|mts|cts|ts|tsx)$/;
@@ -43,6 +54,11 @@ export function checkClosure({ files, brand, externalExists, problems = new Prob
 	const usedExternals = new Set();
 	const unresolved = [];
 	const scanned = [];
+	const generatedArtifacts = new Set();
+	const excludedTooling = new Set();
+	const excludedRoots = brand.baseExclude ?? DEFAULT_BASE_EXCLUDE;
+	const patched = new Set(Object.keys(brand.packageScripts ?? {}));
+	const isExcluded = (p) => excludedRoots.some((x) => p === x || p.startsWith(`${x}/`));
 	const text = (rel) => (files.has(rel) ? String(files.get(rel)) : null);
 
 	const pkgScripts = (dir) => {
@@ -74,7 +90,18 @@ export function checkClosure({ files, brand, externalExists, problems = new Prob
 			else usedExternals.add(externals.has(joined) ? joined : path.posix.normalize(tok));
 			return;
 		}
-		if (!files.has(joined)) problems.add('closure-missing-script', `${source} calls ${tok} but ${joined} is not in the composed tree`, source);
+		if (files.has(joined)) return;
+		if (isRuntimeName(joined.split('/')[0])) {
+			generatedArtifacts.add(joined);
+			return;
+		}
+		const baseScript = /^(vendor\/storefront-client\/)?package\.json#scripts\.(.+)$/.exec(source);
+		const unpatchedBase = baseScript !== null && (baseScript[1] !== undefined || !patched.has(baseScript[2]));
+		if (unpatchedBase && isExcluded(joined)) {
+			excludedTooling.add(joined);
+			return;
+		}
+		problems.add('closure-missing-script', `${source} calls ${tok} but ${joined} is not in the composed tree`, source);
 	}
 
 	function analysePiece(piece, cwd, source) {
@@ -148,5 +175,12 @@ export function checkClosure({ files, brand, externalExists, problems = new Prob
 
 	const externalsMissing = [];
 	if (externalExists) for (const x of usedExternals) if (!externalExists(x)) externalsMissing.push(x);
-	return { scanned, usedExternals: [...usedExternals].sort(), externalsMissing: externalsMissing.sort(), unresolved };
+	return {
+		scanned,
+		usedExternals: [...usedExternals].sort(),
+		externalsMissing: externalsMissing.sort(),
+		unresolved,
+		generatedArtifacts: [...generatedArtifacts].sort(),
+		excludedTooling: [...excludedTooling].sort(),
+	};
 }

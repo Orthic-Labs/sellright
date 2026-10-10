@@ -8,7 +8,9 @@
 		"generate:placeholder-assets": "node scripts/generate-placeholder-assets.mjs",
 		"lint": "eslint \"src/**/*.ts*\"",
 		"build.client": "vite build --logLevel warn",
-		"build.server": "vite build -c adapters/express/vite.config.mts --logLevel warn"
+		"build.server": "vite build -c adapters/express/vite.config.mts --logLevel warn",
+		"serve": "node server/entry.express.js",
+		"test:tools": "node --test tools/compose/compose.test.mjs"
 	},
 	"dependencies": {
 		"@sellright/storefront-client": "workspace:*"

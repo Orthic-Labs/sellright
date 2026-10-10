@@ -47,13 +47,26 @@ function compile(layers) {
   };
 }
 
+/** Strips wrappers that do not change the value: `(x)`, `x!`, `x as T`, `<T>x`, `x satisfies T`. */
+function unwrap(expr) {
+  let e = expr;
+  while (ts.isParenthesizedExpression(e) || ts.isNonNullExpression(e) || ts.isAsExpression(e) || ts.isTypeAssertionExpression(e) || ts.isSatisfiesExpression(e)) e = e.expression;
+  return e;
+}
+
+/** True when a receiver is one of the global objects (window, globalThis, self, global), however it is wrapped. */
+function isGlobalReceiver(rules, expr) {
+  const e = unwrap(expr);
+  return ts.isIdentifier(e) && rules.globalObjects.has(e.text);
+}
+
 /** Names along a callee: `a.b['c']()` gives ['a', 'b', 'c']. */
 function calleeChain(expr) {
   const names = [];
   let e = expr;
   for (;;) {
-    if (ts.isParenthesizedExpression(e) || ts.isNonNullExpression(e) || ts.isAsExpression(e)) e = e.expression;
-    else if (ts.isPropertyAccessExpression(e)) { names.unshift(e.name.text); e = e.expression; }
+    e = unwrap(e);
+    if (ts.isPropertyAccessExpression(e)) { names.unshift(e.name.text); e = e.expression; }
     else if (ts.isElementAccessExpression(e)) {
       if (ts.isStringLiteralLike(e.argumentExpression)) names.unshift(e.argumentExpression.text);
       e = e.expression;
@@ -118,14 +131,14 @@ export function shapeFindings(layers, relFile, text) {
     }
     if (ts.isPropertyAccessExpression(node)) {
       const name = node.name.text;
-      const onGlobal = ts.isIdentifier(node.expression) && rules.globalObjects.has(node.expression.text);
+      const onGlobal = isGlobalReceiver(rules, node.expression);
       if (rules.definitions.has(name)) add(node.name, 'definition-call', `.${name}: loaders, actions and server functions are defined only in the platform`);
       if (rules.networkMethods.has(name)) add(node.name, 'global-network', `.${name} is not allowed in overlay files`);
-      if (onGlobal && rules.networkGlobals.has(name)) add(node.name, 'global-network', `${node.expression.text}.${name} is not allowed in overlay files`);
+      if (onGlobal && rules.networkGlobals.has(name)) add(node.name, 'global-network', `${unwrap(node.expression).text}.${name} is not allowed in overlay files`);
     }
     if (ts.isElementAccessExpression(node) && ts.isStringLiteralLike(node.argumentExpression)) {
       const name = node.argumentExpression.text;
-      const onGlobal = ts.isIdentifier(node.expression) && rules.globalObjects.has(node.expression.text);
+      const onGlobal = isGlobalReceiver(rules, node.expression);
       if (rules.definitions.has(name)) add(node.argumentExpression, 'definition-call', `['${name}'] is a platform-only definer`);
       if (rules.networkMethods.has(name) || (onGlobal && rules.networkGlobals.has(name))) add(node.argumentExpression, 'global-network', `['${name}'] is not allowed in overlay files`);
     }

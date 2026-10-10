@@ -16,7 +16,7 @@
 // adoption); never touch node_modules, dist*, server*, .cache, tmp, .env, .env.local,
 // the asset-retention archive or anything above the build directory.
 import { spawnSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -24,7 +24,7 @@ import { openBase } from './lib/base.mjs';
 import { checkClosure } from './closure-check.mjs';
 import { checkDrift } from './lib/drift-core.mjs';
 import { checkEnv, finalEffectiveHash, loadSchema } from './env-check.mjs';
-import { historyDirFor, layerHashes, markBuilt, readEntry, replaceLayerWithCopy, verifyEntryCopy, writeEntry } from './lib/history.mjs';
+import { ensureHistoryRoot, entryEffectivePin, historyDirFor, layerHashes, markBuilt, mismatchedHashes, readEntry, replaceLayerWithCopy, verifyEntryCopy, writeEntry } from './lib/history.mjs';
 import { buildInventory, checkAdoption, hasNonRuntimeContent } from './lib/inventory.mjs';
 import { loadLayer, validateBrand, validateManifest } from './lib/layer.mjs';
 import { loadLayers, parseLayers } from './lib/layers.mjs';
@@ -41,11 +41,14 @@ import {
 	safeRemoveFile,
 	safeWrite,
 	sha256,
+	unsafeAncestorReason,
 	unsafeRelReason,
 } from './lib/util.mjs';
 
 export const TOOL_VERSION = '1';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+/** The two overlay checkers, packaged with the tool (byte-identical copies of ../../scripts/, enforced by compose.test.mjs). */
+export const CHECKERS_DIR = path.join(HERE, 'checkers');
 export const MANAGED = '.compose-managed.json';
 export const ADOPTION = '.compose-adoption.json';
 export const OVERLAY_LIST = '.compose-overlay-files.txt';
@@ -116,37 +119,84 @@ function readManaged(outDir) {
 	return m;
 }
 
-/**
- * Import/layer check (A14) on every overlay-origin file, run on a scratch materialisation of the
- * planned tree so the resolver sees the base files too. Uses scripts/check-imports.mjs
- * (checkOverlayImports + loadLayers) when it sits next to this tool (repo checkout), or a
- * check-imports.mjs inside tools/compose. In the cold tool home neither exists and the check is
- * reported as unavailable, never as passed.
- */
-async function runImportCheck({ outputs, layersPath, problems }) {
-	const candidates = [path.join(HERE, 'check-imports.mjs'), path.join(HERE, '..', '..', 'scripts', 'check-imports.mjs')];
-	const file = candidates.find((f) => existsSync(f));
-	if (!file) return { status: 'unavailable', note: 'check-imports.mjs not found next to the tool' };
+async function loadChecker(dir, name, needed) {
+	const file = path.join(dir, name);
+	if (!existsSync(file)) return { error: `${name} is not packaged with the tool (looked in ${dir})` };
 	let mod;
 	try {
 		mod = await import(pathToFileURL(file).href);
 	} catch (e) {
-		return { status: 'unavailable', note: `check-imports.mjs could not be loaded: ${e.message}` };
+		return { error: `${name} could not be loaded: ${e.message}` };
 	}
-	if (typeof mod.checkOverlayImports !== 'function' || typeof mod.loadLayers !== 'function') return { status: 'unavailable', note: 'check-imports.mjs lacks checkOverlayImports/loadLayers' };
+	const missing = needed.filter((n) => typeof mod[n] !== 'function');
+	if (missing.length) return { error: `${name} lacks ${missing.join(', ')}` };
+	return { mod };
+}
+
+const SHAPE_KEYS = ['definitionCalls', 'networkGlobals', 'networkMethods', 'globalObjects', 'orchestrationCalls', 'gatewayNamePattern'];
+
+/**
+ * Import/layer check (A14) and code-shape check (A14) on every overlay-origin file, run on a scratch
+ * materialisation of the planned tree so the resolver sees the base files too. Both checkers ship
+ * inside the tool (tools/compose/checkers), so the cold tool home has them. A checker that cannot
+ * run is a PROBLEM (apply and dry-run both fail), never a pass and never a skip.
+ * Deploy files (brand.json deployFiles, already validated by validateManifest) are the one place an
+ * overlay code file may sit in no layer; every storefront source file stays strictly classified.
+ */
+async function runCheckers({ outputs, layersPath, layersText, deployFiles, checkersDir, problems }) {
+	const dir = checkersDir ?? CHECKERS_DIR;
+	const result = { importCheck: { status: 'unavailable' }, shapeCheck: { status: 'unavailable' } };
+	const unavailable = (key, code, file, note) => {
+		result[key] = { status: 'unavailable', note };
+		problems.add(code, note, file);
+	};
+	const imports = await loadChecker(dir, 'check-imports.mjs', ['checkOverlayImports', 'loadLayers']);
+	const shape = await loadChecker(dir, 'check-code-shape.mjs', ['checkOverlayShape']);
+	if (imports.error) unavailable('importCheck', 'import-check-unavailable', 'check-imports.mjs', imports.error);
+	if (shape.error) unavailable('shapeCheck', 'shape-check-unavailable', 'check-code-shape.mjs', shape.error);
+	if (imports.error || shape.error) return result;
+
 	const tmp = mkdtempSync(path.join(tmpdir(), 'compose-imports-'));
 	try {
 		for (const [rel, o] of outputs) safeWrite(tmp, rel, o.buf, o.mode);
+		let layersFile = layersPath;
+		if (!layersFile) {
+			layersFile = path.join(tmp, '.compose-checker-layers.json');
+			writeFileSync(layersFile, layersText);
+		}
 		let layers;
 		try {
-			layers = mod.loadLayers(layersPath ?? path.join(tmp, 'layers.json'));
+			layers = imports.mod.loadLayers(layersFile);
 		} catch (e) {
-			return { status: 'unavailable', note: `layers.json is not in the import checker's format: ${e.message}` };
+			const note = `layers.json is not in the checkers' format: ${e.message}`;
+			unavailable('importCheck', 'import-check-unavailable', 'layers.json', note);
+			unavailable('shapeCheck', 'shape-check-unavailable', 'layers.json', note);
+			return result;
 		}
 		const files = [...outputs].filter(([, o]) => o.origin === 'overlay' || o.origin === 'eject').map(([k]) => k).sort();
-		const res = mod.checkOverlayImports({ root: tmp, layers, files });
-		for (const f of res.findings ?? []) problems.add('import-check', `${f.rule}: ${f.message}`, f.file);
-		return { status: res.findings?.length ? 'failed' : 'passed', checked: res.checked ?? files.length };
+
+		try {
+			const res = imports.mod.checkOverlayImports({ root: tmp, layers, files, deployFiles });
+			for (const f of res.findings ?? []) problems.add('import-check', `${f.rule}: ${f.message}`, f.file);
+			result.importCheck = { status: res.findings?.length ? 'failed' : 'passed', checked: res.checked ?? files.length };
+		} catch (e) {
+			unavailable('importCheck', 'import-check-unavailable', 'check-imports.mjs', `check-imports.mjs failed to run: ${e.message}`);
+		}
+
+		const cs = layers.codeShape;
+		const missingKeys = SHAPE_KEYS.filter((k) => cs?.[k] === undefined);
+		if (missingKeys.length) {
+			unavailable('shapeCheck', 'shape-check-unavailable', 'layers.json', `layers.json codeShape lacks ${missingKeys.join(', ')}`);
+			return result;
+		}
+		try {
+			const res = shape.mod.checkOverlayShape({ root: tmp, layers, files });
+			for (const f of res.findings ?? []) problems.add('shape-check', `${f.rule}: ${f.message}`, f.file);
+			result.shapeCheck = { status: res.findings?.length ? 'failed' : 'passed', checked: res.checked ?? files.length };
+		} catch (e) {
+			unavailable('shapeCheck', 'shape-check-unavailable', 'check-code-shape.mjs', `check-code-shape.mjs failed to run: ${e.message}`);
+		}
+		return result;
 	} finally {
 		rmSync(tmp, { recursive: true, force: true });
 	}
@@ -173,11 +223,13 @@ export async function plan(opts) {
 		problems.throwIfAny();
 
 		let layers;
+		let layersText = null;
 		if (opts.layersPath) layers = loadLayers(opts.layersPath);
 		else {
 			const b = base.read('layers.json');
 			if (!b) throw new ComposeError('missing-file', 'no --layers given and the base has no layers.json');
-			layers = parseLayers(JSON.parse(b.toString('utf8')));
+			layersText = b.toString('utf8');
+			layers = parseLayers(JSON.parse(layersText));
 		}
 		let schema;
 		if (opts.schemaPath) schema = loadSchema(opts.schemaPath);
@@ -226,7 +278,7 @@ export async function plan(opts) {
 			problems,
 			externalExists: (x) => existsSync(x.startsWith('/') ? x : path.join(outDir, x)),
 		});
-		const importCheck = await runImportCheck({ outputs, layersPath: opts.layersPath, problems });
+		const { importCheck, shapeCheck } = await runCheckers({ outputs, layersPath: opts.layersPath, layersText, deployFiles: brand.deployFiles ?? [], checkersDir: opts.checkersDir, problems });
 
 		// ---- disk state and the adoption guard
 		const managed = readManaged(outDir);
@@ -294,6 +346,11 @@ export async function plan(opts) {
 		}
 		const removals = [...prev.keys()].filter((p) => !outputs.has(p) && p !== REPORT && !isRuntimeName(p.split('/')[0])).sort();
 		const retire = inventory?.retire ?? [];
+		// every path apply may delete is validated now, ancestors included, before any mutation
+		for (const rel of [...retire, ...removals]) {
+			const bad = unsafeRelReason(rel) ?? unsafeAncestorReason(outDir, rel);
+			if (bad) problems.add(bad.includes('symlink') ? 'symlink' : bad.includes('ancestor') ? 'not-a-dir' : 'unsafe-path', `refusing to remove ${rel}: ${bad}`, rel);
+		}
 
 		// ---- report (deterministic: no timestamps)
 		const counts = {};
@@ -319,8 +376,9 @@ export async function plan(opts) {
 			optionalInputs: { '.npmrc': { present: base.has('.npmrc') } },
 			env: { names: env.names, settings: env.settings, warnings: env.warnings },
 			drift: drift.map((d) => ({ id: d.id, status: d.status })),
-			closure: { scanned: closure.scanned.length, usedExternals: closure.usedExternals, externalsMissing: closure.externalsMissing, unresolved: closure.unresolved },
+			closure: { scanned: closure.scanned.length, usedExternals: closure.usedExternals, externalsMissing: closure.externalsMissing, unresolved: closure.unresolved, generatedArtifacts: closure.generatedArtifacts, excludedTooling: closure.excludedTooling },
 			importCheck,
+			shapeCheck,
 		};
 		outputs.set(REPORT, { buf: Buffer.from(pretty(report)), mode: 0o644, origin: 'generated' });
 		const managedFiles = [...outputs].map(([p, o]) => ({ path: p, sha256: sha256(o.buf), origin: o.origin })).sort((a, b) => (a.path < b.path ? -1 : 1));
@@ -360,6 +418,7 @@ function writeAll(ctx) {
 export async function apply(opts) {
 	const ctx = await plan({ ...opts, mode: 'apply' });
 	try {
+		ensureHistoryRoot(historyDirFor(ctx.layer.dir));
 		if (!existsSync(ctx.outDir)) mkdirSync(ctx.outDir);
 		const hashes = { ...layerHashes({ layer: ctx.layer, pin: ctx.pin, toolVersion: TOOL_VERSION }), publicConfig: ctx.env.hash, settings: ctx.hashes.settings };
 		const historyId = writeEntry({ layerDir: ctx.layer.dir, layer: ctx.layer, hashes, managedText: ctx.managedText, now: ctx.now });
@@ -441,9 +500,11 @@ export function restoreInputs({ layerDir, historyId, toolVersion = TOOL_VERSION 
 	if (bad.length) throw new ComposeError('history-tampered', `history copy ${historyId} does not match its recorded hashes (${bad.join(', ')}); the brand layer was not touched`);
 	replaceLayerWithCopy({ layerDir: layerReal, entry });
 	const after = fromDir(layerReal);
-	const badAfter = ['pin', 'overlayTree', 'manifest', 'lock', 'brandPublicConfig', 'layerTree'].filter((k) => after[k] !== entry.meta.hashes[k]);
+	const badAfter = mismatchedHashes(entry, after);
 	if (badAfter.length) throw new ComposeError('restore-mismatch', `restored layer does not match ${historyId} (${badAfter.join(', ')})`);
-	return { id: historyId, hashes: after };
+	// the pin the saved output was composed at; it can differ from brand.json's pin (a --pin override)
+	const pin = entryEffectivePin(entry);
+	return { id: historyId, hashes: after, pin, pinOverride: pin !== after.brandPin };
 }
 
 /** --inventory: classify the build directory against the composed set (A25a step 2). */
@@ -469,7 +530,8 @@ export async function inventory(opts) {
 		const dispositions = opts.dispositions ? readJson(opts.dispositions, 'dispositions') : {};
 		const inv = buildInventory({ outDir: ctx.outDir, composed, dispositions, preserved: opts.preserve ?? [], tracked, legacyTreePaths, legacyTag: opts.legacyTag, legacyCommit, dirty });
 		const out = opts.inventoryOut ?? path.join(historyDirFor(ctx.layer.dir), 'adoption-inventory.json');
-		mkdirSync(path.dirname(out), { recursive: true });
+		if (path.dirname(out) === historyDirFor(ctx.layer.dir)) ensureHistoryRoot(path.dirname(out));
+		else mkdirSync(path.dirname(out), { recursive: true });
 		safeWrite(path.dirname(out), path.basename(out), pretty(inv));
 		return { inventory: inv, file: out, unexplained: inv.rows.filter((r) => r.class === 'unexplained').length };
 	} finally {
@@ -569,7 +631,7 @@ export async function main(argv) {
 	}
 	if (mode === '--restore-inputs') {
 		const r = restoreInputs({ layerDir, historyId: a.values.get('--restore-inputs') });
-		console.log(`brand layer restored from ${r.id}; hashes verified (pin ${r.hashes.pin.slice(0, 12)}). Run the build entry to compose these inputs.`);
+		console.log(`brand layer restored from ${r.id}; hashes verified (pin ${r.pin.slice(0, 12)}). Run the build entry to compose these inputs${r.pinOverride ? ` with --pin ${r.pin} (the saved output was composed at a pin different from brand.json's ${r.hashes.brandPin.slice(0, 12)})` : ''}.`);
 		return 0;
 	}
 	const r = await inventory({

@@ -320,8 +320,13 @@ export function importFindings(ctx, relFile, text) {
   return out;
 }
 
-/** Layer-placement findings of an overlay file path (code files only). */
-export function placementFindings(layers, relFile) {
+/**
+ * Layer-placement findings of an overlay file path (code files only). `deployFiles` are the brand's
+ * declared deployment files (brand.json deployFiles, validated by compose): a code file there may sit in
+ * no layer (ecosystem.config.cjs). Nothing else changes: a deploy file in L1 or on two layers still fails,
+ * and every file not declared stays strictly classified.
+ */
+export function placementFindings(layers, relFile, deployFiles = []) {
   if (!isCodeFile(layers, relFile)) return [];
   const f = (rule, message) => ({ file: relFile, line: 1, col: 1, rule, message });
   let c;
@@ -330,18 +335,19 @@ export function placementFindings(layers, relFile) {
   } catch (e) {
     return [f('layer-ambiguous', e.message)];
   }
+  if (!c && new Set(deployFiles).has(relFile)) return [];
   if (!c) return [f('layer-unclassified', `${relFile} is in no layer; list it in layers.json before overlaying it`)];
   if (c.layer === 'L1') return [f('layer-l1-overlay', `${relFile} is L1 (${c.via}); L1 is locked and not ejectable`)];
   return [];
 }
 
-export function checkOverlayImports({ root, layers, files }) {
+export function checkOverlayImports({ root, layers, files, deployFiles = [] }) {
   const resolver = createResolver(root);
   const findings = [];
   let checked = 0;
   for (const raw of files) {
     const rel = normalizeRel(raw);
-    const placement = placementFindings(layers, rel);
+    const placement = placementFindings(layers, rel, deployFiles);
     findings.push(...placement);
     if (!isCodeFile(layers, rel)) continue;
     const abs = path.join(resolver.rootReal, rel);

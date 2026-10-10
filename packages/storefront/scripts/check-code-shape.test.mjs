@@ -79,6 +79,25 @@ test('network: property names that merely look like fetch are not flagged, globa
   assert.ok(shape("export const a = (n: Navigator) => n.sendBeacon('/x');").includes('global-network'));
 });
 
+test('network: a global object wrapped in parentheses, assertions or non-null is still the global object', () => {
+  for (const src of [
+    "export const a = () => (globalThis).fetch('/shop-api');",
+    "export const a = () => ((window)).fetch('/shop-api');",
+    "export const a = () => (self)!.fetch('/shop-api');",
+    "export const a = () => (window as any).fetch('/shop-api');",
+    "export const a = () => ((globalThis as unknown) as Window).fetch('/shop-api');",
+    "export const a = () => (globalThis as any)['fetch']('/shop-api');",
+    "export const a = () => (global satisfies object).fetch('/shop-api');",
+    "export const a = () => new (window as any).WebSocket('wss://example.invalid');",
+    "export const a = () => new (self)!.XMLHttpRequest();",
+  ]) assert.ok(shape(src).includes('global-network'), src);
+  assert.ok(shape("export const a = () => (<any>globalThis).fetch('/shop-api');", 'src/brand/x.ts').includes('global-network'), 'angle-bracket assertion');
+  // a wrapped receiver that is NOT a global object stays allowed, like the unwrapped form
+  assert.deepEqual(shape('export const a = (api: { fetch: () => void }) => (api).fetch();'), []);
+  assert.deepEqual(shape('export const a = (api: any) => (api as { fetch: () => void }).fetch();'), []);
+  assert.deepEqual(shape("export const a = (api: any) => (api!)['fetch']();"), []);
+});
+
 test('orchestration: names, gateway call targets and stock helpers are flagged; a gateway-named JSX element is not a call', () => {
   assert.ok(shape("import { placeOrder as po } from '~/platform/checkout'; export const a = () => po();").includes('orchestration-call'));
   assert.ok(shape('export const a = () => refreshCartStock();').includes('orchestration-call'));

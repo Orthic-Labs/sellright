@@ -6,15 +6,17 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { apply, dryRun, plan, renderWorkspace, restoreInputs, selfCheck } from './compose.mjs';
+import { CHECKERS_DIR, apply, dryRun, plan, renderWorkspace, restoreInputs, selfCheck } from './compose.mjs';
 import { checkClosure } from './closure-check.mjs';
 import { layerOf, parseLayers } from './lib/layers.mjs';
 import { buildInventory } from './lib/inventory.mjs';
+import { openBase } from './lib/base.mjs';
 import { listEntries, markBuilt } from './lib/history.mjs';
-import { Problems, safeWrite, sha256 } from './lib/util.mjs';
-import { BASE_FIXTURE, PIN, allFiles, editBase, equalSnapshots, makeWorld, snapshot } from './fixtures/support.mjs';
+import { Problems, safeRemoveFile, safeWrite, sha256 } from './lib/util.mjs';
+import { BASE_FIXTURE, PIN, PIN2, allFiles, editBase, equalSnapshots, makeWorld, snapshot } from './fixtures/support.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.resolve(HERE, '..', '..', '..', '..');
 const readJ = (p) => JSON.parse(readFileSync(p, 'utf8'));
 const asRoot = process.getuid?.() === 0;
 
@@ -96,7 +98,12 @@ test('happy path from a read-only base fixture', async (t) => {
 	assert.deepEqual(report.patchedScriptKeys, ['build', 'prebuild']);
 	assert.equal(report.optionalInputs['.npmrc'].present, false);
 	assert.deepEqual(report.closure.usedExternals, ['../scripts/node-heap-options.mjs', '/opt/fixture-ops/cf-purge.mjs']);
-	assert.ok(['unavailable', 'passed'].includes(report.importCheck.status));
+	assert.equal(report.importCheck.status, 'passed', 'the import checker ran against the complete layers schema');
+	assert.equal(report.shapeCheck.status, 'passed', 'the code-shape checker ran too');
+	assert.ok(report.importCheck.checked >= 3, 'the deploy file, the ejected component and the slot were all checked');
+	assert.ok(list.includes('ecosystem.config.cjs'), 'the declared deploy file is an overlay code file that sits in no layer');
+	assert.deepEqual(report.closure.generatedArtifacts, ['server/entry.express.js'], 'a generated runtime artifact is not a missing input');
+	assert.deepEqual(report.closure.excludedTooling, ['tools/compose/compose.test.mjs'], 'composition-excluded tooling is not a missing input');
 	assert.equal(report.hashes.overlayTree.length, 64);
 
 	const h = path.join(w.repo, '.compose-history', r.historyId);
@@ -193,6 +200,50 @@ test('a managed file listing an unsafe path stops the apply before any write', a
 	writeFileSync(w.outPath('.compose-managed.json'), JSON.stringify(m));
 	await failsWith(apply(w.opts()), 'bad-managed');
 	assert.equal(readFileSync(outside, 'utf8'), 'keep');
+});
+
+test('removing an obsolete managed file never follows a symlinked ancestor out of the build directory', async (t) => {
+	const w = makeWorld();
+	t.after(w.cleanup);
+	await apply(w.opts());
+	// the overlay drops Hello.tsx, so nothing composed lives in src/brand-slots any more
+	rmSync(w.layerPath('overlay/src/brand-slots/Hello.tsx'));
+	editManifest(w, (m) => (m.entries = m.entries.filter((e) => e.path !== 'src/brand-slots/Hello.tsx')));
+	// ...and that managed directory is swapped for a symlink to a directory outside, holding a same-named file
+	const outsideDir = path.join(w.root, 'outside-dir');
+	w.write(path.join(outsideDir, 'Hello.tsx'), 'precious');
+	renameSync(w.outPath('src/brand-slots'), w.outPath('src/brand-slots-real'));
+	symlinkSync(outsideDir, w.outPath('src/brand-slots'));
+	const historyBefore = listEntries(w.layer).length;
+	const before = snapshot(w.out);
+	await failsWith(dryRun(w.opts()), 'symlink');
+	await failsWith(apply(w.opts()), 'symlink');
+	assert.equal(readFileSync(path.join(outsideDir, 'Hello.tsx'), 'utf8'), 'precious', 'the file behind the symlink was not deleted');
+	assert.equal(listEntries(w.layer).length, historyBefore, 'rejected while planning: no history entry was written');
+	assert.ok(equalSnapshots(before, snapshot(w.out)), 'nothing in the build directory changed');
+});
+
+test('safeRemoveFile and safeWrite refuse a symlinked ancestor, a symlinked root and a non-directory ancestor', (t) => {
+	const dir = mkdtempSync(path.join(tmpdir(), 'compose-sr-'));
+	t.after(() => rmSync(dir, { recursive: true, force: true }));
+	const root = path.join(dir, 'root');
+	const outside = path.join(dir, 'outside');
+	mkdirSync(root);
+	mkdirSync(outside);
+	writeFileSync(path.join(outside, 'f.txt'), 'keep');
+	symlinkSync(outside, path.join(root, 'link'));
+	assert.throws(() => safeRemoveFile(root, 'link/f.txt'), /symlink/);
+	assert.throws(() => safeWrite(root, 'link/g.txt', 'x'), /symlink/);
+	const linkRoot = path.join(dir, 'link-root');
+	symlinkSync(outside, linkRoot);
+	assert.throws(() => safeRemoveFile(linkRoot, 'f.txt'), /symlink/);
+	assert.throws(() => safeWrite(linkRoot, 'g.txt', 'x'), /symlink/);
+	assert.deepEqual(readdirSync(outside), ['f.txt'], 'nothing was removed from or written to the outside directory');
+	writeFileSync(path.join(root, 'file'), 'x');
+	assert.throws(() => safeRemoveFile(root, 'file/inner'), /not-a-dir/);
+	assert.equal(safeRemoveFile(root, 'missing/x'), false, 'a missing ancestor means there is nothing to remove');
+	writeFileSync(path.join(root, 'plain.txt'), 'x');
+	assert.equal(safeRemoveFile(root, 'plain.txt'), true);
 });
 
 // ---------------------------------------------------------------- layer spoofing, globs, ejects
@@ -485,6 +536,67 @@ test('mark-built keeps the newest N built entries and nothing else is deleted', 
 	assert.ok(existsSync(w.layerPath('brand.json')));
 });
 
+test('a symlinked history root is rejected before anything is created, written or pruned', async (t) => {
+	const w = makeWorld();
+	t.after(w.cleanup);
+	const outsideDir = path.join(w.root, 'outside-history');
+	mkdirSync(outsideDir);
+	symlinkSync(outsideDir, path.join(w.repo, '.compose-history'));
+	await failsWith(apply(w.opts()), 'symlink');
+	assert.deepEqual(readdirSync(outsideDir), [], 'no snapshot was written through the history root symlink');
+	assert.equal(existsSync(w.out), false, 'the build directory was not even created');
+	rmSync(path.join(w.repo, '.compose-history'));
+	writeFileSync(path.join(w.repo, '.compose-history'), 'a file, not a directory');
+	await failsWith(apply(w.opts()), 'not-a-dir');
+	rmSync(path.join(w.repo, '.compose-history'));
+
+	// a root swapped for a symlink after entries exist: listing, mark-built and restore all refuse
+	const a = await apply(w.opts());
+	const real = path.join(w.repo, '.compose-history');
+	renameSync(real, path.join(w.repo, 'history-real'));
+	symlinkSync(path.join(w.repo, 'history-real'), real);
+	assert.throws(() => listEntries(w.layer), /symlink/);
+	assert.throws(() => markBuilt({ layerDir: w.layer, outDir: w.out, now: new Date() }), /symlink/);
+	assert.throws(() => restoreInputs({ layerDir: w.layer, historyId: a.historyId }), /symlink/);
+});
+
+test('history made with a --pin override restores; the effective pin is recorded apart from brand.json and reported', async (t) => {
+	const w = makeWorld();
+	t.after(w.cleanup);
+	const layer1 = snapshot(w.layer);
+	const a = await apply({ ...w.opts(), pin: PIN2 });
+	const metaFile = path.join(w.repo, '.compose-history', a.historyId, 'meta.json');
+	const meta = readJ(metaFile);
+	assert.equal(meta.hashes.pin, PIN2, 'the effective pin');
+	assert.equal(meta.hashes.brandPin, PIN, "brand.json's own pin, which the layer copy carries");
+	assert.equal(readJ(w.outPath('compose-report.json')).hashes.pin, PIN2);
+
+	writeFileSync(w.layerPath('overlay/src/brand/tokens.css'), ':root { --brand-color-accent: #111; }\n');
+	const res = restoreInputs({ layerDir: w.layer, historyId: a.historyId });
+	assert.equal(res.pin, PIN2, 'restore reports the pin the saved output was composed at');
+	assert.equal(res.pinOverride, true);
+	assert.equal(res.hashes.brandPin, PIN);
+	assert.ok(equalSnapshots(layer1, snapshot(w.layer)), 'the layer equals the history copy');
+	const again = await apply({ ...w.opts(), pin: res.pin });
+	assert.deepEqual(again.changes, [], 'recomposing at the recorded pin reproduces the saved output');
+
+	// an entry written before brandPin existed recorded the brand.json pin as `pin` and still restores
+	const legacyMeta = readJ(metaFile);
+	delete legacyMeta.hashes.brandPin;
+	legacyMeta.hashes.pin = PIN;
+	writeFileSync(metaFile, JSON.stringify(legacyMeta));
+	writeFileSync(w.layerPath('overlay/src/brand/tokens.css'), ':root { --brand-color-accent: #222; }\n');
+	const old = restoreInputs({ layerDir: w.layer, historyId: a.historyId });
+	assert.equal(old.pin, PIN);
+	assert.equal(old.pinOverride, false);
+
+	// a tampered brandPin is still caught
+	const bad = readJ(metaFile);
+	bad.hashes.brandPin = PIN2;
+	writeFileSync(metaFile, JSON.stringify(bad));
+	assert.throws(() => restoreInputs({ layerDir: w.layer, historyId: a.historyId }), /history-tampered/);
+});
+
 // ---------------------------------------------------------------- adoption guard / legacy source
 
 async function composedShas(w) {
@@ -628,6 +740,110 @@ test('a base script file that the build calls but the tree lacks fails the closu
 	rmSync(w.basePath('scripts/clean.mjs'));
 	await failsWith(apply(w.opts()), 'closure-missing-script');
 	assert.equal(existsSync(w.out), false);
+});
+
+test('closure: generated runtime artifacts and composition-excluded tooling are not missing inputs, and only that', () => {
+	const scripts = { serve: 'node server/entry.express.js', 'test:tools': 'node --test tools/compose/compose.test.mjs', other: 'node dist/x.js', gone: 'node scripts/gone.mjs' };
+	const p = new Problems();
+	const r = checkClosure({ files: pkgFiles(scripts), brand: {}, problems: p });
+	assert.deepEqual(p.list.map((x) => x.message.split(' ')[0]), ['package.json#scripts.gone'], 'a genuinely missing script is still reported');
+	assert.deepEqual(r.generatedArtifacts, ['dist/x.js', 'server/entry.express.js']);
+	assert.deepEqual(r.excludedTooling, ['tools/compose/compose.test.mjs']);
+
+	// a brand that ships tools/ (baseExclude: []) gets them checked
+	const shipped = new Problems();
+	checkClosure({ files: pkgFiles({ 'test:tools': scripts['test:tools'] }), brand: { baseExclude: [] }, problems: shipped });
+	assert.deepEqual(shipped.codes(), ['closure-missing-script']);
+	// a script the brand patches in must run in the built tree: no exemption for excluded tooling
+	const patched = new Problems();
+	checkClosure({ files: pkgFiles({ 'test:tools': scripts['test:tools'] }), brand: { packageScripts: { 'test:tools': scripts['test:tools'] } }, problems: patched });
+	assert.deepEqual(patched.codes(), ['closure-missing-script']);
+	// ...nor for the brand build script
+	const build = new Problems();
+	checkClosure({ files: pkgFiles({}, { 'scripts/b.sh': 'node tools/x.mjs\n' }), brand: { buildScript: 'scripts/b.sh' }, problems: build });
+	assert.deepEqual(build.codes(), ['closure-missing-script']);
+});
+
+test('closure: the REAL storefront package.json script set closes over the REAL composed file set', (t) => {
+	const base = openBase({ baseDir: REPO_ROOT, pin: PIN });
+	t.after(() => base.cleanup());
+	const keep = new Set(['package.json', 'vendor/storefront-client/package.json']);
+	const files = new Map([...base.files.keys()].map((rel) => [rel, keep.has(rel) ? base.read(rel) : Buffer.alloc(0)]));
+	assert.ok(JSON.parse(String(files.get('package.json'))).scripts.serve, 'the real script set is what is under test');
+	const p = new Problems();
+	const r = checkClosure({ files, brand: {}, problems: p });
+	assert.deepEqual(p.list, []);
+	assert.ok(r.scanned.includes('package.json#scripts.serve') && r.scanned.includes('package.json#scripts.test:tools'));
+	assert.ok(r.generatedArtifacts.includes('server/entry.express.js'));
+	assert.ok(r.excludedTooling.includes('tools/compose/compose.test.mjs'));
+});
+
+// ---------------------------------------------------------------- overlay checkers
+
+test('both checkers are packaged with the tool and match the repo scripts byte for byte', () => {
+	assert.equal(CHECKERS_DIR, path.join(HERE, 'checkers'));
+	for (const name of ['check-imports.mjs', 'check-code-shape.mjs']) {
+		const packaged = path.join(HERE, 'checkers', name);
+		assert.ok(existsSync(packaged), `${name} must be packaged in tools/compose/checkers (the cold tool home archives tools/compose only)`);
+		assert.equal(readFileSync(packaged, 'utf8'), readFileSync(path.join(HERE, '..', '..', 'scripts', name), 'utf8'), `${name} drifted from scripts/; run: cp scripts/${name} tools/compose/checkers/${name}`);
+	}
+	assert.ok(!readFileSync(path.join(HERE, 'compose.mjs'), 'utf8').includes("'scripts', 'check-"), 'compose.mjs must not reach outside the tool home for a checker');
+});
+
+test('overlay code is checked by BOTH checkers: forbidden imports, L1 bypass and direct network calls block compose', async (t) => {
+	const w = makeWorld();
+	t.after(w.cleanup);
+	const bad = {
+		'src/brand-slots/Forbidden.tsx': ["import { c } from '@sellright/storefront-client';\nexport const a = c;\n", 'import-check'],
+		'src/brand-slots/Bypass.tsx': ["import { Layout } from '~/routes/layout';\nexport const a = Layout;\n", 'import-check'],
+		'src/brand-slots/Net.tsx': ["export const a = () => fetch('/shop-api');\n", 'shape-check'],
+		'src/brand-slots/Wrapped.tsx': ["export const a = () => (globalThis).fetch('/shop-api');\n", 'shape-check'],
+		'src/brand-slots/Forbidden2.tsx': ["import { c } from '@sellright/storefront-client';\nexport const a = c;\n", 'shape-check'],
+	};
+	for (const [rel, [text, code]] of Object.entries(bad)) {
+		w.write(w.layerPath(`overlay/${rel}`), text);
+		await failsWith(dryRun(w.opts()), code);
+		await failsWith(apply(w.opts()), code);
+		rmSync(w.layerPath(`overlay/${rel}`));
+	}
+	assert.equal(existsSync(w.out), false, 'nothing was composed');
+	const ok = await dryRun(w.opts());
+	assert.equal(ok.report.importCheck.status, 'passed');
+	assert.equal(ok.report.shapeCheck.status, 'passed');
+});
+
+test('a checker that cannot run fails compose; it is never reported as unavailable and passed over', async (t) => {
+	const w = makeWorld({ readOnlyBase: false });
+	t.after(w.cleanup);
+	const empty = mkdtempSync(path.join(tmpdir(), 'compose-nocheckers-'));
+	t.after(() => rmSync(empty, { recursive: true, force: true }));
+	const missing = await failsWith(dryRun({ ...w.opts(), checkersDir: empty }), 'import-check-unavailable');
+	assert.ok(missing.details.some((d) => d.code === 'shape-check-unavailable'));
+	await failsWith(apply({ ...w.opts(), checkersDir: empty }), 'import-check-unavailable');
+	assert.equal(existsSync(w.out), false);
+
+	const full = readFileSync(w.basePath('layers.json'), 'utf8');
+	// the pre-A14 minimal layers.json shape (no platformApi, imports, codeShape)
+	editBase(w, 'layers.json', (s) => JSON.stringify({ version: 1, layers: JSON.parse(s).layers }));
+	const minimal = await failsWith(dryRun(w.opts()), 'import-check-unavailable');
+	assert.ok(minimal.details.some((d) => d.code === 'shape-check-unavailable'));
+	// only codeShape missing: the import checker runs, the shape checker cannot
+	editBase(w, 'layers.json', () => JSON.stringify({ ...JSON.parse(full), codeShape: undefined }));
+	const noShape = await failsWith(dryRun(w.opts()), 'shape-check-unavailable');
+	assert.ok(!noShape.details.some((d) => d.code === 'import-check-unavailable'));
+	editBase(w, 'layers.json', () => full);
+	await dryRun(w.opts());
+});
+
+test('a layers.json shipped in the overlay cannot replace the base layers the checkers use', async (t) => {
+	const w = makeWorld();
+	t.after(w.cleanup);
+	editBrand(w, (b) => b.deployFiles.push('layers.json'));
+	// a permissive layers.json that puts everything in L3 and forbids nothing
+	const permissive = { ...readJ(path.join(BASE_FIXTURE, 'packages/storefront/layers.json')), imports: { forbidden: [], codeExtensions: ['.ts'], assetExtensions: [] } };
+	w.write(w.layerPath('overlay/layers.json'), JSON.stringify(permissive));
+	w.write(w.layerPath('overlay/src/brand-slots/Forbidden.tsx'), "import { c } from '@sellright/storefront-client';\nexport const a = c;\n");
+	await failsWith(dryRun(w.opts()), 'import-check');
 });
 
 // ---------------------------------------------------------------- misc units

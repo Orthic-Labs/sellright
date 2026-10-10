@@ -11,6 +11,9 @@
 // Vite's own loadEnv and fails on: (a) a name outside the schema, (b) a name owned by two
 // sections (or supplied by brand.json for a section that does not own it), (c) a required
 // name that is missing, (d) a legacy-copied public name that differs from brand.json.
+// A required privateRuntime name is checked against its runtime sources (the process environment
+// and the build directory's .env / .env.local), for presence only: its value is never printed,
+// never stored and never part of the public configuration hash.
 // Output is names and hashes only; a value is never printed.
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -170,8 +173,22 @@ export async function checkEnv({ schema, brand, buildDir, loadEnv, problems = ne
 	for (const n of Object.keys(effective)) {
 		if (!known.has(n)) problems.add('env-unknown-name', `effective name ${n} is not in the schema`, 'env');
 	}
+	const privateNames = new Set(names.privateRuntime);
+	const requiredPrivate = (brand.requiredEnv ?? []).filter((n) => privateNames.has(n));
+	// Unprefixed read of .env / .env.local and the process environment. Only "is it set" is taken from
+	// this object; it never reaches `effective`, the hash, the report or any message.
+	let privateSources = {};
+	if (requiredPrivate.length) {
+		const dir = buildDir && existsSync(buildDir) ? buildDir : mkdtempSync(path.join(tmpdir(), 'compose-env-'));
+		try {
+			privateSources = load(LEGACY_PROBE_MODE, dir, '');
+		} finally {
+			if (dir !== buildDir) rmSync(dir, { recursive: true, force: true });
+		}
+	}
 	for (const n of brand.requiredEnv ?? []) {
-		if (effective[n] === undefined || effective[n] === '') problems.add('env-missing-required', `required name ${n} is missing or empty`, 'env');
+		const value = privateNames.has(n) ? privateSources[n] : effective[n];
+		if (value === undefined || value === '') problems.add('env-missing-required', `required name ${n} is missing or empty`, 'env');
 	}
 	for (const [n, v] of Object.entries(publicConfig)) {
 		if (typeof v !== 'string') continue;

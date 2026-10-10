@@ -118,6 +118,37 @@ test('(c) a missing required name fails; a legacy-provided required name satisfi
 	assert.ok((await run({ brand: unknownRequired })).problems.codes().includes('env-unknown-name'));
 });
 
+test('(c2) a required privateRuntime name is checked against its runtime sources, presence only', async () => {
+	const SECRET = 'sk_live_not_a_real_secret_value';
+	const brand = baseBrand();
+	brand.requiredEnv = ['VITE_STORE_NAME', 'SELLRIGHT_API_URL'];
+	assert.ok(schema().privateRuntime.names.includes('SELLRIGHT_API_URL'), 'a privateRuntime name');
+	// missing (an empty value counts as missing, which also pins a possibly inherited value down)
+	let x = await run({ brand, env: { SELLRIGHT_API_URL: '' } });
+	assert.deepEqual(x.problems.list.map((p) => p.code), ['env-missing-required']);
+	assert.ok(x.problems.list[0].message.includes('SELLRIGHT_API_URL'));
+	// supplied through the process environment
+	x = await run({ brand, env: { SELLRIGHT_API_URL: SECRET } });
+	assert.deepEqual(x.problems.list, []);
+	// supplied through the build directory's .env, and through .env.local
+	const viaFile = { '.env': `SELLRIGHT_API_URL=${SECRET}\n` };
+	x = await run({ brand, files: viaFile, env: { SELLRIGHT_API_URL: '' } });
+	assert.deepEqual(x.problems.list.map((p) => p.code), ['env-missing-required'], 'an empty process value wins over the file, as Vite loads it');
+	x = await run({ brand, files: viaFile });
+	assert.deepEqual(x.problems.list, []);
+	x = await run({ brand, files: { '.env.local': `SELLRIGHT_API_URL=${SECRET}\n` } });
+	assert.deepEqual(x.problems.list, []);
+	// the value is never reported, stored or hashed: result, problems and the public hash are unchanged by it
+	assert.ok(!JSON.stringify({ r: x.r, p: x.problems.list }).includes(SECRET));
+	const plain = await run({ files: { '.env': 'UNRELATED=1\n' } });
+	assert.equal(x.r.hash, plain.r.hash, 'a private value does not enter the public configuration hash');
+	assert.deepEqual(x.r.names, plain.r.names);
+	// a required PUBLIC name behaves exactly as before
+	const pub = baseBrand();
+	pub.requiredEnv = ['VITE_STORE_TAGLINE'];
+	assert.deepEqual((await run({ brand: pub, env: { SELLRIGHT_API_URL: SECRET } })).problems.list.map((p) => p.code), ['env-missing-required']);
+});
+
 test('(d) a legacy-copied public name that differs from brand.json fails, naming the name and never the value', async () => {
 	const x = await run({ files: { '.env': 'VITE_STORE_NAME=Somebody Else\n' } });
 	assert.deepEqual(x.problems.codes(), ['env-legacy-conflict']);

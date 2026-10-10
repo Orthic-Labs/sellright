@@ -1,9 +1,25 @@
 {
 	"version": 1,
+	"platformApi": { "alias": "~/platform/", "dir": "src/platform/" },
 	"layers": {
 		"L1": { "include": ["src/platform/**", "src/entry.express.tsx", "src/routes/layout.tsx"] },
 		"L2": { "include": ["src/components/**"] },
 		"L3": { "include": ["src/brand/**", "src/brand-slots/**", "public/brand/**", "src/routes/products/**/ProductPageView.tsx"] }
 	},
-	"assetExceptions": [{ "path": "public/sezzle-color.svg", "layer": "L3" }]
+	"assetExceptions": [{ "path": "public/sezzle-color.svg", "layer": "L3" }],
+	"imports": {
+		"forbidden": ["@sellright/storefront-client", "~/sellright/client"],
+		"codeExtensions": [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"],
+		"assetExtensions": [".css", ".scss", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".ico", ".woff", ".woff2", ".ttf", ".otf", ".json", ".txt", ".md", ".mp4", ".webm"]
+	},
+	"codeShape": {
+		"baseL2Enforcement": "report",
+		"definitionCalls": ["routeLoader$", "routeAction$", "globalAction$", "server$", "routeLoaderQrl", "routeActionQrl", "globalActionQrl", "serverQrl"],
+		"networkGlobals": ["fetch", "XMLHttpRequest", "WebSocket"],
+		"networkMethods": ["sendBeacon"],
+		"globalObjects": ["window", "globalThis", "self", "global"],
+		"orchestrationCalls": ["refreshCartStock", "placeOrder", "loadStripe", "confirmPayment", "getProductStockLevelsOnly", "getProductStockStatus"],
+		"orchestrationPatterns": ["^refresh.*Stock", "^(get|fetch|load|check).*Stock(Level|Levels|Status)"],
+		"gatewayNamePattern": "^(nmi|stripe|sezzle|collectjs)"
+	}
 }
