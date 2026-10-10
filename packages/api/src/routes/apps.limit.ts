@@ -27,7 +27,7 @@ function keyFor(ip: string, identifier: string): string {
   return `${ip}|${identifier.toLowerCase()}`;
 }
 
-function makeKeyedLimiter(bucket: string, windowMs: number, maxAttempts: number) {
+export function makeKeyedLimiter(bucket: string, windowMs: number, maxAttempts: number) {
   return {
     /** Throw-free check: retryAfterSeconds>0 while the (ip, identifier) pair is over budget. */
     retryAfter: (ip: string, identifier = ''): Promise<number> =>

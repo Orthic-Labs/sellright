@@ -14,6 +14,7 @@ import { orders } from './routes/orders.js';
 import { admin } from './routes/admin.js';
 import { setup } from './routes/setup.js';
 import { adminSystem } from './routes/admin-system.js';
+import { adminSystemInfo } from './routes/admin-system-info.js';
 import { adminDashboard } from './routes/admin-dashboard.js';
 import { adminCatalog } from './routes/admin-catalog.js';
 import { adminProducts } from './routes/admin-products.js';
@@ -63,17 +64,47 @@ import { err as logErr } from './lib/logger.js';
 import { listApiPlugins } from './plugins.js';
 import { installDefaultStoreKitPolicy } from './licensing/storekit/default-policy.js';
 import { installDefaultPaymentPolicy } from './payments/policy/default-policy.js';
+import { SELLRIGHT_VERSION } from './version.js';
+import type { EngineContext, EnginePlugin } from './sdk/types.js';
 import { preRoutePolicy } from './pre-route-policy.js';
 
-export const SELLRIGHT_VERSION = '0.1.0';
+export { SELLRIGHT_VERSION };
+
+export interface HttpAppOptions {
+  /** SDK plugins (sdk/create-app.ts). Requires `ctx`. */
+  plugins?: readonly EnginePlugin[];
+  ctx?: EngineContext;
+  /** Admission gate (shutdown step 1): while it returns false every request is answered 503. */
+  admit?: () => boolean;
+}
 
 /**
  * The API is typed REST: every route declares a zod schema, which generates
  * both the OpenAPI contract (/v1/openapi.json) and typed clients for consumers.
  * No GraphQL. See docs/ARCHITECTURE.md.
+ *
+ * This builds the Hono app only (no env parse, no pool, no server). The SDK's
+ * `createApp` (sdk/create-app.ts) is the entry that owns the runtime lifecycle;
+ * it calls this with its plugins. Calling it directly (tests) keeps the legacy
+ * behaviour: plugins registered through plugins.ts `registerApiPlugin` are mounted.
  */
-export function createApp(): OpenAPIHono {
+export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
   const app = new OpenAPIHono();
+  const sdkPlugins = options.plugins ?? [];
+  if (sdkPlugins.length > 0 && !options.ctx) throw new Error('buildHttpApp: plugins require an engine context');
+  const admit = options.admit;
+
+  // Shutdown step 1 ("stop admitting"): answered before anything else runs.
+  if (admit) {
+    app.use('*', async (c, next) => {
+      if (!admit()) {
+        c.header('Connection', 'close');
+        c.header('Retry-After', '5');
+        return c.json({ error: { code: 'SHUTTING_DOWN', message: 'The server is shutting down. Please retry shortly.' } }, 503);
+      }
+      await next();
+    });
+  }
 
   // OBS-1: request-id FIRST so every downstream middleware (CORS, CSRF, route
   // handlers, onError) sees the same id, and so the access log + error log
@@ -88,6 +119,9 @@ export function createApp(): OpenAPIHono {
 
   // Plugin pre-route response policy (plugins.ts `errorPolicy`); no-op without one.
   app.use('*', preRoutePolicy(listApiPlugins));
+  // SDK lifecycle `preRoute`: plugin middleware / response policies that must wrap every
+  // route. After request-id + access log (so they carry the id), before CORS and routes.
+  for (const plugin of sdkPlugins) plugin.preRoute?.(app, options.ctx!);
 
   // OPS-1: per-store CORS allowlist. No wildcard-with-credentials (browsers
   // reject that combination anyway, but we never even offer it). An origin is
@@ -342,6 +376,7 @@ export function createApp(): OpenAPIHono {
   app.route('/', admin);
   app.route('/', setup); // one-click install: pre-auth claim (404s once claimed)
   app.route('/', adminSystem); // one-click install: setup checklist, Publish readiness, recovery-kit download
+  app.route('/', adminSystemInfo); // read-only build-info + effective-config (config/v1) — owner only
   app.route('/', adminDashboard); // store dashboard KPIs
   app.route('/', adminProducts); // product list/detail/edit + variant pricing/stock
   app.route('/', adminCatalog); // catalog mgmt: product/variant create+delete, collections, inventory
@@ -378,6 +413,10 @@ export function createApp(): OpenAPIHono {
   for (const plugin of listApiPlugins()) {
     if (plugin.routes) app.route('/', plugin.routes);
   }
+  for (const plugin of sdkPlugins) {
+    const routes = typeof plugin.routes === 'function' ? plugin.routes(options.ctx!) : plugin.routes;
+    if (routes) app.route('/', routes);
+  }
   for (const plugin of listApiPlugins()) {
     plugin.init?.(app);
   }
@@ -395,3 +434,6 @@ export function createApp(): OpenAPIHono {
 
   return app;
 }
+
+/** @deprecated Legacy name for the Hono builder (kept so existing tests/callers are unchanged). Use the SDK `createApp` from `@sellright/api`. */
+export const createApp = buildHttpApp;

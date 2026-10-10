@@ -1,0 +1,608 @@
+{
+  "schema": "sellright-exports-contract/1",
+  "source": "IMPORT-DISPOSITION.md (draft, plan 2.2) + import-graph.json",
+  "symbols": [
+    {
+      "module": "auth/cookies",
+      "symbol": "customerCsrfValid",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "auth"
+    },
+    {
+      "module": "auth/email",
+      "symbol": "normalizeEmail",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "auth"
+    },
+    {
+      "module": "auth/rate-limit",
+      "symbol": "clientIp",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "auth"
+    },
+    {
+      "module": "auth/session",
+      "symbol": "customerToken",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "auth"
+    },
+    {
+      "module": "auth/session",
+      "symbol": "resolveCustomer",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "auth"
+    },
+    {
+      "module": "db/client",
+      "symbol": "Tx",
+      "kind": "type",
+      "disposition": "public",
+      "surface": "db"
+    },
+    {
+      "module": "db/client",
+      "symbol": "pool",
+      "kind": "const",
+      "disposition": "replaced",
+      "surface": null
+    },
+    {
+      "module": "db/client",
+      "symbol": "unsafeUnscopedDb",
+      "kind": "const",
+      "disposition": "replaced",
+      "surface": null
+    },
+    {
+      "module": "db/client",
+      "symbol": "withStore",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "db"
+    },
+    {
+      "module": "db/schema",
+      "symbol": "schema",
+      "kind": "namespace",
+      "disposition": "public",
+      "surface": "schema"
+    },
+    {
+      "module": "db/schema-core",
+      "symbol": "store",
+      "kind": "const",
+      "disposition": "public",
+      "surface": "schema"
+    },
+    {
+      "module": "db/schema-core",
+      "symbol": "ts",
+      "kind": "const",
+      "disposition": "public",
+      "surface": "schema"
+    },
+    {
+      "module": "db/schema-orders",
+      "symbol": "license",
+      "kind": "const",
+      "disposition": "public",
+      "surface": "schema"
+    },
+    {
+      "module": "env",
+      "symbol": "env",
+      "kind": "const",
+      "disposition": "replaced",
+      "surface": null
+    },
+    {
+      "module": "env",
+      "symbol": "extendEnv",
+      "kind": "function",
+      "disposition": "replaced",
+      "surface": null
+    },
+    {
+      "module": "lib/logger",
+      "symbol": "err",
+      "kind": "const",
+      "disposition": "public",
+      "surface": "log"
+    },
+    {
+      "module": "lib/logger",
+      "symbol": "log",
+      "kind": "const",
+      "disposition": "public",
+      "surface": "log"
+    },
+    {
+      "module": "licensing/activations",
+      "symbol": "findActivationByToken",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/activations",
+      "symbol": "recordCanonicalEntitlementIssuance",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/app-headers",
+      "symbol": "appKeyHeaderNames",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/app-headers",
+      "symbol": "deviceHeaderName",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/app-headers",
+      "symbol": "firstHeader",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/device-leases",
+      "symbol": "LeaseEnvelope",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/device-leases",
+      "symbol": "Platform",
+      "kind": "type",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/device-leases",
+      "symbol": "issueDeviceLease",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/device-leases",
+      "symbol": "removeDeviceOffline",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/device-leases",
+      "symbol": "renewDeviceLease",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/device-leases",
+      "symbol": "revokeDeviceRemote",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/device-policy",
+      "symbol": "derivePool",
+      "kind": "function",
+      "disposition": "replaced",
+      "surface": null
+    },
+    {
+      "module": "licensing/device-policy",
+      "symbol": "registerDevicePolicy",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/device-policy",
+      "symbol": "usesBoundedDevicePools",
+      "kind": "function",
+      "disposition": "replaced",
+      "surface": null
+    },
+    {
+      "module": "licensing/device-policy",
+      "symbol": "withCurrentDevicePolicy",
+      "kind": "function",
+      "disposition": "replaced",
+      "surface": null
+    },
+    {
+      "module": "licensing/entitlement-provider",
+      "symbol": "ActivateEntitlementContext",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/entitlement-provider",
+      "symbol": "EntitlementFields",
+      "kind": "type",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/entitlement-provider",
+      "symbol": "EntitlementVeto",
+      "kind": "class",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/entitlement-provider",
+      "symbol": "RefreshEntitlementContext",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/entitlement-provider",
+      "symbol": "registerEntitlementProvider",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/entitlement-provider",
+      "symbol": "withEntitlementVeto",
+      "kind": "function",
+      "disposition": "replaced",
+      "surface": null
+    },
+    {
+      "module": "licensing/entitlements",
+      "symbol": "buildEntitlements",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/entitlements",
+      "symbol": "canReceiveTieredUpdate",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/entitlements",
+      "symbol": "registerTierCatalog",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/entitlements",
+      "symbol": "resolveAuthorizationTier",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/issue",
+      "symbol": "newLicenseKey",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/license-lifecycle",
+      "symbol": "planLicenseLifecycle",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/mint",
+      "symbol": "mintLicense",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/release-auth",
+      "symbol": "isReleaseServiceToken",
+      "kind": "function",
+      "disposition": "replaced",
+      "surface": null
+    },
+    {
+      "module": "licensing/runtime-artifact-manifest",
+      "symbol": "RuntimeArtifactId",
+      "kind": "const (fork-added)",
+      "disposition": "moved",
+      "surface": null
+    },
+    {
+      "module": "licensing/runtime-artifact-manifest",
+      "symbol": "createRuntimeArtifactManifestTools",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/sign",
+      "symbol": "SignedPayload",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/sign",
+      "symbol": "signEntitlement",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/sign",
+      "symbol": "signLeaseEnvelope",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/sign",
+      "symbol": "verifyToken",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/storekit-config",
+      "symbol": "deploymentConfigFor",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "storekit"
+    },
+    {
+      "module": "licensing/storekit-config",
+      "symbol": "loadStoreKitAppConfig",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "storekit"
+    },
+    {
+      "module": "licensing/storekit-license",
+      "symbol": "ensureStoreKitLicense",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "storekit"
+    },
+    {
+      "module": "licensing/storekit-license",
+      "symbol": "isSandboxStoreKitLicense",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "storekit"
+    },
+    {
+      "module": "licensing/storekit-verify",
+      "symbol": "verifyStoreKitTransactionForDeployment",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "storekit"
+    },
+    {
+      "module": "licensing/tokens",
+      "symbol": "bearerToken",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/tokens",
+      "symbol": "hashActivationToken",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/trial",
+      "symbol": "TRIAL_DAYS",
+      "kind": "const",
+      "disposition": "replaced",
+      "surface": null
+    },
+    {
+      "module": "licensing/trial",
+      "symbol": "TrialPlatform",
+      "kind": "type (fork-added)",
+      "disposition": "moved",
+      "surface": null
+    },
+    {
+      "module": "licensing/trial",
+      "symbol": "trialDaysForPlatform",
+      "kind": "function (fork-added)",
+      "disposition": "moved",
+      "surface": null
+    },
+    {
+      "module": "licensing/trial",
+      "symbol": "trialExpiresAt",
+      "kind": "function",
+      "disposition": "replaced",
+      "surface": null
+    },
+    {
+      "module": "licensing/update-tier",
+      "symbol": "PUBLIC_PATCH_CHANNELS",
+      "kind": "const",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/update-tier",
+      "symbol": "isPatchChannel",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/update-tier",
+      "symbol": "normalizeReleasePlatform",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/update-tier",
+      "symbol": "parsePatchRelease",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/update-tier",
+      "symbol": "patchChannel",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/update-tier",
+      "symbol": "validateReleaseRegistration",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "plugins",
+      "symbol": "registerApiPlugin",
+      "kind": "function",
+      "disposition": "replaced",
+      "surface": null
+    },
+    {
+      "module": "routes/admin-helpers",
+      "symbol": "HttpError",
+      "kind": "class",
+      "disposition": "public",
+      "surface": "http"
+    },
+    {
+      "module": "routes/admin-helpers",
+      "symbol": "J",
+      "kind": "const",
+      "disposition": "public",
+      "surface": "http"
+    },
+    {
+      "module": "routes/admin-helpers",
+      "symbol": "errBody",
+      "kind": "const",
+      "disposition": "public",
+      "surface": "http"
+    },
+    {
+      "module": "routes/admin-helpers",
+      "symbol": "guard",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "http"
+    },
+    {
+      "module": "routes/admin-helpers",
+      "symbol": "requireAdmin",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "http"
+    },
+    {
+      "module": "routes/admin-helpers",
+      "symbol": "requirePermission",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "http"
+    },
+    {
+      "module": "routes/admin-helpers",
+      "symbol": "requireStore",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "http"
+    },
+    {
+      "module": "routes/admin-helpers",
+      "symbol": "requireWrite",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "http"
+    },
+    {
+      "module": "routes/apps",
+      "symbol": "publicAppStore",
+      "kind": "function (fork-added)",
+      "disposition": "public",
+      "surface": "http"
+    },
+    {
+      "module": "routes/apps.limit",
+      "symbol": "makeKeyedLimiter",
+      "kind": "function (fork-added)",
+      "disposition": "public",
+      "surface": "http"
+    },
+    {
+      "module": "routes/shop-config",
+      "symbol": "shopConfig",
+      "kind": "const",
+      "disposition": "replaced",
+      "surface": null
+    },
+    {
+      "module": "routes/store-context",
+      "symbol": "resolveStoreFromCtx",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "http"
+    },
+    {
+      "module": "store-context",
+      "symbol": "DEV_DEFAULT_STORE",
+      "kind": "const",
+      "disposition": "replaced",
+      "surface": null
+    },
+    {
+      "module": "store-context",
+      "symbol": "StoreCtx",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "http"
+    },
+    {
+      "module": "store-context",
+      "symbol": "resolveStore",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "http"
+    },
+    {
+      "module": "store-context",
+      "symbol": "resolveStoreForRequest",
+      "kind": "function",
+      "disposition": "replaced",
+      "surface": null
+    }
+  ]
+}

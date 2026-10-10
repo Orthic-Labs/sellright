@@ -3,9 +3,58 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "main": "./dist/sdk/index.js",
+  "types": "./dist/sdk/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/sdk/index.d.ts",
+      "default": "./dist/sdk/index.js"
+    },
+    "./db": {
+      "types": "./dist/exports/db.d.ts",
+      "default": "./dist/exports/db.js"
+    },
+    "./schema": {
+      "types": "./dist/exports/schema.d.ts",
+      "default": "./dist/exports/schema.js"
+    },
+    "./auth": {
+      "types": "./dist/exports/auth.d.ts",
+      "default": "./dist/exports/auth.js"
+    },
+    "./http": {
+      "types": "./dist/exports/http.d.ts",
+      "default": "./dist/exports/http.js"
+    },
+    "./log": {
+      "types": "./dist/exports/log.d.ts",
+      "default": "./dist/exports/log.js"
+    },
+    "./licensing": {
+      "types": "./dist/exports/licensing.d.ts",
+      "default": "./dist/exports/licensing.js"
+    },
+    "./storekit": {
+      "types": "./dist/exports/storekit.d.ts",
+      "default": "./dist/exports/storekit.js"
+    },
+    "./ops": {
+      "types": "./dist/exports/ops.d.ts",
+      "default": "./dist/exports/ops.js"
+    },
+    "./exports/contract.json": "./exports/contract.json",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.test.*",
+    "drizzle",
+    "exports",
+    "BUILD-INFO.json"
+  ],
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/write-build-info.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/index.js",
     "test": "vitest run --project unit",
@@ -24,7 +73,9 @@
     "effects:worker": "node dist/scripts/effects-worker.js",
     "import:preflight": "tsx src/import/preflight.ts",
     "import:vendure": "tsx src/import/run.ts",
-    "import:restore": "tsx src/import/restore.ts"
+    "import:restore": "tsx src/import/restore.ts",
+    "pack:artifact": "pnpm build && pnpm pack",
+    "gen:exports-contract": "node scripts/gen-exports-contract.mjs"
   },
   "dependencies": {
     "@apple/app-store-server-library": "3.1.0",

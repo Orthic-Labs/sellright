@@ -15,6 +15,7 @@ import { createPrivateKey, sign as edSign, verify as edVerify, type KeyObject } 
 import { readFileSync } from 'node:fs';
 import type { EntitlementStage, LicenseKind } from './license-lifecycle.js';
 import { env } from '../env.js';
+import { fingerprintPublicKey } from '../sdk/fingerprint.js';
 
 export interface SignedPayload {
   /** Schema version. */
@@ -164,6 +165,13 @@ function signingKey(): KeyObject | null {
   return cachedKey;
 }
 
+/** Non-secret identity of the configured signing key (sha256 of its public SPKI), or null when unset. */
+export function signingPublicKeyFingerprint(): { set: boolean; fingerprint: string | null } {
+  let key: KeyObject | null;
+  try { key = signingKey(); } catch { return { set: true, fingerprint: null }; }
+  return fingerprintPublicKey(key);
+}
+
 export interface EntitlementInput {
   licenseId: string;
   app: string;
@@ -193,7 +201,7 @@ export interface EntitlementInput {
 // SEC: default lowered from 30d to 7d to tighten the offline-revocation window
 // on a compromised or refunded license; override via ENTITLEMENT_TTL_SECONDS
 // when a deployment genuinely needs a longer offline grace period.
-const DEFAULT_TTL_SECONDS = env.ENTITLEMENT_TTL_SECONDS ?? 7 * 86_400;
+const defaultTtlSeconds = (): number => env.ENTITLEMENT_TTL_SECONDS ?? 7 * 86_400;
 
 /** Mint a signed token for an active entitlement. Returns null when signing isn't
  *  configured (no `LICENSE_SIGNING_KEY`), so endpoints degrade gracefully before the
@@ -203,7 +211,7 @@ export function signEntitlement(e: EntitlementInput, now: number = Date.now()): 
   const key = signingKey();
   if (!key) return null;
   const iat = Math.floor(now / 1000);
-  const rollingExp = iat + (e.ttlSeconds ?? DEFAULT_TTL_SECONDS);
+  const rollingExp = iat + (e.ttlSeconds ?? defaultTtlSeconds());
   // Never let the offline token outlive the license's hard expiry.
   const exp = e.tokenExpiresAtUnix
     ?? (e.expiresAtUnix != null ? Math.min(rollingExp, e.expiresAtUnix) : rollingExp);
