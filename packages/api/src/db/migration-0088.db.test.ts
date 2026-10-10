@@ -47,8 +47,10 @@ describe('migration 0088 backfill', () => {
     cpSync(join(API, 'drizzle'), pre, { recursive: true });
     rmSync(join(pre, '0088_defork_instrumentation.sql'));
     const jp = join(pre, 'meta', '_journal.json');
-    const j = JSON.parse(readFileSync(jp, 'utf8')) as { entries: Array<{ tag: string }> };
-    j.entries = j.entries.filter((e) => e.tag !== '0088_defork_instrumentation');
+    const j = JSON.parse(readFileSync(jp, 'utf8')) as { entries: Array<{ tag: string; when: number }> };
+    // Pre-0088 state = every migration ordered before 0088 (later ones may depend on its columns).
+    const cut = j.entries.find((e) => e.tag === '0088_defork_instrumentation')!.when;
+    j.entries = j.entries.filter((e) => e.when < cut);
     writeFileSync(jp, JSON.stringify(j));
     migrate(pre);
 
