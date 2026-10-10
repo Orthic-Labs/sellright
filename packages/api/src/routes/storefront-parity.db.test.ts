@@ -165,7 +165,7 @@ describe('blog parity', () => {
 });
 
 describe('guest tracking', () => {
-  const track = (code: string, email = EMAIL) => app.request(`/v1/shop/track?${new URLSearchParams({ code, email })}`, { headers });
+  const track = (code: string, email = EMAIL) => app.request(`/v1/shop/track?${new URLSearchParams({ code, email, turnstileToken: 'valid-token' })}`, { headers });
   it('returns the same error for an unknown code and a mismatched email', async () => {
     expect(await (await track('unknown')).json()).toEqual(await (await track('IMPORTED-123', 'wrong@parity.test')).json());
   });

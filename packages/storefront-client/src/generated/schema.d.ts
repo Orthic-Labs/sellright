@@ -14989,6 +14989,7 @@ export interface paths {
                     "application/json": {
                         /** Format: email */
                         email: string;
+                        turnstileToken?: string;
                     };
                 };
             };
@@ -15002,6 +15003,15 @@ export interface paths {
                         "application/json": {
                             ok: boolean;
                         };
+                    };
+                };
+                /** @description Bot check failed */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
                     };
                 };
                 /** @description Rate limited */
@@ -17227,6 +17237,7 @@ export interface paths {
                         /** @enum {string} */
                         source?: "storefront" | "checkout" | "import" | "api";
                         topic?: string;
+                        turnstileToken?: string;
                     };
                 };
             };
@@ -17240,6 +17251,15 @@ export interface paths {
                         "application/json": {
                             ok: boolean;
                         };
+                    };
+                };
+                /** @description Bot check failed */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
                     };
                 };
                 /** @description Rate limited */
@@ -18881,6 +18901,7 @@ export interface paths {
                 query: {
                     code: string;
                     email: string;
+                    turnstileToken?: string;
                 };
                 header?: never;
                 path?: never;
@@ -18895,6 +18916,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": unknown;
+                    };
+                };
+                /** @description Bot check failed */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
                     };
                 };
                 /** @description Not found */

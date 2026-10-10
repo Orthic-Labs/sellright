@@ -11,7 +11,8 @@ import { clientIp } from '../auth/rate-limit.js';
 import { newsletterRetryAfter, recordNewsletterAttempt } from './shop-extra.newsletter-limit.js';
 import { enqueueEmail } from '../email/outbox.js';
 import { sendSubscriberConfirmation } from './shop-extra.subscriber.js';
-import { contactRoutes } from './contact.js';
+import { contactRoutes, turnstileSecret } from './contact.js';
+import { verifyTurnstileToken } from '../security/turnstile.js';
 import { restockRoutes } from './restock.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
 import { clearTrackingAttempts, trackingRetryAfter } from './shop-extra.tracking-limit.js';
@@ -25,17 +26,25 @@ const J = (schema: z.ZodTypeAny) => ({ 'application/json': { schema } });
 shopExtra.openapi(
   createRoute({
     method: 'get', path: '/v1/shop/track', summary: 'Guest order tracking by code + email',
-    request: { query: z.object({ code: z.string().min(1).max(128), email: z.string().trim().email().max(254) }) },
-    responses: { 200: { description: 'OK', content: J(z.any()) }, 404: { description: 'Not found', content: J(apiErrorSchema()) }, 429: { description: 'Rate limited', content: J(apiErrorSchema()) } },
+    request: { query: z.object({ code: z.string().min(1).max(128), email: z.string().trim().email().max(254), turnstileToken: z.string().max(2048).optional() }) },
+    responses: {
+      200: { description: 'OK', content: J(z.any()) },
+      403: { description: 'Bot check failed', content: J(apiErrorSchema()) },
+      404: { description: 'Not found', content: J(apiErrorSchema()) },
+      429: { description: 'Rate limited', content: J(apiErrorSchema()) },
+    },
   }),
   async (c) => {
     const st = await resolveStoreFromCtx(c);
-    const { code, email } = c.req.valid('query');
+    const { code, email, turnstileToken } = c.req.valid('query');
     const key = JSON.stringify([st.id, clientIp(c), email.toLowerCase()]);
     const retry = await trackingRetryAfter(key);
     if (retry) {
       c.header('Retry-After', String(retry));
       return errJson(c, 429, 'RATE_LIMITED', 'too many tracking attempts');
+    }
+    if (!(await verifyTurnstileToken({ secret: turnstileSecret(st.config), token: turnstileToken ?? null, remoteIp: clientIp(c) }))) {
+      return errJson(c, 403, 'BOT_CHECK_FAILED', 'verification failed');
     }
     const out = await withStore(st.id, async (tx) => {
       const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
@@ -197,6 +206,9 @@ shopExtra.openapi(
       // public route. Other callers (checkout, import) can override.
       source: z.enum(['storefront', 'checkout', 'import', 'api']).optional(),
       meta: z.record(z.string(), z.unknown()).optional(),
+      // Turnstile token from the storefront widget; required when the store has
+      // a secret (or production with no secret and no TURNSTILE_DISABLED).
+      turnstileToken: z.string().max(2048).optional(),
     }).refine(
       // An empty `topic` is the intended value for the general newsletter, but a
       // waitlist with no topic is a waitlist for nothing: it cannot be counted per
@@ -208,6 +220,7 @@ shopExtra.openapi(
     )) } },
     responses: {
       200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) },
+      403: { description: 'Bot check failed', content: J(apiErrorSchema()) },
       429: { description: 'Rate limited', content: J(apiErrorSchema()) },
     },
   }),
@@ -222,10 +235,14 @@ shopExtra.openapi(
     // zod-openapi v1 fails to infer valid('json') for this public POST — same
     // shape as the original comment above the inline-Listmonk block. Cast to
     // the validated schema; the request middleware has already parsed it.
-    const { email, name, kind = 'newsletter', topic = '', source = 'storefront', meta } = c.req.valid('json') as {
+    const { email, name, kind = 'newsletter', topic = '', source = 'storefront', meta, turnstileToken } = c.req.valid('json') as {
       email: string; name?: string; kind?: 'newsletter' | 'waitlist'; topic?: string;
-      source?: 'storefront' | 'checkout' | 'import' | 'api'; meta?: Record<string, unknown>;
+      source?: 'storefront' | 'checkout' | 'import' | 'api'; meta?: Record<string, unknown>; turnstileToken?: string;
     };
+    // 2. Turnstile (fail closed when configured / production without a secret).
+    if (!(await verifyTurnstileToken({ secret: turnstileSecret(st.config), token: turnstileToken ?? null, remoteIp: ip }))) {
+      return errJson(c, 403, 'BOT_CHECK_FAILED', 'verification failed');
+    }
     const normalizedEmail = email.trim().toLowerCase();
     const normalizedTopic = topic ?? '';
 
