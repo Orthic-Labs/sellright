@@ -19,6 +19,7 @@ import { withAdvisoryLock, withStore, type Tx } from '../db/client.js';
 import { withLockedSet } from '../db/locks.js';
 import * as s from '../db/schema.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
+import { recordSettlementOperation } from './settlement/record.js';
 import { emitEvent } from '../webhooks/emit.js';
 import { resolveGatewayAccount, type GatewayMode } from './gateway-account.js';
 import { sezzleProvider, type SezzleOrder } from './sezzle.js';
@@ -171,10 +172,16 @@ async function recomputeOrderRefundState(tx: Tx, storeId: string, orderId: strin
   const refunded = basis.refunded;
   const target = refundStateFromBasis(basis);
   if (!target) return;
+  const reachesRefunded = target === 'Refunded' && canTransition(ord.state as OrderState, 'Refunded');
   if (canTransition(ord.state as OrderState, target)) {
     await tx.update(s.order).set({ state: target, updatedAt: new Date() }).where(eq(s.order.id, orderId));
   }
   // PAYMENT-TIMING §3.3 R5 (R2-6): a full refund releases consumed holds that asked for it.
   if (target === 'Refunded') await releaseOnFullRefundInSet(tx, { storeId, orderId });
+  // Entitlement reversal on the first transition to Refunded (worker effect; identity = order, so replays are no-ops).
+  if (reachesRefunded) await recordSettlementOperation(tx, {
+    storeId, kind: 'order_refunded', operationId: orderId, orderId, mutations: [],
+    effects: [{ kind: 'entitlement_reversal', payload: { orderId, reason: 'full_refund' } }], effectMode: 'deferred',
+  });
   await emitEvent(tx, storeId, 'order.refunded', { code: ord.code, amount: refunded, state: target, source: 'sezzle_dashboard' });
 }
