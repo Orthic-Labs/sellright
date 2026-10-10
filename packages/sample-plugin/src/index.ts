@@ -13,6 +13,7 @@ import { schema } from '@sellright/api/schema';
 import { sampleNote } from './schema.js';
 
 export { sampleNote };
+export { policyRegistrars, type PolicyTypeProof } from './policy-exports.js';
 
 export const SAMPLE_PLUGIN_NAME = 'sample';
 

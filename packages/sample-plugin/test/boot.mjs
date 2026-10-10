@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { createApp, routeInventory, legacyExampleViolations, LEGACY_FLAG } from '@sellright/api';
 import { createSamplePlugin } from '@sellright/sample-plugin';
 import { runMigrations } from '@sellright/api/ops';
-import { SAMPLE_PLUGIN_NAME, sampleNote } from '@sellright/sample-plugin';
+import { SAMPLE_PLUGIN_NAME, policyRegistrars, sampleNote } from '@sellright/sample-plugin';
 
 const out = {};
 const dbUrl = process.env.DATABASE_URL;
@@ -94,4 +94,6 @@ out.health = (await fetch(`http://127.0.0.1:${engine.port}/v1/health`)).status;
 await engine.shutdown();
 out.shutdown = { steps: engine.shutdownSteps.map((s) => s.step), phase: engine.phase, state };
 out.name = SAMPLE_PLUGIN_NAME;
+// policy registrar subpaths (storekit, licensing, payments) resolve from the packed tarball
+out.policyRegistrars = Object.fromEntries(Object.entries(policyRegistrars).map(([k, v]) => [k, typeof v]));
 console.log('RESULT ' + JSON.stringify(out));

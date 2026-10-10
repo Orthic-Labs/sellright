@@ -108,6 +108,20 @@ describe('packed @sellright/api consumed by the sample plugin', () => {
     expect(result.privileged.result).toBe('REJECTED');
   });
 
+  it('resolves every policy registrar export from the packed subpaths', () => {
+    expect(result.policyRegistrars).toEqual({
+      registerStoreKitPolicy: 'function',
+      registerLockPlanContributor: 'function',
+      registerEntitlementPolicy: 'function',
+      registerPaymentPolicy: 'function',
+      trialDaysForPlatform: 'function',
+      resolveRuntimeArtifactPromotion: 'function',
+      revokeLicenseInTx: 'function',
+      restoreLicenseInTx: 'function',
+      createLicenseRevocationFeed: 'function',
+    });
+  });
+
   it('boots the composed app: phases, plugin routes, preRoute, env extension, plugin table, health', () => {
     expect(result.phases).toEqual(['configure', 'preRoute', 'routes', 'schema', 'migrations', 'services']);
     expect(result.ping).toEqual({ status: 200, body: { ok: true, greeting: 'packed', store: STORE_SLUG, engineTables: expect.any(Number) }, pre: '1' });

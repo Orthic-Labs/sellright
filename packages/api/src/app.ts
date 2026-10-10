@@ -66,8 +66,8 @@ import { installDefaultStoreKitPolicy } from './licensing/storekit/default-polic
 import { installDefaultPaymentPolicy } from './payments/policy/default-policy.js';
 import { SELLRIGHT_VERSION } from './version.js';
 import type { EngineContext, EnginePlugin } from './sdk/types.js';
-import { releaseRegistrationRoutes } from './releases/release-registration.js';
-import { assertHostRouteUnshadowed, hostRouteEntryCount, assertNoReleaseRegistrationConflicts } from './releases/registration-policy.js';
+import { createReleaseRegistrationRoutes } from './releases/release-registration.js';
+import { assertHostRouteUnshadowed, hostRouteEntryCount, assertNoReleaseRegistrationConflicts, type PolicyOwner } from './releases/registration-policy.js';
 import { preRoutePolicy } from './pre-route-policy.js';
 
 export { SELLRIGHT_VERSION };
@@ -403,10 +403,17 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
   app.route('/', adminSeo); // SEO-1: admin SEO config + admin-triggered IndexNow submit
   app.route('/', adminWaitlist); // G10: waitlist demand report + CSV
 
+  // SDK plugin routes are resolved once here (a function-valued `routes` is called exactly once) and
+  // mounted after the built-ins below. Legacy `ApiPlugin`s and SDK `EnginePlugin`s share one
+  // release-policy owner list, so both are subject to the same conflict check and host.
+  const sdkRoutes = sdkPlugins.map((p) => (typeof p.routes === 'function' ? p.routes(options.ctx!) : p.routes));
+  const sdkOwners: PolicyOwner[] = sdkPlugins.map((p, i) => ({ name: p.name, releaseRegistration: p.releaseRegistration, routes: sdkRoutes[i] }));
+  const policyOwners = (): PolicyOwner[] => [...listApiPlugins(), ...sdkOwners];
+
   // Release registration policy host (docs/policies/RELEASE-REGISTRATION.md):
   // engine-owned POST /v1/admin/apps/releases; fails startup on plugin conflicts.
-  assertNoReleaseRegistrationConflicts(listApiPlugins());
-  app.route('/', releaseRegistrationRoutes);
+  assertNoReleaseRegistrationConflicts(policyOwners());
+  app.route('/', createReleaseRegistrationRoutes(policyOwners));
   const releaseHostRouteEntries = hostRouteEntryCount(app);
 
   // Extension seam (plugins.ts): mounted AFTER every built-in route above, so a
@@ -421,8 +428,7 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
   for (const plugin of listApiPlugins()) {
     if (plugin.routes) app.route('/', plugin.routes);
   }
-  for (const plugin of sdkPlugins) {
-    const routes = typeof plugin.routes === 'function' ? plugin.routes(options.ctx!) : plugin.routes;
+  for (const routes of sdkRoutes) {
     if (routes) app.route('/', routes);
   }
   for (const plugin of listApiPlugins()) {

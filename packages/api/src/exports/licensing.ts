@@ -20,3 +20,19 @@ export { bearerToken, hashActivationToken } from '../licensing/tokens.js';
 export {
   PUBLIC_PATCH_CHANNELS, isPatchChannel, normalizeReleasePlatform, parsePatchRelease, patchChannel, validateReleaseRegistration,
 } from '../licensing/update-tier.js';
+export {
+  ALLOW, DENY_NOTFOUND, denyPlatform, registerEntitlementPolicy,
+  type AuthorizeContext, type CapacityContext, type ClaimsContext, type EntitlementPolicy, type ExtensionPath, type PolicyClaims,
+  type PolicyDecision, type PolicyLicense, type PolicyRejection, type RequestExtensions, type TrialContext, type TrialDecision,
+} from '../licensing/entitlement-policy.js';
+/** Fork trial-duration helper. Lives in the fork-reference test kit file (see its header); exported per the 2.2 contract. */
+export { trialDaysForPlatform, type TrialPlatform } from '../licensing/entitlement-policy.fork-reference.testkit.js';
+export {
+  resolveRuntimeArtifactPromotion,
+  type ResolveRuntimeArtifactInput, type RuntimeArtifactDelivery, type RuntimeArtifactResolution, type RuntimeArtifactSelector,
+} from '../licensing/runtime-artifact-resolve.js';
+export {
+  LICENSE_REVOCATION_PERMISSION, restoreLicenseInTx, revokeLicenseInTx,
+  type LicenseLifecycleActor, type LicenseRestoreOutcome, type LicenseRevokeOutcome,
+} from '../licensing/license-revocation.js';
+export { createLicenseRevocationFeed, REVOCATION_FEED_PATH, type RevocationFeedOptions } from '../licensing/revocation-feed.js';

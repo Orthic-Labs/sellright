@@ -30,6 +30,10 @@
       "types": "./dist/exports/log.d.ts",
       "default": "./dist/exports/log.js"
     },
+    "./payments": {
+      "types": "./dist/exports/payments.d.ts",
+      "default": "./dist/exports/payments.js"
+    },
     "./licensing": {
       "types": "./dist/exports/licensing.d.ts",
       "default": "./dist/exports/licensing.js"

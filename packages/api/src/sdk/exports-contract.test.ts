@@ -18,7 +18,7 @@ const pkg = JSON.parse(readFileSync(join(API, 'package.json'), 'utf8')) as { exp
 interface Sym { module: string; symbol: string; kind: string; disposition: 'public' | 'moved' | 'replaced'; surface: string | null }
 const contract = JSON.parse(readFileSync(join(API, 'exports/contract.json'), 'utf8')) as { symbols: Sym[] };
 
-const SURFACES = ['db', 'schema', 'auth', 'http', 'log', 'licensing', 'storekit'];
+const SURFACES = ['db', 'schema', 'auth', 'http', 'log', 'licensing', 'storekit', 'payments'];
 
 function barrelExports(surface: string): string[] {
   const file = join(API, 'src/exports', `${surface}.ts`);
@@ -32,9 +32,9 @@ function barrelExports(surface: string): string[] {
 const exported = new Map(SURFACES.map((s) => [s, barrelExports(s)]));
 
 describe('exports contract', () => {
-  it('matches the 0.1 graph totals (86 symbols: 68 public / 3 moved / 15 replaced)', () => {
+  it('matches the pinned totals (0.1 graph 86 symbols + policy-registrar exports: 155 = 139 public / 1 moved / 15 replaced)', () => {
     const by = (d: string) => contract.symbols.filter((s) => s.disposition === d).length;
-    expect([contract.symbols.length, by('public'), by('moved'), by('replaced')]).toEqual([86, 68, 3, 15]);
+    expect([contract.symbols.length, by('public'), by('moved'), by('replaced')]).toEqual([155, 139, 1, 15]);
   });
 
   it('exports every public symbol from its surface', () => {

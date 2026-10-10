@@ -426,15 +426,15 @@
       "module": "licensing/trial",
       "symbol": "TrialPlatform",
       "kind": "type (fork-added)",
-      "disposition": "moved",
-      "surface": null
+      "disposition": "public",
+      "surface": "licensing"
     },
     {
       "module": "licensing/trial",
       "symbol": "trialDaysForPlatform",
       "kind": "function (fork-added)",
-      "disposition": "moved",
-      "surface": null
+      "disposition": "public",
+      "surface": "licensing"
     },
     {
       "module": "licensing/trial",
@@ -603,6 +603,489 @@
       "kind": "function",
       "disposition": "replaced",
       "surface": null
+    },
+    {
+      "module": "licensing/storekit/policy",
+      "symbol": "registerStoreKitPolicy",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "storekit"
+    },
+    {
+      "module": "licensing/storekit/policy",
+      "symbol": "CascadeResult",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "storekit"
+    },
+    {
+      "module": "licensing/storekit/policy",
+      "symbol": "Credential",
+      "kind": "type",
+      "disposition": "public",
+      "surface": "storekit"
+    },
+    {
+      "module": "licensing/storekit/policy",
+      "symbol": "DecideMaterializeInput",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "storekit"
+    },
+    {
+      "module": "licensing/storekit/policy",
+      "symbol": "DeviceContext",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "storekit"
+    },
+    {
+      "module": "licensing/storekit/policy",
+      "symbol": "HttpResult",
+      "kind": "type",
+      "disposition": "public",
+      "surface": "storekit"
+    },
+    {
+      "module": "licensing/storekit/policy",
+      "symbol": "IssueInput",
+      "kind": "type",
+      "disposition": "public",
+      "surface": "storekit"
+    },
+    {
+      "module": "licensing/storekit/policy",
+      "symbol": "IssueResult",
+      "kind": "type",
+      "disposition": "public",
+      "surface": "storekit"
+    },
+    {
+      "module": "licensing/storekit/policy",
+      "symbol": "LinkOutcome",
+      "kind": "type",
+      "disposition": "public",
+      "surface": "storekit"
+    },
+    {
+      "module": "licensing/storekit/policy",
+      "symbol": "LinkRequest",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "storekit"
+    },
+    {
+      "module": "licensing/storekit/policy",
+      "symbol": "LinkValidation",
+      "kind": "type",
+      "disposition": "public",
+      "surface": "storekit"
+    },
+    {
+      "module": "licensing/storekit/policy",
+      "symbol": "MaterializeDecision",
+      "kind": "type",
+      "disposition": "public",
+      "surface": "storekit"
+    },
+    {
+      "module": "licensing/storekit/policy",
+      "symbol": "NotificationChange",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "storekit"
+    },
+    {
+      "module": "licensing/storekit/policy",
+      "symbol": "StoreKitPolicy",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "storekit"
+    },
+    {
+      "module": "licensing/storekit/policy",
+      "symbol": "ValidateLinkInput",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "storekit"
+    },
+    {
+      "module": "licensing/storekit/policy",
+      "symbol": "VerifiedProofSet",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "storekit"
+    },
+    {
+      "module": "db/locks",
+      "symbol": "registerLockPlanContributor",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "storekit"
+    },
+    {
+      "module": "db/locks",
+      "symbol": "HeldLocks",
+      "kind": "type",
+      "disposition": "public",
+      "surface": "storekit"
+    },
+    {
+      "module": "db/locks",
+      "symbol": "LockPlanContribution",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "storekit"
+    },
+    {
+      "module": "db/locks",
+      "symbol": "LockPlanContributor",
+      "kind": "type",
+      "disposition": "public",
+      "surface": "storekit"
+    },
+    {
+      "module": "db/locks",
+      "symbol": "LockSubject",
+      "kind": "type",
+      "disposition": "public",
+      "surface": "storekit"
+    },
+    {
+      "module": "db/locks",
+      "symbol": "PurchaseId",
+      "kind": "type",
+      "disposition": "public",
+      "surface": "storekit"
+    },
+    {
+      "module": "licensing/entitlement-policy",
+      "symbol": "ALLOW",
+      "kind": "const",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/entitlement-policy",
+      "symbol": "DENY_NOTFOUND",
+      "kind": "const",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/entitlement-policy",
+      "symbol": "denyPlatform",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/entitlement-policy",
+      "symbol": "registerEntitlementPolicy",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/entitlement-policy",
+      "symbol": "AuthorizeContext",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/entitlement-policy",
+      "symbol": "CapacityContext",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/entitlement-policy",
+      "symbol": "ClaimsContext",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/entitlement-policy",
+      "symbol": "EntitlementPolicy",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/entitlement-policy",
+      "symbol": "ExtensionPath",
+      "kind": "type",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/entitlement-policy",
+      "symbol": "PolicyClaims",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/entitlement-policy",
+      "symbol": "PolicyDecision",
+      "kind": "type",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/entitlement-policy",
+      "symbol": "PolicyLicense",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/entitlement-policy",
+      "symbol": "PolicyRejection",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/entitlement-policy",
+      "symbol": "RequestExtensions",
+      "kind": "type",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/entitlement-policy",
+      "symbol": "TrialContext",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/entitlement-policy",
+      "symbol": "TrialDecision",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/runtime-artifact-resolve",
+      "symbol": "resolveRuntimeArtifactPromotion",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/runtime-artifact-resolve",
+      "symbol": "ResolveRuntimeArtifactInput",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/runtime-artifact-resolve",
+      "symbol": "RuntimeArtifactDelivery",
+      "kind": "type",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/runtime-artifact-resolve",
+      "symbol": "RuntimeArtifactResolution",
+      "kind": "type",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/runtime-artifact-resolve",
+      "symbol": "RuntimeArtifactSelector",
+      "kind": "type",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/license-revocation",
+      "symbol": "LICENSE_REVOCATION_PERMISSION",
+      "kind": "const",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/license-revocation",
+      "symbol": "restoreLicenseInTx",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/license-revocation",
+      "symbol": "revokeLicenseInTx",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/license-revocation",
+      "symbol": "LicenseLifecycleActor",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/license-revocation",
+      "symbol": "LicenseRestoreOutcome",
+      "kind": "type",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/license-revocation",
+      "symbol": "LicenseRevokeOutcome",
+      "kind": "type",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/revocation-feed",
+      "symbol": "createLicenseRevocationFeed",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/revocation-feed",
+      "symbol": "REVOCATION_FEED_PATH",
+      "kind": "const",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "licensing/revocation-feed",
+      "symbol": "RevocationFeedOptions",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "licensing"
+    },
+    {
+      "module": "payments/policy/host",
+      "symbol": "PAYMENT_POLICY_VETO_CODE",
+      "kind": "const",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/host",
+      "symbol": "PaymentPolicyUnavailableError",
+      "kind": "class",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/host",
+      "symbol": "PaymentPolicyVetoError",
+      "kind": "class",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/host",
+      "symbol": "registerPaymentPolicy",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/types",
+      "symbol": "BeforeCaptureInput",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/types",
+      "symbol": "BeforeCaptureResult",
+      "kind": "type",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/types",
+      "symbol": "BeforePaymentAttemptInput",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/types",
+      "symbol": "BeforePaymentAttemptResult",
+      "kind": "type",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/types",
+      "symbol": "PaymentPolicy",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/types",
+      "symbol": "PaymentProvider",
+      "kind": "type",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/types",
+      "symbol": "PaymentPurpose",
+      "kind": "type",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/types",
+      "symbol": "PolicyOrder",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/types",
+      "symbol": "PolicyVeto",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "releases/registration-policy",
+      "symbol": "ReleaseRegistrationBody",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "http"
+    },
+    {
+      "module": "releases/registration-policy",
+      "symbol": "ReleaseRegistrationPolicy",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "http"
+    },
+    {
+      "module": "releases/registration-policy",
+      "symbol": "ReleaseServiceCredential",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "http"
+    },
+    {
+      "module": "releases/registration-policy",
+      "symbol": "ReleaseValidationContext",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "http"
     }
   ]
 }
