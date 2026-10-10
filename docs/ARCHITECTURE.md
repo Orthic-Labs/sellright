@@ -118,9 +118,13 @@ store/directory settings and the unprivileged runtime database role.
 
 Each publication writes a complete `generations/<uuid>/` tree, then atomically
 swaps the `current` symlink. Consumers must resolve `current` once, validate
-`marker.json` (`format: 1`, `source: sellright`, matching store and generation,
-fresh `generatedAt`), and read files from that pinned directory. RightSites
-rejects snapshots older than five minutes and fetches REST data during SSR.
+`marker.json` (`format` 1 or 2, `source: sellright`, matching store and
+generation, parsable non-future `generatedAt`), and read files from that pinned
+directory. The SellRight storefront reader has no age-based expiry (the
+publisher regenerates on every stock change); it falls back to REST data during
+SSR only when the snapshot is missing or invalid, and fails closed if that also
+fails. RightSites rejects snapshots older than five minutes and fetches REST
+data during SSR.
 Never point it at a legacy Vendure directory. Keep the previous generation and
 a ten-minute grace period for in-flight readers; only marked, owned generations
 are cleaned up. An exclusive `owner.json` claim prevents different stores from

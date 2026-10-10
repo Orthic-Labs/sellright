@@ -7,6 +7,7 @@ import {
 	type CheckoutForm,
 } from '~/providers/shop/checkout/checkout';
 import { decideCheckoutStage } from './checkout-stage';
+import { PreSubmitStockError, refreshStockBeforeSubmit } from './pre-submit-stock';
 
 /**
  * Native checkout flow — single state machine, single backend. There is no
@@ -45,7 +46,7 @@ export const useCheckout = () => {
 		grandTotal: 0,
 		/** Cents the shopper saw on the page when they pressed PLACE ORDER (0 = no total was shown) — the changed-total gate compares the order's grandTotal against it. */
 		shownTotal: 0,
-		/** The last PLACE ORDER was refused 409 OUT_OF_STOCK — the caller must re-read live stock for the cart. */
+		/** The last PLACE ORDER was refused (pre-submit live read found a line unavailable, or 409 OUT_OF_STOCK) — the caller must re-read live stock for the cart. */
 		stockConflict: false,
 		method: null as PaymentMethod | null,
 		error: null as string | null,
@@ -66,6 +67,8 @@ export const useCheckout = () => {
 		state.shownTotal = shownTotalCents;
 		checkoutState.isLoading = true;
 		try {
+			// LOCKED: awaited live cart read before the order POST; a failure or an unavailable line stops here.
+			await refreshStockBeforeSubmit();
 			const created = await srPlaceOrder(form);
 			state.code = created.code;
 			state.receiptToken = created.receiptToken ?? '';
@@ -100,7 +103,7 @@ export const useCheckout = () => {
 		} catch (error) {
 			const msg = error instanceof Error ? error.message : 'Checkout failed. Please try again.';
 			state.error = msg;
-			state.stockConflict = isOutOfStockConflict(error);
+			state.stockConflict = isOutOfStockConflict(error) || error instanceof PreSubmitStockError;
 			checkoutState.error = msg;
 			state.phase = 'error';
 			return 'error';

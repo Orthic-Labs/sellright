@@ -1,4 +1,4 @@
-export type RouteClass = 'dynamic' | 'public_high_traffic' | 'public_standard';
+export type RouteClass = 'dynamic' | 'stock_bearing' | 'public_high_traffic' | 'public_standard';
 
 export interface RouteCacheProfile {
 	routeClass: RouteClass;
@@ -10,7 +10,7 @@ export interface RouteCacheProfile {
 	responseCacheControl?: string;
 }
 
-export const CACHE_POLICY_VERSION = '2026-03-19.3';
+export const CACHE_POLICY_VERSION = '2026-10-10.1';
 
 // `/shop-api` and `/admin-api` were the old legacy GraphQL endpoint
 // prefixes — this SellRight storefront never serves or proxies those paths
@@ -34,9 +34,18 @@ const DYNAMIC_PREFIXES = [
 	'/password-reset',
 ];
 
-const HIGH_TRAFFIC_PUBLIC_PREFIXES = [
+// Documents that render stock-derived state (manifest `inStock`, PDP availability and JSON-LD, search and collection
+// cards, the home page's product cards). A shared cache in front of them is a stock cache (CLAUDE.md "Stock
+// Architecture"): they must be `private, no-cache`, with no CDN cache header. Checkout is dynamic above.
+const STOCK_BEARING_PREFIXES = [
 	'/',
 	'/shop',
+	'/products',
+	'/search',
+	'/collections',
+];
+
+const HIGH_TRAFFIC_PUBLIC_PREFIXES = [
 	'/contact',
 	'/terms',
 	'/privacy',
@@ -57,6 +66,14 @@ export const getRouteCacheProfile = (pathname: string): RouteCacheProfile => {
 			routeClass: 'dynamic',
 			cacheControl: { maxAge: 0, sMaxAge: 0, staleWhileRevalidate: 0 },
 			responseCacheControl: 'private, no-store, no-cache, must-revalidate',
+		};
+	}
+
+	if (startsWithAny(pathname, STOCK_BEARING_PREFIXES)) {
+		return {
+			routeClass: 'stock_bearing',
+			cacheControl: { maxAge: 0, sMaxAge: 0, staleWhileRevalidate: 0 },
+			responseCacheControl: 'private, no-cache',
 		};
 	}
 

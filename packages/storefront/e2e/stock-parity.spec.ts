@@ -1,12 +1,12 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
-import { CATALOG_DIR, SHOP_API_URL, STORE_URL } from './support/env.mjs';
+import { CATALOG_DIR, FS_LOG_FILE, SHOP_API_URL, STORE_URL } from './support/env.mjs';
 import { clientIp } from './support/api';
 import { apiLog, STOCK_PATTERNS } from './support/api-log';
 import { addToCart, fillShipping, goToCheckout, placeOrderButton } from './support/flows';
-import { createStockProduct, currentGeneration, setOnHand } from './support/stock';
+import { createStockProduct, currentGeneration, setOnHand, waitForNewGeneration, waitForPublishedProduct } from './support/stock';
 import { brand } from './support/parity-brands';
-import { readFileSync } from 'node:fs';
+import { readFileSync, renameSync, existsSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
@@ -21,11 +21,10 @@ import { join } from 'node:path';
  * support/flows.ts) and the source, but the first run may need adjustment. A failure of a scenario that states a
  * locked rule is a FINDING to report, not a test defect to weaken away (see the A8 open questions in the plan).
  *
- * Implemented here: 1 (same-document + reload), 2, 3a/3b/3c, 4, 5, 6, 8, 10c, 12, 13 (base). Static scenarios 9 (publisher
+ * Implemented here: 1 (same-document + reload), 2, 3a/3b/3c, 4, 5, 6, 8, 10c, 11 (dynamic), 12, 13 (base), 15, 17 (dynamic). Static scenarios 9 (publisher
  * source), 10a/b/d, 12 (static), 14, 17 (structural) live in unit suites that run with `pnpm test`:
  *   packages/api/src/manifest/{stock-hook,no-search-index}.test.ts, packages/storefront/src/services/stock-guards.test.ts.
- * NOT implemented (blocked): 7 (needs an option-group product seed), 11 and 17-dynamic (reader contract A4 / owner
- * decision O2), 15 (A9a document cache headers), 16 and 18 (owner decision O1, Rotten product route).
+ * NOT implemented (blocked): 7 (needs an option-group product seed), 16 and 18 (owner decision O1, Rotten product route).
  */
 test.skip(!apiLog.enabled, 'stock parity observes API-side requests: needs E2E_API_TAP=1 (api tap). Did not run: missing coverage, not a pass');
 
@@ -101,6 +100,9 @@ test.describe('1. PDP revisit with stock changed in between', () => {
 // ── 2. repeated shop toggles ──────────────────────────────────────────────────────────────────────────────────────
 test('2. repeated "in stock only" toggles each issue their own live catalog call and the list follows (stock changed between)', async ({ apiProxyPage: page, api }) => {
 	const p = await createStockProduct(api, 'toggle', 5);
+	// The shop document is built from the published manifest (layer 1), and the toggle's live read only overrides
+	// products the manifest lists: wait for the publication that carries the new product before loading the shop.
+	await waitForPublishedProduct(p.slug, true);
 	await page.goto(brand.shopPath);
 	await page.waitForLoadState('networkidle');
 	const toggle = page.locator('input[type="checkbox"]').first();
@@ -130,17 +132,23 @@ test('2. repeated "in stock only" toggles each issue their own live catalog call
 test.describe('3. cart and checkout stock checks', () => {
 	const cartButton = (page: Page) => page.getByRole('button', { name: /\d+ items? in cart/i });
 	const droppedNotice = /no longer available|out of stock|sold out|unavailable|removed/i;
+	// The open drawer is a full-screen overlay (fixed inset-0) that covers the header cart button, so a shopper closes it
+	// through its own "Close cart" backdrop; clicking the header button while it is open never reaches the button.
+	const closeCart = async (page: Page) => {
+		await page.getByRole('button', { name: /^close cart$/i }).click();
+		await expect(page.getByRole('dialog', { name: /shopping cart/i })).toHaveCount(0);
+	};
 
 	test('3a cart open: every open issues its own live read and shows the change; sequential opens never coalesce', async ({ apiProxyPage: page, api }) => {
 		const p = await createStockProduct(api, 'cart', 5);
 		await addToCart(page, p.slug); // the drawer is open after adding
 
-		await cartButton(page).click(); // close
+		await closeCart(page);
 		let mark = apiLog.mark();
 		await cartButton(page).click(); // open #1
 		await expect.poll(async () => (await apiLog.since(mark, STOCK_PATTERNS.cartRead, { origin: 'browser' })).length).toBeGreaterThanOrEqual(1);
 
-		await cartButton(page).click(); // close
+		await closeCart(page);
 		await setOnHand(api, p.sku, 0);
 		mark = apiLog.mark();
 		await cartButton(page).click(); // open #2: a NEW call, not a reuse of #1
@@ -165,12 +173,37 @@ test.describe('3. cart and checkout stock checks', () => {
 		await expect.poll(async () => droppedNotice.test(await page.locator('body').innerText()) || (await placeOrderButton(page).count()) === 0 || !(await placeOrderButton(page).isEnabled().catch(() => true))).toBe(true);
 	});
 
-	test('3c-i submit with stock gone is refused by the live server check: 409, no order, the UI says so', async ({ apiProxyPage: page, api }) => {
+	test('3c-i submit with stock gone is refused by the pre-submit live read: no order POST, the UI says so', async ({ apiProxyPage: page, api }) => {
 		const p = await createStockProduct(api, 'submit', 1);
 		await addToCart(page, p.slug);
 		await goToCheckout(page);
 		await fillShipping(page, `${p.slug}@e2e.example.net`);
 		await setOnHand(api, p.sku, 0); // the last unit sold elsewhere after the shopper reached PLACE ORDER
+		const mark = apiLog.mark();
+		await placeOrderButton(page).click();
+		await expect.poll(async () => (await apiLog.since(mark, STOCK_PATTERNS.cartRead, { method: 'GET', origin: 'browser' })).length, { message: 'PLACE ORDER must start with a live cart read' }).toBeGreaterThanOrEqual(1);
+		await expect(page.locator('body')).toContainText(droppedNotice);
+		await expect(page).not.toHaveURL(/confirmation/);
+		expect(await apiLog.since(mark, STOCK_PATTERNS.checkout, { method: 'POST' }), 'the pre-submit read found the line unavailable: no order may be created').toEqual([]);
+	});
+
+	// Server backstop: the stock vanishes AFTER the pre-submit read answered (held open and zeroed in the route), so the
+	// order POST is sent and the server's 409 OUT_OF_STOCK still refuses the sale.
+	// UNVERIFIED: relies on route.fetch() reaching the same API through apiProxyPage's routing; adjust on first run.
+	test('3c-ii stock sold between the pre-submit read and the order POST: the server refuses with 409, no order, the UI says so', async ({ apiProxyPage: page, api }) => {
+		const p = await createStockProduct(api, 'race', 1);
+		await addToCart(page, p.slug);
+		await goToCheckout(page);
+		await fillShipping(page, `${p.slug}@e2e.example.net`);
+		await page.waitForLoadState('networkidle');
+		let armed = true;
+		await page.route((url) => STOCK_PATTERNS.cartRead.test(url.pathname), async (route) => {
+			if (!armed || route.request().method() !== 'GET') return route.fallback();
+			armed = false;
+			const live = await route.fetch(); // the pre-submit read sees the unit in stock ...
+			await setOnHand(api, p.sku, 0); // ... and it sells right after
+			await route.fulfill({ response: live });
+		});
 		const response = page.waitForResponse((r) => r.url().includes('/v1/shop/checkout') && r.request().method() === 'POST');
 		await placeOrderButton(page).click();
 		expect((await response).status(), 'POST /v1/shop/checkout must refuse an out-of-stock line').toBe(409);
@@ -178,13 +211,7 @@ test.describe('3. cart and checkout stock checks', () => {
 		await expect(page).not.toHaveURL(/confirmation/);
 	});
 
-	// KNOWN GAP (found by reading the code, not by running): CLAUDE.md layer 4 says refreshCartStock also runs "inside
-	// placeOrder before submit". In the base, useCheckout.placeOrder → srPlaceOrder goes straight to POST /checkout, and
-	// the only refreshCartStock calls are checkout entry (routes/checkout/index.tsx:224) and after a stock conflict (:380).
-	// The server-side 409 above still protects the sale. `test.fail()` keeps the suite green while the gap exists and
-	// turns RED the moment a pre-submit read appears — then delete the `test.fail()` line. Report to Adrian; not fixed here.
-	test('3c-ii a live cart read is issued BEFORE the order-creating POST (locked rule, layer 4) — known gap on the base', async ({ apiProxyPage: page, api }) => {
-		test.fail(true, 'base placeOrder has no pre-submit refreshCartStock (see comment above); expected to fail until one exists');
+	test('3c-iii a live cart read is issued BEFORE the order-creating POST (locked rule, layer 4)', async ({ apiProxyPage: page, api }) => {
 		const p = await createStockProduct(api, 'presub', 3);
 		await addToCart(page, p.slug);
 		await goToCheckout(page);
@@ -349,4 +376,155 @@ test('13. base PDP: the live stock request is issued by the browser on its own (
 	// No click, no scroll, no keypress: the request must still arrive (qidle).
 	await expect.poll(async () => (await stockCalls(mark)).length, { timeout: 20_000 }).toBeGreaterThanOrEqual(1);
 	expect(brand.pdpTrigger).toBe('qidle'); // the brand's declared trigger; other brands: A8 / owner decision O3
+});
+
+// ── 11 + 17. shop document reads through one server process (reader contract, plan A4; owner decision O2 = no age expiry) ─
+const FS_TAP = process.env.E2E_FS_TAP === '1';
+/** marker.json and shop-catalog*.json reads the storefront server made since `mark` (fs tap; empty when the tap is off). */
+function fsReadsSince(mark: number): { marker: number; catalog: number } {
+	if (!FS_TAP) return { marker: 0, catalog: 0 };
+	let raw = '';
+	try { raw = readFileSync(FS_LOG_FILE, 'utf8'); } catch { /* no log yet */ }
+	const rows = raw.split('\n').filter(Boolean).map((l) => JSON.parse(l) as { time: number; path: string }).filter((r) => r.time >= mark);
+	return { marker: rows.filter((r) => /marker\.json$/.test(r.path)).length, catalog: rows.filter((r) => /shop-catalog[^/]*\.json$/.test(r.path)).length };
+}
+const shopListingCalls = (mark: number) => apiLog.since(mark, STOCK_PATTERNS.shopCatalog);
+const shopCard = (page: Page, slug: string) => page.locator(`a[href*="${slug}"]`);
+
+test.describe('17. shop document reloads through one server process, publications in between', () => {
+	test.skip(!CATALOG_DIR, 'needs E2E_CATALOG_DIR (the real publisher): did not run, missing coverage');
+
+	test('17 every document load reads marker.json and shop-catalog.json from disk, follows each publication, and never calls the live listing while a fresh generation exists', async ({ page, api }) => {
+		const a = await createStockProduct(api, 'shopa', 5);
+		const b = await createStockProduct(api, 'shopb', 5);
+		let generation = currentGeneration()?.name ?? null;
+		const steps = [
+			{ sku: a.sku, onHand: 0, expect: [[a.slug, false], [b.slug, true]] },
+			{ sku: a.sku, onHand: 4, expect: [[a.slug, true], [b.slug, true]] },
+			{ sku: b.sku, onHand: 0, expect: [[a.slug, true], [b.slug, false]] },
+			{ sku: b.sku, onHand: 3, expect: [[a.slug, true], [b.slug, true]] },
+		] as const;
+		let sawFsRead = false;
+		for (const [i, step] of steps.entries()) {
+			await setOnHand(api, step.sku, step.onHand);
+			generation = (await waitForNewGeneration(generation)).name;
+			// let the burst settle: the last publication must carry the final state before the document is read
+			await new Promise((r) => setTimeout(r, 1_000));
+			generation = currentGeneration()!.name;
+			for (const load of ['after the publication', 'again with no publication in between'] as const) {
+				const mark = Date.now();
+				await page.goto(brand.shopPath);
+				await page.waitForLoadState('networkidle');
+				for (const [slug, visible] of step.expect) {
+					await expect(shopCard(page, slug), `step ${i + 1} ${load}: ${slug} must ${visible ? 'be listed' : 'be hidden by "in stock only"'}`).toHaveCount(visible ? 1 : 0);
+				}
+				expect(await shopListingCalls(mark), `step ${i + 1} ${load}: a fresh generation exists, so the reader must serve the shop (no live listing call)`).toEqual([]);
+				if (FS_TAP) {
+					const reads = fsReadsSince(mark);
+					sawFsRead ||= reads.marker + reads.catalog > 0;
+					if (sawFsRead) {
+						expect(reads.marker, `step ${i + 1} ${load}: the document request must re-read marker.json`).toBeGreaterThanOrEqual(1);
+						expect(reads.catalog, `step ${i + 1} ${load}: the document request must re-read shop-catalog.json (no reader memo / generation-keyed cache)`).toBeGreaterThanOrEqual(1);
+					}
+				}
+			}
+		}
+		if (FS_TAP) expect(sawFsRead, 'the fs tap recorded no read at all: it did not reach the server (plan A9 scenario 17 gap) — report, do not pass silently').toBe(true);
+		else test.info().annotations.push({ type: 'fs-tap', description: 'E2E_FS_TAP=1 not set: the per-load disk-read assertion did not run' });
+	});
+});
+
+test.describe.serial('11. a snapshot that is invalid or absent falls back to the live API; a valid old one does not', () => {
+	test.skip(!CATALOG_DIR, 'needs E2E_CATALOG_DIR (the real publisher): did not run, missing coverage');
+
+	/** Run `body` with the current generation's marker replaced; always restore it. */
+	async function withMarker(mutate: (marker: Record<string, unknown>) => Record<string, unknown>, body: () => Promise<void>) {
+		const gen = currentGeneration()!;
+		const file = join(gen.dir, 'marker.json');
+		const original = readFileSync(file, 'utf8');
+		writeFileSync(file, JSON.stringify(mutate(JSON.parse(original))));
+		try { await body(); } finally { writeFileSync(file, original); }
+	}
+	/** Wait until the published manifest shows `slug` with `inStock`, so no publication is still in flight when a marker is edited. */
+	async function waitForManifest(slug: string, inStock: boolean) {
+		await expect.poll(() => {
+			const gen = currentGeneration();
+			if (!gen) return undefined;
+			const catalog = JSON.parse(readFileSync(join(gen.dir, 'shop-catalog.json'), 'utf8')) as { products: Array<{ slug: string; inStock?: boolean }> };
+			return catalog.products.find((x) => x.slug === slug)?.inStock;
+		}, { timeout: 30_000, message: `manifest must show ${slug} inStock=${inStock}` }).toBe(inStock);
+		await new Promise((r) => setTimeout(r, 1_000)); // no trailing generation may land mid-test
+	}
+	async function loadShop(page: Page) {
+		const mark = Date.now();
+		await page.goto(brand.shopPath);
+		await page.waitForLoadState('networkidle');
+		return { mark, calls: await shopListingCalls(mark) };
+	}
+
+	test('11a a valid generation hours old is still served from disk (no age-based expiry)', async ({ page, api }) => {
+		const p = await createStockProduct(api, 'old', 5);
+		await waitForManifest(p.slug, true);
+		await withMarker((m) => ({ ...m, generatedAt: new Date(Date.now() - 6 * 3_600_000).toISOString() }), async () => {
+			const { calls } = await loadShop(page);
+			expect(calls, 'an old but intact generation must not trigger the live listing').toEqual([]);
+			await expect(shopCard(page, p.slug)).toHaveCount(1);
+		});
+	});
+
+	test('11b a foreign tenant marker is rejected: live listing is used and stock stays live', async ({ page, api }) => {
+		const p = await createStockProduct(api, 'foreign', 5);
+		await setOnHand(api, p.sku, 0);
+		await waitForManifest(p.slug, false);
+		await withMarker((m) => ({ ...m, storeSlug: 'another-tenant' }), async () => {
+			const { calls } = await loadShop(page);
+			expect(calls.filter((c) => c.origin === 'server').length, 'the rejected snapshot must fall back to the live API').toBeGreaterThanOrEqual(1);
+			await expect(shopCard(page, p.slug), 'live listing: the sold-out product is hidden by "in stock only"').toHaveCount(0);
+		});
+	});
+
+	test('11c an unsupported marker format or a bad generation name is rejected the same way', async ({ page, api }) => {
+		const p = await createStockProduct(api, 'badmark', 5);
+		await waitForManifest(p.slug, true);
+		for (const mutate of [(m: Record<string, unknown>) => ({ ...m, format: 3 }), (m: Record<string, unknown>) => ({ ...m, generation: '00000000-0000-0000-0000-000000000000' })]) {
+			await withMarker(mutate, async () => {
+				const { calls } = await loadShop(page);
+				expect(calls.filter((c) => c.origin === 'server').length).toBeGreaterThanOrEqual(1);
+				await expect(shopCard(page, p.slug)).toHaveCount(1); // live stock says 5
+			});
+		}
+	});
+
+	test('11d a missing current pointer falls back to the live API; the shop never serves an empty or fail-open list', async ({ page, api }) => {
+		const p = await createStockProduct(api, 'nocurrent', 5);
+		await waitForManifest(p.slug, true);
+		const current = join(CATALOG_DIR!, 'current');
+		const parked = join(CATALOG_DIR!, 'current.parked');
+		renameSync(current, parked);
+		try {
+			const { calls } = await loadShop(page);
+			expect(calls.filter((c) => c.origin === 'server').length).toBeGreaterThanOrEqual(1);
+			await expect(shopCard(page, p.slug)).toHaveCount(1);
+		} finally {
+			if (existsSync(current)) rmSync(parked, { force: true }); else renameSync(parked, current);
+		}
+	});
+});
+
+// ── 15. document cache headers: stock-bearing documents are never shared-cacheable ────────────────────────────────
+test('15 stock-bearing documents are private, no-cache with no CDN cache header; other public pages keep their policy', async ({ api, request }) => {
+	const p = await createStockProduct(api, 'headers', 5);
+	for (const path of ['/', brand.shopPath, brand.pdpPath(p.slug), '/search/']) {
+		const res = await request.get(path);
+		expect(res.status(), path).toBeLessThan(400);
+		const h = res.headers();
+		expect(h['cache-control'], `${path}: exactly the stock-bearing profile`).toBe('private, no-cache');
+		expect(h['cloudflare-cdn-cache-control'], `${path}: no CDN cache header`).toBeUndefined();
+		expect(h['cdn-cache-control'], `${path}: no CDN cache header`).toBeUndefined();
+		expect(h['x-route-class'], path).toBe('stock_bearing');
+		expect(h['x-cache-policy-version'], path).toBeTruthy();
+	}
+	const contact = await request.get('/contact/');
+	expect(contact.headers()['x-route-class'], 'a non-stock public page keeps its class').toBe('public_high_traffic');
+	expect(contact.headers()['cache-control'] ?? '', 'and its shared-cache lifetime').toMatch(/s-maxage=\d+/);
 });

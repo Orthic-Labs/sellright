@@ -50,3 +50,18 @@ export async function waitForNewGeneration(previous: string | null, timeoutMs = 
 		await new Promise((r) => setTimeout(r, 100));
 	}
 }
+
+/** Poll until the CURRENT published shop manifest lists `slug` with `inStock` (no-op without the real publisher: the shop then reads the live listing). */
+export async function waitForPublishedProduct(slug: string, inStock: boolean, timeoutMs = 30_000): Promise<void> {
+	if (!CATALOG_DIR) return;
+	const deadline = Date.now() + timeoutMs;
+	for (;;) {
+		const gen = currentGeneration();
+		if (gen) {
+			const catalog = JSON.parse(readFileSync(join(gen.dir, 'shop-catalog.json'), 'utf8')) as { products: Array<{ slug: string; inStock?: boolean }> };
+			if (catalog.products.find((x) => x.slug === slug)?.inStock === inStock) return;
+		}
+		if (Date.now() > deadline) throw new Error(`published manifest never showed ${slug} inStock=${inStock} within ${timeoutMs}ms`);
+		await new Promise((r) => setTimeout(r, 100));
+	}
+}

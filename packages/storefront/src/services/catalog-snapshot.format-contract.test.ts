@@ -1,17 +1,10 @@
 // @vitest-environment node
 /**
- * CHARACTERIZATION — plan A4 (manifest reader contract), BLOCKED on owner decision O2. Do not "fix" this file by editing
- * the reader here: A4 owns catalog-snapshot.ts.
- *
- * The publisher writes `format: 2` markers (packages/api/src/manifest/publish.ts: `JSON.stringify({ format: 2, source:
- * 'sellright', storeSlug, generation, generatedAt })`), but readCatalogSnapshot accepts only `format === 1`, so a
- * correctly published generation is rejected as "Stale or foreign" and the base shop always falls back to the live API
- * (services/browse-catalog.ts catch branch). This test states the CORRECT behaviour — a generation exactly as the real
- * publisher writes it is readable — and is wrapped in `it.fails`: it passes today (the assertion inside fails, as the
- * defect predicts) and turns RED the moment A4 lands, which is the cue to replace `it.fails` with `it` and to flip the
- * `{ format: 2 }` row in catalog-snapshot.test.ts, which today asserts that format 2 is rejected.
- *
- * Not covered here (need O2): the age window (300000 ms cut-off / 60000 ms future skew) and the fallback policy.
+ * Reader/publisher contract (plan A4): the publisher writes `format: 2` markers (packages/api/src/manifest/publish.ts:
+ * `JSON.stringify({ format: 2, source: 'sellright', storeSlug, generation, generatedAt })`), and readCatalogSnapshot must
+ * read a generation laid out exactly that way, however old its `generatedAt` is (no age-based expiry; the publisher
+ * regenerates on every stock change). Marker format, tenant, path and generation-name validation are covered in
+ * catalog-snapshot.test.ts.
  */
 import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -24,7 +17,7 @@ const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((dir) => rm(dir, { recursive: true, force: true }))); });
 
 /** A generation laid out exactly as publish.ts writes it (v1 + v2 files, format-2 marker, `current` symlink). */
-async function publishedGeneration(storeSlug: string) {
+async function publishedGeneration(storeSlug: string, generatedAt = new Date().toISOString()) {
 	const directory = await mkdtemp(join(tmpdir(), 'sr-reader-format-'));
 	roots.push(directory);
 	const generation = randomUUID();
@@ -34,15 +27,19 @@ async function publishedGeneration(storeSlug: string) {
 	await writeFile(join(folder, 'shop-catalog.json'), JSON.stringify({ products: [{ slug: 'native' }] }));
 	await writeFile(join(folder, 'shop-catalog.v2.json'), JSON.stringify({ products: [{ slug: 'native' }] }));
 	await writeFile(join(folder, 'products', 'native.json'), JSON.stringify({ slug: 'native' }));
-	await writeFile(join(folder, 'marker.json'), JSON.stringify({ format: 2, source: 'sellright', storeSlug, generation, generatedAt: new Date().toISOString() }));
+	await writeFile(join(folder, 'marker.json'), JSON.stringify({ format: 2, source: 'sellright', storeSlug, generation, generatedAt }));
 	await writeFile(join(directory, 'owner.json'), JSON.stringify({ source: 'sellright', storeSlug }));
 	await symlink(`generations/${generation}`, join(directory, 'current'));
 	return { directory, storeSlug };
 }
 
-describe('A4 characterization (BLOCKED: owner decision O2) — reader vs publisher marker format', () => {
-	it.fails('reads a generation exactly as the publisher writes it (format 2) — fails today, so it.fails passes', async () => {
+describe('A4 reader vs publisher marker format', () => {
+	it('reads a generation exactly as the publisher writes it (format 2)', async () => {
 		const config = await publishedGeneration('fixture');
 		await expect(readCatalogSnapshot('shop-catalog.json', config)).resolves.toEqual({ products: [{ slug: 'native' }] });
+	});
+	it('still reads it when the publication is hours old (no age-based expiry)', async () => {
+		const config = await publishedGeneration('fixture', new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString());
+		await expect(readCatalogSnapshot('products/native.json', config)).resolves.toEqual({ slug: 'native' });
 	});
 });

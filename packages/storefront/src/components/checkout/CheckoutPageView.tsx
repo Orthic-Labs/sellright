@@ -37,7 +37,8 @@ interface CheckoutPageViewProps {
 export const CheckoutPageView = component$<CheckoutPageViewProps>((props) => (
   <div class="checkout-layout">
     {!props.pageLoading.value && props.isCartEmpty.value ? (
-      <CheckoutEmptyCart />
+      // A refused order (409 / pre-submit read) drops the sold-out line and empties the cart: say why instead of a bare empty state.
+      <CheckoutEmptyCart message={props.localCart.notice || props.state.error} />
     ) : (
       <div class="min-h-screen">
         <OrderProcessingModal

@@ -16,7 +16,7 @@ LOG="$RUN_DIR/parity.log"
 mkdir -p "$RUN_DIR"
 
 set +e
-E2E_API_TAP=1 E2E_RUN_DIR="$RUN_DIR" E2E_CATALOG_DIR="$CATALOG_DIR" \
+E2E_API_TAP=1 E2E_FS_TAP=1 E2E_RUN_DIR="$RUN_DIR" E2E_CATALOG_DIR="$CATALOG_DIR" \
   npx playwright test e2e/stock-parity.spec.ts e2e/harness-smoke.spec.ts "$@" 2>&1 | tee "$LOG"
 status=${PIPESTATUS[0]}
 set -e

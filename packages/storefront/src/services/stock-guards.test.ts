@@ -67,3 +67,13 @@ describe('catalog reader holds no cache (scenario 17 structural guard)', () => {
 		});
 	}
 });
+
+describe('pre-submit live stock read (locked layer 4)', () => {
+	it('placeOrder awaits refreshStockBeforeSubmit before the order-creating call', () => {
+		const code = read('hooks/useCheckout.ts');
+		const read_ = code.indexOf('await refreshStockBeforeSubmit()');
+		const post = code.indexOf('await srPlaceOrder(');
+		expect(read_, 'refreshStockBeforeSubmit must be awaited in placeOrder').toBeGreaterThan(-1);
+		expect(post).toBeGreaterThan(read_);
+	});
+});

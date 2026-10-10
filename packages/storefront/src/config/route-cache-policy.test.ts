@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getRouteCacheProfile } from './route-cache-policy';
+import { CACHE_POLICY_VERSION, getRouteCacheProfile } from './route-cache-policy';
 
 describe('getRouteCacheProfile', () => {
 	it('classifies mutating/personalized content routes as dynamic (no-store)', () => {
@@ -21,9 +21,32 @@ describe('getRouteCacheProfile', () => {
 	});
 
 	it('still classifies the high-traffic public content routes as such', () => {
-		for (const pathname of ['/', '/shop', '/contact', '/terms', '/privacy', '/returns']) {
+		for (const pathname of ['/contact', '/terms', '/privacy', '/returns']) {
 			expect(getRouteCacheProfile(pathname).routeClass).toBe('public_high_traffic');
 		}
+	});
+
+	it('classifies every stock-bearing document as stock_bearing: private, no-cache, never shared-cacheable', () => {
+		for (const pathname of ['/', '/shop', '/shop/', '/products/some-knife', '/products/a/b', '/search', '/collections/new']) {
+			const profile = getRouteCacheProfile(pathname);
+			expect(profile.routeClass, pathname).toBe('stock_bearing');
+			expect(profile.responseCacheControl, pathname).toBe('private, no-cache');
+			expect(profile.cacheControl, pathname).toEqual({ maxAge: 0, sMaxAge: 0, staleWhileRevalidate: 0 });
+			expect(Object.keys(profile).filter((key) => /cdn/i.test(key)), pathname).toEqual([]);
+		}
+	});
+
+	it('keeps checkout and account dynamic (no-store) and other public routes on their shared-cache policy', () => {
+		expect(getRouteCacheProfile('/checkout').routeClass).toBe('dynamic');
+		expect(getRouteCacheProfile('/checkout/confirmation/ABC').responseCacheControl).toContain('no-store');
+		expect(getRouteCacheProfile('/account/orders').routeClass).toBe('dynamic');
+		expect(getRouteCacheProfile('/contact').cacheControl.sMaxAge).toBe(60 * 60 * 4);
+		expect(getRouteCacheProfile('/contact').responseCacheControl).toBeUndefined();
+		expect(getRouteCacheProfile('/blog').cacheControl.sMaxAge).toBe(60 * 5);
+	});
+
+	it('exposes a policy version string for the x-cache-policy-version header', () => {
+		expect(CACHE_POLICY_VERSION).toMatch(/^\d{4}-\d{2}-\d{2}\.\d+$/);
 	});
 
 	it('falls back to public_standard for everything else (e.g. blog, about)', () => {
