@@ -2,8 +2,10 @@ import { verify as edVerify, type KeyObject } from 'node:crypto';
 import { z } from 'zod';
 
 // Signed runtime/model artifact manifests: one current manifest pointer per
-// app/kind/OS/arch, replaced only after the API verifies the configured Ed25519
-// authority, exact digest/provenance, and lane scope.
+// app/kind/artifactId/OS/arch (an absent artifactId keeps the legacy slot),
+// replaced only after the API verifies the configured Ed25519 authority,
+// exact digest/provenance, and lane scope. `any`/`any` is the wildcard target
+// used when one signed artifact serves every OS/arch.
 //
 // Suite values — licensed app keys, artifact kinds, bucket names, which kinds
 // are private — are all supplied by the deployer via
@@ -26,6 +28,9 @@ export interface RuntimeArtifactManifestConfig {
 }
 
 const Sha256 = z.string().regex(/^[0-9a-f]{64}$/);
+/** Artifact identity slug (per app/kind). Absent = legacy slot without identity. */
+export const RuntimeArtifactId = z.string().max(128).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+  .refine((value) => value.trim() === value, 'must be an exact safe slug');
 const ExactString = z.string().min(1).refine((value) => value.trim() === value, 'must be an exact nonempty string');
 const SafeFilename = ExactString.refine(
   (value) => value !== '.' && value !== '..' && !value.includes('/') && !value.includes('\\') && !value.includes('..'),
@@ -40,6 +45,7 @@ export function createRuntimeArtifactManifestTools(config: RuntimeArtifactManife
   const RuntimeArtifactManifestSchema = z.object({
     schema: z.literal(1),
     artifactKind: z.string().refine((k) => kinds.includes(k), 'unknown artifact kind'),
+    artifactId: RuntimeArtifactId.optional(),
     entitlement: z.object({
       appKey: AppKey,
       tier: z.enum(['pro', 'public', 'bundled']),
@@ -49,8 +55,8 @@ export function createRuntimeArtifactManifestTools(config: RuntimeArtifactManife
       bucket: z.string().min(1).nullable(),
     }).strict(),
     target: z.object({
-      os: z.enum(['windows', 'darwin', 'linux', 'ios']),
-      arch: z.enum(['x86_64', 'aarch64', 'universal']),
+      os: z.enum(['windows', 'darwin', 'linux', 'ios', 'any']),
+      arch: z.enum(['x86_64', 'aarch64', 'universal', 'any']),
     }).strict(),
     object: z.object({
       r2Key: ExactString.nullable(),
@@ -80,6 +86,9 @@ export function createRuntimeArtifactManifestTools(config: RuntimeArtifactManife
       evidenceSha256: Sha256,
     }).strict(),
   }).strict().superRefine((value, ctx) => {
+    if ((value.target.os === 'any') !== (value.target.arch === 'any')) {
+      ctx.addIssue({ code: 'custom', path: ['target'], message: 'target any must be paired as any/any' });
+    }
     const lanes = {
       'private-r2': { tier: 'pro', bucket: config.buckets.private },
       'public-r2': { tier: 'public', bucket: config.buckets.public },
@@ -101,7 +110,8 @@ export function createRuntimeArtifactManifestTools(config: RuntimeArtifactManife
     } else if (value.object.r2Key !== objectKey) {
       ctx.addIssue({ code: 'custom', path: ['object', 'r2Key'], message: 'contradicts immutable SHA-256 object key' });
     }
-    const pointerKey = `${value.entitlement.appKey}/runtime-artifacts/${value.artifactKind}/${value.target.os}/${value.target.arch}/current/manifest.json`;
+    const identityPath = value.artifactId === undefined ? '' : `${value.artifactId}/`;
+    const pointerKey = `${value.entitlement.appKey}/runtime-artifacts/${value.artifactKind}/${identityPath}${value.target.os}/${value.target.arch}/current/manifest.json`;
     if (value.distribution.delivery !== 'bundled' && value.pointerKey !== pointerKey) {
       ctx.addIssue({ code: 'custom', path: ['pointerKey'], message: 'must be the replace-only stable current manifest key' });
     }

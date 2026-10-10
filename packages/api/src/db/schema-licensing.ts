@@ -15,6 +15,8 @@ export const runtimeArtifactPromotion = pgTable(
     storeId: uuid().notNull().references(() => store.id),
     appKey: text().notNull(),
     artifactKind: text().notNull(),
+    // Artifact identity slot (migration 0092). NULL = legacy slot without identity.
+    artifactId: text(),
     targetOs: text().notNull(),
     targetArch: text().notNull(),
     delivery: text().notNull(),
@@ -28,8 +30,8 @@ export const runtimeArtifactPromotion = pgTable(
     registeredAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [unique('runtime_artifact_promotion_current').on(
-    t.storeId, t.appKey, t.artifactKind, t.targetOs, t.targetArch,
-  )],
+    t.storeId, t.appKey, t.artifactKind, t.artifactId, t.targetOs, t.targetArch,
+  ).nullsNotDistinct()],
 );
 
 export type RuntimeArtifactPromotion = typeof runtimeArtifactPromotion.$inferSelect;
