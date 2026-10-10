@@ -40,6 +40,9 @@ export const useAffiliateData = routeLoader$(async ({ url }) => {
     if (!token) return { token: null, result: null };
     const result = await fetchAffiliateStatsByToken(token);
     return { token, result };
+}, {
+    // Qwik Router 2.0.0-rc: loaders only see allow-listed search params.
+    search: ['t'],
 });
 
 export default component$(() => {

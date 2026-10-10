@@ -7,17 +7,20 @@
  * Qwik uses a service worker to speed up your site and reduce latency, ie, not used in the traditional way of offline.
  *
  * Custom caching strategy:
- * - Qwik prefetching (built-in) — handles JS/CSS module prefetch
+ * - Qwik module prefetching is built into the Qwik 2 core preloader (no service worker needed)
  * - Image caching (cache-first) — /assets/ images cached indefinitely
  *
  * NOT cached here (handled by in-memory caches + SSE invalidation instead):
  * - GraphQL API responses — productCache handles this with SSE invalidation
  * - Page HTML — routeLoader$ with staleWhileRevalidate HTTP headers handles this
  */
-import { setupServiceWorker } from '@qwik.dev/router/service-worker';
+// Qwik 2 embeds its own preloader, so `setupServiceWorker()` is a no-op and the
+// `@qwik.dev/router/service-worker` export was removed (2.0.0-beta.41). This
+// file stays only for the custom image cache below; <ServiceWorkerRegister />
+// in root.tsx still registers it.
 
-// Qwik's built-in module prefetching
-setupServiceWorker();
+// Keep this file a module (no imports left) so its top-level consts stay out of the global scope.
+export {};
 
 const IMAGE_CACHE = 'storefront-images-v3';
 

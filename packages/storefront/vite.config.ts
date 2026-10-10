@@ -25,6 +25,12 @@ export default defineConfig((config) => {
   return {
     logLevel: 'info', // Show build progress and info logs
     base: '/', // Ensure root-relative URLs
+    // Vite 8 / Rolldown (ported from the Rotten Hand and Damned storefronts): the
+    // SSR build must bundle tailwindcss so the `@import 'tailwindcss'` in
+    // global.css (?inline) resolves instead of being externalised.
+    ssr: {
+      noExternal: ['tailwindcss'],
+    },
 
     build: {
       sourcemap: false, // Explicitly disable for production to save memory
@@ -67,12 +73,13 @@ export default defineConfig((config) => {
         keep_classnames: false, // Set to true if you need class names preserved
       },
 
-      // manualChunks removed — Qwik beta.30 manages its own chunking.
-      // Custom manualChunks breaks manifest generation → "Qwik core bundle not found" → QRL failures at SSR.
-      // experimentalMinChunkSize merges tiny chunks (<4KB) to reduce HTTP request count.
-      rollupOptions: {
+      // manualChunks is unsupported (Qwik 2.0.0-beta.40+ requires Vite 8 / Rolldown and
+      // manages its own chunking; custom chunking breaks manifest generation → QRL
+      // failures at SSR). `rollupOptions` is the deprecated Vite 7 name; Rolldown reads
+      // `rolldownOptions`. `experimentalMinChunkSize` (merge chunks <4KB) is dropped:
+      // the brand storefronts run without it on Rolldown.
+      rolldownOptions: {
         output: {
-          experimentalMinChunkSize: 4000,
           // Keep bundled images separate from SellRight's /assets product route.
           assetFileNames: (assetInfo) => {
             if (/\.(css)$/.test(assetInfo.name ?? '')) {

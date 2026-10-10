@@ -23,7 +23,7 @@ import { LoginModalProvider, useLoginModalState, useLoginModalActions } from '~/
 import LoginModal from '~/components/auth/LoginModal';
 import { LocalAddressService } from '~/services/LocalAddressService';
 import { CountryPreferenceService } from '~/services/CountryPreferenceService';
-import { CACHE_POLICY_VERSION, getRouteCacheProfile } from '~/config/route-cache-policy';
+import { CACHE_POLICY_VERSION, resolveRouteCacheProfile } from '~/config/route-cache-policy';
 import { DEV_API } from '~/constants';
 import { srShopIdentity, srErrorStatus, srMaintenanceStatus } from '~/utils/sellright';
 import { identityFromStaticTheme } from '~/theme/theme.config';
@@ -72,11 +72,16 @@ export const useStoreIdentityLoader = routeLoader$(async ({ cookie, query, statu
 		// an outage that has nothing to do with publish state.
 		return { identity: identityFromStaticTheme(), notPublished: false };
 	}
+}, {
+	// Qwik Router 2.0.0-rc: loaders are strict by default and see no search
+	// params unless allow-listed, so the preview token must be declared.
+	search: ['preview_token'],
 });
 
-export const onGet: RequestHandler = async ({ cacheControl, url, headers }) => {
-	const pathname = url.pathname;
-	const profile = getRouteCacheProfile(pathname);
+export const onGet: RequestHandler = async ({ cacheControl, url, headers, sharedMap }) => {
+	// Loader/action data requests arrive with the page pathname (router trims q-loader-*.json): they must not
+	// inherit the public page profile.
+	const profile = resolveRouteCacheProfile(url.pathname, sharedMap);
 	cacheControl(profile.cacheControl);
 	headers.set('x-route-class', profile.routeClass);
 	headers.set('x-cache-policy-version', CACHE_POLICY_VERSION);

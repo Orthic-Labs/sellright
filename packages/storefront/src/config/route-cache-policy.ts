@@ -72,3 +72,28 @@ export const getRouteCacheProfile = (pathname: string): RouteCacheProfile => {
 		cacheControl: { maxAge: 0, sMaxAge: 60 * 5, staleWhileRevalidate: 60 },
 	};
 };
+
+/**
+ * Qwik Router rc.2 serves loader data from `{route}/q-loader-{id}.{hash}.json` and strips that suffix from
+ * `url.pathname` before handlers run, so a page-path profile would wrongly classify the data response as the
+ * page ('/' => shared s-maxage). Router flags set on `sharedMap`: `@isQLoader`, `@isQAction`
+ * (router lib/chunks/request-path.mjs, user-response.mjs createRequestEvent).
+ */
+const INTERNAL_DATA_FLAGS = ['@isQLoader', '@isQAction'];
+
+export const isInternalDataRequest = (sharedMap: { has(key: string): boolean }) =>
+	INTERNAL_DATA_FLAGS.some((flag) => sharedMap.has(flag));
+
+/** Loader/action data is cookie-dependent (identity, auth, country, maintenance): never shared-cacheable. */
+export const getDataRequestCacheProfile = (): RouteCacheProfile => ({
+	routeClass: 'dynamic',
+	cacheControl: { maxAge: 0, sMaxAge: 0, staleWhileRevalidate: 0 },
+	responseCacheControl: 'private, no-store, no-cache, must-revalidate',
+});
+
+/** Page profile for HTML documents; private no-store for loader/action data requests under any page path. */
+export const resolveRouteCacheProfile = (
+	pathname: string,
+	sharedMap: { has(key: string): boolean },
+): RouteCacheProfile =>
+	isInternalDataRequest(sharedMap) ? getDataRequestCacheProfile() : getRouteCacheProfile(pathname);

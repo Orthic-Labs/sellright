@@ -45,7 +45,7 @@ beforeAll(async () => {
     dependencies: {
       '@sellright/api': 'file:./packs/sellright-api-0.1.0.tgz',
       '@sellright/sample-plugin': 'file:./packs/sellright-sample-plugin-0.1.0.tgz',
-      'drizzle-orm': '0.45.2', pg: '8.23.0', '@hono/zod-openapi': '1.6.3', zod: '4.6.5',
+      'drizzle-orm': '0.45.4', pg: '8.23.1', '@hono/zod-openapi': '1.6.3', zod: '4.6.5',
     },
   }, null, 2));
   const fixtureLock = join(here, 'fixtures', 'consumer.pnpm-lock.yaml');
