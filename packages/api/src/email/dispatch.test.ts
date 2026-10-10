@@ -64,6 +64,37 @@ describe('email dispatch app routing', () => {
       text: expect.stringContaining('https://viewright.cc/orders/SR-VR-1'),
     }), undefined);
   });
+
+  it('applies the store emailTheme from store.config, falling back to defaults per key', async () => {
+    const sendEmail = vi.fn().mockResolvedValue({ delivered: true });
+    vi.doMock('./mailer.js', () => ({ sendEmail }));
+
+    process.env = { NODE_ENV: 'test', SMTP_FROM: 'hello@example-store.test', STOREFRONT_URL: 'https://store.example.com' };
+
+    const { sendTrialKey } = await import('./dispatch.js');
+
+    await sendTrialKey(
+      {
+        name: 'Theme Shop',
+        currency: 'USD',
+        appKey: null,
+        config: { emailTheme: { footerText: 'Theme Shop Support', colors: { button: '#ff5630' } } },
+      },
+      'trial@example.com',
+      { key: 'TH-TRIAL-1', days: 7 },
+    );
+
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      html: expect.stringContaining('background:#ff5630;color:#fff'),
+    }), undefined);
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      html: expect.stringContaining('>Theme Shop Support</p>'),
+      text: expect.stringContaining('— Theme Shop Support'),
+    }), undefined);
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      html: expect.stringContaining('background:#f6f6f6'), // surface default kept
+    }), undefined);
+  });
 });
 
 describe('per-store resolution precedence (SR-05)', () => {
