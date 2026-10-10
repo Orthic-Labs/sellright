@@ -11,7 +11,7 @@
  * every line and would wipe fulfilled/refunded quantities on a paid order.
  */
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { HttpError, J, errBody, money, requireAdmin, requirePermission, requireStore, requireWrite, guard } from './admin-helpers.js';
+import { HttpError, J, errBody, money, requireAdmin, requireHuman, requirePermission, requireStore, requireWrite, guard } from './admin-helpers.js';
 import {
   AddressInput, EditOp, OrderEditError, Settlement, normalizeAddress,
 } from '../orders/order-edit.js';
@@ -97,7 +97,7 @@ adminOrderEdit.openapi(
     const { code } = c.req.valid('param');
     const body = c.req.valid('json');
     // Money leaving the business needs the same permission as the Refund panel.
-    if (body.settlement?.type === 'refund_now') requirePermission(st, 'refunds');
+    if (body.settlement?.type === 'refund_now') { requirePermission(st, 'refunds'); requireHuman(admin); } // D11: agents never move money out
     const result = await translate(() => commitOrderEdit({
       storeId: st.storeId, storeSlug: st.slug, code, actor: admin.email, ops: body.ops,
       expectedGrandTotal: body.expectedGrandTotal, expectedBalance: body.expectedBalance, idempotencyKey: body.idempotencyKey,

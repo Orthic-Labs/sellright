@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { HttpError, requireInstallationAdmin, requireStepUp, STEP_UP_REQUIRED_MESSAGE } from './admin-helpers.js';
+import { HttpError, hasPermission, requireHuman, requireInstallationAdmin, requireStepUp, STEP_UP_REQUIRED_MESSAGE } from './admin-helpers.js';
 import type { AdminPrincipal } from '../auth/admin-session.js';
 
 function principal(isInstallationAdmin: boolean, stepUpAt: Date | null = null): AdminPrincipal {
-  return { id: 'admin-1', email: 'a@example.com', isInstallationAdmin, stepUpAt, stores: [] };
+  return { id: 'admin-1', email: 'a@example.com', kind: 'human', auth: 'session', apiTokenId: null, isInstallationAdmin, stepUpAt, stores: [] };
 }
 
 describe('requireInstallationAdmin', () => {
@@ -55,5 +55,16 @@ describe('requireStepUp', () => {
     expect(() => requireStepUp(justInside)).not.toThrow();
     const justOutside = principal(true, new Date(Date.now() - 5 * 60 * 1000 - 1000));
     expect(() => requireStepUp(justOutside)).toThrow(HttpError);
+  });
+});
+
+describe('agent kind guards', () => {
+  const agent = { id: 'a', email: 'a@agents.invalid', kind: 'agent', auth: 'api_token', apiTokenId: 't', isInstallationAdmin: false, stepUpAt: new Date(), stores: [] } as const;
+  it('requireHuman refuses agents', () => { expect(() => requireHuman(agent as never)).toThrow(); });
+  it('requireStepUp refuses agents even with a fresh stepUpAt', () => { expect(() => requireStepUp(agent as never)).toThrow(); });
+  it('requireInstallationAdmin refuses agents', () => { expect(() => requireInstallationAdmin({ ...agent, isInstallationAdmin: true } as never)).toThrow(); });
+  it('hasPermission applies grants to agents like humans (the deny set, not the matrix, blocks irreversible routes)', () => {
+    const st = { storeId: 's', slug: 's', name: 's', currency: 'USD', taxRate: 0, shippingTaxable: false, role: 'staff', permissions: { webhooks: true } } as const;
+    expect(hasPermission(st as never, 'webhooks')).toBe(true); expect(hasPermission(st as never, 'refunds')).toBe(false);
   });
 });

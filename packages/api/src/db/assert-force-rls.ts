@@ -25,6 +25,8 @@ const EXEMPT = new Set([
   // stock-hook path via the unscoped owner pool, outside any store context —
   // same cross-cutting-infra posture as processed_event.
   'catalog_manifest_pending',
+  // admin_api_token: registry resolved before store context (0094); isolation = token hash ⋈ single grant, tested in routes/admin-agents.db.test.ts
+  'admin_api_token',
 ]);
 
 async function main() {

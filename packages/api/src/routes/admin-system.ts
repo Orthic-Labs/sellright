@@ -22,7 +22,7 @@ import { isEnvManaged } from '../security/settings-resolver.js';
 // process.env.SELLRIGHT_MASTER_KEY in beforeEach() and have it take effect.
 import { configuredGatewayAccount } from '../payments/gateway-account.js';
 import { stripeCreds } from '../payments/stripe.js';
-import { HttpError, J, errBody, guard, requireAdmin, requireInstallationAdmin, requireStepUp, requireStore } from './admin-helpers.js';
+import { HttpError, J, errBody, guard, requireAdmin, requireHuman, requireInstallationAdmin, requireStepUp, requireStore } from './admin-helpers.js';
 import { mutateStoreConfig } from './admin-settings.js';
 import { CANARY_CHANNELS, CANARY_EMAIL_KINDS, canaryRetryAfter, emitHealthCanary, recordCanaryEmit } from '../canary/health-canary.js';
 
@@ -160,6 +160,7 @@ adminSystem.openapi(
   }),
   async (c) => guard(c, async () => {
     const { admin, token } = await requireAdmin(c);
+    requireHuman(admin); // agents never step up (deny set already blocks the route; belt and braces)
     const ip = clientIp(c);
     // Same rate-limit shape as /v1/admin/login (rate-limit.ts) — step-up IS a
     // second password check, and deserves the identical brute-force guard.

@@ -9,6 +9,7 @@ import { sql } from 'drizzle-orm';
 import { bearer } from '../auth/session.js';
 import { cookie, SESSION_COOKIE } from '../auth/cookies.js';
 import { resolveAdmin, type AdminPrincipal, type AdminStoreAccess } from '../auth/admin-session.js';
+import { isAgentToken, resolveAgentByToken } from '../auth/admin-api-token.js';
 import { apiErrorSchema, errorEnvelope, slugifyCode, type HttpStatus } from '../lib/api-error.js';
 
 // Generic in the schema type so the concrete Zod type flows through to
@@ -43,15 +44,21 @@ export class HttpError extends Error {
   }
 }
 
-export type ReqCtx = { req: { header: (k: string) => string | undefined } };
+export type ReqCtx = { req: { header: (k: string) => string | undefined }; get?: (k: 'adminPrincipal') => AdminPrincipal | undefined };
 
 export async function requireAdmin(c: ReqCtx): Promise<{ admin: AdminPrincipal; token: string }> {
   // httpOnly cookie session (browser) OR Authorization bearer (API clients).
   const token = bearer(c.req.header('authorization')) ?? cookie(c, SESSION_COOKIE);
   if (!token) throw new HttpError(401, 'not authenticated');
-  const admin = await resolveAdmin(token);
+  // adminAgentGuard (routes/admin-agent-guard.ts) resolves the principal once per request; reuse it.
+  const admin = c.get?.('adminPrincipal') ?? (isAgentToken(token) ? await resolveAgentByToken(token) : await resolveAdmin(token));
   if (!admin) throw new HttpError(401, 'invalid or expired session');
   return { admin, token };
+}
+
+/** Human-only gate for the branches the deny set cannot express (draft markPaid, refund_now, gift-card enable/adjust) and 2FA/step-up. */
+export function requireHuman(admin: AdminPrincipal): void {
+  if (admin.kind !== 'human') throw new HttpError(403, 'agents cannot perform this action');
 }
 
 /** Resolve the selected store from x-store-slug and assert the admin can access it. */
@@ -89,7 +96,7 @@ export function requireOwner(st: AdminStoreAccess): void {
 // even every store — never satisfies this on its own; owning store B must
 // never grant system operations over store A or the install itself.
 export function requireInstallationAdmin(admin: AdminPrincipal): void {
-  if (!admin.isInstallationAdmin) {
+  if (admin.kind !== 'human' || !admin.isInstallationAdmin) {
     throw new HttpError(403, 'requires installation administrator');
   }
 }
@@ -114,7 +121,7 @@ export const STEP_UP_REQUIRED_MESSAGE = 'step_up_required';
  *  long-lived session cookie alone must not be able to exfiltrate the master
  *  key without the admin re-proving their password at the moment of use. */
 export function requireStepUp(admin: AdminPrincipal): void {
-  if (!admin.stepUpAt || Date.now() - admin.stepUpAt.getTime() > STEP_UP_WINDOW_MS) {
+  if (admin.kind !== 'human' || !admin.stepUpAt || Date.now() - admin.stepUpAt.getTime() > STEP_UP_WINDOW_MS) {
     throw new HttpError(403, STEP_UP_REQUIRED_MESSAGE);
   }
 }
