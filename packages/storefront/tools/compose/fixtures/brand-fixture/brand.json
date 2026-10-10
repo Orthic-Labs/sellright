@@ -1,0 +1,16 @@
+{
+  "brand": "fixture",
+  "buildDir": "store",
+  "pin": "0123456789abcdef0123456789abcdef01234567",
+  "settings": { "pdp.stockRefreshTrigger": "qinit" },
+  "publicConfig": {
+    "VITE_STORE_NAME": "Fixture Store",
+    "VITE_PUBLIC_DOMAIN": "fixture.example",
+    "VITE_THEME_COLOR_ACCENT": "#b07a84"
+  },
+  "requiredEnv": ["VITE_STORE_NAME"],
+  "externals": ["../scripts/node-heap-options.mjs", "/opt/fixture-ops/cf-purge.mjs"],
+  "packageScripts": { "build": "bash scripts/build-production.sh", "prebuild": null },
+  "deployFiles": ["scripts/build-production.sh", "ecosystem.config.cjs"],
+  "buildScript": "scripts/build-production.sh"
+}

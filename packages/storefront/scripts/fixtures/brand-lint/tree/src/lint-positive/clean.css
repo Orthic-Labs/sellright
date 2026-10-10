@@ -1,0 +1,3 @@
+/* #B87333 and Cormorant Garamond in a comment: not scanned */
+.card { color: var(--color-accent); font-family: var(--font-body); background: #fff; }
+:root { --some-rgb: 12, 34, 56; }

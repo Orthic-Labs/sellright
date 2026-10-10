@@ -1,0 +1,207 @@
+{
+  "$comment": "Three schemas, each name owned by exactly one section (tools/compose/env-check.mjs enforces this). settings and publicBuildConfig are filled from brand.json; privateRuntime names are owned by the brand's generator or pm2 env and never by brand.json. Names only: no values or defaults for secrets live here.",
+  "version": 1,
+  "settings": {
+    "pdp.stockRefreshTrigger": {
+      "type": "enum",
+      "values": [
+        "qinit",
+        "qidle"
+      ],
+      "default": "qidle",
+      "description": "When the PDP starts its one live stock refresh. Damned uses qinit (approved 2026-09-26); others stay on qidle."
+    },
+    "shop.stockOnLoad": {
+      "type": "enum",
+      "values": [
+        "manifest",
+        "live"
+      ],
+      "default": "manifest",
+      "description": "Shop page availability on load: manifest only, or one live uncached fail-closed read (owner decision O1)."
+    },
+    "pdp.bfcacheRefresh": {
+      "type": "boolean",
+      "default": false,
+      "description": "Refresh live stock again on a persisted pageshow (owner decision O3; Damned only)."
+    }
+  },
+  "publicBuildConfig": {
+    "VITE_STORE_NAME": {
+      "description": "Store display name (title, header, JSON-LD)"
+    },
+    "VITE_STORE_LEGAL_NAME": {
+      "description": "Legal entity name"
+    },
+    "VITE_STORE_TAGLINE": {
+      "description": "Short tagline"
+    },
+    "VITE_PUBLIC_DOMAIN": {
+      "description": "Public domain without scheme"
+    },
+    "VITE_STORE_SUPPORT_EMAIL": {
+      "description": "Customer support address shown on the site"
+    },
+    "VITE_STORE_LOGO_TEXT": {
+      "description": "Wordmark text"
+    },
+    "VITE_STORE_LOGO_URL": {
+      "description": "Logo image URL"
+    },
+    "VITE_STORE_OG_IMAGE": {
+      "description": "Default Open Graph image path or URL"
+    },
+    "VITE_STORE_LOCALE": {
+      "description": "Locale tag"
+    },
+    "VITE_STORE_CURRENCY": {
+      "description": "ISO currency code"
+    },
+    "VITE_STORE_ADDRESS_STREET": {
+      "description": "Postal address, street (enables the address block)"
+    },
+    "VITE_STORE_ADDRESS_CITY": {
+      "description": "Postal address, city"
+    },
+    "VITE_STORE_ADDRESS_REGION": {
+      "description": "Postal address, region"
+    },
+    "VITE_STORE_ADDRESS_POSTAL": {
+      "description": "Postal address, postal code"
+    },
+    "VITE_STORE_ADDRESS_COUNTRY": {
+      "description": "Postal address, country code"
+    },
+    "VITE_STORE_SOCIAL_INSTAGRAM": {
+      "description": "Instagram URL"
+    },
+    "VITE_STORE_SOCIAL_FACEBOOK": {
+      "description": "Facebook URL"
+    },
+    "VITE_STORE_SOCIAL_TWITTER": {
+      "description": "Twitter/X URL"
+    },
+    "VITE_STORE_SOCIAL_TIKTOK": {
+      "description": "TikTok URL"
+    },
+    "VITE_STORE_SOCIAL_YOUTUBE": {
+      "description": "YouTube URL"
+    },
+    "VITE_THEME_COLOR_PRIMARY": {
+      "description": "Theme colour: primary"
+    },
+    "VITE_THEME_COLOR_SECONDARY": {
+      "description": "Theme colour: secondary"
+    },
+    "VITE_THEME_COLOR_ACCENT": {
+      "description": "Theme colour: accent"
+    },
+    "VITE_THEME_COLOR_BACKGROUND": {
+      "description": "Theme colour: background"
+    },
+    "VITE_THEME_COLOR_SURFACE": {
+      "description": "Theme colour: surface"
+    },
+    "VITE_THEME_COLOR_BORDER": {
+      "description": "Theme colour: border"
+    },
+    "VITE_THEME_COLOR_TEXT": {
+      "description": "Theme colour: text"
+    },
+    "VITE_THEME_COLOR_TEXT_MUTED": {
+      "description": "Theme colour: muted text"
+    },
+    "VITE_THEME_FONT_BODY": {
+      "description": "Body font stack"
+    },
+    "VITE_THEME_FONT_DISPLAY": {
+      "description": "Display font stack"
+    },
+    "VITE_THEME_FONT_MONO": {
+      "description": "Monospace font stack"
+    },
+    "VITE_SHOP_CATEGORIES": {
+      "description": "Shop category list"
+    },
+    "VITE_HOME_SPOTLIGHT_SLUG": {
+      "description": "Homepage spotlight product slug"
+    },
+    "VITE_HOME_FEATURE_SLUG": {
+      "description": "Homepage feature product slug"
+    },
+    "VITE_POLICY_SHIPPING_LABEL": {
+      "description": "Shipping policy label"
+    },
+    "VITE_POLICY_SHIPPING_SUB": {
+      "description": "Shipping policy sub-line"
+    },
+    "VITE_POLICY_RETURNS_LABEL": {
+      "description": "Returns policy label"
+    },
+    "VITE_POLICY_RETURNS_SUB": {
+      "description": "Returns policy sub-line"
+    },
+    "VITE_POLICY_PAYMENT_LABEL": {
+      "description": "Payment policy label"
+    },
+    "VITE_POLICY_PAYMENT_SUB": {
+      "description": "Payment policy sub-line"
+    },
+    "VITE_SHEERID_ENABLED": {
+      "description": "1 only when the SheerID program is configured"
+    },
+    "VITE_SEZZLE_MERCHANT_UUID": {
+      "description": "Sezzle merchant id (public widget key)"
+    },
+    "VITE_DEMO_MODE": {
+      "description": "1 only for the isolated demo build"
+    }
+  },
+  "privateRuntime": {
+    "names": [
+      "APPLE_PAY_ENABLED",
+      "APPLE_PAY_MERCHANT_ID",
+      "CACHE_ADMIN_TOKEN",
+      "CACHE_WARM_EDGE_URL",
+      "CACHE_WARM_TOKEN",
+      "CATALOG_DIR",
+      "FACEBOOK_ACCESS_TOKEN",
+      "FACEBOOK_PIXEL_ID",
+      "GA4_API_SECRET",
+      "GA4_MEASUREMENT_ID",
+      "HOST",
+      "INDEXNOW_HOST",
+      "INDEXNOW_STORE_ID",
+      "INDEXNOW_WEBHOOK_SECRET",
+      "LISTMONK_ADMIN_TOKEN",
+      "LISTMONK_ADMIN_USER",
+      "LISTMONK_INTERNAL_URL",
+      "LISTMONK_LIST_ID_ROTTEN",
+      "LISTMONK_ROOT_URL",
+      "NODE_ENV",
+      "PORT",
+      "QWIK_LOG_LEVEL",
+      "SELLRIGHT_API_URL",
+      "SELLRIGHT_ASSETS_DIR",
+      "SELLRIGHT_BUILD_SUFFIX",
+      "SELLRIGHT_DISABLE_SSG",
+      "STOREFRONT_ORIGIN",
+      "VITE_FACEBOOK_PIXEL_ID",
+      "VITE_GA4_MEASUREMENT_ID",
+      "VITE_GOOGLE_ADDRESS_VALIDATION_API_KEY",
+      "VITE_IS_READONLY_INSTANCE",
+      "VITE_SECURE_COOKIE",
+      "VITE_SELLRIGHT_API_URL",
+      "VITE_SELLRIGHT_DEV_URL",
+      "VITE_SELLRIGHT_LOCAL_URL",
+      "VITE_SELLRIGHT_PROD_URL",
+      "VITE_SELLRIGHT_STORE_SLUG",
+      "VITE_SERVER_CART",
+      "VITE_SHOW_PAYMENT_STEP",
+      "VITE_SHOW_REVIEWS",
+      "VITE_SR_CHECKOUT",
+      "VITE_STRIPE_PUBLISHABLE_KEY",
+      "VITE_TURNSTILE_SITE_KEY"
+    ]
+  }
+}

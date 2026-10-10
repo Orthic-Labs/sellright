@@ -1,0 +1,1 @@
+src/lint-negative/overlay-owned.tsx

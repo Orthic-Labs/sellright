@@ -35,6 +35,13 @@
 		"qwik": "qwik",
 		"test": "vitest run",
 		"test:scripts": "node --test scripts/*.test.mjs",
+		"test:tools": "node --test tools/compose/compose.test.mjs tools/compose/drift.test.mjs tools/compose/env-check.test.mjs tools/env/env-check.test.mjs",
+		"tokens:inventory": "node scripts/token-inventory.mjs",
+		"check:layers": "node scripts/check-imports.mjs --validate",
+		"check:imports": "node scripts/check-imports.mjs",
+		"check:shape": "node scripts/check-code-shape.mjs",
+		"check:shape:base": "node scripts/check-code-shape.mjs --base",
+		"lint:brand": "node scripts/brand-lint.mjs",
 		"e2e:build": "pnpm run generate:placeholder-assets && rm -rf dist-e2e server-e2e && SELLRIGHT_DISABLE_SSG=1 SELLRIGHT_BUILD_SUFFIX=e2e pnpm run build.client && SELLRIGHT_DISABLE_SSG=1 SELLRIGHT_BUILD_SUFFIX=e2e pnpm run build.server",
 		"test:e2e": "pnpm run e2e:build && playwright test",
 		"test:e2e:run": "playwright test"

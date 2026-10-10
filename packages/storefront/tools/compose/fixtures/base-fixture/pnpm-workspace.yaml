@@ -1,0 +1,10 @@
+packages:
+  - "packages/*"
+  # admin installs on its own
+  - "!packages/admin"
+
+# Supply-chain hardening.
+blockExoticSubdeps: true
+
+overrides:
+  postcss: ^8.5.18

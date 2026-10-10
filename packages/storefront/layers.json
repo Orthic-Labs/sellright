@@ -1,0 +1,124 @@
+{
+  "version": 1,
+  "_comments": {
+    "scope": "Paths are relative to the storefront package root (the composed build directory root). Globs match per path segment: '*' and '?' never cross '/', '**' as a whole segment matches zero or more segments, '[' ']' are literal (route dirs like [...slug]).",
+    "layers": "Each path belongs to at most one layer. A path matching two layers (or a layer and an assetException of another layer) is an error. 'exclude' removes a path from the layer it is listed under, it never assigns it to another one.",
+    "unclassified": "A path matching no layer is unclassified: base-only today (see the A14 report), rejected as an overlay path by check-imports until it is listed here.",
+    "baseL2Enforcement": "report until A13 moves every orchestration call behind ~/platform/*, then set to block (plan A14).",
+    "payments": "src/components/payment, checkout and cart are L1 and not ejectable (plan A11 item 4, A8 refreshCartStock callers)."
+  },
+  "platformApi": {
+    "alias": "~/platform/",
+    "dir": "src/platform/"
+  },
+  "layers": {
+    "L1": {
+      "include": [
+        "src/platform/**",
+        "src/routes/**",
+        "src/entry.*",
+        "src/root.tsx",
+        "src/services/**",
+        "src/providers/**",
+        "src/sellright/**",
+        "src/contexts/**",
+        "src/hooks/**",
+        "src/config/**",
+        "src/utils/**",
+        "src/types/**",
+        "src/types.ts",
+        "src/constants*.ts",
+        "src/env.ts",
+        "src/vite-env.d.ts",
+        "src/two-store-identity.test.ts",
+        "src/data/**",
+        "src/global.css",
+        "src/components/payment/**",
+        "src/components/checkout/**",
+        "src/components/cart/**",
+        "adapters/**"
+      ],
+      "exclude": [
+        "src/routes/products/**/ProductPageView.tsx"
+      ]
+    },
+    "L2": {
+      "include": [
+        "src/components/**"
+      ],
+      "exclude": [
+        "src/components/payment/**",
+        "src/components/checkout/**",
+        "src/components/cart/**"
+      ]
+    },
+    "L3": {
+      "include": [
+        "src/brand/**",
+        "src/brand-slots/**",
+        "public/brand/**",
+        "src/routes/products/**/ProductPageView.tsx"
+      ]
+    }
+  },
+  "assetExceptions": [
+    {
+      "path": "public/sezzle-color.svg",
+      "layer": "L3",
+      "reason": "Required at this exact URL (sites.md: Sezzle assets); referenced by absolute string from the PDP widget and the checkout Sezzle component."
+    },
+    {
+      "path": "public/sezzle-white.svg",
+      "layer": "L3",
+      "reason": "Required at this exact URL (sites.md: Sezzle assets). Not present in the SellRight base today; Damned supplies it."
+    }
+  ],
+  "imports": {
+    "forbidden": [
+      "@sellright/storefront-client",
+      "~/sellright/client"
+    ],
+    "codeExtensions": [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"],
+    "assetExtensions": [
+      ".css", ".scss", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".ico",
+      ".woff", ".woff2", ".ttf", ".otf", ".json", ".txt", ".md", ".mp4", ".webm"
+    ]
+  },
+  "codeShape": {
+    "baseL2Enforcement": "report",
+    "definitionCalls": [
+      "routeLoader$", "routeAction$", "globalAction$", "server$",
+      "routeLoaderQrl", "routeActionQrl", "globalActionQrl", "serverQrl"
+    ],
+    "networkGlobals": ["fetch", "XMLHttpRequest", "WebSocket"],
+    "networkMethods": ["sendBeacon"],
+    "globalObjects": ["window", "globalThis", "self", "global"],
+    "orchestrationCalls": [
+      "refreshCartStock",
+      "placeOrder",
+      "loadStripe",
+      "confirmPayment",
+      "getProductStockLevelsOnly",
+      "getProductStockStatus"
+    ],
+    "orchestrationPatterns": [
+      "^refresh.*Stock",
+      "^(get|fetch|load|check).*Stock(Level|Levels|Status)"
+    ],
+    "gatewayNamePattern": "^(nmi|stripe|sezzle|collectjs)"
+  },
+  "brandLint": {
+    "mode": "warn",
+    "_comments": {
+      "mode": "warn until plan A20 clears the base, then block. Overridable with --mode.",
+      "scope": "Base files only: every src file that is not L3 (layers.json), not a test, and not listed in .compose-overlay-files.txt (brand-owned). Fonts: 'Inter' is the base default and is not a brand font."
+    },
+    "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.css"],
+    "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    "identityColours": ["#B87333", "#F7F2EA", "#111110", "#B07A84", "#9D6B75", "#C49DA5", "#8C5F68", "#F5C518", "#FDFBF2"],
+    "brandFonts": ["Cormorant Garamond", "IBM Plex Sans", "IBM Plex Mono", "Fraunces", "Montserrat", "Space Grotesk", "Gelato Luxe"],
+    "brandNames": ["Damned Designs", "DamnedDesigns", "damneddesigns", "Rotten Hand", "Rottenhand", "Stunning Strangers", "StunningStrangers", "stunningstrangers", "RightSites", "Right Sites"],
+    "vendorUi": ["sezzle"],
+    "vendorUiExemptProviderValues": ["sezzle"]
+  }
+}

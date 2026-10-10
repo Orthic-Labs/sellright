@@ -1,0 +1,9 @@
+{
+	"version": 1,
+	"layers": {
+		"L1": { "include": ["src/platform/**", "src/entry.express.tsx", "src/routes/layout.tsx"] },
+		"L2": { "include": ["src/components/**"] },
+		"L3": { "include": ["src/brand/**", "src/brand-slots/**", "public/brand/**", "src/routes/products/**/ProductPageView.tsx"] }
+	},
+	"assetExceptions": [{ "path": "public/sezzle-color.svg", "layer": "L3" }]
+}
