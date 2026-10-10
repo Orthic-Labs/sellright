@@ -380,9 +380,10 @@ auth.openapi(
     method: 'post',
     path: '/v1/shop/auth/magic-link/request',
     summary: 'Request a passwordless sign-in link',
-    request: { body: { content: { 'application/json': { schema: z.object({ email: z.string().email() }) } } } },
+    request: { body: { content: { 'application/json': { schema: z.object({ email: z.string().email(), turnstileToken: z.string().optional() }) } } } },
     responses: {
       200: { description: 'Always OK', content: { 'application/json': { schema: z.object({ ok: z.boolean() }) } } },
+      403: { description: 'Bot check failed', content: { 'application/json': { schema: apiErrorSchema() } } },
       409: { description: 'Not enabled', content: { 'application/json': { schema: apiErrorSchema() } } },
       429: { description: 'Rate limited', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
@@ -391,13 +392,20 @@ auth.openapi(
     const st = await resolveStoreFromCtx(c);
     const policy = magicLinkPolicy(st.config);
     if (!policy.enabled) return errJson(c, 409, 'MAGIC_LINK_DISABLED', 'magic-link sign-in is not enabled for this store');
-    const email = normalizeEmail(c.req.valid('json').email);
+    const { email: rawEmail, turnstileToken } = c.req.valid('json');
+    const email = normalizeEmail(rawEmail);
     const ip = clientIp(c);
     // Attempt-counted in practice: every request records — each one can trigger
     // an outgoing email, so it's abuse-relevant whether or not an account exists.
     const bucket = `magiclink:${email}`;
     const retry = await loginRetryAfter(ip, bucket);
     if (retry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${retry}s`);
+    // Same bot gate as forgot-password: when the store has Turnstile configured, a request
+    // without a valid token is refused before any account lookup or outgoing email.
+    if (!(await turnstileOk(st.config, turnstileToken, ip))) {
+      await recordLoginFailure(ip, bucket);
+      return errJson(c, 403, 'BOT_CHECK_FAILED', 'verification failed');
+    }
     await withStore(st.id, async (tx) => {
       const [cust] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, email)).limit(1);
       if (!cust) return; // enumeration-safe: identical 200, no token, no email
