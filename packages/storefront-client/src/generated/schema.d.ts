@@ -800,7 +800,7 @@ export interface paths {
             };
         };
         put?: never;
-        /** Create an app release manifest */
+        /** Create (or republish) an app release manifest */
         post: {
             parameters: {
                 query?: never;
@@ -823,6 +823,8 @@ export interface paths {
                         manifest?: unknown;
                         platform?: string | null;
                         version: string;
+                    } & {
+                        [key: string]: unknown;
                     };
                 };
             };
@@ -838,8 +840,26 @@ export interface paths {
                         };
                     };
                 };
+                /** @description Invalid payload */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
                 /** @description Unauthorized */
                 401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Forbidden */
+                403: {
                     headers: {
                         [name: string]: unknown;
                     };
