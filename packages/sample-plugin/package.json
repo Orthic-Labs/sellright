@@ -19,17 +19,17 @@
   "peerDependencies": {
     "@hono/zod-openapi": "^1.6.3",
     "@sellright/api": "0.1.0",
-    "drizzle-orm": "^0.45.2",
-    "pg": "^8.23.0",
+    "drizzle-orm": "^0.45.3",
+    "pg": "^8.23.1",
     "zod": "^4.6.5"
   },
   "devDependencies": {
     "@hono/zod-openapi": "^1.6.3",
     "@sellright/api": "workspace:*",
-    "@types/node": "^25.9.4",
+    "@types/node": "^25.9.9",
     "@types/pg": "^8.23.1",
-    "drizzle-orm": "^0.45.2",
-    "pg": "^8.23.0",
+    "drizzle-orm": "^0.45.3",
+    "pg": "^8.23.1",
     "typescript": "^5.9.3",
     "vitest": "^4.1.9",
     "zod": "^4.6.5"
