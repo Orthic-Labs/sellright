@@ -12,7 +12,7 @@ export interface OrderTrackingResult {
  *  typed end to end through `~/sellright/content` and `TrackedOrder`. No
  *  legacy shape involved — `OrderDetails`/`OrderTracking` render the
  *  API's own native fields directly. */
-export const trackOrderServer = server$(async (orderCode: string, email: string): Promise<OrderTrackingResult> => {
-  const result = await trackOrder(orderCode, email);
+export const trackOrderServer = server$(async (orderCode: string, email: string, turnstileToken?: string): Promise<OrderTrackingResult> => {
+  const result = await trackOrder(orderCode, email, turnstileToken);
   return result;
 });

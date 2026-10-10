@@ -94,9 +94,9 @@ export type SimpleResult = { ok: true } | ({ ok: false } & AccountError);
 /** Always resolves `ok: true` on the happy path AND on a transient failure —
  *  the API's own resend-verification endpoint is enumeration-safe (always
  *  200), so this mirrors that: never leak whether the address exists. */
-export async function resendVerification(email: string): Promise<{ ok: true }> {
+export async function resendVerification(email: string, turnstileToken?: string): Promise<{ ok: true }> {
 	try {
-		await sellright().POST('/v1/shop/auth/resend-verification', { body: { email } });
+		await sellright().POST('/v1/shop/auth/resend-verification', { body: turnstileToken ? { email, turnstileToken } : { email } });
 	} catch {
 		// enumeration-safe: no-op
 	}

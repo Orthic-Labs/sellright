@@ -58,11 +58,9 @@ function turnstileSecret(config: unknown): string | null {
 }
 
 async function turnstileOk(config: unknown, token: string | undefined, remoteIp: string): Promise<boolean> {
-  const secret = turnstileSecret(config);
-  if (!secret) return true;
-  // Fail closed on verification failure — a configured store never proceeds on
-  // a missing/invalid token.
-  return verifyTurnstileToken({ secret, token: token ?? null, remoteIp });
+  // verifyTurnstileToken owns the no-secret policy: dev/test pass, production
+  // fails closed unless TURNSTILE_DISABLED=true. Fail closed on any failure.
+  return verifyTurnstileToken({ secret: turnstileSecret(config), token: token ?? null, remoteIp });
 }
 
 export const customerTokens = new OpenAPIHono();

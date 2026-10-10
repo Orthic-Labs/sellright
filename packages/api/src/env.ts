@@ -175,6 +175,10 @@ const EnvSchema = z.object({
   COOKIE_SECRET: z.string().optional(),
   CONTACT_EMAIL: z.string().email().optional(),
   TURNSTILE_SECRET_KEY: z.string().optional(),
+  // Explicit opt-out for stores with no Turnstile secret. In NODE_ENV=production a
+  // store with no secret FAILS CLOSED on every Turnstile-gated route unless this is
+  // 'true'. Demo/staging deploys without a site key must set TURNSTILE_DISABLED=true.
+  TURNSTILE_DISABLED: z.preprocess(emptyToUndefined, z.enum(['true', 'false']).optional()),
   // Entitlement token lifetime (licensing/sign.ts). Shorter TTL = tighter
   // revocation window on a compromised/refunded license. Default 7d; override
   // per-deployment if a longer offline grace period is required.

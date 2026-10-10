@@ -11,7 +11,7 @@ import { newsletterSignup } from '~/sellright/content';
  * and error-message shaping, matching the `/contact` route's pattern.
  */
 export const onPost: RequestHandler = async ({ request, json }) => {
-	let body: { email?: unknown; honeypot?: unknown };
+	let body: { email?: unknown; honeypot?: unknown; turnstileToken?: unknown };
 	try {
 		body = await request.json();
 	} catch {
@@ -27,6 +27,7 @@ export const onPost: RequestHandler = async ({ request, json }) => {
 		return;
 	}
 
-	const result = await newsletterSignup(email, honeypot);
-	json(result.ok ? 200 : result.message?.includes('Too many') ? 429 : 400, result);
+	const turnstileToken = typeof body.turnstileToken === 'string' ? body.turnstileToken : undefined;
+	const result = await newsletterSignup(email, honeypot, turnstileToken);
+	json(result.ok ? 200 : result.message?.includes('Too many') ? 429 : result.message?.includes('Security check') ? 403 : 400, result);
 };
