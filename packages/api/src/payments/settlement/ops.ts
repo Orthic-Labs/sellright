@@ -23,7 +23,7 @@ export const SETTLEMENT_KINDS = [
   'order_purge',
   'operator_resolution',
   'order_refunded',
-  'dispute_lost',
+  'dispute_opened',
 ] as const;
 export type SettlementKind = (typeof SETTLEMENT_KINDS)[number];
 
@@ -109,9 +109,10 @@ export const OPERATION_POLICY = {
     mutations: [],
     effects: ['entitlement_reversal'],
   },
-  // A chargeback recorded as lost. Identity is the dispute row id; money is never moved here.
-  dispute_lost: {
-    identity: 'dispute.id',
+  // A Stripe chargeback first observed as OPENED (charge.dispute.created). Identity is 'stripe_dispute:<dispute id>';
+  // money is never moved here, only the entitlement is reversed (fork parity: revoke on open, not on lost).
+  dispute_opened: {
+    identity: 'stripe_dispute:<dispute id>',
     mutations: [],
     effects: ['entitlement_reversal'],
   },

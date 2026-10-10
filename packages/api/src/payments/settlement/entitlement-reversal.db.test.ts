@@ -10,10 +10,9 @@ import { sql } from 'drizzle-orm';
 import { pool, withStore } from '../../db/client.js';
 import * as s from '../../db/schema.js';
 import { env } from '../../env.js';
-import { dispute } from '../../db/schema-ops.js';
-import { recordDisputeLost } from '../../disputes/disputes.js';
 import { _resetPaymentPoliciesForTests, registerPaymentPolicy } from '../policy/host.js';
 import type { EntitlementReversalInput, PaymentPolicy } from '../policy/types.js';
+import { recordStripeDispute } from '../webhook-reconcile.js';
 import { finalizeRefund } from '../refunds.js';
 import { MAX_ATTEMPTS, runEffectsPass } from './effects.js';
 
@@ -110,39 +109,40 @@ describe('full refund -> entitlement_reversal', () => {
   });
 });
 
-describe('lost chargeback -> entitlement_reversal', () => {
-  async function seedDispute(orderId: string | null, paymentId: string | null): Promise<string> {
-    return withStore(STORE, async (tx) => {
-      const [d] = await tx.insert(dispute).values({ storeId: STORE, provider: 'nmi', providerRef: 'cb_' + randomUUID().slice(0, 8), orderId, paymentId, amount: 1000, status: 'open' }).returning({ id: dispute.id });
-      return d!.id;
-    });
-  }
+describe('chargeback opened -> entitlement_reversal (fork parity: revoke on open)', () => {
+  const disputeOpened = (piId: string | null, disputeId: string) => withStore(STORE, (tx) => recordStripeDispute(tx, STORE, {
+    disputeId, amount: 1000, reason: 'fraudulent', status: 'needs_response', piId,
+  }));
+  const openedEffects = () => reversalEffects('dispute_opened');
 
-  it('a lost dispute enqueues one effect keyed by the dispute id; the policy is called with chargeback', async () => {
-    const { orderId, paymentId } = await seedPaidOrder(1000);
-    const disputeId = await seedDispute(orderId, paymentId);
-    await withStore(STORE, (tx) => recordDisputeLost(tx, STORE, disputeId));
-    const rows = await reversalEffects('dispute_lost');
-    expect(rows.map((r) => [r.operationId, r.status])).toEqual([[disputeId, 'pending']]);
+  it('a dispute created against a stored payment enqueues one effect; the policy is called once with chargeback', async () => {
+    const { orderId } = await seedPaidOrder(1000);
+    const pi = 'pi_' + orderId.slice(0, 8);
+    await disputeOpened(pi, 'dp_open_1');
+    const rows = await openedEffects();
+    expect(rows.map((r) => [r.operationId, r.status])).toEqual([['stripe_dispute:dp_open_1', 'pending']]);
     expect(await orderState(orderId)).toBe('Paid'); // no money or order-state change on a chargeback
+    expect(calls).toEqual([]); // deferred
     await runEffectsPass({ rounds: 2 });
-    expect(calls.map((c) => [c.reason, c.orderId, c.operationId])).toEqual([['chargeback', orderId, disputeId]]);
+    expect(calls.map((c) => [c.reason, c.orderId, c.operationId])).toEqual([['chargeback', orderId, 'stripe_dispute:dp_open_1']]);
   });
 
-  it('a replayed lost dispute records no second effect and the policy is called once', async () => {
-    const { orderId, paymentId } = await seedPaidOrder(1000);
-    const disputeId = await seedDispute(orderId, paymentId);
-    await withStore(STORE, (tx) => recordDisputeLost(tx, STORE, disputeId));
-    await withStore(STORE, (tx) => recordDisputeLost(tx, STORE, disputeId));
-    expect((await reversalEffects('dispute_lost')).length).toBe(1);
+  it('a duplicate webhook delivery records no second effect and the policy is called once', async () => {
+    const { orderId } = await seedPaidOrder(1000);
+    const pi = 'pi_' + orderId.slice(0, 8);
+    await disputeOpened(pi, 'dp_dup_1');
+    await disputeOpened(pi, 'dp_dup_1');
+    expect((await openedEffects()).length).toBe(1);
     await runEffectsPass({ rounds: 2 });
     expect(calls.length).toBe(1);
   });
 
-  it('a dispute without an order is marked lost and records no operation', async () => {
-    const disputeId = await seedDispute(null, null);
-    await withStore(STORE, (tx) => recordDisputeLost(tx, STORE, disputeId));
-    expect(await reversalEffects('dispute_lost')).toEqual([]);
+  it('a dispute with no matching payment records no effect', async () => {
+    await seedPaidOrder(1000);
+    await disputeOpened('pi_no_such_payment', 'dp_orphan_1');
+    expect(await openedEffects()).toEqual([]);
+    await runEffectsPass({ rounds: 2 });
+    expect(calls).toEqual([]);
   });
 });
 

@@ -341,7 +341,14 @@ export interface DisputeDescriptor { disputeId: string; amount: number; reason: 
  *  audit + order.dispute_opened event + operator email, all idempotent on
  *  (store, provider, disputeId) so provider retries are no-ops. */
 export async function recordStripeDispute(tx: Tx, storeId: string, d: DisputeDescriptor): Promise<void> {
-  await recordStripeDisputeAlert(tx, storeId, d);
+  const res = await recordStripeDisputeAlert(tx, storeId, d);
+  // Fork parity: a chargeback that is OPENED reverses the order's entitlement (not only a lost one). Only the first
+  // observation of the dispute reaches here (res.created); the operation identity makes a replay add nothing.
+  // The order is in moneyOrderIds(charge.dispute.created), so the webhook's lock set already covers it.
+  if (res.created && res.orderId) await recordSettlementOperation(tx, {
+    storeId, kind: 'dispute_opened', operationId: `stripe_dispute:${d.disputeId}`, orderId: res.orderId, mutations: [],
+    effects: [{ kind: 'entitlement_reversal', payload: { orderId: res.orderId, reason: 'chargeback' } }], effectMode: 'deferred',
+  });
 }
 
 export { STRIPE_REFUND_ATTEMPT_KEY };

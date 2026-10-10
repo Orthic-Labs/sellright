@@ -25,7 +25,6 @@ import { emitEvent } from '../webhooks/emit.js';
 import { enqueueEmail } from '../email/outbox.js';
 import { disputeAlert } from '../email/templates-ops.js';
 import { env } from '../env.js';
-import { recordSettlementOperation } from '../payments/settlement/record.js';
 
 export interface DisputeInput {
   provider: 'stripe' | 'nmi' | (string & {});
@@ -139,23 +138,6 @@ export async function recordDispute(tx: Tx, storeId: string, d: DisputeInput): P
 }
 
 /**
- * A chargeback decided against the merchant (status `lost`). Marks the dispute row and records the settlement operation
- * (identity = dispute id) whose deferred `entitlement_reversal` effect reverses the order's entitlement. Money is not
- * moved here. Replays are no-ops: the operation identity dedupes the effect. No upstream ingestion path calls this yet.
- */
-export async function recordDisputeLost(tx: Tx, storeId: string, disputeId: string): Promise<void> {
-  const [d] = await tx.select({ id: dispute.id, orderId: dispute.orderId }).from(dispute)
-    .where(and(eq(dispute.storeId, storeId), eq(dispute.id, disputeId))).limit(1).for('update');
-  if (!d) throw new Error('dispute not found');
-  await tx.update(dispute).set({ status: 'lost', updatedAt: new Date() }).where(eq(dispute.id, d.id));
-  if (!d.orderId) return;
-  await recordSettlementOperation(tx, {
-    storeId, kind: 'dispute_lost', operationId: d.id, orderId: d.orderId, mutations: [],
-    effects: [{ kind: 'entitlement_reversal', payload: { orderId: d.orderId, reason: 'chargeback' } }], effectMode: 'deferred',
-  });
-}
-
-/**
  * Stripe adapter — matches payments/webhook-reconcile.ts's DisputeDescriptor.
  * The payments lane owns that file; integration is ONE line inside
  * recordStripeDispute():
@@ -174,7 +156,7 @@ export async function recordStripeDisputeAlert(tx: Tx, storeId: string, d: {
   let orderCode: string | null = null;
   if (d.piId) {
     const [pay] = await tx.select({ id: s.payment.id, orderId: s.payment.orderId })
-      .from(s.payment).where(eq(s.payment.providerRef, d.piId)).limit(1);
+      .from(s.payment).where(and(eq(s.payment.storeId, storeId), eq(s.payment.method, 'stripe'), eq(s.payment.providerRef, d.piId))).limit(1);
     paymentId = pay?.id ?? null;
     orderId = pay?.orderId ?? null;
     if (orderId) {

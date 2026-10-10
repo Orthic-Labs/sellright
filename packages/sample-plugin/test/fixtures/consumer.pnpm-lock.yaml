@@ -234,7 +234,7 @@ packages:
     resolution: {integrity: sha512-Vt/WkAza2cIPQkv1S9CNNkjnPt+IS199nd+BFUZ+9iQ8As/M8dfqYKdDYLQ0Xdsf069MJti8QeOeh/IKoEBkBw==}
 
   '@sellright/api@file:packs/sellright-api-0.1.0.tgz':
-    resolution: {integrity: sha512-OOT8NobALbsqdoWi9PDxcvXLielQjT82Q8QGOmR5exQguOxDpTseKs5QtM80NLKV3+xG6jRx4uQFtNlKqjNHLQ==, tarball: file:packs/sellright-api-0.1.0.tgz}
+    resolution: {integrity: sha512-fiHb6pcs5B5CaFQ8blsRXFqQMc+FGz1JK5mUcQVZrDOne4O0T7/nO9gW/To9BOmzFuoUc8qPRbWud8Z1z8xxSg==, tarball: file:packs/sellright-api-0.1.0.tgz}
     version: 0.1.0
 
   '@sellright/sample-plugin@file:packs/sellright-sample-plugin-0.1.0.tgz':
