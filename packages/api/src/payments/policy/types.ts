@@ -138,8 +138,14 @@ export interface RevalidateForIssuanceInput {
   readonly held: HeldLocks;
 }
 
+/**
+ * `ok: true` may carry `metadataPatch`: a shallow patch merged into the metadata of every licence the order
+ * has once the issuance runs, in the same transaction, under the order's lock set. Patches from several
+ * policies merge in registration order; the same key from two policies is a PaymentPolicyCompositionError.
+ * `ok: false` blocks issuance before any licence row is written; `audit` (when present) is recorded.
+ */
 export type RevalidateForIssuanceResult =
-  | { readonly ok: true }
+  | { readonly ok: true; readonly metadataPatch?: Readonly<Record<string, unknown>> }
   | { readonly ok: false; readonly code: string; readonly audit?: { readonly action: string; readonly data: Record<string, unknown> } };
 
 /** A reservation state change, delivered to projections in the transaction that made it (PAYMENT-TIMING §3.3). */

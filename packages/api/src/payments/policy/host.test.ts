@@ -113,6 +113,28 @@ describe('composition of the new hooks (pure)', () => {
     expect((err as PaymentPolicyCompositionError).policyIds).toEqual(['first', 'second']);
   });
 
+  it('issuance metadata patches merge in registration order; no patch keeps the default ok result', async () => {
+    expect(await runRevalidateForIssuance(fakeTx, { held: {} as HeldLocks } as RevalidateForIssuanceInput)).toEqual({ ok: true });
+    registerPaymentPolicy({ id: 'p1', async beforePaymentAttempt() { return { allow: true }; }, async revalidateForIssuance() { return { ok: true, metadataPatch: { a: 1 } }; } });
+    registerPaymentPolicy({ id: 'p2', async beforePaymentAttempt() { return { allow: true }; }, async revalidateForIssuance() { return { ok: true }; } });
+    registerPaymentPolicy({ id: 'p3', async beforePaymentAttempt() { return { allow: true }; }, async revalidateForIssuance() { return { ok: true, metadataPatch: { b: 'x' } }; } });
+    expect(await runRevalidateForIssuance(fakeTx, { held: {} as HeldLocks } as RevalidateForIssuanceInput)).toEqual({ ok: true, metadataPatch: { a: 1, b: 'x' } });
+  });
+
+  it('the same metadata key patched by two policies is a composition error', async () => {
+    registerPaymentPolicy({ id: 'p1', async beforePaymentAttempt() { return { allow: true }; }, async revalidateForIssuance() { return { ok: true, metadataPatch: { k: 1 } }; } });
+    registerPaymentPolicy({ id: 'p2', async beforePaymentAttempt() { return { allow: true }; }, async revalidateForIssuance() { return { ok: true, metadataPatch: { k: 2 } }; } });
+    const err = await runRevalidateForIssuance(fakeTx, { held: {} as HeldLocks } as RevalidateForIssuanceInput).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(PaymentPolicyCompositionError);
+    expect((err as PaymentPolicyCompositionError).policyIds).toEqual(['p1', 'p2']);
+  });
+
+  it('a failed issuance revalidation wins over patches from earlier policies', async () => {
+    registerPaymentPolicy({ id: 'p1', async beforePaymentAttempt() { return { allow: true }; }, async revalidateForIssuance() { return { ok: true, metadataPatch: { k: 1 } }; } });
+    registerPaymentPolicy({ id: 'p2', async beforePaymentAttempt() { return { allow: true }; }, async revalidateForIssuance() { return { ok: false, code: 'NOPE' }; } });
+    expect(await runRevalidateForIssuance(fakeTx, { held: {} as HeldLocks } as RevalidateForIssuanceInput)).toEqual({ ok: false, code: 'NOPE' });
+  });
+
   it('a terminal invoice decision wins in registration order; the default is apply', async () => {
     const seen: string[] = [];
     registerPaymentPolicy({ id: 'ok', async beforePaymentAttempt() { return { allow: true }; }, async authorizeInvoiceEffect() { seen.push('ok'); return { decision: 'apply' }; } });
