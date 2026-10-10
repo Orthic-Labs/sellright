@@ -62,15 +62,17 @@ const CONFIRM_COOLDOWN_MS = 60 * 60 * 1000;
  * secret that lets anyone forge a confirm link and spam the team inbox.
  * Configure CONTACT_FORM_SECRET (or any earlier fallback) in real deploys.
  */
-const CONTACT_LINK_SECRET =
+let contactLinkSecret: string | undefined;
+const contactLinkSecretResolver = (): string =>
+  (contactLinkSecret ??=
   env.CONTACT_FORM_SECRET ?? process.env.CONTACT_FORM_SECRET ??
   env.LICENSING_HMAC_SECRET ?? process.env.LICENSING_HMAC_SECRET ??
   env.COOKIE_SECRET ?? process.env.COOKIE_SECRET ??
   env.DOWNLOAD_URL_SECRET ??
-  randomBytes(32).toString('hex');
+  randomBytes(32).toString('hex'));
 
 function signConfirm(id: string, ts: number): string {
-  return createHmac('sha256', CONTACT_LINK_SECRET).update(`${id}:${ts}`).digest('hex');
+  return createHmac('sha256', contactLinkSecretResolver()).update(`${id}:${ts}`).digest('hex');
 }
 
 /** Exported for tests + the email builder. URL shape mirrors the legacy `?data&ts&sig` link, minus the in-URL payload. */

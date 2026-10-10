@@ -16,7 +16,7 @@ vi.mock('../db/client.js', () => ({
 }));
 
 vi.mock('../store-context.js', () => ({
-  DEV_DEFAULT_STORE: 'sellright',
+  devDefaultStore: () => 'sellright',
   StoreSlugError: class StoreSlugError extends Error {},
   resolveStore: vi.fn(async () => ({
     id: 'store_1',
