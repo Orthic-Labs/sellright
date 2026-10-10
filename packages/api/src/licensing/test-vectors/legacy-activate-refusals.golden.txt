@@ -1,0 +1,83 @@
+### POST /v1/licenses/activate {"app":"heardright","licenseKey":"SR-HEARDRIGHT-COMPAT-SBX","deviceId":"d1"}
+HTTP 404
+content-type: application/json
+
+{"ok":false,"status":"not_found","message":"License not found or inactive"}
+
+### POST /v1/licenses/activate {"app":"heardright","licenseKey":"SR-HEARDRIGHT-COMPAT-MOB","deviceId":"d1"}
+HTTP 404
+content-type: application/json
+
+{"ok":false,"status":"not_found","message":"License not found or inactive"}
+
+### POST /v1/licenses/activate {"app":"heardright","licenseKey":"SR-HEARDRIGHT-COMPAT-REVOKED","deviceId":"d1"}
+HTTP 404
+content-type: application/json
+
+{"ok":false,"status":"not_found","message":"License not found or inactive"}
+
+### POST /v1/licenses/activate {"app":"heardright","licenseKey":"SR-HEARDRIGHT-COMPAT-EXPIRED","deviceId":"d1"}
+HTTP 404
+content-type: application/json
+
+{"ok":false,"status":"not_found","message":"License not found or inactive"}
+
+### POST /v1/licenses/activate {"app":"heardright","licenseKey":"SR-HEARDRIGHT-COMPAT-NOPE","deviceId":"d1"}
+HTTP 404
+content-type: application/json
+
+{"ok":false,"status":"not_found","message":"License not found or inactive"}
+
+### POST /v1/licenses/activate {"app":"viewright","licenseKey":"SR-HEARDRIGHT-COMPAT-OK","deviceId":"d1"}
+HTTP 404
+content-type: application/json
+
+{"ok":false,"status":"not_found","message":"License not found or inactive"}
+
+### POST /v1/licenses/activate {"app":"viewright","licenseKey":"SR-VIEWRIGHT-COMPAT-FLAT","deviceId":"seat-1"}
+HTTP 200
+content-type: application/json
+
+{"ok":true,"status":"active","licenseId":"00000000-0000-4000-8000-0000000000b5","activationToken":"sr_act_ypZUf3DnK_8EDfdHxyVAnG88IL1eXroVz4BgoJp-IqI","updatesUntil":null,"message":"Activated","validUntil":null,"licenseKind":"lifetime","entitlementStage":"final","licenseIssuedAt":"2026-08-01T00:00:00.000Z","confirmationDueAt":"2026-08-31T00:00:00.000Z","entitlements":{"v":1,"tier":"pro","features":[]},"signedToken":"eyJ2IjoyLCJpZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDBiNSIsImFwcCI6InZpZXdyaWdodCIsInRpZXIiOiJwcm8iLCJmZWF0dXJlcyI6W10sImRldmljZV9pZCI6InNlYXQtMSIsImlhdCI6MTc5MTU0NzIwMCwiZXhwIjoyNTM0MDIzMDA3OTksImxpY2Vuc2Vfa2luZCI6ImxpZmV0aW1lIiwiZW50aXRsZW1lbnRfc3RhZ2UiOiJmaW5hbCIsImxpY2Vuc2VfaXNzdWVkX2F0IjoxNzg1NTQyNDAwLCJjb25maXJtYXRpb25fZHVlX2F0IjoxNzg4MTM0NDAwfQ.jaZGkPUsyuIbRtiDgvWK_hy45w9q1LLvel7uaAQClia_ZJWWXXluNUUO5O7cmIKQozlb6g1l5lDkMLCOoMbyAw"}
+
+### POST /v1/licenses/activate {"app":"viewright","licenseKey":"SR-VIEWRIGHT-COMPAT-FLAT","deviceId":"seat-2"}
+HTTP 200
+content-type: application/json
+
+{"ok":true,"status":"active","licenseId":"00000000-0000-4000-8000-0000000000b5","activationToken":"sr_act_D5In8mKOMdGJPoihgXTkrjopyyEIC6BX_ciG3IeaJuM","updatesUntil":null,"message":"Activated","validUntil":null,"licenseKind":"lifetime","entitlementStage":"final","licenseIssuedAt":"2026-08-01T00:00:00.000Z","confirmationDueAt":"2026-08-31T00:00:00.000Z","entitlements":{"v":1,"tier":"pro","features":[]},"signedToken":"eyJ2IjoyLCJpZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDBiNSIsImFwcCI6InZpZXdyaWdodCIsInRpZXIiOiJwcm8iLCJmZWF0dXJlcyI6W10sImRldmljZV9pZCI6InNlYXQtMiIsImlhdCI6MTc5MTU0NzIwMCwiZXhwIjoyNTM0MDIzMDA3OTksImxpY2Vuc2Vfa2luZCI6ImxpZmV0aW1lIiwiZW50aXRsZW1lbnRfc3RhZ2UiOiJmaW5hbCIsImxpY2Vuc2VfaXNzdWVkX2F0IjoxNzg1NTQyNDAwLCJjb25maXJtYXRpb25fZHVlX2F0IjoxNzg4MTM0NDAwfQ.3-edF2iutf3YYCOA2Whia7mwJlGTVonqTspu6IOo8EuKOaXvaWnb46EGI3dDniS5uZcQLKE4J8-n43EAY0vYCA"}
+
+### POST /v1/licenses/activate {"app":"viewright","licenseKey":"SR-VIEWRIGHT-COMPAT-FLAT","deviceId":"seat-3"}
+HTTP 409
+content-type: application/json
+
+{"ok":false,"status":"seat_limit_reached","message":"License device limit reached"}
+
+### POST /v1/licenses/activate {"app":"viewright","licenseKey":"SR-VIEWRIGHT-COMPAT-FLAT","deviceId":"seat-1"}
+HTTP 200
+content-type: application/json
+
+{"ok":true,"status":"active","licenseId":"00000000-0000-4000-8000-0000000000b5","activationToken":"sr_act_xnzEJxQRZ-8AZvzB9zaD_B8VEfim21UZmPxeMQ167qI","updatesUntil":null,"message":"Activated","validUntil":null,"licenseKind":"lifetime","entitlementStage":"final","licenseIssuedAt":"2026-08-01T00:00:00.000Z","confirmationDueAt":"2026-08-31T00:00:00.000Z","entitlements":{"v":1,"tier":"pro","features":[]},"signedToken":"eyJ2IjoyLCJpZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDBiNSIsImFwcCI6InZpZXdyaWdodCIsInRpZXIiOiJwcm8iLCJmZWF0dXJlcyI6W10sImRldmljZV9pZCI6InNlYXQtMSIsImlhdCI6MTc5MTU0NzIwMCwiZXhwIjoyNTM0MDIzMDA3OTksImxpY2Vuc2Vfa2luZCI6ImxpZmV0aW1lIiwiZW50aXRsZW1lbnRfc3RhZ2UiOiJmaW5hbCIsImxpY2Vuc2VfaXNzdWVkX2F0IjoxNzg1NTQyNDAwLCJjb25maXJtYXRpb25fZHVlX2F0IjoxNzg4MTM0NDAwfQ.jaZGkPUsyuIbRtiDgvWK_hy45w9q1LLvel7uaAQClia_ZJWWXXluNUUO5O7cmIKQozlb6g1l5lDkMLCOoMbyAw"}
+
+### POST /v1/licenses/activate {"app":"heardright","licenseKey":"SR-HEARDRIGHT-COMPAT-OK","deviceId":"pc-1"}
+HTTP 200
+content-type: application/json
+
+{"ok":true,"status":"active","licenseId":"00000000-0000-4000-8000-0000000000b6","activationToken":"sr_act_-iP1VIPoOjwqgj7jsb2-Qm-KV2hhW2vaiO-ggJxDqcI","updatesUntil":null,"message":"Activated","validUntil":null,"licenseKind":"lifetime","entitlementStage":"final","licenseIssuedAt":"2026-08-01T00:00:00.000Z","confirmationDueAt":"2026-08-31T00:00:00.000Z","entitlements":{"v":1,"tier":"pro","features":["wake_word","voice_commands","byok_ai","whisper"]},"signedToken":"eyJ2IjoyLCJpZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDBiNiIsImFwcCI6ImhlYXJkcmlnaHQiLCJ0aWVyIjoicHJvIiwiZmVhdHVyZXMiOlsid2FrZV93b3JkIiwidm9pY2VfY29tbWFuZHMiLCJieW9rX2FpIiwid2hpc3BlciJdLCJkZXZpY2VfaWQiOiJwYy0xIiwiaWF0IjoxNzkxNTQ3MjAwLCJleHAiOjI1MzQwMjMwMDc5OSwibGljZW5zZV9raW5kIjoibGlmZXRpbWUiLCJlbnRpdGxlbWVudF9zdGFnZSI6ImZpbmFsIiwibGljZW5zZV9pc3N1ZWRfYXQiOjE3ODU1NDI0MDAsImNvbmZpcm1hdGlvbl9kdWVfYXQiOjE3ODgxMzQ0MDB9.EdFkdnlmayvm9RrtbqXdEnVnxmgsaIzkzLHzrz_H70l_1mk9KgVS1ibJBjJH9AVZSgHXMLdvqo-_0EF-4s8gCA"}
+
+### POST /v1/licenses/activate {"app":"heardright","licenseKey":"SR-HEARDRIGHT-COMPAT-OK","deviceId":"pc-2"}
+HTTP 200
+content-type: application/json
+
+{"ok":true,"status":"active","licenseId":"00000000-0000-4000-8000-0000000000b6","activationToken":"sr_act_znP4fOTjO76oh12vZJGQZbwwLhpAj08oi89QvGhc944","updatesUntil":null,"message":"Activated","validUntil":null,"licenseKind":"lifetime","entitlementStage":"final","licenseIssuedAt":"2026-08-01T00:00:00.000Z","confirmationDueAt":"2026-08-31T00:00:00.000Z","entitlements":{"v":1,"tier":"pro","features":["wake_word","voice_commands","byok_ai","whisper"]},"signedToken":"eyJ2IjoyLCJpZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDBiNiIsImFwcCI6ImhlYXJkcmlnaHQiLCJ0aWVyIjoicHJvIiwiZmVhdHVyZXMiOlsid2FrZV93b3JkIiwidm9pY2VfY29tbWFuZHMiLCJieW9rX2FpIiwid2hpc3BlciJdLCJkZXZpY2VfaWQiOiJwYy0yIiwiaWF0IjoxNzkxNTQ3MjAwLCJleHAiOjI1MzQwMjMwMDc5OSwibGljZW5zZV9raW5kIjoibGlmZXRpbWUiLCJlbnRpdGxlbWVudF9zdGFnZSI6ImZpbmFsIiwibGljZW5zZV9pc3N1ZWRfYXQiOjE3ODU1NDI0MDAsImNvbmZpcm1hdGlvbl9kdWVfYXQiOjE3ODgxMzQ0MDB9.9SeYlk5P96zwh8u9FWyiN-a1w63kUqO-LRKjwmqlRYxFpSujr603PpNjAE7q-SppitGFU2g39CcUUS8husN1CA"}
+
+### POST /v1/licenses/activate {"app":"heardright","licenseKey":"SR-HEARDRIGHT-COMPAT-OK","deviceId":"pc-3"}
+HTTP 409
+content-type: application/json
+
+{"ok":false,"status":"seat_limit_reached","message":"License device limit reached"}
+
+### POST /v1/licenses/activate {"app":"heardright","licenseKey":"SR-HEARDRIGHT-COMPAT-OK","deviceId":"w1","deviceClass":"watch"}
+HTTP 400
+content-type: application/json
+
+{"error":"deviceClass \"watch\" is not accepted on this endpoint — the Watch app never activates a license directly.","code":"DEVICECLASS_WATCH_IS_NOT_ACCEPTED_ON_THIS_ENDPOINT_THE_WATCH_APP","requestId":"compat-req-0001"}

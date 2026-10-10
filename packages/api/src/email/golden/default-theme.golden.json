@@ -1,0 +1,12 @@
+{
+  "orderConfirmation": {
+    "subject": "[Brand <B> & Co] Order confirmed — SR-1",
+    "html": "<!doctype html><html><body style=\"font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#222\">\n    <h2 style=\"margin:0 0 16px\">Order confirmed — SR-1</h2>\n    <p>Thanks for your order. Here's the summary:</p>\n     <table style=\"width:100%;border-collapse:collapse;margin:12px 0\"><tr><td>Blade &quot;A&quot; × 2</td><td style=\"text-align:right\">30.00 USD</td></tr><tr><td>Sheath × 1</td><td style=\"text-align:right\">12.00 USD</td></tr></table>\n     <p><strong>Total: 42.00 USD</strong></p>\n     <p>Track your order at <a href=\"https://b.example/orders/SR-1\">https://b.example/orders/SR-1</a></p>\n    <hr style=\"border:none;border-top:1px solid #eee;margin:24px 0\">\n    <p style=\"color:#888;font-size:12px\">Brand &lt;B&gt; &amp; Co</p>\n  </body></html>",
+    "text": "Order confirmed — SR-1\n\nThanks for your order. Here's the summary:\n\n     Blade \"A\" × 230.00 USDSheath × 112.00 USD\n     Total: 42.00 USD\n\n     Track your order at https://b.example/orders/SR-1 (https://b.example/orders/SR-1)\n\n— Brand <B> & Co"
+  },
+  "passwordReset": {
+    "subject": "[Brand <B> & Co] Reset your password",
+    "html": "<!doctype html><html><body style=\"font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#222\">\n    <h2 style=\"margin:0 0 16px\">Reset your password</h2>\n    <p>Someone (hopefully you) asked to reset your password. Click below within 2 hours:</p>\n     <p><a href=\"https://b.example/reset?token=abc&amp;x=1\" style=\"display:inline-block;padding:10px 16px;background:#222;color:#fff;text-decoration:none;border-radius:6px\">Reset password</a></p>\n     <p>If you didn't ask, ignore this email — your password stays the same.</p>\n    <hr style=\"border:none;border-top:1px solid #eee;margin:24px 0\">\n    <p style=\"color:#888;font-size:12px\">Brand &lt;B&gt; &amp; Co</p>\n  </body></html>",
+    "text": "Reset your password\n\nSomeone (hopefully you) asked to reset your password. Click below within 2 hours:\n\n     Reset password (https://b.example/reset?token=abc&amp;x=1)\n\n     If you didn't ask, ignore this email — your password stays the same.\n\n— Brand <B> & Co"
+  }
+}

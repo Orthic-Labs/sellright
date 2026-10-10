@@ -58,6 +58,7 @@
           "PRODUCT_NOT_FOUND",
           "PURCHASE_REQUIRED",
           "RATE_LIMITED",
+          "REJECTED_PLATFORM",
           "REVIEWS_DISABLED",
           "SEAT_LIMIT_REACHED",
           "SECURITY_CHECK_FAILED",
@@ -8780,6 +8781,16 @@
               }
             }
           },
+          "400": {
+            "description": "Rejected by entitlement policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found",
             "content": {
@@ -11116,6 +11127,354 @@
           },
           "403": {
             "description": "Forbidden — installation administrator required, or step-up needed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/system/canary": {
+      "post": {
+        "summary": "Emit delivery canaries through the real outbox paths (installation administrators only; 1 per channel per minute per store)",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "slot": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "channels": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "email",
+                        "webhook",
+                        "push"
+                      ]
+                    },
+                    "minItems": 1,
+                    "maxItems": 3
+                  },
+                  "kinds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "order_confirmation",
+                        "trial_license_key",
+                        "shipping_notification",
+                        "password_reset"
+                      ]
+                    },
+                    "minItems": 1,
+                    "maxItems": 4
+                  }
+                },
+                "required": [
+                  "slot",
+                  "channels"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Enqueued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "slot": {
+                      "type": "integer"
+                    },
+                    "rows": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "channel": {
+                            "type": "string",
+                            "enum": [
+                              "email",
+                              "webhook",
+                              "push"
+                            ]
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "order_confirmation",
+                              "trial_license_key",
+                              "shipping_notification",
+                              "password_reset"
+                            ]
+                          },
+                          "id": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "channel",
+                          "id"
+                        ]
+                      }
+                    },
+                    "skipped": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "channel": {
+                            "type": "string",
+                            "enum": [
+                              "email",
+                              "webhook",
+                              "push"
+                            ]
+                          },
+                          "reason": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "channel",
+                          "reason"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "slot",
+                    "rows",
+                    "skipped"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — installation administrator required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Canary recipient not configured or refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (1 per channel per minute)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/system/build-info": {
+      "get": {
+        "summary": "Build identity of the running artifact (installation administrator + store owner)",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "engine": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "enum": [
+                            "@sellright/api"
+                          ]
+                        },
+                        "version": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "version"
+                      ]
+                    },
+                    "build": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "sha": {
+                          "type": "string"
+                        },
+                        "dirty": {
+                          "type": "boolean"
+                        },
+                        "time": {
+                          "type": "string"
+                        },
+                        "node": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "sha",
+                        "dirty",
+                        "time",
+                        "node"
+                      ]
+                    },
+                    "node": {
+                      "type": "string"
+                    },
+                    "migrationJournalSha256": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "migrationHead": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "plugins": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "engine",
+                    "build",
+                    "node",
+                    "migrationJournalSha256",
+                    "migrationHead",
+                    "plugins"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/system/effective-config": {
+      "get": {
+        "summary": "Effective configuration projection config/v1 — secrets as fingerprints only (installation administrator + store owner)",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "schema": {
+                      "type": "string",
+                      "enum": [
+                        "config/v1"
+                      ]
+                    },
+                    "store": {
+                      "type": "object",
+                      "properties": {
+                        "slug": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "slug"
+                      ]
+                    },
+                    "intended": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "nullable": true
+                      }
+                    },
+                    "deployment": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "nullable": true
+                      }
+                    }
+                  },
+                  "required": [
+                    "schema",
+                    "store",
+                    "intended",
+                    "deployment"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
             "content": {
               "application/json": {
                 "schema": {

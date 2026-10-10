@@ -14,6 +14,7 @@
  * so an unconfigured deployment's `createApp()` output is unchanged.
  */
 import type { OpenAPIHono } from '@hono/zod-openapi';
+import type { ErrorResponsePolicy } from './pre-route-policy.js';
 
 export interface ApiPlugin {
   /** Unique plugin name (diagnostics only; also guards against double-registration). */
@@ -27,6 +28,12 @@ export interface ApiPlugin {
    * of its own.
    */
   init?: (app: OpenAPIHono) => void;
+  /**
+   * Optional pre-route response policy (see pre-route-policy.ts): a declared
+   * route set plus a transformer for JSON error bodies on those routes.
+   * Status and headers are preserved; `/v1/admin` is never transformed.
+   */
+  errorPolicy?: ErrorResponsePolicy;
 }
 
 const registered: ApiPlugin[] = [];

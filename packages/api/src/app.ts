@@ -64,6 +64,7 @@ import { err as logErr } from './lib/logger.js';
 import { listApiPlugins } from './plugins.js';
 import { SELLRIGHT_VERSION } from './version.js';
 import type { EngineContext, EnginePlugin } from './sdk/types.js';
+import { preRoutePolicy } from './pre-route-policy.js';
 
 export { SELLRIGHT_VERSION };
 
@@ -114,6 +115,8 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
   // known. Stays behind the request-id middleware so the line carries it.
   app.use('*', accessLogMiddleware());
 
+  // Plugin pre-route response policy (plugins.ts `errorPolicy`); no-op without one.
+  app.use('*', preRoutePolicy(listApiPlugins));
   // SDK lifecycle `preRoute`: plugin middleware / response policies that must wrap every
   // route. After request-id + access log (so they carry the id), before CORS and routes.
   for (const plugin of sdkPlugins) plugin.preRoute?.(app, options.ctx!);
