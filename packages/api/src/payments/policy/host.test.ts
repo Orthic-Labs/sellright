@@ -8,14 +8,16 @@ const assertHeld = vi.fn(async () => undefined);
 vi.mock('../../db/locks.js', async (importOriginal) => ({ ...(await importOriginal<typeof import('../../db/locks.js')>()), assertHeld: (...a: unknown[]) => assertHeld(...(a as [])) }));
 
 import {
-  PaymentPolicyCompositionError, PaymentPolicyUnavailableError, PaymentPolicyVetoError, _resetPaymentPoliciesForTests, registerPaymentPolicy,
-  registeredPaymentPolicies, runAuthorizeInvoiceEffect, runBeforePaymentAttempt, runEntitlementReversal, runRevalidateForIssuance,
+  PaymentPolicyCompositionError, PaymentPolicyMetadataError, PaymentPolicyUnavailableError, PaymentPolicyVetoError, _resetPaymentPoliciesForTests,
+  hasCheckoutReplayPolicy, registerPaymentPolicy, registeredPaymentPolicies, runAuthorizeInvoiceEffect, runBeforePaymentAttempt,
+  runCheckoutEligibility, runCheckoutReplayAllowed, runEntitlementReversal, runLegacyCheckoutFingerprints, runOnCheckoutOrder, runRevalidateForIssuance,
   runShapeSettlementResponse,
 } from './host.js';
+import { PaymentPolicyRefusalError } from './registry.js';
 import { dispatchReservationTransition } from './transitions.js';
 import { SELLRIGHT_DEFAULT_POLICY_ID, installDefaultPaymentPolicy } from './default-policy.js';
 import type {
-  AuthorizeInvoiceEffectInput, BeforePaymentAttemptInput, EntitlementReversalInput, PaymentPolicy, RevalidateForIssuanceInput,
+  AuthorizeInvoiceEffectInput, BeforePaymentAttemptInput, CheckoutFingerprintBasis, EntitlementReversalInput, PaymentPolicy, RevalidateForIssuanceInput,
 } from './types.js';
 
 const dialect = new PgDialect();
@@ -204,5 +206,161 @@ describe('entitlement reversal hook (pure)', () => {
     });
     await expect(runEntitlementReversal(fakeTx, reversal)).rejects.toBeInstanceOf(PaymentPolicyUnavailableError);
     expect(executed.some((q) => q.includes('ROLLBACK TO SAVEPOINT policy_hook'))).toBe(true);
+  });
+});
+
+// ── checkout hooks (X-57 wire parity) ─────────────────────────────────────────────────────────────────
+const held = {} as HeldLocks;
+const policyOrder = { id: 'o1', storeId: 's1', code: 'C1', state: 'PendingPayment', currency: 'USD', grandTotal: 100, customerId: null, metadata: {} };
+const bare = (id: string, hooks: Partial<PaymentPolicy> = {}): PaymentPolicy => ({ id, async beforePaymentAttempt() { return { allow: true }; }, ...hooks });
+const replayInput = (origin: 'idempotency_key' | 'converted_cart' | 'unique_violation' = 'idempotency_key') =>
+  ({ existingOrder: policyOrder, extensions: {}, customer: null, origin, held });
+const checkoutInput = { order: policyOrder, lines: [], extensions: {}, customer: null, intent: { couponCode: 'C', giftCardCode: 'G', redeemPoints: 5 }, held };
+
+describe('runCheckoutReplayAllowed', () => {
+  it('no policy, or every policy allowing, is true', async () => {
+    await expect(runCheckoutReplayAllowed(fakeTx, replayInput())).resolves.toBe(true);
+    registerPaymentPolicy(bare('a', { async checkoutReplayAllowed() { return true; } }));
+    await expect(runCheckoutReplayAllowed(fakeTx, replayInput())).resolves.toBe(true);
+  });
+
+  it('a bare false is the engine\'s generic 422 LEGAL_ACCEPTANCE_REQUIRED refusal', async () => {
+    registerPaymentPolicy(bare('a', { async checkoutReplayAllowed() { return false; } }));
+    await expect(runCheckoutReplayAllowed(fakeTx, replayInput())).resolves.toEqual({ status: 422, code: 'LEGAL_ACCEPTANCE_REQUIRED', message: 'checkout replay refused by payment policy' });
+  });
+
+  it('a structured refusal keeps the policy message; status and code default to 422 LEGAL_ACCEPTANCE_REQUIRED', async () => {
+    registerPaymentPolicy(bare('a', { async checkoutReplayAllowed() { return { allow: false, message: 'owner only' }; } }));
+    await expect(runCheckoutReplayAllowed(fakeTx, replayInput())).resolves.toEqual({ status: 422, code: 'LEGAL_ACCEPTANCE_REQUIRED', message: 'owner only' });
+  });
+
+  it('a structured refusal may set its own status, code and extras', async () => {
+    registerPaymentPolicy(bare('a', { async checkoutReplayAllowed() { return { allow: false, message: 'm', code: 'X', status: 409, extra: { reason: 'r' } }; } }));
+    await expect(runCheckoutReplayAllowed(fakeTx, replayInput())).resolves.toEqual({ status: 409, code: 'X', message: 'm', extra: { reason: 'r' } });
+  });
+
+  it('passes the replay origin to the policy and the first refusal wins', async () => {
+    const seen: string[] = [];
+    registerPaymentPolicy(bare('a', { async checkoutReplayAllowed(_tx, i) { seen.push(`a:${i.origin}`); return { allow: false, message: `a-${i.origin}` }; } }));
+    registerPaymentPolicy(bare('b', { async checkoutReplayAllowed(_tx, i) { seen.push(`b:${i.origin}`); return false; } }));
+    for (const origin of ['idempotency_key', 'converted_cart', 'unique_violation'] as const) {
+      await expect(runCheckoutReplayAllowed(fakeTx, replayInput(origin))).resolves.toMatchObject({ message: `a-${origin}` });
+    }
+    expect(seen).toEqual(['a:idempotency_key', 'a:converted_cart', 'a:unique_violation']);
+  });
+
+  it('an invalid refusal status or an empty message fails closed', async () => {
+    registerPaymentPolicy(bare('a', { async checkoutReplayAllowed() { return { allow: false, message: 'm', status: 500 as unknown as 409 }; } }));
+    await expect(runCheckoutReplayAllowed(fakeTx, replayInput())).rejects.toBeInstanceOf(PaymentPolicyMetadataError);
+    _resetPaymentPoliciesForTests();
+    registerPaymentPolicy(bare('b', { async checkoutReplayAllowed() { return { allow: false, message: ' ' }; } }));
+    await expect(runCheckoutReplayAllowed(fakeTx, replayInput())).rejects.toBeInstanceOf(PaymentPolicyMetadataError);
+  });
+});
+
+describe('hasCheckoutReplayPolicy', () => {
+  it('is true for a replay-authorization hook or a legacy-fingerprint hook, false otherwise', () => {
+    expect(hasCheckoutReplayPolicy()).toBe(false);
+    registerPaymentPolicy(bare('plain'));
+    expect(hasCheckoutReplayPolicy()).toBe(false);
+    registerPaymentPolicy(bare('legacy', { async legacyCheckoutFingerprint() { return null; } }));
+    expect(hasCheckoutReplayPolicy()).toBe(true);
+    _resetPaymentPoliciesForTests();
+    registerPaymentPolicy(bare('replay', { async checkoutReplayAllowed() { return true; } }));
+    expect(hasCheckoutReplayPolicy()).toBe(true);
+  });
+});
+
+describe('runLegacyCheckoutFingerprints', () => {
+  const request: CheckoutFingerprintBasis = {
+    v: 1, cartToken: null, items: [{ sku: 'S', quantity: 1 }], couponCode: null, giftCardCode: null, shippingMethodCode: null,
+    email: null, shippingAddress: null, billingAddress: null, legalAcceptance: null,
+  };
+  const legacyInput = { existingOrder: policyOrder, extensions: { a: { x: 1 } }, customer: null, origin: 'unique_violation' as const, request, held };
+
+  it('collects string candidates in registration order, skipping null and empty, and passes request, origin and the policy\'s own block', async () => {
+    const seen: unknown[] = [];
+    registerPaymentPolicy(bare('a', { async legacyCheckoutFingerprint(_tx, i) { seen.push([i.origin, i.extensions, i.request]); return 'aa'; } }));
+    registerPaymentPolicy(bare('none', { async legacyCheckoutFingerprint() { return null; } }));
+    registerPaymentPolicy(bare('empty', { async legacyCheckoutFingerprint() { return ''; } }));
+    registerPaymentPolicy(bare('plain'));
+    registerPaymentPolicy(bare('b', { async legacyCheckoutFingerprint() { return 'bb'; } }));
+    await expect(runLegacyCheckoutFingerprints(fakeTx, legacyInput)).resolves.toEqual(['aa', 'bb']);
+    expect(seen).toEqual([['unique_violation', { x: 1 }, request]]);
+  });
+
+  it('no policy offers nothing; a throwing hook is unavailable', async () => {
+    await expect(runLegacyCheckoutFingerprints(fakeTx, legacyInput)).resolves.toEqual([]);
+    registerPaymentPolicy(bare('broken', { async legacyCheckoutFingerprint() { throw new Error('boom'); } }));
+    await expect(runLegacyCheckoutFingerprints(fakeTx, legacyInput)).rejects.toBeInstanceOf(PaymentPolicyUnavailableError);
+  });
+});
+
+describe('runCheckoutEligibility', () => {
+  const eligibility = { storeId: 's1', currency: 'USD', lines: [], extensions: { a: { y: 2 } }, customer: null, intent: { giftCardCode: 'G' }, held };
+
+  it('passes the intent and the policy\'s own extension block; ok proceeds', async () => {
+    const seen: unknown[] = [];
+    registerPaymentPolicy(bare('a', { async checkoutEligibility(_tx, i) { seen.push([i.intent, i.extensions, i.currency]); return { ok: true }; } }));
+    await expect(runCheckoutEligibility(fakeTx, eligibility)).resolves.toBeUndefined();
+    expect(seen).toEqual([[{ giftCardCode: 'G' }, { y: 2 }, 'USD']]);
+  });
+
+  it('a refusal throws PaymentPolicyRefusalError carrying status, code, message and extras; later policies do not run', async () => {
+    const calls: string[] = [];
+    registerPaymentPolicy(bare('a', { async checkoutEligibility() { calls.push('a'); return { ok: false, refusal: { status: 422, code: 'C', message: 'm', extra: { reason: 'r' } } }; } }));
+    registerPaymentPolicy(bare('b', { async checkoutEligibility() { calls.push('b'); return { ok: true }; } }));
+    const err = await runCheckoutEligibility(fakeTx, eligibility).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(PaymentPolicyRefusalError);
+    expect((err as PaymentPolicyRefusalError).refusal).toEqual({ status: 422, code: 'C', message: 'm', extra: { reason: 'r' } });
+    expect(calls).toEqual(['a']);
+  });
+
+  it('no policy with the hook is a no-op (no savepoint); a throwing hook is unavailable', async () => {
+    registerPaymentPolicy(bare('plain'));
+    await expect(runCheckoutEligibility(fakeTx, eligibility)).resolves.toBeUndefined();
+    expect(executed).toEqual([]);
+    registerPaymentPolicy(bare('broken', { async checkoutEligibility() { throw new Error('boom'); } }));
+    await expect(runCheckoutEligibility(fakeTx, eligibility)).rejects.toBeInstanceOf(PaymentPolicyUnavailableError);
+  });
+});
+
+describe('runOnCheckoutOrder (refusal, intent, promotion replacement)', () => {
+  it('no policy: an empty outcome with no replacement', async () => {
+    await expect(runOnCheckoutOrder(fakeTx, checkoutInput)).resolves.toEqual({ metadata: {}, adjustments: [], promotionReplacement: null });
+  });
+
+  it('passes the intent as sent', async () => {
+    let seen: unknown;
+    registerPaymentPolicy(bare('a', { async onCheckoutOrder(_tx, i) { seen = i.intent; return {}; } }));
+    await runOnCheckoutOrder(fakeTx, checkoutInput);
+    expect(seen).toEqual({ couponCode: 'C', giftCardCode: 'G', redeemPoints: 5 });
+  });
+
+  it('a refusal throws PaymentPolicyRefusalError; a veto keeps throwing PaymentPolicyVetoError', async () => {
+    registerPaymentPolicy(bare('a', { async onCheckoutOrder() { return { refusal: { status: 409, code: 'C', message: 'm' } }; } }));
+    const err = await runOnCheckoutOrder(fakeTx, checkoutInput).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(PaymentPolicyRefusalError);
+    expect((err as PaymentPolicyRefusalError).refusal).toEqual({ status: 409, code: 'C', message: 'm' });
+    _resetPaymentPoliciesForTests();
+    registerPaymentPolicy(bare('b', { async onCheckoutOrder() { return { veto: { code: 'V', message: 'v' } }; } }));
+    await expect(runOnCheckoutOrder(fakeTx, checkoutInput)).rejects.toBeInstanceOf(PaymentPolicyVetoError);
+  });
+
+  it('a veto and a refusal in one result is a malformed result', async () => {
+    registerPaymentPolicy(bare('a', { async onCheckoutOrder() { return { veto: { code: 'V', message: 'v' }, refusal: { status: 422, code: 'R', message: 'r' } }; } }));
+    await expect(runOnCheckoutOrder(fakeTx, checkoutInput)).rejects.toBeInstanceOf(PaymentPolicyMetadataError);
+  });
+
+  it('a promotion replacement is reported once; 0 is valid; negative, fractional or a second policy is refused', async () => {
+    registerPaymentPolicy(bare('a', { async onCheckoutOrder() { return { replacePromotion: { fixedDiscount: 0 } }; } }));
+    await expect(runOnCheckoutOrder(fakeTx, checkoutInput)).resolves.toMatchObject({ promotionReplacement: { fixedDiscount: 0 } });
+    registerPaymentPolicy(bare('b', { async onCheckoutOrder() { return { replacePromotion: { fixedDiscount: 100 } }; } }));
+    await expect(runOnCheckoutOrder(fakeTx, checkoutInput)).rejects.toBeInstanceOf(PaymentPolicyMetadataError);
+    for (const bad of [-1, 1.5, Number.NaN]) {
+      _resetPaymentPoliciesForTests();
+      registerPaymentPolicy(bare('c', { async onCheckoutOrder() { return { replacePromotion: { fixedDiscount: bad } }; } }));
+      await expect(runOnCheckoutOrder(fakeTx, checkoutInput)).rejects.toBeInstanceOf(PaymentPolicyMetadataError);
+    }
   });
 });

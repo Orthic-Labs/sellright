@@ -17,11 +17,12 @@ import * as s from '../../db/schema.js';
 import { reserve, type ReservationRow } from '../reservation.js';
 import {
   _resetPaymentPoliciesForTests, inSavepoint, PaymentPolicyCompositionError, PaymentPolicyUnavailableError,
-  PaymentPolicyVetoError, registeredPaymentPolicies, registerPaymentPolicy,
+  PaymentPolicyRefusalError, PaymentPolicyVetoError, registeredPaymentPolicies, registerPaymentPolicy,
 } from './registry.js';
 import type {
   AuthorizeInvoiceEffectInput, BeforeCaptureInput, BeforeCaptureResult, BeforePaymentAttemptInput, CheckoutLine,
-  CheckoutPriceAdjustment, CheckoutReplayInput, InvoiceEffectDecision, PaymentPolicy, PaymentProvider,
+  CheckoutEligibilityInput, CheckoutFingerprintBasis, CheckoutPriceAdjustment, CheckoutPromotionReplacement, CheckoutRefusal,
+  CheckoutReplayInput, CheckoutRequestIntent, InvoiceEffectDecision, PaymentPolicy, PaymentProvider,
   PaymentPurpose, PolicyCustomer, PolicyOrder, ReservationRequest, RevalidateForIssuanceInput,
   RevalidateForIssuanceResult, SettlementResponseInput, SettlementResponseOverride, EntitlementReversalInput,
 } from './types.js';
@@ -98,11 +99,36 @@ export function parseCheckoutExtensions(input: Readonly<Record<string, unknown>>
   return { ok: true, value };
 }
 
+/** A refusal's status must be 409 or 422 and its code and message non-empty; anything else fails the checkout closed. */
+function validRefusal(policyId: string, r: CheckoutRefusal): CheckoutRefusal {
+  if (r.status !== 409 && r.status !== 422) throw new PaymentPolicyMetadataError(policyId, r.code, 'refusal status must be 409 or 422');
+  if (!r.code.trim() || !r.message.trim()) throw new PaymentPolicyMetadataError(policyId, r.code, 'refusal code and message are required');
+  return r.extra ? { status: r.status, code: r.code, message: r.message, extra: { ...r.extra } } : { status: r.status, code: r.code, message: r.message };
+}
+
+/**
+ * Runs every registered policy's checkoutEligibility in registration order, each in SAVEPOINT policy_hook, before any
+ * discount, loyalty or tax step. The first refusal throws PaymentPolicyRefusalError (the whole checkout rolls back).
+ * No policy with the hook means no change.
+ */
+export async function runCheckoutEligibility(tx: Tx, i: Omit<CheckoutEligibilityInput, 'extensions'> & { extensions: Readonly<Record<string, unknown>> }): Promise<void> {
+  await assertHeld(tx, i.held);
+  for (const policy of policies()) {
+    if (!policy.checkoutEligibility) continue;
+    const result = await inSavepoint(tx, policy.id, () => policy.checkoutEligibility!(tx, {
+      storeId: i.storeId, currency: i.currency, lines: i.lines, extensions: i.extensions[policy.id], customer: i.customer, intent: i.intent, held: i.held,
+    }));
+    if (!result.ok) throw new PaymentPolicyRefusalError(validRefusal(policy.id, result.refusal));
+  }
+}
+
 export interface CheckoutOrderOutcome {
   /** Metadata to merge into order.metadata (already validated for collisions). */
   readonly metadata: Record<string, unknown>;
   /** Price adjustments in registration order; the engine writes each as an order_adjustment row. */
   readonly adjustments: readonly (CheckoutPriceAdjustment & { readonly policyId: string })[];
+  /** The promotion replacement a policy asked for, or null. At most one policy may ask. */
+  readonly promotionReplacement: CheckoutPromotionReplacement | null;
 }
 
 /**
@@ -112,19 +138,22 @@ export interface CheckoutOrderOutcome {
  */
 export async function runOnCheckoutOrder(tx: Tx, i: {
   order: PolicyOrder; lines: readonly CheckoutLine[]; extensions: Readonly<Record<string, unknown>>;
-  customer: PolicyCustomer | null; held: HeldLocks;
+  customer: PolicyCustomer | null; intent: CheckoutRequestIntent; held: HeldLocks;
 }): Promise<CheckoutOrderOutcome> {
   await assertHeld(tx, i.held);
   const requests: { policyId: string; request: ReservationRequest }[] = [];
   const metadata: Record<string, unknown> = {};
   const metadataOwner = new Map<string, string>();
   const adjustments: (CheckoutPriceAdjustment & { policyId: string })[] = [];
+  let promotionReplacement: { policyId: string; replacement: CheckoutPromotionReplacement } | null = null;
   for (const policy of policies()) {
     if (!policy.onCheckoutOrder) continue;
     const result = await inSavepoint(tx, policy.id, () => policy.onCheckoutOrder!(tx, {
-      order: i.order, lines: i.lines, extensions: i.extensions[policy.id], customer: i.customer, held: i.held,
+      order: i.order, lines: i.lines, extensions: i.extensions[policy.id], customer: i.customer, intent: i.intent, held: i.held,
     }));
+    if (result.veto && result.refusal) throw new PaymentPolicyMetadataError(policy.id, 'refusal', 'veto and refusal are mutually exclusive');
     if (result.veto) throw new PaymentPolicyVetoError(result.veto);
+    if (result.refusal) throw new PaymentPolicyRefusalError(validRefusal(policy.id, result.refusal));
     for (const [key, value] of Object.entries(result.metadata ?? {})) {
       if (ENGINE_METADATA_KEYS.has(key)) throw new PaymentPolicyMetadataError(policy.id, key, 'engine-owned key');
       const owner = metadataOwner.get(key);
@@ -133,6 +162,12 @@ export async function runOnCheckoutOrder(tx: Tx, i: {
       metadata[key] = value;
     }
     for (const request of result.reserve ?? []) requests.push({ policyId: policy.id, request });
+    if (result.replacePromotion) {
+      const { fixedDiscount } = result.replacePromotion;
+      if (!Number.isInteger(fixedDiscount) || fixedDiscount < 0) throw new PaymentPolicyMetadataError(policy.id, 'replacePromotion', 'fixedDiscount must be a non-negative integer');
+      if (promotionReplacement) throw new PaymentPolicyMetadataError(policy.id, 'replacePromotion', `promotion already replaced by policy ${promotionReplacement.policyId}`);
+      promotionReplacement = { policyId: policy.id, replacement: { fixedDiscount } };
+    }
     if (result.priceAdjustment) {
       const adj = result.priceAdjustment;
       if (!Number.isInteger(adj.amount) || adj.amount === 0) throw new PaymentPolicyMetadataError(policy.id, adj.code, 'adjustment amount must be a non-zero integer');
@@ -154,27 +189,55 @@ export async function runOnCheckoutOrder(tx: Tx, i: {
       releaseOnFullRefund: request.releaseOnFullRefund ?? false, expiresAt: request.expiresAt ?? null,
     });
   }
-  return { metadata, adjustments };
+  return { metadata, adjustments, promotionReplacement: promotionReplacement?.replacement ?? null };
 }
 
-/** True when a registered policy gates checkout replays, so a replay needs the stored order's own lock set. */
-export const hasCheckoutReplayPolicy = (): boolean => policies().some((p) => p.checkoutReplayAllowed);
+/** True when a registered policy gates checkout replays (authorization or a legacy fingerprint), so a replay needs the stored order's own lock set. */
+export const hasCheckoutReplayPolicy = (): boolean => policies().some((p) => p.checkoutReplayAllowed || p.legacyCheckoutFingerprint);
+
+/** The refusal a bare `false` from checkoutReplayAllowed means; byte-identical to the engine's earlier fixed response. */
+const REPLAY_REFUSED_CODE = 'LEGAL_ACCEPTANCE_REQUIRED';
+const REPLAY_REFUSED_MESSAGE = 'checkout replay refused by payment policy';
 
 /**
  * Consulted at every checkout idempotency replay site before the existing order is returned. Every policy that
- * declares checkoutReplayAllowed must return true. Policies run in registration order; a hook failure throws
- * PaymentPolicyUnavailableError (the replay is not served).
+ * declares checkoutReplayAllowed must allow. Policies run in registration order and the first refusal wins: `false`
+ * is 422 LEGAL_ACCEPTANCE_REQUIRED with the generic message, a CheckoutReplayRefusal carries the policy's own message
+ * (and optional code, status and extras). A hook failure throws PaymentPolicyUnavailableError (the replay is not served).
  */
-export async function runCheckoutReplayAllowed(tx: Tx, i: Omit<CheckoutReplayInput, 'extensions'> & { extensions: Readonly<Record<string, unknown>> }): Promise<boolean> {
+export async function runCheckoutReplayAllowed(tx: Tx, i: Omit<CheckoutReplayInput, 'extensions'> & { extensions: Readonly<Record<string, unknown>> }): Promise<true | CheckoutRefusal> {
   await assertHeld(tx, i.held);
   for (const policy of policies()) {
     if (!policy.checkoutReplayAllowed) continue;
-    const allowed = await inSavepoint(tx, policy.id, () => policy.checkoutReplayAllowed!(tx, {
-      existingOrder: i.existingOrder, extensions: i.extensions[policy.id], customer: i.customer, held: i.held,
+    const decision = await inSavepoint(tx, policy.id, () => policy.checkoutReplayAllowed!(tx, {
+      existingOrder: i.existingOrder, extensions: i.extensions[policy.id], customer: i.customer, origin: i.origin, held: i.held,
     }));
-    if (!allowed) return false;
+    if (decision === true) continue;
+    if (decision === false) return { status: 422, code: REPLAY_REFUSED_CODE, message: REPLAY_REFUSED_MESSAGE };
+    return validRefusal(policy.id, { status: decision.status ?? 422, code: decision.code ?? REPLAY_REFUSED_CODE, message: decision.message, extra: decision.extra });
   }
   return true;
+}
+
+/**
+ * The legacy fingerprint candidates the registered policies offer for a stored order, in registration order. Called
+ * only after runCheckoutReplayAllowed returned true. The caller accepts a candidate only by exact equality with the
+ * order's own stored fingerprint; nothing here reads or writes the stored value.
+ */
+export async function runLegacyCheckoutFingerprints(tx: Tx, i: {
+  existingOrder: PolicyOrder; extensions: Readonly<Record<string, unknown>>; customer: PolicyCustomer | null;
+  origin: 'idempotency_key' | 'unique_violation'; request: CheckoutFingerprintBasis; held: HeldLocks;
+}): Promise<string[]> {
+  await assertHeld(tx, i.held);
+  const out: string[] = [];
+  for (const policy of policies()) {
+    if (!policy.legacyCheckoutFingerprint) continue;
+    const candidate = await inSavepoint(tx, policy.id, () => policy.legacyCheckoutFingerprint!(tx, {
+      existingOrder: i.existingOrder, extensions: i.extensions[policy.id], customer: i.customer, origin: i.origin, request: i.request, held: i.held,
+    }));
+    if (typeof candidate === 'string' && candidate) out.push(candidate);
+  }
+  return out;
 }
 
 /**
