@@ -54,6 +54,9 @@
     "VITE_STORE_LOCALE": {
       "description": "Locale tag"
     },
+    "VITE_STORE_STORAGE_NAMESPACE": {
+      "description": "Prefix of the storefront's own browser-storage keys (image-seen cache); default dd keeps the existing key"
+    },
     "VITE_STORE_CURRENCY": {
       "description": "ISO currency code"
     },

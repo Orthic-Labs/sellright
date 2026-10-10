@@ -152,3 +152,43 @@ test('symlinks and build output directories are not scanned; bad arguments exit 
   assert.equal(existsSync(j), true);
   assert.equal(spawnSync(process.execPath, [script, '--nope'], { encoding: 'utf8' }).status, 2);
 });
+
+// ---- A18 expectations on the real base tree (this package), not a fixture.
+const PKG = join(dirname(script), '..');
+const IOS_DARK = ['--color-bg: #0F0F0F;', '--color-surface: #1A1A1A;', '--color-border: #2A2A2A;', '--color-text: #E8E8E8;', '--color-text-muted: #888888;'];
+const NEW_TOKENS = ['--color-tooltip-rgb', '--color-on-dark-rgb'];
+
+test('A18 base tree: every brand-named global is a pure map to a --brand-* value declared once in src/brand/tokens.css', () => {
+  const inv = inventory({ root: PKG });
+  const globalCss = readFileSync(join(PKG, 'src/global.css'), 'utf8');
+  for (const name of [...BRAND_NAMED, ...NEW_TOKENS]) {
+    const backing = name.replace(/^--/, '--brand-');
+    assert.equal(inv.tokens[name]?.class, 'global', `${name} must stay a global token`);
+    assert.equal(globalCss.split(`${name}:`).length - 1, 1, `${name} is declared exactly once in global.css`);
+    assert.match(globalCss, new RegExp(`${name}:\\s*var\\(${backing}\\);`), `${name} must map to var(${backing})`);
+    const backed = inv.tokens[backing];
+    assert.equal(backed?.class, 'global', `${backing} must be a global declaration`);
+    assert.deepEqual(backed.declarations.map((d) => d.file), ['src/brand/tokens.css'], `${backing} is declared once, in src/brand/tokens.css`);
+  }
+  for (const name of NEW_TOKENS) assert.ok(!inv.undeclared.includes(name), `${name} must not be undeclared`);
+});
+
+test('A18 base tree: tokens.css declares only --brand-* names; the iOS dark :root vars stay literal in global.css', () => {
+  const tokensCss = readFileSync(join(PKG, 'src/brand/tokens.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  const declared = [...tokensCss.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]);
+  assert.ok(declared.length >= 19);
+  assert.deepEqual(declared.filter((n) => !n.startsWith('--brand-')), []);
+  const globalCss = readFileSync(join(PKG, 'src/global.css'), 'utf8');
+  for (const line of IOS_DARK) {
+    assert.ok(globalCss.includes(line), `global.css must keep ${line}`);
+    assert.equal(tokensCss.includes(line.split(':')[0] + ':'), false, `${line.split(':')[0]} must not move to tokens.css`);
+  }
+});
+
+test('A18 base tree: global.css imports tokens.css after the Tailwind import and before @theme', () => {
+  const css = readFileSync(join(PKG, 'src/global.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  const at = (s) => css.indexOf(s);
+  assert.ok(at("@import 'tailwindcss'") >= 0);
+  assert.ok(at("@import './brand/tokens.css'") > at("@import 'tailwindcss'"));
+  assert.ok(at('@theme') > at("@import './brand/tokens.css'"));
+});

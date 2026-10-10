@@ -10,6 +10,10 @@ import TrashIcon from '../icons/TrashIcon';
 import { useCart, updateCartLineQuantity, removeCartLine } from '~/contexts/CartContext';
 import { isLineAvailable, remainingQuantity } from '~/sellright/types/cart';
 import { StockWarning } from '../cart/StockWarning';
+import { getSlot } from '~/components/slots';
+
+// A17 mount point: a free-shipping progress hint under the line list. No base fallback: absent slot renders nothing.
+const FreeShippingProgressSlot = getSlot('cart.free-shipping-progress');
 
 // Image preloading function for cart product links
 const handleProductLinkClick = $((productSlug: string, featuredAssetPreview?: string) => {
@@ -240,6 +244,14 @@ export default component$(() => {
 				})}
 
 			</ul>
+			{FreeShippingProgressSlot && (
+				<FreeShippingProgressSlot
+					currencyCode={currencyCode}
+					subtotalCents={cartState.cart.subtotal}
+					lineCount={cartState.cart.lines.length}
+					isCheckoutView={isCheckoutView}
+				/>
+			)}
 		</div>
 	);
 });

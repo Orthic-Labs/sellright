@@ -111,6 +111,7 @@
     "mode": "warn",
     "_comments": {
       "mode": "warn until plan A20 clears the base, then block. Overridable with --mode.",
+      "vendorUiAllowFiles": "Files that may name a vendor: the provider label map (src/platform/payments/labels.ts) and the env key list (src/env.ts, a configuration identifier, not UI). Only the vendor-ui rule is skipped there.",
       "scope": "Base files only: every src file that is not L3 (layers.json), not a test, and not listed in .compose-overlay-files.txt (brand-owned). Fonts: 'Inter' is the base default and is not a brand font."
     },
     "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.css"],
@@ -119,6 +120,7 @@
     "brandFonts": ["Cormorant Garamond", "IBM Plex Sans", "IBM Plex Mono", "Fraunces", "Montserrat", "Space Grotesk", "Gelato Luxe"],
     "brandNames": ["Damned Designs", "DamnedDesigns", "damneddesigns", "Rotten Hand", "Rottenhand", "Stunning Strangers", "StunningStrangers", "stunningstrangers", "RightSites", "Right Sites"],
     "vendorUi": ["sezzle"],
-    "vendorUiExemptProviderValues": ["sezzle"]
+    "vendorUiExemptProviderValues": ["sezzle"],
+    "vendorUiAllowFiles": ["src/platform/payments/labels.ts", "src/env.ts"]
   }
 }

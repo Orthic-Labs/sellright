@@ -1,6 +1,7 @@
 import { $, component$, useSignal, type QRL } from '@qwik.dev/core';
 import { startGatewayPayment } from '~/providers/shop/checkout/checkout';
 import { SellRightError } from '~/sellright/client';
+import { INSTALLMENT_PROVIDER } from '~/platform/payments/labels';
 
 /**
  * Generic installment-payment redirect (Sezzle). Starting the attempt mints
@@ -30,7 +31,7 @@ export const Sezzle = component$<SezzleProps>((props) => {
 		isStarting.value = true;
 		await props.onProcessingChange$?.(true);
 		try {
-			const result = await startGatewayPayment(props.code, 'sezzle', {
+			const result = await startGatewayPayment(props.code, INSTALLMENT_PROVIDER, {
 				idempotencyKey: crypto.randomUUID(),
 				receiptToken: props.receiptToken,
 			});

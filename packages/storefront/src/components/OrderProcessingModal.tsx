@@ -50,7 +50,7 @@ export const OrderProcessingModal = component$<OrderProcessingModalProps>(({ vis
 
         <p style={{
           fontFamily: 'var(--font-body)',
-          fontSize: '14px', color: 'rgba(247,242,234,0.5)',
+          fontSize: '14px', color: 'rgba(var(--color-on-dark-rgb),0.5)',
           marginBottom: '28px',
         }}>
           {elapsed.value >= 30
@@ -87,7 +87,7 @@ export const OrderProcessingModal = component$<OrderProcessingModalProps>(({ vis
         <p style={{
           fontFamily: 'var(--font-mono)',
           fontSize: '10px', letterSpacing: '0.1em', textTransform: 'uppercase',
-          color: 'rgba(247,242,234,0.25)', marginTop: '24px',
+          color: 'rgba(var(--color-on-dark-rgb),0.25)', marginTop: '24px',
         }}>
           {identity.storeName}
         </p>

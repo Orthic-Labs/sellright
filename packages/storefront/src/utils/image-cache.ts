@@ -1,9 +1,10 @@
 import { $ } from '@qwik.dev/core';
+import { theme } from '~/theme/theme.config';
 
 // 🚀 CROSS-PAGE PERSISTENT CACHE - Survives page refreshes and navigation
 // Limit cache size to prevent memory leaks and storage bloat
 const MAX_CACHE_SIZE = 100;
-const STORAGE_KEY = 'dd_cached_images';
+const STORAGE_KEY = `${theme.storageNamespace}_cached_images`;
 
 // Load seen images from sessionStorage on initialization
 const loadSeenImages = (): Set<string> => {

@@ -40,6 +40,18 @@ test('vendor-ui: provider id is exempt, a label beside it is not, exact position
   assert.equal(hit.col, 28);
 });
 
+test('vendor-ui: vendorUiAllowFiles skips only that rule, only for the listed files', () => {
+  const allowed = { ...layers, brandLint: { ...layers.brandLint, vendorUiAllowFiles: ['src/labels.ts'] } };
+  const src = "export const a = 'Sezzle'; export const b = '#B87333';";
+  const rules = (file) => [...new Set(lintText(allowed, file, src).map((f) => f.rule))].sort();
+  assert.deepEqual(rules('src/labels.ts'), ['identity-colour']);
+  assert.deepEqual(rules('src/other.ts'), ['identity-colour', 'vendor-ui']);
+});
+
+test('layers.json: the A20 vendor-ui allow list is exactly the provider label map and the env key list', () => {
+  assert.deepEqual(layers.brandLint.vendorUiAllowFiles, ['src/platform/payments/labels.ts', 'src/env.ts']);
+});
+
 test('identity-colour: hex of any case, 8-digit alpha and r,g,b triplets; neutral colours pass', () => {
   assert.deepEqual(lintErr("export const a = '#b87333';"), ['identity-colour']);
   assert.deepEqual(lintErr("export const a = '#F5C518CC';"), ['identity-colour']);

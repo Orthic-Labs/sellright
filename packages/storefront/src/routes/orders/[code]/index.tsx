@@ -15,6 +15,7 @@ import {
 import { formatPrice } from '~/utils';
 import { createSEOHead } from '~/utils/seo';
 import { useStoreIdentityLoader } from '~/routes/layout';
+import { INSTALLMENT_PROVIDER, continueToLabel } from '~/platform/payments/labels';
 
 /**
  * Order-balance pay page. The "balance due" email (sent after an admin edited
@@ -387,12 +388,12 @@ export default component$(() => {
 												Credit / Debit Card
 											</button>
 										)}
-										{methods.includes('sezzle') && (
+										{methods.includes(INSTALLMENT_PROVIDER) && (
 											<button
-												type="button" role="tab" aria-selected={state.method === 'sezzle'}
+												type="button" role="tab" aria-selected={state.method === INSTALLMENT_PROVIDER}
 												disabled={state.processing}
-												onClick$={() => { state.method = 'sezzle'; state.formError = ''; }}
-												class={`${TAB} ${state.method === 'sezzle' ? 'font-medium text-[var(--color-ink)] border-[var(--color-accent)]' : 'text-[var(--color-ink-soft)] border-transparent'}`}
+												onClick$={() => { state.method = INSTALLMENT_PROVIDER; state.formError = ''; }}
+												class={`${TAB} ${state.method === INSTALLMENT_PROVIDER ? 'font-medium text-[var(--color-ink)] border-[var(--color-accent)]' : 'text-[var(--color-ink-soft)] border-transparent'}`}
 											>
 												Pay in installments
 											</button>
@@ -451,11 +452,11 @@ export default component$(() => {
 										</button>
 									</>
 								)}
-								{state.method === 'sezzle' && (
+								{state.method === INSTALLMENT_PROVIDER && (
 									<Sezzle
 										code={order.code}
 										receiptToken={rt}
-										label={`Continue to Sezzle · ${formatPrice(due, currency)}`}
+										label={`${continueToLabel(INSTALLMENT_PROVIDER)} · ${formatPrice(due, currency)}`}
 										disabled={state.processing}
 										onError$={onError}
 										onProcessingChange$={onProcessing}

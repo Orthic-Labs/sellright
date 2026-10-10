@@ -9,6 +9,7 @@ import { useCart, refreshCartStock, loadCartIfNeeded, useHasMixedPreOrder } from
 import { CartService } from '~/services/CartService';
 import { CheckoutValidationProvider, useCheckoutValidation, useCheckoutValidationActions } from '~/contexts/CheckoutValidationContext';
 import { useCheckout, type PaymentMethod } from '~/hooks/useCheckout';
+import { INSTALLMENT_PROVIDER } from '~/platform/payments/labels';
 import { formatCents } from '~/hooks/checkout-total';
 import { getShopConfig, getEligibleShippingMethods } from '~/providers/shop/checkout/checkout';
 import type { ShopConfig, ShopShippingMethod } from '~/sellright/types/checkout';
@@ -151,7 +152,7 @@ const CheckoutContent = component$(() => {
             // switch via the method selector when more than one is available.
             if (cfg.stripeConfigured) paymentMethod.value = 'stripe';
             else if (cfg.gateways?.nmi) paymentMethod.value = 'nmi';
-            else if (cfg.gateways?.sezzle) paymentMethod.value = 'sezzle';
+            else if (cfg.gateways?.sezzle) paymentMethod.value = INSTALLMENT_PROVIDER;
           })
           .catch((e) => console.warn('[Checkout] shop-config fetch failed:', e));
 

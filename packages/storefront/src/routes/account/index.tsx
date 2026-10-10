@@ -9,6 +9,7 @@ import ShieldCheckIcon from '~/components/icons/ShieldCheckIcon';
 import XMarkIcon from '~/components/icons/XMarkIcon';
 import { Modal } from '~/components/modal/Modal';
 import { LoyaltyBalanceCard } from '~/components/loyalty/LoyaltyBalanceCard';
+import { getSlot } from '~/components/slots';
 import { APP_STATE } from '~/constants';
 import {
 	requestEmailChange,
@@ -21,6 +22,9 @@ import {
 import { ActiveCustomer } from '~/types';
 import { createSEOHead } from '~/utils/seo';
 import { sanitizePhoneNumber } from '~/utils/validation';
+
+// A17 mount point: a badge beside the loyalty balance. No base fallback: absent slot renders nothing.
+const SustainabilityBadgeSlot = getSlot('account.sustainability-badge');
 
 export default component$(() => {
 	const appState = useContext(APP_STATE);
@@ -118,6 +122,7 @@ export default component$(() => {
 
 			{/* Quick Stats Panel */}
 			<LoyaltyBalanceCard />
+			{SustainabilityBadgeSlot && <SustainabilityBadgeSlot orderCount={orderCount.value} statsLoaded={statsLoaded.value} />}
 
 			<div class="mb-8">
 				{/* Only what the API can actually report: the account order

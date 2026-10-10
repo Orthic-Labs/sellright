@@ -7,7 +7,8 @@
 //   identity-colour  a hex colour (or its r,g,b triplet) from the identity palette in layers.json brandLint
 //   brand-font       a brand font family name
 //   brand-name       a brand or product-family name (Damned Designs, Rotten Hand, Stunning Strangers, RightSites)
-//   vendor-ui        Sezzle marketing strings (UI copy, asset URLs); the provider id `provider: 'sezzle'` is exempt
+//   vendor-ui        Sezzle marketing strings (UI copy, asset URLs); the provider id `provider: 'sezzle'` is exempt, and files
+//                    listed in brandLint.vendorUiAllowFiles (the provider label map, the env key list) skip this one rule
 // Only text a reader or the browser sees is scanned: string and template literals, JSX text and CSS values. Comments,
 // identifiers and module specifiers are not.
 // Scope: src files matching brandLint.include/exclude that are not L3 and not listed in .compose-overlay-files.txt
@@ -122,7 +123,9 @@ function lintCss(rules, relFile, text) {
 export function lintText(layers, relFile, text) {
   const rules = compileLint(layers);
   const ext = path.extname(relFile).toLowerCase();
-  const found = ext === '.css' ? lintCss(rules, relFile, text) : lintTs(rules, relFile, text);
+  const all = ext === '.css' ? lintCss(rules, relFile, text) : lintTs(rules, relFile, text);
+  // brandLint.vendorUiAllowFiles: the provider label map and env-key list may name a vendor (vendor-ui only; other rules still apply).
+  const found = (layers.brandLint.vendorUiAllowFiles ?? []).includes(relFile) ? all.filter((f) => f.rule !== 'vendor-ui') : all;
   return found.sort((a, b) => a.line - b.line || a.col - b.col || a.rule.localeCompare(b.rule));
 }
 
