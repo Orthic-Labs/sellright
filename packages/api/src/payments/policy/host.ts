@@ -20,9 +20,10 @@ import {
   PaymentPolicyVetoError, registeredPaymentPolicies, registerPaymentPolicy,
 } from './registry.js';
 import type {
-  AuthorizeInvoiceEffectInput, BeforeCaptureInput, EntitlementReversalInput, BeforeCaptureResult, BeforePaymentAttemptInput, InvoiceEffectDecision,
-  PaymentPolicy, PaymentProvider, PaymentPurpose, PolicyOrder, ReservationRequest, RevalidateForIssuanceInput,
-  RevalidateForIssuanceResult, SettlementResponseInput, SettlementResponseOverride,
+  AuthorizeInvoiceEffectInput, BeforeCaptureInput, BeforeCaptureResult, BeforePaymentAttemptInput, CheckoutLine,
+  CheckoutPriceAdjustment, CheckoutReplayInput, InvoiceEffectDecision, PaymentPolicy, PaymentProvider,
+  PaymentPurpose, PolicyCustomer, PolicyOrder, ReservationRequest, RevalidateForIssuanceInput,
+  RevalidateForIssuanceResult, SettlementResponseInput, SettlementResponseOverride, EntitlementReversalInput,
 } from './types.js';
 
 export {
@@ -62,6 +63,115 @@ export async function runBeforePaymentAttempt(tx: Tx, input: BeforePaymentAttemp
       releaseOnFullRefund: request.releaseOnFullRefund ?? false, expiresAt: request.expiresAt ?? null,
     });
   }
+}
+
+/** Order metadata keys the engine writes itself; a policy may not contribute them. */
+const ENGINE_METADATA_KEYS = new Set(['linked_via', 'contact', 'taxInclusive', 'checkoutFingerprint', 'legal_acceptance', 'loyalty']);
+
+/** A policy's metadata or price adjustment is malformed or collides with another contribution. Fails the checkout closed. */
+export class PaymentPolicyMetadataError extends Error {
+  constructor(readonly policyId: string, readonly key: string, reason: string) {
+    super(`payment policy "${policyId}" metadata "${key}": ${reason}`);
+    this.name = 'PaymentPolicyMetadataError';
+  }
+}
+
+/**
+ * Validates the checkout request's `extensions` object (PAYMENT-TIMING X-57). Every key must name a registered
+ * policy that declares `checkoutExtensions`, and each declared block is parsed by its schema (a missing block is
+ * parsed as undefined, so a required block fails). The returned value holds only the parsed blocks, so the
+ * idempotency fingerprint is computed over canonical data. Pure; safe to call before the transaction.
+ */
+export function parseCheckoutExtensions(input: Readonly<Record<string, unknown>> | undefined):
+  { ok: true; value: Record<string, unknown> } | { ok: false; reason: string } {
+  const declared = policies().filter((p) => p.checkoutExtensions);
+  const raw = input ?? {};
+  for (const key of Object.keys(raw)) {
+    if (!declared.some((p) => p.id === key)) return { ok: false, reason: `unknown extension "${key}"` };
+  }
+  const value: Record<string, unknown> = {};
+  for (const p of declared) {
+    const parsed = p.checkoutExtensions!.safeParse(raw[p.id]);
+    if (!parsed.success) return { ok: false, reason: `invalid extension "${p.id}"` };
+    if (parsed.data !== undefined) value[p.id] = parsed.data;
+  }
+  return { ok: true, value };
+}
+
+export interface CheckoutOrderOutcome {
+  /** Metadata to merge into order.metadata (already validated for collisions). */
+  readonly metadata: Record<string, unknown>;
+  /** Price adjustments in registration order; the engine writes each as an order_adjustment row. */
+  readonly adjustments: readonly (CheckoutPriceAdjustment & { readonly policyId: string })[];
+}
+
+/**
+ * Runs every registered policy's onCheckoutOrder inside the checkout transaction, right after the order and line
+ * inserts. The first veto throws PaymentPolicyVetoError (the whole checkout rolls back). Reserve requests are
+ * unioned and created under the held set; metadata and price adjustments are collected for the engine to apply.
+ */
+export async function runOnCheckoutOrder(tx: Tx, i: {
+  order: PolicyOrder; lines: readonly CheckoutLine[]; extensions: Readonly<Record<string, unknown>>;
+  customer: PolicyCustomer | null; held: HeldLocks;
+}): Promise<CheckoutOrderOutcome> {
+  await assertHeld(tx, i.held);
+  const requests: { policyId: string; request: ReservationRequest }[] = [];
+  const metadata: Record<string, unknown> = {};
+  const metadataOwner = new Map<string, string>();
+  const adjustments: (CheckoutPriceAdjustment & { policyId: string })[] = [];
+  for (const policy of policies()) {
+    if (!policy.onCheckoutOrder) continue;
+    const result = await inSavepoint(tx, policy.id, () => policy.onCheckoutOrder!(tx, {
+      order: i.order, lines: i.lines, extensions: i.extensions[policy.id], customer: i.customer, held: i.held,
+    }));
+    if (result.veto) throw new PaymentPolicyVetoError(result.veto);
+    for (const [key, value] of Object.entries(result.metadata ?? {})) {
+      if (ENGINE_METADATA_KEYS.has(key)) throw new PaymentPolicyMetadataError(policy.id, key, 'engine-owned key');
+      const owner = metadataOwner.get(key);
+      if (owner !== undefined) throw new PaymentPolicyMetadataError(policy.id, key, `already set by policy ${owner}`);
+      metadataOwner.set(key, policy.id);
+      metadata[key] = value;
+    }
+    for (const request of result.reserve ?? []) requests.push({ policyId: policy.id, request });
+    if (result.priceAdjustment) {
+      const adj = result.priceAdjustment;
+      if (!Number.isInteger(adj.amount) || adj.amount === 0) throw new PaymentPolicyMetadataError(policy.id, adj.code, 'adjustment amount must be a non-zero integer');
+      if (!adj.label.trim()) throw new PaymentPolicyMetadataError(policy.id, adj.code, 'adjustment label is required');
+      adjustments.push({ policyId: policy.id, code: adj.code, label: adj.label, amount: adj.amount });
+    }
+  }
+  const seen = new Map<string, string>();
+  for (const { policyId, request } of requests) {
+    const key = `${request.kind}\u0000${request.ownerKey}`;
+    const first = seen.get(key);
+    if (first !== undefined) throw new PaymentPolicyCompositionError(request.kind, request.ownerKey, [first, policyId]);
+    seen.set(key, policyId);
+  }
+  for (const { request } of requests) {
+    await reserve(tx, i.held, {
+      storeId: i.order.storeId, orderId: i.order.id, kind: request.kind, ownerKey: request.ownerKey,
+      holder: request.holder ? { ...request.holder } : undefined,
+      releaseOnFullRefund: request.releaseOnFullRefund ?? false, expiresAt: request.expiresAt ?? null,
+    });
+  }
+  return { metadata, adjustments };
+}
+
+/**
+ * Consulted at every checkout idempotency replay site before the existing order is returned. Every policy that
+ * declares checkoutReplayAllowed must return true. Policies run in registration order; a hook failure throws
+ * PaymentPolicyUnavailableError (the replay is not served).
+ */
+export async function runCheckoutReplayAllowed(tx: Tx, i: Omit<CheckoutReplayInput, 'extensions'> & { extensions: Readonly<Record<string, unknown>> }): Promise<boolean> {
+  await assertHeld(tx, i.held);
+  for (const policy of policies()) {
+    if (!policy.checkoutReplayAllowed) continue;
+    const allowed = await inSavepoint(tx, policy.id, () => policy.checkoutReplayAllowed!(tx, {
+      existingOrder: i.existingOrder, extensions: i.extensions[policy.id], customer: i.customer, held: i.held,
+    }));
+    if (!allowed) return false;
+  }
+  return true;
 }
 
 /**

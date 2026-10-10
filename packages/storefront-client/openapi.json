@@ -2908,6 +2908,12 @@
                     "additionalProperties": {
                       "nullable": true
                     }
+                  },
+                  "extensions": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "nullable": true
+                    }
                   }
                 },
                 "required": [
