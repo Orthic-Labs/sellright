@@ -281,8 +281,10 @@ checkout.openapi(
             : and(eq(s.order.id, orderId), eq(s.order.idempotencyKey, source.idemKey)))
           .limit(1);
         if (!o) return null;
-        if (source !== 'cart' && !fingerprintMatches(o.metadata, fingerprint)) return { fingerprintConflict: true as const };
+        // The policy decides first (who may replay this order), then the key's fingerprint: a caller the policy
+        // refuses learns nothing about whether the body matched. With no policy this order is unobservable.
         if (!await replayAllowed(tx, st, o, extensions.value, token, held)) return { replayRefused: true as const };
+        if (source !== 'cart' && !fingerprintMatches(o.metadata, fingerprint)) return { fingerprintConflict: true as const };
         return orderReplayResult(tx, o);
       });
     // Zero-cache stock rule: set true only by a reserveStockOrThrow call whose
@@ -319,9 +321,10 @@ checkout.openapi(
           .where(eq(s.order.idempotencyKey, idemKey))
           .limit(1);
         if (existing) {
-          if (!fingerprintMatches(existing.metadata, fingerprint)) return { fingerprintConflict: true };
-          // Only a policy that gates replays needs the stored order's lock set; without one the replay is unchanged.
+          // A policy that gates replays decides first, under the stored order's lock set (replayUnderOrderLock checks the
+          // policy, then the fingerprint). Without one the replay is unchanged.
           if (hasCheckoutReplayPolicy()) return { replayOf: { orderId: existing.id, source: { idemKey } } };
+          if (!fingerprintMatches(existing.metadata, fingerprint)) return { fingerprintConflict: true };
           return orderReplayResult(tx, existing);
         }
       }
