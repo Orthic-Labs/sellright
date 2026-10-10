@@ -8,7 +8,7 @@
  */
 import { and, eq } from 'drizzle-orm';
 import type { Tx } from '../../db/client.js';
-import { currentLockSet, lockSetCovers, lockSetInTx, withLockedSetInTx, type HeldLocks, type LockSubject } from '../../db/locks.js';
+import { currentLockSet, lockSetCovers, withLockedSetInTx, type HeldLocks, type LockSubject } from '../../db/locks.js';
 import * as s from '../../db/schema.js';
 import { env } from '../../env.js';
 import { normalizeEmail } from '../../auth/email.js';
@@ -220,7 +220,7 @@ async function linkLicense(tx: Tx, e: EffectRow, p: LicenseIssuePayload, issued:
 }
 
 /**
- * X-49: the order set is taken on the effect's own transaction (lockSetInTx): a covering set already
+ * X-49: the order set is taken on the effect's own transaction (withLockedSetInTx): a covering set already
  * held there passes through; otherwise the order's licence/order/reservation rows are locked in
  * class order on this same transaction. Inline effects run inside the settlement set; deferred
  * effects run in a plain transaction. No nested transaction is opened in either case.
@@ -228,11 +228,24 @@ async function linkLicense(tx: Tx, e: EffectRow, p: LicenseIssuePayload, issued:
 export const editReconcile: LocalEffectHandler = {
   async run(tx, e) {
     const p = e.payload as unknown as EditReconcilePayload;
-    await lockSetInTx(tx, e.storeId, { kind: 'order', orderId: p.orderId });
-    const blocked = await requirePaidLifecycle(tx, e, p.orderId);
-    if (blocked) return blocked;
-    const r = await reconcileEditedOrderLicenses(tx, { storeId: e.storeId, orderId: p.orderId, customerId: p.customerId ?? null, paidAt: new Date(p.paidAt) });
-    return { done: { result: { ...r } } };
+    // Same lock set as before (a covering set is reused, else the order's rows are locked on this transaction); the
+    // set's brand is what the issuance gate needs. Required revocations run first and are never gated: only the
+    // issuance of edit-added licences asks the policy (PAYMENT-TIMING §4.3), exactly as license_issue does.
+    return withLockedSetInTx(tx, e.storeId, { kind: 'order', orderId: p.orderId }, async (inner, held) => {
+      const blocked = await requirePaidLifecycle(inner, e, p.orderId);
+      if (blocked) return blocked;
+      const state: { refused?: EffectOutcome } = {};
+      const r = await reconcileEditedOrderLicenses(inner, {
+        storeId: e.storeId, orderId: p.orderId, customerId: p.customerId ?? null, paidAt: new Date(p.paidAt),
+        gate: async () => {
+          const gate = await issuanceGate(inner, e, { orderId: p.orderId, customerId: p.customerId ?? null, paidAt: p.paidAt }, held);
+          if ('outcome' in gate) { state.refused = gate.outcome; return { ok: false }; }
+          return { ok: true, metadataPatch: gate.metadataPatch };
+        },
+      });
+      if (state.refused) return state.refused;
+      return { done: { result: { ...r } } };
+    });
   },
 };
 

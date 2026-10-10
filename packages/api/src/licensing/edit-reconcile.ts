@@ -12,7 +12,7 @@
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
-import { issueLicensesForPaidOrder } from './issue.js';
+import { issueLicensesForPaidOrder, type IssuanceGate } from './issue.js';
 
 export interface ProposedLine { id: string; variantId: string | null; quantity: number }
 
@@ -47,9 +47,10 @@ export async function licensedLineEditViolations(tx: Tx, storeId: string, orderI
 
 /** Called when an edit's balance is fully settled: issue licenses for added
  *  lines (idempotent per line) and revoke any entitlement stranded on a
- *  zero-quantity line. Returns counts. */
+ *  zero-quantity line. Returns counts. Revocation is unconditional; `gate`
+ *  (when given) can only refuse or annotate the NEW rows the top-up inserts. */
 export async function reconcileEditedOrderLicenses(
-  tx: Tx, opts: { storeId: string; orderId: string; customerId: string | null; paidAt?: Date },
+  tx: Tx, opts: { storeId: string; orderId: string; customerId: string | null; paidAt?: Date; gate?: IssuanceGate },
 ): Promise<{ issued: number; revoked: number }> {
   const now = new Date();
   // L2 before the order (STOREKIT §5.1/§5.2): the caller holds the order's set, which
