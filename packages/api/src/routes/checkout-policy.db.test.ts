@@ -13,6 +13,7 @@ import { env } from '../env.js';
 import { clearLoginAttempts } from '../auth/rate-limit.js';
 import { _resetPaymentPoliciesForTests, registerPaymentPolicy } from '../payments/policy/host.js';
 import type { CheckoutExtensionSchema, CheckoutOrderInput, CheckoutReplayInput, PaymentPolicy } from '../payments/policy/types.js';
+import { cart } from './cart.js';
 import { checkout } from './checkout.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
@@ -26,6 +27,11 @@ const PRODUCT = 'cccccccc-3333-3333-3333-3333333333a1';
 const VARIANT = 'cccccccc-3333-3333-3333-3333333333b1';
 const SKU = 'POLICY-DIG-1';
 const PRICE = 4900;
+const FREE_VARIANT = 'cccccccc-3333-3333-3333-3333333333b2';
+const FREE_SKU = 'POLICY-FREE-1';
+const FREE_VARIANT_2 = 'cccccccc-3333-3333-3333-3333333333b3';
+const FREE_SKU_2 = 'POLICY-FREE-2';
+const GIFT_CODE = 'GC-POLICY';
 const POLICY_ID = 'checkout-test';
 
 /** A structural schema: the block must be an object with a string sourceId. */
@@ -58,6 +64,7 @@ function policy(over: Partial<PaymentPolicy> = {}): PaymentPolicy {
 
 const app = new OpenAPIHono();
 app.route('/', checkout);
+app.route('/', cart);
 
 async function wipe(): Promise<void> {
   await pool.query('TRUNCATE store CASCADE');
@@ -71,6 +78,13 @@ async function seed(): Promise<void> {
     await tx.execute(sql`INSERT INTO product_variant (id, store_id, product_id, sku, name, price, fulfillment_type)
       VALUES (${VARIANT}, ${STORE}, ${PRODUCT}, ${SKU}, 'Policy Download', ${PRICE}, 'digital_download') ON CONFLICT (id) DO NOTHING`);
     await tx.execute(sql`INSERT INTO stock (variant_id, store_id, on_hand, allocated) VALUES (${VARIANT}, ${STORE}, 100, 0) ON CONFLICT (variant_id) DO UPDATE SET on_hand = 100, allocated = 0`);
+    await tx.execute(sql`INSERT INTO product_variant (id, store_id, product_id, sku, name, price, fulfillment_type)
+      VALUES (${FREE_VARIANT}, ${STORE}, ${PRODUCT}, ${FREE_SKU}, 'Policy Free Download', 0, 'digital_download') ON CONFLICT (id) DO NOTHING`);
+    await tx.execute(sql`INSERT INTO stock (variant_id, store_id, on_hand, allocated) VALUES (${FREE_VARIANT}, ${STORE}, 100, 0) ON CONFLICT (variant_id) DO UPDATE SET on_hand = 100, allocated = 0`);
+    await tx.execute(sql`INSERT INTO product_variant (id, store_id, product_id, sku, name, price, fulfillment_type)
+      VALUES (${FREE_VARIANT_2}, ${STORE}, ${PRODUCT}, ${FREE_SKU_2}, 'Policy Free Download 2', 0, 'digital_download') ON CONFLICT (id) DO NOTHING`);
+    await tx.execute(sql`INSERT INTO stock (variant_id, store_id, on_hand, allocated) VALUES (${FREE_VARIANT_2}, ${STORE}, 100, 0) ON CONFLICT (variant_id) DO UPDATE SET on_hand = 100, allocated = 0`);
+    await tx.execute(sql`INSERT INTO gift_card (store_id, code, initial_balance, balance) VALUES (${STORE}, ${GIFT_CODE}, 100000, 100000) ON CONFLICT (code) DO UPDATE SET balance = 100000`);
   });
 }
 
@@ -228,4 +242,175 @@ describe('POST /v1/shop/checkout — payment policy hook (X-57)', () => {
     expect(await count('order_reservation')).toBe(0);
     expect(await count('order_adjustment')).toBe(0);
   });
+
+  describe('placement check sees the persisted order (inline payment paths)', () => {
+    /** A policy that contributes metadata + an adjustment at checkout and vetoes the placement unless it sees both. */
+    function placementPolicy(sawOrder: Array<{ metadata: unknown; grandTotal: number; provider: string }>): PaymentPolicy {
+      return policy({
+        async onCheckoutOrder() { return { metadata: { partnerRef: 'P-7' }, priceAdjustment: { code: 'test.credit', label: 'Partner credit', amount: -500 } }; },
+        async beforePaymentAttempt(_tx, i) {
+          sawOrder.push({ metadata: i.order.metadata, grandTotal: i.order.grandTotal, provider: i.provider });
+          const ok = (i.order.metadata as { partnerRef?: string } | null)?.partnerRef === 'P-7';
+          return ok ? { allow: true } : { allow: false, veto: { code: 'PARTNER_REF_MISSING', message: 'checkout metadata missing' } };
+        },
+      });
+    }
+
+    it('zero-total: beforePaymentAttempt receives the policy-contributed metadata and the adjusted total', async () => {
+      const sawOrder: Array<{ metadata: unknown; grandTotal: number; provider: string }> = [];
+      registerPaymentPolicy(policy({
+        async onCheckoutOrder() { return { metadata: { partnerRef: 'P-7' } }; },
+        async beforePaymentAttempt(_tx, i) {
+          sawOrder.push({ metadata: i.order.metadata, grandTotal: i.order.grandTotal, provider: i.provider });
+          const ok = (i.order.metadata as { partnerRef?: string } | null)?.partnerRef === 'P-7';
+          return ok ? { allow: true } : { allow: false, veto: { code: 'PARTNER_REF_MISSING', message: 'checkout metadata missing' } };
+        },
+      }));
+      const res = await post({ items: [{ sku: FREE_SKU, quantity: 1 }], email: 'free@example.com', extensions: { [POLICY_ID]: { sourceId: 'LIC-1' } } });
+      expect(res.status).toBe(200);
+      expect((await res.json() as { state: string }).state).toBe('Paid');
+      expect(sawOrder).toHaveLength(1);
+      expect(sawOrder[0]).toMatchObject({ provider: 'zero_total', grandTotal: 0 });
+      expect(sawOrder[0]!.metadata).toMatchObject({ partnerRef: 'P-7', contact: { email: 'free@example.com' } });
+    });
+
+    it('gift card: beforePaymentAttempt receives the persisted metadata and the adjusted total', async () => {
+      const sawOrder: Array<{ metadata: unknown; grandTotal: number; provider: string }> = [];
+      registerPaymentPolicy(placementPolicy(sawOrder));
+      const res = await post({ ...base, giftCardCode: GIFT_CODE, extensions: { [POLICY_ID]: { sourceId: 'LIC-1' } } });
+      expect(res.status).toBe(200);
+      const body = await res.json() as { state: string; grandTotal: number; giftCardApplied: number };
+      expect(body.state).toBe('Paid');
+      expect(body.grandTotal).toBe(PRICE - 500);
+      expect(sawOrder).toHaveLength(1);
+      expect(sawOrder[0]).toMatchObject({ provider: 'gift_card', grandTotal: PRICE - 500 });
+      expect(sawOrder[0]!.metadata).toMatchObject({ partnerRef: 'P-7' });
+    });
+  });
+
+  describe('replay is decided under the stored order\'s lock set', () => {
+    type Probe = { orderLocked: boolean; reservationLocked: boolean; calls: number };
+    const probe: Probe = { orderLocked: false, reservationLocked: false, calls: 0 };
+
+    /** True when ANOTHER connection cannot take the row lock (so the checkout transaction holds it). */
+    async function heldByTransaction(query: ReturnType<typeof sql>): Promise<boolean> {
+      try {
+        await withStore(STORE, (tx) => tx.execute(query));
+        return false;
+      } catch (e) {
+        for (let cur: unknown = e, d = 0; cur && typeof cur === 'object' && d < 5; d++, cur = (cur as { cause?: unknown }).cause) {
+          if ((cur as { code?: unknown }).code === '55P03') return true;
+        }
+        throw e;
+      }
+    }
+
+    function probingPolicy(): PaymentPolicy {
+      return policy({
+        async onCheckoutOrder() { return { reserve: [{ kind: 'test.credit', ownerKey: 'LIC-REPLAY' }] }; },
+        async checkoutReplayAllowed(_tx, i) {
+          probe.calls++;
+          probe.orderLocked = await heldByTransaction(sql`SELECT 1 FROM "order" WHERE id = ${i.existingOrder.id} FOR UPDATE NOWAIT`);
+          probe.reservationLocked = await heldByTransaction(sql`SELECT 1 FROM order_reservation WHERE order_id = ${i.existingOrder.id} FOR UPDATE NOWAIT`);
+          return true;
+        },
+      });
+    }
+
+    beforeEach(() => { probe.orderLocked = false; probe.reservationLocked = false; probe.calls = 0; });
+
+    it('same-key replay: the replayed order and its reservations are locked while the hook runs', async () => {
+      registerPaymentPolicy(probingPolicy());
+      const reqBody = { ...base, extensions: { [POLICY_ID]: { sourceId: 'LIC-REPLAY' } } };
+      const first = await post(reqBody, { 'idempotency-key': 'idem-lock-1' });
+      expect(first.status).toBe(200);
+      const code = (await first.json() as { code: string }).code;
+      const again = await post(reqBody, { 'idempotency-key': 'idem-lock-1' });
+      expect(again.status).toBe(200);
+      expect((await again.json() as { code: string }).code).toBe(code);
+      expect(probe).toEqual({ calls: 1, orderLocked: true, reservationLocked: true });
+    });
+
+    it('converted-cart replay: the converted order and its reservations are locked while the hook runs', async () => {
+      registerPaymentPolicy(probingPolicy());
+      const cartRes = await app.request('/v1/shop/cart', { method: 'POST', headers: hdr(), body: JSON.stringify({ items: [{ sku: SKU, quantity: 1 }] }) });
+      expect(cartRes.status).toBe(200);
+      const { token, revision } = await cartRes.json() as { token: string; revision: number };
+      const reqBody = { ...base, cartToken: token, expectedRevision: revision, extensions: { [POLICY_ID]: { sourceId: 'LIC-REPLAY' } } };
+      const first = await post(reqBody);
+      expect(first.status).toBe(200);
+      const code = (await first.json() as { code: string }).code;
+      const again = await post(reqBody);
+      expect(again.status).toBe(200);
+      expect((await again.json() as { code: string }).code).toBe(code);
+      expect(probe).toEqual({ calls: 1, orderLocked: true, reservationLocked: true });
+    });
+
+    it('concurrent same-key double submit: the loser\'s replay holds the winner\'s order lock set', async () => {
+      const gate = holdUntilOtherRequestWaits();
+      registerPaymentPolicy({ ...probingPolicy(), async onCheckoutOrder() { await gate(); return { reserve: [{ kind: 'test.credit', ownerKey: 'LIC-REPLAY' }] }; } });
+      const reqBody = { ...base, extensions: { [POLICY_ID]: { sourceId: 'LIC-REPLAY' } } };
+      const [a, b] = await Promise.all([post(reqBody, { 'idempotency-key': 'idem-lock-2' }), post(reqBody, { 'idempotency-key': 'idem-lock-2' })]);
+      expect([a.status, b.status]).toEqual([200, 200]);
+      expect(((await a.json()) as { code: string }).code).toBe(((await b.json()) as { code: string }).code);
+      expect(probe).toEqual({ calls: 1, orderLocked: true, reservationLocked: true });
+    });
+  });
+
+  describe('concurrent reservation conflict', () => {
+    it('two checkouts reserving the same owner at once: one succeeds, the other is 409 RESERVATION_CONFLICT (not 500)', async () => {
+      // Zero-total checkouts: the winner reaches its placement check (after its reserve, before its commit) and holds
+      // there until the other request is blocked on the live-owner index, so both passed reserve()'s existence check.
+      const wait = holdUntilOtherRequestWaits();
+      registerPaymentPolicy(policy({
+        async onCheckoutOrder() { return { reserve: [{ kind: 'test.credit', ownerKey: 'LIC-RACE' }] }; },
+        async beforePaymentAttempt() { await wait(); return { allow: true }; },
+      }));
+      // Distinct SKUs so the two requests do not serialize on one stock row before reaching the reservation insert.
+      const reqBody = (email: string) => ({ items: [{ sku: email.startsWith('a') ? FREE_SKU : FREE_SKU_2, quantity: 1 }], email, extensions: { [POLICY_ID]: { sourceId: 'LIC-RACE' } } });
+      const [a, b] = await Promise.all([post(reqBody('a@example.com')), post(reqBody('b@example.com'))]);
+      expect([a.status, b.status].sort()).toEqual([200, 409]);
+      const loser = a.status === 409 ? a : b;
+      expect(((await loser.json()) as { error: { code: string } }).error.code).toBe('RESERVATION_CONFLICT');
+      expect(await count('order')).toBe(1);
+      expect(await count('order_reservation')).toBe(1);
+    });
+
+    it('the same race with an Idempotency-Key is still a 409 RESERVATION_CONFLICT (not mistaken for a key race)', async () => {
+      const wait = holdUntilOtherRequestWaits();
+      registerPaymentPolicy(policy({
+        async onCheckoutOrder() { return { reserve: [{ kind: 'test.credit', ownerKey: 'LIC-RACE-2' }] }; },
+        async beforePaymentAttempt() { await wait(); return { allow: true }; },
+      }));
+      // Distinct SKUs so the two requests do not serialize on one stock row before reaching the reservation insert.
+      const reqBody = (email: string) => ({ items: [{ sku: email.startsWith('a') ? FREE_SKU : FREE_SKU_2, quantity: 1 }], email, extensions: { [POLICY_ID]: { sourceId: 'LIC-RACE-2' } } });
+      const [a, b] = await Promise.all([
+        post(reqBody('a@example.com'), { 'idempotency-key': 'idem-race-a' }),
+        post(reqBody('b@example.com'), { 'idempotency-key': 'idem-race-b' }),
+      ]);
+      expect([a.status, b.status].sort()).toEqual([200, 409]);
+      const loser = a.status === 409 ? a : b;
+      expect(((await loser.json()) as { error: { code: string } }).error.code).toBe('RESERVATION_CONFLICT');
+    });
+  });
 });
+
+/**
+ * Returns a gate that resolves once another backend is blocked on a lock (the second request of a race), so the
+ * request holding the gate commits only after the other has reached its conflicting write. Fails loudly instead of
+ * passing vacuously if no waiter appears.
+ */
+function holdUntilOtherRequestWaits(): () => Promise<void> {
+  let entered = 0;
+  return async () => {
+    entered++;
+    if (entered > 1) return; // only the first request waits; the other is the one being waited for
+    const deadline = Date.now() + 8000;
+    for (;;) {
+      const r = await pool.query(`SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`);
+      if ((r.rows[0] as { n: number }).n > 0) return;
+      if (Date.now() > deadline) throw new Error('race not reproduced: no request ever blocked on a lock');
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  };
+}

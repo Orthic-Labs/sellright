@@ -157,6 +157,9 @@ export async function runOnCheckoutOrder(tx: Tx, i: {
   return { metadata, adjustments };
 }
 
+/** True when a registered policy gates checkout replays, so a replay needs the stored order's own lock set. */
+export const hasCheckoutReplayPolicy = (): boolean => policies().some((p) => p.checkoutReplayAllowed);
+
 /**
  * Consulted at every checkout idempotency replay site before the existing order is returned. Every policy that
  * declares checkoutReplayAllowed must return true. Policies run in registration order; a hook failure throws

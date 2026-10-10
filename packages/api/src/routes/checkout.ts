@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, count, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import { withStore, type Tx } from '../db/client.js';
-import { LockSetUnstable, withLockedSet, type LockSubject } from '../db/locks.js';
+import { hasPgCode, LockSetUnstable, withLockedSet, type LockSubject } from '../db/locks.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
 import { calculateOrderTotals, type Promotion } from '../money/totals.js';
@@ -28,7 +28,7 @@ import { legalManifestForApp } from '../legal/manifests.js';
 import { isStorePublished } from '../store-publish.js';
 import { cartResponse, CartOut } from './cart.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
-import { checkPlacement, parseCheckoutExtensions, runCheckoutReplayAllowed, runOnCheckoutOrder } from '../payments/policy/host.js';
+import { checkPlacement, hasCheckoutReplayPolicy, parseCheckoutExtensions, runCheckoutReplayAllowed, runOnCheckoutOrder } from '../payments/policy/host.js';
 import { PaymentPolicyUnavailableError, PaymentPolicyVetoError } from '../payments/policy/registry.js';
 import { ReservationConflict } from '../payments/reservation.js';
 import type { PolicyCustomer, PolicyOrder, PolicyVeto } from '../payments/policy/types.js';
@@ -180,6 +180,8 @@ function replayAllowed(
   }));
 }
 
+type ReplaySource = { idemKey: string } | 'cart';
+
 const CheckoutOut = z.object({ code: z.string(), state: z.string(), grandTotal: z.number().int(), discountTotal: z.number().int(), currency: z.string(), couponApplied: z.boolean(), giftCardApplied: z.number().int(), receiptToken: z.string(), pointsRedeemed: z.number().int(), pointsDiscount: z.number().int() });
 
 export const checkout = new OpenAPIHono();
@@ -265,7 +267,24 @@ checkout.openapi(
     if (!extensions.ok) return errJson(c, 400, 'INVALID_CHECKOUT_REQUEST', 'Invalid checkout request', { param: 'extensions' });
     const fingerprint = checkoutFingerprint({ ...body, extensions: extensions.value });
 
-    type Result = { blocked: string[] } | { shippingError: string } | { cartError: string } | { legalError: string } | { loyaltyError: RedeemRejection } | { policyVeto: PolicyVeto } | { policyUnavailable: true } | { replayRefused: true } | { reservationConflict: true } | { cartConflict: { code: 'stale' | 'revision_required'; snapshot: z.infer<typeof CartOut> } } | { fingerprintConflict: true } | { lockRetry: true } | { code: string; state: string; grandTotal: number; discountTotal: number; couponApplied: boolean; replay?: boolean; giftCardApplied?: number; receiptToken: string; pointsRedeemed?: number; pointsDiscount?: number };
+    type Result = { blocked: string[] } | { shippingError: string } | { cartError: string } | { legalError: string } | { loyaltyError: RedeemRejection } | { policyVeto: PolicyVeto } | { policyUnavailable: true } | { replayRefused: true } | { reservationConflict: true } | { replayOf: { orderId: string; source: ReplaySource } } | { cartConflict: { code: 'stale' | 'revision_required'; snapshot: z.infer<typeof CartOut> } } | { fingerprintConflict: true } | { lockRetry: true } | { code: string; state: string; grandTotal: number; discountTotal: number; couponApplied: boolean; replay?: boolean; giftCardApplied?: number; receiptToken: string; pointsRedeemed?: number; pointsDiscount?: number };
+    // A replay is decided under the STORED order's own lock set (order, licences, reservations — L2/L3/L4), never
+    // under the attempt's set, which covers only the rolled-back attempt's new order id. The set is taken in a fresh
+    // transaction, so the global lock order holds; the order is reread under the locks before the policy hook runs.
+    const replayUnderOrderLock = (orderId: string, source: ReplaySource): Promise<Exclude<Result, { replayOf: unknown }> | null> =>
+      withLockedSet(st.id, [{ kind: 'checkout' }, { kind: 'order', orderId }], async (tx, held) => {
+        const [o] = await tx
+          .select({ id: s.order.id, code: s.order.code, state: s.order.state, grandTotal: s.order.grandTotal, discountTotal: s.order.discountTotal, receiptToken: s.order.receiptToken, metadata: s.order.metadata, customerId: s.order.customerId })
+          .from(s.order)
+          .where(source === 'cart'
+            ? and(eq(s.order.id, orderId), isNull(s.order.deletedAt))
+            : and(eq(s.order.id, orderId), eq(s.order.idempotencyKey, source.idemKey)))
+          .limit(1);
+        if (!o) return null;
+        if (source !== 'cart' && !fingerprintMatches(o.metadata, fingerprint)) return { fingerprintConflict: true as const };
+        if (!await replayAllowed(tx, st, o, extensions.value, token, held)) return { replayRefused: true as const };
+        return orderReplayResult(tx, o);
+      });
     // Zero-cache stock rule: set true only by a reserveStockOrThrow call whose
     // surrounding transaction actually reaches COMMIT. Every path below that
     // aborts the transaction (idempotency replay via unique-violation,
@@ -289,7 +308,7 @@ checkout.openapi(
       { kind: 'order', orderId: newOrderId },
       ...(peekedCustomerId ? [{ kind: 'loyalty' as const, customerId: peekedCustomerId }] : []),
     ];
-    const out = await withLockedSet(st.id, subjects, async (tx, held): Promise<Result> => {
+    const attempt = await withLockedSet(st.id, subjects, async (tx, held): Promise<Result> => {
       // Idempotency: same key -> the same order (also guarded by a unique index),
       // bound to the request fingerprint — a reused key with a different payload
       // is a conflict, not a replay of an order the client didn't resubmit.
@@ -301,7 +320,8 @@ checkout.openapi(
           .limit(1);
         if (existing) {
           if (!fingerprintMatches(existing.metadata, fingerprint)) return { fingerprintConflict: true };
-          if (!await replayAllowed(tx, st, existing, extensions.value, token, held)) return { replayRefused: true };
+          // Only a policy that gates replays needs the stored order's lock set; without one the replay is unchanged.
+          if (hasCheckoutReplayPolicy()) return { replayOf: { orderId: existing.id, source: { idemKey } } };
           return orderReplayResult(tx, existing);
         }
       }
@@ -331,7 +351,7 @@ checkout.openapi(
                 .limit(1)
             : [];
           if (o) {
-            if (!await replayAllowed(tx, st, o, extensions.value, token, held)) return { replayRefused: true };
+            if (hasCheckoutReplayPolicy()) return { replayOf: { orderId: o.id, source: 'cart' as const } };
             return orderReplayResult(tx, o);
           }
           return { cartError: 'cart is empty, invalid, or already checked out' };
@@ -634,10 +654,14 @@ checkout.openapi(
         totals = calculateOrderTotals({ ...totalsInput, adjustments: checkoutPolicy.adjustments.map((a) => ({ label: a.label, amount: a.amount })) });
         await tx.insert(s.orderAdjustment).values(checkoutPolicy.adjustments.map((a) => ({ storeId: st.id, orderId, label: a.label, amount: a.amount, actor: `policy:${a.policyId}` })));
       }
+      // What the order row now holds; the placement check below must see the same metadata and total.
+      let persisted: { grandTotal: number; metadata: unknown } = { grandTotal: totals.grandTotal, metadata: orderMetadata };
       if (checkoutPolicy.adjustments.length || Object.keys(checkoutPolicy.metadata).length) {
-        await tx.update(s.order)
+        const [updated] = await tx.update(s.order)
           .set({ grandTotal: totals.grandTotal, metadata: sql`${s.order.metadata} || ${JSON.stringify(checkoutPolicy.metadata)}::jsonb` })
-          .where(eq(s.order.id, orderId));
+          .where(eq(s.order.id, orderId))
+          .returning({ grandTotal: s.order.grandTotal, metadata: s.order.metadata });
+        persisted = updated!;
       }
 
       // Record promotion usage + bump the global counter (idempotent on order).
@@ -693,7 +717,7 @@ checkout.openapi(
       // dings a phone or sends an email, exactly as before. Runs after the order
       // and cart events so webhook rows keep their order (created -> paid).
       // Placement tenders (PAYMENT-TIMING §4.6): the policy checks the order before any tender is recorded.
-      const placementOrder: PolicyOrder = { id: orderId, storeId: st.id, code, state: 'PendingPayment', currency: st.currency, grandTotal: totals.grandTotal, customerId, metadata: {} };
+      const placementOrder: PolicyOrder = { id: orderId, storeId: st.id, code, state: 'PendingPayment', currency: st.currency, grandTotal: persisted.grandTotal, customerId, metadata: persisted.metadata };
       const paidEffects = (paidAt: Date) => paidOrderEffects({
         orderId, customerId, paidAt, variant: 'checkout', guestEmail: body.email ?? null,
         itemCount: priced.reduce((n, p) => n + p.qty, 0),
@@ -749,20 +773,12 @@ checkout.openapi(
       // Concurrent double-submit with the same Idempotency-Key: the unique
       // (store, key) index rejected the loser; its txn (incl. allocation) rolled
       // back. Return the winner's order in a fresh read — still fingerprint-bound.
-      if (idemKey && (e as { code?: string })?.code === '23505') {
-        return withLockedSet(st.id, [{ kind: 'checkout' }, { kind: 'order', orderId: newOrderId }], async (tx, held): Promise<Result> => {
-          const [o] = await tx
-            .select({ id: s.order.id, code: s.order.code, state: s.order.state, grandTotal: s.order.grandTotal, discountTotal: s.order.discountTotal, receiptToken: s.order.receiptToken, metadata: s.order.metadata, customerId: s.order.customerId })
-            .from(s.order)
-            .where(eq(s.order.idempotencyKey, idemKey))
-            .limit(1);
-          if (o) {
-            if (!fingerprintMatches(o.metadata, fingerprint)) return { fingerprintConflict: true };
-            if (!await replayAllowed(tx, st, o, extensions.value, token, held)) return { replayRefused: true };
-            return orderReplayResult(tx, o);
-          }
-          throw e;
-        });
+      // drizzle wraps the driver error, so the 23505 sits on `cause`, not on `e` (hasPgCode walks the chain).
+      if (idemKey && hasPgCode(e, ['23505'])) {
+        const [winner] = await withStore(st.id, (tx) => tx.select({ id: s.order.id }).from(s.order).where(eq(s.order.idempotencyKey, idemKey)).limit(1));
+        const replayed = winner ? await replayUnderOrderLock(winner.id, { idemKey }) : null;
+        if (!replayed) throw e;
+        return replayed;
       }
       if (e instanceof LockSetUnstable) return { lockRetry: true };
       if (e instanceof StockReservationError) return { blocked: e.skus };
@@ -775,6 +791,13 @@ checkout.openapi(
       if (e instanceof ReservationConflict) return { reservationConflict: true };
       throw e;
     });
+    // A replay decided under a policy's hook runs in its own locked transaction (see replayUnderOrderLock).
+    const out = 'replayOf' in attempt
+      ? await replayUnderOrderLock(attempt.replayOf.orderId, attempt.replayOf.source)
+        ?? (attempt.replayOf.source === 'cart'
+          ? { cartError: 'cart is empty, invalid, or already checked out' }
+          : { lockRetry: true as const })
+      : attempt;
     // Fire AFTER the transaction that actually reserved stock has committed —
     // never from inside it, and never on a rolled-back/replayed attempt.
     if (stockChanged) onStockChanged(st.slug);
