@@ -770,7 +770,7 @@ jobs:
 
       - name: Build and push
         id: build
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: ${{ steps.ctx.outputs.context }}
           file: ${{ steps.ctx.outputs.dockerfile }}
@@ -1099,7 +1099,7 @@ jobs:
       # throwaway tag instead of `:latest`/`:sha`.
       - name: Build + push OLD api (from main)
         id: build_old_api
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: old
           file: old/packages/api/Dockerfile
@@ -1108,7 +1108,7 @@ jobs:
 
       - name: Build + push OLD admin (from main)
         id: build_old_admin
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: old/packages/admin
           file: old/packages/admin/Dockerfile
@@ -1117,7 +1117,7 @@ jobs:
 
       - name: Build + push OLD storefront (from main)
         id: build_old_storefront
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: old
           file: old/packages/storefront/Dockerfile
@@ -1126,7 +1126,7 @@ jobs:
 
       - name: Build + push NEW api (from this PR)
         id: build_new_api
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: new
           file: new/packages/api/Dockerfile
@@ -1135,7 +1135,7 @@ jobs:
 
       - name: Build + push NEW admin (from this PR)
         id: build_new_admin
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: new/packages/admin
           file: new/packages/admin/Dockerfile
@@ -1144,7 +1144,7 @@ jobs:
 
       - name: Build + push NEW storefront (from this PR)
         id: build_new_storefront
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: new
           file: new/packages/storefront/Dockerfile
