@@ -31,7 +31,7 @@ overrides:
   # GHSA-82fw-gwwq-j7x9: keep the test runner and its mocker on the patched release.
   vitest: 4.1.11
   '@vitest/mocker': 4.1.11
-  esbuild: 0.28.1
+  esbuild: 0.28.2
   # GHSA-r28c-9q8g-f849 (path traversal) â€” postcss is pulled in transitively
   # (sanitize-html) as well as directly by admin; force >= 8.5.18
   # workspace-wide rather than editing each package.json.
@@ -56,3 +56,7 @@ overrides:
   source-map-js: ^1.2.2
   # shell-quote <1.11.0 (critical) via a transitive prod dependency.
   shell-quote: ^1.11.0
+
+minimumReleaseAgeExclude:
+  - nodemailer@10.1.0
+  - prettier@3.9.10

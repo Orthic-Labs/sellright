@@ -16,13 +16,13 @@ importers:
         version: file:packs/sellright-api-0.1.0.tgz(@types/node@25.9.9)
       '@sellright/sample-plugin':
         specifier: file:./packs/sellright-sample-plugin-0.1.0.tgz
-        version: file:packs/sellright-sample-plugin-0.1.0.tgz(@hono/zod-openapi@1.6.3(hono@4.13.13)(zod@4.6.5))(@sellright/api@file:packs/sellright-api-0.1.0.tgz(@types/node@25.9.9))(drizzle-orm@0.45.2(pg@8.23.0))(pg@8.23.0)(zod@4.6.5)
+        version: file:packs/sellright-sample-plugin-0.1.0.tgz(@hono/zod-openapi@1.6.3(hono@4.13.13)(zod@4.6.5))(@sellright/api@file:packs/sellright-api-0.1.0.tgz(@types/node@25.9.9))(drizzle-orm@0.45.4(pg@8.23.1))(pg@8.23.1)(zod@4.6.5)
       drizzle-orm:
-        specifier: 0.45.2
-        version: 0.45.2(pg@8.23.0)
+        specifier: 0.45.4
+        version: 0.45.4(pg@8.23.1)
       pg:
-        specifier: 8.23.0
-        version: 8.23.0
+        specifier: 8.23.1
+        version: 8.23.1
       zod:
         specifier: 4.6.5
         version: 4.6.5
@@ -234,17 +234,17 @@ packages:
     resolution: {integrity: sha512-Vt/WkAza2cIPQkv1S9CNNkjnPt+IS199nd+BFUZ+9iQ8As/M8dfqYKdDYLQ0Xdsf069MJti8QeOeh/IKoEBkBw==}
 
   '@sellright/api@file:packs/sellright-api-0.1.0.tgz':
-    resolution: {integrity: sha512-fiHb6pcs5B5CaFQ8blsRXFqQMc+FGz1JK5mUcQVZrDOne4O0T7/nO9gW/To9BOmzFuoUc8qPRbWud8Z1z8xxSg==, tarball: file:packs/sellright-api-0.1.0.tgz}
+    resolution: {integrity: sha512-xQPb0DoZSZGjVRNIwnDp00HqC7C6A37WoalTDQDZc0QHhvt+lK3HDMPioMVMHeQ/iwizRkbOtp3AwtEgn0U6jw==, tarball: file:packs/sellright-api-0.1.0.tgz}
     version: 0.1.0
 
   '@sellright/sample-plugin@file:packs/sellright-sample-plugin-0.1.0.tgz':
-    resolution: {integrity: sha512-+gpE4FBc/pCTSwGA0q+ntsa098PJShD6gg3vw+yBLNuYDigl2kNicc6p/9/Q+icNR7nPTOfkaUzI5rq43M8JFg==, tarball: file:packs/sellright-sample-plugin-0.1.0.tgz}
+    resolution: {integrity: sha512-CSErSqVbmTannS9rWq8WTfTXB4inysOqKjRKLL7JvFebM4WzOyI9HbqeyuRbripk5GoUWIyd7D1LZ3ZEWUCzuw==, tarball: file:packs/sellright-sample-plugin-0.1.0.tgz}
     version: 0.1.0
     peerDependencies:
       '@hono/zod-openapi': ^1.6.3
       '@sellright/api': 0.1.0
-      drizzle-orm: ^0.45.2
-      pg: ^8.23.0
+      drizzle-orm: ^0.45.4
+      pg: ^8.23.1
       zod: ^4.6.5
 
   '@types/jsonwebtoken@9.0.10':
@@ -446,12 +446,13 @@ packages:
     resolution: {integrity: sha512-qI4JLRKnSzqFqr7hAlS5xQDusBCjKSEG4t4+7aNrIQMHBcsC2TGEhuyABJdYkgSewL57PNLYEiibY2iPKhKpaA==}
     engines: {node: '>=20.19.0'}
 
-  dotenv@17.4.2:
-    resolution: {integrity: sha512-nI4U3TottKAcAD9LLud4Cb7b2QztQMUEfHbvhTH09bqXTxnSie8WnjPALV/WMCrJZ6UV/qHJ6L03OqO3LcdYZw==}
+  dotenv@18.0.7:
+    resolution: {integrity: sha512-QEvMEF8ca3GNZJJnAbOgxpj5ULhBvnMcURp+XKrtvqFNPgjBvYoswQ0Jl2cO7JzCjxZjJhr9ZuIEhlrRxMft/Q==}
     engines: {node: '>=12'}
+    hasBin: true
 
-  drizzle-orm@0.45.2:
-    resolution: {integrity: sha512-kY0BSaTNYWnoDMVoyY8uxmyHjpJW1geOmBMdSSicKo9CIIWkSxMIj2rkeSR51b8KAPB7m+qysjuHme5nKP+E5Q==}
+  drizzle-orm@0.45.4:
+    resolution: {integrity: sha512-NiM1YZpJ2UxyeE67DpDDZ+Tsw4YLX3trSlkNT7Tm9eKoUNb1LvaAaQzXgYQsWs+AQ9TUmmwMmBOCXuqqxUWKKQ==}
     peerDependencies:
       '@aws-sdk/client-rds-data': '>=3'
       '@cloudflare/workers-types': '>=4'
@@ -459,6 +460,7 @@ packages:
       '@libsql/client': '>=0.10.0'
       '@libsql/client-wasm': '>=0.10.0'
       '@neondatabase/serverless': '>=0.10.0'
+      '@netlify/db': '>=0.4.0'
       '@op-engineering/op-sqlite': '>=2'
       '@opentelemetry/api': ^1.4.1
       '@planetscale/database': '>=1.13'
@@ -494,6 +496,8 @@ packages:
       '@libsql/client-wasm':
         optional: true
       '@neondatabase/serverless':
+        optional: true
+      '@netlify/db':
         optional: true
       '@op-engineering/op-sqlite':
         optional: true
@@ -933,8 +937,8 @@ packages:
       encoding:
         optional: true
 
-  nodemailer@10.0.16:
-    resolution: {integrity: sha512-VL9xKErxN+el77o8eBOuYKUPMyEx7F9hfnDCuiUKJRp9v3wnWMOudYgP/SWbwSHy8rUL4cylobuXtki1LpQS7A==}
+  nodemailer@10.1.0:
+    resolution: {integrity: sha512-fXW8AulB25aOTuwfRYV6lqHyfz2VM4rr4SGXH03mE7x5znEUpzL5mu6anARUpZN7744Ziwkmr4AxSLPJsBQspg==}
     engines: {node: '>=20.0.0'}
 
   normalize-path@3.0.0:
@@ -999,8 +1003,8 @@ packages:
     resolution: {integrity: sha512-qTAAlrEsl8s4OiEQY69wDvcMIdQN6wdz5ojQiOy6YRMuynxenON0O5oCpJI6lshc6scgAY8qvJ2On/p+CXY0GA==}
     engines: {node: '>=4'}
 
-  pg@8.23.0:
-    resolution: {integrity: sha512-Ip2EQCngowJLGOfCwkFhPXU7/ljlhn6Rxlmy4XYfL2Y+vyRM59+8uR2xqRWKdYmbXmxCFOAmKxBuSUCdF34qLg==}
+  pg@8.23.1:
+    resolution: {integrity: sha512-aL96AHANtWjPLDOLqnhx+ngp9+UK7ETEU8VJrDCGvsSSi/mGLcWYsS6Herg7lmaBJe4uwrfqsa7gTEFaSizDoQ==}
     engines: {node: '>= 16.0.0'}
     peerDependencies:
       pg-native: '>=3.0.1'
@@ -1191,11 +1195,11 @@ packages:
   string_decoder@1.3.0:
     resolution: {integrity: sha512-hkRX8U1WjJFd8LsDJ2yQ/wWWxaopEsABU1XfkM8A+j0+85JAGppt16cr1Whg6KIbb4okU6Mql6BOj+uup/wKeA==}
 
-  stripe@22.6.2:
-    resolution: {integrity: sha512-PwRE2scocvXqDKPiskMa5vRJEAEkq46W69XyUYmAwrNSLr675lQnfqLwnsndAWizwgihOWw/irLmoFRo3ez7ew==}
-    engines: {node: '>=18'}
+  stripe@23.0.0:
+    resolution: {integrity: sha512-MDE2A5ZVVluYURORaZEVghSmnLJc3w6aHAlZSxDQMsOjOb3V0O6ro/CiaeFlJS4N7uIVmsg98ocRsPmUK6YfyA==}
+    engines: {node: '>=20'}
     peerDependencies:
-      '@types/node': '>=18'
+      '@types/node': '>=20'
     peerDependenciesMeta:
       '@types/node':
         optional: true
@@ -1483,16 +1487,16 @@ snapshots:
       '@rightkit/legal': 0.3.1
       '@xmldom/xmldom': 0.9.12
       bcryptjs: 3.0.3
-      dotenv: 17.4.2
-      drizzle-orm: 0.45.2(pg@8.23.0)
+      dotenv: 18.0.7
+      drizzle-orm: 0.45.4(pg@8.23.1)
       exceljs: 4.4.0
       hono: 4.13.13
-      nodemailer: 10.0.16
-      pg: 8.23.0
+      nodemailer: 10.1.0
+      pg: 8.23.1
       pino: 10.4.0
       sanitize-html: 2.18.0
       sharp: 0.35.5(@types/node@25.9.9)
-      stripe: 22.6.2(@types/node@25.9.9)
+      stripe: 23.0.0(@types/node@25.9.9)
       zod: 4.6.5
     transitivePeerDependencies:
       - '@aws-sdk/client-rds-data'
@@ -1501,6 +1505,7 @@ snapshots:
       - '@libsql/client'
       - '@libsql/client-wasm'
       - '@neondatabase/serverless'
+      - '@netlify/db'
       - '@op-engineering/op-sqlite'
       - '@opentelemetry/api'
       - '@planetscale/database'
@@ -1527,12 +1532,12 @@ snapshots:
       - sql.js
       - sqlite3
 
-  '@sellright/sample-plugin@file:packs/sellright-sample-plugin-0.1.0.tgz(@hono/zod-openapi@1.6.3(hono@4.13.13)(zod@4.6.5))(@sellright/api@file:packs/sellright-api-0.1.0.tgz(@types/node@25.9.9))(drizzle-orm@0.45.2(pg@8.23.0))(pg@8.23.0)(zod@4.6.5)':
+  '@sellright/sample-plugin@file:packs/sellright-sample-plugin-0.1.0.tgz(@hono/zod-openapi@1.6.3(hono@4.13.13)(zod@4.6.5))(@sellright/api@file:packs/sellright-api-0.1.0.tgz(@types/node@25.9.9))(drizzle-orm@0.45.4(pg@8.23.1))(pg@8.23.1)(zod@4.6.5)':
     dependencies:
       '@hono/zod-openapi': 1.6.3(hono@4.13.13)(zod@4.6.5)
       '@sellright/api': file:packs/sellright-api-0.1.0.tgz(@types/node@25.9.9)
-      drizzle-orm: 0.45.2(pg@8.23.0)
-      pg: 8.23.0
+      drizzle-orm: 0.45.4(pg@8.23.1)
+      pg: 8.23.1
       zod: 4.6.5
 
   '@types/jsonwebtoken@9.0.10':
@@ -1764,11 +1769,11 @@ snapshots:
       domelementtype: 3.0.0
       domhandler: 6.0.1
 
-  dotenv@17.4.2: {}
+  dotenv@18.0.7: {}
 
-  drizzle-orm@0.45.2(pg@8.23.0):
+  drizzle-orm@0.45.4(pg@8.23.1):
     optionalDependencies:
-      pg: 8.23.0
+      pg: 8.23.1
 
   dunder-proto@1.0.1:
     dependencies:
@@ -2245,7 +2250,7 @@ snapshots:
     dependencies:
       whatwg-url: 5.0.0
 
-  nodemailer@10.0.16: {}
+  nodemailer@10.1.0: {}
 
   normalize-path@3.0.0: {}
 
@@ -2292,9 +2297,9 @@ snapshots:
 
   pg-int8@1.0.1: {}
 
-  pg-pool@3.14.0(pg@8.23.0):
+  pg-pool@3.14.0(pg@8.23.1):
     dependencies:
-      pg: 8.23.0
+      pg: 8.23.1
 
   pg-protocol@1.16.1: {}
 
@@ -2306,10 +2311,10 @@ snapshots:
       postgres-date: 1.0.7
       postgres-interval: 1.2.0
 
-  pg@8.23.0:
+  pg@8.23.1:
     dependencies:
       pg-connection-string: 2.14.1
-      pg-pool: 3.14.0(pg@8.23.0)
+      pg-pool: 3.14.0(pg@8.23.1)
       pg-protocol: 1.16.1
       pg-types: 2.2.0
       pgpass: 1.0.5
@@ -2583,7 +2588,7 @@ snapshots:
     dependencies:
       safe-buffer: 5.2.1
 
-  stripe@22.6.2(@types/node@25.9.9):
+  stripe@23.0.0(@types/node@25.9.9):
     optionalDependencies:
       '@types/node': 25.9.9
 
