@@ -32,9 +32,9 @@ function barrelExports(surface: string): string[] {
 const exported = new Map(SURFACES.map((s) => [s, barrelExports(s)]));
 
 describe('exports contract', () => {
-  it('matches the pinned totals (0.1 graph 86 symbols + policy-registrar exports: 155 = 137 public / 3 moved / 15 replaced)', () => {
+  it('matches the pinned totals (0.1 graph 86 symbols + policy-registrar exports + StoreKit policy helpers: 161 = 143 public / 3 moved / 15 replaced)', () => {
     const by = (d: string) => contract.symbols.filter((s) => s.disposition === d).length;
-    expect([contract.symbols.length, by('public'), by('moved'), by('replaced')]).toEqual([155, 137, 3, 15]);
+    expect([contract.symbols.length, by('public'), by('moved'), by('replaced')]).toEqual([161, 143, 3, 15]);
   });
 
   it('exports every public symbol from its surface', () => {

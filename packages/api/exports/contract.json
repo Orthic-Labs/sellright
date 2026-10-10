@@ -1086,6 +1086,48 @@
       "kind": "interface",
       "disposition": "public",
       "surface": "http"
+    },
+    {
+      "module": "licensing/storekit-license",
+      "symbol": "issueStoreKitActivation",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "storekit"
+    },
+    {
+      "module": "licensing/storekit-license",
+      "symbol": "storeKitLicenseKey",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "storekit"
+    },
+    {
+      "module": "licensing/storekit-license",
+      "symbol": "VerifiedStoreKitLicenseSource",
+      "kind": "type",
+      "disposition": "public",
+      "surface": "storekit"
+    },
+    {
+      "module": "licensing/storekit-verify",
+      "symbol": "StoreKitTransactionPayload",
+      "kind": "type",
+      "disposition": "public",
+      "surface": "storekit"
+    },
+    {
+      "module": "licensing/storekit/default-policy",
+      "symbol": "sellrightRespond",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "storekit"
+    },
+    {
+      "module": "licensing/storekit/default-policy",
+      "symbol": "sourceFromTransaction",
+      "kind": "function",
+      "disposition": "public",
+      "surface": "storekit"
     }
   ]
 }

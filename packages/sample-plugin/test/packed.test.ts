@@ -112,6 +112,10 @@ describe('packed @sellright/api consumed by the sample plugin', () => {
     expect(result.policyRegistrars).toEqual({
       registerStoreKitPolicy: 'function',
       registerLockPlanContributor: 'function',
+      issueStoreKitActivation: 'function',
+      storeKitLicenseKey: 'function',
+      sellrightRespond: 'function',
+      sourceFromTransaction: 'function',
       registerEntitlementPolicy: 'function',
       registerPaymentPolicy: 'function',
       resolveRuntimeArtifactPromotion: 'function',

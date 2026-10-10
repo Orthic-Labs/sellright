@@ -3,7 +3,10 @@
  * PACKED `@sellright/api` tarball; `policyRegistrars` is read by the packed gate (test/boot.mjs).
  * Registration itself happens only in a plugin's `services`/`init`, never at import time.
  */
-import { registerLockPlanContributor, registerStoreKitPolicy, type StoreKitPolicy } from '@sellright/api/storekit';
+import {
+  issueStoreKitActivation, registerLockPlanContributor, registerStoreKitPolicy, sellrightRespond, sourceFromTransaction, storeKitLicenseKey,
+  type StoreKitPolicy, type StoreKitTransactionPayload, type VerifiedStoreKitLicenseSource,
+} from '@sellright/api/storekit';
 import {
   createLicenseRevocationFeed, registerEntitlementPolicy, resolveRuntimeArtifactPromotion, restoreLicenseInTx, revokeLicenseInTx,
   type EntitlementPolicy,
@@ -14,6 +17,10 @@ import type { ReleaseRegistrationPolicy } from '@sellright/api/http';
 export const policyRegistrars = {
   registerStoreKitPolicy,
   registerLockPlanContributor,
+  issueStoreKitActivation,
+  storeKitLicenseKey,
+  sellrightRespond,
+  sourceFromTransaction,
   registerEntitlementPolicy,
   registerPaymentPolicy,
   resolveRuntimeArtifactPromotion,
@@ -29,4 +36,6 @@ export type PolicyTypeProof = {
   payment: PaymentPolicy;
   capture: BeforeCaptureResult;
   release: ReleaseRegistrationPolicy;
+  storeKitSource: VerifiedStoreKitLicenseSource;
+  storeKitPayload: StoreKitTransactionPayload;
 };
