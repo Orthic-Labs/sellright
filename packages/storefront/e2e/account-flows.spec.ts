@@ -32,7 +32,7 @@ test.describe.serial('#19 account: register, verify, sign in', () => {
 		await startSignIn(page, email);
 		await page.locator('input[autocomplete="current-password"]').fill('not-the-password-1');
 		await page.getByRole('button', { name: /^sign in$/i }).click();
-		await expect(page.getByRole('alert').or(page.getByText(/invalid email or password/i)).first()).toBeVisible({ timeout: 10_000 });
+		await expect(page.getByRole('alert').or(page.getByText(/that email and password don.t match/i)).first()).toBeVisible({ timeout: 10_000 });
 		await expect(page).toHaveURL(/\/sign-in/);
 	});
 
