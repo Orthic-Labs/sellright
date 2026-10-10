@@ -33,6 +33,7 @@ import * as s from '../db/schema.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
 import { releaseOrderLoyalty } from '../loyalty/ledger.js';
 import { sweepStaleStripeIntents, sweepStaleBalanceIntents, sweepOrphanPreMints, discoverStaleUntrackedIntents, stripeDiscoverable } from '../payments/stripe-reconcile.js';
+import { release } from '../payments/reservation.js';
 
 export type ReleaseStaleOpts = { apply: boolean; ttlMin: number; log?: (m: string) => void; batchLimit?: number };
 
@@ -110,7 +111,7 @@ export async function releaseStaleAllocations(opts: ReleaseStaleOpts): Promise<{
     let storeReleased = 0;
     for (const orderId of ids) {
       try {
-        const res = await withLockedSet(st.id, { kind: 'order', orderId }, async (tx) => {
+        const res = await withLockedSet(st.id, { kind: 'order', orderId }, async (tx, held) => {
           const claimed = await tx.execute(
             sql`SELECT id, code, created_at FROM "order" WHERE id = ${orderId} AND ${stalePredicate(st.id, cutoff, requireDiscovery)}`,
           );
@@ -156,6 +157,8 @@ export async function releaseStaleAllocations(opts: ReleaseStaleOpts): Promise<{
             await tx.execute(sql`UPDATE "order" SET state = 'Cancelled', updated_at = now() WHERE id = ${orderId}`);
             // LOYALTY-1: an unpaid order that times out gives its reserved points back.
             await releaseOrderLoyalty(tx, st.id, orderId, 'system:reservation-expiry');
+            // PAYMENT-TIMING §5.2 (R3/R4): the claim above already excludes unresolved provider work; the call records the proof.
+            await release(tx, held, { storeId: st.id, orderId, reason: 'order_cancelled', stripeDiscoverable: requireDiscovery });
             await tx.insert(s.auditLog).values({
               storeId: st.id, actor: 'system:reservation-expiry', entity: 'order', entityId: orderId,
               action: 'cancel', fromState: 'PendingPayment', toState: 'Cancelled', data: { reason: 'stale_unpaid', ttlMin },

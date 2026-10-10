@@ -13,6 +13,7 @@ import { customerToken } from '../auth/session.js';
 import { GatewayPaymentError, ownedOrder } from '../payments/gateway-payment.js';
 import { bindStripePreMint, openStripePreMint, reconcileStripeOrder, claimReconcileSlot } from '../payments/stripe-reconcile.js';
 import { checkPaymentAttempt, PaymentPolicyUnavailableError, PaymentPolicyVetoError, runShapeSettlementResponse } from '../payments/policy/host.js';
+import { ReservationConflict } from '../payments/reservation.js';
 
 /** D13: the same ownership rule gateway-payment uses — a matching receipt
  *  token (x-receipt-token, returned by POST /checkout) or the signed-in
@@ -296,6 +297,7 @@ pay.openapi(
       if (e instanceof LockSetUnstable) return errJson(c, 409, 'PAYMENT_RETRY', 'payment is busy, retry shortly', { extra: { state: 'Retry' } });
       if (e instanceof PaymentPolicyVetoError) return errJson(c, 409, e.veto.code, e.veto.message, { extra: { state: e.veto.extra?.state ?? 'PolicyVeto' } });
       if (e instanceof PaymentPolicyUnavailableError) return errJson(c, 503, 'PAYMENT_POLICY_UNAVAILABLE', 'Payment is temporarily unavailable; retry shortly');
+      if (e instanceof ReservationConflict) return errJson(c, 409, 'RESERVATION_CONFLICT', 'an item in this order is reserved by another order', { extra: { state: 'ReservationConflict' } });
       throw e;
     });
   },

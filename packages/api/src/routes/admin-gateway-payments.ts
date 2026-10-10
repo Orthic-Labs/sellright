@@ -1,9 +1,11 @@
-import { OpenAPIHono } from '@hono/zod-openapi';
+import { OpenAPIHono, createRoute } from '@hono/zod-openapi';
 import { z } from 'zod';
 import { and, desc, eq, inArray, or, sql } from 'drizzle-orm';
 import { withAdvisoryLock, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
-import { guard, HttpError, requireAdmin, requireStore, requireWrite, requirePermission } from './admin-helpers.js';
+import { guard, HttpError, requireAdmin, requireStore, requireWrite, requirePermission, J, errBody } from './admin-helpers.js';
+import { withLockedSet } from '../db/locks.js';
+import { overrideRelease, ReservationRuleError } from '../payments/reservation.js';
 import { GatewayPaymentError, verifyGatewayAttempt } from '../payments/gateway-payment.js';
 import { listPaymentAlerts } from '../payments/payment-alerts.js';
 import { listEffectsNeedingAttention, requeueTerminalEffect } from '../payments/settlement/effects.js';
@@ -43,6 +45,49 @@ adminGatewayPayments.get('/v1/admin/payment-reconciliation', c => guard(c, async
   }));
   return c.json(result);
 }));
+
+// PAYMENT-TIMING §5.3 (3): operator override of a reservation held by a Cancelled order whose provider state is
+// unverified. Releases the order's held rows (released_unverified). Money that lands later follows I1.
+const OverrideReleaseBody = z.object({ reason: z.string().trim().min(10).max(500) });
+const OverrideReleaseResult = z.object({ released: z.number().int(), orderId: z.string().uuid(), reservationIds: z.array(z.string().uuid()) });
+adminGatewayPayments.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/payment-reconciliation/reservations/{id}/override-release',
+    summary: 'Operator override: release an order\'s held reservations while provider state is unverified (order must be Cancelled)',
+    request: { params: z.object({ id: z.string().uuid() }), body: { content: J(OverrideReleaseBody) } },
+    responses: {
+      200: { description: 'Released', content: J(OverrideReleaseResult) },
+      404: { description: 'Reservation not found', ...errBody },
+      409: { description: 'Order is not Cancelled, or nothing is held', ...errBody },
+      401: { description: 'Unauthorized', ...errBody },
+    },
+  }),
+  (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const store = requireStore(admin, c);
+    requireWrite(store);
+    requirePermission(store, 'refunds');
+    const { id } = c.req.valid('param');
+    const { reason } = c.req.valid('json');
+    const [row] = await withStore(store.storeId, (tx) => tx.select({ orderId: s.orderReservation.orderId })
+      .from(s.orderReservation).where(and(eq(s.orderReservation.id, id), eq(s.orderReservation.storeId, store.storeId))).limit(1));
+    if (!row) throw new HttpError(404, 'Reservation not found');
+    const released = await withLockedSet(store.storeId, { kind: 'order', orderId: row.orderId }, async (tx, held) => {
+      try {
+        return await overrideRelease(tx, held, { storeId: store.storeId, orderId: row.orderId, reason });
+      } catch (e) {
+        if (e instanceof ReservationRuleError) throw new HttpError(409, e.message);
+        throw e;
+      }
+    });
+    if (!released.length) throw new HttpError(409, 'No held reservation to release on this order');
+    await withStore(store.storeId, (tx) => tx.insert(s.auditLog).values({
+      storeId: store.storeId, actor: admin.email, entity: 'order', entityId: row.orderId, action: 'reservation_override_release',
+      data: { reservationIds: released.map((r) => r.id), reason: reason.trim() },
+    }));
+    return c.json({ released: released.length, orderId: row.orderId, reservationIds: released.map((r) => r.id) }, 200);
+  }),
+);
 
 adminGatewayPayments.post('/v1/admin/payment-reconciliation/effects/:id/retry', c => guard(c, async () => {
   const { admin } = await requireAdmin(c);

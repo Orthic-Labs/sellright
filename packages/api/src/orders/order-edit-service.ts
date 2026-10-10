@@ -19,6 +19,7 @@ import { and, asc, desc, eq, gte, ilike, inArray, isNull, lte, or, sql } from 'd
 import { withAdvisoryLock, withStore, type Tx } from '../db/client.js';
 import { LockSetUnstable, orderIdByCode, withLockedSet } from '../db/locks.js';
 import { checkPlacement } from '../payments/policy/host.js';
+import { PaymentPolicyUnavailableError, PaymentPolicyVetoError } from '../payments/policy/registry.js';
 import * as s from '../db/schema.js';
 import { hasConfirmableIntent, hasUnresolvedPayment } from '../payments/hold.js';
 import { cancelOrderStripeIntents } from '../payments/stripe-reconcile.js';
@@ -646,7 +647,14 @@ export async function commitOrderEdit(input: CommitInput): Promise<CommitResult>
       if (settlement?.type === 'record_payment') {
         const amount = settlement.amount ?? balance;
         // PAYMENT-TIMING §4.6: the placement hook for an edit-recorded tender (provider 'manual') runs before the tender.
-        await checkPlacement(tx, storeId, { id: o.id, storeId, code: o.code, state: o.state, currency: o.currency, grandTotal: t.grandTotal, customerId: o.customerId, metadata: o.metadata }, 'manual');
+        try {
+          await checkPlacement(tx, storeId, { id: o.id, storeId, code: o.code, state: o.state, currency: o.currency, grandTotal: t.grandTotal, customerId: o.customerId, metadata: o.metadata }, 'manual');
+        } catch (e) {
+          // PAYMENT-TIMING §3.6: a placement veto rolls the edit back (the throw aborts this tx); it surfaces as 409 with the veto's code.
+          if (e instanceof PaymentPolicyVetoError) throw new OrderEditError(409, e.veto.code, e.veto.message, e.veto.extra);
+          if (e instanceof PaymentPolicyUnavailableError) throw new OrderEditError(503, 'PAYMENT_POLICY_UNAVAILABLE', 'payment is temporarily unavailable, retry shortly');
+          throw e;
+        }
         const r = await applyPaymentResult(tx, {
           storeId, method: 'manual', amount, editId,
           order: { id: o.id, state: o.state, grandTotal: t.grandTotal, currency: o.currency, customerId: o.customerId, code: o.code },

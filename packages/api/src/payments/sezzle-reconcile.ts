@@ -23,6 +23,7 @@ import { emitEvent } from '../webhooks/emit.js';
 import { resolveGatewayAccount, type GatewayMode } from './gateway-account.js';
 import { sezzleProvider, type SezzleOrder } from './sezzle.js';
 import { finalizeRefund, enqueueRefundSettledEmail, RefundError, orderRefundBasis, refundStateFromBasis } from './refunds.js';
+import { releaseOnFullRefundInSet } from './reservation.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -173,5 +174,7 @@ async function recomputeOrderRefundState(tx: Tx, storeId: string, orderId: strin
   if (canTransition(ord.state as OrderState, target)) {
     await tx.update(s.order).set({ state: target, updatedAt: new Date() }).where(eq(s.order.id, orderId));
   }
+  // PAYMENT-TIMING §3.3 R5 (R2-6): a full refund releases consumed holds that asked for it.
+  if (target === 'Refunded') await releaseOnFullRefundInSet(tx, { storeId, orderId });
   await emitEvent(tx, storeId, 'order.refunded', { code: ord.code, amount: refunded, state: target, source: 'sezzle_dashboard' });
 }

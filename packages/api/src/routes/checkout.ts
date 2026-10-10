@@ -30,6 +30,7 @@ import { cartResponse, CartOut } from './cart.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
 import { checkPlacement } from '../payments/policy/host.js';
 import { PaymentPolicyUnavailableError, PaymentPolicyVetoError } from '../payments/policy/registry.js';
+import { ReservationConflict } from '../payments/reservation.js';
 import type { PolicyOrder, PolicyVeto } from '../payments/policy/types.js';
 
 /**
@@ -234,7 +235,7 @@ checkout.openapi(
 
     const fingerprint = checkoutFingerprint(body);
 
-    type Result = { blocked: string[] } | { shippingError: string } | { cartError: string } | { legalError: string } | { loyaltyError: RedeemRejection } | { policyVeto: PolicyVeto } | { policyUnavailable: true } | { cartConflict: { code: 'stale' | 'revision_required'; snapshot: z.infer<typeof CartOut> } } | { fingerprintConflict: true } | { lockRetry: true } | { code: string; state: string; grandTotal: number; discountTotal: number; couponApplied: boolean; replay?: boolean; giftCardApplied?: number; receiptToken: string; pointsRedeemed?: number; pointsDiscount?: number };
+    type Result = { blocked: string[] } | { shippingError: string } | { cartError: string } | { legalError: string } | { loyaltyError: RedeemRejection } | { policyVeto: PolicyVeto } | { policyUnavailable: true } | { reservationConflict: true } | { cartConflict: { code: 'stale' | 'revision_required'; snapshot: z.infer<typeof CartOut> } } | { fingerprintConflict: true } | { lockRetry: true } | { code: string; state: string; grandTotal: number; discountTotal: number; couponApplied: boolean; replay?: boolean; giftCardApplied?: number; receiptToken: string; pointsRedeemed?: number; pointsDiscount?: number };
     // Zero-cache stock rule: set true only by a reserveStockOrThrow call whose
     // surrounding transaction actually reaches COMMIT. Every path below that
     // aborts the transaction (idempotency replay via unique-violation,
@@ -712,6 +713,8 @@ checkout.openapi(
       // PAYMENT-TIMING §3.6: a placement veto rolled the whole checkout back; the request is refused, statelessly.
       if (e instanceof PaymentPolicyVetoError) return { policyVeto: e.veto };
       if (e instanceof PaymentPolicyUnavailableError) return { policyUnavailable: true };
+      // PAYMENT-TIMING §3.3 R1: the reservation is held by another live order, or released for this one.
+      if (e instanceof ReservationConflict) return { reservationConflict: true };
       throw e;
     });
     // Fire AFTER the transaction that actually reserved stock has committed —
@@ -724,6 +727,7 @@ checkout.openapi(
     if ('loyaltyError' in out) return errJson(c, 409, 'LOYALTY_REDEEM_FAILED', 'points could not be redeemed', { extra: { reason: out.loyaltyError } });
     if ('policyVeto' in out) return errJson(c, 409, out.policyVeto.code, out.policyVeto.message, { extra: { state: out.policyVeto.extra?.state ?? out.policyVeto.code } });
     if ('policyUnavailable' in out) return errJson(c, 409, 'PAYMENT_POLICY_UNAVAILABLE', 'payment is temporarily unavailable, retry shortly');
+    if ('reservationConflict' in out) return errJson(c, 409, 'RESERVATION_CONFLICT', 'an item in this order is reserved by another order');
     if ('blocked' in out) return errJson(c, 409, 'OUT_OF_STOCK', 'unavailable or out of stock', { extra: { skus: out.blocked } });
     if ('lockRetry' in out) return errJson(c, 409, 'CHECKOUT_RETRY', 'checkout is busy, retry shortly');
     if ('fingerprintConflict' in out) return errJson(c, 409, 'IDEMPOTENCY_PAYLOAD_MISMATCH', 'idempotency-key was already used with a different payload', { extra: { reason: 'payload_mismatch' } });

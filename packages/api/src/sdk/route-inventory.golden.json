@@ -1,5 +1,5 @@
 {
-  "count": 327,
+  "count": 328,
   "routes": [
     "DELETE /v1/admin/assets/{id}",
     "DELETE /v1/admin/blog/{id}",
@@ -243,6 +243,7 @@
     "POST /v1/admin/payment-reconciliation/effects/{id}/retry",
     "POST /v1/admin/payment-reconciliation/events/{id}/retry",
     "POST /v1/admin/payment-reconciliation/orders/{code}/stripe-reconcile",
+    "POST /v1/admin/payment-reconciliation/reservations/{id}/override-release",
     "POST /v1/admin/payments/settings/{provider}/{mode}/verify",
     "POST /v1/admin/payments/settings/stripe/{mode}/webhook",
     "POST /v1/admin/products",

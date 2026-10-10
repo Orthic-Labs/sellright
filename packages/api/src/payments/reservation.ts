@@ -14,7 +14,7 @@
 // R6 (operator override, released_unverified) is an admin-route concern and is not here.
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { withStore, type Tx } from '../db/client.js';
-import type { HeldLocks } from '../db/locks.js';
+import { withLockedSetInTx, type HeldLocks } from '../db/locks.js';
 import * as s from '../db/schema.js';
 import { dispatchReservationTransitions } from './policy/transitions.js';
 import { PaymentPolicyUnavailableError } from './policy/registry.js';
@@ -359,6 +359,64 @@ export async function releaseOnFullRefund(
     .returning();
   await dispatchReservationTransitions(tx, released, 'consumed', 'released', 'order_refunded');
   return released;
+}
+
+/**
+ * R5 at a refund that moved the order to Refunded (X-45): the refund records money the provider already
+ * moved, so a failing projection must NOT abort it. The release runs in its own savepoint; a
+ * PaymentPolicyUnavailableError rolls the release back, keeps the rows `consumed`, marks them with
+ * release_requested_at (so the reservation-release sweep retries), and audits the failure with an admin
+ * task. Other errors still abort the caller's transaction.
+ */
+export async function releaseOnFullRefundOrDefer(
+  tx: Tx,
+  held: HeldLocks,
+  input: { storeId: string; orderId: string; refundId?: string | null },
+): Promise<{ released: ReservationRow[]; deferred: boolean }> {
+  await tx.execute(sql`SAVEPOINT reservation_r5`);
+  try {
+    const released = await releaseOnFullRefund(tx, held, input);
+    await tx.execute(sql`RELEASE SAVEPOINT reservation_r5`);
+    return { released, deferred: false };
+  } catch (e) {
+    await tx.execute(sql`ROLLBACK TO SAVEPOINT reservation_r5`);
+    await tx.execute(sql`RELEASE SAVEPOINT reservation_r5`);
+    if (!(e instanceof PaymentPolicyUnavailableError)) throw e;
+    const deferred = await tx.update(s.orderReservation)
+      .set({
+        releaseRequestedAt: sql`coalesce(${s.orderReservation.releaseRequestedAt}, now())`,
+        releaseReason: sql`coalesce(${s.orderReservation.releaseReason}, 'order_refunded')`,
+        updatedAt: sql`now()`,
+      })
+      .where(and(eq(s.orderReservation.storeId, input.storeId), eq(s.orderReservation.orderId, input.orderId),
+        eq(s.orderReservation.state, 'consumed'), eq(s.orderReservation.releaseOnFullRefund, true)))
+      .returning({ id: s.orderReservation.id });
+    if (deferred.length) {
+      const detail = `release of ${deferred.length} reservation(s) deferred after a refund: projection unavailable; the sweep retries`;
+      await tx.insert(s.auditLog).values({
+        storeId: input.storeId, actor: 'system:policy', entity: 'order', entityId: input.orderId,
+        action: 'reservation_projection_failed',
+        data: { cause: 'order_refunded', refundId: input.refundId ?? null, reservationIds: deferred.map((r) => r.id) },
+      });
+      await tx.insert(s.auditLog).values({
+        storeId: input.storeId, actor: 'system:policy', entity: 'order', entityId: input.orderId,
+        action: 'policy_admin_task',
+        data: { title: 'Reservation release pending after refund', detail, code: 'reservation_projection_failed' },
+      });
+    }
+    return { released: [], deferred: true };
+  }
+}
+
+/**
+ * R5 for a refund path whose transaction already runs under the order's lock set (finalizeRefund's contract,
+ * the webhook and sezzle reconcilers): passes through that set, or takes it for this transaction.
+ */
+export async function releaseOnFullRefundInSet(
+  tx: Tx,
+  input: { storeId: string; orderId: string; refundId?: string | null },
+): Promise<{ released: ReservationRow[]; deferred: boolean }> {
+  return withLockedSetInTx(tx, input.storeId, { kind: 'order', orderId: input.orderId }, (t, held) => releaseOnFullRefundOrDefer(t, held, input));
 }
 
 /**

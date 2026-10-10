@@ -12,6 +12,7 @@ import { normalizeEmail } from '../auth/email.js';
 import { onStockChanged } from '../manifest/stock-hook.js';
 import { reconcileRefundLoyalty } from '../loyalty/ledger.js';
 import { isEditRefund } from './edit-refund.js';
+import { releaseOnFullRefundInSet } from './reservation.js';
 
 export class RefundError extends Error {
   constructor(public status: 400 | 404 | 409 | 503, message: string) { super(message); }
@@ -299,6 +300,8 @@ export async function finalizeRefund(tx: Tx, storeId: string, attemptId: string,
     : isEditRefund(refund.metadata) && refunded < captured ? null
     : refunded >= captured ? 'Refunded' : 'PartiallyRefunded';
   await tx.update(s.order).set({ updatedAt: new Date(), ...(state ? { state } : {}) }).where(eq(s.order.id, order.id));
+  // PAYMENT-TIMING §3.3 R5: a full refund releases the consumed holds that asked for it (deferred, not aborted, on a projection failure).
+  if (state === 'Refunded') await releaseOnFullRefundInSet(tx, { storeId, orderId: order.id, refundId: refund.id });
   if (details?.returnId) await tx.update(s.returnRequest).set({ status: 'refunded', refundId: refund.id, updatedAt: new Date() })
     .where(and(eq(s.returnRequest.id, details.returnId), eq(s.returnRequest.orderId, order.id)));
   await tx.update(s.refund).set({ metadata: { ...details, effectsApplied: true } }).where(eq(s.refund.id, refund.id));
