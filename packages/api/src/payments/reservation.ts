@@ -17,6 +17,8 @@ import { withStore, type Tx } from '../db/client.js';
 import type { HeldLocks } from '../db/locks.js';
 import * as s from '../db/schema.js';
 import { dispatchReservationTransitions } from './policy/transitions.js';
+import { PaymentPolicyUnavailableError } from './policy/registry.js';
+import { err as logErr } from '../lib/logger.js';
 
 export type ReservationRow = typeof s.orderReservation.$inferSelect;
 export type ReservationState = 'held' | 'consumed' | 'released';
@@ -163,6 +165,7 @@ export async function reserve(
 async function consumeCore(
   tx: Tx,
   input: { storeId: string; orderId: string; paymentId: string | null; operationId: string },
+  opts: { isolateProjection?: boolean } = {},
 ): Promise<ReservationRow[]> {
   const state = await orderState(tx, input.storeId, input.orderId);
   if (!(CONSUMABLE_STATES as readonly string[]).includes(state)) {
@@ -181,7 +184,24 @@ async function consumeCore(
     .where(and(eq(s.orderReservation.storeId, input.storeId), eq(s.orderReservation.orderId, input.orderId),
       eq(s.orderReservation.state, 'held')))
     .returning();
-  await dispatchReservationTransitions(tx, consumed, 'held', 'consumed', 'consumed');
+  if (!opts.isolateProjection) {
+    await dispatchReservationTransitions(tx, consumed, 'held', 'consumed', 'consumed');
+    return consumed;
+  }
+  // Settlement records money the provider already moved (X-45): it must commit. R2 leaves the rollback
+  // projection unchanged (§3.3), so a failing projection is rolled back to its own savepoint (inSavepoint),
+  // logged and audited, and the settlement proceeds.
+  try {
+    await dispatchReservationTransitions(tx, consumed, 'held', 'consumed', 'consumed');
+  } catch (e) {
+    if (!(e instanceof PaymentPolicyUnavailableError)) throw e;
+    logErr.error('reservation consume projection failed; settlement continues', e, { orderId: input.orderId, operationId: input.operationId });
+    await tx.insert(s.auditLog).values({
+      storeId: input.storeId, actor: 'system:policy', entity: 'order', entityId: input.orderId,
+      action: 'reservation_projection_failed',
+      data: { cause: 'consumed', operationId: input.operationId, reservationIds: consumed.map((r) => r.id) },
+    });
+  }
   return consumed;
 }
 
@@ -216,7 +236,7 @@ export async function consumeForSettlement(
   const [o] = await tx.select({ state: s.order.state }).from(s.order)
     .where(and(eq(s.order.id, input.orderId), eq(s.order.storeId, input.storeId))).limit(1).for('update');
   if (!o || !(CONSUMABLE_STATES as readonly string[]).includes(o.state)) return [];
-  return consumeCore(tx, input);
+  return consumeCore(tx, input, { isolateProjection: true });
 }
 
 /** R3: a cancel path asked to release. Records the request; effective only through settleRelease. */

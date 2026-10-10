@@ -178,13 +178,17 @@ describe('reservation transitions are projected (PAYMENT-TIMING §3.3)', () => {
     expect(transitions).toEqual([expect.objectContaining({ from: 'held', to: 'consumed', cause: 'consumed' })]);
   });
 
-  it('a stale projection failure during consume rolls the consume back (no held→consumed without its projection)', async () => {
+  it('a projection failure during settlement consume never aborts the settlement (X-45): consumed, audited', async () => {
     await underOrderSet(O_PAID, (tx, held) => reserve(tx, held, { storeId: STORE, orderId: O_PAID, kind: KIND, ownerKey: 'c-2' }));
     registerPaymentPolicy(recorder);
     projectionFails = true;
-    await expect(withStore(STORE, (tx) => consumeForSettlement(tx, { storeId: STORE, orderId: O_PAID, paymentId: null, operationId: 'op-consume-2' })))
-      .rejects.toBeInstanceOf(PaymentPolicyUnavailableError);
-    expect((await reservationsOf(O_PAID))[0]!.state).toBe('held');
+    // consume leaves the rollback projection unchanged (§3.3 R2), so the money-recording tx must still commit
+    const out = await withStore(STORE, (tx) => consumeForSettlement(tx, { storeId: STORE, orderId: O_PAID, paymentId: null, operationId: 'op-consume-2' }));
+    expect(out).toHaveLength(1);
+    expect((await reservationsOf(O_PAID))[0]!.state).toBe('consumed');
+    const audit = await withStore(STORE, (tx) => tx.execute(sql`SELECT action, data FROM audit_log WHERE entity_id = ${O_PAID} AND action = 'reservation_projection_failed'`));
+    expect(audit.rows).toHaveLength(1);
+    expect(audit.rows[0]).toMatchObject({ data: { cause: 'consumed', operationId: 'op-consume-2' } });
   });
 
   it('a cancelled order\'s requested release is projected as order_cancelled', async () => {
