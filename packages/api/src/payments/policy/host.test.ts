@@ -9,11 +9,14 @@ vi.mock('../../db/locks.js', async (importOriginal) => ({ ...(await importOrigin
 
 import {
   PaymentPolicyCompositionError, PaymentPolicyUnavailableError, PaymentPolicyVetoError, _resetPaymentPoliciesForTests, registerPaymentPolicy,
-  registeredPaymentPolicies, runAuthorizeInvoiceEffect, runBeforePaymentAttempt, runRevalidateForIssuance, runShapeSettlementResponse,
+  registeredPaymentPolicies, runAuthorizeInvoiceEffect, runBeforePaymentAttempt, runEntitlementReversal, runRevalidateForIssuance,
+  runShapeSettlementResponse,
 } from './host.js';
 import { dispatchReservationTransition } from './transitions.js';
 import { SELLRIGHT_DEFAULT_POLICY_ID, installDefaultPaymentPolicy } from './default-policy.js';
-import type { AuthorizeInvoiceEffectInput, BeforePaymentAttemptInput, PaymentPolicy, RevalidateForIssuanceInput } from './types.js';
+import type {
+  AuthorizeInvoiceEffectInput, BeforePaymentAttemptInput, EntitlementReversalInput, PaymentPolicy, RevalidateForIssuanceInput,
+} from './types.js';
 
 const dialect = new PgDialect();
 const executed: string[] = [];
@@ -110,6 +113,28 @@ describe('composition of the new hooks (pure)', () => {
     expect((err as PaymentPolicyCompositionError).policyIds).toEqual(['first', 'second']);
   });
 
+  it('issuance metadata patches merge in registration order; no patch keeps the default ok result', async () => {
+    expect(await runRevalidateForIssuance(fakeTx, { held: {} as HeldLocks } as RevalidateForIssuanceInput)).toEqual({ ok: true });
+    registerPaymentPolicy({ id: 'p1', async beforePaymentAttempt() { return { allow: true }; }, async revalidateForIssuance() { return { ok: true, metadataPatch: { a: 1 } }; } });
+    registerPaymentPolicy({ id: 'p2', async beforePaymentAttempt() { return { allow: true }; }, async revalidateForIssuance() { return { ok: true }; } });
+    registerPaymentPolicy({ id: 'p3', async beforePaymentAttempt() { return { allow: true }; }, async revalidateForIssuance() { return { ok: true, metadataPatch: { b: 'x' } }; } });
+    expect(await runRevalidateForIssuance(fakeTx, { held: {} as HeldLocks } as RevalidateForIssuanceInput)).toEqual({ ok: true, metadataPatch: { a: 1, b: 'x' } });
+  });
+
+  it('the same metadata key patched by two policies is a composition error', async () => {
+    registerPaymentPolicy({ id: 'p1', async beforePaymentAttempt() { return { allow: true }; }, async revalidateForIssuance() { return { ok: true, metadataPatch: { k: 1 } }; } });
+    registerPaymentPolicy({ id: 'p2', async beforePaymentAttempt() { return { allow: true }; }, async revalidateForIssuance() { return { ok: true, metadataPatch: { k: 2 } }; } });
+    const err = await runRevalidateForIssuance(fakeTx, { held: {} as HeldLocks } as RevalidateForIssuanceInput).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(PaymentPolicyCompositionError);
+    expect((err as PaymentPolicyCompositionError).policyIds).toEqual(['p1', 'p2']);
+  });
+
+  it('a failed issuance revalidation wins over patches from earlier policies', async () => {
+    registerPaymentPolicy({ id: 'p1', async beforePaymentAttempt() { return { allow: true }; }, async revalidateForIssuance() { return { ok: true, metadataPatch: { k: 1 } }; } });
+    registerPaymentPolicy({ id: 'p2', async beforePaymentAttempt() { return { allow: true }; }, async revalidateForIssuance() { return { ok: false, code: 'NOPE' }; } });
+    expect(await runRevalidateForIssuance(fakeTx, { held: {} as HeldLocks } as RevalidateForIssuanceInput)).toEqual({ ok: false, code: 'NOPE' });
+  });
+
   it('a terminal invoice decision wins in registration order; the default is apply', async () => {
     const seen: string[] = [];
     registerPaymentPolicy({ id: 'ok', async beforePaymentAttempt() { return { allow: true }; }, async authorizeInvoiceEffect() { seen.push('ok'); return { decision: 'apply' }; } });
@@ -148,3 +173,36 @@ describe('composition of the new hooks (pure)', () => {
   });
 });
 
+
+describe('entitlement reversal hook (pure)', () => {
+  const reversal = { storeId: 's1', orderId: 'o1', reason: 'full_refund', operationId: 'o1', held: {} as HeldLocks } as EntitlementReversalInput;
+
+  it('an absent hook is a no-op: no savepoint, no error (standalone SellRight behaviour)', async () => {
+    registerPaymentPolicy(allow('plain', []));
+    await expect(runEntitlementReversal(fakeTx, reversal)).resolves.toBeUndefined();
+    expect(executed).toEqual([]);
+  });
+
+  it('calls every registered policy in registration order, each inside its own savepoint', async () => {
+    const calls: string[] = [];
+    const hook = (id: string): PaymentPolicy => ({
+      id, async beforePaymentAttempt() { return { allow: true }; },
+      async onEntitlementReversal(_tx, i) { calls.push(`${id}:${i.reason}:${i.operationId}`); },
+    });
+    registerPaymentPolicy(hook('first'));
+    registerPaymentPolicy(allow('plain', []));
+    registerPaymentPolicy(hook('second'));
+    await runEntitlementReversal(fakeTx, reversal);
+    expect(calls).toEqual(['first:full_refund:o1', 'second:full_refund:o1']);
+    expect(executed.filter((q) => q.includes('SAVEPOINT policy_hook')).length).toBe(4);
+  });
+
+  it('a throwing hook surfaces as unavailable and the savepoint is rolled back', async () => {
+    registerPaymentPolicy({
+      id: 'broken', async beforePaymentAttempt() { return { allow: true }; },
+      async onEntitlementReversal() { throw new Error('boom'); },
+    });
+    await expect(runEntitlementReversal(fakeTx, reversal)).rejects.toBeInstanceOf(PaymentPolicyUnavailableError);
+    expect(executed.some((q) => q.includes('ROLLBACK TO SAVEPOINT policy_hook'))).toBe(true);
+  });
+});

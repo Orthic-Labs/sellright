@@ -13,6 +13,7 @@
 //   onReservationTransition    payments/reservation.ts (every reservation state change)
 //   shapeSettlementResponse    routes/pay.ts (response shaping only, after money is recorded)
 //   lockPlan                   db/locks.ts (STOREKIT §5.3 plan contributor)
+//   onEntitlementReversal      payments/settlement/handlers.ts (entitlement_reversal effect, worker; full refund or lost chargeback)
 import type { Tx } from '../../db/client.js';
 import type { HeldLocks, LockPlanContribution, LockSubject } from '../../db/locks.js';
 import type { ReservationRow } from '../reservation.js';
@@ -137,8 +138,14 @@ export interface RevalidateForIssuanceInput {
   readonly held: HeldLocks;
 }
 
+/**
+ * `ok: true` may carry `metadataPatch`: a shallow patch merged into the metadata of every licence the order
+ * has once the issuance runs, in the same transaction, under the order's lock set. Patches from several
+ * policies merge in registration order; the same key from two policies is a PaymentPolicyCompositionError.
+ * `ok: false` blocks issuance before any licence row is written; `audit` (when present) is recorded.
+ */
 export type RevalidateForIssuanceResult =
-  | { readonly ok: true }
+  | { readonly ok: true; readonly metadataPatch?: Readonly<Record<string, unknown>> }
   | { readonly ok: false; readonly code: string; readonly audit?: { readonly action: string; readonly data: Record<string, unknown> } };
 
 /** A reservation state change, delivered to projections in the transaction that made it (PAYMENT-TIMING §3.3). */
@@ -221,6 +228,23 @@ export interface CheckoutReplayInput {
   readonly held: HeldLocks;
 }
 
+/** Why an order's entitlement is being reversed (the order is Refunded, or a chargeback was lost). */
+export type EntitlementReversalReason = 'full_refund' | 'chargeback';
+
+/**
+ * Entitlement reversal for an order whose money was fully returned or lost to a chargeback (worker effect).
+ * `operationId` is the settlement operation fact (the order id for a full refund, the dispute id for a chargeback).
+ * Runs in the effects worker under the order's lock set, never in the recording transaction.
+ */
+export interface EntitlementReversalInput {
+  readonly storeId: string;
+  readonly orderId: string;
+  readonly reason: EntitlementReversalReason;
+  readonly operationId: string;
+  /** The order's lock set, held on the effect's transaction. */
+  readonly held: HeldLocks;
+}
+
 export interface PaymentPolicy {
   /** Unique registration id (e.g. 'sellright-default', 'rightsuite'). */
   readonly id: string;
@@ -251,6 +275,8 @@ export interface PaymentPolicy {
   onReservationTransition?(tx: Tx, t: ReservationTransition): Promise<void>;
   /** Optional response shaping for /pay, after the money is recorded. Must not write. */
   shapeSettlementResponse?(tx: Tx, i: SettlementResponseInput): Promise<SettlementResponseOverride | null>;
+  /** Optional: absent means no reversal. Runs in the effects worker under the order's lock set; a throw is a bounded retry, then terminal. */
+  onEntitlementReversal?(tx: Tx, i: EntitlementReversalInput): Promise<void>;
   /** Optional plan contributor for the lock set (STOREKIT §5.3). Read-only. */
   lockPlan?(tx: Tx, subject: LockSubject): Promise<LockPlanContribution>;
 }

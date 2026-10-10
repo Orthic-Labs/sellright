@@ -1208,6 +1208,20 @@
     },
     {
       "module": "payments/policy/types",
+      "symbol": "EntitlementReversalInput",
+      "kind": "interface",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/types",
+      "symbol": "EntitlementReversalReason",
+      "kind": "type",
+      "disposition": "public",
+      "surface": "payments"
+    },
+    {
+      "module": "payments/policy/types",
       "symbol": "CheckoutExtensionSchema",
       "kind": "interface",
       "disposition": "public",
