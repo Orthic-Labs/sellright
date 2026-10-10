@@ -52,6 +52,9 @@ export default component$(() => {
 		document.head.appendChild(script);
 	});
 
+	// Ready = the same required fields handleSubmit checks.
+	const contactReady = name.value.trim().length > 0 && email.value.trim().length > 0 && message.value.trim().length > 0;
+
 	const handleSubmit = $(async () => {
 		if (!name.value.trim() || !email.value.trim() || !message.value.trim()) {
 			errorMessage.value = 'Please fill in all required fields.';
@@ -170,7 +173,8 @@ export default component$(() => {
 										<button
 											onClick$={handleSubmit}
 											disabled={formState.value === 'sending'}
-											class="w-full bg-[var(--color-accent)] text-white py-3 px-6 rounded text-sm font-medium uppercase tracking-widest font-['IBM_Plex_Sans'] hover:bg-[#a06529] active:scale-[0.96] transition-colors disabled:opacity-50"
+											aria-disabled={contactReady ? 'false' : 'true'}
+											class="btn-ready w-full bg-[var(--color-accent)] text-white py-3 px-6 rounded text-sm font-medium uppercase tracking-widest font-['IBM_Plex_Sans'] hover:bg-[#a06529] active:scale-[0.96] transition-colors"
 										>
 											{formState.value === 'sending' ? 'Sending...' : 'Send Message'}
 										</button>

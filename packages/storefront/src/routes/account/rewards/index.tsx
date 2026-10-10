@@ -117,8 +117,9 @@ export default component$(() => {
 							</label>
 							<button
 								type="submit"
-								class="px-4 py-2 text-sm font-medium text-white bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] min-h-[44px] disabled:opacity-60"
+								class="btn-ready px-4 py-2 text-sm font-medium text-white bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] min-h-[44px]"
 								disabled={saving.value}
+								aria-disabled={month.value > 0 && day.value > 0 ? 'false' : 'true'}
 							>
 								{saving.value ? 'Saving…' : 'Save birthday'}
 							</button>

@@ -33,6 +33,9 @@ export const useLegacyRedirects = routeLoader$(({ url, redirect }) => {
                 }
                 throw redirect(301, '/track-order');
         }
+}, {
+        // Qwik Router 2.0.0-rc: loaders only see allow-listed search params.
+        search: ['orderCode', 'trackOrder', 'email'],
 });
 
 export const head = createSEOHead({

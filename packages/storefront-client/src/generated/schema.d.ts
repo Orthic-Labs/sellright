@@ -14715,6 +14715,7 @@ export interface paths {
                     "application/json": {
                         /** Format: email */
                         email: string;
+                        turnstileToken?: string;
                     };
                 };
             };
@@ -14728,6 +14729,15 @@ export interface paths {
                         "application/json": {
                             ok: boolean;
                         };
+                    };
+                };
+                /** @description Bot check failed */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
                     };
                 };
                 /** @description Not enabled */

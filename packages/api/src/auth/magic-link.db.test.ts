@@ -20,7 +20,7 @@
  *
  * Runs against a *_test DB only (TRUNCATEs store CASCADE).
  */
-import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { createHash } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
@@ -31,6 +31,12 @@ import { invalidateStoreCache } from '../store-context.js';
 import { auth } from '../routes/auth.js';
 import { shopConfig } from '../routes/shop-config.js';
 import { mintMagicLink } from './magic-link.js';
+import { verifyTurnstileToken } from '../security/turnstile.js';
+
+// Turnstile seam: the verifier is mocked so these tests exercise the magic-link gate itself. A token of 'good' passes.
+vi.mock('../security/turnstile.js', () => ({
+  verifyTurnstileToken: vi.fn(async ({ token }: { token: string | null }) => token === 'good'),
+}));
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
 if (!/_test(\b|$|\?)/.test(DB)) {
@@ -225,5 +231,54 @@ describe('GET /v1/shop/config advertises whether sign-in links are on', () => {
   it('is true for a store that enabled it and false for one that did not', async () => {
     expect(await flag(SLUG_ON)).toBe(true);
     expect(await flag(SLUG_OFF)).toBe(false);
+  });
+});
+
+describe('POST /v1/shop/auth/magic-link/request — Turnstile gate', () => {
+  const withTurnstile = async () => {
+    await pool.query(
+      `UPDATE store SET config = config || $2::jsonb WHERE id = $1`,
+      [STORE_ON2, JSON.stringify({ turnstileSecretKey: 'test-secret' })],
+    );
+    invalidateStoreCache();
+  };
+  const reqWith = (slug: string, email: string, turnstileToken?: string) =>
+    app.request('/v1/shop/auth/magic-link/request', { method: 'POST', headers: hdr(slug), body: JSON.stringify({ email, turnstileToken }) });
+
+  it('refuses a request without a token when the store has Turnstile configured, and sends nothing', async () => {
+    await seedCustomer(STORE_ON2, 'ts-none@a.test');
+    await withTurnstile();
+    vi.mocked(verifyTurnstileToken).mockClear();
+    const res = await reqWith(SLUG_ON2, 'ts-none@a.test');
+    expect(res.status).toBe(403);
+    expect((await res.json() as { error: { code: string } }).error.code).toBe('BOT_CHECK_FAILED');
+    expect(vi.mocked(verifyTurnstileToken)).toHaveBeenCalledTimes(1);
+    expect(await outbox(STORE_ON2)).toHaveLength(0);
+  });
+
+  it('refuses an invalid token the same way', async () => {
+    await seedCustomer(STORE_ON2, 'ts-bad@a.test');
+    await withTurnstile();
+    const res = await reqWith(SLUG_ON2, 'ts-bad@a.test', 'forged');
+    expect(res.status).toBe(403);
+    expect(await outbox(STORE_ON2)).toHaveLength(0);
+  });
+
+  it('accepts a valid token and sends the link as before', async () => {
+    await seedCustomer(STORE_ON2, 'ts-good@a.test');
+    await withTurnstile();
+    const res = await reqWith(SLUG_ON2, 'ts-good@a.test', 'good');
+    expect(res.status).toBe(200);
+    expect(await outbox(STORE_ON2)).toHaveLength(1);
+  });
+
+  it('a store without Turnstile configured never calls the verifier and ignores the token field', async () => {
+    await seedCustomer(STORE_ON, 'ts-off@a.test');
+    vi.mocked(verifyTurnstileToken).mockClear();
+    const noToken = await req(SLUG_ON, 'ts-off@a.test');
+    const withToken = await reqWith(SLUG_ON, 'ts-off@a.test', 'anything');
+    expect(noToken.status).toBe(200);
+    expect(withToken.status).toBe(200);
+    expect(vi.mocked(verifyTurnstileToken)).not.toHaveBeenCalled();
   });
 });

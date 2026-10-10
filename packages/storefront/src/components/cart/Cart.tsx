@@ -185,6 +185,9 @@ export default component$(() => {
 		}, dropdownState.DEBOUNCE_DELAY);
 	});
 
+	// Ready = at least one line, shipping method + country chosen, and in stock. Mirrors the old disabled conditions.
+	const cartCheckoutReady = cartState.cart.lines.length > 0 && !!shippingState.selectedMethod && !!appState.shippingAddress.countryCode && !isOutOfStock.value;
+
 	return (
 		<div>
 			{appState.showCart && (
@@ -364,12 +367,10 @@ export default component$(() => {
 											isNavigatingToCheckout.value = false;
 										}
 									})}
-									disabled={isNavigatingToCheckout.value || !shippingState.selectedMethod ||
-														!appState.shippingAddress.countryCode ||
-														cartState.cart.lines.length === 0 || isOutOfStock.value}
-									class="w-full py-3 mb-1.5 bg-[#141210] text-[#FDFAF6] text-[11px] tracking-[0.2em] uppercase font-medium
+									disabled={isNavigatingToCheckout.value || !cartCheckoutReady}
+									aria-disabled={cartCheckoutReady ? 'false' : 'true'}
+									class="btn-ready w-full py-3 mb-1.5 bg-[#141210] text-[#FDFAF6] text-[11px] tracking-[0.2em] uppercase font-medium
 									       hover:opacity-90 active:opacity-85
-									       disabled:opacity-40 disabled:cursor-not-allowed
 									       transition-opacity duration-300 cursor-pointer
 									       flex items-center justify-center gap-2"
 								>

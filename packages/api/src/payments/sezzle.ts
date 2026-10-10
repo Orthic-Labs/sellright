@@ -116,7 +116,7 @@ export function normalizeSezzleEvent(payload: unknown): NormalizedSezzleEvent | 
   const orderUuid = str(data?.order_uuid) ?? (isDispute ? null : str(data?.uuid)) ??
     str(data?.sezzle_order_uuid);
   const disputeId = isDispute
-    ? str(data?.dispute_id) ?? (num(data?.dispute_id)?.toString() ?? null) ?? str(data?.id)
+    ? str(data?.dispute_id) ?? num(data?.dispute_id)?.toString() ?? str(data?.id)
     : null;
   const details: Record<string, unknown> = {
     receivedAt: new Date().toISOString(),

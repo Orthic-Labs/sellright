@@ -3,18 +3,27 @@ import { useNavigate } from '@qwik.dev/router';
 import { registerCustomerFromSignup } from '~/components/auth/signup-flow';
 import { login, requestMagicLink, requestPasswordReset, resendVerification } from '~/providers/shop/account/account';
 import { getShopConfig } from '~/providers/shop/checkout/checkout';
-import { checkCustomerEmail } from '~/providers/shop/account/check-email';
 import { SignInError } from './SignInError';
 export { head } from './seo';
 
 const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY || '';
 
-type Step = 'email' | 'signin' | 'signup' | 'success' | 'reset-sent' | 'magic-sent' | 'verify-needed';
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const BAD_CREDENTIALS_HINT = "That email and password don't match.";
+const TOKEN_MISSING_HINT = 'Complete the verification above to continue.';
+const TOKEN_FAILED_HINT = "Verification couldn't load. Refresh the page or try another browser.";
+
+type View = 'signin' | 'signup' | 'success' | 'reset-sent' | 'magic-sent' | 'verify-needed';
+
+const PRIMARY =
+	'w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-[var(--color-accent)] hover:bg-[#4F3B26] focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-[var(--color-accent)] transition-colors cursor-pointer btn-ready';
+const INPUT =
+	'mt-1 appearance-none block w-full px-3 py-2.5 border border-gray-300 rounded-md shadow-xs placeholder-gray-400 focus:outline-hidden focus:ring-2 focus:ring-gray-500 focus:border-gray-500 sm:text-sm bg-white';
 
 export default component$(() => {
 	const navigate = useNavigate();
 
-	const step = useSignal<Step>('email');
+	const view = useSignal<View>('signin');
 	const email = useSignal('');
 	const password = useSignal('');
 	const confirmPassword = useSignal('');
@@ -24,12 +33,13 @@ export default component$(() => {
 	const error = useSignal('');
 	const loading = useSignal(false);
 	const turnstileToken = useSignal('');
-	const honeypot = useSignal('');
+	const widgetError = useSignal(false);
+	const widgetId = useSignal<string>();
 	const resendLoading = useSignal(false);
 	const resendSent = useSignal(false);
-	const widgetId = useSignal<string>();
 	/** Whether this store has passwordless sign-in links switched on (GET /v1/shop/config) — offered only when it has. */
 	const magicLinkEnabled = useSignal(false);
+
 	const resetChallenge = $(() => {
 		turnstileToken.value = '';
 		if (widgetId.value) (window as any).turnstile?.reset(widgetId.value);
@@ -43,60 +53,52 @@ export default component$(() => {
 		}
 	});
 
-	// Load Turnstile
+	// Turnstile: one widget for the whole screen. Script or render failure is shown to the shopper, never silent.
 	useVisibleTask$(() => {
 		if (!TURNSTILE_SITE_KEY) return;
+		const fail = () => {
+			widgetError.value = true;
+		};
 		(window as any).onTurnstileLoad = () => {
 			const container = document.getElementById('turnstile-container');
-			if (container && (window as any).turnstile) {
+			if (!container || !(window as any).turnstile) return fail();
+			try {
 				widgetId.value = (window as any).turnstile.render(container, {
 					sitekey: TURNSTILE_SITE_KEY,
 					theme: 'light',
-					callback: (token: string) => { turnstileToken.value = token; },
-					'expired-callback': () => { turnstileToken.value = ''; },
+					callback: (token: string) => {
+						turnstileToken.value = token;
+					},
+					'expired-callback': () => {
+						turnstileToken.value = '';
+					},
+					'error-callback': fail,
 				});
+			} catch {
+				fail();
 			}
 		};
 		const script = document.createElement('script');
 		script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onTurnstileLoad';
 		script.async = true;
+		script.onerror = fail;
 		document.head.appendChild(script);
 	});
 
-	const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-	const handleEmailContinue = $(async () => {
-		error.value = '';
-		const trimmed = email.value.trim();
-		if (!trimmed) {
-			error.value = 'Please enter your email address.';
-			return;
-		}
-		if (!emailRegex.test(trimmed)) {
-			error.value = 'Please enter a valid email address.';
-			return;
-		}
-		if (TURNSTILE_SITE_KEY && !turnstileToken.value) {
-			error.value = 'Please complete the security check.';
-			return;
-		}
-		loading.value = true;
-		const exists = await checkCustomerEmail(trimmed, turnstileToken.value, honeypot.value);
-		await resetChallenge();
-		loading.value = false;
-		step.value = exists ? 'signin' : 'signup';
-	});
+	// Readiness mirrors the handler guards, so a grey button never submits and a ready one always does.
+	const tokenOk = !TURNSTILE_SITE_KEY || turnstileToken.value.length > 0;
+	const emailReady = EMAIL_RE.test(email.value.trim());
+	const signinReady = emailReady && password.value.trim().length > 0;
+	const signupReady =
+		emailReady &&
+		firstName.value.trim().length > 0 &&
+		lastName.value.trim().length > 0 &&
+		password.value.length >= 8 &&
+		password.value === confirmPassword.value;
 
 	const handleSignIn = $(async () => {
+		if (!(EMAIL_RE.test(email.value.trim()) && password.value.trim().length > 0 && (!TURNSTILE_SITE_KEY || turnstileToken.value.length > 0)) || loading.value) return;
 		error.value = '';
-		if (TURNSTILE_SITE_KEY && !turnstileToken.value) {
-			error.value = 'Please complete the security check.';
-			return;
-		}
-		if (!password.value.trim()) {
-			error.value = 'Please enter your password.';
-			return;
-		}
 		loading.value = true;
 		const result = await login(email.value.trim(), password.value, {
 			turnstileToken: turnstileToken.value,
@@ -104,8 +106,15 @@ export default component$(() => {
 		});
 		if (result.ok) {
 			navigate('/account');
-		} else if (result.code === 'not_verified') {
-			step.value = 'verify-needed';
+			return;
+		}
+		if (result.code === 'not_verified') {
+			view.value = 'verify-needed';
+		} else if (result.code === 'invalid_credentials') {
+			// One generic message for every credential failure: never reveal whether the account exists.
+			error.value = magicLinkEnabled.value
+				? `${BAD_CREDENTIALS_HINT} Reset your password or email yourself a sign-in link.`
+				: `${BAD_CREDENTIALS_HINT} Reset your password.`;
 		} else {
 			error.value = result.message;
 		}
@@ -114,11 +123,8 @@ export default component$(() => {
 	});
 
 	const handleSignUp = $(async () => {
+		if (!(EMAIL_RE.test(email.value.trim()) && firstName.value.trim().length > 0 && lastName.value.trim().length > 0 && password.value.length >= 8 && password.value === confirmPassword.value && (!TURNSTILE_SITE_KEY || turnstileToken.value.length > 0)) || loading.value) return;
 		error.value = '';
-		if (TURNSTILE_SITE_KEY && !turnstileToken.value) {
-			error.value = 'Please complete the security check.';
-			return;
-		}
 		loading.value = true;
 		const result = await registerCustomerFromSignup({
 			email: email.value,
@@ -129,73 +135,73 @@ export default component$(() => {
 			turnstileToken: turnstileToken.value,
 		});
 		await resetChallenge();
-		if (result.step) step.value = result.step;
+		if (result.step === 'success') view.value = 'success';
+		else if (result.step === 'signin') view.value = 'signin';
 		if (result.error) error.value = result.error;
 		loading.value = false;
 	});
 
 	const handleForgotPassword = $(async () => {
+		if (!(EMAIL_RE.test(email.value.trim()) && (!TURNSTILE_SITE_KEY || turnstileToken.value.length > 0)) || loading.value) return;
 		error.value = '';
 		loading.value = true;
-		// Enumeration-safe on the API side — always resolves ok, so this always
-		// shows the same "check your email" state regardless of whether the
-		// address exists.
-		await requestPasswordReset(email.value.trim());
-		step.value = 'reset-sent';
+		// Enumeration-safe on the API side — always resolves ok, so this always shows the same "check your email" state.
+		await requestPasswordReset(email.value.trim(), turnstileToken.value);
+		await resetChallenge();
+		view.value = 'reset-sent';
 		loading.value = false;
 	});
 
 	const handleMagicLink = $(async () => {
+		if (!(EMAIL_RE.test(email.value.trim()) && (!TURNSTILE_SITE_KEY || turnstileToken.value.length > 0)) || loading.value) return;
 		error.value = '';
 		loading.value = true;
 		// Enumeration-safe on the API side (identical 200 for an unknown address) — so is the screen that follows.
-		const result = await requestMagicLink(email.value.trim());
+		const result = await requestMagicLink(email.value.trim(), turnstileToken.value);
+		await resetChallenge();
 		loading.value = false;
-		if (result.ok) step.value = 'magic-sent';
+		if (result.ok) view.value = 'magic-sent';
 		else error.value = result.message;
 	});
 
-	const handleBack = $(() => {
+	const goToView = $((next: View) => {
 		error.value = '';
 		password.value = '';
 		confirmPassword.value = '';
 		firstName.value = '';
 		lastName.value = '';
 		resendSent.value = false;
-		step.value = 'email';
+		view.value = next;
 	});
 
 	const handleResendVerification = $(async () => {
+		if (!(EMAIL_RE.test(email.value.trim()) && (!TURNSTILE_SITE_KEY || turnstileToken.value.length > 0)) || resendLoading.value) return;
 		resendLoading.value = true;
-		await resendVerification(email.value.trim());
+		await resendVerification(email.value.trim(), turnstileToken.value);
+		await resetChallenge();
 		resendLoading.value = false;
 		resendSent.value = true;
 	});
+
+	const showWidget = view.value === 'signin' || view.value === 'signup' || view.value === 'verify-needed';
+	const hint = (fieldsReady: boolean) => {
+		if (widgetError.value) return TOKEN_FAILED_HINT;
+		if (fieldsReady && !tokenOk) return TOKEN_MISSING_HINT;
+		return '';
+	};
+	const primaryHint = hint(view.value === 'signup' ? signupReady : signinReady);
 
 	return (
 		<div class="min-h-screen bg-gray-50 flex items-start justify-center py-16 px-4 sm:px-6 lg:px-8">
 			<div class="w-full max-w-md">
 				<div class="bg-[#F9F7F4] rounded-2xl p-8 shadow-sm">
-
-					<div id="turnstile-container" class={['email', 'signin', 'signup'].includes(step.value) ? 'min-h-[65px] flex justify-center mb-4' : 'hidden'}></div>
-					{step.value === 'email' && (
+					{view.value === 'signin' && (
 						<div>
 							<div class="text-center mb-8">
-								<h1 class="text-2xl font-bold text-gray-900">Welcome</h1>
-								<p class="mt-2 text-sm text-gray-600">Enter your email to continue</p>
+								<h1 class="text-2xl font-bold text-gray-900">Sign in</h1>
+								<p class="mt-2 text-sm text-gray-600">Welcome back</p>
 							</div>
 							<div class="space-y-5">
-								{/* Honeypot — hidden from humans */}
-								<input
-									type="text"
-									name="website"
-									autoComplete="off"
-									tabIndex={-1}
-									aria-hidden="true"
-									class="!absolute !-left-[9999px] !top-0 !h-0 !w-0 !overflow-hidden"
-									value={honeypot.value}
-									onInput$={(_, el) => (honeypot.value = el.value)}
-								/>
 								<div>
 									<label class="block text-sm font-medium text-gray-700">Email address</label>
 									<input
@@ -204,141 +210,59 @@ export default component$(() => {
 										autoFocus
 										value={email.value}
 										onInput$={(_, el) => (email.value = el.value)}
-										onKeyUp$={(ev) => {
-											if (ev.key === 'Enter') handleEmailContinue();
-										}}
-										class="mt-1 appearance-none block w-full px-3 py-2.5 border border-gray-300 rounded-md shadow-xs placeholder-gray-400 focus:outline-hidden focus:ring-2 focus:ring-gray-500 focus:border-gray-500 sm:text-sm bg-white"
+										class={INPUT}
 										placeholder="you@example.com"
 									/>
 								</div>
-								{error.value && (
-									<SignInError message={error.value} />
-								)}
-								<button
-									key={`email-continue-${loading.value}`}
-									onClick$={handleEmailContinue}
-									disabled={loading.value}
-									class="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-[var(--color-accent)] hover:bg-[#4F3B26] focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-[var(--color-accent)] transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
-								>
-									{loading.value ? 'Checking...' : 'Continue'}
-								</button>
-							</div>
-						</div>
-					)}
-
-					{step.value === 'signin' && (
-						<div>
-							<div class="text-center mb-8">
-								<h1 class="text-2xl font-bold text-gray-900">Welcome back</h1>
-								<p class="mt-2 text-sm text-gray-600">{email.value}</p>
-								<button onClick$={handleBack} class="text-xs text-gray-500 hover:text-gray-700 underline mt-1 cursor-pointer">
-									Use a different email
-								</button>
-							</div>
-							<div class="space-y-5">
 								<div>
 									<label class="block text-sm font-medium text-gray-700">Password</label>
 									<input
 										type="password"
 										autoComplete="current-password"
-										autoFocus
 										value={password.value}
 										onInput$={(_, el) => (password.value = el.value)}
 										onKeyUp$={(ev) => {
 											if (ev.key === 'Enter') handleSignIn();
 										}}
-										class="mt-1 appearance-none block w-full px-3 py-2.5 border border-gray-300 rounded-md shadow-xs placeholder-gray-400 focus:outline-hidden focus:ring-2 focus:ring-gray-500 focus:border-gray-500 sm:text-sm bg-white"
+										class={INPUT}
 									/>
 								</div>
-								<div class="flex items-center justify-between">
-									<label class="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
-										<input
-											type="checkbox"
-											checked
-											onChange$={(_, el) => (rememberMe.value = el.checked)}
-											class="h-4 w-4 text-[var(--color-accent)] focus:ring-[var(--color-accent)] border-gray-300 rounded-sm"
-										/>
-										Remember me
-									</label>
-									<button
-										key={`password-reset-${loading.value}`}
-										onClick$={handleForgotPassword}
-										disabled={loading.value}
-										class="text-sm text-gray-600 hover:text-gray-800 cursor-pointer underline"
-									>
-										Forgot password?
-									</button>
-								</div>
-								{error.value && (
-									<SignInError message={error.value} />
-								)}
-								<button
-									key={`signin-submit-${loading.value}`}
-									onClick$={handleSignIn}
-									disabled={loading.value}
-									class="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-[var(--color-accent)] hover:bg-[#4F3B26] focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-[var(--color-accent)] transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
-								>
-									{loading.value ? 'Signing in...' : 'Sign In'}
-								</button>
-								{magicLinkEnabled.value && (
-									<button
-										key={`magic-link-${loading.value}`}
-										type="button"
-										onClick$={handleMagicLink}
-										disabled={loading.value}
-										data-testid="magic-link-request"
-										class="w-full text-center text-sm text-gray-600 hover:text-gray-800 underline cursor-pointer disabled:opacity-60"
-									>
-										Email me a sign-in link instead
-									</button>
-								)}
+								<label class="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+									<input
+										type="checkbox"
+										checked
+										onChange$={(_, el) => (rememberMe.value = el.checked)}
+										class="h-4 w-4 text-[var(--color-accent)] focus:ring-[var(--color-accent)] border-gray-300 rounded-sm"
+									/>
+									Remember me
+								</label>
 							</div>
 						</div>
 					)}
 
-					{/* ── Step: Sign Up (new account) ── */}
-					{step.value === 'signup' && (
+					{view.value === 'signup' && (
 						<div>
 							<div class="text-center mb-8">
 								<h1 class="text-2xl font-bold text-gray-900">Create your account</h1>
-								<p class="mt-2 text-sm text-gray-600">{email.value}</p>
-								<button onClick$={handleBack} class="text-xs text-gray-500 hover:text-gray-700 underline mt-1 cursor-pointer">
-									Use a different email
-								</button>
 							</div>
 							<div class="space-y-5">
 								<div class="grid grid-cols-2 gap-4">
 									<div>
 										<label class="block text-sm font-medium text-gray-700">First name</label>
-										<input
-											type="text"
-											autoComplete="given-name"
-											autoFocus
-											value={firstName.value}
-											onInput$={(_, el) => (firstName.value = el.value)}
-											class="mt-1 appearance-none block w-full px-3 py-2.5 border border-gray-300 rounded-md shadow-xs placeholder-gray-400 focus:outline-hidden focus:ring-2 focus:ring-gray-500 focus:border-gray-500 sm:text-sm bg-white"
-										/>
+										<input type="text" autoComplete="given-name" autoFocus value={firstName.value} onInput$={(_, el) => (firstName.value = el.value)} class={INPUT} />
 									</div>
 									<div>
 										<label class="block text-sm font-medium text-gray-700">Last name</label>
-										<input
-											type="text"
-											autoComplete="family-name"
-											value={lastName.value}
-											onInput$={(_, el) => (lastName.value = el.value)}
-											class="mt-1 appearance-none block w-full px-3 py-2.5 border border-gray-300 rounded-md shadow-xs placeholder-gray-400 focus:outline-hidden focus:ring-2 focus:ring-gray-500 focus:border-gray-500 sm:text-sm bg-white"
-										/>
+										<input type="text" autoComplete="family-name" value={lastName.value} onInput$={(_, el) => (lastName.value = el.value)} class={INPUT} />
 									</div>
 								</div>
 								<div>
+									<label class="block text-sm font-medium text-gray-700">Email address</label>
+									<input type="email" autoComplete="email" value={email.value} onInput$={(_, el) => (email.value = el.value)} class={INPUT} placeholder="you@example.com" />
+								</div>
+								<div>
 									<label class="block text-sm font-medium text-gray-700">Password</label>
-									<input
-										type="password"
-										autoComplete="new-password"
-										value={password.value}
-										onInput$={(_, el) => (password.value = el.value)}
-										class="mt-1 appearance-none block w-full px-3 py-2.5 border border-gray-300 rounded-md shadow-xs placeholder-gray-400 focus:outline-hidden focus:ring-2 focus:ring-gray-500 focus:border-gray-500 sm:text-sm bg-white"
-									/>
+									<input type="password" autoComplete="new-password" value={password.value} onInput$={(_, el) => (password.value = el.value)} class={INPUT} />
 								</div>
 								<div>
 									<label class="block text-sm font-medium text-gray-700">Confirm password</label>
@@ -350,26 +274,94 @@ export default component$(() => {
 										onKeyUp$={(ev) => {
 											if (ev.key === 'Enter') handleSignUp();
 										}}
-										class="mt-1 appearance-none block w-full px-3 py-2.5 border border-gray-300 rounded-md shadow-xs placeholder-gray-400 focus:outline-hidden focus:ring-2 focus:ring-gray-500 focus:border-gray-500 sm:text-sm bg-white"
+										class={INPUT}
 									/>
 								</div>
-								{error.value && (
-									<SignInError message={error.value} />
-								)}
-								<button
-									key={`signup-submit-${loading.value}`}
-									onClick$={handleSignUp}
-									disabled={loading.value}
-									class="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-[var(--color-accent)] hover:bg-[#4F3B26] focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-[var(--color-accent)] transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
-								>
-									{loading.value ? 'Creating account...' : 'Create Account'}
-								</button>
 							</div>
 						</div>
 					)}
 
-					{/* ── Step: Registration success ── */}
-					{step.value === 'success' && (
+					<div id="turnstile-container" class={showWidget && TURNSTILE_SITE_KEY ? 'min-h-[65px] flex justify-center mt-5' : 'hidden'}></div>
+
+					{showWidget && error.value && (
+						<div class="mt-5">
+							<SignInError message={error.value} />
+						</div>
+					)}
+
+					{view.value === 'signin' && (
+						<div class="mt-5 space-y-3">
+							<button
+								key={`signin-submit-${loading.value}`}
+								onClick$={handleSignIn}
+								disabled={loading.value}
+								aria-disabled={(signinReady && tokenOk) ? 'false' : 'true'}
+								class={PRIMARY}
+							>
+								{loading.value ? 'Signing in...' : 'Sign in'}
+							</button>
+							{primaryHint && <p class="text-xs text-gray-500 text-center">{primaryHint}</p>}
+							<div class="text-center text-sm text-gray-600 space-y-2 pt-2">
+								<p>
+									<button
+										key={`password-reset-${loading.value}`}
+										type="button"
+										onClick$={handleForgotPassword}
+										disabled={loading.value}
+										aria-disabled={(emailReady && tokenOk) ? 'false' : 'true'}
+										class="link-ready text-gray-600 hover:text-gray-800 underline cursor-pointer"
+									>
+										Forgot your password? Reset it
+									</button>
+								</p>
+								{magicLinkEnabled.value && (
+									<p>
+										<button
+											key={`magic-link-${loading.value}`}
+											type="button"
+											onClick$={handleMagicLink}
+											disabled={loading.value}
+											aria-disabled={(emailReady && tokenOk) ? 'false' : 'true'}
+											data-testid="magic-link-request"
+											class="link-ready text-gray-600 hover:text-gray-800 underline cursor-pointer"
+										>
+											Email me a sign-in link
+										</button>
+									</p>
+								)}
+								<p>
+									New here?{' '}
+									<button type="button" onClick$={() => goToView('signup')} class="text-[var(--color-accent)] hover:text-[var(--color-ink)] underline cursor-pointer">
+										Create an account
+									</button>
+								</p>
+							</div>
+						</div>
+					)}
+
+					{view.value === 'signup' && (
+						<div class="mt-5 space-y-3">
+							<button
+								key={`signup-submit-${loading.value}`}
+								onClick$={handleSignUp}
+								disabled={loading.value}
+								aria-disabled={(signupReady && tokenOk) ? 'false' : 'true'}
+								class={PRIMARY}
+							>
+								{loading.value ? 'Creating account...' : 'Create account'}
+							</button>
+							{primaryHint && <p class="text-xs text-gray-500 text-center">{primaryHint}</p>}
+							<p class="text-center text-sm text-gray-600">
+								Already have an account?{' '}
+								<button type="button" onClick$={() => goToView('signin')} class="text-[var(--color-accent)] hover:text-[var(--color-ink)] underline cursor-pointer">
+									Sign in
+								</button>
+							</p>
+						</div>
+					)}
+
+					{/* ── Registration success ── */}
+					{view.value === 'success' && (
 						<div class="text-center py-4">
 							<div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-[var(--color-parchment)] mb-4">
 								<svg class="h-6 w-6 text-[var(--color-accent)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -380,23 +372,15 @@ export default component$(() => {
 							<p class="text-sm text-gray-600 mb-6">
 								We sent a verification link to <span class="font-medium">{email.value}</span>. Click the link to activate your account.
 							</p>
-							<button
-								onClick$={handleBack}
-								class="text-sm text-[var(--color-accent)] hover:text-[var(--color-ink)] underline cursor-pointer"
-							>
+							<button onClick$={() => goToView('signin')} class="text-sm text-[var(--color-accent)] hover:text-[var(--color-ink)] underline cursor-pointer">
 								Back to sign in
 							</button>
 						</div>
 					)}
 
-					{/* ── Step: unverified account tried to sign in ── */}
-					{step.value === 'verify-needed' && (
+					{/* ── Unverified account tried to sign in ── */}
+					{view.value === 'verify-needed' && (
 						<div class="text-center py-4">
-							<div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-[var(--color-parchment)] mb-4">
-								<svg class="h-6 w-6 text-[var(--color-accent)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-								</svg>
-							</div>
 							<h2 class="text-lg font-medium text-gray-900 mb-2">Verify your email</h2>
 							<p class="text-sm text-gray-600 mb-6">
 								Your password is correct, but <span class="font-medium">{email.value}</span> hasn't been verified yet.
@@ -405,56 +389,39 @@ export default component$(() => {
 							<button
 								onClick$={handleResendVerification}
 								disabled={resendLoading.value || resendSent.value}
-								class="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-[var(--color-accent)] hover:bg-[#4F3B26] focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-[var(--color-accent)] transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed mb-3"
+								aria-disabled={resendSent.value || !(emailReady && tokenOk) ? 'true' : 'false'}
+								class={`${PRIMARY} mb-3`}
 							>
 								{resendLoading.value ? 'Sending...' : resendSent.value ? 'Verification email sent' : 'Resend verification email'}
 							</button>
-							<button
-								onClick$={handleBack}
-								class="text-sm text-gray-600 hover:text-gray-800 underline cursor-pointer"
-							>
+							{!resendSent.value && hint(emailReady) && <p class="text-xs text-gray-500 mb-3">{hint(emailReady)}</p>}
+							<button onClick$={() => goToView('signin')} class="text-sm text-gray-600 hover:text-gray-800 underline cursor-pointer">
 								Back to sign in
 							</button>
 						</div>
 					)}
 
-					{/* ── Step: sign-in link sent ── */}
-					{step.value === 'magic-sent' && (
+					{/* ── Sign-in link sent ── */}
+					{view.value === 'magic-sent' && (
 						<div class="text-center py-4" data-testid="magic-link-sent">
-							<div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-[var(--color-parchment)] mb-4">
-								<svg class="h-6 w-6 text-[var(--color-accent)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-								</svg>
-							</div>
 							<h2 class="text-lg font-medium text-gray-900 mb-2">Check your email</h2>
 							<p class="text-sm text-gray-600 mb-6">
 								If an account exists for <span class="font-medium">{email.value}</span>, we've sent a link that signs you in. It works once and expires soon.
 							</p>
-							<button
-								onClick$={handleBack}
-								class="text-sm text-gray-600 hover:text-gray-800 underline cursor-pointer"
-							>
+							<button onClick$={() => goToView('signin')} class="text-sm text-gray-600 hover:text-gray-800 underline cursor-pointer">
 								Back to sign in
 							</button>
 						</div>
 					)}
 
-					{/* ── Step: Password reset sent ── */}
-					{step.value === 'reset-sent' && (
+					{/* ── Password reset sent ── */}
+					{view.value === 'reset-sent' && (
 						<div class="text-center py-4">
-							<div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-[var(--color-parchment)] mb-4">
-								<svg class="h-6 w-6 text-[var(--color-accent)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-								</svg>
-							</div>
 							<h2 class="text-lg font-medium text-gray-900 mb-2">Check your email</h2>
 							<p class="text-sm text-gray-600 mb-6">
 								If an account exists for <span class="font-medium">{email.value}</span>, we've sent instructions to reset your password.
 							</p>
-							<button
-								onClick$={handleBack}
-								class="text-sm text-gray-600 hover:text-gray-800 underline cursor-pointer"
-							>
+							<button onClick$={() => goToView('signin')} class="text-sm text-gray-600 hover:text-gray-800 underline cursor-pointer">
 								Back to sign in
 							</button>
 						</div>

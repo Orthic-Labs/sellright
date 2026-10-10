@@ -37,6 +37,9 @@ export const OrderReturnsPanel = component$<{ code: string }>(({ code }) => {
 		}
 	});
 
+	// Ready = at least one quantity chosen and a reason of 3+ characters (same as submit's guards).
+	const returnReady = Object.values(qty).some((n) => n > 0) && reason.value.trim().length >= 3;
+
 	const submit = $(async () => {
 		error.value = '';
 		const lines = Object.entries(qty).filter(([, n]) => n > 0).map(([sku, quantity]) => ({ sku, quantity }));
@@ -100,7 +103,7 @@ export const OrderReturnsPanel = component$<{ code: string }>(({ code }) => {
 					</label>
 					{error.value && <p class="text-sm text-red-700" role="alert">{error.value}</p>}
 					<div class="flex gap-3">
-						<button type="submit" disabled={sending.value} class="px-4 py-2 text-sm font-medium text-white bg-[var(--color-accent)] disabled:opacity-60 min-h-[44px] cursor-pointer">
+						<button type="submit" disabled={sending.value} aria-disabled={returnReady ? 'false' : 'true'} class="btn-ready px-4 py-2 text-sm font-medium text-white bg-[var(--color-accent)] min-h-[44px] cursor-pointer">
 							{sending.value ? 'Sending...' : 'Send return request'}
 						</button>
 						<button type="button" class="px-4 py-2 text-sm border border-gray-400 min-h-[44px] cursor-pointer" onClick$={() => { open.value = false; error.value = ''; }}>Cancel</button>
