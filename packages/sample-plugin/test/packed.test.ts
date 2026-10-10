@@ -114,7 +114,6 @@ describe('packed @sellright/api consumed by the sample plugin', () => {
       registerLockPlanContributor: 'function',
       registerEntitlementPolicy: 'function',
       registerPaymentPolicy: 'function',
-      trialDaysForPlatform: 'function',
       resolveRuntimeArtifactPromotion: 'function',
       revokeLicenseInTx: 'function',
       restoreLicenseInTx: 'function',

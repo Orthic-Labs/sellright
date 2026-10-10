@@ -6,7 +6,7 @@
 import { registerLockPlanContributor, registerStoreKitPolicy, type StoreKitPolicy } from '@sellright/api/storekit';
 import {
   createLicenseRevocationFeed, registerEntitlementPolicy, resolveRuntimeArtifactPromotion, restoreLicenseInTx, revokeLicenseInTx,
-  trialDaysForPlatform, type EntitlementPolicy,
+  type EntitlementPolicy,
 } from '@sellright/api/licensing';
 import { registerPaymentPolicy, type BeforeCaptureResult, type PaymentPolicy } from '@sellright/api/payments';
 import type { ReleaseRegistrationPolicy } from '@sellright/api/http';
@@ -16,7 +16,6 @@ export const policyRegistrars = {
   registerLockPlanContributor,
   registerEntitlementPolicy,
   registerPaymentPolicy,
-  trialDaysForPlatform,
   resolveRuntimeArtifactPromotion,
   revokeLicenseInTx,
   restoreLicenseInTx,

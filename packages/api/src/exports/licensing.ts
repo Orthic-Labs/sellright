@@ -26,7 +26,6 @@ export {
   type PolicyDecision, type PolicyLicense, type PolicyRejection, type RequestExtensions, type TrialContext, type TrialDecision,
 } from '../licensing/entitlement-policy.js';
 /** Fork trial-duration helper. Lives in the fork-reference test kit file (see its header); exported per the 2.2 contract. */
-export { trialDaysForPlatform, type TrialPlatform } from '../licensing/entitlement-policy.fork-reference.testkit.js';
 export {
   resolveRuntimeArtifactPromotion,
   type ResolveRuntimeArtifactInput, type RuntimeArtifactDelivery, type RuntimeArtifactResolution, type RuntimeArtifactSelector,

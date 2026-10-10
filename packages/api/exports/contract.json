@@ -426,15 +426,15 @@
       "module": "licensing/trial",
       "symbol": "TrialPlatform",
       "kind": "type (fork-added)",
-      "disposition": "public",
-      "surface": "licensing"
+      "disposition": "moved",
+      "surface": null
     },
     {
       "module": "licensing/trial",
       "symbol": "trialDaysForPlatform",
       "kind": "function (fork-added)",
-      "disposition": "public",
-      "surface": "licensing"
+      "disposition": "moved",
+      "surface": null
     },
     {
       "module": "licensing/trial",
