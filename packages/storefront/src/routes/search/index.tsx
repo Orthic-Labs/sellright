@@ -21,6 +21,9 @@ export const useSearchLoader = routeLoader$(async ({ query }) => {
 	const term = query.get('q') || '';
 	const search = await executeQuery(term);
 	return { search, query };
+}, {
+	// Qwik Router 2.0.0-rc: loaders only see allow-listed search params.
+	search: ['q', 'f'],
 });
 
 // SSR-friendly search action

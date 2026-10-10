@@ -44,10 +44,19 @@ if (outDirSuffix) {
 
 export default extendConfig(baseConfig, () => {
   return {
+    // Qwik Router 2.0.0-beta.38+ prerenders in a dedicated `ssg` Vite environment
+    // (run via builder.buildApp()); it needs the same tailwindcss bundling as the
+    // base `ssr.noExternal`. Ported from the Rotten Hand / Damned storefronts.
+    environments: {
+      ssg: {
+        resolve: { noExternal: ['tailwindcss'] },
+      },
+    },
     build: {
       ssr: true,
       outDir: `server${outDirSuffix}`,
-      rollupOptions: {
+      // Vite 8 / Rolldown: `rolldownOptions` replaces the deprecated `rollupOptions`.
+      rolldownOptions: {
         input: ["src/entry.express.tsx", "@qwik-router-config"],
         output: {
           entryFileNames: "entry.express.js",

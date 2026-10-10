@@ -26,11 +26,12 @@ export default defineConfig(({ mode }) => {
   define: mode === 'qa' ? {
     'import.meta.env.VITE_QA_MOCK': JSON.stringify('1'),
   } : undefined,
-  // Vite's default dep optimizer target asks esbuild 0.28 to downlevel
-  // destructuring in modern ESM deps. The admin app targets modern Chromium.
+  // The admin app targets modern Chromium, so the dependency optimizer must not
+  // downlevel destructuring in modern ESM deps. Vite 8 replaced
+  // `optimizeDeps.esbuildOptions` with `optimizeDeps.rolldownOptions`.
   optimizeDeps: {
-    esbuildOptions: {
-      target: 'es2022',
+    rolldownOptions: {
+      transform: { target: 'es2022' },
     },
   },
   build: {

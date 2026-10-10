@@ -72,6 +72,10 @@ export const useStoreIdentityLoader = routeLoader$(async ({ cookie, query, statu
 		// an outage that has nothing to do with publish state.
 		return { identity: identityFromStaticTheme(), notPublished: false };
 	}
+}, {
+	// Qwik Router 2.0.0-rc: loaders are strict by default and see no search
+	// params unless allow-listed, so the preview token must be declared.
+	search: ['preview_token'],
 });
 
 export const onGet: RequestHandler = async ({ cacheControl, url, headers }) => {

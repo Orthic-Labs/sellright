@@ -34,6 +34,7 @@ export const NMI = component$<NMIProps>((props) => {
 	const collectRef = useSignal<unknown>(null);
 	const getTokenRef = useSignal<unknown>(null);
 	const submitting = useSignal(false);
+	const handledTrigger = useSignal(0);
 
 	useVisibleTask$(async () => {
 		try {
@@ -52,11 +53,14 @@ export const NMI = component$<NMIProps>((props) => {
 		} catch (e) {
 			await props.onError$(e instanceof Error ? e.message : 'Card payment failed to load.');
 		}
-	});
+	}, { strategy: 'document-ready' }); // mount Collect.js as soon as the form renders, not on first intersection/interaction
 
 	useVisibleTask$(async ({ track }) => {
 		const t = track(() => props.confirmTrigger.value);
-		if (!t || !ready.value) return;
+		// A confirm that arrives before the fields are ready is held, not dropped: it runs once they are.
+		const isReady = track(() => ready.value);
+		if (!t || !isReady || t === handledTrigger.value) return;
+		handledTrigger.value = t;
 		if (submitting.value) return; // double click: the attempt already in flight is this one
 		const getToken = getTokenRef.value as (() => Promise<string>) | null;
 		if (!getToken) {
