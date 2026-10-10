@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CACHE_POLICY_VERSION, getRouteCacheProfile } from './route-cache-policy';
+import { CACHE_POLICY_VERSION, getRouteCacheProfile, resolveRouteCacheProfile } from './route-cache-policy';
 
 describe('getRouteCacheProfile', () => {
 	it('classifies mutating/personalized content routes as dynamic (no-store)', () => {
@@ -52,5 +52,32 @@ describe('getRouteCacheProfile', () => {
 	it('falls back to public_standard for everything else (e.g. blog, about)', () => {
 		expect(getRouteCacheProfile('/blog').routeClass).toBe('public_standard');
 		expect(getRouteCacheProfile('/about').routeClass).toBe('public_standard');
+	});
+});
+
+describe('resolveRouteCacheProfile', () => {
+	const flags = (...keys: string[]) => new Map(keys.map((k) => [k, true]));
+
+	it('makes loader data requests private no-store under any page path', () => {
+		for (const pathname of ['/', '/shop', '/contact', '/blog', '/products/x']) {
+			const profile = resolveRouteCacheProfile(pathname, flags('@isQLoader'));
+			expect(profile.routeClass).toBe('dynamic');
+			expect(profile.cacheControl.sMaxAge).toBe(0);
+			expect(profile.responseCacheControl).toBe('private, no-store, no-cache, must-revalidate');
+		}
+	});
+
+	it('makes action data requests private no-store', () => {
+		const profile = resolveRouteCacheProfile('/shop', flags('@isQAction'));
+		expect(profile.responseCacheControl).toContain('no-store');
+	});
+
+	it('leaves HTML document profiles unchanged', () => {
+		for (const pathname of ['/', '/shop', '/blog', '/checkout']) {
+			expect(resolveRouteCacheProfile(pathname, new Map())).toEqual(getRouteCacheProfile(pathname));
+		}
+		// on this branch '/' is stock-bearing (private, no shared cache); a non-stock document keeps its shared profile
+		expect(resolveRouteCacheProfile('/', new Map()).cacheControl.sMaxAge).toBe(0);
+		expect(resolveRouteCacheProfile('/blog', new Map()).cacheControl.sMaxAge).toBeGreaterThan(0);
 	});
 });
