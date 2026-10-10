@@ -12,9 +12,17 @@ export class PreSubmitStockError extends Error {
  * LOCKED (CLAUDE.md layer 4): a fresh, awaited live cart read immediately before the order is created. Unlike the
  * drawer/entry refreshes, a failure here must propagate and stop checkout — it never falls through to submit.
  * No cache, TTL or debounce; every call hits the backend.
+ *
+ * Recovery exception: when that live read reports the cart already `converted` (checkout reserved the stock, then
+ * the response or the payment-intent call was lost), the lines' `available` is computed AFTER that order's own
+ * allocation and is false for the last unit. POST /checkout replays the original order for a converted cart without
+ * touching stock, so availability is not a precondition there. The read itself is never skipped; only what an
+ * unavailable line means changes, and only when the server says the cart is converted. A missing/other status is a
+ * new order and keeps the fail-closed check.
  */
 export const refreshStockBeforeSubmit = async (): Promise<void> => {
 	await CartService.refresh();
+	if (CartService.getCart().status === 'converted') return;
 	const check = CartService.validateStock();
 	if (!check.valid) throw new PreSubmitStockError(check.errors[0] || 'Some items are no longer available.');
 };

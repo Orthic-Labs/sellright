@@ -173,6 +173,33 @@ test.describe('3. cart and checkout stock checks', () => {
 		await expect.poll(async () => droppedNotice.test(await page.locator('body').innerText()) || (await placeOrderButton(page).count()) === 0 || !(await placeOrderButton(page).isEnabled().catch(() => true))).toBe(true);
 	});
 
+	// A guard that refreshes only on the FIRST checkout entry per document (module-level flag, in-memory cache) passes 3b,
+	// whose second entry is a full load (new document, fresh module state). This entry is a second SPA entry in the SAME
+	// document. The drawer is opened and settled first, so its own cart-open read is outside the isolated window and the
+	// only read that can satisfy the assertion after the mark is the checkout-entry read.
+	// UNVERIFIED: header link / cart button on the checkout page follow 3a and spaToShop; adjust on first run.
+	test('3b-ii checkout entry twice in the SAME document: the second SPA entry issues its own live cart read and shows the change', async ({ apiProxyPage: page, api }) => {
+		const p = await createStockProduct(api, 'entry2', 5);
+		await addToCart(page, p.slug);
+		await goToCheckout(page); // entry 1
+		await markDocument(page, 'doc-entry');
+
+		await spaToShop(page); // leave checkout without a document load
+		await cartButton(page).click();
+		await expect(page.getByRole('dialog', { name: /shopping cart/i })).toBeVisible();
+		await page.waitForLoadState('networkidle');
+		await setOnHand(api, p.sku, 0); // the drawer still shows the unit; only a live read can see it gone
+		const mark = apiLog.mark();
+		await page.getByRole('button', { name: /^checkout$/i }).click(); // entry 2: SPA navigation
+		await page.waitForURL('**/checkout/**');
+		await page.waitForLoadState('networkidle');
+
+		expect(await sameDocument(page), 'entry 2 must be an SPA navigation in the same document (no reload)').toBe('doc-entry');
+		await expect.poll(async () => (await apiLog.since(mark, STOCK_PATTERNS.cartRead, { origin: 'browser' })).length, { message: 'second entry in the same document must issue a NEW live cart read after the mark' }).toBeGreaterThanOrEqual(1);
+		await expect.poll(async () => droppedNotice.test(await page.locator('body').innerText()) || (await placeOrderButton(page).count()) === 0 || !(await placeOrderButton(page).isEnabled().catch(() => true)), { message: 'the changed availability must show' }).toBe(true);
+		expect(await sameDocument(page), 'still the same document after the read').toBe('doc-entry');
+	});
+
 	test('3c-i submit with stock gone is refused by the pre-submit live read: no order POST, the UI says so', async ({ apiProxyPage: page, api }) => {
 		const p = await createStockProduct(api, 'submit', 1);
 		await addToCart(page, p.slug);
