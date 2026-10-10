@@ -66,3 +66,52 @@ describe('verifyTurnstileToken', () => {
     expect(await verifyTurnstileToken({ secret: 's', token: 't' })).toBe(false);
   });
 });
+
+describe('verifyTurnstileToken — no secret configured (policy by NODE_ENV / TURNSTILE_DISABLED)', () => {
+  const saved = { NODE_ENV: process.env.NODE_ENV, TURNSTILE_DISABLED: process.env.TURNSTILE_DISABLED };
+  afterEach(() => {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k as keyof typeof saved]; else process.env[k as keyof typeof saved] = v;
+    }
+  });
+
+  it('production with no secret FAILS CLOSED, with or without a token', async () => {
+    process.env.NODE_ENV = 'production';
+    delete process.env.TURNSTILE_DISABLED;
+    fetchMock();
+    expect(await verifyTurnstileToken({ secret: null, token: 'tok' })).toBe(false);
+    expect(await verifyTurnstileToken({ secret: '  ', token: null })).toBe(false);
+    expect(stubbedFetch()).not.toHaveBeenCalled();
+  });
+
+  it('production with TURNSTILE_DISABLED=true passes without a secret', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.TURNSTILE_DISABLED = 'true';
+    fetchMock();
+    expect(await verifyTurnstileToken({ secret: null, token: null })).toBe(true);
+    expect(stubbedFetch()).not.toHaveBeenCalled();
+  });
+
+  it('TURNSTILE_DISABLED values other than the literal "true" do not opt out', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.TURNSTILE_DISABLED = '1';
+    expect(await verifyTurnstileToken({ secret: null, token: null })).toBe(false);
+  });
+
+  it('development/test with no secret keeps today\'s pass-through', async () => {
+    process.env.NODE_ENV = 'development';
+    delete process.env.TURNSTILE_DISABLED;
+    expect(await verifyTurnstileToken({ secret: null, token: null })).toBe(true);
+    process.env.NODE_ENV = 'test';
+    expect(await verifyTurnstileToken({ secret: null, token: null })).toBe(true);
+  });
+
+  it('a configured secret is verified the same way in production (no fail-open)', async () => {
+    process.env.NODE_ENV = 'production';
+    delete process.env.TURNSTILE_DISABLED;
+    fetchMock();
+    stubbedFetch().mockResolvedValue(new Response(JSON.stringify({ success: true }), { status: 200 }));
+    expect(await verifyTurnstileToken({ secret: 's', token: 't' })).toBe(true);
+    expect(await verifyTurnstileToken({ secret: 's', token: null })).toBe(false);
+  });
+});

@@ -3,6 +3,7 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { Pool, type PoolClient } from 'pg';
 import * as schema from './schema.js';
 import { getEnv, type Env } from '../env.js';
+import { beginAfterCommit, discardAfterCommit, flushAfterCommit } from './after-commit.js';
 
 // ---------------------------------------------------------------------------
 // Pools are created by `initPools(env)` (createApp, plugin 2.1) — importing this
@@ -172,11 +173,14 @@ export async function runStoreTransaction<T>(
   let broken = false;
   try {
     await client.query('BEGIN');
+    beginAfterCommit(client);
     await client.query("SELECT set_config('app.current_store', $1, true)", [storeId]);
     const result = await fn(makeTx(client));
     await client.query('COMMIT');
+    flushAfterCommit(client);
     return result;
   } catch (err) {
+    discardAfterCommit(client);
     try {
       await client.query('ROLLBACK');
     } catch {

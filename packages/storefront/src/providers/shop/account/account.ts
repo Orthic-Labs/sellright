@@ -96,7 +96,7 @@ export type SimpleResult = { ok: true } | ({ ok: false } & AccountError);
  *  200), so this mirrors that: never leak whether the address exists. */
 export async function resendVerification(email: string, turnstileToken?: string): Promise<{ ok: true }> {
 	try {
-		await sellright().POST('/v1/shop/auth/resend-verification', { body: { email, turnstileToken } });
+		await sellright().POST('/v1/shop/auth/resend-verification', { body: turnstileToken ? { email, turnstileToken } : { email } });
 	} catch {
 		// enumeration-safe: no-op
 	}

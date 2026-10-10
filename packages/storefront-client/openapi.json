@@ -4183,6 +4183,10 @@
                   "email": {
                     "type": "string",
                     "format": "email"
+                  },
+                  "turnstileToken": {
+                    "type": "string",
+                    "maxLength": 2048
                   }
                 },
                 "required": [
@@ -4207,6 +4211,16 @@
                   "required": [
                     "ok"
                   ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Bot check failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
                 }
               }
             }
@@ -25510,6 +25524,15 @@
             "required": true,
             "name": "email",
             "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "required": false,
+            "name": "turnstileToken",
+            "in": "query"
           }
         ],
         "responses": {
@@ -25519,6 +25542,16 @@
               "application/json": {
                 "schema": {
                   "nullable": true
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Bot check failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
                 }
               }
             }
@@ -25886,6 +25919,10 @@
                     "additionalProperties": {
                       "nullable": true
                     }
+                  },
+                  "turnstileToken": {
+                    "type": "string",
+                    "maxLength": 2048
                   }
                 },
                 "required": [
@@ -25910,6 +25947,16 @@
                   "required": [
                     "ok"
                   ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Bot check failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
                 }
               }
             }

@@ -64,6 +64,8 @@ const baseEnv = {
   PATH: process.env.PATH ?? '',
   HOME: process.env.HOME ?? '',
   NODE_ENV: 'production',
+  // No Turnstile secret in the e2e harness: production fails closed unless opted out.
+  TURNSTILE_DISABLED: 'true',
   STOREFRONT_URL: STORE_URL,
   DOWNLOAD_URL_SECRET: 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789',
   SELLRIGHT_MASTER_KEY: '1122334455667788112233445566778811223344556677881122334455667788',

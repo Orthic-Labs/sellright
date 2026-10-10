@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { createApp } from './sdk/create-app.js';
+import { warnIfTurnstileDisabled } from './security/turnstile.js';
 import { registerProcessErrorHandlers } from './lib/process-error-handlers.js';
 
 // REL-2: install process-level error handlers BEFORE the server starts so
@@ -11,5 +12,6 @@ registerProcessErrorHandlers();
 // and the ordered shutdown all live in the SDK (sdk/create-app.ts). The serving
 // process verifies nothing about migrations here (`skip`) — unchanged behaviour;
 // the SDK default for composed servers is `verify`.
+warnIfTurnstileDisabled();
 const engine = await createApp({ migrations: 'skip' });
 await engine.start({ handleSignals: true });
