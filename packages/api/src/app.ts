@@ -66,6 +66,8 @@ import { installDefaultStoreKitPolicy } from './licensing/storekit/default-polic
 import { installDefaultPaymentPolicy } from './payments/policy/default-policy.js';
 import { SELLRIGHT_VERSION } from './version.js';
 import type { EngineContext, EnginePlugin } from './sdk/types.js';
+import { releaseRegistrationRoutes } from './releases/release-registration.js';
+import { assertHostRouteUnshadowed, hostRouteEntryCount, assertNoReleaseRegistrationConflicts } from './releases/registration-policy.js';
 import { preRoutePolicy } from './pre-route-policy.js';
 
 export { SELLRIGHT_VERSION };
@@ -401,6 +403,12 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
   app.route('/', adminSeo); // SEO-1: admin SEO config + admin-triggered IndexNow submit
   app.route('/', adminWaitlist); // G10: waitlist demand report + CSV
 
+  // Release registration policy host (docs/policies/RELEASE-REGISTRATION.md):
+  // engine-owned POST /v1/admin/apps/releases; fails startup on plugin conflicts.
+  assertNoReleaseRegistrationConflicts(listApiPlugins());
+  app.route('/', releaseRegistrationRoutes);
+  const releaseHostRouteEntries = hostRouteEntryCount(app);
+
   // Extension seam (plugins.ts): mounted AFTER every built-in route above, so a
   // plugin path never shadows a built-in one on an exact-path conflict. Empty
   // by default — nothing is registered unless a fork calls registerApiPlugin()
@@ -420,6 +428,7 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
   for (const plugin of listApiPlugins()) {
     plugin.init?.(app);
   }
+  assertHostRouteUnshadowed(app, releaseHostRouteEntries); // a plugin must not register the host-owned route from init() either
 
   // Register the stable shop-facing error codes as their own named schema
   // (see api-error.ts's SHOP_API_ERROR_CODES) so a generated client gets a

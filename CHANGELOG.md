@@ -12,6 +12,7 @@ must update the matching changelog in the same push.
 
 ### Added
 
+- **Release registration policy host**: the engine owns `POST /v1/admin/apps/releases`; plugins supply `ApiPlugin.releaseRegistration` (app/channel claims, tenant-bound service credential, validation hook, optional `repointArtifacts`). Startup fails on conflicting claims or a re-registered host route. Admin-session republish of the same `(app, channel, platform, version)` is now an upsert (was a unique-violation error); `download_artifact` conflicts still keep the existing row unless the policy opts in. See `docs/policies/RELEASE-REGISTRATION.md`.
 - Entitlement authorization policy: one plugin policy consulted by every activation, refresh, update-feed, lease, trial and StoreKit link path. The default policy changes nothing.
 - `/v1/licenses/activate` alias for licence activation.
 - Signed entitlement formats above v2 can be negotiated with `x-entitlement-versions`; unnegotiated clients always receive byte-identical v2 tokens.

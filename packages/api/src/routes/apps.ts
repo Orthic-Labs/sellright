@@ -65,22 +65,6 @@ export async function publicAppStore(c: { req: { header: (k: string) => string |
   return { appKey, st: await resolveStoreWithFallback(appKey, env.APPS_FALLBACK_STORE_SLUG) };
 }
 
-const ReleaseArtifactIn = z.object({
-  artifactKey: z.string().min(1),
-  path: z.string().min(1),
-  sha256: z.string().nullable().optional(),
-  sizeBytes: z.number().int().positive().nullable().optional(),
-});
-const CreateReleaseIn = z.object({
-  appKey: z.string().min(1),
-  version: z.string().min(1),
-  channel: z.string().default('stable'),
-  platform: z.string().nullable().optional(),
-  manifest: z.any(),
-  artifacts: z.array(ReleaseArtifactIn).optional(),
-});
-type CreateReleaseBody = z.infer<typeof CreateReleaseIn>;
-
 // ra-011: body.app is now REQUIRED on the public activate endpoint. We never
 // fall back to Host-header-derived appKey here — an attacker controlling the
 // Host header could otherwise pivot to any store's license namespace.
@@ -645,48 +629,6 @@ apps.get('/v1/dl/:artifactKey', async (c) => {
     return c.json({ error: 'not found' }, 404);
   }
 });
-
-apps.openapi(
-  createRoute({
-    method: 'post',
-    path: '/v1/admin/apps/releases',
-    summary: 'Create an app release manifest',
-    request: {
-      body: { content: J(CreateReleaseIn) },
-    },
-    responses: {
-      200: { description: 'Created', content: J(z.object({ id: z.string() })) },
-      401: { description: 'Unauthorized', ...errBody },
-    },
-  }),
-  async (c) => guard(c, async () => {
-    const { admin } = await requireAdmin(c);
-    const st = requireStore(admin, c); requireWrite(st); requirePermission(st, 'releases');
-    const body = c.req.valid('json') as CreateReleaseBody;
-    const id = await withStore(st.storeId, async (tx) => {
-      const [row] = await tx.insert(s.appRelease).values({
-        storeId: st.storeId,
-        appKey: body.appKey,
-        version: body.version,
-        channel: body.channel,
-        platform: body.platform ?? null,
-        manifest: body.manifest as object,
-      }).returning({ id: s.appRelease.id });
-      if (body.artifacts?.length) {
-        await tx.insert(s.downloadArtifact).values(body.artifacts.map((artifact) => ({
-          storeId: st.storeId,
-          appReleaseId: row!.id,
-          artifactKey: artifact.artifactKey,
-          path: artifact.path,
-          sha256: artifact.sha256 ?? null,
-          sizeBytes: artifact.sizeBytes ?? null,
-        }))).onConflictDoNothing();
-      }
-      return row!.id;
-    });
-    return c.json({ id }, 200);
-  }),
-);
 
 apps.openapi(
   createRoute({

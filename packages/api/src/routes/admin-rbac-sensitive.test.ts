@@ -29,6 +29,7 @@ import { admin } from './admin.js';
 import { adminOrders } from './admin-orders.js';
 import { apps } from './apps.js';
 import { adminAffiliate } from './admin-affiliate.js';
+import { releaseRegistrationRoutes } from '../releases/release-registration.js';
 
 // Safety: refuse to run against anything but a *_test database.
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
@@ -49,6 +50,7 @@ app.route('/', admin);
 app.route('/', adminOrders);
 app.route('/', apps);
 app.route('/', adminAffiliate);
+app.route('/', releaseRegistrationRoutes);
 
 let ownerToken = '';
 let staffToken = '';
