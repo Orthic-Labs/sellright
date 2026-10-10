@@ -2,7 +2,7 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, desc, eq, isNull, or } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import { errJson } from '../lib/api-error.js';
-import { resolveStore, resolveStoreForRequest, DEV_DEFAULT_STORE, type StoreCtx } from '../store-context.js';
+import { resolveStore, resolveStoreForRequest, devDefaultStore, type StoreCtx } from '../store-context.js';
 import { appKeyHeaderNames, deviceHeaderName, licenseHeaderName, firstHeader } from '../licensing/app-headers.js';
 import { resolveStoreWithFallback } from '../licensing/app-store-fallback.js';
 import * as s from '../db/schema.js';
@@ -12,7 +12,9 @@ import { callEntitlementHook, entitlementProvider, withEntitlementVeto } from '.
 import { bearerToken } from '../licensing/tokens.js';
 import { signedDownloadPath, verifyDownloadSig, downloadSigningConfigured } from '../licensing/download-url.js';
 import { isAllowedRedirectHost } from '../lib/redirect-allowlist.js';
-import { trialExpiresAt, TRIAL_DAYS } from '../licensing/trial.js';
+import { trialExpiresAt } from '../licensing/trial.js';
+import { enforcePreRoute, parseRequestExtensions, policyTrial } from '../licensing/entitlement-policy.js';
+import { parseOfferedVersions } from '../licensing/sign.js';
 import { mintLicense } from '../licensing/mint.js';
 import { sendTrialKey } from '../email/dispatch.js';
 import { J, errBody, guard, requireAdmin, requireStore, requireWrite, requirePermission } from './admin-helpers.js';
@@ -55,8 +57,8 @@ function appKeyFromHost(host: string | undefined): string | null {
   return first;
 }
 
-async function publicAppStore(c: { req: { header: (k: string) => string | undefined } }, explicitApp?: string | null) {
-  const appKey = explicitApp ?? firstHeader(c, appKeyHeaderNames()) ?? appKeyFromHost(c.req.header('host')) ?? DEV_DEFAULT_STORE;
+export async function publicAppStore(c: { req: { header: (k: string) => string | undefined } }, explicitApp?: string | null) {
+  const appKey = explicitApp ?? firstHeader(c, appKeyHeaderNames()) ?? appKeyFromHost(c.req.header('host')) ?? devDefaultStore();
   // Extension seam (licensing/app-store-fallback.ts): env.APPS_FALLBACK_STORE_SLUG
   // unset (the default) rethrows on an unknown appKey, so this 404s exactly as
   // before this seam existed.
@@ -73,6 +75,16 @@ const PublicActivateIn = z.object({
   version: z.string().optional(),
 });
 
+/** Client-offered entitlement token format versions (sign.ts capability negotiation). */
+function offeredVersions(c: { req: { header: (k: string) => string | undefined } }): number[] | undefined {
+  return parseOfferedVersions(c.req.header('x-entitlement-versions'));
+}
+
+/** Map a policy rejection on activate to the route's response (default policy never rejects). */
+function activateRejection(c: { json: (b: unknown, s?: number) => Response }, reason: string): Response {
+  return c.json({ ok: false, status: 'rejected_platform', message: reason }, 400);
+}
+
 apps.openapi(
   createRoute({
     method: 'post',
@@ -85,11 +97,16 @@ apps.openapi(
     responses: {
       200: { description: 'Activated', content: J(z.object({ activated: z.boolean(), ok: z.boolean(), appKey: z.string(), status: z.string(), licenseId: z.string(), activationToken: z.string(), updatesUntil: z.string().nullable(), expiresAt: z.string().nullable(), seats: z.number().int() })) },
       404: { description: 'Not found', ...errBody },
+      400: { description: 'Rejected by entitlement policy', ...errBody },
       409: { description: 'Seat limit reached', ...errBody },
       429: { description: 'Rate limited', ...errBody },
     },
   }),
   async (c) => {
+    // Pre-route policy seam runs BEFORE store resolution, rate limit and any lookup (legacy guard order).
+    const rawBody = await c.req.json().catch(() => ({}));
+    const ext = parseRequestExtensions('activate', rawBody);
+    enforcePreRoute({ path: 'activate', rawBody, ext, header: (n) => c.req.header(n) });
     const st = await store(c);
     const { appKey } = c.req.valid('param');
     const { licenseKey, deviceId, deviceLabel } = c.req.valid('json');
@@ -97,8 +114,9 @@ apps.openapi(
     const retry = await licenseActionRetryAfter(ip, licenseKey);
     if (retry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${retry}s`);
     await recordLicenseAction(ip, licenseKey);
-    const out = await withStore(st.id, (tx) => activateLicenseOnDevice(tx, { storeId: st.id, appKey, licenseKey, deviceId, deviceLabel }));
+    const out = await withStore(st.id, (tx) => activateLicenseOnDevice(tx, { storeId: st.id, appKey, licenseKey, deviceId, deviceLabel, ext }));
     if (out.kind === 'notfound') return errJson(c, 404, 'LICENSE_NOT_FOUND', 'license not found');
+    if (out.kind === 'rejected_platform') return errJson(c, 400, 'REJECTED_PLATFORM', out.reason);
     if (out.kind === 'full') return errJson(c, 409, 'SEAT_LIMIT_REACHED', 'license seat limit reached');
     return c.json({
       activated: true,
@@ -123,8 +141,14 @@ apps.openapi(
 // It may add response fields (e.g. a signed offline entitlement token) or
 // veto the activation — a veto rolls the activation back too. No provider
 // registered => identical behavior to before this seam existed.
-apps.post('/api/licenses/activate', async (c) => withEntitlementVeto(c, async () => {
-  const body = PublicActivateIn.parse(await c.req.json());
+// Alias handlers: ONE handler serves both paths, so the policy (and every
+// response byte) is identical on /api/ and /v1/ (COMPAT C5 alias parity).
+apps.on('POST', ['/api/licenses/activate', '/v1/licenses/activate'], async (c) => withEntitlementVeto(c, async () => {
+  const rawBody = await c.req.json();
+  const body = PublicActivateIn.parse(rawBody);
+  const ext = parseRequestExtensions('activate', rawBody);
+  enforcePreRoute({ path: 'activate', rawBody, ext, header: (n) => c.req.header(n) });
+  const offered = offeredVersions(c);
   const ip = clientIp(c);
   // SEC: throttle per (ip, licenseKey) — blunts key-guessing/credential
   // stuffing against the activation endpoint without penalizing an
@@ -140,6 +164,7 @@ apps.post('/api/licenses/activate', async (c) => withEntitlementVeto(c, async ()
       licenseKey: body.licenseKey,
       deviceId: body.deviceId,
       deviceLabel: body.version ? `app ${body.version}` : null,
+      ext,
     });
     if (activation.kind !== 'ok') return { activation, fields: null };
     // Not caught here — a veto (or any other throw) must propagate out of
@@ -152,11 +177,14 @@ apps.post('/api/licenses/activate', async (c) => withEntitlementVeto(c, async ()
       activationToken: activation.activationToken,
       deviceId: body.deviceId,
       now: new Date(),
+      ext,
+      offeredVersions: offered,
     });
     return { activation, fields };
   });
   const { activation } = result;
   if (activation.kind === 'notfound') return c.json({ ok: false, status: 'not_found', message: 'License not found or inactive' }, 404);
+  if (activation.kind === 'rejected_platform') return activateRejection(c, activation.reason);
   if (activation.kind === 'full') return c.json({ ok: false, status: 'seat_limit_reached', message: 'License device limit reached' }, 409);
   return c.json({
     ok: true,
@@ -186,7 +214,10 @@ const RefreshIn = z.object({
 });
 
 apps.on('POST', ['/api/licenses/refresh', '/v1/licenses/refresh'], async (c) => withEntitlementVeto(c, async () => {
-  const body = RefreshIn.parse(await c.req.json());
+  const rawBody = await c.req.json();
+  const body = RefreshIn.parse(rawBody);
+  const ext = parseRequestExtensions('refresh', rawBody);
+  const offered = offeredVersions(c);
   const ip = clientIp(c);
   // SEC: throttle per (ip, activationToken) — same rationale as activate.
   const retry = await licenseActionRetryAfter(ip, body.activationToken);
@@ -194,7 +225,7 @@ apps.on('POST', ['/api/licenses/refresh', '/v1/licenses/refresh'], async (c) => 
   await recordLicenseAction(ip, body.activationToken);
   const { appKey, st } = await publicAppStore(c, body.app);
   const result = await withStore(st.id, async (tx) => {
-    const activation = await findActivationByToken(tx, { appKey, activationToken: body.activationToken, deviceId: body.deviceId });
+    const activation = await findActivationByToken(tx, { appKey, activationToken: body.activationToken, deviceId: body.deviceId, path: 'refresh', ext });
     if (!activation) return { activation: null, fields: null };
     const fields = await callEntitlementHook(entitlementProvider()?.onRefresh, tx, {
       storeId: st.id,
@@ -203,6 +234,8 @@ apps.on('POST', ['/api/licenses/refresh', '/v1/licenses/refresh'], async (c) => 
       activationId: activation.activationId,
       deviceId: body.deviceId ?? null,
       now: new Date(),
+      ext,
+      offeredVersions: offered,
     });
     return { activation, fields };
   });
@@ -271,11 +304,15 @@ apps.on('POST', ['/api/licenses/deactivate', '/v1/licenses/deactivate'], async (
 // may add response fields or veto issuance entirely — a veto rolls back the
 // customer/license rows created this call. No provider registered => the
 // generic sent/trial_used response below, unchanged by this seam's existence.
+// Policy-declared request extensions (e.g. `platform`) are validated by
+// parseRequestExtensions('trial', ...) — the engine's wire schema stays generic.
 const TrialRequestIn = z.object({ app: z.string().min(1), email: z.string().email(), turnstileToken: z.string().optional() });
 const TRIAL_SEATS = 2;
 
 apps.on('POST', ['/api/licenses/trial', '/v1/licenses/trial'], async (c) => withEntitlementVeto(c, async () => {
-  const body = TrialRequestIn.parse(await c.req.json());
+  const rawBody = await c.req.json();
+  const body = TrialRequestIn.parse(rawBody);
+  const ext = parseRequestExtensions('trial', rawBody);
   const email = body.email.trim().toLowerCase();
   const ip = clientIp(c);
 
@@ -338,14 +375,17 @@ apps.on('POST', ['/api/licenses/trial', '/v1/licenses/trial'], async (c) => with
       // Not caught here — a veto must propagate out of this withStore
       // callback uncaught so the transaction (customer find-or-create, any
       // hook-side writes) rolls back.
+      // The PERSISTED trial metadata (not the new request) decides the resend term.
+      const resend = policyTrial({ storeId: st.id, appKey, email, outcome: 'resend', priorMetadata: priorTrial.metadata, ext, now: new Date() });
       const fields = await callEntitlementHook(entitlementProvider()?.onTrial, tx, {
         storeId: st.id, appKey, email, licenseKey: priorTrial.key, customerId, outcome: 'resend',
       });
-      return { kind: 'resend' as const, key: priorTrial.key, fields };
+      return { kind: 'resend' as const, key: priorTrial.key, days: resend.days, fields };
     }
 
     // mint a fresh trial Pro license
-    const ends = trialExpiresAt();
+    const start = policyTrial({ storeId: st.id, appKey, email, outcome: 'start', priorMetadata: null, ext, now: new Date() });
+    const ends = trialExpiresAt(new Date(), start.days);
     const { licenseKey } = await mintLicense(tx, {
       storeId: st.id,
       appKey,
@@ -353,16 +393,16 @@ apps.on('POST', ['/api/licenses/trial', '/v1/licenses/trial'], async (c) => with
       updatesUntil: ends,
       expiresAt: ends,
       customerId,
-      metadata: { tier: 'pro', kind: 'trial' },
+      metadata: { tier: 'pro', kind: 'trial', ...(start.metadata ?? {}) },
       issuedBy: 'trial-self-serve',
-      reason: `${TRIAL_DAYS}-day self-serve Pro trial`,
+      reason: `${start.days}-day self-serve Pro trial`,
     });
     // A veto here rolls back the customer row (if newly created) AND the
     // freshly-minted license — never a half-issued trial.
     const fields = await callEntitlementHook(entitlementProvider()?.onTrial, tx, {
       storeId: st.id, appKey, email, licenseKey, customerId, outcome: 'issued',
     });
-    return { kind: 'issued' as const, key: licenseKey, fields };
+    return { kind: 'issued' as const, key: licenseKey, days: start.days, fields };
   });
 
   if (!minted) return c.json({ ok: false, status: 'error', message: 'Could not start trial' }, 500);
@@ -379,7 +419,7 @@ apps.on('POST', ['/api/licenses/trial', '/v1/licenses/trial'], async (c) => with
   try {
     await sendTrialKey({ name: st.name, currency: st.currency, appKey, storeId: st.id }, email, {
       key: minted.key,
-      days: TRIAL_DAYS,
+      days: minted.days,
     });
   } catch {
     /* delivery failure is logged in the mailer; the user can re-request (same key) */
@@ -387,7 +427,7 @@ apps.on('POST', ['/api/licenses/trial', '/v1/licenses/trial'], async (c) => with
   return c.json({
     ok: true,
     status: 'sent',
-    message: `Check your email for your ${TRIAL_DAYS}-day Pro key.`,
+    message: `Check your email for your ${minted.days}-day Pro key.`,
     ...(minted.fields ?? {}),
   }, 200);
 }));
@@ -406,7 +446,7 @@ apps.get('/releases/latest.json', async (c) => {
   const platform = c.req.query('platform') ?? undefined;
 
   const out = await withStore(st.id, async (tx) => {
-    const activation = await findActivationByToken(tx, { appKey, activationToken, deviceId });
+    const activation = await findActivationByToken(tx, { appKey, activationToken, deviceId, path: 'update_feed' });
     if (!activation) return { kind: 'unauthorized' as const };
     if (!canReceiveUpdate(activation.license)) return { kind: 'ineligible' as const };
     const [release] = await tx

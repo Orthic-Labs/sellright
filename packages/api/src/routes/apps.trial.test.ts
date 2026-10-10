@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const { sendTrialKey, trialResult } = vi.hoisted(() => ({
   sendTrialKey: vi.fn().mockResolvedValue(undefined),
-  trialResult: { current: { kind: 'issued', key: 'SR-TRIAL-123' } as
-    | { kind: 'issued' | 'resend'; key: string }
+  trialResult: { current: { kind: 'issued', key: 'SR-TRIAL-123', days: 14 } as
+    | { kind: 'issued' | 'resend'; key: string; days: number }
     | { kind: 'expired' } },
 }));
 
@@ -16,7 +16,7 @@ vi.mock('../db/client.js', () => ({
 }));
 
 vi.mock('../store-context.js', () => ({
-  DEV_DEFAULT_STORE: 'sellright',
+  devDefaultStore: () => 'sellright',
   StoreSlugError: class StoreSlugError extends Error {},
   resolveStore: vi.fn(async () => ({
     id: 'store_1',
@@ -29,7 +29,7 @@ vi.mock('../store-context.js', () => ({
 describe('trial license route', () => {
   afterEach(() => {
     vi.clearAllMocks();
-    trialResult.current = { kind: 'issued', key: 'SR-TRIAL-123' };
+    trialResult.current = { kind: 'issued', key: 'SR-TRIAL-123', days: 14 };
   });
 
   it('passes the requested app key into the trial email sender and returns 200', async () => {

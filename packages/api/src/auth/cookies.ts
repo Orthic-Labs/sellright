@@ -109,9 +109,11 @@ export const CUST_CSRF_COOKIE = 'sr_cust_csrf';
  * ttlMs/1000; the default is the env SESSION_TTL_DAYS. (Was the shared 14-day
  * admin MAX_AGE, which expired cookies 16 days before the 30-day session.)
  */
-export const CUSTOMER_COOKIE_MAX_AGE_SECONDS = Math.ceil(env.SESSION_TTL_DAYS * 24 * 3600);
+export function customerCookieMaxAgeSeconds(): number {
+  return Math.ceil(env.SESSION_TTL_DAYS * 24 * 3600);
+}
 
-export function setCustomerCookies(c: Ctx, token: string, csrf: string, maxAgeSeconds = CUSTOMER_COOKIE_MAX_AGE_SECONDS): void {
+export function setCustomerCookies(c: Ctx, token: string, csrf: string, maxAgeSeconds = customerCookieMaxAgeSeconds()): void {
   const secure = secureFlag(c);
   const base = `Path=/; Max-Age=${maxAgeSeconds}; SameSite=Lax${secure}`;
   c.header('Set-Cookie', `${CUST_COOKIE}=${token}; HttpOnly; ${base}`, { append: true });

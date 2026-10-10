@@ -19,6 +19,7 @@ import { err as logErr } from '../lib/logger.js';
 import { env } from '../env.js';
 import { assertSafeOutboundUrl, type OutboundUrlLookup } from '../security/outbound-url.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireManage, requireOwner, requirePermission, guard } from './admin-helpers.js';
+import { CANARY_TOPIC } from '../canary/marker.js';
 
 export const adminSettingsAdvanced = new OpenAPIHono();
 
@@ -31,6 +32,11 @@ export const adminSettingsAdvanced = new OpenAPIHono();
 // write them; audit_log is tenant_isolation-gated and gets storeId = the
 // caller's store, keeping each store's audit rows invisible to other stores.
 // Audit payloads never carry passwords, hashes, tokens, or signing secrets.
+
+/** `health.canary` is reserved for the internal canary endpoint (PLAN 7.16). */
+export function assertMerchantTopics(topics: string[]): void {
+  if (topics.includes(CANARY_TOPIC)) throw new HttpError(400, 'health.canary is a reserved topic', 'reserved_topic', 'topics');
+}
 
 export async function sanitizeWebhookEndpointPatch(
   input: { url?: string; topics?: string[]; enabled?: boolean },
@@ -65,6 +71,7 @@ adminSettingsAdvanced.openapi(
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requirePermission(st, 'webhooks');
     const b = c.req.valid('json');
+    assertMerchantTopics(b.topics);
     const url = await assertSafeOutboundUrl(b.url);
     const secret = randomBytes(24).toString('hex');
     const id = await withStore(st.storeId, async (tx) => {
@@ -89,6 +96,7 @@ adminSettingsAdvanced.openapi(
     const st = requireStore(admin, c); requireManage(st);
     const { id } = c.req.valid('param');
     const b = c.req.valid('json');
+    if (b.topics) assertMerchantTopics(b.topics);
     const patch = await sanitizeWebhookEndpointPatch(b);
     const ok = await withStore(st.storeId, async (tx) => {
       const [w] = await tx.select({ id: s.webhookEndpoint.id, url: s.webhookEndpoint.url, topics: s.webhookEndpoint.topics, enabled: s.webhookEndpoint.enabled }).from(s.webhookEndpoint).where(eq(s.webhookEndpoint.id, id)).limit(1);

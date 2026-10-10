@@ -215,6 +215,7 @@ storeKitWebhooks.openapi(
         licenseKey: ensured.licenseKey,
         deviceIdHash: body.deviceIdHash,
         deviceLabel: body.deviceLabel ?? null,
+        platform: body.platform,
       });
       return { kind: 'activated' as const, activated, entitlement };
     });
@@ -237,6 +238,7 @@ storeKitWebhooks.openapi(
       throw new HttpError(401, 'not authenticated, or purchase already linked to a different account');
     }
     if (out.activated.kind === 'notfound') throw new HttpError(400, 'license could not be activated');
+    if (out.activated.kind === 'rejected_platform') throw new HttpError(400, out.activated.reason);
     if (out.activated.kind === 'full') throw new HttpError(409, 'device seat limit reached');
 
     // Lease-shaped response kept wire-compatible with the RightSites surface

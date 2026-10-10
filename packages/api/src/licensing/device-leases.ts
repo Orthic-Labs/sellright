@@ -19,6 +19,10 @@ import { newActivationToken, hashActivationToken } from './tokens.js';
 import { signEntitlement, signLeaseEnvelope } from './sign.js';
 import { buildEntitlements } from './entitlements.js';
 import {
+  authorizeEntitlement, policyClaims, policyLeaseUnlimited,
+  type PolicyClaims, type RequestExtensions,
+} from './entitlement-policy.js';
+import {
   derivePool,
   devicePolicyFor,
   leaseGraceSecondsFor,
@@ -58,6 +62,8 @@ export interface LeaseEnvelope {
   graceSeconds: number;
   generation: number;
   signature: string | null;
+  /** Policy claim; present only when the policy supplies one (default policy: absent). */
+  entitlementScope?: NonNullable<PolicyClaims['entitlementScope']>;
 }
 
 // Canonical envelope bytes signed by signLeaseEnvelope — fixed field order,
@@ -67,6 +73,8 @@ function canonicalLeaseEnvelope(e: Omit<LeaseEnvelope, 'entitlement' | 'signatur
   return JSON.stringify({
     leaseId: e.leaseId, deviceIdHash: e.deviceIdHash, pool: e.pool,
     issuedAt: e.issuedAt, expiresAt: e.expiresAt, graceSeconds: e.graceSeconds, generation: e.generation,
+    // Appended last and only when set: default-policy bytes are unchanged.
+    entitlementScope: e.entitlementScope,
   });
 }
 
@@ -102,6 +110,9 @@ export async function issueDeviceLease(
   input: {
     storeId: string; appKey: string; licenseKey: string;
     deviceIdHash: string; platform: Platform; deviceLabel?: string | null;
+    ext?: RequestExtensions;
+    /** Entitlement token format versions the client offered (sign.ts negotiation). */
+    offeredVersions?: readonly number[] | null;
   },
 ): Promise<IssueLeaseResult> {
   // Pool is derived server-side from the platform, never accepted from the
@@ -120,11 +131,25 @@ export async function issueDeviceLease(
   const lic = await lockActiveLicense(tx, input);
   if (!lic) return { kind: 'notfound' };
 
+  // Entitlement authorization policy (plan 3.6): sandbox / scope / upgrade
+  // rules are the registered policy's, not the engine's. Default: allow.
+  const decision = await authorizeEntitlement({
+    path: 'lease_issue', tx, storeId: input.storeId, platform: input.platform, pool,
+    ext: input.ext ?? {}, now: new Date(),
+    license: { id: lic.id, appKey: lic.appKey, status: lic.status, seats: lic.seats, expiresAt: lic.expiresAt, metadata: lic.metadata },
+  });
+  if (!decision.allow) {
+    return decision.kind === 'rejected_platform'
+      ? { kind: 'rejected_platform', reason: decision.reason }
+      : { kind: 'notfound' };
+  }
+
   // Only unmarked legacy seats<=0 licenses are grandfathered unlimited.
   // Policy-marked seats=0 licenses use bounded pool caps instead of the flat
   // seat count. With no registered policy the flat seat count is authoritative.
   const policy = devicePolicyFor(lic.appKey);
-  const unlimited = lic.seats <= 0 && !usesBoundedDevicePools(lic.appKey, lic.seats, lic.metadata);
+  const unlimited = policyLeaseUnlimited({ path: 'lease_issue', license: lic, pool })
+    || (lic.seats <= 0 && !usesBoundedDevicePools(lic.appKey, lic.seats, lic.metadata));
 
   const existing = await tx
     .select({ id: s.licenseActivation.id, deviceIdHash: s.licenseActivation.deviceIdHash, pool: s.licenseActivation.pool, generation: s.licenseActivation.generation })
@@ -216,11 +241,13 @@ export async function issueDeviceLease(
     }
   }
 
+  const claims = policyClaims({ path: 'lease_issue', license: lic, pool });
   const entitlements = buildEntitlements({ appKey: input.appKey, metadata: lic.metadata });
   const entitlement = entitlements.tier
     ? signEntitlement({
       licenseId: lic.id, app: input.appKey, tier: entitlements.tier, features: entitlements.features,
       deviceId: input.deviceIdHash, expiresAtUnix: lic.expiresAt ? Math.floor(lic.expiresAt.getTime() / 1000) : null,
+      entitlementScope: claims.entitlementScope, offeredVersions: input.offeredVersions,
     }, now.getTime())
     : null;
 
@@ -228,6 +255,7 @@ export async function issueDeviceLease(
     leaseId, deviceIdHash: input.deviceIdHash, pool,
     issuedAt: issuedAt.toISOString(), expiresAt: expiresAt.toISOString(),
     graceSeconds, generation,
+    ...(claims.entitlementScope ? { entitlementScope: claims.entitlementScope } : {}),
   };
   const signature = signLeaseEnvelope(canonicalLeaseEnvelope(envelopeCore));
 
@@ -253,7 +281,10 @@ export type RenewLeaseResult =
  *  atomic): exactly one wins and the loser sees the rotated leaseId. */
 export async function renewDeviceLease(
   tx: Tx,
-  input: { storeId: string; appKey: string; deviceIdHash: string; leaseId: string },
+  input: {
+    storeId: string; appKey: string; deviceIdHash: string; leaseId: string;
+    ext?: RequestExtensions; offeredVersions?: readonly number[] | null;
+  },
 ): Promise<RenewLeaseResult> {
   const rows = await tx
     .select({
@@ -274,12 +305,19 @@ export async function renewDeviceLease(
   // Replay rejection: the presented leaseId must match the currently-issued one.
   if (row.leaseId !== input.leaseId) return { kind: 'notfound' };
 
-  const lic = await tx.select({ status: s.license.status, expiresAt: s.license.expiresAt, appKey: s.license.appKey, metadata: s.license.metadata, id: s.license.id })
+  const lic = await tx.select({ status: s.license.status, seats: s.license.seats, expiresAt: s.license.expiresAt, appKey: s.license.appKey, metadata: s.license.metadata, id: s.license.id })
     .from(s.license).where(eq(s.license.id, row.licenseId)).limit(1);
   const licRow = lic[0];
   if (!licRow || licRow.status !== 'active' || (licRow.expiresAt != null && licRow.expiresAt.getTime() <= Date.now())) {
     return { kind: 'revoked' };
   }
+  // Renewal re-consults the same policy as issuance (a license that became
+  // ineligible, e.g. sandbox-origin on a computer pool, must not keep renewing).
+  const decision = await authorizeEntitlement({
+    path: 'lease_renew', tx, storeId: input.storeId, pool: row.pool, ext: input.ext ?? {}, now: new Date(),
+    license: { id: licRow.id, appKey: licRow.appKey, status: licRow.status, seats: licRow.seats, expiresAt: licRow.expiresAt, metadata: licRow.metadata },
+  });
+  if (!decision.allow) return { kind: 'revoked' };
 
   const now = new Date();
   const newLeaseId = randomUUID();
@@ -290,11 +328,13 @@ export async function renewDeviceLease(
     lastSeenAt: now, updatedAt: now,
   }).where(eq(s.licenseActivation.id, row.id));
 
+  const claims = policyClaims({ path: 'lease_renew', license: licRow, pool: row.pool });
   const entitlements = buildEntitlements({ appKey: licRow.appKey, metadata: licRow.metadata });
   const entitlement = entitlements.tier
     ? signEntitlement({
       licenseId: licRow.id, app: licRow.appKey, tier: entitlements.tier, features: entitlements.features,
       deviceId: input.deviceIdHash, expiresAtUnix: licRow.expiresAt ? Math.floor(licRow.expiresAt.getTime() / 1000) : null,
+      entitlementScope: claims.entitlementScope, offeredVersions: input.offeredVersions,
     }, now.getTime())
     : null;
 
@@ -302,6 +342,7 @@ export async function renewDeviceLease(
     leaseId: newLeaseId, deviceIdHash: input.deviceIdHash, pool: row.pool as Pool,
     issuedAt: now.toISOString(), expiresAt: expiresAt.toISOString(),
     graceSeconds, generation: row.generation,
+    ...(claims.entitlementScope ? { entitlementScope: claims.entitlementScope } : {}),
   };
   const signature = signLeaseEnvelope(canonicalLeaseEnvelope(envelopeCore));
   return { kind: 'ok', lease: { ...envelopeCore, entitlement, signature } };

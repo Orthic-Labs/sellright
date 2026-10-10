@@ -356,40 +356,121 @@ const EnvSchema = z.object({
 export type Env = z.infer<typeof EnvSchema>;
 export type EnvSource = Record<string, string | undefined>;
 
-const resolvedEnvSource = resolveFileBackedEnv(process.env);
-const parsedEnv: Env = EnvSchema.parse(resolvedEnvSource);
-const productionErrors = productionEnvErrors(parsedEnv, resolvedEnvSource);
-if (productionErrors.length) {
-  throw new Error(`Invalid production environment:\n- ${productionErrors.join('\n- ')}`);
+/**
+ * Parse and validate an environment source into the engine `Env`. Pure: it
+ * touches no module state, so `createApp({ env })` (sdk/create-app.ts) and the
+ * lazy singleton below share one code path. File-backed secrets (`KEY_FILE`)
+ * are resolved first; production gates and the sender-domain policy run here.
+ */
+export function parseEnv(source: EnvSource): { env: Env; resolvedSource: EnvSource } {
+  const resolvedSource = resolveFileBackedEnv(source);
+  const parsed: Env = EnvSchema.parse(resolvedSource);
+  const productionErrors = productionEnvErrors(parsed, resolvedSource);
+  if (productionErrors.length) {
+    throw new Error(`Invalid production environment:\n- ${productionErrors.join('\n- ')}`);
+  }
+  // Shared sender-domain policy (email/sender-policy.ts) — no-op while
+  // FORBIDDEN_SENDER_DOMAINS is unset (the default).
+  assertAllowedSenders(
+    { SMTP_FROM: parsed.SMTP_FROM, FROM_EMAIL: parsed.FROM_EMAIL, EMAIL_FROM_BY_APP: parsed.EMAIL_FROM_BY_APP },
+    parseSenderDomainList(parsed.FORBIDDEN_SENDER_DOMAINS),
+  );
+  return { env: parsed, resolvedSource };
 }
-// Shared sender-domain policy (email/sender-policy.ts) — no-op while
-// FORBIDDEN_SENDER_DOMAINS is unset (the default).
-assertAllowedSenders(
-  { SMTP_FROM: parsedEnv.SMTP_FROM, FROM_EMAIL: parsedEnv.FROM_EMAIL, EMAIL_FROM_BY_APP: parsedEnv.EMAIL_FROM_BY_APP },
-  parseSenderDomainList(parsedEnv.FORBIDDEN_SENDER_DOMAINS),
-);
 
-export const env: Env = parsedEnv;
+// ---------------------------------------------------------------------------
+// Process-wide env holder. Importing this module parses NOTHING (2.1: env is
+// parsed inside createApp). `initEnv` is called by createApp with its `env`
+// option; code paths that never go through createApp (operator scripts, the
+// test runner, the legacy `buildHttpApp()` builder) keep working because the
+// first read of `env` initialises it implicitly from `process.env`. An implicit
+// init is recorded so createApp can refuse to run after a module touched the
+// env at import time (that would mean the env was NOT parsed inside createApp).
+// ---------------------------------------------------------------------------
+interface EnvState { env: Env; source: EnvSource; origin: 'explicit' | 'implicit'; closed?: boolean }
+let envState: EnvState | undefined;
+
+export function initEnv(source: EnvSource = process.env): Env {
+  const { env: parsed, resolvedSource } = parseEnv(source);
+  envState = { env: parsed, source: resolvedSource, origin: 'explicit' };
+  return parsed;
+}
+
+export function getEnv(): Env {
+  if (envState) return envState.env;
+  const { env: parsed, resolvedSource } = parseEnv(process.env);
+  envState = { env: parsed, source: resolvedSource, origin: 'implicit' };
+  return parsed;
+}
+
+/** The resolved raw source the env was parsed from. INTERNAL: contains secrets; use only to fingerprint them. */
+export function getEnvSource(): EnvSource {
+  getEnv();
+  return envState!.source;
+}
+
+/** The current env if one has been initialised, else undefined (never initialises). */
+export function peekEnv(): Env | undefined {
+  return envState?.env;
+}
+
+/** 'explicit' (createApp), 'implicit' (first-touch from process.env) or undefined. */
+export function envOrigin(): 'explicit' | 'implicit' | undefined {
+  return envState && !envState.closed ? envState.origin : undefined;
+}
+
+/**
+ * Mark the env closed (createApp shutdown). The parsed values stay READABLE so a straggler
+ * (a fire-and-forget promise finishing after shutdown) reads config instead of throwing and
+ * turning a clean shutdown into an unhandled rejection (review F4); `envOrigin()` reports
+ * undefined so the next createApp may initialise afresh.
+ */
+export function closeEnv(): void {
+  if (envState) envState.closed = true;
+}
+
+/** Test-only: forget everything so the next read re-initialises from process.env. */
+export function _resetEnvForTest(): void {
+  envState = undefined;
+}
+
+/**
+ * The engine env. A lazy view over the current holder: reads, writes (tests set
+ * flags), `in`, and enumeration all forward to the live parsed object.
+ */
+export const env: Env = new Proxy({} as Env, {
+  get: (_t, key) => Reflect.get(getEnv(), key),
+  set: (_t, key, value) => Reflect.set(getEnv(), key, value),
+  has: (_t, key) => Reflect.has(getEnv(), key),
+  ownKeys: () => Reflect.ownKeys(getEnv()),
+  getOwnPropertyDescriptor: (_t, key) => {
+    const d = Reflect.getOwnPropertyDescriptor(getEnv(), key);
+    if (d) d.configurable = true;
+    return d;
+  },
+});
 
 /**
  * Extension seam: parse additional, deployment-specific env vars from the
- * same resolved source this file used, without editing this file. A fork
- * defines its own zod shape (and optional boot-time validator) and gets back
- * one merged, frozen object carrying both SellRight's `env` and its own typed
- * extras.
+ * same resolved source the engine env was parsed from, without editing this
+ * file. A fork defines its own zod shape (and optional boot-time validator) and
+ * gets back one merged, frozen object carrying both SellRight's `env` and its
+ * own typed extras.
  *
  * This runs a SEPARATE `z.object(extraShape).parse(...)` over the same
  * resolved source — it never re-runs this file's own `.transform()` — so
  * SellRight's own defaults/normalization above are untouched. `validate`
  * receives the merged object and may return an array of error strings; a
  * non-empty array throws, matching this file's own productionEnvErrors gate.
+ * Inside createApp, plugins reach it as `ctx.extendEnv` (the `configure` phase).
  */
 export function extendEnv<Extra extends z.ZodRawShape>(
   extraShape: Extra,
   validate?: (merged: Readonly<Env & z.infer<z.ZodObject<Extra>>>) => string[] | void,
 ): Readonly<Env & z.infer<z.ZodObject<Extra>>> {
-  const extra = z.object(extraShape).parse(resolvedEnvSource);
-  const merged = Object.freeze({ ...env, ...extra }) as Env & z.infer<z.ZodObject<Extra>>;
+  getEnv();
+  const extra = z.object(extraShape).parse(envState!.source);
+  const merged = Object.freeze({ ...envState!.env, ...extra }) as Env & z.infer<z.ZodObject<Extra>>;
   const errors = validate?.(merged);
   if (errors && errors.length) {
     throw new Error(`Invalid extended environment:\n- ${errors.join('\n- ')}`);
