@@ -14,7 +14,7 @@
 // R6 (operator override, released_unverified) is an admin-route concern and is not here.
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { withStore, type Tx } from '../db/client.js';
-import { withLockedSetInTx, type HeldLocks } from '../db/locks.js';
+import { adoptCreatedReservation, withLockedSetInTx, type HeldLocks } from '../db/locks.js';
 import * as s from '../db/schema.js';
 import { dispatchReservationTransitions } from './policy/transitions.js';
 import { PaymentPolicyUnavailableError } from './policy/registry.js';
@@ -89,6 +89,16 @@ export async function providerQuiescent(
   return Boolean((rows as { quiescent: boolean }[])[0]?.quiescent);
 }
 
+/** The live-owner unique index rejected an insert (drizzle wraps the driver error; the pg error sits on `cause`). */
+function isLiveOwnerViolation(e: unknown): boolean {
+  for (let cur: unknown = e, depth = 0; cur && typeof cur === 'object' && depth < 5; depth++) {
+    const err = cur as { code?: unknown; constraint?: unknown; cause?: unknown };
+    if (err.code === '23505' && err.constraint === 'order_reservation_live_owner') return true;
+    cur = err.cause;
+  }
+  return false;
+}
+
 /** R1: place a hold. Idempotent for the same order/kind/owner while held or consumed. */
 export async function reserve(
   tx: Tx,
@@ -142,18 +152,28 @@ export async function reserve(
     .limit(1);
   if (other) throw new ReservationConflict('live_owner', `${kind}:${ownerKey} held by order ${other.orderId}`);
 
-  const [row] = await tx
-    .insert(s.orderReservation)
-    .values({
-      storeId,
-      orderId,
-      kind,
-      ownerKey,
-      holder: input.holder ?? {},
-      releaseOnFullRefund: input.releaseOnFullRefund ?? false,
-      expiresAt: input.expiresAt ?? null,
-    })
-    .returning();
+  // Two concurrent requests for one owner can both pass the check above (their lock sets name different orders);
+  // the live-owner unique index then rejects the loser, which is the same conflict, not a server error. The failed
+  // INSERT aborts the caller's transaction, and the ReservationConflict thrown here rolls it back.
+  let row: ReservationRow | undefined;
+  try {
+    [row] = await tx
+      .insert(s.orderReservation)
+      .values({
+        storeId,
+        orderId,
+        kind,
+        ownerKey,
+        holder: input.holder ?? {},
+        releaseOnFullRefund: input.releaseOnFullRefund ?? false,
+        expiresAt: input.expiresAt ?? null,
+      })
+      .returning();
+  } catch (e) {
+    if (isLiveOwnerViolation(e)) throw new ReservationConflict('live_owner', `${kind}:${ownerKey} held by a concurrent order`);
+    throw e;
+  }
+  adoptCreatedReservation(tx, orderId, row!.id);
   await dispatchReservationTransitions(tx, [row!], null, 'held', 'reserved');
   return row!;
 }

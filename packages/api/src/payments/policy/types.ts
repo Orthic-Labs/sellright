@@ -173,6 +173,61 @@ export interface SettlementResponseOverride {
   readonly extra?: { readonly state?: string };
 }
 
+// ── 6. checkout (PAYMENT-TIMING §3.3 R1; X-57) ────────────────────────────────────────────
+/** Structural schema for a policy's checkout extension block (zod schemas satisfy it). */
+export interface CheckoutExtensionSchema {
+  safeParse(input: unknown): { success: true; data: unknown } | { success: false };
+}
+
+/** The signed-in session customer, or null for a guest checkout. */
+export interface PolicyCustomer {
+  readonly id: string;
+  readonly email: string;
+  readonly emailVerified: boolean;
+}
+
+/** One checkout order line as inserted by the engine in the same transaction. */
+export interface CheckoutLine {
+  readonly variantId: string;
+  readonly sku: string;
+  readonly productId: string;
+  readonly quantity: number;
+  readonly unitPrice: number;
+}
+
+export interface CheckoutOrderInput {
+  /** The order row inserted by the engine, pre-adjustment (grandTotal before any policy price adjustment). */
+  readonly order: PolicyOrder;
+  readonly lines: readonly CheckoutLine[];
+  /** This policy's validated extension block, or undefined when the request carried none. */
+  readonly extensions: unknown;
+  readonly customer: PolicyCustomer | null;
+  readonly held: HeldLocks;
+}
+
+/** An order-level price adjustment row (`order_adjustment`). Minor units, may be negative. Untaxed. */
+export interface CheckoutPriceAdjustment {
+  readonly code: string;
+  readonly label: string;
+  readonly amount: number;
+}
+
+export interface CheckoutOrderResult {
+  readonly veto?: PolicyVeto;
+  /** Merged into order.metadata. Keys owned by the engine, or claimed by another policy, are refused. */
+  readonly metadata?: Readonly<Record<string, unknown>>;
+  readonly reserve?: readonly ReservationRequest[];
+  readonly priceAdjustment?: CheckoutPriceAdjustment;
+}
+
+export interface CheckoutReplayInput {
+  readonly existingOrder: PolicyOrder;
+  /** This policy's validated extension block for the replayed request, or undefined. */
+  readonly extensions: unknown;
+  readonly customer: PolicyCustomer | null;
+  readonly held: HeldLocks;
+}
+
 /** Why an order's entitlement is being reversed (the order is Refunded, or a chargeback was lost). */
 export type EntitlementReversalReason = 'full_refund' | 'chargeback';
 
@@ -193,6 +248,21 @@ export interface EntitlementReversalInput {
 export interface PaymentPolicy {
   /** Unique registration id (e.g. 'sellright-default', 'rightsuite'). */
   readonly id: string;
+  /**
+   * Optional: schema for this policy's `extensions[id]` block on POST /v1/shop/checkout. Validated before
+   * the idempotency fingerprint is computed; a failure is a 400. Absent means the policy accepts no block.
+   */
+  readonly checkoutExtensions?: CheckoutExtensionSchema;
+  /**
+   * Optional: runs inside the checkout transaction right after the order and line inserts, in SAVEPOINT.
+   * A veto rolls the whole checkout back (409 with the veto code); reserve requests become held rows.
+   */
+  onCheckoutOrder?(tx: Tx, i: CheckoutOrderInput): Promise<CheckoutOrderResult>;
+  /**
+   * Optional: consulted at every idempotency replay site (same key, converted cart, unique-violation race)
+   * before the existing order is returned. False refuses the replay (422 LEGAL_ACCEPTANCE_REQUIRED).
+   */
+  checkoutReplayAllowed?(tx: Tx, i: CheckoutReplayInput): Promise<boolean>;
   /** Runs before any attempt row, replay lookup, provider session or intent creation. */
   beforePaymentAttempt(tx: Tx, i: BeforePaymentAttemptInput): Promise<BeforePaymentAttemptResult>;
   /** Optional: absent means capture (default allow). Runs inside the recovery decision transaction. */
