@@ -322,6 +322,40 @@ export async function lockSetInTx(tx: Tx, storeId: string, subject: LockSubject 
 }
 
 /**
+ * In-transaction form of withLockedSet for helpers that run on an existing transaction (effects, inline
+ * settlement, placement tenders). A covering set already held on `tx` is reused (the HeldLocks brand of that set);
+ * otherwise the subject's rows are locked on this same transaction in class order (L1 → L2 → L3 → L4), re-planned
+ * under the locks, and the brand is minted for `fn`. Growth under the lock throws LockSetGrew, which rolls the
+ * caller's transaction back.
+ */
+export async function withLockedSetInTx<T>(
+  tx: Tx,
+  storeId: string,
+  subject: LockSubject | readonly LockSubject[],
+  fn: (tx: Tx, held: HeldLocks, plan: LockPlanContribution) => Promise<T>,
+): Promise<T> {
+  const covering = currentLockSet(tx);
+  if (covering && (await lockSetCovers(tx, storeId, subject))) return fn(tx, covering.held, covering.plan);
+  const subjects = Array.isArray(subject) ? subject : [subject as LockSubject];
+  const plan = await planFor(tx, storeId, subjects);
+  const advisoryHashes = await acquirePurchaseLocks(tx, plan.purchases);
+  const taken = new Set<string>();
+  await lockRows(tx, 'license', storeId, plan.licenseIds, taken);
+  await lockRows(tx, 'order', storeId, plan.orderIds, taken);
+  const again = await planFor(tx, storeId, subjects);
+  if (!subsetOf(again, plan)) throw new LockSetGrew(again);
+  await lockRows(tx, 'order_reservation', storeId, plan.reservationIds ?? [], taken);
+  const held = mintHeld({
+    tx,
+    advisoryHashes,
+    promisedLicenseIds: plan.licenseIds.map(canonical),
+    promisedOrderIds: plan.orderIds.map(canonical),
+    lockedRows: taken,
+  });
+  return lockSetContext.run({ tx, held, plan }, () => fn(tx, held, plan));
+}
+
+/**
  * X-49 order-row acquisition for paths that update only the orders' own rows (no licence writes):
  * pass-through when a covering set is held on `tx`, else the order rows are locked here, sorted, on
  * this same transaction. Taking only L3 keeps the class order when the caller already holds L2 licences.

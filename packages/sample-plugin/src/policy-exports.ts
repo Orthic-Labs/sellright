@@ -11,7 +11,10 @@ import {
   createLicenseRevocationFeed, registerEntitlementPolicy, resolveRuntimeArtifactPromotion, restoreLicenseInTx, revokeLicenseInTx,
   type EntitlementPolicy,
 } from '@sellright/api/licensing';
-import { registerPaymentPolicy, type BeforeCaptureResult, type PaymentPolicy } from '@sellright/api/payments';
+import {
+  registerPaymentPolicy, type BeforeCaptureResult, type InvoiceEffectDecision, type PaymentPolicy, type ReservationRequest,
+  type RevalidateForIssuanceResult, type SettlementResponseOverride,
+} from '@sellright/api/payments';
 import type { ReleaseRegistrationPolicy } from '@sellright/api/http';
 
 export const policyRegistrars = {
@@ -35,6 +38,10 @@ export type PolicyTypeProof = {
   entitlement: EntitlementPolicy;
   payment: PaymentPolicy;
   capture: BeforeCaptureResult;
+  reservation: ReservationRequest;
+  invoiceDecision: InvoiceEffectDecision;
+  revalidate: RevalidateForIssuanceResult;
+  settlementOverride: SettlementResponseOverride;
   release: ReleaseRegistrationPolicy;
   storeKitSource: VerifiedStoreKitLicenseSource;
   storeKitPayload: StoreKitTransactionPayload;

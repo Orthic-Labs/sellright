@@ -16,6 +16,7 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 import { withStore, type Tx } from '../db/client.js';
 import type { HeldLocks } from '../db/locks.js';
 import * as s from '../db/schema.js';
+import { dispatchReservationTransitions } from './policy/transitions.js';
 
 export type ReservationRow = typeof s.orderReservation.$inferSelect;
 export type ReservationState = 'held' | 'consumed' | 'released';
@@ -151,6 +152,7 @@ export async function reserve(
       expiresAt: input.expiresAt ?? null,
     })
     .returning();
+  await dispatchReservationTransitions(tx, [row!], null, 'held', 'reserved');
   return row!;
 }
 
@@ -166,7 +168,7 @@ async function consumeCore(
   if (!(CONSUMABLE_STATES as readonly string[]).includes(state)) {
     throw new ReservationRuleError(`cannot consume reservations of a ${state} order (I3: consume implies Paid)`);
   }
-  return tx
+  const consumed = await tx
     .update(s.orderReservation)
     .set({
       state: 'consumed',
@@ -179,6 +181,8 @@ async function consumeCore(
     .where(and(eq(s.orderReservation.storeId, input.storeId), eq(s.orderReservation.orderId, input.orderId),
       eq(s.orderReservation.state, 'held')))
     .returning();
+  await dispatchReservationTransitions(tx, consumed, 'held', 'consumed', 'consumed');
+  return consumed;
 }
 
 /**
@@ -262,11 +266,13 @@ async function settleReleaseCore(
     stripeDiscoverable: input.stripeDiscoverable,
   });
   if (!quiescent) return [];
-  return tx
+  const released = await tx
     .update(s.orderReservation)
     .set({ state: 'released', releasedAt: sql`now()`, providerTerminalAt: sql`now()`, updatedAt: sql`now()` })
     .where(inArray(s.orderReservation.id, pending.map((r) => r.id)))
     .returning();
+  await dispatchReservationTransitions(tx, released, 'held', 'released', state === 'Refunded' ? 'order_refunded' : 'order_cancelled');
+  return released;
 }
 
 /** R3 + R4 in one call: the cancel path's entry point. Returns the rows still held with a request. */
@@ -325,12 +331,79 @@ export async function releaseOnFullRefund(
 ): Promise<ReservationRow[]> {
   const state = await orderState(tx, input.storeId, input.orderId);
   if (state !== 'Refunded') return [];
-  return tx
+  const released = await tx
     .update(s.orderReservation)
     .set({ state: 'released', releasedAt: sql`now()`, updatedAt: sql`now()` })
     .where(and(eq(s.orderReservation.storeId, input.storeId), eq(s.orderReservation.orderId, input.orderId),
       eq(s.orderReservation.state, 'consumed'), eq(s.orderReservation.releaseOnFullRefund, true)))
     .returning();
+  await dispatchReservationTransitions(tx, released, 'consumed', 'released', 'order_refunded');
+  return released;
+}
+
+/**
+ * R6 (PAYMENT-TIMING §5.3.3): operator override. Releases the order's held rows while provider state is
+ * unverified. Requires a Cancelled order and a reason of at least 10 characters. Money that lands later
+ * follows I1 (recorded, payment_after_cancel).
+ */
+export async function overrideRelease(
+  tx: Tx,
+  _held: HeldLocks,
+  input: { storeId: string; orderId: string; reason: string },
+): Promise<ReservationRow[]> {
+  if (input.reason.trim().length < 10) throw new ReservationRuleError('override reason must be at least 10 characters');
+  const state = await orderState(tx, input.storeId, input.orderId);
+  if (state !== 'Cancelled') throw new ReservationRuleError(`operator override requires a Cancelled order (order is ${state})`);
+  const released = await tx
+    .update(s.orderReservation)
+    .set({
+      state: 'released', releasedAt: sql`now()`, providerTerminalAt: sql`now()`, releasedUnverified: true,
+      releaseReason: `operator_override: ${input.reason.trim()}`, updatedAt: sql`now()`,
+    })
+    .where(and(eq(s.orderReservation.storeId, input.storeId), eq(s.orderReservation.orderId, input.orderId),
+      eq(s.orderReservation.state, 'held')))
+    .returning();
+  await dispatchReservationTransitions(tx, released, 'held', 'released', 'operator_override');
+  return released;
+}
+
+/**
+ * Purge gate (PAYMENT-TIMING §3.5, R2-1): true when the order holds a held reservation whose provider work
+ * could still move money. The caller refuses the purge in that case. Evaluated under the order lock.
+ * `stripeDiscoverable` is the caller's pre-transaction stripeDiscoverable(storeId, config) (no I/O here).
+ */
+export async function purgeBlockedByReservations(
+  tx: Tx,
+  storeId: string,
+  orderId: string,
+  opts: { stripeDiscoverable: boolean },
+): Promise<boolean> {
+  const [held] = await tx.select({ id: s.orderReservation.id }).from(s.orderReservation).where(and(
+    eq(s.orderReservation.storeId, storeId), eq(s.orderReservation.orderId, orderId),
+    eq(s.orderReservation.state, 'held'))).limit(1);
+  if (!held) return false;
+  return !(await providerQuiescent(tx, storeId, orderId, { stripeDiscoverable: opts.stripeDiscoverable }));
+}
+
+/**
+ * Purge (PAYMENT-TIMING §3.5): every reservation of the order is projected as released (cause order_purged)
+ * and deleted, before the order row (FK). Runs under the order's lock set (the caller holds HeldLocks).
+ */
+export async function purgeReservations(
+  tx: Tx,
+  _held: HeldLocks,
+  input: { storeId: string; orderId: string },
+): Promise<ReservationRow[]> {
+  const rows = await tx.select().from(s.orderReservation).where(and(
+    eq(s.orderReservation.storeId, input.storeId), eq(s.orderReservation.orderId, input.orderId)));
+  for (const row of rows) {
+    await dispatchReservationTransitions(tx, [{ ...row, state: 'released' }], row.state, 'released', 'order_purged');
+  }
+  if (rows.length) {
+    await tx.delete(s.orderReservation).where(and(
+      eq(s.orderReservation.storeId, input.storeId), eq(s.orderReservation.orderId, input.orderId)));
+  }
+  return rows;
 }
 
 /** Live (held or consumed) reservations, optionally narrowed. Read-only; no lock brand needed. */

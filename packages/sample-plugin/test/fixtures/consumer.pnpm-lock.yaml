@@ -234,11 +234,11 @@ packages:
     resolution: {integrity: sha512-Vt/WkAza2cIPQkv1S9CNNkjnPt+IS199nd+BFUZ+9iQ8As/M8dfqYKdDYLQ0Xdsf069MJti8QeOeh/IKoEBkBw==}
 
   '@sellright/api@file:packs/sellright-api-0.1.0.tgz':
-    resolution: {integrity: sha512-9iOtI3jFxmstfcgj+52R/f32NYq2xo66Z63KiEtkZPP9bVx/6F2agLwIYIs6txZomo3yAmcspEOB9eYhvgZT9w==, tarball: file:packs/sellright-api-0.1.0.tgz}
+    resolution: {integrity: sha512-XEDWpKn27UYQmbsomSfgfuJWUuMHXUCxavo2ZqSySuRGVjtrmSvS0LANJJADwKq2UkUa/o9S4gc/okYiHj01YA==, tarball: file:packs/sellright-api-0.1.0.tgz}
     version: 0.1.0
 
   '@sellright/sample-plugin@file:packs/sellright-sample-plugin-0.1.0.tgz':
-    resolution: {integrity: sha512-rv6/9uidRAWX13VgLYyEb1FPOxMKKG6Wv7rI2TZ8h6wfdkXOfoOQ7VfOx9GbKfF4eFdYN+exlRgfWO42RCN3ow==, tarball: file:packs/sellright-sample-plugin-0.1.0.tgz}
+    resolution: {integrity: sha512-FWxRzCEEgcyYVY2BUkjChF1UD9Swwzx6MSM44qRqpRcs1T/KpDOqnjId3KWD/h4vno82WUEJsI+CI9Rrstgb9Q==, tarball: file:packs/sellright-sample-plugin-0.1.0.tgz}
     version: 0.1.0
     peerDependencies:
       '@hono/zod-openapi': ^1.6.3

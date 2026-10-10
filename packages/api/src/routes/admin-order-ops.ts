@@ -14,6 +14,10 @@ import { HttpError, J, errBody, money, Page, requireAdmin, requireStore, require
 import { calculateOrderTotals } from '../money/totals.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
 import { reserveStockOrThrow, StockReservationError, validateReservableItems } from '../orders/stock-reservation.js';
+import { checkPlacement } from '../payments/policy/host.js';
+import { PaymentPolicyVetoError } from '../payments/policy/registry.js';
+import { purgeBlockedByReservations, purgeReservations } from '../payments/reservation.js';
+import { stripeDiscoverable } from '../payments/stripe-reconcile.js';
 import { normalizeEmail } from '../auth/email.js';
 import { resolveTaxRate } from '../money/tax.js';
 import { emitEvent } from '../webhooks/emit.js';
@@ -104,6 +108,12 @@ adminOrderOps.openapi(
       // Effects are recorded deferred and executed after the order lines exist.
       // An unpaid draft is its own operation (admin_draft_create): the order.id key of order_paid_transition is
       // reserved for the order's real Paid transition, which a later settlement of this draft must still get.
+      // PAYMENT-TIMING §4.6: the placement hook for an admin manual tender (provider 'manual'). A veto refuses the
+      // whole request before any row is written. Admin orders hold no reservations (the route takes no upgrade input).
+      if (paid) {
+        await checkPlacement(tx, st.storeId, { id: orderId, storeId: st.storeId, code, state: 'Paid', currency: st.currency, grandTotal: totals.grandTotal, customerId, metadata: {} }, 'manual')
+          .catch((e: unknown) => { if (e instanceof PaymentPolicyVetoError) throw new HttpError(409, e.veto.message); throw e; });
+      }
       const draft: Omit<SettlementOperation, 'kind'> = {
         storeId: st.storeId, operationId: orderId, orderId, effectMode: 'deferred' as const,
         mutations: [
@@ -609,13 +619,17 @@ adminOrderOps.openapi(
     const st = requireStore(admin, c); requireManage(st);
     const { codes, force, reason } = c.req.valid('json');
     const results: { code: string; ok: boolean; error?: string }[] = [];
+    // PAYMENT-TIMING §3.5: the Stripe discovery flag is evaluated before any transaction (no I/O inside one).
+    const [purgeStore] = await withStore(st.storeId, (tx) => tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1));
+    const stripeDiscover = await stripeDiscoverable(st.storeId, purgeStore?.config ?? {});
     for (const code of [...new Set(codes)] as string[]) {
       const preId = await orderIdByCode(st.storeId, code);
-      const r = !preId ? { ok: false as const, error: 'order not found' } : await withLockedSet(st.storeId, { kind: 'order', orderId: preId }, async (tx): Promise<{ ok: true } | { ok: false; error: string }> => {
+      const r = !preId ? { ok: false as const, error: 'order not found' } : await withLockedSet(st.storeId, { kind: 'order', orderId: preId }, async (tx, held): Promise<{ ok: true } | { ok: false; error: string }> => {
         const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
         if (!o) return { ok: false, error: 'order not found' };
         if (!o.deletedAt) return { ok: false, error: 'trash the order first (purge only removes trashed orders)' };
         if (await hasUnresolvedPayment(tx, o.id)) return { ok: false, error: 'Resolve the pending payment before purging' };
+        if (await purgeBlockedByReservations(tx, st.storeId, o.id, { stripeDiscoverable: stripeDiscover })) return { ok: false, error: 'Resolve the pending payment before purging' };
         const isPaid = o.state === 'Paid' || o.state === 'PartiallyRefunded' || o.state === 'Refunded';
         if (isPaid && !force) return { ok: false, error: `paid order — purge requires force + reason (state ${o.state})` };
         if (isPaid && force && !reason) return { ok: false, error: 'force-purging a paid order requires a reason' };
@@ -648,7 +662,7 @@ adminOrderOps.openapi(
         await tx.delete(s.orderEdit).where(eq(s.orderEdit.orderId, o.id));
         await tx.delete(s.orderAdjustment).where(eq(s.orderAdjustment.orderId, o.id));
         // Payment reservations (PAYMENT-TIMING): deleted before the order; the lock set already holds them (L4).
-        await tx.delete(s.orderReservation).where(eq(s.orderReservation.orderId, o.id));
+        await purgeReservations(tx, held, { storeId: st.storeId, orderId: o.id });
         await tx.update(s.giftCardTransaction).set({ orderId: null }).where(eq(s.giftCardTransaction.orderId, o.id));
         await tx.update(s.stockMovement).set({ refOrderId: null }).where(eq(s.stockMovement.refOrderId, o.id));
         // A converted cart points back at this order (nullable FK) — detach it so

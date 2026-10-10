@@ -12,7 +12,7 @@ import { apiErrorSchema, errJson } from '../lib/api-error.js';
 import { customerToken } from '../auth/session.js';
 import { GatewayPaymentError, ownedOrder } from '../payments/gateway-payment.js';
 import { bindStripePreMint, openStripePreMint, reconcileStripeOrder, claimReconcileSlot } from '../payments/stripe-reconcile.js';
-import { checkPaymentAttempt, PaymentPolicyUnavailableError, PaymentPolicyVetoError } from '../payments/policy/host.js';
+import { checkPaymentAttempt, PaymentPolicyUnavailableError, PaymentPolicyVetoError, runShapeSettlementResponse } from '../payments/policy/host.js';
 
 /** D13: the same ownership rule gateway-payment uses — a matching receipt
  *  token (x-receipt-token, returned by POST /checkout) or the signed-in
@@ -86,7 +86,8 @@ pay.openapi(
       | { kind: 'badstate'; state: string }
       | { kind: 'nodue'; state: string }
       | { kind: 'noop'; state: string }
-      | { kind: 'ok'; state: string; payment: string };
+      | { kind: 'ok'; state: string; payment: string }
+      | { kind: 'shaped'; status: 409; code: string; message: string; extra?: { state?: string } };
 
     const baseClaimKey = idemKey ? `pay:${st.id}:${code}:${method}:${idemKey}` : `pay:${st.id}:${code}:${method}`;
     // STOREKIT §5.8 #3 / PAYMENT-TIMING §3.5: the order id is read unlocked for planning
@@ -137,7 +138,7 @@ pay.openapi(
         stripeMode: stripeModeFromConfig(st.config),
       });
 
-      return withLockedSet(st.id, { kind: 'order', orderId: prepared.order.id }, async (tx): Promise<R> => {
+      return withLockedSet(st.id, { kind: 'order', orderId: prepared.order.id }, async (tx, held): Promise<R> => {
         const [order] = await tx.select().from(s.order).where(eq(s.order.id, prepared.order.id)).limit(1).for('update');
         if (!order) return { kind: 'notfound' };
         // MONEY-4: the order may have been auto-cancelled (stale-allocation TTL
@@ -162,6 +163,19 @@ pay.openapi(
           result,
           amount: prepared.amountDue,
         });
+        // PAYMENT-TIMING §4.2: the money is recorded above. The policy may only shape the response
+        // (for example a 409 when an issued entitlement would now fail revalidation); it never rolls back.
+        if (applied.paymentState === 'Settled' && applied.orderState !== 'Cancelled') {
+          const [recorded] = result.providerRef
+            ? await tx.select({ id: s.payment.id }).from(s.payment).where(and(
+              eq(s.payment.storeId, st.id), eq(s.payment.orderId, order.id), eq(s.payment.providerRef, result.providerRef),
+            )).limit(1)
+            : [];
+          const override = await runShapeSettlementResponse(tx, {
+            route: 'pay', order: { ...order, code }, recordedPaymentId: recorded?.id ?? null, held,
+          });
+          if (override) return { kind: 'shaped', status: override.status, code: override.code, message: override.message ?? override.code, extra: override.extra };
+        }
         // A balance payment lands on an order that is ALREADY Paid, so the order
         // state alone says nothing about this attempt: report Settled only when
         // THIS tender settled (a declined/failed balance attempt must not read
@@ -176,6 +190,7 @@ pay.openapi(
     }).catch((e: unknown) => { if (e instanceof LockSetUnstable) return 'retry' as const; throw e; });
 
     if (out === 'retry') return errJson(c, 409, 'PAYMENT_RETRY', 'payment is busy, retry shortly', { extra: { state: 'Retry' } });
+    if (out.kind === 'shaped') return errJson(c, out.status, out.code, out.message, { extra: { state: out.extra?.state ?? out.code } });
     if (out.kind === 'notfound') return errJson(c, 404, 'ORDER_NOT_FOUND', 'order not found');
     if (out.kind === 'nodue') return errJson(c, 400, 'ORDER_ALREADY_PAID', 'order already fully paid', { extra: { state: out.state } });
     if (out.kind === 'badstate') return errJson(c, 409, 'ORDER_NOT_PAYABLE', 'order is not payable', { extra: { state: out.state } });
