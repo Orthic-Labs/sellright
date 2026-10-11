@@ -5,7 +5,10 @@ import { isCheckoutPage } from '~/utils/route-helpers';
 import CartContents from '../cart-contents/CartContents';
 import { EligibleShippingMethods } from '~/types';
 import { formatPrice } from '~/utils';
-import { useCart } from '~/contexts/CartContext';
+import { isBrowser } from '@qwik.dev/core/build';
+import { useCart, retireSettledCart } from '~/contexts/CartContext';
+import { CartService } from '~/services/CartService';
+import { cartBannerFor, type ConvertedLookupState } from './cart-banners';
 import { CountryService } from '~/services/CountryService';
 import { CountryPreferenceService } from '~/services/CountryPreferenceService';
 import { isLineAvailable } from '~/sellright/types/cart';
@@ -55,6 +58,25 @@ export default component$(() => {
 			appState.availableCountries = countries as any[];
 		}
 	});
+
+	// A converted cart is an order waiting to be paid (or finished): ask the server which, each time the drawer opens on
+	// one. Read-only; a failed lookup just keeps "Continue checkout" and offers no escape.
+	const convertedLookup = useSignal<ConvertedLookupState>(null);
+	useTask$(async ({ track, cleanup }) => {
+		const open = track(() => appState.showCart);
+		const status = track(() => cartState.cart.status);
+		const token = isBrowser ? CartService.token() : null;
+		if (!open || status !== 'converted' || !token) {
+			convertedLookup.value = null;
+			return;
+		}
+		let cancelled = false;
+		cleanup(() => { cancelled = true; });
+		convertedLookup.value = 'loading';
+		const result = await CartService.lookupConvertedCheckout(token);
+		if (!cancelled) convertedLookup.value = result;
+	});
+	const banner = cartBannerFor(cartState.cart.status, convertedLookup.value);
 
 	const hasOutOfStockItems = $(() => cartState.cart.lines.some((line) => !isLineAvailable(line)));
 
@@ -246,9 +268,15 @@ export default component$(() => {
 								</div>
 							)}
 
+							{banner.message && (
+								<div class="my-2 px-3 py-1.5 bg-[#F0EBE3]" role="status">
+									<span class="text-[11px] text-[#8a6d4a]">{banner.message}</span>
+								</div>
+							)}
+
 							{totalQuantity.value > 0 ? (
 								<CartContents />
-							) : (
+							) : banner.continueCheckout ? null : (
 								<div class="flex flex-col items-center justify-center h-full min-h-[280px] text-center px-4">
 									<svg class="w-10 h-10 text-[#C9C3BA] mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 										<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"/>
@@ -269,7 +297,37 @@ export default component$(() => {
 						</div>
 
 						{/* Compact sticky footer */}
-						{totalQuantity.value > 0 && isInEditableUrl && (
+						{banner.continueCheckout && (
+							<div class="border-t border-[#E5E0D8] bg-[#F0EBE3] px-5 pt-3 pb-4 shrink-0">
+								<button
+									onClick$={$(async () => {
+										appState.showCart = false;
+										await navigate('/checkout/');
+									})}
+									class="btn-ready w-full py-3 mb-1.5 bg-[#141210] text-[#FDFAF6] text-[11px] tracking-[0.2em] uppercase font-medium
+									       hover:opacity-90 active:opacity-85 transition-opacity duration-300 cursor-pointer"
+								>
+									Continue checkout
+								</button>
+								{banner.startNewCart && (
+									<button
+										onClick$={$(async () => {
+											await retireSettledCart(cartState);
+										})}
+										class="w-full py-2 mb-1.5 border border-[#141210] bg-transparent text-[#141210] text-[11px] tracking-[0.2em] uppercase cursor-pointer"
+									>
+										Start a new cart
+									</button>
+								)}
+								<button
+									onClick$={() => (appState.showCart = false)}
+									class="w-full text-center text-[11px] tracking-[0.08em] text-[#9A9288] hover:text-[#1A1A1A] transition-colors py-1 cursor-pointer uppercase bg-transparent border-0"
+								>
+									Continue Shopping
+								</button>
+							</div>
+						)}
+						{!banner.continueCheckout && totalQuantity.value > 0 && isInEditableUrl && (
 							<div class="border-t border-[#E5E0D8] bg-[#F0EBE3] px-5 pt-3 pb-4 shrink-0">
 
 								{/* M4: Removed dynamic key to prevent re-mount on country change; M8: Added aria-label for accessibility */}

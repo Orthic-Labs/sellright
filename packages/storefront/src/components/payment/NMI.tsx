@@ -24,23 +24,40 @@ export interface NMIProps {
 	receiptToken?: string;
 	/** Flip (increment) to trigger tokenization + charge. */
 	confirmTrigger: Signal<number>;
-	onError$: QRL<(message: string) => void>;
-	onProcessingChange$?: QRL<(processing: boolean) => void>;
+	/** The route's view generation when this component was rendered; every callback carries it so a stale mount is rejected. */
+	mountGen?: number;
+	onError$: QRL<(message: string, mountGen?: number) => void>;
+	/** Collect.js could not be LOADED/mounted — distinct from a declined card; falls back to `onError$`. */
+	onInitError$?: QRL<(message: string, mountGen?: number) => void>;
+	onProcessingChange$?: QRL<(processing: boolean, mountGen?: number) => void>;
 	onSuccess$: QRL<(result: GatewayAttempt) => void>;
 }
 
 export const NMI = component$<NMIProps>((props) => {
 	const idPrefix = useSignal(`nmi-${Math.random().toString(36).slice(2)}`);
 	const ready = useSignal(false);
+	// This component's own mount id: captured once (the body re-runs on re-render, `useSignal` keeps the first value).
+	const mountGen = useSignal(props.mountGen);
 	const collectRef = useSignal<unknown>(null);
 	const getTokenRef = useSignal<unknown>(null);
 	const submitting = useSignal(false);
 	// Baseline = the parent's signal at mount: it survives payment-method switches, so a stale confirm must not replay.
 	const handledTrigger = useSignal(props.confirmTrigger.value);
 
-	useVisibleTask$(async () => {
+	// Set when the component is removed (payment method switched while Collect.js was still loading). Every async
+	// callback checks it: a late load/timeout failure from a dead component must not report into the shared
+	// payment-init state, and a late "fields ready" must not touch a gone view.
+	const disposed = useSignal(false);
+
+	useVisibleTask$(async ({ cleanup }) => {
+		cleanup(() => { disposed.value = true; });
+		const reportInitError = async (message: string) => {
+			if (disposed.value) return;
+			await (props.onInitError$ ?? props.onError$)(message, mountGen.value);
+		};
 		try {
 			const collect = await loadCollectJs(props.tokenizationKey, props.mode, undefined, props.environment);
+			if (disposed.value) return;
 			collectRef.value = collect as unknown;
 			const getToken = prepareCardTokenization(
 				collect,
@@ -49,11 +66,12 @@ export const NMI = component$<NMIProps>((props) => {
 					ccexp: `#${idPrefix.value}-exp`,
 					cvv: `#${idPrefix.value}-cvv`,
 				},
-				() => { ready.value = true; },
+				() => { if (!disposed.value) ready.value = true; },
+				(message) => { void reportInitError(message); },
 			);
 			getTokenRef.value = getToken as unknown;
 		} catch (e) {
-			await props.onError$(e instanceof Error ? e.message : 'Card payment failed to load.');
+			await reportInitError(e instanceof Error ? e.message : 'Card payment failed to load.');
 		}
 	}, { strategy: 'document-ready' }); // mount Collect.js as soon as the form renders, not on first intersection/interaction
 
@@ -61,35 +79,39 @@ export const NMI = component$<NMIProps>((props) => {
 		const t = track(() => props.confirmTrigger.value);
 		// A confirm that arrives before the fields are ready is held, not dropped: it runs once they are.
 		const isReady = track(() => ready.value);
+		if (disposed.value) return;
 		const decision = nextConfirm(t, isReady, handledTrigger.value);
 		if (!decision.run) return;
 		handledTrigger.value = decision.baseline;
 		if (submitting.value) return; // double click: the attempt already in flight is this one
 		const getToken = getTokenRef.value as (() => Promise<string>) | null;
 		if (!getToken) {
-			await props.onError$('Payment is not ready yet.');
+			await props.onError$('Payment is not ready yet.', mountGen.value);
 			return;
 		}
 		submitting.value = true;
-		await props.onProcessingChange$?.(true);
+		await props.onProcessingChange$?.(true, mountGen.value);
 		try {
 			const token = await getToken();
+			if (disposed.value) return; // the component is gone: no charge on behalf of a removed view
 			const result = await startGatewayPayment(props.code, 'nmi', {
 				token,
 				idempotencyKey: crypto.randomUUID(), // a new card submit is a new attempt
 				receiptToken: props.receiptToken,
 			});
 			if (result.status === 'settled') {
+				// The charge happened: the success must always be reported, even if the view is gone.
 				await props.onSuccess$(result);
-			} else {
-				await props.onError$('The card was declined. Please try a different card.');
+			} else if (!disposed.value) {
+				await props.onError$('The card was declined. Please try a different card.', mountGen.value);
 			}
 		} catch (e) {
+			if (disposed.value) return;
 			const message = e instanceof SellRightError ? e.message : (e instanceof Error ? e.message : 'Card payment failed.');
-			await props.onError$(message);
+			await props.onError$(message, mountGen.value);
 		} finally {
 			submitting.value = false;
-			await props.onProcessingChange$?.(false);
+			if (!disposed.value) await props.onProcessingChange$?.(false, mountGen.value);
 		}
 	});
 

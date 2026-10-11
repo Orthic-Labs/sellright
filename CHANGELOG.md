@@ -208,6 +208,8 @@ must update the matching changelog in the same push.
 
 ### Fixed
 
+- Storefront: **converted carts keep their way back to the unpaid order.** A cart that became an order is no longer erased from the browser by a stale response, a second tab, a merged/converted 409 or a confirmation page for another order. The cart service now runs every operation under one origin-wide Web Lock (`sr-cart`; without Web Locks the cart-changing flows fail closed with "Please update your browser to use the cart."), binds every response to the token it was requested for, retires a cart only on proof (definitive `CART_NOT_FOUND`, merged, or its original order read as settled/cancelled — and for a confirmation page, that page's own order), and keeps a converted cart's token. Checkout of a converted cart resumes the **original order** from its own minimal payment view (reusing the read-only `GET /v1/shop/cart/{token}/checkout`; no address/shipping form, stock gate or order POST), and shows a cancelled order as cancelled. The cart drawer offers *Continue checkout* for a converted cart and *Start a new cart* only once the order is settled or cancelled; converted lines are read-only. New orders keep the live stock read, revision check and form validation unchanged. No API, schema or stock-architecture change. Design: `docs/plans/2026-10-11-stale-cart-recovery.md`.
+
 - Stripe balance payments: the PaymentIntent idempotency key now carries the settled-tender count and a settled
   replay is skipped (a later edit raising the total by the same amount used to replay the earlier succeeded intent
   within Stripe's 24h window); `/pay` always namespaces the balance claim by settled-tender count; `/pay` no longer

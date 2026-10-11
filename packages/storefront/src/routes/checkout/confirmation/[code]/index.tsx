@@ -1,6 +1,6 @@
 import { component$, useContext, useStore, useVisibleTask$ } from '@qwik.dev/core';
 import { Link, useLocation } from '@qwik.dev/router';
-import { CartContextId, clearCart } from '~/contexts/CartContext';
+import { CartContextId, retireSettledCart } from '~/contexts/CartContext';
 import { getOrder, verifyGatewayPayment } from '~/providers/shop/checkout/checkout';
 import type { OrderSummary, OrderAddressSnapshot } from '~/sellright/types/checkout';
 import { formatPrice } from '~/utils';
@@ -59,10 +59,10 @@ const ConfirmationPage = component$(() => {
 			store.order = order;
 
 			if (isOrderSettled(order.state)) {
-				// Cart already converted server-side into this order — retire the
-				// local mirror. `clearCart` dispatches the cart-updated event the
-				// header badge listens for.
-				clearCart(localCart);
+				// Free the cart slot — but only if the cookie's cart is the one that became THIS order: an old
+				// confirmation page opened while a newer cart exists must leave that cart alone. The retirement
+				// verifies the order server-side under the cart lock and announces the cart-updated event.
+				retireSettledCart(localCart, code);
 			}
 
 			store.loading = false;

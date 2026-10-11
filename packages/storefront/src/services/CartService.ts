@@ -8,10 +8,17 @@
  * either a BLIND APPEND (commutative — no revision) or a revisioned ABSOLUTE
  * SET that adopts the server's snapshot and retries exactly once on a 409.
  *
+ * Every cart operation of a cooperating tab runs under ONE exclusive Web Lock
+ * (`sr-cart`), taken exactly once per public operation: public methods enter
+ * `exclusive`, private `…InLock` internals never do (Web Locks are not
+ * re-entrant). Code already inside the lock (checkout) uses the `CartLockScope`
+ * handed out by `withLock`. See docs/plans/2026-10-11-stale-cart-recovery.md §4.1a.
+ *
  * See `~/sellright/types/cart.ts` for the full API contract, the native
  * Cart/CartLine types, and the fail-closed stock rules.
  */
 import { sellright, SellRightError } from '~/sellright/client';
+import { classifyOrderState } from './order-state';
 import {
   EMPTY_CART,
   type Cart,
@@ -25,8 +32,17 @@ import {
 const TOKEN_COOKIE = 'sr_cart';
 /** Pre-native cart key, read exactly once for a lossless one-time migration. */
 const LEGACY_CART_KEY = 'sellright_legacy_local_cart';
+/** The single origin-wide lock every cart operation of a cooperating tab runs under. */
+const CART_LOCK = 'sr-cart';
 /** Reason returned by `applyCoupon` when a newer cart request replaced it mid-flight. */
 export const COUPON_SUPERSEDED = 'The cart changed while checking that code. Please try again.';
+const MISSING_CART_MESSAGE = 'Your cart expired — please re-add your items';
+const UNSUPPORTED_MESSAGE = 'Please update your browser to use the cart.';
+
+/** A successful cart read with no body (HTTP 204, JSON null): the server said nothing about the cart. Deliberately NOT
+ *  `not_found` — only the typed 404 CART_NOT_FOUND is a definitive "the cart is gone". */
+export const EMPTY_CART_RESPONSE = 'empty_response';
+const emptyCartResponse = (): CartError => new CartError(EMPTY_CART_RESPONSE, 'The cart service returned an empty response');
 
 export class CartError extends Error {
   constructor(
@@ -38,24 +54,60 @@ export class CartError extends Error {
   }
 }
 
+/** The cart was already converted into an order: its token is kept (it is the way back to an unpaid order) and the
+ *  failed mutation is never retried against it. */
+export class ConvertedCartError extends CartError {
+  constructor(message = 'This cart was already checked out — continue to checkout to pay for it.') {
+    super('converted', message);
+    this.name = 'ConvertedCartError';
+  }
+}
+
+/** The original order behind a converted cart, as `GET /v1/shop/cart/{token}/checkout` reports it. */
+export interface ConvertedCheckout {
+  code: string;
+  state: string;
+  grandTotal: number;
+  receiptToken: string;
+  currency: string;
+}
+
+export type ConvertedLookup =
+  | { ok: true; order: ConvertedCheckout }
+  /** `not_converted`: the cart is not converted or its order is gone (404 ORDER_NOT_FOUND). `unavailable`: anything else. */
+  | { ok: false; reason: 'not_converted' | 'unavailable' };
+
+/**
+ * Capability for code that ALREADY holds the cart lock (see `CartService.withLock`). Its methods are the unlocked
+ * internals, so a caller inside the lock never re-enters it. Valid until the callback settles; afterwards every
+ * method throws.
+ */
+export interface CartLockScope {
+  /** Live read of the cart named by the cookie; classified failures retire/install as the error boundary says. */
+  readFresh(): Promise<ServerCart>;
+  /** Adopt a snapshot returned in a checkout 409 — only if it still belongs to `requestToken`, the cart submitted. */
+  adoptConflict(cart: ServerCart, requestToken: string): void;
+  /** Retire `requestToken` locally (merged cart) — only if the cookie still names it. */
+  retire(requestToken: string): void;
+}
+
 type LegacySeedLine = { sku: string; quantity: number; enrichment: CartLineEnrichment };
+
+const isStaleConflict = (c: CartConflict | null): c is CartConflict => !!c && (c.code === 'stale' || c.code === 'revision_required');
 
 export class CartService {
   private static cart: Cart = EMPTY_CART;
   private static couponCode: string | null = null;
   private static enrichment = new Map<string, CartLineEnrichment>();
   private static listeners = new Set<() => void>();
+  /** True while this tab owns `sr-cart` (set by `exclusive`). Misuse tripwire for the unlocked internals. */
+  private static lockHeld = false;
   /**
-   * Request-sequence guard for server-snapshot reads. Two reads in flight at
-   * once (a stock refresh racing a coupon apply/remove, a checkout-entry read
-   * racing either) can land out of order; without a guard the OLDER response
-   * overwrites the newer mirror — a coupon the shopper just applied vanishes
-   * from the totals (or one they just removed reappears). Every read claims a
-   * number before it is sent (`claimSeq`) and only adopts its response while
-   * that number is still the latest (`isCurrent`). Any adoption or discard
-   * bumps the counter too, so a read issued before a mutation completed (or
-   * before the cart was discarded after checkout) can never overwrite it.
-   * This orders RESPONSES only — it is not a cache and holds no stock data.
+   * Request-sequence guard for server-snapshot reads. Operations of a cooperating tab are serialised by the lock,
+   * but a lock-free `refresh` (no Web Locks) and a cookie changed under an in-flight request can still land out of
+   * order; without a guard the OLDER response overwrites the newer mirror. Every read claims a number before it is
+   * sent (`claimSeq`) and only adopts its response while that number is still the latest (`isCurrent`). Any install
+   * or retirement bumps the counter too. This orders RESPONSES only — it is not a cache and holds no stock data.
    */
   private static snapshotSeq = 0;
 
@@ -88,8 +140,9 @@ export class CartService {
     return this.cart;
   }
 
+  /** The cart this browser points at: the cookie only. The mirror may still name an older cart another tab replaced. */
   static token(): string | null {
-    return this.cart.token || this.readTokenCookie();
+    return this.readTokenCookie();
   }
 
   static revision(): number {
@@ -114,6 +167,71 @@ export class CartService {
     document.cookie = `${TOKEN_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax`;
   }
 
+  // ── the lock ──────────────────────────────────────────────────────────
+  private static hasLocks(): boolean {
+    return typeof navigator !== 'undefined' && 'locks' in navigator && !!navigator.locks;
+  }
+
+  /** Run `fn` as the ONE lock owner of a public operation. Fails closed — before `fn`, so before any network call —
+   *  when Web Locks are missing: there is no synchronous fallback that could be claimed safe. */
+  private static async exclusive<T>(fn: () => Promise<T>): Promise<T> {
+    if (!this.hasLocks()) throw new CartError('unsupported', UNSUPPORTED_MESSAGE);
+    return navigator.locks.request(CART_LOCK, { mode: 'exclusive' }, async () => {
+      this.lockHeld = true;
+      try {
+        this.syncToCookie();
+        return await fn();
+      } finally {
+        this.lockHeld = false;
+      }
+    });
+  }
+
+  private static assertHeld(): void {
+    if (!this.lockHeld) throw new Error('CartService: cart internals used outside the cart lock');
+  }
+
+  /**
+   * Hold the cart lock across `fn` — for the checkout, whose live read and order POST are one locked unit. `fn`
+   * receives the scope whose methods are the unlocked internals; it must use those, never the public methods
+   * (a public call from inside would wait for the lock this very call holds).
+   */
+  static withLock<T>(fn: (scope: CartLockScope) => Promise<T>): Promise<T> {
+    return this.exclusive(async () => {
+      let open = true;
+      const guard = <A extends unknown[], R>(f: (...args: A) => R) => (...args: A): R => {
+        if (!open) throw new Error('CartService: lock scope used after the lock was released');
+        return f(...args);
+      };
+      const scope: CartLockScope = {
+        readFresh: guard(() => this.readFreshInLock()),
+        adoptConflict: guard((cart: ServerCart, requestToken: string) => {
+          this.install(cart, requestToken);
+        }),
+        retire: guard((requestToken: string) => this.retire(requestToken)),
+      };
+      try {
+        return await fn(scope);
+      } finally {
+        open = false;
+      }
+    });
+  }
+
+  /** Another tab may have replaced or cleared the cookie while this one waited for the lock: the mirror, coupon and
+   *  enrichment then describe a cart this browser no longer points at. Reset them before the operation proceeds. */
+  private static syncToCookie(): void {
+    if (this.cart.token && this.cart.token !== this.readTokenCookie()) this.resetMirror();
+  }
+
+  private static resetMirror(): void {
+    this.snapshotSeq++; // a read still in flight must not resurrect the dropped cart
+    this.couponCode = null;
+    this.enrichment.clear();
+    this.cart = EMPTY_CART;
+    this.notify();
+  }
+
   // ── enrichment (client-only display metadata, keyed by SKU) ─────────────
   private static setEnrichment(sku: string, enrichment?: CartLineEnrichment): void {
     if (!enrichment) return;
@@ -129,14 +247,19 @@ export class CartService {
     return { ...server, lines: server.lines.map(this.toCartLine) };
   }
 
-  // ── adopt a server snapshot; report SKUs that vanished unexpectedly ──────
-  private static adopt(server: ServerCart, expectedRemoval?: string): string[] {
+  // ── mirror install / retirement / creation ────────────────────────────
+  /**
+   * Write a server snapshot into the MIRROR — never the cookie, never a different cart's identity. Applies only when
+   * the snapshot, the request that produced it and the cookie all name the same token; otherwise a response for T
+   * cannot touch U's mirror. Returns the SKUs that vanished unexpectedly, or `null` when it did not apply.
+   */
+  private static install(server: ServerCart, requestToken: string, expectedRemoval?: string): string[] | null {
+    if (server.token !== requestToken || this.readTokenCookie() !== requestToken) return null;
     const prior = new Set(this.cart.lines.map((l) => l.sku));
     const next = new Set(server.lines.map((l) => l.sku));
     const dropped = [...prior].filter((sku) => sku !== expectedRemoval && !next.has(sku));
     this.snapshotSeq++; // supersede any read issued before this snapshot landed
     this.cart = this.toCart(server);
-    this.writeTokenCookie(server.token);
     // Keep enrichment only for lines still present — stale entries would leak
     // display metadata onto an unrelated future line that reuses the SKU.
     for (const sku of [...this.enrichment.keys()]) {
@@ -146,20 +269,20 @@ export class CartService {
     return dropped;
   }
 
-  /** Drop the token + mirror locally — no network call. Used for terminal
-   *  carts (converted/merged) and 404s (expired cart). */
-  static discard(): void {
-    this.snapshotSeq++; // a read still in flight must not resurrect the discarded cart
+  /** Drop the token + mirror — no network call — but only if the cookie still names `requestToken`: a response for T
+   *  never retires U. */
+  private static retire(requestToken: string): void {
+    this.assertHeld();
+    if (this.readTokenCookie() !== requestToken) return;
     this.clearTokenCookie();
-    this.couponCode = null;
-    this.enrichment.clear();
-    this.cart = EMPTY_CART;
-    this.notify();
+    this.resetMirror();
   }
 
-  /** Adopt a cart snapshot handed back inside a checkout 409 (stale cart). */
-  static adoptConflict(cart: ServerCart): void {
-    this.adopt(cart);
+  /** Adopt a cart snapshot handed back inside a checkout 409 (stale cart), bound to the token that was submitted. */
+  static adoptConflict(cart: ServerCart, requestToken: string): Promise<void> {
+    return this.exclusive(async () => {
+      this.install(cart, requestToken);
+    });
   }
 
   // ── one-time legacy migration ────────────────────────────────────────
@@ -215,9 +338,14 @@ export class CartService {
 
   // ── cart lifecycle ────────────────────────────────────────────────────
   private static async ensureCart(): Promise<string> {
-    const existing = this.readTokenCookie();
-    if (existing) return existing;
+    this.assertHeld();
+    // Re-read inside the lock: another tab may have created the cart while this one waited.
+    return this.readTokenCookie() ?? (await this.createCart());
+  }
 
+  /** The ONLY cookie writer. Consumes the legacy key before the POST: if the response is lost the legacy lines are
+   *  lost rather than duplicated into an orphan cart a later donor scan could fold. No automatic retry of the create. */
+  private static async createCart(): Promise<string> {
     const legacy = this.consumeLegacyCart();
     for (const l of legacy) this.setEnrichment(l.sku, l.enrichment);
 
@@ -225,7 +353,8 @@ export class CartService {
       body: legacy.length ? { items: legacy.map(({ sku, quantity }) => ({ sku, quantity })) } : {},
     });
     if (!data) throw new CartError(undefined, 'Could not create a cart');
-    this.adopt(data);
+    this.writeTokenCookie(data.token);
+    this.install(data, data.token);
     return data.token;
   }
 
@@ -236,10 +365,10 @@ export class CartService {
     const { data } = await sellright().GET('/v1/shop/cart/{token}', {
       params: { path: { token }, query: this.couponCode ? { couponCode: this.couponCode } : {} },
     });
-    if (!data) throw new CartError('not_found', 'Cart not found');
+    if (!data) throw emptyCartResponse();
     // The revision is still the right base for the mutation that asked for it;
     // only the mirror write is skipped when a newer request has superseded us.
-    if (this.isCurrent(seq)) this.adopt(data);
+    if (this.isCurrent(seq)) this.install(data, token);
     return data.revision;
   }
 
@@ -249,98 +378,126 @@ export class CartService {
     return body && typeof body.revision === 'number' && body.cart ? body : null;
   }
 
-  /** Run a revisioned mutation; on a 409 adopt the server's snapshot and
-   *  retry exactly once with the fresh revision. Never loops further. */
-  private static async withRevisionRetry(
+  /**
+   * The one error boundary. Returns the error to throw, after applying its local effect for request token `token`:
+   *  - 404 CART_NOT_FOUND → retire `token`, `CartError('not_found')`.
+   *  - 409 merged → retire `token`, `CartError('merged')`.
+   *  - 409 converted → keep the token, install the converted snapshot, `ConvertedCartError`.
+   *  - anything else (other 404 codes, network errors, timeouts, 5xx, stale conflicts) → the error itself, with the
+   *    token and mirror unchanged.
+   */
+  private static classify(e: unknown, token: string): unknown {
+    if (!(e instanceof SellRightError)) return e;
+    if (e.status === 404 && e.code === 'CART_NOT_FOUND') {
+      this.retire(token);
+      return new CartError('not_found', MISSING_CART_MESSAGE);
+    }
+    const conflict = this.asConflict(e);
+    if (conflict?.code === 'merged') {
+      this.retire(token);
+      return new CartError('merged', 'This cart was merged into your account');
+    }
+    if (conflict?.code === 'converted') {
+      this.install(conflict.cart, token);
+      return new ConvertedCartError();
+    }
+    return e;
+  }
+
+  /** Run a revisioned mutation; on a stale/revision_required 409 adopt the server's snapshot and retry exactly once
+   *  with the fresh revision. Never loops further. Runs inside the lock. */
+  private static async withRevisionRetryInLock(
     mutate: (token: string, revision: number) => Promise<{ data?: ServerCart }>,
     expectedRemoval?: string,
   ): Promise<CartMutationResult> {
+    this.assertHeld();
     const token = await this.ensureCart();
-    const revision = await this.ensureRevision(token);
+    let revision: number;
     try {
-      const { data } = await mutate(token, revision);
+      revision = await this.ensureRevision(token);
+    } catch (e) {
+      throw this.classify(e, token);
+    }
+    const attempt = async (rev: number): Promise<CartMutationResult> => {
+      const { data } = await mutate(token, rev);
       if (!data) throw new CartError(undefined, "Couldn't update cart");
-      const dropped = this.adopt(data, expectedRemoval);
+      const dropped = this.install(data, token, expectedRemoval) ?? [];
       return { cart: this.cart, dropped };
+    };
+    try {
+      return await attempt(revision);
     } catch (e) {
       const conflict = this.asConflict(e);
-      if (conflict) {
-        if (conflict.code === 'converted' || conflict.code === 'merged') {
-          this.discard();
-          throw new CartError(
-            conflict.code,
-            conflict.code === 'converted' ? 'This cart was already checked out' : 'This cart was merged into your account',
-          );
-        }
-        // stale / revision_required — adopt the authoritative snapshot, retry once.
-        this.adopt(conflict.cart, expectedRemoval);
-        try {
-          const { data } = await mutate(token, conflict.revision);
-          if (!data) throw new CartError(undefined, "Couldn't update cart");
-          const dropped = this.adopt(data, expectedRemoval);
-          return { cart: this.cart, dropped };
-        } catch (e2) {
-          if (e2 instanceof SellRightError && e2.status === 404) this.discard();
+      if (!isStaleConflict(conflict)) throw this.classify(e, token);
+      // stale / revision_required — adopt the authoritative snapshot, retry once.
+      this.install(conflict.cart, token, expectedRemoval);
+      try {
+        return await attempt(conflict.revision);
+      } catch (e2) {
+        if (isStaleConflict(this.asConflict(e2))) {
           throw new CartError('conflict', 'Cart changed — review the updated cart and try again');
         }
+        throw this.classify(e2, token);
       }
-      if (e instanceof SellRightError && e.status === 404) {
-        this.discard();
-        throw new CartError('not_found', 'Your cart expired — please re-add your items');
-      }
-      throw e;
     }
   }
 
   // ── mutations ─────────────────────────────────────────────────────────
 
   /** Add (or increment) a line. Blind append — commutative, no revision. */
-  static async addLine(sku: string, quantity: number, enrichment?: CartLineEnrichment): Promise<CartMutationResult> {
-    this.setEnrichment(sku, enrichment);
-    try {
+  static addLine(sku: string, quantity: number, enrichment?: CartLineEnrichment): Promise<CartMutationResult> {
+    return this.exclusive(async () => {
+      this.setEnrichment(sku, enrichment);
       const token = await this.ensureCart();
-      const { data } = await sellright().PATCH('/v1/shop/cart/{token}/lines', {
-        params: { path: { token } },
-        body: { lines: [{ sku, quantity }], ...(this.couponCode ? { couponCode: this.couponCode } : {}) },
-      });
-      if (!data) throw new CartError(undefined, "Couldn't add item to cart");
-      const dropped = this.adopt(data);
-      return { cart: this.cart, dropped };
-    } catch (e) {
-      if (e instanceof SellRightError && e.status === 404) {
-        this.discard();
-        throw new CartError('not_found', 'Your cart expired — please re-add your items');
+      try {
+        const { data } = await sellright().PATCH('/v1/shop/cart/{token}/lines', {
+          params: { path: { token } },
+          body: { lines: [{ sku, quantity }], ...(this.couponCode ? { couponCode: this.couponCode } : {}) },
+        });
+        if (!data) throw new CartError(undefined, "Couldn't add item to cart");
+        const dropped = this.install(data, token) ?? [];
+        return { cart: this.cart, dropped };
+      } catch (e) {
+        // No automatic retry of the append after an uncertain result.
+        throw this.classify(e, token);
       }
-      throw e;
-    }
+    });
   }
 
   /** Set a line to an absolute quantity (<= 0 removes it). Revisioned. */
-  static async updateLine(sku: string, quantity: number, enrichment?: CartLineEnrichment): Promise<CartMutationResult> {
-    this.setEnrichment(sku, enrichment);
-    const qty = Math.max(0, quantity);
-    return this.withRevisionRetry(
-      (token, revision) =>
-        sellright().PATCH('/v1/shop/cart/{token}/lines', {
-          params: { path: { token } },
-          body: {
-            lines: [{ sku, quantity: qty }],
-            expectedRevision: revision,
-            ...(this.couponCode ? { couponCode: this.couponCode } : {}),
-          },
-        }),
-      qty <= 0 ? sku : undefined,
-    );
+  static updateLine(sku: string, quantity: number, enrichment?: CartLineEnrichment): Promise<CartMutationResult> {
+    return this.exclusive(async () => {
+      this.setEnrichment(sku, enrichment);
+      const qty = Math.max(0, quantity);
+      return this.withRevisionRetryInLock(
+        (token, revision) =>
+          sellright().PATCH('/v1/shop/cart/{token}/lines', {
+            params: { path: { token } },
+            body: {
+              lines: [{ sku, quantity: qty }],
+              expectedRevision: revision,
+              ...(this.couponCode ? { couponCode: this.couponCode } : {}),
+            },
+          }),
+        qty <= 0 ? sku : undefined,
+      );
+    });
   }
 
-  /** Remove a line entirely — sugar for `updateLine(sku, 0)`. */
-  static async removeLine(sku: string): Promise<CartMutationResult> {
+  /** Remove a line entirely — sugar for `updateLine(sku, 0)`; takes no lock of its own (updateLine owns it). */
+  static removeLine(sku: string): Promise<CartMutationResult> {
     return this.updateLine(sku, 0);
   }
 
   /** Re-fetch the server-priced cart (live stock/price/coupon) — used for the
-   *  LOCKED stock checks: cart open, checkout entry, and pre-submit. */
-  static async refresh(): Promise<CartMutationResult> {
+   *  LOCKED stock checks: cart open, checkout entry, and pre-submit.
+   *  Without Web Locks this is a read-only refresh: it installs the mirror under the token fence and never retires. */
+  static refresh(): Promise<CartMutationResult> {
+    return this.hasLocks() ? this.exclusive(() => this.refreshInLock()) : this.refreshReadOnly();
+  }
+
+  private static async refreshInLock(): Promise<CartMutationResult> {
+    this.assertHeld();
     const token = this.readTokenCookie();
     if (!token) return { cart: this.cart, dropped: [] };
     const seq = this.claimSeq();
@@ -348,124 +505,189 @@ export class CartService {
       const { data } = await sellright().GET('/v1/shop/cart/{token}', {
         params: { path: { token }, query: this.couponCode ? { couponCode: this.couponCode } : {} },
       });
-      if (!data) throw new CartError('not_found', 'Cart not found');
-      // Superseded by a newer read/mutation/discard: its result is the truth.
+      if (!data) throw emptyCartResponse();
+      // Superseded by a newer read/mutation/retirement: its result is the truth.
       if (!this.isCurrent(seq)) return { cart: this.cart, dropped: [] };
-      const dropped = this.adopt(data);
+      const dropped = this.install(data, token) ?? [];
       return { cart: this.cart, dropped };
     } catch (e) {
-      if (e instanceof SellRightError && e.status === 404) {
-        this.discard();
-        return { cart: this.cart, dropped: [] };
+      throw this.classify(e, token);
+    }
+  }
+
+  private static async refreshReadOnly(): Promise<CartMutationResult> {
+    this.syncToCookie();
+    const token = this.readTokenCookie();
+    if (!token) return { cart: this.cart, dropped: [] };
+    const seq = this.claimSeq();
+    try {
+      const { data } = await sellright().GET('/v1/shop/cart/{token}', {
+        params: { path: { token }, query: this.couponCode ? { couponCode: this.couponCode } : {} },
+      });
+      if (!data) throw emptyCartResponse();
+      if (!this.isCurrent(seq)) return { cart: this.cart, dropped: [] };
+      const dropped = this.install(data, token) ?? [];
+      return { cart: this.cart, dropped };
+    } catch (e) {
+      // Without the lock a cookie must never be cleared: report the missing cart, keep the token.
+      if (e instanceof SellRightError && e.status === 404 && e.code === 'CART_NOT_FOUND') {
+        throw new CartError('not_found', MISSING_CART_MESSAGE);
       }
       throw e;
     }
   }
 
   /** Live read for the pre-submit stock check. Returns the exact server response of THIS request so the caller
-   *  validates what the server just said, not the shared mirror (which a newer overlapping read may have claimed).
-   *  Fail-closed: a missing cart cookie, an empty body, a 404 (also retires the local cart) or any failed read throws.
-   *  The mirror only adopts the response while it is still the latest request; the returned value never depends on that. */
-  static async readFresh(): Promise<ServerCart> {
+   *  validates what the server just said, not the shared mirror. Fail-closed: a missing cart cookie, an empty body,
+   *  a 404 (which also retires the local cart) or any failed read throws. Takes the lock; checkout code already
+   *  inside `withLock` uses `scope.readFresh()` instead. */
+  static readFresh(): Promise<ServerCart> {
+    return this.exclusive(() => this.readFreshInLock());
+  }
+
+  private static async readFreshInLock(): Promise<ServerCart> {
+    this.assertHeld();
     const token = this.readTokenCookie();
-    if (!token) throw new CartError('not_found', 'Your cart expired — please re-add your items');
+    if (!token) throw new CartError('not_found', MISSING_CART_MESSAGE);
     const seq = this.claimSeq();
     try {
       const { data } = await sellright().GET('/v1/shop/cart/{token}', {
         params: { path: { token }, query: this.couponCode ? { couponCode: this.couponCode } : {} },
       });
-      if (!data) throw new CartError('not_found', 'Cart not found');
-      if (this.isCurrent(seq)) this.adopt(data);
+      if (!data) throw emptyCartResponse();
+      if (this.isCurrent(seq)) this.install(data, token);
       return data;
     } catch (e) {
-      if (e instanceof SellRightError && e.status === 404) {
-        this.discard();
-        throw new CartError('not_found', 'Your cart expired — please re-add your items');
-      }
-      throw e;
+      throw this.classify(e, token);
     }
   }
 
   /** Validate + apply a coupon — the server re-prices the real cart; never a
    *  client-side guess. */
-  static async applyCoupon(code: string): Promise<{ valid: boolean; reason?: string }> {
-    const token = await this.ensureCart();
-    const seq = this.claimSeq();
-    const { data } = await sellright().GET('/v1/shop/cart/{token}', { params: { path: { token }, query: { couponCode: code } } });
-    if (!data) throw new CartError('not_found', 'Cart not found');
-    // A newer read/mutation/removal started while this validated: adopting
-    // (or remembering the code) now would overwrite what the shopper did last.
-    if (!this.isCurrent(seq)) return { valid: false, reason: COUPON_SUPERSEDED };
-    this.adopt(data);
-    if (data.coupon?.applied) {
-      this.couponCode = data.coupon.code;
-      return { valid: true };
-    }
-    return { valid: false, reason: data.coupon?.reason ?? 'Invalid or expired code' };
+  static applyCoupon(code: string): Promise<{ valid: boolean; reason?: string }> {
+    return this.exclusive(async () => {
+      const token = await this.ensureCart();
+      const seq = this.claimSeq();
+      let data: ServerCart | undefined;
+      try {
+        ({ data } = await sellright().GET('/v1/shop/cart/{token}', { params: { path: { token }, query: { couponCode: code } } }));
+      } catch (e) {
+        throw this.classify(e, token);
+      }
+      if (!data) throw emptyCartResponse();
+      // A newer request started while this validated, or the token no longer matches: adopting (or remembering the
+      // code) now would overwrite what the shopper did last.
+      if (!this.isCurrent(seq) || this.install(data, token) === null) return { valid: false, reason: COUPON_SUPERSEDED };
+      if (data.coupon?.applied) {
+        this.couponCode = data.coupon.code;
+        return { valid: true };
+      }
+      return { valid: false, reason: data.coupon?.reason ?? 'Invalid or expired code' };
+    });
   }
 
   /** Remove the applied coupon and re-price without it. */
-  static async removeCoupon(): Promise<CartMutationResult> {
-    this.couponCode = null;
-    const token = this.readTokenCookie();
-    if (!token) return { cart: this.cart, dropped: [] };
-    const seq = this.claimSeq();
-    try {
-      const { data } = await sellright().GET('/v1/shop/cart/{token}', { params: { path: { token } } });
-      if (!data) throw new CartError('not_found', 'Cart not found');
-      if (!this.isCurrent(seq)) return { cart: this.cart, dropped: [] };
-      const dropped = this.adopt(data);
-      return { cart: this.cart, dropped };
-    } catch (e) {
-      if (e instanceof SellRightError && e.status === 404) {
-        this.discard();
-        return { cart: this.cart, dropped: [] };
+  static removeCoupon(): Promise<CartMutationResult> {
+    return this.exclusive(async () => {
+      this.couponCode = null;
+      const token = this.readTokenCookie();
+      if (!token) return { cart: this.cart, dropped: [] };
+      const seq = this.claimSeq();
+      try {
+        const { data } = await sellright().GET('/v1/shop/cart/{token}', { params: { path: { token } } });
+        if (!data) throw emptyCartResponse();
+        if (!this.isCurrent(seq)) return { cart: this.cart, dropped: [] };
+        const dropped = this.install(data, token) ?? [];
+        return { cart: this.cart, dropped };
+      } catch (e) {
+        throw this.classify(e, token);
       }
-      throw e;
-    }
+    });
   }
 
   /** Capture the shopper's email on the cart (abandoned-cart recovery). */
-  static async captureEmail(email: string): Promise<CartMutationResult> {
-    return this.withRevisionRetry((token, revision) =>
-      sellright().PATCH('/v1/shop/cart/{token}', {
-        params: { path: { token } },
-        body: { email, expectedRevision: revision },
-      }),
+  static captureEmail(email: string): Promise<CartMutationResult> {
+    return this.exclusive(() =>
+      this.withRevisionRetryInLock((token, revision) =>
+        sellright().PATCH('/v1/shop/cart/{token}', {
+          params: { path: { token } },
+          body: { email, expectedRevision: revision },
+        }),
+      ),
     );
   }
 
   /** Fold the guest cart into the logged-in customer. Call once, after auth. */
-  static async merge(): Promise<CartMutationResult> {
-    return this.withRevisionRetry((token, revision) =>
-      sellright().POST('/v1/shop/cart/{token}/merge', {
-        params: { path: { token }, query: { expectedRevision: revision } },
-      }),
+  static merge(): Promise<CartMutationResult> {
+    return this.exclusive(() =>
+      this.withRevisionRetryInLock((token, revision) =>
+        sellright().POST('/v1/shop/cart/{token}/merge', {
+          params: { path: { token }, query: { expectedRevision: revision } },
+        }),
+      ),
     );
   }
 
   /** NOT used by the checkout flow: PLACE ORDER submits the snapshot of `readFresh` (via
    *  `refreshStockBeforeSubmit`) so the validated read is the submission base. Kept for non-checkout callers only.
-   *  Fresh server cart: re-reads so `expectedRevision` is a live base. `null` when no cart exists. `status` distinguishes
-   *  'converted' (replay the original order — payment recovery) from
-   *  'merged' (terminal — discard). */
-  static async checkoutSnapshot(): Promise<{ token: string; revision: number; status: string } | null> {
-    const token = this.readTokenCookie();
-    if (!token) return null;
-    const seq = this.claimSeq();
+   *  Fresh server cart: re-reads so `expectedRevision` is a live base. `null` when no cart exists or the read failed.
+   *  `status` distinguishes 'converted' (resume the original order) from 'merged' (terminal — retired). */
+  static checkoutSnapshot(): Promise<{ token: string; revision: number; status: string } | null> {
+    return this.exclusive(async () => {
+      const token = this.readTokenCookie();
+      if (!token) return null;
+      const seq = this.claimSeq();
+      try {
+        const { data } = await sellright().GET('/v1/shop/cart/{token}', {
+          params: { path: { token }, query: this.couponCode ? { couponCode: this.couponCode } : {} },
+        });
+        if (!data) return null;
+        // The revision/status are facts about THIS response and stay valid as
+        // the checkout base; only the mirror write yields to a newer request.
+        if (this.isCurrent(seq)) this.install(data, token);
+        return { token, revision: data.revision, status: data.status };
+      } catch (e) {
+        this.classify(e, token); // applies the local effect (retire / converted mirror); the caller only needs "no snapshot"
+        return null;
+      }
+    });
+  }
+
+  // ── converted carts ───────────────────────────────────────────────────
+  /** Read-only lookup of the original order behind a converted cart. Writes nothing, so it needs no lock and stays
+   *  available without Web Locks (an unpaid order must stay payable). Never creates an order. */
+  static async lookupConvertedCheckout(token: string): Promise<ConvertedLookup> {
     try {
-      const { data } = await sellright().GET('/v1/shop/cart/{token}', {
-        params: { path: { token }, query: this.couponCode ? { couponCode: this.couponCode } : {} },
-      });
-      if (!data) return null;
-      // The revision/status are facts about THIS response and stay valid as
-      // the checkout base; only the mirror write yields to a newer request.
-      if (this.isCurrent(seq)) this.adopt(data);
-      return { token, revision: data.revision, status: data.status };
+      const { data } = await sellright().GET('/v1/shop/cart/{token}/checkout', { params: { path: { token } } });
+      if (!data) return { ok: false, reason: 'unavailable' };
+      return {
+        ok: true,
+        order: { code: data.code, state: data.state, grandTotal: data.grandTotal, receiptToken: data.receiptToken ?? '', currency: data.currency },
+      };
     } catch (e) {
-      if (e instanceof SellRightError && e.status === 404) this.discard();
-      return null;
+      if (e instanceof SellRightError && e.status === 404 && e.code === 'ORDER_NOT_FOUND') return { ok: false, reason: 'not_converted' };
+      return { ok: false, reason: 'unavailable' };
     }
+  }
+
+  /**
+   * Free the cart slot after the order behind it is finished. Under the lock: re-read the cookie (T), look up T's
+   * original order, and retire T only when that order is settled or cancelled and — when `expectedCode` is given (a
+   * confirmation page) — is the order that page shows. A failed lookup, `PendingPayment`, an unknown state, a code
+   * mismatch or a 404 (T is a newer, non-converted cart) all keep the token. Returns whether T was retired.
+   */
+  static retireSettled(expectedCode?: string): Promise<boolean> {
+    return this.exclusive(async () => {
+      const token = this.readTokenCookie();
+      if (!token) return false;
+      const lookup = await this.lookupConvertedCheckout(token);
+      if (!lookup.ok) return false;
+      const kind = classifyOrderState(lookup.order.state);
+      if (kind !== 'settled' && kind !== 'cancelled') return false;
+      if (expectedCode !== undefined && lookup.order.code !== expectedCode) return false;
+      this.retire(token);
+      return true;
+    });
   }
 
   /** Validate cart lines for checkout gating — fail-closed, live data only

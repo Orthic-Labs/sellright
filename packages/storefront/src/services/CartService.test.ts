@@ -2,11 +2,16 @@
  * Consumer-contract tests for CartService — the single, server-owned cart.
  * Asserts the wire contract (blind append vs revisioned absolute set), the
  * 409-conflict retry-once behaviour, fail-closed stock reads, the dropped-
- * line notice, and the one-time legacy-cart migration. `fetch` is mocked;
- * jsdom supplies `document.cookie` + `localStorage`.
+ * line notice, the one-time legacy-cart migration, and the converted-cart /
+ * cross-tab invariants (docs/plans/2026-10-11-stale-cart-recovery.md §2, §7).
+ * `fetch` is mocked; jsdom supplies `document.cookie` + `localStorage`; a
+ * real-mutex `navigator.locks` fake (cart-test-harness) serialises "tabs".
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CartService, CartError, COUPON_SUPERSEDED } from './CartService';
+import { CartService, CartError, ConvertedCartError, COUPON_SUPERSEDED, type CartLockScope } from './CartService';
+import { deferred, freshTab, installLocks, removeLocks, settle, type FakeLocks } from './cart-test-harness';
+import { placeOrder } from '~/providers/shop/checkout/checkout';
+import { refreshStockBeforeSubmit } from '~/hooks/pre-submit-stock';
 import { isLineAvailable, remainingQuantity, canRequestQuantity, type ServerCart, type ServerCartLine } from '~/sellright/types/cart';
 
 // `~/sellright/client.ts` wraps server-side requests in a `new Request(...)`
@@ -39,13 +44,18 @@ const serverCart = (over: Partial<ServerCart> = {}): ServerCart => ({
 
 const setCookie = (v: string) => { document.cookie = `sr_cart=${v}; Path=/`; };
 const clearCookie = () => { document.cookie = 'sr_cart=; Path=/; Max-Age=0'; };
+const cookieValue = () => document.cookie.match(/(?:^|; )sr_cart=([^;]*)/)?.[1] ?? null;
+/** Test-only reset of the mirror (the service deliberately has no public unconditional discard). */
+const resetService = () => CartService['resetMirror']();
+let locks: FakeLocks;
 
 beforeEach(() => {
 	calls.length = 0;
 	queue = [];
 	clearCookie();
 	try { localStorage.clear(); } catch { /* ignore */ }
-	CartService.discard();
+	locks = installLocks();
+	resetService();
 	vi.stubGlobal('fetch', vi.fn(async (input: unknown, init?: RequestInit) => {
 		let url: string;
 		let method: string | undefined;
@@ -68,6 +78,7 @@ beforeEach(() => {
 
 afterEach(() => {
 	vi.unstubAllGlobals();
+	removeLocks();
 	clearCookie();
 });
 
@@ -141,22 +152,27 @@ describe('updateLine — revisioned absolute set', () => {
 		expect(patchCalls()).toHaveLength(2); // exactly one retry, never a loop
 	});
 
-	it('409 converted retires the token and cart outright', async () => {
+	it('409 converted KEEPS the token, shows the converted snapshot and does not retry', async () => {
 		setCookie('tok_srv');
 		enqueue(
 			respond(200, serverCart({ revision: 4 })),
 			respond(409, { error: { code: 'CART_STALE', message: 'converted' }, code: 'converted', revision: 4, cart: serverCart({ status: 'converted' }) }),
 		);
-		await expect(CartService.updateLine('SKU1', 2)).rejects.toThrow(/checked out/);
-		expect(CartService.getCart().lines).toHaveLength(0);
-		expect(document.cookie).not.toContain('sr_cart=tok_srv');
+		const outcome = await CartService.updateLine('SKU1', 2).catch((e) => e);
+		expect(outcome).toBeInstanceOf(ConvertedCartError);
+		expect(outcome.message).toMatch(/checked out/);
+		expect(cookieValue()).toBe('tok_srv');
+		expect(CartService.getCart().status).toBe('converted');
+		expect(patchCalls()).toHaveLength(1);
+		expect(calls).toHaveLength(2);
 	});
 
-	it('404 on refresh retires the local cart', async () => {
+	it('404 CART_NOT_FOUND on refresh retires that cart and tells the shopper to re-add', async () => {
 		setCookie('tok_srv');
 		enqueue(respond(404, { error: { code: 'CART_NOT_FOUND', message: 'not found' } }));
-		await CartService.refresh();
+		await expect(CartService.refresh()).rejects.toMatchObject({ code: 'not_found', message: expect.stringMatching(/re-add/) });
 		expect(CartService.getCart().lines).toHaveLength(0);
+		expect(cookieValue()).toBeNull();
 	});
 });
 
@@ -282,97 +298,72 @@ describe('coupon apply/remove — server-priced', () => {
 });
 
 /**
- * Request-sequence guard: server-snapshot reads that overlap must never let an
- * OLDER response overwrite a newer one (the coupon "revalidation race"). Each
- * test holds responses open with deferreds so the arrival order is explicit.
+ * Operations of a cooperating tab are serialised by the cart lock, so reads and mutations never overlap: each test
+ * holds a response open with a deferred and proves the NEXT request is not even sent until it lands. The sequence
+ * guard still orders responses when there is no lock (a lock-free refresh) — covered at the end.
  */
-describe('overlapping reads — request-sequence guard', () => {
-	const deferred = () => {
-		let resolve!: (r: Response) => void;
-		const promise = new Promise<Response>((r) => { resolve = r; });
-		return { promise, resolve };
-	};
+describe('serialised operations and the request-sequence guard', () => {
 	const appliedCoupon = { code: 'SAVE10', applied: true } as const;
 	const waitForCalls = (n: number) => vi.waitFor(() => expect(calls.length).toBeGreaterThanOrEqual(n));
 
-	it('a stale refresh (sent before the coupon apply) cannot wipe the applied coupon, whichever lands last', async () => {
+	it('a coupon apply issued during a refresh is sent only after it lands; the coupon ends applied', async () => {
 		setCookie('tok_srv');
 		const refreshRes = deferred();
-		const applyRes = deferred();
-		enqueue(refreshRes.promise, applyRes.promise);
+		enqueue(refreshRes.promise, respond(200, serverCart({ revision: 2, coupon: appliedCoupon, discountTotal: 250, grandTotal: 2250 })));
 
 		const refreshP = CartService.refresh();
 		const applyP = CartService.applyCoupon('SAVE10');
-		await waitForCalls(2);
+		await waitForCalls(1);
+		await settle();
+		expect(calls).toHaveLength(1); // the apply is queued behind the refresh
 
-		applyRes.resolve(await respond(200, serverCart({ revision: 2, coupon: appliedCoupon, discountTotal: 250, grandTotal: 2250 })));
-		expect(await applyP).toEqual({ valid: true });
 		refreshRes.resolve(await respond(200, serverCart({ revision: 1, coupon: null })));
-		const refreshed = await refreshP;
-
-		expect(refreshed.dropped).toEqual([]);
+		expect((await refreshP).dropped).toEqual([]);
+		expect(await applyP).toEqual({ valid: true });
 		expect(CartService.getCart().coupon).toEqual(appliedCoupon);
 		expect(CartService.getCart().revision).toBe(2);
+		expect(locks.maxConcurrent).toBe(1);
 	});
 
-	it('removing a coupon beats an older in-flight apply: the late apply is ignored and its code is not remembered', async () => {
+	it('a removal queued behind an in-flight apply runs after it: the coupon ends removed and is not remembered', async () => {
 		setCookie('tok_srv');
 		const applyRes = deferred();
-		const removeRes = deferred();
-		enqueue(applyRes.promise, removeRes.promise, respond(200, serverCart({ coupon: null })));
+		enqueue(applyRes.promise, respond(200, serverCart({ revision: 2, coupon: null })), respond(200, serverCart({ coupon: null })));
 
 		const applyP = CartService.applyCoupon('SAVE10');
 		await waitForCalls(1);
 		const removeP = CartService.removeCoupon();
-		await waitForCalls(2);
+		await settle();
+		expect(calls).toHaveLength(1);
 
-		removeRes.resolve(await respond(200, serverCart({ revision: 2, coupon: null })));
-		await removeP;
 		applyRes.resolve(await respond(200, serverCart({ revision: 1, coupon: appliedCoupon })));
-		const applied = await applyP;
+		expect(await applyP).toEqual({ valid: true });
+		await removeP;
 
-		expect(applied).toEqual({ valid: false, reason: COUPON_SUPERSEDED });
 		expect(CartService.getCart().coupon).toBeNull();
-		// The late apply must not have re-armed the coupon for later reads.
 		await CartService.refresh();
 		expect(calls[calls.length - 1].url).not.toContain('couponCode=');
 	});
 
-	it('a refresh still in flight when the cart is discarded cannot resurrect it', async () => {
-		setCookie('tok_srv');
-		const refreshRes = deferred();
-		enqueue(refreshRes.promise);
-
-		const refreshP = CartService.refresh();
-		await waitForCalls(1);
-		CartService.discard();
-		refreshRes.resolve(await respond(200, serverCart()));
-		await refreshP;
-
-		expect(CartService.getCart().lines).toHaveLength(0);
-		expect(document.cookie).not.toContain('sr_cart=tok_srv');
-	});
-
-	it('a read issued while a mutation was in flight cannot overwrite the mutation result', async () => {
+	it('a refresh issued during a mutation is sent only after the mutation lands', async () => {
 		setCookie('tok_srv');
 		enqueue(respond(200, serverCart({ revision: 1 }))); // seed the mirror
 		await CartService.refresh();
+		calls.length = 0;
 
 		const patchRes = deferred();
-		const refreshRes = deferred();
-		enqueue(patchRes.promise, refreshRes.promise);
+		enqueue(patchRes.promise, respond(200, serverCart({ revision: 2 })));
 		const updateP = CartService.updateLine('SKU1', 2);
-		await waitForCalls(2);
+		await waitForCalls(1);
 		const refreshP = CartService.refresh();
-		await waitForCalls(3);
+		await settle();
+		expect(calls).toHaveLength(1); // only the PATCH
 
 		const two = [{ sku: 'SKU1', name: 'Widget', quantity: 2, unitPrice: 2500, lineSubtotal: 5000, lineDiscount: 0, lineTotal: 5000, available: true, availableQuantity: 999 }];
 		patchRes.resolve(await respond(200, serverCart({ revision: 2, lines: two, subtotal: 5000 })));
 		await updateP;
-		refreshRes.resolve(await respond(200, serverCart({ revision: 1 }))); // computed before the PATCH landed
 		await refreshP;
-
-		expect(CartService.getCart().lines[0]?.quantity).toBe(2);
+		expect(calls).toHaveLength(2);
 		expect(CartService.getCart().revision).toBe(2);
 	});
 
@@ -382,6 +373,41 @@ describe('overlapping reads — request-sequence guard', () => {
 		await CartService.refresh();
 		await CartService.refresh();
 		expect(CartService.getCart().revision).toBe(2);
+	});
+
+	it('without Web Locks, an older refresh landing last cannot overwrite a newer one (sequence guard)', async () => {
+		removeLocks();
+		setCookie('tok_srv');
+		const older = deferred();
+		const newer = deferred();
+		enqueue(older.promise, newer.promise);
+
+		const olderP = CartService.refresh();
+		await waitForCalls(1);
+		const newerP = CartService.refresh();
+		await waitForCalls(2);
+
+		newer.resolve(await respond(200, serverCart({ revision: 2 })));
+		await newerP;
+		older.resolve(await respond(200, serverCart({ revision: 1 })));
+		await olderP;
+		expect(CartService.getCart().revision).toBe(2);
+	});
+
+	it('without Web Locks, a refresh in flight when the cart is retired elsewhere cannot resurrect it', async () => {
+		removeLocks();
+		setCookie('tok_srv');
+		const refreshRes = deferred();
+		enqueue(refreshRes.promise);
+
+		const refreshP = CartService.refresh();
+		await waitForCalls(1);
+		clearCookie(); // another tab retired the cart
+		refreshRes.resolve(await respond(200, serverCart()));
+		await refreshP;
+
+		expect(CartService.getCart().lines).toHaveLength(0);
+		expect(cookieValue()).toBeNull();
 	});
 });
 
@@ -404,5 +430,459 @@ describe('CartError', () => {
 		const err = new CartError('not_found', 'Your cart expired');
 		expect(err.code).toBe('not_found');
 		expect(err.name).toBe('CartError');
+	});
+});
+
+// ── converted-cart handling and cross-tab invariants (design §2, §7) ───────────
+const oneLine = (sku: string, quantity = 1) => [
+	{ sku, name: sku, quantity, unitPrice: 2500, lineSubtotal: 2500 * quantity, lineDiscount: 0, lineTotal: 2500 * quantity, available: true, availableQuantity: 999 },
+];
+const notFound = () => respond(404, { error: { code: 'CART_NOT_FOUND', message: 'cart not found' } });
+const converted409 = (cart: Partial<ServerCart> = {}) =>
+	respond(409, { error: { code: 'CART_STALE', message: 'converted' }, code: 'converted', revision: 4, cart: serverCart({ status: 'converted', ...cart }) });
+const stale409 = (revision: number) =>
+	respond(409, { error: { code: 'CART_STALE', message: 'stale' }, code: 'stale', revision, cart: serverCart({ revision }) });
+const merged409 = () =>
+	respond(409, { error: { code: 'CART_STALE', message: 'merged' }, code: 'merged', revision: 4, cart: serverCart({ status: 'merged', lines: [] }) });
+const lookupBody = (over: Record<string, unknown> = {}) => ({
+	code: 'ORD-A', state: 'PendingPayment', grandTotal: 5800, discountTotal: 0, couponApplied: false, giftCardApplied: 0,
+	pointsDiscount: 0, pointsRedeemed: 0, receiptToken: 'rt_a', currency: 'USD', replay: true, ...over,
+});
+const seedMirror = async (token = 'tok_srv', revision = 1) => {
+	setCookie(token);
+	enqueue(respond(200, serverCart({ token, revision })));
+	await CartService.refresh();
+	calls.length = 0;
+};
+const waitForCalls = (n: number) => vi.waitFor(() => expect(calls.length).toBeGreaterThanOrEqual(n));
+const createCalls = () => calls.filter((c) => c.init.method === 'POST' && /\/v1\/shop\/cart$/.test(c.url));
+
+describe('one cart creation across tabs (I4)', () => {
+	it('concurrent first add in two tabs → exactly one POST /cart; both lines land on one token', async () => {
+		const tabB = (await freshTab()).CartService;
+		const createRes = deferred();
+		enqueue(
+			createRes.promise,
+			respond(200, serverCart({ revision: 2, lines: oneLine('SKU1') })), // tab A PATCH
+			respond(200, serverCart({ revision: 3, lines: [...oneLine('SKU1'), ...oneLine('SKU2')] })), // tab B PATCH
+		);
+
+		const addA = CartService.addLine('SKU1', 1);
+		const addB = tabB.addLine('SKU2', 1);
+		await waitForCalls(1);
+		await settle();
+		expect(calls).toHaveLength(1); // tab B waits for the lock instead of creating a competing cart
+
+		createRes.resolve(await respond(200, serverCart({ lines: [] })));
+		await Promise.all([addA, addB]);
+
+		expect(createCalls()).toHaveLength(1);
+		expect(patchCalls().map((c) => c.url.replace(/^https?:\/\/[^/]+/, ''))).toEqual(['/v1/shop/cart/tok_srv/lines', '/v1/shop/cart/tok_srv/lines']);
+		expect(patchCalls().map((c) => JSON.parse(String(c.init.body)).lines[0].sku)).toEqual(['SKU1', 'SKU2']);
+		expect(cookieValue()).toBe('tok_srv');
+		expect(tabB.getCart().lines).toHaveLength(2);
+		expect(locks.maxConcurrent).toBe(1);
+	});
+
+	it('concurrent creation with a legacy key → one seeded cart; the key is consumed once', async () => {
+		localStorage.setItem('sellright_legacy_local_cart', JSON.stringify({
+			items: [{ sku: 'SKU9', quantity: 3, productVariant: { id: 'SKU9', name: 'Legacy', product: { slug: 'legacy' } } }],
+		}));
+		const tabB = (await freshTab()).CartService;
+		const createRes = deferred();
+		enqueue(createRes.promise, respond(200, serverCart({ revision: 2 })), respond(200, serverCart({ revision: 3 })));
+
+		const addA = CartService.addLine('SKU1', 1);
+		const addB = tabB.addLine('SKU2', 1);
+		await waitForCalls(1);
+		createRes.resolve(await respond(200, serverCart({ lines: oneLine('SKU9', 3) })));
+		await Promise.all([addA, addB]);
+
+		expect(createCalls()).toHaveLength(1);
+		expect(JSON.parse(String(createCalls()[0].init.body)).items).toEqual([{ sku: 'SKU9', quantity: 3 }]);
+		expect(localStorage.getItem('sellright_legacy_local_cart')).toBeNull();
+	});
+});
+
+describe('a response for T never changes U (I3)', () => {
+	it('a delayed refresh for T after the cookie moved to U → U\'s cookie and the mirror are untouched', async () => {
+		await seedMirror('tok_srv', 1);
+		const refreshRes = deferred();
+		enqueue(refreshRes.promise);
+
+		const refreshP = CartService.refresh();
+		await waitForCalls(1);
+		setCookie('tok_u'); // a writer outside this tab's lock replaced the cart
+		refreshRes.resolve(await respond(200, serverCart({ token: 'tok_srv', revision: 9 })));
+		const res = await refreshP;
+
+		expect(cookieValue()).toBe('tok_u');
+		expect(res.dropped).toEqual([]);
+		expect(CartService.getCart().revision).toBe(1); // the late response for T was not installed
+	});
+
+	it('a delayed mutation response for T after the cookie moved to U → nothing is written', async () => {
+		await seedMirror('tok_srv', 1);
+		const patchRes = deferred();
+		enqueue(patchRes.promise);
+
+		const addP = CartService.addLine('SKU1', 1);
+		await waitForCalls(1);
+		setCookie('tok_u');
+		patchRes.resolve(await respond(200, serverCart({ token: 'tok_srv', revision: 9 })));
+		await addP;
+
+		expect(cookieValue()).toBe('tok_u');
+		expect(CartService.getCart().revision).toBe(1);
+	});
+
+	it('a delayed checkout 409 `stale` for T after U is current → no adoption (R2-2)', async () => {
+		await seedMirror('tok_srv', 1);
+		const postRes = deferred();
+		enqueue(postRes.promise);
+
+		const order = CartService.withLock((scope) =>
+			placeOrder({ items: [{ sku: 'SKU1', quantity: 1 }] }, { token: 'tok_srv', revision: 1, status: 'active' }, scope),
+		).catch((e) => e);
+		await waitForCalls(1);
+		setCookie('tok_u');
+		postRes.resolve(await respond(409, { error: { code: 'CART_STALE', message: 'cart changed' }, code: 'stale', revision: 6, cart: serverCart({ token: 'tok_srv', revision: 6 }) }));
+
+		expect(((await order) as Error).message).toMatch(/cart changed/);
+		expect(cookieValue()).toBe('tok_u');
+		expect(CartService.getCart().revision).toBe(1);
+	});
+
+	it('a delayed CART_NOT_FOUND for T after U → U is kept (R1-2)', async () => {
+		await seedMirror('tok_srv', 1);
+		const readRes = deferred();
+		enqueue(readRes.promise);
+
+		const refreshP = CartService.refresh().catch((e) => e);
+		await waitForCalls(1);
+		setCookie('tok_u');
+		readRes.resolve(await notFound());
+
+		expect(await refreshP).toMatchObject({ code: 'not_found' });
+		expect(cookieValue()).toBe('tok_u');
+	});
+
+	it('a coupon validated for T after the cookie moved to U is reported superseded and its code is not remembered', async () => {
+		setCookie('tok_srv');
+		const couponRes = deferred();
+		enqueue(couponRes.promise, respond(200, serverCart({ token: 'tok_u' })));
+
+		const applyP = CartService.applyCoupon('SAVE10');
+		await waitForCalls(1);
+		setCookie('tok_u');
+		couponRes.resolve(await respond(200, serverCart({ token: 'tok_srv', coupon: { code: 'SAVE10', applied: true } })));
+
+		expect(await applyP).toEqual({ valid: false, reason: COUPON_SUPERSEDED });
+		expect(CartService.getCart().coupon).toBeNull();
+		await CartService.refresh();
+		expect(calls[calls.length - 1].url).not.toContain('couponCode=');
+	});
+
+	it('a delayed merged 409 retires only the token it was sent for', async () => {
+		await seedMirror('tok_srv', 4);
+		const patchRes = deferred();
+		enqueue(patchRes.promise);
+
+		const updateP = CartService.updateLine('SKU1', 2).catch((e) => e);
+		await waitForCalls(1);
+		setCookie('tok_u');
+		patchRes.resolve(await merged409());
+
+		expect(await updateP).toMatchObject({ code: 'merged' });
+		expect(cookieValue()).toBe('tok_u');
+	});
+
+	it('token() is the cookie, never an older mirror; the next operation resets a mirror another tab replaced', async () => {
+		await seedMirror('tok_srv', 1);
+		setCookie('tok_u');
+		expect(CartService.token()).toBe('tok_u');
+		expect(CartService.getCart().token).toBe('tok_srv');
+
+		enqueue(respond(500, { error: { code: 'BOOM', message: 'boom' } }));
+		await expect(CartService.refresh()).rejects.toThrow();
+		expect(CartService.getCart().token).toBe(''); // reset on lock entry, before the request
+		expect(cookieValue()).toBe('tok_u');
+	});
+});
+
+describe('retirement needs proof (I1, I2, I5)', () => {
+	it('a 404 with another code, and a network timeout, keep the cookie and the mirror', async () => {
+		await seedMirror('tok_srv', 1);
+		enqueue(respond(404, { error: { code: 'NOT_FOUND', message: 'route not found' } }));
+		await expect(CartService.refresh()).rejects.toThrow();
+		expect(cookieValue()).toBe('tok_srv');
+		expect(CartService.getCart().revision).toBe(1);
+
+		enqueue(Promise.reject(new TypeError('network down')));
+		await expect(CartService.refresh()).rejects.toThrow();
+		expect(cookieValue()).toBe('tok_srv');
+		expect(CartService.getCart().revision).toBe(1);
+	});
+
+	it('converted 409 on the first attempt and on the retry → token kept, mirror converted, no further request', async () => {
+		await seedMirror('tok_srv', 4);
+		enqueue(converted409());
+		await expect(CartService.updateLine('SKU1', 2)).rejects.toMatchObject({ code: 'converted' });
+		expect(patchCalls()).toHaveLength(1);
+		expect(calls).toHaveLength(1);
+		expect(cookieValue()).toBe('tok_srv');
+		expect(CartService.getCart().status).toBe('converted');
+
+		resetService();
+		calls.length = 0;
+		await seedMirror('tok_srv', 4);
+		enqueue(stale409(6), converted409());
+		const outcome = await CartService.updateLine('SKU1', 2).catch((e) => e);
+		expect(outcome).toBeInstanceOf(ConvertedCartError); // not a generic "cart changed"
+		expect(patchCalls()).toHaveLength(2); // one retry, never a third
+		expect(calls).toHaveLength(2);
+		expect(cookieValue()).toBe('tok_srv');
+		expect(CartService.getCart().status).toBe('converted');
+	});
+
+	it('an add against a converted cart is reported as converted and keeps the token', async () => {
+		setCookie('tok_srv');
+		enqueue(converted409());
+		await expect(CartService.addLine('SKU1', 1)).rejects.toMatchObject({ code: 'converted' });
+		expect(cookieValue()).toBe('tok_srv');
+		expect(CartService.getCart().status).toBe('converted');
+	});
+
+	it('cold-start revision read hitting CART_NOT_FOUND retires the token: one GET, no PATCH', async () => {
+		setCookie('tok_srv');
+		enqueue(notFound());
+		await expect(CartService.updateLine('SKU1', 2)).rejects.toMatchObject({ code: 'not_found' });
+		expect(calls).toHaveLength(1);
+		expect(patchCalls()).toHaveLength(0);
+		expect(cookieValue()).toBeNull();
+	});
+
+	it('a merged 409 retires its own token', async () => {
+		await seedMirror('tok_srv', 4);
+		enqueue(merged409());
+		await expect(CartService.updateLine('SKU1', 2)).rejects.toMatchObject({ code: 'merged' });
+		expect(cookieValue()).toBeNull();
+		expect(CartService.getCart().lines).toHaveLength(0);
+	});
+
+	it('the failed operation never creates or seeds a replacement cart', async () => {
+		setCookie('tok_srv');
+		enqueue(notFound());
+		await expect(CartService.addLine('SKU1', 1)).rejects.toMatchObject({ code: 'not_found' });
+		expect(createCalls()).toHaveLength(0);
+	});
+});
+
+describe('retireSettled — order-bound retirement', () => {
+	const lookupUrl = (token: string) => `/v1/shop/cart/${token}/checkout`;
+
+	it('an old confirmation (code A) while the cookie names a newer cart → 404 or a code mismatch keeps it (R2-3)', async () => {
+		setCookie('tok_new');
+		enqueue(respond(404, { error: { code: 'ORDER_NOT_FOUND', message: 'order not found' } }));
+		expect(await CartService.retireSettled('ORD-A')).toBe(false);
+		expect(calls[0].url).toContain(lookupUrl('tok_new'));
+		expect(cookieValue()).toBe('tok_new');
+
+		enqueue(respond(200, lookupBody({ code: 'ORD-B', state: 'Paid' })));
+		expect(await CartService.retireSettled('ORD-A')).toBe(false);
+		expect(cookieValue()).toBe('tok_new');
+	});
+
+	it('a failed lookup, PendingPayment or an unknown state keeps the token', async () => {
+		setCookie('tok_srv');
+		// Thunks: a pre-built rejected promise would be reported unhandled until its turn comes.
+		for (const response of [
+			() => respond(500, { error: { code: 'BOOM', message: 'boom' } }),
+			() => Promise.reject(new TypeError('network down')),
+			() => respond(200, lookupBody({ state: 'PendingPayment' })),
+			() => respond(200, lookupBody({ state: 'Declined' })),
+			() => respond(200, lookupBody({ state: 'AddingItems' })),
+		]) {
+			enqueue(response());
+			expect(await CartService.retireSettled('ORD-A')).toBe(false);
+			expect(cookieValue()).toBe('tok_srv');
+		}
+	});
+
+	it('Paid or Cancelled with a matching code retires; the lookup is read-only', async () => {
+		for (const state of ['Paid', 'Cancelled']) {
+			setCookie('tok_srv');
+			enqueue(respond(200, lookupBody({ state })));
+			expect(await CartService.retireSettled('ORD-A')).toBe(true);
+			expect(cookieValue()).toBeNull();
+		}
+		expect(calls.every((c) => !c.init.method || c.init.method === 'GET')).toBe(true);
+	});
+
+	it('without an expected code (the drawer) a settled order retires too', async () => {
+		setCookie('tok_srv');
+		enqueue(respond(200, lookupBody({ state: 'Paid' })));
+		expect(await CartService.retireSettled()).toBe(true);
+		expect(cookieValue()).toBeNull();
+	});
+
+	it('no cookie → nothing to retire, no request', async () => {
+		expect(await CartService.retireSettled('ORD-A')).toBe(false);
+		expect(calls).toHaveLength(0);
+	});
+});
+
+describe('lookupConvertedCheckout', () => {
+	it('returns the original order and writes nothing', async () => {
+		setCookie('tok_srv');
+		enqueue(respond(200, lookupBody()));
+		expect(await CartService.lookupConvertedCheckout('tok_srv')).toEqual({
+			ok: true,
+			order: { code: 'ORD-A', state: 'PendingPayment', grandTotal: 5800, receiptToken: 'rt_a', currency: 'USD' },
+		});
+		expect(calls).toHaveLength(1);
+		expect(calls[0].init.method).toBe('GET');
+		expect(cookieValue()).toBe('tok_srv');
+	});
+
+	it('404 ORDER_NOT_FOUND is not_converted; any other failure is unavailable', async () => {
+		enqueue(respond(404, { error: { code: 'ORDER_NOT_FOUND', message: 'order not found' } }));
+		expect(await CartService.lookupConvertedCheckout('tok_srv')).toEqual({ ok: false, reason: 'not_converted' });
+		enqueue(respond(404, { error: { code: 'NOT_FOUND', message: 'nope' } }));
+		expect(await CartService.lookupConvertedCheckout('tok_srv')).toEqual({ ok: false, reason: 'unavailable' });
+		enqueue(respond(500, { error: { code: 'BOOM', message: 'boom' } }));
+		expect(await CartService.lookupConvertedCheckout('tok_srv')).toEqual({ ok: false, reason: 'unavailable' });
+		enqueue(Promise.reject(new TypeError('network down')));
+		expect(await CartService.lookupConvertedCheckout('tok_srv')).toEqual({ ok: false, reason: 'unavailable' });
+	});
+
+	it('stays available without Web Locks (an unpaid order must stay payable)', async () => {
+		removeLocks();
+		enqueue(respond(200, lookupBody()));
+		expect(await CartService.lookupConvertedCheckout('tok_srv')).toMatchObject({ ok: true });
+	});
+});
+
+describe('no Web Locks → cart-changing flows fail closed (§6)', () => {
+	it('every mutation throws `unsupported` before any request', async () => {
+		removeLocks();
+		setCookie('tok_srv');
+		const attempts: Array<() => Promise<unknown>> = [
+			() => CartService.addLine('SKU1', 1),
+			() => CartService.updateLine('SKU1', 2),
+			() => CartService.removeLine('SKU1'),
+			() => CartService.applyCoupon('SAVE10'),
+			() => CartService.removeCoupon(),
+			() => CartService.captureEmail('a@b.c'),
+			() => CartService.merge(),
+			() => CartService.readFresh(),
+			() => CartService.checkoutSnapshot(),
+			() => CartService.retireSettled('ORD-A'),
+			() => CartService.adoptConflict(serverCart(), 'tok_srv'),
+			() => CartService.withLock(async () => 'never'),
+		];
+		for (const attempt of attempts) {
+			await expect(attempt()).rejects.toMatchObject({ code: 'unsupported', message: expect.stringMatching(/update your browser/) });
+		}
+		expect(calls).toHaveLength(0);
+		expect(cookieValue()).toBe('tok_srv');
+	});
+
+	it('refresh stays available, updates the mirror only, and never clears the cookie', async () => {
+		removeLocks();
+		setCookie('tok_srv');
+		enqueue(respond(200, serverCart({ revision: 3 })));
+		await CartService.refresh();
+		expect(CartService.getCart().revision).toBe(3);
+
+		enqueue(notFound());
+		await expect(CartService.refresh()).rejects.toMatchObject({ code: 'not_found' });
+		expect(cookieValue()).toBe('tok_srv');
+	});
+});
+
+describe('one lock owner per public operation (design §4.1a)', () => {
+	it('the checkout runs the pre-submit read and the order POST inside ONE lock without deadlocking', async () => {
+		setCookie('tok_srv');
+		enqueue(
+			respond(200, serverCart({ revision: 5 })), // live pre-submit read
+			respond(200, { code: 'ORD-N', state: 'PendingPayment', grandTotal: 2500, receiptToken: 'rt_n' }),
+		);
+		const created = await CartService.withLock(async (scope) => {
+			const snapshot = await refreshStockBeforeSubmit(scope);
+			return placeOrder({ items: [{ sku: 'SKU1', quantity: 1 }] }, snapshot, scope);
+		});
+		expect(created.code).toBe('ORD-N');
+		expect(locks.requests).toBe(1);
+		const post = calls.find((c) => c.init.method === 'POST');
+		expect(JSON.parse(String(post!.init.body))).toMatchObject({ cartToken: 'tok_srv', expectedRevision: 5 });
+	});
+
+	it('an independent refresh started during the checkout queues behind it', async () => {
+		setCookie('tok_srv');
+		const readRes = deferred();
+		enqueue(readRes.promise, respond(200, serverCart({ revision: 6 })));
+
+		const checkout = CartService.withLock(async (scope) => (await scope.readFresh()).revision);
+		await waitForCalls(1);
+		const refreshP = CartService.refresh();
+		await settle();
+		expect(calls).toHaveLength(1);
+
+		readRes.resolve(await respond(200, serverCart({ revision: 5 })));
+		expect(await checkout).toBe(5);
+		await refreshP;
+		expect(calls).toHaveLength(2);
+		expect(CartService.getCart().revision).toBe(6);
+		expect(locks.maxConcurrent).toBe(1);
+	});
+
+	it('removeLine takes the lock exactly once (it delegates to updateLine)', async () => {
+		await seedMirror('tok_srv', 2);
+		const before = locks.requests;
+		enqueue(respond(200, serverCart({ revision: 3, lines: [] })));
+		await CartService.removeLine('SKU1');
+		expect(locks.requests - before).toBe(1);
+	});
+
+	it('a scope is dead once the lock is released', async () => {
+		setCookie('tok_srv');
+		let captured!: CartLockScope;
+		await CartService.withLock(async (scope) => {
+			captured = scope;
+		});
+		expect(() => captured.retire('tok_srv')).toThrow(/released/);
+		expect(() => captured.adoptConflict(serverCart(), 'tok_srv')).toThrow(/released/);
+		expect(() => captured.readFresh()).toThrow(/released/);
+		expect(cookieValue()).toBe('tok_srv');
+	});
+});
+
+describe('placeOrder with a converted cart (design §4.2)', () => {
+	const form = { items: [{ sku: 'SKU1', quantity: 1 }] };
+
+	it('a converted snapshot throws ConvertedCartError without any POST and keeps the token', async () => {
+		setCookie('tok_srv');
+		const outcome = await CartService.withLock((scope) =>
+			placeOrder(form, { token: 'tok_srv', revision: 4, status: 'converted' }, scope),
+		).catch((e) => e);
+		expect(outcome).toBeInstanceOf(ConvertedCartError);
+		expect(calls).toHaveLength(0);
+		expect(cookieValue()).toBe('tok_srv');
+	});
+
+	it('a converted 409 keeps the token and mirrors the converted snapshot; a merged 409 retires it', async () => {
+		setCookie('tok_srv');
+		enqueue(respond(409, { error: { code: 'CART_CONVERTED', message: 'cart already converted' }, code: 'converted', revision: 4, cart: serverCart({ status: 'converted' }) }));
+		const outcome = await CartService.withLock((scope) =>
+			placeOrder(form, { token: 'tok_srv', revision: 4, status: 'active' }, scope),
+		).catch((e) => e);
+		expect(outcome).toBeInstanceOf(ConvertedCartError);
+		expect(cookieValue()).toBe('tok_srv');
+		expect(CartService.getCart().status).toBe('converted');
+
+		enqueue(respond(409, { error: { code: 'CART_MERGED', message: 'cart merged' }, code: 'merged', revision: 4, cart: serverCart({ status: 'merged', lines: [] }) }));
+		await CartService.withLock((scope) => placeOrder(form, { token: 'tok_srv', revision: 4, status: 'active' }, scope)).catch(() => undefined);
+		expect(cookieValue()).toBeNull();
 	});
 });

@@ -4,8 +4,10 @@ import { CheckoutEmptyCart } from './CheckoutEmptyCart';
 import { CheckoutMobileCta } from './CheckoutCta';
 import { CheckoutOrderSummary } from './CheckoutOrderSummary';
 import { CheckoutPaymentPanel } from './CheckoutPaymentPanel';
+import { CheckoutResumePanel } from './CheckoutResumePanel';
+import type { PaymentInitState } from './PaymentInitRetry';
 import type { ShopConfig } from '~/sellright/types/checkout';
-import type { CheckoutPhase, PaymentMethod } from '~/hooks/useCheckout';
+import type { CheckoutPhase, PaymentMethod, ResumeView } from '~/hooks/useCheckout';
 
 interface CheckoutPageViewProps {
   checkoutState: any;
@@ -19,16 +21,32 @@ interface CheckoutPageViewProps {
   isOrderProcessing: Signal<boolean>;
   localCart: any;
   onGatewaySuccess$: QRL<() => void>;
-  onPaymentError$: QRL<(message: string) => void>;
-  onPaymentProcessingChange$: QRL<(processing: boolean) => void>;
+  onPaymentError$: QRL<(message: string, mountGen?: number) => void>;
+  onPaymentInitError$: QRL<(message: string, mountGen?: number) => void>;
+  onPaymentProcessingChange$: QRL<(processing: boolean, mountGen?: number) => void>;
   onPlaceOrder$: QRL<() => void>;
+  onResumeMethod$: QRL<(method: PaymentMethod) => void>;
+  onResumeRetry$: QRL<() => void>;
+  onStartNewCart$: QRL<() => void>;
   pageLoading: Signal<boolean>;
+  paymentInit: PaymentInitState;
   paymentMethod: Signal<PaymentMethod>;
   promoExpanded: Signal<boolean>;
   redeemPoints: Signal<number>;
   shippingCents: Signal<number | null>;
   showProcessingModal: Signal<boolean>;
-  srState: { phase: CheckoutPhase; code: string; receiptToken: string; clientSecret: string; grandTotal: number; shownTotal: number };
+  srState: {
+    phase: CheckoutPhase;
+    code: string;
+    receiptToken: string;
+    clientSecret: string;
+    grandTotal: number;
+    shownTotal: number;
+    error: string | null;
+    resume: ResumeView;
+    resumeLines: { name: string; quantity: number }[];
+    paymentError: string | null;
+  };
   state: { loading: boolean; error: string | null };
   stripeConfirmTrigger: Signal<number>;
   stripePublishableKey: Signal<string>;
@@ -36,7 +54,27 @@ interface CheckoutPageViewProps {
 
 export const CheckoutPageView = component$<CheckoutPageViewProps>((props) => (
   <div class="checkout-layout">
-    {!props.pageLoading.value && props.isCartEmpty.value ? (
+    {props.srState.resume !== 'none' ? (
+      // Resuming a converted cart's original order comes BEFORE the empty-cart view and every form/shipping/stock gate:
+      // its own minimal payment view, never the new-order panel.
+      <CheckoutResumePanel
+        gatewayConfirmTrigger={props.gatewayConfirmTrigger}
+        onGatewaySuccess$={props.onGatewaySuccess$}
+        onPaymentError$={props.onPaymentError$}
+        onPaymentInitError$={props.onPaymentInitError$}
+        onPaymentProcessingChange$={props.onPaymentProcessingChange$}
+        onResumeMethod$={props.onResumeMethod$}
+        onResumeRetry$={props.onResumeRetry$}
+        onStartNewCart$={props.onStartNewCart$}
+        paymentInit={props.paymentInit}
+        paymentMethod={props.paymentMethod}
+        shopConfig={props.shopConfig}
+        srState={props.srState}
+        state={props.state}
+        stripeConfirmTrigger={props.stripeConfirmTrigger}
+        stripePublishableKey={props.stripePublishableKey}
+      />
+    ) : !props.pageLoading.value && props.isCartEmpty.value ? (
       // A refused order (409 / pre-submit read) drops the sold-out line and empties the cart: say why instead of a bare empty state.
       <CheckoutEmptyCart message={props.localCart.notice || props.state.error} />
     ) : (
