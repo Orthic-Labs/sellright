@@ -171,8 +171,11 @@ app.use(`/build`, express.static(buildDir, { immutable: true, maxAge:"1y" }));
 app.use(`/assets`, express.static(assetsDir, { immutable: true, maxAge:"1y" }));
 // Add specific handler for fonts
 app.use('/fonts', express.static(join(distDir, 'fonts'), { immutable: true, maxAge:"1y" }));
-// Root static assets with custom cache control
-app.use(express.static(distDir, {
+// Root static assets with custom cache control. Documents and route data are never served from disk: an .html file
+// or a loader/route-data JSON left in dist (for example by an older build that prerendered pages) would bypass the
+// router and the no-store policy and carry build-time availability, so those requests skip the static handler.
+const NEVER_STATIC = /\.html?$|(^|\/)q-(data|loader)[^/]*\.json$/i;
+const rootStatic = express.static(distDir, {
   index: false, // Pages need fresh loaders and the per-request CSP nonce.
   redirect: false,
   dotfiles: 'allow',
@@ -183,7 +186,8 @@ app.use(express.static(distDir, {
       res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
     }
   },
-}));
+});
+app.use((req, res, next) => (NEVER_STATIC.test(req.path) ? next() : rootStatic(req, res, next)));
 
 // Fail-closed default for everything past the static handlers (documents, loader/action data, 404s): the value comes
 // from the one policy file. Routes that are provably stock-free (sitemaps, robots) and the layout's own header

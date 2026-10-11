@@ -17,11 +17,34 @@ function appWithPolicy() {
   app.post('/v1/shop/seo/robots.txt', (c) => c.text('x', 200, { 'cache-control': 'public, max-age=300' }));
   app.get('/v1/shop/seo/jsonld/products/some-slug', (c) => c.json({}, 200, { 'cache-control': 'public, max-age=300' }));
   app.get('/v1/redirect', () => Response.redirect('http://localhost/elsewhere', 302)); // immutable headers
+  // An upstream response passed straight through (as a preRoute plugin returning fetch() would): its headers are
+  // immutable AND it carries cacheable headers that must not survive.
+  app.get('/v1/upstream', () => {
+    const res = new Response('{"inStock":true}', { status: 200, headers: { 'content-type': 'application/json', 'cache-control': 'public, max-age=600', 'cdn-cache-control': 'max-age=600', expires: 'Thu, 01 Jan 2099 00:00:00 GMT' } });
+    const frozen = new Proxy(res.headers, {
+      get(target, prop) {
+        if (prop === 'set' || prop === 'delete' || prop === 'append') return () => { throw new TypeError('immutable'); };
+        const v = Reflect.get(target, prop);
+        return typeof v === 'function' ? v.bind(target) : v;
+      },
+    });
+    Object.defineProperty(res, 'headers', { get: () => frozen });
+    return res;
+  });
   app.onError((_err, c) => c.json({ error: 'internal' }, 500, { 'cache-control': 'public, max-age=300' }));
   return app;
 }
 
 describe('cachePolicy middleware', () => {
+  it('an immutable upstream response loses its cacheable headers (the rebuilt response is re-checked)', async () => {
+    const res = await appWithPolicy().request('/v1/upstream');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
+    expect(res.headers.get('cdn-cache-control')).toBeNull();
+    expect(res.headers.get('expires')).toBeNull();
+    expect(await res.text()).toBe('{"inStock":true}');
+  });
+
   it('defaults every response, including 404, thrown errors and redirects, to private, no-store', async () => {
     const app = appWithPolicy();
     for (const path of ['/v1/plain', '/v1/missing', '/v1/boom', '/v1/redirect']) {

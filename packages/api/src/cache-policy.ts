@@ -49,6 +49,9 @@ function applyNoStore(c: Context): void {
     const headers = new Headers(c.res.headers);
     apply(headers);
     c.res = new Response(c.res.body, { status: c.res.status, statusText: c.res.statusText, headers });
+    // Hono's `c.res` setter copies the previous response's headers onto the replacement, which would bring the
+    // upstream cache headers back: apply the policy again on the (now mutable) response.
+    apply(c.res.headers);
   }
 }
 

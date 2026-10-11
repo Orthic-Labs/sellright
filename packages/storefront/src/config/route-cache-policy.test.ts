@@ -110,7 +110,7 @@ describe('hashed build assets', () => {
 		const src = readFileSync(join(process.cwd(), 'src/entry.express.tsx'), 'utf8');
 		const build = src.indexOf("app.use(`/build`");
 		const assets = src.indexOf("app.use(`/assets`");
-		const rootStatic = src.indexOf('app.use(express.static(distDir');
+		const rootStatic = src.indexOf('rootStatic(req, res, next)');
 		const failClosed = src.indexOf('res.setHeader(\'Cache-Control\', NO_STORE_CACHE_CONTROL)');
 		const router = src.indexOf('app.use(router)');
 		expect(build).toBeGreaterThan(-1);
@@ -120,5 +120,29 @@ describe('hashed build assets', () => {
 		expect(failClosed).toBeLessThan(router);
 		expect(src).toMatch(/express\.static\(buildDir, \{ immutable: true, maxAge:"1y" \}\)/);
 		expect(src).toMatch(/express\.static\(assetsDir, \{ immutable: true, maxAge:"1y" \}\)/);
+	});
+
+	it('never serves a document or route-data file from disk (a prerendered page would bypass the policy)', async () => {
+		const { readFileSync } = await import('node:fs');
+		const { join } = await import('node:path');
+		const src = readFileSync(join(process.cwd(), 'src/entry.express.tsx'), 'utf8');
+		const m = /const NEVER_STATIC = (\/.+\/i);/.exec(src);
+		expect(m, 'NEVER_STATIC pattern present').toBeTruthy();
+		const never = new RegExp(m![1]!.slice(1, m![1]!.lastIndexOf('/')), 'i');
+		for (const p of ['/index.html', '/shop/index.html', '/products/some-knife/index.html', '/about.htm', '/shop/q-data.json', '/q-loader-abc.123.json', '/shop/q-loader-x.y.json']) {
+			expect(never.test(p), p).toBe(true);
+		}
+		for (const p of ['/favicon.ico', '/logo.png', '/q-manifest.json', '/service-worker.js', '/robots.txt', '/fonts/a.woff2']) {
+			expect(never.test(p), p).toBe(false);
+		}
+		expect(src).toMatch(/NEVER_STATIC\.test\(req\.path\) \? next\(\) : rootStatic\(req, res, next\)/);
+	});
+
+	it('prerenders no document in any build (adapter ssg include is empty)', async () => {
+		const { readFileSync } = await import('node:fs');
+		const { join } = await import('node:path');
+		const cfg = readFileSync(join(process.cwd(), 'adapters/express/vite.config.mts'), 'utf8');
+		expect(cfg).toMatch(/ssg: \{ include: \[\] \},/);
+		expect(cfg).not.toMatch(/include: \[\s*["']\/\*["']/);
 	});
 });
