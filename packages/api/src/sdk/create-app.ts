@@ -160,7 +160,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<EngineA
         await assertMigrationsCurrent(pool, tracks);
       } catch (e) {
         if ((e as { code?: string }).code === '42501') {
-          throw new EngineSetupError('the runtime role cannot read the migration journal tables; grant SELECT on them or pass migrations: "skip"', 'MIGRATIONS_UNREADABLE');
+          throw new EngineSetupError('the runtime role cannot read the migration journal and the journal probe (migration 0095_migration_journal_probe) is not installed: run the migrate step with the owner credential first (or, for a track outside schema "drizzle", grant SELECT on its journal table)', 'MIGRATIONS_UNREADABLE');
         }
         throw e;
       }

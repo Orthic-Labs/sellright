@@ -78,7 +78,7 @@ const ops: EditOpT[] = [{ op: 'set_quantity', lineId: LINE, quantity: 3 }];
 
 function commitEdit(idempotencyKey: string) {
   return previewOrderEdit(STORE, CODE, ops).then((prev) => commitOrderEdit({
-    storeId: STORE, storeSlug: SLUG, code: CODE, actor: 'owner@example.test', ops, expectedGrandTotal: prev.after.grandTotal,
+    storeId: STORE, storeSlug: SLUG, code: CODE, actor: 'owner@example.test', principalKind: 'human', ops, expectedGrandTotal: prev.after.grandTotal,
     idempotencyKey, notifyCustomer: false, settlement: { type: 'leave_due' },
   }));
 }

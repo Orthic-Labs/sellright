@@ -142,7 +142,7 @@ let key = 0;
 async function commit(code: string, ops: EditOpT[], over: Partial<CommitInput> = {}, settlement?: SettlementT) {
   const prev = await previewOrderEdit(STORE, code, ops);
   return commitOrderEdit({
-    storeId: STORE, storeSlug: SLUG, code, actor: 'owner@example.test', ops, expectedGrandTotal: prev.after.grandTotal,
+    storeId: STORE, storeSlug: SLUG, code, actor: 'owner@example.test', principalKind: 'human', ops, expectedGrandTotal: prev.after.grandTotal,
     idempotencyKey: `k-${++key}`, notifyCustomer: true, settlement, ...over,
   });
 }
@@ -440,7 +440,7 @@ describe('guards: stale preview, idempotency, state', () => {
   it('rejects a stale preview and applies nothing', async () => {
     const o = await makeOrder({});
     const ops: EditOpT[] = [{ op: 'add_item', sku: 'A', quantity: 1 }];
-    await expectErr(commitOrderEdit({ storeId: STORE, storeSlug: SLUG, code: o.code, actor: 'a', ops, expectedGrandTotal: 12345, idempotencyKey: 'stale', notifyCustomer: false, settlement: { type: 'leave_due' } }), 'PREVIEW_STALE');
+    await expectErr(commitOrderEdit({ storeId: STORE, storeSlug: SLUG, code: o.code, actor: 'a', principalKind: 'human', ops, expectedGrandTotal: 12345, idempotencyKey: 'stale', notifyCustomer: false, settlement: { type: 'leave_due' } }), 'PREVIEW_STALE');
     expect(await linesOf(o.code)).toHaveLength(1);
     expect((await orderRow(o.code)).grandTotal).toBe(o.grandTotal);
   });
@@ -449,7 +449,7 @@ describe('guards: stale preview, idempotency, state', () => {
     const o = await makeOrder({ lines: [{ sku: 'A', qty: 2 }, { sku: 'B', qty: 1 }] });
     const l = (await linesOf(o.code)).find((x) => x.variantSku === 'B')!;
     const ops: EditOpT[] = [{ op: 'remove_line', lineId: l.id }];
-    const input = { storeId: STORE, storeSlug: SLUG, code: o.code, actor: 'a', ops, expectedGrandTotal: 2500, idempotencyKey: 'same-key', notifyCustomer: true, settlement: { type: 'refund_now' } as SettlementT };
+    const input = { storeId: STORE, storeSlug: SLUG, code: o.code, actor: 'a', principalKind: 'human' as const, ops, expectedGrandTotal: 2500, idempotencyKey: 'same-key', notifyCustomer: true, settlement: { type: 'refund_now' } as SettlementT };
     const r1 = await commitOrderEdit(input);
     const r2 = await commitOrderEdit(input);
     expect(r1.replay).toBe(false);
@@ -833,7 +833,7 @@ describe('round-2 review fixes: intents, license issuance, async refunds', () =>
     const o2 = await makeOrder({}); await addIntent(o2.id, 'open', 2);
     intentSpy.cancel = false; // gateway could not cancel it
     const prev = await previewOrderEdit(STORE, o2.code, [op]);
-    await expectErr(commitOrderEdit({ storeId: STORE, storeSlug: SLUG, code: o2.code, actor: 'a', ops: [op], expectedGrandTotal: prev.after.grandTotal, idempotencyKey: 'surv', notifyCustomer: false, settlement: { type: 'leave_due' } }), 'PAYMENT_UNRESOLVED');
+    await expectErr(commitOrderEdit({ storeId: STORE, storeSlug: SLUG, code: o2.code, actor: 'a', principalKind: 'human', ops: [op], expectedGrandTotal: prev.after.grandTotal, idempotencyKey: 'surv', notifyCustomer: false, settlement: { type: 'leave_due' } }), 'PAYMENT_UNRESOLVED');
     expect((await orderRow(o2.code)).shippingAddress).toMatchObject({ country: 'US' });
   });
 
@@ -851,11 +851,11 @@ describe('round-2 review fixes: intents, license issuance, async refunds', () =>
     const r1 = await commit(o.code, ops, { idempotencyKey: 'same-key' }, { type: 'leave_due' });
     expect(r1.replay).toBe(false);
     await addIntent(o.id, 'open'); intentSpy.calls.length = 0;
-    const r2 = await commitOrderEdit({ storeId: STORE, storeSlug: SLUG, code: o.code, actor: 'owner@example.test', ops, expectedGrandTotal: r1.grandTotal, idempotencyKey: 'same-key', notifyCustomer: true, settlement: { type: 'leave_due' } });
+    const r2 = await commitOrderEdit({ storeId: STORE, storeSlug: SLUG, code: o.code, actor: 'owner@example.test', principalKind: 'human', ops, expectedGrandTotal: r1.grandTotal, idempotencyKey: 'same-key', notifyCustomer: true, settlement: { type: 'leave_due' } });
     expect(r2.replay).toBe(true);
     expect(intentSpy.calls).toEqual([]);
     expect(await intentStatuses(o.id)).toEqual(['open']);
-    await expectErr(commitOrderEdit({ storeId: STORE, storeSlug: SLUG, code: o.code, actor: 'a', ops: [{ op: 'set_quantity', lineId: l.id, quantity: 4 }], expectedGrandTotal: 1, idempotencyKey: 'stale-1', notifyCustomer: false, settlement: { type: 'leave_due' } }), 'PREVIEW_STALE');
+    await expectErr(commitOrderEdit({ storeId: STORE, storeSlug: SLUG, code: o.code, actor: 'a', principalKind: 'human', ops: [{ op: 'set_quantity', lineId: l.id, quantity: 4 }], expectedGrandTotal: 1, idempotencyKey: 'stale-1', notifyCustomer: false, settlement: { type: 'leave_due' } }), 'PREVIEW_STALE');
     expect(intentSpy.calls).toEqual([]);
   });
 
@@ -869,6 +869,31 @@ describe('round-2 review fixes: intents, license issuance, async refunds', () =>
     expect(await lic()).toHaveLength(1);
     // a later zero-balance edit never double-issues
     await commit(o.code, [{ op: 'set_shipping_method', code: 'std' }]);
+    expect(await lic()).toHaveLength(1);
+  });
+
+  it('an agent principal cannot commit entitlement-changing ops, even called directly (service refuses; nothing written)', async () => {
+    const o = await makeOrder({ lines: [{ sku: 'B', qty: 1 }] });
+    const l = (await linesOf(o.code))[0]!;
+    const lic = () => withStore(STORE, (tx) => tx.select().from(s.license).where(eq(s.license.orderId, o.id)));
+    for (const op of [
+      { op: 'add_item', sku: 'L', quantity: 1, unitPrice: 0 }, { op: 'set_quantity', lineId: l.id, quantity: 2 },
+      { op: 'swap_variant', lineId: l.id, sku: 'L' }, { op: 'remove_line', lineId: l.id },
+    ] as EditOpT[]) {
+      await expectErr(commitOrderEdit({ storeId: STORE, storeSlug: SLUG, code: o.code, actor: 'bot@example.test', principalKind: 'agent', ops: [op], expectedGrandTotal: 2500, idempotencyKey: `agent-${op.op}`, notifyCustomer: false, settlement: { type: 'leave_due' } }), 'AGENT_FORBIDDEN');
+    }
+    expect(await lic()).toHaveLength(0);
+    expect(await linesOf(o.code)).toHaveLength(1);
+    expect(await audits('edit')).toHaveLength(0);
+  });
+
+  it('reconciliation refuses to issue when the edit was committed by an agent (a benign edit cannot top up a missing licence); a human edit still does', async () => {
+    const o = await makeOrder({ lines: [{ sku: 'L', qty: 1 }] }); // Paid, fully funded, licensed line with no licence row yet
+    const lic = () => withStore(STORE, (tx) => tx.select().from(s.license).where(eq(s.license.orderId, o.id)));
+    await commit(o.code, [{ op: 'set_shipping_method', code: 'std' }], { principalKind: 'agent', actor: 'bot@example.test' }, { type: 'leave_due' });
+    expect(await lic()).toHaveLength(0);
+    expect(await audits('agent_issuance_refused')).toHaveLength(1);
+    await commit(o.code, [{ op: 'set_shipping_method', code: 'std' }], {}, { type: 'leave_due' }); // human: today's behaviour, tops up
     expect(await lic()).toHaveLength(1);
   });
 

@@ -40,7 +40,7 @@ import { emitEvent } from '../webhooks/emit.js';
 import { enqueueOrderBalanceDue, enqueueOrderUpdated, pickEmailAppKey, resolveStorefrontUrl, type StoreEmailCtx } from '../email/dispatch.js';
 import { normalizeEmail } from '../auth/email.js';
 import {
-  OrderEditError, applyEditOps, countryChanged, diffLines, lockedQty, openQty, priceWorkingOrder, readAddress,
+  OrderEditError, applyEditOps, countryChanged, diffLines, editChangesEntitlements, lockedQty, openQty, priceWorkingOrder, readAddress,
   referencedKeys, sameAddress, validateSettlement, allowedSettlements,
   type Address, type EditOpT, type LineDiff, type OrderSnapshot, type PromoFacts, type SettlementT,
   type ShippingMethodFacts, type VariantFacts, type WLine, type WorkingOrder,
@@ -408,6 +408,8 @@ export async function previewOrderEdit(storeId: string, code: string, ops: EditO
 // ── commit ───────────────────────────────────────────────────────────────────
 export interface CommitInput {
   storeId: string; storeSlug: string; code: string; actor: string;
+  /** Who is acting. Required (no default) so a caller cannot forget it: an agent may not commit entitlement-changing ops. */
+  principalKind: 'human' | 'agent';
   ops: EditOpT[]; expectedGrandTotal: number; expectedBalance?: number; idempotencyKey: string;
   settlement?: SettlementT; notifyCustomer: boolean; reason?: string;
 }
@@ -485,6 +487,10 @@ async function retireOrderIntents(storeId: string, code: string, actor: string):
 
 export async function commitOrderEdit(input: CommitInput): Promise<CommitResult> {
   const { storeId } = input;
+  // Defence in depth behind the route's requireHuman: only a human may commit ops that can create or change an entitlement.
+  if (input.principalKind !== 'human' && editChangesEntitlements(input.ops)) {
+    throw new OrderEditError(403, 'AGENT_FORBIDDEN', 'agents cannot perform this action');
+  }
   const fp = fingerprintOf(input);
   // Retire confirmable Stripe intents (minted at the pre-edit amount) BEFORE the
   // edit: Stripe I/O must run with no pay lock held (the sweep takes it). A
@@ -725,7 +731,7 @@ export async function commitOrderEdit(input: CommitInput): Promise<CommitResult>
       // balance payment will ever call the settle-side reconcile. Idempotent.
       const finalState = afterRow?.state ?? o.state;
       if ((finalState === 'Paid' || finalState === 'PartiallyRefunded') && dueNow <= 0) {
-        await recordSettlementOperation(tx, { storeId, kind: 'order_edit_balance_settled', operationId: editId, mutations: [], effects: editBalanceEffects({ orderId: o.id, customerId: o.customerId ?? null, deferredEarn: false }) });
+        await recordSettlementOperation(tx, { storeId, kind: 'order_edit_balance_settled', operationId: editId, mutations: [], effects: editBalanceEffects({ orderId: o.id, customerId: o.customerId ?? null, deferredEarn: false, actorKind: input.principalKind }) });
       }
       return {
         plan, refundPlan,

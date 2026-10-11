@@ -49,7 +49,11 @@ export interface LicenseIssuePayload {
   /** false = link only (first-cycle invoice on an order that is not transitioning to Paid): no issuance. Default true. */
   issue?: boolean;
 }
-export interface EditReconcilePayload { orderId: string; customerId: string | null; paidAt: string }
+export interface EditReconcilePayload {
+  orderId: string; customerId: string | null; paidAt: string;
+  /** Who committed the edit that queued this reconcile; absent for money-driven reconciles (customer balance payments). */
+  actorKind?: 'human' | 'agent';
+}
 export interface LoyaltyEarnPayload {
   /** settle: account bootstrap THEN rewards (the async paid paths' order); checkout: rewards only (bootstrap is in its notification). */
   variant: 'settle' | 'checkout' | 'deferred_edit'; orderId: string; paidAt?: string;
@@ -238,6 +242,15 @@ export const editReconcile: LocalEffectHandler = {
       const r = await reconcileEditedOrderLicenses(inner, {
         storeId: e.storeId, orderId: p.orderId, customerId: p.customerId ?? null, paidAt: new Date(p.paidAt),
         gate: async () => {
+          // An agent never issues entitlements: refuse the new rows (revocations above are unaffected) even if a route forgot its check.
+          if (p.actorKind === 'agent') {
+            await inner.insert(s.auditLog).values({
+              storeId: e.storeId, actor: 'system:policy', entity: 'order', entityId: p.orderId,
+              action: 'agent_issuance_refused', data: { operationId: e.operationId },
+            });
+            state.refused = { terminal: 'AGENT_ISSUANCE_REFUSED' };
+            return { ok: false };
+          }
           const gate = await issuanceGate(inner, e, { orderId: p.orderId, customerId: p.customerId ?? null, paidAt: p.paidAt }, held);
           if ('outcome' in gate) { state.refused = gate.outcome; return { ok: false }; }
           return { ok: true, metadataPatch: gate.metadataPatch };

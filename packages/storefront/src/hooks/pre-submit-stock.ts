@@ -21,9 +21,14 @@ export class PreSubmitStockError extends Error {
  * new order and keeps the fail-closed check.
  */
 export const refreshStockBeforeSubmit = async (): Promise<void> => {
-	await CartService.refresh();
-	const check = validateCheckoutStock();
-	if (!check.valid) throw new PreSubmitStockError(check.errors[0] || 'Some items are no longer available.');
+	// Validate the exact response of THIS read, never the shared mirror: a newer overlapping read can supersede this
+	// one's mirror write, leaving an older in-stock snapshot behind. A missing cookie, 404 or failed read throws.
+	const fresh = await CartService.readFresh();
+	if (fresh.status === 'converted') return;
+	const errors = fresh.lines
+		.filter((line) => line.available !== true)
+		.map((line) => `${line.name || line.sku}: Out of stock. Please remove from cart.`);
+	if (errors.length) throw new PreSubmitStockError(errors[0] || 'Some items are no longer available.');
 };
 
 /**

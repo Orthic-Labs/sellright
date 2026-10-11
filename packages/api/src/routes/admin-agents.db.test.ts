@@ -322,3 +322,80 @@ describe('agent seats', () => {
     for (const g of groups) expect([g, DENIED.some((d) => d.group === g)]).toEqual([g, true]);
   });
 });
+
+/** An agent must never cause licence issuance or any entitlement change through an order edit (agent-role-v5: agents never issue entitlements). */
+describe('agent order edits cannot issue or change entitlements', () => {
+  const ORDER_LIC = 'AGT-A-LIC', VL = 'aaaaaaaa-aaaa-4aaa-8aaa-0000000000a9';
+  const cookiesOf = (r: Response) => ({ sr: /sr_admin=([^;]+)/.exec(r.headers.get('set-cookie') ?? '')?.[1], csrf: /sr_csrf=([^;]+)/.exec(r.headers.get('set-cookie') ?? '')?.[1] });
+  const licences = () => count(A, 'license');
+  // order_line is under RLS: read it inside the store scope (a bare pool query sees no rows).
+  const lineIds = () => withStore(A, async (tx) => (await tx.execute(sql`SELECT ol.id FROM order_line ol JOIN "order" o ON o.id = ol.order_id WHERE o.code = ${ORDER_LIC}`)).rows.map((r) => r['id'] as string));
+  const lineCount = async () => (await lineIds()).length;
+  const addLicensed = (unitPrice: number, key: string) => ({ ops: [{ op: 'add_item', sku: 'SKU-L', quantity: 1, unitPrice }], expectedGrandTotal: 2000 + unitPrice, idempotencyKey: key, notifyCustomer: false, settlement: { type: 'leave_due' } });
+
+  beforeEach(async () => {
+    // A fully paid order plus a licensed SKU: adding the SKU at price 0 leaves the order fully funded, so reconciliation would issue.
+    await withStore(A, async (tx) => {
+      await tx.execute(sql`INSERT INTO product_variant (id, store_id, product_id, sku, name, price, fulfillment_type, app_key) VALUES (${VL}, ${A}, ${PA}, 'SKU-L', 'Licensed', 5000, 'license', 'testapp')`);
+      await tx.execute(sql`INSERT INTO stock (variant_id, store_id, on_hand, allocated) VALUES (${VL}, ${A}, 0, 0)`);
+      await tx.execute(sql`INSERT INTO "order" (id, store_id, code, state, currency, subtotal, grand_total, customer_id, shipping_address, billing_address) VALUES (gen_random_uuid(), ${A}, ${ORDER_LIC}, 'Paid'::order_state, 'USD', 2000, 2000, ${CUST}, '{"line1":"1 Ship St"}'::jsonb, '{"line1":"1 Bill St"}'::jsonb)`);
+      await tx.execute(sql`INSERT INTO order_line (id, store_id, order_id, variant_id, variant_sku, variant_name, quantity, unit_price, line_subtotal, line_total, fulfilled_qty)
+        SELECT gen_random_uuid(), ${A}, id, ${VA}, 'SKU-A', 'VA', 2, 1000, 2000, 2000, 0 FROM "order" WHERE code = ${ORDER_LIC}`);
+      await tx.execute(sql`INSERT INTO payment (store_id, order_id, amount, method, state, provider_ref, gateway_mode, currency)
+        SELECT ${A}, id, 2000, 'stripe', 'Settled', 'pi_seed_agent_lic', 'test', 'USD' FROM "order" WHERE code = ${ORDER_LIC}`);
+    });
+  });
+
+  it('control: a human adding the licensed SKU at price 0 on the paid order gets the licence (behaviour unchanged)', async () => {
+    const before = await licences();
+    const r = await req('POST', `/v1/admin/orders/${ORDER_LIC}/edit/commit`, ownerToken, addLicensed(0, 'human-add-licensed'));
+    expect([r.status, r.status === 200 ? 'ok' : await r.text()]).toEqual([200, 'ok']);
+    expect(await licences()).toBe(before + 1);
+  });
+
+  it('a bearer-token agent adding a licensed SKU (price 0 or full price) is refused: no line, no licence, no edit', async () => {
+    const a = await createAgent();
+    const before = await licences();
+    const lines = await lineCount();
+    for (const [price, key] of [[0, 'agent-add-licensed-0'], [5000, 'agent-add-licensed-full']] as const) {
+      const r = await req('POST', `/v1/admin/orders/${ORDER_LIC}/edit/commit`, a.token, addLicensed(price, key));
+      expect([price, r.status, await errMessage(r)]).toEqual([price, 403, expect.stringMatching(/agents cannot/)]);
+    }
+    expect(await licences()).toBe(before);
+    expect(lines).toBe(1);
+    expect(await lineCount()).toBe(lines);
+    expect(await count(A, 'order_edit')).toBe(0);
+  });
+
+  it('every line-changing op is human-only for an agent (set_quantity, remove_line, swap_variant, add_item); address and coupon edits stay allowed', async () => {
+    const a = await createAgent();
+    const line = (await lineIds())[0]!;
+    const ops = [
+      { op: 'set_quantity', lineId: line, quantity: 3 }, { op: 'remove_line', lineId: line },
+      { op: 'swap_variant', lineId: line, sku: 'SKU-L' }, { op: 'add_item', sku: 'SKU-A', quantity: 1 },
+    ];
+    for (const op of ops) {
+      const r = await req('POST', `/v1/admin/orders/${ORDER_LIC}/edit/commit`, a.token, { ops: [op], expectedGrandTotal: 2000, idempotencyKey: `agent-${op.op}`, notifyCustomer: false, settlement: { type: 'leave_due' } });
+      expect([op.op, r.status]).toEqual([op.op, 403]);
+    }
+    expect(await licences()).toBe(0);
+    const ok = await req('POST', `/v1/admin/orders/${ORDER_LIC}/edit/commit`, a.token, { ops: [{ op: 'set_address', kind: 'shipping', address: { line1: '2 New St', city: 'Austin', country: 'US' } }], expectedGrandTotal: 2000, idempotencyKey: 'agent-address', notifyCustomer: false, settlement: { type: 'leave_due' } });
+    expect(ok.status).toBe(200);
+  });
+
+  it('an agent browser session adding a licensed SKU is refused the same way', async () => {
+    const a = await createAgent(managerToken, { expiresAt: new Date(Date.now() + 3_600_000).toISOString() });
+    const bs = await req('POST', '/v1/admin/agents/browser-session', a.token);
+    expect(bs.status).toBe(200);
+    const { sr, csrf } = cookiesOf(bs);
+    const before = await licences();
+    const r = await app.request(`/v1/admin/orders/${ORDER_LIC}/edit/commit`, {
+      method: 'POST',
+      headers: { cookie: `sr_admin=${sr}; sr_csrf=${csrf}`, 'x-csrf-token': csrf!, 'x-store-slug': 'store-a', 'content-type': 'application/json' },
+      body: JSON.stringify(addLicensed(0, 'agent-session-add-licensed')),
+    });
+    expect([r.status, await errMessage(r)]).toEqual([403, expect.stringMatching(/agents cannot/)]);
+    expect(await licences()).toBe(before);
+    expect(await lineCount()).toBe(1);
+  });
+});

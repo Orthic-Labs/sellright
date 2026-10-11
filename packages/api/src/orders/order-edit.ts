@@ -21,7 +21,7 @@ import { z } from '@hono/zod-openapi';
 import { calculateOrderTotals, type OrderTotals, type Promotion } from '../money/totals.js';
 
 export class OrderEditError extends Error {
-  constructor(public status: 400 | 404 | 409 | 503, public code: string, message: string, public extra?: Record<string, unknown>) {
+  constructor(public status: 400 | 403 | 404 | 409 | 503, public code: string, message: string, public extra?: Record<string, unknown>) {
     super(message);
     this.name = 'OrderEditError';
   }
@@ -60,6 +60,14 @@ export const EditOp = z.discriminatedUnion('op', [
   z.object({ op: z.literal('set_address'), kind: z.enum(['shipping', 'billing']), address: AddressInput, saveToAddressBook: z.boolean().optional() }),
 ]);
 export type EditOpT = z.infer<typeof EditOp>;
+
+/**
+ * Ops that can create or change an entitlement: they add, resize, repoint or drop order lines, and licences follow lines
+ * (issuance tops up per line quantity; a zero-quantity line is revoked). An agent never issues or changes entitlements
+ * (docs/plans/2026-10-10-agent-role-v5.md), so a commit containing any of these needs a human principal.
+ */
+const ENTITLEMENT_OPS: ReadonlySet<EditOpT['op']> = new Set(['add_item', 'set_quantity', 'remove_line', 'swap_variant']);
+export const editChangesEntitlements = (ops: readonly Pick<EditOpT, 'op'>[]): boolean => ops.some((o) => ENTITLEMENT_OPS.has(o.op));
 
 export const Settlement = z.discriminatedUnion('type', [
   z.object({ type: z.literal('refund_now'), paymentId: z.string().uuid().optional() }),

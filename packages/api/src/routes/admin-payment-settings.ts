@@ -10,7 +10,6 @@
  */
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { eq, and, inArray } from 'drizzle-orm';
-import Stripe from 'stripe';
 import { withStore, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { env } from '../env.js';
@@ -18,6 +17,7 @@ import { HttpError, J, errBody, guard, requireAdmin, requireManage, requireStore
 import { encryptSecret, decryptSecret, last4 as computeLast4, type EncryptedSecret } from '../security/secret-crypto.js';
 import { resolveField, isEnvManaged, type FieldScope } from '../security/settings-resolver.js';
 import { stripeCreds } from '../payments/stripe.js';
+import { newStripeClient } from '../payments/stripe-client.js';
 import { configuredGatewayAccount, resolveSezzleField, sezzleSecretModes } from '../payments/gateway-account.js';
 import { verifyNmiKey, verifySezzleKeys, verifyStripeKey } from '../payments/settings-verify.js';
 import { ensureStripeWebhook, type StripeWebhookClient } from '../payments/stripe-webhook-provision.js';
@@ -195,7 +195,7 @@ adminPaymentSettings.openapi(
       if (provider === 'stripe') {
         const secretKey = await resolveField(tx, scopeFor(st.storeId, 'stripe', mode, 'secretKey'), envValueForStripe(mode as 'test' | 'live', 'secretKey'));
         if (!secretKey.value) return { ok: false, error: 'No secret key configured' };
-        const client = new Stripe(secretKey.value);
+        const client = newStripeClient(secretKey.value);
         return verifyStripeKey(secretKey.value, mode as 'test' | 'live', client);
       }
       if (provider === 'nmi') {
@@ -256,7 +256,7 @@ adminPaymentSettings.openapi(
     const result = await withStore(st.storeId, async (tx) => {
       const secretKey = await resolveField(tx, scopeFor(st.storeId, 'stripe', mode, 'secretKey'), envValueForStripe(mode, 'secretKey'));
       if (!secretKey.value) throw new HttpError(400, 'No Stripe secret key configured for this mode yet');
-      const stripe = new Stripe(secretKey.value);
+      const stripe = newStripeClient(secretKey.value);
       const client: StripeWebhookClient = {
         webhookEndpoints: {
           list: (p) => stripe.webhookEndpoints.list(p) as unknown as Promise<{ data: never[] }>,

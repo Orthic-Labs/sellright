@@ -99,15 +99,36 @@ export function readJournal(folder: string): JournalEntry[] {
   return parsed.entries ?? [];
 }
 
+/** Postgres undefined_function: the 0095 probe is not installed yet (schema older than 0095). */
+const UNDEFINED_FUNCTION = '42883';
+
+/**
+ * Newest applied `created_at` of a journal table, or null when the table is absent/empty.
+ * Schema `drizzle` is read through `public.sellright_migration_last_applied` (migration 0095, SECURITY DEFINER) because the
+ * runtime role has no access to that schema. When the probe is not installed (a schema older than 0095) or the track lives in
+ * another schema, the journal is read directly: that works for a privileged/owner credential and fails closed (42501) for the
+ * runtime role.
+ */
+async function lastAppliedOf(db: QueryLike, track: MigrationTrack): Promise<number | null> {
+  if (track.schema === DEFAULT_MIGRATIONS_SCHEMA) {
+    try {
+      const { rows } = await db.query('SELECT public.sellright_migration_last_applied($1, $2) AS last', [track.schema, track.table]);
+      const v = rows[0]?.last;
+      return v == null ? null : Number(v);
+    } catch (e) {
+      if ((e as { code?: string }).code !== UNDEFINED_FUNCTION) throw e;
+    }
+  }
+  const exists = await db.query('SELECT to_regclass($1) AS reg', [`"${track.schema}"."${track.table}"`]);
+  if (!exists.rows[0]?.reg) return null;
+  const { rows } = await db.query(`SELECT created_at FROM "${track.schema}"."${track.table}" ORDER BY created_at DESC LIMIT 1`);
+  const v = rows[0]?.created_at;
+  return v == null ? null : Number(v);
+}
+
 export async function trackStatus(db: QueryLike, track: MigrationTrack): Promise<TrackStatus> {
   const entries = readJournal(track.folder);
-  const exists = await db.query('SELECT to_regclass($1) AS reg', [`"${track.schema}"."${track.table}"`]);
-  let lastApplied: number | null = null;
-  if (exists.rows[0]?.reg) {
-    const { rows } = await db.query(`SELECT created_at FROM "${track.schema}"."${track.table}" ORDER BY created_at DESC LIMIT 1`);
-    const v = rows[0]?.created_at;
-    lastApplied = v == null ? null : Number(v);
-  }
+  const lastApplied = await lastAppliedOf(db, track);
   const pending = entries.filter((e) => lastApplied === null || lastApplied < e.when).map((e) => e.tag);
   return { track, journalEntries: entries.length, pending, lastApplied };
 }
