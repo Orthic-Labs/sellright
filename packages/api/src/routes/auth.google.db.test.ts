@@ -106,7 +106,16 @@ describe('POST /v1/shop/auth/google linking', () => {
 });
 
 const outbox = async () => withStore(STORE, async (tx) => (await tx.execute(sql`SELECT kind, recipient, payload FROM email_outbox ORDER BY created_at`)).rows as Array<{ kind: string; recipient: string; payload: { text: string; html: string; subject: string } }>);
-const customerCount = async () => (await pool.query('SELECT count(*)::int AS n FROM customer')).rows[0].n as number;
+// customer is FORCE RLS: an unscoped owner-pool count returns 0 wherever the owner is subject to RLS (non-superuser),
+// which makes positive assertions fail and negative ones pass vacuously. Count per store, inside the store context.
+const OTHER = 'bbbbbbbb-3333-3333-3333-333333333333';
+const customerCount = async () => {
+  let n = 0;
+  for (const id of [STORE, OTHER]) {
+    n += await withStore(id, async (tx) => Number((await tx.execute(sql`SELECT count(*)::int AS n FROM customer WHERE store_id = ${id}`)).rows[0]!.n));
+  }
+  return n;
+};
 const linkTokenFrom = (row: { payload: { text: string } }) => /sign-in\/confirm\?token=([^\s")<]+)/.exec(row.payload.text)![1]!;
 const NONCE_COOKIE = 'sr_fed_link';
 /** `sr_fed_link=<nonce>` from a 202's Set-Cookie, ready to send back as a Cookie header. */
@@ -317,7 +326,6 @@ describe('POST /v1/shop/auth/google non-authoritative identity', () => {
     for (const bad of [`${forgedBody}.${sig}`, `${body}.${'A'.repeat(sig!.length)}`, `${body}`, 'x'.repeat(40), `${token}.extra`]) {
       expect((await confirm(bad, { cookie })).status).toBe(401);
     }
-    const OTHER = 'bbbbbbbb-3333-3333-3333-333333333333';
     await withStore(OTHER, async (tx) => { await tx.execute(sql`INSERT INTO store (id, slug, name, currency) VALUES (${OTHER}, 'other-google-store', 'o', 'USD')`); });
     expect((await confirm(token, { cookie, slug: 'other-google-store' })).status).toBe(401);
     expect(await customerCount()).toBe(0);
