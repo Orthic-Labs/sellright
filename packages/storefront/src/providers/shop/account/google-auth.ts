@@ -43,7 +43,8 @@ export async function confirmFederatedSignIn(token: string): Promise<ConfirmResu
 	} catch (e) {
 		const err = describeAccountError(e);
 		const { status, code } = (e as { status?: number; code?: string } | null) ?? {};
-		if (status === 401) return { ok: false, code: 'unknown', message: CONFIRM_LINK_FAILED, terminal: true };
+		// 400 is a malformed or truncated token: like 401, no retry from this page can make it work.
+		if (status === 400 || status === 401) return { ok: false, code: 'unknown', message: CONFIRM_LINK_FAILED, terminal: true };
 		if (status === 409) {
 			const message = code === 'EMAIL_TAKEN_UNVERIFIED' ? CONFIRM_UNVERIFIED : err.message.trim() || CONFIRM_UNVERIFIED;
 			return { ok: false, code: 'unknown', message, terminal: true };

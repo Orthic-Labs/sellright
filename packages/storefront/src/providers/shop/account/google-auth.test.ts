@@ -272,6 +272,14 @@ describe('federated confirm error copy and terminal state', () => {
 		if (!r409.ok) expect(r409.message).toBe("An account with this email already exists, but its email address hasn't been verified. Sign in with your password and verify your email first, then try Google or Apple sign-in again.");
 	});
 
+	it('a malformed token (400) is terminal with the link-failed copy', async () => {
+		const { confirmFederatedSignIn } = await import('./google-auth');
+		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(400, { error: { code: 'VALIDATION_ERROR', message: 'x' } })));
+		const r = await confirmFederatedSignIn('short');
+		expect(r).toMatchObject({ ok: false, terminal: true });
+		if (!r.ok) expect(r.message).toMatch(/^We couldn't confirm this link\./);
+	});
+
 	it('a network failure is not terminal (the button stays so the shopper can retry)', async () => {
 		vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('network down'); }));
 		const { confirmFederatedSignIn } = await import('./google-auth');
