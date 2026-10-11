@@ -63,7 +63,8 @@ describe('Google sign-in switch', () => {
 		const entry = read('src/entry.express.tsx');
 		expect(entry).toContain('buildCsp({');
 		expect(entry).toMatch(/buildCsp\(\{\s*nonce,/);
-		expect(entry).toContain('google: googleCsp');
+		expect(entry).toContain('google: googleIdentityCsp(googleSignInClientIdForHost(validatedRequestHost(req.headers)))');
+		expect(entry).not.toMatch(/^const googleCsp\b/m); // no process-wide Google CSP
 		expect(entry).not.toContain('accounts.google.com'); // origins live only in config/google-signin.ts
 		expect(entry).toContain('getOrigin: getRouterOrigin'); // CSRF origin from the trusted boundary
 	});
