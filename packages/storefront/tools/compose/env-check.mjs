@@ -15,10 +15,10 @@
 // and the build directory's .env / .env.local), for presence only: its value is never printed,
 // never stored and never part of the public configuration hash.
 // Output is names and hashes only; a value is never printed.
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createFile, makeTempDir, removeTree } from './lib/durable.mjs';
 import { ComposeError, Problems, hashJson, readJson } from './lib/util.mjs';
 
 /** Mode name no .env.<mode> file uses: loadEnv then reads only .env and .env.local, i.e. the legacy values. */
@@ -158,15 +158,15 @@ export async function checkEnv({ schema, brand, buildDir, loadEnv, problems = ne
 		problems.add('env-shadowing-file', '.env.production.local exists in the build directory and would override brand.json public config', '.env.production.local');
 	}
 
-	const scratch = mkdtempSync(path.join(tmpdir(), 'compose-env-'));
+	const scratch = makeTempDir('compose-env-');
 	let legacy = {};
 	let fromBrand = {};
 	try {
-		writeFileSync(path.join(scratch, '.env.production'), envProduction, { mode: 0o600 });
+		createFile(path.join(scratch, '.env.production'), envProduction, 0o600);
 		fromBrand = load(BUILD_MODE, scratch, 'VITE_');
 		legacy = buildDir && existsSync(buildDir) ? load(LEGACY_PROBE_MODE, buildDir, 'VITE_') : {};
 	} finally {
-		rmSync(scratch, { recursive: true, force: true });
+		removeTree(scratch);
 	}
 	const effective = { ...legacy, ...fromBrand };
 
@@ -179,11 +179,11 @@ export async function checkEnv({ schema, brand, buildDir, loadEnv, problems = ne
 	// this object; it never reaches `effective`, the hash, the report or any message.
 	let privateSources = {};
 	if (requiredPrivate.length) {
-		const dir = buildDir && existsSync(buildDir) ? buildDir : mkdtempSync(path.join(tmpdir(), 'compose-env-'));
+		const dir = buildDir && existsSync(buildDir) ? buildDir : makeTempDir('compose-env-');
 		try {
 			privateSources = load(LEGACY_PROBE_MODE, dir, '');
 		} finally {
-			if (dir !== buildDir) rmSync(dir, { recursive: true, force: true });
+			if (dir !== buildDir) removeTree(dir);
 		}
 	}
 	for (const n of brand.requiredEnv ?? []) {

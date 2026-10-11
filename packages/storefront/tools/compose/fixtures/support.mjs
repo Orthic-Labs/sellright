@@ -64,13 +64,19 @@ export function snapshot(dir) {
 				continue;
 			}
 			let content = null;
+			let dirMode = null;
 			try {
-				if (!fstatSync(fd).isDirectory()) content = readFileSync(fd);
+				const st = fstatSync(fd);
+				if (st.isDirectory()) dirMode = st.mode & 0o777;
+				else content = readFileSync(fd);
 			} finally {
 				closeSync(fd);
 			}
-			if (content === null) visit(abs, r);
-			else m.set(r, sha256(content));
+			// directories count too: their presence and mode (a recovery that leaves a created directory behind differs from the previous state)
+			if (dirMode !== null) {
+				m.set(`${r}/`, `dir:${dirMode.toString(8)}`);
+				visit(abs, r);
+			} else m.set(r, sha256(content));
 		}
 	};
 	visit(dir, '');

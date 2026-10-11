@@ -73,7 +73,7 @@ export function validateBrand(brand, problems = new Problems()) {
 		problems.add('bad-brand', 'buildDir must be a single safe path segment', 'brand.json');
 	}
 	if (!PIN_RE.test(b.pin ?? '')) problems.add('bad-pin', 'pin must be a full 40-character lowercase SHA', 'brand.json');
-	for (const k of ['settings', 'publicConfig', 'packageScripts']) {
+	for (const k of ['settings', 'publicConfig', 'packageScripts', 'buildExports']) {
 		if (b[k] !== undefined && (typeof b[k] !== 'object' || b[k] === null || Array.isArray(b[k]))) {
 			problems.add('bad-brand', `${k} must be an object`, 'brand.json');
 		}
