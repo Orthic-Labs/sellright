@@ -8,16 +8,10 @@
  * either a BLIND APPEND (commutative — no revision) or a revisioned ABSOLUTE
  * SET that adopts the server's snapshot and retries exactly once on a 409.
  *
- * The cookie can outlive the server cart (TTL/eviction). A 404 on an ordinary
- * mutation or read recreates the cart from the local lines and retries once
- * (`withStaleCartRecovery`); the submit-time reads (`readFresh`,
- * `checkoutSnapshot`) never recover — they refuse.
- *
  * See `~/sellright/types/cart.ts` for the full API contract, the native
  * Cart/CartLine types, and the fail-closed stock rules.
  */
 import { sellright, SellRightError } from '~/sellright/client';
-import { withStaleCartRetry } from '~/services/cart-stale-token';
 import {
   EMPTY_CART,
   type Cart,
@@ -64,17 +58,6 @@ export class CartService {
    * This orders RESPONSES only — it is not a cache and holds no stock data.
    */
   private static snapshotSeq = 0;
-  /**
-   * Cart lifecycle generation. Bumped by `discard()` (expiry, conversion, merge)
-   * and by the pre-submit read (`readFresh`), i.e. whenever the cart this tab
-   * was working on stops being the live one. A stale-token recovery captures it
-   * when its request starts and refuses to create, adopt or retry once it has
-   * moved — a late 404 for an old token can never seed a newer or terminal cart,
-   * and a creation response that lands after a discard is ignored.
-   */
-  private static lifecycle = 0;
-  /** One in-flight replacement-cart creation per stale token: overlapping 404s share it. */
-  private static recoveries = new Map<string, Promise<string[]>>();
 
   // ── subscription ──────────────────────────────────────────────────────
   static onChange(cb: () => void): () => void {
@@ -164,117 +147,14 @@ export class CartService {
   }
 
   /** Drop the token + mirror locally — no network call. Used for terminal
-   *  carts (converted/merged) and 404s (expired cart). Ends the current cart
-   *  lifecycle: any stale-token recovery already in flight is abandoned. */
+   *  carts (converted/merged) and 404s (expired cart). */
   static discard(): void {
-    this.lifecycle++;
-    this.retireLocal();
-  }
-
-  /** Clear the local cart without ending the lifecycle (a recovery that has nothing to seed). */
-  private static retireLocal(): void {
     this.snapshotSeq++; // a read still in flight must not resurrect the discarded cart
     this.clearTokenCookie();
     this.couponCode = null;
     this.enrichment.clear();
     this.cart = EMPTY_CART;
     this.notify();
-  }
-
-  private static isStaleCart(e: unknown): boolean {
-    return e instanceof SellRightError && e.status === 404;
-  }
-
-  /** Whether a recovery that started under (`staleToken`, `generation`) may still act:
-   *  `abandon` — the lifecycle moved (discard, checkout submit) or the mirror is a terminal cart;
-   *  `replaced` — the stale token is no longer the live one (another recovery or a newer cart took over);
-   *  `stale` — still the cart this request failed on. */
-  private static recoveryState(staleToken: string, generation: number): 'abandon' | 'replaced' | 'stale' {
-    if (generation !== this.lifecycle) return 'abandon';
-    if (this.cart.status === 'converted' || this.cart.status === 'merged') return 'abandon';
-    return this.readTokenCookie() === staleToken ? 'stale' : 'replaced';
-  }
-
-  private static superseded(): CartError {
-    return new CartError('superseded', 'The cart changed — please try again');
-  }
-
-  /** One shared recovery per stale token. */
-  private static recoverStaleCart(staleToken: string, generation: number): Promise<string[]> {
-    const inFlight = this.recoveries.get(staleToken);
-    if (inFlight) return inFlight;
-    const recovery: Promise<string[]> = this.replaceStaleCart(staleToken, generation).finally(() => {
-      if (this.recoveries.get(staleToken) === recovery) this.recoveries.delete(staleToken);
-    });
-    this.recoveries.set(staleToken, recovery);
-    return recovery;
-  }
-
-  /** The sr_cart cookie outlived the server cart: when there are local lines,
-   *  mint a fresh cart seeded from them (display enrichment is kept) and adopt
-   *  it. The stale cookie and the local lines stay in place until that adoption
-   *  succeeds, so a failed creation leaves them available for another attempt.
-   *  Returns the seeded SKUs the server did not keep. With nothing to seed it
-   *  just retires the local cart — the caller's retry creates one if it needs
-   *  one. Throws `superseded` when the lifecycle moved on; does nothing when a
-   *  newer cart has already replaced the stale one. Never used at submit time. */
-  private static async replaceStaleCart(staleToken: string, generation: number): Promise<string[]> {
-    const before = this.recoveryState(staleToken, generation);
-    if (before === 'abandon') throw this.superseded();
-    if (before === 'replaced') return [];
-    const seed = this.cart.lines.map((l) => ({ sku: l.sku, quantity: l.quantity }));
-    if (!seed.length) {
-      this.retireLocal();
-      return [];
-    }
-    const { data } = await sellright().POST('/v1/shop/cart', { body: { items: seed } });
-    if (!data) throw new CartError(undefined, 'Could not create a cart');
-    // The response may land after a discard, a checkout submit or a newer cart: ignore it then.
-    const after = this.recoveryState(staleToken, generation);
-    if (after === 'abandon') throw this.superseded();
-    if (after === 'replaced') return [];
-    return this.adopt(data);
-  }
-
-  /** Run an ordinary cart call; on a 404 (stale token) recreate the cart from
-   *  the local lines and retry exactly once. SKUs the server dropped while
-   *  reseeding are reported in `dropped`. If the retry 404s as well the local
-   *  cart is retired: `'throw'` raises the expired-cart error (mutations),
-   *  `'empty'` returns the empty mirror (reads). A recovery whose lifecycle
-   *  ended meanwhile (discard, checkout submit) neither creates nor retries:
-   *  `'throw'` raises `superseded`, `'empty'` returns the mirror untouched. */
-  private static async withStaleCartRecovery(
-    run: () => Promise<CartMutationResult>,
-    whenGone: 'throw' | 'empty',
-  ): Promise<CartMutationResult> {
-    const staleToken = this.readTokenCookie();
-    const generation = this.lifecycle;
-    let lost: string[] = [];
-    try {
-      const result = await withStaleCartRetry({
-        run,
-        // A 404 on a token minted by this very call (no cookie when it started) has nothing to recover from.
-        isStaleCart: (e) => !!staleToken && this.isStaleCart(e),
-        recreateCart: async () => {
-          lost = await this.recoverStaleCart(staleToken as string, generation);
-        },
-      });
-      return lost.length ? { ...result, dropped: [...new Set([...lost, ...result.dropped])] } : result;
-    } catch (e) {
-      if (e instanceof CartError && e.code === 'superseded') {
-        if (whenGone === 'empty') return { cart: this.cart, dropped: [] };
-        throw e;
-      }
-      if (!this.isStaleCart(e)) throw e;
-      if (generation !== this.lifecycle) {
-        // The cart was discarded or submitted while this request was in flight: leave the new state alone.
-        if (whenGone === 'empty') return { cart: this.cart, dropped: [] };
-        throw this.superseded();
-      }
-      this.discard();
-      if (whenGone === 'empty') return { cart: this.cart, dropped: [] };
-      throw new CartError('not_found', 'Your cart expired — please re-add your items');
-    }
   }
 
   /** Adopt a cart snapshot handed back inside a checkout 409 (stale cart). */
@@ -375,51 +255,50 @@ export class CartService {
     mutate: (token: string, revision: number) => Promise<{ data?: ServerCart }>,
     expectedRemoval?: string,
   ): Promise<CartMutationResult> {
-    return this.withStaleCartRecovery(async () => {
-      const token = await this.ensureCart();
-      const revision = await this.ensureRevision(token);
-      try {
-        const { data } = await mutate(token, revision);
-        if (!data) throw new CartError(undefined, "Couldn't update cart");
-        const dropped = this.adopt(data, expectedRemoval);
-        return { cart: this.cart, dropped };
-      } catch (e) {
-        const conflict = this.asConflict(e);
-        if (conflict) {
-          if (conflict.code === 'converted' || conflict.code === 'merged') {
-            this.discard();
-            throw new CartError(
-              conflict.code,
-              conflict.code === 'converted' ? 'This cart was already checked out' : 'This cart was merged into your account',
-            );
-          }
-          // stale / revision_required — adopt the authoritative snapshot, retry once.
-          this.adopt(conflict.cart, expectedRemoval);
-          try {
-            const { data } = await mutate(token, conflict.revision);
-            if (!data) throw new CartError(undefined, "Couldn't update cart");
-            const dropped = this.adopt(data, expectedRemoval);
-            return { cart: this.cart, dropped };
-          } catch (e2) {
-            if (e2 instanceof SellRightError && e2.status === 404) this.discard();
-            throw new CartError('conflict', 'Cart changed — review the updated cart and try again');
-          }
+    const token = await this.ensureCart();
+    const revision = await this.ensureRevision(token);
+    try {
+      const { data } = await mutate(token, revision);
+      if (!data) throw new CartError(undefined, "Couldn't update cart");
+      const dropped = this.adopt(data, expectedRemoval);
+      return { cart: this.cart, dropped };
+    } catch (e) {
+      const conflict = this.asConflict(e);
+      if (conflict) {
+        if (conflict.code === 'converted' || conflict.code === 'merged') {
+          this.discard();
+          throw new CartError(
+            conflict.code,
+            conflict.code === 'converted' ? 'This cart was already checked out' : 'This cart was merged into your account',
+          );
         }
-        // A 404 (stale token) propagates to withStaleCartRecovery.
-        throw e;
+        // stale / revision_required — adopt the authoritative snapshot, retry once.
+        this.adopt(conflict.cart, expectedRemoval);
+        try {
+          const { data } = await mutate(token, conflict.revision);
+          if (!data) throw new CartError(undefined, "Couldn't update cart");
+          const dropped = this.adopt(data, expectedRemoval);
+          return { cart: this.cart, dropped };
+        } catch (e2) {
+          if (e2 instanceof SellRightError && e2.status === 404) this.discard();
+          throw new CartError('conflict', 'Cart changed — review the updated cart and try again');
+        }
       }
-    }, 'throw');
+      if (e instanceof SellRightError && e.status === 404) {
+        this.discard();
+        throw new CartError('not_found', 'Your cart expired — please re-add your items');
+      }
+      throw e;
+    }
   }
 
   // ── mutations ─────────────────────────────────────────────────────────
 
   /** Add (or increment) a line. Blind append — commutative, no revision. */
   static async addLine(sku: string, quantity: number, enrichment?: CartLineEnrichment): Promise<CartMutationResult> {
-    return this.withStaleCartRecovery(async () => {
+    this.setEnrichment(sku, enrichment);
+    try {
       const token = await this.ensureCart();
-      // Set display metadata after ensureCart/recovery has adopted any new or
-      // reseeded cart: adopt prunes metadata for SKUs the cart does not hold.
-      this.setEnrichment(sku, enrichment);
       const { data } = await sellright().PATCH('/v1/shop/cart/{token}/lines', {
         params: { path: { token } },
         body: { lines: [{ sku, quantity }], ...(this.couponCode ? { couponCode: this.couponCode } : {}) },
@@ -427,7 +306,13 @@ export class CartService {
       if (!data) throw new CartError(undefined, "Couldn't add item to cart");
       const dropped = this.adopt(data);
       return { cart: this.cart, dropped };
-    }, 'throw');
+    } catch (e) {
+      if (e instanceof SellRightError && e.status === 404) {
+        this.discard();
+        throw new CartError('not_found', 'Your cart expired — please re-add your items');
+      }
+      throw e;
+    }
   }
 
   /** Set a line to an absolute quantity (<= 0 removes it). Revisioned. */
@@ -454,15 +339,12 @@ export class CartService {
   }
 
   /** Re-fetch the server-priced cart (live stock/price/coupon) — used for the
-   *  LOCKED stock checks: cart open and checkout entry. A stale token is
-   *  recovered (recreate from the local lines, one retry); the pre-submit read
-   *  is `readFresh`, which never recovers. */
+   *  LOCKED stock checks: cart open, checkout entry, and pre-submit. */
   static async refresh(): Promise<CartMutationResult> {
-    if (!this.readTokenCookie()) return { cart: this.cart, dropped: [] };
-    return this.withStaleCartRecovery(async () => {
-      const token = this.readTokenCookie();
-      if (!token) return { cart: this.cart, dropped: [] }; // nothing local to recreate
-      const seq = this.claimSeq();
+    const token = this.readTokenCookie();
+    if (!token) return { cart: this.cart, dropped: [] };
+    const seq = this.claimSeq();
+    try {
       const { data } = await sellright().GET('/v1/shop/cart/{token}', {
         params: { path: { token }, query: this.couponCode ? { couponCode: this.couponCode } : {} },
       });
@@ -471,16 +353,20 @@ export class CartService {
       if (!this.isCurrent(seq)) return { cart: this.cart, dropped: [] };
       const dropped = this.adopt(data);
       return { cart: this.cart, dropped };
-    }, 'empty');
+    } catch (e) {
+      if (e instanceof SellRightError && e.status === 404) {
+        this.discard();
+        return { cart: this.cart, dropped: [] };
+      }
+      throw e;
+    }
   }
 
   /** Live read for the pre-submit stock check. Returns the exact server response of THIS request so the caller
    *  validates what the server just said, not the shared mirror (which a newer overlapping read may have claimed).
    *  Fail-closed: a missing cart cookie, an empty body, a 404 (also retires the local cart) or any failed read throws.
-   *  A 404 here is NEVER recovered by recreating the cart: the shopper must see the refusal, not a silently reseeded cart.
    *  The mirror only adopts the response while it is still the latest request; the returned value never depends on that. */
   static async readFresh(): Promise<ServerCart> {
-    this.lifecycle++; // submitting: no stale-token recovery may create, adopt or retry from here on
     const token = this.readTokenCookie();
     if (!token) throw new CartError('not_found', 'Your cart expired — please re-add your items');
     const seq = this.claimSeq();
@@ -521,17 +407,22 @@ export class CartService {
   /** Remove the applied coupon and re-price without it. */
   static async removeCoupon(): Promise<CartMutationResult> {
     this.couponCode = null;
-    if (!this.readTokenCookie()) return { cart: this.cart, dropped: [] };
-    return this.withStaleCartRecovery(async () => {
-      const token = this.readTokenCookie();
-      if (!token) return { cart: this.cart, dropped: [] };
-      const seq = this.claimSeq();
+    const token = this.readTokenCookie();
+    if (!token) return { cart: this.cart, dropped: [] };
+    const seq = this.claimSeq();
+    try {
       const { data } = await sellright().GET('/v1/shop/cart/{token}', { params: { path: { token } } });
       if (!data) throw new CartError('not_found', 'Cart not found');
       if (!this.isCurrent(seq)) return { cart: this.cart, dropped: [] };
       const dropped = this.adopt(data);
       return { cart: this.cart, dropped };
-    }, 'empty');
+    } catch (e) {
+      if (e instanceof SellRightError && e.status === 404) {
+        this.discard();
+        return { cart: this.cart, dropped: [] };
+      }
+      throw e;
+    }
   }
 
   /** Capture the shopper's email on the cart (abandoned-cart recovery). */
@@ -553,8 +444,7 @@ export class CartService {
     );
   }
 
-  /** Never recovers a stale token (a 404 retires the cart and returns null) — it supplies a checkout base.
-   *  NOT used by the checkout flow: PLACE ORDER submits the snapshot of `readFresh` (via
+  /** NOT used by the checkout flow: PLACE ORDER submits the snapshot of `readFresh` (via
    *  `refreshStockBeforeSubmit`) so the validated read is the submission base. Kept for non-checkout callers only.
    *  Fresh server cart: re-reads so `expectedRevision` is a live base. `null` when no cart exists. `status` distinguishes
    *  'converted' (replay the original order — payment recovery) from
