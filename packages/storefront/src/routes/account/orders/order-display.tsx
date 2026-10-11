@@ -1,5 +1,6 @@
 import { component$ } from '@qwik.dev/core';
 import type { AccountOrderDetail } from '~/sellright/types/account';
+import { displayOrderState, getStatusDisplay } from '~/utils/order-display';
 
 export const TruckIcon = component$(() => (
 	<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -25,49 +26,16 @@ export const PackageIcon = component$(() => (
 	</svg>
 ));
 
-/**
- * Status label/color, derived from the native order lifecycle state
- * (`Paid`/`PendingPayment`/`Refunded`/…) plus the latest fulfillment's state
- * when one exists — the same "latest fulfillment wins" convention used by
- * guest order tracking (`services/track-order.service.ts`), so an order looks
- * the same whether viewed signed-in or via a tracking link.
- */
-export function getStatusDisplay(
-	orderState: string,
-	fulfillments: AccountOrderDetail['fulfillments'] | undefined,
-): { label: string; color: string; description?: string } {
-	const latest = fulfillments?.[0];
-	if (latest?.state === 'Delivered') {
-		return { label: 'Delivered', color: 'bg-[#F5F0E8] text-[#645541] border-[#D8D1C7]' };
-	}
-	if (latest?.state === 'Shipped') {
-		return { label: 'Shipped', color: 'bg-[#F5F0E8] text-[#645541] border-[#D8D1C7]' };
-	}
-	if (fulfillments && fulfillments.length > 1 && fulfillments.some((f) => f.state === 'Shipped')) {
-		return { label: 'Partially Shipped', color: 'bg-[#F5F0E8] text-[#645541] border-[#D8D1C7]' };
-	}
-
-	switch (orderState) {
-		case 'Paid':
-			return { label: 'Processing', color: 'bg-[#F5F0E8] text-[#645541] border-[#D8D1C7]' };
-		case 'PendingPayment':
-			return { label: 'Payment Pending', color: 'bg-[#fef3c7] text-[#92400e] border-[#fde68a]' };
-		case 'Cancelled':
-			return { label: 'Cancelled', color: 'bg-[#F5F0E8] text-[#645541] border-[#D8D1C7]' };
-		case 'Refunded':
-		case 'PartiallyRefunded':
-			return { label: 'Refunded', color: 'bg-[#fee2e2] text-[#991b1b] border-[#fca5a5]' };
-		default:
-			return { label: orderState, color: 'bg-[#F5F0E8] text-[#645541] border-[#D8D1C7]' };
-	}
-}
+export { getStatusDisplay };
 
 export const getStatusIcon = (
 	orderState: string,
 	fulfillments?: AccountOrderDetail['fulfillments'],
+	fulfillmentStatus?: string | null,
 ) => {
 	const latest = fulfillments?.[0]?.state?.toLowerCase();
 	if (latest === 'shipped' || latest === 'delivered') return <TruckIcon />;
+	if (['Delivered', 'Shipped', 'PartiallyShipped'].includes(displayOrderState(orderState, fulfillmentStatus))) return <TruckIcon />;
 	if (orderState === 'Paid') return <PackageIcon />;
 	return <CalendarIcon />;
 };

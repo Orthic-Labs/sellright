@@ -12,6 +12,7 @@ import { sellrightRequestCookie } from"./utils/sellright-request-context.server"
 import { sellrightRequestHost } from"./utils/sellright-request-host.server";
 import { assertProdApiConfigured } from"./constants";
 import { NO_STORE_CACHE_CONTROL } from"./config/route-cache-policy";
+import { createCanonicalUrlMiddleware, parseCanonicalSections } from"./utils/canonical-url";
 
 declare global {
  interface QwikRouterPlatform extends PlatformNode {}
@@ -206,6 +207,11 @@ app.use((_req, res, next) => {
   res.setHeader('Cache-Control', NO_STORE_CACHE_CONTROL);
   next();
 });
+
+// URL canonicalisation for public sections (STOREFRONT_CANONICAL_SECTIONS, default OFF). It sits after the snapshot guard
+// (documents and route data skip the static handlers above and are never redirected: they carry a file extension) and after
+// every asset handler, and it inherits the no-store default above. Only page GET/HEAD requests are ever redirected.
+app.use(createCanonicalUrlMiddleware(parseCanonicalSections(process.env.STOREFRONT_CANONICAL_SECTIONS)));
 
 // Use Qwik Router's page and endpoint request handler
 app.use(router);

@@ -36,6 +36,7 @@ the rest of the visit) or an `x-preview-token` header. Issue a token via
 | Variable | Purpose | Default |
 |---|---|---|
 | `SELLRIGHT_API_URL` | **Runtime** (not `VITE_*`) SellRight API base URL — checked per-request, no rebuild needed | falls back to `VITE_SELLRIGHT_API_URL` |
+| `STOREFRONT_CANONICAL_SECTIONS` | **Runtime.** Comma-separated first path segments of public content sections (for example `shop,blog,about,contact`) whose URLs are 301-redirected to one lowercase, slash-terminated shape. Never touches assets, `/v1`, `/api`, loader/action data or non-GET requests | unset (OFF: nothing is redirected) |
 | `VITE_SELLRIGHT_API_URL` | Build-time SellRight API base URL (dev/demo/offline fallback) | `http://127.0.0.1:3300` |
 | `VITE_SELLRIGHT_STORE_SLUG` | Pin a build to one store (`x-store-slug`) instead of runtime per-host resolution | unset (resolves by request Host) |
 | `VITE_PUBLIC_DOMAIN` | Public domain (no protocol), used for canonical/CSP/allowed-hosts | `localhost:4100` |

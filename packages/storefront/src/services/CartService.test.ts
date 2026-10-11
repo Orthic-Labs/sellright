@@ -399,6 +399,103 @@ describe('checkoutSnapshot', () => {
 	});
 });
 
+describe('stale cart token (404) — recreate from local lines and retry once', () => {
+	const notFound = () => respond(404, { error: { code: 'CART_NOT_FOUND', message: 'not found' } });
+	const line = (sku: string, quantity: number) => ({ sku, name: sku, quantity, unitPrice: 2500, lineSubtotal: 2500 * quantity, lineDiscount: 0, lineTotal: 2500 * quantity, available: true, availableQuantity: 999 });
+	const methodsAndPaths = () => calls.map((c) => `${c.init.method ?? 'GET'} ${c.url.replace(/^https?:\/\/[^/]+/, '')}`);
+	/** Mirror holds SKU1 x2 under token tok_old. */
+	const seedMirror = async () => {
+		enqueue(respond(200, serverCart({ token: 'tok_old', lines: [line('SKU1', 1)] })), respond(200, serverCart({ token: 'tok_old', revision: 2, lines: [line('SKU1', 2)] })));
+		await CartService.addLine('SKU1', 2);
+		calls.length = 0;
+	};
+
+	it('addLine after a 404 recreates the cart from the local lines and the line is present', async () => {
+		await seedMirror();
+		enqueue(
+			notFound(), // PATCH on the stale token
+			respond(200, serverCart({ token: 'tok_new', lines: [line('SKU1', 2)] })), // POST /cart seeded
+			respond(200, serverCart({ token: 'tok_new', revision: 2, lines: [line('SKU1', 2), line('SKU2', 1)] })), // PATCH retry
+		);
+		const res = await CartService.addLine('SKU2', 1);
+		expect(methodsAndPaths()).toEqual(['PATCH /v1/shop/cart/tok_old/lines', 'POST /v1/shop/cart', 'PATCH /v1/shop/cart/tok_new/lines']);
+		expect(JSON.parse(String(calls[1].init.body))).toEqual({ items: [{ sku: 'SKU1', quantity: 2 }] });
+		expect(res.cart.lines.map((l) => l.sku)).toEqual(['SKU1', 'SKU2']);
+		expect(document.cookie).toContain('sr_cart=tok_new');
+	});
+
+	it('a cookie with an empty local mirror recovers by creating a fresh cart for the add', async () => {
+		setCookie('tok_gone');
+		enqueue(notFound(), respond(200, serverCart({ token: 'tok_new', lines: [] })), respond(200, serverCart({ token: 'tok_new', revision: 2 })));
+		const res = await CartService.addLine('SKU1', 1);
+		expect(res.cart.lines).toHaveLength(1);
+		expect(document.cookie).toContain('sr_cart=tok_new');
+	});
+
+	it('updateLine (revisioned) recovers as well', async () => {
+		await seedMirror();
+		enqueue(
+			notFound(), // PATCH set on the stale token
+			respond(200, serverCart({ token: 'tok_new', revision: 3, lines: [line('SKU1', 2)] })), // POST seeded
+			respond(200, serverCart({ token: 'tok_new', revision: 4, lines: [line('SKU1', 5)] })), // PATCH retry
+		);
+		const res = await CartService.updateLine('SKU1', 5);
+		expect(JSON.parse(String(patchCalls()[1].init.body)).expectedRevision).toBe(3);
+		expect(res.cart.lines[0].quantity).toBe(5);
+	});
+
+	it('refresh (cart open / checkout entry) recovers and reports SKUs the server did not reseed', async () => {
+		await seedMirror();
+		enqueue(
+			notFound(), // GET on the stale token
+			respond(200, serverCart({ token: 'tok_new', lines: [] })), // POST seeded: server kept nothing
+			respond(200, serverCart({ token: 'tok_new', lines: [] })), // GET retry
+		);
+		const res = await CartService.refresh();
+		expect(methodsAndPaths()).toEqual(['GET /v1/shop/cart/tok_old', 'POST /v1/shop/cart', 'GET /v1/shop/cart/tok_new']);
+		expect(res.dropped).toEqual(['SKU1']);
+		expect(document.cookie).toContain('sr_cart=tok_new');
+	});
+
+	it('only one retry: a second 404 retires the cart and raises the expired-cart error', async () => {
+		await seedMirror();
+		enqueue(notFound(), respond(200, serverCart({ token: 'tok_new', lines: [line('SKU1', 2)] })), notFound());
+		await expect(CartService.addLine('SKU2', 1)).rejects.toMatchObject({ code: 'not_found' });
+		expect(calls.filter((c) => c.init.method === 'POST')).toHaveLength(1);
+		expect(CartService.getCart().lines).toHaveLength(0);
+		expect(document.cookie).not.toContain('sr_cart=tok');
+	});
+
+	it('a non-404 failure is not recovered', async () => {
+		await seedMirror();
+		enqueue(respond(500, { error: { code: 'INTERNAL', message: 'boom' } }));
+		await expect(CartService.addLine('SKU2', 1)).rejects.toBeTruthy();
+		expect(calls).toHaveLength(1);
+	});
+
+	it('readFresh (the pre-submit read) refuses on a 404 and never recreates the cart', async () => {
+		await seedMirror();
+		enqueue(notFound());
+		await expect(CartService.readFresh()).rejects.toMatchObject({ code: 'not_found' });
+		expect(methodsAndPaths()).toEqual(['GET /v1/shop/cart/tok_old']);
+		expect(CartService.getCart().lines).toHaveLength(0);
+	});
+
+	it('checkoutSnapshot does not recover either', async () => {
+		await seedMirror();
+		enqueue(notFound());
+		expect(await CartService.checkoutSnapshot()).toBeNull();
+		expect(methodsAndPaths()).toEqual(['GET /v1/shop/cart/tok_old']);
+	});
+
+	it('a 409 converted cart is still retired, not recreated (replay is the checkout path)', async () => {
+		await seedMirror();
+		enqueue(respond(409, { error: { code: 'CART_STALE', message: 'converted' }, code: 'converted', revision: 2, cart: serverCart({ token: 'tok_old', status: 'converted' }) }));
+		await expect(CartService.addLine('SKU2', 1)).rejects.toBeTruthy();
+		expect(calls.filter((c) => c.init.method === 'POST')).toHaveLength(0);
+	});
+});
+
 describe('CartError', () => {
 	it('carries a stable code distinct from its message', () => {
 		const err = new CartError('not_found', 'Your cart expired');

@@ -12,6 +12,7 @@ import { getMe, getAddresses } from '~/services/customer';
 import type { Address } from '~/sellright/types/account';
 import { $ } from '@qwik.dev/core';
 import { CountryPreferenceService } from '~/services/CountryPreferenceService';
+import { lookupCountryCode } from '~/utils/visitor-country';
 
 export interface StoredAddressInfo {
   countryCode: string;
@@ -116,34 +117,33 @@ export const loadCountryFromStorage = $(async (appState: any) => {
  * This handles geolocation and saves the preference for future use.
  */
 export const loadCountryOnDemand = $(async (appState: any) => {
+	// Write the country only when it actually changes. The lookup can answer while the shopper is typing in an address
+	// form that tracks this value; re-assigning the same country re-ran the form's tasks mid-edit and corrupted the
+	// field being typed (seen as a doubled state value).
+	const setCountry = (code: string) => {
+		if (appState.shippingAddress.countryCode !== code) appState.shippingAddress.countryCode = code;
+	};
 	const persistedCountry = CountryPreferenceService.getCountry();
 	const hasExplicitCountry = CountryPreferenceService.hasExplicitCountrySelection();
 
 	// Only run geolocation if country is default US and user never explicitly set
 	if ((persistedCountry && persistedCountry !== 'US') || hasExplicitCountry) {
-		appState.shippingAddress.countryCode = persistedCountry;
+		setCountry(persistedCountry);
 		return;
 	}
 
-	appState.shippingAddress.countryCode = persistedCountry || 'US';
+	setCountry(persistedCountry || 'US');
 
 	// Attempt geolocation only when still in default mode
-	try {
-		const response = await fetch('https://ipapi.co/json/');
-		const data = await response.json();
-
-		if (data.country_code) {
-			const countryCode = data.country_code.toUpperCase();
-			CountryPreferenceService.setCountryFromGeolocation(countryCode);
-			appState.shippingAddress.countryCode = countryCode;
-			return;
-		}
-	} catch (_error) {
-		// Geolocation failed
+	const countryCode = await lookupCountryCode();
+	if (countryCode) {
+		CountryPreferenceService.setCountryFromGeolocation(countryCode);
+		setCountry(countryCode);
+		return;
 	}
 
 	// Fallback to US if geolocation fails
-	appState.shippingAddress.countryCode = 'US';
+	setCountry('US');
 	CountryPreferenceService.setCountryFromGeolocation('US');
 });
 
@@ -159,21 +159,12 @@ export const getOrResolveCountryCode = $(async (appState: any, countryOverride?:
 		appState.shippingAddress.countryCode = stored;
 		return stored;
 	}
-	try {
-		const timeoutPromise = new Promise((_, reject) =>
-			setTimeout(() => reject(new Error('timeout')), 3000)
-		);
-		const geoPromise = fetch('https://ipapi.co/json/', {
-			signal: AbortSignal.timeout(5000),
-		}).then((r) => r.json());
-		const data: any = await Promise.race([geoPromise, timeoutPromise]);
-		if (data && data.country_code) {
-			const cc = String(data.country_code).toUpperCase();
-			CountryPreferenceService.setCountryFromGeolocation(cc);
-			appState.shippingAddress.countryCode = cc;
-			return cc;
-		}
-	} catch (e) { void e; }
+	const geolocated = await lookupCountryCode();
+	if (geolocated) {
+		CountryPreferenceService.setCountryFromGeolocation(geolocated);
+		appState.shippingAddress.countryCode = geolocated;
+		return geolocated;
+	}
 	const cc = 'US';
 	CountryPreferenceService.setCountryFromGeolocation(cc);
 	appState.shippingAddress.countryCode = cc;
