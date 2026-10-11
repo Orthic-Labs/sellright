@@ -14,6 +14,9 @@ import { acquireOsLock } from './lib/os-lock.mjs';
 import { equalSnapshots, makeWorld, snapshot } from './fixtures/support.mjs';
 import { fsyncHooks } from './lib/durable.mjs';
 
+const child = path.join(path.dirname(new URL(import.meta.url).pathname), 'fixtures/child.mjs');
+const runChild = (scenario, data) => new Promise((r) => spawn(process.execPath, [child, JSON.stringify({ scenario, ...data })], { stdio: 'ignore' }).on('exit', (c, sig) => r(sig ?? c)));
+
 const readJ = (p) => JSON.parse(readFileSync(p, 'utf8'));
 const crash = (point) => (step) => {
 	if (step === point) throw new Error(`injected crash after ${step}`);
@@ -446,20 +449,7 @@ test('review 3.6: a write killed between creating its temporary and renaming it 
 	writeFileSync(path.join(w.out, 'unrelated.compose-tmp-1'), 'someone else');
 	writeFileSync(path.join(w.out, 'other.txt'), 'other');
 	const roots = { out: w.out, history };
-	const script = path.join(w.root, 'killed-write.mjs');
-	const u = (f) => JSON.stringify(new URL(f, import.meta.url).href);
-	writeFileSync(
-		script,
-		`import { beginJournal } from ${u('./lib/journal.mjs')};
-import { safeWrite, writeHooks } from ${u('./lib/util.mjs')};
-beginJournal({ brandRepo: ${JSON.stringify(w.repo)}, roots: ${JSON.stringify(roots)}, paths: [{ root: 'out', rel: 'a.txt' }, { root: 'out', rel: 'b/new.txt' }] });
-safeWrite(${JSON.stringify(w.out)}, 'a.txt', 'complete write');
-// killed right after the temporary of the next write is complete, before its rename
-writeHooks.afterTemp = (tmp) => process.kill(process.pid, 'SIGKILL');
-safeWrite(${JSON.stringify(w.out)}, 'b/new.txt', 'half');
-`,
-	);
-	const code = await new Promise((r) => spawn(process.execPath, [script], { stdio: 'ignore' }).on('exit', (c, sig) => r(sig ?? c)));
+	const code = await runChild('killed-write', { brandRepo: w.repo, roots, out: w.out });
 	assert.equal(code, 'SIGKILL');
 	const leftovers = () => (existsSync(path.join(w.out, 'b')) ? readdirSync(path.join(w.out, 'b')).filter((n) => n.includes('.compose-tmp-')) : []);
 	assert.equal(leftovers().length, 1, 'the interrupted write left its temporary');
@@ -491,31 +481,10 @@ test('review 4.3: a recovery killed between creating a temporary and renaming it
 		mkdirSync(path.join(history, 'h1'), { recursive: true });
 		writeFileSync(path.join(w.out, 'a.txt'), 'previous');
 		const roots = { out: w.out, history };
-		const u = (f) => JSON.stringify(new URL(f, import.meta.url).href);
-		const prepare = path.join(w.root, 'prepare.mjs');
-		writeFileSync(
-			prepare,
-			`import { beginJournal } from ${u('./lib/journal.mjs')};
-import { safeWrite } from ${u('./lib/util.mjs')};
-const j = beginJournal({ brandRepo: ${JSON.stringify(w.repo)}, roots: ${JSON.stringify(roots)}, paths: [{ root: 'out', rel: 'a.txt' }] });
-j.setHistory('h1');
-safeWrite(${JSON.stringify(w.out)}, 'a.txt', 'changed by the interrupted apply');
-`,
-		);
-		await new Promise((r) => spawn(process.execPath, [prepare], { stdio: 'ignore' }).on('exit', r));
+		await runChild('prepare', { brandRepo: w.repo, roots, out: w.out });
 		assert.equal(pendingJournals(w.repo).length, 1);
 		// recovery itself is killed inside a write: restoring a.txt, or marking the history entry abandoned
-		const killed = path.join(w.root, 'killed-recovery.mjs');
-		writeFileSync(
-			killed,
-			`import { recoverJournals } from ${u('./lib/journal.mjs')};
-import { safeWrite, writeHooks } from ${u('./lib/util.mjs')};
-const kill = () => process.kill(process.pid, 'SIGKILL');
-${killIn === 'restore' ? 'writeHooks.afterTemp = kill;' : ''}
-recoverJournals({ brandRepo: ${JSON.stringify(w.repo)}, roots: ${JSON.stringify(roots)}, markAbandoned: (id) => { writeHooks.afterTemp = kill; safeWrite(${JSON.stringify(history)}, id + '/meta.json', '{"status":"abandoned"}'); } });
-`,
-		);
-		const code = await new Promise((r) => spawn(process.execPath, [killed], { stdio: 'ignore' }).on('exit', (c, sig) => r(sig ?? c)));
+		const code = await runChild('killed-recovery', { brandRepo: w.repo, roots, history, killIn });
 		assert.equal(code, 'SIGKILL', killIn);
 		const temps = () => [...readdirSync(w.out), ...readdirSync(path.join(history, 'h1'))].filter((n) => n.includes('.compose-tmp-'));
 		assert.equal(temps().length, 1, `${killIn}: the killed recovery left its temporary`);
@@ -637,41 +606,14 @@ test('review 7.2: a torn temps.log tail is truncated before recovery appends, so
 	mkdirSync(history, { recursive: true });
 	writeFileSync(path.join(w.out, 'a.txt'), 'previous');
 	const roots = { out: w.out, history };
-	const u = (f) => JSON.stringify(new URL(f, import.meta.url).href);
-	const run = async (name, body) => {
-		const f = path.join(w.root, name);
-		writeFileSync(f, body);
-		return new Promise((r) => spawn(process.execPath, [f], { stdio: 'ignore' }).on('exit', (c, sig) => r(sig ?? c)));
-	};
 	// the apply: a journal, a write killed after its temporary exists
-	assert.equal(
-		await run(
-			'apply.mjs',
-			`import { beginJournal } from ${u('./lib/journal.mjs')};
-import { safeWrite, writeHooks } from ${u('./lib/util.mjs')};
-beginJournal({ brandRepo: ${JSON.stringify(w.repo)}, roots: ${JSON.stringify(roots)}, paths: [{ root: 'out', rel: 'a.txt' }] });
-writeHooks.afterTemp = () => process.kill(process.pid, 'SIGKILL');
-safeWrite(${JSON.stringify(w.out)}, 'a.txt', 'half');
-`,
-		),
-		'SIGKILL',
-	);
+	assert.equal(await runChild('apply', { brandRepo: w.repo, roots, out: w.out }), 'SIGKILL');
 	const jdir = path.join(journalRootFor(w.repo), pendingJournals(w.repo)[0]);
 	const log = path.join(jdir, 'temps.log');
 	// the kill also tore the next record in half
 	writeFileSync(log, `${readFileSync(log, 'utf8')}{"p":"${path.join(w.out, 'a.txt')}.compose-tm`);
 	// recovery #1 dies in its first temporary write (restoring a.txt)
-	assert.equal(
-		await run(
-			'recover1.mjs',
-			`import { recoverJournals } from ${u('./lib/journal.mjs')};
-import { writeHooks } from ${u('./lib/util.mjs')};
-writeHooks.afterTemp = () => process.kill(process.pid, 'SIGKILL');
-recoverJournals({ brandRepo: ${JSON.stringify(w.repo)}, roots: ${JSON.stringify(roots)}, markAbandoned: () => {} });
-`,
-		),
-		'SIGKILL',
-	);
+	assert.equal(await runChild('recover-first', { brandRepo: w.repo, roots }), 'SIGKILL');
 	const lines = readFileSync(log, 'utf8').split('\n');
 	assert.equal(lines.at(-1), '', 'the log ends on a record boundary');
 	for (const l of lines.filter(Boolean)) JSON.parse(l);

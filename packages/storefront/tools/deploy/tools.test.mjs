@@ -394,7 +394,14 @@ test('review 3: an artifact check rejects a symlinked server, dist or nested dir
 const cpDir = (from, to) => {
 	for (const n of readdirSync(from, { recursive: true })) {
 		const f = path.join(from, n);
-		if (statSync(f).isFile()) put(path.join(to, n), readFileSync(f));
+		let data;
+		try {
+			data = readFileSync(f);
+		} catch (e) {
+			if (e.code === 'EISDIR') continue;
+			throw e;
+		}
+		put(path.join(to, n), data);
 	}
 };
 

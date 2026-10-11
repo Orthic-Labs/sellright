@@ -17,7 +17,7 @@
 //   <legacy.clientPath>/  the self-contained client the legacy tree's dependency link resolves to
 // The legacy adoption record is <brand repo>/.compose-history/compose-adoption.json (legacyCommit).
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { makeDir, makeTempDir, removeFile, removeTree as removeTempTree } from '../compose/lib/durable.mjs';
@@ -313,16 +313,32 @@ export function closureProblem({ recDir, clientDir, files }) {
 		let cur = recDir;
 		for (const [i, part] of parts.entries()) {
 			cur = path.join(cur, part);
-			let st;
-			try {
-				st = lstatSync(cur);
-			} catch {
-				return `closure file ${rel} is missing`;
+			if (i < parts.length - 1) {
+				let st;
+				try {
+					st = lstatSync(cur);
+				} catch {
+					return `closure file ${rel} is missing`;
+				}
+				if (st.isSymbolicLink()) return `closure file ${rel} goes through a symlink (${parts.slice(0, i + 1).join('/')})`;
+				if (!st.isDirectory()) return `closure file ${rel} is not a regular file`;
 			}
-			if (st.isSymbolicLink()) return `closure file ${rel} goes through a symlink (${parts.slice(0, i + 1).join('/')})`;
-			if (i < parts.length - 1 ? !st.isDirectory() : !st.isFile()) return `closure file ${rel} is not a regular file`;
 		}
-		if (sha(readFileSync(cur)) !== want) return `closure file ${rel} does not match closure.json`;
+		// the file itself is judged and read through one open descriptor (no check-then-read gap)
+		let fd;
+		try {
+			fd = openSync(cur, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+		} catch (e) {
+			if (e.code === 'ENOENT') return `closure file ${rel} is missing`;
+			if (e.code === 'ELOOP') return `closure file ${rel} goes through a symlink (${rel})`;
+			throw e;
+		}
+		try {
+			if (!fstatSync(fd).isFile()) return `closure file ${rel} is not a regular file`;
+			if (sha(readFileSync(fd)) !== want) return `closure file ${rel} does not match closure.json`;
+		} finally {
+			closeSync(fd);
+		}
 	}
 	return null;
 }

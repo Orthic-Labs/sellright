@@ -81,28 +81,13 @@ test('review 3.1: a real composed build, activation and restore run against tree
 
 // ------------------------------------------------------------------ 3.2 smoke child
 
-/** The entry stand-in for the smoke child tests: the real lock, the real startLocal, the journal the real smokeLocal writes. */
-function launcherScript(w, { cwd, port, pollMs }) {
-	const u = (f) => JSON.stringify(new URL(f, import.meta.url).href);
-	return `import { loadConfig, recordSmokeChild, underLock } from ${u('./lib.mjs')};
-import { makeContext } from ${u('./entry.mjs')};
-const ctx = makeContext(loadConfig(${JSON.stringify(w.config())}));
-await underLock(ctx, async () => {
-	const h = await ctx.deps.startLocal({ cwd: ${JSON.stringify(cwd)}, port: ${port}, env: { PATH: process.env.PATH, PORT: '${port}', HOST: '127.0.0.1' }, inheritFd: ctx.lockFd, parentPollMs: ${pollMs}, onSpawn: (info) => recordSmokeChild(ctx.paths, { ...info, port: ${port}, cwd: ${JSON.stringify(cwd)} }) });
-	console.log(JSON.stringify({ pid: h.pid }));
-	setInterval(() => {}, 1000);
-	await new Promise(() => {});
-});
-`;
-}
+const LAUNCHER = path.join(path.dirname(new URL(import.meta.url).pathname), 'fixtures/launcher.mjs');
 async function startLauncher(w, t, pollMs) {
 	const cwd = path.join(w.base, 'smoke-tree');
 	mkdirSync(path.join(cwd, 'server'), { recursive: true });
 	writeFileSync(path.join(cwd, 'server/entry.express.js'), "require('node:http').createServer((q, r) => r.end('ok')).listen(Number(process.env.PORT), '127.0.0.1');\n");
 	const port = await defaultDeps().freePort();
-	const script = path.join(w.base, 'launcher.mjs');
-	writeFileSync(script, launcherScript(w, { cwd, port, pollMs }));
-	const child = spawn(process.execPath, [script], { stdio: ['ignore', 'pipe', 'inherit'] });
+	const child = spawn(process.execPath, [LAUNCHER, JSON.stringify({ config: w.config(), cwd, port, pollMs })], { stdio: ['ignore', 'pipe', 'inherit'] });
 	const out = await new Promise((resolve, reject) => {
 		child.stdout.once('data', (d) => resolve(String(d)));
 		child.once('exit', () => reject(new Error('the launcher exited before starting the smoke child')));

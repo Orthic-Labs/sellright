@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
-import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { activate, build, defaultDeps, deploy, purge, recover, restorePreviousCommand, runCli } from './entry.mjs';
@@ -905,7 +905,7 @@ test('review 2.4: the retention marker follows the live release: abandoned build
 });
 
 test('review 2.1: stopping the local process waits until it has exited (SIGKILL after the timeout), so nothing writes into the tree being renamed', async (t) => {
-	const dir = path.join(tmpdir(), `stop-test-${process.pid}-${Date.now()}`);
+	const dir = mkdtempSync(path.join(tmpdir(), 'stop-test-'));
 	t.after(() => rmSync(dir, { recursive: true, force: true }));
 	mkdirSync(path.join(dir, 'server'), { recursive: true });
 	const out = path.join(dir, 'written');

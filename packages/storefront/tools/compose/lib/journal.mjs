@@ -13,7 +13,7 @@
 //
 // A journal is assembled in `<id>.tmp`, fsynced, then renamed into place, so a half-written journal never counts:
 // nothing has been changed yet when one is found.
-import { lstatSync, readFileSync, readdirSync } from 'node:fs';
+import { closeSync, constants as fsConstants, fstatSync, lstatSync, openSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { appendFile, createFile, fsyncDir, makeDir, removeDir, removeFile, removeTree, renamePath, repairTornTail, replaceFile, setMode } from './durable.mjs';
 import { LockHeldError, acquireOsLock, holdsInheritedLock } from './os-lock.mjs';
@@ -114,14 +114,22 @@ const rootDir = (roots, name) => {
 function snapshotEntry(dir, rel) {
 	assertSafeRel(rel, 'journal path');
 	const abs = path.join(dir, rel);
-	let st;
+	// one open descriptor decides and reads: no gap between the type check and the read for the path to change in
+	let fd;
 	try {
-		st = lstatSync(abs);
-	} catch {
-		return { present: false };
+		fd = openSync(abs, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+	} catch (e) {
+		if (e.code === 'ENOENT') return { present: false };
+		if (e.code === 'ELOOP') throw new ComposeError('not-a-file', `${rel} is not a regular file; refusing to journal it`);
+		throw e;
 	}
-	if (st.isSymbolicLink() || !st.isFile()) throw new ComposeError('not-a-file', `${rel} is not a regular file; refusing to journal it`);
-	return { present: true, mode: st.mode & 0o777, sha256: sha256(readFileSync(abs)) };
+	try {
+		const st = fstatSync(fd);
+		if (!st.isFile()) throw new ComposeError('not-a-file', `${rel} is not a regular file; refusing to journal it`);
+		return { present: true, mode: st.mode & 0o777, sha256: sha256(readFileSync(fd)) };
+	} finally {
+		closeSync(fd);
+	}
 }
 
 /**
