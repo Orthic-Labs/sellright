@@ -83,6 +83,18 @@ check_scope() {
     FAIL=1
   fi
 
+  # kind 1b — syntax-aware: a tagged template whose tag is gql/graphql however the tag expression is wrapped,
+  # e.g. (gql)`…`, (0, gql)`…`, (gql as T)`…`, gql!`…`, ns.gql`…`. The grep above only sees a literal gql`.
+  local ast_args=("$scope")
+  if [ "$scope" = "packages/api/src" ]; then ast_args=(--skip packages/api/src/import "$scope"); fi
+  local ast_hits
+  ast_hits=$(node scripts/assert-no-gql-tags.mjs "${ast_args[@]}") || true
+  if [ -n "$ast_hits" ]; then
+    echo "assert-no-vendure: [$label] GraphQL tagged template found:"
+    echo "$ast_hits"
+    FAIL=1
+  fi
+
   # kind 2 — bare word, allowlist-gated.
   local word_hits
   word_hits=$(grep -rlniE 'vendure' "$scope" \
