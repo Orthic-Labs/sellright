@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { googleClientId, googleIdentityCsp } from '~/config/google-signin';
+import { googleClientId, googleIdentityCsp, googleSignInClientId, googleSignInRefusedForMissingPin } from '~/config/google-signin';
 
 const read = (rel: string) => readFileSync(join(process.cwd(), rel), 'utf8');
 const jsonResponse = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -64,5 +64,119 @@ describe('Google sign-in switch', () => {
 		expect(entry).toContain("'nonce-${nonce}'");
 		for (const k of ['script', 'style', 'connect', 'frame']) expect(entry).toContain(`googleCsp.${k}`);
 		expect(entry).not.toContain('accounts.google.com'); // origins live only in config/google-signin.ts
+	});
+});
+
+describe('Google sign-in: one configuration source, pinned to one store', () => {
+	it('is off without a store pin even when a client id is set (never deployment-wide for an unpinned base)', () => {
+		expect(googleSignInClientId('abc.apps.googleusercontent.com', '')).toBe('');
+		expect(googleSignInClientId('abc.apps.googleusercontent.com', undefined)).toBe('');
+		expect(googleSignInClientId('abc.apps.googleusercontent.com', '  ')).toBe('');
+		expect(googleSignInRefusedForMissingPin('abc.apps.googleusercontent.com', '')).toBe(true);
+		expect(googleIdentityCsp(googleSignInClientId('abc.apps.googleusercontent.com', ''))).toEqual({ script: [], connect: [], frame: [], style: [] });
+	});
+
+	it('is on with a client id and a pin, and off with no client id', () => {
+		expect(googleSignInClientId(' abc.apps.googleusercontent.com ', 'store-a')).toBe('abc.apps.googleusercontent.com');
+		expect(googleSignInRefusedForMissingPin('abc.apps.googleusercontent.com', 'store-a')).toBe(false);
+		expect(googleSignInClientId('', 'store-a')).toBe('');
+		expect(googleSignInRefusedForMissingPin('', '')).toBe(false);
+	});
+
+	it('the button and the CSP read the same function, and the CSP never reads a runtime-only variable', () => {
+		const entry = read('src/entry.express.tsx');
+		const page = read('src/routes/sign-in/index.tsx');
+		expect(entry).toContain('googleIdentityCsp(googleSignInClientId())');
+		expect(page).toContain('const GOOGLE_CLIENT_ID = googleSignInClientId();');
+		expect(entry).not.toContain('process.env.VITE_GOOGLE_CLIENT_ID');
+	});
+});
+
+describe('Google sign-in: 409 shows the API explanation', () => {
+	beforeEach(() => vi.resetModules());
+	afterEach(() => vi.unstubAllGlobals());
+
+	it('surfaces the message for an existing account Google cannot vouch for, with a fallback when it is empty', async () => {
+		const msg = 'an account with this email already exists — sign in with your password or a sign-in link first';
+		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(409, { error: { code: 'EMAIL_TAKEN', message: msg } })));
+		const { loginWithGoogle } = await import('./google-auth');
+		const r = await loginWithGoogle('g'.repeat(40));
+		expect(r).toMatchObject({ ok: false });
+		if (!r.ok) expect(r.message).toMatch(/sign in with your password or a sign-in link/i);
+	});
+});
+
+describe('Google script loader', () => {
+	const scripts = () => Array.from(document.head.querySelectorAll<HTMLScriptElement>('script[src*="accounts.google.com/gsi/client"]'));
+	const ready = () => ({ initialize: vi.fn(), renderButton: vi.fn() });
+	const setGoogle = (id: unknown) => ((window as unknown as { google?: unknown }).google = id ? { accounts: { id } } : undefined);
+
+	beforeEach(() => {
+		vi.resetModules();
+		setGoogle(undefined);
+		document.head.innerHTML = '';
+	});
+	afterEach(() => {
+		vi.useRealTimers();
+		setGoogle(undefined);
+		document.head.innerHTML = '';
+	});
+
+	it('a failed download resolves false, removes the script, and a retry loads again', async () => {
+		const { renderGoogleButton } = await import('./google-auth');
+		const el = document.createElement('div');
+		const first = renderGoogleButton(el, 'cid', () => {});
+		expect(scripts()).toHaveLength(1);
+		scripts()[0].onerror?.(new Event('error'));
+		expect(await first).toBe(false);
+		expect(scripts()).toHaveLength(0);
+
+		const id = ready();
+		const second = renderGoogleButton(el, 'cid', () => {});
+		expect(scripts()).toHaveLength(1); // a fresh script, not the dead pending one
+		setGoogle(id);
+		scripts()[0].onload?.(new Event('load'));
+		expect(await second).toBe(true);
+		expect(id.renderButton).toHaveBeenCalledOnce();
+	});
+
+	it('a hanging download times out, resolves false, and clears the pending loader', async () => {
+		vi.useFakeTimers();
+		const { renderGoogleButton, GOOGLE_SCRIPT_TIMEOUT_MS } = await import('./google-auth');
+		const el = document.createElement('div');
+		const first = renderGoogleButton(el, 'cid', () => {});
+		await vi.advanceTimersByTimeAsync(GOOGLE_SCRIPT_TIMEOUT_MS);
+		expect(await first).toBe(false);
+		expect(scripts()).toHaveLength(0);
+
+		const second = renderGoogleButton(el, 'cid', () => {});
+		expect(scripts()).toHaveLength(1);
+		setGoogle(ready());
+		scripts()[0].onload?.(new Event('load'));
+		expect(await second).toBe(true);
+	});
+
+	it('a script that loads without defining Google Identity counts as unavailable', async () => {
+		const { renderGoogleButton } = await import('./google-auth');
+		const p = renderGoogleButton(document.createElement('div'), 'cid', () => {});
+		scripts()[0].onload?.(new Event('load'));
+		expect(await p).toBe(false);
+	});
+
+	it("the inserted script carries the document's CSP nonce, and none when the document has none", async () => {
+		const own = document.createElement('script');
+		own.setAttribute('nonce', 'abc123');
+		document.head.appendChild(own);
+		const { renderGoogleButton } = await import('./google-auth');
+		void renderGoogleButton(document.createElement('div'), 'cid', () => {});
+		expect(scripts()[0].nonce || scripts()[0].getAttribute('nonce')).toBe('abc123');
+	});
+
+	it('the sign-in page shows an unavailable message with a retry that re-runs the loader', () => {
+		const page = read('src/routes/sign-in/index.tsx');
+		expect(page).toContain('googleUnavailable.value = !(await renderGoogleButton(');
+		expect(page).toMatch(/googleUnavailable\.value && \([\s\S]*?Try again/);
+		expect(page).toContain('googleAttempt.value++');
+		expect(page).toContain('track(() => googleAttempt.value)');
 	});
 });

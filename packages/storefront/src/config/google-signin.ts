@@ -1,10 +1,14 @@
 /**
  * Google sign-in (Google Identity Services) switch and the CSP origins it needs.
  *
- * Enabled only when a Google OAuth client id is configured (`VITE_GOOGLE_CLIENT_ID`; empty by default = off).
- * The shop config (`GET /v1/shop/config`) does not yet say whether a store has Google sign-in on, so this build/runtime
- * value is the switch; the API still verifies the credential against the store's own client id and answers 409 when
- * the store has none. When the API serves the client id per store, this module is the one place to read it.
+ * ONE configuration source for both the sign-in button and the CSP: the compiled `VITE_GOOGLE_CLIENT_ID`, read through
+ * `googleSignInClientId()` below by the page and by `entry.express.tsx` alike (a runtime-only variable can never open
+ * the CSP without the button, or the reverse).
+ *
+ * Per store: the shop config (`GET /v1/shop/config`) does not expose a store's Google client id, and the CSP is built
+ * before any store is resolved, so the feature is restricted to a deployment pinned to a single store
+ * (`VITE_SELLRIGHT_STORE_SLUG`, which makes every request resolve that one store). Without a pin the feature is
+ * refused: no button, no Google origins. The API still verifies the credential against that store's own client id.
  *
  * Origins are those Google documents for GIS (developers.google.com/identity/gsi/web/guides/get-google-api-clientid):
  * the library URL for script-src, the `/gsi/` parent for frames and connect, `/gsi/style` for styles.
@@ -15,6 +19,25 @@ const GSI = 'https://accounts.google.com/gsi/';
 
 export function googleClientId(raw: unknown = import.meta.env.VITE_GOOGLE_CLIENT_ID): string {
 	return typeof raw === 'string' ? raw.trim() : '';
+}
+
+/** The client id for this deployment, or '' when Google sign-in is off. Both the button and the CSP call this. A client
+ *  id without a store pin is refused (see the module note), so one store's setting never reaches another store. */
+export function googleSignInClientId(
+	raw: unknown = import.meta.env.VITE_GOOGLE_CLIENT_ID,
+	storePin: unknown = import.meta.env.VITE_SELLRIGHT_STORE_SLUG,
+): string {
+	const id = googleClientId(raw);
+	if (!id) return '';
+	return typeof storePin === 'string' && storePin.trim() ? id : '';
+}
+
+/** True when a client id is configured but refused for want of a store pin (callers log it once at startup). */
+export function googleSignInRefusedForMissingPin(
+	raw: unknown = import.meta.env.VITE_GOOGLE_CLIENT_ID,
+	storePin: unknown = import.meta.env.VITE_SELLRIGHT_STORE_SLUG,
+): boolean {
+	return googleClientId(raw) !== '' && googleSignInClientId(raw, storePin) === '';
 }
 
 export interface GoogleIdentityCsp {

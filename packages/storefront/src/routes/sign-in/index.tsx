@@ -4,13 +4,13 @@ import { registerCustomerFromSignup } from '~/components/auth/signup-flow';
 import { login, requestMagicLink, requestPasswordReset, resendVerification } from '~/providers/shop/account/account';
 import { loginWithGoogle, renderGoogleButton } from '~/providers/shop/account/google-auth';
 import { getShopConfig } from '~/providers/shop/checkout/checkout';
-import { googleClientId } from '~/config/google-signin';
+import { googleSignInClientId } from '~/config/google-signin';
 import { SignInError } from './SignInError';
 export { head } from './seo';
 
 const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY || '';
-/** Empty = Google sign-in off: no button, no Google script, no Google origins in the CSP. */
-const GOOGLE_CLIENT_ID = googleClientId();
+/** Empty = Google sign-in off: no button, no Google script, no Google origins in the CSP (same source as the CSP). */
+const GOOGLE_CLIENT_ID = googleSignInClientId();
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const BAD_CREDENTIALS_HINT = "That email and password don't match.";
@@ -57,6 +57,10 @@ export default component$(() => {
 		}
 	});
 
+	/** Google's library failed to load or timed out: say so and offer a retry rather than leave a blank area. */
+	const googleUnavailable = useSignal(false);
+	const googleAttempt = useSignal(0);
+
 	const handleGoogleCredential = $(async (credential: string) => {
 		if (loading.value) return;
 		error.value = '';
@@ -73,9 +77,12 @@ export default component$(() => {
 	// Google sign-in: the button lives in the sign-in view only, so it is rendered again whenever that view returns.
 	useVisibleTask$(async ({ track }) => {
 		const current = track(() => view.value);
+		track(() => googleAttempt.value);
 		if (!GOOGLE_CLIENT_ID || current !== 'signin') return;
 		const container = document.getElementById('google-signin-button');
-		if (container) await renderGoogleButton(container, GOOGLE_CLIENT_ID, handleGoogleCredential);
+		if (!container) return;
+		googleUnavailable.value = false;
+		googleUnavailable.value = !(await renderGoogleButton(container, GOOGLE_CLIENT_ID, handleGoogleCredential));
 	});
 
 	// Turnstile: one widget for the whole screen. Script or render failure is shown to the shopper, never silent.
@@ -334,6 +341,14 @@ export default component$(() => {
 										<div class="h-px flex-1 bg-gray-200"></div>
 									</div>
 									<div id="google-signin-button" data-testid="google-signin-button" class="flex justify-center min-h-[44px]"></div>
+									{googleUnavailable.value && (
+										<p class="text-xs text-gray-600 text-center" role="status" data-testid="google-signin-unavailable">
+											Google sign-in is unavailable right now.{' '}
+											<button type="button" class="underline cursor-pointer" onClick$={() => googleAttempt.value++}>
+												Try again
+											</button>
+										</p>
+									)}
 								</>
 							)}
 							<div class="text-center text-sm text-gray-600 space-y-2 pt-2">

@@ -7,7 +7,9 @@
  * reached when a store configures a Listmonk endpoint. Configuration is per store: `LISTMONK_STORES`, a JSON object
  * keyed by the store's public host (lowercase, no port), each value
  *   { baseUrl, user, token, listId, rootUrl?, brandName? }
- * The entry is looked up from the request's own host on every call. There is no process-wide fallback entry, so one
+ * The entry is looked up from a VALIDATED host on every call (`newsletterRequestHost`: the connection's Host header,
+ * or X-Forwarded-Host only when the deployment declares a trusted proxy with `SELLRIGHT_TRUST_FORWARDED_HOST=1`). A
+ * deployment pinned to one store (`VITE_SELLRIGHT_STORE_SLUG`) serves only the entry that declares that `storeSlug`. There is no process-wide fallback entry, so one
  * store's endpoint and credentials can never serve another store's request; a host with no entry answers 404.
  */
 
@@ -18,6 +20,8 @@ export interface ListmonkStoreConfig {
 	listId: number;
 	/** Value sent as the Origin header (Listmonk checks it against its root URL). Defaults to the store's https origin. */
 	rootUrl: string;
+	/** Required when the deployment is pinned to one store (`VITE_SELLRIGHT_STORE_SLUG`): must equal that slug. */
+	storeSlug?: string;
 	/** Optional display name used in the page copy; the pages are neutral without it. */
 	brandName?: string;
 }
@@ -42,14 +46,45 @@ const TIMEOUT_MS = 8000;
 /** Request host without port, lowercase; '' when unusable. */
 export function normalizeHost(host: string | undefined | null): string {
 	if (!host) return '';
-	return host.split(',')[0].trim().toLowerCase().replace(/:\d+$/, '');
+	const first = host.split(',')[0];
+	// Control characters (a header-splitting attempt) are never trimmed away: any code point below 0x20, or 0x7f, is unusable.
+	if ([...first].some((ch) => ch.charCodeAt(0) < 0x20 || ch.charCodeAt(0) === 0x7f)) return '';
+	const h = first.trim().toLowerCase().replace(/:\d+$/, '');
+	return /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/.test(h) ? h : '';
+}
+
+/**
+ * The host that selects a store's Listmonk entry. Never taken from a client-controlled header on its own: the
+ * connection's Host is used unless the deployment declares a trusted proxy (`SELLRIGHT_TRUST_FORWARDED_HOST=1`, set
+ * only when the proxy overwrites X-Forwarded-Host), in which case X-Forwarded-Host wins. '' when unusable.
+ */
+export function newsletterRequestHost(
+	headers: { host?: string | null; forwardedHost?: string | null },
+	env: Record<string, string | undefined> = process.env,
+): string {
+	const trusted = env.SELLRIGHT_TRUST_FORWARDED_HOST === '1';
+	return normalizeHost(trusted && headers.forwardedHost ? headers.forwardedHost : headers.host);
+}
+
+/** The store pin in this env map (`VITE_SELLRIGHT_STORE_SLUG`), or ''. */
+function storePinFrom(env: Record<string, string | undefined>): string {
+	return (env.VITE_SELLRIGHT_STORE_SLUG || '').trim();
+}
+
+/** The deployment's store pin for the routes: the build-time value the rest of the storefront uses, else the runtime one. */
+export function deploymentStorePin(): string {
+	return ((import.meta.env.VITE_SELLRIGHT_STORE_SLUG as string | undefined) || storePinFrom(process.env)).trim();
 }
 
 /**
  * The Listmonk entry for this host, or null when the store has none (or the entry is unusable). Reads the env map
  * passed in, so a caller resolves it per request.
  */
-export function resolveListmonkConfig(host: string | undefined | null, env: Record<string, string | undefined> = process.env): ListmonkStoreConfig | null {
+export function resolveListmonkConfig(
+	host: string | undefined | null,
+	env: Record<string, string | undefined> = process.env,
+	storePin: string = storePinFrom(env),
+): ListmonkStoreConfig | null {
 	const key = normalizeHost(host);
 	const raw = env.LISTMONK_STORES;
 	if (!key || !raw) return null;
@@ -62,6 +97,7 @@ export function resolveListmonkConfig(host: string | undefined | null, env: Reco
 	if (!map || typeof map !== 'object' || !Object.prototype.hasOwnProperty.call(map, key)) return null;
 	const e = (map as Record<string, Record<string, unknown>>)[key];
 	if (!e || typeof e !== 'object') return null;
+	if (storePin && e.storeSlug !== storePin) return null; // pinned deployment: only the pinned store's entry is served
 	const listId = Number(e.listId);
 	if (typeof e.baseUrl !== 'string' || typeof e.user !== 'string' || typeof e.token !== 'string' || !e.baseUrl || !e.user || !e.token) return null;
 	if (!Number.isInteger(listId) || listId <= 0) return null;
@@ -135,16 +171,48 @@ const page = (title: string, heading: string, body: string): string =>
 
 export type ListmonkLinkResult = { status: number; html: string };
 
+const notFound = (): ListmonkLinkResult => ({ status: 404, html: page('Not found', 'Not found', '<p>This page does not exist.</p>') });
+
 /**
- * Handle one legacy link. `host` is the request's own host (resolved per call). Not configured: 404 and nothing is
+ * GET: the confirmation page for one legacy link. Mutates nothing and contacts no upstream (mail scanners and link
+ * prefetchers issue GETs); the button submits a same-origin POST to the same path. Not configured or malformed id: 404.
+ */
+export function renderListmonkConfirmPage(
+	action: 'confirm' | 'unsubscribe',
+	opts: { host: string | undefined | null; uuid: string; env?: Record<string, string | undefined>; storePin?: string },
+): ListmonkLinkResult {
+	const config = resolveListmonkConfig(opts.host, opts.env, opts.storePin);
+	if (!config || !UUID_RE.test(opts.uuid)) return notFound();
+	const who = config.brandName ? ` ${config.brandName}` : '';
+	const [title, heading, text, button] =
+		action === 'confirm'
+			? ['Confirm subscription', 'Confirm your subscription', `Confirm that you want to receive the${who} newsletter.`, 'Confirm subscription']
+			: ['Unsubscribe', 'Unsubscribe from the newsletter', `Confirm that you want to stop receiving the${who} marketing newsletter.`, 'Unsubscribe'];
+	const form = `<form method="post" action="/newsletter/${action}/${esc(opts.uuid)}"><button type="submit" style="padding:.6rem 1.2rem;font-size:1rem">${esc(button)}</button></form>`;
+	return { status: 200, html: page(title, heading, `<p>${esc(text)}</p>${form}`) };
+}
+
+/** POST guard: the Origin header must be present and name the validated host (the framework's own form-POST origin check
+ *  also runs; this one fails closed when Origin is absent). */
+export function isSameOriginPost(origin: string | null | undefined, host: string | undefined | null): boolean {
+	if (!origin || !host) return false;
+	try {
+		return normalizeHost(new URL(origin).host) === normalizeHost(host);
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * POST: perform one legacy link. `host` is the validated host (resolved per call). Not configured: 404 and nothing is
  * contacted. Unknown or malformed id: 404. Listmonk unreachable or erroring: 502. Both actions are idempotent.
  */
 export async function handleListmonkLink(
 	action: 'confirm' | 'unsubscribe',
-	opts: { host: string | undefined | null; uuid: string; env?: Record<string, string | undefined>; fetchImpl?: typeof fetch },
+	opts: { host: string | undefined | null; uuid: string; env?: Record<string, string | undefined>; storePin?: string; fetchImpl?: typeof fetch },
 ): Promise<ListmonkLinkResult> {
-	const config = resolveListmonkConfig(opts.host, opts.env);
-	if (!config) return { status: 404, html: page('Not found', 'Not found', '<p>This page does not exist.</p>') };
+	const config = resolveListmonkConfig(opts.host, opts.env, opts.storePin);
+	if (!config) return notFound();
 	const who = config.brandName ? ` ${config.brandName}` : '';
 	const client = new ListmonkClient(config, opts.fetchImpl);
 	try {

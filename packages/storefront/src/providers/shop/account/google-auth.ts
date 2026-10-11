@@ -8,8 +8,7 @@ import { sellright } from '~/sellright/client';
 import { describeAccountError } from '~/sellright/types/account';
 import type { LoginResult } from './account';
 
-/** Exchange a Google credential for a session. 409 = Google sign-in is not configured for this store, or an
- *  unverified password account already owns the email; 401 = Google token rejected. */
+/** Exchange a Google credential for a session. 409 = Google sign-in is not configured for this store, or an existing account owns the email and Google cannot vouch for it; 401 = Google token rejected. */
 export async function loginWithGoogle(credential: string): Promise<LoginResult> {
 	try {
 		const { data } = await sellright().POST('/v1/shop/auth/google', { body: { credential } });
@@ -20,6 +19,8 @@ export async function loginWithGoogle(credential: string): Promise<LoginResult> 
 		// 401: Google rejected the credential. 409: store not configured, or an unverified password account owns the email
 		// (the API's message says which). Never the password-login wording.
 		if (status === 401) return { ok: false, code: 'unknown', message: 'Google sign-in could not be verified. Please try again.' };
+		// 409 carries the API's own explanation (not configured / an existing account must sign in first); show it.
+		if (status === 409) return { ok: false, code: 'unknown', message: err.message.trim() || 'Google sign-in is not available for this account. Sign in with your password or a sign-in link first.' };
 		return { ok: false, ...err };
 	}
 }
@@ -32,22 +33,45 @@ const gis = () => (window as unknown as { google?: { accounts?: { id?: GoogleId 
 
 let loading: Promise<GoogleId> | undefined;
 
+/** How long the library download may take before it counts as failed. */
+export const GOOGLE_SCRIPT_TIMEOUT_MS = 10_000;
+
+/** The per-request CSP nonce the server stamped on this document's own scripts (read from the DOM, never invented). */
+function documentNonce(): string {
+	const el = document.querySelector<HTMLScriptElement>('script[nonce]');
+	return el?.nonce || el?.getAttribute('nonce') || '';
+}
+
 function loadLibrary(): Promise<GoogleId> {
 	loading ??= new Promise<GoogleId>((resolve, reject) => {
 		const ready = gis();
 		if (ready) return resolve(ready);
 		const script = document.createElement('script');
+		let settled = false;
+		const timer = setTimeout(() => fail(new Error('Google Identity timed out')), GOOGLE_SCRIPT_TIMEOUT_MS);
+		const fail = (e: Error) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			script.remove(); // a retry inserts a fresh script rather than waiting on this one
+			reject(e);
+		};
 		script.src = GOOGLE_IDENTITY_SCRIPT_URL;
 		script.async = true;
+		const nonce = documentNonce();
+		if (nonce) script.nonce = nonce;
 		script.onload = () => {
 			const id = gis();
-			if (id) resolve(id);
-			else reject(new Error('Google Identity unavailable'));
+			if (!id) return fail(new Error('Google Identity unavailable'));
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			resolve(id);
 		};
-		script.onerror = () => reject(new Error('Google Identity failed to load'));
+		script.onerror = () => fail(new Error('Google Identity failed to load'));
 		document.head.appendChild(script);
 	}).catch((e) => {
-		loading = undefined; // allow a retry after a failed load
+		loading = undefined; // failure or timeout clears the pending loader so a retry starts clean
 		throw e;
 	});
 	return loading;

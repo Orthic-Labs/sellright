@@ -8,6 +8,7 @@ import * as s from '../db/schema.js';
 import { hashPassword, passwordNeedsRehash, verifyPassword } from '../auth/password.js';
 import { customerToken, createSession, deleteSession, resolveCustomer, sessionPolicy } from '../auth/session.js';
 import { consumeMagicLink, magicLinkPolicy, mintMagicLink } from '../auth/magic-link.js';
+import { googleAuthoritativeForEmail, verifyGoogleIdToken } from '../auth/google.js';
 import { appleClientIds, verifyAppleIdentityToken } from '../auth/apple.js';
 import { setCustomerCookies, clearCustomerCookies, customerCsrfValid, newCsrf } from '../auth/cookies.js';
 import { clientIp, loginRetryAfter, recordLoginFailure, clearLoginAttempts } from '../auth/rate-limit.js';
@@ -70,17 +71,6 @@ async function googleClientId(storeId: string): Promise<string | null> {
     return row?.config ?? null;
   });
   return (config as { googleClientId?: string } | null)?.googleClientId ?? env.GOOGLE_CLIENT_ID ?? null;
-}
-
-/** Verify a Google Identity Services ID token via Google's tokeninfo endpoint —
- *  validates signature + expiry server-side; we additionally check `aud`. */
-async function verifyGoogleIdToken(credential: string, clientId: string): Promise<{ sub: string; email: string; emailVerified: boolean; firstName: string | null; lastName: string | null } | null> {
-  const res = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(credential)}`);
-  if (!res.ok) return null;
-  const p = (await res.json()) as { aud?: string; sub?: string; email?: string; email_verified?: string | boolean; given_name?: string; family_name?: string };
-  if (!p.sub || !p.email || p.aud !== clientId) return null;
-  const emailVerified = p.email_verified === true || p.email_verified === 'true';
-  return { sub: p.sub, email: normalizeEmail(p.email), emailVerified, firstName: p.given_name ?? null, lastName: p.family_name ?? null };
 }
 
 // isMigrated is true for a credential-less account imported from another
@@ -268,7 +258,7 @@ auth.openapi(
     const { credential } = c.req.valid('json');
     const g = await verifyGoogleIdToken(credential, clientId);
     if (!g || !g.emailVerified) return errJson(c, 401, 'GOOGLE_TOKEN_INVALID', 'invalid or unverified Google token');
-    const out = await withStore(st.id, async (tx): Promise<{ kind: 'blocked' } | { kind: 'ok'; token: string; customer: z.infer<typeof CustomerOut> }> => {
+    const out = await withStore(st.id, async (tx): Promise<{ kind: 'blocked' } | { kind: 'not_linkable' } | { kind: 'ok'; token: string; customer: z.infer<typeof CustomerOut> }> => {
       // Match by googleSub first, then link by email, else create.
       let [cust] = await tx.select().from(s.customer).where(eq(s.customer.googleSub, g.sub)).limit(1);
       if (!cust) {
@@ -290,6 +280,14 @@ auth.openapi(
         if (byEmail && !byEmail.emailVerified && byEmail.passwordHash) {
           return { kind: 'blocked' };
         }
+        // SEC: email-based linking requires Google to be authoritative for the
+        // address (Gmail, or a Workspace `hd` matching the domain). Otherwise a
+        // reassigned third-party address could inherit the current owner's
+        // account. Fail closed: no link, no session. A returning, already
+        // linked Google subject is matched above and is unaffected.
+        if (byEmail && !googleAuthoritativeForEmail(g)) {
+          return { kind: 'not_linkable' };
+        }
         if (byEmail) {
           await tx.update(s.customer).set({ googleSub: g.sub, emailVerified: true, updatedAt: new Date() }).where(eq(s.customer.id, byEmail.id));
           cust = byEmail;
@@ -304,6 +302,9 @@ auth.openapi(
     });
     if (out.kind === 'blocked') {
       return errJson(c, 409, 'EMAIL_TAKEN_UNVERIFIED', 'an account with this email already exists — sign in with your password and verify your email first');
+    }
+    if (out.kind === 'not_linkable') {
+      return errJson(c, 409, 'EMAIL_TAKEN', 'an account with this email already exists — sign in with your password or a sign-in link first');
     }
     setCustomerCookies(c, out.token, newCsrf(), customerCookieSeconds(st));
     return c.json({ token: out.token, customer: out.customer }, 200);

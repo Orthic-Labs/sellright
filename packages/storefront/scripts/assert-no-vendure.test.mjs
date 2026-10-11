@@ -78,3 +78,42 @@ test('a missing explicit overlay list is an error, not a silent pass', () => {
   const r = spawnSync(process.execPath, [SCRIPT, '--root', fixture(), '--overlay-list', '/nonexistent/list.txt'], { encoding: 'utf8' });
   assert.notEqual(r.status, 0);
 });
+
+test('every executable source extension is scanned (.jsx .cjs .mts .cts included)', () => {
+  for (const ext of ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.mts', '.cts']) {
+    const r = checkNoVendure({ root: fixture({ base: { [`src/planted${ext}`]: 'const q = "graphql";\n' } }) });
+    assert.deepEqual(r.map((f) => f.file), [`src/planted${ext}`], ext);
+  }
+  assert.equal(checkNoVendure({ root: fixture({ base: { 'src/data.json': '{"q":"graphql"}\n', 'src/n.md': 'graphql\n' } }) }).length, 0); // not executable
+});
+
+test('a gql tagged template is found across whitespace, newlines and comments', () => {
+  const bypasses = {
+    space: 'const a = gql `{ a }`;\n',
+    tab: 'const a = gql\t`{ a }`;\n',
+    newline: 'const a = gql\n`{ a }`;\n',
+    blank_lines: 'const a = gql\n\n  \n`{ a }`;\n',
+    block_comment: 'const a = gql/* x */`{ a }`;\n',
+    comment_newline: 'const a = gql /* a\nb */\n`{ a }`;\n',
+    line_comment: 'const a = gql // note\n`{ a }`;\n',
+    type_args: 'const a = gql<Vars>`{ a }`;\n',
+    type_args_nested: 'const a = gql<Record<string, number>>\n`{ a }`;\n',
+    member: 'const a = client\n  .gql\n`{ a }`;\n',
+  };
+  for (const [name, text] of Object.entries(bypasses)) {
+    const found = checkNoVendure({ root: fixture({ base: { 'src/q.ts': text } }) });
+    assert.ok(found.some((f) => f.file === 'src/q.ts' && f.tier === 1), name);
+  }
+});
+
+test('a split gql tagged template is reported once, on its own line, and the CLI fails', () => {
+  const root = fixture({ base: { 'src/q.mts': 'const ok = 1;\nconst a = gql\n`{ a }`;\n' } });
+  const found = checkNoVendure({ root });
+  assert.deepEqual(found.map((f) => [f.file, f.line]), [['src/q.mts', 2]]);
+  assert.equal(run(root).status, 1);
+});
+
+test('the word gql without a template, and a same-line template, behave as before', () => {
+  assert.equal(checkNoVendure({ root: fixture({ base: { 'src/ok.ts': 'const gqlish = 1; // the gql word alone\nconst s = `x`;\n' } }) }).length, 0);
+  assert.equal(checkNoVendure({ root: fixture({ base: { 'src/q.ts': 'const a = gql`{ a }`;\n' } }) }).length, 1); // one finding, not two
+});

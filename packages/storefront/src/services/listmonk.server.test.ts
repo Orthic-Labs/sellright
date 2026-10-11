@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { handleListmonkLink, resolveListmonkConfig } from './listmonk.server';
+import { handleListmonkLink, isSameOriginPost, newsletterRequestHost, normalizeHost, renderListmonkConfirmPage, resolveListmonkConfig } from './listmonk.server';
 
 const UUID = '123e4567-e89b-42d3-a456-426614174000';
 const STORES = JSON.stringify({
@@ -71,5 +71,49 @@ describe('listmonk legacy links', () => {
 			expect(r.html).not.toContain('secret-a');
 		}
 		spy.mockRestore();
+	});
+});
+
+describe('listmonk host validation, confirmation page and pin', () => {
+	it('uses the connection Host unless a trusted proxy is declared; never a lone X-Forwarded-Host', () => {
+		const h = { host: 'a.example:4100', forwardedHost: 'b.example' };
+		expect(newsletterRequestHost(h, {})).toBe('a.example');
+		expect(newsletterRequestHost(h, { SELLRIGHT_TRUST_FORWARDED_HOST: '0' })).toBe('a.example');
+		expect(newsletterRequestHost(h, { SELLRIGHT_TRUST_FORWARDED_HOST: 'true' })).toBe('a.example'); // only '1' opts in
+		expect(newsletterRequestHost(h, { SELLRIGHT_TRUST_FORWARDED_HOST: '1' })).toBe('b.example');
+		expect(newsletterRequestHost({ host: 'a.example' }, { SELLRIGHT_TRUST_FORWARDED_HOST: '1' })).toBe('a.example');
+		expect(newsletterRequestHost({ host: null, forwardedHost: 'b.example' }, {})).toBe('');
+	});
+
+	it('rejects a host with unusable characters', () => {
+		for (const bad of ['a.example/evil', 'a b', '[::1]', '-a.example', 'a.example\n', '__proto__']) expect(normalizeHost(bad)).toBe('');
+	});
+
+	it('a pinned deployment serves only the entry that declares the pinned store', () => {
+		const pinned = { LISTMONK_STORES: JSON.stringify({ 'a.example': { baseUrl: 'http://l:9000', user: 'u', token: 't', listId: 1, storeSlug: 'store-a' }, 'b.example': { baseUrl: 'http://l:9000', user: 'u', token: 't', listId: 2 } }) };
+		expect(resolveListmonkConfig('a.example', pinned, 'store-a')).toMatchObject({ listId: 1 });
+		expect(resolveListmonkConfig('a.example', pinned, 'other')).toBeNull();
+		expect(resolveListmonkConfig('b.example', pinned, 'store-a')).toBeNull();
+		expect(resolveListmonkConfig('b.example', pinned, '')).toMatchObject({ listId: 2 }); // no pin: unchanged
+		expect(resolveListmonkConfig('a.example', { ...pinned, VITE_SELLRIGHT_STORE_SLUG: 'other' })).toBeNull(); // pin read from env too
+	});
+
+	it('GET page: a form that POSTs, no upstream call; 404 for an unconfigured host or malformed id', () => {
+		const r = renderListmonkConfirmPage('unsubscribe', { host: 'a.example', uuid: UUID, env });
+		expect(r.status).toBe(200);
+		expect(r.html).toContain(`<form method="post" action="/newsletter/unsubscribe/${UUID}">`);
+		expect(r.html).not.toContain('jo@x.test');
+		expect(renderListmonkConfirmPage('confirm', { host: 'a.example', uuid: UUID, env }).html).toContain(`action="/newsletter/confirm/${UUID}"`);
+		expect(renderListmonkConfirmPage('confirm', { host: 'c.example', uuid: UUID, env }).status).toBe(404);
+		expect(renderListmonkConfirmPage('confirm', { host: 'a.example', uuid: 'x"><script>', env }).status).toBe(404);
+	});
+
+	it('same-origin POST check fails closed', () => {
+		expect(isSameOriginPost('https://a.example', 'a.example')).toBe(true);
+		expect(isSameOriginPost('https://a.example:8443', 'a.example')).toBe(true);
+		expect(isSameOriginPost('https://b.example', 'a.example')).toBe(false);
+		expect(isSameOriginPost(null, 'a.example')).toBe(false);
+		expect(isSameOriginPost('null', 'a.example')).toBe(false);
+		expect(isSameOriginPost('https://a.example', '')).toBe(false);
 	});
 });

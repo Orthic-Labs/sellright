@@ -23,8 +23,14 @@ import { fileURLToPath } from 'node:url';
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const normalizeRel = (p) => path.posix.normalize(p.replaceAll('\\', '/')).replace(/^\.\//, '');
 
-const CODE_EXT = new Set(['.ts', '.tsx', '.js', '.mjs']);
+// Every executable source extension a storefront can contain.
+const CODE_EXT = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.mts', '.cts']);
 const TIER1_SIGNAL = /graphql|gql`|@vendure|__typename/;
+// A gql tagged template with anything between the tag and the backtick that the language allows: whitespace, newlines,
+// block and line comments, and a TypeScript type-argument list (gql<Vars>`...`). Matched over the whole file, not per line.
+const TRIVIA = '(?:\\s|/\\*[\\s\\S]*?\\*/|//[^\\n]*(?:\\n|$))*';
+const TYPE_ARGS = '(?:<[^<>`]*(?:<[^<>`]*>[^<>`]*)*>' + TRIVIA + ')?';
+const TAGGED_GQL = new RegExp('\\bgql' + TRIVIA + TYPE_ARGS + '`', 'g');
 const WIRE_TOKENS = ['__typename', 'priceWithTax', 'featuredAsset', 'customFields', 'facetValues', 'emailAddress', 'streetLine1', 'streetLine2'];
 const TIER2 = new RegExp(`\\b(${WIRE_TOKENS.join('|')})\\b`, 'g');
 const BARE_WORD = /vendure/i;
@@ -64,8 +70,14 @@ export function checkNoVendure({ root, overlayList } = {}) {
   const overlay = new Set(dataLines(listFile).map(normalizeRel));
 
   for (const rel of walkSrc(root)) {
-    const lines = fs.readFileSync(path.join(root, rel), 'utf8').split('\n');
+    const text = fs.readFileSync(path.join(root, rel), 'utf8');
+    const lines = text.split('\n');
     const strict = overlay.has(rel);
+    // Tagged templates split across lines/comments: the per-line signal below only sees `gql` and the backtick together.
+    for (const m of text.matchAll(TAGGED_GQL)) {
+      const line = text.slice(0, m.index).split('\n').length;
+      if (!lines[line - 1].includes('gql`')) findings.push({ file: rel, line, tier: 1, token: 'gql`', message: 'GraphQL/Vendure coupling signal "gql`" (tagged template split across whitespace, lines or comments)' });
+    }
     lines.forEach((line, i) => {
       const at = (tier, token, message) => findings.push({ file: rel, line: i + 1, tier, token, message });
       const signal = line.match(TIER1_SIGNAL);

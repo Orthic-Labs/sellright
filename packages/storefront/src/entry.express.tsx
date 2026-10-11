@@ -12,7 +12,7 @@ import { sellrightRequestCookie } from"./utils/sellright-request-context.server"
 import { sellrightRequestHost } from"./utils/sellright-request-host.server";
 import { assertProdApiConfigured } from"./constants";
 import { NO_STORE_CACHE_CONTROL } from"./config/route-cache-policy";
-import { googleClientId, googleIdentityCsp } from"./config/google-signin";
+import { googleIdentityCsp, googleSignInClientId, googleSignInRefusedForMissingPin } from"./config/google-signin";
 
 declare global {
  interface QwikRouterPlatform extends PlatformNode {}
@@ -50,8 +50,12 @@ const apiOrigin = (process.env.VITE_SELLRIGHT_API_URL || '')
 	.replace(/\/(shop-api)?\/?$/, '')
 	.trim();
 const connectSrcExtra = apiOrigin ? ` ${apiOrigin}` : '';
-// Google Identity origins join the CSP only when Google sign-in is configured (config/google-signin.ts).
-const googleCsp = googleIdentityCsp(googleClientId(process.env.VITE_GOOGLE_CLIENT_ID ?? ''));
+// Google Identity origins join the CSP only when Google sign-in is on, from the same compiled client id the sign-in
+// button reads (config/google-signin.ts) — and only for a deployment pinned to one store.
+const googleCsp = googleIdentityCsp(googleSignInClientId());
+if (googleSignInRefusedForMissingPin()) {
+	console.error('[google-signin] VITE_GOOGLE_CLIENT_ID is set but VITE_SELLRIGHT_STORE_SLUG is not: Google sign-in is disabled (it is only supported for a deployment pinned to a single store).');
+}
 const withSources = (base: string, extra: string[]) => [base, ...extra].join(' ');
 
 // Set security headers
