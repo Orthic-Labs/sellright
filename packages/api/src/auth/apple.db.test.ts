@@ -112,12 +112,73 @@ describe('POST /v1/shop/auth/apple', () => {
     expect(againBody.customer.id).toBe(body.customer.id);
   });
 
-  it('links an existing customer by email, then matches by sub', async () => {
-    const custId = await withStore(STORE_APPLE, async (tx) => {
-      const r = await tx.execute(sql`INSERT INTO customer (store_id, email, email_verified) VALUES (${STORE_APPLE}, 'link@example.com', true) RETURNING id`);
+  const seed = (email: string, verified: boolean, passwordHash: string | null = null, appleSub: string | null = null) =>
+    withStore(STORE_APPLE, async (tx) => {
+      const r = await tx.execute(sql`INSERT INTO customer (store_id, email, email_verified, password_hash, apple_user_id) VALUES (${STORE_APPLE}, ${email}, ${verified}, ${passwordHash}, ${appleSub}) RETURNING id`);
       return (r.rows[0] as { id: string }).id;
     });
-    const res = await signIn(SLUG_APPLE, appleJwt({ email: 'link@example.com' }));
+  const count = (email: string) => withStore(STORE_APPLE, async (tx) =>
+    Number((await tx.execute(sql`SELECT count(*)::int AS n FROM customer WHERE email = ${email} AND store_id = ${STORE_APPLE}`)).rows[0]!.n));
+
+  it('does NOT link or sign in a non-Apple-controlled address (fail closed, no session, no duplicate row)', async () => {
+    await seed('victim@corp.example', true);
+    const res = await signIn(SLUG_APPLE, appleJwt({ email: 'victim@corp.example' }));
+    expect(res.status).toBe(409);
+    expect(res.headers.get('set-cookie')).toBeNull();
+    expect(await appleRow(STORE_APPLE, 'sub-abc-123')).toBeUndefined();
+    expect(await count('victim@corp.example')).toBe(1);
+  });
+
+  it('is not linkable via gmail either (Apple is not authoritative for Google mail)', async () => {
+    await seed('someone@gmail.com', true);
+    const res = await signIn(SLUG_APPLE, appleJwt({ email: 'someone@gmail.com' }));
+    expect(res.status).toBe(409);
+    expect(await appleRow(STORE_APPLE, 'sub-abc-123')).toBeUndefined();
+  });
+
+  it('links a Private Relay address that already belongs to an account', async () => {
+    const custId = await seed('abc123@privaterelay.appleid.com', true);
+    const res = await signIn(SLUG_APPLE, appleJwt({ email: 'abc123@privaterelay.appleid.com', is_private_email: 'true' }));
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { customer: { id: string } }).customer.id).toBe(custId);
+  });
+
+  it('rejects a token with an unverified email (401), creating nothing', async () => {
+    const res = await signIn(SLUG_APPLE, appleJwt({ email: 'new@icloud.com', email_verified: 'false' }));
+    expect(res.status).toBe(401);
+    expect(await count('new@icloud.com')).toBe(0);
+  });
+
+  it('refuses to link into an unverified password-holding account even on icloud.com', async () => {
+    await seed('squat@icloud.com', false, 'hash');
+    const res = await signIn(SLUG_APPLE, appleJwt({ email: 'squat@icloud.com' }));
+    expect(res.status).toBe(409);
+    expect(await appleRow(STORE_APPLE, 'sub-abc-123')).toBeUndefined();
+  });
+
+  it('refuses to rebind an account already linked to a different Apple subject', async () => {
+    await seed('bound@icloud.com', true, null, 'other-sub');
+    const res = await signIn(SLUG_APPLE, appleJwt({ email: 'bound@icloud.com' }));
+    expect(res.status).toBe(409);
+    expect((await appleRow(STORE_APPLE, 'other-sub'))?.email).toBe('bound@icloud.com');
+  });
+
+  it('still signs in an already-linked Apple subject on any address', async () => {
+    const custId = await seed('old@corp.example', true, null, 'sub-abc-123');
+    const res = await signIn(SLUG_APPLE, appleJwt({ email: 'old@corp.example' }));
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { customer: { id: string } }).customer.id).toBe(custId);
+  });
+
+  it('creates an account for a brand-new non-Apple email', async () => {
+    const res = await signIn(SLUG_APPLE, appleJwt({ email: 'fresh@corp.example' }));
+    expect(res.status).toBe(200);
+    expect(await count('fresh@corp.example')).toBe(1);
+  });
+
+  it('links an existing customer by email (Apple-hosted), then matches by sub', async () => {
+    const custId = await seed('link@icloud.com', true);
+    const res = await signIn(SLUG_APPLE, appleJwt({ email: 'link@icloud.com' }));
     expect(res.status).toBe(200);
     const body = await res.json() as { customer: { id: string } };
     expect(body.customer.id).toBe(custId);

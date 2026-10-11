@@ -9,7 +9,7 @@ import { hashPassword, passwordNeedsRehash, verifyPassword } from '../auth/passw
 import { customerToken, createSession, deleteSession, resolveCustomer, sessionPolicy } from '../auth/session.js';
 import { consumeMagicLink, magicLinkPolicy, mintMagicLink } from '../auth/magic-link.js';
 import { googleAuthoritativeForEmail, verifyGoogleIdToken } from '../auth/google.js';
-import { appleClientIds, verifyAppleIdentityToken } from '../auth/apple.js';
+import { appleAuthoritativeForEmail, appleClientIds, verifyAppleIdentityToken } from '../auth/apple.js';
 import { setCustomerCookies, clearCustomerCookies, customerCsrfValid, newCsrf } from '../auth/cookies.js';
 import { clientIp, loginRetryAfter, recordLoginFailure, clearLoginAttempts } from '../auth/rate-limit.js';
 import { normalizeEmail } from '../auth/email.js';
@@ -344,20 +344,29 @@ auth.openapi(
     }
     if (!apple) return errJson(c, 401, 'APPLE_TOKEN_INVALID', 'invalid Apple identity token');
     const { sub, email: appleEmail, emailVerified } = apple;
-    const out = await withStore(st.id, async (tx): Promise<{ kind: 'blocked' } | { kind: 'ok'; token: string; customer: z.infer<typeof CustomerOut> }> => {
-      type CustomerRow = { id: string; email: string; first_name: string | null; last_name: string | null; phone: string | null; email_verified: boolean; password_hash: string | null };
+    // Like Google: a token that carries an email Apple did not verify is
+    // rejected outright — never create or link an account from it.
+    if (appleEmail && !emailVerified) return errJson(c, 401, 'APPLE_TOKEN_INVALID', 'invalid Apple identity token');
+    const out = await withStore(st.id, async (tx): Promise<{ kind: 'blocked' } | { kind: 'not_linkable' } | { kind: 'ok'; token: string; customer: z.infer<typeof CustomerOut> }> => {
+      type CustomerRow = { id: string; email: string; first_name: string | null; last_name: string | null; phone: string | null; email_verified: boolean; password_hash: string | null; apple_user_id: string | null };
       let [cust] = (await tx.execute(sql`SELECT * FROM customer WHERE apple_user_id = ${sub} AND store_id = ${st.id} LIMIT 1`)).rows as CustomerRow[];
       if (!cust && appleEmail) {
         const [byEmail] = (await tx.execute(sql`SELECT * FROM customer WHERE email = ${normalizeEmail(appleEmail)} AND store_id = ${st.id} LIMIT 1`)).rows as CustomerRow[];
-        // SEC: same account-takeover guard as Google (see auth/google above).
-        // Only auto-link when Apple itself proved the address AND the target
-        // account isn't a password-holding, still-unverified account that
-        // someone else registered first.
-        if (byEmail && emailVerified && !(!byEmail.email_verified && byEmail.password_hash)) {
-          await tx.execute(sql`UPDATE customer SET apple_user_id = ${sub}, updated_at = now() WHERE id = ${byEmail.id}`);
-          cust = byEmail;
-        } else if (byEmail && !byEmail.email_verified && byEmail.password_hash) {
-          return { kind: 'blocked' };
+        // SEC: same guards as Google (see auth/google above). (1) never link
+        // into a password-holding, still-unverified account someone else
+        // registered first; (2) email-based linking requires Apple to be
+        // authoritative for the address (Apple-hosted / Private Relay) —
+        // otherwise a reassigned third-party address could inherit the current
+        // owner's account; (3) never overwrite an account already bound to a
+        // different Apple subject. Fail closed with no session. An existing
+        // email must NEVER fall through to INSERT (duplicate / oracle).
+        if (byEmail) {
+          if (!byEmail.email_verified && byEmail.password_hash) return { kind: 'blocked' };
+          if (!appleAuthoritativeForEmail(apple) || (byEmail.apple_user_id && byEmail.apple_user_id !== sub)) {
+            return { kind: 'not_linkable' };
+          }
+          await tx.execute(sql`UPDATE customer SET apple_user_id = ${sub}, email_verified = true, updated_at = now() WHERE id = ${byEmail.id}`);
+          cust = { ...byEmail, email_verified: true };
         }
       }
       if (!cust) {
@@ -377,6 +386,9 @@ auth.openapi(
     });
     if (out.kind === 'blocked') {
       return errJson(c, 409, 'EMAIL_TAKEN_UNVERIFIED', 'an account with this email already exists — sign in with your password and verify your email first');
+    }
+    if (out.kind === 'not_linkable') {
+      return errJson(c, 409, 'EMAIL_TAKEN', 'an account with this email already exists — sign in with your password or a sign-in link first');
     }
     setCustomerCookies(c, out.token, newCsrf(), customerCookieSeconds(st));
     return c.json({ token: out.token, customer: out.customer }, 200);
