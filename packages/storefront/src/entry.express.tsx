@@ -15,7 +15,7 @@ import { NO_STORE_CACHE_CONTROL } from"./config/route-cache-policy";
 import { googleClientId, googleIdentityCsp, googleSignInClientIdForHost, googleSignInHosts, googleSignInRefusedForMissingPin } from"./config/google-signin";
 import { createCanonicalUrlMiddleware, parseCanonicalSections } from"./utils/canonical-url";
 import { buildCsp } from"./utils/csp";
-import { trustedRequestOrigin, validatedRequestHost } from"./utils/trusted-request.server";
+import { getRouterOrigin, validatedRequestHost } from"./utils/trusted-request.server";
 
 declare global {
  interface QwikRouterPlatform extends PlatformNode {}
@@ -44,7 +44,7 @@ const HOST = process.env.HOST ?? 'localhost';
 // boundary only (utils/trusted-request.server.ts); undefined keeps the framework default.
 const { router, notFound } = createQwikRouter({
  render,
- getOrigin: (req) => trustedRequestOrigin(req) ?? null,
+ getOrigin: getRouterOrigin,
 });
 
 // Create the express server
@@ -168,15 +168,15 @@ app.use((req, _res, next) => {
 	sellrightRequestCookie.run(req.headers.cookie, next);
 });
 
-// WS-C: thread the incoming Host (preferring X-Forwarded-Host, set by a
-// reverse proxy/CDN terminating TLS in front of this app — same precedence
+// WS-C: thread the incoming Host (X-Forwarded-Host preferred only behind a declared trusted proxy — same precedence
 // the API's resolveStoreForRequest applies) through to every sr() fetch this
 // request triggers, so SSR data loads resolve the SAME store a browser
 // request to this host would get. Nested inside the cookie ALS.run above is
 // fine — both are independent AsyncLocalStorage instances.
 app.use((req, _res, next) => {
-	const forwardedHost = req.headers['x-forwarded-host'];
-	const host = (Array.isArray(forwardedHost) ? forwardedHost[0] : forwardedHost) || req.headers.host;
+	// Same trusted boundary as the Google decision and the form-POST origin: the connection's Host, or X-Forwarded-Host
+	// only when SELLRIGHT_TRUST_FORWARDED_HOST=1 (utils/trusted-request.server.ts). A forged header is never forwarded.
+	const host = validatedRequestHost(req.headers) || undefined;
 	sellrightRequestHost.run(host, next);
 });
 

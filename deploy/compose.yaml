@@ -205,6 +205,13 @@ services:
         condition: service_healthy
     environment:
       SELLRIGHT_API_URL: ${SELLRIGHT_API_URL:-http://api:3300}
+      # The storefront is reachable only on the private network, through Caddy, which sets X-Forwarded-Host/-Proto
+      # itself (replacing any client-supplied value). So it is the trusted proxy: forwarded host/proto select the
+      # store and the form-POST origin. Never set this on a storefront that can be reached without such a proxy.
+      SELLRIGHT_TRUST_FORWARDED_HOST: "1"
+      # Runtime, optional: comma-separated public hosts of the pinned store allowed to show Google sign-in (only used
+      # with a build pinned via VITE_SELLRIGHT_STORE_SLUG + VITE_GOOGLE_CLIENT_ID). Unset = Google sign-in off.
+      SELLRIGHT_GOOGLE_SIGNIN_HOSTS: ${SELLRIGHT_GOOGLE_SIGNIN_HOSTS:-}
     networks: [private]
 
   caddy:

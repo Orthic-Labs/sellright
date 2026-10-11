@@ -42,3 +42,6 @@ export function trustedRequestOrigin(
 	if (!host) return undefined;
 	return `${forwardedProto || ((req.socket as { encrypted?: boolean } | undefined)?.encrypted ? 'https' : 'http')}://${host}`;
 }
+
+/** The `getOrigin` option entry.express.tsx hands to createQwikRouter (null = keep the framework's own origin). */
+export const getRouterOrigin = (req: { headers: NodeHeaders; socket?: object }): string | null => trustedRequestOrigin(req) ?? null;
