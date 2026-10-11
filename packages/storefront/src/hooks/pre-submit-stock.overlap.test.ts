@@ -1,10 +1,12 @@
 /**
- * Pre-submit stock check against the REAL CartService (only `fetch` is stubbed). The check must validate the exact
- * response of its own read: a newer overlapping read claiming the mirror must not let an older in-stock snapshot pass,
- * and a missing cookie, 404 or failed read must refuse. No cache, debounce or TTL is involved anywhere.
+ * Pre-submit stock check against the REAL CartService (only `fetch` and `navigator.locks` are faked). The check must
+ * validate the exact response of its own read. Cart operations are serialised by the cart lock, so a read issued
+ * while the pre-submit read is pending is sent only after it lands and can neither supply nor excuse its verdict; a
+ * missing cookie, 404 or failed read must refuse. No cache, debounce or TTL is involved anywhere.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CartService } from '~/services/CartService';
+import { installLocks, removeLocks } from '~/services/cart-test-harness';
 import type { ServerCart } from '~/sellright/types/cart';
 import { PreSubmitStockError, refreshStockBeforeSubmit } from './pre-submit-stock';
 
@@ -42,7 +44,8 @@ beforeEach(() => {
 	queue = [];
 	fetchCount = 0;
 	clearCookie();
-	CartService.discard();
+	installLocks();
+	CartService['resetMirror']();
 	vi.stubGlobal('fetch', vi.fn(async () => {
 		fetchCount++;
 		const next = queue.shift();
@@ -52,6 +55,7 @@ beforeEach(() => {
 });
 afterEach(() => {
 	vi.unstubAllGlobals();
+	removeLocks();
 	clearCookie();
 });
 
@@ -63,7 +67,7 @@ describe('pre-submit stock check against the real CartService', () => {
 		expect(fetchCount).toBe(1);
 	});
 
-	it('refuses when a newer read starts while the pre-submit read is pending, even though the mirror held in-stock lines', async () => {
+	it('refuses on its own out-of-stock response even though the mirror held in-stock lines; a read issued meanwhile waits for it', async () => {
 		setCookie('tok_srv');
 		queue.push(respond(200, serverCart())); // seed the mirror: in stock
 		await CartService.refresh();
@@ -75,13 +79,14 @@ describe('pre-submit stock check against the real CartService', () => {
 		const submit = refreshStockBeforeSubmit();
 		const submitOutcome = submit.then(() => 'passed', (e) => e);
 		await vi.waitFor(() => expect(fetchCount).toBe(2));
-		const overlap = CartService.refresh(); // claims the sequence while pre-submit is pending
-		await vi.waitFor(() => expect(fetchCount).toBe(3));
+		const overlap = CartService.refresh(); // queued behind the pre-submit read
+		await new Promise((r) => setTimeout(r, 10));
+		expect(fetchCount).toBe(2); // not sent while the pre-submit read holds the lock
 
-		preSubmit.resolve(await respond(200, serverCart({}, false))); // fresh, out of stock; its mirror write is superseded
+		preSubmit.resolve(await respond(200, serverCart({}, false))); // fresh, out of stock
 		const outcome = await submitOutcome;
 		expect(outcome).toBeInstanceOf(PreSubmitStockError);
-		expect(CartService.validateStock().valid).toBe(true); // the mirror still shows the older in-stock snapshot
+		await vi.waitFor(() => expect(fetchCount).toBe(3));
 		overlapping.resolve(await respond(200, serverCart({}, false)));
 		await overlap;
 	});
@@ -92,19 +97,20 @@ describe('pre-submit stock check against the real CartService', () => {
 		await expect(refreshStockBeforeSubmit()).rejects.toBeInstanceOf(PreSubmitStockError);
 	});
 
-	it('returns the revision of the response it validated, not of a newer overlapping read', async () => {
+	it('returns the revision of the response it validated, not of a read issued meanwhile', async () => {
 		setCookie('tok_srv');
 		const preSubmit = deferred();
 		const overlapping = deferred();
 		queue.push(preSubmit.promise, overlapping.promise);
 		const submit = refreshStockBeforeSubmit();
 		await vi.waitFor(() => expect(fetchCount).toBe(1));
-		const overlap = CartService.refresh();
+		const overlap = CartService.refresh(); // queued: sent only after the pre-submit read lands
+		preSubmit.resolve(await respond(200, serverCart({ revision: 4 })));
+		await expect(submit).resolves.toEqual({ token: 'tok_srv', revision: 4, status: 'active' });
 		await vi.waitFor(() => expect(fetchCount).toBe(2));
 		overlapping.resolve(await respond(200, serverCart({ revision: 9 })));
 		await overlap;
-		preSubmit.resolve(await respond(200, serverCart({ revision: 4 })));
-		await expect(submit).resolves.toEqual({ token: 'tok_srv', revision: 4, status: 'active' });
+		expect(CartService.getCart().revision).toBe(9); // the later read is the newer mirror; the snapshot above is unaffected
 	});
 
 	it('refuses when the cart cookie is missing, without any request', async () => {
@@ -133,7 +139,7 @@ describe('pre-submit stock check against the real CartService', () => {
 		await expect(refreshStockBeforeSubmit()).resolves.toEqual({ token: 'tok_srv', revision: 1, status: 'converted' });
 	});
 
-	it('a converted OVERLAPPING read does not excuse an active, out-of-stock pre-submit response', async () => {
+	it('a converted read issued meanwhile does not excuse an active, out-of-stock pre-submit response', async () => {
 		setCookie('tok_srv');
 		const preSubmit = deferred();
 		const overlapping = deferred();
@@ -141,10 +147,18 @@ describe('pre-submit stock check against the real CartService', () => {
 		const outcome = refreshStockBeforeSubmit().then(() => 'passed', (e) => e);
 		await vi.waitFor(() => expect(fetchCount).toBe(1));
 		const overlap = CartService.refresh();
+		preSubmit.resolve(await respond(200, serverCart({}, false)));
+		expect(await outcome).toBeInstanceOf(PreSubmitStockError);
 		await vi.waitFor(() => expect(fetchCount).toBe(2));
 		overlapping.resolve(await respond(200, serverCart({ status: 'converted' }, false)));
 		await overlap;
-		preSubmit.resolve(await respond(200, serverCart({}, false)));
-		expect(await outcome).toBeInstanceOf(PreSubmitStockError);
+	});
+
+	it('inside the checkout lock the scoped read is used and the lock is taken once (no deadlock)', async () => {
+		setCookie('tok_srv');
+		queue.push(respond(200, serverCart({ revision: 3 })));
+		const snapshot = await CartService.withLock((scope) => refreshStockBeforeSubmit(scope));
+		expect(snapshot).toEqual({ token: 'tok_srv', revision: 3, status: 'active' });
+		expect(fetchCount).toBe(1);
 	});
 });

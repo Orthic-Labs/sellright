@@ -49,26 +49,31 @@ export function loadCollectJs(tokenizationKey: string, mode: 'test' | 'live', do
   const key = `${src}:${tokenizationKey}`;
   if (inflight && inflight.key === key) return inflight.promise;
   const documentRef = doc ?? document;
-  inflight = {
-    key,
-    promise: new Promise<NmiCollectJs>((resolve, reject) => {
-      const script = documentRef.createElement('script');
-      script.src = src;
-      script.setAttribute('data-tokenization-key', tokenizationKey);
-      script.async = true;
-      script.onload = () => {
-        if (window.CollectJS) resolve(window.CollectJS);
-        else reject(new Error('Collect.js failed to initialise'));
-      };
-      script.onerror = () => reject(new Error('Collect.js failed to load'));
-      documentRef.head.appendChild(script);
-    }),
-  };
+  const promise = new Promise<NmiCollectJs>((resolve, reject) => {
+    const script = documentRef.createElement('script');
+    script.src = src;
+    script.setAttribute('data-tokenization-key', tokenizationKey);
+    script.async = true;
+    // A failed load must not stay cached: the next call (the retry) has to request the script again, and the dead
+    // script element must not linger in the head.
+    const fail = (message: string) => {
+      if (inflight?.promise === promise) inflight = null;
+      script.remove();
+      reject(new Error(message));
+    };
+    script.onload = () => {
+      if (window.CollectJS) resolve(window.CollectJS);
+      else fail('Collect.js failed to initialise');
+    };
+    script.onerror = () => fail('Collect.js failed to load');
+    documentRef.head.appendChild(script);
+  });
+  inflight = { key, promise };
   return inflight.promise;
 }
 
 /** Configure before card entry; reconfiguring on Pay redraws the hosted fields. */
-export function prepareCardTokenization(collect: NmiCollectJs, fields: NmiCollectFields, onReady?: () => void): () => Promise<string> {
+export function prepareCardTokenization(collect: NmiCollectJs, fields: NmiCollectFields, onReady?: () => void, onInitError?: (message: string) => void): () => Promise<string> {
   let pending: { resolve: (token: string) => void; reject: (error: Error) => void } | null = null;
   const done = (token: string | null, error?: string) => {
     const request = pending;
@@ -84,7 +89,11 @@ export function prepareCardTokenization(collect: NmiCollectJs, fields: NmiCollec
         ccexp: { selector: fields.ccexp, title: 'Expiration' },
         cvv: { selector: fields.cvv, title: 'Security Code' },
       },
-      timeoutCallback: () => done(null, 'Card validation timed out — try again.'),
+      // No tokenization pending = the hosted fields themselves never initialised: surface it, don't stay silently not-ready.
+      timeoutCallback: () => {
+        if (pending) done(null, 'Card validation timed out — try again.');
+        else onInitError?.('Card fields timed out loading.');
+      },
       callback: (response) => done(response?.token ?? null),
       fieldsAvailableCallback: onReady,
   });

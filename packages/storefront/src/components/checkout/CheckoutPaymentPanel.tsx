@@ -8,6 +8,8 @@ import type { ShopConfig } from '~/sellright/types/checkout';
 import type { CheckoutPhase, PaymentMethod } from '~/hooks/useCheckout';
 import { totalChange, formatCents } from '~/hooks/checkout-total';
 import { CheckoutDesktopCta } from './CheckoutCta';
+import { PaymentInitRetry, type PaymentInitState } from './PaymentInitRetry';
+import { bumpView } from './view-generation';
 
 interface CheckoutPaymentPanelProps {
 	checkoutState: any;
@@ -17,10 +19,12 @@ interface CheckoutPaymentPanelProps {
 	totalConfirmed: Signal<boolean>;
 	isOrderProcessing: Signal<boolean>;
 	onGatewaySuccess$: QRL<() => void>;
-	onPaymentError$: QRL<(message: string) => void>;
-	onPaymentProcessingChange$: QRL<(processing: boolean) => void>;
+	onPaymentInitError$: QRL<(message: string, mountGen?: number) => void>;
+	onPaymentError$: QRL<(message: string, mountGen?: number) => void>;
+	onPaymentProcessingChange$: QRL<(processing: boolean, mountGen?: number) => void>;
 	onPlaceOrder$: QRL<() => void>;
 	pageLoading: Signal<boolean>;
+	paymentInit: PaymentInitState;
 	paymentMethod: Signal<PaymentMethod>;
 	shopConfig: Signal<ShopConfig | null>;
 	srState: { phase: CheckoutPhase; code: string; receiptToken: string; clientSecret: string; grandTotal: number; shownTotal: number };
@@ -31,7 +35,7 @@ interface CheckoutPaymentPanelProps {
 
 /** The available-method list, derived from what `GET /v1/shop/config`
  *  actually reports for this store — never hardcoded, never assumed. */
-function availableMethods(config: ShopConfig | null): PaymentMethod[] {
+export function availableMethods(config: ShopConfig | null): PaymentMethod[] {
 	if (!config) return [];
 	const methods: PaymentMethod[] = [];
 	if (config.stripeConfigured) methods.push('stripe');
@@ -40,7 +44,7 @@ function availableMethods(config: ShopConfig | null): PaymentMethod[] {
 	return methods;
 }
 
-const METHOD_LABEL: Record<PaymentMethod, string> = {
+export const METHOD_LABEL: Record<PaymentMethod, string> = {
 	stripe: 'Card',
 	nmi: 'Card',
 	sezzle: 'Installments',
@@ -164,7 +168,12 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 														role="radio"
 														aria-checked={props.paymentMethod.value === m}
 														disabled={locked}
-														onClick$={$(() => { if (!locked) props.paymentMethod.value = m; })}
+														onClick$={$(() => {
+															if (locked) return;
+															props.paymentMethod.value = m;
+															// A method switch replaces the payment view: in-flight callbacks of the old one are rejected.
+															bumpView(props.paymentInit);
+														})}
 														class="payment-method-option"
 														style={{
 															flex: '1', padding: '10px 12px', fontSize: '13px', borderRadius: '4px', cursor: locked ? 'default' : 'pointer',
@@ -177,9 +186,14 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 												))}
 											</div>
 										)}
-										{props.srState.phase === 'paying' && props.paymentMethod.value === 'stripe' && props.stripePublishableKey.value && props.srState.clientSecret ? (
+										{props.srState.phase === 'paying' && props.paymentInit.failed ? (
+											<PaymentInitRetry init={props.paymentInit} />
+										) : props.srState.phase === 'paying' && props.paymentMethod.value === 'stripe' && props.stripePublishableKey.value && props.srState.clientSecret ? (
 											<>
 												<StripePaymentElement
+													key={props.paymentInit.key}
+									mountGen={props.paymentInit.gen}
+													onInitError$={props.onPaymentInitError$}
 													publishableKey={props.stripePublishableKey.value}
 													clientSecret={props.srState.clientSecret}
 													returnUrl={`${typeof location !== 'undefined' ? location.origin : ''}/checkout/confirmation/${props.srState.code}${props.srState.receiptToken ? `?rt=${encodeURIComponent(props.srState.receiptToken)}` : ''}`}
@@ -206,6 +220,9 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 										) : props.srState.phase === 'paying' && props.paymentMethod.value === 'nmi' && props.shopConfig.value?.gateways?.nmi ? (
 											<>
 												<NMI
+													key={props.paymentInit.key}
+									mountGen={props.paymentInit.gen}
+													onInitError$={props.onPaymentInitError$}
 													code={props.srState.code}
 													tokenizationKey={props.shopConfig.value.gateways.nmi.tokenizationKey}
 													mode={props.shopConfig.value.gateways.nmi.mode}
@@ -234,6 +251,7 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 											</>
 										) : props.srState.phase === 'paying' && props.paymentMethod.value === INSTALLMENT_PROVIDER ? (
 											<Sezzle
+												mountGen={props.paymentInit.gen}
 												code={props.srState.code}
 												receiptToken={props.srState.receiptToken || undefined}
 												label={chargeLabel ? `Continue — ${chargeLabel}` : 'Continue'}

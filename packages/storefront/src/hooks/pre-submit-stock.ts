@@ -1,4 +1,4 @@
-import { CartService } from '~/services/CartService';
+import { CartService, type CartLockScope } from '~/services/CartService';
 
 /** Thrown when the live pre-submit read shows a cart line that is no longer available. */
 export class PreSubmitStockError extends Error {
@@ -29,15 +29,17 @@ export interface CheckoutSnapshot {
  *
  * Recovery exception: when that live read reports the cart already `converted` (checkout reserved the stock, then
  * the response or the payment-intent call was lost), the lines' `available` is computed AFTER that order's own
- * allocation and is false for the last unit. POST /checkout replays the original order for a converted cart without
- * touching stock, so availability (and a non-empty line list) is not a precondition there. The read itself is never
- * skipped; only what an unavailable line means changes, and only when the server says the cart is converted. A
- * missing/other status is a new order and keeps the fail-closed check.
+ * allocation and is false for the last unit. A converted cart creates no new order (`placeOrder` refuses to POST it
+ * and the page resumes the original order), so availability (and a non-empty line list) is not a precondition
+ * there. The read itself is never skipped; only what an unavailable line means changes, and only when the server
+ * says the cart is converted. A missing/other status is a new order and keeps the fail-closed check.
  */
-export const refreshStockBeforeSubmit = async (): Promise<CheckoutSnapshot> => {
+export const refreshStockBeforeSubmit = async (scope?: CartLockScope): Promise<CheckoutSnapshot> => {
 	// Validate the exact response of THIS read, never the shared mirror: a newer overlapping read can supersede this
 	// one's mirror write, leaving an older in-stock snapshot behind. A missing cookie, 404 or failed read throws.
-	const fresh = await CartService.readFresh();
+	// Checkout passes the scope of the lock it already holds (the lock is not re-entrant, so the public read would
+	// wait on itself); an independent caller passes none and takes the lock for this one read.
+	const fresh = scope ? await scope.readFresh() : await CartService.readFresh();
 	const snapshot: CheckoutSnapshot = { token: fresh.token, revision: fresh.revision, status: fresh.status };
 	if (fresh.status === 'converted') return snapshot;
 	const lines = fresh.lines ?? [];

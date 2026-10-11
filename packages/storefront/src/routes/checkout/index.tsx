@@ -5,18 +5,20 @@ import { getCookie } from '~/utils';
 import { getMe, getAddresses } from '~/services/customer';
 import { CountryService } from '~/services/CountryService';
 import { CheckoutAddressProvider } from '~/contexts/CheckoutAddressContext';
-import { useCart, refreshCartStock, loadCartIfNeeded, useHasMixedPreOrder } from '~/contexts/CartContext';
+import { useCart, refreshCartLive, refreshCartStock, retireSettledCart, loadCartIfNeeded, useHasMixedPreOrder } from '~/contexts/CartContext';
+import { CartService } from '~/services/CartService';
 import { validateCheckoutStock } from '~/hooks/pre-submit-stock';
 import { CheckoutValidationProvider, useCheckoutValidation, useCheckoutValidationActions } from '~/contexts/CheckoutValidationContext';
 import { useCheckout, type PaymentMethod } from '~/hooks/useCheckout';
-import { INSTALLMENT_PROVIDER } from '~/platform/payments/labels';
 import { formatCents } from '~/hooks/checkout-total';
+import { decideCheckoutEntry, defaultPaymentMethod, shouldApplyConfigDefault, shouldRecoverExistingOrder, shouldResumeLate } from '~/hooks/checkout-stage';
 import { getShopConfig, getEligibleShippingMethods } from '~/providers/shop/checkout/checkout';
 import type { ShopConfig, ShopShippingMethod } from '~/sellright/types/checkout';
 import { validateBillingSection, validateCustomerSection, validateShippingSection } from '~/utils/checkout-section-validation';
 import { CheckoutPageView } from '~/components/checkout/CheckoutPageView';
 import { CHECKOUT_STYLES } from './checkout-styles';
-import { recoverCheckoutPaymentError } from './checkout-payment-recovery';
+import { recoverCheckoutPaymentError, classifyResumePaymentError } from './checkout-payment-recovery';
+import { acceptsMount, bumpView, isCurrentView } from '~/components/checkout/view-generation';
 
 
 interface CheckoutState {
@@ -31,7 +33,7 @@ const CheckoutContent = component$(() => {
   const hasMixedPreOrder = useHasMixedPreOrder();
   const checkoutValidation = useCheckoutValidation();
   const validationActions = useCheckoutValidationActions();
-  const { checkoutState, state: srState, placeOrder: placeOrderNative } = useCheckout();
+  const { checkoutState, state: srState, placeOrder: placeOrderNative, resumeConverted, resetOrder } = useCheckout();
 
   const state = useStore<CheckoutState>({
     loading: false,
@@ -74,6 +76,13 @@ const CheckoutContent = component$(() => {
   // Public runtime config — decides whether the Stripe Payment Element mounts
   // once the order reaches PendingPayment.
   const shopConfig = useSignal<ShopConfig | null>(null);
+  // The config's default method is applied once (see shouldApplyConfigDefault); a late completion must not overwrite
+  // the selection nor the client secret that belongs to it.
+  const configDefaultApplied = useSignal(false);
+  // The mounted payment component could not LOAD (not a decline): `failed` shows a retry, `key` remounts it.
+  // `gen` is the route's single view generation (see components/checkout/view-generation.ts): every async handler below
+  // captures it at entry and stops without touching state once it changed.
+  const paymentInit = useStore({ failed: false, key: 0, gen: 0 });
 
   useTask$(async ({ track, cleanup }) => {
     const countryCode = track(() => appState.shippingAddress?.countryCode);
@@ -136,98 +145,249 @@ const CheckoutContent = component$(() => {
     return formatCents(cents);
   });
 
+  const applyShopConfig = $((cfg: ShopConfig) => {
+    shopConfig.value = cfg;
+    if (cfg.stripePublishableKey) stripePublishableKey.value = cfg.stripePublishableKey;
+    // Default selection: prefer whichever method the store actually has configured (stripe > nmi > sezzle). The
+    // shopper can still switch via the method selector when more than one is available.
+    if (!shouldApplyConfigDefault(configDefaultApplied.value)) return;
+    configDefaultApplied.value = true;
+    const method = defaultPaymentMethod(cfg);
+    if (method) paymentMethod.value = method;
+  });
+
+  // EVERY read of the shop config goes through here: it resolves only after the config AND its default method are
+  // applied, so no caller sees a null config or a not-yet-defaulted method. A failed fetch rejects.
+  // A load that finishes after the view generation changed writes nothing (no config, no default method) and just returns
+  // what it read; its caller re-checks the generation.
+  // No default parameter for `gen`: a default that reads captured state is evaluated before the QRL's lexical scope is
+  // restored and arrives as undefined, which made every stale check fail (see ensure-shop-config-gen.test.ts).
+  const ensureShopConfig = $(async (genArg?: number): Promise<ShopConfig> => {
+    const gen = genArg ?? paymentInit.gen;
+    if (shopConfig.value) return shopConfig.value;
+    const cfg = await getShopConfig();
+    if (!isCurrentView(paymentInit, gen)) return cfg;
+    await applyShopConfig(cfg);
+    return shopConfig.value ?? cfg;
+  });
+
+  // Forget everything bound to the previous order (store fields, method lock via phase, confirm triggers, consent, init
+  // failure). Run on every transition out of a resume state that is NOT a resume of the same order.
+  const resetOrderState = $(async () => {
+    await resetOrder();
+    stripeConfirmTrigger.value = 0;
+    gatewayConfirmTrigger.value = 0;
+    totalConfirmed.value = false;
+    paymentInit.failed = false;
+    paymentInit.key = paymentInit.key + 1;
+  });
+
+  // Resume the ORIGINAL order of a converted cart: its own view and payment initialisation, never the new-order form
+  // gates, the stock check or an order POST. `methodOverride` re-initialises payment for a method the shopper picked;
+  // `probe` marks a lookup made because the live cart read failed (see enterCheckout).
+  const resumeBusy = useSignal(false);
+  const beginResume = $(async (methodOverride?: PaymentMethod, probe = false) => {
+    if (resumeBusy.value) return;
+    const token = CartService.token();
+    if (!token) return;
+    resumeBusy.value = true;
+    // A resume start replaces the view: it supersedes every handler still in flight.
+    const gen = bumpView(paymentInit);
+    const current = () => isCurrentView(paymentInit, gen);
+    try {
+      paymentInit.failed = false;
+      // The payment method needs the shop config: a failed config read is a retryable error, never a silent
+      // "no payment method configured" (the Stripe key would be empty) for an order that is waiting to be paid.
+      let cfg: ShopConfig;
+      try {
+        cfg = await ensureShopConfig(gen);
+      } catch (e) {
+        if (!current()) return;
+        console.warn('[Checkout] shop-config fetch failed:', e);
+        srState.error = "We couldn't load your payment options. Please try again.";
+        srState.resume = 'error';
+        return;
+      }
+      if (!current()) return;
+      const anyGatewayConfigured = !!cfg.stripeConfigured || !!cfg.gateways?.nmi || !!cfg.gateways?.sezzle;
+      const view = await resumeConverted(token, anyGatewayConfigured ? (methodOverride ?? paymentMethod.value) : null, probe, current);
+      if (view === 'settled' && current()) {
+        const rt = srState.receiptToken ? `?rt=${encodeURIComponent(srState.receiptToken)}` : '';
+        navigate(`/checkout/confirmation/${srState.code}${rt}`);
+      }
+    } finally {
+      // Only the current resume releases the controls; a superseding handler owns them.
+      if (current()) state.loading = false;
+      resumeBusy.value = false;
+    }
+  });
+
+  // The normal new-order checkout's own initialisation (customer, countries, address, destination country).
+  const loadNormalCheckout = $(async (gen: number) => {
+    const [customerData, countriesData] = await Promise.all([
+      getMe().catch(() => null),
+      CountryService.getAvailableCountries().catch(() => []),
+    ]);
+    if (!isCurrentView(paymentInit, gen)) return;
+
+    if (countriesData && countriesData.length > 0) {
+      appState.availableCountries = countriesData;
+    }
+
+    if (customerData) {
+      // appState.customer's field names are the CheckoutAddresses form
+      // state's own shape (title/emailAddress/phoneNumber), not the native
+      // AuthCustomer wire shape (email/phone, no title) — map explicitly
+      // rather than reshaping appState, which other checkout components
+      // still bind by these names.
+      appState.customer = {
+        title: '',
+        firstName: customerData.firstName ?? '',
+        id: customerData.id,
+        lastName: customerData.lastName ?? '',
+        emailAddress: customerData.email,
+        phoneNumber: customerData.phone ?? '',
+      };
+
+      try {
+        const addresses = await getAddresses();
+        if (!isCurrentView(paymentInit, gen)) return;
+        const defaultShipping = addresses.find((a) => a.isDefaultShipping);
+        if (defaultShipping) {
+          appState.shippingAddress = {
+            ...appState.shippingAddress,
+            streetLine1: defaultShipping.line1 || '',
+            streetLine2: defaultShipping.line2 || '',
+            city: defaultShipping.city || '',
+            province: defaultShipping.province || '',
+            postalCode: defaultShipping.postalCode || '',
+            countryCode: defaultShipping.country || appState.shippingAddress.countryCode || '',
+            phoneNumber: defaultShipping.phone || customerData.phone || '',
+          };
+        }
+      } catch (e) {
+        console.warn('[Checkout] Failed to load customer addresses:', e);
+      }
+    }
+
+    await loadCartIfNeeded(localCart);
+    if (!isCurrentView(paymentInit, gen)) return;
+
+    if (!appState.shippingAddress.countryCode) {
+      const cookieCountry = getCookie(COUNTRY_COOKIE);
+      if (cookieCountry) {
+        appState.shippingAddress.countryCode = cookieCountry;
+      } else {
+        const storedCountry = sessionStorage.getItem('countryCode');
+        if (storedCountry) {
+          appState.shippingAddress.countryCode = storedCountry;
+        }
+      }
+    }
+
+    isCartEmpty.value = localCart.cart.lines.length === 0;
+  });
+
+  // Checkout ENTRY. LOCKED: live cart read first, so a converted cart is recognised before the empty-cart gate, the
+  // stock task and the form/shipping validation — none of which apply to an order that already exists. A FAILED read
+  // proves nothing about the cart, so it never selects the normal checkout: the original order is looked up read-only
+  // (it needs no repriced cart) and, when there is none, the page stays on a retryable unresolved state.
+  const enterCheckout = $(async () => {
+    const gen = paymentInit.gen;
+    const current = () => isCurrentView(paymentInit, gen);
+    // Started first so it overlaps the cart read; awaited before the form shows. A failure is tolerated here (the
+    // method list is then empty and PLACE ORDER refuses until the config loads) — the resume path treats it as fatal.
+    const configRead = ensureShopConfig().catch((e) => console.warn('[Checkout] shop-config fetch failed:', e));
+    await loadCartIfNeeded(localCart);
+    if (!current()) return;
+    const read = await refreshCartLive(localCart);
+    if (!current()) return;
+    const decision = decideCheckoutEntry({
+      status: localCart.cart.status,
+      readFailed: read === 'failed',
+      hasToken: !!CartService.token(),
+    });
+    if (decision !== 'normal') {
+      await beginResume(undefined, decision === 'probe');
+      return;
+    }
+    // The cart is a normal active one. Even if this page was showing a resumed order (the cookie was replaced in
+    // another tab between the failure and this retry), that order's code, receipt token, client secret, phase, method
+    // lock and triggers must not survive into a different cart's checkout.
+    await resetOrderState();
+    if (!current()) return;
+    await configRead;
+    if (!current()) return;
+    await loadNormalCheckout(gen);
+  });
+
+  // Retry from the error view re-runs the whole entry sequence (cart read included).
+  const onResumeRetry$ = $(async () => {
+    // A retry starts the view over.
+    const gen = bumpView(paymentInit);
+    srState.resume = 'loading';
+    srState.error = null;
+    try {
+      await enterCheckout();
+    } catch (error) {
+      if (!isCurrentView(paymentInit, gen)) return;
+      console.error('[Checkout] Retry failed:', error);
+      srState.error = "We couldn't load your checkout. Please try again.";
+      srState.resume = 'error';
+    }
+  });
+
+  const onResumeMethod$ = $(async (method: PaymentMethod) => {
+    await beginResume(method);
+  });
+
+  // Offered only for a cancelled order; `retireSettledCart` verifies that server-side before it frees the cart slot.
+  const onStartNewCart$ = $(async () => {
+    const gen = bumpView(paymentInit);
+    const retired = await retireSettledCart(localCart);
+    if (!isCurrentView(paymentInit, gen)) return;
+    if (retired) {
+      await resetOrderState();
+      if (!isCurrentView(paymentInit, gen)) return;
+      isCartEmpty.value = true;
+      return;
+    }
+    srState.error = "We couldn't confirm that this order is finished. Please try again.";
+    srState.resume = 'error';
+  });
+
+  // Leaving the page supersedes every in-flight handler. Its OWN task, and it reads nothing reactive: Qwik runs a task's
+  // cleanup whenever the task re-runs, so this must never live in a task that subscribes to page state (the entry
+  // task re-runs when the cart converts at order creation, which would discard the place-order result).
+  useVisibleTask$(({ cleanup }) => {
+    cleanup(() => { bumpView(paymentInit); });
+  });
+
   useVisibleTask$(async () => {
+    const gen = paymentInit.gen;
     if (pageLoading.value) {
       try {
         appState.showCart = false;
 
-        // Public runtime config decides whether the Stripe Payment Element
-        // mounts once the order reaches PendingPayment.
-        getShopConfig()
-          .then((cfg) => {
-            shopConfig.value = cfg;
-            if (cfg.stripePublishableKey) stripePublishableKey.value = cfg.stripePublishableKey;
-            // Default selection: prefer whichever method the store actually
-            // has configured, in this priority order. The shopper can still
-            // switch via the method selector when more than one is available.
-            if (cfg.stripeConfigured) paymentMethod.value = 'stripe';
-            else if (cfg.gateways?.nmi) paymentMethod.value = 'nmi';
-            else if (cfg.gateways?.sezzle) paymentMethod.value = INSTALLMENT_PROVIDER;
-          })
-          .catch((e) => console.warn('[Checkout] shop-config fetch failed:', e));
-
-        const [customerData, countriesData] = await Promise.all([
-          getMe().catch(() => null),
-          CountryService.getAvailableCountries().catch(() => []),
-        ]);
-
-        if (countriesData && countriesData.length > 0) {
-          appState.availableCountries = countriesData;
-        }
-
-        if (customerData) {
-          // appState.customer's field names are the CheckoutAddresses form
-          // state's own shape (title/emailAddress/phoneNumber), not the native
-          // AuthCustomer wire shape (email/phone, no title) — map explicitly
-          // rather than reshaping appState, which other checkout components
-          // still bind by these names.
-          appState.customer = {
-            title: '',
-            firstName: customerData.firstName ?? '',
-            id: customerData.id,
-            lastName: customerData.lastName ?? '',
-            emailAddress: customerData.email,
-            phoneNumber: customerData.phone ?? '',
-          };
-
-          try {
-            const addresses = await getAddresses();
-            const defaultShipping = addresses.find((a) => a.isDefaultShipping);
-            if (defaultShipping) {
-              appState.shippingAddress = {
-                ...appState.shippingAddress,
-                streetLine1: defaultShipping.line1 || '',
-                streetLine2: defaultShipping.line2 || '',
-                city: defaultShipping.city || '',
-                province: defaultShipping.province || '',
-                postalCode: defaultShipping.postalCode || '',
-                countryCode: defaultShipping.country || appState.shippingAddress.countryCode || '',
-                phoneNumber: defaultShipping.phone || customerData.phone || '',
-              };
-            }
-          } catch (e) {
-            console.warn('[Checkout] Failed to load customer addresses:', e);
-          }
-        }
-
-        await loadCartIfNeeded(localCart);
-
-        if (!appState.shippingAddress.countryCode) {
-          const cookieCountry = getCookie(COUNTRY_COOKIE);
-          if (cookieCountry) {
-            appState.shippingAddress.countryCode = cookieCountry;
-          } else {
-            const storedCountry = sessionStorage.getItem('countryCode');
-            if (storedCountry) {
-              appState.shippingAddress.countryCode = storedCountry;
-            }
-          }
-        }
-
-        isCartEmpty.value = localCart.cart.lines.length === 0;
-
-        if (localCart.cart.lines.length > 0) {
-          refreshCartStock(localCart).catch(error => {
-            console.error('Checkout: Failed to refresh stock levels:', error);
-          });
-        }
-
+        await enterCheckout();
       } catch (error) {
         console.error('[Checkout] Error during checkout initialization:', error);
-        state.error = 'Failed to load checkout. Please try again.';
+        if (isCurrentView(paymentInit, gen)) state.error = 'Failed to load checkout. Please try again.';
       } finally {
         pageLoading.value = false;
       }
+    }
+  });
+
+  // A conversion discovered AFTER initialisation (a later cart refresh, a drawer action, another tab's order reaching
+  // the mirror) switches to the resume view too: the original order must not stay behind the incomplete form or the
+  // empty-cart view. Entry and PLACE ORDER resume on their own (the predicate excludes them).
+  useVisibleTask$(async ({ track }) => {
+    const status = track(() => localCart.cart.status);
+    const loadingNow = track(() => pageLoading.value);
+    const processing = track(() => isOrderProcessing.value);
+    if (shouldResumeLate({ status, resume: srState.resume, orderCode: srState.code, phase: srState.phase, pageLoading: loadingNow, processing })) {
+      await beginResume();
     }
   });
 
@@ -286,6 +446,8 @@ const CheckoutContent = component$(() => {
     showProcessingModal.value = true;
     isOrderProcessing.value = true;
     state.error = null;
+    const gen = paymentInit.gen;
+    const current = () => isCurrentView(paymentInit, gen);
 
     try {
       const customerSection = validateCustomerSection(
@@ -350,11 +512,30 @@ const CheckoutContent = component$(() => {
       // the shipping step with a raw API error). Place the order unpaid and
       // land on 'paying', where the panel renders its explicit
       // "no payment method configured" state.
-      const cfg = shopConfig.value;
-      const anyGatewayConfigured = !cfg || !!cfg.stripeConfigured || !!cfg.gateways?.nmi || !!cfg.gateways?.sezzle;
+      // No order exists yet: a config that cannot be read stops here instead of placing an order whose payment method is
+      // unknown (a null config used to read as "configured").
+      let cfg: ShopConfig;
+      try {
+        cfg = await ensureShopConfig();
+      } catch {
+        throw new Error("We couldn't load your payment options. Please try again.");
+      }
+      if (!current()) return;
+      const anyGatewayConfigured = !!cfg.stripeConfigured || !!cfg.gateways?.nmi || !!cfg.gateways?.sezzle;
       // The total on screen right now is what the shopper agreed to; the order
       // comes back server-priced and the PAY step gates on any difference.
       const phase = await placeOrderNative(form, anyGatewayConfigured ? paymentMethod.value : null, checkoutTotalCents.value || 0);
+      // The page was left (or the view replaced) while the order request ran: nothing is shown or navigated here. The
+      // order exists server-side and is picked up by the resume view on the next visit.
+      if (!current()) return;
+      if (srState.convertedCart) {
+        // Another tab (or an earlier attempt) already turned this cart into an order: nothing was POSTed and the
+        // token is kept. Show that order instead of the form.
+        showProcessingModal.value = false;
+        isOrderProcessing.value = false;
+        await beginResume();
+        return;
+      }
       if (phase === 'paid') {
         showProcessingModal.value = false;
         isOrderProcessing.value = false;
@@ -371,22 +552,86 @@ const CheckoutContent = component$(() => {
         }, 80);
         return;
       }
+      if (shouldRecoverExistingOrder({ phase: srState.phase, orderCode: srState.code, convertedCart: srState.convertedCart }) && CartService.token()) {
+        // The order was created but its payment initialisation (or zero-due settlement) failed: it is a real unpaid
+        // order, so show it through the resume view with a retry instead of the form.
+        showProcessingModal.value = false;
+        isOrderProcessing.value = false;
+        await beginResume();
+        return;
+      }
       if (srState.stockConflict) {
         // Someone else took the stock between this shopper's cart and PLACE ORDER:
         // re-read the live cart so the line stops saying "Only N left" and shows
         // its real (sold-out) state. Live read — nothing is cached.
         await refreshCartStock(localCart);
+        if (!current()) return;
       }
       throw new Error(srState.error || 'Checkout failed. Please try again.');
     } catch (error) {
+      if (!current()) return;
       state.error = error instanceof Error ? error.message : 'An unknown error occurred. Please check your information and try again.';
+    } finally {
       showProcessingModal.value = false;
       isOrderProcessing.value = false;
     }
   });
 
-  const onPaymentError$ = $(async (_errorMessage: string) => {
+  // Resume view: classify the order afresh and update the resume view — a decline keeps the controls and shows an
+  // error, a cancelled / unknown / unreadable order removes them, a settled one goes to confirmation.
+  const recoverResumePaymentError = $(async () => {
+    // Controls stay locked (state.loading) until the order status is resolved: a method switch during a slow or failed
+    // status read would start a second payment whose view this recovery then overwrites. A recovery does not bump the
+    // generation: the mounted component stays the one in charge after a decline.
+    const gen = paymentInit.gen;
+    const current = () => isCurrentView(paymentInit, gen);
+    showProcessingModal.value = false;
+    isOrderProcessing.value = false;
+    state.loading = true;
+    try {
+      const outcome = await classifyResumePaymentError({ code: srState.code, receiptToken: srState.receiptToken });
+      // Superseded (the view was replaced or the page was left): the newer view owns the state.
+      if (!current()) return;
+      if (outcome.kind === 'settled') {
+        const rt = outcome.receiptToken ? `?rt=${encodeURIComponent(outcome.receiptToken)}` : '';
+        navigate(`/checkout/confirmation/${outcome.code}${rt}`);
+        return;
+      }
+      if (outcome.kind === 'payable') {
+        srState.paymentError = outcome.message;
+        return;
+      }
+      srState.clientSecret = '';
+      srState.paymentError = null;
+      if (outcome.kind === 'cancelled') {
+        srState.resume = 'cancelled';
+        return;
+      }
+      srState.error = outcome.message;
+      srState.resume = 'error';
+    } catch (e) {
+      // An unexpected failure must not strand the locked, payable-looking view: show the retryable error instead.
+      if (!current()) return;
+      console.error('[Checkout] Resume payment recovery failed:', e);
+      srState.clientSecret = '';
+      srState.paymentError = null;
+      srState.error = "We couldn't confirm your payment status. Please try again.";
+      srState.resume = 'error';
+    } finally {
+      state.loading = false;
+    }
+  });
+
+  const onPaymentError$ = $(async (_errorMessage: string, mountGen?: number) => {
+    // A callback from a payment component that is no longer the current view says nothing about the current one.
+    if (!acceptsMount(paymentInit, mountGen)) return;
+    if (srState.resume !== 'none') {
+      await recoverResumePaymentError();
+      return;
+    }
+    const gen = paymentInit.gen;
     await recoverCheckoutPaymentError({
+      isCurrent: () => isCurrentView(paymentInit, gen),
       isOrderProcessing,
       navigate,
       showProcessingModal,
@@ -395,11 +640,27 @@ const CheckoutContent = component$(() => {
     });
   });
 
-  const onPaymentProcessingChange$ = $(async (isProcessing: boolean) => {
+  // The payment component failed to LOAD (not a decline): no order-state read, nothing to classify — show the retry that
+  // remounts it. The order, its client secret and the selected method stay as they are.
+  const onPaymentInitError$ = $(async (errorMessage: string, mountGen?: number) => {
+    // The component's QRL may run only after the view was replaced (method switch, retry, resume): reject it here.
+    if (!acceptsMount(paymentInit, mountGen)) return;
+    console.warn('[Checkout] payment component failed to initialise:', errorMessage);
+    showProcessingModal.value = false;
+    isOrderProcessing.value = false;
+    state.loading = false;
+    paymentInit.failed = true;
+  });
+
+  const onPaymentProcessingChange$ = $(async (isProcessing: boolean, mountGen?: number) => {
+    // A stale component may not LOCK the current view; releasing a lock is always safe.
+    if (isProcessing && !acceptsMount(paymentInit, mountGen)) return;
     state.loading = isProcessing;
     isOrderProcessing.value = isProcessing;
   });
 
+  // Intentionally NOT generation-guarded: a settled charge means the order is paid, so the shopper is taken to its
+  // confirmation whatever view they are on.
   // NMI charges synchronously (no redirect) — on a settled attempt, navigate
   // straight to confirmation the same way the zero-due 'paid' phase does.
   const onGatewaySuccess$ = $(async () => {
@@ -421,9 +682,14 @@ const CheckoutContent = component$(() => {
       totalConfirmed={totalConfirmed}
       onGatewaySuccess$={onGatewaySuccess$}
       onPaymentError$={onPaymentError$}
+      onPaymentInitError$={onPaymentInitError$}
       onPaymentProcessingChange$={onPaymentProcessingChange$}
       onPlaceOrder$={placeOrder}
+      onResumeMethod$={onResumeMethod$}
+      onResumeRetry$={onResumeRetry$}
+      onStartNewCart$={onStartNewCart$}
       pageLoading={pageLoading}
+      paymentInit={paymentInit}
       paymentMethod={paymentMethod}
       promoExpanded={promoExpanded}
       redeemPoints={redeemPoints}

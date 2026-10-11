@@ -33,7 +33,9 @@ export default component$(() => {
 	const cartState = useCart();
 	const currentOrderLineSignal = useSignal<{ id: string; value: number }>();
 	const isCheckoutView = isCheckoutPage(location.url.toString());
-	const isInEditableUrl = !isCheckoutView;
+	// A converted cart is an order, not a cart: its lines are read-only.
+	const isConverted = cartState.cart.status === 'converted';
+	const isInEditableUrl = !isCheckoutView && !isConverted;
 	const currencyCode = cartState.cart.currency || 'USD';
 
 	const productNameCache = useSignal<Record<string, string>>({});
@@ -145,7 +147,8 @@ export default component$(() => {
 						productSlug.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
 
 					const linePrice = line.lineSubtotal;
-					const isOOS = !isLineAvailable(line);
+					// Availability of an existing order's lines is not a purchase precondition (it excludes the order's own allocation).
+					const isOOS = !isConverted && !isLineAvailable(line);
 					const remaining = remainingQuantity(line);
 					const quantityOpts = qtyOptions(remaining, line.quantity, line.sku);
 					const vLabel = line.options ?? variantLabel(line.name, productName);
@@ -198,11 +201,13 @@ export default component$(() => {
 								</div>
 
 								{/* Stock warning */}
-								<StockWarning
-									line={line}
-									sku={line.sku}
-									onRemove$={handleStockRemove$}
-								/>
+								{!isConverted && (
+									<StockWarning
+										line={line}
+										sku={line.sku}
+										onRemove$={handleStockRemove$}
+									/>
+								)}
 
 								{/* Qty — hidden for OOS */}
 								{!isOOS && (

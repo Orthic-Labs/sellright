@@ -33,6 +33,16 @@ describe('services/customer — native SellRight client', () => {
 		await expect(getMe()).rejects.toThrow();
 	});
 
+	it('getMe and getAddresses treat an empty body (204 / JSON null) as a failed read', async () => {
+		for (const empty of [() => new Response(null, { status: 204 }), () => jsonResponse(200, null)]) {
+			vi.resetModules();
+			vi.stubGlobal('fetch', vi.fn(async () => empty()));
+			const { getMe, getAddresses } = await import('./customer');
+			await expect(getMe()).rejects.toThrow(/Empty auth\/me response/);
+			await expect(getAddresses()).rejects.toThrow(/Empty addresses response/);
+		}
+	});
+
 	it('getOrders carries the server\'s real `total`, not the page length', async () => {
 		const mockedFetch = vi.fn(async () =>
 			jsonResponse(200, {
