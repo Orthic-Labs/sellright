@@ -298,7 +298,7 @@ describe('POST /v1/shop/auth/apple non-authoritative identity', () => {
     expect(norm(rows[0]!)).toBe(norm(rows[1]!));
     expect(rows[0]!.payload.subject).toMatch(/Apple/);
     expect(rows[0]!.payload.text).toMatch(/Apple account/);
-    expect(rows[0]!.payload.text).toMatch(/same browser where you started signing in/);
+    expect(rows[0]!.payload.text).toMatch(/same browser where you started signing in\. If you're reading this on a different device, open this email in the browser where you started\./);
     expect(await customers()).toBe(1);
     expect(await sessions()).toBe(0);
   });

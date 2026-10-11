@@ -182,7 +182,7 @@ describe('POST /v1/shop/auth/google non-authoritative identity', () => {
     expect(rows[0]!.payload.text).toContain('known-f@corp.example'); // names the Google account email
     expect(rows[0]!.payload.text).toMatch(/Google/);
     expect(rows[0]!.payload.text).toMatch(/didn't try to sign in with Google, ignore this email/);
-    expect(rows[0]!.payload.text).toMatch(/Open this link in the same browser where you started signing in\. Starting again sends a new link and replaces this one\./);
+    expect(rows[0]!.payload.text).toMatch(/Open this link in the same browser where you started signing in\. If you're reading this on a different device, open this email in the browser where you started\. Starting again sends a new link and replaces this one\./);
     expect(await customerCount()).toBe(1); // the seeded one only: nothing created for the unknown address
     expect((await byEmail('known-f@corp.example'))?.googleSub).toBeNull();
     expect(await sessionCount()).toBe(0);

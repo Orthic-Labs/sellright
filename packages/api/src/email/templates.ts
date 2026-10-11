@@ -90,7 +90,7 @@ export const federatedLinkConfirm = (store: StoreCtx, data: { url: string; provi
   wrap(store, `Confirm your ${data.providerName} sign-in`,
     `<p>Someone asked to sign in to ${escape(store.name)} with the ${escape(data.providerName)} account <strong>${escape(data.providerEmail)}</strong>. To continue, confirm within ${data.ttlMinutes} minutes:</p>
      <p><a href="${escape(data.url)}" style="display:inline-block;padding:10px 16px;background:${colorsOf(store).button};color:${colorsOf(store).buttonText};text-decoration:none;border-radius:6px">Review and confirm</a></p>
-     <p>Open this link in the same browser where you started signing in. Starting again sends a new link and replaces this one.</p>
+     <p>Open this link in the same browser where you started signing in. If you're reading this on a different device, open this email in the browser where you started. Starting again sends a new link and replaces this one.</p>
      <p>If you didn't try to sign in with ${escape(data.providerName)}, ignore this email — nothing happens unless the link is confirmed.</p>`);
 
 export const staffInvite = (store: StoreCtx, data: { acceptUrl: string; role: string; inviterEmail: string }) =>

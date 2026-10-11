@@ -238,6 +238,8 @@ describe('Google sign-in verification link', () => {
 
 		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(401, { error: { code: 'TOKEN_INVALID', message: 'x' } })));
 		const bad = await confirmFederatedSignIn('t'.repeat(40));
+		expect(bad).toMatchObject({ ok: false, terminal: true });
+		if (!bad.ok) expect(bad.message).toMatch(/^We couldn't confirm this link\. It may have expired, already been used, or been opened in a different browser or device/);
 		expect(bad.ok).toBe(false);
 	});
 });
@@ -250,5 +252,41 @@ describe('federated confirm landing page', () => {
 		const task = /useVisibleTask\$\(\(\) => \{[\s\S]*?\n\t\}\);/.exec(page)![0];
 		expect(task).not.toContain('confirmFederatedSignIn');
 		expect(page.match(/confirmFederatedSignIn\(/g)).toHaveLength(1);
+	});
+});
+
+describe('federated confirm error copy and terminal state', () => {
+	beforeEach(() => vi.resetModules());
+	afterEach(() => vi.unstubAllGlobals());
+
+	it('401 says to go back to the original browser; 409 unverified names both providers; both are terminal', async () => {
+		const { confirmFederatedSignIn } = await import('./google-auth');
+		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(401, { error: { code: 'TOKEN_INVALID', message: 'x' } })));
+		const r401 = await confirmFederatedSignIn('t'.repeat(40));
+		expect(r401).toMatchObject({ ok: false, terminal: true });
+		if (!r401.ok) expect(r401.message).toBe("We couldn't confirm this link. It may have expired, already been used, or been opened in a different browser or device from the one where you started signing in. Go back to that browser and start signing in again; a new link will be sent.");
+
+		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(409, { error: { code: 'EMAIL_TAKEN_UNVERIFIED', message: 'server wording' } })));
+		const r409 = await confirmFederatedSignIn('t'.repeat(40));
+		expect(r409).toMatchObject({ ok: false, terminal: true });
+		if (!r409.ok) expect(r409.message).toBe("An account with this email already exists, but its email address hasn't been verified. Sign in with your password and verify your email first, then try Google or Apple sign-in again.");
+	});
+
+	it('a network failure is not terminal (the button stays so the shopper can retry)', async () => {
+		vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('network down'); }));
+		const { confirmFederatedSignIn } = await import('./google-auth');
+		const r = await confirmFederatedSignIn('t'.repeat(40));
+		expect(r.ok).toBe(false);
+		expect('terminal' in r && r.terminal).toBeFalsy();
+	});
+
+	it('the page swaps Confirm for a primary Back to sign in after a terminal error, and shows a busy spinner instead of a faded button', () => {
+		const page = read('src/routes/sign-in/confirm/index.tsx');
+		expect(page).toMatch(/terminal\.value \? \(\s*<a href="\/sign-in" id="back-to-sign-in" class=\{PRIMARY\}>/);
+		expect(page).toContain('aria-busy={busy.value}');
+		expect(page).toContain('Signing you in…');
+		expect(page).not.toMatch(/\sdisabled=\{|disabled:opacity/);
+		expect(page).toContain('rounded-2xl p-8 shadow-sm'); // same card as /sign-in
+		expect(page).toContain('text-2xl font-bold text-gray-900');
 	});
 });
