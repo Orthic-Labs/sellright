@@ -21,7 +21,7 @@ import { join } from 'node:path';
  * support/flows.ts) and the source, but the first run may need adjustment. A failure of a scenario that states a
  * locked rule is a FINDING to report, not a test defect to weaken away (see the A8 open questions in the plan).
  *
- * Implemented here: 1 (same-document + reload), 2, 3a/3b/3c, 4, 5, 6, 8, 10c, 11 (dynamic), 12, 13 (base), 15, 17 (dynamic). Static scenarios 9 (publisher
+ * Implemented here: 1 (same-document + reload), 2, 3a/3b/3c, 4, 5, 6, 8, 10c, 11 (dynamic), 12, 13 (base), 15, 15b (q-loader + probe-form action headers), 17 (dynamic). Static scenarios 9 (publisher
  * source), 10a/b/d, 12 (static), 14, 17 (structural) live in unit suites that run with `pnpm test`:
  *   packages/api/src/manifest/{stock-hook,no-search-index}.test.ts, packages/storefront/src/services/stock-guards.test.ts.
  * NOT implemented (blocked): 7 (needs an option-group product seed), 16 and 18 (owner decision O1, Rotten product route).
@@ -553,13 +553,131 @@ test('15 every document is private no-store with no CDN cache header, including 
 	for (const path of ['/', brand.shopPath, brand.pdpPath(p.slug), '/search/', '/contact/', '/definitely-not-a-route/']) {
 		const res = await request.get(path);
 		const h = res.headers();
-		expect(h['cache-control'], `${path}: private no-store`).toMatch(/private/);
-		expect(h['cache-control'], `${path}: private no-store`).toMatch(/no-store/);
-		expect(h['cache-control'], `${path}: no shared lifetime`).not.toMatch(/s-maxage|max-age=[1-9]/);
+		expectPrivateNoStore(path, [h['cache-control'] ?? '']);
 		expect(h['cloudflare-cdn-cache-control'], `${path}: no CDN cache header`).toBeUndefined();
 		expect(h['cdn-cache-control'], `${path}: no CDN cache header`).toBeUndefined();
 		if (res.status() < 400) expect(h['x-cache-policy-version'], path).toBeTruthy();
 	}
 	const stock = await request.get('/');
 	expect(stock.headers()['x-route-class']).toBe('stock_bearing');
+});
+
+// ── 15b. client-navigation data requests: private, no-store, one header, no CDN header, no Cache-Tag ─────────
+/** Cache-Control values -> directive name (lowercased) -> argument. Names are compared exactly, so `x-private` is not `private`. */
+function cacheDirectives(values: string[]): Map<string, string> {
+	const out = new Map<string, string>();
+	for (const value of values) {
+		for (const part of value.split(',')) {
+			const [name, ...arg] = part.trim().split('=');
+			if (name) out.set(name.trim().toLowerCase(), arg.join('=').trim().replace(/^"|"$/g, ''));
+		}
+	}
+	return out;
+}
+/** Real `private` and `no-store` directives, and no public, shared or positive freshness lifetime. */
+function expectPrivateNoStore(what: string, cacheControl: string[]) {
+	const d = cacheDirectives(cacheControl);
+	expect(d.has('private'), `${what}: private directive in "${cacheControl.join(' | ')}"`).toBe(true);
+	expect(d.has('no-store'), `${what}: no-store directive in "${cacheControl.join(' | ')}"`).toBe(true);
+	expect(d.has('public'), `${what}: not public`).toBe(false);
+	expect(d.has('s-maxage'), `${what}: no s-maxage`).toBe(false);
+	const maxAge = d.get('max-age');
+	expect(maxAge === undefined || Number(maxAge) === 0, `${what}: no positive max-age (${maxAge})`).toBe(true);
+}
+/** One raw Cache-Control line, no CDN/surrogate header, no Cache-Tag (counted from raw header lines, not a joined value). */
+function expectNoStoreOnly(what: string, headers: Array<{ name: string; value: string }>) {
+	const lines = (name: string) => headers.filter((h) => h.name.toLowerCase() === name).map((h) => h.value);
+	expect(lines('cache-control'), `${what}: exactly one Cache-Control`).toHaveLength(1);
+	expectPrivateNoStore(what, lines('cache-control'));
+	for (const name of ['cdn-cache-control', 'cloudflare-cdn-cache-control', 'surrogate-control', 'expires', 'cache-tag']) expect(lines(name), `${what}: no ${name}`).toEqual([]);
+}
+
+test.describe('15b. client navigation data requests', () => {
+	test('15b-0 Cache-Control checks match exact directive names, not substrings', () => {
+		expect(() => expectPrivateNoStore('x', ['x-private, x-no-store'])).toThrow();
+		expect(() => expectPrivateNoStore('x', ['private, x-no-store'])).toThrow();
+		expect(() => expectPrivateNoStore('x', ['private, no-store, max-age=60'])).toThrow();
+		expect(() => expectPrivateNoStore('x', ['no-store, private, s-maxage=0'])).toThrow();
+		expect(() => expectPrivateNoStore('x', [''])).toThrow();
+		expectPrivateNoStore('x', ['Private, No-Store, max-age=0']);
+	});
+
+	test('15b-1 every q-loader request the browser really makes (shop, then a PDP, no reload) is private no-store', async ({ apiProxyPage: page, api }) => {
+		const p = await createStockProduct(api, 'loaderhdr', 5);
+		await waitForPublishedProduct(p.slug, true);
+		// Capture BEFORE the first navigation and keep it attached to the end of the test: the header's shop Link prefetches
+		// loader data on the homepage, and the router may reuse that response. URLs are taken from the responses the browser
+		// triggers; none is built here. The PDP's own loader is identified by the PDP route path.
+		const pdpPrefix = brand.pdpPath(p.slug);
+		const loaderUnder = (url: string, prefix: string) => {
+			const { pathname } = new URL(url);
+			return pathname.startsWith(prefix) && /\/q-loader-[^/]*\.json$/.test(pathname);
+		};
+		const checks: Array<Promise<string | null>> = []; // each resolves to a failure message, or null: no unhandled rejection
+		const seen = { shop: [] as string[], pdp: [] as string[] };
+		const inflight = new Set<string>();
+		page.on('request', (r) => {
+			if (loaderUnder(r.url(), '/')) inflight.add(r.url());
+		});
+		const settle = (r: { url(): string }) => void inflight.delete(r.url());
+		page.on('requestfailed', settle);
+		page.on('requestfinished', settle);
+		page.on('response', (r) => {
+			if (loaderUnder(r.url(), pdpPrefix)) seen.pdp.push(r.url());
+			else if (loaderUnder(r.url(), brand.shopPath)) seen.shop.push(r.url());
+			else return; // other loaders (home, header data) are outside this scenario
+			checks.push(
+				r.headersArray().then(
+					(headers) => {
+						try {
+							expect(r.status(), r.url()).toBe(200);
+							expectNoStoreOnly(r.url(), headers);
+							return null;
+						} catch (e) {
+							return String(e instanceof Error ? e.message : e);
+						}
+					},
+					(e) => `${r.url()}: headers unreadable: ${String(e)}`
+				)
+			);
+		});
+		await page.goto('/');
+		await page.waitForLoadState('networkidle');
+		await markDocument(page, 'doc-loader');
+		await spaToShop(page);
+		await spaToProductFromShop(page, p.slug);
+		expect(await sameDocument(page), 'must be client-side navigation, not a reload').toBe('doc-loader');
+		// Qwik updates history before loading the destination: the URL change and networkidle prove nothing about the PDP loader.
+		await expect.poll(() => seen.shop.length, { message: 'shop loader response must be observed' }).toBeGreaterThanOrEqual(1);
+		await expect.poll(() => seen.pdp.length, { message: `PDP loader response under ${pdpPrefix} must be observed (none: the router stopped using loader data URLs, or the capture is wrong)`, timeout: 20_000 }).toBeGreaterThanOrEqual(1);
+		await expectPurchasable(page); // destination rendered from that data
+		await page.waitForLoadState('networkidle');
+		// drain to a quiet boundary: no loader request in flight and no check still being added
+		let drained = 0;
+		await expect
+			.poll(async () => {
+				const batch = checks.slice(drained);
+				drained += batch.length;
+				await Promise.all(batch);
+				return inflight.size === 0 && drained === checks.length;
+			}, { message: 'loader requests must all complete' })
+			.toBe(true);
+		// every response observed up to here (the listeners stay attached), not a snapshot taken mid-flight
+		expect((await Promise.all(checks)).filter((m) => m !== null)).toEqual([]);
+	});
+
+	test('15b-2 a routeAction$ POST the browser really makes (probe form) is private no-store', async ({ apiProxyPage: page }) => {
+		// Same real form platform-reexport.spec.ts submits. The probe answers 404 unless the storefront server runs with
+		// E2E_PLATFORM_PROBE=1; support/run-parity.sh sets it for runner and server. No skip: a disabled probe fails here.
+		await page.goto('/__platform-reexport-probe/');
+		await expect(page.getByTestId('probe-loader'), 'probe disabled: run with E2E_PLATFORM_PROBE=1 (support/run-parity.sh does)').toHaveText('probe-loader-value');
+		await expect(page.getByTestId('probe-resumed')).toHaveText('yes', { timeout: 20_000 });
+		await page.getByTestId('probe-word').fill('hello');
+		const actionResponse = page.waitForResponse((r) => r.request().method() === 'POST' && r.url().includes('/__platform-reexport-probe/'));
+		await page.getByTestId('probe-submit').click();
+		const res = await actionResponse;
+		expect(res.status()).toBe(200);
+		expectNoStoreOnly(res.url(), await res.headersArray());
+		await expect(page.getByTestId('probe-result')).toHaveText('hello');
+	});
 });
