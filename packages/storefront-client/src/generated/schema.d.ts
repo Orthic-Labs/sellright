@@ -7069,6 +7069,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/payment-reconciliation/effects/{id}/approve-issuance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Human approval of a held order-edit issuance: records the approval (original decision untouched), issues, and closes the review task */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Approved (or already approved) */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description true when the effect already carried an approval; nothing further was issued by this call */
+                            alreadyApproved: boolean;
+                            /** @enum {boolean} */
+                            approved: true;
+                            /** Format: uuid */
+                            effectId: string;
+                            /** Format: uuid */
+                            orderId: string;
+                            /** @description The effect status after the call (done once issued) */
+                            status: string;
+                        };
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Agents, read-only roles and users without the refunds permission are refused */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Effect not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description EFFECT_NOT_HELD: not an order-edit effect that is terminal on an issuance hold */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/admin/payment-reconciliation/reservations/{id}/override-release": {
         parameters: {
             query?: never;

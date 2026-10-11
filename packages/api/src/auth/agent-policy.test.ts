@@ -24,6 +24,7 @@ describe('agent deny set', () => {
     expect(agentDenied('POST', '/v1/admin/customers/:id/loyalty/adjust')).toBe('credit');
     expect(agentDenied('POST', '/v1/admin/loyalty/ledger/:id/reverse')).toBe('credit');
     expect(agentDenied('POST', '/v1/admin/licenses')).toBe('entitlement');
+    expect(agentDenied('POST', '/v1/admin/payment-reconciliation/effects/:id/approve-issuance')).toBe('entitlement');
     expect(agentDenied('POST', '/v1/admin/apps/releases')).toBe('release');
     expect(agentDenied('POST', '/v1/admin/staff')).toBe('identity');
     expect(agentDenied('PUT', '/v1/admin/staff/:adminUserId/permissions')).toBe('identity');

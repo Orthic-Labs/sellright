@@ -51,7 +51,10 @@ mutations and `done` commit together. Retries `least(2^attempts*30s, 1h)`, termi
 precondition that cannot hold, plus an `admin_review` row; `terminal` is admin-visible (audit row
 `effect_terminal`, `effect.terminal` webhook event, `effects` on `GET /v1/admin/payment-reconciliation`, retry via
 `POST /v1/admin/payment-reconciliation/effects/:id/retry`). "Not ready" retries (renewal before its first
-invoice) are bounded by a 72 h horizon instead of the attempt budget. External handlers use the effect id as the
+invoice) are bounded by a 72 h horizon instead of the attempt budget. An `edit_reconcile` effect held terminal
+(`EDIT_PRINCIPAL_UNRESOLVED` / `AGENT_ISSUANCE_REFUSED`) is not released by retry; a human approves it via
+`POST /v1/admin/payment-reconciliation/effects/:id/approve-issuance` (writes `payload.issuanceApprovedBy` and an
+`edit_issuance_approved` audit row, issues in the same transaction, and sets `resolution` on the `admin_review` task). Issuance of edit-added licences also requires the current order to be fully funded on every execution (approved or not): while an amount is due the effect retries as `EDIT_BALANCE_DUE`, the approval stays on the payload and the review task stays open. The approval takes the effect row `NOWAIT` after the order set and restarts on contention (409 `EFFECT_BUSY` when the budget runs out), so it never waits for the worker's effect lock while holding the order set. External handlers use the effect id as the
 provider idempotency key and write the receipt in the `done` transaction.
 
 Runs from the API scheduler (`pending-effects` leader job, 15 s) and as `node dist/scripts/effects-worker.js [--once]`
