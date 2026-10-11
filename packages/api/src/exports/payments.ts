@@ -7,7 +7,12 @@ export {
 } from '../payments/policy/host.js';
 export type { ReservationRow } from '../payments/reservation.js';
 export type {
-  AuthorizeInvoiceEffectInput, BeforeCaptureInput, EntitlementReversalInput, EntitlementReversalReason, BeforeCaptureResult, BeforePaymentAttemptInput, BeforePaymentAttemptResult,
-  InvoiceCycle, InvoiceEffectDecision, PaymentPolicy, PaymentProvider, PaymentPurpose, PolicyOrder, PolicyVeto, ReservationRequest,
+  AuthorizeInvoiceEffectInput, BeforeCaptureInput, BeforeCaptureResult, BeforePaymentAttemptInput,
+  BeforePaymentAttemptResult, CheckoutEligibilityInput, CheckoutEligibilityResult, CheckoutExtensionSchema,
+  CheckoutFingerprintBasis, CheckoutLegacyFingerprintInput, CheckoutLine, CheckoutOrderInput, CheckoutOrderResult,
+  CheckoutPriceAdjustment, CheckoutPromotionReplacement, CheckoutRefusal, CheckoutReplayInput, CheckoutReplayOrigin,
+  CheckoutReplayRefusal, CheckoutRequestIntent, InvoiceCycle, InvoiceEffectDecision, PaymentPolicy, PaymentProvider,
+  PaymentPurpose, PolicyCustomer, PolicyOrder, PolicyVeto, ReservationRequest, EntitlementReversalInput,
+  EntitlementReversalReason,
   ReservationTransition, RevalidateForIssuanceInput, RevalidateForIssuanceResult, SettlementResponseInput, SettlementResponseOverride,
 } from '../payments/policy/types.js';
