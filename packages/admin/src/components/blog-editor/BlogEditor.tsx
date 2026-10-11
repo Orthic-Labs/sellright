@@ -94,7 +94,7 @@ export default function BlogEditor({ value, onChange }: Props) {
 
       {urlMode && !source && (
         <div className="flex flex-wrap items-center gap-2 border-b border-line px-2 py-1.5">
-          <input autoFocus className="input !w-auto min-w-[220px] flex-1" type="url" placeholder={urlMode === 'image' ? 'https://…/image.jpg' : 'https://…'}
+          <input autoFocus className="input w-auto! min-w-[220px] flex-1" type="url" placeholder={urlMode === 'image' ? 'https://…/image.jpg' : 'https://…'}
             aria-label={urlMode === 'image' ? 'Image URL' : 'Link URL'} value={url}
             onChange={(e) => { setUrl(e.target.value); setUrlError(''); }}
             onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); applyUrl(); } if (e.key === 'Escape') setUrlMode(null); }} />
@@ -105,7 +105,7 @@ export default function BlogEditor({ value, onChange }: Props) {
       )}
 
       {source
-        ? <textarea className="block w-full min-h-[240px] resize-y bg-transparent p-3 font-mono text-sm outline-none" aria-label="Post body HTML" value={html}
+        ? <textarea className="block w-full min-h-[240px] resize-y bg-transparent p-3 font-mono text-sm outline-hidden" aria-label="Post body HTML" value={html}
             onChange={(e) => { setHtml(e.target.value); onChange(e.target.value); }} />
         : <EditorContent editor={editor} />}
     </div>

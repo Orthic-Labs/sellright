@@ -184,7 +184,7 @@ export default function OrderDetailPage() {
 
       <div className="grid lg:grid-cols-3 gap-5">
         {/* Left: items + actions + timeline */}
-        <div className="lg:col-span-2 space-y-5">
+        <div className="lg:col-span-2 stack-y-5">
           {editing && <OrderEditPanel code={o.code} currency={cur} initialAddress={pendingAddress} onClose={() => { setEditing(false); setPendingAddress(null); }} onCommitted={afterEdit} />}
           <EditHistory code={o.code} currency={cur} payments={o.payments} onChanged={afterEdit} />
           {!editing && (<FormSection title="Items" description={`${o.lines.filter((l) => l.quantity > 0).length} line${o.lines.filter((l) => l.quantity > 0).length === 1 ? '' : 's'} on this order`}>
@@ -204,7 +204,7 @@ export default function OrderDetailPage() {
                 ))}
               </tbody>
             </table>
-            <div className="space-y-1 text-sm pt-2">
+            <div className="stack-y-1 text-sm pt-2">
               <Row label="Subtotal" value={money(o.subtotal, cur)} />
               {o.discountTotal > 0 && <Row label="Discount" value={`− ${money(o.discountTotal, cur)}`} />}
               <Row label={o.shippingMethodName ? `Shipping (${o.shippingMethodName})` : 'Shipping'} value={money(o.shippingTotal, cur)} />
@@ -224,7 +224,7 @@ export default function OrderDetailPage() {
               : o.state === 'PendingPayment' ? 'Order is awaiting payment.' : `Order is ${o.state.toLowerCase()}; no fulfillment actions.`}
           >
             {canFulfill && unfulfilledLines.length > 0 ? (
-              <div className="space-y-3">
+              <div className="stack-y-3">
                 <table className="w-full">
                   <thead><tr><th className="th">Line</th><th className="th text-center" style={{ width: '9rem' }}>Ship qty</th></tr></thead>
                   <tbody>
@@ -283,7 +283,7 @@ export default function OrderDetailPage() {
             )}
 
             {o.fulfillments.length > 0 && (
-              <div className="pt-2 border-t border-gray-100 space-y-2">
+              <div className="pt-2 border-t border-gray-100 stack-y-2">
                 {o.fulfillments.map((f) => {
                   const loc = o.locations.find((l) => l.id === f.locationId);
                   return (
@@ -305,7 +305,7 @@ export default function OrderDetailPage() {
 
           {/* Timeline (audit events + internal notes, same feed) */}
           <FormSection title="Timeline" description="Recent activity for this order, including staff-only notes">
-            <div className="space-y-2">
+            <div className="stack-y-2">
               <div className="flex gap-2">
                 <label className="sr-only" htmlFor="internal-note">Add an internal note</label>
                 <input
@@ -318,7 +318,7 @@ export default function OrderDetailPage() {
                 </button>
               </div>
               {o.events.length > 0 && (
-                <ul className="space-y-2 pt-1">
+                <ul className="stack-y-2 pt-1">
                   {o.events.map((e) => (
                     <li key={e.id} className="flex items-start gap-2 text-sm">
                       <span className={`mt-1.5 h-1.5 w-1.5 rounded-full shrink-0 ${e.action === 'note' ? 'bg-brand' : 'bg-gray-300'}`} />
@@ -343,7 +343,7 @@ export default function OrderDetailPage() {
         </div>
 
         {/* Right: customer + payment + refund + danger */}
-        <div className="space-y-5">
+        <div className="stack-y-5">
           <FormSection title="Customer" description={o.customer ? 'Linked to this store' : 'Guest checkout'}>
             {o.customer ? (
               <Link to={`/customers/${o.customer.id}`} className="text-sm text-brand hover:underline">
@@ -372,7 +372,7 @@ export default function OrderDetailPage() {
 
           {canRefund && (
             <FormSection title="Refund" description="Select lines to refund specific items (with per-line restock), or leave everything unchecked to refund the full remaining balance.">
-              <div className="space-y-2">
+              <div className="stack-y-2">
                 {o.lines.filter((l) => unrefunded(l) > 0).map((l) => {
                   const max = unrefunded(l);
                   return (
@@ -420,7 +420,7 @@ export default function OrderDetailPage() {
               </div>
 
               {o.refunds.length > 0 && (
-                <div className="pt-3 mt-1 border-t border-gray-100 space-y-2">
+                <div className="pt-3 mt-1 border-t border-gray-100 stack-y-2">
                   {o.refunds.map((r) => (
                     <div key={r.id} className="text-xs text-gray-500">
                       <div className="flex items-center justify-between">

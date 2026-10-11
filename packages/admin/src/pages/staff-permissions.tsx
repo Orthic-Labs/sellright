@@ -93,7 +93,7 @@ export function PermissionsMatrix({ member, onSave }: { member: StaffMember; onS
           )}
         </button>
       ) : (
-        <div className="mt-2 space-y-2 border border-gray-100 rounded-lg p-3 bg-gray-50">
+        <div className="mt-2 stack-y-2 border border-gray-100 rounded-lg p-3 bg-gray-50">
           <p className="text-xs font-medium text-gray-600 mb-1">Per-action permissions</p>
           {member.kind === 'agent' && (
             <p className="text-xs text-gray-500">Grants apply, but agents can never delete, cancel, refund, or manage staff — see Agent access.</p>

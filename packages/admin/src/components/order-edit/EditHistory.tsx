@@ -54,7 +54,7 @@ export function EditHistory({ code, currency, payments, onChanged }: Props) {
   return (
     <FormSection title="Edit history">
       {dialog}
-      <ul className="divide-y divide-gray-100">
+      <ul className="rule-y rule-gray-100">
         {history.map((h) => {
           const failed = h.settlement?.type === 'refund_now' && h.settlement.status === 'failed';
           const label = statusLabel(h.settlement);

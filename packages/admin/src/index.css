@@ -1,8 +1,169 @@
 @import './fonts.css';
 @import './theme-tokens.css';
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* Tailwind 4, CSS-first. `source(none)` + explicit @source keeps the v3 scan scope
+   (index.html + src ts/tsx only — no e2e/docs/config files). */
+@import 'tailwindcss' source(none);
+@source '../index.html';
+@source './**/*.{ts,tsx}';
+
+/* v3 behaviour kept: `.dark` class toggles dark mode (theme.tsx + index.html boot script). */
+@custom-variant dark (&:where(.dark, .dark *));
+/* v3 behaviour kept: hover styles apply on touch devices too (v4 gates them behind hover:hover). */
+@custom-variant hover (&:hover);
+@custom-variant group-hover (&:is(:where(.group):hover *));
+
+/* Colours are all driven by CSS variables in theme-tokens.css → runtime theme + dark swap.
+   `inline` makes utilities emit rgb(var(--x)) directly so the variable resolves on the element
+   (not frozen at :root); opacity modifiers (bg-brand/20) still work via color-mix. */
+@theme inline {
+  --color-ink: rgb(var(--text));
+  --color-muted: rgb(var(--text-muted));
+  --color-subtle: rgb(var(--text-subtle));
+  --color-canvas: rgb(var(--bg));
+  --color-surface: rgb(var(--surface));
+  --color-surface-2: rgb(var(--surface-2));
+  /* Always-dark outer chrome (sidebar). Constant across light/dark mode. */
+  --color-shell: rgb(var(--shell-bg));
+  --color-shell-surface: rgb(var(--shell-surface));
+  --color-shell-text: rgb(var(--shell-text));
+  --color-shell-muted: rgb(var(--shell-muted));
+  --color-shell-border: rgb(var(--shell-border));
+  --color-shell-active: rgb(var(--shell-active-bg));
+  --color-shell-active-text: rgb(var(--shell-active-text));
+  --color-line: rgb(var(--border));
+  --color-line-strong: rgb(var(--border-strong));
+  /* `brand` is repointed to the active theme accent, so every existing
+     bg-brand / text-brand / bg-brand-light / hover:bg-brand-hover re-themes. */
+  --color-brand: rgb(var(--accent));
+  --color-brand-hover: rgb(var(--accent-hover));
+  --color-brand-light: rgb(var(--accent-soft));
+  --color-brand-ring: rgb(var(--ring));
+  --color-brand-on: rgb(var(--on-accent));
+  --color-accent: rgb(var(--accent));
+  --color-accent-hover: rgb(var(--accent-hover));
+  --color-accent-soft: rgb(var(--accent-soft));
+  --color-accent-on: rgb(var(--on-accent));
+  --color-success: rgb(var(--success));
+  --color-success-soft: rgb(var(--success-soft));
+  --color-warning: rgb(var(--warning));
+  --color-warning-soft: rgb(var(--warning-soft));
+  --color-danger: rgb(var(--danger));
+  --color-danger-soft: rgb(var(--danger-soft));
+  --color-info: rgb(var(--info));
+  --color-info-soft: rgb(var(--info-soft));
+  /* Remap the gray scale to the per-theme neutral ramp (inverts in dark),
+     so existing text-gray, border-gray and bg-gray utilities theme for free. */
+  --color-gray-50: rgb(var(--gray-50));
+  --color-gray-100: rgb(var(--gray-100));
+  --color-gray-200: rgb(var(--gray-200));
+  --color-gray-300: rgb(var(--gray-300));
+  --color-gray-400: rgb(var(--gray-400));
+  --color-gray-500: rgb(var(--gray-500));
+  --color-gray-600: rgb(var(--gray-600));
+  --color-gray-700: rgb(var(--gray-700));
+  --color-gray-800: rgb(var(--gray-800));
+  --color-gray-900: rgb(var(--gray-900));
+}
+
+@theme {
+  /* v3 look kept: v3 text-* utilities set a fixed rem line-height; v4 uses a unitless ratio, which children with
+     their own font size (table headers, 11px labels) inherit as a smaller computed height. Pin the v3 values. */
+  --text-xs--line-height: 1rem;
+  --text-sm--line-height: 1.25rem;
+  --text-base--line-height: 1.5rem;
+  --text-lg--line-height: 1.75rem;
+  --text-xl--line-height: 1.75rem;
+  --text-2xl--line-height: 2rem;
+  --text-3xl--line-height: 2.25rem;
+  --text-4xl--line-height: 2.5rem;
+
+  --font-sans: 'Hanken Grotesk', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-display: 'Schibsted Grotesk', 'Hanken Grotesk', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --shadow-card: 0 1px 2px rgba(16,24,40,0.04), 0 1px 3px rgba(16,24,40,0.05);
+  --shadow-card-hover: 0 2px 4px rgba(16,24,40,0.06), 0 6px 14px rgba(16,24,40,0.08);
+  --shadow-popover: 0 4px 12px rgba(16,24,40,0.10), 0 2px 4px rgba(16,24,40,0.06);
+  --shadow-modal: 0 18px 48px rgba(16,24,40,0.18), 0 6px 14px rgba(16,24,40,0.08);
+
+  --animate-shimmer: shimmer 1.5s infinite;
+  --animate-drawer-in: drawer-in 0.18s ease-out;
+  --animate-fade-in: fade-in 0.12s ease-out;
+
+  @keyframes shimmer { 100% { transform: translateX(100%); } }
+  @keyframes drawer-in { 0% { transform: translateX(-100%); } 100% { transform: translateX(0); } }
+  @keyframes fade-in { 0% { opacity: 0; } 100% { opacity: 1; } }
+
+  /* Tailwind 3 hex values for the stock-palette colours the app uses directly
+     (v4 ships oklch variants that render slightly differently). */
+  --color-red-50: #fef2f2;
+  --color-red-100: #fee2e2;
+  --color-red-200: #fecaca;
+  --color-red-500: #ef4444;
+  --color-red-600: #dc2626;
+  --color-red-700: #b91c1c;
+  --color-red-800: #991b1b;
+  --color-red-900: #7f1d1d;
+  --color-amber-50: #fffbeb;
+  --color-amber-200: #fde68a;
+  --color-amber-800: #92400e;
+  --color-amber-900: #78350f;
+  --color-emerald-800: #065f46;
+  --color-emerald-900: #064e3b;
+  --color-blue-900: #1e3a8a;
+  --color-indigo-600: #4f46e5;
+}
+
+/* v3 preflight compatibility (v4 changed these defaults). */
+/* v3 look kept: v3's space-x/space-y/divide-y put the margin or border on every child after the first
+   (`> :not([hidden]) ~ :not([hidden])`, margin-top / border-top). v4 moved them to every child but the last
+   (margin-bottom / border-bottom), which changes spacing wherever a hidden or conditional child, a child with its
+   own margin, or margin collapsing is involved. These utilities keep the v3 rule, including the zero it set on the opposite side (which overrode a child's own mb-*); the app uses them instead of the
+   built-in names. */
+@utility stack-y-* {
+  & > :not([hidden]) ~ :not([hidden]) { margin-top: calc(var(--spacing) * --value(number)); margin-bottom: 0; }
+}
+@utility stack-x-* {
+  & > :not([hidden]) ~ :not([hidden]) { margin-left: calc(var(--spacing) * --value(number)); margin-right: 0; }
+}
+@utility rule-gray-100 {
+  & > :not([hidden]) ~ :not([hidden]) { border-color: rgb(var(--gray-100)); }
+}
+@utility rule-line {
+  & > :not([hidden]) ~ :not([hidden]) { border-color: rgb(var(--border)); }
+}
+@utility rule-y {
+  & > :not([hidden]) ~ :not([hidden]) { border-top-width: 1px; border-bottom-width: 0; border-top-style: solid; }
+}
+
+@layer base {
+  /* v3 look kept: Tailwind 4's preflight zeroes the browser's padding inside date/time inputs and changes their
+     layout, which makes them 2px shorter. Revert those to the browser defaults, as in v3. */
+  ::-webkit-datetime-edit, ::-webkit-datetime-edit-fields-wrapper, ::-webkit-datetime-edit-year-field,
+  ::-webkit-datetime-edit-month-field, ::-webkit-datetime-edit-day-field, ::-webkit-datetime-edit-hour-field,
+  ::-webkit-datetime-edit-minute-field, ::-webkit-datetime-edit-second-field, ::-webkit-datetime-edit-millisecond-field,
+  ::-webkit-datetime-edit-meridiem-field { padding: revert; display: revert; }
+  ::-webkit-date-and-time-value { min-height: revert; text-align: revert; }
+
+  /* v3 default border colour was gray-200 (theme borderColor.DEFAULT); v4 is currentColor. */
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: rgb(var(--gray-200));
+  }
+  /* v3 placeholder colour was gray-400; v4 is currentColor at 50%. */
+  input::placeholder,
+  textarea::placeholder {
+    color: rgb(var(--gray-400));
+  }
+  /* v3 buttons showed the pointer cursor; v4 uses default. */
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+}
 
 html, body, #root { height: 100%; }
 :root { color-scheme: light; }
@@ -29,15 +190,15 @@ body { @apply bg-canvas text-ink antialiased font-sans; }
 @layer components {
   .card { @apply bg-surface border border-line rounded-xl shadow-card; }
   .panel { @apply bg-surface border border-line rounded-xl; }
-  .card-interactive { @apply card transition-[box-shadow,transform] duration-150 hover:shadow-card-hover hover:-translate-y-px cursor-pointer; }
+  .card-interactive { @apply bg-surface border border-line rounded-xl shadow-card transition-[box-shadow,transform,translate] duration-150 hover:shadow-card-hover hover:-translate-y-px cursor-pointer; }
 
-  .btn { @apply inline-flex items-center justify-center gap-2 rounded-lg text-sm font-medium px-3.5 py-2 transition-[background-color,box-shadow,transform,border-color] duration-150 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100; }
-  .btn-primary { @apply btn bg-accent text-accent-on shadow-[0_1px_2px_rgba(0,0,0,0.08)] hover:bg-accent-hover; }
-  .btn-ghost { @apply btn bg-surface border border-line-strong text-ink hover:bg-surface-2; }
-  .btn-danger { @apply btn bg-surface border border-danger text-danger hover:bg-danger-soft; }
+  .btn { @apply inline-flex items-center justify-center gap-2 rounded-lg text-sm font-medium px-3.5 py-2 transition-[background-color,box-shadow,transform,scale,border-color] duration-150 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100; }
+  .btn-primary { @apply inline-flex items-center justify-center gap-2 rounded-lg text-sm font-medium px-3.5 py-2 transition-[background-color,box-shadow,transform,scale,border-color] duration-150 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100 bg-accent text-accent-on shadow-[0_1px_2px_rgba(0,0,0,0.08)] hover:bg-accent-hover; }
+  .btn-ghost { @apply inline-flex items-center justify-center gap-2 rounded-lg text-sm font-medium px-3.5 py-2 transition-[background-color,box-shadow,transform,scale,border-color] duration-150 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100 bg-surface border border-line-strong text-ink hover:bg-surface-2; }
+  .btn-danger { @apply inline-flex items-center justify-center gap-2 rounded-lg text-sm font-medium px-3.5 py-2 transition-[background-color,box-shadow,transform,scale,border-color] duration-150 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100 bg-surface border border-danger text-danger hover:bg-danger-soft; }
   .btn-sm { @apply px-2.5 py-1.5 text-xs; }
 
-  .input { @apply w-full rounded-lg border border-line-strong bg-surface text-ink px-3 py-2 text-sm outline-none transition-shadow focus:border-accent focus:ring-2 focus:ring-accent/35; }
+  .input { @apply w-full rounded-lg border border-line-strong bg-surface text-ink px-3 py-2 text-sm outline-hidden transition-shadow focus:border-accent focus:ring-2 focus:ring-accent/35; }
   .input-invalid { @apply border-danger focus:border-danger focus:ring-danger/30; }
   .label { @apply block text-xs font-medium text-muted mb-1; }
 
@@ -47,14 +208,17 @@ body { @apply bg-canvas text-ink antialiased font-sans; }
   .row-link { @apply hover:bg-surface-2 cursor-pointer transition-colors; }
 
   .menu-item { @apply flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-left text-ink hover:bg-surface-2; }
-  .menu-item-danger { @apply menu-item text-danger hover:bg-danger-soft; }
+  .menu-item-danger { @apply flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-left text-danger hover:bg-danger-soft; }
 }
 
 @layer utilities {
-  .skeleton { @apply relative overflow-hidden bg-surface-2 rounded; }
+  .skeleton { @apply relative overflow-hidden bg-surface-2 rounded-sm; }
   .skeleton::after {
     content: '';
-    @apply absolute inset-0 -translate-x-full animate-shimmer;
+    @apply absolute inset-0 animate-shimmer;
+    /* v3 `-translate-x-full` was `transform`; v4 uses the `translate` property, which would
+       halve the shimmer sweep (keyframes animate `transform`). Keep the explicit transform. */
+    transform: translateX(-100%);
     background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.15), transparent);
   }
 }

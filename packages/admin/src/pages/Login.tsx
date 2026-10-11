@@ -37,10 +37,10 @@ export default function Login() {
     <div className="h-full grid place-items-center bg-[#f1f1f1] p-4">
       <div className="w-full max-w-sm">
         <div className="flex items-center justify-center gap-2 mb-6">
-          <div className="h-7 w-7 rounded bg-brand" />
+          <div className="h-7 w-7 rounded-sm bg-brand" />
           <span className="text-lg font-semibold tracking-tight">SellRight</span>
         </div>
-        <form onSubmit={submit} className="card p-6 space-y-4">
+        <form onSubmit={submit} className="card p-6 stack-y-4">
           <div>
             <h1 className="text-base font-semibold">Sign in</h1>
             <p className="text-sm text-gray-500">Manage your stores</p>

@@ -62,12 +62,12 @@ export function CustomerLoyalty({ customerId }: { customerId: string }) {
       description={data.enabled ? 'Balance is the sum of the ledger below.' : 'Points program is off — balances are kept.'}
       actions={!adj ? <button className="btn-ghost text-xs" onClick={() => setAdj({ points: '', reason: '' })}>Adjust</button> : undefined}
     >
-      <div className="text-sm space-y-1 mb-3">
+      <div className="text-sm stack-y-1 mb-3">
         <div><span className="text-gray-500">Available:</span> <span className="font-medium tnum">{data.available.toLocaleString()}</span> <span className="text-gray-500">({money(data.availableValue, cur)})</span></div>
         {data.pendingExpiry > 0 && <div className="text-warning">{data.pendingExpiry.toLocaleString()} points expired, written off on next use</div>}
       </div>
       {adj && (
-        <form className="space-y-2 mb-3" onSubmit={(e) => { e.preventDefault(); if (adjValid) adjust.mutate(); }}>
+        <form className="stack-y-2 mb-3" onSubmit={(e) => { e.preventDefault(); if (adjValid) adjust.mutate(); }}>
           <Field label="Points (+ to add, − to remove)"><input className="input" inputMode="numeric" value={adj.points} onChange={(e) => setAdj({ ...adj, points: e.target.value })} autoFocus /></Field>
           <Field label="Reason (recorded in the activity log)"><input className="input" value={adj.reason} onChange={(e) => setAdj({ ...adj, reason: e.target.value })} /></Field>
           {adjust.error && <InlineAlert tone="critical">{(adjust.error as Error).message}</InlineAlert>}

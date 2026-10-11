@@ -108,7 +108,7 @@ export default function ReturnsPage() {
                             <label className="flex items-center gap-1.5 text-sm text-gray-600 cursor-pointer">
                               <input
                                 type="checkbox"
-                                className="rounded border-gray-300"
+                                className="rounded-sm border-gray-300"
                                 checked={approving.restock}
                                 onChange={(e) =>
                                   setApproving({ id: r.id, restock: e.target.checked })

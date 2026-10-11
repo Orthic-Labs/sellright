@@ -79,7 +79,7 @@ function MultiplierEditor({ form, setForm }: { form: Form; setForm: (f: Form) =>
       <div className="mt-2">
         <input className="input" placeholder="Search a product to add" value={q} onChange={(e) => setQ(e.target.value)} />
         {found && q.trim().length >= 2 && (
-          <ul className="border border-gray-200 rounded mt-1 divide-y divide-gray-100">
+          <ul className="border border-gray-200 rounded-sm mt-1 rule-y rule-gray-100">
             {found.items.length === 0 && <li className="px-3 py-2 text-sm text-gray-500">No matches</li>}
             {found.items.filter((p) => !form.productMultipliers.some((m) => m.productId === p.id)).map((p) => (
               <li key={p.id}>

@@ -37,7 +37,7 @@ export function FormSection({ title, description, children, actions, id }: {
         <h2 className="text-sm font-semibold">{title}</h2>
         {description && <p className="mt-0.5 text-xs text-gray-500">{description}</p>}
       </div>
-      <div className="px-5 py-4 space-y-4">{children}</div>
+      <div className="px-5 py-4 stack-y-4">{children}</div>
       {actions && <div className="flex items-center justify-end gap-2 border-t border-gray-100 px-5 py-3">{actions}</div>}
     </section>
   );

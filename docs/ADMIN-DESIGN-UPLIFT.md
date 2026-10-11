@@ -8,7 +8,7 @@ The admin is **not** "pieced together" — it's a competent, Shopify-Polaris-ins
 
 ## What I changed (shared layer — propagates to every screen)
 
-All in `packages/admin/tailwind.config.js`, `packages/admin/src/index.css`, and `packages/admin/src/components/ui.tsx`:
+All in `packages/admin/src/index.css` (formerly also `tailwind.config.js`), and `packages/admin/src/components/ui.tsx`:
 
 | Change | Before | After | Why |
 |---|---|---|---|

@@ -37,7 +37,7 @@ export default function Blog() {
       } />
 
       {draft && (
-        <div className="card p-4 mb-5 space-y-3 max-w-3xl">
+        <div className="card p-4 mb-5 stack-y-3 max-w-3xl">
           <div><label className="label">Title</label><input className="input" value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} /></div>
           <div><label className="label">Excerpt</label><input className="input" value={draft.excerpt} onChange={(e) => setDraft({ ...draft, excerpt: e.target.value })} /></div>
           <div>

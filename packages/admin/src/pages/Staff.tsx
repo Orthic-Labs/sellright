@@ -222,7 +222,7 @@ export default function StaffPage() {
           </p>
 
           {inviteResult ? (
-            <div className="space-y-3">
+            <div className="stack-y-3">
               <div className="rounded-lg border border-success/30 bg-success-soft p-3 text-sm text-emerald-800">
                 Invite created. Share the token below with the invitee — they'll set their own password on acceptance.
               </div>
@@ -248,7 +248,7 @@ export default function StaffPage() {
             </div>
           ) : inviteForm ? (
             <form
-              className="space-y-3"
+              className="stack-y-3"
               onSubmit={(e) => { e.preventDefault(); sendInvite.mutate(); }}
             >
               <div className="flex flex-wrap gap-3">

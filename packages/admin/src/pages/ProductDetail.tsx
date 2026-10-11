@@ -147,7 +147,7 @@ export default function ProductDetailPage() {
       )}
 
       <div className="grid lg:grid-cols-3 gap-5">
-        <div className="lg:col-span-2 space-y-5 min-w-0">
+        <div className="lg:col-span-2 stack-y-5 min-w-0">
           <FormSection title="Basics" description="Title, description, and core metadata shown to customers.">
             <Field label="Title"><input className="input" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></Field>
             <Field label="Description" hint="Markdown is not supported. Plain text only."><textarea className="input min-h-[120px]" value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} /></Field>
@@ -204,7 +204,7 @@ export default function ProductDetailPage() {
           <OptionsEditor productId={p.id} storeSlug={store?.slug} variants={p.variants.map((v) => ({ id: v.id, sku: v.sku, optionIds: v.optionIds }))} />
         </div>
 
-        <div className="space-y-5 min-w-0">
+        <div className="stack-y-5 min-w-0">
           <FormSection title="Status" description="Only active products appear in your storefront and search.">
             <select className="input" value={draft.status} onChange={(e) => setDraft({ ...draft, status: e.target.value })}>
               <option value="active">Active</option>
@@ -228,11 +228,11 @@ export default function ProductDetailPage() {
             {p.images.length > 0 && (
               <div className="grid grid-cols-3 gap-1.5 mt-3">
                 {p.images.map((im) => (
-                  <div key={im.assetId} className="group relative aspect-square rounded bg-gray-100 overflow-hidden ring-1 ring-gray-100">
+                  <div key={im.assetId} className="group relative aspect-square rounded-sm bg-gray-100 overflow-hidden ring-1 ring-gray-100">
                     <img src={assetUrl(im.path) ?? im.url} alt="" className="h-full w-full object-cover" />
-                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center gap-1.5">
-                      <button title="Set as featured" className="text-white text-xs bg-black/50 rounded px-1.5 py-0.5 hover:bg-black/70" disabled={setFeatured.isPending} onClick={() => setFeatured.mutate(im.assetId)}>★</button>
-                      <button title="Remove from gallery" className="text-white text-xs bg-black/50 rounded px-1.5 py-0.5 hover:bg-red-600" disabled={removeFromGallery.isPending} onClick={() => removeFromGallery.mutate(im.assetId)}>×</button>
+                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-[color,background-color,border-color,text-decoration-color,fill,stroke,opacity,box-shadow,transform,filter,backdrop-filter] flex items-center justify-center gap-1.5">
+                      <button title="Set as featured" className="text-white text-xs bg-black/50 rounded-sm px-1.5 py-0.5 hover:bg-black/70" disabled={setFeatured.isPending} onClick={() => setFeatured.mutate(im.assetId)}>★</button>
+                      <button title="Remove from gallery" className="text-white text-xs bg-black/50 rounded-sm px-1.5 py-0.5 hover:bg-red-600" disabled={removeFromGallery.isPending} onClick={() => removeFromGallery.mutate(im.assetId)}>×</button>
                     </div>
                   </div>
                 ))}
@@ -308,7 +308,7 @@ function OptionsEditor({ productId, storeSlug, variants }: { productId: string; 
   return (
     <div className="card overflow-hidden">
       <div className="px-4 py-3 border-b border-gray-100 text-sm font-semibold">Options</div>
-      <div className="p-4 space-y-3">
+      <div className="p-4 stack-y-3">
         {isLoading ? <Spinner /> : groups.length === 0 ? <p className="text-sm text-gray-400">No option groups yet (e.g. Size, Color).</p> : groups.map((g, gi) => (
           <div key={g.id} className="rounded-lg border border-gray-100 p-3">
             <div className="flex items-center gap-1 mb-2">

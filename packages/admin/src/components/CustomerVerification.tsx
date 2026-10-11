@@ -48,7 +48,7 @@ export function CustomerVerification({ customerId }: { customerId: string }) {
     <FormSection title="Verification" description="Student / military / etc. status from SheerID"
       actions={data.canClear && data.active.length > 0 ? <button className="btn-ghost text-danger" onClick={() => { clear.reset(); setOpen(true); }}>Clear verification</button> : undefined}>
       {data.entries.length === 0 && data.history.length === 0 ? <EmptyState title="Not verified" /> : (
-        <div className="space-y-3 text-sm">
+        <div className="stack-y-3 text-sm">
           {data.entries.length === 0 ? <div className="text-gray-500">No active verification.</div> : data.entries.map((e) => (
             <div key={e.category} className="flex items-start justify-between gap-2">
               <div>
@@ -73,7 +73,7 @@ export function CustomerVerification({ customerId }: { customerId: string }) {
       )}
 
       <Modal open={open} onClose={() => setOpen(false)} title="Clear verification">
-        <div className="space-y-4">
+        <div className="stack-y-4">
           <p className="text-sm text-gray-600">The customer loses access to verified-only discounts right away and will have to verify again. This is recorded in the activity log with your name and reason.</p>
           <Field label="What to clear" htmlFor="ver-cat">
             <select id="ver-cat" className="input" value={category} onChange={(e) => setCategory(e.target.value)}>
