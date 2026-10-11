@@ -9,9 +9,8 @@
  *
  * Refresh semantics (PAR-02): the feed renders from live tables on every
  * request — catalog, price, and stock changes appear on the next poll, no
- * cron/static-file regeneration. A short public cache TTL (5 min) keeps a
- * polling merchant center off the hot path without meaningfully delaying
- * updates.
+ * cron/static-file regeneration. The response carries live availability, so it is
+ * `private, no-store` (stock is never cached anywhere; app-wide policy in cache-policy.ts).
  *
  * Public-by-design: feed URLs are registered in third-party dashboards that
  * send no credentials — the data is the same public catalog/price/stock the
@@ -159,9 +158,8 @@ feeds.openapi(
     const csv = generateFeed(channel, rows.map((r) => toFeedItem(r, cfg)), cfg);
     return c.body(csv, 200, {
       'content-type': 'text/csv; charset=utf-8',
-      // Short public cache: merchant centers poll; live tables mean a missed
-      // cache window is the only staleness possible.
-      'cache-control': 'public, max-age=300',
+      // Live availability: never stored by a browser, proxy or CDN.
+      'cache-control': 'private, no-store',
     });
   },
 );

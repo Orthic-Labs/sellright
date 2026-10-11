@@ -15,7 +15,7 @@ Two ways to configure a deployment:
    also runtime-configurable: set `SELLRIGHT_API_URL` (a plain Node env var,
    NOT `VITE_*`) on the running process to point one built image at any API
    instance without a rebuild. Build this way with `pnpm run build:runtime`
-   (sets `SELLRIGHT_DISABLE_SSG=1` — required: a statically prerendered page
+   (sets `SELLRIGHT_DISABLE_SSG=1`, now a no-op: no build prerenders pages, because a statically prerendered page
    would freeze whichever store happened to resolve at build time and serve
    it to every visitor of every host).
 2. **Build-time, single-store (legacy/dev/offline fallback).** The `VITE_*`

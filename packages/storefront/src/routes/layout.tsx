@@ -78,17 +78,14 @@ export const useStoreIdentityLoader = routeLoader$(async ({ cookie, query, statu
 	search: ['preview_token'],
 });
 
-export const onGet: RequestHandler = async ({ cacheControl, url, headers, sharedMap }) => {
+// onRequest (not onGet): the policy must cover actions (POST) as well as documents and loader data (GET).
+export const onRequest: RequestHandler = async ({ url, headers, sharedMap }) => {
 	// Loader/action data requests arrive with the page pathname (router trims q-loader-*.json): they must not
-	// inherit the public page profile.
+	// inherit a page profile. Every profile is private no-store; no cacheControl() call, no CDN header.
 	const profile = resolveRouteCacheProfile(url.pathname, sharedMap);
-	cacheControl(profile.cacheControl);
 	headers.set('x-route-class', profile.routeClass);
 	headers.set('x-cache-policy-version', CACHE_POLICY_VERSION);
-
-	if (profile.responseCacheControl) {
-		headers.set('Cache-Control', profile.responseCacheControl);
-	}
+	headers.set('Cache-Control', profile.responseCacheControl);
 };
 
 /**

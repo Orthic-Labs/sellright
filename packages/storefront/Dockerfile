@@ -8,7 +8,8 @@
 # without a rebuild). VITE_* build args remain only as an offline/dev
 # fallback (see README.md "Configuring a store").
 #
-# `build:runtime` (package.json) sets SELLRIGHT_DISABLE_SSG=1 — required: a
+# No build prerenders pages any more (adapters/express/vite.config.mts); `build:runtime` still sets
+# SELLRIGHT_DISABLE_SSG=1, now a no-op. The original reason stands: a
 # statically prerendered page would freeze whichever store resolved at build
 # time (there is no real request Host yet) and serve it to every visitor of
 # every host this image is later pointed at, see adapters/express/vite.config.mts.

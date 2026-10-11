@@ -62,6 +62,7 @@ import { isAllowedCorsOrigin } from './cors-origins.js';
 import { pool } from './db/client.js';
 import { isMaintenanceOn, maintenanceInfo } from './maintenance.js';
 import { requestIdMiddleware, accessLogMiddleware } from './lib/request-id.js';
+import { cachePolicy } from './cache-policy.js';
 import { err as logErr } from './lib/logger.js';
 import { listApiPlugins } from './plugins.js';
 import { installDefaultStoreKitPolicy } from './licensing/storekit/default-policy.js';
@@ -97,6 +98,10 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
   const sdkPlugins = options.plugins ?? [];
   if (sdkPlugins.length > 0 && !options.ctx) throw new Error('buildHttpApp: plugins require an engine context');
   const admit = options.admit;
+
+  // Cache policy FIRST so it wraps every response (shutdown 503s, CORS preflights, route output, onError envelopes,
+  // 404s): `private, no-store` unless the path is on cache-policy.ts's explicit exception list.
+  app.use('*', cachePolicy());
 
   // Shutdown step 1 ("stop admitting"): answered before anything else runs.
   if (admit) {
