@@ -3,12 +3,13 @@ import { z } from 'zod';
 import { and, desc, eq, inArray, or, sql } from 'drizzle-orm';
 import { withAdvisoryLock, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
-import { guard, HttpError, requireAdmin, requireStore, requireWrite, requirePermission, J, errBody } from './admin-helpers.js';
+import { guard, HttpError, requireAdmin, requireHuman, requireStore, requireWrite, requirePermission, J, errBody } from './admin-helpers.js';
 import { withLockedSet } from '../db/locks.js';
 import { overrideRelease, ReservationRuleError } from '../payments/reservation.js';
 import { GatewayPaymentError, verifyGatewayAttempt } from '../payments/gateway-payment.js';
 import { listPaymentAlerts } from '../payments/payment-alerts.js';
 import { listEffectsNeedingAttention, requeueTerminalEffect } from '../payments/settlement/effects.js';
+import { approveHeldEditIssuance, IssuanceApprovalError } from '../payments/settlement/issuance-approval.js';
 import { reconcileStripeOrder } from '../payments/stripe-reconcile.js';
 
 export const adminGatewayPayments = new OpenAPIHono();
@@ -86,6 +87,45 @@ adminGatewayPayments.openapi(
       data: { reservationIds: released.map((r) => r.id), reason: reason.trim() },
     }));
     return c.json({ released: released.length, orderId: row.orderId, reservationIds: released.map((r) => r.id) }, 200);
+  }),
+);
+
+// Issue #192: a human's explicit, audited approval of an order-edit issuance that was held (agent-made edit, or a legacy
+// edit whose actor cannot be resolved). The retry route above only requeues and reaches the same hold; this records fresh
+// authorisation beside the original decision and issues in the same transaction. Same gate as retry (write role + the
+// 'refunds' permission), plus human-only (AGENT_DENIED 'entitlement' and requireHuman). No step-up, matching its neighbours
+// (effects/:id/retry and reservations/:id/override-release, which move the same entitlements without one).
+const ApproveIssuanceResult = z.object({
+  effectId: z.string().uuid(), orderId: z.string().uuid(), approved: z.literal(true),
+  alreadyApproved: z.boolean().openapi({ description: 'true when the effect already carried an approval; nothing further was issued by this call' }),
+  status: z.string().openapi({ description: 'The effect status after the call (done once issued)' }),
+});
+adminGatewayPayments.openapi(
+  createRoute({
+    method: 'post', path: '/v1/admin/payment-reconciliation/effects/{id}/approve-issuance',
+    summary: 'Human approval of a held order-edit issuance: records the approval (original decision untouched), issues, and closes the review task',
+    request: { params: z.object({ id: z.string().uuid() }) },
+    responses: {
+      200: { description: 'Approved (or already approved)', content: J(ApproveIssuanceResult) },
+      401: { description: 'Unauthorized', ...errBody },
+      403: { description: 'Agents, read-only roles and users without the refunds permission are refused', ...errBody },
+      404: { description: 'Effect not found', ...errBody },
+      409: { description: 'EFFECT_NOT_HELD: not an order-edit effect that is terminal on an issuance hold', ...errBody },
+    },
+  }),
+  (c) => guard(c, async () => {
+    const { admin } = await requireAdmin(c);
+    const store = requireStore(admin, c);
+    requireHuman(admin);
+    requireWrite(store); requirePermission(store, 'refunds');
+    const { id } = c.req.valid('param');
+    try {
+      const r = await approveHeldEditIssuance(store.storeId, id, { adminUserId: admin.id, email: admin.email });
+      return c.json({ effectId: r.effectId, orderId: r.orderId, approved: true as const, alreadyApproved: !r.approvedNow, status: r.status }, 200);
+    } catch (e) {
+      if (e instanceof IssuanceApprovalError) throw new HttpError(e.status, e.message, e.code);
+      throw e;
+    }
   }),
 );
 

@@ -1,5 +1,5 @@
 {
-  "count": 333,
+  "count": 334,
   "routes": [
     "DELETE /v1/admin/agents/{adminUserId}",
     "DELETE /v1/admin/assets/{id}",
@@ -245,6 +245,7 @@
     "POST /v1/admin/orders/bulk-restore",
     "POST /v1/admin/orders/bulk-soft-delete",
     "POST /v1/admin/payment-reconciliation/{id}/verify",
+    "POST /v1/admin/payment-reconciliation/effects/{id}/approve-issuance",
     "POST /v1/admin/payment-reconciliation/effects/{id}/retry",
     "POST /v1/admin/payment-reconciliation/events/{id}/retry",
     "POST /v1/admin/payment-reconciliation/orders/{code}/stripe-reconcile",

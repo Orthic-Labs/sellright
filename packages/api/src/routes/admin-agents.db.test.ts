@@ -95,6 +95,7 @@ const DENIED: { method: string; path: string; body?: unknown; table?: string; gr
   { method: 'POST', path: `/v1/admin/returns/${RET}/approve`, body: {}, group: 'money_out', control: false }, // D11
   { method: 'POST', path: '/v1/admin/payment-reconciliation/effects/00000000-0000-4000-8000-000000000000/retry', body: {}, group: 'settlement', control: false },
   { method: 'POST', path: '/v1/admin/licenses', body: {}, group: 'entitlement', control: false },
+  { method: 'POST', path: '/v1/admin/payment-reconciliation/effects/00000000-0000-4000-8000-000000000000/approve-issuance', body: {}, group: 'entitlement', control: false },
   { method: 'POST', path: '/v1/admin/apps/releases', body: {}, group: 'release', control: false },
   { method: 'POST', path: '/v1/admin/staff', body: { email: 'new@agent.test', role: 'staff', password: 'password123' }, table: 'admin_user', group: 'identity' },
   { method: 'PATCH', path: `/v1/admin/staff/${STAFF}`, body: { role: 'manager' }, group: 'identity' },
