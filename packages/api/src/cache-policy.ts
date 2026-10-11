@@ -5,7 +5,8 @@
  * handler, so it also covers error envelopes (onError), 404s and any route (built-in or plugin) that sets its own
  * header: a route-set value survives only for an exception entry, on a 200 response to a GET/HEAD. Anything else is
  * forced to `private, no-store` and loses any CDN/surrogate cache header, so a newly added route that forgets a header,
- * or sets a cacheable one, still fails closed.
+ * or sets a cacheable one, still fails closed. `cache-tag` is stripped from EVERY response, exceptions included: Cloudflare ties
+ * tags to cached content and none is emitted anywhere (Cloudflare design P0-c).
  *
  * An exception must be provably stock-free AND identical for every visitor of the store (no cookie, auth, cart or
  * price/availability dependence). Add one only with a `reason` saying why, and a `source` file; the unit test fails
@@ -37,29 +38,37 @@ export function isCacheableException(path: string): boolean {
 
 const CACHE_HEADERS_TO_STRIP = ['cdn-cache-control', 'cloudflare-cdn-cache-control', 'surrogate-control', 'expires'];
 
-function applyNoStore(c: Context): void {
-  const apply = (h: Headers) => {
-    h.set('cache-control', NO_STORE);
-    for (const name of CACHE_HEADERS_TO_STRIP) h.delete(name);
-  };
+/** Run `edit` on the response headers; if they are immutable (a Response straight from fetch/redirect), rebuild the response first. */
+function editHeaders(c: Context, edit: (h: Headers) => void): void {
   try {
-    apply(c.res.headers);
+    edit(c.res.headers);
   } catch {
-    // Immutable headers (a Response returned straight from fetch/redirect): rebuild the response.
     const headers = new Headers(c.res.headers);
-    apply(headers);
+    edit(headers);
     c.res = new Response(c.res.body, { status: c.res.status, statusText: c.res.statusText, headers });
     // Hono's `c.res` setter copies the previous response's headers onto the replacement, which would bring the
-    // upstream cache headers back: apply the policy again on the (now mutable) response.
-    apply(c.res.headers);
+    // upstream headers back: apply the edit again on the (now mutable) response.
+    edit(c.res.headers);
   }
+}
+
+function applyNoStore(c: Context): void {
+  editHeaders(c, (h) => {
+    h.set('cache-control', NO_STORE);
+    for (const name of CACHE_HEADERS_TO_STRIP) h.delete(name);
+    h.delete('cache-tag');
+  });
 }
 
 export function cachePolicy(): MiddlewareHandler {
   return async (c, next) => {
     await next();
     const safeRead = c.req.method === 'GET' || c.req.method === 'HEAD';
-    if (safeRead && c.res.status === 200 && isCacheableException(c.req.path)) return;
+    if (safeRead && c.res.status === 200 && isCacheableException(c.req.path)) {
+      // A cacheable exception keeps its own Cache-Control, but never a Cache-Tag (P0-c: no tag on any response).
+      editHeaders(c, (h) => h.delete('cache-tag'));
+      return;
+    }
     applyNoStore(c);
   };
 }

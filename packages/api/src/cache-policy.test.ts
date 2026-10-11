@@ -9,10 +9,12 @@ function appWithPolicy() {
   app.use('*', cachePolicy());
   app.get('/v1/plain', (c) => c.json({ ok: true }));
   app.get('/v1/sets-public', (c) => c.json({ ok: true }, 200, { 'cache-control': 'public, max-age=300' }));
-  app.get('/v1/sets-cdn', (c) => c.json({ ok: true }, 200, { 'cdn-cache-control': 'max-age=300', 'cloudflare-cdn-cache-control': 'max-age=300', 'surrogate-control': 'max-age=300', expires: 'Wed, 21 Oct 2037 07:28:00 GMT' }));
+  app.get('/v1/sets-cdn', (c) => c.json({ ok: true }, 200, { 'cdn-cache-control': 'max-age=300', 'cloudflare-cdn-cache-control': 'max-age=300', 'surrogate-control': 'max-age=300', 'cache-tag': 'product-1,stock', expires: 'Wed, 21 Oct 2037 07:28:00 GMT' }));
   app.get('/v1/sets-no-store', (c) => c.json({ ok: true }, 200, { 'cache-control': 'no-store' }));
   app.get('/v1/boom', () => { throw new Error('boom'); });
-  app.get('/v1/shop/seo/robots.txt', (c) => c.text('User-agent: *', 200, { 'cache-control': 'public, max-age=300' }));
+  app.get('/v1/shop/seo/robots.txt', (c) => c.text('User-agent: *', 200, { 'cache-control': 'public, max-age=300', 'cache-tag': 'robots' }));
+  app.get('/v1/pro/revocations', () => new Response('{}', { status: 200, headers: { 'cache-control': 'public, max-age=60', 'cache-tag': 'revocations' } })); // listed exception returning a fetch-style Response
+  app.get('/v1/boom-tagged', () => { throw new Error('boom'); });
   app.get('/v1/shop/seo/sitemap-products.xml', (c) => c.json({ error: 'siteUrl not configured' }, 503, { 'cache-control': 'public, max-age=300' }));
   app.post('/v1/shop/seo/robots.txt', (c) => c.text('x', 200, { 'cache-control': 'public, max-age=300' }));
   app.get('/v1/shop/seo/jsonld/products/some-slug', (c) => c.json({}, 200, { 'cache-control': 'public, max-age=300' }));
@@ -20,7 +22,7 @@ function appWithPolicy() {
   // An upstream response passed straight through (as a preRoute plugin returning fetch() would): its headers are
   // immutable AND it carries cacheable headers that must not survive.
   app.get('/v1/upstream', () => {
-    const res = new Response('{"inStock":true}', { status: 200, headers: { 'content-type': 'application/json', 'cache-control': 'public, max-age=600', 'cdn-cache-control': 'max-age=600', expires: 'Thu, 01 Jan 2099 00:00:00 GMT' } });
+    const res = new Response('{"inStock":true}', { status: 200, headers: { 'content-type': 'application/json', 'cache-control': 'public, max-age=600', 'cdn-cache-control': 'max-age=600', 'cache-tag': 'product-1', expires: 'Thu, 01 Jan 2099 00:00:00 GMT' } });
     const frozen = new Proxy(res.headers, {
       get(target, prop) {
         if (prop === 'set' || prop === 'delete' || prop === 'append') return () => { throw new TypeError('immutable'); };
@@ -31,7 +33,7 @@ function appWithPolicy() {
     Object.defineProperty(res, 'headers', { get: () => frozen });
     return res;
   });
-  app.onError((_err, c) => c.json({ error: 'internal' }, 500, { 'cache-control': 'public, max-age=300' }));
+  app.onError((_err, c) => c.json({ error: 'internal' }, 500, { 'cache-control': 'public, max-age=300', 'cache-tag': 'errors' }));
   return app;
 }
 
@@ -42,6 +44,7 @@ describe('cachePolicy middleware', () => {
     expect(res.headers.get('cache-control')).toBe('private, no-store');
     expect(res.headers.get('cdn-cache-control')).toBeNull();
     expect(res.headers.get('expires')).toBeNull();
+    expect(res.headers.get('cache-tag')).toBeNull();
     expect(await res.text()).toBe('{"inStock":true}');
   });
 
@@ -59,8 +62,24 @@ describe('cachePolicy middleware', () => {
     expect(res.headers.get('cache-control')).toBe(NO_STORE);
     const cdn = await app.request('/v1/sets-cdn');
     expect(cdn.headers.get('cache-control')).toBe(NO_STORE);
-    for (const h of ['cdn-cache-control', 'cloudflare-cdn-cache-control', 'surrogate-control', 'expires']) expect(cdn.headers.get(h), h).toBeNull();
+    for (const h of ['cdn-cache-control', 'cloudflare-cdn-cache-control', 'surrogate-control', 'expires', 'cache-tag']) expect(cdn.headers.get(h), h).toBeNull();
     expect((await app.request('/v1/sets-no-store')).headers.get('cache-control')).toBe(NO_STORE);
+  });
+
+  it('a cacheable exception keeps its Cache-Control but never a Cache-Tag', async () => {
+    const app = appWithPolicy();
+    const robots = await app.request('/v1/shop/seo/robots.txt');
+    expect(robots.headers.get('cache-control')).toBe('public, max-age=300');
+    expect(robots.headers.get('cache-tag')).toBeNull();
+    const rev = await app.request('/v1/pro/revocations');
+    expect(rev.headers.get('cache-control')).toBe('public, max-age=60');
+    expect(rev.headers.get('cache-tag')).toBeNull();
+  });
+
+  it('error responses carry no Cache-Tag from the error handler', async () => {
+    const res = await appWithPolicy().request('/v1/boom-tagged');
+    expect(res.status).toBe(500);
+    expect(res.headers.get('cache-tag')).toBeNull();
   });
 
   it('error responses are no-store even when the error handler sets a cacheable header', async () => {
