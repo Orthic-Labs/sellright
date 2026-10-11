@@ -17,7 +17,10 @@
 //   node scripts/assert-no-vendure.mjs [--root DIR] [--overlay-list FILE]
 import fs from 'node:fs';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+
+const ts = createRequire(import.meta.url)('typescript');
 
 // Self-contained on purpose: the guard runs first in `build` and needs nothing but node.
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -36,6 +39,32 @@ const TIER2 = new RegExp(`\\b(${WIRE_TOKENS.join('|')})\\b`, 'g');
 const BARE_WORD = /vendure/i;
 const CONFIG_HARD = /@vendure|\b[A-Z][A-Z0-9_]*VENDURE[A-Z0-9_]*\b/;
 const CONFIG_FILES = /^(ecosystem.*\.cjs|vite\.config\.ts|postcss\.config\.cjs|tailwind\.config\.mjs|tsconfig\.json|package\.json)$/;
+
+// Syntax-aware pass (same rule as the repo-root scripts/assert-no-gql-tags.mjs, inlined because this guard must stay
+// self-contained): a tagged template whose tag, once parentheses / as / satisfies / <T> assertions / non-null / comma
+// sequences are peeled, is gql or graphql (identifier, member or string element access). The regexes above miss
+// (gql)`..`, (gql as T)`..`, gql!`..`. Known gaps: an aliased tag or a renamed import (a syntactic check cannot follow values).
+const unwrapTag = (n) => {
+	for (;;) {
+		if (ts.isParenthesizedExpression(n) || ts.isAsExpression(n) || ts.isNonNullExpression(n) || ts.isTypeAssertionExpression(n) || ts.isSatisfiesExpression(n)) n = n.expression;
+		else if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.CommaToken) n = n.right;
+		else return n;
+	}
+};
+function gqlTagLines(rel, text) {
+	const kind = /\.[jt]sx$/.test(rel) ? ts.ScriptKind.TSX : /\.[cm]?js$/.test(rel) ? ts.ScriptKind.JS : ts.ScriptKind.TS;
+	const sf = ts.createSourceFile(rel, text, ts.ScriptTarget.Latest, true, kind);
+	const lines = [];
+	(function visit(node) {
+		if (ts.isTaggedTemplateExpression(node)) {
+			const n = unwrapTag(node.tag);
+			const name = ts.isIdentifier(n) ? n.text : ts.isPropertyAccessExpression(n) ? n.name.text : ts.isElementAccessExpression(n) && ts.isStringLiteralLike(unwrapTag(n.argumentExpression)) ? unwrapTag(n.argumentExpression).text : null;
+			if (name === 'gql' || name === 'graphql') lines.push(sf.getLineAndCharacterOfPosition(node.tag.getStart(sf)).line + 1);
+		}
+		ts.forEachChild(node, visit);
+	})(sf);
+	return lines;
+}
 
 const dataLines = (file) =>
   fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').map((l) => l.trim()).filter((l) => l !== '' && !l.startsWith('#')) : [];
@@ -77,6 +106,11 @@ export function checkNoVendure({ root, overlayList } = {}) {
     for (const m of text.matchAll(TAGGED_GQL)) {
       const line = text.slice(0, m.index).split('\n').length;
       if (!lines[line - 1].includes('gql`')) findings.push({ file: rel, line, tier: 1, token: 'gql`', message: 'GraphQL/Vendure coupling signal "gql`" (tagged template split across whitespace, lines or comments)' });
+    }
+    const reported = new Set(findings.filter((f) => f.file === rel && f.token === 'gql`').map((f) => f.line));
+    for (const line of gqlTagLines(rel, text)) {
+      if (reported.has(line) || lines[line - 1].includes('gql`')) continue; // already reported by the regex or the per-line signal
+      findings.push({ file: rel, line, tier: 1, token: 'gql`', message: 'GraphQL/Vendure coupling signal: gql/graphql tagged template (wrapped tag expression)' });
     }
     lines.forEach((line, i) => {
       const at = (tier, token, message) => findings.push({ file: rel, line: i + 1, tier, token, message });

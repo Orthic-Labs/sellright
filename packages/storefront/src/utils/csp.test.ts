@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { googleIdentityCsp } from '../config/google-signin';
+import { googleIdentityCsp, googleSignInClientIdForHost } from '../config/google-signin';
 import { buildCsp, IP_LOOKUP_ORIGIN, TURNSTILE_ORIGIN } from './csp';
 
 const directive = (csp: string, name: string) => csp.split('; ').find((d) => d.startsWith(`${name} `)) ?? '';
@@ -85,6 +85,16 @@ describe('buildCsp — Google Identity sources join only when supplied, alongsid
 		const empty = { script: [], connect: [], frame: [], style: [] };
 		expect(buildCsp({ nonce: 'n', google: empty })).toBe(buildCsp({ nonce: 'n' }));
 		expect(directive(buildCsp({ nonce: 'n' }), 'style-src')).toBe("style-src 'self' 'unsafe-inline'");
+	});
+});
+
+describe('buildCsp — Google sources are decided per request host (the entry passes the same expression)', () => {
+	const cspFor = (host: string) => buildCsp({ nonce: 'n', google: googleIdentityCsp(googleSignInClientIdForHost(host, 'x.apps.googleusercontent.com', 'store-a', 'a.example')) });
+
+	it('the pinned store host gets the Google origins; a second host reaching the same process gets none', () => {
+		expect(cspFor('a.example')).toContain('https://accounts.google.com/gsi/client');
+		expect(cspFor('b.example')).not.toContain('accounts.google.com');
+		expect(cspFor('b.example')).toBe(buildCsp({ nonce: 'n' }));
 	});
 });
 

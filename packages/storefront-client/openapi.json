@@ -4423,6 +4423,31 @@
               }
             }
           },
+          "202": {
+            "description": "Google cannot vouch for this address: a confirmation link was sent to it (identical whether or not an account exists)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "verificationRequired": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "nonce": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "verificationRequired",
+                    "nonce"
+                  ]
+                }
+              }
+            }
+          },
           "401": {
             "description": "Invalid token",
             "content": {
@@ -4435,6 +4460,124 @@
           },
           "409": {
             "description": "Not configured, or an unverified account already owns this email",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/shop/auth/federated/confirm": {
+      "post": {
+        "summary": "Confirm a federated sign-in from the emailed link",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "minLength": 20,
+                    "maxLength": 2048
+                  },
+                  "nonce": {
+                    "type": "string",
+                    "minLength": 20,
+                    "maxLength": 256
+                  }
+                },
+                "required": [
+                  "token"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "token": {
+                      "type": "string"
+                    },
+                    "customer": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "email": {
+                          "type": "string"
+                        },
+                        "firstName": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "lastName": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "phone": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "emailVerified": {
+                          "type": "boolean"
+                        },
+                        "isMigrated": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "email",
+                        "firstName",
+                        "lastName",
+                        "phone",
+                        "emailVerified",
+                        "isMigrated"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "token",
+                    "customer"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Link invalid, expired, already used, or opened in a different browser",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The address already belongs to an account that cannot be linked",
             "content": {
               "application/json": {
                 "schema": {
@@ -4525,6 +4668,31 @@
               }
             }
           },
+          "202": {
+            "description": "Apple cannot vouch for this address: a confirmation link was sent to it (identical whether or not an account exists)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "verificationRequired": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "nonce": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "verificationRequired",
+                    "nonce"
+                  ]
+                }
+              }
+            }
+          },
           "401": {
             "description": "Invalid token",
             "content": {
@@ -4536,7 +4704,17 @@
             }
           },
           "409": {
-            "description": "Not configured, or an unverified account already owns this email",
+            "description": "Not configured (APPLE_SIGNIN_NOT_CONFIGURED), an unverified account owns this email (EMAIL_TAKEN_UNVERIFIED), or an account with this email exists and Apple is not authoritative for it / is bound to another Apple subject (EMAIL_TAKEN)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
             "content": {
               "application/json": {
                 "schema": {

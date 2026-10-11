@@ -5,14 +5,17 @@
  */
 import { GOOGLE_IDENTITY_SCRIPT_URL } from '~/config/google-signin';
 import { sellright } from '~/sellright/client';
-import { describeAccountError } from '~/sellright/types/account';
+import { describeAccountError, type AccountError } from '~/sellright/types/account';
 import type { LoginResult } from './account';
 
 /** Exchange a Google credential for a session. 409 = Google sign-in is not configured for this store, or an existing account owns the email and Google cannot vouch for it; 401 = Google token rejected. */
 export async function loginWithGoogle(credential: string): Promise<LoginResult> {
 	try {
 		const { data } = await sellright().POST('/v1/shop/auth/google', { body: { credential } });
-		return { ok: true, customer: data!.customer };
+		// 202: Google cannot vouch for this address, so the API mailed it a verification link instead of signing in. The
+		// reply is the same whether or not an account exists; say only that, never anything account-specific.
+		if (!data || !('customer' in data)) return { ok: false, code: 'unknown', message: 'Check your email: we sent a link to confirm this Google sign-in. Open it in this same browser; it expires in 30 minutes.' };
+		return { ok: true, customer: data.customer };
 	} catch (e) {
 		const err = describeAccountError(e);
 		const status = (e as { status?: number } | null)?.status;
@@ -21,6 +24,31 @@ export async function loginWithGoogle(credential: string): Promise<LoginResult> 
 		if (status === 401) return { ok: false, code: 'unknown', message: 'Google sign-in could not be verified. Please try again.' };
 		// 409 carries the API's own explanation (not configured / an existing account must sign in first); show it.
 		if (status === 409) return { ok: false, code: 'unknown', message: err.message.trim() || 'Google sign-in is not available for this account. Sign in with your password or a sign-in link first.' };
+		return { ok: false, ...err };
+	}
+}
+
+/** `terminal`: the server answered and the link can never work (retrying is pointless); the page then offers only a way back. */
+export type ConfirmResult = LoginResult | ({ ok: false; terminal?: boolean } & AccountError);
+
+export const CONFIRM_LINK_FAILED = "We couldn't confirm this link. It may have expired, already been used, or been opened in a different browser or device from the one where you started signing in. Go back to that browser and start signing in again; a new link will be sent.";
+export const CONFIRM_UNVERIFIED = "An account with this email already exists, but its email address hasn't been verified. Sign in with your password and verify your email first, then try Google or Apple sign-in again.";
+
+/** Redeem the emailed federated sign-in link (proof of current control of the address) for a session. The API also needs
+ *  the nonce cookie set when the flow started, so this only succeeds in the browser that began it. */
+export async function confirmFederatedSignIn(token: string): Promise<ConfirmResult> {
+	try {
+		const { data } = await sellright().POST('/v1/shop/auth/federated/confirm', { body: { token } });
+		return { ok: true, customer: data!.customer };
+	} catch (e) {
+		const err = describeAccountError(e);
+		const { status, code } = (e as { status?: number; code?: string } | null) ?? {};
+		// 400 is a malformed or truncated token: like 401, no retry from this page can make it work.
+		if (status === 400 || status === 401) return { ok: false, code: 'unknown', message: CONFIRM_LINK_FAILED, terminal: true };
+		if (status === 409) {
+			const message = code === 'EMAIL_TAKEN_UNVERIFIED' ? CONFIRM_UNVERIFIED : err.message.trim() || CONFIRM_UNVERIFIED;
+			return { ok: false, code: 'unknown', message, terminal: true };
+		}
 		return { ok: false, ...err };
 	}
 }

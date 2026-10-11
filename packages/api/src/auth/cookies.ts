@@ -125,6 +125,17 @@ export function clearCustomerCookies(c: Ctx): void {
   c.header('Set-Cookie', `${CUST_CSRF_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax`, { append: true });
 }
 
+// ── Federated sign-in link nonce (auth/federated-link.ts) ────────────────────
+// Set on the 202 that mails a confirmation link; the link only redeems in the browser that holds it. HttpOnly (no JS
+// read), Secure (scheme-derived, as above), SameSite=Lax; lives exactly as long as the link.
+export const FEDERATED_NONCE_COOKIE = 'sr_fed_link';
+export function setFederatedNonceCookie(c: Ctx, nonce: string, maxAgeSeconds: number): void {
+  c.header('Set-Cookie', `${FEDERATED_NONCE_COOKIE}=${nonce}; HttpOnly; Path=/; Max-Age=${maxAgeSeconds}; SameSite=Lax${secureFlag(c)}`, { append: true });
+}
+export function clearFederatedNonceCookie(c: Ctx): void {
+  c.header('Set-Cookie', `${FEDERATED_NONCE_COOKIE}=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax${secureFlag(c)}`, { append: true });
+}
+
 /** CSRF check for cookie-authenticated customer mutations (bearer is exempt). */
 export function customerCsrfValid(c: { req: { header: (k: string) => string | undefined } }): boolean {
   if (hasValidBearer(c.req.header('authorization'))) return true;

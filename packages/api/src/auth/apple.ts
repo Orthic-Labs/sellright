@@ -116,6 +116,22 @@ export async function verifyAppleIdentityToken(identityToken: string, expectedAu
   };
 }
 
+// Domains for which Apple itself is the authority on mailbox ownership:
+// Hide-My-Email relay addresses and Apple-hosted mail. For any other address
+// Apple's `email_verified` only proves the Apple ID owner once verified it —
+// not that they are the CURRENT owner (reassigned / lapsed third-party domain).
+const APPLE_MAIL_DOMAINS = new Set(['privaterelay.appleid.com', 'icloud.com', 'me.com', 'mac.com']);
+
+/** True only when Apple is authoritative for this address (verified AND an
+ *  Apple-controlled domain). Only then may the token link into an existing
+ *  account by email. Mirrors googleAuthoritativeForEmail. */
+export function appleAuthoritativeForEmail(a: Pick<AppleIdentity, 'email' | 'emailVerified'>): boolean {
+  if (!a.emailVerified || !a.email) return false;
+  const at = a.email.lastIndexOf('@');
+  if (at < 1) return false;
+  return APPLE_MAIL_DOMAINS.has(a.email.slice(at + 1).trim().toLowerCase());
+}
+
 /** Test seam: reset the memoized JWKS (so a test can mock fetch and re-fetch). */
 export function _resetAppleJwksCache(): void {
   cachedJwks = null;

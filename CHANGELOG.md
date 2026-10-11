@@ -241,8 +241,35 @@ must update the matching changelog in the same push.
 - Broken Postgres clients are evicted when rollback fails, while the original
   request error is preserved for diagnosis.
 
+### Security
+
+- Google and Apple sign-in no longer reveal whether an address has an account.
+  A non-authoritative identity (an address its provider does not own) gets the
+  same `202 { verificationRequired, nonce }` for every address and an emailed
+  link. The link redeems once, only alongside the nonce the starting client
+  holds (cookie for browsers, request body for native apps), at
+  `POST /v1/shop/auth/federated/confirm`. A different existing Google or Apple
+  link on the account is never overwritten.
+- Sign in with Apple links to an existing account by email only for
+  Apple-owned addresses (Private Relay, icloud.com, me.com, mac.com); an
+  unverified Apple email is refused.
+- Storefront Google sign-in and its CSP origins are decided per validated
+  request host, so a second host on a pinned deployment never gets the pinned
+  store's button.
+- The no-Vendure source guard detects wrapped `gql` tags syntactically and
+  fails closed if its scanner fails.
+
 ### Operations
 
+- New storefront runtime settings: `SELLRIGHT_GOOGLE_SIGNIN_HOSTS` (the pinned
+  store's public hosts; empty turns Google sign-in off) and
+  `SELLRIGHT_TRUST_FORWARDED_HOST=1` (set in the compose deployment) so the CSRF
+  origin and store host follow the HTTPS proxy. Newsletter confirm/unsubscribe
+  form posts now work behind an HTTPS-terminating proxy.
+- Migration 0096 adds `federated_link_redemption` (expand-only; rollback is
+  dropping the table). Production needs a sign-in link secret of at least 32
+  characters (`COOKIE_SECRET`, `LICENSING_HMAC_SECRET` or `DOWNLOAD_URL_SECRET`)
+  or Google and Apple sign-in for non-authoritative addresses is refused.
 - Postgres operations now enable `pg_stat_statements`, log queries over one
   second, and expose a repeatable top-query inspection loop before further
   tuning. The update-heavy email and push outboxes use lower per-table

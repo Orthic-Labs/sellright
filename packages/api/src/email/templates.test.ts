@@ -3,7 +3,8 @@
  * templates — no DB, pure rendering.
  */
 import { describe, expect, it } from 'vitest';
-import { orderRefundConfirmation, emailAddressChange, pointsEarned, reviewApproved, type StoreCtx } from './templates.js';
+import { FEDERATED_LINK_TTL_MS } from '../auth/federated-link.js';
+import { federatedLinkConfirm, orderRefundConfirmation, emailAddressChange, pointsEarned, reviewApproved, type StoreCtx } from './templates.js';
 
 const store: StoreCtx = {
   name: 'Brand B',
@@ -64,4 +65,21 @@ describe('REWARDS-1 templates', () => {
     expect(reviewApproved(store, { productName: 'Knife', points: 0, balance: null }).text).not.toContain('points');
     expect(reviewApproved(store, { productName: '<b>Knife</b>', points: 0, balance: null }).html).not.toContain('<b>Knife</b>');
   });
+});
+
+describe('federatedLinkConfirm', () => {
+  for (const provider of ['Google', 'Apple']) {
+    it(`${provider}: names the provider, states the real token TTL, and tells the reader which browser to use (html + text)`, () => {
+      const minutes = FEDERATED_LINK_TTL_MS / 60000;
+      const r = federatedLinkConfirm(store, { url: 'https://s.example/sign-in/confirm?token=t', providerName: provider, providerEmail: 'a@corp.example', ttlMinutes: minutes });
+      expect(minutes).toBe(30);
+      for (const body of [r.html, r.text]) {
+        expect(body).toContain(provider);
+        expect(body).toContain('a@corp.example');
+        expect(body).toContain(`within ${minutes} minutes`);
+        expect(body).toContain("Open this link in the same browser where you started signing in. If you're reading this on a different device, open this email in the browser where you started. Starting again sends a new link and replaces this one.");
+        expect(body).toContain("If you didn't try to sign in with " + provider);
+      }
+    });
+  }
 });

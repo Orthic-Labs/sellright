@@ -1,6 +1,6 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { grantSignupBonus } from '../loyalty/bonus.js';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, isNull, or, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import { type StoreCtx } from '../store-context.js';
@@ -8,14 +8,15 @@ import * as s from '../db/schema.js';
 import { hashPassword, passwordNeedsRehash, verifyPassword } from '../auth/password.js';
 import { customerToken, createSession, deleteSession, resolveCustomer, sessionPolicy } from '../auth/session.js';
 import { consumeMagicLink, magicLinkPolicy, mintMagicLink } from '../auth/magic-link.js';
-import { googleAuthoritativeForEmail, verifyGoogleIdToken } from '../auth/google.js';
-import { appleClientIds, verifyAppleIdentityToken } from '../auth/apple.js';
-import { setCustomerCookies, clearCustomerCookies, customerCsrfValid, newCsrf } from '../auth/cookies.js';
+import { googleAuthoritativeForEmail, verifyGoogleIdToken, type GoogleIdentity } from '../auth/google.js';
+import { FEDERATED_LINK_TTL_MS, federatedLinkAvailable, hashLinkNonce, newLinkNonce, nonceMatches, redeemFederatedLink, signFederatedLink, verifyFederatedLink } from '../auth/federated-link.js';
+import { appleAuthoritativeForEmail, appleClientIds, verifyAppleIdentityToken } from '../auth/apple.js';
+import { setCustomerCookies, clearCustomerCookies, customerCsrfValid, newCsrf, cookie, FEDERATED_NONCE_COOKIE, setFederatedNonceCookie, clearFederatedNonceCookie } from '../auth/cookies.js';
 import { clientIp, loginRetryAfter, recordLoginFailure, clearLoginAttempts } from '../auth/rate-limit.js';
 import { normalizeEmail } from '../auth/email.js';
 import { createHash, randomBytes } from 'node:crypto';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
-import { enqueueEmailVerify, enqueueMagicLink, resolveStorefrontUrl } from '../email/dispatch.js';
+import { enqueueEmailVerify, enqueueFederatedLinkConfirm, enqueueMagicLink, resolveStorefrontUrl } from '../email/dispatch.js';
 import { verifyTurnstileToken } from '../security/turnstile.js';
 import { env } from '../env.js';
 
@@ -238,7 +239,89 @@ auth.openapi(
   },
 );
 
-// POST /v1/shop/auth/google — sign in / up with a Google ID token (GIS credential)
+// Find-or-link-or-create for a Google identity. `mailboxProven` is true when the
+// caller already proved CURRENT control of the address (the authoritative-domain
+// check, or a click on the fresh-verification link); only then may an existing
+// account be linked by email.
+type SignInOutcome = { kind: 'blocked' } | { kind: 'not_linkable' } | { kind: 'ok'; token: string; customer: z.infer<typeof CustomerOut> };
+async function completeGoogleSignIn(tx: Parameters<Parameters<typeof withStore>[1]>[0], st: StoreCtx, g: Pick<GoogleIdentity, 'sub' | 'email' | 'firstName' | 'lastName'>, mailboxProven: boolean): Promise<SignInOutcome> {
+  // Match by googleSub first, then link by email, else create.
+  let [cust] = await tx.select().from(s.customer).where(eq(s.customer.googleSub, g.sub)).limit(1);
+  if (!cust) {
+    const [byEmail] = await tx.select().from(s.customer).where(eq(s.customer.email, g.email)).limit(1);
+    // SEC: auto-linking Google sign-in into an EXISTING account by email
+    // match is an account-takeover vector if that account has a password
+    // and its email was never proven — anyone who can register
+    // unverified@victim.com and later prove that SAME address via Google
+    // would otherwise silently inherit the victim's pre-existing account.
+    // Google itself proved this email (g.emailVerified, checked above),
+    // so the only unsafe case is: the target account is unverified AND
+    // has a password of its own (someone else set it up first). Refuse
+    // the link there rather than clearing the password ourselves — this
+    // is not the account owner authenticating, so we don't get to make
+    // destructive changes to it; the legitimate owner can still sign in
+    // with their password + verify normally, or use the account-recovery
+    // flow. A passwordless (isMigrated) unverified account is safe to
+    // link: nothing to steal, no credential to invalidate.
+    if (byEmail && !byEmail.emailVerified && byEmail.passwordHash) return { kind: 'blocked' };
+    // SEC: email-based linking requires proof of CURRENT control of the address:
+    // Google authoritative for it (Gmail, or a Workspace `hd` matching the
+    // domain) or a fresh email-verification click. Callers never reach here for
+    // a non-authoritative identity without that proof (the request handler
+    // answers those identically for existing and unknown addresses).
+    if (byEmail && !mailboxProven) return { kind: 'not_linkable' };
+    if (byEmail) {
+      // SEC: never re-bind. An account already tied to a DIFFERENT Google subject keeps it (a reassigned address must
+      // not let a new Google identity displace the existing one). The UPDATE is conditional too, so a concurrent
+      // link between the read above and this write also lands as not_linkable rather than overwriting.
+      if (byEmail.googleSub && byEmail.googleSub !== g.sub) return { kind: 'not_linkable' };
+      const linked = await tx.update(s.customer).set({ googleSub: g.sub, emailVerified: true, updatedAt: new Date() })
+        .where(and(eq(s.customer.id, byEmail.id), or(isNull(s.customer.googleSub), eq(s.customer.googleSub, g.sub))))
+        .returning({ id: s.customer.id });
+      if (linked.length === 0) return { kind: 'not_linkable' };
+      cust = byEmail;
+    } else {
+      const [created] = await tx.insert(s.customer).values({ storeId: st.id, email: g.email, firstName: g.firstName, lastName: g.lastName, googleSub: g.sub, emailVerified: true }).returning();
+      cust = created!;
+    }
+  }
+  await grantSignupBonus(tx, st.id, cust.id); // REWARDS-1: no-op unless the rule is on
+  const token = await createSession(tx, st.id, cust.id, sessionPolicy(st.config));
+  return { kind: 'ok', token, customer: { id: cust.id, email: cust.email, firstName: cust.firstName, lastName: cust.lastName, phone: cust.phone, emailVerified: true, isMigrated: cust.passwordHash == null } };
+}
+
+function signInOutcomeResponse(c: Parameters<typeof errJson>[0], st: StoreCtx, out: SignInOutcome) {
+  if (out.kind === 'blocked') {
+    return errJson(c, 409, 'EMAIL_TAKEN_UNVERIFIED', 'an account with this email already exists — sign in with your password and verify your email first');
+  }
+  if (out.kind === 'not_linkable') {
+    return errJson(c, 409, 'EMAIL_TAKEN', 'an account with this email already exists — sign in with your password or a sign-in link first');
+  }
+  setCustomerCookies(c, out.token, newCsrf(), customerCookieSeconds(st));
+  return c.json({ token: out.token, customer: out.customer }, 200);
+}
+
+// Rate gate for federated confirmation mail (Google, Apple). Attempt-counted twice: per (ip, address) like magic-link,
+// and per address alone so a distributed sender cannot flood one inbox. Both are keyed on the address only (never on
+// account state), so a 429 is identical for existing and unknown addresses.
+async function federatedMailGate(c: Parameters<typeof clientIp>[0], email: string) {
+  const ip = clientIp(c);
+  const ipBucket = `federatedlink:${email}`;
+  const addrBucket = `federatedlink-addr:${email}`;
+  const retry = Math.max(await loginRetryAfter(ip, ipBucket), await loginRetryAfter('*', addrBucket));
+  return { retry, record: async () => { await recordLoginFailure(ip, ipBucket); await recordLoginFailure('*', addrBucket); } };
+}
+
+// POST /v1/shop/auth/google — sign in / up with a Google ID token (GIS credential).
+// A linked Google subject, or an identity Google is authoritative for, signs in
+// (200). Any OTHER valid identity gets 202 and a confirmation link mailed to its
+// address — with no account lookup, so the response is byte-identical whether
+// or not the address already has an account (no enumeration of reassigned
+// addresses). The 202 also sets an HttpOnly nonce cookie the link is bound to:
+// it redeems only in this browser, at /federated/confirm (auth/federated-link.ts). The same nonce is also returned in the 202
+// body (always, so the shape is identical for every address) for native apps with no cookie jar: they finish via a
+// universal link carrying the token and POST token + their held nonce. The token reaches only the mailbox holder and the
+// nonce only the initiator, so both are needed either way; a nonce is never read from a URL.
 auth.openapi(
   createRoute({
     method: 'post',
@@ -247,8 +330,10 @@ auth.openapi(
     request: { body: { content: { 'application/json': { schema: z.object({ credential: z.string().min(20) }) } } } },
     responses: {
       200: { description: 'OK', content: { 'application/json': { schema: z.object({ token: z.string(), customer: CustomerOut }) } } },
+      202: { description: 'Google cannot vouch for this address: a confirmation link was sent to it (identical whether or not an account exists)', content: { 'application/json': { schema: z.object({ verificationRequired: z.literal(true), nonce: z.string() }) } } },
       401: { description: 'Invalid token', content: { 'application/json': { schema: apiErrorSchema() } } },
       409: { description: 'Not configured, or an unverified account already owns this email', content: { 'application/json': { schema: apiErrorSchema() } } },
+      429: { description: 'Rate limited', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
   async (c) => {
@@ -258,58 +343,131 @@ auth.openapi(
     const { credential } = c.req.valid('json');
     const g = await verifyGoogleIdToken(credential, clientId);
     if (!g || !g.emailVerified) return errJson(c, 401, 'GOOGLE_TOKEN_INVALID', 'invalid or unverified Google token');
-    const out = await withStore(st.id, async (tx): Promise<{ kind: 'blocked' } | { kind: 'not_linkable' } | { kind: 'ok'; token: string; customer: z.infer<typeof CustomerOut> }> => {
-      // Match by googleSub first, then link by email, else create.
-      let [cust] = await tx.select().from(s.customer).where(eq(s.customer.googleSub, g.sub)).limit(1);
-      if (!cust) {
-        const [byEmail] = await tx.select().from(s.customer).where(eq(s.customer.email, g.email)).limit(1);
-        // SEC: auto-linking Google sign-in into an EXISTING account by email
-        // match is an account-takeover vector if that account has a password
-        // and its email was never proven — anyone who can register
-        // unverified@victim.com and later prove that SAME address via Google
-        // would otherwise silently inherit the victim's pre-existing account.
-        // Google itself proved this email (g.emailVerified, checked above),
-        // so the only unsafe case is: the target account is unverified AND
-        // has a password of its own (someone else set it up first). Refuse
-        // the link there rather than clearing the password ourselves — this
-        // is not the account owner authenticating, so we don't get to make
-        // destructive changes to it; the legitimate owner can still sign in
-        // with their password + verify normally, or use the account-recovery
-        // flow. A passwordless (isMigrated) unverified account is safe to
-        // link: nothing to steal, no credential to invalidate.
-        if (byEmail && !byEmail.emailVerified && byEmail.passwordHash) {
-          return { kind: 'blocked' };
-        }
-        // SEC: email-based linking requires Google to be authoritative for the
-        // address (Gmail, or a Workspace `hd` matching the domain). Otherwise a
-        // reassigned third-party address could inherit the current owner's
-        // account. Fail closed: no link, no session. A returning, already
-        // linked Google subject is matched above and is unaffected.
-        if (byEmail && !googleAuthoritativeForEmail(g)) {
-          return { kind: 'not_linkable' };
-        }
-        if (byEmail) {
-          await tx.update(s.customer).set({ googleSub: g.sub, emailVerified: true, updatedAt: new Date() }).where(eq(s.customer.id, byEmail.id));
-          cust = byEmail;
-        } else {
-          const [created] = await tx.insert(s.customer).values({ storeId: st.id, email: g.email, firstName: g.firstName, lastName: g.lastName, googleSub: g.sub, emailVerified: true }).returning();
-          cust = created!;
+    const authoritative = googleAuthoritativeForEmail(g);
+    let gate: Awaited<ReturnType<typeof federatedMailGate>> | undefined;
+    if (!authoritative) {
+      // Deployment misconfiguration (no usable link secret in production), same answer for every address.
+      if (!federatedLinkAvailable()) return errJson(c, 409, 'GOOGLE_SIGNIN_NOT_CONFIGURED', 'Google sign-in is not configured for this store');
+      gate = await federatedMailGate(c, g.email);
+      if (gate.retry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${gate.retry}s`);
+    }
+    const nonce = newLinkNonce();
+    const out = await withStore(st.id, async (tx): Promise<SignInOutcome | { kind: 'verify_sent' }> => {
+      if (!authoritative) {
+        // Returning, already-linked subject: matched by sub only, never by email.
+        const [linked] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.googleSub, g.sub)).limit(1);
+        if (!linked) {
+          // No customer lookup by address here — that is the whole point.
+          const token = signFederatedLink({ provider: 'google', storeId: st.id, subject: g.sub, email: g.email, firstName: g.firstName, lastName: g.lastName }, hashLinkNonce(nonce));
+          const url = `${resolveStorefrontUrl(emailStoreCtx(st))}/sign-in/confirm?token=${token}`;
+          await enqueueFederatedLinkConfirm(tx, st.id, emailStoreCtx(st), g.email, { url, providerName: 'Google', providerEmail: g.email, ttlMinutes: FEDERATED_LINK_TTL_MS / 60000 });
+          return { kind: 'verify_sent' };
         }
       }
-      await grantSignupBonus(tx, st.id, cust.id); // REWARDS-1: no-op unless the rule is on
-      const token = await createSession(tx, st.id, cust.id, sessionPolicy(st.config));
-      return { kind: 'ok', token, customer: { id: cust.id, email: cust.email, firstName: cust.firstName, lastName: cust.lastName, phone: cust.phone, emailVerified: true, isMigrated: cust.passwordHash == null } };
+      return completeGoogleSignIn(tx, st, g, authoritative);
     });
-    if (out.kind === 'blocked') {
-      return errJson(c, 409, 'EMAIL_TAKEN_UNVERIFIED', 'an account with this email already exists — sign in with your password and verify your email first');
+    if (out.kind === 'verify_sent') {
+      await gate?.record();
+      setFederatedNonceCookie(c, nonce, FEDERATED_LINK_TTL_MS / 1000);
+      return c.json({ verificationRequired: true as const, nonce }, 202);
     }
-    if (out.kind === 'not_linkable') {
-      return errJson(c, 409, 'EMAIL_TAKEN', 'an account with this email already exists — sign in with your password or a sign-in link first');
-    }
-    setCustomerCookies(c, out.token, newCsrf(), customerCookieSeconds(st));
-    return c.json({ token: out.token, customer: out.customer }, 200);
+    return signInOutcomeResponse(c, st, out);
   },
 );
+
+// POST /v1/shop/auth/federated/confirm — redeem the link mailed by a federated
+// sign-in (provider is inside the signed token). Requires (1) a valid, unexpired
+// token, (2) the nonce cookie of the browser that started the flow, (3) first
+// use. Clicking proves current control of the address, so it may link an
+// existing account or create one; this is the first place account state is
+// consulted. Any failure of 1-3 is the same 401 and changes nothing.
+auth.openapi(
+  createRoute({
+    method: 'post',
+    path: '/v1/shop/auth/federated/confirm',
+    summary: 'Confirm a federated sign-in from the emailed link',
+    request: { body: { content: { 'application/json': { schema: z.object({ token: z.string().min(20).max(2048), nonce: z.string().min(20).max(256).optional() }) } } } },
+    responses: {
+      200: { description: 'OK', content: { 'application/json': { schema: z.object({ token: z.string(), customer: CustomerOut }) } } },
+      401: { description: 'Link invalid, expired, already used, or opened in a different browser', content: { 'application/json': { schema: apiErrorSchema() } } },
+      409: { description: 'The address already belongs to an account that cannot be linked', content: { 'application/json': { schema: apiErrorSchema() } } },
+    },
+  }),
+  async (c) => {
+    const st = await resolveStoreFromCtx(c);
+    const invalid = () => errJson(c, 401, 'TOKEN_INVALID', 'this confirmation link is invalid, expired, or was already used — start the sign-in again in this browser');
+    const { token: linkToken, nonce: bodyNonce } = c.req.valid('json');
+    const claims = verifyFederatedLink(linkToken, st.id);
+    if (!claims) return invalid();
+    // The initiator's nonce: request body (native apps) or the HttpOnly cookie (browsers) — never the URL. Other browser /
+    // wrong nonce: link stays unspent.
+    if (!nonceMatches(bodyNonce ?? cookie(c, FEDERATED_NONCE_COOKIE), claims.nonceHash)) return invalid();
+    const out = await withStore(st.id, async (tx): Promise<SignInOutcome | { kind: 'replayed' }> => {
+      if (!(await redeemFederatedLink(tx, st.id, claims.jti, claims.exp))) return { kind: 'replayed' };
+      // Clicking proved the mailbox, so the provider-specific link/create runs with mailboxProven.
+      return claims.provider === 'apple'
+        ? completeAppleSignIn(tx, st, { sub: claims.subject, email: claims.email, emailVerified: true }, true)
+        : completeGoogleSignIn(tx, st, { sub: claims.subject, email: claims.email, firstName: claims.firstName, lastName: claims.lastName }, true);
+    });
+    if (out.kind === 'replayed') return invalid();
+    clearFederatedNonceCookie(c);
+    return signInOutcomeResponse(c, st, out);
+  },
+);
+
+// Find-or-link-or-create for an Apple identity. `mailboxProven` is true when the caller already proved CURRENT control
+// of the address (Apple authoritative for it, or a click on the confirmation link); only then may an existing account
+// be linked by email. apple_user_id is read/written via raw SQL (see the route comment below).
+async function completeAppleSignIn(tx: Parameters<Parameters<typeof withStore>[1]>[0], st: StoreCtx, apple: { sub: string; email: string | null; emailVerified: boolean }, mailboxProven: boolean): Promise<SignInOutcome> {
+  const { sub, email: appleEmail, emailVerified } = apple;
+  type CustomerRow = { id: string; email: string; first_name: string | null; last_name: string | null; phone: string | null; email_verified: boolean; password_hash: string | null; apple_user_id: string | null };
+  let [cust] = (await tx.execute(sql`SELECT * FROM customer WHERE apple_user_id = ${sub} AND store_id = ${st.id} LIMIT 1`)).rows as CustomerRow[];
+  if (!cust && appleEmail) {
+    const [byEmail] = (await tx.execute(sql`SELECT * FROM customer WHERE email = ${normalizeEmail(appleEmail)} AND store_id = ${st.id} LIMIT 1`)).rows as CustomerRow[];
+    // SEC: same guards as Google (see completeGoogleSignIn). (1) never link
+    // into a password-holding, still-unverified account someone else
+    // registered first; (2) email-based linking requires proof of current
+    // control of the address — Apple authoritative for it (Apple-hosted /
+    // Private Relay) or a fresh confirmation click — otherwise a reassigned
+    // third-party address could inherit the current owner's account; (3) never
+    // overwrite an account already bound to a different Apple subject. Fail
+    // closed with no session. An existing email must NEVER fall through to
+    // INSERT (duplicate / oracle).
+    // NOTE: the apple_user_id match above is per store, not per audience/
+    // team. A user who previously signed in under a different Apple team
+    // (different per-team `sub` for the same Apple ID, e.g. after a
+    // bundle-id / audience change) no longer relinks to their account by
+    // email: they get 409 EMAIL_TAKEN and must sign in another way. There
+    // is no signed-in "link Apple" endpoint yet, so the 409 message points
+    // only at sign-in methods that exist; it does not promise a link step.
+    if (byEmail) {
+      if (!byEmail.email_verified && byEmail.password_hash) return { kind: 'blocked' };
+      if (!mailboxProven || (byEmail.apple_user_id && byEmail.apple_user_id !== sub)) {
+        return { kind: 'not_linkable' };
+      }
+      // Race guard: the SELECT above is not locked, so re-assert in the
+      // WHERE that the row is still unbound (or already ours). A concurrent
+      // sign-in with another Apple subject that bound it first -> 0 rows.
+      const linked = (await tx.execute(sql`UPDATE customer SET apple_user_id = ${sub}, email_verified = true, updated_at = now() WHERE id = ${byEmail.id} AND (apple_user_id IS NULL OR apple_user_id = ${sub}) RETURNING id`)).rows;
+      if (!linked.length) return { kind: 'not_linkable' };
+      cust = { ...byEmail, email_verified: true };
+    }
+  }
+  if (!cust) {
+    // Apple's Private Relay can omit email on repeat sign-ins; a fresh
+    // account with no email yet is legitimate here — the email column is
+    // NOT NULL so fall back to an opaque per-sub placeholder that can
+    // never collide with a real address (.invalid is reserved, RFC 2606)
+    // and is never shown to the user.
+    const email = appleEmail ? normalizeEmail(appleEmail) : `apple-${sub}@no-email.invalid`;
+    const [created] = (await tx.execute(sql`
+      INSERT INTO customer (store_id, email, apple_user_id, email_verified)
+      VALUES (${st.id}, ${email}, ${sub}, ${emailVerified}) RETURNING *`)).rows as CustomerRow[];
+    cust = created!;
+  }
+  const token = await createSession(tx, st.id, cust.id, sessionPolicy(st.config));
+  return { kind: 'ok', token, customer: { id: cust.id, email: cust.email, firstName: cust.first_name, lastName: cust.last_name, phone: cust.phone, emailVerified: cust.email_verified, isMigrated: cust.password_hash == null } };
+}
 
 // POST /v1/shop/auth/apple — Sign in with Apple (ported upstream from
 // RightSites). Verifies the client's identityToken server-side (auth/apple.ts:
@@ -328,8 +486,10 @@ auth.openapi(
     request: { body: { content: { 'application/json': { schema: z.object({ identityToken: z.string().min(20) }) } } } },
     responses: {
       200: { description: 'OK', content: { 'application/json': { schema: z.object({ token: z.string(), customer: CustomerOut }) } } },
+      202: { description: 'Apple cannot vouch for this address: a confirmation link was sent to it (identical whether or not an account exists)', content: { 'application/json': { schema: z.object({ verificationRequired: z.literal(true), nonce: z.string() }) } } },
       401: { description: 'Invalid token', content: { 'application/json': { schema: apiErrorSchema() } } },
-      409: { description: 'Not configured, or an unverified account already owns this email', content: { 'application/json': { schema: apiErrorSchema() } } },
+      409: { description: 'Not configured (APPLE_SIGNIN_NOT_CONFIGURED), an unverified account owns this email (EMAIL_TAKEN_UNVERIFIED), or an account with this email exists and Apple is not authoritative for it / is bound to another Apple subject (EMAIL_TAKEN)', content: { 'application/json': { schema: apiErrorSchema() } } },
+      429: { description: 'Rate limited', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
   async (c) => {
@@ -344,42 +504,43 @@ auth.openapi(
     }
     if (!apple) return errJson(c, 401, 'APPLE_TOKEN_INVALID', 'invalid Apple identity token');
     const { sub, email: appleEmail, emailVerified } = apple;
-    const out = await withStore(st.id, async (tx): Promise<{ kind: 'blocked' } | { kind: 'ok'; token: string; customer: z.infer<typeof CustomerOut> }> => {
-      type CustomerRow = { id: string; email: string; first_name: string | null; last_name: string | null; phone: string | null; email_verified: boolean; password_hash: string | null };
-      let [cust] = (await tx.execute(sql`SELECT * FROM customer WHERE apple_user_id = ${sub} AND store_id = ${st.id} LIMIT 1`)).rows as CustomerRow[];
-      if (!cust && appleEmail) {
-        const [byEmail] = (await tx.execute(sql`SELECT * FROM customer WHERE email = ${normalizeEmail(appleEmail)} AND store_id = ${st.id} LIMIT 1`)).rows as CustomerRow[];
-        // SEC: same account-takeover guard as Google (see auth/google above).
-        // Only auto-link when Apple itself proved the address AND the target
-        // account isn't a password-holding, still-unverified account that
-        // someone else registered first.
-        if (byEmail && emailVerified && !(!byEmail.email_verified && byEmail.password_hash)) {
-          await tx.execute(sql`UPDATE customer SET apple_user_id = ${sub}, updated_at = now() WHERE id = ${byEmail.id}`);
-          cust = byEmail;
-        } else if (byEmail && !byEmail.email_verified && byEmail.password_hash) {
-          return { kind: 'blocked' };
+    // Like Google: a token that carries an email Apple did not verify is
+    // rejected outright — never create or link an account from it.
+    if (appleEmail && !emailVerified) return errJson(c, 401, 'APPLE_TOKEN_INVALID', 'invalid Apple identity token');
+    // An identity that names an address Apple is NOT authoritative for is answered uniformly (see the Google handler):
+    // no lookup by address, a confirmation link mailed to it, 202 + nonce cookie, identical for existing and unknown
+    // addresses. A returning, already-bound Apple subject and authoritative identities (Apple-hosted / Private Relay)
+    // are unchanged; an identity with no email at all names no address, so there is nothing to confirm.
+    // The link is bound to the initiator: browsers via the nonce cookie, native apps via the same nonce returned in the
+    // 202 body and posted back with the token (see the Google handler comment).
+    const authoritative = appleAuthoritativeForEmail(apple);
+    const confirmByMail = !!appleEmail && !authoritative;
+    let gate: Awaited<ReturnType<typeof federatedMailGate>> | undefined;
+    if (confirmByMail) {
+      if (!federatedLinkAvailable()) return errJson(c, 409, 'APPLE_SIGNIN_NOT_CONFIGURED', 'Sign in with Apple is not configured for this store');
+      gate = await federatedMailGate(c, normalizeEmail(appleEmail!));
+      if (gate.retry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${gate.retry}s`);
+    }
+    const nonce = newLinkNonce();
+    const out = await withStore(st.id, async (tx): Promise<SignInOutcome | { kind: 'verify_sent' }> => {
+      if (confirmByMail) {
+        const bound = (await tx.execute(sql`SELECT 1 FROM customer WHERE apple_user_id = ${sub} AND store_id = ${st.id} LIMIT 1`)).rows;
+        if (!bound.length) {
+          const to = normalizeEmail(appleEmail!);
+          const token = signFederatedLink({ provider: 'apple', storeId: st.id, subject: sub, email: to, firstName: null, lastName: null }, hashLinkNonce(nonce));
+          const url = `${resolveStorefrontUrl(emailStoreCtx(st))}/sign-in/confirm?token=${token}`;
+          await enqueueFederatedLinkConfirm(tx, st.id, emailStoreCtx(st), to, { url, providerName: 'Apple', providerEmail: to, ttlMinutes: FEDERATED_LINK_TTL_MS / 60000 });
+          return { kind: 'verify_sent' };
         }
       }
-      if (!cust) {
-        // Apple's Private Relay can omit email on repeat sign-ins; a fresh
-        // account with no email yet is legitimate here — the email column is
-        // NOT NULL so fall back to an opaque per-sub placeholder that can
-        // never collide with a real address (.invalid is reserved, RFC 2606)
-        // and is never shown to the user.
-        const email = appleEmail ? normalizeEmail(appleEmail) : `apple-${sub}@no-email.invalid`;
-        const [created] = (await tx.execute(sql`
-          INSERT INTO customer (store_id, email, apple_user_id, email_verified)
-          VALUES (${st.id}, ${email}, ${sub}, ${emailVerified}) RETURNING *`)).rows as CustomerRow[];
-        cust = created!;
-      }
-      const token = await createSession(tx, st.id, cust.id, sessionPolicy(st.config));
-      return { kind: 'ok', token, customer: { id: cust.id, email: cust.email, firstName: cust.first_name, lastName: cust.last_name, phone: cust.phone, emailVerified: cust.email_verified, isMigrated: cust.password_hash == null } };
+      return completeAppleSignIn(tx, st, apple, authoritative);
     });
-    if (out.kind === 'blocked') {
-      return errJson(c, 409, 'EMAIL_TAKEN_UNVERIFIED', 'an account with this email already exists — sign in with your password and verify your email first');
+    if (out.kind === 'verify_sent') {
+      await gate?.record();
+      setFederatedNonceCookie(c, nonce, FEDERATED_LINK_TTL_MS / 1000);
+      return c.json({ verificationRequired: true as const, nonce }, 202);
     }
-    setCustomerCookies(c, out.token, newCsrf(), customerCookieSeconds(st));
-    return c.json({ token: out.token, customer: out.customer }, 200);
+    return signInOutcomeResponse(c, st, out);
   },
 );
 
