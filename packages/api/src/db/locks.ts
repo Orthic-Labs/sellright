@@ -453,6 +453,9 @@ export async function withLockedSet<T>(
       }
       if (attempt >= (opts.maxRestarts ?? 3)) throw new LockSetUnstable();
       plan = e instanceof LockSetGrew ? union(plan, e.grown) : plan;
+      // A lock timeout already waited out lock_timeout; a NOWAIT refusal (55P03 at once) did not, so back off with jitter
+      // before the restart or the whole budget burns inside one holder's critical section.
+      if (!(e instanceof LockSetGrew)) await new Promise((resolve) => setTimeout(resolve, 10 + Math.floor(Math.random() * 40) * (attempt + 1)));
     }
   }
 }

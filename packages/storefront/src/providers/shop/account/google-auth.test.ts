@@ -61,8 +61,9 @@ describe('Google sign-in switch', () => {
 
 	it('the CSP is built per request with the nonce and only adds Google sources through the switch', () => {
 		const entry = read('src/entry.express.tsx');
-		expect(entry).toContain("'nonce-${nonce}'");
-		for (const k of ['script', 'style', 'connect', 'frame']) expect(entry).toContain(`googleCsp.${k}`);
+		expect(entry).toContain('buildCsp({');
+		expect(entry).toContain('nonce,');
+		expect(entry).toContain('google: googleCsp');
 		expect(entry).not.toContain('accounts.google.com'); // origins live only in config/google-signin.ts
 	});
 });

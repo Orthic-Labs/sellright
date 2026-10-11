@@ -1084,3 +1084,305 @@ describe('legacy edit_reconcile effects (queued before actorKind existed)', () =
   });
 });
 
+
+// Issue #192: a human's explicit approval of a held edit_reconcile effect (POST .../effects/:id/approve-issuance).
+describe('approve a held edit issuance', () => {
+  const emails: string[] = [];
+  const adminIds: string[] = [];
+  const mkAdmin = async (kind: string, role?: string) => {
+    const email = `appr-${kind}-${Math.random().toString(16).slice(2, 10)}@example.test`;
+    emails.push(email);
+    const r = await pool.query('INSERT INTO admin_user (email, kind, password_hash) VALUES ($1, $2, $3) RETURNING id', [email, kind, 'x']);
+    const id = r.rows[0].id as string;
+    adminIds.push(id);
+    if (role) await withStore(STORE, (tx) => tx.execute(sql`INSERT INTO admin_user_store (admin_user_id, store_id, role) VALUES (${id}, ${STORE}, ${role})`));
+    return { id, email };
+  };
+  afterAll(async () => {
+    if (!emails.length) return;
+    // Children first: store grants and sessions reference admin_user.
+    await pool.query('DELETE FROM admin_user_store WHERE admin_user_id IN (SELECT id FROM admin_user WHERE email = ANY($1))', [emails]);
+    await pool.query('DELETE FROM session WHERE admin_user_id IN (SELECT id FROM admin_user WHERE email = ANY($1))', [emails]);
+    await pool.query('DELETE FROM admin_user WHERE email = ANY($1)', [emails]);
+  });
+
+  let http: OpenAPIHono;
+  let ownerToken = '';
+  let owner = { id: '', email: '' };
+  const call = (token: string, path: string, method = 'POST') => http.request(path, { method, headers: { authorization: `Bearer ${token}`, 'x-store-slug': SLUG } });
+  const approve = (token: string, effectId: string) => call(token, `/v1/admin/payment-reconciliation/effects/${effectId}/approve-issuance`);
+  const errCode = async (r: Response) => ((await r.json()) as { error?: { code?: string } }).error?.code;
+
+  beforeEach(async () => {
+    const { buildHttpApp } = await import('../app.js');
+    const { createAdminSession } = await import('../auth/admin-session.js');
+    http = buildHttpApp() as unknown as OpenAPIHono;
+    owner = await mkAdmin('human', 'owner');
+    ownerToken = await createAdminSession(owner.id);
+  });
+
+  /** A held effect: a legacy edit whose actor cannot be resolved (or an agent-made edit), run once to its terminal hold. */
+  async function heldEffect(o: { id: string }, via: 'unresolved' | 'agent' = 'unresolved') {
+    const editId = crypto.randomUUID();
+    const eff = await withStore(STORE, async (tx) => {
+      await tx.insert(s.orderEdit).values({ id: editId, storeId: STORE, orderId: o.id, before: {}, after: {}, actor: via === 'unresolved' ? 'ghost@example.test' : 'x@example.test' });
+      await tx.insert(s.settlementOperation).values({ storeId: STORE, operationKind: 'order_edit_balance_settled', operationId: editId, orderId: o.id, paymentId: null });
+      const [row] = await tx.insert(s.orderPendingEffect).values({
+        storeId: STORE, operationKind: 'order_edit_balance_settled', operationId: editId, effectKind: 'edit_reconcile',
+        payload: { orderId: o.id, customerId: null, paidAt: new Date().toISOString(), ...(via === 'agent' ? { actorKind: 'agent' } : {}) },
+      }).returning({ id: s.orderPendingEffect.id });
+      return row!;
+    });
+    await run();
+    const e = await effectRow(eff.id);
+    expect(e.status).toBe('terminal');
+    return { effectId: eff.id, editId };
+  }
+  const run = async () => { const { runEffectsPass } = await import('../payments/settlement/effects.js'); return runEffectsPass({ rounds: 2 }); };
+  const effectRow = (id: string) => withStore(STORE, async (tx) => (await tx.select().from(s.orderPendingEffect).where(eq(s.orderPendingEffect.id, id)))[0]!);
+  const licensesOf = (orderId: string) => withStore(STORE, (tx) => tx.select().from(s.license).where(eq(s.license.orderId, orderId)));
+  const reviewOf = (editId: string) => withStore(STORE, async (tx) => (await tx.select().from(s.orderPendingEffect).where(and(eq(s.orderPendingEffect.operationId, editId), eq(s.orderPendingEffect.effectKind, 'admin_review'))))[0]!);
+  const approvalAudits = (effectId: string) => withStore(STORE, (tx) => tx.select().from(s.auditLog).where(and(eq(s.auditLog.action, 'edit_issuance_approved'), eq(s.auditLog.entityId, effectId))));
+
+  it('a human approves a held effect: issues once, audit row, effect done, review task resolved, original decision untouched', async () => {
+    const o = await makeOrder({ lines: [{ sku: 'L', qty: 1 }] });
+    const { effectId, editId } = await heldEffect(o);
+    expect((await reviewOf(editId)).resolution).toBeNull();
+    const { listEffectsNeedingAttention } = await import('../payments/settlement/effects.js');
+    expect((await withStore(STORE, (tx) => listEffectsNeedingAttention(tx))).map((r) => r.id)).toContain((await reviewOf(editId)).id);
+
+    const r = await approve(ownerToken, effectId);
+    expect(r.status).toBe(200);
+    expect(await r.json()).toMatchObject({ effectId, orderId: o.id, approved: true, alreadyApproved: false, status: 'done' });
+
+    const e = await effectRow(effectId);
+    expect(e.status).toBe('done');
+    expect((e.payload as { issuanceApprovedBy: Record<string, unknown> }).issuanceApprovedBy).toMatchObject({ adminUserId: owner.id, email: owner.email, effectId, orderId: o.id });
+    expect(await licensesOf(o.id)).toHaveLength(1);
+    const [audit] = await approvalAudits(effectId);
+    expect(audit!.actor).toBe(owner.email);
+    expect(audit!.data).toMatchObject({ adminUserId: owner.id, effectId, orderId: o.id, heldReason: 'EDIT_PRINCIPAL_UNRESOLVED' });
+    // the review task is closed and the effect leaves the attention list
+    expect((await reviewOf(editId)).resolution).toMatchObject({ action: 'approved_issuance', adminUserId: owner.id, effectId });
+    const open = (await withStore(STORE, (tx) => listEffectsNeedingAttention(tx))).map((x) => x.operationId);
+    expect(open).not.toContain(editId);
+    // provenance is not rewritten: the recorded decision is still "unresolved"
+    const decided = await audits('edit_principal_resolved');
+    expect(decided).toHaveLength(1);
+    expect(decided[0]!.data).toMatchObject({ kind: 'unresolved' });
+  });
+
+  it('an agent-refused hold (actorKind agent) is approvable too', async () => {
+    const o = await makeOrder({ lines: [{ sku: 'L', qty: 1 }] });
+    const { effectId } = await heldEffect(o, 'agent');
+    expect((await effectRow(effectId)).lastError).toBe('AGENT_ISSUANCE_REFUSED');
+    expect((await approve(ownerToken, effectId)).status).toBe(200);
+    expect((await effectRow(effectId)).status).toBe('done');
+    expect(await licensesOf(o.id)).toHaveLength(1);
+  });
+
+  it('approving twice is idempotent: one licence, one approval audit row', async () => {
+    const o = await makeOrder({ lines: [{ sku: 'L', qty: 1 }] });
+    const { effectId } = await heldEffect(o);
+    expect((await approve(ownerToken, effectId)).status).toBe(200);
+    const again = await approve(ownerToken, effectId);
+    expect(again.status).toBe(200);
+    expect(await again.json()).toMatchObject({ alreadyApproved: true, status: 'done' });
+    expect(await licensesOf(o.id)).toHaveLength(1);
+    expect(await approvalAudits(effectId)).toHaveLength(1);
+  });
+
+  it('an agent bearer token and an agent browser session are refused (403); nothing changes', async () => {
+    const o = await makeOrder({ lines: [{ sku: 'L', qty: 1 }] });
+    const { effectId } = await heldEffect(o);
+    const created = await http.request('/v1/admin/agents', { method: 'POST', headers: { authorization: `Bearer ${ownerToken}`, 'x-store-slug': SLUG, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Ops bot' }) });
+    expect(created.status).toBe(200);
+    const agent = (await created.json()) as { token: string; adminUserId: string };
+    // with every permission granted, the deny set still wins
+    expect((await http.request(`/v1/admin/staff/${agent.adminUserId}/permissions`, { method: 'PUT', headers: { authorization: `Bearer ${ownerToken}`, 'x-store-slug': SLUG, 'content-type': 'application/json' }, body: JSON.stringify({ permissions: { refunds: true } }) })).status).toBe(200);
+    expect((await approve(agent.token, effectId)).status).toBe(403);
+    const bs = await call(agent.token, '/v1/admin/agents/browser-session');
+    const sr = /sr_admin=([^;]+)/.exec(bs.headers.get('set-cookie') ?? '')?.[1];
+    const csrf = /sr_csrf=([^;]+)/.exec(bs.headers.get('set-cookie') ?? '')?.[1];
+    const viaCookie = await http.request(`/v1/admin/payment-reconciliation/effects/${effectId}/approve-issuance`, {
+      method: 'POST', headers: { cookie: `sr_admin=${sr}; sr_csrf=${csrf}`, 'x-csrf-token': csrf!, 'x-store-slug': SLUG },
+    });
+    expect(viaCookie.status).toBe(403);
+    const e = await effectRow(effectId);
+    expect(e.status).toBe('terminal');
+    expect((e.payload as Record<string, unknown>).issuanceApprovedBy).toBeUndefined();
+    expect(await licensesOf(o.id)).toHaveLength(0);
+    expect(await approvalAudits(effectId)).toHaveLength(0);
+  });
+
+  it('a human without the refunds permission, or with a read-only role, is refused', async () => {
+    const { createAdminSession } = await import('../auth/admin-session.js');
+    const o = await makeOrder({ lines: [{ sku: 'L', qty: 1 }] });
+    const { effectId } = await heldEffect(o);
+    const staff = await mkAdmin('human', 'staff');
+    const viewer = await mkAdmin('human', 'read_only');
+    expect((await approve(await createAdminSession(staff.id), effectId)).status).toBe(403);
+    expect((await approve(await createAdminSession(viewer.id), effectId)).status).toBe(403);
+    expect((await effectRow(effectId)).status).toBe('terminal');
+  });
+
+  it('refuses effects that are not held: done, still pending, another kind, unknown id', async () => {
+    // done: a human-paid edit effect that issued normally
+    const o1 = await makeOrder({ lines: [{ sku: 'L', qty: 1 }] });
+    const doneEditId = crypto.randomUUID();
+    const done = await withStore(STORE, async (tx) => {
+      await tx.insert(s.settlementOperation).values({ storeId: STORE, operationKind: 'payment_settled', operationId: doneEditId, orderId: o1.id });
+      const [row] = await tx.insert(s.orderPendingEffect).values({ storeId: STORE, operationKind: 'payment_settled', operationId: doneEditId, effectKind: 'edit_reconcile', payload: { orderId: o1.id, customerId: null, paidAt: new Date().toISOString() } }).returning({ id: s.orderPendingEffect.id });
+      return row!;
+    });
+    await run();
+    expect((await effectRow(done.id)).status).toBe('done');
+    const r1 = await approve(ownerToken, done.id);
+    expect([r1.status, await errCode(r1)]).toEqual([409, 'EFFECT_NOT_HELD']);
+    expect(await licensesOf(o1.id)).toHaveLength(1);
+    // pending: queued, not yet run
+    const o2 = await makeOrder({ lines: [{ sku: 'L', qty: 1 }] });
+    const pendingEditId = crypto.randomUUID();
+    const pending = await withStore(STORE, async (tx) => {
+      await tx.insert(s.settlementOperation).values({ storeId: STORE, operationKind: 'payment_settled', operationId: pendingEditId, orderId: o2.id });
+      const [row] = await tx.insert(s.orderPendingEffect).values({ storeId: STORE, operationKind: 'payment_settled', operationId: pendingEditId, effectKind: 'edit_reconcile', payload: { orderId: o2.id, customerId: null, paidAt: new Date().toISOString() } }).returning({ id: s.orderPendingEffect.id });
+      return row!;
+    });
+    const r2 = await approve(ownerToken, pending.id);
+    expect([r2.status, await errCode(r2)]).toEqual([409, 'EFFECT_NOT_HELD']);
+    expect((await effectRow(pending.id)).status).toBe('pending');
+    // another kind: the admin_review task row itself
+    const held = await heldEffect(await makeOrder({ lines: [{ sku: 'L', qty: 1 }] }));
+    const r3 = await approve(ownerToken, (await reviewOf(held.editId)).id);
+    expect([r3.status, await errCode(r3)]).toEqual([409, 'EFFECT_NOT_HELD']);
+    expect((await approve(ownerToken, crypto.randomUUID())).status).toBe(404);
+  });
+
+  it('an ordinary retry without approval still reaches the same hold', async () => {
+    const o = await makeOrder({ lines: [{ sku: 'L', qty: 1 }] });
+    const { effectId, editId } = await heldEffect(o);
+    expect((await call(ownerToken, `/v1/admin/payment-reconciliation/effects/${effectId}/retry`)).status).toBe(200);
+    await run();
+    const e = await effectRow(effectId);
+    expect(e.status).toBe('terminal');
+    expect(e.lastError).toBe('EDIT_PRINCIPAL_UNRESOLVED');
+    expect(await licensesOf(o.id)).toHaveLength(0);
+    expect((await reviewOf(editId)).resolution).toBeNull();
+  });
+
+  it('an approval on effect A releases neither effect B nor an order other than its own (a copied approval is ignored)', async () => {
+    const oa = await makeOrder({ lines: [{ sku: 'L', qty: 1 }] });
+    const ob = await makeOrder({ lines: [{ sku: 'L', qty: 1 }] });
+    const a = await heldEffect(oa);
+    const b = await heldEffect(ob);
+    expect((await approve(ownerToken, a.effectId)).status).toBe(200);
+    expect((await effectRow(b.effectId)).status).toBe('terminal');
+    expect(await licensesOf(ob.id)).toHaveLength(0);
+    // copy A's approval object into B's payload and requeue B: bound to A's effect id and order, with no audit row for B
+    const approvalA = ((await effectRow(a.effectId)).payload as { issuanceApprovedBy: unknown }).issuanceApprovedBy;
+    await withStore(STORE, async (tx) => {
+      await tx.execute(sql`UPDATE order_pending_effect SET payload = payload || ${JSON.stringify({ issuanceApprovedBy: approvalA })}::jsonb WHERE id = ${b.effectId}`);
+      const { requeueTerminalEffect } = await import('../payments/settlement/effects.js');
+      await requeueTerminalEffect(tx, b.effectId);
+    });
+    await run();
+    expect((await effectRow(b.effectId)).status).toBe('terminal');
+    expect(await licensesOf(ob.id)).toHaveLength(0);
+    expect((await reviewOf(b.editId)).resolution).toBeNull();
+  });
+  it('an approval never issues for a line the order has not paid for: a later leave_due licensed addition holds the effect, the review stays open, and the balance settles it', async () => {
+    const o = await makeOrder({ lines: [{ sku: 'L', qty: 1 }] }); // Paid, fully funded
+    const { effectId, editId } = await heldEffect(o);
+    // A human then adds another licensed line and leaves it due: the order stays Paid with a positive balance.
+    const r = await commit(o.code, [{ op: 'add_item', sku: 'M', quantity: 1 }], {}, { type: 'leave_due' });
+    expect(r.state).toBe('Paid');
+    expect(r.amountDue).toBe(1000);
+
+    const res = await approve(ownerToken, effectId);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ effectId, approved: true, status: 'pending' });
+    expect(await licensesOf(o.id)).toHaveLength(0); // nothing for the unpaid addition, nor for the funded line
+    const e = await effectRow(effectId);
+    expect([e.status, e.lastError]).toEqual(['pending', 'EDIT_BALANCE_DUE']);
+    // the approval is not consumed by the refusal: it stays on the payload, and the review task stays unresolved
+    expect((e.payload as { issuanceApprovedBy: Record<string, unknown> }).issuanceApprovedBy).toMatchObject({ adminUserId: owner.id, effectId, orderId: o.id });
+    expect((await reviewOf(editId)).resolution).toBeNull();
+    expect(await approvalAudits(effectId)).toHaveLength(1);
+
+    // A worker retry while the balance is still due refuses the same way (every execution is checked).
+    await withStore(STORE, (tx) => tx.execute(sql`UPDATE order_pending_effect SET next_attempt_at = now() WHERE id = ${effectId}`));
+    await run();
+    expect(await licensesOf(o.id)).toHaveLength(0);
+    expect((await effectRow(effectId)).lastError).toBe('EDIT_BALANCE_DUE');
+    expect((await reviewOf(editId)).resolution).toBeNull();
+
+    // The balance is settled: the retry now takes the normal path, issues once per line, and closes the review.
+    await withStore(STORE, (tx) => tx.insert(s.payment).values({ storeId: STORE, orderId: o.id, amount: 1000, method: 'stripe', state: 'Settled', providerRef: `pi_bal_${o.code}`, gatewayMode: 'test', currency: 'USD' }));
+    await withStore(STORE, (tx) => tx.execute(sql`UPDATE order_pending_effect SET next_attempt_at = now() WHERE id = ${effectId}`));
+    await run();
+    const done = await effectRow(effectId);
+    expect(done.status).toBe('done');
+    expect(await licensesOf(o.id)).toHaveLength(2);
+    expect((await reviewOf(editId)).resolution).toMatchObject({ action: 'approved_issuance', adminUserId: owner.id, effectId });
+    await run();
+    expect(await licensesOf(o.id)).toHaveLength(2);
+  });
+
+  // Lock order (issuance-approval.ts): the worker holds the effect row first and then waits for the order set; the approval
+  // holds the order set. It must not wait for the effect row (deadlock), it must back off and restart.
+  const holdEffectRow = async (effectId: string) => {
+    const w = await pool.connect();
+    await w.query('BEGIN');
+    await w.query(`SELECT set_config('app.current_store', $1, true)`, [STORE]);
+    await w.query(`SELECT 1 FROM order_pending_effect WHERE id = $1 FOR UPDATE`, [effectId]);
+    return w;
+  };
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  it('approve versus a worker holding the effect row: no deadlock, the worker gets the order set while the approval backs off, then one issuance', async () => {
+    const o = await makeOrder({ lines: [{ sku: 'L', qty: 1 }] });
+    const { effectId } = await heldEffect(o);
+    const w = await holdEffectRow(effectId); // worker step 1: the effect row
+    let approvalSettled = false;
+    const approval = Promise.resolve(approve(ownerToken, effectId)).then((r) => { approvalSettled = true; return r; });
+    try {
+      await sleep(250); // the approval has taken the order set, been refused the effect row (NOWAIT) and rolled back
+      expect(approvalSettled).toBe(false);
+      // worker step 2: the order set. With a wait-while-holding approval this is the deadlock cycle (40P01 on one side).
+      await w.query(`SET LOCAL lock_timeout = '3s'`);
+      await expect(w.query(`SELECT 1 FROM "order" WHERE id = $1 FOR UPDATE`, [o.id])).resolves.toBeDefined();
+      expect(approvalSettled).toBe(false); // still cannot take the effect row
+      await w.query('COMMIT');
+    } finally {
+      await w.query('ROLLBACK').catch(() => undefined);
+      w.release();
+    }
+    const res = await approval;
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ effectId, approved: true, alreadyApproved: false, status: 'done' });
+    expect(await licensesOf(o.id)).toHaveLength(1);
+    expect(await approvalAudits(effectId)).toHaveLength(1);
+    await run(); // a later worker pass finds nothing to do
+    expect(await licensesOf(o.id)).toHaveLength(1);
+  });
+
+  it('approve while the effect row stays held: a bounded 409 EFFECT_BUSY, nothing recorded, and a later approval succeeds', async () => {
+    const o = await makeOrder({ lines: [{ sku: 'L', qty: 1 }] });
+    const { effectId } = await heldEffect(o);
+    const w = await holdEffectRow(effectId);
+    try {
+      const busy = await approve(ownerToken, effectId);
+      expect([busy.status, await errCode(busy)]).toEqual([409, 'EFFECT_BUSY']);
+    } finally {
+      await w.query('ROLLBACK').catch(() => undefined);
+      w.release();
+    }
+    const e = await effectRow(effectId);
+    expect(e.status).toBe('terminal');
+    expect((e.payload as Record<string, unknown>).issuanceApprovedBy).toBeUndefined();
+    expect(await approvalAudits(effectId)).toHaveLength(0);
+    expect(await licensesOf(o.id)).toHaveLength(0);
+    expect((await approve(ownerToken, effectId)).status).toBe(200);
+    expect(await licensesOf(o.id)).toHaveLength(1);
+  }, 20000);
+});

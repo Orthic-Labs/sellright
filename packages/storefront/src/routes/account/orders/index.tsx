@@ -64,7 +64,7 @@ export default component$(() => {
 						<>
 							<div class="space-y-4">
 								{orders.value.map((order) => {
-									const status = getStatusDisplay(order.state, undefined);
+									const status = getStatusDisplay(order.state, undefined, order.fulfillmentStatus);
 									if (OrderCardSlot) return <OrderCardSlot key={order.code} order={order} href={`/account/orders/${order.code}`} />;
 									return (
 										<a
@@ -74,7 +74,7 @@ export default component$(() => {
 										>
 											<div class="flex items-start justify-between gap-4">
 												<div class="flex items-center gap-3 min-w-0">
-													{getStatusIcon(order.state)}
+													{getStatusIcon(order.state, undefined, order.fulfillmentStatus)}
 													<div class="min-w-0">
 														<h3 class="text-base sm:text-lg font-semibold text-gray-900 truncate">
 															Order #{order.code}

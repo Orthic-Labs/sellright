@@ -27,6 +27,7 @@ import { emitOrderPaidEvent, sendOrderConfirmationAndEnrol } from '../paid-effec
 import { runAuthorizeInvoiceEffect, runEntitlementReversal, runRevalidateForIssuance } from '../policy/host.js';
 import { PaymentPolicyUnavailableError } from '../policy/registry.js';
 import type { PolicyOrder } from '../policy/types.js';
+import { resolveHeldReviewTasks, validIssuanceApproval } from './issuance-approval.js';
 import { recordOperationLicense, registerEffectHandler, backoffSeconds, runningInline, type EffectOutcome, type EffectRow, type LocalEffectHandler } from './effects.js';
 
 /** Mirror of email/dispatch.ts::parseAppMap (kept local: no internal export just for this path). */
@@ -53,6 +54,8 @@ export interface EditReconcilePayload {
   orderId: string; customerId: string | null; paidAt: string;
   /** Who committed the edit that queued this reconcile; absent for money-driven reconciles (customer balance payments). */
   actorKind?: 'human' | 'agent';
+  /** Fresh human approval of a held issuance (issuance-approval.ts); honoured only for this effect and order. */
+  issuanceApprovedBy?: { adminUserId: string; email: string; at: string; effectId: string; orderId: string };
 }
 export interface LoyaltyEarnPayload {
   /** settle: account bootstrap THEN rewards (the async paid paths' order); checkout: rewards only (bootstrap is in its notification). */
@@ -223,6 +226,16 @@ async function linkLicense(tx: Tx, e: EffectRow, p: LicenseIssuePayload, issued:
   return { done: { result: { issued, licenseId: lic?.id ?? null } } };
 }
 
+/** Retry reason while an edit_reconcile would issue licences for a line the order has not paid for. */
+export const EDIT_BALANCE_DUE = 'EDIT_BALANCE_DUE';
+
+/** Amount still due on the CURRENT order (its locked row's grandTotal, not the payload's snapshot). */
+async function editBalanceDue(tx: Tx, storeId: string, orderId: string): Promise<number> {
+  const order = await loadOrder(tx, storeId, orderId);
+  const { amountDueForOrder } = await import('../settle.js'); // lazy: settle -> settlement/record -> handlers (import cycle)
+  return amountDueForOrder(tx, storeId, orderId, order.grandTotal);
+}
+
 /** Who is behind an edit_reconcile effect: a human (or a customer's payment), an agent, or an edit whose actor cannot be established. */
 type EditPrincipal = { kind: 'human' | 'agent' | 'unresolved'; source?: 'payload' | 'edit_actor' | 'recorded'; reason?: string };
 
@@ -289,13 +302,16 @@ export const editReconcile: LocalEffectHandler = {
       const blocked = await requirePaidLifecycle(inner, e, p.orderId);
       if (blocked) return blocked;
       const state: { refused?: EffectOutcome } = {};
+      // A human's explicit approval of a held issuance (POST .../effects/:id/approve-issuance) stands in for the principal check
+      // below and nothing else: the policy gate still runs. Absent on every effect that was never held (no lookup then).
+      const approval = p.issuanceApprovedBy ? await validIssuanceApproval(inner, e, p) : null;
       const r = await reconcileEditedOrderLicenses(inner, {
         storeId: e.storeId, orderId: p.orderId, customerId: p.customerId ?? null, paidAt: new Date(p.paidAt),
         gate: async () => {
           // An agent never issues entitlements: refuse the new rows (revocations above are unaffected) even if a route forgot its check.
           // A row queued by an order edit before actorKind existed has no recorded principal: resolve the edit's actor
           // (order_edit.actor -> admin_user.kind). An agent, or an edit whose actor cannot be resolved, holds for a human.
-          const principal = await resolveEditPrincipal(inner, e, p);
+          const principal: EditPrincipal = approval ? { kind: 'human', source: 'recorded' } : await resolveEditPrincipal(inner, e, p);
           if (principal.kind !== 'human') {
             await inner.insert(s.auditLog).values({
               storeId: e.storeId, actor: 'system:policy', entity: 'order', entityId: p.orderId,
@@ -305,13 +321,21 @@ export const editReconcile: LocalEffectHandler = {
             state.refused = { terminal: principal.kind === 'agent' ? 'AGENT_ISSUANCE_REFUSED' : 'EDIT_PRINCIPAL_UNRESOLVED' };
             return { ok: false };
           }
+          // Entitlements follow money, on EVERY execution (inline, worker retry, approved or not): reconciliation covers every
+          // current line of the order, and a later human edit may have added a licensed line left due (the order stays Paid).
+          // Checked on the locked current order, only here (the hook runs just before NEW licence rows are inserted).
+          // A bounded retry, not a terminal: nothing is consumed (an approval stays on the payload, the review task stays open)
+          // and the effect issues once the balance is settled.
+          if ((await editBalanceDue(inner, e.storeId, p.orderId)) > 0) { state.refused = { retry: { reason: EDIT_BALANCE_DUE } }; return { ok: false }; }
           const gate = await issuanceGate(inner, e, { orderId: p.orderId, customerId: p.customerId ?? null, paidAt: p.paidAt }, held);
           if ('outcome' in gate) { state.refused = gate.outcome; return { ok: false }; }
           return { ok: true, metadataPatch: gate.metadataPatch };
         },
       });
       if (state.refused) return state.refused;
-      return { done: { result: { ...r } } };
+      // The review task that announced the hold closes in the same transaction as this effect's `done`.
+      if (approval) await resolveHeldReviewTasks(inner, e, approval);
+      return { done: { result: { ...r, ...(approval ? { issuanceApprovedBy: approval.adminUserId } : {}) } } };
     });
   },
 };

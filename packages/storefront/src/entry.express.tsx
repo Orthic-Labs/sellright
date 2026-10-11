@@ -13,6 +13,8 @@ import { sellrightRequestHost } from"./utils/sellright-request-host.server";
 import { assertProdApiConfigured } from"./constants";
 import { NO_STORE_CACHE_CONTROL } from"./config/route-cache-policy";
 import { googleIdentityCsp, googleSignInClientId, googleSignInRefusedForMissingPin } from"./config/google-signin";
+import { createCanonicalUrlMiddleware, parseCanonicalSections } from"./utils/canonical-url";
+import { buildCsp } from"./utils/csp";
 
 declare global {
  interface QwikRouterPlatform extends PlatformNode {}
@@ -49,14 +51,12 @@ const app = express();
 const apiOrigin = (process.env.VITE_SELLRIGHT_API_URL || '')
 	.replace(/\/(shop-api)?\/?$/, '')
 	.trim();
-const connectSrcExtra = apiOrigin ? ` ${apiOrigin}` : '';
 // Google Identity origins join the CSP only when Google sign-in is on, from the same compiled client id the sign-in
 // button reads (config/google-signin.ts) — and only for a deployment pinned to one store.
 const googleCsp = googleIdentityCsp(googleSignInClientId());
 if (googleSignInRefusedForMissingPin()) {
 	console.error('[google-signin] VITE_GOOGLE_CLIENT_ID is set but VITE_SELLRIGHT_STORE_SLUG is not: Google sign-in is disabled (it is only supported for a deployment pinned to a single store).');
 }
-const withSources = (base: string, extra: string[]) => [base, ...extra].join(' ');
 
 // Set security headers
 app.use((req, res, next) => {
@@ -106,7 +106,8 @@ app.use((req, res, next) => {
 	//               Stripe.js (loadStripe) is loaded from js.stripe.com;
 	//               NMI Collect.js (loadCollectJs) is loaded from
 	//               sandbox.nmi.com (test) / secure.nmi.com (live) — see
-	//               services/NmiCollect.ts's collectJsSrc
+	//               services/NmiCollect.ts's collectJsSrc; Turnstile's api.js is
+	//               injected without a nonce, hence its origin (when configured)
 	//   style-src   'self' 'unsafe-inline'                    — Qwik/Tailwind
 	//               emit inline <style> tags per-component with no nonce
 	//               support today; unsafe-inline is scoped to STYLE only
@@ -114,6 +115,7 @@ app.use((req, res, next) => {
 	//   font-src    'self'                                    — self-hosted webfonts only
 	//   connect-src 'self' https://api.stripe.com
 	//               https://sandbox.nmi.com https://secure.nmi.com <api origin>
+	//               [+ https://ipapi.co when the browser country fallback is on]
 	//                                                          — SellRight API,
 	//               Stripe, and NMI Collect.js's own tokenization XHR calls
 	//   frame-src   https://js.stripe.com https://hooks.stripe.com
@@ -121,26 +123,22 @@ app.use((req, res, next) => {
 	//                                                          — Stripe Payment
 	//               Element / 3DS iframes, NMI Collect.js's hosted card
 	//               number/expiry/cvv iframes (never this app's own PAN input)
+	//               [+ https://challenges.cloudflare.com when a Turnstile site key is set]
 	//   object-src  'none'
 	//   base-uri    'self'
 	//   form-action 'self'
 	//   frame-ancestors 'none'
 	//   upgrade-insecure-requests
-	const cspDirectives = [
-		`default-src 'self'`,
-		withSources(`script-src 'self' 'nonce-${nonce}' https://js.stripe.com https://sandbox.nmi.com https://secure.nmi.com`, googleCsp.script),
-		withSources(`style-src 'self' 'unsafe-inline'`, googleCsp.style),
-		`img-src 'self' data: https:`,
-		`font-src 'self'`,
-		withSources(`connect-src 'self' https://api.stripe.com https://sandbox.nmi.com https://secure.nmi.com${connectSrcExtra}`, googleCsp.connect),
-		withSources(`frame-src https://js.stripe.com https://hooks.stripe.com https://sandbox.nmi.com https://secure.nmi.com`, googleCsp.frame),
-		`object-src 'none'`,
-		`base-uri 'self'`,
-		`worker-src 'self'`,
-		`form-action 'self'`,
-		`frame-ancestors 'none'`,
-		`upgrade-insecure-requests`
-	].join('; ');
+	// The directive list lives in utils/csp.ts (pure, unit-tested). Two origins are conditional: Cloudflare Turnstile
+	// (script-src + frame-src) when a site key is configured, and ipapi.co (connect-src) when the browser country fallback
+	// is enabled; Google Identity origins (script/style/connect/frame) join only when Google sign-in is on. All read the SAME VITE_* variables the client bundle was built with, from the runtime environment.
+	const cspDirectives = buildCsp({
+		nonce,
+		apiOrigin,
+		turnstileSiteKey: process.env.VITE_TURNSTILE_SITE_KEY,
+		ipCountryFallback: process.env.VITE_IP_COUNTRY_FALLBACK,
+		google: googleCsp,
+	});
 
 	res.setHeader('Content-Security-Policy', cspDirectives);
 
@@ -214,6 +212,11 @@ app.use((_req, res, next) => {
   res.setHeader('Cache-Control', NO_STORE_CACHE_CONTROL);
   next();
 });
+
+// URL canonicalisation for public sections (STOREFRONT_CANONICAL_SECTIONS, default OFF). It sits after the snapshot guard
+// (documents and route data skip the static handlers above and are never redirected: they carry a file extension) and after
+// every asset handler, and it inherits the no-store default above. Only page GET/HEAD requests are ever redirected.
+app.use(createCanonicalUrlMiddleware(parseCanonicalSections(process.env.STOREFRONT_CANONICAL_SECTIONS)));
 
 // Use Qwik Router's page and endpoint request handler
 app.use(router);
