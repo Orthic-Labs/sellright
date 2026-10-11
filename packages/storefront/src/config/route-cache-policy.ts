@@ -34,6 +34,7 @@ const DYNAMIC_PREFIXES = [
 	'/track-order',
 	'/newsletter-signup',
 	'/subscriber',
+	'/newsletter/',
 	'/affiliate',
 	'/verify',
 	'/forgot-password',

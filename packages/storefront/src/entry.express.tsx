@@ -12,6 +12,7 @@ import { sellrightRequestCookie } from"./utils/sellright-request-context.server"
 import { sellrightRequestHost } from"./utils/sellright-request-host.server";
 import { assertProdApiConfigured } from"./constants";
 import { NO_STORE_CACHE_CONTROL } from"./config/route-cache-policy";
+import { googleClientId, googleIdentityCsp } from"./config/google-signin";
 
 declare global {
  interface QwikRouterPlatform extends PlatformNode {}
@@ -49,6 +50,9 @@ const apiOrigin = (process.env.VITE_SELLRIGHT_API_URL || '')
 	.replace(/\/(shop-api)?\/?$/, '')
 	.trim();
 const connectSrcExtra = apiOrigin ? ` ${apiOrigin}` : '';
+// Google Identity origins join the CSP only when Google sign-in is configured (config/google-signin.ts).
+const googleCsp = googleIdentityCsp(googleClientId(process.env.VITE_GOOGLE_CLIENT_ID ?? ''));
+const withSources = (base: string, extra: string[]) => [base, ...extra].join(' ');
 
 // Set security headers
 app.use((req, res, next) => {
@@ -120,12 +124,12 @@ app.use((req, res, next) => {
 	//   upgrade-insecure-requests
 	const cspDirectives = [
 		`default-src 'self'`,
-		`script-src 'self' 'nonce-${nonce}' https://js.stripe.com https://sandbox.nmi.com https://secure.nmi.com`,
-		`style-src 'self' 'unsafe-inline'`,
+		withSources(`script-src 'self' 'nonce-${nonce}' https://js.stripe.com https://sandbox.nmi.com https://secure.nmi.com`, googleCsp.script),
+		withSources(`style-src 'self' 'unsafe-inline'`, googleCsp.style),
 		`img-src 'self' data: https:`,
 		`font-src 'self'`,
-		`connect-src 'self' https://api.stripe.com https://sandbox.nmi.com https://secure.nmi.com${connectSrcExtra}`,
-		`frame-src https://js.stripe.com https://hooks.stripe.com https://sandbox.nmi.com https://secure.nmi.com`,
+		withSources(`connect-src 'self' https://api.stripe.com https://sandbox.nmi.com https://secure.nmi.com${connectSrcExtra}`, googleCsp.connect),
+		withSources(`frame-src https://js.stripe.com https://hooks.stripe.com https://sandbox.nmi.com https://secure.nmi.com`, googleCsp.frame),
 		`object-src 'none'`,
 		`base-uri 'self'`,
 		`worker-src 'self'`,
