@@ -1,14 +1,7 @@
 import { $, component$, useSignal, useStore, useVisibleTask$ } from '@qwik.dev/core';
 import { getOrderReturns, requestOrderReturn } from '~/services/customer';
 import type { OrderReturns } from '~/sellright/types/account';
-
-const STATUS_LABEL: Record<OrderReturns['items'][number]['status'], { label: string; hint: string }> = {
-	requested: { label: 'Return requested', hint: 'We are reviewing your request.' },
-	approved: { label: 'Return approved', hint: 'Your refund is being processed.' },
-	received: { label: 'Return received', hint: 'We have your items and are processing your refund.' },
-	refunded: { label: 'Refunded', hint: 'Your refund has been issued to your original payment method.' },
-	rejected: { label: 'Return not approved', hint: 'Contact us if you have questions about this decision.' },
-};
+import { buildReturnRequest, MIN_RETURN_REASON_LENGTH, returnStatusLabel } from '~/utils/order-returns';
 
 const FIELD = 'border border-gray-300 rounded-sm py-2 px-2 text-sm bg-white';
 
@@ -38,15 +31,14 @@ export const OrderReturnsPanel = component$<{ code: string }>(({ code }) => {
 	});
 
 	// Ready = at least one quantity chosen and a reason of 3+ characters (same as submit's guards).
-	const returnReady = Object.values(qty).some((n) => n > 0) && reason.value.trim().length >= 3;
+	const returnReady = Object.values(qty).some((n) => n > 0) && reason.value.trim().length >= MIN_RETURN_REASON_LENGTH;
 
 	const submit = $(async () => {
 		error.value = '';
-		const lines = Object.entries(qty).filter(([, n]) => n > 0).map(([sku, quantity]) => ({ sku, quantity }));
-		if (lines.length === 0) { error.value = 'Choose at least one item to return.'; return; }
-		if (reason.value.trim().length < 3) { error.value = 'Tell us briefly why you are returning it.'; return; }
+		const built = buildReturnRequest(qty, reason.value);
+		if (!built.ok) { error.value = built.message; return; }
 		sending.value = true;
-		const res = await requestOrderReturn(code, { lines, reason: reason.value.trim() });
+		const res = await requestOrderReturn(code, { lines: built.lines, reason: built.reason });
 		sending.value = false;
 		if (!res.ok) { error.value = res.message; await reload(); return; }
 		open.value = false;
@@ -65,10 +57,10 @@ export const OrderReturnsPanel = component$<{ code: string }>(({ code }) => {
 			{d.items.map((r) => (
 				<div key={r.id} class="mb-3 text-sm" data-testid="return-request">
 					<p class="font-medium">
-						<span data-testid="return-status">{STATUS_LABEL[r.status].label}</span>
+						<span data-testid="return-status">{returnStatusLabel(r.status).label}</span>
 						<span class="text-gray-500 font-normal"> · {r.lines.map((l) => `${l.quantity} × ${l.name}`).join(', ')}</span>
 					</p>
-					<p class="text-gray-600">{STATUS_LABEL[r.status].hint}</p>
+					<p class="text-gray-600">{returnStatusLabel(r.status).hint}</p>
 				</div>
 			))}
 			{justSent.value && <p class="text-sm text-gray-700 mb-3" role="status">Thanks, your return request was sent.</p>}

@@ -39,13 +39,13 @@ export default component$(() => {
 
 	const o = order.value;
 	const tracking = getTrackingInfo(o?.fulfillments);
-	const status = o ? getStatusDisplay(o.state, o.fulfillments) : undefined;
+	const status = o ? getStatusDisplay(o.state, o.fulfillments, o.fulfillmentStatus) : undefined;
 
 	return (
 		<div class="max-w-6xl m-auto rounded-lg p-4 space-y-6 text-gray-900">
 			<div>
 				<div class="flex items-center gap-3 mb-2">
-					{o && getStatusIcon(o.state, o.fulfillments)}
+					{o && getStatusIcon(o.state, o.fulfillments, o.fulfillmentStatus)}
 					<h2>
 						{o ? (
 							<>Order <span class="text-xl font-semibold">{o.code}</span></>
