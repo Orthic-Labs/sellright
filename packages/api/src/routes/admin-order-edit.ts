@@ -13,7 +13,7 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { HttpError, J, errBody, money, requireAdmin, requireHuman, requirePermission, requireStore, requireWrite, guard } from './admin-helpers.js';
 import {
-  AddressInput, EditOp, OrderEditError, Settlement, editChangesEntitlements, normalizeAddress,
+  AddressInput, EditOp, OrderEditError, Settlement, normalizeAddress,
 } from '../orders/order-edit.js';
 import { commitOrderEdit, loadEditContext, retryOrderEditRefund, previewOrderEdit, saveOrderAddress, searchEditVariants } from '../orders/order-edit-service.js';
 
@@ -101,9 +101,9 @@ adminOrderEdit.openapi(
     // D10: an agent is never the source of truth that money arrived. record_payment writes a manual (unverified) tender and can
     // turn an unpaid order Paid, exactly like a draft's markPaid; only a human may assert it.
     if (body.settlement?.type === 'record_payment') requireHuman(admin);
-    // An agent never issues or changes entitlements: line ops on a paid order reach licence issuance via edit reconciliation
-    // (e.g. add_item of a licensed SKU at any price), so they are human-only. The service enforces this again via principalKind.
-    if (editChangesEntitlements(body.ops)) requireHuman(admin);
+    // An agent never issues or changes entitlements. Whether an edit touches one depends on the affected variants, so commitOrderEdit
+    // decides from the locked plan (403 AGENT_FORBIDDEN for an agent adding/removing/swapping/resizing an entitlement-bearing line);
+    // physical-only edits by an agent are allowed. Settlement rules above (refund_now, record_payment) stay human-only.
     const result = await translate(() => commitOrderEdit({
       storeId: st.storeId, storeSlug: st.slug, code, actor: admin.email, principalKind: admin.kind, ops: body.ops,
       expectedGrandTotal: body.expectedGrandTotal, expectedBalance: body.expectedBalance, idempotencyKey: body.idempotencyKey,

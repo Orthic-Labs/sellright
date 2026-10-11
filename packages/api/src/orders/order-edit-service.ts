@@ -40,7 +40,7 @@ import { emitEvent } from '../webhooks/emit.js';
 import { enqueueOrderBalanceDue, enqueueOrderUpdated, pickEmailAppKey, resolveStorefrontUrl, type StoreEmailCtx } from '../email/dispatch.js';
 import { normalizeEmail } from '../auth/email.js';
 import {
-  OrderEditError, applyEditOps, countryChanged, diffLines, editChangesEntitlements, lockedQty, openQty, priceWorkingOrder, readAddress,
+  OrderEditError, applyEditOps, countryChanged, diffLines, lockedQty, openQty, planChangesEntitlements, priceWorkingOrder, readAddress,
   referencedKeys, sameAddress, validateSettlement, allowedSettlements,
   type Address, type EditOpT, type LineDiff, type OrderSnapshot, type PromoFacts, type SettlementT,
   type ShippingMethodFacts, type VariantFacts, type WLine, type WorkingOrder,
@@ -485,12 +485,19 @@ async function retireOrderIntents(storeId: string, code: string, actor: string):
   if (ord) await cancelOrderStripeIntents(storeId, ord.id, actor);
 }
 
-export async function commitOrderEdit(input: CommitInput): Promise<CommitResult> {
-  const { storeId } = input;
-  // Defence in depth behind the route's requireHuman: only a human may commit ops that can create or change an entitlement.
-  if (input.principalKind !== 'human' && editChangesEntitlements(input.ops)) {
+/**
+ * Only a human may commit an edit that adds, removes, swaps or resizes an entitlement-bearing line. Decided from the plan
+ * (the affected variants), so an agent's physical-only edit is allowed. Defence in depth behind the route, which relies on
+ * this same check; reconciliation refuses issuance for an agent edit independently (handlers.ts editReconcile).
+ */
+export function assertPrincipalMayCommit(principalKind: 'human' | 'agent', plan: Pick<EditPlan, 'working' | 'variantsById'>): void {
+  if (principalKind !== 'human' && planChangesEntitlements(plan.working.lines, plan.variantsById)) {
     throw new OrderEditError(403, 'AGENT_FORBIDDEN', 'agents cannot perform this action');
   }
+}
+
+export async function commitOrderEdit(input: CommitInput): Promise<CommitResult> {
+  const { storeId } = input;
   const fp = fingerprintOf(input);
   // Retire confirmable Stripe intents (minted at the pre-edit amount) BEFORE the
   // edit: Stripe I/O must run with no pay lock held (the sweep takes it). A
@@ -504,6 +511,7 @@ export async function commitOrderEdit(input: CommitInput): Promise<CommitResult>
       .where(and(eq(s.orderEdit.storeId, storeId), eq(s.orderEdit.idempotencyKey, input.idempotencyKey))).limit(1);
     if (prior) return false;
     const plan = await planOrderEdit(tx, storeId, input.code, input.ops, { lock: false });
+    assertPrincipalMayCommit(input.principalKind, plan); // before any Stripe I/O or write
     if (plan.after.totals.grandTotal !== input.expectedGrandTotal) {
       throw new OrderEditError(409, 'PREVIEW_STALE', 'the order changed since the preview — review the new totals and try again', { grandTotal: plan.after.totals.grandTotal, balance: plan.balance.amountDue });
     }
@@ -537,6 +545,7 @@ export async function commitOrderEdit(input: CommitInput): Promise<CommitResult>
       }
 
       const plan = await planOrderEdit(tx, storeId, input.code, input.ops, { lock: true });
+      assertPrincipalMayCommit(input.principalKind, plan); // re-checked on the locked plan: the order may have changed since the unlocked one
       const o = plan.order;
       if (plan.after.totals.grandTotal !== input.expectedGrandTotal || (input.expectedBalance != null && plan.balance.amountDue !== input.expectedBalance)) {
         throw new OrderEditError(409, 'PREVIEW_STALE', 'the order changed since the preview — review the new totals and try again', { grandTotal: plan.after.totals.grandTotal, balance: plan.balance.amountDue });

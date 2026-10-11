@@ -59,7 +59,7 @@ describe('pre-submit stock check against the real CartService', () => {
 	it('passes when the fresh response has every line available', async () => {
 		setCookie('tok_srv');
 		queue.push(respond(200, serverCart()));
-		await expect(refreshStockBeforeSubmit()).resolves.toBeUndefined();
+		await expect(refreshStockBeforeSubmit()).resolves.toEqual({ token: 'tok_srv', revision: 1, status: 'active' });
 		expect(fetchCount).toBe(1);
 	});
 
@@ -86,6 +86,27 @@ describe('pre-submit stock check against the real CartService', () => {
 		await overlap;
 	});
 
+	it('refuses an empty active cart from the live response', async () => {
+		setCookie('tok_srv');
+		queue.push(respond(200, serverCart({ lines: [] })));
+		await expect(refreshStockBeforeSubmit()).rejects.toBeInstanceOf(PreSubmitStockError);
+	});
+
+	it('returns the revision of the response it validated, not of a newer overlapping read', async () => {
+		setCookie('tok_srv');
+		const preSubmit = deferred();
+		const overlapping = deferred();
+		queue.push(preSubmit.promise, overlapping.promise);
+		const submit = refreshStockBeforeSubmit();
+		await vi.waitFor(() => expect(fetchCount).toBe(1));
+		const overlap = CartService.refresh();
+		await vi.waitFor(() => expect(fetchCount).toBe(2));
+		overlapping.resolve(await respond(200, serverCart({ revision: 9 })));
+		await overlap;
+		preSubmit.resolve(await respond(200, serverCart({ revision: 4 })));
+		await expect(submit).resolves.toEqual({ token: 'tok_srv', revision: 4, status: 'active' });
+	});
+
 	it('refuses when the cart cookie is missing, without any request', async () => {
 		await expect(refreshStockBeforeSubmit()).rejects.toThrow(/expired/);
 		expect(fetchCount).toBe(0);
@@ -109,7 +130,7 @@ describe('pre-submit stock check against the real CartService', () => {
 	it('converted-cart recovery still passes when that same response is converted with an unavailable last unit', async () => {
 		setCookie('tok_srv');
 		queue.push(respond(200, serverCart({ status: 'converted' }, false)));
-		await expect(refreshStockBeforeSubmit()).resolves.toBeUndefined();
+		await expect(refreshStockBeforeSubmit()).resolves.toEqual({ token: 'tok_srv', revision: 1, status: 'converted' });
 	});
 
 	it('a converted OVERLAPPING read does not excuse an active, out-of-stock pre-submit response', async () => {

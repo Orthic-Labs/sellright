@@ -10,6 +10,7 @@
  */
 import { sellright, idempotency, SellRightError } from '~/sellright/client';
 import { CartService } from '~/services/CartService';
+import type { CheckoutSnapshot } from '~/hooks/pre-submit-stock';
 import type {
 	CheckoutRequest,
 	CheckoutResponse,
@@ -24,7 +25,7 @@ import type {
 } from '~/sellright/types/checkout';
 
 export interface CheckoutForm {
-	/** Fallback line items when no server-cart token exists yet. */
+	/** Bootstrap line items the request schema requires; the server cart's lines win. */
 	items?: { sku: string; quantity: number }[];
 	email?: string;
 	shippingAddress?: Record<string, unknown>;
@@ -71,15 +72,19 @@ const isCartConflict = (
 
 /**
  * Create the order (server-priced) from the sr_cart token. The server is
- * authoritative — when a cart token is present its lines win and the client
- * item list is only the bootstrap value the schema requires. Conversion is a
- * non-append mutation: `expectedRevision` echoes the cart's live revision
- * (missing → 409 `revision_required`, mismatched → 409 `stale` + the current
- * cart snapshot, which is adopted into the local mirror).
+ * authoritative — its cart lines win and the client item list is only the
+ * bootstrap value the schema requires. Conversion is a non-append mutation:
+ * `expectedRevision` echoes the revision of `snapshot`, the live read the
+ * pre-submit stock check just validated (mismatch → 409 `stale` + the current
+ * cart snapshot, which is adopted into the local mirror; the next attempt must
+ * run a fresh validation). There is no tokenless submit and no second cart
+ * read here: the validated snapshot is the only source of token and revision.
  */
-export const placeOrder = async (form: CheckoutForm): Promise<CheckoutResponse> => {
-	const cart = await CartService.checkoutSnapshot();
-	if (cart?.status === 'merged') {
+export const placeOrder = async (form: CheckoutForm, snapshot: CheckoutSnapshot): Promise<CheckoutResponse> => {
+	if (!snapshot || !snapshot.token || typeof snapshot.revision !== 'number') {
+		throw new Error('Your cart could not be verified — please review it and try again.');
+	}
+	if (snapshot.status === 'merged') {
 		// This token's lines already moved into the customer's cart at login —
 		// falling back to the client item list here would double-submit them.
 		CartService.discard();
@@ -95,11 +100,9 @@ export const placeOrder = async (form: CheckoutForm): Promise<CheckoutResponse> 
 		couponCode: form.couponCode,
 		giftCardCode: form.giftCardCode,
 		...(form.redeemPoints && form.redeemPoints > 0 ? { redeemPoints: form.redeemPoints } : {}),
+		cartToken: snapshot.token,
+		expectedRevision: snapshot.revision,
 	};
-	if (cart) {
-		body.cartToken = cart.token;
-		body.expectedRevision = cart.revision;
-	}
 
 	try {
 		const { data } = await sellright().POST('/v1/shop/checkout', {

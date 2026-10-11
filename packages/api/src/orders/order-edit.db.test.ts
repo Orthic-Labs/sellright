@@ -873,18 +873,53 @@ describe('round-2 review fixes: intents, license issuance, async refunds', () =>
   });
 
   it('an agent principal cannot commit entitlement-changing ops, even called directly (service refuses; nothing written)', async () => {
-    const o = await makeOrder({ lines: [{ sku: 'B', qty: 1 }] });
-    const l = (await linesOf(o.code))[0]!;
+    // B is physical, L is a licensed (entitlement-bearing) variant. Each op below adds, resizes, swaps or removes a licensed line.
+    const o = await makeOrder({ lines: [{ sku: 'B', qty: 1 }, { sku: 'L', qty: 1 }] });
+    const [lb, ll] = [(await linesOf(o.code)).find((l) => l.variantSku === 'B')!, (await linesOf(o.code)).find((l) => l.variantSku === 'L')!];
     const lic = () => withStore(STORE, (tx) => tx.select().from(s.license).where(eq(s.license.orderId, o.id)));
     for (const op of [
-      { op: 'add_item', sku: 'L', quantity: 1, unitPrice: 0 }, { op: 'set_quantity', lineId: l.id, quantity: 2 },
-      { op: 'swap_variant', lineId: l.id, sku: 'L' }, { op: 'remove_line', lineId: l.id },
+      { op: 'add_item', sku: 'L', quantity: 1, unitPrice: 0 }, { op: 'add_item', sku: 'M', quantity: 1 },
+      { op: 'set_quantity', lineId: ll.id, quantity: 2 }, { op: 'set_quantity', lineId: ll.id, quantity: 0 },
+      { op: 'swap_variant', lineId: lb.id, sku: 'L' }, { op: 'swap_variant', lineId: ll.id, sku: 'M' }, { op: 'swap_variant', lineId: ll.id, sku: 'A' },
+      { op: 'remove_line', lineId: ll.id },
     ] as EditOpT[]) {
-      await expectErr(commitOrderEdit({ storeId: STORE, storeSlug: SLUG, code: o.code, actor: 'bot@example.test', principalKind: 'agent', ops: [op], expectedGrandTotal: 2500, idempotencyKey: `agent-${op.op}`, notifyCustomer: false, settlement: { type: 'leave_due' } }), 'AGENT_FORBIDDEN');
+      await expectErr(commitOrderEdit({ storeId: STORE, storeSlug: SLUG, code: o.code, actor: 'bot@example.test', principalKind: 'agent', ops: [op], expectedGrandTotal: 3500, idempotencyKey: `agent-${op.op}-${JSON.stringify(op).length}`, notifyCustomer: false, settlement: { type: 'leave_due' } }), 'AGENT_FORBIDDEN');
     }
     expect(await lic()).toHaveLength(0);
-    expect(await linesOf(o.code)).toHaveLength(1);
+    expect(await linesOf(o.code)).toHaveLength(2);
     expect(await audits('edit')).toHaveLength(0);
+  });
+
+  it('an agent principal may commit physical-only edits (quantity, add, swap, remove of physical lines; shipping, coupon, adjustment); the human path is unchanged', async () => {
+    const o = await makeOrder({ lines: [{ sku: 'A', qty: 2 }, { sku: 'B', qty: 1 }] });
+    const ls = await linesOf(o.code);
+    const la = ls.find((l) => l.variantSku === 'A')!, lb = ls.find((l) => l.variantSku === 'B')!;
+    const agent = { principalKind: 'agent' as const, actor: 'bot@example.test' };
+    const steps: EditOpT[][] = [
+      [{ op: 'set_quantity', lineId: la.id, quantity: 3 }],
+      [{ op: 'add_item', sku: 'C', quantity: 1 }],
+      [{ op: 'swap_variant', lineId: lb.id, sku: 'A' }],
+      [{ op: 'set_shipping_method', code: 'exp' }],
+      [{ op: 'apply_coupon', code: 'TEN' }],
+      [{ op: 'remove_line', lineId: la.id }],
+    ];
+    for (const ops of steps) {
+      // the balance can be due or a credit after each step: take whichever settlement the preview allows
+      const r = await commit(o.code, ops, agent, { type: 'leave_due' }).catch(async (e) => {
+        if (!(e instanceof OrderEditError) || e.code !== 'SETTLEMENT_INVALID') throw e;
+        return commit(o.code, ops, agent, { type: 'leave_credit' });
+      });
+      expect(r.replay).toBe(false);
+    }
+    expect((await audits('edit')).length).toBe(steps.length);
+    expect(await withStore(STORE, (tx) => tx.select().from(s.license).where(eq(s.license.orderId, o.id)))).toHaveLength(0);
+  });
+
+  it('an agent physical edit on an order that also holds a licensed line does not touch it, and issues nothing (reconciliation still refuses)', async () => {
+    const o = await makeOrder({ lines: [{ sku: 'A', qty: 1 }, { sku: 'L', qty: 1 }] }); // licensed line has no licence row yet
+    const la = (await linesOf(o.code)).find((l) => l.variantSku === 'A')!;
+    await commit(o.code, [{ op: 'set_quantity', lineId: la.id, quantity: 2 }], { principalKind: 'agent', actor: 'bot@example.test' }, { type: 'leave_due' });
+    expect(await withStore(STORE, (tx) => tx.select().from(s.license).where(eq(s.license.orderId, o.id)))).toHaveLength(0);
   });
 
   it('reconciliation refuses to issue when the edit was committed by an agent (a benign edit cannot top up a missing licence); a human edit still does', async () => {
@@ -952,3 +987,100 @@ describe('round-2 review fixes: intents, license issuance, async refunds', () =>
     await expectErr(retryOrderEditRefund({ storeId: STORE, code: o.code, editId: r.editId, actor: 'x', action: 'retry' }), 'REFUND_NOT_RETRYABLE');
   });
 });
+
+describe('legacy edit_reconcile effects (queued before actorKind existed)', () => {
+  const emails: string[] = [];
+  const adminOf = async (kind: string) => {
+    const email = `legacy-${kind}-${Math.random().toString(16).slice(2, 10)}@example.test`;
+    emails.push(email);
+    await pool.query('INSERT INTO admin_user (email, kind) VALUES ($1, $2)', [email, kind]);
+    return email;
+  };
+  afterAll(async () => { if (emails.length) await pool.query('DELETE FROM admin_user WHERE email = ANY($1)', [emails]); });
+
+  /** An effect exactly as a pre-release order edit left it: no actorKind in the payload, queued under the edit's operation. */
+  async function legacyEffect(o: { id: string }, opts: { actor: string | null; kind?: string; paymentId?: string; editRow?: boolean }) {
+    const editId = crypto.randomUUID();
+    const kind = opts.kind ?? 'order_edit_balance_settled';
+    return withStore(STORE, async (tx) => {
+      if (opts.editRow !== false) {
+        await tx.insert(s.orderEdit).values({ id: editId, storeId: STORE, orderId: o.id, before: {}, after: {}, actor: opts.actor });
+      }
+      await tx.insert(s.settlementOperation).values({ storeId: STORE, operationKind: kind, operationId: editId, orderId: o.id, paymentId: opts.paymentId ?? null });
+      const [eff] = await tx.insert(s.orderPendingEffect).values({
+        storeId: STORE, operationKind: kind, operationId: editId, effectKind: 'edit_reconcile',
+        payload: { orderId: o.id, customerId: null, paidAt: new Date().toISOString() },
+      }).returning({ id: s.orderPendingEffect.id });
+      return { editId, effectId: eff!.id };
+    });
+  }
+  const effectRow = (id: string) => withStore(STORE, async (tx) => (await tx.select().from(s.orderPendingEffect).where(eq(s.orderPendingEffect.id, id)))[0]!);
+  const licensesOf = (orderId: string) => withStore(STORE, (tx) => tx.select().from(s.license).where(eq(s.license.orderId, orderId)));
+  const run = async () => { const { runEffectsPass } = await import('../payments/settlement/effects.js'); return runEffectsPass({ rounds: 2 }); };
+
+  it('an edit by an agent admin, queued with no principal, is refused terminal with an audit row and issues nothing', async () => {
+    const o = await makeOrder({ lines: [{ sku: 'L', qty: 1 }] });
+    const e = await legacyEffect(o, { actor: await adminOf('agent') });
+    await run();
+    expect((await effectRow(e.effectId)).status).toBe('terminal');
+    expect(await licensesOf(o.id)).toHaveLength(0);
+    expect(await audits('agent_issuance_refused')).toHaveLength(1);
+  });
+
+  it('an edit whose actor cannot be resolved (no admin row, no actor, no edit row) is held terminal, never issued', async () => {
+    for (const [i, opts] of ([{ actor: 'ghost@example.test' }, { actor: null }, { actor: null, editRow: false }] as const).entries()) {
+      const o = await makeOrder({ lines: [{ sku: 'L', qty: 1 }] });
+      const e = await legacyEffect(o, opts);
+      await run();
+      expect((await effectRow(e.effectId)).status, `case ${i}`).toBe('terminal');
+      expect(await licensesOf(o.id), `case ${i}`).toHaveLength(0);
+    }
+    expect(await audits('edit_issuance_held_unresolved_principal')).toHaveLength(3);
+  });
+
+  it('an edit by a human admin still issues (behaviour for human admins is unchanged)', async () => {
+    const o = await makeOrder({ lines: [{ sku: 'L', qty: 1 }] });
+    const e = await legacyEffect(o, { actor: await adminOf('human') });
+    await run();
+    expect((await effectRow(e.effectId)).status).toBe('done');
+    expect(await licensesOf(o.id)).toHaveLength(1);
+  });
+
+  it('the decision is identical on every retry: a recorded agent refusal survives the admin row changing and a requeue', async () => {
+    const { requeueTerminalEffect } = await import('../payments/settlement/effects.js');
+    const o = await makeOrder({ lines: [{ sku: 'L', qty: 1 }] });
+    const actor = await adminOf('agent');
+    const e = await legacyEffect(o, { actor });
+    await run();
+    expect((await effectRow(e.effectId)).status).toBe('terminal');
+    await pool.query("UPDATE admin_user SET kind = 'human' WHERE email = $1", [actor]);
+    await withStore(STORE, (tx) => requeueTerminalEffect(tx, e.effectId));
+    await run();
+    expect((await effectRow(e.effectId)).status).toBe('terminal');
+    expect(await licensesOf(o.id)).toHaveLength(0);
+    expect(await audits('edit_principal_resolved')).toHaveLength(1);
+  });
+
+  it('customer-payment effects are unchanged: a balance paid by the customer (operation recorded a payment) or any other operation kind issues without an actor lookup', async () => {
+    const o1 = await makeOrder({ lines: [{ sku: 'L', qty: 1 }] });
+    const e1 = await legacyEffect(o1, { actor: await adminOf('agent'), paymentId: crypto.randomUUID() });
+    const o2 = await makeOrder({ lines: [{ sku: 'L', qty: 1 }] });
+    const e2 = await legacyEffect(o2, { actor: null, kind: 'payment_settled', editRow: false });
+    await run();
+    expect((await effectRow(e1.effectId)).status).toBe('done');
+    expect((await effectRow(e2.effectId)).status).toBe('done');
+    expect(await licensesOf(o1.id)).toHaveLength(1);
+    expect(await licensesOf(o2.id)).toHaveLength(1);
+  });
+
+  it('an effect that carries actorKind keeps using it (no lookup): agent refused, human issues', async () => {
+    const o = await makeOrder({ lines: [{ sku: 'L', qty: 1 }] });
+    const e = await legacyEffect(o, { actor: await adminOf('human') });
+    // order_pending_effect is under RLS: update it inside the store scope (a bare pool query changes no rows).
+    await withStore(STORE, (tx) => tx.execute(sql`UPDATE order_pending_effect SET payload = payload || '{"actorKind":"agent"}'::jsonb WHERE id = ${e.effectId}`));
+    await run();
+    expect((await effectRow(e.effectId)).status).toBe('terminal');
+    expect(await licensesOf(o.id)).toHaveLength(0);
+  });
+});
+

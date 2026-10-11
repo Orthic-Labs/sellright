@@ -367,19 +367,37 @@ describe('agent order edits cannot issue or change entitlements', () => {
     expect(await count(A, 'order_edit')).toBe(0);
   });
 
-  it('every line-changing op is human-only for an agent (set_quantity, remove_line, swap_variant, add_item); address and coupon edits stay allowed', async () => {
+  it('an agent may edit physical lines but not entitlement-bearing ones (add, swap to, change quantity of, or remove a licensed line); address edits stay allowed', async () => {
     const a = await createAgent();
-    const line = (await lineIds())[0]!;
-    const ops = [
-      { op: 'set_quantity', lineId: line, quantity: 3 }, { op: 'remove_line', lineId: line },
-      { op: 'swap_variant', lineId: line, sku: 'SKU-L' }, { op: 'add_item', sku: 'SKU-A', quantity: 1 },
-    ];
-    for (const op of ops) {
-      const r = await req('POST', `/v1/admin/orders/${ORDER_LIC}/edit/commit`, a.token, { ops: [op], expectedGrandTotal: 2000, idempotencyKey: `agent-${op.op}`, notifyCustomer: false, settlement: { type: 'leave_due' } });
-      expect([op.op, r.status]).toEqual([op.op, 403]);
+    const commit = (token: string, op: Record<string, unknown>, key: string, expectedGrandTotal = 2000) =>
+      req('POST', `/v1/admin/orders/${ORDER_LIC}/edit/commit`, token, { ops: [op], expectedGrandTotal, idempotencyKey: key, notifyCustomer: false, settlement: { type: 'leave_due' } });
+    const physical = (await lineIds())[0]!;
+    // Physical-only edits are not an entitlement change: never the agent refusal (the totals here are deliberately stale, so 409 is fine).
+    for (const op of [{ op: 'set_quantity', lineId: physical, quantity: 3 }, { op: 'add_item', sku: 'SKU-A', quantity: 1 }]) {
+      const r = await commit(a.token, op, `agent-physical-${op.op}`);
+      expect([op.op, r.status === 403]).toEqual([op.op, false]);
+    }
+    // Bringing a licensed variant onto the order is refused.
+    for (const op of [{ op: 'swap_variant', lineId: physical, sku: 'SKU-L' }, { op: 'add_item', sku: 'SKU-L', quantity: 1, unitPrice: 0 }]) {
+      const r = await commit(a.token, op, `agent-licensed-${op.op}`);
+      expect([op.op, r.status, await errMessage(r)]).toEqual([op.op, 403, expect.stringMatching(/agents cannot/)]);
     }
     expect(await licences()).toBe(0);
-    const ok = await req('POST', `/v1/admin/orders/${ORDER_LIC}/edit/commit`, a.token, { ops: [{ op: 'set_address', kind: 'shipping', address: { line1: '2 New St', city: 'Austin', country: 'US' } }], expectedGrandTotal: 2000, idempotencyKey: 'agent-address', notifyCustomer: false, settlement: { type: 'leave_due' } });
+    // A human adds the licensed line; the agent can then neither change its quantity nor remove it.
+    const human = await commit(ownerToken, { op: 'add_item', sku: 'SKU-L', quantity: 1, unitPrice: 0 }, 'human-adds-licensed-line');
+    expect(human.status).toBe(200);
+    const licensed = (await lineIds()).find((id) => id !== physical)!;
+    expect(licensed).toBeTruthy();
+    const licencesAfterHuman = await licences();
+    const resize = await commit(a.token, { op: 'set_quantity', lineId: licensed, quantity: 2 }, 'agent-licensed-line-set_quantity');
+    expect(resize.status).toBe(403);
+    // Removing a line whose licence is already issued is refused before the principal check (the line is locked: 409);
+    // either refusal is acceptable, what matters is that nothing changes.
+    const remove = await commit(a.token, { op: 'remove_line', lineId: licensed }, 'agent-licensed-line-remove_line');
+    expect([403, 409]).toContain(remove.status);
+    expect(await licences()).toBe(licencesAfterHuman);
+    expect(await lineCount()).toBe(2);
+    const ok = await commit(a.token, { op: 'set_address', kind: 'shipping', address: { line1: '2 New St', city: 'Austin', country: 'US' } }, 'agent-address');
     expect(ok.status).toBe(200);
   });
 

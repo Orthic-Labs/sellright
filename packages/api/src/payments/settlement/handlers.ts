@@ -223,6 +223,56 @@ async function linkLicense(tx: Tx, e: EffectRow, p: LicenseIssuePayload, issued:
   return { done: { result: { issued, licenseId: lic?.id ?? null } } };
 }
 
+/** Who is behind an edit_reconcile effect: a human (or a customer's payment), an agent, or an edit whose actor cannot be established. */
+type EditPrincipal = { kind: 'human' | 'agent' | 'unresolved'; source?: 'payload' | 'edit_actor' | 'recorded'; reason?: string };
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const PRINCIPAL_RESOLVED_ACTION = 'edit_principal_resolved';
+
+/**
+ * Decides who authorised an edit_reconcile effect before its new licences may issue.
+ *  - payload.actorKind (written by every order-edit commit since the agent role): used as recorded.
+ *  - not an order-edit commit (a customer's payment: its operation is not order_edit_balance_settled, or that operation
+ *    recorded a payment row): a human-paid settlement, unchanged.
+ *  - otherwise a legacy edit-originated effect with no principal: read the original edit's actor (order_edit.actor is the
+ *    admin email) and its admin_user.kind; an agent, or anything that cannot be resolved, is not 'human'.
+ * The first resolution is written to the audit log keyed by the effect id and read back on every later run, so a retry
+ * decides identically even if the admin row changes meanwhile.
+ */
+async function resolveEditPrincipal(tx: Tx, e: EffectRow, p: EditReconcilePayload): Promise<EditPrincipal> {
+  if (p.actorKind) return { kind: p.actorKind, source: 'payload' };
+  if (e.operationKind !== 'order_edit_balance_settled') return { kind: 'human' };
+  const [op] = await tx.select({ paymentId: s.settlementOperation.paymentId }).from(s.settlementOperation).where(and(
+    eq(s.settlementOperation.storeId, e.storeId), eq(s.settlementOperation.operationKind, e.operationKind), eq(s.settlementOperation.operationId, e.operationId))).limit(1);
+  if (op?.paymentId) return { kind: 'human' }; // a customer's payment cleared the edit's balance
+
+  const [prior] = await tx.select({ data: s.auditLog.data }).from(s.auditLog).where(and(
+    eq(s.auditLog.storeId, e.storeId), eq(s.auditLog.entity, 'order_pending_effect'), eq(s.auditLog.entityId, e.id),
+    eq(s.auditLog.action, PRINCIPAL_RESOLVED_ACTION))).limit(1);
+  const recorded = (prior?.data as { kind?: string } | null | undefined)?.kind;
+  if (recorded === 'human' || recorded === 'agent' || recorded === 'unresolved') return { kind: recorded, source: 'recorded' };
+
+  const decided = await lookupEditPrincipal(tx, e, p);
+  await tx.insert(s.auditLog).values({
+    storeId: e.storeId, actor: 'system:policy', entity: 'order_pending_effect', entityId: e.id,
+    action: PRINCIPAL_RESOLVED_ACTION, data: { kind: decided.kind, editId: e.operationId, ...(decided.reason ? { reason: decided.reason } : {}) },
+  });
+  return decided;
+}
+
+async function lookupEditPrincipal(tx: Tx, e: EffectRow, p: EditReconcilePayload): Promise<EditPrincipal> {
+  if (!UUID_RE.test(e.operationId)) return { kind: 'unresolved', source: 'edit_actor', reason: 'operation_id_not_an_edit' };
+  const [edit] = await tx.select({ actor: s.orderEdit.actor }).from(s.orderEdit).where(and(
+    eq(s.orderEdit.id, e.operationId), eq(s.orderEdit.storeId, e.storeId), eq(s.orderEdit.orderId, p.orderId))).limit(1);
+  if (!edit) return { kind: 'unresolved', source: 'edit_actor', reason: 'edit_not_found' };
+  if (!edit.actor) return { kind: 'unresolved', source: 'edit_actor', reason: 'edit_actor_missing' };
+  const [admin] = await tx.select({ kind: s.adminUser.kind }).from(s.adminUser).where(eq(s.adminUser.email, normalizeEmail(edit.actor))).limit(1);
+  if (!admin) return { kind: 'unresolved', source: 'edit_actor', reason: 'actor_not_an_admin' };
+  if (admin.kind === 'human') return { kind: 'human', source: 'edit_actor' };
+  if (admin.kind === 'agent') return { kind: 'agent', source: 'edit_actor' };
+  return { kind: 'unresolved', source: 'edit_actor', reason: 'actor_kind_unknown' };
+}
+
 /**
  * X-49: the order set is taken on the effect's own transaction (withLockedSetInTx): a covering set already
  * held there passes through; otherwise the order's licence/order/reservation rows are locked in
@@ -243,12 +293,16 @@ export const editReconcile: LocalEffectHandler = {
         storeId: e.storeId, orderId: p.orderId, customerId: p.customerId ?? null, paidAt: new Date(p.paidAt),
         gate: async () => {
           // An agent never issues entitlements: refuse the new rows (revocations above are unaffected) even if a route forgot its check.
-          if (p.actorKind === 'agent') {
+          // A row queued by an order edit before actorKind existed has no recorded principal: resolve the edit's actor
+          // (order_edit.actor -> admin_user.kind). An agent, or an edit whose actor cannot be resolved, holds for a human.
+          const principal = await resolveEditPrincipal(inner, e, p);
+          if (principal.kind !== 'human') {
             await inner.insert(s.auditLog).values({
               storeId: e.storeId, actor: 'system:policy', entity: 'order', entityId: p.orderId,
-              action: 'agent_issuance_refused', data: { operationId: e.operationId },
+              action: principal.kind === 'agent' ? 'agent_issuance_refused' : 'edit_issuance_held_unresolved_principal',
+              data: { operationId: e.operationId, effectId: e.id, ...(principal.source ? { source: principal.source } : {}), ...(principal.reason ? { reason: principal.reason } : {}) },
             });
-            state.refused = { terminal: 'AGENT_ISSUANCE_REFUSED' };
+            state.refused = { terminal: principal.kind === 'agent' ? 'AGENT_ISSUANCE_REFUSED' : 'EDIT_PRINCIPAL_UNRESOLVED' };
             return { ok: false };
           }
           const gate = await issuanceGate(inner, e, { orderId: p.orderId, customerId: p.customerId ?? null, paidAt: p.paidAt }, held);

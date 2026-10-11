@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   EditOp, OrderEditError, Settlement, allowedSettlements, applyEditOps, countryChanged, diffLines, lockedQty, normalizeAddress,
-  openQty, priceWorkingOrder, readAddress, referencedKeys, validateSettlement,
+  openQty, planChangesEntitlements, priceWorkingOrder, readAddress, referencedKeys, validateSettlement,
   type EditLookups, type VariantFacts, type WLine, type WorkingOrder,
 } from './order-edit.js';
 
@@ -149,3 +149,47 @@ describe('helpers', () => {
     expect(readAddress(null)).toBeNull();
   });
 });
+
+describe('planChangesEntitlements (agent gate: decided from the locked plan and the affected variants)', () => {
+  const facts = (extra: Record<string, { fulfillmentType: string; appKey: string | null; stripePriceId?: string | null }> = {}) => new Map([
+    ['var-A', { fulfillmentType: 'physical', appKey: null }],
+    ['var-B', { fulfillmentType: 'physical', appKey: null }],
+    ['var-L', { fulfillmentType: 'license', appKey: 'testapp' }],
+    ['var-D', { fulfillmentType: 'digital_download', appKey: 'testapp' }],
+    ['var-P', { fulfillmentType: 'update_pass', appKey: 'testapp' }],
+    ['var-NOKEY', { fulfillmentType: 'license', appKey: null }],
+    ['var-SUB', { fulfillmentType: 'physical', appKey: null, stripePriceId: 'price_1' }],
+    ...Object.entries(extra),
+  ]);
+  const plan = (lines: WLine[]) => planChangesEntitlements(lines, facts());
+  const fresh = (sku: string, quantity: number): WLine => ({ key: `new:${sku}`, id: null, variantId: `var-${sku}`, sku, name: sku, unitPrice: 1000, quantity, fulfilledQty: 0, refundedQty: 0, cancelledQty: 0, original: null });
+
+  it('allows physical-only edits: quantity, add, remove, swap between physical variants, and an untouched licensed line', () => {
+    expect(plan([line(L1, 'A', 3, { original: { variantId: 'var-A', sku: 'A', name: 'A', unitPrice: 1000, quantity: 1 } })])).toBe(false);
+    expect(plan([line(L1, 'A', 1), fresh('B', 2)])).toBe(false);
+    expect(plan([line(L1, 'A', 0, { original: { variantId: 'var-A', sku: 'A', name: 'A', unitPrice: 1000, quantity: 2 } })])).toBe(false);
+    expect(plan([line(L1, 'B', 1, { variantId: 'var-B', original: { variantId: 'var-A', sku: 'A', name: 'A', unitPrice: 1000, quantity: 1 } })])).toBe(false);
+    expect(plan([line(L1, 'A', 1), line(L2, 'L', 1)])).toBe(false); // the licensed line is not part of the edit
+    expect(plan([])).toBe(false);
+  });
+
+  it('refuses adding, resizing, removing and swapping a licence / digital / update-pass line, and a recurring plan', () => {
+    for (const sku of ['L', 'D', 'P', 'SUB']) {
+      expect(plan([fresh(sku, 1)]), `add ${sku}`).toBe(true);
+      expect(plan([line(L1, sku, 3, { original: { variantId: `var-${sku}`, sku, name: sku, unitPrice: 1000, quantity: 1 } })]), `resize ${sku}`).toBe(true);
+      expect(plan([line(L1, sku, 0, { original: { variantId: `var-${sku}`, sku, name: sku, unitPrice: 1000, quantity: 1 } })]), `remove ${sku}`).toBe(true);
+      expect(plan([line(L1, 'A', 1, { original: { variantId: `var-${sku}`, sku, name: sku, unitPrice: 1000, quantity: 1 } })]), `swap away from ${sku}`).toBe(true);
+      expect(plan([line(L1, sku, 1, { original: { variantId: 'var-A', sku: 'A', name: 'A', unitPrice: 1000, quantity: 1 } })]), `swap to ${sku}`).toBe(true);
+    }
+  });
+
+  it('uses the issuance predicate: a licence-type variant with no appKey grants nothing, so it is not entitlement-bearing', () => {
+    expect(plan([fresh('NOKEY', 1)])).toBe(false);
+  });
+
+  it('fails closed when a changed line\'s variant cannot be resolved; ignores an unresolved variant on an untouched line', () => {
+    expect(plan([line(L1, 'GONE', 2, { variantId: null, original: { variantId: null, sku: 'GONE', name: 'G', unitPrice: 1000, quantity: 1 } })])).toBe(true);
+    expect(plan([line(L1, 'GONE', 1, { variantId: null, original: { variantId: null, sku: 'GONE', name: 'G', unitPrice: 1000, quantity: 1 } })])).toBe(false);
+  });
+});
+

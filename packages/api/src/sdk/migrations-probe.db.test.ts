@@ -98,3 +98,102 @@ describe('migration journal probe (0095)', () => {
     });
   });
 });
+
+describe('separately owned engine and plugin journals', () => {
+  const OWNER_ROLE = `probe_po_${randomBytes(4).toString('hex')}`;
+  const RT_ROLE = `probe_rt2_${randomBytes(4).toString('hex')}`;
+  const TABLE = `__drizzle_migrations_probe_${randomBytes(4).toString('hex')}`;
+  const WHEN = 1000;
+  let ready = false;
+  const cleanup: string[] = [];
+
+  function pluginFolder(): string {
+    const dir = join(scratch, 'plugin');
+    mkdirSync(join(dir, 'meta'), { recursive: true });
+    writeFileSync(join(dir, 'meta', '_journal.json'), JSON.stringify({ version: '7', dialect: 'postgresql', entries: [{ idx: 0, version: '7', when: WHEN, tag: '0000_plugin_probe', breakpoints: true }] }));
+    return dir;
+  }
+  const track = () => ({ name: 'plugin', folder: pluginFolder(), schema: 'drizzle', table: TABLE });
+
+  beforeAll(async () => {
+    try {
+      // The probe's owner must be a role that is NOT allowed to read the plugin-owned journal, so the owner can be neither a
+      // superuser nor a member of the plugin owner that inherits its privileges.
+      const me = await owner.query(`SELECT r.rolsuper, r.rolbypassrls FROM pg_roles r WHERE r.rolname = (SELECT pg_get_userbyid(proowner) FROM pg_proc WHERE proname = 'sellright_migration_last_applied' AND pronamespace = 'public'::regnamespace)`);
+      if (!me.rows[0] || me.rows[0].rolsuper) return;
+      await owner.query(`CREATE ROLE ${OWNER_ROLE} NOLOGIN NOSUPERUSER NOBYPASSRLS`); cleanup.push(`DROP ROLE IF EXISTS ${OWNER_ROLE}`);
+      await owner.query(`CREATE ROLE ${RT_ROLE} NOLOGIN NOSUPERUSER NOBYPASSRLS`); cleanup.unshift(`DROP ROLE IF EXISTS ${RT_ROLE}`);
+      // set-only membership: the test credential can SET ROLE to the plugin owner / runtime role but inherits nothing from them
+      await owner.query(`GRANT ${OWNER_ROLE} TO CURRENT_USER WITH INHERIT FALSE, SET TRUE`);
+      await owner.query(`GRANT ${RT_ROLE} TO CURRENT_USER WITH INHERIT FALSE, SET TRUE`);
+      await owner.query(`GRANT USAGE, CREATE ON SCHEMA drizzle TO ${OWNER_ROLE}`);
+      await owner.query(`GRANT USAGE ON SCHEMA drizzle TO ${RT_ROLE}`);
+      await owner.query(`SET ROLE ${OWNER_ROLE}`);
+      try {
+        await owner.query(`CREATE TABLE drizzle."${TABLE}" (id serial PRIMARY KEY, hash text NOT NULL, created_at bigint)`);
+        await owner.query(`INSERT INTO drizzle."${TABLE}" (hash, created_at) VALUES ('h', ${WHEN})`);
+      } finally { await owner.query('RESET ROLE'); }
+      // precondition: the probe (engine owner's privileges) really cannot read the plugin journal
+      await owner.query('SELECT public.sellright_migration_last_applied($1, $2)', ['drizzle', TABLE]).then(
+        () => { throw new Error('probe could read the plugin journal; case not reproducible with this credential'); },
+        (e: { code?: string }) => { if (e.code !== '42501') throw e; },
+      );
+      ready = true;
+    } catch { /* credential cannot create/own roles, or PG < 16 membership syntax: skipped below */ }
+  });
+
+  afterAll(async () => {
+    await owner.query('RESET ROLE').catch(() => undefined);
+    await asPluginOwner(`DROP TABLE IF EXISTS drizzle."${TABLE}"`).catch(() => undefined);
+    await owner.query(`REVOKE USAGE ON SCHEMA drizzle FROM ${RT_ROLE}`).catch(() => undefined);
+    await owner.query(`REVOKE USAGE, CREATE ON SCHEMA drizzle FROM ${OWNER_ROLE}`).catch(() => undefined);
+    for (const q of cleanup) await owner.query(q).catch(() => undefined);
+  });
+
+  async function asPluginOwner(sql: string): Promise<void> {
+    await owner.query(`SET ROLE ${OWNER_ROLE}`);
+    try { await owner.query(sql); } finally { await owner.query('RESET ROLE'); }
+  }
+  async function asRuntime<T>(fn: (c: pg.Client) => Promise<T>): Promise<T> {
+    const c = new pg.Client({ connectionString: DB });
+    await c.connect();
+    try { await c.query(`SET ROLE ${RT_ROLE}`); return await fn(c); } finally { await c.end().catch(() => undefined); }
+  }
+
+  it('falls back to the caller\'s own read when the probe is refused (42501) and the caller can read the journal', async (ctx) => {
+    if (!ready) return ctx.skip();
+    await asPluginOwner(`GRANT SELECT ON drizzle."${TABLE}" TO ${RT_ROLE}`);
+    await asRuntime(async (c) => {
+      const status = await trackStatus(c, track());
+      expect(status.lastApplied).toBe(WHEN);
+      expect(status.pending).toEqual([]);
+      // the engine track still verifies through the probe in the same session
+      expect((await assertMigrationsCurrent(c, engineTracks))[0]!.pending).toEqual([]);
+    });
+  });
+
+  it('still fails (42501) when the caller cannot read the journal either', async (ctx) => {
+    if (!ready) return ctx.skip();
+    await asPluginOwner(`REVOKE SELECT ON drizzle."${TABLE}" FROM ${RT_ROLE}`);
+    await asRuntime(async (c) => {
+      await expect(trackStatus(c, track())).rejects.toMatchObject({ code: '42501' });
+    });
+  });
+
+  it('a pending plugin migration is reported through the fallback read', async (ctx) => {
+    if (!ready) return ctx.skip();
+    await asPluginOwner(`GRANT SELECT ON drizzle."${TABLE}" TO ${RT_ROLE}`);
+    const dir = join(scratch, 'plugin-pending');
+    mkdirSync(join(dir, 'meta'), { recursive: true });
+    writeFileSync(join(dir, 'meta', '_journal.json'), JSON.stringify({ entries: [
+      { idx: 0, version: '7', when: WHEN, tag: '0000_plugin_probe', breakpoints: true },
+      { idx: 1, version: '7', when: WHEN + 1, tag: '0001_plugin_next', breakpoints: true },
+    ] }));
+    await asRuntime(async (c) => {
+      const err = await assertMigrationsCurrent(c, [{ name: 'plugin', folder: dir, schema: 'drizzle', table: TABLE }]).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(PendingMigrationsError);
+      expect((err as PendingMigrationsError).statuses[0]!.pending).toEqual(['0001_plugin_next']);
+    });
+  });
+});
+

@@ -8,27 +8,45 @@ export class PreSubmitStockError extends Error {
 	}
 }
 
+/** The validated live read, handed to order creation as the ONLY source of the cart token and revision. */
+export interface CheckoutSnapshot {
+	token: string;
+	revision: number;
+	status: string;
+}
+
 /**
  * LOCKED (CLAUDE.md layer 4): a fresh, awaited live cart read immediately before the order is created. Unlike the
  * drawer/entry refreshes, a failure here must propagate and stop checkout — it never falls through to submit.
  * No cache, TTL or debounce; every call hits the backend.
  *
+ * The response validated here IS the submission snapshot: its token, revision and status are returned and the order
+ * POST uses exactly those, so no second read can supply an unchecked revision, and a failed second read cannot drop
+ * the cart token. A snapshot is single-use — it is never stored; a revision conflict from the server makes the next
+ * attempt run this function (and its live read) again.
+ *
+ * An active cart with no lines is refused: there is nothing to validate and nothing to buy.
+ *
  * Recovery exception: when that live read reports the cart already `converted` (checkout reserved the stock, then
  * the response or the payment-intent call was lost), the lines' `available` is computed AFTER that order's own
  * allocation and is false for the last unit. POST /checkout replays the original order for a converted cart without
- * touching stock, so availability is not a precondition there. The read itself is never skipped; only what an
- * unavailable line means changes, and only when the server says the cart is converted. A missing/other status is a
- * new order and keeps the fail-closed check.
+ * touching stock, so availability (and a non-empty line list) is not a precondition there. The read itself is never
+ * skipped; only what an unavailable line means changes, and only when the server says the cart is converted. A
+ * missing/other status is a new order and keeps the fail-closed check.
  */
-export const refreshStockBeforeSubmit = async (): Promise<void> => {
+export const refreshStockBeforeSubmit = async (): Promise<CheckoutSnapshot> => {
 	// Validate the exact response of THIS read, never the shared mirror: a newer overlapping read can supersede this
 	// one's mirror write, leaving an older in-stock snapshot behind. A missing cookie, 404 or failed read throws.
 	const fresh = await CartService.readFresh();
-	if (fresh.status === 'converted') return;
-	const errors = fresh.lines
+	const snapshot: CheckoutSnapshot = { token: fresh.token, revision: fresh.revision, status: fresh.status };
+	if (fresh.status === 'converted') return snapshot;
+	const lines = fresh.lines ?? [];
+	if (lines.length === 0) throw new PreSubmitStockError('Your cart is empty. Please add items before placing an order.');
+	const errors = lines
 		.filter((line) => line.available !== true)
 		.map((line) => `${line.name || line.sku}: Out of stock. Please remove from cart.`);
 	if (errors.length) throw new PreSubmitStockError(errors[0] || 'Some items are no longer available.');
+	return snapshot;
 };
 
 /**

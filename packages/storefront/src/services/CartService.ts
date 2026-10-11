@@ -444,8 +444,9 @@ export class CartService {
     );
   }
 
-  /** Fresh server cart for checkout: re-reads so `expectedRevision` is the
-   *  live base. `null` when no cart exists. `status` distinguishes
+  /** NOT used by the checkout flow: PLACE ORDER submits the snapshot of `readFresh` (via
+   *  `refreshStockBeforeSubmit`) so the validated read is the submission base. Kept for non-checkout callers only.
+   *  Fresh server cart: re-reads so `expectedRevision` is a live base. `null` when no cart exists. `status` distinguishes
    *  'converted' (replay the original order — payment recovery) from
    *  'merged' (terminal — discard). */
   static async checkoutSnapshot(): Promise<{ token: string; revision: number; status: string } | null> {
