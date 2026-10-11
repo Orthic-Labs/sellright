@@ -248,7 +248,13 @@ async function completeGoogleSignIn(tx: Parameters<Parameters<typeof withStore>[
   // Match by googleSub first, then link by email, else create.
   let [cust] = await tx.select().from(s.customer).where(eq(s.customer.googleSub, g.sub)).limit(1);
   if (!cust) {
-    const [byEmail] = await tx.select().from(s.customer).where(eq(s.customer.email, g.email)).limit(1);
+    // SEC: an identity that reaches here without mailbox proof was matched by subject a moment ago and has since been
+    // unbound; it may neither link nor create.
+    if (!mailboxProven) return { kind: 'not_linkable' };
+    // SEC: the row is locked (FOR UPDATE) so every check below is made against the committed row. A concurrent email
+    // change that commits first means this address no longer names that account: the locked read re-evaluates the
+    // email predicate and returns nothing, so proof of the abandoned mailbox cannot attach to the account.
+    const [byEmail] = await tx.select().from(s.customer).where(eq(s.customer.email, g.email)).limit(1).for('update');
     // SEC: auto-linking Google sign-in into an EXISTING account by email
     // match is an account-takeover vector if that account has a password
     // and its email was never proven — anyone who can register
@@ -269,20 +275,22 @@ async function completeGoogleSignIn(tx: Parameters<Parameters<typeof withStore>[
     // domain) or a fresh email-verification click. Callers never reach here for
     // a non-authoritative identity without that proof (the request handler
     // answers those identically for existing and unknown addresses).
-    if (byEmail && !mailboxProven) return { kind: 'not_linkable' };
     if (byEmail) {
       // SEC: never re-bind. An account already tied to a DIFFERENT Google subject keeps it (a reassigned address must
       // not let a new Google identity displace the existing one). The UPDATE is conditional too, so a concurrent
       // link between the read above and this write also lands as not_linkable rather than overwriting.
       if (byEmail.googleSub && byEmail.googleSub !== g.sub) return { kind: 'not_linkable' };
       const linked = await tx.update(s.customer).set({ googleSub: g.sub, emailVerified: true, updatedAt: new Date() })
-        .where(and(eq(s.customer.id, byEmail.id), or(isNull(s.customer.googleSub), eq(s.customer.googleSub, g.sub))))
+        .where(and(eq(s.customer.id, byEmail.id), eq(s.customer.email, g.email), or(isNull(s.customer.googleSub), eq(s.customer.googleSub, g.sub))))
         .returning({ id: s.customer.id });
       if (linked.length === 0) return { kind: 'not_linkable' };
       cust = byEmail;
     } else {
-      const [created] = await tx.insert(s.customer).values({ storeId: st.id, email: g.email, firstName: g.firstName, lastName: g.lastName, googleSub: g.sub, emailVerified: true }).returning();
-      cust = created!;
+      const [created] = await tx.insert(s.customer).values({ storeId: st.id, email: g.email, firstName: g.firstName, lastName: g.lastName, googleSub: g.sub, emailVerified: true }).onConflictDoNothing().returning();
+      // SEC: another transaction claimed this address (or this subject) after the locked read saw none. Fail closed
+      // rather than 500; the shopper starts again and the normal guards apply to the row that now exists.
+      if (!created) return { kind: 'not_linkable' };
+      cust = created;
     }
   }
   await grantSignupBonus(tx, st.id, cust.id); // REWARDS-1: no-op unless the rule is on
@@ -344,8 +352,12 @@ auth.openapi(
     const g = await verifyGoogleIdToken(credential, clientId);
     if (!g || !g.emailVerified) return errJson(c, 401, 'GOOGLE_TOKEN_INVALID', 'invalid or unverified Google token');
     const authoritative = googleAuthoritativeForEmail(g);
+    // A returning, already-linked subject (matched by sub only, never by email) needs no confirmation mail, so the
+    // link-secret check and the mail throttle do not apply to it.
+    const needsMail = !authoritative
+      && (await withStore(st.id, (tx) => tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.googleSub, g.sub)).limit(1))).length === 0;
     let gate: Awaited<ReturnType<typeof federatedMailGate>> | undefined;
-    if (!authoritative) {
+    if (needsMail) {
       // Deployment misconfiguration (no usable link secret in production), same answer for every address.
       if (!federatedLinkAvailable()) return errJson(c, 409, 'GOOGLE_SIGNIN_NOT_CONFIGURED', 'Google sign-in is not configured for this store');
       gate = await federatedMailGate(c, g.email);
@@ -353,16 +365,12 @@ auth.openapi(
     }
     const nonce = newLinkNonce();
     const out = await withStore(st.id, async (tx): Promise<SignInOutcome | { kind: 'verify_sent' }> => {
-      if (!authoritative) {
-        // Returning, already-linked subject: matched by sub only, never by email.
-        const [linked] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.googleSub, g.sub)).limit(1);
-        if (!linked) {
-          // No customer lookup by address here — that is the whole point.
-          const token = signFederatedLink({ provider: 'google', storeId: st.id, subject: g.sub, email: g.email, firstName: g.firstName, lastName: g.lastName }, hashLinkNonce(nonce));
-          const url = `${resolveStorefrontUrl(emailStoreCtx(st))}/sign-in/confirm?token=${token}`;
-          await enqueueFederatedLinkConfirm(tx, st.id, emailStoreCtx(st), g.email, { url, providerName: 'Google', providerEmail: g.email, ttlMinutes: FEDERATED_LINK_TTL_MS / 60000 });
-          return { kind: 'verify_sent' };
-        }
+      if (needsMail) {
+        // No customer lookup by address here — that is the whole point.
+        const token = signFederatedLink({ provider: 'google', storeId: st.id, subject: g.sub, email: g.email, firstName: g.firstName, lastName: g.lastName }, hashLinkNonce(nonce));
+        const url = `${resolveStorefrontUrl(emailStoreCtx(st))}/sign-in/confirm?token=${token}`;
+        await enqueueFederatedLinkConfirm(tx, st.id, emailStoreCtx(st), g.email, { url, providerName: 'Google', providerEmail: g.email, ttlMinutes: FEDERATED_LINK_TTL_MS / 60000 });
+        return { kind: 'verify_sent' };
       }
       return completeGoogleSignIn(tx, st, g, authoritative);
     });
@@ -423,7 +431,12 @@ async function completeAppleSignIn(tx: Parameters<Parameters<typeof withStore>[1
   type CustomerRow = { id: string; email: string; first_name: string | null; last_name: string | null; phone: string | null; email_verified: boolean; password_hash: string | null; apple_user_id: string | null };
   let [cust] = (await tx.execute(sql`SELECT * FROM customer WHERE apple_user_id = ${sub} AND store_id = ${st.id} LIMIT 1`)).rows as CustomerRow[];
   if (!cust && appleEmail) {
-    const [byEmail] = (await tx.execute(sql`SELECT * FROM customer WHERE email = ${normalizeEmail(appleEmail)} AND store_id = ${st.id} LIMIT 1`)).rows as CustomerRow[];
+    // SEC: an identity naming an address without mailbox proof was matched by subject a moment ago and has since been
+    // unbound; it may neither link nor create.
+    if (!mailboxProven) return { kind: 'not_linkable' };
+    // SEC: locked read (FOR UPDATE), same reason as Google: a concurrent email change that commits first makes this
+    // return nothing, so proof of the abandoned mailbox cannot attach to the account.
+    const [byEmail] = (await tx.execute(sql`SELECT * FROM customer WHERE email = ${normalizeEmail(appleEmail)} AND store_id = ${st.id} LIMIT 1 FOR UPDATE`)).rows as CustomerRow[];
     // SEC: same guards as Google (see completeGoogleSignIn). (1) never link
     // into a password-holding, still-unverified account someone else
     // registered first; (2) email-based linking requires proof of current
@@ -442,13 +455,13 @@ async function completeAppleSignIn(tx: Parameters<Parameters<typeof withStore>[1
     // only at sign-in methods that exist; it does not promise a link step.
     if (byEmail) {
       if (!byEmail.email_verified && byEmail.password_hash) return { kind: 'blocked' };
-      if (!mailboxProven || (byEmail.apple_user_id && byEmail.apple_user_id !== sub)) {
+      if (byEmail.apple_user_id && byEmail.apple_user_id !== sub) {
         return { kind: 'not_linkable' };
       }
       // Race guard: the SELECT above is not locked, so re-assert in the
       // WHERE that the row is still unbound (or already ours). A concurrent
       // sign-in with another Apple subject that bound it first -> 0 rows.
-      const linked = (await tx.execute(sql`UPDATE customer SET apple_user_id = ${sub}, email_verified = true, updated_at = now() WHERE id = ${byEmail.id} AND (apple_user_id IS NULL OR apple_user_id = ${sub}) RETURNING id`)).rows;
+      const linked = (await tx.execute(sql`UPDATE customer SET apple_user_id = ${sub}, email_verified = true, updated_at = now() WHERE id = ${byEmail.id} AND email = ${normalizeEmail(appleEmail)} AND (apple_user_id IS NULL OR apple_user_id = ${sub}) RETURNING id`)).rows;
       if (!linked.length) return { kind: 'not_linkable' };
       cust = { ...byEmail, email_verified: true };
     }
@@ -462,8 +475,10 @@ async function completeAppleSignIn(tx: Parameters<Parameters<typeof withStore>[1
     const email = appleEmail ? normalizeEmail(appleEmail) : `apple-${sub}@no-email.invalid`;
     const [created] = (await tx.execute(sql`
       INSERT INTO customer (store_id, email, apple_user_id, email_verified)
-      VALUES (${st.id}, ${email}, ${sub}, ${emailVerified}) RETURNING *`)).rows as CustomerRow[];
-    cust = created!;
+      VALUES (${st.id}, ${email}, ${sub}, ${emailVerified}) ON CONFLICT DO NOTHING RETURNING *`)).rows as CustomerRow[];
+    // SEC: another transaction claimed this address (or this subject) after the locked read saw none: fail closed.
+    if (!created) return { kind: 'not_linkable' };
+    cust = created;
   }
   const token = await createSession(tx, st.id, cust.id, sessionPolicy(st.config));
   return { kind: 'ok', token, customer: { id: cust.id, email: cust.email, firstName: cust.first_name, lastName: cust.last_name, phone: cust.phone, emailVerified: cust.email_verified, isMigrated: cust.password_hash == null } };
@@ -514,7 +529,10 @@ auth.openapi(
     // The link is bound to the initiator: browsers via the nonce cookie, native apps via the same nonce returned in the
     // 202 body and posted back with the token (see the Google handler comment).
     const authoritative = appleAuthoritativeForEmail(apple);
-    const confirmByMail = !!appleEmail && !authoritative;
+    // A returning, already-bound subject needs no confirmation mail, so the link-secret check and the mail throttle
+    // do not apply to it.
+    const confirmByMail = !!appleEmail && !authoritative
+      && (await withStore(st.id, (tx) => tx.execute(sql`SELECT 1 FROM customer WHERE apple_user_id = ${sub} AND store_id = ${st.id} LIMIT 1`))).rows.length === 0;
     let gate: Awaited<ReturnType<typeof federatedMailGate>> | undefined;
     if (confirmByMail) {
       if (!federatedLinkAvailable()) return errJson(c, 409, 'APPLE_SIGNIN_NOT_CONFIGURED', 'Sign in with Apple is not configured for this store');
@@ -524,14 +542,11 @@ auth.openapi(
     const nonce = newLinkNonce();
     const out = await withStore(st.id, async (tx): Promise<SignInOutcome | { kind: 'verify_sent' }> => {
       if (confirmByMail) {
-        const bound = (await tx.execute(sql`SELECT 1 FROM customer WHERE apple_user_id = ${sub} AND store_id = ${st.id} LIMIT 1`)).rows;
-        if (!bound.length) {
-          const to = normalizeEmail(appleEmail!);
-          const token = signFederatedLink({ provider: 'apple', storeId: st.id, subject: sub, email: to, firstName: null, lastName: null }, hashLinkNonce(nonce));
-          const url = `${resolveStorefrontUrl(emailStoreCtx(st))}/sign-in/confirm?token=${token}`;
-          await enqueueFederatedLinkConfirm(tx, st.id, emailStoreCtx(st), to, { url, providerName: 'Apple', providerEmail: to, ttlMinutes: FEDERATED_LINK_TTL_MS / 60000 });
-          return { kind: 'verify_sent' };
-        }
+        const to = normalizeEmail(appleEmail!);
+        const token = signFederatedLink({ provider: 'apple', storeId: st.id, subject: sub, email: to, firstName: null, lastName: null }, hashLinkNonce(nonce));
+        const url = `${resolveStorefrontUrl(emailStoreCtx(st))}/sign-in/confirm?token=${token}`;
+        await enqueueFederatedLinkConfirm(tx, st.id, emailStoreCtx(st), to, { url, providerName: 'Apple', providerEmail: to, ttlMinutes: FEDERATED_LINK_TTL_MS / 60000 });
+        return { kind: 'verify_sent' };
       }
       return completeAppleSignIn(tx, st, apple, authoritative);
     });
