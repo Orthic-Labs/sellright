@@ -98,4 +98,17 @@ describe('createCanonicalUrlMiddleware', () => {
 		expect(canonical).toBeLessThan(router);
 		expect(src).toContain('neverServedFromDisk(req.path) ? next() : rootStatic(req, res, next)');
 	});
+	it('never produces a redirect to another origin (protocol-relative, backslash or doubled-slash paths)', () => {
+		const sections = ['contact'];
+		for (const path of ['//evil.example/Contact', '/\\evil.example/Contact', '/Contact//evil.example', '/Contact/\\evil.example', '/Contact/%0d%0aSet-Cookie:x']) {
+			const out = canonicalUrlRedirect({ method: 'GET', path: decodeURIComponent(path), originalUrl: path }, sections);
+			if (out !== null) {
+				expect(out.startsWith('/contact'), path).toBe(true);
+				expect(out.includes('//'), path).toBe(false);
+				expect(/[\\\r\n]/.test(out), path).toBe(false);
+			}
+		}
+		expect(canonicalUrlRedirect({ method: 'GET', path: '//evil.example/Contact', originalUrl: '//evil.example/Contact' }, sections)).toBeNull();
+		expect(canonicalUrlRedirect({ method: 'GET', path: '/Contact//evil.example', originalUrl: '/Contact//evil.example' }, sections)).toBeNull();
+	});
 });

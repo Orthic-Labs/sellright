@@ -50,6 +50,10 @@ export function canonicalUrlRedirect(
 	const query = queryIndex >= 0 ? req.originalUrl.slice(queryIndex) : '';
 	if (query && isFrameworkQuery(query.slice(1))) return null;
 	const target = req.path.toLowerCase().replace(/\/?$/, '/');
+	// Same-origin only, by construction and by check: the target is this request's own path, which starts with
+	// "/<allowed section>". Anything that a browser could read as another origin (a second leading slash, a backslash)
+	// or as a header break is never redirected.
+	if (!/^\/[a-z0-9]/.test(target) || /[\\\r\n]/.test(target) || target.includes('//')) return null;
 	return target === req.path ? null : target + query;
 }
 
