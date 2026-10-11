@@ -2,10 +2,10 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, count, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import { withStore, type Tx } from '../db/client.js';
-import { LockSetUnstable, withLockedSet, type LockSubject } from '../db/locks.js';
+import { hasPgCode, LockSetUnstable, withLockedSet, type LockSubject } from '../db/locks.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
-import { calculateOrderTotals, type Promotion } from '../money/totals.js';
+import { calculateOrderTotals, type OrderTotals, type Promotion } from '../money/totals.js';
 import { evaluateCoupon } from '../money/coupon.js';
 import { couponItemsFromFacts, loadCouponMatchContext } from '../money/coupon-context.js';
 import { selectAutomaticPromotion } from '../money/auto-discount.js';
@@ -28,10 +28,10 @@ import { legalManifestForApp } from '../legal/manifests.js';
 import { isStorePublished } from '../store-publish.js';
 import { cartResponse, CartOut } from './cart.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
-import { checkPlacement } from '../payments/policy/host.js';
-import { PaymentPolicyUnavailableError, PaymentPolicyVetoError } from '../payments/policy/registry.js';
+import { checkPlacement, hasCheckoutOrderPolicy, hasCheckoutReplayPolicy, parseCheckoutExtensions, runCheckoutEligibility, runCheckoutReplayAllowed, runLegacyCheckoutFingerprints, runOnCheckoutOrder } from '../payments/policy/host.js';
+import { PaymentPolicyRefusalError, PaymentPolicyUnavailableError, PaymentPolicyVetoError } from '../payments/policy/registry.js';
 import { ReservationConflict } from '../payments/reservation.js';
-import type { PolicyOrder, PolicyVeto } from '../payments/policy/types.js';
+import type { CheckoutFingerprintBasis, CheckoutRefusal, CheckoutReplayOrigin, PolicyCustomer, PolicyOrder, PolicyVeto } from '../payments/policy/types.js';
 
 /**
  * Canonical address shape for the order snapshot — matches the `address` table
@@ -89,7 +89,7 @@ function stableJson(value: unknown): unknown {
   return value ?? null;
 }
 
-function checkoutFingerprint(body: {
+type FingerprintBody = {
   items: Array<{ sku: string; quantity: number }>;
   cartToken?: string;
   couponCode?: string;
@@ -100,13 +100,16 @@ function checkoutFingerprint(body: {
   shippingAddress?: Record<string, unknown>;
   billingAddress?: Record<string, unknown>;
   legalAcceptance?: Record<string, unknown>;
-}): string {
+};
+
+/** The canonical request a fingerprint hashes (everything but policy extensions). Key order is the hashed order. */
+function fingerprintBasis(body: FingerprintBody): CheckoutFingerprintBasis {
   const items = body.cartToken
     ? null
     : [...body.items]
         .map((i) => ({ sku: i.sku, quantity: i.quantity }))
         .sort((a, b) => a.sku.localeCompare(b.sku) || a.quantity - b.quantity);
-  return createHash('sha256').update(JSON.stringify({
+  return {
     v: 1,
     cartToken: body.cartToken ?? null,
     items,
@@ -123,6 +126,14 @@ function checkoutFingerprint(body: {
     // key carrying a DIFFERENT acceptance is a payload mismatch (409), never a
     // silent re-verification skip.
     legalAcceptance: stableJson(body.legalAcceptance),
+  };
+}
+
+function checkoutFingerprint(basis: CheckoutFingerprintBasis, extensions?: Record<string, unknown>): string {
+  return createHash('sha256').update(JSON.stringify({
+    ...basis,
+    // Policy-declared extension blocks (validated by parseCheckoutExtensions); absent = byte-identical fingerprint.
+    ...(extensions && Object.keys(extensions).length ? { extensions: stableJson(extensions) } : {}),
   })).digest('hex');
 }
 
@@ -131,9 +142,10 @@ function checkoutFingerprint(body: {
  *  and replay as before (scoped legacy compatibility — the window where an
  *  old key could be replayed with a mutated payload is bounded by the fact
  *  that keys were already treated as single-use). */
-export function fingerprintMatches(orderMetadata: unknown, fingerprint: string): boolean {
+export function fingerprintMatches(orderMetadata: unknown, fingerprint: string, legacyCandidates: readonly string[] = []): boolean {
   const stored = (orderMetadata as { checkoutFingerprint?: unknown } | null)?.checkoutFingerprint;
-  return typeof stored !== 'string' || stored === fingerprint;
+  // A legacy candidate (policy-supplied, D9) is accepted only by exact equality with THIS order's stored fingerprint.
+  return typeof stored !== 'string' || stored === fingerprint || legacyCandidates.includes(stored);
 }
 
 /** Uniform replay payload for "this checkout already produced an order" —
@@ -155,9 +167,65 @@ async function orderReplayResult(
   };
 }
 
+/** The session customer as a policy sees it (null for a guest checkout). */
+async function policyCustomerOf(tx: Tx, token: string | null): Promise<PolicyCustomer | null> {
+  if (!token) return null;
+  const c = await resolveCustomer(tx, token);
+  return c ? { id: c.id, email: c.email ?? '', emailVerified: c.emailVerified } : null;
+}
+
+type PolicyReplayOrder = { id: string; code: string; state: string; grandTotal: number; customerId: string | null; metadata: unknown };
+const policyOrderOf = (st: { id: string; currency: string }, o: PolicyReplayOrder): PolicyOrder =>
+  ({ id: o.id, storeId: st.id, code: o.code, state: o.state, currency: st.currency, grandTotal: o.grandTotal, customerId: o.customerId, metadata: o.metadata });
+
+/** Replay gate for the three idempotency replay sites: the stored order is returned only if every policy allows it. */
+function replayAllowed(
+  tx: Tx,
+  st: { id: string; currency: string },
+  o: PolicyReplayOrder,
+  extensions: Record<string, unknown>,
+  token: string | null,
+  origin: CheckoutReplayOrigin,
+  held: import('../db/locks.js').HeldLocks,
+): Promise<true | CheckoutRefusal> {
+  return policyCustomerOf(tx, token).then((customer) => runCheckoutReplayAllowed(tx, {
+    existingOrder: policyOrderOf(st, o), extensions, customer, origin, held,
+  }));
+}
+
+/**
+ * A replay of an Idempotency-Key must carry the stored order's fingerprint. A policy may also offer a legacy
+ * candidate (D9); it is consulted only when the normal fingerprint does not match, only after replayAllowed returned
+ * true, and is accepted only by equality with this order's own stored fingerprint. Nothing is rewritten.
+ */
+async function replayFingerprintOk(
+  tx: Tx,
+  st: { id: string; currency: string },
+  o: PolicyReplayOrder,
+  fingerprint: string,
+  request: CheckoutFingerprintBasis,
+  extensions: Record<string, unknown>,
+  token: string | null,
+  origin: 'idempotency_key' | 'unique_violation',
+  held: import('../db/locks.js').HeldLocks,
+): Promise<boolean> {
+  if (fingerprintMatches(o.metadata, fingerprint)) return true;
+  const customer = await policyCustomerOf(tx, token);
+  const candidates = await runLegacyCheckoutFingerprints(tx, { existingOrder: policyOrderOf(st, o), extensions, customer, origin, request, held });
+  return fingerprintMatches(o.metadata, fingerprint, candidates);
+}
+
+type ReplaySource = { idemKey: string; origin: 'idempotency_key' | 'unique_violation' } | 'cart';
+
 const CheckoutOut = z.object({ code: z.string(), state: z.string(), grandTotal: z.number().int(), discountTotal: z.number().int(), currency: z.string(), couponApplied: z.boolean(), giftCardApplied: z.number().int(), receiptToken: z.string(), pointsRedeemed: z.number().int(), pointsDiscount: z.number().int() });
 
 export const checkout = new OpenAPIHono();
+
+/** A policy refusal on the wire: its own status, code and message, `extra` as top-level siblings of `error`, and no synthetic `state`. */
+function refusalJson(c: import('hono').Context, r: CheckoutRefusal) {
+  const extra = r.extra as Record<string, unknown> | undefined;
+  return r.status === 422 ? errJson(c, 422, r.code, r.message, { extra }) : errJson(c, 409, r.code, r.message, { extra });
+}
 
 // POST /v1/shop/checkout — create an order from a cart (PendingPayment).
 // Re-prices server-side, RE-VALIDATES the coupon server-side (never trusts the
@@ -204,6 +272,9 @@ checkout.openapi(
               // a licensed product whose appKey has a manifest configured under
               // store.config.legalManifests; verified server-side, never trusted.
               legalAcceptance: z.record(z.string(), z.unknown()).optional(),
+              // Payment-policy extension blocks, keyed by policy id (X-57). Each block is validated by its policy's
+              // checkoutExtensions schema; an unknown key or an invalid block is a 400. Absent for standalone SellRight.
+              extensions: z.record(z.string(), z.unknown()).optional(),
             }),
           },
         },
@@ -233,9 +304,34 @@ checkout.openapi(
     const checkoutRetry = await loginRetryAfter(ip, checkoutBucket);
     if (checkoutRetry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many checkouts — try again in ${checkoutRetry}s`);
 
-    const fingerprint = checkoutFingerprint(body);
+    const extensions = parseCheckoutExtensions(body.extensions);
+    if (!extensions.ok) return errJson(c, 400, 'INVALID_CHECKOUT_REQUEST', 'Invalid checkout request', { param: 'extensions' });
+    const basis = fingerprintBasis(body);
+    const fingerprint = checkoutFingerprint(basis, extensions.value);
+    // The request's discount/tender intent as sent, for policies (applied or not).
+    const intent = { couponCode: body.couponCode, giftCardCode: body.giftCardCode, redeemPoints: body.redeemPoints };
 
-    type Result = { blocked: string[] } | { shippingError: string } | { cartError: string } | { legalError: string } | { loyaltyError: RedeemRejection } | { policyVeto: PolicyVeto } | { policyUnavailable: true } | { reservationConflict: true } | { cartConflict: { code: 'stale' | 'revision_required'; snapshot: z.infer<typeof CartOut> } } | { fingerprintConflict: true } | { lockRetry: true } | { code: string; state: string; grandTotal: number; discountTotal: number; couponApplied: boolean; replay?: boolean; giftCardApplied?: number; receiptToken: string; pointsRedeemed?: number; pointsDiscount?: number };
+    type Result = { blocked: string[] } | { shippingError: string } | { cartError: string } | { legalError: string } | { loyaltyError: RedeemRejection } | { policyVeto: PolicyVeto } | { policyRefusal: CheckoutRefusal } | { policyUnavailable: true } | { replayRefused: CheckoutRefusal } | { reservationConflict: true } | { replayOf: { orderId: string; source: ReplaySource } } | { cartConflict: { code: 'stale' | 'revision_required'; snapshot: z.infer<typeof CartOut> } } | { fingerprintConflict: true } | { lockRetry: true } | { code: string; state: string; grandTotal: number; discountTotal: number; couponApplied: boolean; replay?: boolean; giftCardApplied?: number; receiptToken: string; pointsRedeemed?: number; pointsDiscount?: number };
+    // A replay is decided under the STORED order's own lock set (order, licences, reservations — L2/L3/L4), never
+    // under the attempt's set, which covers only the rolled-back attempt's new order id. The set is taken in a fresh
+    // transaction, so the global lock order holds; the order is reread under the locks before the policy hook runs.
+    const replayUnderOrderLock = (orderId: string, source: ReplaySource): Promise<Exclude<Result, { replayOf: unknown }> | null> =>
+      withLockedSet(st.id, [{ kind: 'checkout' }, { kind: 'order', orderId }], async (tx, held) => {
+        const [o] = await tx
+          .select({ id: s.order.id, code: s.order.code, state: s.order.state, grandTotal: s.order.grandTotal, discountTotal: s.order.discountTotal, receiptToken: s.order.receiptToken, metadata: s.order.metadata, customerId: s.order.customerId })
+          .from(s.order)
+          .where(source === 'cart'
+            ? and(eq(s.order.id, orderId), isNull(s.order.deletedAt))
+            : and(eq(s.order.id, orderId), eq(s.order.idempotencyKey, source.idemKey)))
+          .limit(1);
+        if (!o) return null;
+        // The policy decides first (who may replay this order), then the key's fingerprint: a caller the policy
+        // refuses learns nothing about whether the body matched. With no policy this order is unobservable.
+        const allowed = await replayAllowed(tx, st, o, extensions.value, token, source === 'cart' ? 'converted_cart' : source.origin, held);
+        if (allowed !== true) return { replayRefused: allowed };
+        if (source !== 'cart' && !await replayFingerprintOk(tx, st, o, fingerprint, basis, extensions.value, token, source.origin, held)) return { fingerprintConflict: true as const };
+        return orderReplayResult(tx, o);
+      });
     // Zero-cache stock rule: set true only by a reserveStockOrThrow call whose
     // surrounding transaction actually reaches COMMIT. Every path below that
     // aborts the transaction (idempotency replay via unique-violation,
@@ -259,17 +355,20 @@ checkout.openapi(
       { kind: 'order', orderId: newOrderId },
       ...(peekedCustomerId ? [{ kind: 'loyalty' as const, customerId: peekedCustomerId }] : []),
     ];
-    const out = await withLockedSet(st.id, subjects, async (tx): Promise<Result> => {
+    const attempt = await withLockedSet(st.id, subjects, async (tx, held): Promise<Result> => {
       // Idempotency: same key -> the same order (also guarded by a unique index),
       // bound to the request fingerprint — a reused key with a different payload
       // is a conflict, not a replay of an order the client didn't resubmit.
       if (idemKey) {
         const [existing] = await tx
-          .select({ id: s.order.id, code: s.order.code, state: s.order.state, grandTotal: s.order.grandTotal, discountTotal: s.order.discountTotal, receiptToken: s.order.receiptToken, metadata: s.order.metadata })
+          .select({ id: s.order.id, code: s.order.code, state: s.order.state, grandTotal: s.order.grandTotal, discountTotal: s.order.discountTotal, receiptToken: s.order.receiptToken, metadata: s.order.metadata, customerId: s.order.customerId })
           .from(s.order)
           .where(eq(s.order.idempotencyKey, idemKey))
           .limit(1);
         if (existing) {
+          // A policy that gates replays decides first, under the stored order's lock set (replayUnderOrderLock checks the
+          // policy, then the fingerprint). Without one the replay is unchanged.
+          if (hasCheckoutReplayPolicy()) return { replayOf: { orderId: existing.id, source: { idemKey, origin: 'idempotency_key' as const } } };
           if (!fingerprintMatches(existing.metadata, fingerprint)) return { fingerprintConflict: true };
           return orderReplayResult(tx, existing);
         }
@@ -294,12 +393,15 @@ checkout.openapi(
           // lost-response retry) — one cart, one order, always.
           const [o] = row.convertedOrderId
             ? await tx
-                .select({ id: s.order.id, code: s.order.code, state: s.order.state, grandTotal: s.order.grandTotal, discountTotal: s.order.discountTotal, receiptToken: s.order.receiptToken, metadata: s.order.metadata })
+                .select({ id: s.order.id, code: s.order.code, state: s.order.state, grandTotal: s.order.grandTotal, discountTotal: s.order.discountTotal, receiptToken: s.order.receiptToken, metadata: s.order.metadata, customerId: s.order.customerId })
                 .from(s.order)
                 .where(and(eq(s.order.id, row.convertedOrderId), isNull(s.order.deletedAt)))
                 .limit(1)
             : [];
-          if (o) return orderReplayResult(tx, o);
+          if (o) {
+            if (hasCheckoutReplayPolicy()) return { replayOf: { orderId: o.id, source: 'cart' as const } };
+            return orderReplayResult(tx, o);
+          }
           return { cartError: 'cart is empty, invalid, or already checked out' };
         }
         // 'merged' is terminal like 'converted' but has no order to resume —
@@ -423,6 +525,16 @@ checkout.openapi(
         if (customerId) { linkedVia = 'email_match'; loyaltyOwner = byEmail ?? null; }
       }
 
+      // Policy request eligibility (X-57): runs before any discount, loyalty or tax step, so a policy's refusal is never
+      // preempted by a loyalty error. The request intent is passed as sent. Throws on refusal (stock is already reserved).
+      await runCheckoutEligibility(tx, {
+        storeId: st.id, currency: st.currency,
+        lines: priced.map((p) => ({ variantId: p.v.id, sku: p.v.sku, productId: p.v.productId, quantity: p.qty, unitPrice: p.unitPrice })),
+        extensions: extensions.value,
+        customer: sessionCustomer ? { id: sessionCustomer.id, email: sessionCustomer.email ?? '', emailVerified: sessionCustomer.emailVerified } : null,
+        intent, held,
+      });
+
       // ── Discount: explicit coupon OR best automatic; re-validate server-side
       //    + enforce usage limits ──────────────────────────────────────────────
       let promotion: Promotion | undefined;
@@ -487,8 +599,14 @@ checkout.openapi(
 
       const discounted = calculateOrderTotals({ lines: priced.map(p => ({ unitPrice: p.unitPrice, quantity: p.qty })),
         shipping: 0, taxRate, taxInclusive: st.taxInclusive, promotion });
+      // A discount-dependent rejection is deferred only while a policy that may replace the promotion is registered;
+      // it is decided once the effective promotion is known (below). With no such policy it throws here, as always.
+      let shippingRejectionDeferred = false;
       if (shippingCalculator && !isMethodEligible(shippingCalculator, { subtotal: subtotalCents, country: shipCountry,
-        discountedSubtotalWithTax: discounted.grandTotal })) throw new ShippingUnavailableError('not_eligible');
+        discountedSubtotalWithTax: discounted.grandTotal })) {
+        if (shippingCalculator.subtotalBasis === 'discounted_with_tax' && hasCheckoutOrderPolicy()) shippingRejectionDeferred = true;
+        else throw new ShippingUnavailableError('not_eligible');
+      }
 
       // ── Loyalty points (LOYALTY-1) ────────────────────────────────────────
       // Redemption: session customers only (an email-matched guest link is
@@ -499,6 +617,8 @@ checkout.openapi(
       // The discount is fixed cents applied after the promotion, before tax.
       const loyalty = loyaltySettingsFromConfig(st.config);
       let redeem: { points: number; discountCents: number } | null = null;
+      let availablePoints = 0;
+      let redeemRejectionDeferred: RedeemRejection | null = null;
       if (body.redeemPoints) {
         // THROW (not return): stock is already reserved in this txn, so a
         // rejection must roll it back — the .catch below maps it to a 409.
@@ -507,31 +627,36 @@ checkout.openapi(
         // The loyalty set was planned for the peeked customer; a different session
         // customer under the lock cannot be covered, so the attempt is retried.
         if (sessionCustomer.id !== peekedCustomerId) throw new LockSetUnstable();
-        const available = await lockedAvailable(tx, st.id, sessionCustomer.id);
-        const plan = planRedemption({ settings: loyalty, requestedPoints: body.redeemPoints, availablePoints: available,
+        availablePoints = await lockedAvailable(tx, st.id, sessionCustomer.id);
+        const plan = planRedemption({ settings: loyalty, requestedPoints: body.redeemPoints, availablePoints,
           discountableCents: discounted.subtotal - discounted.discountTotal });
-        if (!plan.ok) throw new LoyaltyRedeemError(plan.reason);
-        redeem = { points: plan.points, discountCents: plan.discountCents };
+        // Balance and authentication rejections stay here. The discount-dependent ones (nothing_to_discount,
+        // below_minimum) wait for the effective promotion only while a promotion-replacing policy may exist.
+        if (!plan.ok) {
+          if ((plan.reason === 'nothing_to_discount' || plan.reason === 'below_minimum') && hasCheckoutOrderPolicy()) redeemRejectionDeferred = plan.reason;
+          else throw new LoyaltyRedeemError(plan.reason);
+        } else redeem = { points: plan.points, discountCents: plan.discountCents };
       }
-      const totals = calculateOrderTotals({
+      let totalsInput = {
         shippingTaxRate: shippingCalculator?.taxRate, shippingTaxInclusive: shippingCalculator?.taxInclusive,
         lines: priced.map((p) => ({ unitPrice: p.unitPrice, quantity: p.qty })),
         shipping: shippingAmount, taxRate, taxInclusive: st.taxInclusive, shippingTaxable: st.shippingTaxable, promotion,
         pointsDiscount: redeem?.discountCents ?? 0,
-      });
+      };
+      let totals = calculateOrderTotals(totalsInput);
       // Earn snapshot: registered customers only, on merchandise after every
       // discount (promo + points), excluding shipping and tax. Posted to the
       // ledger only when the order reaches Paid (postPaidOrderRewards).
-      const loyaltySnap: OrderLoyaltySnapshot | null = loyalty.enabled || redeem
+      const loyaltySnapshotFor = (t: OrderTotals): OrderLoyaltySnapshot | null => loyalty.enabled || redeem
         ? {
             redeemPoints: redeem?.points ?? 0,
-            pointsDiscount: totals.pointsDiscount,
+            pointsDiscount: t.pointsDiscount,
             earnPoints: loyalty.enabled && customerOwnsOrder(loyaltyOwner, {customerId, metadata: { linked_via: linkedVia, contact: { email: normalizeEmail(sessionCustomer?.email ?? body.email ?? '') } }})
               ? (() => {
-                const base = earnableCents({ subtotal: totals.subtotal, discountTotal: totals.discountTotal, taxRate, taxInclusive: st.taxInclusive });
+                const base = earnableCents({ subtotal: t.subtotal, discountTotal: t.discountTotal, taxRate, taxInclusive: st.taxInclusive });
                 return pointsEarned(base, loyalty.earnRatePerDollar) + multiplierBonusPoints({
                   lines: priced.map((p) => ({ productId: p.v.productId, cents: p.unitPrice * p.qty })),
-                  subtotal: totals.subtotal, earnableCents: base, earnRatePerDollar: loyalty.earnRatePerDollar, multipliers: loyalty.productMultipliers,
+                  subtotal: t.subtotal, earnableCents: base, earnRatePerDollar: loyalty.earnRatePerDollar, multipliers: loyalty.productMultipliers,
                 });
               })()
               : 0,
@@ -540,6 +665,7 @@ checkout.openapi(
             ...(loyalty.productMultipliers.length ? { productMultipliers: loyalty.productMultipliers } : {}),
           }
         : null;
+      let loyaltySnap = loyaltySnapshotFor(totals);
 
       const orderId = newOrderId;
       const code = orderCode();
@@ -547,6 +673,16 @@ checkout.openapi(
       // order-by-code read on the confirmation page (carried as ?rt=). Never
       // bare-code (P1): the order code is ~enumerable.
       const receiptToken = randomBytes(32).toString('base64url');
+      const orderMetadata = { ...(linkedVia ? { linked_via: linkedVia } : {}),
+        contact: { email: normalizeEmail(sessionCustomer?.email ?? body.email ?? '') },
+        taxInclusive: st.taxInclusive,
+        // CART-01: binds the idempotency key to this payload — a replay with
+        // the same key but a different payload is a 409, not a silent replay.
+        checkoutFingerprint: fingerprint,
+        // Immutable legal-acceptance receipt (canonical configured values,
+        // verified above) for manifest-configured licensed products.
+        ...(legalReceipt ? { legal_acceptance: legalReceipt } : {}),
+        ...(loyaltySnap ? { loyalty: loyaltySnap } : {}) };
       await tx.insert(s.order).values({
         id: orderId, storeId: st.id, code, customerId, state: 'PendingPayment', currency: st.currency,
         idempotencyKey: idemKey, promotionId: promoId, receiptToken,
@@ -563,25 +699,78 @@ checkout.openapi(
         // WP9.5: attach the link provenance to the order metadata. The account
         // order-list endpoint reads this to suppress email_match-linked orders
         // until the customer verifies the email.
-        metadata: { ...(linkedVia ? { linked_via: linkedVia } : {}),
-          contact: { email: normalizeEmail(sessionCustomer?.email ?? body.email ?? '') },
-          taxInclusive: st.taxInclusive,
-          // CART-01: binds the idempotency key to this payload — a replay with
-          // the same key but a different payload is a 409, not a silent replay.
-          checkoutFingerprint: fingerprint,
-          // Immutable legal-acceptance receipt (canonical configured values,
-          // verified above) for manifest-configured licensed products.
-          ...(legalReceipt ? { legal_acceptance: legalReceipt } : {}),
-          ...(loyaltySnap ? { loyalty: loyaltySnap } : {}) },
+        metadata: orderMetadata,
       });
+      const lineIds = priced.map(() => randomUUID());
       await tx.insert(s.orderLine).values(
         priced.map((p, idx) => ({
-          storeId: st.id, orderId, variantId: p.v.id, variantSku: p.v.sku, variantName: p.v.name,
+          id: lineIds[idx]!, storeId: st.id, orderId, variantId: p.v.id, variantSku: p.v.sku, variantName: p.v.name,
           quantity: p.qty, unitPrice: p.unitPrice,
           lineSubtotal: totals.lines[idx]!.lineSubtotal, lineDiscount: totals.lines[idx]!.lineDiscount,
           lineTax: 0, lineTotal: totals.lines[idx]!.lineTotal,
         })),
       );
+
+      // ── Payment policy checkout hook (PAYMENT-TIMING §3.1, R1; X-57). Runs in this transaction, right after the
+      // order and line inserts. A veto rolls the checkout back; reserve requests are held rows; metadata merges into
+      // the order; price adjustments become order_adjustment rows and the totals (and stored grand total) are
+      // recomputed before any tender is taken. The default (no policy) returns an empty outcome: no change.
+      const checkoutPolicy = await runOnCheckoutOrder(tx, {
+        order: { id: orderId, storeId: st.id, code, state: 'PendingPayment', currency: st.currency, grandTotal: totals.grandTotal, customerId, metadata: orderMetadata },
+        lines: priced.map((p) => ({ variantId: p.v.id, sku: p.v.sku, productId: p.v.productId, quantity: p.qty, unitPrice: p.unitPrice })),
+        extensions: extensions.value,
+        customer: sessionCustomer ? { id: sessionCustomer.id, email: sessionCustomer.email ?? '', emailVerified: sessionCustomer.emailVerified } : null,
+        intent, held,
+      });
+      // A policy that REPLACES the applied promotion with a fixed merchandise discount (X-57): the promotion is dropped
+      // (no promotionId, no usage, couponApplied false), tax is computed on the discounted merchandise as for any promotion,
+      // a redemption is re-planned against the new discountable base, and the order, line and loyalty snapshot are rewritten
+      // here, before any tender is taken.
+      const replacement = checkoutPolicy.promotionReplacement;
+      if (replacement) {
+        promotion = { type: 'fixed', value: replacement.fixedDiscount };
+        promoId = null;
+        const replaced = calculateOrderTotals({ lines: priced.map((p) => ({ unitPrice: p.unitPrice, quantity: p.qty })),
+          shipping: 0, taxRate, taxInclusive: st.taxInclusive, promotion });
+        // Discount-dependent shipping eligibility, on the effective promotion's discounted merchandise total (either direction).
+        if (shippingCalculator && (shippingRejectionDeferred || shippingCalculator.subtotalBasis === 'discounted_with_tax')
+          && !isMethodEligible(shippingCalculator, { subtotal: subtotalCents, country: shipCountry,
+            discountedSubtotalWithTax: replaced.grandTotal })) throw new ShippingUnavailableError('not_eligible');
+        if ((redeem || redeemRejectionDeferred) && body.redeemPoints) {
+          const plan = planRedemption({ settings: loyalty, requestedPoints: body.redeemPoints, availablePoints,
+            discountableCents: replaced.subtotal - replaced.discountTotal });
+          if (!plan.ok) throw new LoyaltyRedeemError(plan.reason);
+          redeem = { points: plan.points, discountCents: plan.discountCents };
+        }
+        totalsInput = { ...totalsInput, promotion, pointsDiscount: redeem?.discountCents ?? 0 };
+        totals = calculateOrderTotals(totalsInput);
+        loyaltySnap = loyaltySnapshotFor(totals);
+        for (const [idx, l] of totals.lines.entries()) {
+          await tx.update(s.orderLine).set({ lineDiscount: l.lineDiscount, lineTotal: l.lineTotal }).where(eq(s.orderLine.id, lineIds[idx]!));
+        }
+      } else {
+        // No replacement: the deferred rejections stand, shipping first as before.
+        if (shippingRejectionDeferred) throw new ShippingUnavailableError('not_eligible');
+        if (redeemRejectionDeferred) throw new LoyaltyRedeemError(redeemRejectionDeferred);
+      }
+      if (checkoutPolicy.adjustments.length) {
+        totals = calculateOrderTotals({ ...totalsInput, adjustments: checkoutPolicy.adjustments.map((a) => ({ label: a.label, amount: a.amount })) });
+        await tx.insert(s.orderAdjustment).values(checkoutPolicy.adjustments.map((a) => ({ storeId: st.id, orderId, label: a.label, amount: a.amount, actor: `policy:${a.policyId}` })));
+      }
+      // What the order row now holds; the placement check below must see the same metadata and total.
+      let persisted: { grandTotal: number; metadata: unknown } = { grandTotal: totals.grandTotal, metadata: orderMetadata };
+      const metadataPatch = { ...checkoutPolicy.metadata, ...(replacement && loyaltySnap ? { loyalty: loyaltySnap } : {}) };
+      if (replacement || checkoutPolicy.adjustments.length || Object.keys(metadataPatch).length) {
+        const [updated] = await tx.update(s.order)
+          .set({
+            grandTotal: totals.grandTotal,
+            ...(replacement ? { discountTotal: totals.discountTotal, shippingTotal: totals.shippingTotal, taxTotal: totals.taxTotal, promotionId: null } : {}),
+            metadata: sql`${s.order.metadata} || ${JSON.stringify(metadataPatch)}::jsonb`,
+          })
+          .where(eq(s.order.id, orderId))
+          .returning({ grandTotal: s.order.grandTotal, metadata: s.order.metadata });
+        persisted = updated!;
+      }
 
       // Record promotion usage + bump the global counter (idempotent on order).
       if (promoId) {
@@ -636,7 +825,7 @@ checkout.openapi(
       // dings a phone or sends an email, exactly as before. Runs after the order
       // and cart events so webhook rows keep their order (created -> paid).
       // Placement tenders (PAYMENT-TIMING §4.6): the policy checks the order before any tender is recorded.
-      const placementOrder: PolicyOrder = { id: orderId, storeId: st.id, code, state: 'PendingPayment', currency: st.currency, grandTotal: totals.grandTotal, customerId, metadata: {} };
+      const placementOrder: PolicyOrder = { id: orderId, storeId: st.id, code, state: 'PendingPayment', currency: st.currency, grandTotal: persisted.grandTotal, customerId, metadata: persisted.metadata };
       const paidEffects = (paidAt: Date) => paidOrderEffects({
         orderId, customerId, paidAt, variant: 'checkout', guestEmail: body.email ?? null,
         itemCount: priced.reduce((n, p) => n + p.qty, 0),
@@ -692,19 +881,12 @@ checkout.openapi(
       // Concurrent double-submit with the same Idempotency-Key: the unique
       // (store, key) index rejected the loser; its txn (incl. allocation) rolled
       // back. Return the winner's order in a fresh read — still fingerprint-bound.
-      if (idemKey && (e as { code?: string })?.code === '23505') {
-        return withStore(st.id, async (tx): Promise<Result> => {
-          const [o] = await tx
-            .select({ id: s.order.id, code: s.order.code, state: s.order.state, grandTotal: s.order.grandTotal, discountTotal: s.order.discountTotal, receiptToken: s.order.receiptToken, metadata: s.order.metadata })
-            .from(s.order)
-            .where(eq(s.order.idempotencyKey, idemKey))
-            .limit(1);
-          if (o) {
-            if (!fingerprintMatches(o.metadata, fingerprint)) return { fingerprintConflict: true };
-            return orderReplayResult(tx, o);
-          }
-          throw e;
-        });
+      // drizzle wraps the driver error, so the 23505 sits on `cause`, not on `e` (hasPgCode walks the chain).
+      if (idemKey && hasPgCode(e, ['23505'])) {
+        const [winner] = await withStore(st.id, (tx) => tx.select({ id: s.order.id }).from(s.order).where(eq(s.order.idempotencyKey, idemKey)).limit(1));
+        const replayed = winner ? await replayUnderOrderLock(winner.id, { idemKey, origin: 'unique_violation' }) : null;
+        if (!replayed) throw e;
+        return replayed;
       }
       if (e instanceof LockSetUnstable) return { lockRetry: true };
       if (e instanceof StockReservationError) return { blocked: e.skus };
@@ -712,11 +894,19 @@ checkout.openapi(
       if (e instanceof LoyaltyRedeemError) return { loyaltyError: e.reason };
       // PAYMENT-TIMING §3.6: a placement veto rolled the whole checkout back; the request is refused, statelessly.
       if (e instanceof PaymentPolicyVetoError) return { policyVeto: e.veto };
+      if (e instanceof PaymentPolicyRefusalError) return { policyRefusal: e.refusal };
       if (e instanceof PaymentPolicyUnavailableError) return { policyUnavailable: true };
       // PAYMENT-TIMING §3.3 R1: the reservation is held by another live order, or released for this one.
       if (e instanceof ReservationConflict) return { reservationConflict: true };
       throw e;
     });
+    // A replay decided under a policy's hook runs in its own locked transaction (see replayUnderOrderLock).
+    const out = 'replayOf' in attempt
+      ? await replayUnderOrderLock(attempt.replayOf.orderId, attempt.replayOf.source)
+        ?? (attempt.replayOf.source === 'cart'
+          ? { cartError: 'cart is empty, invalid, or already checked out' }
+          : { lockRetry: true as const })
+      : attempt;
     // Fire AFTER the transaction that actually reserved stock has committed —
     // never from inside it, and never on a rolled-back/replayed attempt.
     if (stockChanged) onStockChanged(st.slug);
@@ -724,6 +914,8 @@ checkout.openapi(
     if ('shippingError' in out) return errJson(c, 409, 'SHIPPING_UNAVAILABLE', 'shipping unavailable', { extra: { reason: out.shippingError } });
     if ('cartError' in out) return errJson(c, 409, 'CART_INVALID', out.cartError);
     if ('legalError' in out) return errJson(c, 422, 'LEGAL_ACCEPTANCE_REQUIRED', out.legalError);
+    if ('replayRefused' in out) return refusalJson(c, out.replayRefused);
+    if ('policyRefusal' in out) return refusalJson(c, out.policyRefusal);
     if ('loyaltyError' in out) return errJson(c, 409, 'LOYALTY_REDEEM_FAILED', 'points could not be redeemed', { extra: { reason: out.loyaltyError } });
     if ('policyVeto' in out) return errJson(c, 409, out.policyVeto.code, out.policyVeto.message, { extra: { state: out.policyVeto.extra?.state ?? out.policyVeto.code } });
     if ('policyUnavailable' in out) return errJson(c, 409, 'PAYMENT_POLICY_UNAVAILABLE', 'payment is temporarily unavailable, retry shortly');

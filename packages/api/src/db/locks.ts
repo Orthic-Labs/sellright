@@ -166,9 +166,8 @@ async function lockRows(
   }
 }
 
-/** drizzle wraps driver errors ("Failed query: …") and keeps the pg error on `cause`. */
-/** True when `e` or any error on its `cause` chain (5 levels) carries one of `codes`; outer wrappers may have their own code. */
-function hasPgCode(e: unknown, codes: readonly string[]): boolean {
+/** drizzle wraps driver errors ("Failed query: …") and keeps the pg error on `cause`. True when `e` or any error on its `cause` chain (5 levels) carries one of `codes`; outer wrappers may have their own code. */
+export function hasPgCode(e: unknown, codes: readonly string[]): boolean {
   for (let cur: unknown = e, depth = 0; cur && typeof cur === 'object' && depth < 5; depth++) {
     const code = (cur as { code?: unknown }).code;
     if (typeof code === 'string' && codes.includes(code)) return true;
@@ -312,6 +311,20 @@ export async function lockSetCovers(tx: Tx, storeId: string, subject: LockSubjec
   if (!held) return false;
   const subjects = Array.isArray(subject) ? subject : [subject as LockSubject];
   return subsetOf(await planFor(tx, storeId, subjects), held.plan);
+}
+
+/**
+ * A reservation row this transaction just inserted joins the held set's plan. The row did not exist when the set was
+ * planned and is invisible to every other transaction until commit, so nobody can contend for it and no lock is taken
+ * (the L2 -> L3 -> L4 order is untouched). Without this, the covering check re-plans the order, sees the new L4 row
+ * as growth, and treats an inline effect of the same transaction as uncovered. Only applies when the set on `tx`
+ * already covers the reservation's order; otherwise it is a no-op.
+ */
+export function adoptCreatedReservation(tx: Tx, orderId: string, reservationId: string): void {
+  const ctx = lockSetContext.getStore();
+  if (!ctx || ctx.tx !== tx) return;
+  if (!ctx.plan.orderIds.some((id) => canonical(id) === canonical(orderId))) return;
+  ctx.plan = union(ctx.plan, { purchases: [], licenseIds: [], orderIds: [], reservationIds: [reservationId] });
 }
 
 /**

@@ -4,7 +4,7 @@
 // transitions without importing the hook runners, which in turn call the reservation service.
 import { sql } from 'drizzle-orm';
 import type { Tx } from '../../db/client.js';
-import type { PaymentPolicy, PolicyVeto } from './types.js';
+import type { CheckoutRefusal, PaymentPolicy, PolicyVeto } from './types.js';
 
 /** Wire code for a veto that carries no code of its own (PAYMENT-TIMING §3.6). */
 export const PAYMENT_POLICY_VETO_CODE = 'PAYMENT_POLICY_VETO';
@@ -14,6 +14,14 @@ export class PaymentPolicyVetoError extends Error {
   constructor(readonly veto: PolicyVeto) {
     super(veto.message);
     this.name = 'PaymentPolicyVetoError';
+  }
+}
+
+/** A checkout policy refused the request with its own wire shape. The checkout transaction must roll back. */
+export class PaymentPolicyRefusalError extends Error {
+  constructor(readonly refusal: CheckoutRefusal) {
+    super(refusal.message);
+    this.name = 'PaymentPolicyRefusalError';
   }
 }
 
