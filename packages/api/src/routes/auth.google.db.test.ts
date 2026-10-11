@@ -339,3 +339,59 @@ describe('POST /v1/shop/auth/google non-authoritative identity', () => {
   });
 
 });
+
+describe('POST /v1/shop/auth/google review follow-ups', () => {
+  it('a link redeemed while the account changes its email never binds the account (deterministic)', async () => {
+    await seedCustomer('old-owner@corp.example');
+    const custId = (await byEmail('old-owner@corp.example'))!.id;
+    const { cookie, token } = await startFlow('old-owner@corp.example', 'g-race-email');
+    // Connection C row-locks the customer (an email change in flight). The confirm's locked read waits on it. C then
+    // moves the account to a new address and commits; the read re-evaluates its email predicate and finds no row, so
+    // proof of the abandoned mailbox cannot attach to the account that now lives at the new address.
+    let release!: () => void;
+    let locked!: () => void;
+    const held = new Promise<void>((r) => { release = r; });
+    const lockedP = new Promise<void>((r) => { locked = r; });
+    const holder = withStore(STORE, async (tx) => {
+      await tx.execute(sql`SELECT id FROM customer WHERE id = ${custId} FOR UPDATE`);
+      locked();
+      await held;
+      await tx.execute(sql`UPDATE customer SET email = 'new-owner@corp.example' WHERE id = ${custId}`);
+    });
+    await lockedP;
+    const pending = confirm(token, { cookie });
+    // Always release C, or a failed poll leaves the row locked and every later TRUNCATE in this file hangs.
+    let waiting = false;
+    try {
+      for (let i = 0; i < 200 && !waiting; i++) {
+        waiting = (await pool.query(
+          `SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query ILIKE '%from "customer"%for update%'`,
+        )).rowCount! > 0;
+        if (!waiting) await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(waiting, 'confirm should be blocked on the row lock').toBe(true);
+    } finally {
+      release();
+      await holder.catch(() => {});
+    }
+    const res = await pending;
+    const moved = await byEmail('new-owner@corp.example');
+    expect(moved?.id).toBe(custId);
+    expect(moved?.googleSub).toBeNull();
+    // The mailbox holder gets a separate, new account at the old address; never a session for the moved account.
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { customer: { id: string } }).customer.id).not.toBe(custId);
+  });
+
+  it('an already-linked subject still signs in when the address is mail-throttled', async () => {
+    await seedCustomer('linked-th@corp.example', 'g-linked-th');
+    mockGoogle({ sub: 'g-other-th', email: 'linked-th@corp.example' });
+    const statuses: number[] = [];
+    for (let i = 0; i < 12; i++) statuses.push((await signIn()).status);
+    expect(statuses).toContain(429);
+    mockGoogle({ sub: 'g-linked-th', email: 'linked-th@corp.example' });
+    const res = await signIn();
+    expect(res.status).toBe(200);
+    expect(await sessionCount()).toBe(1);
+  });
+});

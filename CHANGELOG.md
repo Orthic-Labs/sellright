@@ -259,6 +259,13 @@ must update the matching changelog in the same push.
 - The no-Vendure source guard detects wrapped `gql` tags syntactically and
   fails closed if its scanner fails.
 
+### Security
+
+- Google and Apple account linking reads the account row under a lock, so a
+  confirmation link for an address the account has just moved away from can no
+  longer attach to that account. An already-linked Google or Apple identity
+  signs in even when the address is mail-throttled or no link secret is set.
+
 ### Operations
 
 - New storefront runtime settings: `SELLRIGHT_GOOGLE_SIGNIN_HOSTS` (the pinned

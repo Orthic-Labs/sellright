@@ -176,11 +176,11 @@ describe('POST /v1/shop/auth/apple', () => {
     expect(await appleRow(STORE_APPLE, loser)).toBeUndefined();
   });
 
-  it('a link whose row was bound to another subject between the SELECT and the UPDATE 409s and does not rebind (deterministic)', async () => {
+  it('a link whose row is bound to another subject while the sign-in waits on the row 409s and does not rebind (deterministic)', async () => {
     const custId = await seed('race@icloud.com', true);
-    // Connection C row-locks the customer and holds it. The sign-in's plain SELECT still reads the unbound row, then its
-    // UPDATE blocks on C's lock. C then binds a DIFFERENT subject and commits; the blocked UPDATE re-evaluates its WHERE
-    // against the new row version. Without the `apple_user_id IS NULL OR = sub` guard it would rebind to sub-race-a.
+    // Connection C row-locks the customer and holds it. The sign-in's locked read (FOR UPDATE) blocks on C's lock. C then
+    // binds a DIFFERENT subject and commits; the read returns the committed row, which is bound to sub-race-b, so the
+    // sign-in refuses instead of rebinding to sub-race-a.
     let release!: () => void;
     let locked!: () => void;
     const held = new Promise<void>((r) => { release = r; });
@@ -193,17 +193,17 @@ describe('POST /v1/shop/auth/apple', () => {
     });
     await lockedP;
     const pending = signIn(SLUG_APPLE, appleJwt({ sub: 'sub-race-a', email: 'race@icloud.com' }));
-    // Wait until the sign-in's UPDATE is actually waiting on C's lock (bounded poll, no fixed sleep). Always release C,
+    // Wait until the sign-in's locked read is actually waiting on C's lock (bounded poll, no fixed sleep). Always release C,
     // or a failed poll leaves the row locked and every later TRUNCATE in this file hangs.
     let waiting = false;
     try {
       for (let i = 0; i < 200 && !waiting; i++) {
         waiting = (await pool.query(
-          `SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query ILIKE 'UPDATE customer SET apple_user_id%'`,
+          `SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query ILIKE 'SELECT * FROM customer WHERE email%FOR UPDATE%'`,
         )).rowCount! > 0;
         if (!waiting) await new Promise((r) => setTimeout(r, 25));
       }
-      expect(waiting, 'sign-in UPDATE should be blocked on the row lock').toBe(true);
+      expect(waiting, 'sign-in should be blocked on the row lock').toBe(true);
     } finally {
       release();
       await holder.catch(() => {});
@@ -418,5 +418,55 @@ describe('POST /v1/shop/auth/apple non-authoritative identity', () => {
     expect((await confirm(`${body}.${'A'.repeat(sig!.length)}`, { cookie })).status).toBe(401);
     expect((await app.request('/v1/shop/auth/federated/confirm', { method: 'POST', headers: { ...hdr(SLUG_NONE), cookie }, body: JSON.stringify({ token }) })).status).toBe(401);
     expect(await customers()).toBe(0);
+  });
+});
+
+describe('POST /v1/shop/auth/apple review follow-ups', () => {
+  it('a link redeemed while the account changes its email never binds the account (deterministic)', async () => {
+    const custId = await seedC('old-owner@corp.example');
+    const { cookie, token } = await startFlow('old-owner@corp.example', 'ap-race-email');
+    // Same shape as the Google test: C holds the row, moves the account to a new address, commits; the confirm's locked
+    // read then finds no row at the old address.
+    let release!: () => void;
+    let locked!: () => void;
+    const held = new Promise<void>((r) => { release = r; });
+    const lockedP = new Promise<void>((r) => { locked = r; });
+    const holder = withStore(STORE_APPLE, async (tx) => {
+      await tx.execute(sql`SELECT id FROM customer WHERE id = ${custId} FOR UPDATE`);
+      locked();
+      await held;
+      await tx.execute(sql`UPDATE customer SET email = 'new-owner@corp.example' WHERE id = ${custId}`);
+    });
+    await lockedP;
+    const pending = confirm(token, { cookie });
+    let waiting = false;
+    try {
+      for (let i = 0; i < 200 && !waiting; i++) {
+        waiting = (await pool.query(
+          `SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query ILIKE 'SELECT * FROM customer WHERE email%FOR UPDATE%'`,
+        )).rowCount! > 0;
+        if (!waiting) await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(waiting, 'confirm should be blocked on the row lock').toBe(true);
+    } finally {
+      release();
+      await holder.catch(() => {});
+    }
+    const res = await pending;
+    const moved = await withStore(STORE_APPLE, async (tx) =>
+      (await tx.execute(sql`SELECT email, apple_user_id FROM customer WHERE id = ${custId}`)).rows[0] as { email: string; apple_user_id: string | null });
+    expect(moved).toEqual({ email: 'new-owner@corp.example', apple_user_id: null });
+    // The mailbox holder gets a separate, new account at the old address; never a session for the moved account.
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { customer: { id: string } }).customer.id).not.toBe(custId);
+  });
+
+  it('an already-bound subject still signs in when the address is mail-throttled', async () => {
+    await seedC('bound-th@corp.example', 'ap-bound-th');
+    const statuses: number[] = [];
+    for (let i = 0; i < 12; i++) statuses.push((await signIn(SLUG_APPLE, appleJwt({ sub: 'ap-other-th', email: 'bound-th@corp.example' }))).status);
+    expect(statuses).toContain(429);
+    const res = await signIn(SLUG_APPLE, appleJwt({ sub: 'ap-bound-th', email: 'bound-th@corp.example' }));
+    expect(res.status).toBe(200);
   });
 });
