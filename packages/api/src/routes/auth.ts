@@ -286,8 +286,11 @@ async function completeGoogleSignIn(tx: Parameters<Parameters<typeof withStore>[
       if (linked.length === 0) return { kind: 'not_linkable' };
       cust = byEmail;
     } else {
-      const [created] = await tx.insert(s.customer).values({ storeId: st.id, email: g.email, firstName: g.firstName, lastName: g.lastName, googleSub: g.sub, emailVerified: true }).returning();
-      cust = created!;
+      const [created] = await tx.insert(s.customer).values({ storeId: st.id, email: g.email, firstName: g.firstName, lastName: g.lastName, googleSub: g.sub, emailVerified: true }).onConflictDoNothing().returning();
+      // SEC: another transaction claimed this address (or this subject) after the locked read saw none. Fail closed
+      // rather than 500; the shopper starts again and the normal guards apply to the row that now exists.
+      if (!created) return { kind: 'not_linkable' };
+      cust = created;
     }
   }
   await grantSignupBonus(tx, st.id, cust.id); // REWARDS-1: no-op unless the rule is on
@@ -472,8 +475,10 @@ async function completeAppleSignIn(tx: Parameters<Parameters<typeof withStore>[1
     const email = appleEmail ? normalizeEmail(appleEmail) : `apple-${sub}@no-email.invalid`;
     const [created] = (await tx.execute(sql`
       INSERT INTO customer (store_id, email, apple_user_id, email_verified)
-      VALUES (${st.id}, ${email}, ${sub}, ${emailVerified}) RETURNING *`)).rows as CustomerRow[];
-    cust = created!;
+      VALUES (${st.id}, ${email}, ${sub}, ${emailVerified}) ON CONFLICT DO NOTHING RETURNING *`)).rows as CustomerRow[];
+    // SEC: another transaction claimed this address (or this subject) after the locked read saw none: fail closed.
+    if (!created) return { kind: 'not_linkable' };
+    cust = created;
   }
   const token = await createSession(tx, st.id, cust.id, sessionPolicy(st.config));
   return { kind: 'ok', token, customer: { id: cust.id, email: cust.email, firstName: cust.first_name, lastName: cust.last_name, phone: cust.phone, emailVerified: cust.email_verified, isMigrated: cust.password_hash == null } };

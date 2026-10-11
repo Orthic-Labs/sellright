@@ -461,6 +461,47 @@ describe('POST /v1/shop/auth/apple review follow-ups', () => {
     expect(((await res.json()) as { customer: { id: string } }).customer.id).not.toBe(custId);
   });
 
+  it('a link redeemed while the account moves away and someone else registers the address is refused, not a 500 (deterministic)', async () => {
+    const custId = await seedC('old-owner2@corp.example');
+    const { cookie, token } = await startFlow('old-owner2@corp.example', 'ap-race-reg');
+    // Same shape as the Google test: C holds the row, moves the account to a new address, commits; the confirm's locked
+    // read then finds no row at the old address.
+    let release!: () => void;
+    let locked!: () => void;
+    const held = new Promise<void>((r) => { release = r; });
+    const lockedP = new Promise<void>((r) => { locked = r; });
+    const holder = withStore(STORE_APPLE, async (tx) => {
+      await tx.execute(sql`SELECT id FROM customer WHERE id = ${custId} FOR UPDATE`);
+      locked();
+      await held;
+      await tx.execute(sql`UPDATE customer SET email = 'new-owner2@corp.example' WHERE id = ${custId}`);
+      await tx.execute(sql`INSERT INTO customer (store_id, email, email_verified) VALUES (${STORE_APPLE}, 'old-owner2@corp.example', false)`);
+    });
+    await lockedP;
+    const pending = confirm(token, { cookie });
+    let waiting = false;
+    try {
+      for (let i = 0; i < 200 && !waiting; i++) {
+        waiting = (await pool.query(
+          `SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query ILIKE 'SELECT * FROM customer WHERE email%FOR UPDATE%'`,
+        )).rowCount! > 0;
+        if (!waiting) await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(waiting, 'confirm should be blocked on the row lock').toBe(true);
+    } finally {
+      release();
+      await holder.catch(() => {});
+    }
+    const res = await pending;
+    const moved = await withStore(STORE_APPLE, async (tx) =>
+      (await tx.execute(sql`SELECT email, apple_user_id FROM customer WHERE id = ${custId}`)).rows[0] as { email: string; apple_user_id: string | null });
+    expect(moved).toEqual({ email: 'new-owner2@corp.example', apple_user_id: null });
+    // The locked read saw no row (its snapshot predates the registration); the insert then conflicts and fails closed.
+    expect(res.status).toBe(409);
+    expect(await appleRow(STORE_APPLE, 'ap-race-reg')).toBeUndefined();
+    expect(await sessions()).toBe(0);
+  });
+
   it('an already-bound subject still signs in when the address is mail-throttled', async () => {
     await seedC('bound-th@corp.example', 'ap-bound-th');
     const statuses: number[] = [];
