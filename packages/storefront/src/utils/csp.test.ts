@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { googleIdentityCsp } from '../config/google-signin';
 import { buildCsp, IP_LOOKUP_ORIGIN, TURNSTILE_ORIGIN } from './csp';
 
 const directive = (csp: string, name: string) => csp.split('; ').find((d) => d.startsWith(`${name} `)) ?? '';
@@ -64,6 +65,20 @@ describe('buildCsp — Google Identity sources join only when supplied, alongsid
 		expect(directive(csp, 'frame-src')).toContain('https://g.test/gsi/');
 		expect(directive(csp, 'frame-src')).toContain(TURNSTILE_ORIGIN);
 		expect(directive(csp, 'style-src')).toBe("style-src 'self' 'unsafe-inline' https://g.test/gsi/style");
+	});
+
+	it('puts each real Google Identity source in its own directives and in no other', () => {
+		const google = googleIdentityCsp('x.apps.googleusercontent.com');
+		const csp = buildCsp({ nonce: 'n', google });
+		const lists = { 'script-src': google.script, 'connect-src': google.connect, 'frame-src': google.frame, 'style-src': google.style };
+		const sources = [...new Set(Object.values(lists).flat())];
+		expect(sources.length).toBeGreaterThan(0);
+		for (const d of csp.split('; ')) {
+			const name = d.split(' ')[0];
+			const tokens = d.split(' ').slice(1);
+			const allowed: string[] = lists[name as keyof typeof lists] ?? [];
+			for (const s of sources) expect(tokens.includes(s), `${s} in ${name}`).toBe(allowed.includes(s));
+		}
 	});
 
 	it('adds nothing without google or with empty lists', () => {
