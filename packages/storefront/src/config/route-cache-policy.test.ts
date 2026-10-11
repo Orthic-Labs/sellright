@@ -122,20 +122,38 @@ describe('hashed build assets', () => {
 		expect(src).toMatch(/express\.static\(assetsDir, \{ immutable: true, maxAge:"1y" \}\)/);
 	});
 
-	it('never serves a document or route-data file from disk (a prerendered page would bypass the policy)', async () => {
+	it('never serves a document or route-data file from disk, including encoded and precompressed forms', async () => {
 		const { readFileSync } = await import('node:fs');
 		const { join } = await import('node:path');
 		const src = readFileSync(join(process.cwd(), 'src/entry.express.tsx'), 'utf8');
 		const m = /const NEVER_STATIC = (\/.+\/i);/.exec(src);
 		expect(m, 'NEVER_STATIC pattern present').toBeTruthy();
-		const never = new RegExp(m![1]!.slice(1, m![1]!.lastIndexOf('/')), 'i');
-		for (const p of ['/index.html', '/shop/index.html', '/products/some-knife/index.html', '/about.htm', '/shop/q-data.json', '/q-loader-abc.123.json', '/shop/q-loader-x.y.json']) {
-			expect(never.test(p), p).toBe(true);
+		const pattern = new RegExp(m![1]!.slice(1, m![1]!.lastIndexOf('/')), 'i');
+		// Same steps as neverServedFromDisk in the entry file (which cannot be imported here: it starts a server).
+		const never = (raw: string) => { let d: string; try { d = decodeURIComponent(raw); } catch { return true; } return pattern.test(d.replace(/\\/g, '/')); };
+		for (const p of ['/index.html', '/shop/index.html', '/products/some-knife/index.html', '/about.htm', '/shop/q-data.json', '/q-loader-abc.123.json',
+			'/shop/q-loader-x.y.json', '/shop/index%2ehtml', '/shop/index%2Ehtml', '/shop/index.html.gz', '/shop/index.html.br', '/q-loader-a.b.json.gz', '/shop/%E0%A4%A']) {
+			expect(never(p), p).toBe(true);
 		}
-		for (const p of ['/favicon.ico', '/logo.png', '/q-manifest.json', '/service-worker.js', '/robots.txt', '/fonts/a.woff2']) {
-			expect(never.test(p), p).toBe(false);
+		for (const p of ['/favicon.ico', '/logo.png', '/q-manifest.json', '/service-worker.js', '/robots.txt', '/fonts/a.woff2', '/q-manifest.json.gz']) {
+			expect(never(p), p).toBe(false);
 		}
-		expect(src).toMatch(/NEVER_STATIC\.test\(req\.path\) \? next\(\) : rootStatic\(req, res, next\)/);
+		expect(src).toMatch(/decodeURIComponent\(rawPath\)/);
+		expect(src).toMatch(/neverServedFromDisk\(req\.path\) \? next\(\) : rootStatic\(req, res, next\)/);
+	});
+
+	it('the service worker stores image responses only, never a document or data response', async () => {
+		const { readFileSync } = await import('node:fs');
+		const { join } = await import('node:path');
+		const sw = readFileSync(join(process.cwd(), 'src/routes/service-worker.ts'), 'utf8');
+		expect(sw).toMatch(/request\.destination !== 'image'\) return false/);
+		expect(sw).toMatch(/isImageRequest\(event\.request\)/);
+		expect(sw).toMatch(/if \(isStorableImage\(response\)\) \{\s*cache\.put/);
+		expect(sw).toMatch(/\^image\\\//);
+		expect(sw).toMatch(/no-store/);
+		expect(sw).not.toMatch(/storefront-images-v3/);
+		// No other cache.put in the worker.
+		expect(sw.match(/cache\.put\(/g)?.length).toBe(1);
 	});
 
 	it('prerenders no document in any build (adapter ssg include is empty)', async () => {

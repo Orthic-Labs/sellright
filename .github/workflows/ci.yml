@@ -69,13 +69,13 @@ jobs:
       - name: Audit production dependencies
         run: pnpm deps:audit
 
-      - name: Production build (root — exercises the storefront's SSG path)
+      - name: Production build (root — the storefront's full production build; no page is prerendered any more)
         # The exact command a real deploy runs: `pnpm -r build` (every
         # workspace package's own `build` script, including packages/
-        # storefront's full production build with static prerendering) then
+        # storefront's full production build) then
         # packages/admin's build. `pnpm verify:static` below also runs
         # `pnpm -r build`, but as one step inside a longer chain — this
-        # dedicated step exists so a regression in the storefront's SSG path
+        # dedicated step exists so a regression in the storefront's build path
         # (PR #96 shipped one: an intermittent Code(Q8) crash rendering
         # /checkout/ during static generation, since fixed by excluding
         # /checkout from SSG and hardening the runtime identity fetch —

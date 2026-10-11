@@ -174,7 +174,14 @@ app.use('/fonts', express.static(join(distDir, 'fonts'), { immutable: true, maxA
 // Root static assets with custom cache control. Documents and route data are never served from disk: an .html file
 // or a loader/route-data JSON left in dist (for example by an older build that prerendered pages) would bypass the
 // router and the no-store policy and carry build-time availability, so those requests skip the static handler.
-const NEVER_STATIC = /\.html?$|(^|\/)q-(data|loader)[^/]*\.json$/i;
+// The check runs on the DECODED path (the static handler decodes before it reads the file, so `index%2ehtml` would
+// otherwise slip through) and covers precompressed copies. An undecodable path is not a static file either.
+const NEVER_STATIC = /\.html?(\.(gz|br))?$|(^|\/)q-(data|loader)[^/]*\.json(\.(gz|br))?$/i;
+export const neverServedFromDisk = (rawPath: string): boolean => {
+  let decoded: string;
+  try { decoded = decodeURIComponent(rawPath); } catch { return true; }
+  return NEVER_STATIC.test(decoded.replace(/\\/g, '/'));
+};
 const rootStatic = express.static(distDir, {
   index: false, // Pages need fresh loaders and the per-request CSP nonce.
   redirect: false,
@@ -187,7 +194,7 @@ const rootStatic = express.static(distDir, {
     }
   },
 });
-app.use((req, res, next) => (NEVER_STATIC.test(req.path) ? next() : rootStatic(req, res, next)));
+app.use((req, res, next) => (neverServedFromDisk(req.path) ? next() : rootStatic(req, res, next)));
 
 // Fail-closed default for everything past the static handlers (documents, loader/action data, 404s): the value comes
 // from the one policy file. Routes that are provably stock-free (sitemaps, robots) and the layout's own header
