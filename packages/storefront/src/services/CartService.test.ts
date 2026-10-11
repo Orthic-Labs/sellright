@@ -494,6 +494,84 @@ describe('stale cart token (404) — recreate from local lines and retry once', 
 		await expect(CartService.addLine('SKU2', 1)).rejects.toBeTruthy();
 		expect(calls.filter((c) => c.init.method === 'POST')).toHaveLength(0);
 	});
+
+	const deferred = () => {
+		let resolve!: (r: Response) => void;
+		const promise = new Promise<Response>((r) => { resolve = r; });
+		return { promise, resolve };
+	};
+
+	it('two overlapping stale requests share ONE replacement cart and the seed is not doubled', async () => {
+		await seedMirror();
+		enqueue(
+			notFound(), // addLine SKU2 on tok_old
+			notFound(), // addLine SKU3 on tok_old
+			respond(200, serverCart({ token: 'tok_new', lines: [line('SKU1', 2)] })), // the single POST /cart
+			respond(200, serverCart({ token: 'tok_new', revision: 2, lines: [line('SKU1', 2), line('SKU2', 1)] })),
+			respond(200, serverCart({ token: 'tok_new', revision: 3, lines: [line('SKU1', 2), line('SKU2', 1), line('SKU3', 1)] })),
+		);
+		const [a, b] = await Promise.all([CartService.addLine('SKU2', 1), CartService.addLine('SKU3', 1)]);
+		const posts = calls.filter((c) => c.init.method === 'POST');
+		expect(posts).toHaveLength(1);
+		expect(JSON.parse(String(posts[0].init.body))).toEqual({ items: [{ sku: 'SKU1', quantity: 2 }] });
+		expect(calls.filter((c) => c.url.includes('/cart/tok_new/lines'))).toHaveLength(2);
+		expect(a.cart.token).toBe('tok_new');
+		expect(b.cart.lines.find((l) => l.sku === 'SKU1')?.quantity).toBe(2);
+		expect(document.cookie).toContain('sr_cart=tok_new');
+	});
+
+	it('a late 404 for the old token after the replacement cart entered checkout creates nothing', async () => {
+		await seedMirror();
+		const late = deferred();
+		enqueue(late.promise); // PATCH on tok_old, held
+		const pending = CartService.addLine('SKU2', 1);
+		const outcome = pending.then(() => null, (e: unknown) => e);
+		await vi.waitFor(() => expect(calls).toHaveLength(1));
+		// Meanwhile a replacement cart exists and the shopper is in the pre-submit read.
+		CartService.adoptConflict(serverCart({ token: 'tok_b', lines: [line('SKU1', 2)] }));
+		enqueue(respond(200, serverCart({ token: 'tok_b', lines: [line('SKU1', 2)] })));
+		await CartService.readFresh();
+		late.resolve(await notFound());
+		expect(await outcome).toMatchObject({ code: 'superseded' });
+		expect(calls.filter((c) => c.init.method === 'POST')).toHaveLength(0);
+		expect(calls).toHaveLength(2); // the held PATCH and readFresh's GET: no recreate, no retry
+		expect(document.cookie).toContain('sr_cart=tok_b');
+		expect(CartService.getCart().token).toBe('tok_b');
+	});
+
+	it('a creation response that lands after discard() is ignored', async () => {
+		await seedMirror();
+		const creation = deferred();
+		enqueue(notFound(), creation.promise); // GET on tok_old, then the held POST /cart
+		const refreshing = CartService.refresh();
+		await vi.waitFor(() => expect(calls.filter((c) => c.init.method === 'POST')).toHaveLength(1));
+		CartService.discard();
+		creation.resolve(await respond(200, serverCart({ token: 'tok_late', lines: [line('SKU1', 2)] })));
+		const res = await refreshing;
+		expect(res.cart.lines).toHaveLength(0);
+		expect(CartService.getCart().token).toBe('');
+		expect(document.cookie).not.toContain('sr_cart=tok');
+		expect(calls).toHaveLength(2); // no retry GET
+	});
+
+	it('a failed replacement creation keeps the stale cookie and the original lines for another attempt', async () => {
+		await seedMirror();
+		enqueue(notFound(), respond(500, { error: { code: 'INTERNAL', message: 'boom' } }));
+		await expect(CartService.addLine('SKU2', 1)).rejects.toBeTruthy();
+		expect(document.cookie).toContain('sr_cart=tok_old');
+		expect(CartService.getCart().lines.map((l) => [l.sku, l.quantity])).toEqual([['SKU1', 2]]);
+		calls.length = 0;
+		enqueue(
+			notFound(),
+			respond(200, serverCart({ token: 'tok_new', lines: [line('SKU1', 2)] })),
+			respond(200, serverCart({ token: 'tok_new', revision: 2, lines: [line('SKU1', 2), line('SKU2', 1)] })),
+		);
+		const res = await CartService.addLine('SKU2', 1);
+		const post = calls.find((c) => c.init.method === 'POST');
+		expect(JSON.parse(String(post?.init.body))).toEqual({ items: [{ sku: 'SKU1', quantity: 2 }] });
+		expect(res.cart.lines.map((l) => l.sku)).toEqual(['SKU1', 'SKU2']);
+		expect(document.cookie).toContain('sr_cart=tok_new');
+	});
 });
 
 describe('CartError', () => {

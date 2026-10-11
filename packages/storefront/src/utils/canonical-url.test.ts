@@ -58,6 +58,17 @@ describe('canonicalUrlRedirect', () => {
 		expect(canonicalUrlRedirect(req('/Contact', 'PUT'), SECTIONS)).toBeNull();
 	});
 
+	it('recognises framework query keys after percent-decoding, as Qwik does', () => {
+		expect(canonicalUrlRedirect(req('/Contact', 'GET', '?%71func=abc&%71data=payload'), SECTIONS)).toBeNull();
+		expect(canonicalUrlRedirect(req('/Contact', 'GET', '?%71action=abc'), SECTIONS)).toBeNull();
+		expect(canonicalUrlRedirect(req('/Contact', 'GET', '?x=1&q%66unc'), SECTIONS)).toBeNull();
+		expect(canonicalUrlRedirect(req('/Contact', 'GET', '?%71Func=abc'), SECTIONS)).toBe('/contact/?%71Func=abc');
+	});
+
+	it('keeps the original, still-encoded query string on an ordinary redirect', () => {
+		expect(canonicalUrlRedirect(req('/Contact', 'GET', '?q=a%20b&%71x=1'), SECTIONS)).toBe('/contact/?q=a%20b&%71x=1');
+	});
+
 	it('does nothing at all when no sections are configured (default OFF)', () => {
 		expect(canonicalUrlRedirect(req('/SHOP/'), [])).toBeNull();
 	});

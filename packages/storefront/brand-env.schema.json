@@ -161,9 +161,15 @@
     }
   },
   "privateRuntime": {
+    "notes": {
+      "BEHIND_CLOUDFLARE": "Runtime. 1 only when every request reaches the origin through an edge that overwrites cf-ipcountry (origin locked to Cloudflare). Default unset = the country header is NOT trusted: /api/country answers null and the client falls back. Same opt-in name as the API's.",
+      "VITE_IP_COUNTRY_FALLBACK": "Build-time and runtime (set both alike). 0/false/off disables the browser fallback lookup of the visitor country at ipapi.co and drops that origin from the CSP connect-src. Default unset = enabled.",
+      "VITE_TURNSTILE_SITE_KEY": "Public Turnstile site key. When set (at build and in the runtime environment), the CSP script-src and frame-src also allow https://challenges.cloudflare.com."
+    },
     "names": [
       "APPLE_PAY_ENABLED",
       "APPLE_PAY_MERCHANT_ID",
+      "BEHIND_CLOUDFLARE",
       "CACHE_ADMIN_TOKEN",
       "CACHE_WARM_EDGE_URL",
       "CACHE_WARM_TOKEN",
@@ -193,6 +199,7 @@
       "VITE_FACEBOOK_PIXEL_ID",
       "VITE_GA4_MEASUREMENT_ID",
       "VITE_GOOGLE_ADDRESS_VALIDATION_API_KEY",
+      "VITE_IP_COUNTRY_FALLBACK",
       "VITE_IS_READONLY_INSTANCE",
       "VITE_SECURE_COOKIE",
       "VITE_SELLRIGHT_API_URL",

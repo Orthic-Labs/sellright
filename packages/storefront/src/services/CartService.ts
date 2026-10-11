@@ -64,6 +64,17 @@ export class CartService {
    * This orders RESPONSES only — it is not a cache and holds no stock data.
    */
   private static snapshotSeq = 0;
+  /**
+   * Cart lifecycle generation. Bumped by `discard()` (expiry, conversion, merge)
+   * and by the pre-submit read (`readFresh`), i.e. whenever the cart this tab
+   * was working on stops being the live one. A stale-token recovery captures it
+   * when its request starts and refuses to create, adopt or retry once it has
+   * moved — a late 404 for an old token can never seed a newer or terminal cart,
+   * and a creation response that lands after a discard is ignored.
+   */
+  private static lifecycle = 0;
+  /** One in-flight replacement-cart creation per stale token: overlapping 404s share it. */
+  private static recoveries = new Map<string, Promise<string[]>>();
 
   // ── subscription ──────────────────────────────────────────────────────
   static onChange(cb: () => void): () => void {
@@ -153,8 +164,15 @@ export class CartService {
   }
 
   /** Drop the token + mirror locally — no network call. Used for terminal
-   *  carts (converted/merged) and 404s (expired cart). */
+   *  carts (converted/merged) and 404s (expired cart). Ends the current cart
+   *  lifecycle: any stale-token recovery already in flight is abandoned. */
   static discard(): void {
+    this.lifecycle++;
+    this.retireLocal();
+  }
+
+  /** Clear the local cart without ending the lifecycle (a recovery that has nothing to seed). */
+  private static retireLocal(): void {
     this.snapshotSeq++; // a read still in flight must not resurrect the discarded cart
     this.clearTokenCookie();
     this.couponCode = null;
@@ -167,20 +185,54 @@ export class CartService {
     return e instanceof SellRightError && e.status === 404;
   }
 
-  /** The sr_cart cookie outlived the server cart: clear it and, when there are
-   *  local lines, mint a fresh cart seeded from them (display enrichment is
-   *  kept). Returns the seeded SKUs the server did not keep. With nothing to
-   *  seed it just retires the local cart — the caller's retry creates one if
-   *  it needs one. Never used at submit time. */
-  private static async recreateCart(): Promise<string[]> {
+  /** Whether a recovery that started under (`staleToken`, `generation`) may still act:
+   *  `abandon` — the lifecycle moved (discard, checkout submit) or the mirror is a terminal cart;
+   *  `replaced` — the stale token is no longer the live one (another recovery or a newer cart took over);
+   *  `stale` — still the cart this request failed on. */
+  private static recoveryState(staleToken: string, generation: number): 'abandon' | 'replaced' | 'stale' {
+    if (generation !== this.lifecycle) return 'abandon';
+    if (this.cart.status === 'converted' || this.cart.status === 'merged') return 'abandon';
+    return this.readTokenCookie() === staleToken ? 'stale' : 'replaced';
+  }
+
+  private static superseded(): CartError {
+    return new CartError('superseded', 'The cart changed — please try again');
+  }
+
+  /** One shared recovery per stale token. */
+  private static recoverStaleCart(staleToken: string, generation: number): Promise<string[]> {
+    const inFlight = this.recoveries.get(staleToken);
+    if (inFlight) return inFlight;
+    const recovery: Promise<string[]> = this.replaceStaleCart(staleToken, generation).finally(() => {
+      if (this.recoveries.get(staleToken) === recovery) this.recoveries.delete(staleToken);
+    });
+    this.recoveries.set(staleToken, recovery);
+    return recovery;
+  }
+
+  /** The sr_cart cookie outlived the server cart: when there are local lines,
+   *  mint a fresh cart seeded from them (display enrichment is kept) and adopt
+   *  it. The stale cookie and the local lines stay in place until that adoption
+   *  succeeds, so a failed creation leaves them available for another attempt.
+   *  Returns the seeded SKUs the server did not keep. With nothing to seed it
+   *  just retires the local cart — the caller's retry creates one if it needs
+   *  one. Throws `superseded` when the lifecycle moved on; does nothing when a
+   *  newer cart has already replaced the stale one. Never used at submit time. */
+  private static async replaceStaleCart(staleToken: string, generation: number): Promise<string[]> {
+    const before = this.recoveryState(staleToken, generation);
+    if (before === 'abandon') throw this.superseded();
+    if (before === 'replaced') return [];
     const seed = this.cart.lines.map((l) => ({ sku: l.sku, quantity: l.quantity }));
     if (!seed.length) {
-      this.discard();
+      this.retireLocal();
       return [];
     }
-    this.clearTokenCookie();
     const { data } = await sellright().POST('/v1/shop/cart', { body: { items: seed } });
     if (!data) throw new CartError(undefined, 'Could not create a cart');
+    // The response may land after a discard, a checkout submit or a newer cart: ignore it then.
+    const after = this.recoveryState(staleToken, generation);
+    if (after === 'abandon') throw this.superseded();
+    if (after === 'replaced') return [];
     return this.adopt(data);
   }
 
@@ -188,23 +240,37 @@ export class CartService {
    *  the local lines and retry exactly once. SKUs the server dropped while
    *  reseeding are reported in `dropped`. If the retry 404s as well the local
    *  cart is retired: `'throw'` raises the expired-cart error (mutations),
-   *  `'empty'` returns the empty mirror (reads). */
+   *  `'empty'` returns the empty mirror (reads). A recovery whose lifecycle
+   *  ended meanwhile (discard, checkout submit) neither creates nor retries:
+   *  `'throw'` raises `superseded`, `'empty'` returns the mirror untouched. */
   private static async withStaleCartRecovery(
     run: () => Promise<CartMutationResult>,
     whenGone: 'throw' | 'empty',
   ): Promise<CartMutationResult> {
+    const staleToken = this.readTokenCookie();
+    const generation = this.lifecycle;
     let lost: string[] = [];
     try {
       const result = await withStaleCartRetry({
         run,
-        isStaleCart: (e) => this.isStaleCart(e),
+        // A 404 on a token minted by this very call (no cookie when it started) has nothing to recover from.
+        isStaleCart: (e) => !!staleToken && this.isStaleCart(e),
         recreateCart: async () => {
-          lost = await this.recreateCart();
+          lost = await this.recoverStaleCart(staleToken as string, generation);
         },
       });
       return lost.length ? { ...result, dropped: [...new Set([...lost, ...result.dropped])] } : result;
     } catch (e) {
+      if (e instanceof CartError && e.code === 'superseded') {
+        if (whenGone === 'empty') return { cart: this.cart, dropped: [] };
+        throw e;
+      }
       if (!this.isStaleCart(e)) throw e;
+      if (generation !== this.lifecycle) {
+        // The cart was discarded or submitted while this request was in flight: leave the new state alone.
+        if (whenGone === 'empty') return { cart: this.cart, dropped: [] };
+        throw this.superseded();
+      }
       this.discard();
       if (whenGone === 'empty') return { cart: this.cart, dropped: [] };
       throw new CartError('not_found', 'Your cart expired — please re-add your items');
@@ -414,6 +480,7 @@ export class CartService {
    *  A 404 here is NEVER recovered by recreating the cart: the shopper must see the refusal, not a silently reseeded cart.
    *  The mirror only adopts the response while it is still the latest request; the returned value never depends on that. */
   static async readFresh(): Promise<ServerCart> {
+    this.lifecycle++; // submitting: no stale-token recovery may create, adopt or retry from here on
     const token = this.readTokenCookie();
     if (!token) throw new CartError('not_found', 'Your cart expired — please re-add your items');
     const seq = this.claimSeq();

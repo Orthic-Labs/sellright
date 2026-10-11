@@ -23,27 +23,46 @@ export function displayOrderState(state: string, fulfillmentStatus?: string | nu
 
 const NEUTRAL = 'bg-[#F5F0E8] text-[#645541] border-[#D8D1C7]';
 
+const TERMINAL_PAYMENT_STATES = new Set(['Cancelled', 'Refunded', 'Declined']);
+
 /**
- * Status label/color, derived from the native order lifecycle state
- * (`Paid`/`PendingPayment`/`Refunded`/…), the order's `fulfillmentStatus`
- * (all the order LIST carries) and the latest fulfillment's state when the
- * full fulfillments array is present — the same "latest fulfillment wins"
- * convention used by guest order tracking (`services/track-order.service.ts`),
- * so an order looks the same whether viewed signed-in or via a tracking link.
+ * The one status an order shows, in a fixed precedence:
+ *  1. terminal payment states (Cancelled, Refunded, Declined),
+ *  2. the order's aggregate `fulfillmentStatus` when the API supplied one,
+ *  3. the individual fulfilments, only when the aggregate is unavailable
+ *     (latest fulfilment Delivered/Shipped, else several fulfilments with a
+ *     shipped one = partially shipped; the convention used by guest order
+ *     tracking in `services/track-order.service.ts`),
+ *  4. the payment state itself.
+ * Returns `Delivered` | `Shipped` | `PartiallyShipped` or the payment state.
+ * Labels and icons both read this, so they cannot disagree.
+ */
+export function resolveOrderDisplayState(
+	orderState: string,
+	fulfillments: AccountOrderDetail['fulfillments'] | undefined,
+	fulfillmentStatus?: string | null,
+): string {
+	if (TERMINAL_PAYMENT_STATES.has(orderState)) return orderState;
+	if (fulfillmentStatus) return displayOrderState(orderState, fulfillmentStatus);
+	const latest = fulfillments?.[0]?.state?.toLowerCase();
+	if (latest === 'delivered') return 'Delivered';
+	if (latest === 'shipped') return 'Shipped';
+	if (fulfillments && fulfillments.length > 1 && fulfillments.some((f) => f.state?.toLowerCase() === 'shipped')) return 'PartiallyShipped';
+	return orderState;
+}
+
+/**
+ * Status label/color. See `resolveOrderDisplayState` for the precedence between
+ * the native payment state (`Paid`/`PendingPayment`/`Refunded`/…), the order's
+ * aggregate `fulfillmentStatus` (all the order LIST carries) and the full
+ * fulfillments array (detail page only).
  */
 export function getStatusDisplay(
 	orderState: string,
 	fulfillments: AccountOrderDetail['fulfillments'] | undefined,
 	fulfillmentStatus?: string | null,
 ): { label: string; color: string; description?: string } {
-	const latest = fulfillments?.[0];
-	if (latest?.state === 'Delivered') return { label: 'Delivered', color: NEUTRAL };
-	if (latest?.state === 'Shipped') return { label: 'Shipped', color: NEUTRAL };
-	if (fulfillments && fulfillments.length > 1 && fulfillments.some((f) => f.state === 'Shipped')) {
-		return { label: 'Partially Shipped', color: NEUTRAL };
-	}
-
-	switch (displayOrderState(orderState, fulfillmentStatus)) {
+	switch (resolveOrderDisplayState(orderState, fulfillments, fulfillmentStatus)) {
 		case 'Delivered':
 			return { label: 'Delivered', color: NEUTRAL };
 		case 'Shipped':

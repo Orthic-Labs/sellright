@@ -13,6 +13,7 @@ import { sellrightRequestHost } from"./utils/sellright-request-host.server";
 import { assertProdApiConfigured } from"./constants";
 import { NO_STORE_CACHE_CONTROL } from"./config/route-cache-policy";
 import { createCanonicalUrlMiddleware, parseCanonicalSections } from"./utils/canonical-url";
+import { buildCsp } from"./utils/csp";
 
 declare global {
  interface QwikRouterPlatform extends PlatformNode {}
@@ -49,7 +50,6 @@ const app = express();
 const apiOrigin = (process.env.VITE_SELLRIGHT_API_URL || '')
 	.replace(/\/(shop-api)?\/?$/, '')
 	.trim();
-const connectSrcExtra = apiOrigin ? ` ${apiOrigin}` : '';
 
 // Set security headers
 app.use((req, res, next) => {
@@ -99,7 +99,8 @@ app.use((req, res, next) => {
 	//               Stripe.js (loadStripe) is loaded from js.stripe.com;
 	//               NMI Collect.js (loadCollectJs) is loaded from
 	//               sandbox.nmi.com (test) / secure.nmi.com (live) — see
-	//               services/NmiCollect.ts's collectJsSrc
+	//               services/NmiCollect.ts's collectJsSrc; Turnstile's api.js is
+	//               injected without a nonce, hence its origin (when configured)
 	//   style-src   'self' 'unsafe-inline'                    — Qwik/Tailwind
 	//               emit inline <style> tags per-component with no nonce
 	//               support today; unsafe-inline is scoped to STYLE only
@@ -107,6 +108,7 @@ app.use((req, res, next) => {
 	//   font-src    'self'                                    — self-hosted webfonts only
 	//   connect-src 'self' https://api.stripe.com
 	//               https://sandbox.nmi.com https://secure.nmi.com <api origin>
+	//               [+ https://ipapi.co when the browser country fallback is on]
 	//                                                          — SellRight API,
 	//               Stripe, and NMI Collect.js's own tokenization XHR calls
 	//   frame-src   https://js.stripe.com https://hooks.stripe.com
@@ -114,26 +116,21 @@ app.use((req, res, next) => {
 	//                                                          — Stripe Payment
 	//               Element / 3DS iframes, NMI Collect.js's hosted card
 	//               number/expiry/cvv iframes (never this app's own PAN input)
+	//               [+ https://challenges.cloudflare.com when a Turnstile site key is set]
 	//   object-src  'none'
 	//   base-uri    'self'
 	//   form-action 'self'
 	//   frame-ancestors 'none'
 	//   upgrade-insecure-requests
-	const cspDirectives = [
-		`default-src 'self'`,
-		`script-src 'self' 'nonce-${nonce}' https://js.stripe.com https://sandbox.nmi.com https://secure.nmi.com`,
-		`style-src 'self' 'unsafe-inline'`,
-		`img-src 'self' data: https:`,
-		`font-src 'self'`,
-		`connect-src 'self' https://api.stripe.com https://sandbox.nmi.com https://secure.nmi.com${connectSrcExtra}`,
-		`frame-src https://js.stripe.com https://hooks.stripe.com https://sandbox.nmi.com https://secure.nmi.com`,
-		`object-src 'none'`,
-		`base-uri 'self'`,
-		`worker-src 'self'`,
-		`form-action 'self'`,
-		`frame-ancestors 'none'`,
-		`upgrade-insecure-requests`
-	].join('; ');
+	// The directive list lives in utils/csp.ts (pure, unit-tested). Two origins are conditional: Cloudflare Turnstile
+	// (script-src + frame-src) when a site key is configured, and ipapi.co (connect-src) when the browser country fallback
+	// is enabled. Both read the SAME VITE_* variables the client bundle was built with, from the runtime environment.
+	const cspDirectives = buildCsp({
+		nonce,
+		apiOrigin,
+		turnstileSiteKey: process.env.VITE_TURNSTILE_SITE_KEY,
+		ipCountryFallback: process.env.VITE_IP_COUNTRY_FALLBACK,
+	});
 
 	res.setHeader('Content-Security-Policy', cspDirectives);
 

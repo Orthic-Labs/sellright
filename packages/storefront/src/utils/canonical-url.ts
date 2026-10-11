@@ -16,8 +16,14 @@
 /** First path segments that are never canonicalised, even when listed. */
 const NEVER_CANONICALISED = new Set(['build', 'assets', 'fonts', 'v1', 'api', 'checkout', 'account']);
 
-/** Qwik action / server$ / loader-data request markers in the query string. */
-const QWIK_DATA_QUERY = /(^|&)(qaction|qfunc|qdata)(=|&|$)/;
+/** Qwik action / server$ / loader-data request markers. Matched on DECODED query keys (URLSearchParams, as Qwik reads them),
+ *  so `%71func=x` is the framework's `qfunc` too. */
+const QWIK_DATA_KEYS = ['qaction', 'qfunc', 'qdata'] as const;
+
+const isFrameworkQuery = (query: string): boolean => {
+	const params = new URLSearchParams(query);
+	return QWIK_DATA_KEYS.some((key) => params.has(key));
+};
 
 /** Parse the configured list: lowercase, trimmed, bare segment names only. */
 export function parseCanonicalSections(raw: string | undefined | null): string[] {
@@ -42,7 +48,7 @@ export function canonicalUrlRedirect(
 	if (/\.[a-z0-9]+$/i.test(req.path)) return null;
 	const queryIndex = req.originalUrl.indexOf('?');
 	const query = queryIndex >= 0 ? req.originalUrl.slice(queryIndex) : '';
-	if (query && QWIK_DATA_QUERY.test(query.slice(1))) return null;
+	if (query && isFrameworkQuery(query.slice(1))) return null;
 	const target = req.path.toLowerCase().replace(/\/?$/, '/');
 	return target === req.path ? null : target + query;
 }

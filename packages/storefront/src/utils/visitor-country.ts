@@ -15,14 +15,33 @@ export function parseCdnCountry(raw: string | null | undefined): string | null {
 	return /^[A-Z]{2}$/.test(code) && code !== 'XX' && code !== 'T1' ? code : null;
 }
 
-const SOURCES: Array<{ url: string; timeoutMs: number }> = [
+/**
+ * Whether the browser may fall back to the third-party lookup (`VITE_IP_COUNTRY_FALLBACK`; unset = on, `0`/`false`/`off` = off).
+ * The Express CSP reads the same value to decide whether `connect-src` allows that origin (`utils/csp.ts`), so the
+ * client fallback and the policy cannot disagree.
+ */
+export function ipCountryFallbackEnabled(raw: string | null | undefined): boolean {
+	return !['0', 'false', 'off'].includes((raw ?? '').trim().toLowerCase());
+}
+
+/**
+ * Whether the request came through an edge that overwrites the country header (`BEHIND_CLOUDFLARE=1`, the same opt-in the API
+ * uses for CF-Connecting-IP). Without it a client reaching the origin directly can send any value, so the header is ignored.
+ */
+export function trustsCdnCountryHeader(raw: string | null | undefined): boolean {
+	return (raw ?? '').trim() === '1';
+}
+
+const sources = (): Array<{ url: string; timeoutMs: number }> => [
 	{ url: '/api/country/', timeoutMs: 2000 },
-	{ url: 'https://ipapi.co/json/', timeoutMs: 3000 },
+	...(ipCountryFallbackEnabled(import.meta.env.VITE_IP_COUNTRY_FALLBACK)
+		? [{ url: 'https://ipapi.co/json/', timeoutMs: 3000 }]
+		: []),
 ];
 
 /** Visitor country code from the first source that answers, or null. */
 export async function lookupCountryCode(): Promise<string | null> {
-	for (const { url, timeoutMs } of SOURCES) {
+	for (const { url, timeoutMs } of sources()) {
 		try {
 			const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
 			if (!response.ok) continue;

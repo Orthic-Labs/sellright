@@ -37,6 +37,9 @@ the rest of the visit) or an `x-preview-token` header. Issue a token via
 |---|---|---|
 | `SELLRIGHT_API_URL` | **Runtime** (not `VITE_*`) SellRight API base URL — checked per-request, no rebuild needed | falls back to `VITE_SELLRIGHT_API_URL` |
 | `STOREFRONT_CANONICAL_SECTIONS` | **Runtime.** Comma-separated first path segments of public content sections (for example `shop,blog,about,contact`) whose URLs are 301-redirected to one lowercase, slash-terminated shape. Never touches assets, `/v1`, `/api`, loader/action data or non-GET requests | unset (OFF: nothing is redirected) |
+| `BEHIND_CLOUDFLARE` | **Runtime.** Set `1` only when every request reaches the origin through an edge that overwrites `cf-ipcountry` (origin locked to Cloudflare; same opt-in as the API's). `/api/country` reads the header only then; otherwise it answers `null` and the browser falls back | unset (header NOT trusted) |
+| `VITE_IP_COUNTRY_FALLBACK` | **Build-time and runtime (set both alike).** `0`/`false`/`off` disables the browser's third-party country lookup (ipapi.co) and removes that origin from the CSP `connect-src` | unset (fallback on, origin allowed) |
+| `VITE_TURNSTILE_SITE_KEY` | Public Cloudflare Turnstile site key (sign-in, contact, forgot-password, order tracking, newsletter). Set it at build and in the runtime environment: when present the CSP `script-src` and `frame-src` also allow `https://challenges.cloudflare.com` | unset (no widget, origin not allowed) |
 | `VITE_SELLRIGHT_API_URL` | Build-time SellRight API base URL (dev/demo/offline fallback) | `http://127.0.0.1:3300` |
 | `VITE_SELLRIGHT_STORE_SLUG` | Pin a build to one store (`x-store-slug`) instead of runtime per-host resolution | unset (resolves by request Host) |
 | `VITE_PUBLIC_DOMAIN` | Public domain (no protocol), used for canonical/CSP/allowed-hosts | `localhost:4100` |

@@ -1,6 +1,6 @@
 import { component$ } from '@qwik.dev/core';
 import type { AccountOrderDetail } from '~/sellright/types/account';
-import { displayOrderState, getStatusDisplay } from '~/utils/order-display';
+import { getStatusDisplay, resolveOrderDisplayState } from '~/utils/order-display';
 
 export const TruckIcon = component$(() => (
 	<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -33,9 +33,7 @@ export const getStatusIcon = (
 	fulfillments?: AccountOrderDetail['fulfillments'],
 	fulfillmentStatus?: string | null,
 ) => {
-	const latest = fulfillments?.[0]?.state?.toLowerCase();
-	if (latest === 'shipped' || latest === 'delivered') return <TruckIcon />;
-	if (['Delivered', 'Shipped', 'PartiallyShipped'].includes(displayOrderState(orderState, fulfillmentStatus))) return <TruckIcon />;
+	if (['Delivered', 'Shipped', 'PartiallyShipped'].includes(resolveOrderDisplayState(orderState, fulfillments, fulfillmentStatus))) return <TruckIcon />;
 	if (orderState === 'Paid') return <PackageIcon />;
 	return <CalendarIcon />;
 };

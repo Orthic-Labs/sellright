@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { displayOrderState, getStatusDisplay } from './order-display';
+import { displayOrderState, getStatusDisplay, resolveOrderDisplayState } from './order-display';
 
 const read = (rel: string) => readFileSync(join(process.cwd(), rel), 'utf8');
 
@@ -50,5 +50,40 @@ describe('getStatusDisplay — the order list (no fulfillments array)', () => {
 	it('the order list and the detail page pass fulfillmentStatus through', () => {
 		expect(read('src/routes/account/orders/index.tsx')).toContain('getStatusDisplay(order.state, undefined, order.fulfillmentStatus)');
 		expect(read('src/routes/account/orders/[code]/index.tsx')).toContain('getStatusDisplay(o.state, o.fulfillments, o.fulfillmentStatus)');
+	});
+});
+
+describe('status precedence — terminal payment state, then aggregate fulfilment, then individual fulfilments', () => {
+	const ful = (...states: string[]) => states.map((state) => ({ state })) as never;
+
+	it('a partially fulfilled order with one Shipped fulfilment reads Partially Shipped, not Shipped', () => {
+		expect(getStatusDisplay('Paid', ful('Shipped'), 'partially_fulfilled').label).toBe('Partially Shipped');
+		expect(resolveOrderDisplayState('Paid', ful('Shipped'), 'partially_fulfilled')).toBe('PartiallyShipped');
+	});
+
+	it('refunded and cancelled orders keep their payment label whatever the fulfilments say', () => {
+		expect(getStatusDisplay('Refunded', ful('Delivered'), 'delivered').label).toBe('Refunded');
+		expect(getStatusDisplay('Refunded', ful('Delivered')).label).toBe('Refunded');
+		expect(getStatusDisplay('Cancelled', ful('Delivered'), 'delivered').label).toBe('Cancelled');
+		expect(getStatusDisplay('Cancelled', ful('Delivered')).label).toBe('Cancelled');
+		expect(resolveOrderDisplayState('Cancelled', ful('Delivered'), 'delivered')).toBe('Cancelled');
+	});
+
+	it('the aggregate wins over the latest fulfilment when both are present', () => {
+		expect(getStatusDisplay('Paid', ful('Shipped'), 'delivered').label).toBe('Delivered');
+		expect(getStatusDisplay('Paid', ful('Delivered'), 'unfulfilled').label).toBe('Processing');
+	});
+
+	it('individual fulfilments are consulted only when the aggregate is unavailable', () => {
+		expect(getStatusDisplay('Paid', ful('Delivered'), null).label).toBe('Delivered');
+		expect(getStatusDisplay('Paid', ful('Shipped'), undefined).label).toBe('Shipped');
+		expect(getStatusDisplay('Paid', ful('Pending', 'Shipped')).label).toBe('Partially Shipped');
+		expect(getStatusDisplay('Paid', ful()).label).toBe('Processing');
+	});
+
+	it('the icon uses the same resolver as the label', () => {
+		const src = read('src/routes/account/orders/order-display.tsx');
+		expect(src).toContain('resolveOrderDisplayState(orderState, fulfillments, fulfillmentStatus)');
+		expect(src).not.toContain('fulfillments?.[0]');
 	});
 });
