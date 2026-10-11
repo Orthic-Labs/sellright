@@ -1,6 +1,6 @@
-import { component$, useContext, useComputed$, useOnWindow, $, useSignal, useStyles$ } from '@qwik.dev/core';
-import { CountryPreferenceService } from '~/services/CountryPreferenceService';
-import { useCart, refreshCartStock, loadCartIfNeeded } from '~/contexts/CartContext';
+import { $, component$, useContext, useComputed$, useOnWindow, useSignal, useStyles$ } from '@qwik.dev/core';
+import { useCart } from '~/contexts/CartContext';
+import { useCartToggle } from '~/platform/cart';
 import { useLocation, Link, useNavigate } from '@qwik.dev/router';
 import { APP_STATE, CUSTOMER_NOT_DEFINED_ID } from '~/constants';
 import { useStoreIdentityLoader } from '~/routes/layout';
@@ -23,6 +23,7 @@ export default component$(() => {
 	const userMenuRef = useSignal<Element>();
 
 	const cart = useCart();
+	const toggleCart = useCartToggle();
 	// The cart store is reactive (useStore, single server-owned source of
 	// truth — see CartContext.tsx) so this recomputes on every mutation
 	// (add/update/remove/refresh) with no separate event listener or
@@ -115,20 +116,7 @@ export default component$(() => {
 								class="header-icon-btn cursor-pointer"
 								role="button"
 								tabIndex={0}
-								onClick$={$(async () => {
-									if (!appState.shippingAddress.countryCode) {
-										appState.shippingAddress.countryCode = CountryPreferenceService.getCountry();
-									}
-									if (appState.showCart) {
-										appState.showCart = false;
-									} else {
-										loadCartIfNeeded(cart);
-										appState.showCart = true;
-										// LOCKED stock rule: live refresh on every cart open, no
-										// cache/TTL/debounce — see CartContext.tsx refreshCartStock.
-										refreshCartStock(cart).catch(console.error);
-									}
-								})}
+								onClick$={toggleCart}
 								aria-label={`${totalQuantity.value} items in cart`}
 								title="View cart"
 							>

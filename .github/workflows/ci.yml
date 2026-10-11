@@ -101,6 +101,19 @@ jobs:
         # storefront's own vitest suite.
         run: pnpm --filter @sellright/storefront test
 
+      - name: Storefront tooling tests (layers, import and code-shape checks, brand-literal lint)
+        # Plan A14/A19/A22: node --test over packages/storefront/scripts/*.test.mjs. They need the workspace install
+        # above (the TypeScript compiler API); each builds its fixture project in a temp directory.
+        run: pnpm --filter @sellright/storefront run test:scripts
+
+      - name: Storefront layer checks (base)
+        # layers.json must classify every src, public and adapters path without ambiguity; base L2 orchestration calls
+        # are listed in report mode until A13 (layers.json codeShape.baseL2Enforcement); brand-literal lint warns until A20.
+        run: |
+          pnpm --filter @sellright/storefront run check:layers
+          pnpm --filter @sellright/storefront run check:shape:base
+          pnpm --filter @sellright/storefront run lint:brand
+
   database:
     name: PostgreSQL 17 integration
     runs-on: ubuntu-latest
@@ -635,6 +648,10 @@ jobs:
       - name: Run the storefront e2e suite
         working-directory: packages/storefront
         # `test:e2e` builds the storefront (SSG off) into server-e2e/dist-e2e, then runs the suite.
+        env:
+          # Enables the A12 loader/action re-export probe: e2e/platform-reexport.spec.ts runs and the probe route answers
+          # (it is a 404 without this variable, in the runner and in the storefront server).
+          E2E_PLATFORM_PROBE: '1'
         run: pnpm run test:e2e
 
       - name: Upload Playwright report on failure

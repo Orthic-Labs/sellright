@@ -4,6 +4,7 @@
  * total. No network, no Qwik — unit-tested in balance-pay.test.ts.
  */
 import type { ShopConfig } from '~/sellright/types/checkout';
+import { INSTALLMENT_PROVIDER } from '~/platform/payments/labels';
 
 export type BalancePageState =
 	| 'invalid' // no/unknown receipt token, or order not found
@@ -48,7 +49,7 @@ export function availableBalanceMethods(
 	const out: BalanceMethod[] = [];
 	if (config?.stripeConfigured && config.stripePublishableKey?.trim()) out.push('stripe');
 	if (config?.gateways?.nmi?.tokenizationKey) out.push('nmi');
-	if (config?.gateways?.sezzle) out.push('sezzle');
+	if (config?.gateways?.sezzle) out.push(INSTALLMENT_PROVIDER);
 	return out;
 }
 

@@ -75,6 +75,9 @@ export interface StoreTheme {
 	};
 	currency: string;
 	locale: string;
+	/** Prefix of this storefront's own browser-storage keys (e.g. the image-seen cache). Default `dd` keeps the pre-A20 key
+	 * `dd_cached_images` unchanged; a brand sets VITE_STORE_STORAGE_NAMESPACE. */
+	storageNamespace: string;
 	/** Generic shop-page category filter labels (matched against product tags). */
 	shopCategories: string[];
 	/**
@@ -145,6 +148,7 @@ export const theme: StoreTheme = {
 	},
 	currency: env('VITE_STORE_CURRENCY', 'USD'),
 	locale: env('VITE_STORE_LOCALE', 'en'),
+	storageNamespace: env('VITE_STORE_STORAGE_NAMESPACE', 'dd'),
 	shopCategories: (() => {
 		const raw = envOrUndefined('VITE_SHOP_CATEGORIES');
 		return raw ? raw.split(',').map((s) => s.trim()).filter(Boolean) : ['New', 'Bestsellers', 'Sale'];

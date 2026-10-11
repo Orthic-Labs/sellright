@@ -3,6 +3,7 @@ import { CheckoutAddresses } from '~/components/checkout/CheckoutAddresses';
 import { StripePaymentElement } from '~/components/checkout/StripePaymentElement';
 import { NMI } from '~/components/payment/NMI';
 import { Sezzle } from '~/components/payment/Sezzle';
+import { INSTALLMENT_PROVIDER } from '~/platform/payments/labels';
 import type { ShopConfig } from '~/sellright/types/checkout';
 import type { CheckoutPhase, PaymentMethod } from '~/hooks/useCheckout';
 import { totalChange, formatCents } from '~/hooks/checkout-total';
@@ -35,7 +36,7 @@ function availableMethods(config: ShopConfig | null): PaymentMethod[] {
 	const methods: PaymentMethod[] = [];
 	if (config.stripeConfigured) methods.push('stripe');
 	if (config.gateways?.nmi) methods.push('nmi');
-	if (config.gateways?.sezzle) methods.push('sezzle');
+	if (config.gateways?.sezzle) methods.push(INSTALLMENT_PROVIDER);
 	return methods;
 }
 
@@ -231,7 +232,7 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 														: (chargeLabel ? `PAY — ${chargeLabel}` : 'PAY')}
 												</button>
 											</>
-										) : props.srState.phase === 'paying' && props.paymentMethod.value === 'sezzle' ? (
+										) : props.srState.phase === 'paying' && props.paymentMethod.value === INSTALLMENT_PROVIDER ? (
 											<Sezzle
 												code={props.srState.code}
 												receiptToken={props.srState.receiptToken || undefined}

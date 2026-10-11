@@ -2,6 +2,10 @@ import { $, component$, type Signal } from '@qwik.dev/core';
 import CartContents from '~/components/cart-contents/CartContents';
 import CartTotals from '~/components/cart-totals/CartTotals';
 import { LoyaltyRedeem } from '~/components/loyalty/LoyaltyRedeem';
+import { getSlot } from '~/components/slots';
+
+// A17 mount point: the brand's points-redemption control; the base LoyaltyRedeem is the fallback.
+const LoyaltyRedemption = getSlot('checkout.loyalty-redemption') ?? LoyaltyRedeem;
 
 interface CheckoutOrderSummaryProps {
   formattedTotal: Signal<string | null>;
@@ -106,7 +110,7 @@ export const CheckoutOrderSummary = component$<CheckoutOrderSummaryProps>((props
           )}
         </div>
         {!props.pageLoading.value && (
-          <LoyaltyRedeem
+          <LoyaltyRedemption
             redeemPoints={props.redeemPoints}
             discountableCents={Math.max(0, (props.localCart?.cart?.subtotal || 0) - (props.localCart?.cart?.discountTotal || 0))}
             currencyCode={props.localCart?.cart?.currency || 'USD'}

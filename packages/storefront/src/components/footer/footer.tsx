@@ -2,8 +2,10 @@ import { component$ } from '@qwik.dev/core';
 import { Link } from '@qwik.dev/router';
 import { useStoreIdentityLoader } from '~/routes/layout';
 import { footerViewModel } from './footer-view-model';
+import { getSlot } from '~/components/slots';
 
-const SEZZLE_CONFIGURED = !!(import.meta.env.VITE_SEZZLE_MERCHANT_UUID as string | undefined);
+// A17 mount point: extra payment badges after the card icons (the base's own provider badge is its default slot file).
+const PaymentBadgesSlot = getSlot('payment.badges');
 
 export default component$(() => {
 	// WS-C: runtime store identity, resolved per-request by the root layout's
@@ -166,10 +168,8 @@ export default component$(() => {
 					<svg width="38" height="24" viewBox="0 0 38 24"><rect width="38" height="24" rx="3" fill="#252525" stroke="#333" stroke-width="0.5"/><circle cx="19" cy="12" r="8" fill="none" stroke="#fff" stroke-width="1.2"/><line x1="19" y1="4" x2="19" y2="20" stroke="#fff" stroke-width="1.2"/></svg>
 					{/* JCB */}
 					<svg width="38" height="24" viewBox="0 0 38 24"><rect width="38" height="24" rx="3" fill="#252525" stroke="#333" stroke-width="0.5"/><rect x="8" y="6" width="7" height="12" rx="1.5" fill="#0B7BC0"/><rect x="16" y="6" width="7" height="12" rx="1.5" fill="#E4001B"/><rect x="24" y="6" width="7" height="12" rx="1.5" fill="#00A650"/></svg>
-					{/* Sezzle — only shown when the store has a Sezzle merchant configured */}
-					{SEZZLE_CONFIGURED && (
-						<svg width="38" height="24" viewBox="0 0 38 24"><rect width="38" height="24" rx="3" fill="#252525" stroke="#333" stroke-width="0.5"/><text x="19" y="15" text-anchor="middle" fill="#8B62E8" font-family="Inter,sans-serif" font-size="6" font-weight="700">Sezzle</text></svg>
-					)}
+					{/* Extra provider badges — slot `payment.badges` */}
+					{PaymentBadgesSlot && <PaymentBadgesSlot placement="footer" />}
 				</div>
 
 				{/* Copyright */}

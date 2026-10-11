@@ -1,6 +1,8 @@
 /* Font faces */
 @import 'tailwindcss';
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+/* A18: brand token values live in brand/tokens.css (--brand-*); the names below map them to the public tokens. */
+@import './brand/tokens.css';
 
 /* ── Card/parchment sub-palette ──
    ProductCard, the PDP (product-styles.ts), blog, and the affiliate
@@ -10,20 +12,19 @@
    as a Tailwind v4 @theme block (not just :root) so both `var(--color-ink)`
    (existing arbitrary-value call sites) and Tailwind-generated utilities
    (bg-ink, text-ink-muted, border-card-border, …) work. Neutral defaults
-   only — no brand ships with these hex values baked in; override per-brand
-   the same way as --color-accent (see src/theme/theme.config.ts) once this
-   sub-palette grows its own env vars. */
+   only — no brand ships with these hex values baked in; a brand replaces
+   brand/tokens.css (the values live there as --brand-color-*). */
 @theme {
-  --color-ink: #18181b;
-  --color-ink-hover: #27272a;
-  --color-ink-soft: #52525b;
-  --color-ink-muted: #a1a1aa;
-  --color-ink-contrast: #fafafa;
-  --color-parchment: #f4f4f5;
-  --color-parchment-hover: #e4e4e7;
-  --color-card-border: #e4e4e7;
-  --color-image-bg: #18181b;
-  --color-tint: #e4e4e7;
+  --color-ink: var(--brand-color-ink);
+  --color-ink-hover: var(--brand-color-ink-hover);
+  --color-ink-soft: var(--brand-color-ink-soft);
+  --color-ink-muted: var(--brand-color-ink-muted);
+  --color-ink-contrast: var(--brand-color-ink-contrast);
+  --color-parchment: var(--brand-color-parchment);
+  --color-parchment-hover: var(--brand-color-parchment-hover);
+  --color-card-border: var(--brand-color-card-border);
+  --color-image-bg: var(--brand-color-image-bg);
+  --color-tint: var(--brand-color-tint);
 }
 
 /* SheerID iframe styling - center the form */
@@ -152,17 +153,17 @@
 @layer utilities {
   /* ── Neutral demo typography ──
      Single-family (Inter) system: display/body/mono all resolve to sane
-     system-first stacks. Swap via VITE_THEME_FONT_DISPLAY / _BODY / _MONO
-     (see src/theme/theme.config.ts) — a brand build can load its own
-     self-hosted @font-face rules here and just change the var values below,
-     nothing else in the codebase needs to change.
+     system-first stacks. The stacks themselves are declared in
+     brand/tokens.css (--brand-font-*); a brand build replaces that file and
+     loads its own self-hosted @font-face rules, nothing else in the codebase
+     needs to change.
   */
   :root {
     /* Font stacks */
-    --font-display: 'Inter', system-ui, -apple-system, sans-serif;
-    --font-heading: 'Inter', system-ui, -apple-system, sans-serif;
-    --font-body: 'Inter', system-ui, -apple-system, sans-serif;
-    --font-mono: ui-monospace, SFMono-Regular, 'IBM Plex Mono', monospace;
+    --font-display: var(--brand-font-display);
+    --font-heading: var(--brand-font-heading);
+    --font-body: var(--brand-font-body);
+    --font-mono: var(--brand-font-mono);
 
     /* Fluid type scale */
     --step--1: clamp(0.75rem, 0.7rem + 0.2vw, 0.875rem);
@@ -187,11 +188,13 @@
     --color-text: #E8E8E8;
     --color-text-muted: #888888;
     /* Brand accent — single source of truth for CTAs, links, active states.
-       Override via VITE_THEME_COLOR_ACCENT (see src/theme/theme.config.ts);
-       these are just the neutral-demo fallback values baked at build time. */
-    --color-accent: #2563eb;
-    --color-accent-hover: #1d4ed8;
-    --color-accent-rgb: 37, 99, 235;
+       Values are declared in brand/tokens.css (--brand-color-accent*). */
+    --color-accent: var(--brand-color-accent);
+    --color-accent-hover: var(--brand-color-accent-hover);
+    --color-accent-rgb: var(--brand-color-accent-rgb);
+    /* Literal rgb triplets that component CSS used to inline (PDP tooltip fill, dark processing modal text). */
+    --color-tooltip-rgb: var(--brand-color-tooltip-rgb);
+    --color-on-dark-rgb: var(--brand-color-on-dark-rgb);
   }
 
   /* ── Text role classes ── */

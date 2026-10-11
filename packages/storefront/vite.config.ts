@@ -4,6 +4,7 @@ import { defineConfig, loadEnv } from 'vite';
 import tsconfigPaths from 'vite-tsconfig-paths';
 import { imagetools } from 'vite-imagetools';
 import viteCompression from 'vite-plugin-compression';
+import { brandSlotsPlugin } from './src/components/slots/vite-plugin';
 
 export default defineConfig((config) => {
   const isDev = config.mode === 'development';
@@ -94,6 +95,8 @@ export default defineConfig((config) => {
       },
     },
     plugins: [
+      // A17: validates src/brand-slots (or SELLRIGHT_BRAND_SLOTS_DIR) and serves virtual:sellright-brand-slots.
+      brandSlotsPlugin(),
       qwikRouter({
         // Exclude dynamic sitemap routes from static generation
         exclude: ['/sitemap.xml', '/sitemap-*.xml'],

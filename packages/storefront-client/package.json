@@ -13,9 +13,10 @@
   "sideEffects": false,
   "scripts": {
     "build": "tsc -p tsconfig.json && pnpm run build.copy-generated",
-    "build.copy-generated": "node -e \"const fs=require('fs');fs.mkdirSync('dist/generated',{recursive:true});fs.copyFileSync('src/generated/schema.d.ts','dist/generated/schema.d.ts');\"",
+    "build.copy-generated": "node scripts/copy-generated.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
+    "test:scripts": "node --test scripts/*.test.mjs",
     "generate": "tsx scripts/generate.mts",
     "generate:check": "tsx scripts/generate.mts --check"
   },

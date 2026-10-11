@@ -1,0 +1,7 @@
+{
+	"name": "@sellright/storefront-client",
+	"version": "0.0.0-fixture",
+	"scripts": {
+		"build": "tsc -p tsconfig.json && node scripts/copy-generated.mjs"
+	}
+}

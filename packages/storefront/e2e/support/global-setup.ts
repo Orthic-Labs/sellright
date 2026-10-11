@@ -1,5 +1,5 @@
 import { AdminApi, SHIPPING, SKU } from './api';
-import { NMI, SEZZLE, STORE_URL, EXTERNAL_API, HOOK_URL } from './env.mjs';
+import { NMI, SEZZLE, STORE_URL, EXTERNAL_API, HOOK_URL, STRIPE, STRIPE_ENABLED } from './env.mjs';
 
 /**
  * Runs once per `playwright test` after the webServers are up (the API was just rebuilt from a fresh database by
@@ -36,6 +36,12 @@ export default async function globalSetup() {
 	await api.patch('/settings/payments', { nmi: { enabled: true, mode: 'test' }, sezzle: { enabled: true, mode: 'test' } });
 	await api.put('/payments/settings/nmi/test', { fields: NMI });
 	await api.put('/payments/settings/sezzle/sandbox', { fields: SEZZLE });
+	// Stripe test mode (opt-in, E2E_STRIPE=1): fake keys; the API only ever reaches the mock's /stripe (preload.mjs).
+	if (STRIPE_ENABLED) {
+		await api.put('/payments/settings/stripe/test', { fields: STRIPE });
+		await api.patch('/settings/payments', { stripe: { enabled: true } });
+		await api.patch('/settings/payments/stripe-mode', { mode: 'test' });
+	}
 	// Sezzle's return URLs are built from the store's public storefront URL (admin Settings > Store).
 	await api.patch('/settings/store', { storefrontUrl: STORE_URL });
 

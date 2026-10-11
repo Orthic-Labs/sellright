@@ -12,7 +12,11 @@ export async function readCatalogSnapshot<T>(file: string, config = {
   const name = relative(root, generation);
   if (!/^generations\/[0-9a-f-]{36}$/.test(name)) throw new Error('Invalid catalog generation');
   const marker = JSON.parse(await readFile(join(generation, 'marker.json'), 'utf8'));
+  // No age-based expiry: the publisher regenerates on every stock change, so an old but intact generation is still current.
+  // generatedAt must still parse and not lie in the future (clock-skew guard, not an expiry).
+  // Marker formats the publisher has written (api/src/manifest/publish.ts writes 2; 1 is the earlier layout).
+  const supportedFormats = [1, 2];
   const age = Date.now() - Date.parse(marker.generatedAt);
-  if (marker.format !== 1 || marker.source !== 'sellright' || marker.storeSlug !== config.storeSlug || name !== `generations/${marker.generation}` || !Number.isFinite(age) || age < -60000 || age > 300000) throw new Error('Stale or foreign catalog generation');
+  if (!supportedFormats.includes(marker.format) || marker.source !== 'sellright' || marker.storeSlug !== config.storeSlug || name !== `generations/${marker.generation}` || !Number.isFinite(age) || age < -60000) throw new Error('Stale or foreign catalog generation');
   return JSON.parse(await readFile(join(generation, file), 'utf8')) as T;
 }

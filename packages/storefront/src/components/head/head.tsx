@@ -5,6 +5,7 @@ import { DEFAULT_METADATA_TITLE } from '~/constants';
 import { generateDocumentHead } from '~/utils';
 import { sanitizeStyle, sanitizeInlineScript } from '~/utils/sanitize';
 import { useStoreIdentityLoader } from '~/routes/layout';
+import { PROVIDER_PREFETCH_ORIGINS } from '~/platform/payments/labels';
 
 interface HeadProps {
 	nonce?: string;
@@ -113,8 +114,9 @@ export const Head = component$<HeadProps>(({ nonce }) => {
 
 			{/* SheerID verification service - dns-prefetch only, loaded on-demand */}
 			<link rel="dns-prefetch" href="https://services.sheerid.com" />
-			<link rel="dns-prefetch" href="https://gateway.sezzle.com" />
-			<link rel="dns-prefetch" href="https://sandbox.gateway.sezzle.com" />
+			{PROVIDER_PREFETCH_ORIGINS.map((href) => (
+				<link key={href} rel="dns-prefetch" href={href} />
+			))}
 
 
 			{/* Geolocation services for address validation */}

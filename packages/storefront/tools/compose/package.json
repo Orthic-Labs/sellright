@@ -1,0 +1,14 @@
+{
+	"name": "@sellright/compose-tool",
+	"version": "1.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Cold runtime of the storefront composition tool. ops/compose-brand.sh archives this directory from the pin, installs it with --frozen-lockfile --ignore-scripts and runs compose.mjs from it. Versions are exact and must equal the ones the pin's packages/storefront lock resolves (lock-equivalence).",
+	"engines": {
+		"node": ">=24.7 <25"
+	},
+	"dependencies": {
+		"typescript": "6.0.3",
+		"vite": "8.3.4"
+	}
+}

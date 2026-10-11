@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readlink, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -27,8 +27,40 @@ describe('SellRight catalog snapshot reader', () => {
     expect(await readCatalogSnapshot('shop-catalog.json', config)).toEqual({ products: [{ slug: 'native' }] });
     expect(await readCatalogSnapshot('products/native.json', config)).toEqual({ slug: 'native' });
   });
-  it.each([{ source: 'legacy' }, { storeSlug: 'another' }, { format: 2 }, { generatedAt: '2000-01-01' }, { generatedAt: 'invalid' }, { generatedAt: '2100-01-01' }, { generation: randomUUID() }])('rejects invalid marker %j', async marker => {
+  it.each([{ format: 1 }, { format: 2 }, { generatedAt: '2000-01-01T00:00:00.000Z' }])('accepts a supported marker %j (no age-based expiry)', async marker => {
+    expect(await readCatalogSnapshot('shop-catalog.json', await fixture(marker))).toEqual({ products: [{ slug: 'native' }] });
+  });
+  it.each([{ source: 'legacy' }, { storeSlug: 'another' }, { format: 3 }, { format: 0 }, { format: '2' }, { format: undefined }, { generatedAt: 'invalid' }, { generatedAt: '2100-01-01' }, { generation: randomUUID() }])('rejects invalid marker %j', async marker => {
     await expect(readCatalogSnapshot('shop-catalog.json', await fixture(marker))).rejects.toThrow('Stale or foreign');
+  });
+  it('rejects a generation directory that is not a UUID-named generation', async () => {
+    const config = await fixture();
+    const bad = join(config.directory, 'generations', 'not-a-generation');
+    await mkdir(bad, { recursive: true });
+    await rm(join(config.directory, 'current'));
+    await symlink('generations/not-a-generation', join(config.directory, 'current'));
+    await expect(readCatalogSnapshot('shop-catalog.json', config)).rejects.toThrow('Invalid catalog generation');
+  });
+  it('rejects a current pointer that escapes the catalog root', async () => {
+    const config = await fixture();
+    const outside = await mkdtemp(join(tmpdir(), 'sr-reader-outside-'));
+    roots.push(outside);
+    await rm(join(config.directory, 'current'));
+    await symlink(outside, join(config.directory, 'current'));
+    await expect(readCatalogSnapshot('shop-catalog.json', config)).rejects.toThrow('Invalid catalog generation');
+  });
+  it('throws when there is no current generation', async () => {
+    const config = await fixture();
+    await rm(join(config.directory, 'current'));
+    await expect(readCatalogSnapshot('shop-catalog.json', config)).rejects.toThrow();
+  });
+  it('throws when the marker is unparsable or missing', async () => {
+    const config = await fixture();
+    const generation = (await readlink(join(config.directory, 'current'))).replace('generations/', '');
+    await writeFile(join(config.directory, 'generations', generation, 'marker.json'), '{not json');
+    await expect(readCatalogSnapshot('shop-catalog.json', config)).rejects.toThrow();
+    await rm(join(config.directory, 'generations', generation, 'marker.json'));
+    await expect(readCatalogSnapshot('shop-catalog.json', config)).rejects.toThrow();
   });
   it('requires explicit configuration and prevents path traversal', async () => {
     await expect(readCatalogSnapshot('shop-catalog.json', { directory: undefined, storeSlug: 'fixture' })).rejects.toThrow('not configured');

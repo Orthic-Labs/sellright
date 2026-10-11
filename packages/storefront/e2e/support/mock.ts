@@ -1,6 +1,8 @@
 /** Client for the mock gateway process (support/mock-gateways.mjs): inspect what the API sent, steer Sezzle. */
 import { createHmac } from 'node:crypto';
-import { API_URL, MOCK_URL, SEZZLE, SEZZLE_ACCOUNT } from './env.mjs';
+import { createRequire } from 'node:module';
+import { join } from 'node:path';
+import { API_DIR, API_URL, MOCK_URL, SEZZLE, SEZZLE_ACCOUNT, STRIPE } from './env.mjs';
 
 const get = async <T>(path: string): Promise<T> => (await fetch(MOCK_URL + '/control' + path)).json() as Promise<T>;
 const post = async <T>(path: string, body: unknown = {}): Promise<T> =>
@@ -21,6 +23,11 @@ export const mock = {
 	sezzleSessions: async () => (await get<{ sessions: SezzleSession[] }>('/sezzle/sessions')).sessions,
 	/** The shopper approved on Sezzle's hosted page; Sezzle captured (intent CAPTURE). The API's next authoritative GET sees it. */
 	sezzleCapture: (uuid: string) => post('/sezzle/capture', { uuid }),
+	/** What the API sent to "api.stripe.com" (rerouted to the mock). `via` is the transport the preload saw: fetch | https. */
+	stripeCalls: async () => (await get<{ calls: Array<{ method: string; path: string; via: string; idempotencyKey: string | null }> }>('/calls?service=stripe')).calls,
+	stripeIntents: async () => (await get<{ intents: Array<{ id: string; amount: number; currency: string; status: string; metadata: Record<string, string>; client_secret: string }> }>('/stripe/intents')).intents,
+	/** What Stripe.js does in the browser, steered by the spec: settle or decline the intent. */
+	stripeConfirm: (id: string, outcome: 'succeeded' | 'declined') => post('/stripe/confirm', { id, outcome }),
 	/** Forget recorded calls / hooks / mails (specs run serially against one mock, so each starts from a clean slate). */
 	reset: () => post('/reset'),
 	failNextHooks: (count: number) => post('/hooks/fail', { count }),
@@ -42,4 +49,13 @@ export function linkInMail(mail: MockMail, needle: string): string | undefined {
 	const urls = `${mail.html}\n${mail.text}`.match(/https?:\/\/[^\s"'<>)\]]+/g) ?? [];
 	// HTML-escaped ampersands in hrefs (&amp;) decode back to the real query string.
 	return urls.map((u) => u.replace(/&amp;/g, '&')).find((u) => u.includes(needle));
+}
+
+/** A Stripe webhook signed the way Stripe signs it (SDK test-header helper, so the API's real constructEvent runs). */
+export async function postStripeWebhook(event: Record<string, unknown>, storeSlug: string): Promise<number> {
+	const Stripe = createRequire(join(API_DIR, 'package.json'))('stripe') as { webhooks: { generateTestHeaderString(o: { payload: string; secret: string }): string } };
+	const payload = JSON.stringify(event);
+	const signature = Stripe.webhooks.generateTestHeaderString({ payload, secret: STRIPE.webhookSecret });
+	const res = await fetch(`${API_URL}/v1/webhooks/stripe`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-store-slug': storeSlug, 'stripe-signature': signature }, body: payload });
+	return res.status;
 }

@@ -5,12 +5,12 @@
 //     (catalog, shipping, gateways, ...) is seeded over the admin API by global-setup.ts,
 //  3. exec the API on :3398 with the gateway seam preloaded (preload.mjs), an SMTP sink, and the scheduler on.
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import {
-  API_DIR, API_PORT, DB_ADMIN_URL, DB_APP_URL, DB_NAME, DB_OWNER_URL, MOCK_URL, OWNER_EMAIL, OWNER_PASSWORD, RUN_DIR,
-  SMTP_PORT, STORE_SLUG, STORE_URL, HOOK_SENTINEL, assertSafeTargets, STOREFRONT_DIR,
+  API_DIR, API_PORT, CATALOG_DIR, DB_ADMIN_URL, DB_APP_URL, DB_NAME, DB_OWNER_URL, MOCK_URL, OWNER_EMAIL, OWNER_PASSWORD, RUN_DIR,
+  SMTP_PORT, STORE_SLUG, STORE_URL, HOOK_SENTINEL, SUPPORT_DIR, assertSafeTargets,
 } from './env.mjs';
 
 assertSafeTargets();
@@ -23,6 +23,24 @@ for (const f of [apiEntry, join(API_DIR, 'dist', 'scripts', 'migrate.js'), join(
   }
 }
 mkdirSync(RUN_DIR, { recursive: true });
+
+// Catalog manifest output (E2E_CATALOG_DIR): start every run from an empty directory. Only a directory that is
+// empty, or that the publisher itself claimed for the e2e store (owner.json), is ever emptied.
+function resetCatalogDir() {
+  if (!CATALOG_DIR) return;
+  mkdirSync(CATALOG_DIR, { recursive: true });
+  const entries = readdirSync(CATALOG_DIR);
+  if (entries.length > 0) {
+    let owner;
+    try { owner = JSON.parse(readFileSync(join(CATALOG_DIR, 'owner.json'), 'utf8')); } catch { /* not a catalog dir */ }
+    if (owner?.source !== 'sellright' || owner?.storeSlug !== STORE_SLUG) {
+      console.error(`[e2e] refusing to reset E2E_CATALOG_DIR ${CATALOG_DIR}: not empty and not an e2e catalog directory`);
+      process.exit(1);
+    }
+    for (const entry of entries) rmSync(join(CATALOG_DIR, entry), { recursive: true, force: true });
+  }
+}
+resetCatalogDir();
 
 const { Client } = createRequire(join(API_DIR, 'package.json'))('pg');
 
@@ -100,7 +118,7 @@ await grantAppRole();
 
 // cwd is the git-ignored run dir so the API never picks up packages/api/.env (dotenv reads ./.env)
 // and its relative ASSET_DIR / MAINTENANCE_FLAG_FILE / DOWNLOAD_DIR stay out of the checkout.
-const child = spawn(process.execPath, ['--import', join(STOREFRONT_DIR, 'e2e', 'support', 'preload.mjs'), apiEntry], {
+const child = spawn(process.execPath, ['--import', join(SUPPORT_DIR, 'preload.mjs'), apiEntry], {
   cwd: RUN_DIR,
   env: {
     ...baseEnv,
@@ -122,6 +140,8 @@ const child = spawn(process.execPath, ['--import', join(STOREFRONT_DIR, 'e2e', '
     SMTP_FROM: 'shop@e2e.example.net',
     // Passwordless sign-in is OFF unless a deployment (or store.config.auth) opts in; the account specs exercise it.
     MAGIC_LINK_ENABLED: 'true',
+    // Real catalog publisher (stock-hook.ts needs all three) — only when the run asked for a catalog directory.
+    ...(CATALOG_DIR ? { CATALOG_DIR, STORE_SLUG, CATALOG_MANIFEST_JOBS_ENABLED: '1' } : {}),
   },
   stdio: 'inherit',
 });

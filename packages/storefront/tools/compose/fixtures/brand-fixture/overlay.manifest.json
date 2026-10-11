@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "entries": [
+    { "path": "src/brand/tokens.css", "layer": "L3" },
+    { "path": "src/brand-slots/Hello.tsx", "layer": "L3" },
+    { "path": "src/components/Button.tsx", "layer": "L2", "baseHash": "2d33e744a819896c5a4de3675cf27442bcf040018fbb9ed01390e7536a94002d", "baseSnapshotHash": "2d33e744a819896c5a4de3675cf27442bcf040018fbb9ed01390e7536a94002d", "fromPin": "0123456789abcdef0123456789abcdef01234567" },
+    { "kind": "package-script", "key": "build", "layer": "L2", "baseHash": "49532bc660331689e742c043e2b53fe183f97882b7feb02bb8bc23babc1dd12b", "baseSnapshotHash": "49532bc660331689e742c043e2b53fe183f97882b7feb02bb8bc23babc1dd12b", "fromPin": "0123456789abcdef0123456789abcdef01234567" },
+    { "kind": "package-script", "key": "prebuild", "layer": "L2", "baseHash": "2eb1ccc0f5e533ac68569616f0d271a2f13dd2cbae75330922685793ec57031e", "baseSnapshotHash": "2eb1ccc0f5e533ac68569616f0d271a2f13dd2cbae75330922685793ec57031e", "fromPin": "0123456789abcdef0123456789abcdef01234567" }
+  ]
+}

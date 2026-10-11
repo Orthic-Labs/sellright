@@ -201,4 +201,6 @@ assertProdApiConfigured(process.env.NODE_ENV, process.env.SELLRIGHT_API_URL);
 // Start the express server
 app.listen(PORT, HOST, () => {
  console.log(`Server started: http://${HOST}:${PORT}/`);
+ // pm2 `wait_ready`: tell the process manager the listener is up (no-op when not forked with an IPC channel). A20/D6.
+ process.send?.('ready');
 });

@@ -1,19 +1,15 @@
 import { $, component$, useContext, useStore, useStyles$, useTask$, useVisibleTask$, useSignal, useComputed$ } from '@qwik.dev/core';
-import {
-  useNavigate,
-  type DocumentHead
-} from '@qwik.dev/router';
-import { theme } from '~/theme/theme.config';
+import { useNavigate } from '@qwik.dev/router';
 import { APP_STATE, COUNTRY_COOKIE } from '~/constants';
 import { getCookie } from '~/utils';
 import { getMe, getAddresses } from '~/services/customer';
 import { CountryService } from '~/services/CountryService';
 import { CheckoutAddressProvider } from '~/contexts/CheckoutAddressContext';
-import { createSEOHead } from '~/utils/seo';
 import { useCart, refreshCartStock, loadCartIfNeeded, useHasMixedPreOrder } from '~/contexts/CartContext';
-import { CartService } from '~/services/CartService';
+import { validateCheckoutStock } from '~/hooks/pre-submit-stock';
 import { CheckoutValidationProvider, useCheckoutValidation, useCheckoutValidationActions } from '~/contexts/CheckoutValidationContext';
 import { useCheckout, type PaymentMethod } from '~/hooks/useCheckout';
+import { INSTALLMENT_PROVIDER } from '~/platform/payments/labels';
 import { formatCents } from '~/hooks/checkout-total';
 import { getShopConfig, getEligibleShippingMethods } from '~/providers/shop/checkout/checkout';
 import type { ShopConfig, ShopShippingMethod } from '~/sellright/types/checkout';
@@ -156,7 +152,7 @@ const CheckoutContent = component$(() => {
             // switch via the method selector when more than one is available.
             if (cfg.stripeConfigured) paymentMethod.value = 'stripe';
             else if (cfg.gateways?.nmi) paymentMethod.value = 'nmi';
-            else if (cfg.gateways?.sezzle) paymentMethod.value = 'sezzle';
+            else if (cfg.gateways?.sezzle) paymentMethod.value = INSTALLMENT_PROVIDER;
           })
           .catch((e) => console.warn('[Checkout] shop-config fetch failed:', e));
 
@@ -237,11 +233,13 @@ const CheckoutContent = component$(() => {
 
   useTask$(async ({ track }) => {
     track(() => localCart.cart.lines);
+    // A converted cart recovers its own order (see validateCheckoutStock); its status arrives with the live read.
+    track(() => localCart.cart.status);
 
     isCartEmpty.value = localCart.cart.lines.length === 0;
 
     if (localCart.cart.lines.length > 0) {
-        const stockValidation = CartService.validateStock();
+        const stockValidation = validateCheckoutStock();
         validationActions.updateStockValidation(stockValidation.valid, stockValidation.errors);
     } else {
         validationActions.updateStockValidation(true, []);
@@ -452,11 +450,4 @@ export default component$(() => {
   );
 });
 
-export const head = (): DocumentHead => {
-  return createSEOHead({
-    title: 'Checkout',
-    description: `Complete your purchase at ${theme.storeName}.`,
-    noindex: true,
-    links: []
-  });
-};
+export { head } from '~/platform/checkout';

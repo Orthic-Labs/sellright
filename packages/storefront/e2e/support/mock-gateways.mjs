@@ -2,6 +2,7 @@
 //
 //   /nmi/*      NMI Payment API (sandbox.nmi.com)         -> POST /nmi/api/transact.php
 //   /sezzle/*   Sezzle gateway (sandbox.gateway.sezzle.com) -> /sezzle/v2/{authentication,session,order/...}
+//   /stripe/*   Stripe API (api.stripe.com)               -> /stripe/v1/payment_intents[/:id[/confirm|/cancel]]
 //   /indexnow/* IndexNow (api.indexnow.org)               -> POST /indexnow/indexnow, recorded; answers 200
 //   /hook/*     the "customer's" webhook receiver (order.shipped, ...), see preload.mjs for how the API reaches it
 //   :SMTP_PORT  an SMTP sink, so the real nodemailer path + email_outbox 'sent' transition run for real
@@ -13,7 +14,7 @@ import { createServer as createSmtp } from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { MOCK_PORT, SMTP_PORT, NMI, SEZZLE } from './env.mjs';
 
-const state = { calls: [], hooks: [], mails: [], indexnow: [], sezzle: new Map(), nmiTx: new Map(), seq: 1000, hookFailures: 0 };
+const state = { calls: [], hooks: [], mails: [], indexnow: [], sezzle: new Map(), nmiTx: new Map(), stripeIntents: new Map(), seq: 1000, hookFailures: 0 };
 
 const json = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
 const readBody = (req) => new Promise((resolve) => { const c = []; req.on('data', (d) => c.push(d)); req.on('end', () => resolve(Buffer.concat(c).toString('utf8'))); });
@@ -41,6 +42,60 @@ function nmi(req, res, path, raw) {
     return out({ response: '3', responsetext: 'Unsupported type', response_code: '300' });
   }
   json(res, 404, { error: 'unknown nmi path ' + path });
+}
+
+
+// ── Stripe (API side only; Stripe.js in the browser is stubbed by e2e/support/stripe-stub.ts) ─────────────────
+// The API only creates and retrieves PaymentIntents (src/payments/stripe.ts). `confirm` is what Stripe.js would do
+// in the browser; specs drive it through /control/stripe/confirm with the outcome they want. Each recorded call
+// carries `via` ('fetch' | 'https'): the header the preload sets when it reroutes api.stripe.com — this answers the
+// plan's A6 item 1 probe (which transport stripe-node uses) from real traffic.
+const form = (raw) => {
+  // application/x-www-form-urlencoded with bracket keys: metadata[orderCode]=X -> { metadata: { orderCode: 'X' } }
+  // Request-supplied keys only ever index Maps while parsing (so '__proto__', 'constructor' and the like are plain
+  // keys, never writes to an object); Object.fromEntries then defines them as own properties of fresh objects.
+  const root = new Map();
+  for (const [k, v] of new URLSearchParams(raw)) {
+    const m = /^([^[]+)((?:\[[^\]]*\])*)$/.exec(k);
+    const keys = m ? [m[1], ...[...m[2].matchAll(/\[([^\]]*)\]/g)].map((x) => x[1])] : [k];
+    let node = root;
+    for (const key of keys.slice(0, -1)) {
+      let next = node.get(key);
+      if (!(next instanceof Map)) node.set(key, (next = new Map()));
+      node = next;
+    }
+    node.set(keys.at(-1), v);
+  }
+  const plain = (map) => Object.fromEntries([...map].map(([k, v]) => [k, v instanceof Map ? plain(v) : v]));
+  return plain(root);
+};
+const intentView = (pi) => ({
+  id: pi.id, object: 'payment_intent', amount: pi.amount, currency: pi.currency, status: pi.status, metadata: pi.metadata,
+  client_secret: pi.client_secret, latest_charge: pi.latest_charge ?? null, last_payment_error: pi.last_payment_error ?? null, livemode: false,
+});
+function stripe(req, res, path, raw) {
+  state.calls.push({ service: 'stripe', method: req.method, path, via: req.headers['x-e2e-via'] ?? 'unknown', idempotencyKey: req.headers['idempotency-key'] ?? null, at: Date.now() });
+  if (!/^Bearer sk_test_/.test(req.headers.authorization ?? '')) return json(res, 401, { error: { type: 'invalid_request_error', message: 'Invalid API Key provided' } });
+  if (path === '/v1/payment_intents' && req.method === 'POST') {
+    const b = form(raw);
+    const key = req.headers['idempotency-key'];
+    // Stripe replays the same PaymentIntent for a repeated idempotency key.
+    const replay = key && [...state.stripeIntents.values()].find((p) => p.idempotencyKey === key);
+    if (replay) return json(res, 200, intentView(replay));
+    const id = `pi_e2e_${++state.seq}`;
+    const pi = { id, amount: Number(b.amount), currency: b.currency, status: 'requires_payment_method', metadata: b.metadata ?? {}, client_secret: `${id}_secret_e2e`, idempotencyKey: key ?? null };
+    state.stripeIntents.set(id, pi);
+    return json(res, 200, intentView(pi));
+  }
+  const m = path.match(/^\/v1\/payment_intents\/([^/]+)(?:\/(confirm|cancel))?$/);
+  if (m) {
+    const pi = state.stripeIntents.get(m[1]);
+    if (!pi) return json(res, 404, { error: { type: 'invalid_request_error', code: 'resource_missing', message: `No such payment_intent: '${m[1]}'` } });
+    if (m[2] === 'cancel') { pi.status = 'canceled'; return json(res, 200, intentView(pi)); }
+    if (m[2] === 'confirm') return json(res, 200, intentView(pi)); // the outcome is steered by /control/stripe/confirm, not by the API
+    if (req.method === 'GET') return json(res, 200, intentView(pi));
+  }
+  json(res, 404, { error: { type: 'invalid_request_error', message: 'unknown stripe path ' + path } });
 }
 
 // ── Sezzle ───────────────────────────────────────────────────────────────────────────────────────────────
@@ -103,6 +158,16 @@ function control(req, res, path, raw) {
     if (!o.captures.length) o.captures.push({ uuid: randomUUID(), amount: money(o.amount, o.currency) });
     return json(res, 200, sezzleOrderView(o));
   }
+  if (path === '/stripe/intents') return json(res, 200, { intents: [...state.stripeIntents.values()].map(intentView) });
+  if (path === '/stripe/confirm' && req.method === 'POST') {
+    // What Stripe.js does in the browser: the shopper confirmed; outcome 'succeeded' or 'declined'.
+    const { id, outcome } = JSON.parse(raw);
+    const pi = state.stripeIntents.get(id);
+    if (!pi) return json(res, 404, { error: 'no such intent' });
+    if (outcome === 'succeeded') { pi.status = 'succeeded'; pi.latest_charge = `ch_e2e_${++state.seq}`; }
+    else { pi.status = 'requires_payment_method'; pi.last_payment_error = { message: 'Your card was declined.' }; }
+    return json(res, 200, intentView(pi));
+  }
   if (path === '/reset' && req.method === 'POST') { state.calls = []; state.hooks = []; state.mails = []; state.indexnow = []; state.hookFailures = 0; return json(res, 200, { ok: true }); }
   // Make the next N webhook deliveries answer 500 (delivery must retry / not be marked delivered).
   if (path === '/hooks/fail' && req.method === 'POST') { state.hookFailures = JSON.parse(raw).count ?? 1; return json(res, 200, { ok: true }); }
@@ -116,6 +181,7 @@ createHttp(async (req, res) => {
     if (path === '/health') return json(res, 200, { ok: true });
     if (path.startsWith('/nmi/')) return nmi(req, res, path.slice(4), raw);
     if (path.startsWith('/sezzle/')) return sezzle(req, res, path.slice(7), raw);
+    if (path.startsWith('/stripe/')) return stripe(req, res, path.slice(7), raw);
     if (path.startsWith('/indexnow/')) {
       let body = null; try { body = JSON.parse(raw); } catch { /* recorded as null */ }
       state.indexnow.push({ method: req.method, path, headers: req.headers, body, at: Date.now() });
