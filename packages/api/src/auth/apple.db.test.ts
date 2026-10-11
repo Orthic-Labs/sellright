@@ -163,7 +163,7 @@ describe('POST /v1/shop/auth/apple', () => {
     expect((await appleRow(STORE_APPLE, 'other-sub'))?.email).toBe('bound@icloud.com');
   });
 
-  it('concurrent first links with two different subs: exactly one wins, the other 409s, no rebind', async () => {
+  it('smoke: concurrent first links with two different subs end with exactly one binding (not a deterministic guard test)', async () => {
     const custId = await seed('race@icloud.com', true);
     const [a, b] = await Promise.all([
       signIn(SLUG_APPLE, appleJwt({ sub: 'sub-race-a', email: 'race@icloud.com' })),
@@ -174,6 +174,40 @@ describe('POST /v1/shop/auth/apple', () => {
     const loser = a.status === 200 ? 'sub-race-b' : 'sub-race-a';
     expect((await appleRow(STORE_APPLE, winner))?.id).toBe(custId);
     expect(await appleRow(STORE_APPLE, loser)).toBeUndefined();
+  });
+
+  it('a link whose row was bound to another subject between the SELECT and the UPDATE 409s and does not rebind (deterministic)', async () => {
+    const custId = await seed('race@icloud.com', true);
+    // Connection C row-locks the customer and holds it. The sign-in's plain SELECT still reads the unbound row, then its
+    // UPDATE blocks on C's lock. C then binds a DIFFERENT subject and commits; the blocked UPDATE re-evaluates its WHERE
+    // against the new row version. Without the `apple_user_id IS NULL OR = sub` guard it would rebind to sub-race-a.
+    let release!: () => void;
+    let locked!: () => void;
+    const held = new Promise<void>((r) => { release = r; });
+    const lockedP = new Promise<void>((r) => { locked = r; });
+    const holder = withStore(STORE_APPLE, async (tx) => {
+      await tx.execute(sql`SELECT id FROM customer WHERE id = ${custId} FOR UPDATE`);
+      locked();
+      await held;
+      await tx.execute(sql`UPDATE customer SET apple_user_id = 'sub-race-b' WHERE id = ${custId}`);
+    });
+    await lockedP;
+    const pending = signIn(SLUG_APPLE, appleJwt({ sub: 'sub-race-a', email: 'race@icloud.com' }));
+    // Wait until the sign-in's UPDATE is actually waiting on C's lock (bounded poll, no fixed sleep).
+    let waiting = false;
+    for (let i = 0; i < 200 && !waiting; i++) {
+      waiting = (await pool.query(
+        `SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query ILIKE 'UPDATE customer SET apple_user_id%'`,
+      )).rowCount! > 0;
+      if (!waiting) await new Promise((r) => setTimeout(r, 25));
+    }
+    expect(waiting, 'sign-in UPDATE should be blocked on the row lock').toBe(true);
+    release();
+    await holder;
+    const res = await pending;
+    expect(res.status).toBe(409);
+    expect(await appleRow(STORE_APPLE, 'sub-race-a')).toBeUndefined();
+    expect((await appleRow(STORE_APPLE, 'sub-race-b'))?.id).toBe(custId);
   });
 
   it('still signs in an already-linked Apple subject on any address', async () => {
