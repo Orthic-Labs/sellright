@@ -547,20 +547,19 @@ test.describe.serial('11. a snapshot that is invalid or absent falls back to the
 	});
 });
 
-// ── 15. document cache headers: stock-bearing documents are never shared-cacheable ────────────────────────────────
-test('15 stock-bearing documents are private, no-cache with no CDN cache header; other public pages keep their policy', async ({ api, request }) => {
+// ── 15. document cache headers: every document is private, no-store ─────────────────────────────────────────────
+test('15 every document is private no-store with no CDN cache header, including non-stock pages and unknown paths', async ({ api, request }) => {
 	const p = await createStockProduct(api, 'headers', 5);
-	for (const path of ['/', brand.shopPath, brand.pdpPath(p.slug), '/search/']) {
+	for (const path of ['/', brand.shopPath, brand.pdpPath(p.slug), '/search/', '/contact/', '/definitely-not-a-route/']) {
 		const res = await request.get(path);
-		expect(res.status(), path).toBeLessThan(400);
 		const h = res.headers();
-		expect(h['cache-control'], `${path}: exactly the stock-bearing profile`).toBe('private, no-cache');
+		expect(h['cache-control'], `${path}: private no-store`).toMatch(/private/);
+		expect(h['cache-control'], `${path}: private no-store`).toMatch(/no-store/);
+		expect(h['cache-control'], `${path}: no shared lifetime`).not.toMatch(/s-maxage|max-age=[1-9]/);
 		expect(h['cloudflare-cdn-cache-control'], `${path}: no CDN cache header`).toBeUndefined();
 		expect(h['cdn-cache-control'], `${path}: no CDN cache header`).toBeUndefined();
-		expect(h['x-route-class'], path).toBe('stock_bearing');
-		expect(h['x-cache-policy-version'], path).toBeTruthy();
+		if (res.status() < 400) expect(h['x-cache-policy-version'], path).toBeTruthy();
 	}
-	const contact = await request.get('/contact/');
-	expect(contact.headers()['x-route-class'], 'a non-stock public page keeps its class').toBe('public_high_traffic');
-	expect(contact.headers()['cache-control'] ?? '', 'and its shared-cache lifetime').toMatch(/s-maxage=\d+/);
+	const stock = await request.get('/');
+	expect(stock.headers()['x-route-class']).toBe('stock_bearing');
 });

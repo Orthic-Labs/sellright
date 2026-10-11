@@ -64,6 +64,16 @@ describe('GET /v1/shop/feeds/{channel}', () => {
     expect(body).not.toContain('SKU-B1'); // cross-store isolation
   });
 
+  it('every feed response (all channels, .csv alias, unknown channel) is private, no-store: it carries live availability', async () => {
+    await seedStore(STORE_A, 'feed-a');
+    await seedCatalog(STORE_A, 'SKU-C1');
+    for (const path of ['/v1/shop/feeds/google', '/v1/shop/feeds/google.csv', '/v1/shop/feeds/facebook', '/v1/shop/feeds/pinterest', '/v1/shop/feeds/rss']) {
+      const res = await get(path);
+      expect(res.headers.get('cache-control'), path).toBe('private, no-store');
+      expect(res.headers.get('cdn-cache-control'), path).toBeNull();
+    }
+  });
+
   it('live availability: zero stock flips to out of stock on the next request', async () => {
     await seedStore(STORE_A, 'feed-a');
     const variantId = await seedCatalog(STORE_A, 'SKU-A2', 0);

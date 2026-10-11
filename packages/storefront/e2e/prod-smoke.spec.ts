@@ -96,7 +96,7 @@ function expectStockPrivate(res: APIResponse, what: string): void {
 	if (!STRICT_STOCK) return;
 	const cc = header(res, 'cache-control');
 	expect(cc, `${what}: cache-control`).toMatch(/private/);
-	expect(cc, `${what}: cache-control`).toMatch(/no-cache/);
+	expect(cc, `${what}: cache-control`).toMatch(/no-store/);
 	expect(cc, `${what}: no shared lifetime`).not.toMatch(/s-maxage/);
 	expect(header(res, 'cloudflare-cdn-cache-control'), `${what}: no CDN cache header`).toBe('');
 }

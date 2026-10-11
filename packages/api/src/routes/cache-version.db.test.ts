@@ -32,7 +32,7 @@ describe('GET /v1/shop/cache-version', () => {
   it('is never cached: same request twice with no writes returns the same value, no Cache-Control caching header', async () => {
     await seedStore(STORE_A, 'cv-a');
     const res = await app.request('/v1/shop/cache-version', { headers: { 'x-store-slug': 'cv-a' } });
-    expect(res.headers.get('cache-control')).toBe('no-store');
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
     const v1 = await version();
     const v2 = await version();
     expect(v1).toBe(v2);

@@ -11,6 +11,7 @@ import render from"./entry.ssr";
 import { sellrightRequestCookie } from"./utils/sellright-request-context.server";
 import { sellrightRequestHost } from"./utils/sellright-request-host.server";
 import { assertProdApiConfigured } from"./constants";
+import { NO_STORE_CACHE_CONTROL } from"./config/route-cache-policy";
 
 declare global {
  interface QwikRouterPlatform extends PlatformNode {}
@@ -183,6 +184,14 @@ app.use(express.static(distDir, {
     }
   },
 }));
+
+// Fail-closed default for everything past the static handlers (documents, loader/action data, 404s): the value comes
+// from the one policy file. Routes that are provably stock-free (sitemaps, robots) and the layout's own header
+// override it; Qwik's 404 handler and any route that sets nothing inherit it, so an unknown path is never stored.
+app.use((_req, res, next) => {
+  res.setHeader('Cache-Control', NO_STORE_CACHE_CONTROL);
+  next();
+});
 
 // Use Qwik Router's page and endpoint request handler
 app.use(router);
