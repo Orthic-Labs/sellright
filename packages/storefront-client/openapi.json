@@ -3914,6 +3914,105 @@
         }
       }
     },
+    "/v1/admin/payment-reconciliation/effects/{id}/approve-issuance": {
+      "post": {
+        "summary": "Human approval of a held order-edit issuance: records the approval (original decision untouched), issues, and closes the review task",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Approved (or already approved)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "effectId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "orderId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "approved": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "alreadyApproved": {
+                      "type": "boolean",
+                      "description": "true when the effect already carried an approval; nothing further was issued by this call"
+                    },
+                    "status": {
+                      "type": "string",
+                      "description": "The effect status after the call (done once issued)"
+                    }
+                  },
+                  "required": [
+                    "effectId",
+                    "orderId",
+                    "approved",
+                    "alreadyApproved",
+                    "status"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Agents, read-only roles and users without the refunds permission are refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Effect not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "EFFECT_NOT_HELD: not an order-edit effect that is terminal on an issuance hold",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/shop/auth/register": {
       "post": {
         "summary": "Register a customer account",

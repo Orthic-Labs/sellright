@@ -380,3 +380,27 @@ export async function requeueTerminalEffect(tx: Tx, effectId: string): Promise<b
     sql`${s.orderPendingEffect.effectKind} <> 'admin_review'`)).returning({ id: s.orderPendingEffect.id });
   return rows.length > 0;
 }
+
+/**
+ * Record a human's approval on a held effect's payload (issue 192). The payload is merged, never replaced: the original
+ * recorded decision and provenance stay. Lives here because writes to order_pending_effect belong to this module.
+ */
+export async function recordEffectIssuanceApproval(tx: Tx, effectId: string, approval: Record<string, unknown>): Promise<void> {
+  await tx.update(s.orderPendingEffect)
+    .set({ payload: sql`${s.orderPendingEffect.payload} || ${JSON.stringify({ issuanceApprovedBy: approval })}::jsonb` })
+    .where(eq(s.orderPendingEffect.id, effectId));
+}
+
+/**
+ * Close the admin_review task(s) that announced a failed effect of the same operation (markTerminal writes them with
+ * `failedEffectId`). A resolved review leaves the attention queue (listEffectsNeedingAttention).
+ */
+export async function resolveReviewTasksForEffect(
+  tx: Tx, e: { id: string; storeId: string; operationKind: string; operationId: string }, resolution: Record<string, unknown>,
+): Promise<void> {
+  await tx.update(s.orderPendingEffect).set({ resolution, updatedAt: new Date() }).where(and(
+    eq(s.orderPendingEffect.storeId, e.storeId), eq(s.orderPendingEffect.operationKind, e.operationKind as never),
+    eq(s.orderPendingEffect.operationId, e.operationId), eq(s.orderPendingEffect.effectKind, 'admin_review'),
+    sql`${s.orderPendingEffect.resolution} IS NULL`, sql`${s.orderPendingEffect.payload}->>'failedEffectId' = ${e.id}`));
+}
+

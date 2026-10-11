@@ -30,7 +30,9 @@ export const AGENT_DENIED: ReadonlyMap<string, DenyGroup> = new Map<string, Deny
   // credit out of thin air (D12): loyalty points are redeemable at checkout; gift cards are handled as a mixed route (created disabled)
   ...D('credit', 'POST /v1/admin/customers/:id/loyalty/adjust', 'POST /v1/admin/loyalty/ledger/:id/reverse'),
   // entitlements: issue/revoke licences, release held reservations, revoke/clear verifications
-  ...D('entitlement', 'POST /v1/admin/licenses', 'POST /v1/admin/payment-reconciliation/reservations/:id/override-release', 'POST /v1/admin/sheerid/revoke', 'POST /v1/admin/customers/:id/verification/clear'),
+  ...D('entitlement', 'POST /v1/admin/licenses', 'POST /v1/admin/payment-reconciliation/reservations/:id/override-release',
+    'POST /v1/admin/payment-reconciliation/effects/:id/approve-issuance', // a human approves an issuance an agent edit (or an unresolved actor) was held from
+    'POST /v1/admin/sheerid/revoke', 'POST /v1/admin/customers/:id/verification/clear'),
   // publishing a software release to customers
   ...D('release', 'POST /v1/admin/apps/releases'),
   // identities: staff and agents are managed by humans only
