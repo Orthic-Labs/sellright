@@ -103,9 +103,9 @@ export default function CustomerDetailPage() {
           </FormSection>
         </div>
 
-        <div className="space-y-5">
+        <div className="stack-y-5">
           <FormSection title="Contact">
-            <div className="text-sm space-y-1">
+            <div className="text-sm stack-y-1">
               <div><span className="text-gray-500">Email:</span> <span className="font-medium break-all">{c.email}</span></div>
               {c.phone && <div><span className="text-gray-500">Phone:</span> <span className="font-medium">{c.phone}</span></div>}
               <div className="flex items-center gap-1.5"><span className="text-gray-500">Verified:</span> {c.emailVerified ? <span className="text-success inline-flex items-center gap-1"><BadgeCheck size={13} /> Yes</span> : <span className="text-gray-500">No</span>}</div>

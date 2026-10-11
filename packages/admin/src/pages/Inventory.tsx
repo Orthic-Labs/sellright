@@ -197,7 +197,7 @@ function StockAdjustModal({ row, onClose, onAdjusted }: { row: InventoryRow; onC
 
   return (
     <Modal open title={`Adjust stock — ${row.sku}`} onClose={onClose} width="max-w-lg">
-      <div className="space-y-4">
+      <div className="stack-y-4">
         <div className="text-sm text-gray-500">
           {row.name} · On hand <span className="font-medium text-ink tnum">{row.onHand}</span> · Committed <span className="font-medium text-ink tnum">{row.allocated}</span> · Available <span className="font-medium text-ink tnum">{row.available}</span>
         </div>
@@ -235,7 +235,7 @@ function StockAdjustModal({ row, onClose, onAdjusted }: { row: InventoryRow; onC
           {history.isLoading ? <Spinner /> : !history.data?.items.length ? (
             <p className="text-sm text-gray-400">No adjustments recorded yet.</p>
           ) : (
-            <ul className="space-y-1.5 max-h-56 overflow-y-auto">
+            <ul className="stack-y-1.5 max-h-56 overflow-y-auto">
               {history.data.items.map((m) => (
                 <li key={m.id} className="text-xs text-gray-500 flex items-center justify-between gap-2">
                   <span>

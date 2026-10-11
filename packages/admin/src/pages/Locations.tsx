@@ -78,7 +78,7 @@ export default function LocationsPage() {
               type="checkbox"
               checked={isDefault}
               onChange={(e) => setIsDefault(e.target.checked)}
-              className="h-4 w-4 rounded border-gray-300"
+              className="h-4 w-4 rounded-sm border-gray-300"
             />
             <label htmlFor="loc-default" className="text-sm text-gray-700 select-none">Default</label>
           </div>

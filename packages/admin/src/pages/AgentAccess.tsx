@@ -32,7 +32,7 @@ export default function AgentAccess() {
       {issued && (
         <div className="m-4 p-3 rounded-lg border border-amber-200 bg-amber-50 text-sm" role="status">
           <p className="font-medium mb-1">Token for “{issued.name}” — shown once. Copy it now.</p>
-          <code className="block break-all text-xs bg-white border border-amber-200 rounded p-2 select-all" data-testid="agent-token">{issued.token}</code>
+          <code className="block break-all text-xs bg-white border border-amber-200 rounded-sm p-2 select-all" data-testid="agent-token">{issued.token}</code>
           <button className="btn-ghost btn-sm mt-2" onClick={() => setIssued(null)}>Done</button>
         </div>
       )}

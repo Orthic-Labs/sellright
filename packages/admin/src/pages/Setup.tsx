@@ -32,7 +32,7 @@ export default function Setup() {
       <ShellCard>
         <h1 className="text-base font-semibold">No setup token</h1>
         <p className="text-sm text-gray-500 mt-2">
-          This page needs a claim link. On the server, run <code className="font-mono text-xs bg-gray-100 px-1 py-0.5 rounded">sellright setup-link</code> and open the URL it prints.
+          This page needs a claim link. On the server, run <code className="font-mono text-xs bg-gray-100 px-1 py-0.5 rounded-sm">sellright setup-link</code> and open the URL it prints.
         </p>
       </ShellCard>
     );
@@ -73,7 +73,7 @@ export default function Setup() {
       <h1 className="text-base font-semibold">Claim your installation</h1>
       <p className="text-sm text-gray-500 mb-4">Create the owner account for this SellRight install. This link works once.</p>
       {err && <div className="rounded-lg bg-danger-soft text-danger text-sm px-3 py-2 border border-danger/30 mb-4">{err}</div>}
-      <form onSubmit={submit} className="space-y-4">
+      <form onSubmit={submit} className="stack-y-4">
         <div>
           <label className="label">Your name</label>
           <input className="input" autoFocus value={name} onChange={(e) => setName(e.target.value)} required />
@@ -104,7 +104,7 @@ function ShellCard({ children }: { children: React.ReactNode }) {
     <div className="h-full grid place-items-center bg-[#f1f1f1] p-4">
       <div className="w-full max-w-sm">
         <div className="flex items-center justify-center gap-2 mb-6">
-          <div className="h-7 w-7 rounded bg-brand" />
+          <div className="h-7 w-7 rounded-sm bg-brand" />
           <span className="text-lg font-semibold tracking-tight">SellRight</span>
         </div>
         <div className="card p-6">{children}</div>

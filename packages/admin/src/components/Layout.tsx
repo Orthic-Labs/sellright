@@ -230,7 +230,7 @@ function NavItems({ onNavigate }: { onNavigate?: () => void }) {
   const toggle = (id: string) => setOpenIds((m) => { const v = !m[id]; localStorage.setItem(`sr_nav_${id}`, v ? '1' : '0'); return { ...m, [id]: v }; });
 
   return (
-    <nav className="flex-1 overflow-y-auto p-3 space-y-1" aria-label="Primary">
+    <nav className="flex-1 overflow-y-auto p-3 stack-y-1" aria-label="Primary">
       {GROUPS.map((g) => {
         const hasActive = groupContainsPath(g, loc.pathname);
         const open = openIds[g.id] || hasActive;
@@ -242,7 +242,7 @@ function NavItems({ onNavigate }: { onNavigate?: () => void }) {
               <ChevronDown size={13} className={`transition-transform ${open ? '' : '-rotate-90'}`} aria-hidden="true" />
             </button>
             {open && (
-              <div className="mt-0.5 space-y-0.5">
+              <div className="mt-0.5 stack-y-0.5">
                 {g.items.map(({ to, label, icon: Icon, end }) => (
                   <NavLink key={to} to={to} end={end} onClick={onNavigate}
                     className={({ isActive }) =>
@@ -312,7 +312,7 @@ export default function Layout() {
 
       {/* Main column */}
       <div className="flex flex-1 flex-col min-w-0">
-        <header className="flex items-center gap-3 h-14 px-4 md:px-5 border-b border-gray-200 bg-surface/80 backdrop-blur">
+        <header className="flex items-center gap-3 h-14 px-4 md:px-5 border-b border-gray-200 bg-surface/80 backdrop-blur-sm">
           {/* Mobile: menu + store name */}
           <button className="md:hidden grid h-9 w-9 place-items-center rounded-lg text-gray-600 hover:bg-gray-100" aria-label="Open navigation" onClick={() => setDrawer(true)}>
             <Menu size={20} />

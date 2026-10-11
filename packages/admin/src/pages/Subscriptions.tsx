@@ -48,7 +48,7 @@ export default function Subscriptions() {
     { key: 'period', header: 'Renews', width: '16%', render: (r) => (
       <span className="text-gray-500">
         {r.currentPeriodEnd ? date(r.currentPeriodEnd) : '—'}
-        {r.cancelAtPeriodEnd && <span className="ml-1.5 align-middle text-[10px] uppercase font-semibold text-warning bg-warning-soft rounded px-1 py-0.5">cancels</span>}
+        {r.cancelAtPeriodEnd && <span className="ml-1.5 align-middle text-[10px] uppercase font-semibold text-warning bg-warning-soft rounded-sm px-1 py-0.5">cancels</span>}
       </span>
     ) },
     { key: 'created', header: 'Started', align: 'right', width: '16%', render: (r) => <span className="text-gray-500">{date(r.createdAt)}</span> },

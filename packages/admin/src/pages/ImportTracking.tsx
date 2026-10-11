@@ -79,7 +79,7 @@ export default function ImportTracking() {
       {err && <div className="mb-4"><InlineAlert tone="critical">{err}</InlineAlert></div>}
 
       <div className="grid xl:grid-cols-[minmax(0,26rem)_1fr] gap-5 items-start">
-        <div className="space-y-3">
+        <div className="stack-y-3">
           <div className="flex flex-wrap items-center gap-2">
             <input ref={fileRef} type="file" accept=".csv,.txt,text/csv,text/plain" className="sr-only" aria-label="Choose a CSV file" onChange={(e) => { void onFile(e.target.files?.[0]); e.target.value = ''; }} />
             <button className="btn-ghost" onClick={() => fileRef.current?.click()}><FileUp size={15} /> Upload CSV</button>
@@ -94,7 +94,7 @@ export default function ImportTracking() {
           <p className="text-xs text-gray-400">Carrier is detected from the tracking number (UPS, USPS, FedEx) unless you give one. Preview changes nothing.</p>
         </div>
 
-        <div className="space-y-3 min-w-0">
+        <div className="stack-y-3 min-w-0">
           {preview && (
             <>
               <div className="flex flex-wrap items-center gap-2" aria-live="polite">
@@ -114,13 +114,13 @@ export default function ImportTracking() {
           )}
 
           {result && (
-            <div className="card p-4 space-y-2" aria-live="polite">
+            <div className="card p-4 stack-y-2" aria-live="polite">
               <div className="text-sm font-medium text-success">{result.updated} order{result.updated === 1 ? '' : 's'} marked shipped. {result.emailsQueued} customer email{result.emailsQueued === 1 ? '' : 's'} queued.</div>
               {result.skipped > 0 && (
                 <div className="text-sm text-gray-600">
                   {result.skipped} row{result.skipped === 1 ? '' : 's'} not imported.
                   <button className="btn-ghost btn-sm ml-2" onClick={() => downloadSkipped(result.rows)}><Download size={13} /> Download skipped</button>
-                  <ul className="text-xs text-gray-500 mt-1 space-y-0.5">{result.errors.slice(0, 20).map((e, i) => <li key={i}><span className="font-mono">{e.code}</span> — {e.error}</li>)}</ul>
+                  <ul className="text-xs text-gray-500 mt-1 stack-y-0.5">{result.errors.slice(0, 20).map((e, i) => <li key={i}><span className="font-mono">{e.code}</span> — {e.error}</li>)}</ul>
                 </div>
               )}
               <button className="btn-ghost btn-sm" onClick={() => { setResult(null); setText(''); setFileName(null); }}>Start another import</button>

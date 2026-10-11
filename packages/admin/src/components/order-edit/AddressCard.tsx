@@ -72,7 +72,7 @@ export function AddressCard({ code, kind, address, canEdit, hasCustomer, onSaved
           {canEdit && <button className="btn-ghost btn-sm shrink-0" onClick={start} aria-label={`Edit ${title.toLowerCase()}`}><Pencil size={13} /> Edit</button>}
         </div>
       ) : (
-        <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); if (addressValid(form)) save.mutate(); }}>
+        <form className="stack-y-3" onSubmit={(e) => { e.preventDefault(); if (addressValid(form)) save.mutate(); }}>
           <div className="grid grid-cols-2 gap-3">
             {FIELDS.map(([key, label, span]) => (
               <div key={key} className={span}>

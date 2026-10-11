@@ -45,7 +45,7 @@ function SeoSettingsCard({ onSaved }: { onSaved: () => void }) {
     <FormSection title="Site settings" description="The public address crawlers see, and the key that lets you notify search engines (IndexNow) when pages change."
       actions={<button className="btn-primary" form="seo-settings" disabled={!dirty || save.isPending || isLoading}>{save.isPending ? <Spinner className="text-white" /> : null} Save settings</button>}>
       {error ? <InlineAlert tone="critical" title="Could not load SEO settings">{(error as Error).message}</InlineAlert> : (
-        <form id="seo-settings" className="space-y-4" data-testid="seo-settings-form"
+        <form id="seo-settings" className="stack-y-4" data-testid="seo-settings-form"
           onSubmit={(e) => { e.preventDefault(); setTouched(true); if (!validateSiteUrl(siteUrl) && !validateIndexNowKey(indexNowKey)) save.mutate(); }}>
           <Field label="Site URL" htmlFor="seo-site-url" error={urlError} hint="Your storefront's public address, e.g. https://example.com. Leave blank to clear.">
             <input id="seo-site-url" data-testid="seo-site-url" className={`input ${urlError ? 'input-invalid' : ''}`} value={siteUrl} disabled={isLoading}
@@ -99,7 +99,7 @@ export default function SeoPage() {
         } />
 
       {isLoading ? <Loading /> : error ? <div className="card overflow-hidden"><ErrorState message={(error as Error).message} onRetry={() => refetch()} /></div> : data && (
-        <div className="space-y-5">
+        <div className="stack-y-5">
           <SeoSettingsCard onSaved={() => qc.invalidateQueries({ queryKey: key })} />
           {!data.configured && <InlineAlert tone="attention" title="Site URL not set">Sitemaps need the store's public address. Enter it under Site settings below and this page will list every sitemap.</InlineAlert>}
           {result && <InlineAlert tone={result.indexNow.attempted && !result.indexNow.ok ? 'attention' : 'positive'} title="Refresh finished">{describeRefresh(result).map((l) => <div key={l}>{l}</div>)}</InlineAlert>}

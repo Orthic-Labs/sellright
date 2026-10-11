@@ -94,7 +94,7 @@ export default function SettingsPage() {
           </div>
         </nav>
 
-        <div className="space-y-5 min-w-0">
+        <div className="stack-y-5 min-w-0">
           {section === 'store' && (
             <FormSection title="Store profile" description="Your store's public name and base currency."
               actions={store2 && <>
@@ -102,14 +102,14 @@ export default function SettingsPage() {
                 <button className="btn-primary" disabled={saveStore.isPending || !store2.name.trim()} onClick={() => saveStore.mutate()}>{saveStore.isPending ? <Spinner className="text-white" /> : 'Save'}</button>
               </>}>
               {store2 ? (
-                <div className="space-y-4">
+                <div className="stack-y-4">
                   <Field label="Store name" htmlFor="s-name"><input id="s-name" className="input max-w-md" value={store2.name} onChange={(e) => setStore2({ ...store2, name: e.target.value })} /></Field>
                   <Field label="Storefront URL" htmlFor="s-url" hint="The public address of your storefront (https://…). Used for payment return links and links in emails. Leave empty to clear.">
                     <input id="s-url" className="input max-w-md" type="url" inputMode="url" placeholder="https://shop.example.com" value={store2.storefrontUrl} onChange={(e) => setStore2({ ...store2, storefrontUrl: e.target.value })} />
                   </Field>
                 </div>
               ) : (
-                <dl className="space-y-2.5 text-sm">
+                <dl className="stack-y-2.5 text-sm">
                   <div className="flex justify-between max-w-md"><dt className="text-gray-500">Name</dt><dd className="font-medium">{cfg.name}</dd></div>
                   <div className="flex justify-between max-w-md"><dt className="text-gray-500">Currency</dt><dd className="font-medium">{cfg.currency}</dd></div>
                   <div className="flex justify-between max-w-md gap-4"><dt className="text-gray-500">Storefront URL</dt><dd className="font-medium break-all text-right">{cfg.storefrontUrl ?? <span className="text-gray-400 font-normal">Not set</span>}</dd></div>
@@ -121,7 +121,7 @@ export default function SettingsPage() {
 
           {section === 'payments' && (
             <FormSection title="Payment providers" description="Enable the methods customers can pay with at checkout.">
-              <div className="divide-y divide-gray-100">
+              <div className="rule-y rule-gray-100">
                 {ADMIN_PAYMENT_PROVIDERS.map((p) => {
                   const on = paymentEnabled(cfg.payments?.[p]);
                   return (
@@ -168,7 +168,7 @@ export default function SettingsPage() {
                 <Field label="Tax rate %" htmlFor="s-tax" hint="Percentage applied to taxable order subtotals."><input id="s-tax" className="input max-w-[10rem] tnum" inputMode="decimal" value={tax} onChange={(e) => setTax(e.target.value)} /></Field>
               ) : (
                 <>
-                  <dl className="space-y-2.5 text-sm"><div className="flex justify-between max-w-md"><dt className="text-gray-500">Base tax rate</dt><dd className="font-medium tnum">{(cfg.taxRate / 100).toFixed(2)}%</dd></div></dl>
+                  <dl className="stack-y-2.5 text-sm"><div className="flex justify-between max-w-md"><dt className="text-gray-500">Base tax rate</dt><dd className="font-medium tnum">{(cfg.taxRate / 100).toFixed(2)}%</dd></div></dl>
                   {canManage && <button className="btn-ghost btn-sm" onClick={() => setTax((cfg.taxRate / 100).toFixed(2))}>Edit rate</button>}
                 </>
               )}
@@ -205,7 +205,7 @@ export default function SettingsPage() {
               ) : setup ? (
                 <>
                   <p className="text-sm text-gray-600">Add this secret to your authenticator app, then enter the 6-digit code.</p>
-                  <div className="font-mono text-xs bg-gray-50 border border-gray-200 rounded p-2 break-all max-w-lg">{setup.secret}</div>
+                  <div className="font-mono text-xs bg-gray-50 border border-gray-200 rounded-sm p-2 break-all max-w-lg">{setup.secret}</div>
                   <a className="text-xs text-brand hover:underline break-all" href={setup.otpauthUri}>otpauth link</a>
                   <Field label="Verification code"><input className="input tracking-widest text-center max-w-[10rem] tnum" inputMode="numeric" maxLength={6} placeholder="000000" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} /></Field>
                   {enable2fa.error && <InlineAlert tone="critical">{(enable2fa.error as Error).message}</InlineAlert>}
@@ -222,7 +222,7 @@ export default function SettingsPage() {
               actions={canManage && !inv && <button className="btn-ghost btn-sm" onClick={() => setInv({ email: '', role: 'staff', password: '' })}><Plus size={14} /> Add staff</button>}>
               {!canManage ? <InlineAlert tone="neutral">Only owners and managers can manage staff.</InlineAlert> : (
                 <>
-                  <div className="divide-y divide-gray-100">
+                  <div className="rule-y rule-gray-100">
                     {staff.data?.items.map((u) => (
                       <div key={u.adminUserId} className="flex items-center justify-between py-2.5 text-sm">
                         <span className="font-medium">{u.email}{u.isYou && <span className="text-xs text-gray-400 font-normal"> (you)</span>}</span>
@@ -236,7 +236,7 @@ export default function SettingsPage() {
                     ))}
                   </div>
                   {inv && (
-                    <div className="space-y-2 pt-1 max-w-lg">
+                    <div className="stack-y-2 pt-1 max-w-lg">
                       <div className="flex gap-2"><input className="input" placeholder="email" value={inv.email} onChange={(e) => setInv({ ...inv, email: e.target.value })} /><select className="input w-32" value={inv.role} onChange={(e) => setInv({ ...inv, role: e.target.value })}>{['staff', 'manager', 'owner', 'read_only'].map((r) => <option key={r}>{r}</option>)}</select></div>
                       <input className="input" type="password" placeholder="initial password (min 8)" value={inv.password} onChange={(e) => setInv({ ...inv, password: e.target.value })} />
                       <p className="text-xs text-gray-400">The invitee signs in with this email and password; they can change it later.</p>
@@ -251,7 +251,7 @@ export default function SettingsPage() {
 
           {section === 'account' && (
             <FormSection title="Account" description="Your personal sign-in to SellRight.">
-              <dl className="space-y-2.5 text-sm">
+              <dl className="stack-y-2.5 text-sm">
                 <div className="flex justify-between max-w-md"><dt className="text-gray-500">Email</dt><dd className="font-medium">{me?.email}</dd></div>
                 <div className="flex justify-between max-w-md"><dt className="text-gray-500">Your role</dt><dd className="font-medium capitalize">{store?.role}</dd></div>
               </dl>

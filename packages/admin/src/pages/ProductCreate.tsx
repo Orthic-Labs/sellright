@@ -37,7 +37,7 @@ export default function ProductCreate() {
       {err && <div className="mb-4"><InlineAlert tone="critical">{err}</InlineAlert></div>}
 
       <form onSubmit={submit} className="grid lg:grid-cols-[1fr_280px] gap-5 items-start">
-        <div className="space-y-5">
+        <div className="stack-y-5">
           <FormSection title="Product information">
             <Field label="Title" htmlFor="p-name"><input id="p-name" className="input" autoFocus value={name} onChange={(e) => setName(e.target.value)} required placeholder="e.g. Anzu Fixed Blade" /></Field>
             <Field label="URL slug" htmlFor="p-slug" hint="Auto-generated from the title; edit to override.">
@@ -49,7 +49,7 @@ export default function ProductCreate() {
           {/* What comes after create — set expectations honestly rather than fake fields. */}
           <div className="panel p-5">
             <div className="text-sm font-semibold mb-3">Next, on the product page</div>
-            <ul className="space-y-2 text-sm text-gray-500">
+            <ul className="stack-y-2 text-sm text-gray-500">
               <li className="flex items-center gap-2"><Image size={15} className="text-gray-300" /> Add media and a featured image</li>
               <li className="flex items-center gap-2"><Tag size={15} className="text-gray-300" /> Set pricing and create variants</li>
               <li className="flex items-center gap-2"><Layers size={15} className="text-gray-300" /> Assign to collections and manage stock</li>

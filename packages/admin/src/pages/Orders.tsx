@@ -160,8 +160,8 @@ export default function Orders() {
       const od = o.status && o.status !== 'open' && o.status !== 'completed' ? orderDef(o.status) : null;
       return (
         <span className="font-medium">{o.code}
-          {o.isPreOrder && <span className="ml-1.5 align-middle text-[10px] uppercase font-semibold text-warning bg-warning-soft rounded px-1 py-0.5">pre-order</span>}
-          {od && <span className="ml-1.5 align-middle text-[10px] uppercase font-semibold text-muted bg-surface-2 rounded px-1 py-0.5">{od.label}</span>}
+          {o.isPreOrder && <span className="ml-1.5 align-middle text-[10px] uppercase font-semibold text-warning bg-warning-soft rounded-sm px-1 py-0.5">pre-order</span>}
+          {od && <span className="ml-1.5 align-middle text-[10px] uppercase font-semibold text-muted bg-surface-2 rounded-sm px-1 py-0.5">{od.label}</span>}
         </span>
       );
     } },
@@ -225,7 +225,7 @@ export default function Orders() {
         {BUILTIN_VIEWS.map((v) => {
           const active = sameFilters(filters, v.filters);
           return (
-            <button key={v.id} title={v.title} aria-pressed={active} className={`btn-ghost btn-sm ${active ? '!bg-brand-light !text-brand !border-brand/30' : ''}`} onClick={() => setFilters({ ...EMPTY_FILTERS, ...v.filters, q: filters.q })}>
+            <button key={v.id} title={v.title} aria-pressed={active} className={`btn-ghost btn-sm ${active ? 'bg-brand-light! text-brand! border-brand/30!' : ''}`} onClick={() => setFilters({ ...EMPTY_FILTERS, ...v.filters, q: filters.q })}>
               {v.label}
             </button>
           );
@@ -249,10 +249,10 @@ export default function Orders() {
             <FilterSelect label="Fulfillment" value={filters.fulfillmentStatus} onChange={(v) => patchFilters({ fulfillmentStatus: v })} options={FULFILLMENT_OPTIONS} />
             <FilterSelect label="Order" value={filters.status} onChange={(v) => patchFilters({ status: v })} options={ORDER_OPTIONS} />
             <label className="inline-flex items-center gap-1.5 text-xs text-gray-500">From
-              <input type="date" aria-label="Date from" className="input !py-1.5 !text-xs w-[8.5rem]" value={filters.from} max={filters.to || undefined} onChange={(e) => patchFilters({ from: e.target.value })} />
+              <input type="date" aria-label="Date from" className="input py-1.5! text-xs! w-[8.5rem]" value={filters.from} max={filters.to || undefined} onChange={(e) => patchFilters({ from: e.target.value })} />
             </label>
             <label className="inline-flex items-center gap-1.5 text-xs text-gray-500">To
-              <input type="date" aria-label="Date to" className="input !py-1.5 !text-xs w-[8.5rem]" value={filters.to} min={filters.from || undefined} onChange={(e) => patchFilters({ to: e.target.value })} />
+              <input type="date" aria-label="Date to" className="input py-1.5! text-xs! w-[8.5rem]" value={filters.to} min={filters.from || undefined} onChange={(e) => patchFilters({ to: e.target.value })} />
             </label>
             {isFiltered && <button className="btn-ghost btn-sm" onClick={() => setFilters(EMPTY_FILTERS)}>Clear</button>}
           </div>
@@ -312,7 +312,7 @@ export default function Orders() {
             tone="critical"
             title={`${bulkResult.succeeded} succeeded, ${bulkResult.skipped} skipped, ${bulkResult.results.filter((r) => !r.ok).length} failed`}
           >
-            <ul className="mt-1 text-xs space-y-0.5">
+            <ul className="mt-1 text-xs stack-y-0.5">
               {bulkResult.results.filter((r) => !r.ok).map((r) => <li key={r.code}><span className="font-mono">{r.code}</span> — {r.error}</li>)}
             </ul>
           </InlineAlert>
@@ -326,7 +326,7 @@ export default function Orders() {
 
 function FilterSelect({ label, value, onChange, options }: { label: string; value: string; onChange: (v: string) => void; options: { value: string; label: string }[] }) {
   return (
-    <select aria-label={`${label} filter`} className={`input !py-1.5 !text-xs w-auto ${value ? '!border-brand/40 !bg-brand-light/40' : ''}`} value={value} onChange={(e) => onChange(e.target.value)}>
+    <select aria-label={`${label} filter`} className={`input py-1.5! text-xs! w-auto ${value ? 'border-brand/40! bg-brand-light/40!' : ''}`} value={value} onChange={(e) => onChange(e.target.value)}>
       <option value="">{label}: any</option>
       {options.map((o) => <option key={o.value} value={o.value}>{label}: {o.label}</option>)}
     </select>
