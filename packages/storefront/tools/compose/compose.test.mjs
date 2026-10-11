@@ -127,6 +127,26 @@ test('--require-out-pair rejects an output that is not <layer parent>/<buildDir>
 	assert.equal(existsSync(path.join(w.root, 'elsewhere')), false);
 });
 
+test('review 13: --require-out-pair accepts the stage the deploy entry composes into (<buildDir>.next with --live <buildDir>) and nothing looser', async (t) => {
+	const w = makeWorld();
+	t.after(w.cleanup);
+	mkdirSync(w.out);
+	const stage = `${w.out}.next`;
+	const pair = { ...w.opts(), requireOutPair: true };
+	// the real composer, applied into the stage the way the entry does it
+	const r = await apply({ ...pair, outDir: stage, liveDir: w.out });
+	assert.ok(r.historyId, 'the staged composition ran');
+	assert.ok(existsSync(path.join(stage, '.compose-managed.json')));
+	assert.deepEqual(readdirSync(w.out), [], 'the live tree was not written');
+	// a stage without --live, with another live tree, or an unrelated sibling is still refused
+	await failsWith(dryRun({ ...pair, outDir: stage }), 'out-mismatch');
+	mkdirSync(path.join(w.root, 'other'));
+	await failsWith(dryRun({ ...pair, outDir: stage, liveDir: path.join(w.root, 'other') }), 'out-mismatch');
+	await failsWith(dryRun({ ...pair, outDir: `${w.out}.other`, liveDir: w.out }), 'out-mismatch');
+	// the canonical path itself still passes
+	await dryRun({ ...pair, outDir: w.out });
+});
+
 test('source and output must not overlap', async (t) => {
 	const w = makeWorld();
 	t.after(w.cleanup);

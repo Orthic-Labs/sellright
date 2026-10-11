@@ -234,3 +234,20 @@ test('CLI: report with diffs and exit 1 while drifted, accept through main(), ex
 	assert.ok(text.includes(`accepted ${BTN}`));
 	assert.equal(run([]).status, 0);
 });
+
+test('review 3.5: accept, readopt and migrate rewrite the brand layer, so they are refused while a deployment operation holds the lock', async (t) => {
+	const w = world(t);
+	const stateDir = path.join(w.repo, '.deploy-state');
+	mkdirSync(stateDir, { recursive: true });
+	const { acquireOsLock } = await import('./lib/os-lock.mjs');
+	const before = readFileSync(w.layerPath('overlay.manifest.json'), 'utf8');
+	const hold = await acquireOsLock(stateDir, 'lock');
+	const common = ['--base-dir', w.base, '--pin', PIN];
+	for (const args of [['--accept', BTN, '--resolution', 'x'], ['--readopt', BTN], ['--migrate', BTN, 'src/components/Other.tsx', '--layers', w.basePath('layers.json')]]) {
+		let err;
+		await driftMain([w.layer, ...args, ...common], { out: () => {} }).catch((e) => (err = e));
+		assert.equal(err?.code, 'locked', args[0]);
+	}
+	assert.equal(readFileSync(w.layerPath('overlay.manifest.json'), 'utf8'), before, 'the layer was not touched');
+	await hold();
+});
