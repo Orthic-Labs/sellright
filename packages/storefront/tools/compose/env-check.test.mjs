@@ -210,6 +210,11 @@ test('renderEnvProduction is sorted, quoted and refuses unrepresentable values',
 	assert.equal(renderEnvProduction({ VITE_A: 'say "hi"' }).split('\n')[1], "VITE_A='say \"hi\"'");
 });
 
+test('renderEnvProduction escapes backslashes as well as dollar signs, so a value cannot smuggle an escape', () => {
+	assert.equal(renderEnvProduction({ VITE_A: 'a\\b' }).split('\n')[1], 'VITE_A="a\\\\b"');
+	assert.equal(renderEnvProduction({ VITE_A: '\\$X' }).split('\n')[1], 'VITE_A="\\\\\\$X"');
+});
+
 // ------------------------------------------------ against Vite's own loadEnv (missing coverage when vite cannot be resolved)
 
 let realLoadEnv = null;

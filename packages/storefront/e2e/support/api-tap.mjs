@@ -9,13 +9,34 @@
 // The log is observation only: the tap never caches, retries, rewrites a response or reorders requests.
 // GET /__tap/health and GET /__tap/inflight are answered locally and are not logged.
 import http from 'node:http';
-import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, openSync, writeSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { API_LOG_FILE, API_URL, TAP_PORT } from './env.mjs';
 
 const target = new URL(process.env.E2E_TAP_TARGET ?? API_URL);
 mkdirSync(dirname(API_LOG_FILE), { recursive: true });
-writeFileSync(API_LOG_FILE, ''); // each run starts with an empty log
+const logFd = openSync(API_LOG_FILE, 'w'); // each run starts with an empty log; the path is fixed at startup, never derived from a request
+
+// Bounds on what a request can put in the log: a known method token, a capped path with control characters
+// dropped, and a byte budget for the whole file after which records are dropped.
+const MAX_PATH_CHARS = 2048;
+const MAX_LOG_BYTES = 64 * 1024 * 1024;
+let logBytes = 0;
+const logRecord = ({ startedAt, endedAt, method, path, status, origin }) => {
+  const record = {
+    startedAt,
+    endedAt,
+    method: /^[A-Z]{1,16}$/.test(method) ? method : 'OTHER',
+    path: String(path).replace(/[\u0000-\u001f\u007f]/g, '').slice(0, MAX_PATH_CHARS),
+    status: Number.isInteger(status) ? status : 0,
+    origin: origin === 'browser' ? 'browser' : 'server',
+  };
+  const line = `${JSON.stringify(record)}\n`;
+  const size = Buffer.byteLength(line);
+  if (logBytes + size > MAX_LOG_BYTES) return;
+  logBytes += size;
+  writeSync(logFd, line);
+};
 
 let inflight = 0;
 const HOP = new Set(['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade']);
@@ -32,7 +53,7 @@ const server = http.createServer((req, res) => {
     if (logged) return;
     logged = true;
     inflight--;
-    appendFileSync(API_LOG_FILE, JSON.stringify({ startedAt, endedAt: Date.now(), method: req.method, path: req.url, status, origin }) + '\n');
+    logRecord({ startedAt, endedAt: Date.now(), method: req.method, path: req.url, status, origin });
   };
 
   const headers = {};

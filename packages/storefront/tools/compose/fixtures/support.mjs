@@ -1,5 +1,5 @@
 // Shared helpers for the compose, drift and env tests. Not a test file.
-import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, constants as fsConstants, cpSync, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,7 +22,7 @@ export function miniLoadEnv(mode, dir, prefix) {
 			if (!m || !m[1].startsWith(prefix)) continue;
 			let v = m[2].trim();
 			const q = /^(["'`])([\s\S]*)\1$/.exec(v);
-			if (q) v = q[2].replace(/\\\$/g, '$');
+			if (q) v = q[2].replace(/\\([\\$])/g, '$1');
 			out[m[1]] = v;
 		}
 	}
@@ -53,10 +53,24 @@ export function snapshot(dir) {
 		for (const n of readdirSync(d).sort()) {
 			const abs = path.join(d, n);
 			const r = rel ? `${rel}/${n}` : n;
-			const st = lstatSync(abs);
-			if (st.isSymbolicLink()) m.set(r, 'link');
-			else if (st.isDirectory()) visit(abs, r);
-			else m.set(r, sha256(readFileSync(abs)));
+			// One open per entry: O_NOFOLLOW reports a symlink (ELOOP) and the type comes from the descriptor, so no
+			// lstat-then-read window. O_NONBLOCK keeps a FIFO from hanging the open.
+			let fd;
+			try {
+				fd = openSync(abs, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+			} catch (e) {
+				if (e.code !== 'ELOOP') throw e;
+				m.set(r, 'link');
+				continue;
+			}
+			let content = null;
+			try {
+				if (!fstatSync(fd).isDirectory()) content = readFileSync(fd);
+			} finally {
+				closeSync(fd);
+			}
+			if (content === null) visit(abs, r);
+			else m.set(r, sha256(content));
 		}
 	};
 	visit(dir, '');

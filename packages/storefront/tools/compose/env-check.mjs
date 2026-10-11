@@ -104,7 +104,7 @@ export function validateBrandConfig({ schema, brand, problems = new Problems() }
 
 function quoteValue(name, v) {
 	if (/[\r\n\0]/.test(v)) throw new ComposeError('env-bad-value', `publicConfig.${name} contains a line break or NUL`);
-	const e = v.replace(/\$/g, '\\$');
+	const e = v.replace(/[\\$]/g, '\\$&');
 	if (!e.includes('"')) return `"${e}"`;
 	if (!e.includes("'")) return `'${e}'`;
 	if (!e.includes('`')) return `\`${e}\``;

@@ -52,16 +52,22 @@ function nmi(req, res, path, raw) {
 // plan's A6 item 1 probe (which transport stripe-node uses) from real traffic.
 const form = (raw) => {
   // application/x-www-form-urlencoded with bracket keys: metadata[orderCode]=X -> { metadata: { orderCode: 'X' } }
-  const out = {};
+  // Request-supplied keys only ever index Maps while parsing (so '__proto__', 'constructor' and the like are plain
+  // keys, never writes to an object); Object.fromEntries then defines them as own properties of fresh objects.
+  const root = new Map();
   for (const [k, v] of new URLSearchParams(raw)) {
     const m = /^([^[]+)((?:\[[^\]]*\])*)$/.exec(k);
-    if (!m) { out[k] = v; continue; }
-    const keys = [m[1], ...[...m[2].matchAll(/\[([^\]]*)\]/g)].map((x) => x[1])];
-    let o = out;
-    keys.slice(0, -1).forEach((key) => { o = o[key] ??= {}; });
-    o[keys.at(-1)] = v;
+    const keys = m ? [m[1], ...[...m[2].matchAll(/\[([^\]]*)\]/g)].map((x) => x[1])] : [k];
+    let node = root;
+    for (const key of keys.slice(0, -1)) {
+      let next = node.get(key);
+      if (!(next instanceof Map)) node.set(key, (next = new Map()));
+      node = next;
+    }
+    node.set(keys.at(-1), v);
   }
-  return out;
+  const plain = (map) => Object.fromEntries([...map].map(([k, v]) => [k, v instanceof Map ? plain(v) : v]));
+  return plain(root);
 };
 const intentView = (pi) => ({
   id: pi.id, object: 'payment_intent', amount: pi.amount, currency: pi.currency, status: pi.status, metadata: pi.metadata,

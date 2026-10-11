@@ -219,7 +219,7 @@ export function createResolver(root) {
       if (key.endsWith('*')) {
         const prefix = key.slice(0, -1);
         if (!spec.startsWith(prefix)) continue;
-        for (const t of targets) out.push(path.resolve(rootReal, t.replace('*', spec.slice(prefix.length))));
+        for (const t of targets) out.push(path.resolve(rootReal, t.split('*').join(spec.slice(prefix.length))));
       } else if (spec === key) {
         for (const t of targets) out.push(path.resolve(rootReal, t));
       }
@@ -351,10 +351,24 @@ export function checkOverlayImports({ root, layers, files, deployFiles = [] }) {
     findings.push(...placement);
     if (!isCodeFile(layers, rel)) continue;
     const abs = path.join(resolver.rootReal, rel);
-    if (!fs.existsSync(abs)) { findings.push({ file: rel, line: 1, col: 1, rule: 'file-missing', message: `${rel} is listed but does not exist` }); continue; }
-    if (fs.lstatSync(abs).isSymbolicLink()) { findings.push({ file: rel, line: 1, col: 1, rule: 'file-symlink', message: `${rel} is a symlink` }); continue; }
+    // One open decides everything: O_NOFOLLOW refuses a symlink atomically, so nothing can be swapped in between a check and the read.
+    let fd;
+    try {
+      fd = fs.openSync(abs, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    } catch (e) {
+      if (e.code === 'ENOENT') findings.push({ file: rel, line: 1, col: 1, rule: 'file-missing', message: `${rel} is listed but does not exist` });
+      else if (e.code === 'ELOOP') findings.push({ file: rel, line: 1, col: 1, rule: 'file-symlink', message: `${rel} is a symlink` });
+      else throw e;
+      continue;
+    }
+    let text;
+    try {
+      text = fs.readFileSync(fd, 'utf8');
+    } finally {
+      fs.closeSync(fd);
+    }
     checked++;
-    findings.push(...importFindings({ layers, resolver }, rel, fs.readFileSync(abs, 'utf8')));
+    findings.push(...importFindings({ layers, resolver }, rel, text));
   }
   return { findings, checked };
 }

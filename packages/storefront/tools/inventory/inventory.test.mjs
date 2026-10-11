@@ -318,13 +318,14 @@ test('cli: skeleton, check, dispositions; inputs untouched; --out inside an inpu
 		const csv = path.join(w.root, 'out', 'reconcile.csv');
 		const sink = { out: () => {}, err: () => {} };
 		assert.equal(await main(['--base', w.base, '--brand', w.brand, '--out', csv, '--json-out', path.join(w.root, 'out', 'inv.json'), '--no-git'], sink), 0);
-		assert.ok(existsSync(csv));
+		const csvText = readFileSync(csv, 'utf8'); // reading it is the existence check: no check-then-use on the path
+		assert.ok(csvText.length > 0);
 		assert.equal(await main(['--base', w.base, '--brand', w.brand, '--reconcile', csv, '--check', '--no-git'], sink), 1);
 		const lines = [];
 		await main(['--base', w.base, '--brand', w.brand, '--reconcile', csv, '--check', '--no-git'], { out: (s) => lines.push(s), err: () => {} });
 		assert.match(lines.join(''), /unknown-disposition/);
 
-		const recs = parseCsv(readFileSync(csv, 'utf8'));
+		const recs = parseCsv(csvText);
 		for (const r of recs) {
 			if (r.disposition === UNKNOWN) Object.assign(r, { disposition: 'brand-specific', reason: 'brand owns it' });
 			if (r.d7_class === UNKNOWN) r.d7_class = 'wire-name';

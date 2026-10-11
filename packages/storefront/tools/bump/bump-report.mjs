@@ -389,7 +389,7 @@ export function renderMarkdown(report) {
 		'',
 		'| # | Section | Status | Summary |',
 		'|---|---|---|---|',
-		...report.sections.map((s, i) => `| ${i + 1} | ${s.title} | ${BADGE[s.status]} | ${s.summary.replace(/\|/g, '\\|')} |`),
+		...report.sections.map((s, i) => `| ${i + 1} | ${s.title} | ${BADGE[s.status]} | ${s.summary.replace(/\\/g, '\\\\').replace(/\|/g, '\\|')} |`),
 		'',
 	];
 	report.sections.forEach((s, i) => {

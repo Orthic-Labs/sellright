@@ -16,7 +16,7 @@
 // adoption); never touch node_modules, dist*, server*, .cache, tmp, .env, .env.local,
 // the asset-retention archive or anything above the build directory.
 import { spawnSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -105,16 +105,34 @@ function canonicalOut(p, what) {
 	return path.join(realDir(path.dirname(abs), `parent of ${what}`), path.basename(abs));
 }
 
+/**
+ * Reads a path in ONE open so nothing can be swapped in between a check and the read: O_NOFOLLOW refuses a
+ * symlink atomically (ELOOP), O_NONBLOCK keeps a FIFO from hanging the open, and the type is taken from the
+ * opened descriptor. Returns { kind: 'absent' | 'symlink' | 'other' | 'file', buf? }.
+ */
+function readRegularNoFollow(abs) {
+	let fd;
+	try {
+		fd = openSync(abs, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+	} catch (e) {
+		if (e.code === 'ENOENT' || e.code === 'ENOTDIR') return { kind: 'absent' };
+		if (e.code === 'ELOOP') return { kind: 'symlink' };
+		throw e;
+	}
+	try {
+		if (!fstatSync(fd).isFile()) return { kind: 'other' };
+		return { kind: 'file', buf: readFileSync(fd) };
+	} finally {
+		closeSync(fd);
+	}
+}
+
 function readManaged(outDir) {
 	const f = path.join(outDir, MANAGED);
-	let st;
-	try {
-		st = lstatSync(f);
-	} catch {
-		return null;
-	}
-	if (!st.isFile()) throw new ComposeError('bad-managed', `${MANAGED} is not a regular file`);
-	const m = JSON.parse(readFileSync(f, 'utf8'));
+	const got = readRegularNoFollow(f);
+	if (got.kind === 'absent') return null;
+	if (got.kind !== 'file') throw new ComposeError('bad-managed', `${MANAGED} is not a regular file`);
+	const m = JSON.parse(got.buf.toString('utf8'));
 	if (m?.version !== 1 || !Array.isArray(m.files)) throw new ComposeError('bad-managed', `${MANAGED} is malformed`);
 	return m;
 }
@@ -308,19 +326,14 @@ export async function plan(opts) {
 		const dirOk = new Set();
 		for (const [rel, o] of [...outputs].sort(([a], [b]) => (a < b ? -1 : 1))) {
 			const abs = path.join(outDir, rel);
-			let st = null;
-			try {
-				st = lstatSync(abs);
-			} catch {
-				/* absent */
-			}
+			const found = readRegularNoFollow(abs);
 			const want = sha256(o.buf);
 			let action = 'add';
-			if (st) {
-				if (st.isSymbolicLink()) problems.add('symlink', `output target is a symlink: ${rel}`, rel);
-				else if (!st.isFile()) problems.add('not-a-file', `output target is not a regular file: ${rel}`, rel);
+			if (found.kind !== 'absent') {
+				if (found.kind === 'symlink') problems.add('symlink', `output target is a symlink: ${rel}`, rel);
+				else if (found.kind !== 'file') problems.add('not-a-file', `output target is not a regular file: ${rel}`, rel);
 				else {
-					const have = sha256(readFileSync(abs));
+					const have = sha256(found.buf);
 					if (have === want) action = 'unchanged';
 					else if (prev.has(rel)) action = 'change';
 					else {
@@ -406,7 +419,8 @@ function writeAll(ctx) {
 	for (const [rel, o] of [...outputs].sort(([a], [b]) => (a < b ? -1 : 1))) {
 		const abs = path.join(outDir, rel);
 		try {
-			if (sha256(readFileSync(abs)) === sha256(o.buf) && !lstatSync(abs).isSymbolicLink()) continue;
+			const cur = readRegularNoFollow(abs);
+			if (cur.kind === 'file' && sha256(cur.buf) === sha256(o.buf)) continue;
 		} catch {
 			/* absent */
 		}
