@@ -101,8 +101,11 @@ adminOrderEdit.openapi(
     // D10: an agent is never the source of truth that money arrived. record_payment writes a manual (unverified) tender and can
     // turn an unpaid order Paid, exactly like a draft's markPaid; only a human may assert it.
     if (body.settlement?.type === 'record_payment') requireHuman(admin);
+    // An agent never issues or changes entitlements. Whether an edit touches one depends on the affected variants, so commitOrderEdit
+    // decides from the locked plan (403 AGENT_FORBIDDEN for an agent adding/removing/swapping/resizing an entitlement-bearing line);
+    // physical-only edits by an agent are allowed. Settlement rules above (refund_now, record_payment) stay human-only.
     const result = await translate(() => commitOrderEdit({
-      storeId: st.storeId, storeSlug: st.slug, code, actor: admin.email, ops: body.ops,
+      storeId: st.storeId, storeSlug: st.slug, code, actor: admin.email, principalKind: admin.kind, ops: body.ops,
       expectedGrandTotal: body.expectedGrandTotal, expectedBalance: body.expectedBalance, idempotencyKey: body.idempotencyKey,
       settlement: body.settlement, notifyCustomer: body.notifyCustomer, reason: body.reason,
     }));

@@ -7,6 +7,7 @@ import {demoBindHost} from './policy.mjs';
 import {interactiveRequest,interactiveBody,sameOriginMutation,demoAdminCredentials,demoRouteTarget,allowedDemoHost} from './interactive-policy.mjs';
 import {assertInteractiveDatabase,visitorFor,provisionVisitor,removeVisitor,cleanVisitors,hash,scoped} from './visitors.mjs';
 import {ensureDemoSeedAssets} from './generate-demo-assets.mjs';
+import {verifyDemoMigrations} from './migration-gate.mjs';
 
 // The generic Qwik storefront (packages/storefront), built root-mounted
 // exactly like any other deployment and served as its own process — see
@@ -29,6 +30,8 @@ const {env}=await import('../../packages/api/dist/env.js');
 const assetDir=resolve(env.ASSET_DIR);
 const require=createRequire(new URL('../../packages/api/package.json',import.meta.url));
 const {eq,and,sql}=require('drizzle-orm');
+// Refuse to start against an old schema: the legacy app below never verifies migrations itself.
+await verifyDemoMigrations(pool);
 // Shared synthetic product photography for the seeded demo catalog — not
 // committed (repo hook blocks binary images), rendered on disk once per
 // unique assetDir. Non-fatal: a rendering failure just leaves the built-in

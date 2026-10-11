@@ -76,4 +76,13 @@ describe('pre-submit live stock read (locked layer 4)', () => {
 		expect(read_, 'refreshStockBeforeSubmit must be awaited in placeOrder').toBeGreaterThan(-1);
 		expect(post).toBeGreaterThan(read_);
 	});
+
+	it('the validated read is passed into the order call, and checkout.ts makes no second cart read or tokenless submit', () => {
+		const hook = read('hooks/useCheckout.ts');
+		expect(hook).toMatch(/const snapshot = await refreshStockBeforeSubmit\(\)/);
+		expect(hook).toMatch(/srPlaceOrder\(form, snapshot\)/);
+		const provider = read('providers/shop/checkout/checkout.ts');
+		expect(provider).not.toMatch(/checkoutSnapshot|readFresh|CartService\.refresh/);
+		expect(provider).not.toMatch(/if \(cart\)/);
+	});
 });

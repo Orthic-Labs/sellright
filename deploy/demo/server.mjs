@@ -5,6 +5,7 @@ import { resolve, extname, sep } from 'node:path';
 import { allowedDemoRequest, allowedDemoBody, demoBindHost, demoSessionCookie } from './policy.mjs';
 import { assertDemoData, cleanDemo, demoCounts } from './safety.mjs';
 import { createHash } from 'node:crypto';
+import { verifyDemoMigrations } from './migration-gate.mjs';
 
 const database = new URL(process.env.DATABASE_URL ?? '');
 if (database.pathname !== '/sellright_demo' || process.env.SELLRIGHT_DEMO !== '1') {
@@ -24,6 +25,8 @@ if (process.env.GATEWAY_ACCOUNTS_JSON_FILE ||
 const { createApp } = await import('../../packages/api/dist/app.js');
 const { pool, assertRuntimeRoleUnprivileged } = await import('../../packages/api/dist/db/client.js');
 await assertRuntimeRoleUnprivileged();
+// Refuse to start against an old schema: the legacy app below never verifies migrations itself.
+await verifyDemoMigrations(pool);
 const { rows: stores } = await pool.query('SELECT slug, config FROM store');
 if (stores.length !== 1 || stores[0].slug !== 'demo' || stores[0].config?.demo !== true) {
   throw new Error('Refusing to expose a database without exactly one marked demo tenant');

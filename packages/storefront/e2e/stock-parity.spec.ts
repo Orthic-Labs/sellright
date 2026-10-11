@@ -223,7 +223,8 @@ test.describe('3. cart and checkout stock checks', () => {
 
 	// Server backstop: the stock vanishes AFTER the pre-submit read answered (held open and zeroed in the route), so the
 	// order POST is sent and the server's 409 OUT_OF_STOCK still refuses the sale.
-	// UNVERIFIED: relies on route.fetch() reaching the same API through apiProxyPage's routing; adjust on first run.
+	// The held read is fetched from the API itself (the page's /v1 calls are proxied there by apiProxyPage; a plain
+	// route.fetch() would ask the storefront origin and get a 404, which the pre-submit check rightly refuses).
 	test('3c-ii stock sold between the pre-submit read and the order POST: the server refuses with 409, no order, the UI says so', async ({ apiProxyPage: page, api }) => {
 		const p = await createStockProduct(api, 'race', 1);
 		await addToCart(page, p.slug);
@@ -234,7 +235,8 @@ test.describe('3. cart and checkout stock checks', () => {
 		await page.route((url) => STOCK_PATTERNS.cartRead.test(url.pathname), async (route) => {
 			if (!armed || route.request().method() !== 'GET') return route.fallback();
 			armed = false;
-			const live = await route.fetch(); // the pre-submit read sees the unit in stock ...
+			const asked = new URL(route.request().url());
+			const live = await route.fetch({ url: SHOP_API_URL + asked.pathname + asked.search, headers: { ...route.request().headers(), 'x-real-ip': clientIp(), 'x-e2e-origin': 'browser' } }); // the pre-submit read sees the unit in stock ...
 			await setOnHand(api, p.sku, 0); // ... and it sells right after
 			await route.fulfill({ response: live });
 		});

@@ -27,7 +27,8 @@
  *   CartService.merge(): Promise<CartMutationResult>                — fold the guest cart into the
  *                                                                      logged-in customer; call once, right after auth
  *   CartService.checkoutSnapshot(): Promise<{ token; revision; status } | null>
- *                                                     — live base for checkout; `status` distinguishes
+ *                                                     — live base read (NOT used by PLACE ORDER, which submits the
+ *                                                       snapshot of its own validated `readFresh`); `status` distinguishes
  *                                                       'converted' (replay for payment recovery) from
  *                                                       'merged' (terminal — discard)
  *   CartService.adoptConflict(cart): void            — adopt a cart handed back inside a checkout 409

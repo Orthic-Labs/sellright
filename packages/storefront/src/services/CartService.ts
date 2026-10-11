@@ -362,6 +362,30 @@ export class CartService {
     }
   }
 
+  /** Live read for the pre-submit stock check. Returns the exact server response of THIS request so the caller
+   *  validates what the server just said, not the shared mirror (which a newer overlapping read may have claimed).
+   *  Fail-closed: a missing cart cookie, an empty body, a 404 (also retires the local cart) or any failed read throws.
+   *  The mirror only adopts the response while it is still the latest request; the returned value never depends on that. */
+  static async readFresh(): Promise<ServerCart> {
+    const token = this.readTokenCookie();
+    if (!token) throw new CartError('not_found', 'Your cart expired — please re-add your items');
+    const seq = this.claimSeq();
+    try {
+      const { data } = await sellright().GET('/v1/shop/cart/{token}', {
+        params: { path: { token }, query: this.couponCode ? { couponCode: this.couponCode } : {} },
+      });
+      if (!data) throw new CartError('not_found', 'Cart not found');
+      if (this.isCurrent(seq)) this.adopt(data);
+      return data;
+    } catch (e) {
+      if (e instanceof SellRightError && e.status === 404) {
+        this.discard();
+        throw new CartError('not_found', 'Your cart expired — please re-add your items');
+      }
+      throw e;
+    }
+  }
+
   /** Validate + apply a coupon — the server re-prices the real cart; never a
    *  client-side guess. */
   static async applyCoupon(code: string): Promise<{ valid: boolean; reason?: string }> {
@@ -420,8 +444,9 @@ export class CartService {
     );
   }
 
-  /** Fresh server cart for checkout: re-reads so `expectedRevision` is the
-   *  live base. `null` when no cart exists. `status` distinguishes
+  /** NOT used by the checkout flow: PLACE ORDER submits the snapshot of `readFresh` (via
+   *  `refreshStockBeforeSubmit`) so the validated read is the submission base. Kept for non-checkout callers only.
+   *  Fresh server cart: re-reads so `expectedRevision` is a live base. `null` when no cart exists. `status` distinguishes
    *  'converted' (replay the original order — payment recovery) from
    *  'merged' (terminal — discard). */
   static async checkoutSnapshot(): Promise<{ token: string; revision: number; status: string } | null> {

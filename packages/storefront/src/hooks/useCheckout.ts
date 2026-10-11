@@ -68,8 +68,9 @@ export const useCheckout = () => {
 		checkoutState.isLoading = true;
 		try {
 			// LOCKED: awaited live cart read before the order POST; a failure or an unavailable line stops here.
-			await refreshStockBeforeSubmit();
-			const created = await srPlaceOrder(form);
+			// The validated read IS the submission snapshot: the order POST uses its token/revision, no second read.
+			const snapshot = await refreshStockBeforeSubmit();
+			const created = await srPlaceOrder(form, snapshot);
 			state.code = created.code;
 			state.receiptToken = created.receiptToken ?? '';
 			state.grandTotal = created.grandTotal;

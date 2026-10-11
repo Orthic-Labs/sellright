@@ -19,9 +19,10 @@
  */
 import { z } from '@hono/zod-openapi';
 import { calculateOrderTotals, type OrderTotals, type Promotion } from '../money/totals.js';
+import { isEntitlementBearing } from '../licensing/entitlements.js';
 
 export class OrderEditError extends Error {
-  constructor(public status: 400 | 404 | 409 | 503, public code: string, message: string, public extra?: Record<string, unknown>) {
+  constructor(public status: 400 | 403 | 404 | 409 | 503, public code: string, message: string, public extra?: Record<string, unknown>) {
     super(message);
     this.name = 'OrderEditError';
   }
@@ -60,6 +61,32 @@ export const EditOp = z.discriminatedUnion('op', [
   z.object({ op: z.literal('set_address'), kind: z.enum(['shipping', 'billing']), address: AddressInput, saveToAddressBook: z.boolean().optional() }),
 ]);
 export type EditOpT = z.infer<typeof EditOp>;
+
+/** The variant facts the entitlement gate reads (a subset of the product_variant row). */
+export interface EntitlementFacts { fulfillmentType: string; appKey: string | null; stripePriceId?: string | null }
+
+/**
+ * Whether a LOCKED edit plan would add, remove, swap or resize a line whose variant carries an entitlement. An agent never
+ * issues or changes entitlements (docs/plans/2026-10-10-agent-role-v5.md), so only such a plan needs a human principal;
+ * physical-only edits (quantity of a shipped good, shipping, coupons, addresses, adjustments) are reversible and allowed.
+ *
+ * A variant is entitlement-bearing by the issuance predicate (`isEntitlementBearing`: licence / digital / update pass with an
+ * appKey), or when it is a recurring plan (`stripePriceId`), whose subscription is an entitlement too. A changed line is
+ * judged on both sides of the change (the variant it had AND the one it has), and a variant that cannot be resolved is
+ * treated as bearing (fail closed). Lines the edit leaves untouched are ignored.
+ */
+export function planChangesEntitlements(lines: readonly WLine[], variantsById: ReadonlyMap<string, EntitlementFacts>): boolean {
+  const bearing = (variantId: string | null): boolean => {
+    const v = variantId ? variantsById.get(variantId) : undefined;
+    return !v || isEntitlementBearing(v) || !!v.stripePriceId;
+  };
+  return lines.some((l) => {
+    const o = l.original;
+    const changed = o ? o.variantId !== l.variantId || o.quantity !== l.quantity : l.quantity > 0;
+    if (!changed) return false;
+    return bearing(l.variantId) || (!!o && bearing(o.variantId));
+  });
+}
 
 export const Settlement = z.discriminatedUnion('type', [
   z.object({ type: z.literal('refund_now'), paymentId: z.string().uuid().optional() }),

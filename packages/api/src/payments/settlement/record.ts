@@ -383,9 +383,10 @@ export function paidOrderEffects(a: {
 }
 
 /** Effects for a balance payment that clears an order edit: entitlement reconcile + the deferred edit earn. */
-export function editBalanceEffects(a: { orderId: string; customerId: string | null; deferredEarn?: boolean }): EffectRequest[] {
+export function editBalanceEffects(a: { orderId: string; customerId: string | null; deferredEarn?: boolean; actorKind?: 'human' | 'agent' }): EffectRequest[] {
   return [
-    { kind: 'edit_reconcile', payload: { orderId: a.orderId, customerId: a.customerId, paidAt: new Date().toISOString() } },
+    // actorKind is set only by the order-edit commit: an agent's edit must never cause licence issuance (see editReconcile).
+    { kind: 'edit_reconcile', payload: { orderId: a.orderId, customerId: a.customerId, paidAt: new Date().toISOString(), ...(a.actorKind ? { actorKind: a.actorKind } : {}) } },
     ...(a.deferredEarn === false ? [] : [{ kind: 'loyalty_earn' as const, payload: { variant: 'deferred_edit', orderId: a.orderId } }]),
   ];
 }
