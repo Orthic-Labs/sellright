@@ -40,7 +40,7 @@ function StepUpModal({ onVerified, onCancel }: { onVerified: () => void; onCance
     <>
       <div className="fixed inset-0 z-40 bg-black/30 animate-fade-in" onClick={onCancel} aria-hidden="true" />
       <div role="dialog" aria-modal="true" aria-label="Confirm your password" className="fixed inset-x-0 top-[15vh] z-50 mx-auto w-full max-w-sm px-3">
-        <form onSubmit={submit} className="card p-6 space-y-4 shadow-lg">
+        <form onSubmit={submit} className="card p-6 stack-y-4 shadow-lg">
           <div>
             <h2 className="text-base font-semibold">Confirm it's you</h2>
             <p className="text-sm text-gray-500">The recovery kit contains your master key. Re-enter your password to continue.</p>
@@ -149,7 +149,7 @@ export default function SetupChecklist() {
           {publish.isPending ? <Spinner className="text-white" /> : 'Publish store'}
         </button>
       </div>
-      <ul className="mt-4 divide-y divide-gray-100">
+      <ul className="mt-4 rule-y rule-gray-100">
         {ITEMS.map(({ key: k, label, to }) => {
           const item = data[k];
           return (

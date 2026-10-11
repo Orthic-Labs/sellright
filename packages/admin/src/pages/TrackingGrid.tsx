@@ -123,9 +123,9 @@ export default function TrackingGrid() {
                       {o.items.length ? o.items.map((it) => <div key={it.sku} title={it.name}>{it.quantity}× {it.sku}</div>) : <span className="text-gray-400">—</span>}
                       {o.fulfillmentStatus === 'partially_fulfilled' && <div className="text-info mt-0.5">partly shipped{o.shippedTracking.length ? `: ${o.shippedTracking.join(', ')}` : ''}</div>}
                     </td>
-                    <td className="td"><input className="input !py-1.5 font-mono !text-xs" aria-label={`Tracking number for ${o.code}`} value={e?.tracking ?? ''} placeholder="Paste tracking" onChange={(ev) => setEntry(o.code, { tracking: ev.target.value })} onPaste={(ev) => onPaste(i, ev)} /></td>
+                    <td className="td"><input className="input py-1.5! font-mono text-xs!" aria-label={`Tracking number for ${o.code}`} value={e?.tracking ?? ''} placeholder="Paste tracking" onChange={(ev) => setEntry(o.code, { tracking: ev.target.value })} onPaste={(ev) => onPaste(i, ev)} /></td>
                     <td className="td">
-                      <select className="input !py-1.5 !text-xs" aria-label={`Carrier for ${o.code}`} value={e?.carrier ?? ''} onChange={(ev) => setEntry(o.code, { carrier: ev.target.value })}>
+                      <select className="input py-1.5! text-xs!" aria-label={`Carrier for ${o.code}`} value={e?.carrier ?? ''} onChange={(ev) => setEntry(o.code, { carrier: ev.target.value })}>
                         <option value="">{detected ? `Auto: ${detected}` : 'Auto'}</option>
                         {CARRIER_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
                       </select>

@@ -35,7 +35,7 @@ export default function AutoDeliverDialog({ open, onClose }: { open: boolean; on
   const stale = !!preview && preview.days !== n;
   return (
     <Modal open={open} onClose={onClose} title="Mark old shipments delivered" width="max-w-xl">
-      <div className="space-y-4">
+      <div className="stack-y-4">
         <p className="text-sm text-gray-600">Shipments still marked <b>Shipped</b> for longer than the number of days below are marked <b>Delivered</b>. Nothing changes until you confirm.</p>
         <div className="flex items-end gap-2">
           <Field label="Shipped more than (days) ago" htmlFor="ad-days"><input id="ad-days" className="input w-24 tnum" inputMode="numeric" value={days} onChange={(e) => setDays(e.target.value)} /></Field>
@@ -43,7 +43,7 @@ export default function AutoDeliverDialog({ open, onClose }: { open: boolean; on
         </div>
         {run.isPending && !preview && <div className="text-sm text-gray-400 flex items-center gap-2"><Spinner /> Checking…</div>}
         {preview && (
-          <div className="space-y-2" aria-live="polite">
+          <div className="stack-y-2" aria-live="polite">
             <InlineAlert tone={preview.count ? 'attention' : 'neutral'} title={preview.count ? `${preview.count} shipment${preview.count === 1 ? '' : 's'} would be marked delivered` : 'Nothing to mark delivered'}>
               Shipped before {date(preview.cutoff)} ({preview.days} days ago or more).
             </InlineAlert>

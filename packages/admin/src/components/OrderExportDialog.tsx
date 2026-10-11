@@ -99,7 +99,7 @@ export default function OrderExportDialog({ open, onClose, filters }: { open: bo
 
   return (
     <Modal open={open} onClose={onClose} title="Export orders" width="max-w-3xl">
-      <div className="space-y-5">
+      <div className="stack-y-5">
         <p className="text-xs text-gray-500">Starts from your current order filters. Change anything below; the file contains up to {(cat.data?.cap ?? 50000).toLocaleString()} {rows === 'line' ? 'line items' : 'orders'}.</p>
 
         <section className="grid sm:grid-cols-2 gap-3" aria-label="Which orders">
@@ -126,7 +126,7 @@ export default function OrderExportDialog({ open, onClose, filters }: { open: bo
         </section>
         {rangeInvalid && <InlineAlert tone="critical">The start date is after the end date.</InlineAlert>}
 
-        <section className="border-t border-gray-100 pt-4 space-y-3" aria-label="Rows and columns">
+        <section className="border-t border-gray-100 pt-4 stack-y-3" aria-label="Rows and columns">
           <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
             <fieldset className="flex items-center gap-3"><legend className="sr-only">Rows</legend>
               <span className="text-gray-500">One row per</span>
@@ -150,7 +150,7 @@ export default function OrderExportDialog({ open, onClose, filters }: { open: bo
               </span>
             ))}
             <span className="ml-auto inline-flex items-center gap-1.5">
-              <input className="input !py-1 !text-xs w-36" aria-label="Preset name" placeholder="Save columns as…" value={presetName} onChange={(e) => setPresetName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') savePreset(); }} />
+              <input className="input py-1! text-xs! w-36" aria-label="Preset name" placeholder="Save columns as…" value={presetName} onChange={(e) => setPresetName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') savePreset(); }} />
               <button className="btn-ghost btn-sm" disabled={!presetName.trim() || selected.length === 0} onClick={savePreset}>Save</button>
             </span>
           </div>

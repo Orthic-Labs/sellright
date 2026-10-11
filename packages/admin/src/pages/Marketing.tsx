@@ -43,13 +43,13 @@ export default function Marketing() {
       <PageHeader title="Marketing & Email" subtitle="Listmonk — managed right here, no separate login." actions={<Badge value={status} />} />
 
       {!cfg?.configured ? (
-        <div className="max-w-xl space-y-4">
+        <div className="max-w-xl stack-y-4">
           <InlineAlert tone="info" title="Connect your Listmonk instance">
             Once connected, SellRight syncs your customers into Listmonk lists and lets you draft campaigns here. Sending stays in Listmonk for safety.
           </InlineAlert>
           <FormSection title="Connect Listmonk"
             actions={<button className="btn-primary" form="lm-connect" disabled={connect.isPending || !isUrl(form.url) || !form.apiUser || !form.apiToken}>{connect.isPending ? <><Spinner className="text-white" /> Connecting…</> : <><Mail size={15} /> Connect & verify</>}</button>}>
-            <form id="lm-connect" className="space-y-4" onSubmit={(e) => { e.preventDefault(); setTouched(true); if (isUrl(form.url)) connect.mutate(); }}>
+            <form id="lm-connect" className="stack-y-4" onSubmit={(e) => { e.preventDefault(); setTouched(true); if (isUrl(form.url)) connect.mutate(); }}>
               <Field label="Listmonk URL" htmlFor="lm-url" error={urlError} hint="The base URL of your Listmonk install.">
                 <input id="lm-url" className={`input ${urlError ? 'input-invalid' : ''}`} value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} onBlur={() => setTouched(true)} placeholder="https://listmonk.example.com" />
               </Field>
@@ -62,7 +62,7 @@ export default function Marketing() {
           </FormSection>
         </div>
       ) : (
-        <div className="space-y-5">
+        <div className="stack-y-5">
           <FormSection title="Connection" description="SellRight is syncing customers to this Listmonk instance."
             actions={<button className="btn-ghost btn-sm" onClick={() => { connect.reset(); qc.setQueryData(cfgKey, { configured: false, url: null }); }}>Reconfigure</button>}>
             <div className="flex items-center gap-2 text-sm">
@@ -84,7 +84,7 @@ export default function Marketing() {
                     <tr key={l.id} className="border-t border-gray-100">
                       <td className="td font-medium truncate">{l.name}</td>
                       <td className="td text-right text-gray-600 tnum"><Users size={13} className="inline mr-1 text-gray-300" />{l.subscribers}</td>
-                      <td className="td text-right space-x-2 whitespace-nowrap">
+                      <td className="td text-right stack-x-2 whitespace-nowrap">
                         <button className="btn-ghost btn-sm" disabled={sync.isPending} onClick={() => sync.mutate(l.id)}>{sync.isPending ? <Spinner /> : <><RefreshCw size={13} /> Sync customers</>}</button>
                         <button className="btn-ghost btn-sm" onClick={() => setCampaign({ name: '', subject: '', listId: l.id, body: '' })}><Send size={13} /> Campaign</button>
                       </td>

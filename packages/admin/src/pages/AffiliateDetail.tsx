@@ -68,7 +68,7 @@ export default function AffiliateDetailPage() {
           </table>
         </div>
 
-        <div className="space-y-5">
+        <div className="stack-y-5">
           <div className="card p-4">
             <div className="text-sm font-semibold mb-2">Record payout</div>
             <input className="input mb-2" placeholder="payment reference (optional)" value={txRef} onChange={(e) => setTxRef(e.target.value)} />

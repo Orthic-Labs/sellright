@@ -16,7 +16,7 @@ test.describe('shipping rules', () => {
 		await page.getByRole('button', { name: 'Shipping', exact: true }).click();
 		await expect(page.getByRole('heading', { name: 'Shipping methods' })).toBeVisible();
 	}
-	const item = (page: import('@playwright/test').Page) => page.locator('.divide-y > div').filter({ hasText: CODE });
+	const item = (page: import('@playwright/test').Page) => page.locator('.rule-y > div').filter({ hasText: CODE });
 	const calculator = async (api: import('./support/api').AdminApi) =>
 		(await api.get<{ items: { code: string; enabled: boolean; calculator: Record<string, unknown> }[] }>('/shipping-methods')).items.find((m) => m.code === CODE)!;
 

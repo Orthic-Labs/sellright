@@ -35,7 +35,7 @@ export default function TrackingPreviewTable({ rows, carrierOverrides, onCarrier
                 <td className="td font-medium">{r.code || <span className="text-gray-400">(blank)</span>}</td>
                 <td className="td font-mono text-xs break-all">{r.tracking || <span className="text-gray-400">(blank)</span>}</td>
                 <td className="td">
-                  <select aria-label={`Carrier for row ${r.index + 1}`} className="input !py-1 !text-xs" value={value} disabled={disabled || !ok} onChange={(e) => onCarrier(r.index, e.target.value)}>
+                  <select aria-label={`Carrier for row ${r.index + 1}`} className="input py-1! text-xs!" value={value} disabled={disabled || !ok} onChange={(e) => onCarrier(r.index, e.target.value)}>
                     <option value="">{auto ? `Auto: ${auto}` : r.carrierSource === 'given' ? `As given: ${r.carrier}` : 'Auto: unknown'}</option>
                     {CARRIER_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
                   </select>

@@ -28,13 +28,13 @@ function VariantPicker({ code, onPick, placeholder }: { code: string; onPick: (v
     gcTime: 0,
   });
   return (
-    <div className="space-y-2">
+    <div className="stack-y-2">
       <div className="relative">
         <Search size={14} className="absolute left-2.5 top-2.5 text-gray-400" />
         <input className="input pl-8" value={q} onChange={(e) => setQ(e.target.value)} placeholder={placeholder} aria-label={placeholder} />
       </div>
       {dq && (
-        <div className="rounded-lg border border-gray-100 divide-y divide-gray-100 max-h-48 overflow-y-auto">
+        <div className="rounded-lg border border-gray-100 rule-y rule-gray-100 max-h-48 overflow-y-auto">
           {isFetching && !data ? <div className="p-2 text-xs text-gray-400">Searching…</div> : (data?.items.length ?? 0) === 0 ? <div className="p-2 text-xs text-gray-400">No matching variants</div> : data!.items.map((v) => (
             <button type="button" key={v.sku} className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 flex justify-between gap-3" onClick={() => { onPick(v); setQ(''); }}>
               <span className="min-w-0 truncate">{v.productName} — {v.name} <span className="text-xs text-gray-400">{v.sku}</span></span>
@@ -156,7 +156,7 @@ export function OrderEditPanel({ code, currency, initialAddress, onClose, onComm
   const removeLine = (id: string, min: number) => set({ qty: { ...st.qty, [id]: min } });
 
   return (
-    <div className="space-y-5">
+    <div className="stack-y-5">
       <FormSection title="Edit order" description="Stage changes below. Totals, stock and the balance update as you go; nothing is saved until you commit.">
         <table className="w-full">
           <thead><tr><th className="th">Item</th><th className="th text-center" style={{ width: '8rem' }}>Qty</th><th className="th text-right">Total</th><th className="th" style={{ width: '5rem' }} /></tr></thead>
@@ -248,7 +248,7 @@ export function OrderEditPanel({ code, currency, initialAddress, onClose, onComm
         </div>
         <div>
           <div className="label">Adjustments</div>
-          <ul className="space-y-1 mb-2">
+          <ul className="stack-y-1 mb-2">
             {ctx.adjustments.map((a) => {
               const gone = st.adjRemove.includes(a.id);
               return (
@@ -290,11 +290,11 @@ export function OrderEditPanel({ code, currency, initialAddress, onClose, onComm
       {ops.length > 0 && (
         <FormSection title="Review and settle" description="What this edit does to the order, and how to settle the difference.">
           {preview.error ? <InlineAlert tone="critical">{(preview.error as Error).message}</InlineAlert> : !pv ? <Loading label="Calculating" /> : (
-            <div className="space-y-4">
+            <div className="stack-y-4">
               {pv.warnings.map((w) => <InlineAlert key={w} tone="attention">{WARNING_TEXT[w] ?? w}</InlineAlert>)}
               {pv.address.shipping.countryChanged && <InlineAlert tone="info">The shipping country changed, so tax and shipping eligibility were recalculated.</InlineAlert>}
               {!pv.stockOk && <InlineAlert tone="critical">Not enough stock: {pv.stock.filter((x) => !x.ok).map((x) => `${x.sku} (need ${x.delta}, ${x.available ?? 0} available)`).join(', ')}.</InlineAlert>}
-              <ul className="text-sm space-y-1">
+              <ul className="text-sm stack-y-1">
                 {pv.lines.filter((l) => l.change !== 'unchanged').map((l, i) => (
                   <li key={i} className="flex justify-between gap-3 text-gray-600">
                     <span>{l.change === 'added' ? `Add ${l.afterQty} × ${l.name}` : l.change === 'removed' ? `Remove ${l.name}` : l.change === 'swapped' ? `Swap ${l.fromSku} → ${l.name}` : l.change === 'quantity' ? `${l.name}: ${l.beforeQty} → ${l.afterQty}` : `${l.name}: repriced`}</span>
@@ -303,7 +303,7 @@ export function OrderEditPanel({ code, currency, initialAddress, onClose, onComm
                 ))}
                 {pv.stock.filter((x) => x.delta !== 0).map((x) => <li key={x.sku} className="text-xs text-gray-400">Stock {x.sku}: {x.delta > 0 ? `reserve ${x.delta}` : `release ${-x.delta}`}</li>)}
               </ul>
-              <div className="space-y-1 text-sm border-t border-gray-100 pt-2">
+              <div className="stack-y-1 text-sm border-t border-gray-100 pt-2">
                 {([['Subtotal', 'subtotal'], ['Discount', 'discountTotal'], ['Shipping', 'shippingTotal'], ['Tax', 'taxTotal'], ['Adjustments', 'adjustmentTotal']] as const).map(([label, k]) => (
                   (pv.before[k] !== 0 || pv.after[k] !== 0) && <div key={k} className="flex justify-between text-gray-600"><span>{label}</span><span className="tnum">{pv.before[k] !== pv.after[k] && <span className="text-gray-400 line-through mr-2">{money(pv.before[k], currency)}</span>}{money(pv.after[k], currency)}</span></div>
                 ))}
@@ -315,7 +315,7 @@ export function OrderEditPanel({ code, currency, initialAddress, onClose, onComm
               </div>
 
               {due !== 0 && (
-                <fieldset className="space-y-2">
+                <fieldset className="stack-y-2">
                   <legend className="label">{due > 0 ? 'How will the customer pay?' : 'How do you want to return the difference?'}</legend>
                   {(due < 0 ? [
                     ['refund_now', `Refund ${money(-due, currency)} now`],

@@ -67,12 +67,12 @@ export default function Onboarding() {
     <div className="h-full grid place-items-center bg-[#f1f1f1] p-4">
       <div className="w-full max-w-md">
         <div className="flex items-center justify-center gap-2 mb-6">
-          <div className="h-7 w-7 rounded bg-brand" />
+          <div className="h-7 w-7 rounded-sm bg-brand" />
           <span className="text-lg font-semibold tracking-tight">SellRight</span>
         </div>
         <div className="card p-6">
           {step === 'basics' && (
-            <form onSubmit={saveBasics} className="space-y-4">
+            <form onSubmit={saveBasics} className="stack-y-4">
               <div>
                 <h1 className="text-base font-semibold">Name your store</h1>
                 <p className="text-sm text-gray-500">You can change any of this later in Settings.</p>
@@ -109,7 +109,7 @@ export default function Onboarding() {
           )}
 
           {step === 'preview' && (
-            <div className="space-y-4">
+            <div className="stack-y-4">
               <div>
                 <h1 className="text-base font-semibold">Your storefront preview</h1>
                 <p className="text-sm text-gray-500">Private until you publish — only people with this link can see it.</p>

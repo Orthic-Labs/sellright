@@ -30,7 +30,7 @@ export default function ShippingMethods({ canManage }: { canManage: boolean }) {
       {dialog}
       <FormSection title="Shipping methods" description="At checkout a customer is offered every enabled method whose conditions match their cart and destination."
         actions={canManage && <button className="btn-ghost btn-sm" onClick={() => setEditing({ id: null })}><Plus size={14} /> Add method</button>}>
-        <div className="divide-y divide-gray-100">
+        <div className="rule-y rule-gray-100">
           {ship.data?.items.map((m) => (
             <div key={m.id} className="py-3 text-sm flex items-start justify-between gap-3">
               <div className="min-w-0">
@@ -90,14 +90,14 @@ function MethodDrawer({ currency, editing, onClose, onSaved }: {
           <h2 className="text-sm font-semibold">{editing.id ? `Edit ${editing.existing?.name ?? 'method'}` : 'Add shipping method'}</h2>
           <button aria-label="Close" className="p-1 text-gray-400 hover:text-ink" onClick={onClose}><X size={18} /></button>
         </div>
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="flex-1 overflow-y-auto p-4 stack-y-4">
           <div className="grid grid-cols-2 gap-3">
             <Field label="Name" htmlFor="sm-name"><input id="sm-name" ref={firstField} className="input" value={f.name} onChange={(e) => set('name', e.target.value)} /></Field>
             <Field label="Code" htmlFor="sm-code" hint="Used by the storefront."><input id="sm-code" className="input font-mono text-xs" value={f.code} onChange={(e) => set('code', e.target.value)} /></Field>
           </div>
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" className="h-4 w-4 accent-brand" checked={f.enabled} onChange={(e) => set('enabled', e.target.checked)} /> Offer this method at checkout</label>
 
-          <fieldset className="space-y-3 border-t border-gray-100 pt-4">
+          <fieldset className="stack-y-3 border-t border-gray-100 pt-4">
             <legend className="text-xs font-semibold uppercase tracking-wide text-gray-400 pb-1">Rate and order size</legend>
             <Field label={`Shipping rate (${currency})`} htmlFor="sm-rate" hint="0 = free shipping."><input id="sm-rate" className="input tnum w-32" inputMode="decimal" value={f.rate} onChange={(e) => set('rate', e.target.value)} /></Field>
             <div className="grid grid-cols-2 gap-3">
@@ -112,7 +112,7 @@ function MethodDrawer({ currency, editing, onClose, onSaved }: {
             </Field>
           </fieldset>
 
-          <fieldset className="space-y-3 border-t border-gray-100 pt-4">
+          <fieldset className="stack-y-3 border-t border-gray-100 pt-4">
             <legend className="text-xs font-semibold uppercase tracking-wide text-gray-400 pb-1">Destinations</legend>
             <Field label="Ship to" htmlFor="sm-cmode">
               <select id="sm-cmode" className="input" value={f.countryMode} onChange={(e) => set('countryMode', e.target.value as CountryMode)}>

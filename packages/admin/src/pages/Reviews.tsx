@@ -102,7 +102,7 @@ export default function ReviewsPage() {
       {isLoading ? <Loading /> : error ? <ErrorState message={(error as Error).message} onRetry={refresh} /> : !data || data.items.length === 0 ? (
         <EmptyState title={status === 'pending' ? 'No reviews waiting for moderation' : 'No reviews'} />
       ) : (
-        <div className="space-y-3">
+        <div className="stack-y-3">
           {data.items.map((r) => (
             <div key={r.id} className="card p-4">
               <div className="flex flex-wrap items-center gap-2 text-sm">

@@ -269,11 +269,11 @@ export function CommandPalette() {
               type="text"
               placeholder="Search orders, products, customers, or run a command…"
               aria-label="Command palette search"
-              className="flex-1 bg-transparent outline-none text-sm"
+              className="flex-1 bg-transparent outline-hidden text-sm"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
-            <kbd className="hidden md:inline text-[10px] font-mono px-1.5 py-0.5 rounded border border-gray-200 text-gray-500">esc</kbd>
+            <kbd className="hidden md:inline text-[10px] font-mono px-1.5 py-0.5 rounded-sm border border-gray-200 text-gray-500">esc</kbd>
           </div>
 
           <div ref={listRef} className="max-h-[60vh] overflow-y-auto py-1.5" role="listbox" aria-label="Command results">

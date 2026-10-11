@@ -55,7 +55,7 @@ export function SkeletonBlock({ className = '' }: { className?: string }) {
 }
 
 export function SkeletonText({ w = 'w-24' }: { w?: string }) {
-  return <span className={`skeleton inline-block h-3.5 ${w} rounded`} />;
+  return <span className={`skeleton inline-block h-3.5 ${w} rounded-sm`} />;
 }
 
 export function PageHeader({ title, subtitle, actions, stackOnMobile = false }: { title: string; subtitle?: ReactNode; actions?: ReactNode; stackOnMobile?: boolean }) {
