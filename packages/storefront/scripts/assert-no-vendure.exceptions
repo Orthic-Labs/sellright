@@ -1,0 +1,2 @@
+# Scoped strict-token exceptions for brand-origin files: `path|token|one-line reason`, relative to the storefront package root.
+# An excepted file is let through ONLY for the named token. The base ships this empty; a brand overlay supplies its own.

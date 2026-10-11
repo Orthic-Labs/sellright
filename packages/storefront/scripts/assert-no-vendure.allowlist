@@ -1,0 +1,2 @@
+# Files allowed to contain the bare word "vendure" (genuine one-time migration history, never live coupling).
+# One path per line, relative to the storefront package root. The base ships this empty; a brand overlay supplies its own.

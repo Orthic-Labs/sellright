@@ -12,6 +12,7 @@ import { sellrightRequestCookie } from"./utils/sellright-request-context.server"
 import { sellrightRequestHost } from"./utils/sellright-request-host.server";
 import { assertProdApiConfigured } from"./constants";
 import { NO_STORE_CACHE_CONTROL } from"./config/route-cache-policy";
+import { googleIdentityCsp, googleSignInClientId, googleSignInRefusedForMissingPin } from"./config/google-signin";
 import { createCanonicalUrlMiddleware, parseCanonicalSections } from"./utils/canonical-url";
 import { buildCsp } from"./utils/csp";
 
@@ -50,6 +51,12 @@ const app = express();
 const apiOrigin = (process.env.VITE_SELLRIGHT_API_URL || '')
 	.replace(/\/(shop-api)?\/?$/, '')
 	.trim();
+// Google Identity origins join the CSP only when Google sign-in is on, from the same compiled client id the sign-in
+// button reads (config/google-signin.ts) — and only for a deployment pinned to one store.
+const googleCsp = googleIdentityCsp(googleSignInClientId());
+if (googleSignInRefusedForMissingPin()) {
+	console.error('[google-signin] VITE_GOOGLE_CLIENT_ID is set but VITE_SELLRIGHT_STORE_SLUG is not: Google sign-in is disabled (it is only supported for a deployment pinned to a single store).');
+}
 
 // Set security headers
 app.use((req, res, next) => {
@@ -124,12 +131,13 @@ app.use((req, res, next) => {
 	//   upgrade-insecure-requests
 	// The directive list lives in utils/csp.ts (pure, unit-tested). Two origins are conditional: Cloudflare Turnstile
 	// (script-src + frame-src) when a site key is configured, and ipapi.co (connect-src) when the browser country fallback
-	// is enabled. Both read the SAME VITE_* variables the client bundle was built with, from the runtime environment.
+	// is enabled; Google Identity origins (script/style/connect/frame) join only when Google sign-in is on. All read the SAME VITE_* variables the client bundle was built with, from the runtime environment.
 	const cspDirectives = buildCsp({
 		nonce,
 		apiOrigin,
 		turnstileSiteKey: process.env.VITE_TURNSTILE_SITE_KEY,
 		ipCountryFallback: process.env.VITE_IP_COUNTRY_FALLBACK,
+		google: googleCsp,
 	});
 
 	res.setHeader('Content-Security-Policy', cspDirectives);
