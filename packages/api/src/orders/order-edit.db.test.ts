@@ -1290,4 +1290,99 @@ describe('approve a held edit issuance', () => {
     expect(await licensesOf(ob.id)).toHaveLength(0);
     expect((await reviewOf(b.editId)).resolution).toBeNull();
   });
+  it('an approval never issues for a line the order has not paid for: a later leave_due licensed addition holds the effect, the review stays open, and the balance settles it', async () => {
+    const o = await makeOrder({ lines: [{ sku: 'L', qty: 1 }] }); // Paid, fully funded
+    const { effectId, editId } = await heldEffect(o);
+    // A human then adds another licensed line and leaves it due: the order stays Paid with a positive balance.
+    const r = await commit(o.code, [{ op: 'add_item', sku: 'M', quantity: 1 }], {}, { type: 'leave_due' });
+    expect(r.state).toBe('Paid');
+    expect(r.amountDue).toBe(1000);
+
+    const res = await approve(ownerToken, effectId);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ effectId, approved: true, status: 'pending' });
+    expect(await licensesOf(o.id)).toHaveLength(0); // nothing for the unpaid addition, nor for the funded line
+    const e = await effectRow(effectId);
+    expect([e.status, e.lastError]).toEqual(['pending', 'EDIT_BALANCE_DUE']);
+    // the approval is not consumed by the refusal: it stays on the payload, and the review task stays unresolved
+    expect((e.payload as { issuanceApprovedBy: Record<string, unknown> }).issuanceApprovedBy).toMatchObject({ adminUserId: owner.id, effectId, orderId: o.id });
+    expect((await reviewOf(editId)).resolution).toBeNull();
+    expect(await approvalAudits(effectId)).toHaveLength(1);
+
+    // A worker retry while the balance is still due refuses the same way (every execution is checked).
+    await withStore(STORE, (tx) => tx.execute(sql`UPDATE order_pending_effect SET next_attempt_at = now() WHERE id = ${effectId}`));
+    await run();
+    expect(await licensesOf(o.id)).toHaveLength(0);
+    expect((await effectRow(effectId)).lastError).toBe('EDIT_BALANCE_DUE');
+    expect((await reviewOf(editId)).resolution).toBeNull();
+
+    // The balance is settled: the retry now takes the normal path, issues once per line, and closes the review.
+    await withStore(STORE, (tx) => tx.insert(s.payment).values({ storeId: STORE, orderId: o.id, amount: 1000, method: 'stripe', state: 'Settled', providerRef: `pi_bal_${o.code}`, gatewayMode: 'test', currency: 'USD' }));
+    await withStore(STORE, (tx) => tx.execute(sql`UPDATE order_pending_effect SET next_attempt_at = now() WHERE id = ${effectId}`));
+    await run();
+    const done = await effectRow(effectId);
+    expect(done.status).toBe('done');
+    expect(await licensesOf(o.id)).toHaveLength(2);
+    expect((await reviewOf(editId)).resolution).toMatchObject({ action: 'approved_issuance', adminUserId: owner.id, effectId });
+    await run();
+    expect(await licensesOf(o.id)).toHaveLength(2);
+  });
+
+  // Lock order (issuance-approval.ts): the worker holds the effect row first and then waits for the order set; the approval
+  // holds the order set. It must not wait for the effect row (deadlock), it must back off and restart.
+  const holdEffectRow = async (effectId: string) => {
+    const w = await pool.connect();
+    await w.query('BEGIN');
+    await w.query(`SELECT set_config('app.current_store', $1, true)`, [STORE]);
+    await w.query(`SELECT 1 FROM order_pending_effect WHERE id = $1 FOR UPDATE`, [effectId]);
+    return w;
+  };
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  it('approve versus a worker holding the effect row: no deadlock, the worker gets the order set while the approval backs off, then one issuance', async () => {
+    const o = await makeOrder({ lines: [{ sku: 'L', qty: 1 }] });
+    const { effectId } = await heldEffect(o);
+    const w = await holdEffectRow(effectId); // worker step 1: the effect row
+    let approvalSettled = false;
+    const approval = Promise.resolve(approve(ownerToken, effectId)).then((r) => { approvalSettled = true; return r; });
+    try {
+      await sleep(250); // the approval has taken the order set, been refused the effect row (NOWAIT) and rolled back
+      expect(approvalSettled).toBe(false);
+      // worker step 2: the order set. With a wait-while-holding approval this is the deadlock cycle (40P01 on one side).
+      await w.query(`SET LOCAL lock_timeout = '3s'`);
+      await expect(w.query(`SELECT 1 FROM "order" WHERE id = $1 FOR UPDATE`, [o.id])).resolves.toBeDefined();
+      expect(approvalSettled).toBe(false); // still cannot take the effect row
+      await w.query('COMMIT');
+    } finally {
+      await w.query('ROLLBACK').catch(() => undefined);
+      w.release();
+    }
+    const res = await approval;
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ effectId, approved: true, alreadyApproved: false, status: 'done' });
+    expect(await licensesOf(o.id)).toHaveLength(1);
+    expect(await approvalAudits(effectId)).toHaveLength(1);
+    await run(); // a later worker pass finds nothing to do
+    expect(await licensesOf(o.id)).toHaveLength(1);
+  });
+
+  it('approve while the effect row stays held: a bounded 409 EFFECT_BUSY, nothing recorded, and a later approval succeeds', async () => {
+    const o = await makeOrder({ lines: [{ sku: 'L', qty: 1 }] });
+    const { effectId } = await heldEffect(o);
+    const w = await holdEffectRow(effectId);
+    try {
+      const busy = await approve(ownerToken, effectId);
+      expect([busy.status, await errCode(busy)]).toEqual([409, 'EFFECT_BUSY']);
+    } finally {
+      await w.query('ROLLBACK').catch(() => undefined);
+      w.release();
+    }
+    const e = await effectRow(effectId);
+    expect(e.status).toBe('terminal');
+    expect((e.payload as Record<string, unknown>).issuanceApprovedBy).toBeUndefined();
+    expect(await approvalAudits(effectId)).toHaveLength(0);
+    expect(await licensesOf(o.id)).toHaveLength(0);
+    expect((await approve(ownerToken, effectId)).status).toBe(200);
+    expect(await licensesOf(o.id)).toHaveLength(1);
+  }, 20000);
 });

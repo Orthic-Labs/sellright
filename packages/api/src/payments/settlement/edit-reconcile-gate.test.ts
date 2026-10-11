@@ -15,6 +15,10 @@ vi.mock('../policy/host.js', async (importOriginal) => ({
 }));
 type Gate = () => Promise<{ ok: false } | { ok: true; metadataPatch?: Record<string, unknown> }>;
 const reconcile = vi.fn();
+// The funding check before issuance reads the order's balance from the database; this file exercises the policy gate
+// with a fake transaction, so the order is fully funded here. The unpaid-line case is covered against a real database
+// in orders/order-edit.db.test.ts.
+vi.mock('../settle.js', async (importOriginal) => ({ ...(await importOriginal<typeof import('../settle.js')>()), amountDueForOrder: vi.fn(async () => 0) }));
 vi.mock('../../licensing/edit-reconcile.js', () => ({
   reconcileEditedOrderLicenses: (...a: unknown[]) => reconcile(...a),
 }));
@@ -26,9 +30,9 @@ const ORDER = { id: 'o1', storeId: 's1', code: 'C1', state: 'Paid', currency: 'U
 const effect = { id: 'eff-1', storeId: 's1', operationId: 'op-1', effectKind: 'edit_reconcile', payload: { orderId: 'o1', customerId: null, paidAt: '2026-01-01T00:00:00.000Z' } } as unknown as EffectRow;
 
 let audits: Record<string, unknown>[];
-/** Selects in handler order: lifecycle state, order row, reservations. */
+/** Selects in handler order: lifecycle state, order row, the order row for the funding check, the order row for the policy gate, reservations. */
 function fakeTx() {
-  const queue: unknown[][] = [[{ state: 'Paid' }], [ORDER], []];
+  const queue: unknown[][] = [[{ state: 'Paid' }], [ORDER], [ORDER], []];
   const chain = (): unknown => {
     const rows = queue.shift() ?? [];
     const c: Record<string, unknown> = {};

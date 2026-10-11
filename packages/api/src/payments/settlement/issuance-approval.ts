@@ -9,7 +9,7 @@
  */
 import { and, eq, sql } from 'drizzle-orm';
 import { withStore, type Tx } from '../../db/client.js';
-import { withLockedSet } from '../../db/locks.js';
+import { LockSetUnstable, withLockedSet } from '../../db/locks.js';
 import * as s from '../../db/schema.js';
 import { executeEffectsNow, recordEffectIssuanceApproval, requeueTerminalEffect, resolveReviewTasksForEffect, type EffectRow } from './effects.js';
 
@@ -61,9 +61,16 @@ export async function resolveHeldReviewTasks(tx: Tx, e: EffectRow, approval: Iss
 }
 
 /**
- * Approve and run a held edit_reconcile effect. One transaction under the order's lock set (same order as the worker:
- * order rows, then the effect row): record the approval, requeue, and run the effect inline, so issuance, the effect's
- * `done` and the review task's resolution commit together or not at all.
+ * Approve and run a held edit_reconcile effect. One transaction under the order's lock set: record the approval,
+ * requeue, and run the effect inline, so issuance, the effect's `done` and the review task's resolution commit together
+ * or not at all.
+ *
+ * Lock order: the worker takes the effect row FIRST, then the order set (processClaimedEffect -> editReconcile); this
+ * path takes the order set first, so it must never WAIT for the effect row while holding the set (that is the
+ * deadlock cycle). The effect row is taken NOWAIT: when the worker holds it, Postgres raises 55P03 at once, the
+ * transaction rolls back (releasing the order set) and withLockedSet restarts it through its bounded lock-contention
+ * retry. The approver never blocks, so the worker's wait for the order set always ends. When the budget runs out it is a
+ * 409 EFFECT_BUSY (retry the request).
  *  - 404 EFFECT_NOT_FOUND; 409 EFFECT_NOT_HELD when it is not an edit_reconcile effect terminal on a hold.
  *  - Idempotent: an effect that already carries an approval is returned unchanged and issues nothing more.
  */
@@ -74,9 +81,19 @@ export async function approveHeldEditIssuance(storeId: string, effectId: string,
   if (peek.effectKind !== 'edit_reconcile' || typeof orderId !== 'string') {
     throw new IssuanceApprovalError(409, 'EFFECT_NOT_HELD', 'Effect is not a held order-edit issuance');
   }
+  try {
+    return await approveLocked(storeId, effectId, orderId, approver);
+  } catch (e) {
+    if (e instanceof LockSetUnstable) throw new IssuanceApprovalError(409, 'EFFECT_BUSY', 'Effect is being processed; retry the approval');
+    throw e;
+  }
+}
+
+async function approveLocked(storeId: string, effectId: string, orderId: string, approver: { adminUserId: string; email: string }): Promise<ApproveResult> {
   return withLockedSet(storeId, { kind: 'order', orderId }, async (tx) => {
+    // NOWAIT, never a wait while holding the order set (see approveHeldEditIssuance): 55P03 restarts the whole transaction.
     const [cur] = await tx.select().from(s.orderPendingEffect)
-      .where(and(eq(s.orderPendingEffect.id, effectId), eq(s.orderPendingEffect.storeId, storeId))).limit(1).for('update');
+      .where(and(eq(s.orderPendingEffect.id, effectId), eq(s.orderPendingEffect.storeId, storeId))).limit(1).for('update', { noWait: true });
     const curOrderId = (cur?.payload as { orderId?: unknown } | null)?.orderId;
     if (!cur || cur.effectKind !== 'edit_reconcile' || curOrderId !== orderId) {
       throw new IssuanceApprovalError(409, 'EFFECT_NOT_HELD', 'Effect is not a held order-edit issuance');
@@ -98,7 +115,7 @@ export async function approveHeldEditIssuance(storeId: string, effectId: string,
     await executeEffectsNow(tx, [effectId]);
     const [after] = await tx.select({ status: s.orderPendingEffect.status }).from(s.orderPendingEffect).where(eq(s.orderPendingEffect.id, effectId)).limit(1);
     return { effectId, orderId, approvedNow: true, status: after?.status ?? 'unknown' };
-  });
+  }, { maxRestarts: 8 });
 }
 
 /** Unlocked first read: the effect's kind and payload, to learn which order to lock. */
