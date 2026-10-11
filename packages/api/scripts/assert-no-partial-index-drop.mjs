@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const DIR = fileURLToPath(new URL('../drizzle/', import.meta.url));
-const BAD = /drop\s+index[^;]*license_activation_token_hash/i;
+const BAD = /drop\s+index[^;]*(license_activation_token_hash|session_api_token_unique)/i;
 
 const offenders = [];
 for (const f of readdirSync(DIR)) {
@@ -18,8 +18,8 @@ for (const f of readdirSync(DIR)) {
 }
 
 if (offenders.length) {
-  console.error(`[assert-no-partial-index-drop] spurious DROP INDEX on license_activation_token_hash in: ${offenders.join(', ')}`);
-  console.error('Remove that line — drizzle-kit does not model the partial index (ra-007).');
+  console.error(`[assert-no-partial-index-drop] spurious DROP INDEX on license_activation_token_hash / session_api_token_unique in: ${offenders.join(', ')}`);
+  console.error('Remove that line — drizzle-kit does not model these partial indexes (ra-007; session_api_token_unique: 0094).');
   process.exit(1);
 }
-console.log('[assert-no-partial-index-drop] ok — no spurious license_activation index drop');
+console.log('[assert-no-partial-index-drop] ok — no spurious license_activation index drop (session_api_token_unique guarded too)');

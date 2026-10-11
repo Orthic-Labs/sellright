@@ -93,6 +93,7 @@ export const adminUser = pgTable('admin_user', {
   // nullable so every admin created by earlier flows (seed-admin, invites,
   // bootstrap) keeps working unchanged.
   name: text(),
+  kind: text().notNull().default('human'), // 'agent' = API-token identity (docs/plans/2026-10-10-agent-role-v5.md)
   // One-click install (plan §1.3): install-wide authority, distinct from any
   // per-store `owner` role. Owns system operations (backup/restore trigger,
   // recovery-kit download, add-store, future update trigger). Owning a store
@@ -144,6 +145,19 @@ export const staffInvite = pgTable('staff_invite', {
   createdAt: ts(),
 });
 
+export const adminApiToken = pgTable('admin_api_token', {
+  id: uuid().primaryKey().defaultRandom(),
+  adminUserId: uuid().notNull().references(() => adminUser.id, { onDelete: 'cascade' }),
+  storeId: uuid().notNull().references(() => store.id, { onDelete: 'cascade' }),
+  name: text().notNull(),
+  tokenHash: text().notNull().unique(),
+  createdBy: text(),
+  lastUsedAt: timestamp({ withTimezone: true }),
+  expiresAt: timestamp({ withTimezone: true }),
+  revokedAt: timestamp({ withTimezone: true }),
+  createdAt: ts(),
+});
+
 export const session = pgTable('session', {
   id: uuid().primaryKey().defaultRandom(),
   storeId: uuid().references(() => store.id),
@@ -157,6 +171,7 @@ export const session = pgTable('session', {
   // requireStepUp() in routes/admin-helpers.ts. Per-session, not per-admin:
   // stepping up in one browser tab must never grant it to another session.
   stepUpAt: timestamp({ withTimezone: true }),
+  apiTokenId: uuid().references(() => adminApiToken.id, { onDelete: 'cascade' }),
   createdAt: ts(),
 });
 

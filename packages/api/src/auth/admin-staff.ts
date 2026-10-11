@@ -66,12 +66,13 @@ export async function setAdminPassword(adminId: string, passwordHash: string): P
 /** List staff for a store with email + role + permissions, denormalized via the
  *  admin_user join. UI consumer. */
 export async function listStoreStaff(storeId: string): Promise<
-  Array<{ adminUserId: string; email: string; role: string; createdAt: Date; permissions: unknown }>
+  Array<{ adminUserId: string; email: string; kind: string; role: string; createdAt: Date; permissions: unknown }>
 > {
   return db
     .select({
       adminUserId: s.adminUser.id,
       email: s.adminUser.email,
+      kind: s.adminUser.kind,
       role: s.adminUserStore.role,
       createdAt: s.adminUser.createdAt,
       permissions: s.adminUserStore.permissions,
@@ -90,6 +91,18 @@ export async function findAdminIdByEmail(email: string): Promise<string | null> 
     .where(eq(s.adminUser.email, normalizeEmail(email)))
     .limit(1);
   return existing?.id ?? null;
+}
+
+/** Identity kind of an admin by exact (normalized) email, or null when no such admin. Agents are never created or invited through staff paths. */
+export async function adminKindByEmail(email: string): Promise<'human' | 'agent' | null> {
+  const [u] = await db.select({ kind: s.adminUser.kind }).from(s.adminUser).where(eq(s.adminUser.email, normalizeEmail(email))).limit(1);
+  return u ? (u.kind === 'agent' ? 'agent' : 'human') : null;
+}
+
+/** Identity kind of an admin by id, or null when no such admin. */
+export async function adminKindById(id: string): Promise<'human' | 'agent' | null> {
+  const [u] = await db.select({ kind: s.adminUser.kind }).from(s.adminUser).where(eq(s.adminUser.id, id)).limit(1);
+  return u ? (u.kind === 'agent' ? 'agent' : 'human') : null;
 }
 
 /** Create a new admin_user row, returning the id. Password has already been

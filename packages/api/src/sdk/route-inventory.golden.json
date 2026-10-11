@@ -1,6 +1,7 @@
 {
-  "count": 328,
+  "count": 333,
   "routes": [
+    "DELETE /v1/admin/agents/{adminUserId}",
     "DELETE /v1/admin/assets/{id}",
     "DELETE /v1/admin/blog/{id}",
     "DELETE /v1/admin/collections/{id}",
@@ -26,6 +27,7 @@
     "GET /v1/admin/affiliates",
     "GET /v1/admin/affiliates/{id}",
     "GET /v1/admin/affiliates/{id}/stats",
+    "GET /v1/admin/agents",
     "GET /v1/admin/apps/releases",
     "GET /v1/admin/assets",
     "GET /v1/admin/blog",
@@ -200,6 +202,9 @@
     "POST /v1/admin/affiliates",
     "POST /v1/admin/affiliates/{id}/settle",
     "POST /v1/admin/affiliates/link",
+    "POST /v1/admin/agents",
+    "POST /v1/admin/agents/{adminUserId}/rotate",
+    "POST /v1/admin/agents/browser-session",
     "POST /v1/admin/apps/releases",
     "POST /v1/admin/assets",
     "POST /v1/admin/blog",

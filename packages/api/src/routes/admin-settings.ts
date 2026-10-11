@@ -10,7 +10,7 @@ import { broadcastStoreCacheInvalidation } from '../store-context.js';
 import { env } from '../env.js';
 import { normalizeStorefrontUrl } from '../lib/storefront-url.js';
 import { generatePreviewToken, hashPreviewToken } from '../store-publish.js';
-import { HttpError, J, errBody, requireAdmin, requireStore, requireManage, guard } from './admin-helpers.js';
+import { HttpError, J, errBody, requireAdmin, requireStore, requireManage, requireHuman, guard } from './admin-helpers.js';
 // Circular with admin-system.ts (which imports mutateStoreConfig from here)
 // is safe: both bindings are only ever called from inside route handlers,
 // never at module-evaluation time, so ESM's live-binding semantics resolve
@@ -116,6 +116,7 @@ adminSettings.openapi(
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
+    requireHuman(admin); // agents have no 2FA (deny set already blocks the route; belt and braces)
     const secret = newTotpSecret(); // not persisted until /enable confirms a code
     return c.json({ secret, otpauthUri: otpauthUri(secret, admin.email) }, 200);
   }),
@@ -129,6 +130,7 @@ adminSettings.openapi(
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
+    requireHuman(admin);
     const { secret, code } = c.req.valid('json');
     // ra-sec: refuse to overwrite an existing factor. /disable requires the current
     // code, so replacing 2FA always proves possession of the old device — otherwise
@@ -149,6 +151,7 @@ adminSettings.openapi(
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
+    requireHuman(admin);
     const { code } = c.req.valid('json');
     const existing = await getAdminTotpSecret(admin.id);
     if (!existing) return c.json({ enabled: false }, 200);

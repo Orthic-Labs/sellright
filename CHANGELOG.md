@@ -12,6 +12,7 @@ must update the matching changelog in the same push.
 
 ### Added
 
+- Admin: **agent seats** — API-token login for automation (`kind=agent`), same roles and grants as staff, hard block on irreversible/identity/credential/system routes (`auth/agent-policy.ts`), token-bound browser sessions, `assert:agent-boundary` gate, `agent-token` owner script (docs/ADMIN-AGENTS.md).
 - **Payment policy hooks (PAYMENT-TIMING §3.1)**: `PaymentPolicy` gains `authorizeInvoiceEffect` (subscription entitlement effects, effects worker), `revalidateForIssuance` (issuance effects, under the order lock set), `onReservationTransition` (projection in the transition's own transaction), `shapeSettlementResponse` (`/pay` response shaping only) and `lockPlan` (lock-set plan contributor). `beforePaymentAttempt` may return `reserve` requests; the engine creates the `order_reservation` rows in the same transaction. Placement tenders (zero total, gift card, admin manual `markPaid`, order-edit `record_payment`) run the placement check. Defaults allow, apply, ok and no-op, so SellRight standalone behaviour is unchanged. Exported from `@sellright/api/payments`.
 - Admin order purge refuses while a held reservation has provider work that could still move money, and releases the order's reservations (projected as `order_purged`) before the order row is deleted.
 

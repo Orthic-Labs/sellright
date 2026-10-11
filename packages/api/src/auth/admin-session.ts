@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { and, eq, gt, isNotNull } from 'drizzle-orm';
-import { unsafeUnscopedDb as db } from '../db/client.js';
+import { unsafeUnscopedDb as db, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { normalizeEmail } from './email.js';
 
@@ -21,6 +21,12 @@ export interface AdminStoreAccess {
 export interface AdminPrincipal {
   id: string;
   email: string;
+  /** 'agent' = API-token identity (docs/plans/2026-10-10-agent-role-v5.md); 'human' = everyone else. */
+  kind: 'human' | 'agent';
+  /** How this request authenticated: a cookie/bearer session, or an `sra_` API token directly. */
+  auth: 'session' | 'api_token';
+  /** The admin_api_token that minted/authenticates this principal (agents only), else null. */
+  apiTokenId: string | null;
   /** Install-wide authority (plan §1.3) — distinct from any per-store 'owner'
    *  role. Gates system operations (backup/restore, recovery-kit download,
    *  add-store). See requireInstallationAdmin() in admin-helpers.ts. */
@@ -48,6 +54,13 @@ export async function createAdminSession(adminUserId: string): Promise<string> {
   return token;
 }
 
+/** Transaction-aware session insert for agent browser sessions: the session carries the token binding. */
+export async function createAdminSessionTx(tx: Tx, adminUserId: string, ttlMs: number, apiTokenId: string | null): Promise<string> {
+  const token = randomBytes(32).toString('hex');
+  await tx.insert(s.session).values({ adminUserId, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + ttlMs), apiTokenId });
+  return token;
+}
+
 export async function deleteAdminSession(token: string): Promise<void> {
   await db.delete(s.session).where(eq(s.session.tokenHash, hashToken(token)));
 }
@@ -64,7 +77,13 @@ export async function resolveAdmin(token: string): Promise<AdminPrincipal | null
       id: s.adminUser.id,
       email: s.adminUser.email,
       isInstallationAdmin: s.adminUser.isInstallationAdmin,
+      kind: s.adminUser.kind,
       stepUpAt: s.session.stepUpAt,
+      apiTokenId: s.session.apiTokenId,
+      tokenAdminUserId: s.adminApiToken.adminUserId,
+      tokenStoreId: s.adminApiToken.storeId,
+      tokenRevokedAt: s.adminApiToken.revokedAt,
+      tokenExpiresAt: s.adminApiToken.expiresAt,
       storeId: s.store.id,
       slug: s.store.slug,
       name: s.store.name,
@@ -76,6 +95,7 @@ export async function resolveAdmin(token: string): Promise<AdminPrincipal | null
     })
     .from(s.session)
     .innerJoin(s.adminUser, eq(s.adminUser.id, s.session.adminUserId))
+    .leftJoin(s.adminApiToken, eq(s.adminApiToken.id, s.session.apiTokenId))
     .leftJoin(s.adminUserStore, eq(s.adminUserStore.adminUserId, s.adminUser.id))
     .leftJoin(s.store, eq(s.store.id, s.adminUserStore.storeId))
     .where(
@@ -99,7 +119,16 @@ export async function resolveAdmin(token: string): Promise<AdminPrincipal | null
       role: r.role as AdminStoreAccess['role'],
       permissions: (r.permissions as Record<string, boolean> | null) ?? null,
     }));
-  return { id: first.id, email: first.email, isInstallationAdmin: first.isInstallationAdmin, stepUpAt: first.stepUpAt, stores };
+  const kind = first.kind === 'agent' ? 'agent' : 'human';
+  if (first.apiTokenId) {
+    // Token-bound session: the token must be live AND belong to this admin on this single store.
+    if (first.tokenRevokedAt || (first.tokenExpiresAt && first.tokenExpiresAt.getTime() <= Date.now())) return null;
+    if (first.tokenAdminUserId !== first.id || stores.length !== 1 || first.tokenStoreId !== stores[0]!.storeId) return null;
+  }
+  // Token-bound sessions belong to agents only; agents only ever hold token-bound sessions, on exactly one store, never as owner (D2).
+  if (first.apiTokenId && kind !== 'agent') return null; // invalid state (Astra v5 F12): a human must never inherit a token binding
+  if (kind === 'agent' && (!first.apiTokenId || stores.length !== 1 || stores[0]!.role === 'owner')) return null;
+  return { id: first.id, email: first.email, kind, auth: 'session', apiTokenId: first.apiTokenId, isInstallationAdmin: first.isInstallationAdmin, stepUpAt: first.stepUpAt, stores };
 }
 
 /** Records that THIS session (identified by its own bearer token, not the
@@ -112,7 +141,7 @@ export async function markStepUpVerified(token: string): Promise<void> {
 /** Find an admin user by email — global registry lookup on the default db client. */
 export async function findAdminByEmail(email: string) {
   const [u] = await db
-    .select({ id: s.adminUser.id, email: s.adminUser.email, passwordHash: s.adminUser.passwordHash, totpSecret: s.adminUser.totpSecret })
+    .select({ id: s.adminUser.id, email: s.adminUser.email, kind: s.adminUser.kind, passwordHash: s.adminUser.passwordHash, totpSecret: s.adminUser.totpSecret })
     .from(s.adminUser)
     .where(eq(s.adminUser.email, normalizeEmail(email)))
     .limit(1);

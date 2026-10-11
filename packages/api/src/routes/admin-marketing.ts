@@ -5,7 +5,7 @@ import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { assertSafeOutboundUrl, safeOutboundFetch } from '../security/outbound-url.js';
 import { broadcastStoreCacheInvalidation } from '../store-context.js';
-import { HttpError, J, errBody, money, requireAdmin, requireStore, requireWrite, requireManage, requirePermission, guard, Page } from './admin-helpers.js';
+import { HttpError, J, errBody, money, requireAdmin, requireStore, requireWrite, requireManage, requireHuman, requirePermission, guard, Page } from './admin-helpers.js';
 import { err as logErr } from '../lib/logger.js';
 import { syncPromotionAffiliate } from '../affiliate/onboarding.js';
 
@@ -474,12 +474,13 @@ adminMarketing.openapi(
     const st = requireStore(admin, c); requirePermission(st, 'giftcards');
     const b = c.req.valid('json');
     const code = b.code || giftCode();
+    const enabled = admin.kind !== 'agent'; // D12: a card an agent issues starts disabled; a human enables it
     const res = await withStore(st.storeId, async (tx) => {
       const [dupe] = await tx.select({ id: s.giftCard.id }).from(s.giftCard).where(eq(s.giftCard.code, code)).limit(1);
       if (dupe) return { dupe: true as const };
-      const [g] = await tx.insert(s.giftCard).values({ storeId: st.storeId, code, initialBalance: b.balance, balance: b.balance, expiresAt: b.expiresAt ? new Date(b.expiresAt) : null }).returning({ id: s.giftCard.id });
+      const [g] = await tx.insert(s.giftCard).values({ storeId: st.storeId, code, initialBalance: b.balance, balance: b.balance, enabled, expiresAt: b.expiresAt ? new Date(b.expiresAt) : null }).returning({ id: s.giftCard.id });
       await tx.insert(s.giftCardTransaction).values({ storeId: st.storeId, giftCardId: g!.id, amount: b.balance });
-      await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'gift_card', entityId: g!.id, action: 'issue', data: { balance: b.balance } });
+      await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'gift_card', entityId: g!.id, action: 'issue', data: { balance: b.balance, enabled } });
       return { id: g!.id };
     });
     if ('dupe' in res) throw new HttpError(409, 'gift card code already exists');
@@ -498,6 +499,7 @@ adminMarketing.openapi(
     const st = requireStore(admin, c); requireManage(st);
     const { id } = c.req.valid('param');
     const b = c.req.valid('json');
+    if (b.enabled === true || b.adjust) requireHuman(admin); // D12: enabling or changing balance is a human act; disabling stays allowed
     const res = await withStore(st.storeId, async (tx) => {
       const [g] = await tx.select().from(s.giftCard).where(eq(s.giftCard.id, id)).limit(1);
       if (!g) return null;

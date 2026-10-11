@@ -10,7 +10,7 @@ import * as s from '../db/schema.js';
 import { cancelOrderStripeIntents } from '../payments/stripe-reconcile.js';
 import { releaseOrderLoyalty } from '../loyalty/ledger.js';
 import { dispute } from '../db/schema-ops.js';
-import { HttpError, J, errBody, money, Page, requireAdmin, requireStore, requireWrite, requireManage, requirePermission, guard } from './admin-helpers.js';
+import { HttpError, J, errBody, money, Page, requireAdmin, requireStore, requireWrite, requireManage, requireHuman, requirePermission, guard } from './admin-helpers.js';
 import { calculateOrderTotals } from '../money/totals.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
 import { reserveStockOrThrow, StockReservationError, validateReservableItems } from '../orders/stock-reservation.js';
@@ -68,6 +68,7 @@ adminOrderOps.openapi(
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c); requireWrite(st);
     const body = c.req.valid('json');
+    if (body.markPaid) requireHuman(admin); // D10: an agent prepares the draft, a human marks it paid
     const items = body.items as Array<{ sku: string; quantity: number }>;
     const skus = [...new Set(items.map((i) => i.sku))];
     // Zero-cache stock rule: true only if a reservation from a transaction that

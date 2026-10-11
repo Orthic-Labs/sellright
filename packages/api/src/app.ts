@@ -35,6 +35,8 @@ import { adminContent } from './routes/admin-content.js';
 import { adminAssets } from './routes/admin-assets.js';
 import { adminPush } from './routes/admin-push.js';
 import { adminLicenses } from './routes/admin-licenses.js';
+import { adminAgents } from './routes/admin-agents.js';
+import { adminAgentGuard } from './routes/admin-agent-guard.js';
 import { shopExtra } from './routes/shop-extra.js';
 import { subscriberRoutes } from './routes/shop-extra.subscriber.js';
 import { feeds } from './routes/feeds.js';
@@ -183,6 +185,10 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
     }
     await next();
   });
+
+  // Agent seats (docs/plans/2026-10-10-agent-role-v5.md): resolves the admin principal once and applies the
+  // agent deny set (auth/agent-policy.ts) before any handler runs. After CSRF so cookie mutations are still CSRF-checked.
+  app.use('/v1/admin/*', adminAgentGuard);
 
   // Shop-surface CSRF guard (WP1.1). Mirrors the admin block: cookie-session
   // requests must double-submit the customer CSRF token. Bearer/API clients are
@@ -398,6 +404,7 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
   app.route('/', adminAssets); // WP8: asset upload + management
   app.route('/', adminPush); // mobile push: device registration (0039)
   app.route('/', adminLicenses); // mint/list software licenses (comp/support/creator, audited)
+  app.route('/', adminAgents); // agent seats: API-token identities with ordinary roles (deny set in auth/agent-policy.ts)
   app.route('/', shopExtra); // shop: guest tracking, public blog, shipping eligibility, newsletter
   app.route('/', subscriberRoutes); // subscriber confirm + unsubscribe (SUBSCRIBER-1)
   app.route('/', adminSeo); // SEO-1: admin SEO config + admin-triggered IndexNow submit

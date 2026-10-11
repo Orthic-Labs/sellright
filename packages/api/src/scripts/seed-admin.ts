@@ -21,7 +21,12 @@ async function main() {
   }
   const passwordHash = await hashPassword(password);
 
-  const existing = await db.select({ id: s.adminUser.id }).from(s.adminUser).where(eq(s.adminUser.email, email)).limit(1);
+  const existing = await db.select({ id: s.adminUser.id, kind: s.adminUser.kind }).from(s.adminUser).where(eq(s.adminUser.email, email)).limit(1);
+  // Agent identities (admin_user.kind = 'agent') never get a password or an owner grant — refuse before ANY write.
+  if (existing[0]?.kind === 'agent') {
+    console.error(`[script] refusing to touch agent identity ${email}`);
+    process.exit(3);
+  }
   let adminId: string;
   if (existing.length) {
     adminId = existing[0]!.id;
