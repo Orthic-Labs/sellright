@@ -5,7 +5,7 @@ import {
 import"dotenv/config";
 import express from"express";
 import { randomBytes } from"node:crypto";
-import { join, dirname, basename } from"node:path";
+import { join, dirname, basename, posix } from"node:path";
 import { fileURLToPath } from"node:url";
 import render from"./entry.ssr";
 import { sellrightRequestCookie } from"./utils/sellright-request-context.server";
@@ -180,7 +180,10 @@ const NEVER_STATIC = /\.html?(\.(gz|br))?$|(^|\/)q-(data|loader)[^/]*\.json(\.(g
 export const neverServedFromDisk = (rawPath: string): boolean => {
   let decoded: string;
   try { decoded = decodeURIComponent(rawPath); } catch { return true; }
-  return NEVER_STATIC.test(decoded.replace(/\\/g, '/'));
+  // Normalise the way the static handler does before it opens a file (dot segments, repeated and trailing slashes),
+  // so `index.html/.` or `x/../index.html` is judged as the file it would resolve to.
+  const normalized = posix.normalize(decoded.replace(/\\/g, '/')).replace(/\/+$/, '');
+  return NEVER_STATIC.test(normalized);
 };
 const rootStatic = express.static(distDir, {
   index: false, // Pages need fresh loaders and the per-request CSP nonce.
