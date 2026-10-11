@@ -5,9 +5,16 @@
 // TypeScript compiler API and flags any tagged template whose tag expression, once parentheses / `as` / `satisfies` /
 // non-null / type assertions / comma sequences are peeled, is an identifier or member named gql or graphql.
 //
+// Known gaps (a syntactic check cannot follow values): an aliased tag (`const q = gql; q\`...\``), a renamed import
+// (`import { gql as g }` then g\`...\``), and a tag obtained from a call or a computed key. The grep pass for the
+// `@vendure` / `graphql` words still catches the usual import that would introduce such a tag.
+//
+// Exit codes: 0 clean, 1 hits found (printed on stdout), 2 usage error or unreadable file. The shell guard treats any
+// non-zero exit with no hit lines as a scanner failure, so an uncaught crash (also exit 1 in node) cannot pass.
 // Usage: node scripts/assert-no-gql-tags.mjs [--skip <dir>]... <dir-or-file>...   (exit 1 on any hit; hits printed as file:line:col)
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import ts from 'typescript';
 
 const TAG_NAMES = new Set(['gql', 'graphql']);
@@ -67,7 +74,7 @@ function* walk(p, skip = []) {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   let failed = false;
   const args = process.argv.slice(2);
   const skip = [];
@@ -76,7 +83,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     if (args[i] === '--skip') skip.push(resolve(args[++i]));
     else roots.push(args[i]);
   }
+  if (roots.length === 0) { console.error('assert-no-gql-tags: no path given'); process.exit(2); }
   for (const root of roots) {
+    if (!statSync(root, { throwIfNoEntry: false })) { console.error(`assert-no-gql-tags: missing path ${root}`); process.exit(2); }
     for (const f of walk(root, skip)) {
       for (const h of findGqlTags(f, readFileSync(f, 'utf8'))) {
         console.log(`${f}:${h.line}:${h.col}: tagged template with '${h.name}' tag`);

@@ -1,7 +1,7 @@
 // node --test scripts/assert-no-gql-tags.test.mjs   (from the repo root)
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { symlinkSync, copyFileSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
@@ -72,4 +72,42 @@ test('CLI exits 1 on a hit and 0 on a clean tree', () => {
   const r = run();
   assert.equal(r.status, 1);
   assert.match(r.stdout, /bad\.ts:1:\d+: tagged template/);
+});
+
+// The shell guard, in a throwaway repo layout (it cd's to its own parent dir).
+function guardRepo({ scanner, files = {} }) {
+  const root = mkdtempSync(join(tmpdir(), 'sr-guard-'));
+  dirs.push(root);
+  mkdirSync(join(root, 'scripts'));
+  copyFileSync(join(here, 'assert-no-vendure.sh'), join(root, 'scripts', 'assert-no-vendure.sh'));
+  if (scanner === 'real') copyFileSync(join(here, 'assert-no-gql-tags.mjs'), join(root, 'scripts', 'assert-no-gql-tags.mjs'));
+  else writeFileSync(join(root, 'scripts', 'assert-no-gql-tags.mjs'), scanner);
+  mkdirSync(join(root, 'packages', 'api', 'src'), { recursive: true });
+  for (const [rel, body] of Object.entries(files)) writeFileSync(join(root, rel), body);
+  // typescript resolves from the real repo's node_modules
+  mkdirSync(join(root, 'node_modules'));
+  symlinkSync(join(here, '..', 'node_modules', 'typescript'), join(root, 'node_modules', 'typescript'));
+  return spawnSync('bash', [join(root, 'scripts', 'assert-no-vendure.sh')], { encoding: 'utf8' });
+}
+
+test('shell guard: a crashing scanner fails the guard instead of passing it', () => {
+  for (const scanner of ['throw new Error("boom");', 'process.exit(2);', 'process.exit(1);']) {
+    const r = guardRepo({ scanner });
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.match(r.stdout, /AST scanner failed/);
+  }
+});
+
+test('shell guard: a missing typescript module fails the guard', () => {
+  const r = guardRepo({ scanner: "import ts from 'definitely-not-installed-pkg'; console.log(ts);" });
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /AST scanner failed/);
+});
+
+test('shell guard: real scanner passes a clean tree and fails a wrapped tag', () => {
+  const ok = guardRepo({ scanner: 'real', files: { 'packages/api/src/a.ts': 'export const a = sql`x`;' } });
+  assert.equal(ok.status, 0, ok.stdout + ok.stderr);
+  const bad = guardRepo({ scanner: 'real', files: { 'packages/api/src/a.ts': 'export const a = (gql)`x`;' } });
+  assert.equal(bad.status, 1);
+  assert.match(bad.stdout, /GraphQL tagged template found/);
 });

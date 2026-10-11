@@ -88,7 +88,14 @@ check_scope() {
   local ast_args=("$scope")
   if [ "$scope" = "packages/api/src" ]; then ast_args=(--skip packages/api/src/import "$scope"); fi
   local ast_hits
-  ast_hits=$(node scripts/assert-no-gql-tags.mjs "${ast_args[@]}") || true
+  local ast_rc=0
+  ast_hits=$(node scripts/assert-no-gql-tags.mjs "${ast_args[@]}") || ast_rc=$?
+  # A non-zero exit WITHOUT hit lines on stdout is the scanner itself failing (crash, missing module, bad path —
+  # node exits 1 on an uncaught error just like a real hit), which must never read as a pass.
+  if [ "$ast_rc" -ne 0 ] && [ -z "$ast_hits" ]; then
+    echo "assert-no-vendure: [$label] AST scanner failed (exit $ast_rc) — guard cannot vouch for this scope"
+    FAIL=1
+  fi
   if [ -n "$ast_hits" ]; then
     echo "assert-no-vendure: [$label] GraphQL tagged template found:"
     echo "$ast_hits"

@@ -117,3 +117,20 @@ test('the word gql without a template, and a same-line template, behave as befor
   assert.equal(checkNoVendure({ root: fixture({ base: { 'src/ok.ts': 'const gqlish = 1; // the gql word alone\nconst s = `x`;\n' } }) }).length, 0);
   assert.equal(checkNoVendure({ root: fixture({ base: { 'src/q.ts': 'const a = gql`{ a }`;\n' } }) }).length, 1); // one finding, not two
 });
+
+test('a wrapped gql tag (parens, as, satisfies, non-null, comma, member) is found by the syntax-aware pass', () => {
+  const shapes = {
+    parens: 'const a = (gql)`{ a }`;\n',
+    as_cast: 'const a = (gql as any)`{ a }`;\n',
+    non_null: 'const a = gql!`{ a }`;\n',
+    comma: 'const a = (0, gql)`{ a }`;\n',
+    member_parens: 'const a = (client.gql)`{ a }`;\n',
+    satisfies: 'const a = (gql satisfies T)`{ a }`;\n',
+  };
+  for (const [name, text] of Object.entries(shapes)) {
+    const findings = checkNoVendure({ root: fixture({ base: { 'src/q.ts': text } }) });
+    assert.equal(findings.length, 1, name);
+    assert.equal(findings[0].line, 1, name);
+  }
+  assert.equal(checkNoVendure({ root: fixture({ base: { 'src/ok.ts': 'const a = (sql)`x`;\n' } }) }).length, 0);
+});
