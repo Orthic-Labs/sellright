@@ -193,17 +193,21 @@ describe('POST /v1/shop/auth/apple', () => {
     });
     await lockedP;
     const pending = signIn(SLUG_APPLE, appleJwt({ sub: 'sub-race-a', email: 'race@icloud.com' }));
-    // Wait until the sign-in's UPDATE is actually waiting on C's lock (bounded poll, no fixed sleep).
+    // Wait until the sign-in's UPDATE is actually waiting on C's lock (bounded poll, no fixed sleep). Always release C,
+    // or a failed poll leaves the row locked and every later TRUNCATE in this file hangs.
     let waiting = false;
-    for (let i = 0; i < 200 && !waiting; i++) {
-      waiting = (await pool.query(
-        `SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query ILIKE 'UPDATE customer SET apple_user_id%'`,
-      )).rowCount! > 0;
-      if (!waiting) await new Promise((r) => setTimeout(r, 25));
+    try {
+      for (let i = 0; i < 200 && !waiting; i++) {
+        waiting = (await pool.query(
+          `SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query ILIKE 'UPDATE customer SET apple_user_id%'`,
+        )).rowCount! > 0;
+        if (!waiting) await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(waiting, 'sign-in UPDATE should be blocked on the row lock').toBe(true);
+    } finally {
+      release();
+      await holder.catch(() => {});
     }
-    expect(waiting, 'sign-in UPDATE should be blocked on the row lock').toBe(true);
-    release();
-    await holder;
     const res = await pending;
     expect(res.status).toBe(409);
     expect(await appleRow(STORE_APPLE, 'sub-race-a')).toBeUndefined();
