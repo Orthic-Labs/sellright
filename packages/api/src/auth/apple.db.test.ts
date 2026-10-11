@@ -163,6 +163,19 @@ describe('POST /v1/shop/auth/apple', () => {
     expect((await appleRow(STORE_APPLE, 'other-sub'))?.email).toBe('bound@icloud.com');
   });
 
+  it('concurrent first links with two different subs: exactly one wins, the other 409s, no rebind', async () => {
+    const custId = await seed('race@icloud.com', true);
+    const [a, b] = await Promise.all([
+      signIn(SLUG_APPLE, appleJwt({ sub: 'sub-race-a', email: 'race@icloud.com' })),
+      signIn(SLUG_APPLE, appleJwt({ sub: 'sub-race-b', email: 'race@icloud.com' })),
+    ]);
+    expect([a.status, b.status].sort()).toEqual([200, 409]);
+    const winner = a.status === 200 ? 'sub-race-a' : 'sub-race-b';
+    const loser = a.status === 200 ? 'sub-race-b' : 'sub-race-a';
+    expect((await appleRow(STORE_APPLE, winner))?.id).toBe(custId);
+    expect(await appleRow(STORE_APPLE, loser)).toBeUndefined();
+  });
+
   it('still signs in an already-linked Apple subject on any address', async () => {
     const custId = await seed('old@corp.example', true, null, 'sub-abc-123');
     const res = await signIn(SLUG_APPLE, appleJwt({ email: 'old@corp.example' }));

@@ -329,7 +329,7 @@ auth.openapi(
     responses: {
       200: { description: 'OK', content: { 'application/json': { schema: z.object({ token: z.string(), customer: CustomerOut }) } } },
       401: { description: 'Invalid token', content: { 'application/json': { schema: apiErrorSchema() } } },
-      409: { description: 'Not configured, or an unverified account already owns this email', content: { 'application/json': { schema: apiErrorSchema() } } },
+      409: { description: 'Not configured (APPLE_SIGNIN_NOT_CONFIGURED), an unverified account owns this email (EMAIL_TAKEN_UNVERIFIED), or an account with this email exists and Apple is not authoritative for it / is bound to another Apple subject (EMAIL_TAKEN)', content: { 'application/json': { schema: apiErrorSchema() } } },
     },
   }),
   async (c) => {
@@ -360,12 +360,23 @@ auth.openapi(
         // owner's account; (3) never overwrite an account already bound to a
         // different Apple subject. Fail closed with no session. An existing
         // email must NEVER fall through to INSERT (duplicate / oracle).
+        // NOTE: the apple_user_id match above is per store, not per audience/
+        // team. A user who previously signed in under a different Apple team
+        // (different per-team `sub` for the same Apple ID, e.g. after a
+        // bundle-id / audience change) no longer relinks to their account by
+        // email: they get 409 EMAIL_TAKEN and must sign in another way. There
+        // is no signed-in "link Apple" endpoint yet, so the 409 message points
+        // only at sign-in methods that exist; it does not promise a link step.
         if (byEmail) {
           if (!byEmail.email_verified && byEmail.password_hash) return { kind: 'blocked' };
           if (!appleAuthoritativeForEmail(apple) || (byEmail.apple_user_id && byEmail.apple_user_id !== sub)) {
             return { kind: 'not_linkable' };
           }
-          await tx.execute(sql`UPDATE customer SET apple_user_id = ${sub}, email_verified = true, updated_at = now() WHERE id = ${byEmail.id}`);
+          // Race guard: the SELECT above is not locked, so re-assert in the
+          // WHERE that the row is still unbound (or already ours). A concurrent
+          // sign-in with another Apple subject that bound it first -> 0 rows.
+          const linked = (await tx.execute(sql`UPDATE customer SET apple_user_id = ${sub}, email_verified = true, updated_at = now() WHERE id = ${byEmail.id} AND (apple_user_id IS NULL OR apple_user_id = ${sub}) RETURNING id`)).rows;
+          if (!linked.length) return { kind: 'not_linkable' };
           cust = { ...byEmail, email_verified: true };
         }
       }
@@ -388,7 +399,7 @@ auth.openapi(
       return errJson(c, 409, 'EMAIL_TAKEN_UNVERIFIED', 'an account with this email already exists — sign in with your password and verify your email first');
     }
     if (out.kind === 'not_linkable') {
-      return errJson(c, 409, 'EMAIL_TAKEN', 'an account with this email already exists — sign in with your password or a sign-in link first');
+      return errJson(c, 409, 'EMAIL_TAKEN', 'an account with this email already exists — sign in with your password or a sign-in link instead');
     }
     setCustomerCookies(c, out.token, newCsrf(), customerCookieSeconds(st));
     return c.json({ token: out.token, customer: out.customer }, 200);
