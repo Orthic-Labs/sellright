@@ -24,6 +24,7 @@ import {
   staffInvite,
   passwordReset,
   emailVerify,
+  federatedLinkConfirm,
   emailAddressChange,
   emailAddressChangedNotice,
   orderRefundConfirmation,
@@ -53,6 +54,7 @@ export const EMAIL_KIND = {
   EMAIL_CHANGE: 'email_change',
   EMAIL_CHANGED_NOTICE: 'email_changed_notice',
   MAGIC_LINK: 'magic_link',
+  FEDERATED_LINK_CONFIRM: 'federated_link_confirm',
   ORDER_REFUND_CONFIRMATION: 'order-refund-confirmation',
   ORDER_UPDATED: 'order_updated',
   ORDER_BALANCE_DUE: 'order_balance_due',
@@ -223,6 +225,22 @@ export async function enqueueMagicLink(tx: Tx, storeId: string, store: StoreEmai
   const rendered = magicLinkAccess(ctx, { url: data.url, ttlMinutes: data.ttlMinutes, isNewAccount: data.isNewAccount ?? false });
   const inserted = await enqueueEmail(tx, storeId, {
     kind: EMAIL_KIND.MAGIC_LINK,
+    dedupeKey: data.dedupeKey,
+    recipient: to,
+    payload: { to, from: ctx.fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },
+  });
+  if (inserted) afterCommit(tx, wakeEmailDelivery);
+  return inserted;
+}
+
+/** Confirmation link for a federated sign-in the provider could not vouch for (auth/federated-link.ts). */
+export async function enqueueFederatedLinkConfirm(tx: Tx, storeId: string, store: StoreEmailCtx, to: string, data: {
+  url: string; providerName: string; providerEmail: string; ttlMinutes: number; dedupeKey?: string;
+}): Promise<boolean> {
+  const ctx = emailCtx(store);
+  const rendered = federatedLinkConfirm(ctx, data);
+  const inserted = await enqueueEmail(tx, storeId, {
+    kind: EMAIL_KIND.FEDERATED_LINK_CONFIRM,
     dedupeKey: data.dedupeKey,
     recipient: to,
     payload: { to, from: ctx.fromEmail, subject: rendered.subject, html: rendered.html, text: rendered.text },

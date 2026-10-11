@@ -94,10 +94,10 @@ describe('POST /v1/shop/auth/apple', () => {
   });
 
   it('creates a passwordless account keyed by sub and returns a session', async () => {
-    const res = await signIn(SLUG_APPLE, appleJwt({ email: 'ap@example.com' }));
+    const res = await signIn(SLUG_APPLE, appleJwt({ email: 'ap@icloud.com' }));
     expect(res.status).toBe(200);
     const body = await res.json() as { token: string; customer: { id: string; email: string; emailVerified: boolean; isMigrated: boolean } };
-    expect(body.customer.email).toBe('ap@example.com');
+    expect(body.customer.email).toBe('ap@icloud.com');
     expect(body.customer.emailVerified).toBe(true);
     expect(body.customer.isMigrated).toBe(true); // passwordless == credential-less
     expect(body.token.length).toBeGreaterThan(20);
@@ -120,11 +120,11 @@ describe('POST /v1/shop/auth/apple', () => {
   const count = (email: string) => withStore(STORE_APPLE, async (tx) =>
     Number((await tx.execute(sql`SELECT count(*)::int AS n FROM customer WHERE email = ${email} AND store_id = ${STORE_APPLE}`)).rows[0]!.n));
 
-  it('does NOT link or sign in a non-Apple-controlled address (fail closed, no session, no duplicate row)', async () => {
+  it('does NOT link or sign in a non-Apple-controlled address: 202 + mailed link, no session, no duplicate row', async () => {
     await seed('victim@corp.example', true);
     const res = await signIn(SLUG_APPLE, appleJwt({ email: 'victim@corp.example' }));
-    expect(res.status).toBe(409);
-    expect(res.headers.get('set-cookie')).toBeNull();
+    expect(res.status).toBe(202);
+    expect(res.headers.get('set-cookie')).not.toMatch(/sr_cust/);
     expect(await appleRow(STORE_APPLE, 'sub-abc-123')).toBeUndefined();
     expect(await count('victim@corp.example')).toBe(1);
   });
@@ -132,7 +132,7 @@ describe('POST /v1/shop/auth/apple', () => {
   it('is not linkable via gmail either (Apple is not authoritative for Google mail)', async () => {
     await seed('someone@gmail.com', true);
     const res = await signIn(SLUG_APPLE, appleJwt({ email: 'someone@gmail.com' }));
-    expect(res.status).toBe(409);
+    expect(res.status).toBe(202);
     expect(await appleRow(STORE_APPLE, 'sub-abc-123')).toBeUndefined();
   });
 
@@ -221,10 +221,10 @@ describe('POST /v1/shop/auth/apple', () => {
     expect(((await res.json()) as { customer: { id: string } }).customer.id).toBe(custId);
   });
 
-  it('creates an account for a brand-new non-Apple email', async () => {
+  it('a brand-new non-Apple email is NOT created on sign-in (202); only the emailed link creates it', async () => {
     const res = await signIn(SLUG_APPLE, appleJwt({ email: 'fresh@corp.example' }));
-    expect(res.status).toBe(200);
-    expect(await count('fresh@corp.example')).toBe(1);
+    expect(res.status).toBe(202);
+    expect(await count('fresh@corp.example')).toBe(0);
   });
 
   it('links an existing customer by email (Apple-hosted), then matches by sub', async () => {
@@ -241,5 +241,150 @@ describe('POST /v1/shop/auth/apple', () => {
     expect(res.status).toBe(200);
     const row = await appleRow(STORE_APPLE, 'sub-noemail');
     expect(row?.email).toBe('apple-sub-noemail@no-email.invalid');
+  });
+});
+
+// --- Non-authoritative Apple identities: uniform 202 + browser-bound, single-use confirmation link ----------------
+const outbox = () => withStore(STORE_APPLE, async (tx) =>
+  (await tx.execute(sql`SELECT kind, recipient, payload FROM email_outbox ORDER BY created_at`)).rows as Array<{ kind: string; recipient: string; payload: { text: string; subject: string } }>);
+const NONCE_COOKIE = 'sr_fed_link';
+const nonceCookieOf = (res: Response) => new RegExp(`${NONCE_COOKIE}=[^;]+`).exec(res.headers.get('set-cookie') ?? '')?.[0];
+const tokenFrom = (row: { payload: { text: string } }) => /sign-in\/confirm\?token=([^\s")<]+)/.exec(row.payload.text)![1]!;
+const confirm = (token: string, headers: Record<string, string> = {}) =>
+  app.request('/v1/shop/auth/federated/confirm', { method: 'POST', headers: { ...hdr(SLUG_APPLE), ...headers }, body: JSON.stringify({ token }) });
+async function startFlow(email: string, sub: string) {
+  const res = await signIn(SLUG_APPLE, appleJwt({ sub, email }));
+  expect(res.status).toBe(202);
+  const rows = await outbox();
+  return { res, cookie: nonceCookieOf(res)!, token: tokenFrom(rows[rows.length - 1]!) };
+}
+const seedC = (email: string, appleSub: string | null = null, verified = true, passwordHash: string | null = null) =>
+  withStore(STORE_APPLE, async (tx) => {
+    const r = await tx.execute(sql`INSERT INTO customer (store_id, email, email_verified, password_hash, apple_user_id) VALUES (${STORE_APPLE}, ${email}, ${verified}, ${passwordHash}, ${appleSub}) RETURNING id`);
+    return (r.rows[0] as { id: string }).id;
+  });
+const customers = async () => Number((await pool.query('SELECT count(*)::int AS n FROM customer')).rows[0].n);
+const sessions = async () => Number((await pool.query('SELECT count(*)::int AS n FROM "session"')).rows[0].n);
+
+describe('POST /v1/shop/auth/apple non-authoritative identity', () => {
+  it('answers identically for an existing and an unknown address, including cookie attributes', async () => {
+    await seedC('known-i@corp.example');
+    const a = await signIn(SLUG_APPLE, appleJwt({ sub: 'ap-i1', email: 'known-i@corp.example' }));
+    const aBody = await a.text();
+    const b = await signIn(SLUG_APPLE, appleJwt({ sub: 'ap-i2', email: 'nobody-i@corp.example' }));
+    const bBody = await b.text();
+    expect(a.status).toBe(202);
+    expect(b.status).toBe(202);
+    expect(bBody).toBe(aBody);
+    expect(JSON.parse(aBody)).toEqual({ verificationRequired: true });
+    const attrs = (r: Response) => (r.headers.get('set-cookie') ?? '').replace(/sr_fed_link=[^;]+/, 'sr_fed_link=<n>');
+    expect(attrs(a)).toBe(attrs(b));
+    expect(attrs(a)).toMatch(/HttpOnly/);
+    expect(attrs(a)).toMatch(/SameSite=Lax/);
+    expect(attrs(a)).not.toMatch(/sr_cust/);
+  });
+
+  it('sends one Apple-named email with identical content for both cases and creates nothing', async () => {
+    await seedC('known-m@corp.example');
+    await startFlow('known-m@corp.example', 'ap-m1');
+    await startFlow('nobody-m@corp.example', 'ap-m2');
+    const rows = await outbox();
+    expect(rows.map((r) => [r.kind, r.recipient])).toEqual([['federated_link_confirm', 'known-m@corp.example'], ['federated_link_confirm', 'nobody-m@corp.example']]);
+    const norm = (r: (typeof rows)[number]) => r.payload.text.replace(/token=[^\s")<]+/, 'token=<t>').replaceAll(r.recipient, '<addr>');
+    expect(norm(rows[0]!)).toBe(norm(rows[1]!));
+    expect(rows[0]!.payload.subject).toMatch(/Apple/);
+    expect(rows[0]!.payload.text).toMatch(/Apple account/);
+    expect(rows[0]!.payload.text).toMatch(/same browser where you started signing in/);
+    expect(await customers()).toBe(1);
+    expect(await sessions()).toBe(0);
+  });
+
+  it('rate-limits identically for existing and unknown addresses', async () => {
+    await seedC('rl-known@corp.example');
+    const run = async (email: string, sub: string) => {
+      const out: number[] = [];
+      for (let i = 0; i < 12; i++) out.push((await signIn(SLUG_APPLE, appleJwt({ sub, email }))).status);
+      return out;
+    };
+    const known = await run('rl-known@corp.example', 'ap-rl1');
+    const unknown = await run('rl-nobody@corp.example', 'ap-rl2');
+    expect(known).toEqual(unknown);
+    expect(known).toContain(429);
+  });
+
+  it('the link links the existing account (browser-bound) and signs in', async () => {
+    const id = await seedC('known-a@corp.example');
+    const { cookie, token } = await startFlow('known-a@corp.example', 'ap-a1');
+    const res = await confirm(token, { cookie });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { customer: { id: string } }).customer.id).toBe(id);
+    expect((await appleRow(STORE_APPLE, 'ap-a1'))?.id).toBe(id);
+    expect(res.headers.get('set-cookie')).toMatch(/sr_fed_link=;[^,]*Max-Age=0/);
+  });
+
+  it('the link creates a verified account for an unknown address', async () => {
+    const { cookie, token } = await startFlow('nobody-b@corp.example', 'ap-b1');
+    const res = await confirm(token, { cookie });
+    expect(res.status).toBe(200);
+    expect(await appleRow(STORE_APPLE, 'ap-b1')).toMatchObject({ email: 'nobody-b@corp.example', email_verified: true });
+  });
+
+  it('a confirm in another browser, or with no/other nonce, fails for cookie and bearer clients and spends nothing', async () => {
+    await seedC('known-x@corp.example');
+    const victim = await startFlow('known-x@corp.example', 'ap-x1');
+    const attacker = nonceCookieOf(await signIn(SLUG_APPLE, appleJwt({ sub: 'ap-x2', email: 'known-x@corp.example' })))!;
+    for (const h of [{} as Record<string, string>, { cookie: attacker }, { cookie: `${NONCE_COOKIE}=` }, { authorization: 'Bearer native-token' }, { authorization: 'Bearer native-token', cookie: attacker }]) {
+      expect((await confirm(victim.token, h)).status).toBe(401);
+    }
+    expect(await appleRow(STORE_APPLE, 'ap-x1')).toBeUndefined();
+    expect(await sessions()).toBe(0);
+    expect((await confirm(victim.token, { cookie: victim.cookie })).status).toBe(200); // still unspent
+  });
+
+  it('a link cannot be redeemed twice', async () => {
+    const { cookie, token } = await startFlow('nobody-r@corp.example', 'ap-r1');
+    expect((await confirm(token, { cookie })).status).toBe(200);
+    const again = await confirm(token, { cookie });
+    expect(again.status).toBe(401);
+    expect(await sessions()).toBe(1);
+    expect(await customers()).toBe(1);
+  });
+
+  it('refuses to re-bind an account already bound to a different Apple subject, even with a valid link', async () => {
+    await seedC('known-rb@corp.example', 'ap-old');
+    const { cookie, token } = await startFlow('known-rb@corp.example', 'ap-new');
+    const res = await confirm(token, { cookie });
+    expect(res.status).toBe(409);
+    expect(res.headers.get('set-cookie') ?? '').not.toMatch(/sr_cust=[^;]/);
+    expect((await appleRow(STORE_APPLE, 'ap-old'))?.email).toBe('known-rb@corp.example');
+    expect(await appleRow(STORE_APPLE, 'ap-new')).toBeUndefined();
+  });
+
+  it('still refuses an unverified password account at confirm', async () => {
+    await seedC('known-pw@corp.example', null, false, 'hash');
+    const { cookie, token } = await startFlow('known-pw@corp.example', 'ap-pw1');
+    expect((await confirm(token, { cookie })).status).toBe(409);
+    expect(await appleRow(STORE_APPLE, 'ap-pw1')).toBeUndefined();
+  });
+
+  it('a returning, already-bound Apple subject on a non-authoritative address still signs in directly (no mail)', async () => {
+    await seedC('bound@corp.example', 'ap-bound');
+    const res = await signIn(SLUG_APPLE, appleJwt({ sub: 'ap-bound', email: 'bound@corp.example' }));
+    expect(res.status).toBe(200);
+    expect(await outbox()).toEqual([]);
+  });
+
+  it('an identity with no email (Private Relay repeat) still takes the direct path', async () => {
+    const res = await signIn(SLUG_APPLE, appleJwt({ sub: 'ap-noemail' }));
+    expect(res.status).toBe(200);
+    expect(await outbox()).toEqual([]);
+  });
+
+  it('a tampered or other-store link is rejected', async () => {
+    const { cookie, token } = await startFlow('nobody-t@corp.example', 'ap-t1');
+    const [body, sig] = token.split('.');
+    expect((await confirm(`${body}.${'A'.repeat(sig!.length)}`, { cookie })).status).toBe(401);
+    expect((await app.request('/v1/shop/auth/federated/confirm', { method: 'POST', headers: { ...hdr(SLUG_NONE), cookie }, body: JSON.stringify({ token }) })).status).toBe(401);
+    expect(await customers()).toBe(0);
   });
 });

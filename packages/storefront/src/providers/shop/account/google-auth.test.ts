@@ -215,3 +215,40 @@ describe('Google script loader', () => {
 		expect(page).toContain('track(() => googleAttempt.value)');
 	});
 });
+
+describe('Google sign-in verification link', () => {
+	beforeEach(() => vi.resetModules());
+	afterEach(() => vi.unstubAllGlobals());
+
+	it('a 202 (link mailed) is a message, never a sign-in, and says nothing account-specific', async () => {
+		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(202, { verificationRequired: true })));
+		const { loginWithGoogle } = await import('./google-auth');
+		const r = await loginWithGoogle('g'.repeat(40));
+		expect(r.ok).toBe(false);
+		if (!r.ok) expect(r.message).toMatch(/check your email/i);
+	});
+
+	it('confirm posts the token and signs the shopper in; an invalid link is a message', async () => {
+		const mockedFetch = vi.fn(async () => jsonResponse(200, { token: 't', customer: CUSTOMER }));
+		vi.stubGlobal('fetch', mockedFetch);
+		const { confirmFederatedSignIn } = await import('./google-auth');
+		expect(await confirmFederatedSignIn('t'.repeat(40))).toEqual({ ok: true, customer: expect.objectContaining({ id: 'c1' }) });
+		const [input] = mockedFetch.mock.calls[0] as unknown as [Request];
+		expect(new URL(input.url).pathname).toBe('/v1/shop/auth/federated/confirm');
+
+		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(401, { error: { code: 'TOKEN_INVALID', message: 'x' } })));
+		const bad = await confirmFederatedSignIn('t'.repeat(40));
+		expect(bad.ok).toBe(false);
+	});
+});
+
+describe('federated confirm landing page', () => {
+	it('redeems only on an explicit click, never on load', () => {
+		const page = read('src/routes/sign-in/confirm/index.tsx');
+		expect(page).toContain('onClick$={confirm}');
+		// the only call to the API helper lives inside the click handler, not in useVisibleTask$
+		const task = /useVisibleTask\$\(\(\) => \{[\s\S]*?\n\t\}\);/.exec(page)![0];
+		expect(task).not.toContain('confirmFederatedSignIn');
+		expect(page.match(/confirmFederatedSignIn\(/g)).toHaveLength(1);
+	});
+});

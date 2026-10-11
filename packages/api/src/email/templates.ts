@@ -83,6 +83,16 @@ export const magicLinkAccess = (store: StoreCtx, data: { url: string; ttlMinutes
      <p><a href="${escape(data.url)}" style="display:inline-block;padding:10px 16px;background:${colorsOf(store).button};color:${colorsOf(store).buttonText};text-decoration:none;border-radius:6px">Sign in</a></p>
      <p>If you didn't request this, you can ignore this email.</p>`);
 
+// Confirmation link for a federated (Google/Apple) sign-in the provider could not vouch for. Names the provider and the
+// account email it presented. Identical whether or not a customer already exists for the address — it says nothing
+// about account state.
+export const federatedLinkConfirm = (store: StoreCtx, data: { url: string; providerName: string; providerEmail: string; ttlMinutes: number }) =>
+  wrap(store, `Confirm your ${data.providerName} sign-in`,
+    `<p>Someone asked to sign in to ${escape(store.name)} with the ${escape(data.providerName)} account <strong>${escape(data.providerEmail)}</strong>. To continue, confirm within ${data.ttlMinutes} minutes:</p>
+     <p><a href="${escape(data.url)}" style="display:inline-block;padding:10px 16px;background:${colorsOf(store).button};color:${colorsOf(store).buttonText};text-decoration:none;border-radius:6px">Review and confirm</a></p>
+     <p>Open this link in the same browser where you started signing in. Starting again sends a new link and replaces this one.</p>
+     <p>If you didn't try to sign in with ${escape(data.providerName)}, ignore this email — nothing happens unless the link is confirmed.</p>`);
+
 export const staffInvite = (store: StoreCtx, data: { acceptUrl: string; role: string; inviterEmail: string }) =>
   wrap(store, `${data.inviterEmail} invited you to ${store.name}`,
     `<p>You've been invited to help manage <strong>${escape(store.name)}</strong> as a <strong>${escape(data.role)}</strong>.</p>

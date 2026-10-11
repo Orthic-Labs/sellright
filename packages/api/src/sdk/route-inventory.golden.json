@@ -1,5 +1,5 @@
 {
-  "count": 334,
+  "count": 335,
   "routes": [
     "DELETE /v1/admin/agents/{adminUserId}",
     "DELETE /v1/admin/assets/{id}",
@@ -287,6 +287,7 @@
     "POST /v1/shop/account/orders/{code}/returns",
     "POST /v1/shop/account/password",
     "POST /v1/shop/auth/apple",
+    "POST /v1/shop/auth/federated/confirm",
     "POST /v1/shop/auth/forgot-password",
     "POST /v1/shop/auth/google",
     "POST /v1/shop/auth/login",

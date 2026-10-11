@@ -14672,6 +14672,18 @@ export interface paths {
                         };
                     };
                 };
+                /** @description Apple cannot vouch for this address: a confirmation link was sent to it (identical whether or not an account exists) */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {boolean} */
+                            verificationRequired: true;
+                        };
+                    };
+                };
                 /** @description Invalid token */
                 401: {
                     headers: {
@@ -14681,8 +14693,17 @@ export interface paths {
                         "application/json": components["schemas"]["ApiError"];
                     };
                 };
-                /** @description Not configured, or an unverified account already owns this email */
+                /** @description Not configured (APPLE_SIGNIN_NOT_CONFIGURED), an unverified account owns this email (EMAIL_TAKEN_UNVERIFIED), or an account with this email exists and Apple is not authoritative for it / is bound to another Apple subject (EMAIL_TAKEN) */
                 409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Rate limited */
+                429: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -14744,6 +14765,77 @@ export interface paths {
         };
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/shop/auth/federated/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Confirm a federated sign-in from the emailed link */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        token: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            customer: {
+                                email: string;
+                                emailVerified: boolean;
+                                firstName: string | null;
+                                id: string;
+                                isMigrated: boolean;
+                                lastName: string | null;
+                                phone: string | null;
+                            };
+                            token: string;
+                        };
+                    };
+                };
+                /** @description Link invalid, expired, already used, or opened in a different browser */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description The address already belongs to an account that cannot be linked */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -14859,6 +14951,18 @@ export interface paths {
                         };
                     };
                 };
+                /** @description Google cannot vouch for this address: a confirmation link was sent to it (identical whether or not an account exists) */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {boolean} */
+                            verificationRequired: true;
+                        };
+                    };
+                };
                 /** @description Invalid token */
                 401: {
                     headers: {
@@ -14870,6 +14974,15 @@ export interface paths {
                 };
                 /** @description Not configured, or an unverified account already owns this email */
                 409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Rate limited */
+                429: {
                     headers: {
                         [name: string]: unknown;
                     };
