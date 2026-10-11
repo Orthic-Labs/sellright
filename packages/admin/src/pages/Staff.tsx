@@ -4,9 +4,11 @@ import { UserMinus, RefreshCw, Copy, Check } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../auth';
 import { PageHeader, Loading, ErrorNote, EmptyState, Badge, Spinner } from '../components/ui';
+import AgentAccess from './AgentAccess';
 import { useConfirmDialog } from '../components/ConfirmDialog';
 import {
   PERMISSION_ACTIONS,
+  AGENT_ROLES,
   PermissionsMatrix,
   ROLE_DESC,
   ROLE_LABELS,
@@ -47,6 +49,7 @@ export default function StaffPage() {
 
   const staffKey = ['staff', store?.slug];
   const invitesKey = ['staff-invites', store?.slug];
+  const agentsKey = ['agents', store?.slug];
 
   const staffQ = useQuery({ queryKey: staffKey, queryFn: () => api.get<{ items: StaffMember[] }>('/staff') });
   const invitesQ = useQuery({ queryKey: invitesKey, queryFn: () => api.get<{ items: Invite[] }>('/staff/invites') });
@@ -61,6 +64,7 @@ export default function StaffPage() {
   const invalidate = () => {
     void qc.invalidateQueries({ queryKey: staffKey });
     void qc.invalidateQueries({ queryKey: invitesKey });
+    void qc.invalidateQueries({ queryKey: agentsKey });
   };
 
   // ── invite form state ──
@@ -86,7 +90,7 @@ export default function StaffPage() {
 
   // ── remove staff ──
   const removeStaff = useMutation({
-    mutationFn: (id: string) => api.del(`/staff/${id}`),
+    mutationFn: (m: StaffMember) => api.del(m.kind === 'agent' ? `/agents/${m.adminUserId}` : `/staff/${m.adminUserId}`),
     onSuccess: invalidate,
   });
 
@@ -138,6 +142,7 @@ export default function StaffPage() {
                   <td className="td">
                     <span className="font-medium text-sm">{m.email}</span>
                     {m.isYou && <span className="ml-1.5 text-xs text-gray-400">(you)</span>}
+                    {m.kind === 'agent' && <span className="ml-1.5"><Badge value="agent" tone="info" label="Agent" /></span>}
                   </td>
                   <td className="td">
                     {canManage && !m.isYou ? (
@@ -147,7 +152,7 @@ export default function StaffPage() {
                         disabled={changeRole.isPending}
                         onChange={(e) => changeRole.mutate({ id: m.adminUserId, role: e.target.value as Role })}
                       >
-                        {ROLES.map((r) => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
+                        {(m.kind === 'agent' ? AGENT_ROLES : ROLES).map((r) => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
                       </select>
                     ) : (
                       <Badge value={m.role} />
@@ -166,22 +171,24 @@ export default function StaffPage() {
                     <td className="td text-right">
                       {!m.isYou && (
                         <div className="flex items-center justify-end gap-1">
-                          <button
-                            className="btn-ghost py-1 px-2 text-xs flex items-center gap-1"
-                            title="Force-logout (revoke all sessions)"
-                            disabled={revokeSessions.isPending}
-                            onClick={() => revokeSessions.mutate(m.adminUserId)}
-                          >
-                            <RefreshCw size={12} />
-                            Revoke sessions
-                          </button>
+                          {m.kind !== 'agent' && (
+                            <button
+                              className="btn-ghost py-1 px-2 text-xs flex items-center gap-1"
+                              title="Force-logout (revoke all sessions)"
+                              disabled={revokeSessions.isPending}
+                              onClick={() => revokeSessions.mutate(m.adminUserId)}
+                            >
+                              <RefreshCw size={12} />
+                              Revoke sessions
+                            </button>
+                          )}
                           <button
                             className="btn-ghost py-1 px-2 text-xs text-danger hover:bg-danger-soft flex items-center gap-1"
-                            title="Remove from store"
+                            title={m.kind === 'agent' ? 'Remove agent' : 'Remove from store'}
                             disabled={removeStaff.isPending}
                             onClick={async () => {
-                              if (await confirm({ title: `Remove ${m.email} from this store?`, tone: 'danger', confirmLabel: 'Remove' })) {
-                                removeStaff.mutate(m.adminUserId);
+                              if (await confirm({ title: `Remove ${m.email} from this store?`, tone: 'danger', confirmLabel: m.kind === 'agent' ? 'Remove agent' : 'Remove' })) {
+                                removeStaff.mutate(m);
                               }
                             }}
                           >
@@ -339,6 +346,9 @@ export default function StaffPage() {
           )}
         </div>
       )}
+
+      {/* ── agent access ── */}
+      <AgentAccess />
 
       {/* ── permission key reference (secondary — collapsed by default) ── */}
       <details className="card p-5 group">

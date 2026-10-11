@@ -6,6 +6,7 @@ import { ErrorNote, Spinner } from '../components/ui';
 
 export type Role = 'owner' | 'manager' | 'staff' | 'read_only';
 export const ROLES: Role[] = ['owner', 'manager', 'staff', 'read_only'];
+export const AGENT_ROLES: Role[] = ['staff', 'manager', 'read_only'];
 export const ROLE_LABELS: Record<Role, string> = { owner: 'Owner', manager: 'Manager', staff: 'Staff', read_only: 'Read-only' };
 export const ROLE_DESC: Record<Role, string> = {
   owner: 'Full access, including billing, staff, and store deletion.',
@@ -35,6 +36,7 @@ export interface StaffMember {
   role: Role;
   createdAt: string;
   isYou: boolean;
+  kind?: 'human' | 'agent';
   permissions?: Record<string, boolean> | null;
 }
 
@@ -93,6 +95,9 @@ export function PermissionsMatrix({ member, onSave }: { member: StaffMember; onS
       ) : (
         <div className="mt-2 space-y-2 border border-gray-100 rounded-lg p-3 bg-gray-50">
           <p className="text-xs font-medium text-gray-600 mb-1">Per-action permissions</p>
+          {member.kind === 'agent' && (
+            <p className="text-xs text-gray-500">Grants apply, but agents can never delete, cancel, refund, or manage staff — see Agent access.</p>
+          )}
           {PERMISSION_ACTIONS.map(({ key, label, hint }) => (
             <label key={key} className="flex items-center gap-2 text-xs cursor-pointer">
               <input

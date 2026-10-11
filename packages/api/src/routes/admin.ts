@@ -53,7 +53,7 @@ admin.openapi(
     // enabled" via the response. The fix: treat a 2FA-enabled account with a
     // missing TOTP as a single incomplete login attempt (401, generic message).
     // The UI must always send both password and TOTP together.
-    if (!u || !(await verifyPassword(password, u.passwordHash))) { await recordLoginFailure(ip, `admin:${email}`); throw new HttpError(401, 'invalid email, password, or 2FA code'); }
+    if (!u || u.kind === 'agent' || !(await verifyPassword(password, u.passwordHash))) { await recordLoginFailure(ip, `admin:${email}`); throw new HttpError(401, 'invalid email, password, or 2FA code'); }
     if (u.totpSecret) {
       if (!totp) { await recordLoginFailure(ip, `admin:${email}`); throw new HttpError(401, 'invalid email, password, or 2FA code'); }
       if (!verifyTotp(u.totpSecret, totp, u.id)) { await recordLoginFailure(ip, `admin:${email}`); throw new HttpError(401, 'invalid email, password, or 2FA code'); }
@@ -88,13 +88,13 @@ admin.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/me', summary: 'Current admin + accessible stores',
     responses: {
-      200: { description: 'OK', content: J(z.object({ email: z.string(), isInstallationAdmin: z.boolean(), stores: z.array(StoreAccess) })) },
+      200: { description: 'OK', content: J(z.object({ email: z.string(), isInstallationAdmin: z.boolean(), kind: z.enum(['human', 'agent']), auth: z.enum(['session', 'api_token']), stores: z.array(StoreAccess) })) },
       401: { description: 'Unauthorized', ...errBody },
     },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
-    return c.json({ email: admin.email, isInstallationAdmin: admin.isInstallationAdmin, stores: admin.stores }, 200);
+    return c.json({ email: admin.email, isInstallationAdmin: admin.isInstallationAdmin, kind: admin.kind, auth: admin.auth, stores: admin.stores }, 200);
   }),
 );
 
@@ -207,7 +207,7 @@ admin.openapi(
         code: o.code, state: o.state, status: o.status, paymentStatus, fulfillmentStatus, isPreOrder: o.isPreOrder, currency: o.currency,
         subtotal: o.subtotal, discountTotal: o.discountTotal, shippingTotal: o.shippingTotal, taxTotal: o.taxTotal, grandTotal: o.grandTotal,
         placedAt: o.placedAt ? o.placedAt.toISOString() : null, createdAt: o.createdAt.toISOString(),
-        shippingAddress: o.shippingAddress ?? null, billingAddress: o.billingAddress ?? null,
+        shippingAddress: o.shippingAddress ?? null, billingAddress: admin.kind === 'agent' ? null : (o.billingAddress ?? null), // D6: billing address stripped for agents
         customer,
         // `id` is the order_line id the refund/return endpoints key their
         // `lines[].orderLineId` on — without it no consumer of this response can

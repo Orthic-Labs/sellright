@@ -102,7 +102,8 @@ export async function uploadAsset(file: File, alt?: string): Promise<AssetRow> {
 
 // ── shared types ────────────────────────────────────────────────────────────
 export interface StoreAccess { storeId: string; slug: string; name: string; currency: string; role: string; }
-export interface Me { email: string; isInstallationAdmin: boolean; stores: StoreAccess[]; }
+export interface Me { email: string; kind: 'human' | 'agent'; auth: 'session' | 'api_token'; isInstallationAdmin: boolean; stores: StoreAccess[]; }
+export interface AgentRow { id: string; adminUserId: string; name: string; email: string; role: string; createdBy: string | null; createdAt: string; lastUsedAt: string | null; expiresAt: string | null; }
 export interface LoginResp { token?: string; csrfToken?: string; twoFactorRequired?: boolean; admin?: { email: string }; stores?: StoreAccess[]; }
 export interface Page<T> { items: T[]; total: number; page: number; pageSize: number; }
 

@@ -7,6 +7,8 @@ import { hashPassword } from '../auth/password.js';
 import { errJson } from '../lib/api-error.js';
 import { normalizeEmail } from '../auth/email.js';
 import {
+  adminKindByEmail,
+  adminKindById,
   createAdminUser,
   findAdminIdByEmail,
   findInviteByTokenHash,
@@ -14,6 +16,7 @@ import {
   listStoreStaff,
   setAdminPassword,
 } from '../auth/admin-staff.js';
+import { revokeAgentTokens } from '../auth/admin-api-token.js';
 import { sendStaffInvite } from '../email/dispatch.js';
 import { err as logErr } from '../lib/logger.js';
 import { env } from '../env.js';
@@ -149,6 +152,7 @@ adminSettingsAdvanced.openapi(
       items: items.map((i) => ({
         adminUserId: i.adminUserId,
         email: i.email,
+        kind: i.kind,
         role: i.role,
         createdAt: i.createdAt.toISOString(),
         permissions: (i.permissions ?? {}) as Record<string, boolean>,
@@ -171,6 +175,7 @@ adminSettingsAdvanced.openapi(
     // SEC-OWNER-1: only an existing owner may grant the 'owner' role.
     if (role === 'owner') requireOwner(st);
     const email = normalizeEmail(rawEmail);
+    if ((await adminKindByEmail(email)) === 'agent') throw new HttpError(400, 'agents are created under Agent access');
     let adminUserId = await findAdminIdByEmail(email);
     if (!adminUserId) {
       adminUserId = await createAdminUser(email, await hashPassword(password));
@@ -209,6 +214,7 @@ adminSettingsAdvanced.openapi(
     const st = requireStore(admin, c); requireManage(st);
     const { adminUserId } = c.req.valid('param');
     const { role } = c.req.valid('json');
+    if (role === 'owner' && (await adminKindById(adminUserId)) === 'agent') throw new HttpError(400, 'agents cannot be owners'); // D2
     // SEC-OWNER-1: a manager passes requireManage() above but must not be able
     // to grant themselves (or anyone) 'owner', nor to demote the real owner —
     // either direction requires the CALLER to already be an owner.
@@ -287,6 +293,7 @@ adminSettingsAdvanced.openapi(
       await tx
         .delete(s.adminUserStore)
         .where(and(eq(s.adminUserStore.adminUserId, adminUserId), eq(s.adminUserStore.storeId, st.storeId)));
+      await revokeAgentTokens(tx, adminUserId, st.storeId); // an agent removed through the staff path loses its tokens (and their sessions) too
       if (targetRole !== null) {
         await tx.insert(s.auditLog).values({
           storeId: st.storeId,
@@ -318,6 +325,7 @@ adminSettingsAdvanced.openapi(
     const b = c.req.valid('json');
     // SEC-OWNER-1: same owner-only gate as direct staff creation.
     if (b.role === 'owner') requireOwner(st);
+    if ((await adminKindByEmail(normalizeEmail(b.email))) === 'agent') throw new HttpError(400, 'agents are created under Agent access');
     const token = randomBytes(24).toString('hex');
     // SR-16: invite insert + audit row in one transaction. The raw token is
     // never persisted anywhere but the response — only its sha256 hash is
@@ -371,6 +379,7 @@ adminSettingsAdvanced.openapi(
     if (!inv || inv.acceptedAt || inv.expiresAt.getTime() <= Date.now()) {
       return errJson(c, 409, 'INVITE_INVALID', 'invite is invalid, already used, or expired');
     }
+    if ((await adminKindByEmail(inv.email)) === 'agent') throw new HttpError(400, 'agents cannot accept invites');
     const passwordHash = await hashPassword(b.password);
     let adminId = await findAdminIdByEmail(inv.email);
     if (adminId) {
@@ -427,6 +436,7 @@ adminSettingsAdvanced.openapi(
         .where(and(eq(s.adminUserStore.adminUserId, adminUserId), eq(s.adminUserStore.storeId, st.storeId)))
         .limit(1);
       if (!m) throw new HttpError(404, 'staff member not enrolled in this store');
+      if ((await adminKindById(adminUserId)) === 'agent') throw new HttpError(400, 'use /v1/admin/agents/{id}/rotate for agents'); // D9
       const del = await tx.delete(s.session).where(eq(s.session.adminUserId, adminUserId)).returning({ id: s.session.id });
       await tx.insert(s.auditLog).values({
         storeId: st.storeId,
