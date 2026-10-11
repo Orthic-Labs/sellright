@@ -160,7 +160,7 @@
       "description": "1 only for the isolated demo build"
     },
     "VITE_GOOGLE_CLIENT_ID": {
-      "description": "Google OAuth client id (public). Empty (default) = no Google sign-in button and no Google origins in the CSP; must equal the client id the API verifies for this store"
+      "description": "Google OAuth client id (public). Empty (default) = no Google sign-in button and no Google origins in the CSP; must equal the client id the API verifies for this store. Also needs SELLRIGHT_GOOGLE_SIGNIN_HOSTS (runtime): the pinned store's public hosts that may show it"
     }
   },
   "privateRuntime": {
@@ -198,6 +198,7 @@
       "SELLRIGHT_ASSETS_DIR",
       "SELLRIGHT_BUILD_SUFFIX",
       "SELLRIGHT_DISABLE_SSG",
+      "SELLRIGHT_GOOGLE_SIGNIN_HOSTS",
       "SELLRIGHT_TRUST_FORWARDED_HOST",
       "STOREFRONT_CANONICAL_SECTIONS",
       "STOREFRONT_ORIGIN",

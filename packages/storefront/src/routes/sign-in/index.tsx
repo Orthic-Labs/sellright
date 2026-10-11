@@ -1,16 +1,22 @@
 import { $, component$, useSignal, useVisibleTask$ } from '@qwik.dev/core';
-import { useNavigate } from '@qwik.dev/router';
+import { routeLoader$, useNavigate } from '@qwik.dev/router';
 import { registerCustomerFromSignup } from '~/components/auth/signup-flow';
 import { login, requestMagicLink, requestPasswordReset, resendVerification } from '~/providers/shop/account/account';
 import { loginWithGoogle, renderGoogleButton } from '~/providers/shop/account/google-auth';
 import { getShopConfig } from '~/providers/shop/checkout/checkout';
-import { googleSignInClientId } from '~/config/google-signin';
+import { googleSignInClientIdForHost } from '~/config/google-signin';
+import { validatedRequestHost } from '~/utils/trusted-request.server';
 import { SignInError } from './SignInError';
 export { head } from './seo';
 
 const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY || '';
-/** Empty = Google sign-in off: no button, no Google script, no Google origins in the CSP (same source as the CSP). */
-const GOOGLE_CLIENT_ID = googleSignInClientId();
+/** Empty = Google sign-in off for THIS request's host: no button, no Google script, no Google origins in the CSP (the
+ *  CSP in entry.express.tsx makes the same per-host decision from the same function). */
+export const useGoogleClientId = routeLoader$(({ request }) =>
+	googleSignInClientIdForHost(
+		validatedRequestHost({ host: request.headers.get('host') ?? undefined, 'x-forwarded-host': request.headers.get('x-forwarded-host') ?? undefined }),
+	),
+);
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const BAD_CREDENTIALS_HINT = "That email and password don't match.";
@@ -26,6 +32,7 @@ const INPUT =
 
 export default component$(() => {
 	const navigate = useNavigate();
+	const googleClientId = useGoogleClientId();
 
 	const view = useSignal<View>('signin');
 	const email = useSignal('');
@@ -78,11 +85,12 @@ export default component$(() => {
 	useVisibleTask$(async ({ track }) => {
 		const current = track(() => view.value);
 		track(() => googleAttempt.value);
-		if (!GOOGLE_CLIENT_ID || current !== 'signin') return;
+		const clientId = googleClientId.value;
+		if (!clientId || current !== 'signin') return;
 		const container = document.getElementById('google-signin-button');
 		if (!container) return;
 		googleUnavailable.value = false;
-		googleUnavailable.value = !(await renderGoogleButton(container, GOOGLE_CLIENT_ID, handleGoogleCredential));
+		googleUnavailable.value = !(await renderGoogleButton(container, clientId, handleGoogleCredential));
 	});
 
 	// Turnstile: one widget for the whole screen. Script or render failure is shown to the shopper, never silent.
@@ -333,7 +341,7 @@ export default component$(() => {
 								{loading.value ? 'Signing in...' : 'Sign in'}
 							</button>
 							{primaryHint && <p class="text-xs text-gray-500 text-center">{primaryHint}</p>}
-							{GOOGLE_CLIENT_ID && (
+							{googleClientId.value && (
 								<>
 									<div class="flex items-center gap-3">
 										<div class="h-px flex-1 bg-gray-200"></div>

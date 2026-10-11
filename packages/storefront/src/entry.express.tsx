@@ -12,9 +12,10 @@ import { sellrightRequestCookie } from"./utils/sellright-request-context.server"
 import { sellrightRequestHost } from"./utils/sellright-request-host.server";
 import { assertProdApiConfigured } from"./constants";
 import { NO_STORE_CACHE_CONTROL } from"./config/route-cache-policy";
-import { googleIdentityCsp, googleSignInClientId, googleSignInRefusedForMissingPin } from"./config/google-signin";
+import { googleClientId, googleIdentityCsp, googleSignInClientIdForHost, googleSignInHosts, googleSignInRefusedForMissingPin } from"./config/google-signin";
 import { createCanonicalUrlMiddleware, parseCanonicalSections } from"./utils/canonical-url";
 import { buildCsp } from"./utils/csp";
+import { trustedRequestOrigin, validatedRequestHost } from"./utils/trusted-request.server";
 
 declare global {
  interface QwikRouterPlatform extends PlatformNode {}
@@ -38,8 +39,12 @@ const PORT = parseInt(process.env.PORT ?? '4100', 10);
 const HOST = process.env.HOST ?? 'localhost';
 
 // Create the Qwik Router Node middleware
+// getOrigin: behind an HTTPS-terminating proxy the socket is plain http, so the framework's own origin never matches a
+// browser form POST's Origin header (newsletter confirm/unsubscribe) and it answers 403. Derive it from the trusted
+// boundary only (utils/trusted-request.server.ts); undefined keeps the framework default.
 const { router, notFound } = createQwikRouter({
  render,
+ getOrigin: (req) => trustedRequestOrigin(req) ?? null,
 });
 
 // Create the express server
@@ -51,11 +56,13 @@ const app = express();
 const apiOrigin = (process.env.VITE_SELLRIGHT_API_URL || '')
 	.replace(/\/(shop-api)?\/?$/, '')
 	.trim();
-// Google Identity origins join the CSP only when Google sign-in is on, from the same compiled client id the sign-in
-// button reads (config/google-signin.ts) — and only for a deployment pinned to one store.
-const googleCsp = googleIdentityCsp(googleSignInClientId());
+// Google Identity origins join the CSP only for a request whose validated host belongs to the pinned store with
+// Google sign-in on (config/google-signin.ts, the same decision the sign-in page makes): per request, never per process.
 if (googleSignInRefusedForMissingPin()) {
 	console.error('[google-signin] VITE_GOOGLE_CLIENT_ID is set but VITE_SELLRIGHT_STORE_SLUG is not: Google sign-in is disabled (it is only supported for a deployment pinned to a single store).');
+}
+else if (googleClientId() && googleSignInHosts().length === 0) {
+	console.error('[google-signin] VITE_GOOGLE_CLIENT_ID is set but SELLRIGHT_GOOGLE_SIGNIN_HOSTS is empty: Google sign-in is disabled on every host (list the pinned store\'s public hosts, comma-separated).');
 }
 
 // Set security headers
@@ -137,7 +144,8 @@ app.use((req, res, next) => {
 		apiOrigin,
 		turnstileSiteKey: process.env.VITE_TURNSTILE_SITE_KEY,
 		ipCountryFallback: process.env.VITE_IP_COUNTRY_FALLBACK,
-		google: googleCsp,
+		// Per request: this host's own Google decision (same function as the sign-in page), never a process-wide one.
+		google: googleIdentityCsp(googleSignInClientIdForHost(validatedRequestHost(req.headers))),
 	});
 
 	res.setHeader('Content-Security-Policy', cspDirectives);

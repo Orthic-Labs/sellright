@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { googleClientId, googleIdentityCsp, googleSignInClientId, googleSignInRefusedForMissingPin } from '~/config/google-signin';
+import { googleClientId, googleIdentityCsp, googleSignInClientId, googleSignInClientIdForHost, googleSignInHosts, googleSignInRefusedForMissingPin } from '~/config/google-signin';
 
 const read = (rel: string) => readFileSync(join(process.cwd(), rel), 'utf8');
 const jsonResponse = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -54,8 +54,8 @@ describe('Google sign-in switch', () => {
 
 	it('the sign-in page renders the button only when enabled, and a successful credential navigates to the account', () => {
 		const page = read('src/routes/sign-in/index.tsx');
-		expect(page).toMatch(/GOOGLE_CLIENT_ID && \(\s*<>[\s\S]*?id="google-signin-button"/);
-		expect(page).toContain('if (!GOOGLE_CLIENT_ID || current !== \'signin\') return;');
+		expect(page).toMatch(/googleClientId\.value && \(\s*<>[\s\S]*?id="google-signin-button"/);
+		expect(page).toContain('if (!clientId || current !== \'signin\') return;');
 		expect(page).toMatch(/loginWithGoogle\(credential\);\s*if \(result\.ok\) \{\s*navigate\('\/account'\)/);
 	});
 
@@ -65,6 +65,7 @@ describe('Google sign-in switch', () => {
 		expect(entry).toMatch(/buildCsp\(\{\s*nonce,/);
 		expect(entry).toContain('google: googleCsp');
 		expect(entry).not.toContain('accounts.google.com'); // origins live only in config/google-signin.ts
+		expect(entry).toContain('getOrigin: (req) => trustedRequestOrigin(req) ?? null'); // CSRF origin from the trusted boundary
 	});
 });
 
@@ -87,9 +88,41 @@ describe('Google sign-in: one configuration source, pinned to one store', () => 
 	it('the button and the CSP read the same function, and the CSP never reads a runtime-only variable', () => {
 		const entry = read('src/entry.express.tsx');
 		const page = read('src/routes/sign-in/index.tsx');
-		expect(entry).toContain('googleIdentityCsp(googleSignInClientId())');
-		expect(page).toContain('const GOOGLE_CLIENT_ID = googleSignInClientId();');
+		expect(entry).toContain('googleIdentityCsp(googleSignInClientIdForHost(validatedRequestHost(req.headers)))');
+		expect(page).toContain('googleSignInClientIdForHost(');
+		expect(page).toContain('validatedRequestHost(');
 		expect(entry).not.toContain('process.env.VITE_GOOGLE_CLIENT_ID');
+	});
+});
+
+describe('Google sign-in: resolved per validated request host, not per process', () => {
+	const ID = 'abc.apps.googleusercontent.com';
+	const HOSTS = 'a.example, A2.example:8443';
+
+	it('only a host listed for the pinned store gets the client id; a second host gets none (and so no CSP origins)', () => {
+		expect(googleSignInClientIdForHost('a.example', ID, 'store-a', HOSTS)).toBe(ID);
+		expect(googleSignInClientIdForHost('a2.example', ID, 'store-a', HOSTS)).toBe(ID);
+		expect(googleSignInClientIdForHost('b.example', ID, 'store-a', HOSTS)).toBe('');
+		expect(googleIdentityCsp(googleSignInClientIdForHost('b.example', ID, 'store-a', HOSTS))).toEqual({ script: [], connect: [], frame: [], style: [] });
+		expect(googleIdentityCsp(googleSignInClientIdForHost('a.example', ID, 'store-a', HOSTS)).script).toEqual(['https://accounts.google.com/gsi/client']);
+	});
+
+	it('fails closed: no host list, no pin, no client id or an unusable host means no Google sign-in', () => {
+		expect(googleSignInClientIdForHost('a.example', ID, 'store-a', '')).toBe('');
+		expect(googleSignInClientIdForHost('a.example', ID, 'store-a', undefined)).toBe('');
+		expect(googleSignInClientIdForHost('a.example', ID, '', HOSTS)).toBe('');
+		expect(googleSignInClientIdForHost('a.example', '', 'store-a', HOSTS)).toBe('');
+		expect(googleSignInClientIdForHost('', ID, 'store-a', HOSTS)).toBe('');
+		expect(googleSignInHosts(' , ')).toEqual([]);
+	});
+
+	it('the request host comes from the trusted boundary: a forged X-Forwarded-Host cannot turn Google on', async () => {
+		const { validatedRequestHost } = await import('~/utils/trusted-request.server');
+		const forged = { host: 'b.example', 'x-forwarded-host': 'a.example' };
+		expect(googleSignInClientIdForHost(validatedRequestHost(forged, {}), ID, 'store-a', HOSTS)).toBe('');
+		const trusted = { SELLRIGHT_TRUST_FORWARDED_HOST: '1' };
+		expect(googleSignInClientIdForHost(validatedRequestHost({ host: 'internal', 'x-forwarded-host': 'a.example' }, trusted), ID, 'store-a', HOSTS)).toBe(ID);
+		expect(googleSignInClientIdForHost(validatedRequestHost({ host: 'internal', 'x-forwarded-host': 'b.example' }, trusted), ID, 'store-a', HOSTS)).toBe('');
 	});
 });
 

@@ -10,12 +10,21 @@
  * (`VITE_SELLRIGHT_STORE_SLUG`, which makes every request resolve that one store). Without a pin the feature is
  * refused: no button, no Google origins. The API still verifies the credential against that store's own client id.
  *
+ * Per host: a pin alone is not enough, because a pinned process answers every host that reaches it while the browser
+ * resolves the store by host. `SELLRIGHT_GOOGLE_SIGNIN_HOSTS` (comma-separated public hosts, no port) names the hosts that
+ * belong to the pinned store; the client id and the CSP origins are resolved per request from the VALIDATED request host
+ * (`validatedRequestHost`, utils/trusted-request.server.ts) and a host not listed gets neither (fail closed, so an
+ * unset list means no Google sign-in anywhere).
+ *
  * Origins are those Google documents for GIS (developers.google.com/identity/gsi/web/guides/get-google-api-clientid):
  * the library URL for script-src, the `/gsi/` parent for frames and connect, `/gsi/style` for styles.
  */
 export const GOOGLE_IDENTITY_SCRIPT_URL = 'https://accounts.google.com/gsi/client';
 
 const GSI = 'https://accounts.google.com/gsi/';
+
+/** Runtime env, server only (this module is also bundled for the browser, where there is no `process`). */
+const serverEnv = (name: string): string | undefined => (typeof process !== 'undefined' ? process.env?.[name] : undefined);
 
 export function googleClientId(raw: unknown = import.meta.env.VITE_GOOGLE_CLIENT_ID): string {
 	return typeof raw === 'string' ? raw.trim() : '';
@@ -30,6 +39,28 @@ export function googleSignInClientId(
 	const id = googleClientId(raw);
 	if (!id) return '';
 	return typeof storePin === 'string' && storePin.trim() ? id : '';
+}
+
+/** Hosts of the pinned store that may offer Google sign-in (`SELLRIGHT_GOOGLE_SIGNIN_HOSTS`), lowercase, no port. */
+export function googleSignInHosts(raw: unknown = serverEnv('SELLRIGHT_GOOGLE_SIGNIN_HOSTS')): string[] {
+	if (typeof raw !== 'string') return [];
+	return raw
+		.split(',')
+		.map((h) => h.trim().toLowerCase().replace(/:\d+$/, ''))
+		.filter(Boolean);
+}
+
+/** The client id for a request to `host` (already validated and port-free), or '' when Google sign-in is off for it:
+ *  no client id, no store pin, or a host outside the pinned store's list. Page and CSP both call this per request. */
+export function googleSignInClientIdForHost(
+	host: string,
+	raw: unknown = import.meta.env.VITE_GOOGLE_CLIENT_ID,
+	storePin: unknown = import.meta.env.VITE_SELLRIGHT_STORE_SLUG,
+	hostsRaw: unknown = serverEnv('SELLRIGHT_GOOGLE_SIGNIN_HOSTS'),
+): string {
+	const id = googleSignInClientId(raw, storePin);
+	if (!id || !host) return '';
+	return googleSignInHosts(hostsRaw).includes(host.toLowerCase()) ? id : '';
 }
 
 /** True when a client id is configured but refused for want of a store pin (callers log it once at startup). */
