@@ -16861,6 +16861,9 @@ export interface paths {
                         /** Format: email */
                         email?: string;
                         expectedRevision?: number;
+                        extensions?: {
+                            [key: string]: unknown;
+                        };
                         giftCardCode?: string;
                         items: {
                             quantity: number;
