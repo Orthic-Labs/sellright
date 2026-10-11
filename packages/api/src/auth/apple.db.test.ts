@@ -264,7 +264,15 @@ const seedC = (email: string, appleSub: string | null = null, verified = true, p
     const r = await tx.execute(sql`INSERT INTO customer (store_id, email, email_verified, password_hash, apple_user_id) VALUES (${STORE_APPLE}, ${email}, ${verified}, ${passwordHash}, ${appleSub}) RETURNING id`);
     return (r.rows[0] as { id: string }).id;
   });
-const customers = async () => Number((await pool.query('SELECT count(*)::int AS n FROM customer')).rows[0].n);
+// customer is FORCE RLS: count per store inside the store context (an unscoped owner-pool count is 0 under RLS,
+// failing positive assertions and passing negative ones vacuously). Both stores, so cross-store creation is still caught.
+const customers = async () => {
+  let n = 0;
+  for (const id of [STORE_APPLE, STORE_NONE]) {
+    n += await withStore(id, async (tx) => Number((await tx.execute(sql`SELECT count(*)::int AS n FROM customer WHERE store_id = ${id}`)).rows[0]!.n));
+  }
+  return n;
+};
 const sessions = async () => Number((await pool.query('SELECT count(*)::int AS n FROM "session"')).rows[0].n);
 
 describe('POST /v1/shop/auth/apple non-authoritative identity', () => {
