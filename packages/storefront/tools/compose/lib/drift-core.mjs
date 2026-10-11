@@ -3,9 +3,9 @@
 // tools/drift/drift.mjs; compose imports this file, so it lives under tools/compose
 // (the wrapper archives only that directory).
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { createFile, makeDir, makeTempDir, removeTree } from './durable.mjs';
 import { scriptEntryId, snapshotKey } from './layer.mjs';
 import { layerOf } from './layers.mjs';
 import { ComposeError, PIN_RE, Problems, pretty, readJson, safeRemoveFile, safeWrite, sha256 } from './util.mjs';
@@ -90,12 +90,12 @@ export function checkDrift({ layer, base, pin, problems = new Problems() }) {
 
 /** `git diff --no-index -U3` of two buffers; '' when equal. Paths are shown as old/<name> and new/<name>. */
 export function unifiedDiff(oldBuf, newBuf, name) {
-	const tmp = mkdtempSync(path.join(tmpdir(), 'compose-diff-'));
+	const tmp = makeTempDir('compose-diff-');
 	try {
 		for (const [side, buf] of [['old', oldBuf], ['new', newBuf]]) {
 			const f = path.join(tmp, side, name);
-			mkdirSync(path.dirname(f), { recursive: true });
-			writeFileSync(f, buf ?? Buffer.alloc(0));
+			makeDir(path.dirname(f), { recursive: true });
+			createFile(f, buf ?? Buffer.alloc(0));
 		}
 		const r = spawnSync('git', ['-c', 'core.quotepath=false', 'diff', '--no-index', '--no-color', '-U3', '--', `old/${name}`, `new/${name}`], {
 			cwd: tmp,
@@ -107,7 +107,7 @@ export function unifiedDiff(oldBuf, newBuf, name) {
 		if (r.status !== 0 && r.status !== 1) throw new ComposeError('git', `git diff exited ${r.status}: ${r.stderr}`);
 		return r.stdout;
 	} finally {
-		rmSync(tmp, { recursive: true, force: true });
+		removeTree(tmp);
 	}
 }
 

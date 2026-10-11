@@ -10,9 +10,9 @@
 // tests and by `--base-dir`) or `repo` + `pin` (git archive of the pin into a
 // temp directory outside every repo). Nothing under baseDir or repo is written.
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { makeTempDir, removeTree } from './durable.mjs';
 import { ComposeError, PIN_RE, realDir, sha256, treeHash, walkFiles } from './util.mjs';
 
 export const STOREFRONT_SRC = 'packages/storefront';
@@ -63,15 +63,15 @@ export function openBase(opts) {
 	} else {
 		if (!repo) throw new ComposeError('bad-args', 'either baseDir or repo is required');
 		assertPinExists(repo, pin);
-		temp = mkdtempSync(path.join(tmpdir(), 'compose-base-'));
+		temp = makeTempDir('compose-base-');
 		const arc = git(['-C', repo, 'archive', '--format=tar', pin, ...ARCHIVE_PATHS]);
 		if (arc.status !== 0) {
-			rmSync(temp, { recursive: true, force: true });
+			removeTree(temp);
 			throw new ComposeError('git-archive', `git archive ${pin} failed: ${String(arc.stderr).trim()}`);
 		}
 		const tar = spawnSync('tar', ['-x', '-C', temp], { input: arc.stdout, maxBuffer: 1 << 26 });
 		if (tar.status !== 0) {
-			rmSync(temp, { recursive: true, force: true });
+			removeTree(temp);
 			throw new ComposeError('git-archive', `tar extract failed: ${String(tar.stderr).trim()}`);
 		}
 		root = realDir(temp, 'base temp dir');
@@ -88,11 +88,11 @@ export function openBase(opts) {
 		const tsb = walkFiles(root, (rel) => rel !== 'tsconfig.base.json').filter((f) => f.rel === 'tsconfig.base.json');
 		for (const f of tsb) add('tsconfig.base.json', f.abs, f.mode);
 	} catch (e) {
-		if (temp) rmSync(temp, { recursive: true, force: true });
+		if (temp) removeTree(temp);
 		throw e;
 	}
 	if (!files.has('package.json') || !files.has('tsconfig.base.json')) {
-		if (temp) rmSync(temp, { recursive: true, force: true });
+		if (temp) removeTree(temp);
 		throw new ComposeError('bad-base', 'base lacks packages/storefront/package.json or tsconfig.base.json');
 	}
 
@@ -129,7 +129,7 @@ export function openBase(opts) {
 			return tree;
 		},
 		cleanup() {
-			if (temp) rmSync(temp, { recursive: true, force: true });
+			if (temp) removeTree(temp);
 		},
 	};
 }

@@ -11,10 +11,12 @@
 // With no action it prints the report and exits 1 while any eject is changed, orphaned
 // or has a tampered snapshot. The compose gate itself lives in tools/compose
 // (lib/drift-core.mjs, called from compose.mjs step 2); this file is the operator's CLI.
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openBase } from '../compose/lib/base.mjs';
 import { accept, checkDrift, describeDrift, entryId, formatDriftReport, migrate, readopt } from '../compose/lib/drift-core.mjs';
+import { acquireLock } from '../compose/lib/journal.mjs';
 import { loadLayer, validateBrand } from '../compose/lib/layer.mjs';
 import { loadLayers, parseLayers } from '../compose/lib/layers.mjs';
 import { ComposeError, Problems } from '../compose/lib/util.mjs';
@@ -53,20 +55,30 @@ export async function main(argv, { out = (s) => process.stdout.write(s), now = n
 		if (a.values['--layers']) layers = loadLayers(a.values['--layers']);
 		else if (base.read('layers.json')) layers = parseLayers(JSON.parse(base.read('layers.json').toString('utf8')));
 
+		// accept, readopt and migrate rewrite the brand layer, which is an input of every compose and build: they take the same locks
+		// (deployment lock, then compose lock) as any other writer of the brand repo and are refused (ComposeError locked) while one runs
+		const locked = async (fn) => {
+			const release = await acquireLock(path.dirname(realpathSync(layer.dir)));
+			try {
+				return await fn();
+			} finally {
+				await release();
+			}
+		};
 		if (a.values['--accept'] !== undefined) {
-			const r = accept({ layerDir: layer.dir, base, pin, id: a.values['--accept'], text: a.values['--resolution'], now });
+			const r = await locked(() => accept({ layerDir: layer.dir, base, pin, id: a.values['--accept'], text: a.values['--resolution'], now }));
 			out(`accepted ${r.id} (new base ${r.baseHash.slice(0, 12)} at pin ${pin.slice(0, 12)})\n`);
 			return 0;
 		}
 		if (a.values['--readopt'] !== undefined) {
-			const r = readopt({ layerDir: layer.dir, pin, id: a.values['--readopt'], text: a.values['--resolution'] ?? 'readopted base', now });
+			const r = await locked(() => readopt({ layerDir: layer.dir, pin, id: a.values['--readopt'], text: a.values['--resolution'] ?? 'readopted base', now }));
 			out(`readopted ${r.id}: the override is removed and the base is used again\n`);
 			return 0;
 		}
 		if (a.migrate) {
 			if (!a.migrate[0] || !a.migrate[1]) throw new ComposeError('bad-args', '--migrate needs <old> <new>');
 			if (!layers) throw new ComposeError('missing-file', '--migrate needs layers (--layers or a layers.json in the base)');
-			const r = migrate({ layerDir: layer.dir, layers, base, pin, from: a.migrate[0], to: a.migrate[1], now });
+			const r = await locked(() => migrate({ layerDir: layer.dir, layers, base, pin, from: a.migrate[0], to: a.migrate[1], now }));
 			out(`migrated eject to ${r.id}; review the moved override against the new base\n`);
 			return 0;
 		}

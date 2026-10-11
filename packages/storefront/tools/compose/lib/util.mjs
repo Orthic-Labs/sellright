@@ -1,21 +1,8 @@
 // Shared primitives for the compose, drift and env tools. Node built-ins only.
 import { createHash } from 'node:crypto';
-import {
-	chmodSync,
-	closeSync,
-	existsSync,
-	fsyncSync,
-	lstatSync,
-	mkdirSync,
-	openSync,
-	readFileSync,
-	readdirSync,
-	realpathSync,
-	renameSync,
-	rmSync,
-	writeSync,
-} from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import path from 'node:path';
+import { makeDir, removeDir, removeFile, replaceFile } from './durable.mjs';
 
 export class ComposeError extends Error {
 	constructor(code, message, details) {
@@ -254,6 +241,17 @@ export function unsafeAncestorReason(root, rel) {
  * the way (existing ancestors or the target itself) and directories at the
  * target. Writes to a temp name and renames, so a crash never leaves a half file.
  */
+/**
+ * A transaction (the apply journal) can register itself here to be told of every temporary file `safeWrite` is about to
+ * create, before it exists, so an interrupted write's temporary is part of the undo record. `writeHooks.afterTemp` is a
+ * test seam: it runs once the temporary is complete and before the rename, where a kill leaves exactly that file behind.
+ */
+let tempRecorder = null;
+export const setTempRecorder = (fn) => {
+	tempRecorder = fn;
+};
+export const writeHooks = { afterTemp: null };
+
 export function safeWrite(root, rel, data, mode = 0o644) {
 	assertRealRoot(root);
 	assertSafeRel(rel, 'output path');
@@ -269,7 +267,7 @@ export function safeWrite(root, rel, data, mode = 0o644) {
 		} catch {
 			/* missing: created below */
 		}
-		if (st === null) mkdirSync(cur);
+		if (st === null) makeDir(cur);
 		else if (st.isSymbolicLink()) throw new ComposeError('symlink', `output ancestor is a symlink: ${parts.slice(0, i + 1).join('/')}`);
 		else if (!st.isDirectory()) throw new ComposeError('not-a-dir', `output ancestor is not a directory: ${parts.slice(0, i + 1).join('/')}`);
 	}
@@ -280,16 +278,12 @@ export function safeWrite(root, rel, data, mode = 0o644) {
 	} catch (e) {
 		if (e instanceof ComposeError) throw e;
 	}
-	const tmp = `${abs}.compose-tmp-${process.pid}`;
-	const fd = openSync(tmp, 'wx', mode);
-	try {
-		writeSync(fd, data);
-		fsyncSync(fd);
-	} finally {
-		closeSync(fd);
-	}
-	chmodSync(tmp, mode);
-	renameSync(tmp, abs);
+	replaceFile(abs, data, {
+		mode,
+		tmp: `${abs}.compose-tmp-${process.pid}`,
+		beforeTemp: (t) => tempRecorder?.(t),
+		afterTemp: (t) => writeHooks.afterTemp?.(t),
+	});
 }
 
 /** Removes one regular file under root (never a symlink target or a file behind a symlinked or non-directory ancestor, never a directory). */
@@ -308,23 +302,26 @@ export function safeRemoveFile(root, rel) {
 	}
 	if (st.isSymbolicLink()) throw new ComposeError('symlink', `refusing to remove symlink ${rel}`);
 	if (!st.isFile()) throw new ComposeError('not-a-file', `refusing to remove non-file ${rel}`);
-	rmSync(abs);
+	removeFile(abs);
 	return true;
 }
 
-/** Removes now-empty parent directories of rel, stopping at root. Never removes root. */
+/** Removes now-empty parent directories of rel, stopping at root. Never removes root. Returns the relative directories it removed. */
 export function pruneEmptyDirs(root, rel) {
+	const removed = [];
 	let dir = path.posix.dirname(rel);
 	while (dir && dir !== '.') {
 		const abs = path.join(root, dir);
 		try {
-			if (!lstatSync(abs).isDirectory() || readdirSync(abs).length > 0) return;
-			rmSync(abs, { recursive: false });
+			if (!lstatSync(abs).isDirectory() || readdirSync(abs).length > 0) break;
+			removeDir(abs);
 		} catch {
-			return;
+			break;
 		}
+		removed.push(dir);
 		dir = path.posix.dirname(dir);
 	}
+	return removed;
 }
 
 export const exists = (p) => existsSync(p);

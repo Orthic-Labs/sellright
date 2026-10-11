@@ -3,8 +3,9 @@
 //   layer/                  the whole brand layer directory, byte for byte
 //   meta.json               { id, status: 'applied'|'built', pin, hashes, createdAt, builtAt? }
 //   compose-managed.json    the .compose-managed.json this apply produced
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
+import { makeDir, removeTree } from './durable.mjs';
 import { ComposeError, hashJson, pretty, readJson, safeRemoveFile, safeWrite, pruneEmptyDirs, sha256, treeHash, walkFiles } from './util.mjs';
 
 const ID_RE = /^\d{8}T\d{6}Z-[0-9a-f]{12}(-\d+)?$/;
@@ -31,7 +32,7 @@ export function historyRootState(root) {
 
 /** Creates the history root when absent (never recursively: its parent is the real brand repo directory) and validates it. */
 export function ensureHistoryRoot(root) {
-	if (!historyRootState(root)) mkdirSync(root);
+	if (!historyRootState(root)) makeDir(root);
 	historyRootState(root);
 	return root;
 }
@@ -59,10 +60,17 @@ export function layerHashes({ layer, pin, toolVersion }) {
 	};
 }
 
-export function writeEntry({ layerDir, layer, hashes, managedText, now }) {
+/** Picks the id the next entry will have; nothing is created. The caller journals it BEFORE `writeEntry` creates any file. */
+export function allocateEntryId({ layerDir, hashes, now }) {
 	const root = ensureHistoryRoot(historyDirFor(layerDir));
 	let id = `${stamp(now)}-${hashes.pin.slice(0, 12)}`;
 	for (let n = 2; existsSync(path.join(root, id)); n++) id = `${stamp(now)}-${hashes.pin.slice(0, 12)}-${String(n).padStart(3, '0')}`;
+	return id;
+}
+
+/** Writes the entry `id` (from `allocateEntryId`, already journaled). meta.json is written last: an entry without it is a partial one. */
+export function writeEntry({ layerDir, layer, hashes, managedText, now, id }) {
+	const root = ensureHistoryRoot(historyDirFor(layerDir));
 	for (const f of layer.files) safeWrite(root, `${id}/layer/${f.rel}`, readFileSync(f.abs), f.mode & 0o111 ? 0o755 : 0o644);
 	safeWrite(root, `${id}/compose-managed.json`, managedText);
 	safeWrite(root, `${id}/meta.json`, pretty({ id, status: 'applied', hashes, createdAt: now.toISOString(), pin: hashes.pin }));
@@ -89,7 +97,7 @@ export function readEntry(layerDir, id) {
 }
 
 /** Flip the newest `applied` entry whose managed file equals the one now in the build directory to `built`. */
-export function markBuilt({ layerDir, outDir, now, keepBuilt = 3 }) {
+export function markBuilt({ layerDir, outDir, now, keepBuilt = 3, buildConfigHash }) {
 	let managed;
 	try {
 		managed = readFileSync(path.join(outDir, '.compose-managed.json'));
@@ -103,9 +111,41 @@ export function markBuilt({ layerDir, outDir, now, keepBuilt = 3 }) {
 	const e = cands.at(-1);
 	if (!e) throw new ComposeError('no-matching-history', 'no applied history entry matches the build directory\'s .compose-managed.json');
 	const root = historyDirFor(layerDir);
-	safeWrite(root, `${e.id}/meta.json`, pretty({ ...e.meta, status: 'built', builtAt: now.toISOString() }));
+	safeWrite(root, `${e.id}/meta.json`, pretty({ ...e.meta, status: 'built', builtAt: now.toISOString(), ...(buildConfigHash ? { buildConfigHash } : {}) }));
 	pruneHistory({ layerDir, keepBuilt });
 	return e.id;
+}
+
+/**
+ * Settles an entry whose apply was interrupted and rolled back by --recover. A complete entry (meta.json present) is marked
+ * `abandoned`; a partial one (the apply died while creating it: no readable meta.json, which is written last) is removed
+ * entirely, because nothing can use it and nothing else would ever clean it. Missing entries are ignored (idempotent).
+ * Returns 'abandoned', 'removed' or false.
+ */
+export function abandonEntry({ layerDir, id, now = new Date() }) {
+	if (!ID_RE.test(id ?? '')) return false;
+	const root = historyDirFor(layerDir);
+	if (!historyRootState(root)) return false;
+	const dir = path.join(root, id);
+	let st;
+	try {
+		st = lstatSync(dir);
+	} catch {
+		return false;
+	}
+	if (st.isSymbolicLink() || !st.isDirectory()) return false;
+	let meta = null;
+	try {
+		meta = JSON.parse(readFileSync(path.join(dir, 'meta.json'), 'utf8'));
+	} catch {
+		/* partial */
+	}
+	if (!meta || typeof meta !== 'object') {
+		removeTree(dir);
+		return 'removed';
+	}
+	safeWrite(root, `${id}/meta.json`, pretty({ ...meta, status: 'abandoned', abandonedAt: now.toISOString() }));
+	return 'abandoned';
 }
 
 /** Keep the newest `keepBuilt` built entries and anything newer than the oldest kept one; remove only this tool's own entry directories. */
@@ -119,7 +159,7 @@ export function pruneHistory({ layerDir, keepBuilt }) {
 		if (e.id < oldestKept) {
 			const st = lstatSync(e.dir);
 			if (st.isSymbolicLink() || !st.isDirectory()) continue;
-			rmSync(e.dir, { recursive: true });
+			removeTree(e.dir);
 			removed.push(e.id);
 		}
 	}

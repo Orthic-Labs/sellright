@@ -4,11 +4,16 @@
 //   compose.mjs <brand-layer-dir> --out <build-dir> [--pin <sha>] [--base-dir <dir> | --repo <git repo>]
 //               [--layers <layers.json>] [--schema <brand-env.schema.json>] [--require-out-pair]
 //               ( --dry-run
-//               | --apply [--adopt <adoption-inventory.json>]
-//               | --mark-built [--keep <n>]
+//               | --apply [--adopt <adoption-inventory.json>] [--live <build-dir>] [--allow-fault]
+//               | --check-build-env
+//               | --mark-built [--build-config <file>] [--keep <n>]
 //               | --restore-inputs <history-id>
 //               | --inventory [--dispositions <file>] [--preserve a,b] [--legacy-tag <tag>] [--inventory-out <file>]
+//               | --recover
 //               | --self-check )
+//
+// Exit codes: 0 ok, 1 failure, 2 usage, 5 recovery required (journal present or lock held), 6 adoption or pin
+// refused, 7 env or build-config mismatch.
 //
 // Rules the code holds to: never write outside the output root; never follow a
 // symlink (lstat everywhere, any symlink in an input tree is an error); never delete a
@@ -16,16 +21,17 @@
 // adoption); never touch node_modules, dist*, server*, .cache, tmp, .env, .env.local,
 // the asset-retention archive or anything above the build directory.
 import { spawnSync } from 'node:child_process';
-import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, openSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { openBase } from './lib/base.mjs';
+import { createFile, makeDir, makeTempDir, removeTree } from './lib/durable.mjs';
 import { checkClosure } from './closure-check.mjs';
 import { checkDrift } from './lib/drift-core.mjs';
-import { checkEnv, finalEffectiveHash, loadSchema } from './env-check.mjs';
-import { ensureHistoryRoot, entryEffectivePin, historyDirFor, layerHashes, markBuilt, mismatchedHashes, readEntry, replaceLayerWithCopy, verifyEntryCopy, writeEntry } from './lib/history.mjs';
+import { BUILD_MODE, checkEnv, defaultLoadEnv, effectiveHash, finalEffectiveHash, loadSchema } from './env-check.mjs';
+import { abandonEntry, allocateEntryId, ensureHistoryRoot, entryEffectivePin, historyDirFor, layerHashes, markBuilt, mismatchedHashes, readEntry, replaceLayerWithCopy, verifyEntryCopy, writeEntry } from './lib/history.mjs';
 import { buildInventory, checkAdoption, hasNonRuntimeContent } from './lib/inventory.mjs';
+import { acquireLock, assertNoJournal, beginJournal, recoverJournals } from './lib/journal.mjs';
 import { loadLayer, validateBrand, validateManifest } from './lib/layer.mjs';
 import { loadLayers, parseLayers } from './lib/layers.mjs';
 import {
@@ -40,6 +46,7 @@ import {
 	realDir,
 	safeRemoveFile,
 	safeWrite,
+	setTempRecorder,
 	sha256,
 	unsafeAncestorReason,
 	unsafeRelReason,
@@ -174,13 +181,13 @@ async function runCheckers({ outputs, layersPath, layersText, deployFiles, check
 	if (shape.error) unavailable('shapeCheck', 'shape-check-unavailable', 'check-code-shape.mjs', shape.error);
 	if (imports.error || shape.error) return result;
 
-	const tmp = mkdtempSync(path.join(tmpdir(), 'compose-imports-'));
+	const tmp = makeTempDir('compose-imports-');
 	try {
 		for (const [rel, o] of outputs) safeWrite(tmp, rel, o.buf, o.mode);
 		let layersFile = layersPath;
 		if (!layersFile) {
 			layersFile = path.join(tmp, '.compose-checker-layers.json');
-			writeFileSync(layersFile, layersText);
+			createFile(layersFile, layersText);
 		}
 		let layers;
 		try {
@@ -216,7 +223,7 @@ async function runCheckers({ outputs, layersPath, layersText, deployFiles, check
 		}
 		return result;
 	} finally {
-		rmSync(tmp, { recursive: true, force: true });
+		removeTree(tmp);
 	}
 }
 
@@ -235,8 +242,13 @@ export async function plan(opts) {
 		const outDir = canonicalOut(opts.outDir, 'output directory');
 		if (isInside(layer.dir, outDir) || isInside(outDir, layer.dir)) problems.add('overlap', `output ${outDir} and layer ${layer.dir} overlap`);
 		if (isInside(base.root, outDir) || isInside(outDir, base.root)) problems.add('overlap', `output ${outDir} and base ${base.root} overlap`);
-		if (opts.requireOutPair && outDir !== path.join(path.dirname(layer.dir), brand.buildDir)) {
-			problems.add('out-mismatch', `--out must equal ${path.join(path.dirname(layer.dir), brand.buildDir)}`);
+		if (opts.requireOutPair) {
+			// the canonical build directory, or its `.next` sibling (the deploy entry composes into a stage and names the live tree with --live)
+			const pair = path.join(path.dirname(layer.dir), brand.buildDir);
+			if (outDir === `${pair}.next`) {
+				const live = opts.liveDir ? canonicalOut(opts.liveDir, '--live directory') : null;
+				if (live !== pair) problems.add('out-mismatch', `--out ${outDir} is a stage of ${pair}: --live must name ${pair}`);
+			} else if (outDir !== pair) problems.add('out-mismatch', `--out must equal ${pair} or ${pair}.next (with --live ${pair})`);
 		}
 		problems.throwIfAny();
 
@@ -299,7 +311,11 @@ export async function plan(opts) {
 		const { importCheck, shapeCheck } = await runCheckers({ outputs, layersPath: opts.layersPath, layersText, deployFiles: brand.deployFiles ?? [], checkersDir: opts.checkersDir, problems });
 
 		// ---- disk state and the adoption guard
-		const managed = readManaged(outDir);
+		// With a stage as --out, managed-file presence and the legacy test read the live tree (plan §4.3 step 3).
+		const liveDir = opts.liveDir ? realDir(opts.liveDir, '--live directory') : null;
+		if (liveDir && (isInside(liveDir, outDir) || isInside(outDir, liveDir))) problems.add('overlap', `--live ${liveDir} and output ${outDir} overlap`);
+		const stateDir = liveDir ?? outDir;
+		const managed = readManaged(stateDir);
 		const prev = new Map((managed?.files ?? []).map((f) => [f.path, f.sha256]));
 		for (const p of prev.keys()) {
 			const r = unsafeRelReason(p);
@@ -308,16 +324,16 @@ export async function plan(opts) {
 		problems.throwIfAny();
 		let inventory = null;
 		const notes = [];
-		const legacy = !managed && hasNonRuntimeContent(outDir);
+		const legacy = !managed && hasNonRuntimeContent(stateDir);
 		if (legacy) {
 			if (opts.adoptFile) {
 				inventory = readJson(opts.adoptFile, 'adoption inventory');
 				const composedShas = new Map([...outputs].map(([k, v]) => [k, sha256(v.buf)]));
 				const adoptProblems = new Problems();
-				checkAdoption({ inventory, outDir, composed: composedShas, problems: adoptProblems });
+				checkAdoption({ inventory, outDir: stateDir, composed: composedShas, problems: adoptProblems });
 				for (const p of adoptProblems.list) (mode === 'apply' ? problems : { add: (c, m, f) => notes.push(`[${c}] ${f ? `${f}: ` : ''}${m}`) }).add(p.code, p.message, p.file);
 			} else if (mode === 'apply') {
-				problems.add('adoption-required', `${outDir} holds a legacy or foreign tree (no ${MANAGED}); --apply refuses without --adopt <inventory.json>`);
+				problems.add('adoption-required', `${stateDir} holds a legacy or foreign tree (no ${MANAGED}); --apply refuses without --adopt <inventory.json>`);
 			} else {
 				notes.push('adoption required: the build directory holds a legacy tree; a plain --apply will refuse without --adopt');
 			}
@@ -407,7 +423,7 @@ export async function plan(opts) {
 			if (!same) changes.push({ path: REPORT, action: existsSync(rp) ? (prev.has(REPORT) ? 'change' : 'overwrite-unmanaged') : 'add' });
 		}
 		problems.throwIfAny();
-		return { mode, now, layer, brand, pin, base, outDir, layers, schema, outputs, env, hashes, report, managed, managedFiles, managedText, changes, removals, retire, inventory, notes, legacy, problems, closure, drift };
+		return { mode, now, layer, brand, pin, base, outDir, liveDir, layers, schema, outputs, env, hashes, report, managed, managedFiles, managedText, changes, removals, retire, inventory, notes, legacy, problems, closure, drift };
 	} catch (e) {
 		base.cleanup();
 		throw e;
@@ -428,14 +444,66 @@ function writeAll(ctx) {
 	}
 }
 
-/** --apply */
+export const FAULT_STEPS = ['retire', 'write', 'remove', 'manifest', 'adoption'];
+
+/**
+ * Failure injection for the drills: `COMPOSE_FAULT=<step>` kills the process right after that journal step, but only when
+ * `--allow-fault` was passed (the entry passes it for a non-production root only). Without the flag the variable is ignored.
+ */
+export function faultHook({ allow, env = process.env, kill = () => process.kill(process.pid, 'SIGKILL') }) {
+	const point = allow ? env.COMPOSE_FAULT : undefined;
+	if (!point) return undefined;
+	if (!FAULT_STEPS.includes(point)) throw new ComposeError('bad-args', `COMPOSE_FAULT must be one of ${FAULT_STEPS.join(', ')}`);
+	return (step) => {
+		if (step === point) kill(step);
+	};
+}
+
+/** Directory roots a journal is bound to: the output tree and the brand repo's history directory. */
+function journalRoots(layerReal, outDir) {
+	return { out: outDir, history: historyDirFor(layerReal) };
+}
+
+/** --apply: under the per-brand lock, journaled (plan §4.3 step 4a, C3). A failure after the journal exists leaves it for --recover. */
 export async function apply(opts) {
+	const layerReal = realDir(opts.layerDir, 'brand layer');
+	const brandRepo = path.dirname(layerReal);
+	const release = await acquireLock(brandRepo);
+	try {
+		assertNoJournal(brandRepo);
+		return await applyLocked(opts, layerReal, brandRepo);
+	} finally {
+		// a journal left on disk by a failed apply is recovered, not appended to: the temp recorder belongs to this apply only
+		setTempRecorder(null);
+		await release();
+	}
+}
+
+async function applyLocked(opts, layerReal, brandRepo) {
 	const ctx = await plan({ ...opts, mode: 'apply' });
 	try {
 		ensureHistoryRoot(historyDirFor(ctx.layer.dir));
-		if (!existsSync(ctx.outDir)) mkdirSync(ctx.outDir);
 		const hashes = { ...layerHashes({ layer: ctx.layer, pin: ctx.pin, toolVersion: TOOL_VERSION }), publicConfig: ctx.env.hash, settings: ctx.hashes.settings };
-		const historyId = writeEntry({ layerDir: ctx.layer.dir, layer: ctx.layer, hashes, managedText: ctx.managedText, now: ctx.now });
+		const fault = (step) => opts.fault?.(step);
+
+		// journal first: previous bytes of every path this apply may touch, then every intended addition (absent paths)
+		const touched = new Set([...ctx.changes.map((c) => c.path), ...ctx.removals, ...ctx.retire, MANAGED, ADOPTION, REPORT]);
+		const journal = beginJournal({
+			brandRepo,
+			roots: journalRoots(layerReal, ctx.outDir),
+			paths: [...[...touched].sort().map((rel) => ({ root: 'out', rel })), { root: 'history', rel: 'compose-adoption.json' }],
+			now: ctx.now,
+			rm: opts.rm,
+		});
+		// created after the journal records that it was absent, so an interrupted apply's recovery removes it again
+		makeDir(ctx.outDir);
+		// the entry's id is journaled BEFORE any file of it exists: a kill anywhere while it is created leaves an id that recovery
+		// removes (partial) or marks abandoned (complete); before the id is published nothing of the entry exists yet
+		const historyId = allocateEntryId({ layerDir: ctx.layer.dir, hashes, now: ctx.now });
+		fault('history-id');
+		journal.setHistory(historyId);
+		fault('history-journaled');
+		writeEntry({ layerDir: ctx.layer.dir, layer: ctx.layer, hashes, managedText: ctx.managedText, now: ctx.now, id: historyId });
 
 		// first adoption: retire only the inventory's list (checked tracked legacy files)
 		const retired = [];
@@ -445,7 +513,11 @@ export async function apply(opts) {
 				pruneEmptyDirs(ctx.outDir, rel);
 			}
 		}
+		journal.mark('retire');
+		fault('retire');
 		writeAll(ctx);
+		journal.mark('write');
+		fault('write');
 		const removed = [];
 		for (const rel of ctx.removals) {
 			if (safeRemoveFile(ctx.outDir, rel)) {
@@ -453,7 +525,11 @@ export async function apply(opts) {
 				pruneEmptyDirs(ctx.outDir, rel);
 			}
 		}
+		journal.mark('remove');
+		fault('remove');
 		safeWrite(ctx.outDir, MANAGED, ctx.managedText);
+		journal.mark('manifest');
+		fault('manifest');
 
 		for (const [rel, o] of ctx.outputs) {
 			if (sha256(readFileSync(path.join(ctx.outDir, rel))) !== sha256(o.buf)) throw new ComposeError('write-verify', `${rel} on disk differs from the plan after writing`);
@@ -483,13 +559,83 @@ export async function apply(opts) {
 			safeWrite(ctx.outDir, ADOPTION, text);
 			safeWrite(historyDirFor(ctx.layer.dir), 'compose-adoption.json', text);
 		}
+		journal.mark('adoption');
+		fault('adoption');
 
 		const finalHash = await finalEffectiveHash({ buildDir: ctx.outDir, loadEnv: opts.loadEnv });
 		if (finalHash !== ctx.env.hash) throw new ComposeError('effective-config-mismatch', 'the effective public config read back from the build directory differs from the planned one');
+		journal.finish();
 		return { historyId, changes: ctx.changes, removed, retired, hashes, report: ctx.report };
 	} finally {
 		ctx.base.cleanup();
 	}
+}
+
+/**
+ * --recover: restores every journaled path to its previous bytes, mode or absence, deletes intended additions,
+ * marks the history entry abandoned and deletes the journal. Idempotent; writes nothing when no journal exists.
+ */
+export async function recover({ layerDir, outDir, rm }) {
+	const layerReal = realDir(layerDir, 'brand layer');
+	const brandRepo = path.dirname(layerReal);
+	const release = await acquireLock(brandRepo);
+	try {
+		return recoverJournals({
+			brandRepo,
+			roots: journalRoots(layerReal, canonicalOut(outDir, 'output directory')),
+			markAbandoned: (id) => abandonEntry({ layerDir: layerReal, id }),
+			rm,
+		});
+	} finally {
+		await release();
+	}
+}
+
+/** Runs `fn` under the per-brand lock; the modes that change the history or the brand layer take it like --apply does. */
+export async function withBrandLock(layerDir, fn) {
+	const release = await acquireLock(path.dirname(realDir(layerDir, 'brand layer')));
+	try {
+		return await fn();
+	} finally {
+		await release();
+	}
+}
+
+/**
+ * --check-build-env: re-reads what the build will read (after the env generator and compose ran) and writes
+ * <out>/build-config.json: sorted VITE_* names, the effective-config hash, the names and hash of the build's own
+ * exports (brand.json buildExports) and their combined hash. The export values go to <out>/build-exports.json, which
+ * the entry applies to the build and the build guard checks against that hash. ComposeError build-config-mismatch (exit 7) when the
+ * effective hash differs from the one compose planned (compose-report.json hashes.publicConfig).
+ */
+export async function checkBuildEnv({ layerDir, outDir, loadEnv }) {
+	const layer = loadLayer(layerDir);
+	const out = realDir(outDir, 'output directory');
+	const planned = readJson(path.join(out, REPORT), REPORT).hashes?.publicConfig;
+	const load = loadEnv ?? (await defaultLoadEnv());
+	const effective = load(BUILD_MODE, out, 'VITE_');
+	const effectiveConfigHash = effectiveHash(effective);
+	if (effectiveConfigHash !== planned) {
+		throw new ComposeError('build-config-mismatch', `the effective public config the build will read (${effectiveConfigHash.slice(0, 12)}) differs from compose's planned one (${String(planned).slice(0, 12)}); a stale or foreign env file is being read`);
+	}
+	const exportsMap = layer.brand.buildExports ?? {};
+	for (const [k, v] of Object.entries(exportsMap)) {
+		if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k) || typeof v !== 'string') throw new ComposeError('build-exports-invalid', `brand.json buildExports.${k} must be a string under an environment variable name`);
+	}
+	const exportsHash = hashJson(Object.entries(exportsMap).sort(([a], [b]) => (a < b ? -1 : 1)));
+	const config = {
+		version: 1,
+		publicNames: Object.keys(effective).filter((k) => k.startsWith('VITE_')).sort(),
+		effectiveConfigHash,
+		exportNames: Object.keys(exportsMap).sort(),
+		exportsHash,
+		buildConfigHash: hashJson({ effectiveConfigHash, exportsHash }),
+	};
+	// One source for execution and for the hash: the entry applies these values to the build, and the inner script's
+	// guard re-hashes the environment it was given against `exportsHash` in build-config.json.
+	safeWrite(out, 'build-exports.json', pretty({ version: 1, exports: exportsMap }));
+	safeWrite(out, 'build-config.json', pretty(config));
+	return config;
 }
 
 /** --dry-run */
@@ -523,6 +669,10 @@ export function restoreInputs({ layerDir, historyId, toolVersion = TOOL_VERSION 
 
 /** --inventory: classify the build directory against the composed set (A25a step 2). */
 export async function inventory(opts) {
+	const outProbe = canonicalOut(opts.outDir, 'output directory');
+	if (!readManaged(opts.liveDir ?? outProbe) && hasNonRuntimeContent(opts.liveDir ?? outProbe) && (!opts.legacyTag || !opts.dispositions)) {
+		throw new ComposeError('inventory-args', 'the tree is unadopted: --inventory requires --legacy-tag and --dispositions');
+	}
 	const ctx = await plan({ ...opts, mode: 'inventory' });
 	try {
 		const composed = new Map([...ctx.outputs].map(([k, v]) => [k, sha256(v.buf)]));
@@ -545,7 +695,7 @@ export async function inventory(opts) {
 		const inv = buildInventory({ outDir: ctx.outDir, composed, dispositions, preserved: opts.preserve ?? [], tracked, legacyTreePaths, legacyTag: opts.legacyTag, legacyCommit, dirty });
 		const out = opts.inventoryOut ?? path.join(historyDirFor(ctx.layer.dir), 'adoption-inventory.json');
 		if (path.dirname(out) === historyDirFor(ctx.layer.dir)) ensureHistoryRoot(path.dirname(out));
-		else mkdirSync(path.dirname(out), { recursive: true });
+		else makeDir(path.dirname(out), { recursive: true });
 		safeWrite(path.dirname(out), path.basename(out), pretty(inv));
 		return { inventory: inv, file: out, unexplained: inv.rows.filter((r) => r.class === 'unexplained').length };
 	} finally {
@@ -576,7 +726,7 @@ export function selfCheck({ resolve = (s) => import.meta.resolve(s), toolHome = 
 // -------------------------------------------------------------------- CLI
 function parseArgs(argv) {
 	const o = { positional: [], flags: new Set(), values: new Map() };
-	const withValue = new Set(['--out', '--pin', '--base-dir', '--repo', '--layers', '--schema', '--adopt', '--restore-inputs', '--keep', '--dispositions', '--preserve', '--legacy-tag', '--inventory-out']);
+	const withValue = new Set(['--out', '--pin', '--base-dir', '--repo', '--layers', '--schema', '--adopt', '--restore-inputs', '--keep', '--dispositions', '--preserve', '--legacy-tag', '--inventory-out', '--live', '--build-config']);
 	for (let i = 0; i < argv.length; i++) {
 		const a = argv[i];
 		if (withValue.has(a)) {
@@ -604,9 +754,9 @@ export async function main(argv) {
 		return r.ok ? 0 : 1;
 	}
 	const [layerDir] = a.positional;
-	const modes = ['--dry-run', '--apply', '--mark-built', '--inventory'].filter((f) => a.flags.has(f)).concat(a.values.has('--restore-inputs') ? ['--restore-inputs'] : []);
+	const modes = ['--dry-run', '--apply', '--mark-built', '--inventory', '--check-build-env', '--recover'].filter((f) => a.flags.has(f)).concat(a.values.has('--restore-inputs') ? ['--restore-inputs'] : []);
 	if (!layerDir || modes.length !== 1) {
-		console.error('usage: compose.mjs <brand-layer-dir> --out <build-dir> (--dry-run | --apply [--adopt f] | --mark-built | --restore-inputs <id> | --inventory | --self-check)');
+		console.error('usage: compose.mjs <brand-layer-dir> --out <build-dir> [--live <dir>] (--dry-run | --apply [--adopt f] [--allow-fault] | --check-build-env | --mark-built [--build-config f] | --restore-inputs <id> | --inventory | --recover | --self-check)');
 		return 2;
 	}
 	const common = {
@@ -618,6 +768,7 @@ export async function main(argv) {
 		layersPath: a.values.get('--layers'),
 		schemaPath: a.values.get('--schema'),
 		requireOutPair: a.flags.has('--require-out-pair'),
+		liveDir: a.values.get('--live'),
 	};
 	const needOut = !a.values.has('--restore-inputs');
 	if (needOut && !common.outDir) {
@@ -625,6 +776,20 @@ export async function main(argv) {
 		return 2;
 	}
 	const mode = modes[0];
+	// While a journal exists every mode except --dry-run and --recover refuses (exit 5).
+	if (mode !== '--dry-run' && mode !== '--recover') assertNoJournal(path.dirname(realDir(layerDir, 'brand layer')));
+	if (mode === '--recover') {
+		const done = await recover({ layerDir, outDir: common.outDir });
+		if (!done.length) console.log('nothing to recover');
+		for (const d of done) console.log(`recovered journal ${d.id}: ${d.restored} restored, ${d.removed} additions removed${d.history ? `, history ${d.history} abandoned` : ''}`);
+		return 0;
+	}
+	if (mode === '--check-build-env') {
+		// writes build-config.json and build-exports.json into the stage: a writer like any other, so it takes the same locks
+		const c = await withBrandLock(layerDir, () => checkBuildEnv({ layerDir, outDir: common.outDir }));
+		console.log(`build-config.json written: ${c.publicNames.length} VITE_ names (${c.publicNames.join(' ')}); effective config ${c.effectiveConfigHash.slice(0, 12)}; build config ${c.buildConfigHash.slice(0, 12)}`);
+		return 0;
+	}
 	if (mode === '--dry-run') {
 		const r = await dryRun(common);
 		printChanges(r);
@@ -632,31 +797,52 @@ export async function main(argv) {
 		return 0;
 	}
 	if (mode === '--apply') {
-		const r = await apply({ ...common, adoptFile: a.values.get('--adopt') });
+		// Fault injection is inert unless --allow-fault is passed (the entry passes it for a non-production root only).
+		const fault = faultHook({ allow: a.flags.has('--allow-fault') });
+		const r = await apply({ ...common, adoptFile: a.values.get('--adopt'), fault });
 		printChanges({ changes: r.changes, removals: r.removed.map((p) => p), notes: [], hashes: r.hashes });
 		console.log(`history entry ${r.historyId} (status applied); run --mark-built after the build succeeds`);
 		return 0;
 	}
 	if (mode === '--mark-built') {
 		const layerReal = realDir(layerDir, 'brand layer');
-		const id = markBuilt({ layerDir: layerReal, outDir: realDir(common.outDir, 'output directory'), now: new Date(), keepBuilt: Number(a.values.get('--keep') ?? 3) });
+		let buildConfigHash;
+		const cfgFile = a.values.get('--build-config');
+		if (cfgFile) {
+			const cfg = readJson(cfgFile, 'build config');
+			if (!/^[0-9a-f]{64}$/.test(cfg.buildConfigHash ?? '')) throw new ComposeError('build-config-mismatch', `${cfgFile} has no valid buildConfigHash`);
+			buildConfigHash = cfg.buildConfigHash;
+		}
+		const id = await withBrandLock(layerReal, () => markBuilt({ layerDir: layerReal, outDir: realDir(common.outDir, 'output directory'), now: new Date(), keepBuilt: Number(a.values.get('--keep') ?? 3), buildConfigHash }));
 		console.log(`history entry ${id} marked built`);
 		return 0;
 	}
 	if (mode === '--restore-inputs') {
-		const r = restoreInputs({ layerDir, historyId: a.values.get('--restore-inputs') });
+		const r = await withBrandLock(layerDir, () => restoreInputs({ layerDir, historyId: a.values.get('--restore-inputs') }));
 		console.log(`brand layer restored from ${r.id}; hashes verified (pin ${r.pin.slice(0, 12)}). Run the build entry to compose these inputs${r.pinOverride ? ` with --pin ${r.pin} (the saved output was composed at a pin different from brand.json's ${r.hashes.brandPin.slice(0, 12)})` : ''}.`);
 		return 0;
 	}
-	const r = await inventory({
+	const r = await withBrandLock(layerDir, () => inventory({
 		...common,
 		dispositions: a.values.get('--dispositions'),
 		preserve: a.values.get('--preserve')?.split(',').filter(Boolean),
 		legacyTag: a.values.get('--legacy-tag'),
 		inventoryOut: a.values.get('--inventory-out'),
-	});
+	}));
 	console.log(`inventory written to ${r.file}: ${r.inventory.rows.length} rows, ${r.unexplained} unexplained, status ${r.inventory.status}`);
 	return r.unexplained > 0 || r.inventory.status !== 'ok' ? 1 : 0;
+}
+
+/** Exit code for a failure: 5 recovery required, 6 adoption or pin refused, 7 env or build-config mismatch, 2 usage, else 1. */
+export function exitCodeFor(e) {
+	if (!(e instanceof ComposeError)) return 1;
+	const codes = e.code === 'validation' ? e.details.map((d) => d.code) : [e.code];
+	const any = (...want) => codes.some((c) => want.includes(c));
+	if (any('journal-present', 'locked')) return 5;
+	if (any('adoption-required', 'bad-pin', 'bad-inventory', 'inventory-stale', 'inventory-blocked', 'inventory-unexplained', 'retire-invalid')) return 6;
+	if (any('effective-config-mismatch', 'build-config-mismatch')) return 7;
+	if (any('bad-args', 'inventory-args')) return 2;
+	return 1;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -664,7 +850,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
 		(c) => process.exit(c),
 		(e) => {
 			console.error(e instanceof ComposeError ? e.message : e.stack);
-			process.exit(1);
+			process.exit(exitCodeFor(e));
 		},
 	);
 }

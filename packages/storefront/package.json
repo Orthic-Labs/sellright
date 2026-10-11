@@ -35,7 +35,7 @@
 		"qwik": "qwik",
 		"test": "vitest run",
 		"test:scripts": "node --test scripts/*.test.mjs",
-		"test:tools": "node --test tools/compose/compose.test.mjs tools/compose/drift.test.mjs tools/compose/env-check.test.mjs tools/env/env-check.test.mjs tools/inventory/inventory.test.mjs tools/bump/bump.test.mjs",
+		"test:tools": "node --test tools/compose/compose.test.mjs tools/compose/journal.test.mjs tools/compose/drift.test.mjs tools/compose/env-check.test.mjs tools/env/env-check.test.mjs tools/inventory/inventory.test.mjs tools/bump/bump.test.mjs tools/deploy/tools.test.mjs tools/deploy/entry.test.mjs tools/deploy/rollback.test.mjs tools/deploy/review3.test.mjs tools/deploy/review4.test.mjs tools/deploy/review5.test.mjs tools/deploy/review6.test.mjs tools/deploy/review7.test.mjs",
 		"tokens:inventory": "node scripts/token-inventory.mjs",
 		"check:layers": "node scripts/check-imports.mjs --validate",
 		"check:imports": "node scripts/check-imports.mjs",
