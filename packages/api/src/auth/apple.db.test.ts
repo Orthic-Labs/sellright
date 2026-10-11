@@ -250,13 +250,14 @@ const outbox = () => withStore(STORE_APPLE, async (tx) =>
 const NONCE_COOKIE = 'sr_fed_link';
 const nonceCookieOf = (res: Response) => new RegExp(`${NONCE_COOKIE}=[^;]+`).exec(res.headers.get('set-cookie') ?? '')?.[0];
 const tokenFrom = (row: { payload: { text: string } }) => /sign-in\/confirm\?token=([^\s")<]+)/.exec(row.payload.text)![1]!;
-const confirm = (token: string, headers: Record<string, string> = {}) =>
-  app.request('/v1/shop/auth/federated/confirm', { method: 'POST', headers: { ...hdr(SLUG_APPLE), ...headers }, body: JSON.stringify({ token }) });
+const confirm = (token: string, headers: Record<string, string> = {}, opts: { nonce?: string; query?: string } = {}) =>
+  app.request(`/v1/shop/auth/federated/confirm${opts.query ?? ''}`, { method: 'POST', headers: { ...hdr(SLUG_APPLE), ...headers }, body: JSON.stringify(opts.nonce === undefined ? { token } : { token, nonce: opts.nonce }) });
 async function startFlow(email: string, sub: string) {
   const res = await signIn(SLUG_APPLE, appleJwt({ sub, email }));
   expect(res.status).toBe(202);
   const rows = await outbox();
-  return { res, cookie: nonceCookieOf(res)!, token: tokenFrom(rows[rows.length - 1]!) };
+  const nonce = ((await res.clone().json()) as { nonce: string }).nonce;
+  return { res, cookie: nonceCookieOf(res)!, nonce, token: tokenFrom(rows[rows.length - 1]!) };
 }
 const seedC = (email: string, appleSub: string | null = null, verified = true, passwordHash: string | null = null) =>
   withStore(STORE_APPLE, async (tx) => {
@@ -275,8 +276,11 @@ describe('POST /v1/shop/auth/apple non-authoritative identity', () => {
     const bBody = await b.text();
     expect(a.status).toBe(202);
     expect(b.status).toBe(202);
-    expect(bBody).toBe(aBody);
-    expect(JSON.parse(aBody)).toEqual({ verificationRequired: true });
+    const shape = (b: string) => Object.entries(JSON.parse(b) as Record<string, unknown>).map(([k, v]) => [k, typeof v]).sort();
+    expect(shape(aBody)).toEqual(shape(bBody));
+    expect(shape(aBody)).toEqual([['nonce', 'string'], ['verificationRequired', 'boolean']]);
+    expect((JSON.parse(aBody) as { nonce: string }).nonce).not.toBe((JSON.parse(bBody) as { nonce: string }).nonce);
+    expect(JSON.parse(aBody)).toMatchObject({ verificationRequired: true });
     const attrs = (r: Response) => (r.headers.get('set-cookie') ?? '').replace(/sr_fed_link=[^;]+/, 'sr_fed_link=<n>');
     expect(attrs(a)).toBe(attrs(b));
     expect(attrs(a)).toMatch(/HttpOnly/);
@@ -339,6 +343,26 @@ describe('POST /v1/shop/auth/apple non-authoritative identity', () => {
     expect(await appleRow(STORE_APPLE, 'ap-x1')).toBeUndefined();
     expect(await sessions()).toBe(0);
     expect((await confirm(victim.token, { cookie: victim.cookie })).status).toBe(200); // still unspent
+  });
+
+  it('native path: token + the nonce from the 202 body redeem without a cookie (also with a bearer header), once', async () => {
+    const { token, nonce, cookie } = await startFlow('nobody-nat@corp.example', 'ap-nat1');
+    expect(cookie).toContain(nonce);
+    const res = await confirm(token, { authorization: 'Bearer native-token' }, { nonce });
+    expect(res.status).toBe(200);
+    expect(await appleRow(STORE_APPLE, 'ap-nat1')).toMatchObject({ email: 'nobody-nat@corp.example' });
+    expect((await confirm(token, {}, { nonce })).status).toBe(401); // replay
+    expect(await sessions()).toBe(1);
+  });
+
+  it('wrong or missing body nonce fails; a nonce in the query string is ignored', async () => {
+    const { token, nonce } = await startFlow('nobody-bn@corp.example', 'ap-bn1');
+    for (const bad of [{ nonce: 'A'.repeat(43) }, { nonce: 'short-but-long-enough-nonce-x' }, {}]) {
+      expect((await confirm(token, {}, bad)).status).toBe(401);
+    }
+    expect((await confirm(token, {}, { query: `?nonce=${nonce}` })).status).toBe(401);
+    expect(await customers()).toBe(0);
+    expect((await confirm(token, {}, { nonce })).status).toBe(200);
   });
 
   it('a link cannot be redeemed twice', async () => {

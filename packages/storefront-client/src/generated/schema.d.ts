@@ -14679,6 +14679,7 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            nonce: string;
                             /** @enum {boolean} */
                             verificationRequired: true;
                         };
@@ -14791,6 +14792,7 @@ export interface paths {
             requestBody?: {
                 content: {
                     "application/json": {
+                        nonce?: string;
                         token: string;
                     };
                 };
@@ -14958,6 +14960,7 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            nonce: string;
                             /** @enum {boolean} */
                             verificationRequired: true;
                         };

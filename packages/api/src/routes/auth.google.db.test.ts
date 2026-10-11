@@ -111,10 +111,10 @@ const linkTokenFrom = (row: { payload: { text: string } }) => /sign-in\/confirm\
 const NONCE_COOKIE = 'sr_fed_link';
 /** `sr_fed_link=<nonce>` from a 202's Set-Cookie, ready to send back as a Cookie header. */
 const nonceCookieOf = (res: Response) => new RegExp(`${NONCE_COOKIE}=[^;]+`).exec(res.headers.get('set-cookie') ?? '')?.[0];
-const confirm = (token: string, opts: { cookie?: string; slug?: string } = {}) => app.request('/v1/shop/auth/federated/confirm', {
+const confirm = (token: string, opts: { cookie?: string; slug?: string; nonce?: string; query?: string } = {}) => app.request(`/v1/shop/auth/federated/confirm${opts.query ?? ''}`, {
   method: 'POST',
   headers: { 'content-type': 'application/json', 'x-store-slug': opts.slug ?? SLUG, ...(opts.cookie ? { cookie: opts.cookie } : {}) },
-  body: JSON.stringify({ token }),
+  body: JSON.stringify(opts.nonce === undefined ? { token } : { token, nonce: opts.nonce }),
 });
 /** Start a non-authoritative flow for `email`; returns the cookie and the mailed token. */
 async function startFlow(email: string, sub: string, extra: Record<string, unknown> = {}) {
@@ -122,7 +122,8 @@ async function startFlow(email: string, sub: string, extra: Record<string, unkno
   const res = await signIn();
   expect(res.status).toBe(202);
   const rows = await outbox();
-  return { res, cookie: nonceCookieOf(res)!, token: linkTokenFrom(rows[rows.length - 1]!) };
+  const nonce = ((await res.clone().json()) as { nonce: string }).nonce;
+  return { res, cookie: nonceCookieOf(res)!, nonce, token: linkTokenFrom(rows[rows.length - 1]!) };
 }
 
 describe('POST /v1/shop/auth/google non-authoritative identity', () => {
@@ -144,8 +145,11 @@ describe('POST /v1/shop/auth/google non-authoritative identity', () => {
 
       expect(existing.status).toBe(202);
       expect(unknown.status).toBe(existing.status);
-      expect(unknownBody).toBe(existingBody);
-      expect(JSON.parse(existingBody)).toEqual({ verificationRequired: true });
+      const shape = (b: string) => Object.entries(JSON.parse(b) as Record<string, unknown>).map(([k, v]) => [k, typeof v]).sort();
+      expect(shape(existingBody)).toEqual(shape(unknownBody));
+      expect(shape(existingBody)).toEqual([['nonce', 'string'], ['verificationRequired', 'boolean']]);
+      expect((JSON.parse(existingBody) as { nonce: string }).nonce).not.toBe((JSON.parse(unknownBody) as { nonce: string }).nonce);
+      expect(JSON.parse(existingBody)).toMatchObject({ verificationRequired: true });
       expect(existing.headers.get('content-type')).toBe(unknown.headers.get('content-type'));
       // Only the nonce cookie, with identical attributes; never a session cookie.
       const attrs = (r: Response) => (r.headers.get('set-cookie') ?? '').replace(/sr_fed_link=[^;]+/, 'sr_fed_link=<n>');
@@ -256,6 +260,26 @@ describe('POST /v1/shop/auth/google non-authoritative identity', () => {
     }
     expect(await customerCount()).toBe(0);
     expect((await post({ cookie })).status).toBe(200); // the right nonce still works: nothing was spent
+  });
+
+  it('native path: token + the nonce from the 202 body redeem without any cookie, once', async () => {
+    const { token, nonce, cookie } = await startFlow('nobody-nat@corp.example', 'g-nat1');
+    expect(cookie).toContain(nonce); // body nonce is the same secret the cookie carries
+    const res = await confirm(token, { nonce });
+    expect(res.status).toBe(200);
+    expect(await byEmail('nobody-nat@corp.example')).toMatchObject({ googleSub: 'g-nat1' });
+    expect((await confirm(token, { nonce })).status).toBe(401); // replay
+    expect(await sessionCount()).toBe(1);
+  });
+
+  it('wrong or missing body nonce fails; a nonce in the query string is ignored', async () => {
+    const { token, nonce } = await startFlow('nobody-bn@corp.example', 'g-bn1');
+    for (const bad of [{ nonce: 'A'.repeat(43) }, { nonce: 'short-but-long-enough-nonce-x' }, {}]) {
+      expect((await confirm(token, bad)).status).toBe(401);
+    }
+    expect((await confirm(token, { query: `?nonce=${nonce}` })).status).toBe(401);
+    expect(await customerCount()).toBe(0);
+    expect((await confirm(token, { nonce })).status).toBe(200); // unspent by the failures
   });
 
   it('a link cannot be redeemed twice (replay fails, no second session)', async () => {

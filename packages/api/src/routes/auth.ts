@@ -318,7 +318,10 @@ async function federatedMailGate(c: Parameters<typeof clientIp>[0], email: strin
 // address — with no account lookup, so the response is byte-identical whether
 // or not the address already has an account (no enumeration of reassigned
 // addresses). The 202 also sets an HttpOnly nonce cookie the link is bound to:
-// it redeems only in this browser, at /federated/confirm (auth/federated-link.ts).
+// it redeems only in this browser, at /federated/confirm (auth/federated-link.ts). The same nonce is also returned in the 202
+// body (always, so the shape is identical for every address) for native apps with no cookie jar: they finish via a
+// universal link carrying the token and POST token + their held nonce. The token reaches only the mailbox holder and the
+// nonce only the initiator, so both are needed either way; a nonce is never read from a URL.
 auth.openapi(
   createRoute({
     method: 'post',
@@ -327,7 +330,7 @@ auth.openapi(
     request: { body: { content: { 'application/json': { schema: z.object({ credential: z.string().min(20) }) } } } },
     responses: {
       200: { description: 'OK', content: { 'application/json': { schema: z.object({ token: z.string(), customer: CustomerOut }) } } },
-      202: { description: 'Google cannot vouch for this address: a confirmation link was sent to it (identical whether or not an account exists)', content: { 'application/json': { schema: z.object({ verificationRequired: z.literal(true) }) } } },
+      202: { description: 'Google cannot vouch for this address: a confirmation link was sent to it (identical whether or not an account exists)', content: { 'application/json': { schema: z.object({ verificationRequired: z.literal(true), nonce: z.string() }) } } },
       401: { description: 'Invalid token', content: { 'application/json': { schema: apiErrorSchema() } } },
       409: { description: 'Not configured, or an unverified account already owns this email', content: { 'application/json': { schema: apiErrorSchema() } } },
       429: { description: 'Rate limited', content: { 'application/json': { schema: apiErrorSchema() } } },
@@ -366,7 +369,7 @@ auth.openapi(
     if (out.kind === 'verify_sent') {
       await gate?.record();
       setFederatedNonceCookie(c, nonce, FEDERATED_LINK_TTL_MS / 1000);
-      return c.json({ verificationRequired: true as const }, 202);
+      return c.json({ verificationRequired: true as const, nonce }, 202);
     }
     return signInOutcomeResponse(c, st, out);
   },
@@ -383,7 +386,7 @@ auth.openapi(
     method: 'post',
     path: '/v1/shop/auth/federated/confirm',
     summary: 'Confirm a federated sign-in from the emailed link',
-    request: { body: { content: { 'application/json': { schema: z.object({ token: z.string().min(20).max(2048) }) } } } },
+    request: { body: { content: { 'application/json': { schema: z.object({ token: z.string().min(20).max(2048), nonce: z.string().min(20).max(256).optional() }) } } } },
     responses: {
       200: { description: 'OK', content: { 'application/json': { schema: z.object({ token: z.string(), customer: CustomerOut }) } } },
       401: { description: 'Link invalid, expired, already used, or opened in a different browser', content: { 'application/json': { schema: apiErrorSchema() } } },
@@ -393,9 +396,12 @@ auth.openapi(
   async (c) => {
     const st = await resolveStoreFromCtx(c);
     const invalid = () => errJson(c, 401, 'TOKEN_INVALID', 'this confirmation link is invalid, expired, or was already used — start the sign-in again in this browser');
-    const claims = verifyFederatedLink(c.req.valid('json').token, st.id);
+    const { token: linkToken, nonce: bodyNonce } = c.req.valid('json');
+    const claims = verifyFederatedLink(linkToken, st.id);
     if (!claims) return invalid();
-    if (!nonceMatches(cookie(c, FEDERATED_NONCE_COOKIE), claims.nonceHash)) return invalid(); // other browser: link stays unspent
+    // The initiator's nonce: request body (native apps) or the HttpOnly cookie (browsers) — never the URL. Other browser /
+    // wrong nonce: link stays unspent.
+    if (!nonceMatches(bodyNonce ?? cookie(c, FEDERATED_NONCE_COOKIE), claims.nonceHash)) return invalid();
     const out = await withStore(st.id, async (tx): Promise<SignInOutcome | { kind: 'replayed' }> => {
       if (!(await redeemFederatedLink(tx, st.id, claims.jti, claims.exp))) return { kind: 'replayed' };
       // Clicking proved the mailbox, so the provider-specific link/create runs with mailboxProven.
@@ -480,7 +486,7 @@ auth.openapi(
     request: { body: { content: { 'application/json': { schema: z.object({ identityToken: z.string().min(20) }) } } } },
     responses: {
       200: { description: 'OK', content: { 'application/json': { schema: z.object({ token: z.string(), customer: CustomerOut }) } } },
-      202: { description: 'Apple cannot vouch for this address: a confirmation link was sent to it (identical whether or not an account exists)', content: { 'application/json': { schema: z.object({ verificationRequired: z.literal(true) }) } } },
+      202: { description: 'Apple cannot vouch for this address: a confirmation link was sent to it (identical whether or not an account exists)', content: { 'application/json': { schema: z.object({ verificationRequired: z.literal(true), nonce: z.string() }) } } },
       401: { description: 'Invalid token', content: { 'application/json': { schema: apiErrorSchema() } } },
       409: { description: 'Not configured (APPLE_SIGNIN_NOT_CONFIGURED), an unverified account owns this email (EMAIL_TAKEN_UNVERIFIED), or an account with this email exists and Apple is not authoritative for it / is bound to another Apple subject (EMAIL_TAKEN)', content: { 'application/json': { schema: apiErrorSchema() } } },
       429: { description: 'Rate limited', content: { 'application/json': { schema: apiErrorSchema() } } },
@@ -505,9 +511,8 @@ auth.openapi(
     // no lookup by address, a confirmation link mailed to it, 202 + nonce cookie, identical for existing and unknown
     // addresses. A returning, already-bound Apple subject and authoritative identities (Apple-hosted / Private Relay)
     // are unchanged; an identity with no email at all names no address, so there is nothing to confirm.
-    // Web-only redemption: the link is bound to the browser that started the flow (nonce cookie, never returned in the
-    // body). Native clients have no pre-auth bearer to tell them apart from a browser at sign-in time, so returning the
-    // nonce in the body is not done: a native non-authoritative Apple sign-up must finish in the browser.
+    // The link is bound to the initiator: browsers via the nonce cookie, native apps via the same nonce returned in the
+    // 202 body and posted back with the token (see the Google handler comment).
     const authoritative = appleAuthoritativeForEmail(apple);
     const confirmByMail = !!appleEmail && !authoritative;
     let gate: Awaited<ReturnType<typeof federatedMailGate>> | undefined;
@@ -533,7 +538,7 @@ auth.openapi(
     if (out.kind === 'verify_sent') {
       await gate?.record();
       setFederatedNonceCookie(c, nonce, FEDERATED_LINK_TTL_MS / 1000);
-      return c.json({ verificationRequired: true as const }, 202);
+      return c.json({ verificationRequired: true as const, nonce }, 202);
     }
     return signInOutcomeResponse(c, st, out);
   },

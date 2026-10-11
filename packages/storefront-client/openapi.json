@@ -4435,10 +4435,14 @@
                       "enum": [
                         true
                       ]
+                    },
+                    "nonce": {
+                      "type": "string"
                     }
                   },
                   "required": [
-                    "verificationRequired"
+                    "verificationRequired",
+                    "nonce"
                   ]
                 }
               }
@@ -4490,6 +4494,11 @@
                     "type": "string",
                     "minLength": 20,
                     "maxLength": 2048
+                  },
+                  "nonce": {
+                    "type": "string",
+                    "minLength": 20,
+                    "maxLength": 256
                   }
                 },
                 "required": [
@@ -4671,10 +4680,14 @@
                       "enum": [
                         true
                       ]
+                    },
+                    "nonce": {
+                      "type": "string"
                     }
                   },
                   "required": [
-                    "verificationRequired"
+                    "verificationRequired",
+                    "nonce"
                   ]
                 }
               }
