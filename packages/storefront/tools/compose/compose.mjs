@@ -54,7 +54,7 @@ import {
 
 export const TOOL_VERSION = '1';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-/** The two overlay checkers, packaged with the tool (byte-identical copies of ../../scripts/, enforced by compose.test.mjs). */
+/** The overlay checkers, packaged with the tool (byte-identical copies of ../../scripts/, enforced by compose.test.mjs). */
 export const CHECKERS_DIR = path.join(HERE, 'checkers');
 export const MANAGED = '.compose-managed.json';
 export const ADOPTION = '.compose-adoption.json';
@@ -158,7 +158,7 @@ async function loadChecker(dir, name, needed) {
 	return { mod };
 }
 
-const SHAPE_KEYS = ['definitionCalls', 'networkGlobals', 'networkMethods', 'globalObjects', 'orchestrationCalls', 'gatewayNamePattern'];
+const SHAPE_KEYS = ['definitionCalls', 'networkGlobals', 'networkMethods', 'globalObjects', 'orchestrationCalls', 'gatewayNamePattern', 'injectionProps', 'injectionCalls', 'createElementAllow', 'qrlIntrospection', 'workerCalls', 'forbiddenJsxTags', 'brandStockFlags'];
 
 /**
  * Import/layer check (A14) and code-shape check (A14) on every overlay-origin file, run on a scratch
@@ -170,16 +170,18 @@ const SHAPE_KEYS = ['definitionCalls', 'networkGlobals', 'networkMethods', 'glob
  */
 async function runCheckers({ outputs, layersPath, layersText, deployFiles, checkersDir, problems }) {
 	const dir = checkersDir ?? CHECKERS_DIR;
-	const result = { importCheck: { status: 'unavailable' }, shapeCheck: { status: 'unavailable' } };
+	const result = { importCheck: { status: 'unavailable' }, shapeCheck: { status: 'unavailable' }, l2Check: { status: 'unavailable' } };
 	const unavailable = (key, code, file, note) => {
 		result[key] = { status: 'unavailable', note };
 		problems.add(code, note, file);
 	};
 	const imports = await loadChecker(dir, 'check-imports.mjs', ['checkOverlayImports', 'loadLayers']);
 	const shape = await loadChecker(dir, 'check-code-shape.mjs', ['checkOverlayShape']);
+	const l2 = await loadChecker(dir, 'check-l2-boundary.mjs', ['checkEjectBoundary']);
 	if (imports.error) unavailable('importCheck', 'import-check-unavailable', 'check-imports.mjs', imports.error);
 	if (shape.error) unavailable('shapeCheck', 'shape-check-unavailable', 'check-code-shape.mjs', shape.error);
-	if (imports.error || shape.error) return result;
+	if (l2.error) unavailable('l2Check', 'l2-check-unavailable', 'check-l2-boundary.mjs', l2.error);
+	if (imports.error || shape.error || l2.error) return result;
 
 	const tmp = makeTempDir('compose-imports-');
 	try {
@@ -196,6 +198,7 @@ async function runCheckers({ outputs, layersPath, layersText, deployFiles, check
 			const note = `layers.json is not in the checkers' format: ${e.message}`;
 			unavailable('importCheck', 'import-check-unavailable', 'layers.json', note);
 			unavailable('shapeCheck', 'shape-check-unavailable', 'layers.json', note);
+			unavailable('l2Check', 'l2-check-unavailable', 'layers.json', note);
 			return result;
 		}
 		const files = [...outputs].filter(([, o]) => o.origin === 'overlay' || o.origin === 'eject').map(([k]) => k).sort();
@@ -220,6 +223,14 @@ async function runCheckers({ outputs, layersPath, layersText, deployFiles, check
 			result.shapeCheck = { status: res.findings?.length ? 'failed' : 'passed', checked: res.checked ?? files.length };
 		} catch (e) {
 			unavailable('shapeCheck', 'shape-check-unavailable', 'check-code-shape.mjs', `check-code-shape.mjs failed to run: ${e.message}`);
+		}
+
+		try {
+			const res = l2.mod.checkEjectBoundary({ root: tmp, layers, files });
+			for (const f of res.findings ?? []) problems.add('l2-boundary', `${f.rule}: ${f.message}`, f.file);
+			result.l2Check = { status: res.findings?.length ? 'failed' : 'passed', checked: res.checked ?? 0 };
+		} catch (e) {
+			unavailable('l2Check', 'l2-check-unavailable', 'check-l2-boundary.mjs', `check-l2-boundary.mjs failed to run: ${e.message}`);
 		}
 		return result;
 	} finally {
@@ -308,7 +319,7 @@ export async function plan(opts) {
 			problems,
 			externalExists: (x) => existsSync(x.startsWith('/') ? x : path.join(outDir, x)),
 		});
-		const { importCheck, shapeCheck } = await runCheckers({ outputs, layersPath: opts.layersPath, layersText, deployFiles: brand.deployFiles ?? [], checkersDir: opts.checkersDir, problems });
+		const { importCheck, shapeCheck, l2Check } = await runCheckers({ outputs, layersPath: opts.layersPath, layersText, deployFiles: brand.deployFiles ?? [], checkersDir: opts.checkersDir, problems });
 
 		// ---- disk state and the adoption guard
 		// With a stage as --out, managed-file presence and the legacy test read the live tree (plan §4.3 step 3).
@@ -408,6 +419,7 @@ export async function plan(opts) {
 			closure: { scanned: closure.scanned.length, usedExternals: closure.usedExternals, externalsMissing: closure.externalsMissing, unresolved: closure.unresolved, generatedArtifacts: closure.generatedArtifacts, excludedTooling: closure.excludedTooling },
 			importCheck,
 			shapeCheck,
+			l2Check,
 		};
 		outputs.set(REPORT, { buf: Buffer.from(pretty(report)), mode: 0o644, origin: 'generated' });
 		const managedFiles = [...outputs].map(([p, o]) => ({ path: p, sha256: sha256(o.buf), origin: o.origin })).sort((a, b) => (a.path < b.path ? -1 : 1));

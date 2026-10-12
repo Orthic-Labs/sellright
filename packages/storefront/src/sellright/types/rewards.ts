@@ -5,10 +5,11 @@
  * and these follow.
  */
 import type { paths } from '../client';
+import type { Live } from './live';
 
 type LoyaltyOp = paths['/v1/shop/account/loyalty']['get'];
 /** GET /v1/shop/account/loyalty — the signed-in customer's points. */
-export type LoyaltyAccount = LoyaltyOp['responses'][200]['content']['application/json'];
+export type LoyaltyAccount = LoyaltyOp['responses'][200]['content']['application/json'] & Live;
 /** The shopper-visible slice of the store's points program. */
 export type LoyaltyProgram = LoyaltyAccount['program'];
 export type LoyaltyActivity = LoyaltyAccount['activity'][number];

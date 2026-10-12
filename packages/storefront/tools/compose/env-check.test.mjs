@@ -188,9 +188,12 @@ test('a .env.production.local in the build directory would shadow brand.json and
 });
 
 test('settings: defaults, enum and boolean validation, unknown keys', async () => {
+	// a wired setting (schema without `wired: false`) accepts a non-default value
+	const wired = schema();
+	for (const k of Object.keys(wired.settings)) delete wired.settings[k].wired;
 	const brand = baseBrand();
 	brand.settings = { 'pdp.stockRefreshTrigger': 'qinit', 'pdp.bfcacheRefresh': true, 'shop.stockOnLoad': 'live' };
-	const ok = await run({ brand });
+	const ok = await run({ brand, sch: wired });
 	assert.deepEqual(ok.problems.list, []);
 	assert.deepEqual(ok.r.settings, { 'pdp.bfcacheRefresh': true, 'pdp.stockRefreshTrigger': 'qinit', 'shop.stockOnLoad': 'live' });
 	const bad = baseBrand();
@@ -198,6 +201,35 @@ test('settings: defaults, enum and boolean validation, unknown keys', async () =
 	const x = await run({ brand: bad });
 	assert.deepEqual(x.problems.codes().sort(), ['env-bad-setting', 'env-unknown-setting']);
 	assert.notEqual(ok.r.settingsHash, (await run()).r.settingsHash);
+});
+
+test('env-setting-unwired: a non-default value of a setting no code reads is a problem; its default and an unset setting are not', async () => {
+	const sch = schema();
+	for (const k of ['pdp.stockRefreshTrigger', 'shop.stockOnLoad', 'pdp.bfcacheRefresh']) assert.equal(sch.settings[k].wired, false, `${k} is marked unwired in brand-env.schema.json`);
+	for (const [key, value] of [['pdp.stockRefreshTrigger', 'qinit'], ['shop.stockOnLoad', 'live'], ['pdp.bfcacheRefresh', true]]) {
+		const brand = baseBrand();
+		brand.settings = { [key]: value };
+		const x = await run({ brand });
+		assert.deepEqual(x.problems.codes(), ['env-setting-unwired'], key);
+		assert.ok(x.problems.list.some((p) => p.message.includes(`settings.${key}`) && !p.message.includes('undefined')), key);
+		// the gate keeps the approved setting where it is: it must not tell anyone to delete or weaken it, and must name the pin
+		const msg = x.problems.list.map((p) => p.message).join('\n');
+		assert.match(msg, /migration gate/, key);
+		assert.match(msg, /keep the setting in brand\.json/, key);
+		assert.match(msg, /current base pin until the platform wiring for it lands/, key);
+		assert.doesNotMatch(msg, /remove it|drop it|delete/i, key);
+	}
+	const same = baseBrand();
+	same.settings = { 'pdp.stockRefreshTrigger': 'qidle', 'shop.stockOnLoad': 'manifest', 'pdp.bfcacheRefresh': false };
+	assert.deepEqual((await run({ brand: same })).problems.list, [], 'the default value of an unwired setting is accepted');
+	assert.deepEqual((await run()).problems.list, []);
+});
+
+test('env-setting-unwired: a mix reports each unwired non-default setting once and still validates the rest', async () => {
+	const brand = baseBrand();
+	brand.settings = { 'pdp.stockRefreshTrigger': 'qinit', 'shop.stockOnLoad': 'nope' };
+	const x = await run({ brand });
+	assert.deepEqual(x.problems.codes().sort(), ['env-bad-setting', 'env-setting-unwired']);
 });
 
 test('renderEnvProduction is sorted, quoted and refuses unrepresentable values', () => {

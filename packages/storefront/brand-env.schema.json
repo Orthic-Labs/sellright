@@ -9,6 +9,7 @@
         "qidle"
       ],
       "default": "qidle",
+      "wired": false,
       "description": "When the PDP starts its one live stock refresh. Damned uses qinit (approved 2026-09-26); others stay on qidle."
     },
     "shop.stockOnLoad": {
@@ -18,11 +19,13 @@
         "live"
       ],
       "default": "manifest",
+      "wired": false,
       "description": "Shop page availability on load: manifest only, or one live uncached fail-closed read (owner decision O1)."
     },
     "pdp.bfcacheRefresh": {
       "type": "boolean",
       "default": false,
+      "wired": false,
       "description": "Refresh live stock again on a persisted pageshow (owner decision O3; Damned only)."
     }
   },

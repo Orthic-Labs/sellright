@@ -1,4 +1,4 @@
 // expect-imports: import-unclassified
-import { theme } from '~/theme/theme.config';
+import { legacy } from '~/other/legacy';
 
-export const t = theme;
+export const t = legacy;

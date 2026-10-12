@@ -13,11 +13,17 @@
 //   import-forbidden        @sellright/storefront-client, ~/sellright/client (layers.json imports.forbidden)
 //   import-l1-bypass        resolves (aliases and '..' included) to an L1 file outside the platform API; type-only exempt
 //   import-unresolved / import-outside-root / import-absolute / import-unclassified / import-dynamic / import-glob
+//   import-framework-symbol bare specifier or name outside layers.json imports.framework; namespace/default/`export *` rejected (r2)
+//   import-node             node:* and Node built-ins (r3)
+//   import-platform-private a ~/platform/* target that is not in platformApi.public, or a name outside its list (r4)
+//   import-type-only-l1     a type-only import of an L1 file outside imports.typeOnlyAllow and the public platform modules (r6)
+//   import-l1-transitive    a base file reached through an overlay file's imports pulls in a non-public L1 file (r1)
 // Import classes: framework (bare package), types (type-only), asset (css, images, fonts, json), presentation (L2/L3
 // file), platform API (src/platform/**, imported as ~/platform/*). Only TypeScript module resolution decides what a
 // specifier points at, so an alias or a '..' chain cannot hide an L1 target.
 import fs from 'node:fs';
 import path from 'node:path';
+import { builtinModules } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import ts from 'typescript';
 
@@ -89,6 +95,12 @@ export function loadLayers(file = path.join(PACKAGE_ROOT, 'layers.json')) {
     if (!LAYER_NAMES.includes(ex.layer)) throw new Error(`layers.json: assetException ${ex.path} has unknown layer ${ex.layer}`);
   }
   if (!layers.platformApi?.dir?.endsWith('/')) throw new Error('layers.json: platformApi.dir must end with "/"');
+  const need = (ok, what) => { if (!ok) throw new Error(`layers.json lacks ${what} (the brand-views boundary rules need it)`); };
+  need(layers.platformApi.public && typeof layers.platformApi.public === 'object', 'platformApi.public');
+  need(layers.platformApi.reexports && typeof layers.platformApi.reexports === 'object', 'platformApi.reexports');
+  need(layers.imports?.framework && typeof layers.imports.framework === 'object', 'imports.framework');
+  need(Array.isArray(layers.imports?.typeOnlyAllow), 'imports.typeOnlyAllow');
+  need(Array.isArray(layers.imports?.transitiveL1Allow), 'imports.transitiveL1Allow');
   return layers;
 }
 
@@ -151,18 +163,32 @@ export function walk(node, visit) {
 /** Every module specifier in a file. `literal: null` = a dynamic specifier that cannot be read statically. */
 export function collectModuleSpecifiers(sf) {
   const out = [];
-  const add = (node, literal, typeOnly, via) => out.push({ node, spec: literal, typeOnly, via });
+  const add = (node, literal, typeOnly, via, detail = null) => out.push({ node, spec: literal, typeOnly, via, detail });
   walk(sf, (node) => {
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
       const clause = node.importClause;
       const nb = clause?.namedBindings;
       const typeOnly = !!clause && (clause.isTypeOnly
         || (!clause.name && !!nb && ts.isNamedImports(nb) && nb.elements.length > 0 && nb.elements.every((e) => e.isTypeOnly)));
-      add(node, node.moduleSpecifier.text, typeOnly, 'import');
+      const names = [];
+      let kind = 'side-effect';
+      if (clause?.name) kind = 'default';
+      if (nb && ts.isNamespaceImport(nb)) kind = 'namespace';
+      if (nb && ts.isNamedImports(nb)) {
+        if (!clause.name) kind = 'named';
+        for (const e of nb.elements) names.push({ name: (e.propertyName ?? e.name).text, typeOnly: !!clause.isTypeOnly || e.isTypeOnly });
+      }
+      add(node, node.moduleSpecifier.text, typeOnly, 'import', { kind, names });
     } else if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
       const ec = node.exportClause;
       const typeOnly = node.isTypeOnly || (!!ec && ts.isNamedExports(ec) && ec.elements.length > 0 && ec.elements.every((e) => e.isTypeOnly));
-      add(node, node.moduleSpecifier.text, typeOnly, 'export');
+      const names = [];
+      let kind = 'star';
+      if (ec && ts.isNamedExports(ec)) {
+        kind = 'named';
+        for (const e of ec.elements) names.push({ name: (e.propertyName ?? e.name).text, typeOnly: node.isTypeOnly || e.isTypeOnly });
+      } else if (ec && ts.isNamespaceExport(ec)) kind = 'namespace';
+      add(node, node.moduleSpecifier.text, typeOnly, 'export', { kind, names });
     } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
       const e = node.moduleReference.expression;
       add(node, ts.isStringLiteral(e) ? e.text : null, node.isTypeOnly, 'import=');
@@ -270,12 +296,55 @@ function isForbiddenSpecifier(layers, spec) {
   return (layers.imports.forbidden ?? []).some((f) => clean === f || clean.startsWith(`${f}/`));
 }
 
+const isBuiltinSpecifier = (spec) => spec.startsWith('node:') || builtinModules.includes(spec) || builtinModules.includes(spec.split('/')[0]);
+
+/** rel path -> allowed names ('*' or a list) for every platformApi.public module that exists in the tree. */
+function publicModules(ctx) {
+  if (ctx.publicCache) return ctx.publicCache;
+  const map = new Map();
+  for (const [spec, names] of Object.entries(ctx.layers.platformApi.public ?? {})) {
+    const r = ctx.resolver.resolve(spec, 'src/__public_probe__.ts');
+    if (!r.error) map.set(r.rel, names);
+  }
+  ctx.publicCache = map;
+  return map;
+}
+
+/** rel paths of the reviewed L1 re-export targets (platformApi.reexports) and the type-only allow list. */
+function resolvedSet(ctx, key, specs) {
+  ctx[key] ??= new Set(specs.map((spec) => ctx.resolver.resolve(spec, 'src/__public_probe__.ts')).filter((r) => !r.error).map((r) => r.rel));
+  return ctx[key];
+}
+const reexportTargets = (ctx) => resolvedSet(ctx, 'reexportCache', Object.values(ctx.layers.platformApi.reexports ?? {}).filter((s) => s.startsWith('~/') || s.startsWith('.')));
+const typeOnlyTargets = (ctx) => resolvedSet(ctx, 'typeOnlyCache', ctx.layers.imports.typeOnlyAllow ?? []);
+
+/** r2: bare specifiers and the names imported from them. */
+function frameworkFindings(ctx, relFile, sf, node, spec, via, detail, typeOnly) {
+  const fw = ctx.layers.imports.framework ?? {};
+  const f = (msg) => finding(relFile, sf, node, 'import-framework-symbol', msg);
+  if (via === 'dynamic-import' || via === 'require' || via === 'import=') return [f(`'${spec}': a ${via} of a bare package cannot be name-checked; use a static named import`)];
+  if (via === 'import-type') return [];
+  const allowed = fw[spec];
+  if (!Array.isArray(allowed)) return [f(`'${spec}' is not an allowed framework package (layers.json imports.framework)`)];
+  if (!detail || detail.kind === 'namespace' || detail.kind === 'default' || detail.kind === 'star') return [f(`'${spec}': namespace, default and \`export *\` forms are not allowed; import allowed names`)];
+  if (detail.kind === 'side-effect') return [f(`'${spec}': a bare side-effect import is not allowed`)];
+  const out = [];
+  for (const { name, typeOnly: nameTypeOnly } of detail.names) {
+    const okValue = allowed.includes(name);
+    const okType = allowed.includes(`type:${name}`);
+    if (nameTypeOnly ? !(okValue || okType) : !okValue) {
+      out.push(f(okType && !nameTypeOnly ? `'${name}' from '${spec}' may only be imported as a type (import type)` : `'${name}' from '${spec}' is not in the allowed framework symbols`));
+    }
+  }
+  return out;
+}
+
 /** Import findings of one source file. `ctx` = { layers, resolver }. */
 export function importFindings(ctx, relFile, text) {
   const { layers, resolver } = ctx;
   const sf = parseSource(relFile, text);
   const out = [];
-  for (const { node, spec, typeOnly, via } of collectModuleSpecifiers(sf)) {
+  for (const { node, spec, typeOnly, via, detail } of collectModuleSpecifiers(sf)) {
     if (via === 'import-meta-glob') {
       out.push(finding(relFile, sf, node, 'import-glob', 'import.meta.glob pulls files in by pattern and cannot be layer-checked'));
       continue;
@@ -288,12 +357,18 @@ export function importFindings(ctx, relFile, text) {
       out.push(finding(relFile, sf, node, 'import-forbidden', `'${spec}' is forbidden in overlay files (use the platform API)`));
       continue;
     }
-    if (spec.startsWith('node:')) continue;
+    if (isBuiltinSpecifier(spec)) {
+      out.push(finding(relFile, sf, node, 'import-node', `Node built-in '${spec}' is not allowed in overlay files`));
+      continue;
+    }
     if (spec.startsWith('/') || /^[a-z][a-z0-9+.-]*:/i.test(spec) && !resolver.isAlias(spec)) {
       out.push(finding(relFile, sf, node, 'import-absolute', `absolute specifier '${spec}' is not allowed`));
       continue;
     }
-    if (!spec.startsWith('.') && !resolver.isAlias(spec)) continue; // framework: a bare package
+    if (!spec.startsWith('.') && !resolver.isAlias(spec)) { // a bare package
+      out.push(...frameworkFindings(ctx, relFile, sf, node, spec, via, detail, typeOnly));
+      continue;
+    }
     const r = resolver.resolve(spec, relFile);
     if (r.error) {
       out.push(finding(relFile, sf, node, r.error, r.message));
@@ -301,8 +376,19 @@ export function importFindings(ctx, relFile, text) {
     }
     const ext = path.extname(r.rel).toLowerCase();
     if (layers.imports.assetExtensions.includes(ext)) continue; // asset
-    if (typeOnly) continue; // types
-    if (isPlatformPath(layers, r.rel)) continue; // platform API
+    const pub = publicModules(ctx).get(r.rel);
+    if (pub !== undefined) { // platform API: only the listed public modules and names
+      if (pub !== '*' && !typeOnly) {
+        if (!detail || detail.kind !== 'named') out.push(finding(relFile, sf, node, 'import-platform-private', `'${spec}' exports only ${pub.join(', ')}: use named imports`));
+        else for (const n of detail.names) if (!n.typeOnly && !pub.includes(n.name)) out.push(finding(relFile, sf, node, 'import-platform-private', `'${n.name}' is not a public export of '${spec}' (${pub.join(', ')})`));
+      }
+      continue;
+    }
+    if (isPlatformPath(layers, r.rel)) {
+      if (typeOnly) out.push(finding(relFile, sf, node, 'import-type-only-l1', `'${spec}' is a private platform module; only ~/platform/views and ~/platform/head are public`));
+      else out.push(finding(relFile, sf, node, 'import-platform-private', `'${spec}' is a private platform module; only ~/platform/views and ~/platform/head are public`));
+      continue;
+    }
     let target;
     try {
       target = classify(layers, r.rel);
@@ -310,12 +396,80 @@ export function importFindings(ctx, relFile, text) {
       out.push(finding(relFile, sf, node, 'layer-ambiguous', e.message));
       continue;
     }
+    if (typeOnly) { // types: only L1 files outside the allow list are a problem (r6)
+      if (target?.layer === 'L1' && !typeOnlyTargets(ctx).has(r.rel)) {
+        out.push(finding(relFile, sf, node, 'import-type-only-l1', `'${spec}' resolves to L1 file ${r.rel}; type-only L1 imports are limited to ${(layers.imports.typeOnlyAllow ?? []).join(', ')}`));
+      }
+      continue;
+    }
     if (!target) {
       out.push(finding(relFile, sf, node, 'import-unclassified', `'${spec}' resolves to ${r.rel}, which is in no layer`));
     } else if (target.layer === 'L1') {
       out.push(finding(relFile, sf, node, 'import-l1-bypass', `'${spec}' resolves to L1 file ${r.rel}; use ~/platform/* instead`));
     }
-    // L2 / L3 targets: presentation, allowed
+    // L2 / L3 targets: presentation, allowed here; their own imports are walked by transitiveFindings (r1)
+  }
+  return out;
+}
+
+/**
+ * r1: walks the local import graph below an overlay file. A reached base file may import another presentation
+ * (L2/L3) file, an asset, a public platform module, a reviewed re-export target or an allow-listed pure L1 file
+ * (imports.transitiveL1Allow); anything else in L1 (contexts, providers, services, controllers, ...) is an
+ * import-l1-transitive finding that names the chain, so an L2 re-export cannot launder a forbidden module.
+ */
+export function transitiveFindings(ctx, startRel, readFile) {
+  const { layers, resolver } = ctx;
+  const out = [];
+  const seen = new Set([startRel]);
+  const allowL1 = (rel) => (layers.imports.transitiveL1Allow ?? []).some((g) => matchGlob(g, rel));
+  const visit = (rel, chain) => {
+    let text;
+    try { text = readFile(rel); } catch { return; }
+    if (text === null || text === undefined) return;
+    const sf = parseSource(rel, text);
+    const here = [...chain, rel].join(' -> ');
+    for (const { node, spec, typeOnly, via, detail } of collectModuleSpecifiers(sf)) {
+      if (typeOnly) continue;
+      if (spec === null) { out.push(finding(startRel, null, null, 'import-l1-transitive', `${here}: ${via} with a non-literal specifier in a reached file cannot be layer-checked`)); continue; }
+      if (isForbiddenSpecifier(layers, spec)) { out.push(finding(startRel, null, null, 'import-l1-transitive', `${here} imports forbidden '${spec}'`)); continue; }
+      if (isBuiltinSpecifier(spec)) { out.push(finding(startRel, null, null, 'import-l1-transitive', `${here} imports Node built-in '${spec}'`)); continue; }
+      if (!spec.startsWith('.') && !resolver.isAlias(spec)) { // a bare package: the framework packages get the r2 name check, any other package must be reviewed
+        const fw = layers.imports.framework ?? {};
+        if (Array.isArray(fw[spec])) {
+          for (const f of frameworkFindings(ctx, rel, sf, node, spec, via, detail, false)) out.push(finding(startRel, null, null, 'import-l1-transitive', `${here}: ${f.message}`));
+        } else if (!(layers.imports.transitivePackagesAllow ?? []).includes(spec)) {
+          out.push(finding(startRel, null, null, 'import-l1-transitive', `${here} imports package '${spec}', which is not in layers.json imports.transitivePackagesAllow`));
+        }
+        continue;
+      }
+      const r = resolver.resolve(spec, rel);
+      if (r.error) continue;
+      if (layers.imports.assetExtensions.includes(path.extname(r.rel).toLowerCase())) continue;
+      if (publicModules(ctx).has(r.rel) || reexportTargets(ctx).has(r.rel)) continue;
+      let target;
+      try { target = classify(layers, r.rel); } catch { continue; }
+      if (isPlatformPath(layers, r.rel) || (target?.layer === 'L1' && !allowL1(r.rel))) {
+        out.push(finding(startRel, null, null, 'import-l1-transitive', `${here} -> ${r.rel}: a reached base file imports non-public L1 file ${r.rel}`));
+        continue;
+      }
+      // L2 / L3 files and the reviewed pure L1 files are walked too: nothing is exempt from the rules below it
+      if (!seen.has(r.rel)) { seen.add(r.rel); visit(r.rel, [...chain, rel]); }
+    }
+  };
+  // start from the overlay file's own presentation imports
+  const startText = readFile(startRel);
+  if (startText === null || startText === undefined) return out;
+  const sf0 = parseSource(startRel, startText);
+  for (const { spec, typeOnly } of collectModuleSpecifiers(sf0)) {
+    if (spec === null || typeOnly) continue;
+    if (!spec.startsWith('.') && !resolver.isAlias(spec)) continue;
+    const r = resolver.resolve(spec, startRel);
+    if (r.error || layers.imports.assetExtensions.includes(path.extname(r.rel).toLowerCase())) continue;
+    if (publicModules(ctx).has(r.rel) || isPlatformPath(layers, r.rel) || reexportTargets(ctx).has(r.rel)) continue;
+    let target;
+    try { target = classify(layers, r.rel); } catch { continue; }
+    if (target && !seen.has(r.rel) && (target.layer !== 'L1' || allowL1(r.rel))) { seen.add(r.rel); visit(r.rel, [startRel]); }
   }
   return out;
 }
@@ -341,16 +495,35 @@ export function placementFindings(layers, relFile, deployFiles = []) {
   return [];
 }
 
+const EXECUTABLE_ASSET = /\.(js|mjs|cjs|wasm|html|htm)$/i;
+
+/** r11: an overlay public/** file that the browser would run or render as a document. */
+export function executableAssetFindings(relFile, readText) {
+  if (!relFile.startsWith('public/')) return [];
+  const f = (message) => ({ file: relFile, line: 1, col: 1, rule: 'overlay-executable-asset', message });
+  if (EXECUTABLE_ASSET.test(relFile)) return [f(`${relFile}: overlay public files may not ship executable or document content (.js, .mjs, .cjs, .wasm, .html, .htm)`)];
+  if (/\.svg$/i.test(relFile)) {
+    const text = readText() ?? '';
+    if (/<script[\s>]/i.test(text) || /\son[a-z]+\s*=/i.test(text) || /javascript:/i.test(text)) return [f(`${relFile}: an SVG with <script>, an on*= handler or a javascript: URL is executable`)];
+  }
+  return [];
+}
+
 export function checkOverlayImports({ root, layers, files, deployFiles = [] }) {
   const resolver = createResolver(root);
+  const ctx = { layers, resolver };
+  const readBase = (rel) => { const p = path.join(resolver.rootReal, rel); return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null; };
   const findings = [];
   let checked = 0;
   for (const raw of files) {
     const rel = normalizeRel(raw);
     const placement = placementFindings(layers, rel, deployFiles);
     findings.push(...placement);
-    if (!isCodeFile(layers, rel)) continue;
     const abs = path.join(resolver.rootReal, rel);
+    if (rel.startsWith('public/')) {
+      findings.push(...executableAssetFindings(rel, () => { try { return fs.readFileSync(abs, 'utf8'); } catch { return null; } }));
+    }
+    if (!isCodeFile(layers, rel)) continue;
     // One open decides everything: O_NOFOLLOW refuses a symlink atomically, so nothing can be swapped in between a check and the read.
     let fd;
     try {
@@ -368,7 +541,8 @@ export function checkOverlayImports({ root, layers, files, deployFiles = [] }) {
       fs.closeSync(fd);
     }
     checked++;
-    findings.push(...importFindings({ layers, resolver }, rel, text));
+    findings.push(...importFindings(ctx, rel, text));
+    findings.push(...transitiveFindings(ctx, rel, readBase));
   }
   return { findings, checked };
 }

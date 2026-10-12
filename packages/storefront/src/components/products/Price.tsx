@@ -1,10 +1,9 @@
-import { component$, Signal } from '@qwik.dev/core';
-import { formatPrice } from '~/utils';
+import { component$ } from '@qwik.dev/core';
+import { formatPrice } from '~/utils/price-format';
 
 interface PriceProps {
   /** Regular unit price, integer cents. Native primary prop. */
   price?: number | null;
-  variantSig?: Signal<unknown>;
   forcedClass?: string;
   salePrice?: number | null;
   preOrderPrice?: number | null;
@@ -22,7 +21,6 @@ interface PriceProps {
 export default component$<PriceProps>(
   ({
     price,
-    variantSig,
     forcedClass,
     salePrice,
     preOrderPrice,
@@ -55,8 +53,6 @@ export default component$<PriceProps>(
 
     return (
       <div class="flex items-center justify-center" style={{ fontVariantNumeric: 'tabular-nums' }}>
-        {variantSig?.value != null && <div class="hidden">{JSON.stringify(variantSig.value)}</div>}
-
         {strikeCents !== null && (
           <div class={`text-sm line-through mr-2 ${originalPriceClass || 'text-white/90'}`}>
             {renderPrice(strikeCents)}

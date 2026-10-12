@@ -43,7 +43,7 @@ test('every negative fixture declares at least one expected rule', () => {
 });
 
 test('each rule class is exercised by some negative fixture in both file kinds', () => {
-  for (const rule of ['definition-call', 'global-network', 'orchestration-call', 'import-forbidden']) {
+  for (const rule of ['definition-call', 'global-network', 'orchestration-call', 'import-forbidden', 'inject-html', 'inject-tag', 'inject-call', 'inject-element', 'qrl-introspection', 'worker-register', 'brand-stock-flag']) {
     for (const as of ['L3', 'L2-eject']) {
       const hit = tree.overlay.some((o) => o.as === as && o.kind === 'negative' && rulesFor(o.rel).includes(rule));
       assert.ok(hit, `${rule} as ${as}`);
@@ -150,4 +150,94 @@ test('CLI overlay mode: the fixture overlay fails, the positives alone pass, bas
   const none = spawnSync(process.execPath, [SCRIPT, '--root', PACKAGE_ROOT, '--layers', LAYERS], { encoding: 'utf8' });
   assert.equal(none.status, 0, none.stderr);
   assert.match(none.stdout, /base alone/);
+});
+
+// ------------------------------------------------------------------------------------------------ brand-views rules (r7-r10, r12)
+
+test('r7: HTML insertion props, forbidden tags and insertion calls are flagged; RichContent and Link are not', () => {
+  assert.ok(shape('export const A = (p: { h: string }) => <div dangerouslySetInnerHTML={p.h} />;').includes('inject-html'));
+  assert.ok(shape('export const A = (p: { h: string }) => <div {...{ dangerouslySetInnerHTML: p.h }} />;').includes('inject-html'));
+  assert.ok(shape("export const a = (el: any) => { el['innerHTML'] = 'x'; };").includes('inject-html'));
+  assert.ok(shape('export const A = () => <script />;').includes('inject-tag'));
+  assert.ok(shape('export const A = () => <meta name="x" />;').includes('inject-tag'));
+  assert.ok(shape('export const a = (d: any) => d.write("x");').includes('inject-call'));
+  assert.ok(shape('const e = eval; export { e };').includes('inject-call'));
+  assert.deepEqual(shape("import { RichContent, Link } from '~/platform/views'; export const A = (p: any) => <Link href=\"/\"><RichContent content={p.c} /></Link>;"), []);
+  assert.deepEqual(shape('export const A = () => <link-like />;'), []);
+});
+
+test('r8: createElement takes only an allowed literal; aliases, bind, destructuring, on* attributes and javascript: fail', () => {
+  assert.deepEqual(shape("export const a = () => document.createElement('div');"), []);
+  assert.deepEqual(shape("export const a = () => document.createElementNS('http://www.w3.org/2000/svg', 'canvas');"), []);
+  assert.ok(shape("export const a = () => document.createElement('script');").includes('inject-element'));
+  assert.ok(shape("export const a = () => document.createElement('SCRIPT');").includes('inject-element'));
+  assert.ok(shape('export const a = (t: string) => document.createElement(t);').includes('inject-element'));
+  assert.ok(shape('export const a = document.createElement;').includes('inject-element'));
+  assert.ok(shape('export const a = document.createElement.bind(document);').includes('inject-element'));
+  assert.ok(shape('export const { createElement } = document;').includes('inject-element'));
+  assert.ok(shape("export const a = (k: string) => (document as any)[k]('script');").includes('inject-element'));
+  assert.ok(shape("export const a = (el: Element) => el.setAttribute('onclick', 'x()');").includes('inject-element'));
+  assert.ok(shape("export const a = (el: Element, n: string) => el.setAttribute(n, 'x');").includes('inject-element'));
+  assert.deepEqual(shape("export const a = (el: Element) => el.setAttribute('data-x', '1');"), []);
+  assert.ok(shape("export const a = 'javascript:alert(1)';").includes('inject-element'));
+  assert.ok(shape("export const a = () => setInterval('x()', 5);").includes('inject-element'));
+  assert.deepEqual(shape('export const a = () => setTimeout(() => 1, 5);'), []);
+  assert.ok(shape("export const a = (el: any) => { el.src = '/x'; };").includes('inject-element'));
+  assert.deepEqual(shape("export const a = () => { const img = document.createElement('img'); img.src = '/x.png'; return img; };"), []);
+});
+
+test('r9: QRL internals are flagged, Promise.resolve is not', () => {
+  for (const name of ['getCaptured', 'getSymbol', 'getHash', 'resolve', '$captureRef$', '$capture$', '$chunk$', '$symbol$']) {
+    assert.ok(shape(`export const a = (q: any) => q.${name};`).includes('qrl-introspection'), name);
+    assert.ok(shape(`export const a = (q: any) => q['${name}'];`).includes('qrl-introspection'), `['${name}']`);
+  }
+  assert.ok(shape('export const a = (q: any) => { const { getCaptured } = q; return getCaptured; };').includes('qrl-introspection'));
+  assert.deepEqual(shape('export const a = () => Promise.resolve(1);'), []);
+});
+
+test('r10: register, Worker and SharedWorker are flagged', () => {
+  assert.ok(shape("export const a = () => navigator.serviceWorker.register('/sw.js');").includes('worker-register'));
+  assert.ok(shape("export const a = () => new Worker('/w.js');").includes('worker-register'));
+  assert.ok(shape("export const a = () => new SharedWorker('/w.js');").includes('worker-register'));
+});
+
+test('r12: brand stock flags are flagged by declaration; ordinary names are not', () => {
+  for (const name of ['stockLoaded', 'availabilityChecked', 'inventoryFresh', 'stockCached', 'skipStockCheck', 'cacheStockLevels', 'StockLoaded']) {
+    assert.ok(shape(`export const f = () => { const ${name} = false; return ${name}; };`).includes('brand-stock-flag'), name);
+  }
+  assert.ok(shape('export const o = { stockLoaded: true };').includes('brand-stock-flag'));
+  assert.ok(shape('export const A = () => <div stockChecked={true} />;').includes('brand-stock-flag'));
+  assert.deepEqual(shape('export const stockLabel = "x"; export const inStock = true; export const availability = "in-stock";'), []);
+});
+
+test('r8/r9/r10 receivers: file-local data and methods pass; DOM nodes, parameters, chains, reassigned names and platform receivers still fail', () => {
+  // ordinary local presentation state
+  assert.deepEqual(shape("import { useStore } from '@qwik.dev/core'; export const a = () => { const preview = useStore({ src: '', href: '' }); preview.src = '/brand/photo.webp'; preview.href = '/story/'; return preview; };"), []);
+  assert.deepEqual(shape("export const a = () => { const link = { href: '' }; link.href = '/story/'; return link; };"), []);
+  assert.deepEqual(shape("export const a = () => { const registry = { register(n: string) { return n; }, resolve: (n: string) => n }; registry.register('a'); return registry.resolve('a'); };"), []);
+  assert.deepEqual(shape("class Names { register(k: string) { return k; } resolve(k: string) { return this.register(k); } } export const a = () => { const names = new Names(); names.register('a'); return names.resolve('a'); };"), []);
+  // member chains rooted in a local signal or store: presentation data all the way down
+  assert.deepEqual(shape("import { useSignal } from '@qwik.dev/core'; export const a = () => { const preview = useSignal({ src: '' }); preview.value.src = '/brand/photo.webp'; return preview; };"), []);
+  assert.deepEqual(shape("import { useStore } from '@qwik.dev/core'; export const a = () => { const state = useStore({ image: { src: '' } }); state.image.src = '/brand/photo.webp'; return state; };"), []);
+  assert.deepEqual(shape("import { useSignal } from '@qwik.dev/core'; export const a = () => { const s = useSignal({ hero: { image: { href: '' } } }); s.value.hero.image.href = '/story/'; s.value['hero'].image.href = '/story/'; return s; };"), []);
+  assert.deepEqual(shape("export const a = () => { const o = { link: { href: '' } }; o.link.href = '/story/'; return o; };"), []);
+  // ...but a hop that is not local data keeps failing
+  assert.ok(shape("import { useSignal } from '@qwik.dev/core'; export const a = () => { const s = useSignal({ src: '' }); s.other.src = '/x'; return s; };").includes('inject-element'));
+  assert.ok(shape("import { useSignal } from '@qwik.dev/core'; export const a = () => { const s = useSignal({ el: document.body }); s.value.el.src = '/x'; return s; };").includes('inject-element'));
+  assert.ok(shape("import { useStore } from '@qwik.dev/core'; export const a = () => { const s = useStore({ image: { src: '' } }); s.image.src = '/x'; return s; }; export const b = (el: HTMLImageElement) => { const t = { image: { src: '' } }; t.image = el as never; t.image.src = '/y'; };").includes('inject-element'));
+  assert.ok(shape("import { useStore } from '@qwik.dev/core'; export const a = () => { const s = useStore({ image: { src: '' } }); s.image = document.body; s.image.src = '/x'; return s; };").includes('inject-element'));
+  assert.ok(shape("export const a = (p: { image: { src: string } }) => { p.image.src = '/x'; };").includes('inject-element'));
+  assert.ok(shape("export const a = () => { const s = { image: { src: '' } }; const k = 'image'; s[k].src = '/x'; return s; };").includes('inject-element'));
+  assert.ok(shape("import { useSignal } from '@qwik.dev/core'; export const a = () => { const s = useSignal({ src: '' }); s.value = document.body as never; s.value.src = '/x'; return s; };").includes('inject-element'));
+  // dangerous receivers keep failing
+  assert.ok(shape("export const a = (el: HTMLImageElement) => { el.src = '/x'; };").includes('inject-element'));
+  assert.ok(shape("export const a = () => { document.body.src = '/x'; };").includes('inject-element'));
+  assert.ok(shape("export const a = () => { const s = { el: document.body }; s.el.src = '/x'; };").includes('inject-element'));
+  assert.ok(shape("export const a = () => { let p = { src: '' }; p = document.body as never; p.src = '/x'; };").includes('inject-element'));
+  assert.ok(shape("export const a = () => { const p = { src: '' }; p.src = 'javascript:alert(1)'; };").includes('inject-element'));
+  assert.ok(shape("export const a = () => { const sw = navigator.serviceWorker; return sw.register('/sw.js'); };").includes('worker-register'));
+  assert.ok(shape("export const a = (r: { register: () => void }) => r.register();").includes('worker-register'));
+  assert.ok(shape("export const a = () => { const o = { resolve() { return 1; } }; return o.getHash; };").includes('qrl-introspection'));
+  assert.ok(shape("export const a = () => { const o = { x: 1 }; return o.resolve; };").includes('qrl-introspection'));
+  assert.ok(shape("export const a = (q: { resolve: () => void }) => q.resolve();").includes('qrl-introspection'));
 });

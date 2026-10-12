@@ -1,8 +1,10 @@
 import { component$ } from '@qwik.dev/core';
 import { createSEOHead } from '~/utils/seo';
 import { useStoreIdentityLoader } from '~/routes/layout';
+import { BrandContentMount } from '~/platform/controllers/content';
+import { contentView } from '~/platform/controllers/views';
 
-export default component$(() => {
+const BaseAboutPage = component$(() => {
   const identity = useStoreIdentityLoader().value.identity;
   return (
     <div class="bg-[var(--color-surface,#f4f4f5)] min-h-screen py-10 sm:py-14 lg:py-20">
@@ -46,6 +48,8 @@ export default component$(() => {
     </div>
   );
 });
+
+export default contentView ? BrandContentMount : BaseAboutPage;
 
 export const head = ({ resolveValue }: { resolveValue: any }) => {
   const identity = resolveValue(useStoreIdentityLoader);

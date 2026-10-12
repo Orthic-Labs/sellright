@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { PACKAGE_ROOT, checkOverlayImports, classify, loadLayers, matchGlob, normalizeRel, validateTree } from './check-imports.mjs';
+import { PACKAGE_ROOT, checkOverlayImports, classify, createResolver, importFindings, listProjectFiles, loadLayers, matchGlob, normalizeRel, transitiveFindings, validateTree } from './check-imports.mjs';
 import { buildTree, loadSnippets } from './fixtures/layers/build-tree.mjs';
 
 const SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'check-imports.mjs');
@@ -36,16 +36,22 @@ test('classify: representative paths', () => {
   assert.equal(layerOf('src/platform/probe.ts'), 'L1');
   assert.equal(layerOf('src/routes/shop/index.tsx'), 'L1');
   assert.equal(layerOf('src/routes/products/[...slug]/index.tsx'), 'L1');
-  assert.equal(layerOf('src/routes/products/[...slug]/ProductPageView.tsx'), 'L3');
+  assert.equal(layerOf('src/routes/products/[...slug]/ProductPageView.tsx'), 'L1', 'the legacy product seam is L1 now (route.product replaces it in PR2)');
   assert.equal(layerOf('src/routes/products/[...slug]/UnexpectedProductPageView.tsx'), 'L1');
-  assert.equal(layerOf('src/components/header/header.tsx'), 'L2');
+  assert.equal(layerOf('src/components/header/header.tsx'), 'L1');
+  assert.equal(layerOf('src/components/slots/registry.ts'), 'L1');
+  assert.equal(layerOf('src/components/ui/LazyImage.tsx'), 'L1');
+  assert.equal(layerOf('src/components/ui/Button.tsx'), 'L2');
+  assert.equal(layerOf('src/components/Filters.tsx'), 'L2');
+  assert.equal(layerOf('src/components/products/ProductCard.tsx'), 'L2');
+  assert.equal(layerOf('src/components/account/Tab.tsx'), 'L2');
   assert.equal(layerOf('src/components/payment/NMI.tsx'), 'L1');
   assert.equal(layerOf('src/components/checkout/CheckoutPageView.tsx'), 'L1');
   assert.equal(layerOf('src/components/cart/Cart.tsx'), 'L1');
   assert.equal(layerOf('src/brand/tokens.css'), 'L3');
   assert.equal(layerOf('src/brand-slots/payment.badges.tsx'), 'L3');
   assert.equal(layerOf('public/brand/logo.svg'), 'L3');
-  assert.equal(layerOf('src/theme/theme.config.ts'), null);
+  assert.equal(layerOf('src/theme/theme.config.ts'), 'L1');
   assert.equal(layerOf('public/favicon.ico'), null);
 });
 
@@ -123,12 +129,12 @@ for (const sn of loadSnippets('positive')) {
 test('placement: an overlay code file in L1 or in no layer is rejected, a non-code file is not looked at', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sr-place-'));
   try {
-    for (const rel of ['src/routes/x/index.tsx', 'src/theme/t.ts', 'src/brand/ok.ts', 'public/favicon.ico']) {
+    for (const rel of ['src/routes/x/index.tsx', 'src/other/t.ts', 'src/brand/ok.ts', 'public/favicon.ico']) {
       fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
       fs.writeFileSync(path.join(root, rel), rel.endsWith('.ts') || rel.endsWith('.tsx') ? 'export const a = 1;\n' : 'x');
     }
-    const r = checkOverlayImports({ root, layers, files: ['src/routes/x/index.tsx', 'src/theme/t.ts', 'src/brand/ok.ts', 'public/favicon.ico'] });
-    assert.deepEqual(r.findings.map((f) => `${f.file} ${f.rule}`).sort(), ['src/routes/x/index.tsx layer-l1-overlay', 'src/theme/t.ts layer-unclassified']);
+    const r = checkOverlayImports({ root, layers, files: ['src/routes/x/index.tsx', 'src/other/t.ts', 'src/brand/ok.ts', 'public/favicon.ico'] });
+    assert.deepEqual(r.findings.map((f) => `${f.file} ${f.rule}`).sort(), ['src/other/t.ts layer-unclassified', 'src/routes/x/index.tsx layer-l1-overlay']);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -137,14 +143,14 @@ test('placement: an overlay code file in L1 or in no layer is rejected, a non-co
 test('placement: a declared deploy file may sit in no layer; nothing else is exempted', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sr-deploy-'));
   try {
-    for (const rel of ['ecosystem.config.cjs', 'src/theme/t.ts', 'src/routes/x/index.tsx']) {
+    for (const rel of ['ecosystem.config.cjs', 'src/other/t.ts', 'src/routes/x/index.tsx']) {
       fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
       fs.writeFileSync(path.join(root, rel), 'module.exports = {};\n');
     }
     const rules = (files, deployFiles) => checkOverlayImports({ root, layers, files, deployFiles }).findings.map((f) => `${f.file} ${f.rule}`).sort();
     assert.deepEqual(rules(['ecosystem.config.cjs']), ['ecosystem.config.cjs layer-unclassified'], 'undeclared: still rejected');
     assert.deepEqual(rules(['ecosystem.config.cjs'], ['ecosystem.config.cjs']), [], 'declared deploy file is accepted');
-    assert.deepEqual(rules(['src/theme/t.ts'], ['ecosystem.config.cjs']), ['src/theme/t.ts layer-unclassified'], 'a source file that is not declared stays strict');
+    assert.deepEqual(rules(['src/other/t.ts'], ['ecosystem.config.cjs']), ['src/other/t.ts layer-unclassified'], 'a source file that is not declared stays strict');
     assert.deepEqual(rules(['src/routes/x/index.tsx'], ['src/routes/x/index.tsx']), ['src/routes/x/index.tsx layer-l1-overlay'], 'declaring an L1 file does not unlock it');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -211,4 +217,154 @@ test('CLI --validate passes on the real tree', () => {
   const r = run('--validate');
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /layers\.json valid/);
+});
+
+// ------------------------------------------------------------------------------------------------ brand-views boundary (PR1)
+
+test('r14 paths: every reclassified stateful component and the legacy product seam is L1 and not ejectable', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sr-l1-eject-'));
+  const l1Paths = [
+    'src/routes/products/[...slug]/ProductPageView.tsx',
+    'src/components/cart-totals/CartTotals.tsx',
+    'src/components/cart-contents/CartContents.tsx',
+    'src/components/address-form/AddressForm.tsx',
+    'src/components/billing-address-form/BillingAddressForm.tsx',
+    'src/components/customer-info-form/CustomerInfoForm.tsx',
+    'src/components/account/AddressCard.tsx',
+    'src/components/account/AccountNav.tsx',
+    'src/components/account/OrderReturns.tsx',
+    'src/components/loyalty/LoyaltyRedeem.tsx',
+    'src/components/order-tracking/OrderDetails.tsx',
+    'src/components/header/header.tsx',
+    'src/components/menu/Menu.tsx',
+    'src/components/footer/footer.tsx',
+    'src/components/head/head.tsx',
+    'src/components/auth/LoginModal.tsx',
+    'src/components/verification/VerificationModal.tsx',
+    'src/components/reviews/ProductReviews.tsx',
+    'src/components/slots/registry.ts',
+    'src/components/ui/LazyImage.tsx',
+  ];
+  try {
+    for (const rel of l1Paths) {
+      fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+      fs.writeFileSync(path.join(root, rel), 'export const a = 1;\n');
+    }
+    const r = checkOverlayImports({ root, layers, files: l1Paths });
+    assert.deepEqual(r.findings.map((f) => `${f.file} ${f.rule}`).sort(), l1Paths.map((p) => `${p} layer-l1-overlay`).sort());
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('r14 paths: the presentation components that stay L2 can still be ejected', () => {
+  for (const rel of ['src/components/Filters.tsx', 'src/components/products/ProductCard.tsx', 'src/components/products/Price.tsx', 'src/components/home/HomeTeeSection.tsx', 'src/components/ui/Button.tsx', 'src/components/account/Tab.tsx', 'src/components/breadcrumbs/Breadcrumbs.tsx']) {
+    assert.equal(classify(layers, rel)?.layer, 'L2', rel);
+  }
+});
+
+test('r11: overlay public files may not be executable or documents; a clean SVG and a font pass', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sr-asset-'));
+  const files = {
+    'public/brand/x.js': 'alert(1)',
+    'public/brand/x.mjs': 'export {}',
+    'public/brand/x.wasm': '\0asm',
+    'public/brand/page.html': '<p>x</p>',
+    'public/brand/page.htm': '<p>x</p>',
+    'public/brand/evil.svg': '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
+    'public/brand/handler.svg': '<svg xmlns="http://www.w3.org/2000/svg" onload="x()"></svg>',
+    'public/brand/link.svg': '<svg xmlns="http://www.w3.org/2000/svg"><a href="javascript:x()"/></svg>',
+    'public/brand/ok.svg': '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0"/></svg>',
+    'public/brand/font.woff2': 'wOF2',
+  };
+  try {
+    for (const [rel, text] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+      fs.writeFileSync(path.join(root, rel), text);
+    }
+    const r = checkOverlayImports({ root, layers, files: Object.keys(files) });
+    const bad = new Set(r.findings.filter((f) => f.rule === 'overlay-executable-asset').map((f) => f.file));
+    assert.deepEqual([...bad].sort(), ['public/brand/evil.svg', 'public/brand/handler.svg', 'public/brand/link.svg', 'public/brand/page.htm', 'public/brand/page.html', 'public/brand/x.js', 'public/brand/x.mjs', 'public/brand/x.wasm']);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('r2/r3: allowed framework names pass, one forbidden name fails, type-only names follow the type: entries', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sr-fw-'));
+  const run = (src) => {
+    fs.mkdirSync(path.join(root, 'src/brand'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'src/brand/a.tsx'), src);
+    return checkOverlayImports({ root, layers, files: ['src/brand/a.tsx'] }).findings.map((f) => f.rule);
+  };
+  try {
+    fs.cpSync(path.join(PACKAGE_ROOT, 'scripts/fixtures/layers/tree'), root, { recursive: true });
+    assert.deepEqual(run("import { component$, useSignal, type QRL } from '@qwik.dev/core';\nexport const a = [component$, useSignal] as unknown as QRL<() => void>;\n"), []);
+    assert.deepEqual(run("import { useContext } from '@qwik.dev/core';\nexport const a = useContext;\n"), ['import-framework-symbol']);
+    assert.deepEqual(run("import { QRL } from '@qwik.dev/core';\nexport const a: QRL<() => void> | null = null;\n"), ['import-framework-symbol']);
+    assert.deepEqual(run("import type { Signal } from '@qwik.dev/core';\nexport const a: Signal<number> | null = null;\n"), []);
+    assert.deepEqual(run("import { createContextId } from '@qwik.dev/core';\nexport const a = createContextId;\n"), ['import-framework-symbol']);
+    assert.deepEqual(run("import { readFileSync } from 'fs/promises';\nexport const a = readFileSync;\n"), ['import-node']);
+    assert.deepEqual(run("const m = await import('lodash');\nexport const a = m;\n"), ['import-framework-symbol']);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('r4: a public platform module with a name list rejects other names and namespace imports; "*" accepts any name', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sr-pub-'));
+  try {
+    fs.cpSync(path.join(PACKAGE_ROOT, 'scripts/fixtures/layers/tree'), root, { recursive: true });
+    const run = (src) => {
+      fs.writeFileSync(path.join(root, 'src/brand/a.tsx'), src);
+      return checkOverlayImports({ root, layers, files: ['src/brand/a.tsx'] }).findings.map((f) => f.rule);
+    };
+    fs.mkdirSync(path.join(root, 'src/brand'), { recursive: true });
+    assert.deepEqual(run("import type { BrandHeadSpec, StaticSchema } from '~/platform/head';\nexport const a: [BrandHeadSpec?, StaticSchema?] = [];\n"), []);
+    assert.deepEqual(run("import * as h from '~/platform/head';\nexport const a = h;\n"), ['import-platform-private']);
+    assert.deepEqual(run("import { formatMoney, type Cents } from '~/platform/views';\nexport const a: Cents = 1; export const b = formatMoney(a);\n"), []);
+    assert.deepEqual(run("import * as v from '~/platform/views';\nexport const a = v;\n"), []);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('layers.json without the brand-views keys is rejected by loadLayers (a stale base cannot run the new checkers silently)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sr-stale-'));
+  try {
+    for (const key of ['platformApi.public', 'platformApi.reexports', 'imports.framework', 'imports.typeOnlyAllow', 'imports.transitiveL1Allow']) {
+      const l = structuredClone(layers);
+      const [a, b] = key.split('.');
+      delete l[a][b];
+      const file = path.join(dir, `${key}.json`);
+      fs.writeFileSync(file, JSON.stringify(l));
+      assert.throws(() => loadLayers(file), new RegExp(key.replace('.', '\\.')), key);
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('real tree: every presentation (L2) component a brand may import reaches only pure files (no adapter, context, env or unreviewed package)', () => {
+  const resolver = createResolver(PACKAGE_ROOT);
+  const readBase = (rel) => { const p = path.join(PACKAGE_ROOT, rel); return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null; };
+  const l2 = listProjectFiles(PACKAGE_ROOT).filter((f) => /\.tsx?$/.test(f) && !/\.test\./.test(f) && classify(layers, f)?.layer === 'L2');
+  for (const promised of ['src/components/home/HomeHero.tsx', 'src/components/home/HomeSocialSections.tsx', 'src/components/OrderProcessingModal.tsx', 'src/components/products/ProductCard.tsx', 'src/components/products/Price.tsx']) {
+    assert.ok(l2.includes(promised), `${promised} is L2`);
+  }
+  // The real brand path: a brand file imports the component, so the component's OWN bare imports are checked too (starting the walk at
+  // the L2 file itself would skip them).
+  const PROBE = 'src/brand/reuse-probe.tsx';
+  const bad = l2.flatMap((f) => {
+    const spec = `~/${f.replace(/^src\//, '').replace(/\.tsx?$/, '')}`;
+    const read = (rel) => (rel === PROBE ? `import X from '${spec}';\nexport const probe = X;\n` : readBase(rel));
+    return [...importFindings({ layers, resolver }, PROBE, read(PROBE)), ...transitiveFindings({ layers, resolver }, PROBE, read)].map((x) => `${f}: ${x.rule} ${x.message}`);
+  });
+  assert.deepEqual(bad, []);
+});
+
+test('transitiveL1Allow lists files, never a directory glob over src/utils (the API adapter lives there)', () => {
+  for (const g of layers.imports.transitiveL1Allow) assert.ok(!/^src\/utils\/\*/.test(g), `${g} is too wide`);
+  assert.equal(layers.imports.transitiveL1Allow.some((g) => matchGlob(g, 'src/utils/sellright.ts')), false);
+  assert.equal(layers.imports.transitiveL1Allow.some((g) => matchGlob(g, 'src/constants.ts')), false);
 });

@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config';
+import { fileURLToPath } from 'node:url';
 import tsconfigPaths from 'vite-tsconfig-paths';
 
 /**
@@ -10,6 +11,12 @@ import tsconfigPaths from 'vite-tsconfig-paths';
  */
 export default defineConfig({
   plugins: [tsconfigPaths()],
+  resolve: {
+    // The virtual brand-data module only exists inside the Vite build; unit tests see "no brand data" (today's defaults).
+    alias: {
+      'virtual:sellright-brand-data': fileURLToPath(new URL('./src/platform/brand-data/__stubs__/empty.ts', import.meta.url)),
+    },
+  },
   test: {
     environment: 'jsdom',
     include: ['src/**/*.test.ts'],

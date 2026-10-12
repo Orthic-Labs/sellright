@@ -15,6 +15,9 @@
  *    first-party `/api/country` answers nothing.
  *  - Google Identity origins (script/style/connect/frame) when Google sign-in
  *    is on; the origin lists come from `config/google-signin.ts` via `google`.
+ *  - Analytics origins (script/connect) when the brand declares `analytics` in head.json;
+ *    the lists come from `analyticsCsp()` in `platform/head.tsx` via `analytics`.
+ *    Never `unsafe-eval`: no GTM Custom JavaScript variables, no production Preview mode.
  */
 import type { GoogleIdentityCsp } from '../config/google-signin';
 import { ipCountryFallbackEnabled } from './visitor-country';
@@ -33,21 +36,23 @@ export interface CspOptions {
 	ipCountryFallback?: string | null;
 	/** Extra Google Identity sources (`googleIdentityCsp(...)`); empty lists add nothing. */
 	google?: GoogleIdentityCsp;
+	/** Analytics sources (`analyticsCsp(...)`); undefined adds nothing, so the policy is unchanged without it. */
+	analytics?: { script: string[]; connect: string[] };
 }
 
 const withSources = (base: string, extra: string[] = []) => [base, ...extra].join(' ');
 
-export function buildCsp({ nonce, apiOrigin, turnstileSiteKey, ipCountryFallback, google }: CspOptions): string {
+export function buildCsp({ nonce, apiOrigin, turnstileSiteKey, ipCountryFallback, google, analytics }: CspOptions): string {
 	const turnstile = (turnstileSiteKey ?? '').trim() ? ` ${TURNSTILE_ORIGIN}` : '';
 	const ipLookup = ipCountryFallbackEnabled(ipCountryFallback) ? ` ${IP_LOOKUP_ORIGIN}` : '';
 	const api = apiOrigin ? ` ${apiOrigin}` : '';
 	return [
 		`default-src 'self'`,
-		withSources(`script-src 'self' 'nonce-${nonce}' https://js.stripe.com https://sandbox.nmi.com https://secure.nmi.com${turnstile}`, google?.script),
+		withSources(`script-src 'self' 'nonce-${nonce}' https://js.stripe.com https://sandbox.nmi.com https://secure.nmi.com${turnstile}`, [...(google?.script ?? []), ...(analytics?.script ?? [])]),
 		withSources(`style-src 'self' 'unsafe-inline'`, google?.style),
 		`img-src 'self' data: https:`,
 		`font-src 'self'`,
-		withSources(`connect-src 'self' https://api.stripe.com https://sandbox.nmi.com https://secure.nmi.com${api}${ipLookup}`, google?.connect),
+		withSources(`connect-src 'self' https://api.stripe.com https://sandbox.nmi.com https://secure.nmi.com${api}${ipLookup}`, [...(google?.connect ?? []), ...(analytics?.connect ?? [])]),
 		withSources(`frame-src https://js.stripe.com https://hooks.stripe.com https://sandbox.nmi.com https://secure.nmi.com${turnstile}`, google?.frame),
 		`object-src 'none'`,
 		`base-uri 'self'`,

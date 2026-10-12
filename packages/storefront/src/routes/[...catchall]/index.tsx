@@ -1,8 +1,16 @@
 import { component$ } from '@qwik.dev/core';
-import { Link, useLocation, routeLoader$, type RequestHandler } from '@qwik.dev/router';
+import { Link, useLocation, routeLoader$, type DocumentHead, type DocumentHeadValue, type RequestHandler } from '@qwik.dev/router';
 import { createSEOHead } from '~/utils/seo';
+import { useStoreIdentityLoader } from '~/routes/layout';
+import { DECLARED_CONTENT } from '~/platform/brand-data';
+import { matchDeclaredPath } from '~/platform/content-routes';
+import { contentHead } from '~/platform/head-resolve';
+import { BrandContentMount } from '~/platform/controllers/content';
+import { contentView } from '~/platform/controllers/views';
 
 export const onGet: RequestHandler = async ({ status, url }) => {
+	// Declared content paths (src/brand/routes.json) are real pages: no 404 status. Without a declaration nothing changes.
+	if (matchDeclaredPath(DECLARED_CONTENT, url.pathname)) return;
 	// Return proper 404 status for catchall routes (prevents Google soft 404s)
 	// Skip for legacy redirect paths — they throw redirect() before reaching here
 	if (!url.pathname.startsWith('/order-status')) {
@@ -38,16 +46,27 @@ export const useLegacyRedirects = routeLoader$(({ url, redirect }) => {
         search: ['orderCode', 'trackOrder', 'email'],
 });
 
-export const head = createSEOHead({
+// Today's 404 head, byte for byte.
+const NOT_FOUND_HEAD = createSEOHead({
 	title: '404 - Page Not Found',
 	description: 'The page you are looking for could not be found.',
 	noindex: true,
 });
 
+// A declared content path takes its declaration's head (never the 404 title or noindex); every other path keeps NOT_FOUND_HEAD.
+export const head: DocumentHead = ({ resolveValue, url }) => {
+	const declared = matchDeclaredPath(DECLARED_CONTENT, url.pathname);
+	if (!declared) return NOT_FOUND_HEAD as DocumentHeadValue;
+	return contentHead(declared, resolveValue(useStoreIdentityLoader).identity) as DocumentHeadValue;
+};
+
 export default component$(() => {
         useLegacyRedirects();
         const location = useLocation();
         const currentPath = location.url.pathname;
+
+	// A declared content path renders `route.content` instead of the 404 page (one component either way: the 404 markup is untouched).
+	if (contentView && matchDeclaredPath(DECLARED_CONTENT, currentPath)) return <BrandContentMount />;
 
 	return (
 		<div class="min-h-screen bg-gray-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8">

@@ -15,6 +15,8 @@ import { NO_STORE_CACHE_CONTROL } from"./config/route-cache-policy";
 import { googleClientId, googleIdentityCsp, googleSignInClientIdForHost, googleSignInHosts, googleSignInRefusedForMissingPin } from"./config/google-signin";
 import { createCanonicalUrlMiddleware, parseCanonicalSections } from"./utils/canonical-url";
 import { buildCsp } from"./utils/csp";
+import { analyticsCsp } from"./platform/head-analytics";
+import { BRAND_HEAD } from"./platform/brand-data";
 import { getRouterOrigin, validatedRequestHost } from"./utils/trusted-request.server";
 
 declare global {
@@ -146,6 +148,8 @@ app.use((req, res, next) => {
 		ipCountryFallback: process.env.VITE_IP_COUNTRY_FALLBACK,
 		// Per request: this host's own Google decision (same function as the sign-in page), never a process-wide one.
 		google: googleIdentityCsp(googleSignInClientIdForHost(validatedRequestHost(req.headers))),
+		// Brand views: GTM origins only when head.json declares analytics (undefined = the policy is unchanged).
+		analytics: analyticsCsp(BRAND_HEAD.analytics),
 	});
 
 	res.setHeader('Content-Security-Policy', cspDirectives);

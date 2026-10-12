@@ -11,10 +11,17 @@ const EXPECTED = [
 	'account.order-card',
 	'account.sustainability-badge',
 	'legal.copy',
+	'shell.header',
+	'shell.footer',
+	'route.home',
+	'route.content',
+	'route.blog',
+	'route.blog-post',
+	'route.contact',
 ];
 
 describe('slot registry', () => {
-	it('lists exactly the nine plan A17 slots, once each', () => {
+	it('lists exactly the nine plan A17 slots plus the seven brand-view slots, once each', () => {
 		expect([...SLOT_NAMES]).toEqual(EXPECTED);
 		expect(new Set(SLOT_NAMES).size).toBe(SLOT_NAMES.length);
 	});

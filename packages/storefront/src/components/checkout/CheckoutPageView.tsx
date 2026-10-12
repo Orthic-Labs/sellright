@@ -1,4 +1,5 @@
-import { $, component$, type QRL, type Signal } from '@qwik.dev/core';
+import { $, component$, type QRL, type ReadonlySignal, type Signal } from '@qwik.dev/core';
+import { useStoreIdentityLoader } from '~/routes/layout';
 import { OrderProcessingModal } from '~/components/OrderProcessingModal';
 import { CheckoutEmptyCart } from './CheckoutEmptyCart';
 import { CheckoutMobileCta } from './CheckoutCta';
@@ -8,6 +9,8 @@ import { CheckoutResumePanel } from './CheckoutResumePanel';
 import type { PaymentInitState } from './PaymentInitRetry';
 import type { ShopConfig } from '~/sellright/types/checkout';
 import type { CheckoutPhase, PaymentMethod, ResumeView } from '~/hooks/useCheckout';
+import type { LoyaltyViewData } from '~/platform/controllers/loyalty';
+import type { ActionResult } from '~/platform/views';
 
 interface CheckoutPageViewProps {
   checkoutState: any;
@@ -32,7 +35,8 @@ interface CheckoutPageViewProps {
   paymentInit: PaymentInitState;
   paymentMethod: Signal<PaymentMethod>;
   promoExpanded: Signal<boolean>;
-  redeemPoints: Signal<number>;
+  loyalty: ReadonlySignal<LoyaltyViewData | null>;
+  onRedeemToggle$: QRL<(on: boolean) => Promise<ActionResult>>;
   shippingCents: Signal<number | null>;
   showProcessingModal: Signal<boolean>;
   srState: {
@@ -52,7 +56,9 @@ interface CheckoutPageViewProps {
   stripePublishableKey: Signal<string>;
 }
 
-export const CheckoutPageView = component$<CheckoutPageViewProps>((props) => (
+export const CheckoutPageView = component$<CheckoutPageViewProps>((props) => {
+  const identity = useStoreIdentityLoader();
+  return (
   <div class="checkout-layout">
     {props.srState.resume !== 'none' ? (
       // Resuming a converted cart's original order comes BEFORE the empty-cart view and every form/shipping/stock gate:
@@ -81,6 +87,7 @@ export const CheckoutPageView = component$<CheckoutPageViewProps>((props) => (
       <div class="min-h-screen">
         <OrderProcessingModal
           visible={props.showProcessingModal.value}
+          storeName={identity.value.identity.storeName}
           onClose$={$(() => {
             props.showProcessingModal.value = false;
             props.isOrderProcessing.value = false;
@@ -94,7 +101,8 @@ export const CheckoutPageView = component$<CheckoutPageViewProps>((props) => (
               localCart={props.localCart}
               pageLoading={props.pageLoading}
               promoExpanded={props.promoExpanded}
-              redeemPoints={props.redeemPoints}
+              loyalty={props.loyalty}
+              onRedeemToggle$={props.onRedeemToggle$}
               shippingCents={props.shippingCents}
             />
             <CheckoutPaymentPanel {...props} />
@@ -104,4 +112,5 @@ export const CheckoutPageView = component$<CheckoutPageViewProps>((props) => (
       </div>
     )}
   </div>
-));
+  );
+});

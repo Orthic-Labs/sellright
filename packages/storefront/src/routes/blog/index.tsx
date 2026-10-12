@@ -2,6 +2,8 @@ import { component$, useStyles$ } from '@qwik.dev/core';
 import { Link } from '@qwik.dev/router';
 import type { BlogPostSummary } from '~/providers/shop/blog/blog';
 import { useBlogPosts, head } from '~/platform/blog';
+import { BrandBlogMount } from '~/platform/controllers/content';
+import { blogView } from '~/platform/controllers/views';
 
 export { useBlogPosts, head };
 
@@ -32,7 +34,7 @@ const STYLES = `
     .sr-blog__empty-text { font-family: var(--font-body); font-size: 15px; color: #6B6560; line-height: 1.7; }
 `;
 
-export default component$(() => {
+const BaseBlogPage = component$(() => {
     useStyles$(STYLES);
     const blogData = useBlogPosts();
     const posts = blogData.value.items;
@@ -81,3 +83,5 @@ export default component$(() => {
         </div>
     );
 });
+
+export default blogView ? BrandBlogMount : BaseBlogPage;

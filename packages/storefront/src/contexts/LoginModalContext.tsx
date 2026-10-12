@@ -9,7 +9,9 @@ import {
   QRL
 } from '@qwik.dev/core';
 
-export interface LoginModalState {
+import type { Live } from '~/sellright/types/live';
+
+export interface LoginModalState extends Live {
   isOpen: boolean;
   onLoginSuccess?: QRL<() => void>;
 }
@@ -19,7 +21,7 @@ export interface LoginModalActions {
   closeLoginModal: QRL<() => void>;
 }
 
-export interface LoginModalContextType {
+export interface LoginModalContextType extends Live {
   state: LoginModalState;
   actions: LoginModalActions;
 }
