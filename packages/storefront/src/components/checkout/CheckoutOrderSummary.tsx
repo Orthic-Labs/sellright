@@ -1,8 +1,7 @@
 import { $, component$, type QRL, type ReadonlySignal, type Signal } from '@qwik.dev/core';
 import CartContents from '~/components/cart-contents/CartContents';
 import CartTotals from '~/components/cart-totals/CartTotals';
-import { LoyaltyRedeem } from '~/components/loyalty/LoyaltyRedeem';
-import { getSlot } from '~/components/slots';
+import { LoyaltyRedemptionView, platformAction } from '~/platform/gateway';
 import type { LoyaltyViewData } from '~/platform/controllers/loyalty';
 import type { ActionResult } from '~/platform/views';
 
@@ -20,9 +19,10 @@ interface CheckoutOrderSummaryProps {
 }
 
 /**
- * A17 mount point: the brand's points-redemption control; the base LoyaltyRedeem is the fallback. Reads both signals in its own
- * render (an inline `&&` over them in the summary's JSX never re-rendered once the account loaded) and resolves the slot here:
- * a module-level `getSlot(..) ?? LoyaltyRedeem` constant was `undefined` inside this component's lazy chunk in the client build.
+ * A17 mount point: the brand's points-redemption control; the base LoyaltyRedeem is the fallback (both through the gateway handle,
+ * which resolves the slot at render time: a module-level slot lookup `?? LoyaltyRedeem` constant was `undefined` inside this
+ * component's lazy chunk in the client build). Reads both signals in its own render (an inline `&&` over them in the summary's JSX
+ * never re-rendered once the account loaded).
  */
 const CheckoutLoyalty = component$<{
   pageLoading: Signal<boolean>;
@@ -31,8 +31,7 @@ const CheckoutLoyalty = component$<{
 }>((props) => {
   const view = props.loyalty.value;
   if (props.pageLoading.value || !view) return null;
-  const LoyaltyRedemption = getSlot('checkout.loyalty-redemption') ?? LoyaltyRedeem;
-  return <LoyaltyRedemption {...view} onRedeemToggle$={props.onRedeemToggle$} />;
+  return <LoyaltyRedemptionView {...view} onRedeemToggle$={platformAction('loyalty.redeem-toggle', props.onRedeemToggle$)} />;
 });
 
 export const CheckoutOrderSummary = component$<CheckoutOrderSummaryProps>((props) => (

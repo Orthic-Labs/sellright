@@ -1,9 +1,8 @@
 import { $, component$, useSignal, useStore, useTask$ } from '@qwik.dev/core';
-import ProductCard from '~/components/products/ProductCard';
+import { ProductCard, ShopFilters as Filters, platformAction } from '~/platform/gateway';
 import { searchProducts } from '~/providers/shop/products/products';
 import type { CatalogListItem } from '~/sellright/types/catalog';
 import { FacetWithValues } from '~/types';
-import Filters from '~/components/Filters';
 import { theme } from '~/theme/theme.config';
 import { useCatalogLoader } from '~/platform/shop';
 import { projectFacetIds, projectFacets } from '~/platform/controllers/project';
@@ -172,9 +171,9 @@ export default component$(() => {
      <Filters
       facetsWithValues={projectFacets(state.facetValues)}
       facetValueIds={projectFacetIds(facetIds.value)}
-      onFilterChange$={onFilterChange}
+      onFilterChange$={platformAction('filters.value', onFilterChange)}
       searchTerm={searchTerm.value}
-      onSearchChange$={onSearchChange}
+      onSearchChange$={platformAction('filters.search', onSearchChange)}
      />
     </div>
    </div>

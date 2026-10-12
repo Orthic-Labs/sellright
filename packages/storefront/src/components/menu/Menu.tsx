@@ -1,6 +1,6 @@
 import { component$, useContext } from '@qwik.dev/core';
 import { APP_STATE } from '~/constants';
-import CloseIcon from '../icons/CloseIcon';
+import { CloseIcon } from '~/platform/gateway';
 import { Link } from '@qwik.dev/router';
 
 export default component$(() => {

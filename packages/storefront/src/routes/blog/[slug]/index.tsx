@@ -7,7 +7,7 @@ import { theme, siteUrl } from '~/theme/theme.config';
 import { useBlogPost, useRelatedPosts } from '~/platform/blog';
 import { buildBlogBody, stripTags } from '~/platform/blog-content';
 import { BrandBlogPostMount } from '~/platform/controllers/content';
-import { blogPostView } from '~/platform/controllers/views';
+import { hasView } from '~/platform/gateway';
 
 // Heuristically derive FAQ Q&A pairs from the body so we can emit FAQPage schema.
 // Looks for an <h2> labelled FAQ / "frequently asked", then pairs each following
@@ -186,7 +186,7 @@ const BaseBlogPostPage = component$(() => {
     );
 });
 
-export default blogPostView ? BrandBlogPostMount : BaseBlogPostPage;
+export default hasView('route.blog-post') ? BrandBlogPostMount : BaseBlogPostPage;
 
 export const head = ({ resolveValue }: any) => {
     const post = resolveValue(useBlogPost) as BlogPostFull | null;

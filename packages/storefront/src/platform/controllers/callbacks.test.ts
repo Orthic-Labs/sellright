@@ -158,3 +158,32 @@ describe('dispatch', () => {
 		});
 	});
 });
+
+// Gateway plan §3 (ruling step 3): a method's result never reaches the caller as is; it is rebuilt from the dispatch's fixed schema.
+describe('dispatch result schema', () => {
+	it('returns a new frozen copy of the method result, never the method’s own object', async () => {
+		const own = { ok: true as const };
+		const r = await dispatch(newCtl(), null, ACTION_RESULTS as never, () => own);
+		expect(r).toEqual({ ok: true });
+		expect(r).not.toBe(own);
+		expect(Object.isFrozen(r)).toBe(true);
+	});
+
+	it('a result the schema rejects (a widened result carrying live state, or a wrong shape) resolves `error`', async () => {
+		const live = { lines: [{ sku: 'A' }] };
+		expect(await dispatch(newCtl(), null, ACTION_RESULTS as never, () => ({ ok: true, cart: live }))).toEqual({ ok: false, reason: 'error' });
+		expect(await dispatch(newCtl(), null, ACTION_RESULTS as never, async () => live)).toEqual({ ok: false, reason: 'error' });
+		expect(await dispatch(newCtl(), null, ACTION_RESULTS as never, () => ({ ok: false, reason: 'turnstile' }))).toEqual({ ok: false, reason: 'error' });
+	});
+
+	it('a rejected result still releases the guard and keeps the order', async () => {
+		const ctl = newCtl();
+		const log: string[] = [];
+		const a = dispatch(ctl, 'submit', ACTION_RESULTS as never, async () => { await tick(); log.push('a'); return { ok: true, extra: 1 }; });
+		const b = dispatch(ctl, null, ACTION_RESULTS as never, () => { log.push('b'); return { ok: true }; });
+		expect(await a).toEqual({ ok: false, reason: 'error' });
+		expect(await b).toEqual({ ok: true });
+		expect(log).toEqual(['a', 'b']);
+		expect(ctl.admitted).toEqual([]);
+	});
+});

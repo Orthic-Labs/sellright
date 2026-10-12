@@ -155,10 +155,10 @@ test.describe.serial('SSR capture for the fallback proof', () => {
 		await addToCart(page, 'e2e-shirt');
 		await goToCheckout(page);
 		const redeem = page.getByTestId('loyalty-redeem');
-		// main never renders the control (expectedDifference in ssr-pages.json): wait for it, and capture without it when it does not come.
-		await redeem.waitFor({ state: 'visible', timeout: 15_000 }).catch(() => undefined);
+		// The control must render on every build that has it (the gateway once broke it: a null prop dropped by a JSX spread threw). Only
+		// the capture taken from a build older than brand views PR 1 lacks it, which is what expectedDifference in ssr-pages.json is for.
+		await expect(redeem).toBeVisible({ timeout: 15_000 });
 		await page.waitForLoadState('networkidle');
-		if (!inventory.pages.find((x: { name: string }) => x.name === 'checkout-loyalty').expectedDifference) await expect(redeem).toBeVisible();
 		expectRendered('checkout-loyalty', await renderedMarkup(page));
 	});
 

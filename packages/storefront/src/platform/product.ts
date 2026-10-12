@@ -2,7 +2,7 @@
 // generation). The PDP live-stock refresh itself (qidle, getProductStock) stays in ProductContent.tsx: it is a $ closure
 // over component signals and cannot move verbatim.
 import { routeLoader$, type StaticGenerateHandler } from '@qwik.dev/router';
-import { generateImagePreloadLinks } from '~/components/ui';
+import { generateImagePreloadLinks } from '~/components/ui/LazyImage';
 import { getProductDetail } from '~/providers/shop/products/products';
 import { getProductReviews } from '~/providers/shop/rewards/rewards';
 import { liveProductMeta, manifestProductMeta, normalizeManifestProductDetail, type CatalogProduct, type RawManifestProductDetail } from '~/sellright/types/catalog';

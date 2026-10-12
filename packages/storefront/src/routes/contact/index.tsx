@@ -2,7 +2,7 @@ import { component$ } from '@qwik.dev/core';
 import { createSEOHead } from '~/utils/seo';
 import { useStoreIdentityLoader } from '~/routes/layout';
 import { BrandContactMount, useContactForm } from '~/platform/controllers/content';
-import { contactView } from '~/platform/controllers/views';
+import { hasView } from '~/platform/gateway';
 
 const SUBJECTS = [
 	{ value: 'GENERAL', label: 'General Inquiry' },
@@ -159,7 +159,7 @@ const BaseContactPage = component$(() => {
 	);
 });
 
-export default contactView ? BrandContactMount : BaseContactPage;
+export default hasView('route.contact') ? BrandContactMount : BaseContactPage;
 
 export const head = ({ resolveValue }: { resolveValue: any }) => {
 	const identity = resolveValue(useStoreIdentityLoader);

@@ -289,8 +289,16 @@ export function Panel(p: { v: ReadonlySignal<number> }) { return p.v.value; }
 write('src/components/ui/GoodPure.tsx', "import { fmt } from '~/utils/fmt';\nexport interface P { n: number; onGo$?: () => void }\nexport const B = (p: P) => fmt(p.n);\n");
 write('src/utils/fmt.ts', 'export const fmt = (n: number) => String(n);\n');
 
-const { findings } = checkL2Boundary({ root, layers });
+// Gateway plan §6: the call-site analysis (a) is advisory (`advisories`); (b)/(c) still block (`findings`).
+const { findings: blocking, advisories } = checkL2Boundary({ root, layers });
+const findings = [...blocking, ...advisories];
 const rulesAt = (file) => findings.filter((f) => f.file === file).map((f) => f.rule);
+
+test('call-site (a) results are advisories, never blocking findings', () => {
+  assert.ok(advisories.length > 0);
+  assert.ok(advisories.every((f) => f.rule === 'l2-live-prop'));
+  assert.ok(blocking.every((f) => f.rule !== 'l2-live-prop'));
+});
 
 for (const name of Object.keys(NEG)) {
   test(`${name}: L1 passes live state to an L2 component -> l2-live-prop`, () => {
@@ -327,10 +335,26 @@ test('(c) ejects: an eject of an L2 file is held to the same import and prop-typ
   assert.equal(ej.checked, 4);
 });
 
-test('the real tree passes the boundary check (CLI)', () => {
-  const r = spawnSync(process.execPath, [SCRIPT, '--root', PACKAGE_ROOT], { encoding: 'utf8' });
+test('the real tree passes the boundary check with no advisory either (CLI, --strict): no L1 file renders an L2 component directly', () => {
+  const r = spawnSync(process.execPath, [SCRIPT, '--root', PACKAGE_ROOT, '--strict'], { encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /clean/);
+  assert.match(r.stdout, /clean .*0 advisory warning/);
+});
+
+test('CLI: advisories print as warnings and fail only with --strict', () => {
+  const only = fs.mkdtempSync(path.join(os.tmpdir(), 'sr-l2-adv-'));
+  try {
+    // The fixture project without the files that carry blocking (b) findings: only advisories remain.
+    fs.cpSync(root, only, { recursive: true });
+    for (const f of new Set(blocking.map((x) => x.file))) fs.rmSync(path.join(only, f));
+    const lax = spawnSync(process.execPath, [SCRIPT, '--root', only, '--layers', path.join(PACKAGE_ROOT, 'layers.json')], { encoding: 'utf8' });
+    assert.equal(lax.status, 0, lax.stderr);
+    assert.match(lax.stderr, /^warning: .*l2-live-prop/m);
+    const strict = spawnSync(process.execPath, [SCRIPT, '--root', only, '--layers', path.join(PACKAGE_ROOT, 'layers.json'), '--strict'], { encoding: 'utf8' });
+    assert.equal(strict.status, 1);
+  } finally {
+    fs.rmSync(only, { recursive: true, force: true });
+  }
 });
 
 test('CLI: the fixture project fails', () => {

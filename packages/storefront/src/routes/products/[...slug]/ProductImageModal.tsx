@@ -1,5 +1,5 @@
 import { component$ } from '@qwik.dev/core';
-import { OptimizedImage } from '~/components/ui';
+import { OptimizedImage } from '~/components/ui/LazyImage';
 
 export const ProductImageModal = component$((props: Record<string, any>) => {
   const {

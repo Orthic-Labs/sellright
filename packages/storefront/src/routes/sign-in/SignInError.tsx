@@ -1,5 +1,5 @@
 import { component$ } from '@qwik.dev/core';
-import XCircleIcon from '~/components/icons/XCircleIcon';
+import { XCircleIcon } from '~/platform/gateway';
 
 export const SignInError = component$<{ message: string }>(({ message }) => {
  return (

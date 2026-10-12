@@ -1,11 +1,6 @@
 import { $, component$, useContext, useSignal } from '@qwik.dev/core';
 import { useNavigate } from '@qwik.dev/router';
-import { HighlightedButton } from '~/components/buttons/HighlightedButton';
-import { ErrorMessage } from '~/components/error-message/ErrorMessage';
-import Success from '~/components/success/Success';
-import CheckIcon from '~/components/icons/CheckIcon';
-import EyeIcon from '~/components/icons/EyeIcon';
-import EyeSlashIcon from '~/components/icons/EyeSlashIcon';
+import { HighlightedButton, ErrorMessage, Success, EyeIcon, EyeSlashIcon, platformAction } from '~/platform/gateway';
 import { APP_STATE } from '~/constants';
 import { changePassword } from '~/services/customer';
 import { createSEOHead } from '~/utils/seo';
@@ -129,9 +124,7 @@ export default component$(() => {
 
 						{/* Actions */}
 						<div class="flex items-center justify-between pt-2">
-							<HighlightedButton onClick$={updatePassword} disabled={!appState.customer}>
-								<CheckIcon /> &nbsp; Update Password
-							</HighlightedButton>
+							<HighlightedButton onClick$={platformAction('ui.press', updatePassword)} disabled={!appState.customer} icon="check" text=" &nbsp; Update Password" />
 
 							<button
 								type="button"

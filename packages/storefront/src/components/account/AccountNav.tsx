@@ -1,12 +1,6 @@
 import { $, component$, useSignal, useVisibleTask$ } from '@qwik.dev/core';
 import { Link, useLocation } from '@qwik.dev/router';
-import ShoppingBagIcon from '~/components/icons/ShoppingBagIcon';
-import MapPinIcon from '~/components/icons/MapPinIcon';
-import LockClosedIcon from '~/components/icons/LockClosedIcon';
-import HomeIcon from '~/components/icons/HomeIcon';
-import GiftIcon from '~/components/icons/GiftIcon';
-import HeartIcon from '~/components/icons/HeartIcon';
-import LogoutIcon from '~/components/icons/LogoutIcon';
+import { ShoppingBagIcon, MapPinIcon, LockClosedIcon, HomeIcon, GiftIcon, HeartIcon, LogoutIcon, type IconHandle } from '~/platform/gateway';
 import { loadLoyaltyProgram } from '~/components/loyalty/loyalty-program';
 import { logout } from '~/providers/shop/account/account';
 import { LocalAddressService } from '~/services/LocalAddressService';
@@ -14,7 +8,7 @@ import { LocalAddressService } from '~/services/LocalAddressService';
 const navLinks: Array<{
 	title: string;
 	href: string;
-	icon: typeof HomeIcon;
+	icon: IconHandle;
 	showOnMobile: boolean;
 	requiresRewards?: boolean;
 }> = [

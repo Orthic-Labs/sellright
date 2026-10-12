@@ -1,7 +1,7 @@
 import { $, component$, useOnDocument, useSignal } from '@qwik.dev/core';
 import { useLocation } from '@qwik.dev/router';
 import { OrderReturnsPanel } from '~/components/account/OrderReturns';
-import { OptimizedImage } from '~/components/ui';
+import { OptimizedImage } from '~/components/ui/LazyImage';
 import { getOrderByCode } from '~/services/customer';
 import type { AccountOrderDetail } from '~/sellright/types/account';
 import { formatPrice } from '~/utils';

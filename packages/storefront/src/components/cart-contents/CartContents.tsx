@@ -1,21 +1,18 @@
 import { component$, useContext, useSignal, useTask$, $ } from '@qwik.dev/core';
 import { Link, useLocation } from '@qwik.dev/router';
-import { OptimizedImage, QuantityDropdown } from '~/components/ui';
+import { OptimizedImage } from '~/components/ui/LazyImage';
 import { APP_STATE } from '~/constants';
 import { getProductDetail } from '~/providers/shop/products/products';
 import { formatPrice } from '~/utils';
 import { isCheckoutPage } from '~/utils/route-helpers';
 import { isImageCached } from '~/utils/image-cache';
-import TrashIcon from '../icons/TrashIcon';
 import { useCart, updateCartLineQuantity, removeCartLine } from '~/contexts/CartContext';
 import { isLineAvailable, remainingQuantity } from '~/sellright/types/cart';
 import { StockWarning } from '../cart/StockWarning';
-import { getSlot } from '~/components/slots';
+import { FreeShippingProgressView, QuantityDropdown, TrashIcon, platformAction } from '~/platform/gateway';
 import { projectQuantityOptions } from '~/platform/controllers/project';
 import { discountedSubtotalCents, shippingCountry } from '~/platform/controllers/cart-props';
 
-// A17 mount point: a free-shipping progress hint under the line list. No base fallback: absent slot renders nothing.
-const FreeShippingProgressSlot = getSlot('cart.free-shipping-progress');
 
 // Image preloading function for cart product links
 const handleProductLinkClick = $((productSlug: string, featuredAssetPreview?: string) => {
@@ -212,7 +209,7 @@ export default component$(() => {
 												options={quantityOpts}
 												theme={isCheckoutView ? 'dark' : 'light'}
 												disabled={!isInEditableUrl}
-												onChange$={handleQtyChange$}
+												onChange$={platformAction('cart.quantity-select', handleQtyChange$)}
 											/>
 										) : (
 											<span class={`text-[12px] ${isCheckoutView ? 'text-[rgba(253,250,246,0.7)]' : 'text-[rgba(26,26,26,0.7)]'}`}>Qty {line.quantity}</span>
@@ -242,16 +239,15 @@ export default component$(() => {
 				})}
 
 			</ul>
-			{FreeShippingProgressSlot && (
-				<FreeShippingProgressSlot
-					currencyCode={currencyCode}
-					subtotalCents={cartState.cart.subtotal}
-					lineCount={cartState.cart.lines.length}
-					isCheckoutView={isCheckoutView}
-					countryCode={shippingCountry(appState.shippingAddress.countryCode)}
-					discountedSubtotalCents={discountedSubtotalCents(cartState.cart.subtotal, cartState.cart.discountTotal)}
-				/>
-			)}
+			{/* A17 mount point: a free-shipping progress hint under the line list. No base fallback: absent slot renders nothing. */}
+			<FreeShippingProgressView
+				currencyCode={currencyCode}
+				subtotalCents={cartState.cart.subtotal}
+				lineCount={cartState.cart.lines.length}
+				isCheckoutView={isCheckoutView}
+				countryCode={shippingCountry(appState.shippingAddress.countryCode)}
+				discountedSubtotalCents={discountedSubtotalCents(cartState.cart.subtotal, cartState.cart.discountTotal)}
+			/>
 		</div>
 	);
 });

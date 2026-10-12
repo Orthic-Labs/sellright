@@ -118,7 +118,7 @@
       "status": 200,
       "marker": "data-testid=\"loyalty-redeem\"",
       "expectedDifference": {
-        "reason": "main never renders the points-redeem control (the module-level `getSlot(..) ?? LoyaltyRedeem` evaluated to undefined in the client chunk, so the leaf component never mounted); the branch renders it. A fix, not a regression.",
+        "reason": "a capture from a main older than brand views PR 1 never rendered the points-redeem control (the module-level `getSlot(..) ?? LoyaltyRedeem` evaluated to undefined in the client chunk, so the leaf component never mounted); every build since renders it, and the capture spec fails if it does not.",
         "afterOnlyMarker": "data-testid=\"loyalty-redeem\""
       }
     },

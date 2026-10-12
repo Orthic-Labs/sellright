@@ -1,8 +1,6 @@
 import { $, component$, useStore, useTask$ } from '@qwik.dev/core';
 import { routeLoader$, useLocation, routeAction$, zod$, z } from '@qwik.dev/router';
-import Filters from '~/components/facet-filter-controls/Filters';
-import FiltersButton from '~/components/filters-button/FiltersButton';
-import ProductCard from '~/components/products/ProductCard';
+import { SearchFilters as Filters, FiltersButton, ProductCard, platformAction } from '~/platform/gateway';
 import { searchProducts } from '~/providers/shop/products/products';
 import type { CatalogListResponse } from '~/sellright/types/catalog';
 import { FacetWithValues } from '~/types';
@@ -115,9 +113,9 @@ export default component$(() => {
 				</h2>
 				{!!state.facetValues.length && (
 					<FiltersButton
-						onToggleMenu$={async () => {
+						onToggleMenu$={platformAction('ui.press', $(async () => {
 							state.showMenu = !state.showMenu;
-						}}
+						}))}
 					/>
 				)}
 			</div>
@@ -127,11 +125,11 @@ export default component$(() => {
 					<Filters
 						showMenu={state.showMenu}
 						facetsWithValues={projectFacets(state.facetValues)}
-						onToggleMenu$={async () => {
+						onToggleMenu$={platformAction('ui.press', $(async () => {
 							state.showMenu = !state.showMenu;
-						}}
-						onFilterChange$={onFilterChange}
-						onOpenCloseFilter$={onOpenCloseFilter}
+						}))}
+						onFilterChange$={platformAction('filters.value', onFilterChange)}
+						onOpenCloseFilter$={platformAction('filters.value', onOpenCloseFilter)}
 					/>
 				)}
 				<div class="sm:col-span-5 lg:col-span-4">

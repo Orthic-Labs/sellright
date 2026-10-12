@@ -9,6 +9,10 @@
 //     A key is released when its call's promise settles.
 //   - On unmount `ctl.disposed = true`: queued methods resolve `disposed` without effects.
 // Methods never call other actions, so the chain cannot deadlock.
+// Results (gateway plan §3, ruling step 3): what a method returns never reaches the caller as is. It is rebuilt from the dispatch's
+// fixed result schema (a new detached value); a result the schema rejects resolves `error`.
+import { ACTION_RESULT } from '~/platform/gateway/actions';
+import { detachValue, type Schema } from '~/platform/gateway/schema';
 
 export type { ActionResult, FormResult } from '~/platform/views';
 
@@ -23,12 +27,15 @@ export interface DispatchResults<R> {
 	busy: R;
 	disposed: R;
 	error: R;
+	/** The fixed schema every method result is rebuilt from. */
+	schema: Schema;
 }
 
 export const ACTION_RESULTS: DispatchResults<{ ok: false; reason: 'busy' | 'disposed' | 'error' }> = {
 	busy: { ok: false, reason: 'busy' },
 	disposed: { ok: false, reason: 'disposed' },
 	error: { ok: false, reason: 'error' },
+	schema: ACTION_RESULT,
 };
 
 const noop = () => undefined;
@@ -59,7 +66,7 @@ export function dispatch<R>(ctl: ActionCtl, guard: string | null, results: Dispa
 	return serial(ctl, async () => {
 		if (ctl.disposed) return results.disposed;
 		try {
-			return await method();
+			return detachValue(results.schema, await method(), 'dispatch result') as R;
 		} catch {
 			return results.error;
 		}

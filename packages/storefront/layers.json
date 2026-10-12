@@ -8,7 +8,17 @@
     "trustModel": "Brand code is reviewed owner code. The import and shape rules stop accidental coupling (writable props, live stores, context lookup, QRL introspection, HTML or script insertion); they are not a sandbox against deliberately hostile JavaScript.",
     "transitiveL1Allow": "Reviewed pure L1 files a reached base L2 file may import, listed one by one (never a directory: src/utils/** holds the API adapter). They are walked like any other reached file, so a re-export of an adapter, a forbidden package or a context symbol inside them is still import-l1-transitive. Any other non-public L1 file reached from an overlay file is import-l1-transitive.",
     "transitivePackagesAllow": "Third-party packages a reached base file may import besides the framework packages (those get the r2 name check).",
-    "payments": "src/components/payment, checkout and cart are L1 and not ejectable (plan A11 item 4, A8 refreshCartStock callers)."
+    "payments": "src/components/payment, checkout and cart are L1 and not ejectable (plan A11 item 4, A8 refreshCartStock callers).",
+    "gateway": "Brand views gateway (docs/plans/2026-10-11-brand-views-gateway.md, scripts/check-gateway.mjs): the only L1 access to presentation implementations (L2/L3 modules and the slot lookup) is gateway.dir. Every other non-presentation file may import them type-only. Inside gateway.dir a raw binding may only be an argument of a gateway.factories call; the slot lookup is imported only by gateway.slotLookupImporters; an action handle literal is built only in gateway.actionModule. modal is L1 because it frames interactive L1 markup (children never cross the gateway)."
+  },
+  "gateway": {
+    "dir": "src/platform/gateway/",
+    "implementationModules": ["src/components/slots/index.ts"],
+    "slotLookupImporters": ["src/platform/gateway/gate.tsx"],
+    "virtualImplementations": { "virtual:sellright-brand-slots": ["src/components/slots/index.ts"] },
+    "factories": ["gate", "slotGate", "gateValue"],
+    "actionModule": "src/platform/gateway/actions.ts",
+    "actionKind": "sr-action"
   },
   "platformApi": {
     "alias": "~/platform/",
@@ -68,6 +78,7 @@
         "src/components/auth/**",
         "src/components/verification/**",
         "src/components/reviews/**",
+        "src/components/modal/**",
         "adapters/**"
       ],
       "exclude": []
@@ -99,7 +110,8 @@
         "src/components/head/**",
         "src/components/auth/**",
         "src/components/verification/**",
-        "src/components/reviews/**"
+        "src/components/reviews/**",
+        "src/components/modal/**"
       ]
     },
     "L3": {

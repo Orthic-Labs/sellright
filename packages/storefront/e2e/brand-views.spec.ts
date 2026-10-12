@@ -84,6 +84,64 @@ test.describe('brand views (fixture build)', () => {
 		await expect.poll(() => cartReads.length).toBe(1); // one live cart read per open, never cached
 	});
 
+	test('gateway: a brand header action runs after resumption and again after SPA navigation, results arrive detached', async ({ apiProxyPage: page }) => {
+		await addToCart(page, PRODUCT.shirt.slug);
+		await page.goto('/about/');
+		await page.waitForLoadState('networkidle');
+		const header = page.getByTestId('view-header');
+		await expect(header).toHaveAttribute('data-path', '/about/');
+		await page.evaluate(() => { (window as unknown as { __docMarker: string }).__docMarker = 'same-document'; });
+		// first event on a resumed document: the gateway-bound action runs and its result reaches the view as plain data
+		await page.getByTestId('view-header-cart').click();
+		await expect(page.getByTestId('view-header-last')).toHaveText('ok');
+		await expect(page.getByTestId('view-header-cart')).toHaveText(/^cart:1:open$/);
+		// the open drawer covers the header: close it with its own button (platform markup), state flows back into the view's props
+		await page.getByRole('button', { name: 'Close cart' }).click();
+		await expect(page.getByTestId('view-header-cart')).toHaveText(/^cart:1:closed$/);
+		// SPA navigation through the view's Link: same document (marker survives), new route props
+		await page.getByTestId('view-header-home').click();
+		await expect(header).toHaveAttribute('data-path', '/');
+		expect(await page.evaluate(() => (window as unknown as { __docMarker?: string }).__docMarker)).toBe('same-document');
+		// a later event after navigation still goes through the gateway and gets a detached result
+		await page.getByTestId('view-header-cart').click();
+		await expect(page.getByTestId('view-header-last')).toHaveText('ok');
+		await expect(page.getByTestId('view-header-cart')).toHaveText(/^cart:1:open$/);
+	});
+
+	test('gateway: action results arrive detached (a retained platform result, a delayed result, two rounds) in the compiled build', async ({ page }) => {
+		// The second submit while one is in flight resolves with the platform's retained `busy` result (a module constant in the
+		// dispatcher); the first resolves later, after a deliberately held request. The view writes to every result it receives.
+		let release: () => void = () => undefined;
+		let held = 0;
+		await page.route('**/newsletter-signup', async (route) => {
+			held++;
+			await new Promise<void>((r) => { release = r; });
+			await route.fulfill({ status: 200, body: '{}' });
+		});
+		await page.goto('/');
+		const subscribe = page.getByTestId('view-home-subscribe');
+		const status = page.getByTestId('view-home-status');
+		const seen = () => page.evaluate(() => (window as unknown as { __srResults?: { seen: unknown[] } }).__srResults?.seen ?? []);
+		const round = async (n: number) => {
+			await page.getByTestId('view-home-email').fill(`${uniq('det')}@example.com`);
+			await subscribe.click();
+			await expect.poll(() => held).toBe(n); // the first call's request is in flight and held
+			await subscribe.click(); // admitted-while-running → busy, immediately
+			await expect.poll(async () => (await seen()).length).toBe(n * 2 - 1);
+			release(); // the delayed result of the first call arrives now
+			await expect.poll(async () => (await seen()).length).toBe(n * 2);
+		};
+		await round(1);
+		await expect(status).toHaveText('success');
+		await round(2);
+		expect(await seen()).toEqual([{ ok: false, reason: 'busy' }, { ok: true }, { ok: false, reason: 'busy' }, { ok: true }]); // round 1's writes never reached round 2's results
+		// distinct objects every time, and the view's writes stayed on its own copies
+		expect(await page.evaluate(() => {
+			const objs = (window as unknown as { __srResults: { objs: { reason?: string; extra?: number }[] } }).__srResults.objs;
+			return { distinct: new Set(objs).size, busyWritten: objs[0].reason };
+		})).toEqual({ distinct: 4, busyWritten: 'mutated' });
+	});
+
 	test('home view: an invalid email never posts, a double submit makes one request', async ({ page }) => {
 		let posts = 0;
 		await page.route('**/newsletter-signup', async (route) => { posts++; await new Promise((r) => setTimeout(r, 300)); await route.fulfill({ status: 200, body: '{}' }); });

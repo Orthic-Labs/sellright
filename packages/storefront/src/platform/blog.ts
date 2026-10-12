@@ -5,7 +5,7 @@ import { getBlogPostBySlug, getBlogPosts, type BlogPostSummary } from '~/provide
 import { theme, siteUrl } from '~/theme/theme.config';
 import { BRAND_ROUTES } from '~/platform/brand-data';
 import { fixBodyHtml, rankRelatedPosts, RELATED_POOL } from '~/platform/blog-content';
-import { blogPostView } from '~/platform/controllers/views';
+import { hasView } from '~/platform/gateway';
 import { blogPageSize } from '~/platform/controllers/blog-view';
 
 /** The blog list page size: routes.json `blog.pageSize` (1-100; the API caps `take` at 100), else today's 20. */
@@ -27,7 +27,7 @@ export const useBlogPost = routeLoader$(async (requestEvent) => {
 export const useRelatedPosts = routeLoader$(async (requestEvent) => {
     const slug = requestEvent.params.slug;
     try {
-        if (blogPostView) {
+        if (hasView('route.blog-post')) {
             // A `route.blog-post` view: related = shared tags, then recency, then slug over the latest posts, fetched per request.
             const current = await requestEvent.resolveValue(useBlogPost);
             const { items } = await getBlogPosts(RELATED_POOL, 0);
