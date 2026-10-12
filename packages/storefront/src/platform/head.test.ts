@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_METADATA_TITLE } from '~/constants';
 import { createSEOHead } from '~/utils/seo';
 import { canonicalHref, contentHead, resolveHead, serialiseJsonLd, setMeta, type BrandHeadSpec, type HeadSources } from './head-resolve';
-import { analyticsCsp, gtmLoader } from './head-analytics';
+import { analyticsCsp, GTM_LOADER_SOURCE } from './head-analytics';
 import { buildCsp } from '~/utils/csp';
 
 const identity = { storeName: 'Store', siteOrigin: 'https://store.example', ogImageUrl: '/og.png', tagline: 'Tag line', locale: 'en-US' } as never;
@@ -188,11 +188,10 @@ describe('analytics: CSP and the GTM loader', () => {
 		expect(buildCsp({ nonce: 'n', analytics: csp })).not.toContain('unsafe-eval');
 	});
 
-	it('the loader embeds the container id as a JSON string and passes the inline-script sanitiser', () => {
-		const js = gtmLoader('GTM-ABC123');
-		expect(js).toContain('"GTM-ABC123"');
-		expect(js).toContain('https://www.googletagmanager.com/gtm.js?id=');
-		expect(js).not.toBe('');
+	it('the loader is static: it reads the container id from its own data attribute and embeds none', () => {
+		expect(GTM_LOADER_SOURCE).toContain("getAttribute('data-gtm-id')");
+		expect(GTM_LOADER_SOURCE).toContain('https://www.googletagmanager.com/gtm.js?id=');
+		expect(GTM_LOADER_SOURCE).not.toMatch(/GTM-[A-Z0-9]/);
 	});
 });
 
