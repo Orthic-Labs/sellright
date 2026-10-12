@@ -1,4 +1,6 @@
-export type BillingAddress = {
+import type { Live } from '~/sellright/types/live';
+
+export type BillingAddress = Live & {
   firstName?: string;
   lastName?: string;
   streetLine1?: string;
@@ -9,7 +11,7 @@ export type BillingAddress = {
   countryCode?: string;
 };
 
-export type AppState = {
+export type AppState = Live & {
 	showCart: boolean;
 	showMenu: boolean;
 	showUserMenu: boolean;
@@ -23,7 +25,7 @@ export type AppState = {
 	isPageTransitionLoading?: boolean;
 };
 
-export type ShippingAddress = {
+export type ShippingAddress = Live & {
 	id?: string;
 	fullName?: string;
 	streetLine1?: string;
@@ -60,7 +62,7 @@ export type Review = {
 	datetime: string;
 };
 
-export type ActiveCustomer = {
+export type ActiveCustomer = Live & {
 	title?: string;
 	firstName: string;
 	id: string;

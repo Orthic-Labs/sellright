@@ -27,7 +27,32 @@ const MOUNTS: Record<SlotName, Mount> = {
 	'account.order-card': { file: 'routes/account/orders/index.tsx', keeps: /if \(OrderCardSlot\) return <OrderCardSlot[^>]*\/>;\n\s*return \(\n\s*<a/ },
 	'account.sustainability-badge': { file: 'routes/account/index.tsx', keeps: /\{SustainabilityBadgeSlot && <SustainabilityBadgeSlot / },
 	'legal.copy': { file: 'routes/privacy/index.tsx', keeps: /\{LegalCopy \? <LegalCopy section="privacy\.payment-processors" \/> : 'payment service providers'\}/ },
+	// Brand views (plan §1 "Mount rule"): every view slot is looked up once, in platform/controllers/views.ts, as a build constant.
+	// The routes choose between the L1 Brand<X>Mount and today's component (see VIEW_CHOICES below).
+	'shell.header': { file: 'platform/controllers/views.ts', keeps: /export const shellHeaderView = getSlot\('shell\.header'\);/ },
+	'shell.footer': { file: 'platform/controllers/views.ts', keeps: /export const shellFooterView = getSlot\('shell\.footer'\);/ },
+	'route.home': { file: 'platform/controllers/views.ts', keeps: /export const homeView = getSlot\('route\.home'\);/ },
+	'route.content': { file: 'platform/controllers/views.ts', keeps: /export const contentView = getSlot\('route\.content'\);/ },
+	'route.blog': { file: 'platform/controllers/views.ts', keeps: /export const blogView = getSlot\('route\.blog'\);/ },
+	'route.blog-post': { file: 'platform/controllers/views.ts', keeps: /export const blogPostView = getSlot\('route\.blog-post'\);/ },
+	'route.contact': { file: 'platform/controllers/views.ts', keeps: /export const contactView = getSlot\('route\.contact'\);/ },
 };
+
+/** Where each view constant picks the L1 mount over today's component, and that today's component stays the fallback branch. */
+const VIEW_CHOICES: { file: string; choice: RegExp }[] = [
+	{ file: 'routes/layout.tsx', choice: /\(shellHeaderView \? <BrandHeaderMount \/> : <Header \/>\)/ },
+	{ file: 'routes/layout.tsx', choice: /\(shellFooterView \? <BrandFooterMount \/> : <Footer \/>\)/ },
+	{ file: 'routes/index.tsx', choice: /export default homeView \? BrandHomeMount : BaseHomePage;/ },
+	{ file: 'routes/about/index.tsx', choice: /export default contentView \? BrandContentMount : BaseAboutPage;/ },
+	{ file: 'routes/privacy/index.tsx', choice: /export default contentView \? BrandContentMount : BasePrivacyPage;/ },
+	{ file: 'routes/terms/index.tsx', choice: /export default contentView \? BrandContentMount : BaseTermsPage;/ },
+	{ file: 'routes/returns/index.tsx', choice: /export default contentView \? BrandContentMount : BaseReturnsPage;/ },
+	{ file: 'routes/press/index.tsx', choice: /export default contentView \? BrandContentMount : BasePressPage;/ },
+	{ file: 'routes/contact/index.tsx', choice: /export default contactView \? BrandContactMount : BaseContactPage;/ },
+	{ file: 'routes/blog/index.tsx', choice: /export default blogView \? BrandBlogMount : BaseBlogPage;/ },
+	{ file: 'routes/blog/[slug]/index.tsx', choice: /export default blogPostView \? BrandBlogPostMount : BaseBlogPostPage;/ },
+	{ file: 'routes/[...catchall]/index.tsx', choice: /if \(contentView && matchDeclaredPath\(DECLARED_CONTENT, currentPath\)\) return <BrandContentMount \/>;/ },
+];
 
 function allSourceFiles(dir: string, out: string[] = []): string[] {
 	for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -58,6 +83,19 @@ describe('slot mount points', () => {
 			expect(text).toMatch(mount.keeps);
 		});
 	}
+
+	for (const { file, choice } of VIEW_CHOICES) {
+		it(`${file}: chooses the brand mount only when its view exists, and keeps today's component as the fallback`, () => {
+			expect(read(file)).toMatch(choice);
+		});
+	}
+
+	it('the controllers never import a brand slot file or the virtual module directly', () => {
+		const views = read('platform/controllers/views.ts');
+		expect(views).toContain("from '~/components/slots'");
+		expect(views).not.toContain('virtual:sellright-brand-slots');
+		expect(views).not.toContain('brand-slots/');
+	});
 
 	it('mount files import the slot lookup, not the virtual module', () => {
 		for (const { file } of Object.values(MOUNTS)) {

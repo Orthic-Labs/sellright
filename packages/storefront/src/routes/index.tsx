@@ -1,12 +1,12 @@
 // Homepage - Refined editorial design
-import { component$, useStyles$, useSignal, useContext, useVisibleTask$, $ } from '@qwik.dev/core';
+import { component$, useStyles$, useSignal, useContext, $ } from '@qwik.dev/core';
 import type { JsonLdSchema } from '~/types/seo.types';
 import { useOrganizationJsonLd, usePreorderProduct, useFeatureProduct, useFeaturedProducts, useHomeCollections, buildHomeHead } from '~/platform/home';
 import { APP_STATE } from '~/constants';
 import type { CartLineEnrichment } from '~/sellright/types/cart';
 import { useCart, addToCart } from '~/contexts/CartContext';
 import { loadCountryOnDemand } from '~/utils/addressStorage';
-import { mountTurnstile, resetTurnstile, TURNSTILE_SITE_KEY } from '~/utils/turnstile-widget';
+import { TURNSTILE_SITE_KEY } from '~/utils/turnstile-widget';
 import { stripHtml } from '~/utils/sanitize';
 import { STYLES } from '~/components/home/homepage-styles';
 import { HomeHero } from '~/components/home/HomeHero';
@@ -15,6 +15,9 @@ import { HomeServiceSection, HomeTrustBar } from '~/components/home/HomeSocialSe
 import Price from '~/components/products/Price';
 import ProductCard from '~/components/products/ProductCard';
 import { useStoreIdentityLoader } from '~/routes/layout';
+import { BrandHomeMount, useNewsletterForm } from '~/platform/controllers/content';
+import { homeView } from '~/platform/controllers/views';
+import { projectPolicies, projectFeatureProduct, projectFeatureVariant, projectPrice, projectProductTiles } from '~/platform/controllers/project';
 import HeroImage_1024 from '~/media/hero.jpg?format=avif&w=1024&quality=75&url';
 
 // Spotlight section image — 65: decorative/lifestyle, not a purchase decision image
@@ -28,11 +31,12 @@ import PreorderImageJPEG_1024 from '~/media/sec2.jpg?format=jpeg&w=1024&quality=
 
 export { useOrganizationJsonLd, usePreorderProduct, useFeatureProduct, useFeaturedProducts, useHomeCollections };
 
-export default component$(() => {
+const BaseHomePage = component$(() => {
   useStyles$(STYLES);
 
   const appState = useContext(APP_STATE);
   const cart = useCart();
+  const identity = useStoreIdentityLoader();
   const preorderProduct = usePreorderProduct();
   const featureProduct = useFeatureProduct();
   const featuredProducts = useFeaturedProducts();
@@ -52,59 +56,8 @@ export default component$(() => {
   // paragraph simply doesn't render rather than showing something untrue.
   const spotlightBody = preorderProduct.value?.description ? stripHtml(preorderProduct.value.description).trim() : '';
 
-  const nlEmail = useSignal('');
-  const nlHoneypot = useSignal('');
-  const nlState = useSignal<'idle' | 'sending' | 'success' | 'error'>('idle');
-  const nlError = useSignal('');
-  const nlToken = useSignal('');
-
-  useVisibleTask$(() => {
-    mountTurnstile('nl-turnstile', (t) => { nlToken.value = t; }, () => { nlToken.value = ''; });
-  });
-
-  const handleNewsletterSubmit = $(async () => {
-    if (nlState.value === 'sending') return;
-    const email = nlEmail.value.trim();
-    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      nlError.value = 'Please enter a valid email.';
-      nlState.value = 'error';
-      return;
-    }
-    if (TURNSTILE_SITE_KEY && !nlToken.value) {
-      nlError.value = 'Please complete the security check.';
-      nlState.value = 'error';
-      return;
-    }
-    const token = nlToken.value;
-    nlState.value = 'sending';
-    nlError.value = '';
-    nlToken.value = '';
-    resetTurnstile();
-    try {
-      const res = await fetch('/newsletter-signup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email,
-          honeypot: nlHoneypot.value,
-          turnstileToken: token,
-        }),
-      });
-      if (!res.ok) {
-        const msg = res.status === 429
-          ? 'Too many signups from this IP. Try again in an hour.'
-          : res.status === 403 ? 'Security check failed. Please try again.' : 'Subscription failed. Please try again.';
-        nlError.value = msg;
-        nlState.value = 'error';
-        return;
-      }
-      nlState.value = 'success';
-      nlEmail.value = '';
-    } catch {
-      nlError.value = 'Network error. Please try again.';
-      nlState.value = 'error';
-    }
-  });
+  // The newsletter state, its Turnstile widget and its submit live in the platform (platform/controllers/content.tsx).
+  const { email: nlEmail, honeypot: nlHoneypot, state: nlState, error: nlError, token: nlToken, handleSubmit: handleNewsletterSubmit } = useNewsletterForm();
 
   const handlePreorderAddToCart = $(async () => {
     const product = preorderProduct.value;
@@ -151,9 +104,9 @@ export default component$(() => {
 
   return (
     <div class="hp">
-      <HomeHero />
+      <HomeHero storeName={identity.value.identity.storeName} tagline={identity.value.identity.tagline} policies={projectPolicies(identity.value.identity.policies)} />
 
-      <HomeTrustBar />
+      <HomeTrustBar policies={projectPolicies(identity.value.identity.policies)} />
 
       {/* ════════ Spotlight section (only renders when a real product is configured) ════════ */}
       {preorderProduct.value && (
@@ -163,13 +116,7 @@ export default component$(() => {
                 <h2 class="po-title reveal visible" data-reveal>{preorderProduct.value.name}</h2>
                 {spotlightVariant && (
                   <div class="po-price-wrap">
-                    <Price
-                      priceWithTax={spotlightVariant.priceWithTax ?? spotlightVariant.price}
-                      salePrice={spotlightVariant.customFields?.salePrice}
-                      preOrderPrice={spotlightVariant.customFields?.preOrderPrice}
-                      isPreOrder={spotlightVariant.customFields?.isPreOrder}
-                      forcedClass="po-price"
-                    />
+                    <Price {...projectPrice(spotlightVariant)} forcedClass="po-price" />
                   </div>
                 )}
                 {spotlightBody && (
@@ -208,7 +155,7 @@ export default component$(() => {
         </section>
       )}
 
-      <HomeTeeSection product={featureProduct.value} variant={featureVariant} />
+      <HomeTeeSection product={projectFeatureProduct(featureProduct.value)} variant={projectFeatureVariant(featureVariant)} />
 
       {/* ════════ Shop the collection — live catalog grid ════════ */}
       {featuredProducts.value.length > 0 && (
@@ -218,14 +165,14 @@ export default component$(() => {
             <h2 class="featured-grid-title">Everything, considered.</h2>
           </div>
           <div class="featured-grid-items">
-            {featuredProducts.value.map((item: any, i: number) => (
+            {projectProductTiles(featuredProducts.value).map((tile, i) => (
               <ProductCard
-                key={item.slug}
-                productAsset={item.productAsset}
-                productName={item.productName}
-                slug={item.slug}
-                priceWithTax={item.priceWithTax}
-                inStock={item.inStock}
+                key={tile.slug}
+                name={tile.name}
+                image={tile.image}
+                slug={tile.slug}
+                price={tile.price}
+                inStock={tile.inStock}
                 priority={i < 4}
               />
             ))}
@@ -296,6 +243,8 @@ export default component$(() => {
     </div>
   );
 });
+
+export default homeView ? BrandHomeMount : BaseHomePage;
 
 export const head = ({ resolveValue }: { resolveValue: any }) => {
   const schemas = resolveValue(useOrganizationJsonLd) as unknown as JsonLdSchema[];

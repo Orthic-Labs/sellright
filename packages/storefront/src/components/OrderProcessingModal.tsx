@@ -1,13 +1,12 @@
 import { component$, useSignal, useVisibleTask$, type QRL } from '@qwik.dev/core';
-import { useStoreIdentityLoader } from '~/routes/layout';
 
 export interface OrderProcessingModalProps {
   visible: boolean;
+  storeName: string;
   onClose$?: QRL<() => void>;
 }
 
-export const OrderProcessingModal = component$<OrderProcessingModalProps>(({ visible, onClose$ }) => {
-  const identity = useStoreIdentityLoader().value.identity;
+export const OrderProcessingModal = component$<OrderProcessingModalProps>(({ visible, storeName, onClose$ }) => {
   const elapsed = useSignal(0);
 
   useVisibleTask$(({ track, cleanup }) => {
@@ -89,7 +88,7 @@ export const OrderProcessingModal = component$<OrderProcessingModalProps>(({ vis
           fontSize: '10px', letterSpacing: '0.1em', textTransform: 'uppercase',
           color: 'rgba(var(--color-on-dark-rgb),0.25)', marginTop: '24px',
         }}>
-          {identity.storeName}
+          {storeName}
         </p>
       </div>
     </div>

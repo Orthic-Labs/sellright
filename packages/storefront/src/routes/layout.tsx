@@ -18,6 +18,8 @@ import { ActiveCustomer, AppState } from '~/types';
 import ConditionalCart from '../components/cart/ConditionalCart';
 import Header from '../components/header/header';
 import Footer from '../components/footer/footer';
+import { BrandFooterMount, BrandHeaderMount } from '~/platform/controllers/shell';
+import { shellFooterView, shellHeaderView } from '~/platform/controllers/views';
 import { CartProvider } from '~/contexts/CartContext';
 import { LoginModalProvider, useLoginModalState, useLoginModalActions } from '~/contexts/LoginModalContext';
 import LoginModal from '~/components/auth/LoginModal';
@@ -299,14 +301,14 @@ export default component$(() => {
 		<CartProvider>
 		<LoginModalProvider>
 			<div>
-				{!isAffiliateSurface && <Header />}
+				{!isAffiliateSurface && (shellHeaderView ? <BrandHeaderMount /> : <Header />)}
 				{state.showCart && <ConditionalCart isHomePage={isHomePage} showCart={state.showCart} />}
 				{!isAffiliateSurface && <Menu />}
 				<div style={{ position: 'relative', minHeight: '100vh', backgroundColor: 'var(--color-parchment)' }}>
 					<main id="main-content" class={`flex-1 bg-[var(--color-parchment)] ${isHomePage || isAffiliateSurface ? '' : 'pt-16'}`}>
 						<Slot />
 					</main>
-					{!isAffiliateSurface && <Footer />}
+					{!isAffiliateSurface && (shellFooterView ? <BrandFooterMount /> : <Footer />)}
 				</div>
 				{/* Global Login Modal */}
 				<LoginModalComponent />

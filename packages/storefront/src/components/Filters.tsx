@@ -1,4 +1,4 @@
-import { component$, QRL, useSignal } from '@qwik.dev/core';
+import { component$, useSignal, type QRL } from '@qwik.dev/core';
 import { FacetWithValues } from '~/types';
 
 interface FiltersProps {

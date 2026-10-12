@@ -19,6 +19,7 @@ import { CheckoutPageView } from '~/components/checkout/CheckoutPageView';
 import { CHECKOUT_STYLES } from './checkout-styles';
 import { recoverCheckoutPaymentError, classifyResumePaymentError } from './checkout-payment-recovery';
 import { acceptsMount, bumpView, isCurrentView } from '~/components/checkout/view-generation';
+import { useLoyaltyOffer } from '~/platform/controllers/loyalty';
 
 
 interface CheckoutState {
@@ -55,9 +56,13 @@ const CheckoutContent = component$(() => {
   const totalConfirmed = useSignal(false);
   const pageLoading = useSignal(true);
   const promoExpanded = useSignal(false);
-  // Loyalty points to spend on this order (0 = none) — set by LoyaltyRedeem,
-  // re-validated server-side at order creation.
+  // Loyalty points to spend on this order (0 = none) — written only by useLoyaltyOffer (the shopper's toggle, or a reset
+  // when the discountable amount changes), re-validated server-side at order creation.
   const redeemPoints = useSignal(0);
+  const discountableCents = useComputed$(() => Math.max(0, (localCart.cart.subtotal || 0) - (localCart.cart.discountTotal || 0)));
+  const cartCurrency = useComputed$(() => localCart.cart.currency || 'USD');
+  // Destructured on purpose, and the signal itself (not `.value`) goes down to CheckoutOrderSummary, which reads it in its own render.
+  const { view: loyaltyView, onRedeemToggle$ } = useLoyaltyOffer(redeemPoints, discountableCents, cartCurrency);
 
   const isCartEmpty = useSignal(true);
 
@@ -692,7 +697,8 @@ const CheckoutContent = component$(() => {
       paymentInit={paymentInit}
       paymentMethod={paymentMethod}
       promoExpanded={promoExpanded}
-      redeemPoints={redeemPoints}
+      loyalty={loyaltyView}
+      onRedeemToggle$={onRedeemToggle$}
       shippingCents={shippingCents}
       showProcessingModal={showProcessingModal}
       shopConfig={shopConfig}

@@ -16,7 +16,7 @@ export const DEFAULT_METADATA_TITLE = theme.storeName;
 export const DEFAULT_METADATA_DESCRIPTION = theme.tagline;
 export const DEFAULT_METADATA_IMAGE = `${siteUrl}/logo.svg`;
 export const DEFAULT_LOCALE = 'en';
-export const DEFAULT_CURRENCY = 'USD';
+export { DEFAULT_CURRENCY } from '~/utils/price-format';
 export const normalizeApiUrl = (value: string | undefined, fallback: string) => {
 	const raw = (value || '').trim().replace(/`/g, '');
 	const withoutTrailingSlash = raw.replace(/\/+$/g, '');

@@ -11,6 +11,8 @@ import { useCart, updateCartLineQuantity, removeCartLine } from '~/contexts/Cart
 import { isLineAvailable, remainingQuantity } from '~/sellright/types/cart';
 import { StockWarning } from '../cart/StockWarning';
 import { getSlot } from '~/components/slots';
+import { projectQuantityOptions } from '~/platform/controllers/project';
+import { discountedSubtotalCents, shippingCountry } from '~/platform/controllers/cart-props';
 
 // A17 mount point: a free-shipping progress hint under the line list. No base fallback: absent slot renders nothing.
 const FreeShippingProgressSlot = getSlot('cart.free-shipping-progress');
@@ -124,18 +126,6 @@ export default component$(() => {
 		return stripped.startsWith('-') ? stripped.substring(1).trim() : stripped;
 	};
 
-	// Helper: derive quantity options for cart lines. `remaining === null` is
-	// the fail-closed-safe "uncapped" case — bounded to a sane dropdown size,
-	// never treated as literally infinite.
-	const qtyOptions = (remaining: number | null, currentQty: number, sku: string) => {
-		const maxQty = remaining === null ? Math.max(currentQty, 99) : Math.max(remaining, currentQty);
-		const expanded = expandedDropdowns.value.has(sku);
-		if (maxQty <= 10) return Array.from({ length: maxQty }, (_, i) => i + 1);
-		return expanded
-			? Array.from({ length: maxQty }, (_, i) => i + 1)
-			: [...Array.from({ length: 9 }, (_, i) => i + 1), '10+'];
-	};
-
 	return (
 		<div class="flow-root w-full">
 			<ul class={`divide-y w-full ${isCheckoutView ? 'divide-[rgba(var(--color-accent-rgb),0.25)]' : 'divide-[rgba(17,17,17,0.08)]'}`}>
@@ -150,7 +140,10 @@ export default component$(() => {
 					// Availability of an existing order's lines is not a purchase precondition (it excludes the order's own allocation).
 					const isOOS = !isConverted && !isLineAvailable(line);
 					const remaining = remainingQuantity(line);
-					const quantityOpts = qtyOptions(remaining, line.quantity, line.sku);
+					// Quantity options for the dropdown (a project*() result: plain data for the L2 component). `remaining === null` is the
+					// fail-closed-safe "uncapped" case — bounded to a sane dropdown size, never treated as literally infinite.
+					const maxQty = remaining === null ? Math.max(line.quantity, 99) : Math.max(remaining, line.quantity);
+					const quantityOpts = projectQuantityOptions(maxQty, expandedDropdowns.value.has(line.sku));
 					const vLabel = line.options ?? variantLabel(line.name, productName);
 
 					return (
@@ -255,6 +248,8 @@ export default component$(() => {
 					subtotalCents={cartState.cart.subtotal}
 					lineCount={cartState.cart.lines.length}
 					isCheckoutView={isCheckoutView}
+					countryCode={shippingCountry(appState.shippingAddress.countryCode)}
+					discountedSubtotalCents={discountedSubtotalCents(cartState.cart.subtotal, cartState.cart.discountTotal)}
 				/>
 			)}
 		</div>

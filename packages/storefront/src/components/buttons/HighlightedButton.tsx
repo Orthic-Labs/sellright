@@ -1,4 +1,4 @@
-import { $, component$, QRL, Slot } from '@qwik.dev/core';
+import { $, component$, type QRL, Slot } from '@qwik.dev/core';
 
 type Props = {
 	extraClass?: string;

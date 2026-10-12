@@ -5,11 +5,23 @@
     "layers": "Each path belongs to at most one layer. A path matching two layers (or a layer and an assetException of another layer) is an error. 'exclude' removes a path from the layer it is listed under, it never assigns it to another one.",
     "unclassified": "A path matching no layer is unclassified: base-only today (see the A14 report), rejected as an overlay path by check-imports until it is listed here.",
     "baseL2Enforcement": "report until A13 moves every orchestration call behind ~/platform/*, then set to block (plan A14).",
+    "trustModel": "Brand code is reviewed owner code. The import and shape rules stop accidental coupling (writable props, live stores, context lookup, QRL introspection, HTML or script insertion); they are not a sandbox against deliberately hostile JavaScript.",
+    "transitiveL1Allow": "Reviewed pure L1 files a reached base L2 file may import, listed one by one (never a directory: src/utils/** holds the API adapter). They are walked like any other reached file, so a re-export of an adapter, a forbidden package or a context symbol inside them is still import-l1-transitive. Any other non-public L1 file reached from an overlay file is import-l1-transitive.",
+    "transitivePackagesAllow": "Third-party packages a reached base file may import besides the framework packages (those get the r2 name check).",
     "payments": "src/components/payment, checkout and cart are L1 and not ejectable (plan A11 item 4, A8 refreshCartStock callers)."
   },
   "platformApi": {
     "alias": "~/platform/",
-    "dir": "src/platform/"
+    "dir": "src/platform/",
+    "public": {
+      "~/platform/views": "*",
+      "~/platform/head": ["BrandHeadSpec", "StaticSchema"]
+    },
+    "reexports": {
+      "Link": "@qwik.dev/router",
+      "OptimizedImage": "~/components/ui/LazyImage",
+      "VerificationButton": "~/components/verification/VerificationButton"
+    }
   },
   "layers": {
     "L1": {
@@ -36,11 +48,29 @@
         "src/components/payment/**",
         "src/components/checkout/**",
         "src/components/cart/**",
+        "src/components/slots/**",
+        "src/components/ui/LazyImage.tsx",
+        "src/theme/**",
+        "src/components/cart-totals/**",
+        "src/components/cart-contents/**",
+        "src/components/address-form/**",
+        "src/components/billing-address-form/**",
+        "src/components/customer-info-form/**",
+        "src/components/account/AddressCard.tsx",
+        "src/components/account/AccountNav.tsx",
+        "src/components/account/OrderReturns.tsx",
+        "src/components/loyalty/**",
+        "src/components/order-tracking/**",
+        "src/components/header/**",
+        "src/components/menu/**",
+        "src/components/footer/**",
+        "src/components/head/**",
+        "src/components/auth/**",
+        "src/components/verification/**",
+        "src/components/reviews/**",
         "adapters/**"
       ],
-      "exclude": [
-        "src/routes/products/**/ProductPageView.tsx"
-      ]
+      "exclude": []
     },
     "L2": {
       "include": [
@@ -49,15 +79,34 @@
       "exclude": [
         "src/components/payment/**",
         "src/components/checkout/**",
-        "src/components/cart/**"
+        "src/components/cart/**",
+        "src/components/slots/**",
+        "src/components/ui/LazyImage.tsx",
+        "src/theme/**",
+        "src/components/cart-totals/**",
+        "src/components/cart-contents/**",
+        "src/components/address-form/**",
+        "src/components/billing-address-form/**",
+        "src/components/customer-info-form/**",
+        "src/components/account/AddressCard.tsx",
+        "src/components/account/AccountNav.tsx",
+        "src/components/account/OrderReturns.tsx",
+        "src/components/loyalty/**",
+        "src/components/order-tracking/**",
+        "src/components/header/**",
+        "src/components/menu/**",
+        "src/components/footer/**",
+        "src/components/head/**",
+        "src/components/auth/**",
+        "src/components/verification/**",
+        "src/components/reviews/**"
       ]
     },
     "L3": {
       "include": [
         "src/brand/**",
         "src/brand-slots/**",
-        "public/brand/**",
-        "src/routes/products/**/ProductPageView.tsx"
+        "public/brand/**"
       ]
     }
   },
@@ -78,6 +127,20 @@
       "@sellright/storefront-client",
       "~/sellright/client"
     ],
+    "framework": {
+      "@qwik.dev/core": [
+        "component$", "$", "useSignal", "useStore", "useComputed$", "useTask$", "useVisibleTask$",
+        "useStyles$", "useStylesScoped$", "useId", "useOn", "useOnDocument", "useOnWindow", "Slot", "Fragment", "sync$",
+        "type:QRL", "type:Signal", "type:Component", "type:JSXOutput", "type:PropsOf", "type:CSSProperties"
+      ],
+      "@qwik.dev/router": ["Link", "useLocation", "useNavigate", "type:DocumentHead"]
+    },
+    "typeOnlyAllow": ["~/components/slots/registry"],
+    "transitiveL1Allow": [
+      "src/utils/price-format.ts", "src/utils/sanitize.ts", "src/utils/image-cache.ts", "src/types/**", "src/types.ts", "src/config/**",
+      "src/theme/**", "src/media/**", "src/data/**"
+    ],
+    "transitivePackagesAllow": ["isomorphic-dompurify"],
     "codeExtensions": [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"],
     "assetExtensions": [
       ".css", ".scss", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".ico",
@@ -105,7 +168,14 @@
       "^refresh.*Stock",
       "^(get|fetch|load|check).*Stock(Level|Levels|Status)"
     ],
-    "gatewayNamePattern": "^(nmi|stripe|sezzle|collectjs)"
+    "gatewayNamePattern": "^(nmi|stripe|sezzle|collectjs)",
+    "injectionProps": ["dangerouslySetInnerHTML", "innerHTML", "outerHTML", "srcdoc"],
+    "injectionCalls": ["insertAdjacentHTML", "createContextualFragment", "write", "writeln", "eval", "Function", "importScripts", "parseFromString"],
+    "createElementAllow": ["div", "span", "p", "a", "img", "picture", "source", "ul", "ol", "li", "button", "input", "label", "canvas"],
+    "qrlIntrospection": ["getCaptured", "getSymbol", "getHash", "resolve", "$captureRef$", "$capture$", "$chunk$", "$symbol$"],
+    "workerCalls": ["register", "Worker", "SharedWorker"],
+    "forbiddenJsxTags": ["script", "iframe", "object", "embed", "base", "frame", "meta", "link"],
+    "brandStockFlags": ["^(stock|availability|inventory).*(Loaded|Checked|Fresh|Cached)$", "^(skip|cache).*Stock"]
   },
   "brandLint": {
     "mode": "warn",

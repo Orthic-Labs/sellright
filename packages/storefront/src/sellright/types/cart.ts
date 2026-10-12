@@ -64,6 +64,7 @@
  * callers never retry themselves and never loop.
  */
 import type { paths } from '../client';
+import type { Live } from './live';
 
 type CartLinesEndpoint = paths['/v1/shop/cart/{token}/lines']['patch'];
 type CreateCartEndpoint = paths['/v1/shop/cart']['post'];
@@ -94,8 +95,8 @@ export interface CartLineEnrichment {
   shipDate?: string;
 }
 
-export type CartLine = ServerCartLine & CartLineEnrichment;
-export type Cart = Omit<ServerCart, 'lines'> & { lines: CartLine[] };
+export type CartLine = ServerCartLine & CartLineEnrichment & Live;
+export type Cart = Omit<ServerCart, 'lines'> & { lines: CartLine[] } & Live;
 
 export interface CartMutationResult {
   cart: Cart;

@@ -2,11 +2,13 @@ import { component$ } from '@qwik.dev/core';
 import { createSEOHead } from '~/utils/seo';
 import { useStoreIdentityLoader } from '~/routes/layout';
 import { getSlot } from '~/components/slots';
+import { BrandContentMount } from '~/platform/controllers/content';
+import { contentView } from '~/platform/controllers/views';
 
 // A17 mount point: brand-owned copy for the payment-processor line (the base's wording is its default slot file).
 const LegalCopy = getSlot('legal.copy');
 
-export default component$(() => {
+const BasePrivacyPage = component$(() => {
 	const identity = useStoreIdentityLoader().value.identity;
  return (
  <div class="bg-white min-h-screen">
@@ -340,6 +342,8 @@ export default component$(() => {
  </div>
  );
 });
+
+export default contentView ? BrandContentMount : BasePrivacyPage;
 
 export const head = ({ resolveValue }: { resolveValue: any }) => {
  const identity = resolveValue(useStoreIdentityLoader);

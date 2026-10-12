@@ -1,4 +1,4 @@
-import { $, component$, QRL } from '@qwik.dev/core';
+import { $, component$, type QRL } from '@qwik.dev/core';
 import { FacetWithValues } from '~/types';
 import CloseIcon from '../icons/CloseIcon';
 import MinusIcon from '../icons/MinusIcon';

@@ -2,8 +2,21 @@
 // `src/brand-slots/<slot-name>.tsx` whose default export is `component$<SlotProps<'<slot-name>'>>(...)`; the Vite plugin
 // (vite-plugin.ts) rejects unknown file names, a default export that is not `component$`, and props not typed from this
 // map. Slots receive data and QRLs; they never fetch (check-code-shape rejects fetch/server$ in L3 files).
-import type { Component, QRL, Signal } from '@qwik.dev/core';
+// Brand views (plan §1): a slot's props are flat, `DeepReadonly<ViewData> & Actions`: JSON-shaped data and `on*$` QRLs, never a
+// Signal, store, loader value or class instance. The controllers in src/platform/controllers build them.
+import type { Component } from '@qwik.dev/core';
 import type { AccountOrderSummary } from '~/sellright/types/account';
+import type {
+	Action,
+	BlogListViewProps,
+	BlogPostViewProps,
+	ContactViewProps,
+	ContentViewProps,
+	DeepReadonly,
+	HomeViewProps,
+	ShellFooterProps,
+	ShellViewProps,
+} from '~/platform/views';
 
 export interface SlotPropsMap {
 	/** Cart drawer / checkout summary lines: a progress hint under the line list. No base fallback (renders nothing). */
@@ -13,12 +26,30 @@ export interface SlotPropsMap {
 		subtotalCents: number;
 		lineCount: number;
 		isCheckoutView: boolean;
+		/** APP_STATE.shippingAddress.countryCode (null until known): a brand's country rule (e.g. a US-only free-shipping band). */
+		countryCode: string | null;
+		/** max(0, subtotal - discountTotal): the amount the threshold applies to (formula of components/cart/Cart.tsx). */
+		discountedSubtotalCents: number;
 	};
-	/** Checkout order summary: the points-redemption control. Fallback: the base LoyaltyRedeem. */
-	'checkout.loyalty-redemption': {
-		redeemPoints: Signal<number>;
+	/**
+	 * Checkout order summary: the points-redemption control. Rendered only when the shopper is signed in and the program is
+	 * enabled. Fallback: the base LoyaltyRedeem, which gets the same props. The route owns the redemption signal; the slot
+	 * can only ask `onRedeemToggle$`.
+	 */
+	'checkout.loyalty-redemption': DeepReadonly<{
+		/** srAccountLoyalty().available. */
+		balance: number;
+		/** The program's minimum redeemable points (keeps the base "minimum points" message). */
+		minRedeemPoints: number;
+		/** previewRedemption(available, available, discountableCents, program); null = nothing redeemable. */
+		offer: { points: number; discountCents: number } | null;
+		/** previewRedemption(redeemPoints, available, ...) of the route's own signal; null = nothing applied. */
+		applied: { points: number; discountCents: number } | null;
 		discountableCents: number;
-		currencyCode?: string;
+		currencyCode: string;
+	}> & {
+		/** on = redeem `offer.points` (invalid when `offer` is null), off = redeem 0. */
+		onRedeemToggle$: Action<[on: boolean]>;
 	};
 	/** Footer payment-icon row: extra badges after the card icons. The base ships a default file for its own provider badge. */
 	'payment.badges': {
@@ -40,11 +71,11 @@ export interface SlotPropsMap {
 		productName: string;
 		soldOut: boolean;
 		/** Optional hook the platform can supply once a waitlist endpoint exists; the slot never fetches itself. */
-		onJoin$?: QRL<(email: string) => void>;
+		onJoin$?: Action<[email: string]>;
 	};
 	/** Account order history: one order card. Fallback: the base card markup. */
 	'account.order-card': {
-		order: AccountOrderSummary;
+		order: DeepReadonly<AccountOrderSummary>;
 		href: string;
 	};
 	/** Account overview: a badge next to the loyalty balance. No base fallback. */
@@ -56,6 +87,21 @@ export interface SlotPropsMap {
 	'legal.copy': {
 		section: LegalCopySection;
 	};
+	/** Site header. Fallback: the base header. Brands style the base header through tokens and CSS only. */
+	'shell.header': DeepReadonly<Omit<ShellViewProps, 'onCartToggle$' | 'onLogin$' | 'onLogout$' | 'onAccount$'>> &
+		Pick<ShellViewProps, 'onCartToggle$' | 'onLogin$' | 'onLogout$' | 'onAccount$'>;
+	/** Site footer. Fallback: the base footer. */
+	'shell.footer': DeepReadonly<ShellFooterProps>;
+	/** Homepage. Fallback: the base homepage. */
+	'route.home': DeepReadonly<Omit<HomeViewProps, 'onSubscribe$'>> & Pick<HomeViewProps, 'onSubscribe$'>;
+	/** Static content pages (about, privacy, terms, returns, press, and the content paths a brand declares in routes.json). Fallback: the base page. */
+	'route.content': DeepReadonly<ContentViewProps>;
+	/** Blog list. Fallback: the base list. */
+	'route.blog': DeepReadonly<BlogListViewProps>;
+	/** One blog post, or its missing state (the 404 status is kept). Fallback: the base post page. */
+	'route.blog-post': DeepReadonly<BlogPostViewProps>;
+	/** Contact page with the platform-managed form. Fallback: the base contact page. */
+	'route.contact': DeepReadonly<Omit<ContactViewProps, 'onSubmit$'>> & Pick<ContactViewProps, 'onSubmit$'>;
 }
 
 export type LegalCopySection = 'privacy.payment-processors';
@@ -76,6 +122,13 @@ export const SLOT_NAMES = [
 	'account.order-card',
 	'account.sustainability-badge',
 	'legal.copy',
+	'shell.header',
+	'shell.footer',
+	'route.home',
+	'route.content',
+	'route.blog',
+	'route.blog-post',
+	'route.contact',
 ] as const satisfies readonly SlotName[];
 
 /** The only extension a slot file may have: a slot is a Qwik component, so it needs JSX. */

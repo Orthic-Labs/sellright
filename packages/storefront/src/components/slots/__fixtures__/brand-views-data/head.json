@@ -1,0 +1,11 @@
+{
+  "titleTemplate": "%s | {store}",
+  "defaultDescription": "Fixture default description",
+  "canonical": { "lowercase": true, "trailingSlash": "always" },
+  "favicon": { "svg": "/favicon/favicon.svg" },
+  "fontPreloads": [],
+  "googleFontsPreconnect": true,
+  "pageSchemas": {
+    "/about/": [ { "@context": "https://schema.org", "@type": "AboutPage", "name": "About (fixture)" } ]
+  }
+}

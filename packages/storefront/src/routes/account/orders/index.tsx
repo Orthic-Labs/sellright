@@ -7,6 +7,7 @@ import ShoppingBagIcon from '~/components/icons/ShoppingBagIcon';
 import { formatDate, getStatusDisplay, getStatusIcon } from './order-display';
 import { OrdersSkeleton } from './OrdersSkeleton';
 import { getSlot } from '~/components/slots';
+import { projectOrder } from '~/platform/controllers/project';
 export { head } from './seo';
 
 const PAGE_SIZE = 20;
@@ -65,7 +66,7 @@ export default component$(() => {
 							<div class="space-y-4">
 								{orders.value.map((order) => {
 									const status = getStatusDisplay(order.state, undefined, order.fulfillmentStatus);
-									if (OrderCardSlot) return <OrderCardSlot key={order.code} order={order} href={`/account/orders/${order.code}`} />;
+									if (OrderCardSlot) return <OrderCardSlot key={order.code} order={projectOrder(order)} href={`/account/orders/${order.code}`} />;
 									return (
 										<a
 											key={order.code}

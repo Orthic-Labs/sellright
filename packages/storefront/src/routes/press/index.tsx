@@ -1,8 +1,10 @@
 import { component$ } from '@qwik.dev/core';
 import { createSEOHead } from '~/utils/seo';
 import { useStoreIdentityLoader } from '~/routes/layout';
+import { BrandContentMount } from '~/platform/controllers/content';
+import { contentView } from '~/platform/controllers/views';
 
-export default component$(() => {
+const BasePressPage = component$(() => {
   return (
     <div style={{
       background: '#0A0A0A',
@@ -37,6 +39,8 @@ export default component$(() => {
     </div>
   );
 });
+
+export default contentView ? BrandContentMount : BasePressPage;
 
 export const head = ({ resolveValue }: { resolveValue: any }) => {
   const identity = resolveValue(useStoreIdentityLoader);

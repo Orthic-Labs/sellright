@@ -366,7 +366,7 @@ export const ProductPageView = component$((props: Record<string, any>) => {
             )}
             {!!addItemToOrderErrorSignal.value && (
               <div style="margin-top:8px">
-                <Alert message={addItemToOrderErrorSignal.value} />
+                <Alert message={String(addItemToOrderErrorSignal.value)} />
               </div>
             )}
           </div>

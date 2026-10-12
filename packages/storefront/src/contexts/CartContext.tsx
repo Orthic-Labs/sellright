@@ -10,6 +10,7 @@ import {
 } from '@qwik.dev/core';
 import { CartService, CartError } from '~/services/CartService';
 import { bindCartMirror, commitMirror, isDefinitiveCartFailure } from './cart-mirror';
+import type { Live } from '~/sellright/types/live';
 import { EMPTY_CART, type Cart, type CartLineEnrichment } from '~/sellright/types/cart';
 
 /**
@@ -20,7 +21,7 @@ import { EMPTY_CART, type Cart, type CartLineEnrichment } from '~/sellright/type
  * the full API contract and the fail-closed stock rules.
  */
 
-export interface CartContextState {
+export interface CartContextState extends Live {
   cart: Cart;
   isLoading: boolean;
   lastError: string | null;

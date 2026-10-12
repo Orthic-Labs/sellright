@@ -41,6 +41,11 @@ function world() {
 	const repo = path.join(root, 'repo');
 	const layer = path.join(root, 'brand', 'storefront');
 	cpSync(BASE_FIXTURE, repo, { recursive: true });
+	// the brand file below imports these platform modules, so the fixture base lists them as public platform API (r4)
+	const layersFile = path.join(repo, SF, 'layers.json');
+	const layersJson = JSON.parse(readFileSync(layersFile, 'utf8'));
+	for (const m of ['loader', 'reexp', 'gone', 'cart']) layersJson.platformApi.public[`~/platform/${m}`] = '*';
+	writeFileSync(layersFile, `${JSON.stringify(layersJson, null, '\t')}\n`);
 	write(repo, `${SF}/src/platform/gone.ts`, 'export const goneThing = 1;\n');
 	write(repo, `${SF}/src/platform/reexp.ts`, "export { helper } from '~/services/util';\n");
 	write(repo, `${SF}/src/services/util.ts`, 'export const helper = () => 1;\n');

@@ -1,7 +1,9 @@
 import { createContextId, useContext, useContextProvider, useStore, Slot, component$, useTask$, $ } from '@qwik.dev/core';
 
+import type { Live } from '~/sellright/types/live';
+
 // Define the validation state structure
-export interface CheckoutValidationState {
+export interface CheckoutValidationState extends Live {
   // Customer validation
   isCustomerValid: boolean;
   customerErrors: {

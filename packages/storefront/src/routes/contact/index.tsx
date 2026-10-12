@@ -1,10 +1,8 @@
-import { component$, useSignal, useVisibleTask$, $ } from '@qwik.dev/core';
-import { server$ } from '@qwik.dev/router';
+import { component$ } from '@qwik.dev/core';
 import { createSEOHead } from '~/utils/seo';
 import { useStoreIdentityLoader } from '~/routes/layout';
-
-
-const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY || '';
+import { BrandContactMount, useContactForm } from '~/platform/controllers/content';
+import { contactView } from '~/platform/controllers/views';
 
 const SUBJECTS = [
 	{ value: 'GENERAL', label: 'General Inquiry' },
@@ -15,78 +13,10 @@ const SUBJECTS = [
 	{ value: 'OTHER', label: 'Other' },
 ];
 
-const submitFormServer = server$(async function(formData: {
-	name: string; email: string; subject: string; message: string;
-	turnstileToken: string; honeypot: string;
-}) {
-	const { submitContactForm } = await import('~/providers/shop/contact/contact');
-	return submitContactForm(formData);
-});
-
-export default component$(() => {
+const BaseContactPage = component$(() => {
 	const identity = useStoreIdentityLoader().value.identity;
-	const name = useSignal('');
-	const email = useSignal('');
-	const subject = useSignal('GENERAL');
-	const message = useSignal('');
-	const honeypot = useSignal('');
-	const turnstileToken = useSignal('');
-	const formState = useSignal<'idle' | 'sending' | 'success' | 'error'>('idle');
-	const errorMessage = useSignal('');
-
-	useVisibleTask$(() => {
-		if (!TURNSTILE_SITE_KEY) return;
-		(window as any).onTurnstileLoad = () => {
-			const container = document.getElementById('turnstile-container');
-			if (!container) return;
-			(window as any).turnstile.render(container, {
-				sitekey: TURNSTILE_SITE_KEY,
-				theme: 'light',
-				callback: (token: string) => { turnstileToken.value = token; },
-				'expired-callback': () => { turnstileToken.value = ''; },
-			});
-		};
-		const script = document.createElement('script');
-		script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onTurnstileLoad';
-		script.async = true;
-		document.head.appendChild(script);
-	});
-
-	// Ready = the same required fields handleSubmit checks.
-	const contactReady = name.value.trim().length > 0 && email.value.trim().length > 0 && message.value.trim().length > 0;
-
-	const handleSubmit = $(async () => {
-		if (!name.value.trim() || !email.value.trim() || !message.value.trim()) {
-			errorMessage.value = 'Please fill in all required fields.';
-			formState.value = 'error';
-			return;
-		}
-		if (!turnstileToken.value && TURNSTILE_SITE_KEY) {
-			errorMessage.value = 'Please complete the security check.';
-			formState.value = 'error';
-			return;
-		}
-		formState.value = 'sending';
-		try {
-			const result = await submitFormServer({
-				name: name.value.trim(),
-				email: email.value.trim(),
-				subject: subject.value,
-				message: message.value.trim(),
-				turnstileToken: turnstileToken.value,
-				honeypot: honeypot.value,
-			});
-			if (result.success) {
-				formState.value = 'success';
-			} else {
-				errorMessage.value = result.message || 'Something went wrong.';
-				formState.value = 'error';
-			}
-		} catch {
-			errorMessage.value = 'Failed to send message. Please try again.';
-			formState.value = 'error';
-		}
-	});
+	// The form state, its Turnstile widget and its submit live in the platform (platform/controllers/content.tsx).
+	const { name, email, subject, message, honeypot, formState, errorMessage, contactReady, handleSubmit } = useContactForm();
 
 	return (
 		<div class="bg-[var(--color-parchment)] min-h-screen py-6 sm:py-8 lg:py-10">
@@ -228,6 +158,8 @@ export default component$(() => {
 		</div>
 	);
 });
+
+export default contactView ? BrandContactMount : BaseContactPage;
 
 export const head = ({ resolveValue }: { resolveValue: any }) => {
 	const identity = resolveValue(useStoreIdentityLoader);

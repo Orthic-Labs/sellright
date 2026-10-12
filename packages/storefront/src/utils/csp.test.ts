@@ -108,9 +108,41 @@ describe('entry.express.tsx emits the built policy', () => {
 		expect(src).toContain("res.setHeader('Content-Security-Policy', cspDirectives)");
 	});
 
-	it('every Turnstile loader in the base (sign-in, login modal, contact, shared widget) uses the allowed origin', () => {
-		for (const f of ['src/routes/sign-in/index.tsx', 'src/components/auth/LoginModal.tsx', 'src/routes/contact/index.tsx', 'src/utils/turnstile-widget.ts']) {
+	it('every Turnstile loader in the base (sign-in, login modal, contact controller, shared widget) uses the allowed origin', () => {
+		// the contact form's loader moved from routes/contact/index.tsx into the platform controller (brand views)
+		for (const f of ['src/routes/sign-in/index.tsx', 'src/components/auth/LoginModal.tsx', 'src/platform/controllers/content.tsx', 'src/utils/turnstile-widget.ts']) {
 			expect(readFileSync(join(process.cwd(), f), 'utf8')).toContain(`${TURNSTILE_ORIGIN}/turnstile/`);
 		}
+	});
+});
+
+describe('buildCsp — analytics sources (brand views)', () => {
+	const analytics = { script: ['https://*.googletagmanager.com'], connect: ['https://*.google-analytics.com', 'https://*.analytics.google.com', 'https://*.googletagmanager.com'] };
+
+	it('is unchanged without analytics (byte-identical policy)', () => {
+		const withUndefined = buildCsp({ nonce: 'n', analytics: undefined });
+		expect(withUndefined).toBe(buildCsp({ nonce: 'n' }));
+		expect(withUndefined).not.toContain('googletagmanager');
+	});
+
+	it('adds the script and connect origins only, keeps the nonce policy, never unsafe-eval', () => {
+		const csp = buildCsp({ nonce: 'abc', analytics });
+		expect(directive(csp, 'script-src')).toContain('https://*.googletagmanager.com');
+		expect(directive(csp, 'connect-src')).toContain('https://*.google-analytics.com');
+		expect(directive(csp, 'connect-src')).toContain('https://*.analytics.google.com');
+		expect(directive(csp, 'connect-src')).toContain('https://*.googletagmanager.com');
+		expect(directive(csp, 'script-src')).toContain("'nonce-abc'");
+		expect(csp).not.toContain('unsafe-eval');
+		expect(directive(csp, 'script-src')).not.toContain("'unsafe-inline'");
+		expect(directive(csp, 'frame-src')).not.toContain('googletagmanager');
+		expect(directive(csp, 'style-src')).not.toContain('googletagmanager');
+	});
+
+	it('merges with Google Identity and keeps every other origin', () => {
+		const csp = buildCsp({ nonce: 'n', turnstileSiteKey: 'k', google: { script: ['https://g.test/c'], connect: ['https://g.test/'], frame: [], style: [] }, analytics });
+		expect(directive(csp, 'script-src')).toContain('https://g.test/c');
+		expect(directive(csp, 'script-src')).toContain('https://*.googletagmanager.com');
+		expect(directive(csp, 'script-src')).toContain(TURNSTILE_ORIGIN);
+		expect(directive(csp, 'connect-src')).toContain('https://g.test/');
 	});
 });

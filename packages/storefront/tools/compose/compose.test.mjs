@@ -306,9 +306,11 @@ test('reserved and runtime overlay paths are rejected', async (t) => {
 
 test('glob boundary: per-segment matching, exact assets, exclude, literal brackets', () => {
 	const layers = parseLayers(readJ(path.join(BASE_FIXTURE, 'packages/storefront/layers.json')));
-	assert.equal(layerOf(layers, 'src/routes/products/ProductPageView.tsx'), 'L3');
-	assert.equal(layerOf(layers, 'src/routes/products/a/b/ProductPageView.tsx'), 'L3');
+	assert.equal(layerOf(layers, 'src/routes/products/ProductPageView.tsx'), 'L1', 'the legacy product seam is L1 now');
+	assert.equal(layerOf(layers, 'src/routes/products/a/b/ProductPageView.tsx'), 'L1');
 	assert.equal(layerOf(layers, 'src/routes/products/UnexpectedProductPageView.tsx'), null);
+	assert.equal(layerOf(layers, 'src/components/header/header.tsx'), 'L1');
+	assert.equal(layerOf(layers, 'src/components/Button.tsx'), 'L2');
 	assert.equal(layerOf(layers, 'src/components/x/y/z.tsx'), 'L2');
 	assert.equal(layerOf(layers, 'src/platform/loader.ts'), 'L1');
 	assert.equal(layerOf(layers, 'src/platformer/x.ts'), null);
@@ -326,7 +328,7 @@ test('glob boundary: per-segment matching, exact assets, exclude, literal bracke
 });
 
 test('ambiguous glob: a path in two layers throws, in the unit and in compose', async (t) => {
-	const ambiguous = parseLayers({ version: 1, layers: { L1: { include: ['src/routes/**'] }, L2: { include: ['src/c/**'] }, L3: { include: ['src/routes/products/**/ProductPageView.tsx'] } } });
+	const ambiguous = parseLayers({ version: 1, layers: { L1: { include: ['src/routes/**'] }, L2: { include: ['src/c/**'] }, L3: { include: ['src/routes/products/**/ProductPageView.tsx'] } } }); // the shape of the retired exception
 	assert.throws(() => layerOf(ambiguous, 'src/routes/products/ProductPageView.tsx'), /ambiguous-layer/);
 	assert.equal(layerOf(ambiguous, 'src/routes/other.tsx'), 'L1');
 	const withException = parseLayers({ version: 1, layers: { L1: { include: ['public/**'] }, L2: { include: ['src/c/**'] }, L3: { include: ['src/b/**'] } }, assetExceptions: [{ path: 'public/sezzle-color.svg', layer: 'L3' }] });
@@ -335,8 +337,7 @@ test('ambiguous glob: a path in two layers throws, in the unit and in compose', 
 
 	const w = makeWorld({ readOnlyBase: false });
 	t.after(w.cleanup);
-	editBase(w, 'layers.json', (s) => s.replace('"src/routes/layout.tsx"', '"src/routes/**"'));
-	w.write(w.layerPath('overlay/src/routes/products/ProductPageView.tsx'), 'export {};\n');
+	editBase(w, 'layers.json', (s) => s.replace('"src/routes/layout.tsx"', '"src/brand-slots/**"'));
 	await failsWith(dryRun(w.opts()), 'ambiguous-layer');
 });
 
@@ -800,9 +801,9 @@ test('closure: the REAL storefront package.json script set closes over the REAL 
 
 // ---------------------------------------------------------------- overlay checkers
 
-test('both checkers are packaged with the tool and match the repo scripts byte for byte', () => {
+test('the checkers are packaged with the tool and match the repo scripts byte for byte', () => {
 	assert.equal(CHECKERS_DIR, path.join(HERE, 'checkers'));
-	for (const name of ['check-imports.mjs', 'check-code-shape.mjs']) {
+	for (const name of ['check-imports.mjs', 'check-code-shape.mjs', 'check-l2-boundary.mjs']) {
 		const packaged = path.join(HERE, 'checkers', name);
 		assert.ok(existsSync(packaged), `${name} must be packaged in tools/compose/checkers (the cold tool home archives tools/compose only)`);
 		assert.equal(readFileSync(packaged, 'utf8'), readFileSync(path.join(HERE, '..', '..', 'scripts', name), 'utf8'), `${name} drifted from scripts/; run: cp scripts/${name} tools/compose/checkers/${name}`);
@@ -864,6 +865,138 @@ test('a layers.json shipped in the overlay cannot replace the base layers the ch
 	w.write(w.layerPath('overlay/layers.json'), JSON.stringify(permissive));
 	w.write(w.layerPath('overlay/src/brand-slots/Forbidden.tsx'), "import { c } from '@sellright/storefront-client';\nexport const a = c;\n");
 	await failsWith(dryRun(w.opts()), 'import-check');
+});
+
+// ---------------------------------------------------------------- brand-views boundary (PR1): every negative blocks dry-run and apply
+
+const BOUNDARY_RULES = ['import-check', 'shape-check', 'l2-boundary', 'overlay-in-l1'];
+
+/** Rejects with validation problems, one of which comes from a checker and names `rule`. */
+async function failsWithRule(promise, rule) {
+	let err;
+	try {
+		await promise;
+	} catch (e) {
+		err = e;
+	}
+	assert.ok(err?.code === 'validation', `expected a validation failure for ${rule}, got ${err?.code ?? 'success'}`);
+	// an L1 path is refused by compose itself ('overlay-in-l1', the existing L1-overlay error) before any checker runs
+	const hit = err.details.filter((d) => (rule === 'layer-l1-overlay' ? d.code === 'overlay-in-l1' : BOUNDARY_RULES.includes(d.code) && String(d.message).startsWith(`${rule}:`)));
+	assert.ok(hit.length > 0, `expected ${rule}, got ${err.details.map((d) => `${d.code} ${String(d.message).split(':')[0]}`).join(', ')}`);
+}
+
+const BOUNDARY_NEGATIVES = {
+	// r1-r6 (check-imports)
+	'src/brand/UseContext.tsx': ["import { createContextId, useContext } from '@qwik.dev/core';\nexport const c = () => useContext(createContextId('cart-context'));\n", 'import-framework-symbol'],
+	'src/brand/Namespace.tsx': ["import * as Q from '@qwik.dev/core';\nexport const c = Q;\n", 'import-framework-symbol'],
+	'src/brand/NodeFs.tsx': ["import fs from 'node:fs';\nexport const c = fs;\n", 'import-node'],
+	'src/brand/Controller.tsx': ["import { useShellController } from '~/platform/controllers/shell';\nexport const c = useShellController;\n", 'import-platform-private'],
+	'src/brand/Chain.tsx': ["import { useCart } from '~/components/CartLeak';\nexport const c = useCart;\n", 'import-l1-transitive'],
+	'src/brand/TypeOnly.tsx': ["import type { useCart } from '~/contexts/CartContext';\nexport type C = typeof useCart;\n", 'import-type-only-l1'],
+	// r7-r10, r12 (check-code-shape)
+	'src/brand/Html.tsx': ['export const A = (p: { h: string }) => <div dangerouslySetInnerHTML={p.h} />;\n', 'inject-html'],
+	'src/brand/Tag.tsx': ['export const A = () => <script />;\n', 'inject-tag'],
+	'src/brand/Call.tsx': ["export const a = (d: Document, h: string) => d.write(h);\n", 'inject-call'],
+	'src/brand/Create.tsx': ["export const a = () => document.createElement('script');\n", 'inject-element'],
+	'src/brand/Attr.tsx': ["export const a = (el: Element) => el.setAttribute('onload', 'x()');\n", 'inject-element'],
+	'src/brand/JsUrl.tsx': ["export const a = 'javascript:alert(1)';\n", 'inject-element'],
+	'src/brand/Qrl.tsx': ['export const a = (q: any) => q.getCaptured();\n', 'qrl-introspection'],
+	'src/brand/Worker.tsx': ["export const a = () => navigator.serviceWorker.register('/sw.js');\n", 'worker-register'],
+	'src/brand/Stock.tsx': ['export const stockLoaded = false;\n', 'brand-stock-flag'],
+	// r11
+	'public/brand/x.js': ['alert(1)\n', 'overlay-executable-asset'],
+	'public/brand/x.svg': ['<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>\n', 'overlay-executable-asset'],
+	// ejecting a file that is L1 now
+	'src/routes/products/ProductPageView.tsx': ['export default () => null;\n', 'layer-l1-overlay'],
+	'src/components/cart-totals/CartTotals.tsx': ['export default () => null;\n', 'layer-l1-overlay'],
+	'src/components/address-form/AddressForm.tsx': ['export default () => null;\n', 'layer-l1-overlay'],
+	'src/components/billing-address-form/BillingAddressForm.tsx': ['export default () => null;\n', 'layer-l1-overlay'],
+	'src/components/header/header.tsx': ['export default () => null;\n', 'layer-l1-overlay'],
+	// r14 (c): an L2 eject
+	'src/components/Button.tsx#1': ["import { useCart } from '~/contexts/CartContext';\nexport default () => useCart();\n", 'l2-forbidden-import'],
+	'src/components/Button.tsx#2': ["import type { Signal } from '@qwik.dev/core';\nexport interface P { open: Signal<boolean> }\nexport default (p: P) => p.open;\n", 'l2-live-prop-type'],
+};
+
+/** The L2 eject negatives overwrite the fixture's declared eject (Button.tsx); compose refuses an undeclared one before any checker runs. */
+const writeNegative = (w, rel, text) => w.write(w.layerPath(`overlay/${rel}`), text);
+const restoreNegative = (w, rel, original) => (original === null ? rmSync(w.layerPath(`overlay/${rel}`)) : writeFileSync(w.layerPath(`overlay/${rel}`), original));
+const originalOf = (w, rel) => (existsSync(w.layerPath(`overlay/${rel}`)) ? readFileSync(w.layerPath(`overlay/${rel}`), 'utf8') : null);
+const relOf = (key) => key.split('#')[0];
+
+test('every boundary negative blocks dry-run and apply, and nothing is composed', async (t) => {
+	const w = makeWorld();
+	t.after(w.cleanup);
+	for (const [key, [text, rule]] of Object.entries(BOUNDARY_NEGATIVES)) {
+		const rel = relOf(key);
+		const original = originalOf(w, rel);
+		writeNegative(w, rel, text);
+		await failsWithRule(dryRun(w.opts()), rule);
+		await failsWithRule(apply(w.opts()), rule);
+		restoreNegative(w, rel, original);
+	}
+	assert.equal(existsSync(w.out), false, 'nothing was composed');
+	const ok = await dryRun(w.opts());
+	assert.equal(ok.report.importCheck.status, 'passed');
+	assert.equal(ok.report.shapeCheck.status, 'passed');
+	assert.equal(ok.report.l2Check.status, 'passed');
+});
+
+test('boundary positives compose: framework names, public platform modules, type-only registry import, createElement(div)', async (t) => {
+	const w = makeWorld();
+	t.after(w.cleanup);
+	w.write(w.layerPath('overlay/src/brand/Ok.tsx'), `import { component$, useSignal, type QRL } from '@qwik.dev/core';
+import { Link } from '@qwik.dev/router';
+import type { SlotProps } from '~/components/slots/registry';
+import { formatMoney, type Cents } from '~/platform/views';
+import type { BrandHeadSpec } from '~/platform/head';
+import '~/brand/tokens.css';
+export const price: Cents = 100;
+export const spec: BrandHeadSpec = {};
+export type P = SlotProps<'x.y'> & { go?: QRL<() => void> };
+export default component$<P>((p) => { const s = useSignal(0); const el = document.createElement('div'); return <Link href="/">{formatMoney(price)}{p.a}{s.value}{String(el)}</Link>; });
+`);
+	const r = await dryRun(w.opts());
+	assert.equal(r.report.importCheck.status, 'passed');
+	assert.equal(r.report.shapeCheck.status, 'passed');
+});
+
+test('cold-compose parity: the packaged checkers and the repo scripts reach the same verdict on every negative', async (t) => {
+	const w = makeWorld();
+	t.after(w.cleanup);
+	const verdict = async (checkersDir) => {
+		const out = {};
+		for (const [key, [text]] of Object.entries(BOUNDARY_NEGATIVES)) {
+			const rel = relOf(key);
+			const original = originalOf(w, rel);
+			writeNegative(w, rel, text);
+			try {
+				await dryRun({ ...w.opts(), checkersDir });
+				out[key] = [];
+			} catch (e) {
+				out[key] = (e.details ?? []).filter((d) => BOUNDARY_RULES.includes(d.code)).map((d) => `${d.code} ${d.message}`).sort();
+			}
+			restoreNegative(w, rel, original);
+		}
+		return out;
+	};
+	const packaged = await verdict(CHECKERS_DIR);
+	const scripts = await verdict(path.join(HERE, '..', '..', 'scripts'));
+	assert.deepEqual(packaged, scripts);
+	for (const [rel, found] of Object.entries(packaged)) assert.ok(found.length > 0, `${rel} was rejected`);
+	// a tool home without the r14 checker cannot compose
+	const partial = mkdtempSync(path.join(tmpdir(), 'compose-partial-'));
+	t.after(() => rmSync(partial, { recursive: true, force: true }));
+	for (const n of ['check-imports.mjs', 'check-code-shape.mjs']) writeFileSync(path.join(partial, n), readFileSync(path.join(CHECKERS_DIR, n)));
+	await failsWith(dryRun({ ...w.opts(), checkersDir: partial }), 'l2-check-unavailable');
+});
+
+test('a base layers.json from before the brand-views rules cannot run the checkers (strict: no silent pass)', async (t) => {
+	const w = makeWorld({ readOnlyBase: false });
+	t.after(w.cleanup);
+	editBase(w, 'layers.json', (s) => { const l = JSON.parse(s); delete l.imports.framework; return JSON.stringify(l); });
+	await failsWith(dryRun(w.opts()), 'import-check-unavailable');
+	editBase(w, 'layers.json', (s) => { const l = JSON.parse(s); delete l.codeShape.qrlIntrospection; return JSON.stringify(l); });
+	await failsWith(dryRun(w.opts()), 'shape-check-unavailable');
 });
 
 // ---------------------------------------------------------------- misc units

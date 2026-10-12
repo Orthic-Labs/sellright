@@ -7,6 +7,7 @@ import { searchProducts } from '~/providers/shop/products/products';
 import type { CatalogListResponse } from '~/sellright/types/catalog';
 import { FacetWithValues } from '~/types';
 import { createSEOHead } from '~/utils/seo';
+import { projectFacets } from '~/platform/controllers/project';
 
 // SellRight's catalog search has no facet/facet-value aggregation (unlike the
 // old legacy SearchResponse.facetValues) — `activeFacetValueIds` is accepted
@@ -125,7 +126,7 @@ export default component$(() => {
 				{!!state.facetValues.length && (
 					<Filters
 						showMenu={state.showMenu}
-						facetsWithValues={state.facetValues}
+						facetsWithValues={projectFacets(state.facetValues)}
 						onToggleMenu$={async () => {
 							state.showMenu = !state.showMenu;
 						}}

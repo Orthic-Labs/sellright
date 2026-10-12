@@ -6,6 +6,7 @@ import { FacetWithValues } from '~/types';
 import Filters from '~/components/Filters';
 import { theme } from '~/theme/theme.config';
 import { useCatalogLoader } from '~/platform/shop';
+import { projectFacetIds, projectFacets } from '~/platform/controllers/project';
 
 export { useCatalogLoader };
 export { head, onStaticGenerate } from '~/platform/shop';
@@ -169,8 +170,8 @@ export default component$(() => {
    <div class="border-b border-[var(--color-card-border)] bg-[var(--color-parchment)]">
     <div class="max-w-[1920px] mx-auto px-4 sm:px-8 lg:px-12 py-4">
      <Filters
-      facetsWithValues={state.facetValues}
-      facetValueIds={facetIds.value}
+      facetsWithValues={projectFacets(state.facetValues)}
+      facetValueIds={projectFacetIds(facetIds.value)}
       onFilterChange$={onFilterChange}
       searchTerm={searchTerm.value}
       onSearchChange$={onSearchChange}

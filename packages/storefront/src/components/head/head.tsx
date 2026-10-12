@@ -2,10 +2,10 @@ import { component$, useTask$ } from '@qwik.dev/core';
 import { isBrowser } from '@qwik.dev/core/build';
 import { useDocumentHead, useLocation } from '@qwik.dev/router';
 import { DEFAULT_METADATA_TITLE } from '~/constants';
-import { generateDocumentHead } from '~/utils';
 import { sanitizeStyle, sanitizeInlineScript } from '~/utils/sanitize';
 import { useStoreIdentityLoader } from '~/routes/layout';
 import { PROVIDER_PREFETCH_ORIGINS } from '~/platform/payments/labels';
+import { brandHeadTags, DEFAULT_SOURCES, resolveHead } from '~/platform/head';
 
 interface HeadProps {
 	nonce?: string;
@@ -13,14 +13,17 @@ interface HeadProps {
 
 export const Head = component$<HeadProps>(({ nonce }) => {
 	const documentHead = useDocumentHead();
-	const head =
-		documentHead.meta.length > 0 ? documentHead : { ...documentHead, ...generateDocumentHead() };
 	const loc = useLocation();
 	// WS-C: runtime store identity/theme, resolved per-request by the root
 	// layout's routeLoader$ (safe to call from any component for this route —
 	// unlike a plain useContext, a loader doesn't require Head to be a
 	// descendant of where the loader is invoked in the render tree).
 	const identity = useStoreIdentityLoader().value.identity;
+	// Brand views (plan §2.4): the route's head merged with src/brand/head.json and routes.json by one precedence rule. With none of
+	// them this is the route head with the base defaults, as before.
+	const resolved = resolveHead(documentHead, loc.url.pathname, identity);
+	const head = resolved.head;
+	const brandHead = DEFAULT_SOURCES.spec;
 
 	// The initial <html lang> (entry.ssr.tsx containerAttributes) is the
 	// build-time static theme's locale — the real per-request store identity
@@ -126,10 +129,19 @@ export const Head = component$<HeadProps>(({ nonce }) => {
 
 
 
-			{/* Service Worker for iOS privacy optimization */}
-			<script
-				{...(nonce ? { nonce } : {})}
-				dangerouslySetInnerHTML={sanitizeInlineScript(`
+			{/* Service Worker for iOS privacy optimization (head.json serviceWorker: 'register-ios-privacy' is the default) */}
+			{brandHead.serviceWorker !== 'none' && (
+				<script
+					{...(nonce ? { nonce } : {})}
+					dangerouslySetInnerHTML={sanitizeInlineScript(brandHead.serviceWorker === 'unregister-ios-privacy' ? `
+				if ('serviceWorker' in navigator) {
+					navigator.serviceWorker.getRegistrations().then((registrations) => {
+						registrations.forEach((r) => {
+							if (r.active && r.active.scriptURL.indexOf('/ios-privacy-sw.js') > -1) r.unregister();
+						});
+					}).catch(() => {});
+				}
+			` : `
 				if ('serviceWorker' in navigator && /iPad|iPhone|iPod/.test(navigator.userAgent)) {
 					window.addEventListener('load', () => {
 						navigator.serviceWorker.register('/ios-privacy-sw.js')
@@ -139,25 +151,33 @@ export const Head = component$<HeadProps>(({ nonce }) => {
 					});
 				}
 			`)}
-			/>
+				/>
+			)}
 			<title>{head.title || DEFAULT_METADATA_TITLE}</title>
 
 			<link rel="manifest" href="/manifest.json" />
 			{/* Neutral demo theme loads Inter from Google Fonts (see global.css);
 			    a brand build that self-hosts its own @font-face files should add
 			    matching <link rel="preload" as="font"> entries here. */}
-			<link rel="preconnect" href="https://fonts.googleapis.com" />
-			<link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+			{resolved.googleFontsPreconnect && <link rel="preconnect" href="https://fonts.googleapis.com" />}
+			{resolved.googleFontsPreconnect && <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />}
 
 
 
-			{/* Favicon — SVG only */}
-			<link rel="icon" href="/favicon/favicon.svg" type="image/svg+xml" />
+			{/* Favicon — SVG only (a brand favicon spec replaces it, never both) */}
+			{resolved.favicon ? (
+				<>
+					{resolved.favicon.svg && <link rel="icon" href={resolved.favicon.svg} type="image/svg+xml" />}
+					{resolved.favicon.ico && <link rel="icon" href={resolved.favicon.ico} sizes="any" />}
+				</>
+			) : (
+				<link rel="icon" href="/favicon/favicon.svg" type="image/svg+xml" />
+			)}
 
 			{/* Canonical: use page-specific if provided, otherwise default */}
 			{head.links.some((l: any) => l.rel === 'canonical')
 				? null
-				: <link rel="canonical" href={`${identity.siteOrigin}${loc.url.pathname}`} />
+				: <link rel="canonical" href={resolved.canonical ?? `${identity.siteOrigin}${loc.url.pathname}`} />
 			}
 
 			{head.meta
@@ -195,6 +215,8 @@ export const Head = component$<HeadProps>(({ nonce }) => {
 				.map((l: any, key: number) => (
 					<link key={key} {...l} />
 				))}
+
+			{brandHeadTags(resolved, nonce)}
 
 			{head.styles.map(({ key, style, ...props }) => (
 				<style key={key} {...props} dangerouslySetInnerHTML={sanitizeStyle(style ?? '')} />

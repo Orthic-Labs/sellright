@@ -14,7 +14,8 @@
 // A required privateRuntime name is checked against its runtime sources (the process environment
 // and the build directory's .env / .env.local), for presence only: its value is never printed,
 // never stored and never part of the public configuration hash.
-// Output is names and hashes only; a value is never printed.
+// A brand.json setting whose schema entry says `wired: false` (validated, but read by no code) may only carry its default
+// (env-setting-unwired: a migration gate. The setting stays in the brand's files and the brand stays on its current base pin until the wiring lands). Output is names and hashes only; a value is never printed.
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -86,7 +87,14 @@ export function validateBrandConfig({ schema, brand, problems = new Problems() }
 		}
 		const ok = spec.type === 'enum' ? spec.values.includes(v) : typeof v === 'boolean';
 		if (!ok) problems.add('env-bad-setting', `settings.${k} has an invalid value (allowed: ${spec.type === 'enum' ? spec.values.join(' | ') : 'true | false'})`, 'brand.json');
-		else settings[k] = v;
+		else {
+			settings[k] = v;
+			// A setting the schema marks `wired: false` is validated and hashed but no storefront code reads it yet
+			// (src/platform/settings.ts): a non-default value would change nothing while looking configured.
+			if (spec.wired === false && v !== spec.default) {
+				problems.add('env-setting-unwired', `settings.${k} = ${JSON.stringify(v)} is not honoured by this base: no storefront code reads this setting yet (default ${JSON.stringify(spec.default)}). This is a migration gate, not a request to change the brand: keep the setting in brand.json (it is approved brand configuration) and keep the brand on its current base pin until the platform wiring for it lands`, 'brand.json');
+			}
+		}
 	}
 	for (const [n, v] of Object.entries(brand.publicConfig ?? {})) {
 		if (!names.publicBuildConfig.includes(n)) {
