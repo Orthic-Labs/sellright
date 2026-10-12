@@ -17,7 +17,7 @@ import type {
 	ShellFooterProps,
 	ShellViewProps,
 } from '~/platform/views';
-import { ACTION_RESULT, FORM_RESULT } from './actions';
+import { ACTIONS, ACTION_RESULT, FORM_RESULT, type ActionName, type BoundAction } from './actions';
 import type {
 	BLOG_LIST_DATA,
 	BLOG_POST_DATA,
@@ -54,8 +54,33 @@ export const CHECKS = [
 	yes<Check<typeof FORM_RESULT, FormResult>>(true),
 ];
 
+// Failure results: what presentation reads on a failed action must be the public contract's own (`reason`), for the value the gateway
+// builds on a platform exception and for the type of every bound action. `FailureOf` is the fixed failure each action declares.
+type RunResult<A> = A extends (...a: never[]) => infer R ? Awaited<R> : never;
+type FailureOf<N extends ActionName> = (typeof ACTIONS)[N] extends { failure: infer F } ? F : undefined;
+export const FAILURES = [
+	// the bound action's result is exactly the public result type (so `r.reason` is typed and present on the failure branch)
+	yes<Same<RunResult<BoundAction<'shell.cart-toggle'>>, DeepReadonly<ActionResult>>>(true),
+	yes<Same<RunResult<BoundAction<'shell.login'>>, DeepReadonly<ActionResult>>>(true),
+	yes<Same<RunResult<BoundAction<'shell.logout'>>, DeepReadonly<ActionResult>>>(true),
+	yes<Same<RunResult<BoundAction<'shell.account'>>, DeepReadonly<ActionResult>>>(true),
+	yes<Same<RunResult<BoundAction<'loyalty.redeem-toggle'>>, DeepReadonly<ActionResult>>>(true),
+	yes<Same<RunResult<BoundAction<'pdp.waitlist-join'>>, DeepReadonly<ActionResult>>>(true),
+	yes<Same<RunResult<BoundAction<'home.subscribe'>>, DeepReadonly<FormResult>>>(true),
+	yes<Same<RunResult<BoundAction<'contact.submit'>>, DeepReadonly<FormResult>>>(true),
+	// the declared failure is a member of that public type
+	yes<FailureOf<'shell.login'> extends ActionResult ? true : false>(true),
+	yes<FailureOf<'home.subscribe'> extends FormResult ? true : false>(true),
+	// a failure shaped like the old `{ ok: false, code, message }` is not an ActionResult / FormResult
+	yes<{ ok: false; code: 'action-failed'; message: string } extends ActionResult ? false : true>(true),
+	yes<{ ok: false; code: 'action-failed'; message: string } extends FormResult ? false : true>(true),
+];
+
 describe('gateway schemas match the prop types', () => {
 	it('is checked at compile time (see CHECKS)', () => {
 		expect(CHECKS.every(Boolean)).toBe(true);
+	});
+	it('failure results use the public contract (compile-time, see FAILURES)', () => {
+		expect(FAILURES.every(Boolean)).toBe(true);
 	});
 });

@@ -29,6 +29,10 @@ import RawSearchFilters from '~/components/facet-filter-controls/Filters';
 import RawFiltersButton from '~/components/filters-button/FiltersButton';
 import { LoyaltyRedeem } from '~/components/loyalty/LoyaltyRedeem';
 import { STYLES } from '~/components/home/homepage-styles';
+import DefaultLegalCopy from '~/brand-slots/legal.copy';
+import DefaultPaymentBadges from '~/brand-slots/payment.badges';
+import DefaultPaymentWidget from '~/brand-slots/pdp.payment-widget';
+import { getSlot } from '~/components/slots';
 import * as G from './index';
 import { platformAction } from './actions';
 
@@ -153,16 +157,30 @@ describe('gateway default output: each handle renders what L1 rendered before', 
 		});
 	}
 
+	// The render config registers the slots the product ships (src/brand-slots), so these compare the default implementations.
+	it('slot handles render the shipped default implementation, validated, with output equal to the component alone', async () => {
+		const badges = await html(<G.PaymentBadgesView placement="footer" />);
+		expect(badges).toBe(await html(<DefaultPaymentBadges placement="footer" />));
+		expect(badges).toContain('Sezzle');
+		const widget = await html(<G.PaymentWidgetView priceCents={4000} />);
+		expect(widget).toBe(await html(<DefaultPaymentWidget priceCents={4000} />));
+		expect(widget).toContain('4 interest-free payments of');
+		const legal = await html(<G.LegalCopyView section="privacy.payment-processors" />);
+		expect(legal).toBe(await html(<DefaultLegalCopy section="privacy.payment-processors" />));
+		expect(legal).toContain('NMI, Sezzle');
+	});
+
+	it('the default slots are really registered (an empty registry would make the comparison above vacuous)', () => {
+		for (const name of ['payment.badges', 'pdp.payment-widget', 'legal.copy'] as const) expect(getSlot(name), name).toBeDefined();
+	});
+
 	it('slot handles with no brand slot and no fallback render nothing', async () => {
 		const identity = { storeName: 'S', legalName: 'S', tagline: '', supportEmail: '', logoText: 'S', logoImageUrl: null, siteOrigin: '', social: {} };
 		const views: JSXOutput[] = [
 			<G.FreeShippingProgressView key="v1" currencyCode="USD" subtotalCents={1000} lineCount={1} isCheckoutView={false} countryCode={null} discountedSubtotalCents={1000} />,
-			<G.PaymentBadgesView key="v2" placement="footer" />,
-			<G.PaymentWidgetView key="v3" priceCents={1000} />,
 			<G.GuaranteeModalView key="v4" productId="1" productName="Tee" />,
 			<G.WaitlistView key="v5" productId="1" productName="Tee" soldOut={true} />,
 			<G.SustainabilityBadgeView key="v6" orderCount={2} statsLoaded={true} />,
-			<G.LegalCopyView key="v7" section="privacy.payment-processors" />,
 			<G.ShellFooterView key="v8" identity={identity} paymentLabels={['Card']} year={2026} />,
 			<G.ContentView key="v9" identity={identity} pageKey="about" pathname="/about/" />,
 		];

@@ -48,6 +48,17 @@ export function bindAction<N extends ActionName>(handle: ActionHandle<N>): Bound
 }
 
 const hasOwn = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k);
+/**
+ * Qwik deletes a null-valued prop when it comes through a JSX spread or a dynamic expression (`_jsxSplit` "clean up null markers"), so
+ * a nullable data prop the caller passed as `null` can arrive absent. A missing key whose schema accepts null is `null`.
+ */
+function nullForMissing(schema: Schema, data: Record<string, unknown>): void {
+	if (schema.t !== 'object') return;
+	for (const [key, field] of Object.entries(schema.fields)) {
+		if (field.t === 'optional' || hasOwn(data, key)) continue;
+		if (field.t === 'anyOf' && field.of.some((s) => s.t === 'null')) data[key] = null;
+	}
+}
 const emptyChildren = (c: unknown) => c === undefined || c === null || c === false || (Array.isArray(c) && c.length === 0);
 
 /** Any handle definition, without its inferred data type (keeps the checker out of deep schema instantiation). */
@@ -69,6 +80,7 @@ export function enter(name: string, def: AnyGateDef, props: object): { props: Re
 		}
 		if (!hasOwn(actions, key)) data[key] = source[key];
 	}
+	nullForMissing(def.data, data);
 	const safe: unknown = detachValue(def.data, data, name);
 	const bound: Record<string, unknown> = {};
 	for (const [key, spec] of Object.entries(actions)) {

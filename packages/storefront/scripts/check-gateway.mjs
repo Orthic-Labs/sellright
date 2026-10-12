@@ -35,7 +35,8 @@ import {
   walk,
 } from './check-imports.mjs';
 
-const isTest = (rel) => /\.test\.[cm]?[jt]sx?$/.test(rel);
+// Test code: *.test.* files and `__stubs__/` (vitest aliases only; never part of a build).
+const isTest = (rel) => /\.test\.[cm]?[jt]sx?$/.test(rel) || /(^|\/)__stubs__\//.test(rel);
 
 function gatewayConfig(layers) {
   const g = layers.gateway;

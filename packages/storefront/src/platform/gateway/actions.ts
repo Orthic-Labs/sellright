@@ -14,7 +14,12 @@ interface ActionSpec {
 	/** 'event': a DOM handler; the framework-delivered arguments are not forwarded. Otherwise one schema per argument. */
 	readonly args: 'event' | readonly Schema[];
 	readonly result: Schema;
+	/** What presentation gets when the platform function throws or rejects: a member of `result` (void: nothing). */
+	readonly failure?: { readonly ok: false; readonly reason: string };
 }
+
+const ACTION_FAILED = { ok: false, reason: 'error' } as const satisfies Infer<typeof ACTION_RESULT>;
+const FORM_FAILED = { ok: false, reason: 'server' } as const satisfies Infer<typeof FORM_RESULT>;
 
 /** Every action presentation code can be given. Adding one is a reviewed platform change. */
 export const ACTIONS = {
@@ -22,14 +27,14 @@ export const ACTIONS = {
 	'cart.quantity-select': { args: [anyOf(num, str), str], result: VOID },
 	'filters.value': { args: [str], result: VOID },
 	'filters.search': { args: [str], result: VOID },
-	'shell.cart-toggle': { args: [], result: ACTION_RESULT },
-	'shell.login': { args: [], result: ACTION_RESULT },
-	'shell.logout': { args: [], result: ACTION_RESULT },
-	'shell.account': { args: [], result: ACTION_RESULT },
-	'home.subscribe': { args: [str, str], result: FORM_RESULT },
-	'contact.submit': { args: [str, str, str, str, str], result: FORM_RESULT },
-	'loyalty.redeem-toggle': { args: [bool], result: ACTION_RESULT },
-	'pdp.waitlist-join': { args: [str], result: ACTION_RESULT },
+	'shell.cart-toggle': { args: [], result: ACTION_RESULT, failure: ACTION_FAILED },
+	'shell.login': { args: [], result: ACTION_RESULT, failure: ACTION_FAILED },
+	'shell.logout': { args: [], result: ACTION_RESULT, failure: ACTION_FAILED },
+	'shell.account': { args: [], result: ACTION_RESULT, failure: ACTION_FAILED },
+	'home.subscribe': { args: [str, str], result: FORM_RESULT, failure: FORM_FAILED },
+	'contact.submit': { args: [str, str, str, str, str], result: FORM_RESULT, failure: FORM_FAILED },
+	'loyalty.redeem-toggle': { args: [bool], result: ACTION_RESULT, failure: ACTION_FAILED },
+	'pdp.waitlist-join': { args: [str], result: ACTION_RESULT, failure: ACTION_FAILED },
 } as const satisfies Record<string, ActionSpec>;
 
 export type ActionName = keyof typeof ACTIONS;
@@ -42,7 +47,7 @@ type ResultOf<N extends ActionName> = Infer<(typeof ACTIONS)[N]['result']>;
 export type ActionImpl<N extends ActionName> = QRL<(...args: ArgsOf<N>) => ResultOf<N> extends void ? unknown : ResultOf<N> | Promise<ResultOf<N>>>;
 
 /** What presentation code calls: the gateway's wrapper around a platform action. */
-export type BoundAction<N extends ActionName> = QRL<(...args: ArgsOf<N>) => Promise<ResultOf<N> | ActionFailure>>;
+export type BoundAction<N extends ActionName> = QRL<(...args: ArgsOf<N>) => Promise<ResultOf<N>>>;
 
 export interface ActionHandle<N extends ActionName = ActionName> {
 	readonly kind: 'sr-action';
@@ -89,19 +94,8 @@ export async function invokeAction(name: ActionName, run: QRL<(...args: never[])
 		value = await (run as unknown as (...a: unknown[]) => unknown)(...callArgs);
 	} catch {
 		// Whatever the platform function threw or rejected with (a live array, an Error whose `cause` holds state) stays here: presentation
-		// gets a new fixed-shape failure, never the original value, its message, or its cause.
-		return actionFailure(name);
+		// gets the action's own failure result from its public contract (`reason`), never the original value, its message, or its cause.
+		return spec.failure ? Object.freeze({ ...spec.failure }) : undefined;
 	}
 	return detachValue(spec.result, value, `${name} result`);
-}
-
-/** What presentation code receives when a platform action throws or rejects. Built here, from constants. */
-export interface ActionFailure {
-	readonly ok: false;
-	readonly code: 'action-failed';
-	readonly message: string;
-}
-
-function actionFailure(name: ActionName): ActionFailure {
-	return Object.freeze({ ok: false, code: 'action-failed', message: `Action '${name}' failed.` });
 }

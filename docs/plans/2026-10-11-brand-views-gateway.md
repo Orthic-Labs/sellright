@@ -96,7 +96,7 @@ Render tests run with `vitest.render.config.ts` (Qwik optimizer plugin; `*.rende
 - Projections feeding strict schemas pick fields explicitly: `projectOrder` (10 summary fields, was a generic `detach`), `projectPolicies`, new `projectHeroPolicies` (`controllers/project.ts`). An API field added later can then never fail a render.
 - A schema rejection is a thrown `GatewayError`: in production a mismatch fails the render (fail closed). Call sites are typed by `Infer<schema>`, so `tsc` catches drift first.
 - Factory calls in `gateway/index.tsx` are `/*#__PURE__*/` so unused handles tree-shake; bundle and preload effects are unverified without a build.
-- Render tests use `vitest.render.config.ts` with stubs for both virtual modules (`src/components/slots/__stubs__/brand-slots.ts`).
+- Render tests use `vitest.render.config.ts` with stubs for both virtual modules (`src/platform/gateway/__stubs__/brand-slots.ts`, which registers the slots the product ships in `src/brand-slots`).
 
 ## 9. Stock rule
 No stock read, cache, TTL, debounce or loaded flag is added or moved. `ProductCard.inStock` and every stock path keep today's sources; `useCartToggle` (live refresh on open) still runs inside `shell.cart-toggle`.

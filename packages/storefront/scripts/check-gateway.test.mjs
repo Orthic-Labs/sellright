@@ -60,6 +60,7 @@ const POS = {
   'src/routes/pos-l1-import.tsx': "import { platformAction } from '~/platform/gateway/actions';\nexport const p = platformAction;\n",
   'src/routes/pos-package.tsx': "import { component$ } from '@qwik.dev/core';\nexport const c = component$;\n",
   'src/routes/pos-other-kind.tsx': "export const h = { kind: 'other', name: 'x' };\n",
+  'src/platform/gateway/__stubs__/pos-slots.ts': "import Card from '~/components/ui/Card';\nexport const slots = { Card };\n",
   'src/routes/pos-a.test.tsx': "import Card from '~/components/ui/Card';\nexport const c = Card;\n",
 };
 for (const [rel, [text]] of Object.entries(NEG)) write(rel, text);

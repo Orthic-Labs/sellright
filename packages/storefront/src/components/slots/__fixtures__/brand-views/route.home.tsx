@@ -19,6 +19,13 @@ export default component$<SlotProps<'route.home'>>((props) => {
 			<button type="button" data-testid="view-home-subscribe" onClick$={async () => {
 				const r = await props.onSubscribe$(email.value, '');
 				outcome.value = r.ok ? 'ok' : r.reason;
+				// Detachment probe (brand-views.spec.ts): record what arrived, then write to the received object. The platform's own
+				// result (a retained module constant for `busy`) must stay pristine for the next call.
+				const w = window as unknown as { __srResults?: { objs: object[]; seen: { ok: boolean; reason?: string }[] } };
+				const log = (w.__srResults ??= { objs: [], seen: [] });
+				log.objs.push(r);
+				log.seen.push(r.ok ? { ok: true } : { ok: false, reason: r.reason });
+				try { (r as { reason?: string }).reason = 'mutated'; (r as { extra?: number }).extra = 1; } catch { /* frozen in dev builds */ }
 			}}>subscribe</button>
 			<span data-testid="view-home-status">{props.newsletter.status}</span>
 			<span data-testid="view-home-message">{props.newsletter.message ?? ''}</span>

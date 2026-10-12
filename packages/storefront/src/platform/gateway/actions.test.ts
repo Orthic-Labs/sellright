@@ -2,8 +2,8 @@
 // resumption, later events, delayed results) are in actions.render.test.tsx.
 import { inlinedQrl } from '@qwik.dev/core';
 import { describe, expect, it } from 'vitest';
-import { ACTIONS, checkHandle, invokeAction, platformAction } from './actions';
-import { GatewayError } from './schema';
+import { ACTIONS, checkHandle, invokeAction, platformAction, type ActionName } from './actions';
+import { GatewayError, detachValue } from './schema';
 
 const qrl = <T extends (...a: never[]) => unknown>(fn: T, sym = 'test_fn') => inlinedQrl(fn, sym);
 
@@ -75,14 +75,13 @@ describe('invokeAction', () => {
 
 describe('invokeAction failures cross detached', () => {
 	const live = { countries: [{ code: 'US' }], nested: { deep: [1] } };
-	const FAILED = { ok: false, code: 'action-failed', message: "Action 'shell.login' failed." };
+	const FAILED = { ok: false, reason: 'error' };
 
 	/** The failure must be the fixed shape and share no reference with anything the platform threw. */
 	function expectDetached(r: unknown, source: object) {
 		expect(r).toEqual(FAILED);
 		expect(r).not.toBe(source);
-		expect(typeof (r as { message: unknown }).message).toBe('string');
-		expect(Object.keys(r as object).sort()).toEqual(['code', 'message', 'ok']);
+		expect(Object.keys(r as object).sort()).toEqual(['ok', 'reason']);
 		expect(Object.isFrozen(r)).toBe(true);
 	}
 
@@ -108,12 +107,22 @@ describe('invokeAction failures cross detached', () => {
 		expect(r).not.toBe(err.cause);
 	});
 
-	it('a void action that throws or rejects is mapped too', async () => {
+	it('a void action that throws or rejects resolves to nothing (its result type is void)', async () => {
 		const sync = await invokeAction('ui.press', qrl(() => { throw live; }) as never, []);
 		const later = await invokeAction('ui.press', qrl(async () => { throw live; }) as never, []);
-		for (const r of [sync, later]) {
-			expect(r).toEqual({ ok: false, code: 'action-failed', message: "Action 'ui.press' failed." });
-			expect(r).not.toBe(live);
+		expect(sync).toBeUndefined();
+		expect(later).toBeUndefined();
+	});
+
+	it('every action fails with a result its own public contract accepts (reason, never code/message)', async () => {
+		for (const [name, spec] of Object.entries(ACTIONS) as [ActionName, (typeof ACTIONS)[ActionName]][]) {
+			const args = spec.args === 'event' ? [] : spec.args.map((a) => (a.t === 'boolean' ? true : a.t === 'anyOf' ? 1 : 'x'));
+			const r = await invokeAction(name, qrl(() => { throw live; }) as never, args);
+			if (spec.result.t === 'void') { expect(r, name).toBeUndefined(); continue; }
+			expect(() => detachValue(spec.result, r, name), name).not.toThrow(); // a member of the action's result schema
+			expect(r, name).toMatchObject({ ok: false });
+			expect(Object.keys(r as object).sort(), name).toEqual(['ok', 'reason']);
+			expect(typeof (r as { reason: unknown }).reason, name).toBe('string');
 		}
 	});
 
