@@ -19,7 +19,7 @@ import ConditionalCart from '../components/cart/ConditionalCart';
 import Header from '../components/header/header';
 import Footer from '../components/footer/footer';
 import { BrandFooterMount, BrandHeaderMount } from '~/platform/controllers/shell';
-import { shellFooterView, shellHeaderView } from '~/platform/controllers/views';
+import { hasView, ComingSoon, MaintenanceScreen } from '~/platform/gateway';
 import { CartProvider } from '~/contexts/CartContext';
 import { LoginModalProvider, useLoginModalState, useLoginModalActions } from '~/contexts/LoginModalContext';
 import LoginModal from '~/components/auth/LoginModal';
@@ -30,8 +30,6 @@ import { DEV_API } from '~/constants';
 import { srShopIdentity, srErrorStatus, srMaintenanceStatus } from '~/utils/sellright';
 import { identityFromStaticTheme } from '~/theme/theme.config';
 import { normalizeIdentity } from '~/utils/normalize-identity';
-import ComingSoon from '~/components/coming-soon/ComingSoon';
-import MaintenanceScreen from '~/components/maintenance/MaintenanceScreen';
 
 /** WS-C: cookie that remembers a valid preview token across navigation, once
  *  presented on any request via ?preview_token=. Not HttpOnly — the value is
@@ -301,14 +299,14 @@ export default component$(() => {
 		<CartProvider>
 		<LoginModalProvider>
 			<div>
-				{!isAffiliateSurface && (shellHeaderView ? <BrandHeaderMount /> : <Header />)}
+				{!isAffiliateSurface && (hasView('shell.header') ? <BrandHeaderMount /> : <Header />)}
 				{state.showCart && <ConditionalCart isHomePage={isHomePage} showCart={state.showCart} />}
 				{!isAffiliateSurface && <Menu />}
 				<div style={{ position: 'relative', minHeight: '100vh', backgroundColor: 'var(--color-parchment)' }}>
 					<main id="main-content" class={`flex-1 bg-[var(--color-parchment)] ${isHomePage || isAffiliateSurface ? '' : 'pt-16'}`}>
 						<Slot />
 					</main>
-					{!isAffiliateSurface && (shellFooterView ? <BrandFooterMount /> : <Footer />)}
+					{!isAffiliateSurface && (hasView('shell.footer') ? <BrandFooterMount /> : <Footer />)}
 				</div>
 				{/* Global Login Modal */}
 				<LoginModalComponent />

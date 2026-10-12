@@ -1,12 +1,11 @@
 import { component$ } from '@qwik.dev/core';
 import { createSEOHead } from '~/utils/seo';
 import { useStoreIdentityLoader } from '~/routes/layout';
-import { getSlot } from '~/components/slots';
 import { BrandContentMount } from '~/platform/controllers/content';
-import { contentView } from '~/platform/controllers/views';
+import { LegalCopyView, hasView } from '~/platform/gateway';
 
 // A17 mount point: brand-owned copy for the payment-processor line (the base's wording is its default slot file).
-const LegalCopy = getSlot('legal.copy');
+const hasLegalCopy = hasView('legal.copy');
 
 const BasePrivacyPage = component$(() => {
 	const identity = useStoreIdentityLoader().value.identity;
@@ -141,7 +140,7 @@ const BasePrivacyPage = component$(() => {
 
   <h3 class="text-xl font-bold mt-6 mb-3">Service Providers and Processors</h3>
   <ul class="list-disc pl-5 space-y-2">
-   <li><strong>Payment Processors:</strong> {LegalCopy ? <LegalCopy section="privacy.payment-processors" /> : 'payment service providers'}</li>
+   <li><strong>Payment Processors:</strong> {hasLegalCopy ? <LegalCopyView section="privacy.payment-processors" /> : 'payment service providers'}</li>
    <li><strong>Shipping Companies:</strong> USPS, UPS, FedEx, and other delivery services</li>
    <li><strong>Technology Providers:</strong> Web hosting, email services, analytics platforms</li>
    <li><strong>Customer Service:</strong> Help desk and support ticket management systems</li>
@@ -343,7 +342,7 @@ const BasePrivacyPage = component$(() => {
  );
 });
 
-export default contentView ? BrandContentMount : BasePrivacyPage;
+export default hasView('route.content') ? BrandContentMount : BasePrivacyPage;
 
 export const head = ({ resolveValue }: { resolveValue: any }) => {
  const identity = resolveValue(useStoreIdentityLoader);

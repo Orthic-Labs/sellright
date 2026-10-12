@@ -1,12 +1,13 @@
 /**
- * Phantom marker for live state the base owns (r14, scripts/check-l2-boundary.mjs).
+ * Phantom marker for live state the base owns (diagnostics only).
  *
  * A type that carries `Live` is mutable runtime state: the cart store and its lines, app state and its addresses, the checkout
  * contexts, the signed-in customer's account objects. The marker exists only in the type system (optional, never set, no runtime
- * value), so assignment and literals are unaffected. The L2-boundary check resolves the checker's type of every JSX attribute
- * handed to an ejectable component and rejects any type that reaches the marker, so a getter, a helper, a wrapper, a callback
- * parameter or a spread cannot launder a live object: the type follows it. `Detached<T>` is the only way to take the marker off,
- * and only `project*()` functions (which copy field by field) return it.
+ * value), so assignment and literals are unaffected. scripts/check-l2-boundary.mjs uses it for an ADVISORY call-site diagnostic.
+ *
+ * It is not the boundary. Presentation code never receives a live reference because L1 reaches presentation only through the
+ * gateway (src/platform/gateway; scripts/check-gateway.mjs), which rebuilds every data prop from a fixed schema and every action result
+ * the same way (docs/plans/2026-10-11-brand-views-gateway.md). `Detached<T>` documents that a `project*()` function returns a copy.
  *
  * Import with `import type`: `LIVE` is a declaration only and has no runtime value.
  */

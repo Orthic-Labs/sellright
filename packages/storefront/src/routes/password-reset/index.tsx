@@ -1,5 +1,5 @@
 import { $, component$, useSignal } from '@qwik.dev/core';
-import XCircleIcon from '~/components/icons/XCircleIcon';
+import { XCircleIcon } from '~/platform/gateway';
 import { resetPassword } from '~/providers/shop/account/account';
 import { createSEOHead } from '~/utils/seo';
 import { theme } from '~/theme/theme.config';

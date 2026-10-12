@@ -3,7 +3,7 @@ import { Link } from '@qwik.dev/router';
 import type { BlogPostSummary } from '~/providers/shop/blog/blog';
 import { useBlogPosts, head } from '~/platform/blog';
 import { BrandBlogMount } from '~/platform/controllers/content';
-import { blogView } from '~/platform/controllers/views';
+import { hasView } from '~/platform/gateway';
 
 export { useBlogPosts, head };
 
@@ -84,4 +84,4 @@ const BaseBlogPage = component$(() => {
     );
 });
 
-export default blogView ? BrandBlogMount : BaseBlogPage;
+export default hasView('route.blog') ? BrandBlogMount : BaseBlogPage;

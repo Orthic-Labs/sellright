@@ -1,6 +1,6 @@
 import { $, component$, type QRL, type ReadonlySignal, type Signal } from '@qwik.dev/core';
 import { useStoreIdentityLoader } from '~/routes/layout';
-import { OrderProcessingModal } from '~/components/OrderProcessingModal';
+import { OrderProcessingModal, platformAction } from '~/platform/gateway';
 import { CheckoutEmptyCart } from './CheckoutEmptyCart';
 import { CheckoutMobileCta } from './CheckoutCta';
 import { CheckoutOrderSummary } from './CheckoutOrderSummary';
@@ -88,10 +88,10 @@ export const CheckoutPageView = component$<CheckoutPageViewProps>((props) => {
         <OrderProcessingModal
           visible={props.showProcessingModal.value}
           storeName={identity.value.identity.storeName}
-          onClose$={$(() => {
+          onClose$={platformAction('ui.press', $(() => {
             props.showProcessingModal.value = false;
             props.isOrderProcessing.value = false;
-          })}
+          }))}
         />
         <div class="max-w-7xl mx-auto pt-5 pb-10 sm:px-6 lg:px-8">
           <div class="checkout-columns lg:flex lg:gap-x-8 xl:gap-x-12">

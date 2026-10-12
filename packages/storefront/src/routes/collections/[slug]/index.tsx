@@ -9,7 +9,7 @@
 // consumers after this route stops using it).
 import { component$ } from '@qwik.dev/core';
 import { Link, routeLoader$ } from '@qwik.dev/router';
-import ProductCard from '~/components/products/ProductCard';
+import { ProductCard } from '~/platform/gateway';
 import { fetchCollectionDetail } from '~/sellright/catalog';
 import { createSEOHead } from '~/utils/seo';
 import { generateBreadcrumbSchema } from '~/services/seo-schemas';

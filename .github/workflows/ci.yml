@@ -98,7 +98,7 @@ jobs:
         # packages/storefront via `pnpm -r build`/`pnpm -r typecheck` (it's a
         # normal workspace member — only packages/admin is excluded). This
         # adds the one thing that wasn't running anywhere in CI: the
-        # storefront's own vitest suite.
+        # storefront's own vitest suite (unit, then the Qwik render tests in vitest.render.config.ts).
         run: pnpm --filter @sellright/storefront test
 
       - name: Storefront tooling tests (layers, import and code-shape checks, brand-literal lint)
@@ -111,6 +111,7 @@ jobs:
         # are listed in report mode until A13 (layers.json codeShape.baseL2Enforcement); brand-literal lint warns until A20.
         run: |
           pnpm --filter @sellright/storefront run check:layers
+          pnpm --filter @sellright/storefront run check:gateway
           pnpm --filter @sellright/storefront run check:shape:base
           pnpm --filter @sellright/storefront run lint:brand
 

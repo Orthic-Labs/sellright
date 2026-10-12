@@ -1,7 +1,8 @@
 // Brand views, plan §1 "Projection". Every value a slot or an L2 component receives from live state is built here, field by field
 // from primitives. A projection never spreads or returns a store, loader value or nested source object. Dev and test deep-freeze
 // (so a brand write throws); production rebuilds each projection in `useComputed$` at the call site, so a write only touches a
-// discarded copy. scripts/check-l2-boundary.mjs (r14) accepts a `project*()` call as the only way to hand an object from live state to L2.
+// discarded copy. The gateway (src/platform/gateway) then rebuilds what it receives from its fixed schema, so a projection shapes the data
+// and the gateway guarantees detachment; scripts/check-l2-boundary.mjs (r14) only keeps an advisory diagnostic of call sites.
 import { DEFAULT_CURRENCY } from '~/constants';
 import type { AccountOrderSummary } from '~/sellright/types/account';
 import type { Detached } from '~/sellright/types/live';
@@ -71,10 +72,29 @@ export const projectIdentity = (identity: SrStoreIdentity): DeepReadonly<PublicI
 		},
 	});
 
-/** The identity's shipping/returns/payment policy blocks as a detached copy (a base component such as HomeHero gets plain data, never the loader value). */
-export const projectPolicies = (policies: StoreTheme['policies']): StoreTheme['policies'] => seal(detach(policies)) as StoreTheme['policies'];
+const projectPolicy = (p: { label: string; sub: string }) => ({ label: String(p.label), sub: String(p.sub) });
 
-export const projectOrder = (order: AccountOrderSummary): DeepReadonly<Detached<AccountOrderSummary>> => seal(detach(order) as Detached<AccountOrderSummary>);
+/** The identity's shipping/returns/payment policy blocks, field by field (a base component such as HomeHero gets plain data, never the loader value). */
+export const projectPolicies = (policies: StoreTheme['policies']): StoreTheme['policies'] =>
+	seal({ shipping: projectPolicy(policies.shipping), returns: projectPolicy(policies.returns), payment: projectPolicy(policies.payment) }) as StoreTheme['policies'];
+
+/** The two policy blocks HomeHero shows, field by field. */
+export const projectHeroPolicies = (policies: StoreTheme['policies']): Pick<StoreTheme['policies'], 'shipping' | 'returns'> =>
+	seal({ shipping: projectPolicy(policies.shipping), returns: projectPolicy(policies.returns) }) as Pick<StoreTheme['policies'], 'shipping' | 'returns'>;
+
+/** One account order summary, field by field (the API may add fields; the gateway schema accepts exactly these). */
+export const projectOrder = (order: AccountOrderSummary): DeepReadonly<Detached<AccountOrderSummary>> =>
+	seal({
+		code: order.code,
+		currency: order.currency,
+		fulfillmentStatus: order.fulfillmentStatus,
+		grandTotal: order.grandTotal,
+		lines: order.lines,
+		paymentStatus: order.paymentStatus,
+		placedAt: order.placedAt ?? null,
+		state: order.state,
+		status: order.status,
+	}) as DeepReadonly<Detached<AccountOrderSummary>>;
 
 /** For `Filters`: the facet list as plain data, never the shop page's store. */
 export const projectFacets = (facets: readonly FacetWithValues[]): FacetWithValues[] =>

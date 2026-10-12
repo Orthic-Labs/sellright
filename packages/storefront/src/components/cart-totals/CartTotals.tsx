@@ -2,8 +2,7 @@ import { $, component$, useSignal, useComputed$, type Signal } from '@qwik.dev/c
 
 import { useCart, applyCoupon, removeCoupon, type CartContextState } from '~/contexts/CartContext';
 import { formatPrice } from '~/utils';
-import TrashIcon from '../icons/TrashIcon';
-import Alert from '../alert/Alert';
+import { TrashIcon, Alert } from '~/platform/gateway';
 import { LoyaltyEarnHint } from '../loyalty/LoyaltyEarnHint';
 
 export default component$<{

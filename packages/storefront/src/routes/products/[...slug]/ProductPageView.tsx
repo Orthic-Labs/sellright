@@ -1,7 +1,6 @@
 import { component$ } from '@qwik.dev/core';
-import { OptimizedImage } from '~/components/ui';
-import Alert from '~/components/alert/Alert';
-import CheckIcon from '~/components/icons/CheckIcon';
+import { OptimizedImage } from '~/components/ui/LazyImage';
+import { Alert, CheckIcon, GuaranteeModalView, PaymentWidgetView, WaitlistView, hasView } from '~/platform/gateway';
 import { sanitizeProductDescription } from '~/utils/sanitize';
 import { availableForGroup, enhanceDescription, liveUnitPrice, priceDeltaLabel, swatchColor, titleCase } from './product-options';
 import { ProductImageModal } from './ProductImageModal';import { ProductMobileBar } from './ProductMobileBar';
@@ -10,19 +9,18 @@ import { effectiveVariantPrice, type CatalogVariant } from '~/sellright/types/ca
 import { LoyaltyPdpEarn } from '~/components/loyalty/LoyaltyPdpEarn';
 import { ProductReviews } from '~/components/reviews/ProductReviews';
 import { starString } from '~/utils/rewards';
-import { getSlot } from '~/components/slots';
 
 // A17 mount points. Each is undefined when the brand supplies no slot file; the markup that used to be inlined here
 // now lives in the base's own default slot files under src/brand-slots.
-const PaymentWidgetSlot = getSlot('pdp.payment-widget');
-const WaitlistSlot = getSlot('pdp.waitlist');
-const GuaranteeModalSlot = getSlot('pdp.guarantee-modal');
+const hasPaymentWidget = hasView('pdp.payment-widget');
+const hasWaitlist = hasView('pdp.waitlist');
+const hasGuaranteeModal = hasView('pdp.guarantee-modal');
 
 export const ProductPageView = component$((props: Record<string, any>) => {
   const { addItemToOrderErrorSignal, allVariantsSoldOut, changeImage, closeImageModal, ctaClass, ctaDisabled, ctaTooltipFading, currentImageIndex, currentImageSig, displayPrice, galleryRef, groups, handleAddToCart, handleDotClick$, handleGalleryItemClick$, handleGalleryScroll, handleGroupSelect$, handleThumbClick$, handleTouchEnd$, handleTouchMove$, handleTouchStart$, hasSale, isAddingToCart, isImageLoading, isOutOfStock, isPreOrder, modalImageIndex, modalImageSrc, navigateModal, openImageModal, orderedAssets, preOrderConsent, product, productId, quantitySignal, rating, selectedValues, selectedVariant, selectedVariantIdSignal, showCtaTooltip, showFromPrefix, showImageModal } = props;
   // Price the payment-widget slot shows (same selection the inline widget used: pre-order price, else sale price, else display price).
   let widgetPriceCents = 0;
-  if (PaymentWidgetSlot) {
+  if (hasPaymentWidget) {
     const sv: CatalogVariant | undefined = selectedVariant.value;
     const sale = typeof sv?.salePrice === 'number' && sv.salePrice > 0 ? sv.salePrice : null;
     const pre = typeof sv?.preOrderPrice === 'number' && sv.preOrderPrice > 0 ? sv.preOrderPrice : null;
@@ -192,7 +190,7 @@ export const ProductPageView = component$((props: Record<string, any>) => {
             productId={productId}
             from={!!showFromPrefix.value && !hasSale.value && !isPreOrder.value}
           />
-          {PaymentWidgetSlot && <PaymentWidgetSlot priceCents={widgetPriceCents} />}
+          {hasPaymentWidget && <PaymentWidgetView priceCents={widgetPriceCents} />}
           <div class="sr-rule" />
           {groups.value.map((group: { groupName: string; values: string[] }, groupIdx: number) => {
             const isMulti = groups.value.length > 1;
@@ -370,9 +368,9 @@ export const ProductPageView = component$((props: Record<string, any>) => {
               </div>
             )}
           </div>
-          {WaitlistSlot && <WaitlistSlot productId={productId} productName={product.name || ''} soldOut={!!allVariantsSoldOut.value} />}
+          {hasWaitlist && <WaitlistView productId={productId} productName={product.name || ''} soldOut={!!allVariantsSoldOut.value} />}
           <ProductTrustBar />
-          {GuaranteeModalSlot && <GuaranteeModalSlot productId={productId} productName={product.name || ''} />}
+          {hasGuaranteeModal && <GuaranteeModalView productId={productId} productName={product.name || ''} />}
           <div class="sr-rule" />
           {product.description && (
             <div

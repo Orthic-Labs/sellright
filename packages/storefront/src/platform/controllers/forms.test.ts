@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { ACTION_RESULTS, dispatch, type ActionCtl } from './callbacks';
+import { FORM_RESULT } from '~/platform/gateway/actions';
 import { submitContact, submitNewsletter, type FormPort, type FormStatus } from './forms';
 
 const makePort = (over: Partial<{ token: string; turnstileRequired: boolean }> = {}) => {
@@ -78,7 +79,7 @@ describe('newsletter form', () => {
 		let release!: () => void;
 		const gate = new Promise<void>((r) => (release = r));
 		const deps = { post: async () => { requests++; await gate; return { ok: true, status: 200 }; }, onSuccess: () => undefined };
-		const FORM = { busy: { ok: false as const, reason: 'busy' as const }, disposed: { ok: false as const, reason: 'disposed' as const }, error: { ok: false as const, reason: 'server' as const } };
+		const FORM = { busy: { ok: false as const, reason: 'busy' as const }, disposed: { ok: false as const, reason: 'disposed' as const }, error: { ok: false as const, reason: 'server' as const }, schema: FORM_RESULT };
 		const submit = () => dispatch(ctl, 'submit', FORM as never, () => submitNewsletter(port, deps, 'a@b.co', ''));
 		const first = submit();
 		const second = submit();
@@ -152,7 +153,7 @@ describe('contact form', () => {
 		let release!: () => void;
 		const gate = new Promise<void>((r) => (release = r));
 		const deps = { send: async () => { sends++; await gate; return { success: true }; } };
-		const submit = () => dispatch(ctl, 'submit', ACTION_RESULTS as never, () => submitContact(port, deps, fields));
+		const submit = () => dispatch(ctl, 'submit', { ...ACTION_RESULTS, schema: FORM_RESULT } as never, () => submitContact(port, deps, fields));
 		const a = submit();
 		const b = submit();
 		expect(await b).toEqual({ ok: false, reason: 'busy' });

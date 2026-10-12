@@ -6,7 +6,7 @@ import { DECLARED_CONTENT } from '~/platform/brand-data';
 import { matchDeclaredPath } from '~/platform/content-routes';
 import { contentHead } from '~/platform/head-resolve';
 import { BrandContentMount } from '~/platform/controllers/content';
-import { contentView } from '~/platform/controllers/views';
+import { hasView } from '~/platform/gateway';
 
 export const onGet: RequestHandler = async ({ status, url }) => {
 	// Declared content paths (src/brand/routes.json) are real pages: no 404 status. Without a declaration nothing changes.
@@ -66,7 +66,7 @@ export default component$(() => {
         const currentPath = location.url.pathname;
 
 	// A declared content path renders `route.content` instead of the 404 page (one component either way: the 404 markup is untouched).
-	if (contentView && matchDeclaredPath(DECLARED_CONTENT, currentPath)) return <BrandContentMount />;
+	if (hasView('route.content') && matchDeclaredPath(DECLARED_CONTENT, currentPath)) return <BrandContentMount />;
 
 	return (
 		<div class="min-h-screen bg-gray-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8">

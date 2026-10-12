@@ -1,8 +1,5 @@
 import { Slot, component$, type QRL } from '@qwik.dev/core';
-import { Button } from '../buttons/Button';
-import { HighlightedButton } from '../buttons/HighlightedButton';
-import CheckIcon from '../icons/CheckIcon';
-import XMarkIcon from '../icons/XMarkIcon';
+import { Button, HighlightedButton, platformAction } from '~/platform/gateway';
 
 interface IProps {
 	title: string;
@@ -46,15 +43,11 @@ export const Modal = component$(({ title, open, iconBackground, onSubmit$, onCan
 						</div>
 						<div class="sm:bg-[var(--color-parchment-hover)] px-4 pb-3 sm:pt-3 sm:px-6 sm:flex sm:flex-row-reverse sm:gap-x-4 space-y-2 sm:space-y-0">
 							{onCancel$ && (
-								<Button onClick$={onCancel$}>
-									<XMarkIcon /> Cancel
-								</Button>
+								<Button onClick$={platformAction('ui.press', onCancel$)} icon="x-mark" text=" Cancel" />
 							)}
 
 							{onSubmit$ && (
-								<HighlightedButton onClick$={onSubmit$}>
-									<CheckIcon /> Submit
-								</HighlightedButton>
+								<HighlightedButton onClick$={platformAction('ui.press', onSubmit$)} icon="check" text=" Submit" />
 							)}
 						</div>
 					</div>

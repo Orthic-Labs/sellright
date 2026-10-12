@@ -4,7 +4,7 @@ import { CartContextId, retireSettledCart } from '~/contexts/CartContext';
 import { getOrder, verifyGatewayPayment } from '~/providers/shop/checkout/checkout';
 import type { OrderSummary, OrderAddressSnapshot } from '~/sellright/types/checkout';
 import { formatPrice } from '~/utils';
-import { OptimizedImage } from '~/components/ui';
+import { OptimizedImage } from '~/components/ui/LazyImage';
 import { TIMELINE, activeStepFromState, parseLineName, isOrderSettled, isOrderTerminalUnpaid, assetUrl, readOrderUntilSettled, resolveConfirmationEmail } from './confirmation-data';
 import { APP_STATE } from '~/constants';
 

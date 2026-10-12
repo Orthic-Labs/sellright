@@ -1,10 +1,7 @@
-import { QRL, component$ } from '@qwik.dev/core';
+import { $, QRL, component$ } from '@qwik.dev/core';
 import { useNavigate } from '@qwik.dev/router';
 import { ShippingAddress } from '~/types';
-import { Button } from '../buttons/Button';
-import { HighlightedButton } from '../buttons/HighlightedButton';
-import PencilIcon from '../icons/PencilIcon';
-import XCircleIcon from '../icons/XCircleIcon';
+import { Button, HighlightedButton, platformAction } from '~/platform/gateway';
 
 type IProps = {
 	address: ShippingAddress;
@@ -50,21 +47,21 @@ export default component$<IProps>(({ address, onDelete$ }) => {
 				</div>
 				<div class="flex justify-around">
 					<HighlightedButton
-						onClick$={() => {
+						onClick$={platformAction('ui.press', $(() => {
 							navigate(`/account/address-book/${address.id}`);
-						}}
-					>
-						<PencilIcon /> &nbsp; Edit
-					</HighlightedButton>
+						}))}
+						icon="pencil"
+						text=" &nbsp; Edit"
+					/>
 					<Button
-						onClick$={() => {
+						onClick$={platformAction('ui.press', $(() => {
 							if (onDelete$ && address.id) {
 								onDelete$(address.id);
 							}
-						}}
-					>
-						<XCircleIcon /> &nbsp; Delete
-					</Button>
+						}))}
+						icon="x-circle"
+						text=" &nbsp; Delete"
+					/>
 				</div>
 				<div class="flex text-xs justify-between mt-4">
 					{address.defaultShippingAddress && (

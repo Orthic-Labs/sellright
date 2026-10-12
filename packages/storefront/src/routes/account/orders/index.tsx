@@ -3,17 +3,16 @@ import { useNavigate } from '@qwik.dev/router';
 import { getOrders } from '~/services/customer';
 import type { AccountOrderSummary } from '~/sellright/types/account';
 import { formatPrice } from '~/utils';
-import ShoppingBagIcon from '~/components/icons/ShoppingBagIcon';
+import { OrderCardView, ShoppingBagIcon, hasView } from '~/platform/gateway';
 import { formatDate, getStatusDisplay, getStatusIcon } from './order-display';
 import { OrdersSkeleton } from './OrdersSkeleton';
-import { getSlot } from '~/components/slots';
 import { projectOrder } from '~/platform/controllers/project';
 export { head } from './seo';
 
 const PAGE_SIZE = 20;
 
 // A17 mount point: a brand order card; the card markup below is the fallback.
-const OrderCardSlot = getSlot('account.order-card');
+const hasOrderCard = hasView('account.order-card');
 
 export default component$(() => {
 	const navigate = useNavigate();
@@ -66,7 +65,7 @@ export default component$(() => {
 							<div class="space-y-4">
 								{orders.value.map((order) => {
 									const status = getStatusDisplay(order.state, undefined, order.fulfillmentStatus);
-									if (OrderCardSlot) return <OrderCardSlot key={order.code} order={projectOrder(order)} href={`/account/orders/${order.code}`} />;
+									if (hasOrderCard) return <OrderCardView key={order.code} order={projectOrder(order)} href={`/account/orders/${order.code}`} />;
 									return (
 										<a
 											key={order.code}

@@ -8,16 +8,10 @@ import { useCart, addToCart } from '~/contexts/CartContext';
 import { loadCountryOnDemand } from '~/utils/addressStorage';
 import { TURNSTILE_SITE_KEY } from '~/utils/turnstile-widget';
 import { stripHtml } from '~/utils/sanitize';
-import { STYLES } from '~/components/home/homepage-styles';
-import { HomeHero } from '~/components/home/HomeHero';
-import { HomeTeeSection } from '~/components/home/HomeTeeSection';
-import { HomeServiceSection, HomeTrustBar } from '~/components/home/HomeSocialSections';
-import Price from '~/components/products/Price';
-import ProductCard from '~/components/products/ProductCard';
+import { homepageStyles, hasView, HomeHero, HomeTeeSection, HomeServiceSection, HomeTrustBar, Price, ProductCard } from '~/platform/gateway';
 import { useStoreIdentityLoader } from '~/routes/layout';
 import { BrandHomeMount, useNewsletterForm } from '~/platform/controllers/content';
-import { homeView } from '~/platform/controllers/views';
-import { projectPolicies, projectFeatureProduct, projectFeatureVariant, projectPrice, projectProductTiles } from '~/platform/controllers/project';
+import { projectHeroPolicies, projectPolicies, projectFeatureProduct, projectFeatureVariant, projectPrice, projectProductTiles } from '~/platform/controllers/project';
 import HeroImage_1024 from '~/media/hero.jpg?format=avif&w=1024&quality=75&url';
 
 // Spotlight section image — 65: decorative/lifestyle, not a purchase decision image
@@ -32,7 +26,7 @@ import PreorderImageJPEG_1024 from '~/media/sec2.jpg?format=jpeg&w=1024&quality=
 export { useOrganizationJsonLd, usePreorderProduct, useFeatureProduct, useFeaturedProducts, useHomeCollections };
 
 const BaseHomePage = component$(() => {
-  useStyles$(STYLES);
+  useStyles$(homepageStyles);
 
   const appState = useContext(APP_STATE);
   const cart = useCart();
@@ -104,7 +98,7 @@ const BaseHomePage = component$(() => {
 
   return (
     <div class="hp">
-      <HomeHero storeName={identity.value.identity.storeName} tagline={identity.value.identity.tagline} policies={projectPolicies(identity.value.identity.policies)} />
+      <HomeHero storeName={identity.value.identity.storeName} tagline={identity.value.identity.tagline} policies={projectHeroPolicies(identity.value.identity.policies)} />
 
       <HomeTrustBar policies={projectPolicies(identity.value.identity.policies)} />
 
@@ -244,7 +238,7 @@ const BaseHomePage = component$(() => {
   );
 });
 
-export default homeView ? BrandHomeMount : BaseHomePage;
+export default hasView('route.home') ? BrandHomeMount : BaseHomePage;
 
 export const head = ({ resolveValue }: { resolveValue: any }) => {
   const schemas = resolveValue(useOrganizationJsonLd) as unknown as JsonLdSchema[];

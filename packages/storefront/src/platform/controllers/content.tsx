@@ -10,16 +10,18 @@ import { BLOG_PAGE_SIZE, useBlogPost, useBlogPosts, useRelatedPosts } from '~/pl
 import { DECLARED_CONTENT } from '~/platform/brand-data';
 import { matchDeclaredPath } from '~/platform/content-routes';
 import { dispatch, type ActionCtl, type DispatchResults } from './callbacks';
+import { FORM_RESULT } from '~/platform/gateway/actions';
 import { submitContact, submitNewsletter, type FormPort, type FormStatus } from './forms';
 import { buildBlogListView, buildBlogPostView } from './blog-view';
 import { projectFeatured, projectFormState, projectIdentity, seal } from './project';
-import { blogPostView, blogView, contactView, contentView, homeView } from './views';
+import { BlogListView, BlogPostView, ContactView, ContentView, HomeView, platformAction } from '~/platform/gateway';
 import type { BlogListViewProps, BlogPostViewProps, ContactViewProps, ContentViewProps, FormResult, FormState, HomeViewProps } from '~/platform/views';
 
 const FORM_RESULTS: DispatchResults<FormResult> = {
 	busy: { ok: false, reason: 'busy' },
 	disposed: { ok: false, reason: 'disposed' },
 	error: { ok: false, reason: 'server' },
+	schema: FORM_RESULT,
 };
 
 // ---------------------------------------------------------------------------------------------------- newsletter (routes/index.tsx)
@@ -150,7 +152,6 @@ export const pageKeyFor = (pathname: string): string | null => {
 
 /** `route.content`: the built-in static pages and the declared content paths. */
 export const BrandContentMount = component$(() => {
-	const View = contentView!;
 	const location = useLocation();
 	const identity = useStoreIdentityLoader();
 	const data = useComputed$(() =>
@@ -160,12 +161,11 @@ export const BrandContentMount = component$(() => {
 			pathname: location.url.pathname,
 		}),
 	);
-	return <View {...data.value} />;
+	return <ContentView {...data.value} />;
 });
 
 /** `route.home`. */
 export const BrandHomeMount = component$(() => {
-	const View = homeView!;
 	const identity = useStoreIdentityLoader();
 	const featured = useFeaturedProducts();
 	const form = useNewsletterForm();
@@ -175,34 +175,31 @@ export const BrandHomeMount = component$(() => {
 			featured: projectFeatured(featured.value) as HomeViewProps['featured'],
 		}),
 	);
-	return <View {...data.value} newsletter={form.form.value} onSubscribe$={form.onSubscribe$} />;
+	return <HomeView {...data.value} newsletter={form.form.value} onSubscribe$={platformAction('home.subscribe', form.onSubscribe$)} />;
 });
 
 /** `route.blog`. A list longer than the page has no crawlable link past it, so the mount warns on the server. */
 export const BrandBlogMount = component$(() => {
-	const View = blogView!;
 	const identity = useStoreIdentityLoader();
 	const list = useBlogPosts();
 	const data = useComputed$(() => buildBlogListView(projectIdentity(identity.value.identity) as BlogListViewProps['identity'], list.value.items, list.value.totalItems, BLOG_PAGE_SIZE));
 	if (isServer && data.value.hasMore) console.warn(`blog list: ${data.value.total} posts but only ${data.value.posts.length} are listed; posts past the page have no crawlable link (raise blog.pageSize, max 100)`);
-	return <View {...data.value} />;
+	return <BlogListView {...data.value} />;
 });
 
 /** `route.blog-post`: `found` or `missing` (the loader already set the 404 status for a missing post). */
 export const BrandBlogPostMount = component$(() => {
-	const View = blogPostView!;
 	const identity = useStoreIdentityLoader();
 	const postLoader = useBlogPost();
 	const relatedLoader = useRelatedPosts();
 	const data = useComputed$(() => buildBlogPostView(projectIdentity(identity.value.identity) as BlogPostViewProps['identity'], postLoader.value, relatedLoader.value));
-	return <View {...data.value} />;
+	return <BlogPostView {...data.value} />;
 });
 
 /** `route.contact`. */
 export const BrandContactMount = component$(() => {
-	const View = contactView!;
 	const identity = useStoreIdentityLoader();
 	const form = useContactForm();
 	const data = useComputed$(() => seal<Omit<ContactViewProps, 'form' | 'onSubmit$'>>({ identity: projectIdentity(identity.value.identity) as ContactViewProps['identity'] }));
-	return <View {...data.value} form={form.form.value} onSubmit$={form.onSubmit$} />;
+	return <ContactView {...data.value} form={form.form.value} onSubmit$={platformAction('contact.submit', form.onSubmit$)} />;
 });

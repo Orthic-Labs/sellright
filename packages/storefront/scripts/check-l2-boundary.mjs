@@ -1,24 +1,23 @@
 #!/usr/bin/env node
-// r14 `l2-boundary` (brand-views plan §2.6). TypeScript compiler API only.
+// r14 `l2-boundary` (brand-views plan §2.6; gateway plan §6). TypeScript compiler API only.
 //
-//   node scripts/check-l2-boundary.mjs [--root DIR] [--layers FILE] [--overlay-list FILE] [FILE...]
-//       Base mode (always): (a) every JSX element in an L1 file whose tag resolves to an L2 declaration; (b) every base L2 file.
+//   node scripts/check-l2-boundary.mjs [--root DIR] [--layers FILE] [--overlay-list FILE] [--strict] [FILE...]
+//       Base mode (always): (a) every JSX element in an L1 file whose tag resolves to an L2 declaration (ADVISORY); (b) every base L2 file.
 //       Overlay mode (FILE... or the overlay list): (c) the same (b) checks on every overlay-origin L2 eject.
-//   Exit 1 on any finding. Finding format: "<file>:<line>:<col> <rule> <message>".
+//   Exit 1 on any (b)/(c) finding. (a) findings are printed as warnings and fail only with --strict.
+//   Finding format: "<file>:<line>:<col> <rule> <message>".
+//
+// The guarantee that presentation code receives no live reference is STRUCTURAL and lives elsewhere: L1 reaches presentation only
+// through the gateway (src/platform/gateway, enforced by scripts/check-gateway.mjs), which hands it data rebuilt from a fixed schema
+// and platform actions whose results are rebuilt the same way. (a) below is a type-based regression detector kept for its diagnostics;
+// it is not a complete provenance analysis (JavaScript has an open class of ways to carry a reference) and nothing relies on it.
 //
 // Rules
-//   l2-live-prop       an attribute passed to an L2 component carries live state. Decided by TYPE: the checker's type of the expression
-//                      (getters, helpers, wrappers, generic identity functions, callback parameters, spreads and map callbacks all
-//                      resolve in the type) is rejected when it, or any property type, element/type-argument type, index type or
-//                      call-signature return type reachable to a bounded depth, carries the phantom `Live` marker
-//                      (src/sellright/types/live.ts: cart + lines, app state + addresses, checkout/login contexts, account objects),
-//                      is a Signal/ReadonlySignal/Store, is declared in ~/contexts/**, or is an unresolved generic.
-//                      Syntactic rules remain only where a type cannot see: an `any`/`unknown`-typed value is rejected, and an
-//                      object/array whose root is a binding from useStore, useSignal, useComputed$, a loader
-//                      .value or a component's props (types that carry no marker) is rejected through members, literals, spreads,
-//                      conditionals, call arguments, local function returns/parameters (named helpers included), collection callbacks,
-//                      loops and later writes. Allowed: primitives, QRLs/functions, object/array literals of such values,
-//                      project*() results whose type is unmarked.
+//   l2-live-prop        (advisory) an attribute an L1 file passes directly to an L2 component looks like live state: its type carries the
+//                       phantom `Live` marker (src/sellright/types/live.ts) or is a Signal/ReadonlySignal/Store/~/contexts type to a
+//                       bounded depth, or (syntactically) its root is a binding from useStore, useSignal, useComputed$, a loader .value
+//                       or a component's props. Since the gateway, no L1 file renders an L2 component directly, so this normally
+//                       reports nothing.
 //   l2-forbidden-import an L2 file imports ~/contexts/**, APP_STATE, ~/providers/**, ~/services/** or ~/platform/controllers/**
 //   l2-live-prop-type   a component prop type of an L2 file (component$ / exported function parameter and the local types it reaches) is typed Signal/ReadonlySignal or AppState; private helpers are not props
 // A reached L2 file is also kept pure by r1 (check-imports.mjs, import-l1-transitive); this script covers what imports alone cannot.
@@ -662,6 +661,7 @@ export function listSrcFiles(root) {
   return out.sort();
 }
 
+/** `findings` block; `advisories` are the (a) call-site diagnostics (gateway plan §6). */
 export function checkL2Boundary({ root, layers, overlay = [] }) {
   const rootReal = fs.realpathSync(root);
   const resolver = createResolver(rootReal);
@@ -669,14 +669,14 @@ export function checkL2Boundary({ root, layers, overlay = [] }) {
   const findings = [];
   findings.push(...baseL2Findings({ root: rootReal, layers, resolver, files: listSrcFiles(rootReal).filter((f) => !skip.has(f)) }));
   const program = createProgram(rootReal);
-  findings.push(...callSiteFindings({ root: rootReal, layers, program }));
+  const advisories = callSiteFindings({ root: rootReal, layers, program });
   const eject = checkEjectBoundary({ root: rootReal, layers, files: overlay });
   findings.push(...eject.findings);
-  return { findings, ejectsChecked: eject.checked };
+  return { findings, advisories, ejectsChecked: eject.checked };
 }
 
 function main() {
-  const opts = parseArgs(process.argv.slice(2));
+  const opts = parseArgs(process.argv.slice(2), ['--strict']);
   const root = path.resolve(opts.root ?? PACKAGE_ROOT);
   const layers = loadLayers(opts.layers ? path.resolve(opts.layers) : path.join(root, 'layers.json'));
   let overlay = opts.files;
@@ -684,13 +684,15 @@ function main() {
     const list = opts['overlay-list'] ? path.resolve(opts['overlay-list']) : path.join(root, '.compose-overlay-files.txt');
     if (fs.existsSync(list)) overlay = readOverlayList(list);
   }
-  const { findings, ejectsChecked } = checkL2Boundary({ root, layers, overlay });
+  const { findings, advisories, ejectsChecked } = checkL2Boundary({ root, layers, overlay });
+  for (const f of advisories) console.error(`warning: ${formatFinding(f)}`);
   for (const f of findings) console.error(formatFinding(f));
-  if (findings.length > 0) {
-    console.error(`check-l2-boundary: ${findings.length} finding(s)`);
+  const failing = findings.length + (opts.strict ? advisories.length : 0);
+  if (failing > 0) {
+    console.error(`check-l2-boundary: ${findings.length} finding(s), ${advisories.length} advisory warning(s)${opts.strict ? ' (--strict)' : ''}`);
     process.exit(1);
   }
-  console.log(`check-l2-boundary: clean (${ejectsChecked} L2 eject(s) checked)`);
+  console.log(`check-l2-boundary: clean (${ejectsChecked} L2 eject(s) checked; ${advisories.length} advisory warning(s))`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) main();

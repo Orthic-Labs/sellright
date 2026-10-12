@@ -1,5 +1,5 @@
 // Brand views, plan §2.3 `shell.header` / `shell.footer`: the L1 mounts. They read APP_STATE, the cart and the identity loader (a brand
-// never does) and hand the brand view a detached projection plus `on*$` actions that go through the dispatcher.
+// never does) and hand the brand view, through its gateway handle, a projection plus platform actions that go through the dispatcher.
 import { $, component$, useComputed$, useContext, useStore, useVisibleTask$ } from '@qwik.dev/core';
 import { useLocation, useNavigate } from '@qwik.dev/router';
 import { APP_STATE, CUSTOMER_NOT_DEFINED_ID } from '~/constants';
@@ -12,14 +12,13 @@ import { PROVIDER_LABELS } from '~/platform/payments/labels';
 import { useCartToggle } from '~/platform/cart';
 import { ACTION_RESULTS, dispatch, type ActionCtl } from './callbacks';
 import { projectIdentity, seal } from './project';
-import { shellFooterView, shellHeaderView } from './views';
+import { ShellFooterView, ShellHeaderView, platformAction } from '~/platform/gateway';
 import type { ActionResult, ShellFooterProps, ShellViewProps } from '~/platform/views';
 
 type ShellData = Omit<ShellViewProps, 'onCartToggle$' | 'onLogin$' | 'onLogout$' | 'onAccount$'>;
 
 /** The shell header view, fed by the platform. Only mounted when `route`'s caller found a `shell.header` slot. */
 export const BrandHeaderMount = component$(() => {
-	const View = shellHeaderView!;
 	const appState = useContext(APP_STATE);
 	const cart = useCart();
 	const location = useLocation();
@@ -62,12 +61,19 @@ export const BrandHeaderMount = component$(() => {
 		return { ok: true };
 	}));
 
-	return <View {...data.value} onCartToggle$={onCartToggle$} onLogin$={onLogin$} onLogout$={onLogout$} onAccount$={onAccount$} />;
+	return (
+		<ShellHeaderView
+			{...data.value}
+			onCartToggle$={platformAction('shell.cart-toggle', onCartToggle$)}
+			onLogin$={platformAction('shell.login', onLogin$)}
+			onLogout$={platformAction('shell.logout', onLogout$)}
+			onAccount$={platformAction('shell.account', onAccount$)}
+		/>
+	);
 });
 
 /** The shell footer view. */
 export const BrandFooterMount = component$(() => {
-	const View = shellFooterView!;
 	const identity = useStoreIdentityLoader();
 	const data = useComputed$(() =>
 		seal<ShellFooterProps>({
@@ -76,5 +82,5 @@ export const BrandFooterMount = component$(() => {
 			year: new Date().getFullYear(),
 		}),
 	);
-	return <View {...data.value} />;
+	return <ShellFooterView {...data.value} />;
 });

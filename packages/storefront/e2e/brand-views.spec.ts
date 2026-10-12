@@ -84,6 +84,30 @@ test.describe('brand views (fixture build)', () => {
 		await expect.poll(() => cartReads.length).toBe(1); // one live cart read per open, never cached
 	});
 
+	test('gateway: a brand header action runs after resumption and again after SPA navigation, results arrive detached', async ({ apiProxyPage: page }) => {
+		await addToCart(page, PRODUCT.shirt.slug);
+		await page.goto('/about/');
+		await page.waitForLoadState('networkidle');
+		const header = page.getByTestId('view-header');
+		await expect(header).toHaveAttribute('data-path', '/about/');
+		await page.evaluate(() => { (window as unknown as { __docMarker: string }).__docMarker = 'same-document'; });
+		// first event on a resumed document: the gateway-bound action runs and its result reaches the view as plain data
+		await page.getByTestId('view-header-cart').click();
+		await expect(page.getByTestId('view-header-last')).toHaveText('ok');
+		await expect(page.getByTestId('view-header-cart')).toHaveText(/^cart:1:open$/);
+		// the open drawer covers the header: close it with its own button (platform markup), state flows back into the view's props
+		await page.getByRole('button', { name: 'Close cart' }).click();
+		await expect(page.getByTestId('view-header-cart')).toHaveText(/^cart:1:closed$/);
+		// SPA navigation through the view's Link: same document (marker survives), new route props
+		await page.getByTestId('view-header-home').click();
+		await expect(header).toHaveAttribute('data-path', '/');
+		expect(await page.evaluate(() => (window as unknown as { __docMarker?: string }).__docMarker)).toBe('same-document');
+		// a later event after navigation still goes through the gateway and gets a detached result
+		await page.getByTestId('view-header-cart').click();
+		await expect(page.getByTestId('view-header-last')).toHaveText('ok');
+		await expect(page.getByTestId('view-header-cart')).toHaveText(/^cart:1:open$/);
+	});
+
 	test('home view: an invalid email never posts, a double submit makes one request', async ({ page }) => {
 		let posts = 0;
 		await page.route('**/newsletter-signup', async (route) => { posts++; await new Promise((r) => setTimeout(r, 300)); await route.fulfill({ status: 200, body: '{}' }); });

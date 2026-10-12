@@ -2,7 +2,7 @@ import { component$ } from '@qwik.dev/core';
 import { createSEOHead } from '~/utils/seo';
 import { useStoreIdentityLoader } from '~/routes/layout';
 import { BrandContentMount } from '~/platform/controllers/content';
-import { contentView } from '~/platform/controllers/views';
+import { hasView } from '~/platform/gateway';
 
 const BaseReturnsPage = component$(() => {
 	const identity = useStoreIdentityLoader().value.identity;
@@ -147,7 +147,7 @@ const BaseReturnsPage = component$(() => {
  );
 });
 
-export default contentView ? BrandContentMount : BaseReturnsPage;
+export default hasView('route.content') ? BrandContentMount : BaseReturnsPage;
 
 export const head = ({ resolveValue }: { resolveValue: any }) => {
  const identity = resolveValue(useStoreIdentityLoader);

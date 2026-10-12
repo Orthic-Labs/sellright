@@ -1,5 +1,5 @@
 import { $, component$, useSignal, useVisibleTask$ } from '@qwik.dev/core';
-import XCircleIcon from '~/components/icons/XCircleIcon';
+import { XCircleIcon } from '~/platform/gateway';
 import { confirmFederatedSignIn } from '~/providers/shop/account/google-auth';
 import { createSEOHead } from '~/utils/seo';
 

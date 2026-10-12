@@ -1,10 +1,7 @@
 import { $, component$, useContext, useSignal, useStore, useTask$, useVisibleTask$ } from '@qwik.dev/core';
 import { useLocation, useNavigate } from '@qwik.dev/router';
 import AddressForm from '~/components/address-form/AddressForm';
-import { Button } from '~/components/buttons/Button';
-import CheckIcon from '~/components/icons/CheckIcon';
-import XCircleIcon from '~/components/icons/XCircleIcon';
-import XMarkIcon from '~/components/icons/XMarkIcon';
+import { Button, CheckIcon, XCircleIcon, platformAction } from '~/platform/gateway';
 import { APP_STATE } from '~/constants';
 import { CountryPreferenceService } from '~/services/CountryPreferenceService';
 import { CountryService } from '~/services/CountryService';
@@ -147,9 +144,7 @@ export default component$(() => {
 						</button>
 
 						<span class="mr-4" />
-						<Button onClick$={cancel}>
-							<XMarkIcon /> &nbsp; Cancel
-						</Button>
+						<Button onClick$={platformAction('ui.press', cancel)} icon="x-mark" text=" &nbsp; Cancel" />
 					</div>
 				</form>
 			</div>

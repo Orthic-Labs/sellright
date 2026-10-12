@@ -2,10 +2,10 @@ import { component$ } from '@qwik.dev/core';
 import { Link } from '@qwik.dev/router';
 import { useStoreIdentityLoader } from '~/routes/layout';
 import { footerViewModel } from './footer-view-model';
-import { getSlot } from '~/components/slots';
+import { PaymentBadgesView, hasView } from '~/platform/gateway';
 
 // A17 mount point: extra payment badges after the card icons (the base's own provider badge is its default slot file).
-const PaymentBadgesSlot = getSlot('payment.badges');
+const hasPaymentBadges = hasView('payment.badges');
 
 export default component$(() => {
 	// WS-C: runtime store identity, resolved per-request by the root layout's
@@ -169,7 +169,7 @@ export default component$(() => {
 					{/* JCB */}
 					<svg width="38" height="24" viewBox="0 0 38 24"><rect width="38" height="24" rx="3" fill="#252525" stroke="#333" stroke-width="0.5"/><rect x="8" y="6" width="7" height="12" rx="1.5" fill="#0B7BC0"/><rect x="16" y="6" width="7" height="12" rx="1.5" fill="#E4001B"/><rect x="24" y="6" width="7" height="12" rx="1.5" fill="#00A650"/></svg>
 					{/* Extra provider badges — slot `payment.badges` */}
-					{PaymentBadgesSlot && <PaymentBadgesSlot placement="footer" />}
+					{hasPaymentBadges && <PaymentBadgesView placement="footer" />}
 				</div>
 
 				{/* Copyright */}
