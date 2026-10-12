@@ -21,15 +21,25 @@ export interface BrandDataSources {
 	routes: unknown | null;
 }
 
+/** One open descriptor: O_NOFOLLOW rejects a symlink at open, fstat checks the file kind, and the read uses the same descriptor (no check-then-use gap). */
 function readJsonFile(file: string, label: string, problems: BrandDataProblem[]): unknown | null {
-	if (!fs.existsSync(file)) return null;
-	const st = fs.lstatSync(file);
-	if (!st.isFile()) { problems.push({ file: label, message: 'must be a regular file (no symlink or directory)' }); return null; }
+	let fd: number;
 	try {
-		return JSON.parse(fs.readFileSync(file, 'utf8'));
+		fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+	} catch (e) {
+		const code = (e as NodeJS.ErrnoException).code;
+		if (code === 'ENOENT') return null;
+		if (code === 'ELOOP') { problems.push({ file: label, message: 'must be a regular file (no symlink or directory)' }); return null; }
+		throw e;
+	}
+	try {
+		if (!fs.fstatSync(fd).isFile()) { problems.push({ file: label, message: 'must be a regular file (no symlink or directory)' }); return null; }
+		return JSON.parse(fs.readFileSync(fd, 'utf8'));
 	} catch (e) {
 		problems.push({ file: label, message: `is not valid JSON: ${(e as Error).message}` });
 		return null;
+	} finally {
+		fs.closeSync(fd);
 	}
 }
 
