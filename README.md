@@ -6,7 +6,7 @@ A self-hosted, multi-store commerce backend with a REST API, a browser-based adm
 
 SellRight keeps catalog, carts, checkout, payments and order operations in one PostgreSQL-backed system. The included Qwik storefront resolves the store per request host and is still being migrated onto the REST path (see [features](docs/FEATURES.md)); other storefronts consume the API independently.
 
-> **Try it:** a synthetic demo shop and its admin run at [www.sellright.cc](https://www.sellright.cc).
+> **Try it:** a synthetic demo shop runs at [demo.sellright.cc](https://demo.sellright.cc).
 > **Status:** pre-1.0. Suitable for development and evaluation; production adoption requires gateway acceptance, migration rehearsal, backups and rollback verification.
 > **License:** source-available under the Business Source License 1.1, free for organizations with up to 25 Covered Persons; each version converts to Apache-2.0 on its Change Date.
 
@@ -21,7 +21,7 @@ SellRight keeps catalog, carts, checkout, payments and order operations in one P
 | Multi-store | Staff permissions; PostgreSQL row-level security |
 | Integration | REST/OpenAPI, static catalog exports, Vendure importer, software licensing |
 | Storefront | Generic Qwik storefront, store resolved per request host; typed REST client generated from the OpenAPI contract |
-| Mobile | [SellRight Admin for iOS](ios/README.md): dashboard KPIs, orders with search, filter, detail and fulfillment with tracking, products, multi-store switching, TOTP login, push and a Live Activity that follows an order from paid to delivered. Android: coming soon |
+| Mobile | [SellRight Admin for iOS](ios/README.md): dashboard KPIs, orders with search, filter, detail and fulfillment with tracking, products, multi-store switching, TOTP login, push (needs an APNs key) and a Live Activity that follows an order from paid to delivered. Android: coming soon |
 
 See [architecture](docs/ARCHITECTURE.md) for boundaries and [features](docs/FEATURES.md) for detail.
 
