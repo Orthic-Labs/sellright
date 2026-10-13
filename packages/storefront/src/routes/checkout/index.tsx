@@ -19,6 +19,7 @@ import { CheckoutPageView } from '~/components/checkout/CheckoutPageView';
 import { CHECKOUT_STYLES } from './checkout-styles';
 import { recoverCheckoutPaymentError, classifyResumePaymentError } from './checkout-payment-recovery';
 import { acceptsMount, bumpView, isCurrentView } from '~/components/checkout/view-generation';
+import { drainResumes, type ResumeQueue } from '~/components/checkout/resume-selection';
 import { useLoyaltyOffer } from '~/platform/controllers/loyalty';
 
 
@@ -190,12 +191,10 @@ const CheckoutContent = component$(() => {
   // Resume the ORIGINAL order of a converted cart: its own view and payment initialisation, never the new-order form
   // gates, the stock check or an order POST. `methodOverride` re-initialises payment for a method the shopper picked;
   // `probe` marks a lookup made because the live cart read failed (see enterCheckout).
-  const resumeBusy = useSignal(false);
-  const beginResume = $(async (methodOverride?: PaymentMethod, probe = false) => {
-    if (resumeBusy.value) return;
+  const resumeQueue = useStore<ResumeQueue<PaymentMethod>>({ busy: false, pending: null });
+  const runResume = $(async (methodOverride?: PaymentMethod, probe = false) => {
     const token = CartService.token();
     if (!token) return;
-    resumeBusy.value = true;
     // A resume start replaces the view: it supersedes every handler still in flight.
     const gen = bumpView(paymentInit);
     const current = () => isCurrentView(paymentInit, gen);
@@ -223,8 +222,19 @@ const CheckoutContent = component$(() => {
     } finally {
       // Only the current resume releases the controls; a superseding handler owns them.
       if (current()) state.loading = false;
-      resumeBusy.value = false;
     }
+  });
+
+  // Entry point for every resume. A method chosen while a resume is still in flight is not dropped: the latest choice
+  // is queued and applied once the in-flight run settles (see resume-selection.ts).
+  const beginResume = $(async (methodOverride?: PaymentMethod, probe = false) => {
+    let firstRun = true;
+    await drainResumes(resumeQueue, methodOverride, (method) => {
+      // `probe` belongs to the call that started the drain; a queued method selection is never a probe.
+      const asProbe = firstRun && probe;
+      firstRun = false;
+      return runResume(method, asProbe);
+    });
   });
 
   // The normal new-order checkout's own initialisation (customer, countries, address, destination country).

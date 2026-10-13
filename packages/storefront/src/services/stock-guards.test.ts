@@ -140,7 +140,7 @@ describe('pre-submit live stock read (locked layer 4)', () => {
 		expect(entry.indexOf('await resetOrderState()')).toBeGreaterThan(-1);
 		expect(entry.indexOf('await resetOrderState()')).toBeLessThan(entry.indexOf('await loadNormalCheckout(gen)'));
 		expect(entry).not.toMatch(/srState\.resume = 'none'/);
-		const reset = section(route, 'const resetOrderState', 'const resumeBusy');
+		const reset = section(route, 'const resetOrderState', 'const resumeQueue');
 		for (const field of ['resetOrder()', 'stripeConfirmTrigger.value = 0', 'gatewayConfirmTrigger.value = 0', 'totalConfirmed.value = false', 'paymentInit.failed = false']) {
 			expect(reset).toContain(field);
 		}
@@ -178,7 +178,7 @@ describe('pre-submit live stock read (locked layer 4)', () => {
 		expect(route).not.toMatch(/shopConfig\.value;?\s*\n\s*const anyGatewayConfigured/);
 		expect(route).not.toMatch(/\.then\(\(cfg\) => applyShopConfig/);
 		expect(route).toMatch(/await applyShopConfig\(cfg\)/);
-		const resume = section(route, 'const beginResume', 'const loadNormalCheckout');
+		const resume = section(route, 'const runResume = $(', 'const loadNormalCheckout');
 		expect(resume).toContain('await ensureShopConfig(gen)');
 		const place = section(route, 'const placeOrder = $(', 'const recoverResumePaymentError');
 		expect(place.indexOf('await ensureShopConfig()')).toBeGreaterThan(-1);
@@ -243,7 +243,7 @@ describe('pre-submit live stock read (locked layer 4)', () => {
 	it('ONE view generation: bumped on method switch, resume start, retry, start-new-cart and leaving the page; no second counter', () => {
 		const route = read('routes/checkout/index.tsx');
 		expect(route).not.toMatch(/resumeGen/);
-		expect(section(route, 'const beginResume = $(', 'const loadNormalCheckout')).toMatch(/const gen = bumpView\(paymentInit\)/);
+		expect(section(route, 'const runResume = $(', 'const loadNormalCheckout')).toMatch(/const gen = bumpView\(paymentInit\)/);
 		expect(section(route, 'const onResumeRetry$', 'const onResumeMethod$')).toMatch(/const gen = bumpView\(paymentInit\)/);
 		expect(section(route, 'const onStartNewCart$', 'useVisibleTask$')).toMatch(/const gen = bumpView\(paymentInit\)/);
 		expect(route).toMatch(/cleanup\(\(\) => \{ bumpView\(paymentInit\); \}\)/);
@@ -275,7 +275,7 @@ describe('pre-submit live stock read (locked layer 4)', () => {
 		expect(config).toMatch(/await getShopConfig\(\);\s*if \(!isCurrentView\(paymentInit, gen\)\) return cfg;\s*await applyShopConfig/);
 		// beginResume: after the config read, before payment initialisation; it passes the check into resumeConverted and
 		// navigates only while current.
-		const resume = section(route, 'const beginResume = $(', 'const loadNormalCheckout');
+		const resume = section(route, 'const runResume = $(', 'const loadNormalCheckout');
 		expect(resume).toMatch(/await ensureShopConfig\(gen\)/);
 		expect(resume).toMatch(/resumeConverted\(token, [^\n]*, probe, current\)/);
 		expect(resume).toMatch(/view === 'settled' && current\(\)/);

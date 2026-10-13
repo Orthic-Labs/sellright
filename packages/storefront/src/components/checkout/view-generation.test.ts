@@ -1,5 +1,13 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
+import { totalChange } from '~/hooks/checkout-total';
 import { acceptsMount, bumpView, isCurrentView, type ViewGeneration } from './view-generation';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const ROUTE_DIR = join(HERE, '../../routes/checkout');
+const read = (rel: string) => readFileSync(join(HERE, rel), 'utf8');
 
 /**
  * A payment component's QRL can run only after the view was replaced (lazy-loaded handler). The component captured its
@@ -86,46 +94,49 @@ describe('view generation', () => {
 	});
 
 	// Regression (round 7): the normal flow must never change the generation between PLACE ORDER and the payment view.
-	// Every step below is something the normal flow does; none of them may bump. Only a view replacement may.
+	// Only a view replacement may bump. These cases exercise the checkout code itself (the changed-total gate, the
+	// Sezzle component's callbacks, the route's place-order handler), not outcomes the test sets up for itself.
 	describe('one place-order → payment sequence keeps a single generation', () => {
-		const run = async (finish: (view: ViewGeneration, placed: { total: number; shown: number }) => Promise<void>) => {
-			const view = makeView();
-			const gen0 = view.gen; // entry task, config read, form fill: no bump
-			const ui = { consentShown: false, redirected: false, error: null as string | null };
-			const placeOrder = async () => {
-				const gen = view.gen; // captured at entry, as in routes/checkout/index.tsx
-				await Promise.resolve(); // config read
-				await Promise.resolve(); // order request: the cart converts here, entry/late tasks may re-run
-				await Promise.resolve(); // stock refresh
-				if (!isCurrentView(view, gen)) return; // a stale place-order shows nothing
-				await finish(view, { total: 3300, shown: 3000 });
-				ui.consentShown = true;
-			};
-			await placeOrder();
-			expect(view.gen).toBe(gen0);
-			return ui;
-		};
-
-		it('changed-total consent gate: the notice shows after the order is created', async () => {
-			const ui = await run(async () => {});
-			expect(ui.consentShown).toBe(true);
+		it('changed-total consent gate: a server total that differs from the shown one is gated by the real totalChange', () => {
+			// shown 30.00 at PLACE ORDER, the server priced the created order at 33.00: the notice must gate the charge
+			expect(totalChange(3000, 3300)).toEqual({ changed: true, shownCents: 3000, chargeCents: 3300 });
+			expect(totalChange(3000, 3000).changed).toBe(false);
+			// both payment panels refuse to charge a changed total until the shopper confirms
+			expect(read('CheckoutPaymentPanel.tsx')).toMatch(/needsConsent = paying && change\.changed && !props\.totalConfirmed\.value/);
+			expect(read('CheckoutPaymentPanel.tsx')).toMatch(/totalChange\(props\.srState\.shownTotal, props\.srState\.grandTotal\)\.changed && !props\.totalConfirmed\.value\) return;/);
 		});
 
-		it('Sezzle: the mount id rendered for the payment view is accepted by its start/return callbacks', async () => {
-			const view = makeView();
-			await run(async (v) => {
-				const mountGen = v.gen; // <Sezzle mountGen={paymentInit.gen}/> rendered once the phase is 'paying'
-				expect(acceptsMount(v, mountGen)).toBe(true); // onProcessingChange$(true) on Continue
-				expect(acceptsMount(v, mountGen)).toBe(true); // onError$ if session creation fails
-			});
-			expect(view.gen).toBe(0);
+		it('the place-order handler never bumps the view; only the view-replacing handlers do', () => {
+			const route = readFileSync(join(ROUTE_DIR, 'index.tsx'), 'utf8');
+			const start = route.indexOf('const placeOrder = $(');
+			const end = route.indexOf('const recoverResumePaymentError', start);
+			expect(start).toBeGreaterThan(-1);
+			expect(end).toBeGreaterThan(start);
+			const place = route.slice(start, end);
+			expect(place).toMatch(/isCurrentView\(paymentInit, gen\)|current\(\)/); // it checks the generation it captured...
+			expect(place).not.toMatch(/bumpView\(/); // ...and never replaces it
 		});
 
-		it('a method switch (the only bump in the sequence) is what discards a place-order that began before it', async () => {
+		it('Sezzle: the component reports with the mount id it was rendered with, and that id is accepted by the route', () => {
+			const sezzle = read('../payment/Sezzle.tsx');
+			expect(sezzle).toMatch(/useSignal\(props\.mountGen\)/);
+			expect(sezzle).toMatch(/onProcessingChange\$\?\.\(true, mountGen\.value\)/);
+			expect(sezzle).toMatch(/onError\$\([^)]*mountGen\.value\)/);
+			// both payment views render it with the view's current generation
+			expect(read('CheckoutPaymentPanel.tsx')).toMatch(/<Sezzle\s+mountGen=\{props\.paymentInit\.gen\}/);
+			expect(read('CheckoutResumePanel.tsx')).toMatch(/<Sezzle\s+mountGen=\{props\.paymentInit\.gen\}/);
+			// the id rendered is the id the route compares against
+			const view = makeView();
+			const rendered = view.gen;
+			expect(acceptsMount(view, rendered)).toBe(true);
+		});
+
+		it('a method switch (the only bump in the sequence) is what discards a place-order that began before it', () => {
 			const view = makeView();
 			const gen = view.gen;
 			bumpView(view);
 			expect(isCurrentView(view, gen)).toBe(false);
+			expect(read('CheckoutPaymentPanel.tsx')).toMatch(/bumpView\(props\.paymentInit\)/);
 		});
 	});
 });
