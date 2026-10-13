@@ -56,6 +56,21 @@ test.describe('brand views (fixture build)', () => {
 		expect(res?.status()).toBe(200);
 		await expect(page.getByTestId('view-content')).toHaveAttribute('data-page-key', 'single-story');
 		await expect(page).toHaveTitle(/^Single story \| /);
+		// HEAD answers like GET: the declared page is a 200, an undeclared single segment stays a 404
+		expect((await request.head('/single-story/')).status()).toBe(200);
+		expect((await request.head('/no-such-page/')).status()).toBe(404);
+	});
+
+	test('client navigation: a declared single-segment path renders the content view; an undeclared one renders the 404 page, never the view', async ({ page }) => {
+		await page.goto('/our/story/');
+		await page.getByTestId('view-content-link-declared').click();
+		await page.waitForURL(/\/single-story\/$/);
+		await expect(page.getByTestId('view-content')).toHaveAttribute('data-page-key', 'single-story');
+		await page.goto('/our/story/');
+		await page.getByTestId('view-content-link-undeclared').click();
+		await page.waitForURL(/\/no-such-single\/$/);
+		await expect(page.getByRole('heading', { name: 'Page Not Found' })).toBeVisible();
+		await expect(page.getByTestId('view-content')).toHaveCount(0);
 		await page.goto('/');
 	});
 
