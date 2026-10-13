@@ -6,7 +6,7 @@ import { Sezzle } from '~/components/payment/Sezzle';
 import { INSTALLMENT_PROVIDER } from '~/platform/payments/labels';
 import type { ShopConfig } from '~/sellright/types/checkout';
 import type { CheckoutPhase, PaymentMethod } from '~/hooks/useCheckout';
-import { totalChange, formatCents } from '~/hooks/checkout-total';
+import { totalChange, formatCents, needsTotalConsent } from '~/hooks/checkout-total';
 import { CheckoutDesktopCta } from './CheckoutCta';
 import { PaymentInitRetry, type PaymentInitState } from './PaymentInitRetry';
 import { bumpView } from './view-generation';
@@ -58,7 +58,7 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 	const paying = props.srState.phase === 'paying';
 	const change = totalChange(props.srState.shownTotal, props.srState.grandTotal);
 	const chargeLabel = paying && props.srState.grandTotal > 0 ? formatCents(props.srState.grandTotal) : null;
-	const needsConsent = paying && change.changed && !props.totalConfirmed.value;
+	const needsConsent = paying && needsTotalConsent(props.srState.shownTotal, props.srState.grandTotal, props.totalConfirmed.value);
 	return (
 	<div class="checkout-right order-1 lg:order-2 mb-8 lg:mb-0 lg:basis-[58%]">
 		<div class="checkout-right-inner" style="padding:8px 20px 32px;">
@@ -205,7 +205,7 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 													type="button"
 													onClick$={$(() => {
 														if (props.state.loading) return;
-														if (totalChange(props.srState.shownTotal, props.srState.grandTotal).changed && !props.totalConfirmed.value) return;
+														if (needsTotalConsent(props.srState.shownTotal, props.srState.grandTotal, props.totalConfirmed.value)) return;
 														props.stripeConfirmTrigger.value = props.stripeConfirmTrigger.value + 1;
 													})}
 													disabled={props.state.loading || needsConsent}
@@ -237,7 +237,7 @@ export const CheckoutPaymentPanel = component$<CheckoutPaymentPanelProps>((props
 													type="button"
 													onClick$={$(() => {
 														if (props.state.loading) return;
-														if (totalChange(props.srState.shownTotal, props.srState.grandTotal).changed && !props.totalConfirmed.value) return;
+														if (needsTotalConsent(props.srState.shownTotal, props.srState.grandTotal, props.totalConfirmed.value)) return;
 														props.gatewayConfirmTrigger.value = props.gatewayConfirmTrigger.value + 1;
 													})}
 													disabled={props.state.loading || needsConsent}
