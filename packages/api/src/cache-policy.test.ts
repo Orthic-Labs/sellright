@@ -227,8 +227,8 @@ describe('cachePolicy keeps a handler-set no-store-only Cache-Control verbatim',
   });
 
   it('isNoStoreOnly', () => {
-    for (const v of ['no-store', 'private, no-store', 'no-cache, no-store, must-revalidate', 'No-Store', 'no-store, max-age=0']) expect(isNoStoreOnly(v), v).toBe(true);
-    for (const v of [null, '', 'public', 'private', 'no-cache', 'max-age=0', 'public, max-age=300', 'no-store, public', 'no-store, max-age=1', 'no-store, max-age = 30', 'no-store, s-maxage=5', 'no-store, immutable', 'no-store, stale-if-error=5']) expect(isNoStoreOnly(v), String(v)).toBe(false);
+    for (const v of ['no-store', 'private, no-store', 'no-cache, no-store, must-revalidate', 'No-Store', 'NO-STORE, No-Cache', 'no-store, max-age=0', 'no-store, max-age=00', 'no-store, s-maxage=0, proxy-revalidate']) expect(isNoStoreOnly(v), v).toBe(true);
+    for (const v of [null, '', 'public', 'private', 'no-cache', 'max-age=0', 'public, max-age=300', 'no-store, public', 'no-store, max-age=1', 'no-store, max-age = 30', 'x-no-store', 'example="no-store"', 'no-store="x"', ',no-store', 'no-store,,private', 'no-store, max-age=01', 'no-store, max-age=1', 'no-store, max-age="0"', 'no-store, foo', 'no-store, no-transform', 'no-store, max-age', 'no-store, max-age=-1', 'no-store x', 'no-store, s-maxage=5', 'no-store, immutable', 'no-store, stale-if-error=5']) expect(isNoStoreOnly(v), String(v)).toBe(false);
   });
 
   it('a registered or static exception behaves as before (kept only when cacheable; a no-store handler value stays no-store)', async () => {
@@ -240,3 +240,56 @@ describe('cachePolicy keeps a handler-set no-store-only Cache-Control verbatim',
     expect(res.headers.get('cache-tag')).toBeNull();
   });
 });
+
+describe('cachePolicy strict no-store parse, at middleware level', () => {
+  const FROZEN = 'no-cache, no-store, must-revalidate';
+  const run = async (value: string | string[], path = '/v1/x', init: RequestInit = {}, status = 200) => {
+    const a = new Hono();
+    a.use('*', cachePolicy());
+    a.all(path, (c) => {
+      const headers = new Headers();
+      for (const v of Array.isArray(value) ? value : [value]) headers.append('cache-control', v);
+      headers.set('cache-tag', 't');
+      headers.set('cdn-cache-control', 'max-age=300');
+      return new Response('{}', { status, headers });
+    });
+    return a.request(path, init);
+  };
+  const cc = async (value: string | string[], path?: string, init?: RequestInit, status?: number) => (await run(value, path, init, status)).headers.get('cache-control');
+
+  it('rewrites look-alikes, quoted values and malformed lists to private, no-store', async () => {
+    for (const v of ['x-no-store', 'example="no-store"', 'no-store="x"', 'no-store, public', ',no-store', 'no-store,,private', 'no-store, max-age=01', 'no-store, max-age=1', 'no-store, max-age="0"', 'no-store, foo', 'no-store, stale-if-error=0', 'no-cache', 'private']) {
+      expect(await cc(v), v).toBe(NO_STORE);
+    }
+  });
+
+  it('keeps zero-valued max-age and any-case names verbatim', async () => {
+    expect(await cc('no-store, max-age=00')).toBe('no-store, max-age=00');
+    expect(await cc('no-store, max-age=0, s-maxage=0')).toBe('no-store, max-age=0, s-maxage=0');
+    expect(await cc('NO-STORE, No-Cache')).toBe('NO-STORE, No-Cache');
+    expect(await cc(FROZEN)).toBe(FROZEN);
+  });
+
+  it('combines duplicate Cache-Control headers: one that grants caching rewrites the whole thing', async () => {
+    expect(await cc(['no-store', 'public, max-age=300'])).toBe(NO_STORE);
+    expect(await cc(['no-store', 'max-age=1'])).toBe(NO_STORE);
+    expect(await cc(['no-cache', 'no-store'])).toBe('no-cache, no-store');
+  });
+
+  it('applies on a stock route path, HEAD and non-200 statuses, always stripping cache-tag and CDN headers', async () => {
+    const stock = await run(FROZEN, '/v1/shop/catalog/products/x/stock');
+    expect(stock.headers.get('cache-control')).toBe(FROZEN);
+    expect((await run('no-store, public', '/v1/shop/catalog/products/x/stock')).headers.get('cache-control')).toBe(NO_STORE);
+    const head = await run(FROZEN, '/v1/x', { method: 'HEAD' });
+    expect(head.headers.get('cache-control')).toBe(FROZEN);
+    for (const status of [404, 500]) {
+      const res = await run(FROZEN, '/v1/x', {}, status);
+      expect(res.status).toBe(status);
+      expect(res.headers.get('cache-control')).toBe(FROZEN);
+      expect(res.headers.get('cache-tag')).toBeNull();
+      expect(res.headers.get('cdn-cache-control')).toBeNull();
+      expect((await run('public, max-age=300', '/v1/x', {}, status)).headers.get('cache-control')).toBe(NO_STORE);
+    }
+  });
+});
+

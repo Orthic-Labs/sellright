@@ -8,8 +8,8 @@
  * or sets a cacheable one, still fails closed. `cache-tag` is stripped from EVERY response, exceptions included: Cloudflare ties
  * tags to cached content and none is emitted anywhere (Cloudflare design P0-c).
  *
- * One narrowing: a route-set Cache-Control that already contains `no-store` and grants nothing (no public, s-maxage, max-age>0,
- * stale-*, immutable) is kept verbatim on any route, method and status, since it is as restrictive as `private, no-store` (a client
+ * One narrowing: a route-set Cache-Control that strictly parses to no-store plus only no-cache / must-revalidate / proxy-revalidate / private /
+ * zero max-age (see isNoStoreOnly) is kept verbatim on any route, method and status, since it is as restrictive as `private, no-store` (a client
  * contract may pin e.g. `no-cache, no-store, must-revalidate`). Nothing becomes more cacheable; CDN headers and `cache-tag` are still stripped.
  *
  * An exception must be provably stock-free AND identical for every visitor of the store (no cookie, auth, cart or
@@ -203,14 +203,32 @@ function handlerSetCacheable(value: string | null): boolean {
   return /\bpublic\b|\bs-maxage=[1-9]|\bmax-age=[1-9]/i.test(value);
 }
 
+const NO_STORE_KEEP_VALUELESS = new Set(['no-store', 'no-cache', 'must-revalidate', 'proxy-revalidate', 'private']);
+const NO_STORE_KEEP_ZERO = new Set(['max-age', 's-maxage']);
+
 /**
- * A handler-set Cache-Control that already forbids storing (`no-store`) and grants nothing: no `public`, no `s-maxage`, no
- * `max-age>0`, no `stale-*`, no `immutable`. Such a value is kept verbatim (e.g. a frozen client contract's
- * `no-cache, no-store, must-revalidate`) because it is exactly as restrictive as `private, no-store`; anything else is rewritten.
+ * A handler-set Cache-Control that already forbids storing and grants nothing, by strict parse (fails closed). All values are combined
+ * (`Headers.get` joins repeated headers with ", "), split on commas and trimmed; every directive must be exactly `name` or `name=digits`
+ * (no quotes or other characters, no empty segment). Kept only when every directive is a valueless no-store / no-cache /
+ * must-revalidate / proxy-revalidate / private, or max-age / s-maxage with an all-zero value, AND a valueless `no-store` is present.
+ * Anything else (extension directives, quoted values, public, stale-*, immutable, max-age>0, ...) is rewritten to `private, no-store`.
  */
 export function isNoStoreOnly(value: string | null): boolean {
-  if (!value || !/\bno-store\b/i.test(value)) return false;
-  return !/\b(public|s-maxage|stale-while-revalidate|stale-if-error|immutable)\b|\bmax-age\s*=\s*"?0*[1-9]/i.test(value);
+  if (!value) return false;
+  let hasNoStore = false;
+  for (const raw of value.split(',')) {
+    const directive = raw.trim();
+    if (!/^[A-Za-z-]+(=[0-9]+)?$/.test(directive)) return false;
+    const eq = directive.indexOf('=');
+    const name = (eq < 0 ? directive : directive.slice(0, eq)).toLowerCase();
+    if (eq < 0) {
+      if (!NO_STORE_KEEP_VALUELESS.has(name)) return false;
+      if (name === 'no-store') hasNoStore = true;
+    } else if (!NO_STORE_KEEP_ZERO.has(name) || !/^0+$/.test(directive.slice(eq + 1))) {
+      return false;
+    }
+  }
+  return hasNoStore;
 }
 
 /** Read-only view of the legacy-plugin-registered entries (diagnostics, tests). */
