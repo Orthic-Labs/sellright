@@ -16,6 +16,7 @@
 import type { OpenAPIHono } from '@hono/zod-openapi';
 import type { ReleaseRegistrationPolicy } from './releases/registration-policy.js';
 import type { ErrorResponsePolicy } from './pre-route-policy.js';
+import { registerCacheableExceptions, _clearRegisteredCacheableExceptionsForTest, type CacheableException } from './cache-policy.js';
 
 export interface ApiPlugin {
   /** Unique plugin name (diagnostics only; also guards against double-registration). */
@@ -42,6 +43,12 @@ export interface ApiPlugin {
    * Status and headers are preserved; `/v1/admin` is never transformed.
    */
   errorPolicy?: ErrorResponsePolicy;
+  /**
+   * Stock-free, visitor-independent routes of this plugin that may keep their own cacheable `Cache-Control` (cache-policy.ts).
+   * Each entry needs a `source` and `reason`; hard-denied (catalog, cart, checkout, stock, feeds) paths and duplicates throw.
+   * Applied by `registerApiPlugin`, all-or-nothing together with the plugin itself.
+   */
+  cacheableExceptions?: readonly CacheableException[];
 }
 
 const registered: ApiPlugin[] = [];
@@ -51,6 +58,8 @@ export function registerApiPlugin(plugin: ApiPlugin): void {
   if (registered.some((p) => p.name === plugin.name)) {
     throw new Error(`API plugin "${plugin.name}" is already registered`);
   }
+  // Validates before anything is stored, so a rejected exception leaves neither the plugin nor any entry registered.
+  if (plugin.cacheableExceptions?.length) registerCacheableExceptions(plugin.cacheableExceptions);
   registered.push(plugin);
 }
 
@@ -62,4 +71,5 @@ export function listApiPlugins(): readonly ApiPlugin[] {
 /** Test-only: clear all registered plugins between test runs. */
 export function _clearApiPluginsForTest(): void {
   registered.length = 0;
+  _clearRegisteredCacheableExceptionsForTest();
 }
