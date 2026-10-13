@@ -1,8 +1,8 @@
 // Brand views, plan §2.4 "Static schemas": the JSON-LD a brand may declare per page in head.json `pageSchemas`. Live commerce
 // JSON-LD (Product, Offer, ratings) stays platform-owned and is never brand-declared. Pure; build-time and tests.
 
-export const ROOT_TYPES = ['BreadcrumbList', 'AboutPage', 'ContactPage', 'FAQPage', 'WebPage', 'Blog', 'BlogPosting', 'Article', 'Person', 'Organization'] as const;
-export const NESTED_TYPES = ['ListItem', 'Question', 'Answer', 'Organization', 'Person', 'ImageObject', 'WebPage', 'PostalAddress', 'ContactPoint'] as const;
+export const ROOT_TYPES = ['BreadcrumbList', 'AboutPage', 'ContactPage', 'FAQPage', 'WebPage', 'CollectionPage', 'Blog', 'BlogPosting', 'Article', 'Person', 'Organization'] as const;
+export const NESTED_TYPES = ['ListItem', 'ItemList', 'Question', 'Answer', 'Organization', 'Person', 'ImageObject', 'WebPage', 'PostalAddress', 'ContactPoint'] as const;
 export const FORBIDDEN_TYPES = ['Product', 'ProductGroup', 'Offer', 'AggregateOffer', 'AggregateRating', 'Review'] as const;
 const FORBIDDEN_KEY = /^(offers|price.*|availability|aggregateRating|review|sku|gtin.*|mpn)$/i;
 

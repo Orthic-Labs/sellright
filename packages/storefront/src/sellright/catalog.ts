@@ -80,11 +80,12 @@ export async function fetchProductDetail(
   }
 }
 
-/** GET /v1/shop/catalog/products/{slug}/stock — null on 404. */
-export async function fetchProductStock(slug: string): Promise<CatalogStockResponse | null> {
+/** GET /v1/shop/catalog/products/{slug}/stock — null on 404. `signal` aborts the request (a superseded view's read). */
+export async function fetchProductStock(slug: string, opts: { signal?: AbortSignal } = {}): Promise<CatalogStockResponse | null> {
   try {
     const { data, error } = await sellright().GET('/v1/shop/catalog/products/{slug}/stock', {
       params: { path: { slug } },
+      ...(opts.signal ? { signal: opts.signal } : {}),
     });
     if (error) throw error;
     return data;

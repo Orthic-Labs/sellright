@@ -25,6 +25,7 @@ import {
   type CartLine,
   type CartLineEnrichment,
   type CartConflict,
+  type AddLineResult,
   type CartMutationResult,
   type ServerCart,
 } from '~/sellright/types/cart';
@@ -278,6 +279,16 @@ export class CartService {
     this.resetMirror();
   }
 
+  /** Start over with no cart (the cart-link seed's replace semantics, brand views PR2 / plan v3.1 §3.5): forget this browser's cart
+   *  token and mirror, no network call; the next add creates a new cart. The previous cart stays on the server untouched. */
+  static discard(): Promise<void> {
+    return this.exclusive(async () => {
+      const token = this.readTokenCookie();
+      if (token) this.retire(token);
+      else this.resetMirror();
+    });
+  }
+
   /** Adopt a cart snapshot handed back inside a checkout 409 (stale cart), bound to the token that was submitted. */
   static adoptConflict(cart: ServerCart, requestToken: string): Promise<void> {
     return this.exclusive(async () => {
@@ -444,8 +455,9 @@ export class CartService {
 
   // ── mutations ─────────────────────────────────────────────────────────
 
-  /** Add (or increment) a line. Blind append — commutative, no revision. */
-  static addLine(sku: string, quantity: number, enrichment?: CartLineEnrichment): Promise<CartMutationResult> {
+  /** Add (or increment) a line. Blind append — commutative, no revision. `applied`/`line` describe this add's own response
+   *  (brand views PR2 §5); existing callers ignore them. */
+  static addLine(sku: string, quantity: number, enrichment?: CartLineEnrichment): Promise<AddLineResult> {
     return this.exclusive(async () => {
       this.setEnrichment(sku, enrichment);
       const token = await this.ensureCart();
@@ -455,8 +467,9 @@ export class CartService {
           body: { lines: [{ sku, quantity }], ...(this.couponCode ? { couponCode: this.couponCode } : {}) },
         });
         if (!data) throw new CartError(undefined, "Couldn't add item to cart");
-        const dropped = this.install(data, token) ?? [];
-        return { cart: this.cart, dropped };
+        const installed = this.install(data, token);
+        const line = data.lines.find((l) => l.sku === sku) ?? null;
+        return { cart: this.cart, dropped: installed ?? [], applied: installed !== null, line };
       } catch (e) {
         // No automatic retry of the append after an uncertain result.
         throw this.classify(e, token);

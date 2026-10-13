@@ -15,6 +15,8 @@ import type { JsonLdSchema } from '~/types/seo.types';
 import { theme, siteUrl } from '~/theme/theme.config';
 import { stripHtml } from '~/utils/sanitize';
 import { readCatalogSnapshot } from '~/services/catalog-snapshot';
+import { PRODUCT_PREFIX, productUrl } from '~/platform/product-path';
+import { hasView } from '~/platform/gateway';
 
 export interface ProductLoaderResult {
   product: CatalogProduct;
@@ -35,7 +37,10 @@ export interface ProductLoaderResult {
 // block a routeLoader$ on a stock query, never default missing stock to
 // in-stock) — the client hydrates real availability on qidle.
 // ─────────────────────────────────────────────────────────────────
-export const useProductLoader = routeLoader$(async ({ params, fail, status }) => {
+export const useProductLoader = routeLoader$(async ({ params, fail, status, url }) => {
+  // Brand views PR2: a branded product page has its own loader (useBrandProductDetail), and a route that is not the configured
+  // product path (routes.json productPath) serves no product. Neither case does any I/O here.
+  if (hasView('route.product') || url.pathname.split('/')[1] !== PRODUCT_PREFIX) return null;
   const { slug } = cleanUpParams(params);
   if (!slug) {
     status(404);
@@ -85,7 +90,8 @@ export const useProductLoader = routeLoader$(async ({ params, fail, status }) =>
 // useProductLoader (which ships stockLevel '0' on the page itself); this
 // loader only feeds the <script type="application/ld+json"> in <head>, so it
 // never touches the PDP's own stock-shell/qidle-refresh behavior.
-export const useProductJsonLd = routeLoader$(async ({ params }) => {
+export const useProductJsonLd = routeLoader$(async ({ params, url }) => {
+  if (url.pathname.split('/')[1] !== PRODUCT_PREFIX) return null;
   const { slug } = cleanUpParams(params);
   if (!slug) return null;
   return jsonLdProduct(slug);
@@ -123,7 +129,7 @@ export const head = ({ resolveValue, url: _url }: { resolveValue: any; url: URL 
   const breadcrumbSchema = generateBreadcrumbSchema([
     { name: 'Home', url: `${siteUrl}/` },
     { name: 'Shop', url: `${siteUrl}/shop` },
-    { name: product?.name || 'Product', url: `${siteUrl}/products/${product?.slug || ''}/` },
+    { name: product?.name || 'Product', url: productUrl(product?.slug || '') },
   ]);
 
   const schemas: JsonLdSchema[] = [breadcrumbSchema];
@@ -134,7 +140,7 @@ export const head = ({ resolveValue, url: _url }: { resolveValue: any; url: URL 
     schemas.push(withAggregateRating(productJsonLd, loaderResult?.rating));
   }
 
-  const canonicalUrl = `${siteUrl}/products/${product?.slug || ''}/`;
+  const canonicalUrl = productUrl(product?.slug || '');
   return createSEOHead({
     title: product?.name || 'Product',
     description: cleanDescription || `${product?.name || 'Product'} - Premium quality product from ${theme.storeName}`,

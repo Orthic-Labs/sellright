@@ -10,6 +10,7 @@ import type { SrStoreIdentity } from '~/utils/sellright';
 import type { FacetWithValues } from '~/types';
 import type { StoreTheme } from '~/theme/theme.config';
 import type { BlogCard, DeepReadonly, FormState, ListingCard, PublicIdentity } from '~/platform/views';
+import { productPath } from '~/platform/product-path';
 
 /** True in dev and test builds: projections are deep-frozen there. Read at call time so a test can stub the mode. */
 export const freezeEnabled = (): boolean => !!(import.meta.env.DEV || import.meta.env.MODE === 'test');
@@ -133,7 +134,7 @@ export const projectFeatured = (items: readonly LegacySearchItem[]): ListingCard
 		items.map((item) => ({
 			slug: String(item.slug),
 			name: String(item.productName ?? ''),
-			href: `/products/${String(item.slug)}/`,
+			href: productPath(String(item.slug)),
 			image: item.productAsset?.preview ? String(item.productAsset.preview) : null,
 			priceCents: legacyPriceToNumber(item.priceWithTax) ?? 0,
 			currencyCode: DEFAULT_CURRENCY,

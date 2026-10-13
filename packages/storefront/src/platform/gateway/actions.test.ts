@@ -3,7 +3,7 @@
 import { inlinedQrl } from '@qwik.dev/core';
 import { describe, expect, it } from 'vitest';
 import { ACTIONS, checkHandle, invokeAction, platformAction, type ActionName } from './actions';
-import { GatewayError, detachValue } from './schema';
+import { GatewayError, detachValue, type Schema } from './schema';
 
 const qrl = <T extends (...a: never[]) => unknown>(fn: T, sym = 'test_fn') => inlinedQrl(fn, sym);
 
@@ -116,10 +116,15 @@ describe('invokeAction failures cross detached', () => {
 
 	it('every action fails with a result its own public contract accepts (reason, never code/message)', async () => {
 		for (const [name, spec] of Object.entries(ACTIONS) as [ActionName, (typeof ACTIONS)[ActionName]][]) {
-			const args = spec.args === 'event' ? [] : spec.args.map((a) => (a.t === 'boolean' ? true : a.t === 'anyOf' ? 1 : 'x'));
+			const sample = (a: Schema): unknown => (a.t === 'boolean' ? true : a.t === 'number' ? 1 : a.t === 'anyOf' ? (a.of.some((x) => x.t === 'null') ? null : 1) : 'x');
+			const args = spec.args === 'event' ? [] : spec.args.map(sample);
 			const r = await invokeAction(name, qrl(() => { throw live; }) as never, args);
 			if (spec.result.t === 'void') { expect(r, name).toBeUndefined(); continue; }
 			expect(() => detachValue(spec.result, r, name), name).not.toThrow(); // a member of the action's result schema
+			if (name === 'configurator.add') {
+				expect(r, name).toEqual({ status: 'rejected', reason: 'error', message: null });
+				continue;
+			}
 			expect(r, name).toMatchObject({ ok: false });
 			expect(Object.keys(r as object).sort(), name).toEqual(['ok', 'reason']);
 			expect(typeof (r as { reason: unknown }).reason, name).toBe('string');

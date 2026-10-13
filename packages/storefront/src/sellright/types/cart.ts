@@ -105,6 +105,14 @@ export interface CartMutationResult {
   dropped: string[];
 }
 
+/** `CartService.addLine` (brand views PR2 §5): the mutation result plus the add's own outcome, read from its own server response. */
+export interface AddLineResult extends CartMutationResult {
+  /** True when the response was installed: the response, the request token and the cookie name the same cart. */
+  applied: boolean;
+  /** The response body's own line for the SKU (never the mirror), or null when the response has none. */
+  line: ServerCartLine | null;
+}
+
 /** Fail-closed availability: only an explicit `true` counts as purchasable. */
 export const isLineAvailable = (line: Pick<ServerCartLine, 'available'>): boolean => line.available === true;
 

@@ -5,6 +5,7 @@ import { getCookie } from '~/utils';
 import { getMe, getAddresses } from '~/services/customer';
 import { CountryService } from '~/services/CountryService';
 import { CheckoutAddressProvider } from '~/contexts/CheckoutAddressContext';
+import { track } from '~/sellright/analytics';
 import { useCart, refreshCartLive, refreshCartStock, retireSettledCart, loadCartIfNeeded, useHasMixedPreOrder } from '~/contexts/CartContext';
 import { CartService } from '~/services/CartService';
 import { validateCheckoutStock } from '~/hooks/pre-submit-stock';
@@ -308,6 +309,8 @@ const CheckoutContent = component$(() => {
     // lock and triggers must not survive into a different cart's checkout.
     await resetOrderState();
     if (!current()) return;
+    // Plan v3.1 §3.5: begin_checkout once per normal checkout view (consent-gated by the analytics bus; minor units).
+    track({ name: 'begin_checkout', currency: localCart.cart.currency, value: localCart.cart.subtotal, itemCount: localCart.cart.lines.reduce((n, l) => n + l.quantity, 0) });
     await configRead;
     if (!current()) return;
     await loadNormalCheckout(gen);

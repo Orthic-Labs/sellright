@@ -116,8 +116,8 @@ describe('routes.json (content declarations)', () => {
 		expect(routes({ version: 1 })).toEqual([]);
 	});
 
-	it('rejects unknown keys (PR2 keys are not accepted yet), a missing version and a bad page size', () => {
-		expect(routes({ version: 1, productPath: '/shop/:slug/' }).join()).toMatch(/unknown property "productPath"/);
+	it('rejects unknown keys, a missing version and a bad page size', () => {
+		expect(routes({ version: 1, nope: true }).join()).toMatch(/unknown property "nope"/);
 		expect(routes({}).join()).toMatch(/missing required "version"/);
 		expect(routes({ version: 1, blog: { pageSize: 0 } }).join()).toMatch(/below 1/);
 		expect(routes({ version: 1, blog: { pageSize: 101 } }).join()).toMatch(/above 100/);
@@ -199,5 +199,40 @@ describe('loadBrandData / virtual module', () => {
 		};
 		walk(src);
 		expect(hits).toEqual(['platform/brand-data/index.ts']);
+	});
+});
+
+describe('routes.json PR2 part (productPath, shop, operational)', () => {
+	const shop = (over: Record<string, unknown> = {}) => ({
+		version: 1,
+		productPath: '/shop/:slug/',
+		shop: {
+			detailProducts: [
+				{ key: 'short', slug: 'shortsleeveshirt', head: { title: 'Short', description: 'D' }, breadcrumbName: 'Short shirt', schemas: [{ '@context': 'https://schema.org', '@type': 'FAQPage', mainEntity: [] }] },
+				{ key: 'long', slug: 'longsleeveshirt' },
+			],
+			productQuery: { params: ['style', 'sleeve'], values: { short: 'short', long: 'long' } },
+		},
+		operational: { cartSeedPath: '/checkout/facebook/', analyticsPath: '/api/analytics/performance/' },
+		...over,
+	});
+	const v = (value: unknown, views = { hasShopView: true, hasProductView: true }) =>
+		validateRoutesData(value, { routeDirs: ['shop', 'products', 'checkout', 'api'], hasContentView: false, ...views }).map((p) => p.message).join(' | ');
+
+	it("accepts Rotten's shape", () => {
+		expect(v(shop())).toBe('');
+	});
+	it('rejects a commerce schema, an unknown product key in the query, duplicates, alias collisions and a bad productPath', () => {
+		expect(v(shop({ shop: { detailProducts: [{ key: 'a', slug: 's', schemas: [{ '@type': 'Product', offers: {} }] }] } }))).toMatch(/platform-owned/);
+		expect(v(shop({ shop: { detailProducts: [{ key: 'a', slug: 's' }], productQuery: { params: ['style'], values: { x: 'nope' } } } }))).toMatch(/not a shop.detailProducts key/);
+		expect(v(shop({ shop: { detailProducts: [{ key: 'a', slug: 's' }, { key: 'a', slug: 's' }] } }))).toMatch(/declared twice/);
+		expect(v(shop({ operational: { cartSeedPath: '/checkout/confirmation/' } }))).toMatch(/collides/);
+		expect(v(shop({ operational: { analyticsPath: '/api/analytics/events/' } }))).toMatch(/collides/);
+		expect(v(shop({ productPath: '/p/:slug/' }))).not.toBe('');
+		expect(v(shop({ shop: { detailProducts: [{ key: 'a', slug: 's', head: { title: '<b>', description: 'x' } }] } }))).not.toBe('');
+		expect(v(shop(), { hasShopView: false, hasProductView: false })).toMatch(/only the brand views read it/);
+	});
+	it('accepts CollectionPage with an ItemList for /shop/ (head.json pageSchemas)', () => {
+		expect(validateHeadData({ pageSchemas: { '/shop/': [{ '@context': 'https://schema.org', '@type': 'CollectionPage', name: 'Shop', mainEntity: { '@type': 'ItemList', itemListElement: [{ '@type': 'ListItem', position: 1, url: 'https://x/shop/a/', name: 'A' }] } }] } })).toEqual([]);
 	});
 });

@@ -14,8 +14,10 @@ import type {
 	ContentViewProps,
 	DeepReadonly,
 	HomeViewProps,
+	ProductViewProps,
 	ShellFooterProps,
 	ShellViewProps,
+	ShopViewProps,
 } from '~/platform/views';
 
 export interface SlotPropsMap {
@@ -102,7 +104,17 @@ export interface SlotPropsMap {
 	'route.blog-post': DeepReadonly<BlogPostViewProps>;
 	/** Contact page with the platform-managed form. Fallback: the base contact page. */
 	'route.contact': DeepReadonly<Omit<ContactViewProps, 'onSubmit$'>> & Pick<ContactViewProps, 'onSubmit$'>;
+	/** The shop page: the listing plus the configurator (routes.json shop.detailProducts). Fallback: the base shop page. */
+	'route.shop': DeepReadonly<Omit<ShopViewProps, ShopActionKey>> & Pick<ShopViewProps, ShopActionKey>;
+	/** One product page, or its missing state (the 404 status is kept). Narrow on `state`. Fallback: the base product page. */
+	'route.product': ProductSlotProps;
 }
+
+type ConfiguratorActionKey = 'onOptionSelect$' | 'onQuantityChange$' | 'onConsentChange$' | 'onAddToCart$' | 'onRetryStock$';
+type ShopActionKey = ConfiguratorActionKey | 'onProductSelect$' | 'onInStockChange$';
+type FoundProps = Extract<ProductViewProps, { state: 'found' }>;
+type MissingProps = Extract<ProductViewProps, { state: 'missing' }>;
+export type ProductSlotProps = (DeepReadonly<Omit<FoundProps, ConfiguratorActionKey>> & Pick<FoundProps, ConfiguratorActionKey>) | DeepReadonly<MissingProps>;
 
 export type LegalCopySection = 'privacy.payment-processors';
 
@@ -129,6 +141,8 @@ export const SLOT_NAMES = [
 	'route.blog',
 	'route.blog-post',
 	'route.contact',
+	'route.shop',
+	'route.product',
 ] as const satisfies readonly SlotName[];
 
 /** The only extension a slot file may have: a slot is a Qwik component, so it needs JSX. */

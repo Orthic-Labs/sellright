@@ -157,6 +157,41 @@ export const addToCart = $(async (cartState: CartContextState, sku: string, quan
   }
 });
 
+/** What one configurator add did, from its own server response (brand views PR2 §5). Plain data: the controller maps it to an AddResult. */
+export type AddOutcome =
+  | { kind: 'applied'; line: { quantity: number; available: boolean; availableQuantity: number | null } | null }
+  | { kind: 'not-applied' }
+  | { kind: 'error'; message: string | null };
+
+/** `addToCart` with an outcome: the same state handling (mirror, notice, lastError, isLoading), plus what the add's own response
+ *  says. A thrown cart error, a response for a cart this tab no longer points at, and a missing line never read as success. */
+export const addToCartWithOutcome = $(async (cartState: CartContextState, sku: string, quantity: number, enrichment?: CartLineEnrichment): Promise<AddOutcome> => {
+  await loadCartIfNeeded(cartState);
+  cartState.isLoading = true;
+  cartState.lastError = null;
+  try {
+    const res = await CartService.addLine(sku, quantity, enrichment);
+    applyResult(cartState, res);
+    if (!res.applied) return { kind: 'not-applied' };
+    const l = res.line;
+    return {
+      kind: 'applied',
+      line: l
+        ? {
+            quantity: Number(l.quantity),
+            available: l.available === true,
+            availableQuantity: typeof l.availableQuantity === 'number' && Number.isFinite(l.availableQuantity) ? l.availableQuantity : l.availableQuantity === null ? null : 0,
+          }
+        : null,
+    };
+  } catch (error) {
+    reportError(cartState, error, 'Failed to add item to cart');
+    return { kind: 'error', message: cartState.lastError };
+  } finally {
+    cartState.isLoading = false;
+  }
+});
+
 export const updateCartLineQuantity = $(async (cartState: CartContextState, sku: string, quantity: number) => {
   await loadCartIfNeeded(cartState);
   cartState.isLoading = true;

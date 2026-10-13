@@ -12,6 +12,7 @@ import { StockWarning } from '../cart/StockWarning';
 import { FreeShippingProgressView, QuantityDropdown, TrashIcon, platformAction } from '~/platform/gateway';
 import { projectQuantityOptions } from '~/platform/controllers/project';
 import { discountedSubtotalCents, shippingCountry } from '~/platform/controllers/cart-props';
+import { productPath } from '~/platform/product-path';
 
 
 // Image preloading function for cart product links
@@ -164,7 +165,7 @@ export default component$(() => {
 									<h3 class={`text-[15px] font-normal leading-snug truncate font-heading ${isCheckoutView ? 'text-[#FDFAF6]' : 'text-[#1A1A1A]'}`}>
 										{productSlug ? (
 											<Link
-												href={`/products/${productSlug}/`}
+												href={productPath(productSlug)}
 												data-slug={productSlug}
 								data-preview={line.image || ''}
 								onClick$={handleLinkClick$}

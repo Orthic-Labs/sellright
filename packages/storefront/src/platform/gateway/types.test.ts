@@ -14,10 +14,14 @@ import type {
 	FormResult,
 	HomeViewProps,
 	PublicIdentity,
+	AddResult,
+	ProductFoundData,
+	ProductMissingData,
+	ShopViewData,
 	ShellFooterProps,
 	ShellViewProps,
 } from '~/platform/views';
-import { ACTIONS, ACTION_RESULT, FORM_RESULT, type ActionName, type BoundAction } from './actions';
+import { ACTIONS, ACTION_RESULT, ADD_RESULT, FORM_RESULT, type ActionName, type BoundAction } from './actions';
 import type {
 	BLOG_LIST_DATA,
 	BLOG_POST_DATA,
@@ -30,6 +34,9 @@ import type {
 	ORDER_SUMMARY,
 	SHELL_FOOTER_DATA,
 	SHELL_HEADER_DATA,
+	SHOP_DATA,
+	PRODUCT_FOUND_DATA,
+	PRODUCT_MISSING_DATA,
 } from './index';
 import type { Infer } from './schema';
 
@@ -52,6 +59,10 @@ export const CHECKS = [
 	yes<Check<typeof ORDER_SUMMARY, Omit<AccountOrderSummary, typeof LIVE>>>(true),
 	yes<Check<typeof ACTION_RESULT, ActionResult>>(true),
 	yes<Check<typeof FORM_RESULT, FormResult>>(true),
+	yes<Check<typeof ADD_RESULT, AddResult>>(true),
+	yes<Check<typeof SHOP_DATA, ShopViewData>>(true),
+	yes<Check<typeof PRODUCT_FOUND_DATA, ProductFoundData>>(true),
+	yes<Check<typeof PRODUCT_MISSING_DATA, ProductMissingData>>(true),
 ];
 
 // Failure results: what presentation reads on a failed action must be the public contract's own (`reason`), for the value the gateway
@@ -68,6 +79,9 @@ export const FAILURES = [
 	yes<Same<RunResult<BoundAction<'pdp.waitlist-join'>>, DeepReadonly<ActionResult>>>(true),
 	yes<Same<RunResult<BoundAction<'home.subscribe'>>, DeepReadonly<FormResult>>>(true),
 	yes<Same<RunResult<BoundAction<'contact.submit'>>, DeepReadonly<FormResult>>>(true),
+	yes<Same<RunResult<BoundAction<'configurator.add'>>, DeepReadonly<AddResult>>>(true),
+	yes<Same<RunResult<BoundAction<'configurator.option-select'>>, DeepReadonly<ActionResult>>>(true),
+	yes<FailureOf<'configurator.add'> extends AddResult ? true : false>(true),
 	// the declared failure is a member of that public type
 	yes<FailureOf<'shell.login'> extends ActionResult ? true : false>(true),
 	yes<FailureOf<'home.subscribe'> extends FormResult ? true : false>(true),

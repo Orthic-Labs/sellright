@@ -1,0 +1,71 @@
+// Brand views PR2 §7: the branded shop page's loader. The listing (shop-catalog.json) and every configurator product
+// (routes.json shop.detailProducts) come from ONE catalog generation, or all from the live API, never a mix. Metadata only: the listing
+// keeps the manifest's `inStock` (the shop page's layer-2 source; the in-stock toggle is its only live listing read) and the detail
+// carries no stock at all. With no `route.shop` view this loader returns null without any I/O.
+import { routeLoader$ } from '@qwik.dev/router';
+import { hasView } from '~/platform/gateway';
+import { DETAIL_PRODUCTS } from '~/platform/brand-data';
+import { productPath } from '~/platform/product-path';
+import type { ModelProduct } from '~/platform/controllers/product-model';
+import { buildModelProduct } from '~/platform/controllers/product-model';
+import { liveBrowseCatalog, normalizeBrowseCatalog, type BrowseCatalog } from '~/services/browse-catalog';
+import { readCatalogGeneration } from '~/services/catalog-snapshot';
+import { manifestProductMeta, normalizeManifestProductDetail, type CatalogListItem, type RawManifestProductDetail } from '~/sellright/types/catalog';
+import { modelsFromLive } from '~/platform/product-detail';
+import { DEFAULT_CURRENCY } from '~/constants';
+import type { ShopListingItem } from '~/platform/views';
+
+export interface ConfiguratorDetail {
+	listing: ShopListingItem[];
+	detail: ModelProduct[];
+	detailStatus: 'ok' | 'partial' | 'unavailable';
+	source: 'manifest' | 'network';
+}
+
+/** One listing item for the view: no stock beyond the listing's own flag. */
+export const listingItem = (p: CatalogListItem): ShopListingItem => ({
+	slug: String(p.slug),
+	name: String(p.name),
+	href: productPath(String(p.slug)),
+	image: p.image ?? null,
+	priceCents: p.pricingVariant?.price ?? p.minPrice ?? 0,
+	currencyCode: DEFAULT_CURRENCY,
+	availability: p.inStock === true ? 'in-stock' : 'out-of-stock',
+});
+
+const statusOf = (resolved: number, wanted: number): ConfiguratorDetail['detailStatus'] => (resolved === 0 ? 'unavailable' : resolved < wanted ? 'partial' : 'ok');
+
+/** Listing + detail from one generation, or null when the generation is invalid or any file of the set is missing. */
+export async function fromManifest(read = readCatalogGeneration): Promise<Omit<ConfiguratorDetail, 'source'> | null> {
+	const detailFiles = DETAIL_PRODUCTS.map((p) => `products/${p.slug}.json`);
+	let gen: Awaited<ReturnType<typeof readCatalogGeneration<unknown>>>;
+	try {
+		gen = await read<unknown>(['shop-catalog.json', ...detailFiles]);
+	} catch {
+		return null;
+	}
+	if (['shop-catalog.json', ...detailFiles].some((f) => !gen.files[f])) return null;
+	try {
+		const listing = normalizeBrowseCatalog(gen.files['shop-catalog.json']);
+		const detail = DETAIL_PRODUCTS.map((p, i) => {
+			const raw = gen.files[detailFiles[i]] as RawManifestProductDetail;
+			return buildModelProduct(normalizeManifestProductDetail(raw), { key: p.key, href: productPath(p.slug), ...manifestProductMeta(raw) });
+		}).filter((m) => m.variants.length > 0);
+		return { listing: listing.products.map(listingItem), detail, detailStatus: statusOf(detail.length, DETAIL_PRODUCTS.length) };
+	} catch {
+		return null;
+	}
+}
+
+export const useConfiguratorDetail = routeLoader$(async (): Promise<ConfiguratorDetail | null> => {
+	if (!hasView('route.shop')) return null;
+	const pinned = await fromManifest();
+	if (pinned) return { ...pinned, source: 'manifest' };
+	// Live: the whole set from the API. A product that fails is omitted (detailStatus says so); a failed listing is empty.
+	const [browse, models] = await Promise.all([
+		liveBrowseCatalog().catch((): BrowseCatalog => ({ totalItems: 0, products: [] })),
+		modelsFromLive(DETAIL_PRODUCTS.map((p) => ({ key: p.key, slug: p.slug }))),
+	]);
+	const detail = models.filter((m): m is ModelProduct => !!m && m.variants.length > 0);
+	return { listing: browse.products.map(listingItem), detail, detailStatus: statusOf(detail.length, DETAIL_PRODUCTS.length), source: 'network' };
+});

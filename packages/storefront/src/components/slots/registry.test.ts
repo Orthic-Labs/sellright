@@ -18,10 +18,12 @@ const EXPECTED = [
 	'route.blog',
 	'route.blog-post',
 	'route.contact',
+	'route.shop',
+	'route.product',
 ];
 
 describe('slot registry', () => {
-	it('lists exactly the nine plan A17 slots plus the seven brand-view slots, once each', () => {
+	it('lists exactly the nine plan A17 slots plus the nine brand-view slots, once each', () => {
 		expect([...SLOT_NAMES]).toEqual(EXPECTED);
 		expect(new Set(SLOT_NAMES).size).toBe(SLOT_NAMES.length);
 	});

@@ -45,7 +45,7 @@ const serverCart = (over: Partial<ServerCart> = {}): ServerCart => ({
 const setCookie = (v: string) => { document.cookie = `sr_cart=${v}; Path=/`; };
 const clearCookie = () => { document.cookie = 'sr_cart=; Path=/; Max-Age=0'; };
 const cookieValue = () => document.cookie.match(/(?:^|; )sr_cart=([^;]*)/)?.[1] ?? null;
-/** Test-only reset of the mirror (the service deliberately has no public unconditional discard). */
+/** Test-only reset of the mirror (the public `discard` retires the cookie too; tests reset the mirror alone). */
 const resetService = () => CartService['resetMirror']();
 let locks: FakeLocks;
 
@@ -884,5 +884,44 @@ describe('placeOrder with a converted cart (design §4.2)', () => {
 		enqueue(respond(409, { error: { code: 'CART_MERGED', message: 'cart merged' }, code: 'merged', revision: 4, cart: serverCart({ status: 'merged', lines: [] }) }));
 		await CartService.withLock((scope) => placeOrder(form, { token: 'tok_srv', revision: 4, status: 'active' }, scope)).catch(() => undefined);
 		expect(cookieValue()).toBeNull();
+	});
+});
+
+describe('addLine — the add\'s own outcome (brand views PR2 §5)', () => {
+	it('applied, with the response body\'s own line (not the mirror)', async () => {
+		setCookie('tok_srv');
+		enqueue(respond(200, serverCart({ lines: [{ sku: 'SKU1', name: 'Widget', quantity: 4, unitPrice: 2500, lineSubtotal: 10000, lineDiscount: 0, lineTotal: 10000, available: false, availableQuantity: 3 }] })));
+		const res = await CartService.addLine('SKU1', 1);
+		expect(res.applied).toBe(true);
+		expect(res.line).toMatchObject({ sku: 'SKU1', quantity: 4, available: false, availableQuantity: 3 });
+	});
+
+	it('not applied when another tab replaced the cookie while the request ran; the mirror is untouched by that response', async () => {
+		setCookie('tok_srv');
+		const gate = deferred<Response>();
+		enqueue(gate.promise);
+		const pending = CartService.addLine('SKU1', 1);
+		await settle();
+		setCookie('tok_other');
+		gate.resolve(new Response(JSON.stringify(serverCart()), { status: 200, headers: { 'content-type': 'application/json' } }));
+		const res = await pending;
+		expect(res.applied).toBe(false);
+		expect(res.cart.lines.find((l) => l.sku === 'SKU1')).toBeUndefined();
+	});
+
+	it('no line for the SKU in the response: line is null', async () => {
+		setCookie('tok_srv');
+		enqueue(respond(200, serverCart({ lines: [] })));
+		const res = await CartService.addLine('SKU9', 1);
+		expect(res.applied).toBe(true);
+		expect(res.line).toBeNull();
+	});
+
+	it('discard forgets the token and the mirror without a network call', async () => {
+		setCookie('tok_srv');
+		await CartService.discard();
+		expect(cookieValue()).toBeNull();
+		expect(calls).toHaveLength(0);
+		expect(CartService.getCart().lines).toEqual([]);
 	});
 });

@@ -1,12 +1,12 @@
 import { $, component$, useComputed$, useContext, useOnDocument, useSignal, useStore, useTask$ } from '@qwik.dev/core';
 import { APP_STATE } from '~/constants';
 import { getProductStock } from '~/providers/shop/products/products';
-import { mergeProductStock, type CatalogProduct, type CatalogVariant } from '~/sellright/types/catalog';
-import type { CartLineEnrichment } from '~/sellright/types/cart';
+import { mergeProductStock } from '~/sellright/types/catalog';
 import { useCart, addToCart } from '~/contexts/CartContext';
 import { loadCountryOnDemand } from '~/utils/addressStorage';
 import { useImageGalleryTouchHandling } from '~/utils/optimized-touch-handling';
 import { ProductPageView } from './ProductPageView';
+import { toCartEnrichment } from '~/platform/controllers/product-model';
 import { areAllVariantsSoldOut, findVariant, getOptionGroups, isPreOrderPresented, isSelectionOutOfStock, isVariantPurchasable } from './product-options';
 import type { ProductLoaderResult } from './index';
 
@@ -17,21 +17,6 @@ export interface GalleryImage {
 }
 
 const PLACEHOLDER_IMAGE: GalleryImage = { preview: '/asset_placeholder.webp' };
-
-/** Cart boundary: translate the native product/variant into the cart's
- *  client-only display enrichment (`~/sellright/types/cart`). This is the
- *  ONLY place in the catalog area that builds it — everything upstream of it
- *  stays native, and the server cart line itself carries only `sku`/`quantity`. */
-function toCartEnrichment(product: CatalogProduct, variant: CatalogVariant, image: GalleryImage | undefined): CartLineEnrichment {
-  return {
-    slug: product.slug,
-    image: image?.preview ?? null,
-    name: variant.name,
-    options: variant.options.map((o) => o.name).join(' / '),
-    isPreOrder: variant.isPreOrder,
-    shipDate: variant.shipDate ?? undefined,
-  };
-}
 
 export const ProductContent = component$(({ loaderResult }: { loaderResult: ProductLoaderResult | { failed: true; message?: string } | null | undefined }) => {
   const appState = useContext(APP_STATE);

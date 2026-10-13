@@ -30,4 +30,13 @@ describe('brand-view fixtures', () => {
 	it('the fixture data directory has no executable or unknown file', () => {
 		expect(fs.readdirSync(DATA).sort()).toEqual(['head.json', 'routes.json']);
 	});
+
+	it('the PR2 fixture (e2e/brand-views-shop.spec.ts builds with it) holds only the shop and product views, and its routes.json validates', () => {
+		const views = path.join(HERE, '__fixtures__/brand-views-pr2');
+		const data = path.join(HERE, '__fixtures__/brand-views-pr2-data');
+		expect(discoverSlots(views).map((e) => e.name).sort()).toEqual(['route.product', 'route.shop']);
+		const loaded = loadBrandData(PACKAGE_ROOT, data, views);
+		expect((loaded.routes as { shop: { detailProducts: unknown[] } }).shop.detailProducts).toHaveLength(2);
+		expect(fs.readdirSync(data)).toEqual(['routes.json']);
+	});
 });
