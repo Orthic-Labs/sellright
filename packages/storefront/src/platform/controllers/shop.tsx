@@ -9,6 +9,7 @@ import type { ActionResult, PublicIdentity, ShopListingItem, ShopViewData } from
 import { ACTION_RESULTS, dispatch, type ActionCtl } from './callbacks';
 import { useConfigurator, type ConfiguratorLoaderValue } from './configurator';
 import { useShopListingOnLoad } from '~/platform/stock-triggers';
+import { liveListingAvailability } from '~/platform/listing-availability';
 import { projectIdentity, seal } from './project';
 
 /** The listing with the live override from the toggle applied (the override exists only after a toggle in this view). */
@@ -19,12 +20,15 @@ export function applyOverride(listing: readonly ShopListingItem[], override: Rec
 	}));
 }
 
-/** The in-stock toggle's live read: every listed product's live `inStock` (only an explicit true counts). */
-export async function liveListingOverride(search = searchProducts): Promise<Record<string, boolean>> {
-	const live = await search({ take: 500 });
-	const out: Record<string, boolean> = {};
-	for (const item of live.items) out[item.slug] = item.inStock === true;
-	return out;
+/** The listing's live read: fail closed for every listed slug (platform/listing-availability.ts); a failed read is all out of stock. */
+export async function liveListingOverride(listedSlugs: readonly string[], search = searchProducts): Promise<{ override: Record<string, boolean>; ok: boolean }> {
+	let live: Awaited<ReturnType<typeof searchProducts>> | null = null;
+	try {
+		live = await search({ take: 500 });
+	} catch (err) {
+		console.error('[shop] Live stock read failed:', err);
+	}
+	return { override: liveListingAvailability(listedSlugs, live), ok: live !== null };
 }
 
 export const BrandShopMount = component$(() => {
@@ -36,28 +40,26 @@ export const BrandShopMount = component$(() => {
 	const listCtl = useStore<ActionCtl>({ disposed: false, admitted: [] });
 	useVisibleTask$(({ cleanup }) => cleanup(() => { listCtl.disposed = true; }));
 
+	// One request generation for the automatic read and the toggle: only the latest response applies.
+	const listingGen = useSignal(0);
+	// The listed slugs as plain data, taken at render: the read never touches the loader signal from inside an event handler.
+	const listed = useStore<{ slugs: string[] }>({ slugs: (detail.value?.listing ?? []).map((item) => item.slug) });
+	const readListing = $(async (): Promise<boolean> => {
+		const gen = ++listingGen.value;
+		const slugs = [...listed.slugs];
+		const { override: next, ok } = await liveListingOverride(slugs);
+		if (gen === listingGen.value && !listCtl.disposed) override.value = next;
+		return ok;
+	});
+
 	// shop.stockOnLoad = live (Rotten, owner decision O1): one live listing read per view on load, as the toggle does.
-	useShopListingOnLoad(
-		$(async () => {
-			try {
-				override.value = await liveListingOverride();
-			} catch (err) {
-				console.error('[shop] Live stock read on load failed:', err);
-			}
-		}),
-	);
+	useShopListingOnLoad(readListing);
 
 	const onInStockChange$ = $((inStock: boolean) =>
 		dispatch<ActionResult>(listCtl, 'listing', ACTION_RESULTS, async () => {
 			if (typeof inStock !== 'boolean') return { ok: false, reason: 'invalid' };
 			inStockOnly.value = inStock;
-			try {
-				override.value = await liveListingOverride();
-				return { ok: true };
-			} catch (err) {
-				console.error('[shop] Live stock recheck on toggle failed:', err);
-				return { ok: false, reason: 'error' };
-			}
+			return (await readListing()) ? { ok: true } : { ok: false, reason: 'error' };
 		}),
 	);
 
