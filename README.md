@@ -1,23 +1,35 @@
+<picture><source media="(prefers-color-scheme: dark)" srcset=".github/banner-dark.svg"><img src=".github/banner.svg" alt="SellRight: multi-store commerce admin and REST API on your own PostgreSQL" style="max-width:100%;height:auto"></picture>
+
+<sub>Banner: new-product form in a development store, captured 13 June 2026.</sub>
+
 # SellRight
 
 A self-hosted, multi-store commerce backend with a REST API, a browser-based admin and a generic storefront.
 
 SellRight keeps catalog, carts, checkout, payments and order operations in one PostgreSQL-backed system. The included Qwik storefront resolves the store per request host and is still being migrated onto the REST path (see [features](docs/FEATURES.md)); other storefronts consume the API independently. An isolated, synthetic demo storefront is included for evaluation, not merchant deployment.
 
-**Status: pre-1.0.** Suitable for development and evaluation. Production adoption requires gateway acceptance, migration rehearsal, backups and rollback verification. Implemented adapters are not a claim that every merchant deployment has passed acceptance.
+> **Demo:** Try the synthetic shop at [demo.sellright.cc](https://demo.sellright.cc).
 
-## What Is Included
+> **Status:** Pre-1.0; suitable for development and evaluation. Production adoption requires gateway acceptance, migration rehearsal, backups and rollback verification. Implemented adapters do not mean every merchant deployment passed acceptance.
 
-- Products, variants, collections, inventory, promotions, shipping and tax.
-- Persistent carts separate from orders, with server-authoritative prices and checkout.
-- Stripe, NMI and Sezzle adapters, payment reconciliation and refunds.
-- Customer accounts, orders, returns, fulfillment and transactional email.
-- Multi-store administration with staff permissions and PostgreSQL row-level security.
-- REST/OpenAPI, static catalog exports, a Vendure importer and software licensing.
+> **License:** Source-available under the Business Source License 1.1, free for organizations with up to 25 Covered Persons; each version converts to Apache-2.0 on its Change Date. See [LICENSE](LICENSE).
+
+## What you get
+
+| Area | Included |
+|---|---|
+| Catalog | Products, variants, collections, inventory, promotions, shipping, tax |
+| Checkout | Persistent carts separate from orders; server-authoritative prices |
+| Payments | Stripe, NMI and Sezzle adapters; reconciliation; refunds. Implemented adapters are not a claim that every merchant deployment has passed acceptance |
+| Operations | Customer accounts, orders, returns, fulfillment, transactional email |
+| Multi-store | Staff permissions; PostgreSQL row-level security |
+| Integration | REST/OpenAPI, static catalog exports, Vendure importer, software licensing |
+| Storefront | Generic Qwik storefront, store resolved per request host; typed REST client generated from the OpenAPI contract |
+| Mobile | [SellRight Admin for iOS](ios/README.md) covers store operations; push and Live Activities require APNs setup ([guide](docs/IOS-PUSH-SETUP.md)). Android is planned. |
 
 See [architecture](docs/ARCHITECTURE.md) for boundaries and [features](docs/FEATURES.md) for detail.
 
-## Run With Docker
+## Run it
 
 Use a host with Docker Compose and ports 80/443 available. For an existing reverse proxy, adapt the edge routing rather than taking over those ports.
 
@@ -88,3 +100,7 @@ Database tests require a dedicated disposable `*_test` database. They can trunca
 ## License
 
 SellRight is source-available under the **Business Source License 1.1**, not an OSI Open Source license before its Change Date. Production use is free for organizations with no more than **25 Covered Persons**, as defined in [LICENSE](LICENSE); larger organizations require a commercial license. Each version converts to Apache-2.0 on its Change Date. The license text is authoritative.
+
+---
+
+<picture><source media="(prefers-color-scheme: dark)" srcset=".github/orthic-labs-mark.svg"><img src=".github/orthic-labs-mark-light.svg" alt="Orthic Labs" width="22" style="max-width:100%;height:auto"></picture> **[Orthic Labs](https://orthiclabs.com)** · [github.com/Orthic-Labs](https://github.com/Orthic-Labs) · More: [Legion](https://github.com/Orthic-Labs/legion) · [Ember](https://github.com/Orthic-Labs/ember) · [SwiftRight](https://github.com/Orthic-Labs/swiftright) · [Pulse](https://github.com/Orthic-Labs/pulse) · [RightKit](https://github.com/Orthic-Labs/rightkit) · [RustRight](https://github.com/Orthic-Labs/rustright)
