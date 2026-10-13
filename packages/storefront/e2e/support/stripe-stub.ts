@@ -14,6 +14,7 @@
  *
  * Steering from a spec (all page-side globals, set via page.evaluate / addInitScript):
  *   __STRIPE_OUTCOME      'succeeded' (default) | 'declined'
+ *   __STRIPE_LOADERROR    message -> mounting a payment element fires 'loaderror' ({ error: { message } }) instead of 'ready'
  *   __STRIPE_SUBMIT_ERROR message -> elements.submit() resolves { error }
  *   __stripeEmit(event, payload)  fire a registered element handler, e.g. ('change', { complete: true })
  */
@@ -41,7 +42,10 @@ export function stripeStubScript(mockUrl = MOCK_URL): string {
 						const element = {
 							mount(target) {
 								calls.push({ fn: 'mount', target: String(target) });
-								setTimeout(() => (handlers.ready || []).forEach((f) => f({})), 0);
+								setTimeout(() => {
+									if (window.__STRIPE_LOADERROR) (handlers.loaderror || []).forEach((f) => f({ elementType: 'payment', error: { type: 'api_connection_error', message: String(window.__STRIPE_LOADERROR) } }));
+									else (handlers.ready || []).forEach((f) => f({}));
+								}, 0);
 							},
 							on(event, cb) { (handlers[event] ||= []).push(cb); },
 							destroy() { calls.push({ fn: 'destroy' }); },
