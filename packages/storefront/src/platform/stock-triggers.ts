@@ -7,6 +7,7 @@
 //                            view on load, as the in-stock toggle does; the toggle stays a live read too.
 import { $, useOnDocument, useOnWindow, useSignal, useTask$, type QRL } from '@qwik.dev/core';
 import { isBrowser } from '@qwik.dev/core/build';
+import { useLocation } from '@qwik.dev/router';
 import { platformSettings } from './settings';
 
 export const PDP_STOCK_TRIGGER: 'qinit' | 'qidle' = platformSettings['pdp.stockRefreshTrigger'];
@@ -31,19 +32,23 @@ export function useBfcacheStockRefresh(refresh: QRL<() => unknown>, page: 'pdp' 
 }
 
 /**
- * Shop: with shop.stockOnLoad = live, one live listing read per view: qidle on a direct load, a browser task at a client-side mount
- * (SPA navigation), whichever comes first. `requested` belongs to this mounted view only; it is not a freshness flag (a new view or a
- * reload reads again). Manifest (default): no listener, no task.
+ * Shop: with shop.stockOnLoad = live, one live listing read per view: qidle on a direct load, a browser task at a client-side mount or
+ * when the URL changes (an SPA navigation, a query-only one included, is a new view), whichever comes first. `requestedFor` is the view
+ * (path + query) that already started its read; it is not a freshness flag (a new view or a reload reads again). The reader keeps one
+ * request generation, so a previous view's response can never apply. Manifest (default): no listener, no task.
  */
 export function useShopListingOnLoad(read: QRL<() => unknown>): void {
 	if (SHOP_STOCK_ON_LOAD !== 'live') return;
-	const requested = useSignal(false);
+	const location = useLocation();
+	const requestedFor = useSignal<string | null>(null);
 	const start = $(() => {
-		if (requested.value) return;
-		requested.value = true;
+		const view = `${location.url.pathname}${location.url.search}`;
+		if (requestedFor.value === view) return;
+		requestedFor.value = view;
 		read();
 	});
-	useTask$(() => {
+	useTask$(({ track }) => {
+		track(() => location.url.href);
 		if (isBrowser) start();
 	});
 	useOnDocument('qidle', start);

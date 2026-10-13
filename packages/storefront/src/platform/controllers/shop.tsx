@@ -1,6 +1,6 @@
 // Brand views PR2 §10: the branded shop page: the listing (manifest on load; the in-stock toggle is its only live listing read,
 // moved from routes/shop/index.tsx) and the configurator over routes.json shop.detailProducts.
-import { $, component$, useSignal, useStore, useVisibleTask$, type ReadonlySignal } from '@qwik.dev/core';
+import { $, component$, useSignal, useStore, useTask$, useVisibleTask$, type ReadonlySignal } from '@qwik.dev/core';
 import { useStoreIdentityLoader } from '~/routes/layout';
 import { useConfiguratorDetail } from '~/platform/configurator-detail';
 import { ShopView, platformAction } from '~/platform/gateway';
@@ -9,7 +9,7 @@ import type { ActionResult, PublicIdentity, ShopListingItem, ShopViewData } from
 import { ACTION_RESULTS, dispatch, type ActionCtl } from './callbacks';
 import { useConfigurator, type ConfiguratorLoaderValue } from './configurator';
 import { useShopListingOnLoad } from '~/platform/stock-triggers';
-import { liveListingAvailability } from '~/platform/listing-availability';
+import { liveListingAvailability, readLiveListing } from '~/platform/listing-availability';
 import { projectIdentity, seal } from './project';
 
 /** The listing with the live override from the toggle applied (the override exists only after a toggle in this view). */
@@ -22,12 +22,8 @@ export function applyOverride(listing: readonly ShopListingItem[], override: Rec
 
 /** The listing's live read: fail closed for every listed slug (platform/listing-availability.ts); a failed read is all out of stock. */
 export async function liveListingOverride(listedSlugs: readonly string[], search = searchProducts): Promise<{ override: Record<string, boolean>; ok: boolean }> {
-	let live: Awaited<ReturnType<typeof searchProducts>> | null = null;
-	try {
-		live = await search({ take: 500 });
-	} catch (err) {
-		console.error('[shop] Live stock read failed:', err);
-	}
+	const live = await readLiveListing((p) => search(p));
+	if (live === null) console.error('[shop] Live stock read failed');
 	return { override: liveListingAvailability(listedSlugs, live), ok: live !== null };
 }
 
@@ -44,6 +40,11 @@ export const BrandShopMount = component$(() => {
 	const listingGen = useSignal(0);
 	// The listed slugs as plain data, taken at render: the read never touches the loader signal from inside an event handler.
 	const listed = useStore<{ slugs: string[] }>({ slugs: (detail.value?.listing ?? []).map((item) => item.slug) });
+	// A new loader value (SPA navigation) re-takes the slugs.
+	useTask$(({ track }) => {
+		const d = track(() => detail.value);
+		listed.slugs = (d?.listing ?? []).map((item) => item.slug);
+	});
 	const readListing = $(async (): Promise<boolean> => {
 		const gen = ++listingGen.value;
 		const slugs = [...listed.slugs];

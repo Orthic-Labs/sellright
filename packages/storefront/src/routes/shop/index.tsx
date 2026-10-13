@@ -2,7 +2,7 @@ import { $, component$, useSignal, useStore, useTask$ } from '@qwik.dev/core';
 import { ProductCard, ShopFilters as Filters, hasView, platformAction } from '~/platform/gateway';
 import { BrandShopMount } from '~/platform/controllers/shop';
 import { useShopListingOnLoad } from '~/platform/stock-triggers';
-import { liveListingAvailability } from '~/platform/listing-availability';
+import { liveListingAvailability, readLiveListing as fetchLiveListing } from '~/platform/listing-availability';
 import { searchProducts } from '~/providers/shop/products/products';
 import type { CatalogListItem } from '~/sellright/types/catalog';
 import { FacetWithValues } from '~/types';
@@ -147,12 +147,8 @@ const BaseShopPage = component$(() => {
  const listingGen = useSignal(0);
  const readLiveListing = $(async (): Promise<boolean> => {
   const gen = ++listingGen.value;
-  let live: Awaited<ReturnType<typeof searchProducts>> | null = null;
-  try {
-   live = await searchProducts({ take: 500 });
-  } catch (err) {
-   console.error('[shop] Live stock read failed:', err);
-  }
+  const live = await fetchLiveListing((p) => searchProducts(p));
+  if (live === null) console.error('[shop] Live stock read failed');
   if (gen !== listingGen.value) return live !== null;
   liveStockOverride.value = liveListingAvailability((catalog.value.products || []).map((p) => p.slug), live);
   return live !== null;

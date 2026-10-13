@@ -29,6 +29,20 @@ test.describe('stock settings (non-default build)', () => {
 		}
 	});
 
+	test('shop.stockOnLoad=live: a same-component SPA navigation (query only) is a new view with one new listing read', async ({ apiProxyPage: page }) => {
+		apiLog.require();
+		await page.goto('/shop/?style=shirt');
+		await page.waitForLoadState('networkidle');
+		const link = page.getByTestId('view-shop-query-oos');
+		test.skip((await link.count()) === 0, 'the base shop has no query link: covered by the brand-view build run of this spec');
+		const mark = apiLog.mark();
+		await link.click();
+		await page.waitForURL(/\?style=oos$/);
+		await expect.poll(async () => (await apiLog.since(mark, STOCK_PATTERNS.shopCatalog, browser)).length).toBe(1);
+		await page.waitForLoadState('networkidle');
+		expect((await apiLog.since(mark, STOCK_PATTERNS.shopCatalog, browser)).length).toBe(1);
+	});
+
 	test('pdp.stockRefreshTrigger=qinit: with idle never reached, the PDP still reads live stock, exactly once', async ({ apiProxyPage: page }) => {
 		apiLog.require();
 		// The browser never reports idle: a qidle-triggered read could not start. The qinit trigger fires when the document is ready.
