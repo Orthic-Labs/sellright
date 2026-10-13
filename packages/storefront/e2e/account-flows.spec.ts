@@ -110,6 +110,46 @@ test.describe.serial('#19 account: address book and order history', () => {
 		await expect(page.getByText(/no saved addresses yet/i)).toBeVisible({ timeout: 15_000 });
 		expect(await rows()).toHaveLength(0);
 	});
+
+	// Regression for #202. The postal lookup answers asynchronously; when its answer lands while the shopper is already
+	// in #province, the form must not write the field (that moved the caret to the end, so the typed NV was appended to
+	// the looked-up NV: "NVNV"). The lookup response is held until #province is focused, so the order is deterministic.
+	test('address form: a postal lookup that answers while the shopper is in the state field does not double their entry', async ({ apiProxyPage: page }) => {
+		await signInWithPassword(page, email);
+
+		let arrived!: () => void;
+		const lookupArrived = new Promise<void>((resolve) => { arrived = resolve; });
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => { release = resolve; });
+		await page.route((url) => url.searchParams.has('qfunc'), async (route) => {
+			if (route.request().postData()?.includes('89501')) {
+				arrived();
+				await gate;
+			}
+			await route.continue();
+		});
+
+		await page.goto('/account/address-book/add');
+		await page.locator('#fullName').fill('Grace Hopper');
+		await page.locator('#streetLine1').fill('1 Compiler Way');
+		await page.locator('#postalCode').fill('89501');
+		await page.locator('#city').focus(); // blurs the postal code: the lookup request goes out and is held
+		await lookupArrived;
+
+		await page.locator('#province').focus(); // the shopper is in the state field when the answer comes back
+		const answered = page.waitForResponse((r) => r.url().includes('qfunc=') && r.request().postData()?.includes('89501') === true);
+		release();
+		await answered;
+		await expect(page.locator('#city')).toHaveValue('Reno'); // the lookup was applied (to the field the shopper is not in)
+
+		await page.locator('#province').pressSequentially('NV');
+		await expect(page.locator('#province')).toHaveValue('NV');
+
+		const submitted = page.waitForRequest((r) => r.method() === 'POST' && r.url().endsWith('/v1/shop/account/addresses'));
+		await page.getByRole('button', { name: /^\s*save/i }).click();
+		expect((await submitted).postDataJSON()).toMatchObject({ city: 'Reno', province: 'NV', postalCode: '89501' });
+		await page.waitForURL(/\/account\/address-book\/?$/, { timeout: 20_000 });
+	});
 });
 
 test.describe('#19 order history and guest tracking', () => {

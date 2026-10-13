@@ -94,3 +94,30 @@ export const isShippingAddressFieldsValid = (address: ShippingAddress): boolean 
   && validateStateProvince(address.province || '', countryCode, 'State/Province').isValid
   && validatePostalCode(address.postalCode || '', countryCode).isValid;
 };
+
+export type PostalLookupField = 'city' | 'province';
+
+/**
+ * Which fields a postal-code lookup result may write.
+ *
+ * A lookup lands asynchronously, so it must not touch a field the shopper is in right now (`focusedField`) or one
+ * they have typed into themselves (`userEdited` and non-empty). Empty fields, and fields still holding an earlier
+ * lookup or a value loaded from a saved address, are fair game. An empty result value, or one equal to what the
+ * field already holds, is never written.
+ */
+export const postalLookupPatch = (input: {
+ current: Record<PostalLookupField, string>;
+ userEdited: Record<PostalLookupField, boolean>;
+ focusedField: string | null;
+ result: Partial<Record<PostalLookupField, string>>;
+}): Partial<Record<PostalLookupField, string>> => {
+ const patch: Partial<Record<PostalLookupField, string>> = {};
+ for (const field of ['city', 'province'] as const) {
+  const next = input.result[field];
+  if (!next || next === input.current[field]) continue;
+  if (input.focusedField === field) continue;
+  if (input.current[field] !== '' && input.userEdited[field]) continue;
+  patch[field] = next;
+ }
+ return patch;
+};

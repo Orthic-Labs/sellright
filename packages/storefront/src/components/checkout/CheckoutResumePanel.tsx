@@ -201,6 +201,10 @@ export const CheckoutResumePanel = component$<CheckoutResumePanelProps>((props) 
 								onError$={props.onPaymentError$}
 								onProcessingChange$={props.onPaymentProcessingChange$}
 							/>
+						) : methods.includes(props.paymentMethod.value) ? (
+							// A method is selected but its payment is still being initialised (a switch in flight): never claim the
+							// store has no method configured while a selection exists.
+							<p class="payment-placeholder" style="padding:14px 0;" role="status">Preparing payment...</p>
 						) : (
 							<div class="payment-placeholder text-red-600" style="padding:14px 0;" role="alert">
 								No payment method is configured for this store — please contact support.
