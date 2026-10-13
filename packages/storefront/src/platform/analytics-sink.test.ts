@@ -42,6 +42,10 @@ describe('conversion payload', () => {
 		const add = conversionPayload({ name: 'add_to_cart', sku: 'S', productName: 'Shirt', price: 7500, currency: 'USD', quantity: 2 }, 'id1', 'https://x/', undefined, false);
 		expect(add.dataLayer.ecommerce).toMatchObject({ value: 150, items: [{ item_id: 'S', price: 75, quantity: 2 }] });
 		expect(add.beacon?.event).toMatchObject({ name: 'add_to_cart', eventId: 'id1', gtagSent: false });
+		const jpy = conversionPayload({ name: 'view_item', sku: 'S', productName: 'Shirt', price: 1000, currency: 'JPY' }, 'id2', 'https://x/', undefined, false);
+		expect(jpy.dataLayer.ecommerce).toMatchObject({ value: 1000, items: [{ price: 1000 }] });
+		const kwd = conversionPayload({ name: 'add_to_cart', sku: 'S', productName: 'Shirt', price: 1000, currency: 'KWD', quantity: 3 }, 'id3', 'https://x/', undefined, false);
+		expect(kwd.dataLayer.ecommerce).toMatchObject({ value: 3, items: [{ price: 1 }] });
 		const p = conversionPayload({ name: 'purchase', orderCode: 'RH1', currency: 'USD', value: 8000, itemCount: 1 }, 'purchase_RH1', 'https://x/', undefined, true);
 		expect(p.beacon).toBeNull();
 		expect(p.dataLayer).toMatchObject({ event: 'purchase', event_id: 'purchase_RH1', ecommerce: { transaction_id: 'RH1', value: 80 } });

@@ -87,11 +87,18 @@ describe('availability (LOCKED stock rule)', () => {
 		expect(productAvailability(model, stockFromResponse(null))).toBe('out-of-stock');
 	});
 
-	it('a malformed availableQuantity fails closed to 0; null is uncapped', () => {
-		const s = stockFromResponse({ variants: [{ sku: 'A', inStock: true, availableQuantity: -1 }, { sku: 'B', inStock: true, availableQuantity: null }, { sku: 'C', inStock: true, availableQuantity: Number.NaN }] } as never);
-		expect(s.bySku.A.availableQuantity).toBe(0);
-		expect(s.bySku.B.availableQuantity).toBeNull();
-		expect(s.bySku.C.availableQuantity).toBe(0);
+	it('a malformed availableQuantity fails the SKU closed (not in stock, not purchasable); null is uncapped', () => {
+		const bad = [-1, Number.NaN, 1.5, '3', undefined, Infinity];
+		const s = stockFromResponse({ variants: [...bad.map((q, i) => ({ sku: `B${i}`, inStock: true, availableQuantity: q })), { sku: 'U', inStock: true, availableQuantity: null }, { sku: 'N', inStock: true, availableQuantity: 2 }] } as never);
+		bad.forEach((_, i) => {
+			expect(s.bySku[`B${i}`]).toEqual({ inStock: false, availableQuantity: 0 });
+			expect(variantAvailability(s, `B${i}`)).toBe('out-of-stock');
+		});
+		expect(s.bySku.U).toEqual({ inStock: true, availableQuantity: null });
+		expect(s.bySku.N).toEqual({ inStock: true, availableQuantity: 2 });
+		const fractional = stockFromResponse({ variants: [{ sku: 'RH-M-BLK', inStock: true, availableQuantity: 1.5 }] } as never);
+		const p = computePurchase({ model, stock: fractional, selected: ['medium', 'midnight-black'], quantity: 1, consent: false, adding: false, last: null, inCart: {} });
+		expect(p.purchase).toMatchObject({ eligible: false, reason: 'out-of-stock' });
 	});
 
 	it('a stale pre-order flag never makes an explicitly out-of-stock SKU available or purchasable', () => {

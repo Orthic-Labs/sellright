@@ -198,8 +198,8 @@ export function buildModelProduct(product: CatalogProduct, meta: { key: string; 
   };
 }
 
-/** A finite, non-negative availableQuantity, or null (uncapped). Anything malformed fails closed to 0. */
-const quantityOf = (v: unknown): number | null => (v === null ? null : typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0);
+/** availableQuantity is null (uncapped) or a finite non-negative integer; anything else is malformed. */
+const validQuantity = (v: unknown): v is number | null => v === null || (typeof v === 'number' && Number.isInteger(v) && v >= 0);
 
 /** A stock response applied to one product: `inStock === true` only; a SKU the response omits stays absent (= out of stock). */
 export function stockFromResponse(response: CatalogStockResponse | null): ProductStock {
@@ -209,7 +209,10 @@ export function stockFromResponse(response: CatalogStockResponse | null): Produc
   }
   for (const v of response?.variants ?? []) {
     if (!v || typeof v.sku !== 'string') continue;
-    bySku[v.sku] = { inStock: v.inStock === true, availableQuantity: quantityOf(v.availableQuantity) };
+    // A malformed quantity (missing, negative, fractional, non-numeric) fails the SKU closed: not in stock, nothing to add.
+    bySku[v.sku] = validQuantity(v.availableQuantity)
+      ? { inStock: v.inStock === true, availableQuantity: v.availableQuantity }
+      : { inStock: false, availableQuantity: 0 };
   }
   return { status: 'ready', bySku };
 }

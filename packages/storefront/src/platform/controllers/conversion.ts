@@ -2,23 +2,25 @@
 // (consent-gated); this subscriber pushes it to the tag manager's dataLayer and beacons view_item / add_to_cart / begin_checkout to the
 // event sink (platform/analytics-sink.ts), which sends a GA4 Measurement Protocol copy only when the tag manager did not. `purchase` is
 // pushed to the dataLayer only, never beaconed (the API's conversion plugin owns server purchase). No ad pixels. The bus carries minor
-// units; GA4 gets major units.
+// units; GA4 gets major units by the currency's own exponent.
 import { BRAND_HEAD, BRAND_ROUTES } from '~/platform/brand-data';
+import { minorUnitDigits } from '~/utils/currency';
 import { hasAnalyticsConsent, onAnalyticsEvent, setAnalyticsConsent, track, type AnalyticsEvent } from '~/sellright/analytics';
 
 export const SINK_PATH = BRAND_ROUTES?.operational?.analyticsPath ?? '/api/analytics/events/';
 
-const major = (cents: number) => Math.round(cents) / 100;
+/** Minor units to major units for the currency's own exponent (JPY 0, USD 2, KWD 3). */
+const major = (minor: number, currency: string) => Math.round(minor) / 10 ** minorUnitDigits(currency);
 
 /** The dataLayer push and (unless purchase) the sink body for one event. Pure. */
 export function conversionPayload(event: AnalyticsEvent, eventId: string, pageLocation: string, clientId: string | undefined, gtagSent: boolean) {
 	const items =
 		event.name === 'view_item' || event.name === 'add_to_cart'
-			? [{ item_id: event.sku, item_name: event.productName, price: major(event.price), quantity: event.name === 'add_to_cart' ? event.quantity : 1 }]
+			? [{ item_id: event.sku, item_name: event.productName, price: major(event.price, event.currency), quantity: event.name === 'add_to_cart' ? event.quantity : 1 }]
 			: event.name === 'purchase'
-				? (event.items ?? []).slice(0, 20).map((i) => ({ item_id: i.sku, item_name: i.name, price: major(i.price), quantity: i.quantity }))
+				? (event.items ?? []).slice(0, 20).map((i) => ({ item_id: i.sku, item_name: i.name, price: major(i.price, event.currency), quantity: i.quantity }))
 				: [];
-	const value = event.name === 'add_to_cart' ? major(event.price) * event.quantity : event.name === 'view_item' ? major(event.price) : major(event.value);
+	const value = event.name === 'add_to_cart' ? major(event.price * event.quantity, event.currency) : event.name === 'view_item' ? major(event.price, event.currency) : major(event.value, event.currency);
 	const dataLayer = {
 		event: event.name,
 		event_id: eventId,
