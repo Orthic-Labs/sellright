@@ -185,3 +185,17 @@ Focused tests, then `pnpm typecheck`, `pnpm build`, `pnpm test:scripts`, `pnpm t
 
 ## 15. Stock rule check
 No cache, TTL, debounce, sessionStorage or brand flag; loaders never read stock; missing stock or a SKU absent from the response means out of stock; one live read per view (§4); superseded responses are dropped; layers 1, 4 and 5 are untouched; a rejected or unapplied add never reports success; brand code receives detached data and gateway actions only.
+
+## 16. Review fold (`bv-pr2-plan.astra1.json`) and implementation deviations
+| # | Finding | Resolution in the code |
+|---|---|---|
+| high | pre-order flag overriding live OOS | Already fixed on main (PR 211). The controller requires the live `inStock === true` for availability and eligibility; `isPreOrder` only shows the label and asks consent (`product-model.ts` `computePurchase`, test "a stale pre-order flag ...") |
+| medium | code-based selection vs name-based helpers | View codes are the slug of the catalog name (Rotten's `optionCode`), unique per group; each code maps to one name, so `findVariant` keeps working on names and the controller resolves on codes (`buildModelProduct`, `resolveVariant`). Deep links: a param named like the group code with a value code or name slug (`?size=medium&color=forest-green`). Fixtures use option ids that differ from names |
+| medium | quantity not revalidated | `selection.quantity` is always normalised to `1..max(1, maxQuantity)` (selection, stock or cart change), and the add revalidates it against the current cap |
+| medium | Promise.all vs per-product isolation | Tagged per-product outcomes (`stock-read.ts` `readStock`), one product's failure never discards a sibling's live result |
+| medium | product declarations override the missing head | Product head copy is not a per-path declaration: `brandProductHead` applies it only in the found state; missing is always `Product Not Found` + noindex |
+| medium | redirect drops the query | The `/products/<slug>/` 301 keeps `url.search` |
+| medium | API URL migrations lack a config contract | Not changed in PR2: the 301 forwards API-built `/products/` links with their query; threading `seo.productUrlPattern` into the purge hook, review and restock emails is a follow-up |
+| low | grep test vs ProductCard fallback | The test allows the documented L2 defaults in `ProductCard.tsx` and `HomeTeeSection.tsx`; every base caller passes `href` from `productPath` |
+
+Deviations: the `purchase` event fires once per order on the confirmation page (every settled path lands there) instead of also at the checkout settle points; `pdp.stockRefreshTrigger` is wired in the separate stock-settings PR.
