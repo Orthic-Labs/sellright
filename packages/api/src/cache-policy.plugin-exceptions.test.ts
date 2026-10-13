@@ -345,3 +345,43 @@ describe('registered exceptions: handler-set header, credentials, licensed updat
     expect((await app.request('/rs/silent.json')).headers.get('cache-control')).toBe(NO_STORE);
   });
 });
+
+describe('licence header name comes from the engine configuration, not only process.env', () => {
+  const mk = (path: string) => ({ path, source: 's.ts', reason: 'r' });
+  it('an SDK ctx env that differs from process.env still gates the custom licence header', async () => {
+    const saved = process.env.APPS_LICENSE_HEADER;
+    delete process.env.APPS_LICENSE_HEADER;
+    try {
+      const routes = new OpenAPIHono();
+      routes.get('/rs/manifest.json', (c) => c.json({ ok: true }, 200, { 'cache-control': 'public, max-age=300' }));
+      const ctx = { env: { APPS_LICENSE_HEADER: 'x-custom-license' } } as unknown as EngineContext;
+      const app = buildHttpApp({ ctx, plugins: [{ name: 'rs', routes, cacheableExceptions: [mk('/rs/manifest.json')] }] });
+      expect((await app.request('/rs/manifest.json')).headers.get('cache-control')).toBe('public, max-age=300');
+      expect((await app.request('/rs/manifest.json', { headers: { 'x-custom-license': 'key' } })).headers.get('cache-control')).toBe(NO_STORE);
+      // an app built with the default config does not treat that header as a credential
+      const plain = buildHttpApp({ ctx: {} as EngineContext, plugins: [{ name: 'rs', routes, cacheableExceptions: [mk('/rs/manifest.json')] }] });
+      expect((await plain.request('/rs/manifest.json', { headers: { 'x-custom-license': 'key' } })).headers.get('cache-control')).toBe('public, max-age=300');
+    } finally {
+      if (saved === undefined) delete process.env.APPS_LICENSE_HEADER; else process.env.APPS_LICENSE_HEADER = saved;
+    }
+  });
+
+  it('the initialised engine env (peekEnv) is honoured by a standalone cachePolicy', async () => {
+    const { initEnv, _resetEnvForTest } = await import('./env.js');
+    const saved = process.env.APPS_LICENSE_HEADER;
+    delete process.env.APPS_LICENSE_HEADER;
+    _resetEnvForTest();
+    try {
+      initEnv({ ...process.env, NODE_ENV: 'test', APPS_LICENSE_HEADER: 'x-engine-license' });
+      registerCacheableExceptions([mk('/rs/feedless.json')]);
+      const a = new Hono();
+      a.use('*', cachePolicy());
+      a.get('/rs/feedless.json', (c) => c.json({}, 200, { 'cache-control': 'public, max-age=300' }));
+      expect((await a.request('/rs/feedless.json')).headers.get('cache-control')).toBe('public, max-age=300');
+      expect((await a.request('/rs/feedless.json', { headers: { 'x-engine-license': 'k' } })).headers.get('cache-control')).toBe(NO_STORE);
+    } finally {
+      _resetEnvForTest();
+      if (saved !== undefined) process.env.APPS_LICENSE_HEADER = saved;
+    }
+  });
+});

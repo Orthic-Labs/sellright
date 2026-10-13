@@ -27,6 +27,7 @@
  * behaviour are unchanged; a plugin can only ADD a cacheable path, never relax an existing no-store one.
  */
 import type { Context, MiddlewareHandler } from 'hono';
+import { peekEnv } from './env.js';
 
 export const NO_STORE = 'private, no-store';
 
@@ -174,14 +175,21 @@ export function isCacheableException(path: string, extra: readonly CacheableExce
 /** Request headers that carry a credential or an activation/license token; a response to such a request is never shared-cacheable via a registered exception. */
 const CREDENTIAL_HEADERS = ['authorization', 'proxy-authorization', 'cookie', 'x-api-key', 'x-viewright-license', 'x-activation-token'];
 
-function credentialHeaders(): string[] {
-  // The licence header name is env-configurable (APPS_LICENSE_HEADER); read it raw so the policy never forces an env parse.
-  const configured = process.env.APPS_LICENSE_HEADER?.trim().toLowerCase();
-  return configured ? [...CREDENTIAL_HEADERS, configured] : CREDENTIAL_HEADERS;
+/**
+ * Credential headers for one request: the fixed list plus the configured licence header name (APPS_LICENSE_HEADER). The name is
+ * taken from EVERY source that may be live (the `licenseHeader` option, i.e. the SDK ctx env of this app; the initialised engine
+ * env via peekEnv(), which never parses; process.env for standalone use), so a createApp({ env }) that differs from process.env
+ * is still honoured by licensing and gated here.
+ */
+function credentialHeaders(licenseHeader: string | undefined): string[] {
+  const configured = [licenseHeader, peekEnv()?.APPS_LICENSE_HEADER, process.env.APPS_LICENSE_HEADER]
+    .map((h) => h?.trim().toLowerCase())
+    .filter((h): h is string => Boolean(h));
+  return [...new Set([...CREDENTIAL_HEADERS, ...configured])];
 }
 
-function carriesCredentials(c: Context): boolean {
-  return credentialHeaders().some((h) => Boolean(c.req.header(h)));
+function carriesCredentials(c: Context, licenseHeader: string | undefined): boolean {
+  return credentialHeaders(licenseHeader).some((h) => Boolean(c.req.header(h)));
 }
 
 // Handler-set value counts as cacheable only when explicit and free of no-store / no-cache / private.
@@ -237,6 +245,8 @@ function applyNoStore(c: Context): void {
 export interface CachePolicyOptions {
   /** Already-validated per-app exceptions (SDK `EnginePlugin.cacheableExceptions`, from `validateCacheableExceptions`). */
   extraExceptions?: readonly CacheableException[];
+  /** The licence header name from this app's engine configuration (SDK ctx env); buildHttpApp passes `ctx.env.APPS_LICENSE_HEADER`. */
+  licenseHeader?: string;
 }
 
 export function cachePolicy(options: CachePolicyOptions = {}): MiddlewareHandler {
@@ -248,7 +258,7 @@ export function cachePolicy(options: CachePolicyOptions = {}): MiddlewareHandler
       // Static (reviewed) exceptions keep their own Cache-Control; so do registered (plugin) ones, but only when the handler itself set a
       // cacheable value (a handler that sets none, e.g. an authenticated licence check, gets no-store) and the request carried no credentials.
       const keep = isStaticCacheableException(c.req.path)
-        || (isRegisteredCacheableException(c.req.path, extra) && !carriesCredentials(c) && handlerSetCacheable(c.res.headers.get('cache-control')));
+        || (isRegisteredCacheableException(c.req.path, extra) && !carriesCredentials(c, options.licenseHeader) && handlerSetCacheable(c.res.headers.get('cache-control')));
       if (keep) {
         // Never a Cache-Tag (P0-c: no tag on any response).
         editHeaders(c, (h) => h.delete('cache-tag'));

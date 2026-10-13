@@ -108,7 +108,7 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
     if (!plugin.cacheableExceptions?.length) continue;
     sdkCacheable.push(...validateCacheableExceptions(plugin.cacheableExceptions, [...CACHEABLE_EXCEPTIONS, ...listRegisteredCacheableExceptions(), ...sdkCacheable]));
   }
-  app.use('*', cachePolicy({ extraExceptions: sdkCacheable }));
+  app.use('*', cachePolicy({ extraExceptions: sdkCacheable, licenseHeader: options.ctx?.env?.APPS_LICENSE_HEADER }));
 
   // Shutdown step 1 ("stop admitting"): answered before anything else runs.
   if (admit) {
