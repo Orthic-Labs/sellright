@@ -11,21 +11,21 @@ import type { CatalogStockResponse } from '~/sellright/types/catalog';
 import { stockFromResponse, type ProductStock } from './product-model';
 
 export interface StockCtl {
-	/** Increments when the loader value changes in the browser (a new view of the same component). SSR serialises 1. */
+	/** Increments when the view's key changes in the browser (a new view of the same component). SSR serialises 1. */
 	viewGen: number;
 	/** The view that already got its automatic read. */
 	lastLoadGen: number;
 	/** Increments per read; a response applies only if it is still the latest. */
 	stockGen: number;
-	/** The task has seen the first loader value (set during SSR, or at a client-side mount). */
-	started: boolean;
+	/** The current view's key (path and products), set during SSR or at a client-side mount; null before the first run. */
+	viewKey: string | null;
 	/** Live stock of the current view, per product slug. Absent = unchecked. */
 	stock: Record<string, ProductStock>;
 }
 
 export type StockFetcher = (slug: string, opts: { signal?: AbortSignal }) => Promise<CatalogStockResponse | null>;
 
-export const initialStockCtl = (): StockCtl => ({ viewGen: 1, lastLoadGen: 0, stockGen: 0, started: false, stock: {} });
+export const initialStockCtl = (): StockCtl => ({ viewGen: 1, lastLoadGen: 0, stockGen: 0, viewKey: null, stock: {} });
 
 // Browser-only, per controller store: the in-flight read's AbortController. A WeakMap, as callbacks.ts keeps its chains.
 const inflight = new WeakMap<object, AbortController>();

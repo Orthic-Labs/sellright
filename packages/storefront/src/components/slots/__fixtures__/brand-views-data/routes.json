@@ -28,51 +28,5 @@
   },
   "blog": {
     "pageSize": 100
-  },
-  "shop": {
-    "detailProducts": [
-      {
-        "key": "shirt",
-        "slug": "e2e-shirt",
-        "head": {
-          "title": "The fixture shirt",
-          "description": "A fixture product head."
-        },
-        "breadcrumbName": "Fixture shirt",
-        "schemas": [
-          {
-            "@context": "https://schema.org",
-            "@type": "FAQPage",
-            "mainEntity": [
-              {
-                "@type": "Question",
-                "name": "Q?",
-                "acceptedAnswer": {
-                  "@type": "Answer",
-                  "text": "A."
-                }
-              }
-            ]
-          }
-        ]
-      },
-      {
-        "key": "oos",
-        "slug": "e2e-out-of-stock-tee"
-      }
-    ],
-    "productQuery": {
-      "params": [
-        "style"
-      ],
-      "values": {
-        "shirt": "shirt",
-        "oos": "oos"
-      }
-    }
-  },
-  "operational": {
-    "cartSeedPath": "/checkout/fixture-link/",
-    "analyticsPath": "/api/analytics/fixture-sink/"
   }
 }

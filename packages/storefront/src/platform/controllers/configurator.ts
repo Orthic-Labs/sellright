@@ -2,7 +2,7 @@
 // live stock read (stock-read.ts), the purchase state and the add. Every action goes through `dispatch` (callbacks.ts): validated
 // against this store, applied in call order, a result rebuilt from its fixed schema. A forged or out-of-range call returns `invalid`
 // (or `not-eligible` for an add) with no state change and no request.
-import { $, useComputed$, useContext, useOnDocument, useStore, useTask$, useVisibleTask$, type ReadonlySignal } from '@qwik.dev/core';
+import { $, useContext, useOnDocument, useStore, useTask$, useVisibleTask$, type ReadonlySignal } from '@qwik.dev/core';
 import { isBrowser } from '@qwik.dev/core/build';
 import { useLocation } from '@qwik.dev/router';
 import { APP_STATE } from '~/constants';
@@ -67,9 +67,12 @@ export function useConfigurator(loader: ReadonlySignal<ConfiguratorLoaderValue>,
 	});
 
 	// A new loader value in the browser is a new view (same component, SPA navigation). At a client-side mount this is the first run.
-	useTask$(({ track: tracked, cleanup }) => {
+	useTask$(({ track: tracked }) => {
 		const value = tracked(() => loader.value);
-		if (ctl.started) {
+		// The view's identity is its path and products, not the loader object: resuming the page re-delivers the same loader value and
+		// must not count as a new view (that would start a second read).
+		const key = `${location.url.pathname}|${sourceOf(value, mode).products.map((p) => p.slug).join(',')}`;
+		if (ctl.viewKey !== null && ctl.viewKey !== key) {
 			startNewView(ctl);
 			const focus = initialFocus(sourceOf(value, mode), location.url.searchParams);
 			ctl.productKey = focus.productKey;
@@ -78,14 +81,15 @@ export function useConfigurator(loader: ReadonlySignal<ConfiguratorLoaderValue>,
 			ctl.consent = false;
 			ctl.last = null;
 		}
-		ctl.started = true;
-		cleanup(() => abortStockRead(ctl));
+		ctl.viewKey = key;
 		if (isBrowser) load();
 	});
 	useOnDocument('qidle', $(() => load()));
 	useVisibleTask$(({ cleanup }) => cleanup(() => { ctl.disposed = true; abortStockRead(ctl); }));
 
-	const view = useComputed$(() => seal(projectConfigurator(ctl, sourceOf(loader.value, mode), cart.cart.lines)) as ConfiguratorView);
+	/** The projection for this render (the mount calls it in its render body: a computed read inside another computed lost its
+	 *  captures in the production build, Qwik 2 rc). It reads the store, the loader and the cart mirror, so a change re-renders. */
+	const project = (): ConfiguratorView => seal(projectConfigurator(ctl, sourceOf(loader.value, mode), cart.cart.lines)) as ConfiguratorView;
 
 	const onProductSelect$ = $((key: string) => dispatch<ActionResult>(ctl, null, ACTION_RESULTS, () => selectProduct(ctl, sourceOf(loader.value, mode), key)));
 	const onOptionSelect$ = $((group: string, value: string | null) => dispatch<ActionResult>(ctl, null, ACTION_RESULTS, () => selectOption(ctl, sourceOf(loader.value, mode), group, value)));
@@ -129,7 +133,7 @@ export function useConfigurator(loader: ReadonlySignal<ConfiguratorLoaderValue>,
 		}),
 	);
 
-	return { ctl, view, onProductSelect$, onOptionSelect$, onQuantityChange$, onConsentChange$, onRetryStock$, onAddToCart$ };
+	return { ctl, project, onProductSelect$, onOptionSelect$, onQuantityChange$, onConsentChange$, onRetryStock$, onAddToCart$ };
 }
 
 /** A polite live-region message (as the base PDP posts on add). */

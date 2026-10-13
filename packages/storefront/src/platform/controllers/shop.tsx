@@ -1,6 +1,6 @@
 // Brand views PR2 §10: the branded shop page: the listing (manifest on load; the in-stock toggle is its only live listing read,
 // moved from routes/shop/index.tsx) and the configurator over routes.json shop.detailProducts.
-import { $, component$, useComputed$, useSignal, useStore, useVisibleTask$, type ReadonlySignal } from '@qwik.dev/core';
+import { $, component$, useSignal, useStore, useVisibleTask$, type ReadonlySignal } from '@qwik.dev/core';
 import { useStoreIdentityLoader } from '~/routes/layout';
 import { useConfiguratorDetail } from '~/platform/configurator-detail';
 import { ShopView, platformAction } from '~/platform/gateway';
@@ -49,22 +49,21 @@ export const BrandShopMount = component$(() => {
 		}),
 	);
 
-	const data = useComputed$(() => {
-		const d = detail.value;
-		const v = c.view.value;
-		return seal<ShopViewData>({
-			identity: projectIdentity(identity.value.identity) as PublicIdentity,
-			listing: applyOverride(d?.listing ?? [], override.value),
-			inStockOnly: inStockOnly.value,
-			detail: v.products,
-			detailStatus: d?.detailStatus ?? 'unavailable',
-			selection: v.selection,
-			purchase: v.purchase,
-		});
+	// Built in the render body, field by field (no nested computed: see useConfigurator `project`).
+	const d = detail.value;
+	const v = c.project();
+	const data = seal<ShopViewData>({
+		identity: projectIdentity(identity.value.identity) as PublicIdentity,
+		listing: applyOverride(d?.listing ?? [], override.value),
+		inStockOnly: inStockOnly.value,
+		detail: v.products,
+		detailStatus: d?.detailStatus ?? 'unavailable',
+		selection: v.selection,
+		purchase: v.purchase,
 	});
 	return (
 		<ShopView
-			{...data.value}
+			{...data}
 			onProductSelect$={platformAction('configurator.product-select', c.onProductSelect$)}
 			onOptionSelect$={platformAction('configurator.option-select', c.onOptionSelect$)}
 			onQuantityChange$={platformAction('configurator.quantity', c.onQuantityChange$)}

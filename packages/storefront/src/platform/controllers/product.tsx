@@ -19,22 +19,21 @@ export const ProductFoundMount = component$(() => {
 	const identity = useStoreIdentityLoader();
 	const detail = useBrandProductDetail();
 	const c = useConfigurator(detail as ReadonlySignal<ConfiguratorLoaderValue>, 'product');
-	const data = useComputed$(() => {
-		const d = detail.value;
-		const v = c.view.value;
-		return seal<ProductFoundData>({
-			identity: projectIdentity(identity.value.identity) as PublicIdentity,
-			state: 'found',
-			product: v.products[0],
-			siblings: v.siblings,
-			selection: v.selection,
-			purchase: v.purchase,
-			breadcrumbs: d && d.state === 'found' ? d.breadcrumbs.map((b) => ({ name: b.name, href: b.href })) : [],
-		});
+	// Built in the render body, field by field (no nested computed: see useConfigurator `project`).
+	const d = detail.value;
+	const v = c.project();
+	const data = seal<ProductFoundData>({
+		identity: projectIdentity(identity.value.identity) as PublicIdentity,
+		state: 'found',
+		product: v.products[0],
+		siblings: v.siblings,
+		selection: v.selection,
+		purchase: v.purchase,
+		breadcrumbs: d && d.state === 'found' ? d.breadcrumbs.map((b) => ({ name: b.name, href: b.href })) : [],
 	});
 	return (
 		<ProductView
-			{...data.value}
+			{...data}
 			onOptionSelect$={platformAction('configurator.option-select', c.onOptionSelect$)}
 			onQuantityChange$={platformAction('configurator.quantity', c.onQuantityChange$)}
 			onConsentChange$={platformAction('configurator.consent', c.onConsentChange$)}

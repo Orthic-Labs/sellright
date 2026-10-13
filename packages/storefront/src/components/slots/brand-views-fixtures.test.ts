@@ -17,7 +17,7 @@ const DATA = path.join(HERE, '__fixtures__/brand-views-data');
 describe('brand-view fixtures', () => {
 	it('every fixture file is a valid slot for the view slots', () => {
 		const names = discoverSlots(VIEWS).map((e) => e.name).sort();
-		expect(names).toEqual(['cart.free-shipping-progress', 'checkout.loyalty-redemption', 'legal.copy', 'pdp.payment-widget', 'pdp.waitlist', 'route.blog', 'route.blog-post', 'route.contact', 'route.content', 'route.home', 'route.product', 'route.shop', 'shell.footer', 'shell.header']);
+		expect(names).toEqual(['cart.free-shipping-progress', 'checkout.loyalty-redemption', 'legal.copy', 'pdp.payment-widget', 'pdp.waitlist', 'route.blog', 'route.blog-post', 'route.contact', 'route.content', 'route.home', 'shell.footer', 'shell.header']);
 		for (const n of names) expect((SLOT_NAMES as readonly string[]).includes(n)).toBe(true);
 	});
 
@@ -29,5 +29,14 @@ describe('brand-view fixtures', () => {
 
 	it('the fixture data directory has no executable or unknown file', () => {
 		expect(fs.readdirSync(DATA).sort()).toEqual(['head.json', 'routes.json']);
+	});
+
+	it('the PR2 fixture (e2e/brand-views-shop.spec.ts builds with it) holds only the shop and product views, and its routes.json validates', () => {
+		const views = path.join(HERE, '__fixtures__/brand-views-pr2');
+		const data = path.join(HERE, '__fixtures__/brand-views-pr2-data');
+		expect(discoverSlots(views).map((e) => e.name).sort()).toEqual(['route.product', 'route.shop']);
+		const loaded = loadBrandData(PACKAGE_ROOT, data, views);
+		expect((loaded.routes as { shop: { detailProducts: unknown[] } }).shop.detailProducts).toHaveLength(2);
+		expect(fs.readdirSync(data)).toEqual(['routes.json']);
 	});
 });
