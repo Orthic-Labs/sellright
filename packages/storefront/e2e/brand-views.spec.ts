@@ -62,6 +62,10 @@ test.describe('brand views (fixture build)', () => {
 	});
 
 	test('client navigation: a declared single-segment path renders the content view; an undeclared one renders the 404 page, never the view', async ({ page }) => {
+		const errors: string[] = [];
+		page.on('pageerror', (e) => errors.push(e.message));
+		const failedLoaders: string[] = [];
+		page.on('response', (r) => { if (/q-loader-/.test(r.url()) && r.status() >= 400) failedLoaders.push(`${r.status()} ${r.url()}`); });
 		await page.goto('/our/story/');
 		await page.getByTestId('view-content-link-declared').click();
 		await page.waitForURL(/\/single-story\/$/);
@@ -71,6 +75,8 @@ test.describe('brand views (fixture build)', () => {
 		await page.waitForURL(/\/no-such-single\/$/);
 		await expect(page.getByRole('heading', { name: 'Page Not Found' })).toBeVisible();
 		await expect(page.getByTestId('view-content')).toHaveCount(0);
+		expect(errors).toEqual([]);
+		expect(failedLoaders).toEqual([]);
 		await page.goto('/');
 	});
 

@@ -69,6 +69,14 @@ export default component$(() => {
 	// A declared content path renders `route.content` instead of the 404 page (one component either way: the 404 markup is untouched).
 	if (hasView('route.content') && matchDeclaredPath(DECLARED_CONTENT, currentPath)) return <BrandContentMount />;
 
+	return notFoundMarkup(currentPath);
+});
+
+/**
+ * Today's 404 page markup as a plain function (no component boundary, so the rendered bytes are what this route always rendered),
+ * loader-free, so the single-segment `[key]` route can render it without exporting this route's loader.
+ */
+export function notFoundMarkup(currentPath: string) {
 	return (
 		<div class="min-h-screen bg-gray-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
 			<div class="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
@@ -124,4 +132,4 @@ export default component$(() => {
 			</div>
 		</div>
 	);
-});
+}
