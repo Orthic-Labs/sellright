@@ -226,6 +226,11 @@ describe('cachePolicy keeps a handler-set no-store-only Cache-Control verbatim',
     expect(await cc('/v1/no-store-max-age-0')).toBe('no-store, max-age=0');
   });
 
+  it('isNoStoreOnly: a trailing line terminator never passes the anchored grammar (JS $ without m is end of input)', () => {
+    for (const v of ['no-store, max-age=0\u2028', 'no-store, max-age=0\u2028, no-cache', 'no-store, max-age=0\n', 'no-store, s-maxage=0\r', 'no-store\u2029', 'no-store\n, no-cache'])
+      expect(isNoStoreOnly(v), JSON.stringify(v)).toBe(false);
+  });
+
   it('isNoStoreOnly', () => {
     for (const v of ['no-store', 'private, no-store', 'no-cache, no-store, must-revalidate', 'No-Store', 'NO-STORE, No-Cache', 'no-store, max-age=0', 'no-store, max-age=00', 'no-store, s-maxage=0, proxy-revalidate']) expect(isNoStoreOnly(v), v).toBe(true);
     for (const v of [null, '', 'public', 'private', 'no-cache', 'max-age=0', 'public, max-age=300', 'no-store, public', 'no-store, max-age=1', 'no-store, max-age = 30', 'x-no-store', 'example="no-store"', 'no-store="x"', ',no-store', 'no-store,,private', 'no-store, max-age=01', 'no-store, max-age=1', 'no-store, max-age="0"', 'no-store, foo', 'no-store, no-transform', 'no-store, max-age', 'no-store, max-age=-1', 'no-store x', 'no-store, s-maxage=5', 'no-store, immutable', 'no-store, stale-if-error=5']) expect(isNoStoreOnly(v), String(v)).toBe(false);
