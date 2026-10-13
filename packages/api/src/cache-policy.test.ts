@@ -291,5 +291,52 @@ describe('cachePolicy strict no-store parse, at middleware level', () => {
       expect((await run('public, max-age=300', '/v1/x', {}, status)).headers.get('cache-control')).toBe(NO_STORE);
     }
   });
+
+  // Header values above U+00FF cannot be set on a real Headers object, so the value is presented through a headers view; the policy
+  // reads exactly what a handler could have produced.
+  const viewed = async (value: string) => {
+    const a = new Hono();
+    a.use('*', cachePolicy());
+    a.get('/v1/x', () => {
+      const res = new Response('{}', { status: 200 });
+      let overridden = true;
+      const view = new Proxy(res.headers, {
+        get(target, prop) {
+          if (prop === 'set') return (name: string, v: string) => { if (name.toLowerCase() === 'cache-control') overridden = false; target.set(name, v); };
+          if (prop === 'get') return (name: string) => (overridden && name.toLowerCase() === 'cache-control' ? value : target.get(name));
+          if (prop === 'has') return (name: string) => (overridden && name.toLowerCase() === 'cache-control') || target.has(name);
+          const v = Reflect.get(target, prop);
+          return typeof v === 'function' ? v.bind(target) : v;
+        },
+      });
+      Object.defineProperty(res, 'headers', { get: () => view });
+      return res;
+    });
+    const out = await a.request('/v1/x');
+    return out.headers.get('cache-control');
+  };
+
+  it('trims only HTTP optional whitespace: any other leading/trailing character fails closed', async () => {
+    for (const ws of ['\u00a0', '\u2003', '\ufeff', '\v', '\f', '\u0085', '\u1680', '\u2028']) {
+      for (const v of [`${ws}no-store`, `no-store${ws}`, `no-store,${ws}no-cache`, `no-store${ws}, no-cache`, `no-store, no-cache${ws}`]) {
+        expect(isNoStoreOnly(v), JSON.stringify(v)).toBe(false);
+        expect(await viewed(v), JSON.stringify(v)).toBe(NO_STORE);
+      }
+    }
+  });
+
+  it('a real header carrying U+00A0 or \v around a directive is rewritten at middleware level', async () => {
+    for (const v of ['\u00a0no-store', 'no-store\u00a0', 'no-store,\u00a0no-cache', 'no-store, no-cache\u00a0']) {
+      expect(await cc(v), JSON.stringify(v)).toBe(NO_STORE);
+    }
+  });
+
+  it('space and tab around directives are still fine', async () => {
+    expect(isNoStoreOnly(' no-store ')).toBe(true);
+    expect(isNoStoreOnly('\tno-store,\tno-cache\t')).toBe(true);
+    expect(await viewed('no-store,\tno-cache')).toBe('no-store,\tno-cache');
+    expect(await viewed('no-cache, no-store')).toBe('no-cache, no-store');
+    expect(await cc('no-store, no-cache')).toBe('no-store, no-cache');
+  });
 });
 

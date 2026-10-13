@@ -209,7 +209,7 @@ const NO_STORE_KEEP_ZERO = new Set(['max-age', 's-maxage']);
 /**
  * A handler-set Cache-Control that already forbids storing and grants nothing, by strict parse (fails closed). All values are combined
  * (`Headers.get` joins repeated headers with ", "), split on commas and trimmed; every directive must be exactly `name` or `name=digits`
- * (no quotes or other characters, no empty segment). Kept only when every directive is a valueless no-store / no-cache /
+ * (no quotes or other characters, no empty segment; only space and tab are trimmed around a directive). Kept only when every directive is a valueless no-store / no-cache /
  * must-revalidate / proxy-revalidate / private, or max-age / s-maxage with an all-zero value, AND a valueless `no-store` is present.
  * Anything else (extension directives, quoted values, public, stale-*, immutable, max-age>0, ...) is rewritten to `private, no-store`.
  */
@@ -217,7 +217,7 @@ export function isNoStoreOnly(value: string | null): boolean {
   if (!value) return false;
   let hasNoStore = false;
   for (const raw of value.split(',')) {
-    const directive = raw.trim();
+    const directive = raw.replace(/^[ \t]+|[ \t]+$/g, ''); // HTTP OWS only: String.trim() would also strip U+00A0, U+FEFF, \v, \f, ...
     if (!/^[A-Za-z-]+(=[0-9]+)?$/.test(directive)) return false;
     const eq = directive.indexOf('=');
     const name = (eq < 0 ? directive : directive.slice(0, eq)).toLowerCase();
