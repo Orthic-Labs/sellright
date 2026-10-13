@@ -4,10 +4,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-// brand-env.schema.json marks a platform setting `wired: false` while no storefront code reads it, and compose then refuses a
-// non-default value (env-setting-unwired). This test ties that flag to the code: the moment a reader appears, the flag is stale.
+// The platform settings decide stock-read TIMING only, and they are read in exactly one L1 module (platform/stock-triggers.ts). This
+// keeps the wiring reviewable in one place and out of brand reach (layers.json platformApi.public exposes neither file).
 const SRC = fileURLToPath(new URL('..', import.meta.url));
 const SCHEMA = path.join(SRC, '..', 'brand-env.schema.json');
+const LAYERS = path.join(SRC, '..', 'layers.json');
 
 function sources(dir: string, out: string[] = []): string[] {
 	for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -17,16 +18,38 @@ function sources(dir: string, out: string[] = []): string[] {
 	}
 	return out;
 }
+const rel = (f: string) => path.relative(SRC, f).split(path.sep).join('/');
+const all = sources(SRC).map((f) => ({ f: rel(f), text: fs.readFileSync(f, 'utf8') }));
 
-describe('platform settings wiring flag', () => {
-	const schema = JSON.parse(fs.readFileSync(SCHEMA, 'utf8')) as { settings: Record<string, { wired?: boolean }> };
-	const readers = sources(SRC)
-		.filter((f) => !f.endsWith(path.join('platform', 'settings.ts')))
-		.filter((f) => /\b(platformSettings|resolvePlatformSettings|PLATFORM_SETTING_DEFAULTS)\b/.test(fs.readFileSync(f, 'utf8')))
-		.map((f) => path.relative(SRC, f));
+describe('platform settings wiring', () => {
+	it('only platform/stock-triggers.ts reads the settings module', () => {
+		const readers = all.filter((s) => s.f !== 'platform/settings.ts' && /from ['"](~\/platform\/settings|\.\/settings|\.\.\/settings)['"]/.test(s.text)).map((s) => s.f);
+		expect(readers).toEqual(['platform/stock-triggers.ts']);
+		expect(all.filter((s) => s.f !== 'platform/settings.ts' && /\b(platformSettings|resolvePlatformSettings|settingsFromEnv)\b/.test(s.text)).map((s) => s.f)).toEqual(['platform/stock-triggers.ts']);
+	});
 
-	it('every setting is marked unwired while nothing outside platform/settings.ts reads the settings module', () => {
-		expect(readers).toEqual([]);
-		for (const [name, spec] of Object.entries(schema.settings)) expect(spec.wired, name).toBe(false);
+	it('no setting is marked unwired any more, and every setting has its consumer in stock-triggers.ts', () => {
+		const schema = JSON.parse(fs.readFileSync(SCHEMA, 'utf8')) as { settings: Record<string, { wired?: boolean }> };
+		const triggers = all.find((s) => s.f === 'platform/stock-triggers.ts')!.text;
+		for (const [name, spec] of Object.entries(schema.settings)) {
+			expect(spec.wired, name).toBeUndefined();
+			expect(triggers, name).toContain(`platformSettings['${name}']`);
+		}
+	});
+
+	it('the trigger hooks are used by the base PDP, the brand configurator and both shop pages', () => {
+		const users = all.filter((s) => /from ['"]~\/platform\/stock-triggers['"]/.test(s.text)).map((s) => s.f).sort();
+		expect(users).toEqual(['platform/controllers/configurator.ts', 'platform/controllers/shop.tsx', 'routes/products/[...slug]/ProductContent.tsx', 'routes/shop/index.tsx']);
+	});
+
+	it('brand code cannot import the settings or the trigger module (not a public platform module)', () => {
+		const layers = JSON.parse(fs.readFileSync(LAYERS, 'utf8')) as { platformApi: { public: Record<string, unknown> } };
+		expect(Object.keys(layers.platformApi.public)).not.toContain('~/platform/settings');
+		expect(Object.keys(layers.platformApi.public)).not.toContain('~/platform/stock-triggers');
+	});
+
+	it('the triggers never cache: no storage, no module-level result, no time window', () => {
+		const triggers = all.find((s) => s.f === 'platform/stock-triggers.ts')!.text.replace(/^\s*\/\/.*$/gm, '');
+		expect(triggers).not.toMatch(/sessionStorage|localStorage|setTimeout|Date\.now|new Map|ttl|debounce/i);
 	});
 });

@@ -1,6 +1,7 @@
 import { $, component$, useSignal, useStore, useTask$ } from '@qwik.dev/core';
 import { ProductCard, ShopFilters as Filters, hasView, platformAction } from '~/platform/gateway';
 import { BrandShopMount } from '~/platform/controllers/shop';
+import { useShopListingOnLoad } from '~/platform/stock-triggers';
 import { searchProducts } from '~/providers/shop/products/products';
 import type { CatalogListItem } from '~/sellright/types/catalog';
 import { FacetWithValues } from '~/types';
@@ -139,6 +140,18 @@ const BaseShopPage = component$(() => {
  const onSearchChange = $((newTerm: string) => {
   searchTerm.value = newTerm;
  });
+
+ // shop.stockOnLoad = live: one live listing read per view on load (platform/stock-triggers.ts). Default manifest: none.
+ useShopListingOnLoad($(async () => {
+  try {
+   const liveSearch = await searchProducts({ take: 500 });
+   const override: Record<string, boolean> = {};
+   for (const item of liveSearch.items) override[item.slug] = item.inStock === true;
+   liveStockOverride.value = override;
+  } catch (err) {
+   console.error('[shop] Live stock read on load failed:', err);
+  }
+ }));
 
  // Toggling the stock filter refreshes availability from SellRight.
  const onInStockChange = $(async (inStock: boolean) => {

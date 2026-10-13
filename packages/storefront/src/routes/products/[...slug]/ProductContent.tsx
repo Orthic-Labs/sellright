@@ -7,6 +7,7 @@ import { loadCountryOnDemand } from '~/utils/addressStorage';
 import { useImageGalleryTouchHandling } from '~/utils/optimized-touch-handling';
 import { ProductPageView } from './ProductPageView';
 import { toCartEnrichment } from '~/platform/controllers/product-model';
+import { useBfcacheStockRefresh, usePdpStockTrigger } from '~/platform/stock-triggers';
 import { areAllVariantsSoldOut, findVariant, getOptionGroups, isPreOrderPresented, isSelectionOutOfStock, isVariantPurchasable } from './product-options';
 import type { ProductLoaderResult } from './index';
 
@@ -153,7 +154,10 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
       isEnhancing.value = false;
     }
   });
-  useOnDocument('qidle', $(() => { refreshLiveStock(); }));
+  // When the one automatic read starts (pdp.stockRefreshTrigger, default qidle) and the optional back/forward-cache re-read
+  // (pdp.bfcacheRefresh, default off): platform/stock-triggers.ts. Every read is live; nothing is cached.
+  usePdpStockTrigger(refreshLiveStock);
+  useBfcacheStockRefresh(refreshLiveStock);
   const changeImage = $((newIndex: number) => {
     const newAsset = orderedAssets.value[newIndex];
     if (newAsset) {

@@ -8,6 +8,7 @@ import { searchProducts } from '~/providers/shop/products/products';
 import type { ActionResult, PublicIdentity, ShopListingItem, ShopViewData } from '~/platform/views';
 import { ACTION_RESULTS, dispatch, type ActionCtl } from './callbacks';
 import { useConfigurator, type ConfiguratorLoaderValue } from './configurator';
+import { useShopListingOnLoad } from '~/platform/stock-triggers';
 import { projectIdentity, seal } from './project';
 
 /** The listing with the live override from the toggle applied (the override exists only after a toggle in this view). */
@@ -34,6 +35,17 @@ export const BrandShopMount = component$(() => {
 	const override = useSignal<Record<string, boolean> | null>(null);
 	const listCtl = useStore<ActionCtl>({ disposed: false, admitted: [] });
 	useVisibleTask$(({ cleanup }) => cleanup(() => { listCtl.disposed = true; }));
+
+	// shop.stockOnLoad = live (Rotten, owner decision O1): one live listing read per view on load, as the toggle does.
+	useShopListingOnLoad(
+		$(async () => {
+			try {
+				override.value = await liveListingOverride();
+			} catch (err) {
+				console.error('[shop] Live stock read on load failed:', err);
+			}
+		}),
+	);
 
 	const onInStockChange$ = $((inStock: boolean) =>
 		dispatch<ActionResult>(listCtl, 'listing', ACTION_RESULTS, async () => {

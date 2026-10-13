@@ -1,5 +1,5 @@
 {
-  "$comment": "Three schemas, each name owned by exactly one section (tools/compose/env-check.mjs enforces this). settings and publicBuildConfig are filled from brand.json; privateRuntime names are owned by the brand's generator or pm2 env and never by brand.json. Names only: no values or defaults for secrets live here.",
+  "$comment": "Three schemas, each name owned by exactly one section (tools/compose/env-check.mjs enforces this). settings and publicBuildConfig are filled from brand.json; privateRuntime names are owned by the brand's generator or pm2 env and never by brand.json. Names only: no values or defaults for secrets live here. A setting reaches the build as its `env` name, written by compose into .env.production from the validated brand.json value (brand.json publicConfig may not set it).",
   "version": 1,
   "settings": {
     "pdp.stockRefreshTrigger": {
@@ -9,8 +9,8 @@
         "qidle"
       ],
       "default": "qidle",
-      "wired": false,
-      "description": "When the PDP starts its one live stock refresh. Damned uses qinit (approved 2026-09-26); others stay on qidle."
+      "description": "When the PDP starts its one live stock refresh. Damned uses qinit (approved 2026-09-26); others stay on qidle.",
+      "env": "VITE_SR_PDP_STOCK_TRIGGER"
     },
     "shop.stockOnLoad": {
       "type": "enum",
@@ -19,14 +19,14 @@
         "live"
       ],
       "default": "manifest",
-      "wired": false,
-      "description": "Shop page availability on load: manifest only, or one live uncached fail-closed read (owner decision O1)."
+      "description": "Shop page availability on load: manifest only, or one live uncached fail-closed read (owner decision O1).",
+      "env": "VITE_SR_SHOP_STOCK_ON_LOAD"
     },
     "pdp.bfcacheRefresh": {
       "type": "boolean",
       "default": false,
-      "wired": false,
-      "description": "Refresh live stock again on a persisted pageshow (owner decision O3; Damned only)."
+      "description": "Refresh live stock again on a persisted pageshow (owner decision O3; Damned only).",
+      "env": "VITE_SR_PDP_BFCACHE_REFRESH"
     }
   },
   "publicBuildConfig": {
