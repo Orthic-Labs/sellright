@@ -8,6 +8,10 @@
  * or sets a cacheable one, still fails closed. `cache-tag` is stripped from EVERY response, exceptions included: Cloudflare ties
  * tags to cached content and none is emitted anywhere (Cloudflare design P0-c).
  *
+ * One narrowing: a route-set Cache-Control that strictly parses to no-store plus only no-cache / must-revalidate / proxy-revalidate / private /
+ * zero max-age (see isNoStoreOnly) is kept verbatim on any route, method and status, since it is as restrictive as `private, no-store` (a client
+ * contract may pin e.g. `no-cache, no-store, must-revalidate`). Nothing becomes more cacheable; CDN headers and `cache-tag` are still stripped.
+ *
  * An exception must be provably stock-free AND identical for every visitor of the store (no cookie, auth, cart or
  * price/availability dependence). Add one only with a `reason` saying why, and a `source` file; the unit test fails
  * when a source file sets a cacheable Cache-Control that is not listed here.
@@ -199,6 +203,34 @@ function handlerSetCacheable(value: string | null): boolean {
   return /\bpublic\b|\bs-maxage=[1-9]|\bmax-age=[1-9]/i.test(value);
 }
 
+const NO_STORE_KEEP_VALUELESS = new Set(['no-store', 'no-cache', 'must-revalidate', 'proxy-revalidate', 'private']);
+const NO_STORE_KEEP_ZERO = new Set(['max-age', 's-maxage']);
+
+/**
+ * A handler-set Cache-Control that already forbids storing and grants nothing, by strict parse (fails closed). All values are combined
+ * (`Headers.get` joins repeated headers with ", "), split on commas and trimmed; every directive must be exactly `name` or `name=digits`
+ * (no quotes or other characters, no empty segment; only space and tab are trimmed around a directive). Kept only when every directive is a valueless no-store / no-cache /
+ * must-revalidate / proxy-revalidate / private, or max-age / s-maxage with an all-zero value, AND a valueless `no-store` is present.
+ * Anything else (extension directives, quoted values, public, stale-*, immutable, max-age>0, ...) is rewritten to `private, no-store`.
+ */
+export function isNoStoreOnly(value: string | null): boolean {
+  if (!value) return false;
+  let hasNoStore = false;
+  for (const raw of value.split(',')) {
+    const directive = raw.replace(/^[ \t]+|[ \t]+$/g, ''); // HTTP OWS only: String.trim() would also strip U+00A0, U+FEFF, \v, \f, ...
+    if (!/^[A-Za-z-]+(=[0-9]+)?$/.test(directive)) return false;
+    const eq = directive.indexOf('=');
+    const name = (eq < 0 ? directive : directive.slice(0, eq)).toLowerCase();
+    if (eq < 0) {
+      if (!NO_STORE_KEEP_VALUELESS.has(name)) return false;
+      if (name === 'no-store') hasNoStore = true;
+    } else if (!NO_STORE_KEEP_ZERO.has(name) || !/^0+$/.test(directive.slice(eq + 1))) {
+      return false;
+    }
+  }
+  return hasNoStore;
+}
+
 /** Read-only view of the legacy-plugin-registered entries (diagnostics, tests). */
 export function listRegisteredCacheableExceptions(): readonly CacheableException[] {
   return registeredExceptions;
@@ -234,6 +266,14 @@ function editHeaders(c: Context, edit: (h: Headers) => void): void {
   }
 }
 
+/** Keep the handler's own no-store-only Cache-Control; still drop CDN-targeted headers and any Cache-Tag. */
+function keepNoStoreVerbatim(c: Context): void {
+  editHeaders(c, (h) => {
+    for (const name of CACHE_HEADERS_TO_STRIP) h.delete(name);
+    h.delete('cache-tag');
+  });
+}
+
 function applyNoStore(c: Context): void {
   editHeaders(c, (h) => {
     h.set('cache-control', NO_STORE);
@@ -264,6 +304,12 @@ export function cachePolicy(options: CachePolicyOptions = {}): MiddlewareHandler
         editHeaders(c, (h) => h.delete('cache-tag'));
         return;
       }
+    }
+    // A handler-set value that already contains no-store and grants nothing keeps its exact bytes (any route, method or status).
+    // Never more cacheable than before: every other value, including none, becomes `private, no-store`.
+    if (isNoStoreOnly(c.res.headers.get('cache-control'))) {
+      keepNoStoreVerbatim(c);
+      return;
     }
     applyNoStore(c);
   };
