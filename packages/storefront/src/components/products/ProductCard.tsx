@@ -128,7 +128,7 @@ export default component$((props: ProductCardProps) => {
 							<div class="flex items-center gap-2">
 								<div class="w-5 h-px bg-[var(--color-accent)] flex-shrink-0"></div>
 								<span class="text-[13px] tracking-[2.5px] uppercase text-[var(--color-accent)] font-normal font-heading">
-									{isPreOrder ? 'Pre-order now' : inStock === false ? 'Notify me' : 'View product'}
+									{isPreOrder && inStock !== false ? 'Pre-order now' : inStock === false ? 'Notify me' : 'View product'}
 								</span>
 							</div>
 						</div>

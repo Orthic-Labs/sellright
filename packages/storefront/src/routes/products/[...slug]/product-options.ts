@@ -53,9 +53,48 @@ export function getOptionGroups(variants: CatalogVariant[]): { groupName: string
   return ordered.map(({ groupName, values }) => ({ groupName, values }));
 }
 
+type StockFlags = Pick<CatalogVariant, 'inStock' | 'isPreOrder'>;
+
+/** LOCKED stock rule: the live `inStock` read is authoritative. `isPreOrder`
+ *  is catalog metadata and can never make a variant purchasable on its own;
+ *  anything other than `inStock === true` (missing included) fails closed. */
+export function isVariantPurchasable(variant: Pick<CatalogVariant, 'inStock'> | null | undefined): boolean {
+  return variant?.inStock === true;
+}
+
+/** A variant is sold as a pre-order only while the live read says it is in
+ *  stock. A flagged pre-order with `inStock === false` is simply out of stock. */
+export function isActivePreOrder(variant: StockFlags | null | undefined): boolean {
+  return !!variant && variant.isPreOrder === true && variant.inStock === true;
+}
+
+/** Pre-order presentation (label, consent, price): the selected variant when
+ *  one is resolved, otherwise any variant that is an active pre-order. */
+export function isPreOrderPresented(selected: StockFlags | null | undefined, variants: StockFlags[]): boolean {
+  if (selected) return isActivePreOrder(selected);
+  return variants.some(isActivePreOrder);
+}
+
+/** Every variant is out of stock on the live read, pre-order flag or not. */
+export function areAllVariantsSoldOut(variants: Pick<CatalogVariant, 'inStock'>[]): boolean {
+  return variants.every((v) => !isVariantPurchasable(v));
+}
+
+/** Out of stock only for a complete selection that resolved to a variant whose
+ *  live read is not in stock. An incomplete selection is never OOS (it is
+ *  simply not yet purchasable) and is never wiped. */
+export function isSelectionOutOfStock(
+  selectionComplete: boolean,
+  selected: Pick<CatalogVariant, 'inStock'> | null | undefined,
+): boolean {
+  if (!selectionComplete) return false;
+  if (!selected) return false;
+  return !isVariantPurchasable(selected);
+}
+
 /** Values available for groupIndex given prior selections, stock-filtered.
- *  LOCKED stock rule: a pre-order variant is always selectable regardless of
- *  `inStock`; every other variant needs `inStock === true`. */
+ *  LOCKED stock rule: every variant needs a live `inStock === true`; the
+ *  pre-order flag never makes an out-of-stock variant selectable. */
 export function availableForGroup(
   variants: CatalogVariant[],
   groups: { groupName: string; values: string[] }[],
@@ -73,7 +112,7 @@ export function availableForGroup(
       if (opt?.name !== sel) { ok = false; break; }
     }
     if (!ok) continue;
-    if (!v.isPreOrder && !v.inStock) continue;
+    if (!isVariantPurchasable(v)) continue;
     const opt = v.options.find(o => o.group?.name === groups[groupIndex].groupName);
     if (opt) out.add(opt.name);
   }
