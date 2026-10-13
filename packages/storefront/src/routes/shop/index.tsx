@@ -1,6 +1,8 @@
 import { $, component$, useSignal, useStore, useTask$ } from '@qwik.dev/core';
 import { ProductCard, ShopFilters as Filters, hasView, platformAction } from '~/platform/gateway';
 import { BrandShopMount } from '~/platform/controllers/shop';
+import { useShopListingOnLoad } from '~/platform/stock-triggers';
+import { liveListingAvailability, readLiveListing as fetchLiveListing } from '~/platform/listing-availability';
 import { searchProducts } from '~/providers/shop/products/products';
 import type { CatalogListItem } from '~/sellright/types/catalog';
 import { FacetWithValues } from '~/types';
@@ -140,19 +142,27 @@ const BaseShopPage = component$(() => {
   searchTerm.value = newTerm;
  });
 
+ // The listing's live read (the toggle, and shop.stockOnLoad = live on load): fail closed per platform/listing-availability.ts, and
+ // only the latest request applies (an older response can never overwrite a newer one).
+ const listingGen = useSignal(0);
+ const readLiveListing = $(async (): Promise<boolean> => {
+  const gen = ++listingGen.value;
+  const live = await fetchLiveListing((p) => searchProducts(p));
+  if (live === null) console.error('[shop] Live stock read failed');
+  if (gen !== listingGen.value) return live !== null;
+  liveStockOverride.value = liveListingAvailability((catalog.value.products || []).map((p) => p.slug), live);
+  return live !== null;
+ });
+
+ // shop.stockOnLoad = live: one live listing read per view on load (platform/stock-triggers.ts). Default manifest: none.
+ useShopListingOnLoad(readLiveListing);
+
  // Toggling the stock filter refreshes availability from SellRight.
  const onInStockChange = $(async (inStock: boolean) => {
   inStockOnly.value = inStock;
+  isSearching.value = true;
   try {
-   isSearching.value = true;
-   const liveSearch = await searchProducts({ term: searchTerm.value || undefined, take: 500 });
-   const override: Record<string, boolean> = {};
-   for (const item of liveSearch.items) {
-    override[item.slug] = item.inStock === true;
-   }
-   liveStockOverride.value = override;
-  } catch (err) {
-   console.error('[shop] Live stock recheck on toggle failed:', err);
+   await readLiveListing();
   } finally {
    isSearching.value = false;
   }

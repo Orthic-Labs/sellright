@@ -13,6 +13,10 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SCHEMA_FILE = path.join(HERE, '..', '..', 'brand-env.schema.json');
 const schema = () => structuredClone(loadSchema(SCHEMA_FILE));
 
+/** compose writes every setting into .env.production as its build env name, defaults included. */
+const SETTINGS_ENV_DEFAULT = { VITE_SR_PDP_STOCK_TRIGGER: 'qidle', VITE_SR_SHOP_STOCK_ON_LOAD: 'manifest', VITE_SR_PDP_BFCACHE_REFRESH: 'false' };
+const withSettings = (o) => ({ ...o, ...SETTINGS_ENV_DEFAULT });
+
 const baseBrand = () => ({
 	settings: {},
 	publicConfig: { VITE_STORE_NAME: 'Brand Store', VITE_PUBLIC_DOMAIN: 'brand.example' },
@@ -64,8 +68,8 @@ test('the checked-in schema is valid and each name has exactly one owner', () =>
 test('a clean brand passes and reports names and a hash only', async () => {
 	const { r, problems } = await run();
 	assert.deepEqual(problems.list, []);
-	assert.deepEqual(r.names, ['VITE_PUBLIC_DOMAIN', 'VITE_STORE_NAME']);
-	assert.equal(r.hash, effectiveHash({ VITE_STORE_NAME: 'Brand Store', VITE_PUBLIC_DOMAIN: 'brand.example' }));
+	assert.deepEqual(r.names, ['VITE_PUBLIC_DOMAIN', 'VITE_SR_PDP_BFCACHE_REFRESH', 'VITE_SR_PDP_STOCK_TRIGGER', 'VITE_SR_SHOP_STOCK_ON_LOAD', 'VITE_STORE_NAME']);
+	assert.equal(r.hash, effectiveHash(withSettings({ VITE_STORE_NAME: 'Brand Store', VITE_PUBLIC_DOMAIN: 'brand.example' })));
 	assert.equal(r.settings['pdp.stockRefreshTrigger'], 'qidle');
 	assert.equal(r.settings['shop.stockOnLoad'], 'manifest');
 	assert.equal(r.settings['pdp.bfcacheRefresh'], false);
@@ -164,10 +168,10 @@ test('precedence: brand.json beats .env and .env.local; the process environment 
 	const files = { '.env': 'VITE_STORE_NAME=FromEnv\n', '.env.local': 'VITE_STORE_NAME=FromLocal\n' };
 	const x = await run({ files });
 	assert.ok(x.problems.codes().includes('env-legacy-conflict'));
-	assert.equal(x.r.hash, effectiveHash({ VITE_STORE_NAME: 'Brand Store', VITE_PUBLIC_DOMAIN: 'brand.example' }), 'brand value wins in production mode');
+	assert.equal(x.r.hash, effectiveHash(withSettings({ VITE_STORE_NAME: 'Brand Store', VITE_PUBLIC_DOMAIN: 'brand.example' })), 'brand value wins in production mode');
 
 	const viaProcess = await run({ files, env: { VITE_STORE_NAME: 'FromProcess' } });
-	assert.equal(viaProcess.r.hash, effectiveHash({ VITE_STORE_NAME: 'FromProcess', VITE_PUBLIC_DOMAIN: 'brand.example' }));
+	assert.equal(viaProcess.r.hash, effectiveHash(withSettings({ VITE_STORE_NAME: 'FromProcess', VITE_PUBLIC_DOMAIN: 'brand.example' })));
 	assert.deepEqual(viaProcess.r.warnings, ['process environment overrides VITE_STORE_NAME']);
 	assert.ok(!viaProcess.problems.codes().includes('env-roundtrip'));
 	assert.ok(!viaProcess.problems.codes().includes('env-legacy-conflict'));
@@ -203,33 +207,36 @@ test('settings: defaults, enum and boolean validation, unknown keys', async () =
 	assert.notEqual(ok.r.settingsHash, (await run()).r.settingsHash);
 });
 
-test('env-setting-unwired: a non-default value of a setting no code reads is a problem; its default and an unset setting are not', async () => {
+test('settings are wired: every value reaches the build as its env name in .env.production (the gate stays for a future unwired setting)', async () => {
 	const sch = schema();
-	for (const k of ['pdp.stockRefreshTrigger', 'shop.stockOnLoad', 'pdp.bfcacheRefresh']) assert.equal(sch.settings[k].wired, false, `${k} is marked unwired in brand-env.schema.json`);
-	for (const [key, value] of [['pdp.stockRefreshTrigger', 'qinit'], ['shop.stockOnLoad', 'live'], ['pdp.bfcacheRefresh', true]]) {
-		const brand = baseBrand();
-		brand.settings = { [key]: value };
-		const x = await run({ brand });
-		assert.deepEqual(x.problems.codes(), ['env-setting-unwired'], key);
-		assert.ok(x.problems.list.some((p) => p.message.includes(`settings.${key}`) && !p.message.includes('undefined')), key);
-		// the gate keeps the approved setting where it is: it must not tell anyone to delete or weaken it, and must name the pin
-		const msg = x.problems.list.map((p) => p.message).join('\n');
-		assert.match(msg, /migration gate/, key);
-		assert.match(msg, /keep the setting in brand\.json/, key);
-		assert.match(msg, /current base pin until the platform wiring for it lands/, key);
-		assert.doesNotMatch(msg, /remove it|drop it|delete/i, key);
-	}
-	const same = baseBrand();
-	same.settings = { 'pdp.stockRefreshTrigger': 'qidle', 'shop.stockOnLoad': 'manifest', 'pdp.bfcacheRefresh': false };
-	assert.deepEqual((await run({ brand: same })).problems.list, [], 'the default value of an unwired setting is accepted');
-	assert.deepEqual((await run()).problems.list, []);
+	for (const k of ['pdp.stockRefreshTrigger', 'shop.stockOnLoad', 'pdp.bfcacheRefresh']) assert.equal(sch.settings[k].wired, undefined, `${k} is wired`);
+	const brand = baseBrand();
+	brand.settings = { 'pdp.stockRefreshTrigger': 'qinit', 'shop.stockOnLoad': 'live', 'pdp.bfcacheRefresh': true };
+	const x = await run({ brand });
+	assert.deepEqual(x.problems.list, []);
+	assert.match(x.r.envProduction, /^VITE_SR_PDP_STOCK_TRIGGER="qinit"$/m);
+	assert.match(x.r.envProduction, /^VITE_SR_SHOP_STOCK_ON_LOAD="live"$/m);
+	assert.match(x.r.envProduction, /^VITE_SR_PDP_BFCACHE_REFRESH="true"$/m);
+	assert.match((await run()).r.envProduction, /^VITE_SR_SHOP_STOCK_ON_LOAD="manifest"$/m, 'defaults are written too');
+	// a setting a future schema marks unwired is still refused at a non-default value
+	const unwired = schema();
+	unwired.settings['shop.stockOnLoad'].wired = false;
+	const y = await run({ brand, sch: unwired });
+	assert.deepEqual(y.problems.codes(), ['env-setting-unwired']);
+	assert.match(y.problems.list[0].message, /keep the setting in brand\.json/);
 });
 
-test('env-setting-unwired: a mix reports each unwired non-default setting once and still validates the rest', async () => {
+test('a setting env name is owned by settings: brand.json publicConfig may not set it, and the process environment may not override it', async () => {
 	const brand = baseBrand();
-	brand.settings = { 'pdp.stockRefreshTrigger': 'qinit', 'shop.stockOnLoad': 'nope' };
-	const x = await run({ brand });
-	assert.deepEqual(x.problems.codes().sort(), ['env-bad-setting', 'env-setting-unwired']);
+	brand.publicConfig.VITE_SR_SHOP_STOCK_ON_LOAD = 'live';
+	assert.ok((await run({ brand })).problems.codes().includes('env-wrong-owner'));
+	const x = await run({ env: { VITE_SR_SHOP_STOCK_ON_LOAD: 'live' } });
+	assert.ok(x.problems.codes().includes('env-setting-overridden'));
+	const sch = schema();
+	sch.settings['pdp.bfcacheRefresh'].env = 'VITE_SR_PDP_STOCK_TRIGGER';
+	const p = new Problems();
+	validateSchema(sch, p);
+	assert.ok(p.codes().includes('env-duplicate-owner'));
 });
 
 test('renderEnvProduction is sorted, quoted and refuses unrepresentable values', () => {
@@ -286,12 +293,12 @@ test('Vite loadEnv: values that need quoting survive .env.production', needVite,
 	const brand = { settings: {}, publicConfig, requiredEnv: ['VITE_STORE_NAME'] };
 	const { r, problems } = await run({ brand, loadEnv: realLoadEnv });
 	assert.deepEqual(problems.list, [], JSON.stringify(problems.list));
-	assert.equal(r.hash, effectiveHash(publicConfig));
+	assert.equal(r.hash, effectiveHash(withSettings(publicConfig)));
 });
 
 test('Vite loadEnv: legacy conflict and precedence end to end', needVite, async () => {
 	const x = await run({ loadEnv: realLoadEnv, files: { '.env': 'VITE_STORE_NAME=Somebody Else\nSTRIPE_SECRET_NOT_REAL=nope\n' } });
 	assert.deepEqual(x.problems.codes(), ['env-legacy-conflict']);
-	assert.equal(x.r.hash, effectiveHash({ VITE_STORE_NAME: 'Brand Store', VITE_PUBLIC_DOMAIN: 'brand.example' }));
+	assert.equal(x.r.hash, effectiveHash(withSettings({ VITE_STORE_NAME: 'Brand Store', VITE_PUBLIC_DOMAIN: 'brand.example' })));
 	assert.ok(!x.r.names.includes('STRIPE_SECRET_NOT_REAL'));
 });

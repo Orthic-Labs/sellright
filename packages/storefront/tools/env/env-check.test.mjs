@@ -36,7 +36,7 @@ test('CLI: a valid brand exits 0 and prints names and a hash, never a value', op
 	const dir = setup({ publicConfig: { VITE_STORE_NAME: 'Secretly Named Store' }, requiredEnv: ['VITE_STORE_NAME'] }, 'STRIPE_SECRET_NOT_REAL=sk_nope\n');
 	const r = run(dir, ['--build-dir', dir]);
 	assert.equal(r.status, 0, r.stderr);
-	assert.match(r.stdout, /effective VITE_ names \(1\): VITE_STORE_NAME/);
+	assert.match(r.stdout, /effective VITE_ names \(4\): VITE_SR_PDP_BFCACHE_REFRESH VITE_SR_PDP_STOCK_TRIGGER VITE_SR_SHOP_STOCK_ON_LOAD VITE_STORE_NAME/);
 	assert.match(r.stdout, /effective public config hash: [0-9a-f]{64}/);
 	assert.ok(!r.stdout.includes('Secretly Named Store') && !r.stdout.includes('sk_nope') && !r.stderr.includes('sk_nope'));
 });

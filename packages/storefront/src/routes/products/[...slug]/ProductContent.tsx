@@ -1,12 +1,13 @@
 import { $, component$, useComputed$, useContext, useOnDocument, useSignal, useStore, useTask$ } from '@qwik.dev/core';
 import { APP_STATE } from '~/constants';
 import { getProductStock } from '~/providers/shop/products/products';
-import { mergeProductStock } from '~/sellright/types/catalog';
+import { mergeProductStock, withUncheckedStock } from '~/sellright/types/catalog';
 import { useCart, addToCart } from '~/contexts/CartContext';
 import { loadCountryOnDemand } from '~/utils/addressStorage';
 import { useImageGalleryTouchHandling } from '~/utils/optimized-touch-handling';
 import { ProductPageView } from './ProductPageView';
 import { toCartEnrichment } from '~/platform/controllers/product-model';
+import { useBfcacheStockRefresh, usePdpStockTrigger } from '~/platform/stock-triggers';
 import { areAllVariantsSoldOut, findVariant, getOptionGroups, isPreOrderPresented, isSelectionOutOfStock, isVariantPurchasable } from './product-options';
 import type { ProductLoaderResult } from './index';
 
@@ -128,11 +129,15 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
       case 'ArrowRight': if (orderedAssets.value.length > 1) navigateModal('next'); break;
     }
   }));
+  // Each read carries a generation; only the latest read's result applies (a restore re-read can overlap the load read).
+  const stockReadGen = useSignal(0);
   const refreshLiveStock = $(async () => {
+    const gen = ++stockReadGen.value;
     isEnhancing.value = true;
     enhancementError.value = null;
     try {
       const stock = await getProductStock(product.slug);
+      if (gen !== stockReadGen.value) return;
       if (!stock) return;
       const merged = mergeProductStock(product, stock);
       product.variants = merged.variants;
@@ -153,7 +158,16 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
       isEnhancing.value = false;
     }
   });
-  useOnDocument('qidle', $(() => { refreshLiveStock(); }));
+  // When the one automatic read starts (pdp.stockRefreshTrigger, default qidle) and the optional back/forward-cache re-read
+  // (pdp.bfcacheRefresh, default off): platform/stock-triggers.ts. Every read is live; nothing is cached.
+  usePdpStockTrigger(refreshLiveStock);
+  // A restored page first drops what it showed (every variant unchecked, fail closed; selections are kept), then reads again: a 404,
+  // a malformed body or a failure leaves it unavailable instead of keeping the stock it had before it was cached.
+  const refreshAfterRestore = $(async () => {
+    product.variants = withUncheckedStock(product).variants;
+    await refreshLiveStock();
+  });
+  useBfcacheStockRefresh(refreshAfterRestore);
   const changeImage = $((newIndex: number) => {
     const newAsset = orderedAssets.value[newIndex];
     if (newAsset) {

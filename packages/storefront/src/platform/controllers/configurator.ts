@@ -2,7 +2,7 @@
 // live stock read (stock-read.ts), the purchase state and the add. Every action goes through `dispatch` (callbacks.ts): validated
 // against this store, applied in call order, a result rebuilt from its fixed schema. A forged or out-of-range call returns `invalid`
 // (or `not-eligible` for an add) with no state change and no request.
-import { $, useContext, useOnDocument, useStore, useTask$, useVisibleTask$, type ReadonlySignal } from '@qwik.dev/core';
+import { $, useContext, useStore, useTask$, useVisibleTask$, type ReadonlySignal } from '@qwik.dev/core';
 import { isBrowser } from '@qwik.dev/core/build';
 import { useLocation } from '@qwik.dev/router';
 import { APP_STATE } from '~/constants';
@@ -17,7 +17,8 @@ import { addResultFrom, effectivePriceOf, enrichmentFor } from './product-model'
 import { INVALID, OK, changeConsent, changeQuantity, focused, initialFocus, projectConfigurator, selectOption, selectProduct, sourceOf, type ConfiguratorCtl, type ConfiguratorView } from './configurator-model';
 
 export type { ConfiguratorCtl, ConfiguratorSource, ConfiguratorView } from './configurator-model';
-import { abortStockRead, initialStockCtl, requestLoad, retryFailed, startNewView } from './stock-read';
+import { abortStockRead, initialStockCtl, readStock, requestLoad, retryFailed, startNewView } from './stock-read';
+import { useBfcacheStockRefresh, useStockTrigger } from '~/platform/stock-triggers';
 import { seal } from './project';
 import type { BrandProductDetail } from '~/platform/product-detail';
 import type { ConfiguratorDetail } from '~/platform/configurator-detail';
@@ -89,7 +90,11 @@ export function useConfigurator(loader: ReadonlySignal<ConfiguratorLoaderValue>,
 		ctl.viewKey = key;
 		if (isBrowser) load();
 	});
-	useOnDocument('qidle', $(() => load()));
+	// The automatic read's document event: the PDP follows pdp.stockRefreshTrigger, the shop stays on qidle.
+	useStockTrigger(mode === 'product' ? 'pdp' : 'shop', load);
+	// pdp.bfcacheRefresh: a restored page reads its products again (same view, same selection; a live read like any other).
+	const reread = $(() => { void readStock(ctl, sourceOf(loader.value, mode).products.map((p) => p.slug), fetchProductStock); });
+	useBfcacheStockRefresh(reread, mode === 'product' ? 'pdp' : 'shop');
 	useVisibleTask$(({ cleanup }) => cleanup(() => { ctl.disposed = true; abortStockRead(ctl); }));
 
 	/** The projection for this render (the mount calls it in its render body: a computed read inside another computed lost its
