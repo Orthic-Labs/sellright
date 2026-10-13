@@ -18,5 +18,12 @@ export const totalChange = (shownCents: number, chargeCents: number): TotalChang
 	chargeCents,
 });
 
+/**
+ * True while a changed total still waits for the shopper's confirmation: the payment controls stay disabled and every
+ * charge handler returns before charging. Nothing is gated before the order exists or when the totals agree.
+ */
+export const needsTotalConsent = (shownCents: number, chargeCents: number, confirmed: boolean): boolean =>
+	totalChange(shownCents, chargeCents).changed && !confirmed;
+
 /** Same formatting the order-summary estimate uses ('$' + grouped 2-decimal amount). */
 export const formatCents = (cents: number): string => '$' + (cents / 100).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');

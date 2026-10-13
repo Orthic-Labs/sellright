@@ -3,7 +3,7 @@ import { drainResumes, type ResumeQueue } from './resume-selection';
 
 type Method = 'stripe' | 'nmi' | 'sezzle';
 
-const makeQueue = (): ResumeQueue<Method> => ({ busy: false, pending: null });
+const makeQueue = (): ResumeQueue<Method> => ({ busy: false, pending: null, epoch: 0 });
 
 /** A resume whose payment init the test releases by hand, recording which method each init ran for. */
 const makeHarness = () => {
@@ -34,7 +34,7 @@ describe('resume method selection (latest wins)', () => {
 		await first;
 		expect(h.inits).toEqual(['nmi', 'sezzle']);
 		expect(h.inits[h.inits.length - 1]).toBe('sezzle');
-		expect(h.queue).toEqual({ busy: false, pending: null });
+		expect(h.queue).toEqual({ busy: false, pending: null, epoch: 0 });
 	});
 
 	it('three rapid selections: intermediate ones are coalesced, final applied equals the last selected', async () => {
@@ -47,7 +47,7 @@ describe('resume method selection (latest wins)', () => {
 		await h.flush();
 		await first;
 		expect(h.inits).toEqual(['nmi', 'stripe']);
-		expect(h.queue).toEqual({ busy: false, pending: null });
+		expect(h.queue).toEqual({ busy: false, pending: null, epoch: 0 });
 	});
 
 	it('a lone selection runs once; a later selection after it settled runs on its own', async () => {
@@ -75,7 +75,7 @@ describe('resume method selection (latest wins)', () => {
 	it('a failing run releases the queue so the next selection can start', async () => {
 		const queue = makeQueue();
 		await expect(drainResumes(queue, 'nmi', async () => { throw new Error('boom'); })).rejects.toThrow('boom');
-		expect(queue).toEqual({ busy: false, pending: null });
+		expect(queue).toEqual({ busy: false, pending: null, epoch: 0 });
 		const seen: Array<Method | undefined> = [];
 		await drainResumes(queue, 'stripe', async (m) => { seen.push(m); });
 		expect(seen).toEqual(['stripe']);

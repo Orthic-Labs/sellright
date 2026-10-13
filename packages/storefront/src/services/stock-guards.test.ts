@@ -157,8 +157,8 @@ describe('pre-submit live stock read (locked layer 4)', () => {
 
 	it('an existing order whose PLACE ORDER failed is recovered through resume, not left behind the form gates', () => {
 		const route = read('routes/checkout/index.tsx');
-		const place = section(route, 'const placeOrder = $(', 'const recoverResumePaymentError');
-		const recover = section(place, 'shouldRecoverExistingOrder(', 'await beginResume()');
+		const place = read('components/checkout/place-order-flow.ts');
+		const recover = section(place, 'shouldRecoverExistingOrder(', 'await deps.beginResume()');
 		expect(recover).toMatch(/orderCode: srState\.code/);
 		// the recovery precedes the generic "throw the error" exit
 		expect(place.indexOf('shouldRecoverExistingOrder(')).toBeLessThan(place.indexOf("throw new Error(srState.error ||"));
@@ -178,11 +178,11 @@ describe('pre-submit live stock read (locked layer 4)', () => {
 		expect(route).not.toMatch(/shopConfig\.value;?\s*\n\s*const anyGatewayConfigured/);
 		expect(route).not.toMatch(/\.then\(\(cfg\) => applyShopConfig/);
 		expect(route).toMatch(/await applyShopConfig\(cfg\)/);
-		const resume = section(route, 'const runResume = $(', 'const loadNormalCheckout');
-		expect(resume).toContain('await ensureShopConfig(gen)');
-		const place = section(route, 'const placeOrder = $(', 'const recoverResumePaymentError');
-		expect(place.indexOf('await ensureShopConfig()')).toBeGreaterThan(-1);
-		expect(place.indexOf('await ensureShopConfig()')).toBeLessThan(place.indexOf('placeOrderNative('));
+		const resume = read('components/checkout/resume-flow.ts');
+		expect(resume).toContain('await deps.ensureShopConfig(gen)');
+		const place = read('components/checkout/place-order-flow.ts');
+		expect(place.indexOf('await deps.ensureShopConfig()')).toBeGreaterThan(-1);
+		expect(place.indexOf('await deps.ensureShopConfig()')).toBeLessThan(place.indexOf('deps.placeOrder('));
 		// The default method is applied once.
 		expect(route).toMatch(/shouldApplyConfigDefault\(configDefaultApplied\.value\)/);
 	});
@@ -243,10 +243,12 @@ describe('pre-submit live stock read (locked layer 4)', () => {
 	it('ONE view generation: bumped on method switch, resume start, retry, start-new-cart and leaving the page; no second counter', () => {
 		const route = read('routes/checkout/index.tsx');
 		expect(route).not.toMatch(/resumeGen/);
-		expect(section(route, 'const runResume = $(', 'const loadNormalCheckout')).toMatch(/const gen = bumpView\(paymentInit\)/);
+		expect(read('components/checkout/resume-flow.ts')).toMatch(/const gen = bumpView\(deps\.view\)/);
 		expect(section(route, 'const onResumeRetry$', 'const onResumeMethod$')).toMatch(/const gen = bumpView\(paymentInit\)/);
 		expect(section(route, 'const onStartNewCart$', 'useVisibleTask$')).toMatch(/const gen = bumpView\(paymentInit\)/);
-		expect(route).toMatch(/cleanup\(\(\) => \{ bumpView\(paymentInit\); \}\)/);
+		// leaving the page bumps the generation AND voids any queued method selection, in one call
+		expect(route).toMatch(/cleanup\(\(\) => \{ cancelResumeFlow\(paymentInit, resumeQueue\); \}\)/);
+		expect(read('components/checkout/resume-flow.ts')).toMatch(/export const cancelResumeFlow[\s\S]*?bumpView\(view\);\s*cancelResumes\(queue\)/);
 		// The leave-page bump lives in its own task that reads nothing reactive; a task that subscribes to page state
 		// (entry, late resume) re-runs when the cart converts at order creation and would bump through its cleanup.
 		const leaveTask = section(route, 'useVisibleTask$(({ cleanup })', 'useVisibleTask$(async () =>');
@@ -275,15 +277,17 @@ describe('pre-submit live stock read (locked layer 4)', () => {
 		expect(config).toMatch(/await getShopConfig\(\);\s*if \(!isCurrentView\(paymentInit, gen\)\) return cfg;\s*await applyShopConfig/);
 		// beginResume: after the config read, before payment initialisation; it passes the check into resumeConverted and
 		// navigates only while current.
-		const resume = section(route, 'const runResume = $(', 'const loadNormalCheckout');
-		expect(resume).toMatch(/await ensureShopConfig\(gen\)/);
-		expect(resume).toMatch(/resumeConverted\(token, [^\n]*, probe, current\)/);
+		const resume = read('components/checkout/resume-flow.ts');
+		expect(resume).toMatch(/await deps\.ensureShopConfig\(gen\)/);
+		expect(resume).toMatch(/deps\.resumeConverted\(token, [^\n]*, probe, current\)/);
 		expect(resume).toMatch(/view === 'settled' && current\(\)/);
 		expect(resume).toMatch(/catch \(e\) \{\s*if \(!current\(\)\) return;/);
 		// placeOrder: after the config read and the order request, in the catch, and flags released in finally.
+		const flow = read('components/checkout/place-order-flow.ts');
+		expect(flow).toMatch(/await deps\.ensureShopConfig\(\);[\s\S]*?if \(!current\(\)\) return;[\s\S]*?const anyGatewayConfigured/);
+		expect(flow).toMatch(/await deps\.placeOrder\([^\n]*\n[\s\S]*?if \(!current\(\)\) return;\s*if \(srState\.convertedCart\)/);
 		const place = section(route, 'const placeOrder = $(', 'const recoverResumePaymentError');
-		expect(place).toMatch(/await ensureShopConfig\(\);[\s\S]*?if \(!current\(\)\) return;[\s\S]*?const anyGatewayConfigured/);
-		expect(place).toMatch(/await placeOrderNative\([^\n]*\n[\s\S]*?if \(!current\(\)\) return;\s*if \(srState\.convertedCart\)/);
+		expect(place).toMatch(/await submitOrderFlow\(/);
 		expect(place).toMatch(/catch \(error\) \{\s*if \(!current\(\)\) return;/);
 		expect(place).toMatch(/\} finally \{\s*showProcessingModal\.value = false;\s*isOrderProcessing\.value = false;/);
 		// start-new-cart: after the retire lookup and the reset.
@@ -309,8 +313,11 @@ describe('pre-submit live stock read (locked layer 4)', () => {
 	it('payment-component callbacks carry the component\'s own mount id and the route rejects a stale one', () => {
 		const route = read('routes/checkout/index.tsx');
 		expect(section(route, 'const onPaymentError$ = $(', 'const onPaymentInitError$')).toMatch(/if \(!acceptsMount\(paymentInit, mountGen\)\) return;/);
-		expect(section(route, 'const onPaymentInitError$ = $(', 'const onPaymentProcessingChange$')).toMatch(/if \(!acceptsMount\(paymentInit, mountGen\)\) return;/);
-		expect(section(route, 'const onPaymentProcessingChange$ = $(', 'const onGatewaySuccess$')).toMatch(/if \(isProcessing && !acceptsMount\(paymentInit, mountGen\)\) return;/);
+		expect(section(route, 'const onPaymentInitError$ = $(', 'const onPaymentProcessingChange$')).toMatch(/if \(!applyPaymentInitError\([^\n]*mountGen\)\) return;/);
+		expect(section(route, 'const onPaymentProcessingChange$ = $(', 'const onGatewaySuccess$')).toMatch(/applyPaymentProcessingChange\([^\n]*isProcessing, mountGen\)/);
+		const callbacks = read('components/checkout/payment-callbacks.ts');
+		expect(callbacks).toMatch(/if \(!acceptsMount\(deps\.view, mountGen\)\) return false;/);
+		expect(callbacks).toMatch(/if \(isProcessing && !acceptsMount\(deps\.view, mountGen\)\) return false;/);
 		for (const rel of ['components/checkout/StripePaymentElement.tsx', 'components/payment/NMI.tsx', 'components/payment/Sezzle.tsx']) {
 			const code = read(rel);
 			expect(code, rel).toMatch(/const mountGen = useSignal\(props\.mountGen\)/);

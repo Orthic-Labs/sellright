@@ -11,7 +11,7 @@ import { validateCheckoutStock } from '~/hooks/pre-submit-stock';
 import { CheckoutValidationProvider, useCheckoutValidation, useCheckoutValidationActions } from '~/contexts/CheckoutValidationContext';
 import { useCheckout, type PaymentMethod } from '~/hooks/useCheckout';
 import { formatCents } from '~/hooks/checkout-total';
-import { decideCheckoutEntry, defaultPaymentMethod, shouldApplyConfigDefault, shouldRecoverExistingOrder, shouldResumeLate } from '~/hooks/checkout-stage';
+import { decideCheckoutEntry, defaultPaymentMethod, shouldApplyConfigDefault, shouldResumeLate } from '~/hooks/checkout-stage';
 import { getShopConfig, getEligibleShippingMethods } from '~/providers/shop/checkout/checkout';
 import type { ShopConfig, ShopShippingMethod } from '~/sellright/types/checkout';
 import { validateBillingSection, validateCustomerSection, validateShippingSection } from '~/utils/checkout-section-validation';
@@ -19,7 +19,10 @@ import { CheckoutPageView } from '~/components/checkout/CheckoutPageView';
 import { CHECKOUT_STYLES } from './checkout-styles';
 import { recoverCheckoutPaymentError, classifyResumePaymentError } from './checkout-payment-recovery';
 import { acceptsMount, bumpView, isCurrentView } from '~/components/checkout/view-generation';
-import { drainResumes, type ResumeQueue } from '~/components/checkout/resume-selection';
+import type { ResumeQueue } from '~/components/checkout/resume-selection';
+import { beginResumeFlow, cancelResumeFlow } from '~/components/checkout/resume-flow';
+import { submitOrderFlow } from '~/components/checkout/place-order-flow';
+import { applyPaymentInitError, applyPaymentProcessingChange } from '~/components/checkout/payment-callbacks';
 import { useLoyaltyOffer } from '~/platform/controllers/loyalty';
 
 
@@ -191,50 +194,24 @@ const CheckoutContent = component$(() => {
   // Resume the ORIGINAL order of a converted cart: its own view and payment initialisation, never the new-order form
   // gates, the stock check or an order POST. `methodOverride` re-initialises payment for a method the shopper picked;
   // `probe` marks a lookup made because the live cart read failed (see enterCheckout).
-  const resumeQueue = useStore<ResumeQueue<PaymentMethod>>({ busy: false, pending: null });
-  const runResume = $(async (methodOverride?: PaymentMethod, probe = false) => {
-    const token = CartService.token();
-    if (!token) return;
-    // A resume start replaces the view: it supersedes every handler still in flight.
-    const gen = bumpView(paymentInit);
-    const current = () => isCurrentView(paymentInit, gen);
-    try {
-      paymentInit.failed = false;
-      // The payment method needs the shop config: a failed config read is a retryable error, never a silent
-      // "no payment method configured" (the Stripe key would be empty) for an order that is waiting to be paid.
-      let cfg: ShopConfig;
-      try {
-        cfg = await ensureShopConfig(gen);
-      } catch (e) {
-        if (!current()) return;
-        console.warn('[Checkout] shop-config fetch failed:', e);
-        srState.error = "We couldn't load your payment options. Please try again.";
-        srState.resume = 'error';
-        return;
-      }
-      if (!current()) return;
-      const anyGatewayConfigured = !!cfg.stripeConfigured || !!cfg.gateways?.nmi || !!cfg.gateways?.sezzle;
-      const view = await resumeConverted(token, anyGatewayConfigured ? (methodOverride ?? paymentMethod.value) : null, probe, current);
-      if (view === 'settled' && current()) {
-        const rt = srState.receiptToken ? `?rt=${encodeURIComponent(srState.receiptToken)}` : '';
-        navigate(`/checkout/confirmation/${srState.code}${rt}`);
-      }
-    } finally {
-      // Only the current resume releases the controls; a superseding handler owns them.
-      if (current()) state.loading = false;
-    }
-  });
-
-  // Entry point for every resume. A method chosen while a resume is still in flight is not dropped: the latest choice
-  // is queued and applied once the in-flight run settles (see resume-selection.ts).
+  const resumeQueue = useStore<ResumeQueue<PaymentMethod>>({ busy: false, pending: null, epoch: 0 });
+  // The resume logic itself lives in resume-flow.ts (so tests can drive it); this only wires it to the page's state.
   const beginResume = $(async (methodOverride?: PaymentMethod, probe = false) => {
-    let firstRun = true;
-    await drainResumes(resumeQueue, methodOverride, (method) => {
-      // `probe` belongs to the call that started the drain; a queued method selection is never a probe.
-      const asProbe = firstRun && probe;
-      firstRun = false;
-      return runResume(method, asProbe);
-    });
+    await beginResumeFlow(
+      {
+        queue: resumeQueue,
+        view: paymentInit,
+        srState,
+        state,
+        selectedMethod: () => paymentMethod.value,
+        token: () => CartService.token(),
+        ensureShopConfig: (gen) => ensureShopConfig(gen),
+        resumeConverted: (token, method, isProbe, isCurrent) => resumeConverted(token, method, isProbe, isCurrent),
+        navigate: (path) => navigate(path),
+      },
+      methodOverride,
+      probe,
+    );
   });
 
   // The normal new-order checkout's own initialisation (customer, countries, address, destination country).
@@ -375,7 +352,8 @@ const CheckoutContent = component$(() => {
   // cleanup whenever the task re-runs, so this must never live in a task that subscribes to page state (the entry
   // task re-runs when the cart converts at order creation, which would discard the place-order result).
   useVisibleTask$(({ cleanup }) => {
-    cleanup(() => { bumpView(paymentInit); });
+    // Supersede the in-flight resume AND void any queued method selection, so nothing starts after the page is left.
+    cleanup(() => { cancelResumeFlow(paymentInit, resumeQueue); });
   });
 
   useVisibleTask$(async () => {
@@ -521,68 +499,29 @@ const CheckoutContent = component$(() => {
         couponCode: localCart.cart.coupon?.applied ? localCart.cart.coupon.code : undefined,
         redeemPoints: redeemPoints.value > 0 ? redeemPoints.value : undefined,
       };
-      totalConfirmed.value = false;
-      // When shop-config says the store has no gateway at all, don't mint a
-      // doomed Stripe PaymentIntent (it 503s and bounces the shopper back to
-      // the shipping step with a raw API error). Place the order unpaid and
-      // land on 'paying', where the panel renders its explicit
-      // "no payment method configured" state.
-      // No order exists yet: a config that cannot be read stops here instead of placing an order whose payment method is
-      // unknown (a null config used to read as "configured").
-      let cfg: ShopConfig;
-      try {
-        cfg = await ensureShopConfig();
-      } catch {
-        throw new Error("We couldn't load your payment options. Please try again.");
-      }
-      if (!current()) return;
-      const anyGatewayConfigured = !!cfg.stripeConfigured || !!cfg.gateways?.nmi || !!cfg.gateways?.sezzle;
-      // The total on screen right now is what the shopper agreed to; the order
-      // comes back server-priced and the PAY step gates on any difference.
-      const phase = await placeOrderNative(form, anyGatewayConfigured ? paymentMethod.value : null, checkoutTotalCents.value || 0);
-      // The page was left (or the view replaced) while the order request ran: nothing is shown or navigated here. The
-      // order exists server-side and is picked up by the resume view on the next visit.
-      if (!current()) return;
-      if (srState.convertedCart) {
-        // Another tab (or an earlier attempt) already turned this cart into an order: nothing was POSTed and the
-        // token is kept. Show that order instead of the form.
-        showProcessingModal.value = false;
-        isOrderProcessing.value = false;
-        await beginResume();
-        return;
-      }
-      if (phase === 'paid') {
-        showProcessingModal.value = false;
-        isOrderProcessing.value = false;
-        const rt = srState.receiptToken ? `?rt=${encodeURIComponent(srState.receiptToken)}` : '';
-        navigate(`/checkout/confirmation/${srState.code}${rt}`);
-        return;
-      }
-      if (phase === 'paying') {
-        showProcessingModal.value = false;
-        isOrderProcessing.value = false;
-        state.error = null;
-        setTimeout(() => {
-          document.getElementById('payment-method-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }, 80);
-        return;
-      }
-      if (shouldRecoverExistingOrder({ phase: srState.phase, orderCode: srState.code, convertedCart: srState.convertedCart }) && CartService.token()) {
-        // The order was created but its payment initialisation (or zero-due settlement) failed: it is a real unpaid
-        // order, so show it through the resume view with a retry instead of the form.
-        showProcessingModal.value = false;
-        isOrderProcessing.value = false;
-        await beginResume();
-        return;
-      }
-      if (srState.stockConflict) {
-        // Someone else took the stock between this shopper's cart and PLACE ORDER:
-        // re-read the live cart so the line stops saying "Only N left" and shows
-        // its real (sold-out) state. Live read — nothing is cached.
-        await refreshCartStock(localCart);
-        if (!current()) return;
-      }
-      throw new Error(srState.error || 'Checkout failed. Please try again.');
+      // From here to the payment view: place-order-flow.ts (it never bumps the view generation).
+      await submitOrderFlow(
+        {
+          srState,
+          state,
+          flags: { processingModal: showProcessingModal, orderProcessing: isOrderProcessing, totalConfirmed },
+          selectedMethod: () => paymentMethod.value,
+          shownCents: () => checkoutTotalCents.value || 0,
+          ensureShopConfig: () => ensureShopConfig(),
+          placeOrder: (f, method, shown) => placeOrderNative(f, method, shown),
+          beginResume: () => beginResume(),
+          refreshStock: () => refreshCartStock(localCart),
+          navigate: (path) => navigate(path),
+          hasCartToken: () => !!CartService.token(),
+          onPaying: () => {
+            setTimeout(() => {
+              document.getElementById('payment-method-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }, 80);
+          },
+        },
+        form,
+        current,
+      );
     } catch (error) {
       if (!current()) return;
       state.error = error instanceof Error ? error.message : 'An unknown error occurred. Please check your information and try again.';
@@ -659,19 +598,13 @@ const CheckoutContent = component$(() => {
   // remounts it. The order, its client secret and the selected method stay as they are.
   const onPaymentInitError$ = $(async (errorMessage: string, mountGen?: number) => {
     // The component's QRL may run only after the view was replaced (method switch, retry, resume): reject it here.
-    if (!acceptsMount(paymentInit, mountGen)) return;
+    if (!applyPaymentInitError({ view: paymentInit, state, flags: { processingModal: showProcessingModal, orderProcessing: isOrderProcessing } }, mountGen)) return;
     console.warn('[Checkout] payment component failed to initialise:', errorMessage);
-    showProcessingModal.value = false;
-    isOrderProcessing.value = false;
-    state.loading = false;
-    paymentInit.failed = true;
   });
 
   const onPaymentProcessingChange$ = $(async (isProcessing: boolean, mountGen?: number) => {
     // A stale component may not LOCK the current view; releasing a lock is always safe.
-    if (isProcessing && !acceptsMount(paymentInit, mountGen)) return;
-    state.loading = isProcessing;
-    isOrderProcessing.value = isProcessing;
+    applyPaymentProcessingChange({ view: paymentInit, state, flags: { processingModal: showProcessingModal, orderProcessing: isOrderProcessing } }, isProcessing, mountGen);
   });
 
   // Intentionally NOT generation-guarded: a settled charge means the order is paid, so the shopper is taken to its

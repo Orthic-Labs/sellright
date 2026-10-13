@@ -10,7 +10,18 @@
 export interface ResumeQueue<M> {
 	busy: boolean;
 	pending: M | null;
+	/** Bumped by `cancelResumes`: a drain that started under an older epoch starts nothing further. */
+	epoch: number;
 }
+
+/**
+ * The page was left (or the whole queue is otherwise void): forget any queued selection and stop every drain that is
+ * still running from starting another run. The in-flight run itself is superseded separately by the view generation.
+ */
+export const cancelResumes = <M>(queue: ResumeQueue<M>): void => {
+	queue.pending = null;
+	queue.epoch += 1;
+};
 
 /**
  * Runs `run(first)`; any selection made while it is in flight is queued (the newest replaces an older queued one) and
@@ -27,12 +38,14 @@ export const drainResumes = async <M>(
 		return;
 	}
 	queue.busy = true;
+	const epoch = queue.epoch;
 	try {
 		let next: M | undefined = first;
 		for (;;) {
 			queue.pending = null;
 			await run(next);
-			if (queue.pending === null) return;
+			// Cancelled while the run was in flight (page left): the queued selection must not start another run.
+			if (queue.epoch !== epoch || queue.pending === null) return;
 			next = queue.pending;
 		}
 	} finally {
