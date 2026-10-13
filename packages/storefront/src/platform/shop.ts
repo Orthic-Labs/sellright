@@ -5,6 +5,7 @@ import { loadBrowseCatalog } from '~/services/browse-catalog';
 import { generateBreadcrumbSchema } from '~/services/seo-schemas';
 import { createSEOHead } from '~/utils/seo';
 import { siteUrl } from '~/theme/theme.config';
+import { hasView } from '~/platform/gateway';
 
 // ── Catalog manifest loader (SSR) ──────────────────────────────
 // Reads the pre-generated shop-catalog.json at SSR time, normalized to the
@@ -14,6 +15,8 @@ import { siteUrl } from '~/theme/theme.config';
 // stock is rechecked before checkout.
 // Products are in the HTML on first byte — no client-side API call needed.
 export const useCatalogLoader = routeLoader$(async ({ error }) => {
+ // Brand views PR2: a branded shop reads its listing through useConfiguratorDetail (one generation with the detail products).
+ if (hasView('route.shop')) return { totalItems: 0, products: [], fallback: false };
  try {
   const parsed = await loadBrowseCatalog();
   return { ...parsed, fallback: false };

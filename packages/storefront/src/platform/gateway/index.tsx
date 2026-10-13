@@ -42,6 +42,7 @@ import { LoyaltyRedeem } from '~/components/loyalty/LoyaltyRedeem';
 import type { JSXOutput } from '@qwik.dev/core';
 import { action, gate, gateValue, hasView, optionalAction, slotGate } from './gate';
 import { anyOf, arr, bool, html, lit, nul, num, obj, opt, str } from './schema';
+import { ADD_RESULT } from './actions';
 
 export { hasView };
 export { platformAction, type ActionHandle, type ActionName } from './actions';
@@ -157,6 +158,8 @@ export const ProductCard = /*#__PURE__*/ gate('ProductCard', RawProductCard, {
 		inStock: opt(bool),
 		priority: opt(bool),
 		skeleton: opt(bool),
+		/** The product link (platform/product-path.ts); the card's own default is the /products/ path. */
+		href: opt(str),
 	}),
 });
 export const Price = /*#__PURE__*/ gate('Price', RawPrice, {
@@ -189,6 +192,8 @@ export const HomeTrustBar = /*#__PURE__*/ gate('HomeTrustBar', RawHomeTrustBar, 
 export const HomeServiceSection = /*#__PURE__*/ gate('HomeServiceSection', RawHomeServiceSection, { data: obj({}) });
 export const HomeTeeSection = /*#__PURE__*/ gate('HomeTeeSection', RawHomeTeeSection, {
 	data: obj({
+		/** The product link (platform/product-path.ts). */
+		href: opt(str),
 		product: opt(nul(obj({ name: str, slug: str, category: nul(str), description: nul(str), featuredAsset: nul(obj({ preview: str })) }))),
 		variant: opt(
 			nul(
@@ -274,3 +279,87 @@ export const WaitlistView = /*#__PURE__*/ slotGate('pdp.waitlist', {
 export const OrderCardView = /*#__PURE__*/ slotGate('account.order-card', { data: obj({ order: ORDER_SUMMARY, href: str }) });
 export const SustainabilityBadgeView = /*#__PURE__*/ slotGate('account.sustainability-badge', { data: obj({ orderCount: num, statsLoaded: bool }) });
 export const LegalCopyView = /*#__PURE__*/ slotGate('legal.copy', { data: obj({ section: lit('privacy.payment-processors') }) });
+
+// ---------------------------------------------------------------------------------------------------- PR2: shop and product views
+// docs/plans/2026-10-11-brand-views-pr2.md §2. Detail is metadata only; `availability` is `in-stock` only from a live read of the
+// current view (platform/controllers/product-model.ts). The gateway has no record type, so every map is an array of pairs.
+
+const AVAILABILITY = lit('unchecked', 'loading', 'in-stock', 'out-of-stock', 'error');
+const VIEW_IMAGE = obj({ url: str, alt: nul(str) });
+const PRICE_RANGE = obj({ minCents: num, maxCents: num });
+export const VIEW_PRODUCT = obj({
+	key: str,
+	slug: str,
+	name: str,
+	href: str,
+	description: html,
+	images: arr(VIEW_IMAGE),
+	optionGroups: arr(obj({ code: str, name: str, values: arr(obj({ code: str, name: str, availability: AVAILABILITY })) })),
+	variants: arr(
+		obj({
+			sku: str,
+			name: str,
+			options: arr(obj({ group: str, value: str })),
+			priceCents: num,
+			salePriceCents: nul(num),
+			preOrderPriceCents: nul(num),
+			isPreOrder: bool,
+			shipDate: nul(str),
+			images: arr(VIEW_IMAGE),
+			availability: AVAILABILITY,
+		}),
+	),
+	priceRange: PRICE_RANGE,
+	currencyCode: str,
+	availability: AVAILABILITY,
+	rating: nul(obj({ average: num, count: num })),
+	productId: nul(str),
+});
+export const PRODUCT_SUMMARY = obj({ key: str, slug: str, name: str, href: str, image: nul(str), priceRange: PRICE_RANGE, currencyCode: str });
+export const VIEW_SELECTION = obj({ productKey: nul(str), options: arr(obj({ group: str, value: nul(str) })), variantSku: nul(str), quantity: num, preOrderConsent: bool });
+export const PURCHASE = obj({
+	stock: lit('unchecked', 'loading', 'ready', 'error'),
+	eligible: bool,
+	reason: nul(lit('select-product', 'select-options', 'stock-loading', 'out-of-stock', 'in-cart-limit', 'stock-error', 'consent-required', 'adding')),
+	adding: bool,
+	last: nul(ADD_RESULT),
+	inCartQuantity: num,
+	maxQuantity: num,
+});
+const LISTING_ITEM = obj({ slug: str, name: str, href: str, image: nul(str), priceCents: num, currencyCode: str, availability: lit('in-stock', 'out-of-stock') });
+
+export const SHOP_DATA = obj({
+	identity: IDENTITY,
+	listing: arr(LISTING_ITEM),
+	inStockOnly: bool,
+	detail: arr(VIEW_PRODUCT),
+	detailStatus: lit('ok', 'partial', 'unavailable'),
+	selection: VIEW_SELECTION,
+	purchase: PURCHASE,
+});
+const CONFIGURATOR_ACTIONS = {
+	onOptionSelect$: action('configurator.option-select'),
+	onQuantityChange$: action('configurator.quantity'),
+	onConsentChange$: action('configurator.consent'),
+	onAddToCart$: action('configurator.add'),
+	onRetryStock$: action('configurator.retry-stock'),
+} as const;
+export const ShopView = /*#__PURE__*/ slotGate('route.shop', {
+	data: SHOP_DATA,
+	actions: { ...CONFIGURATOR_ACTIONS, onProductSelect$: action('configurator.product-select'), onInStockChange$: action('shop.in-stock') },
+});
+
+export const PRODUCT_FOUND_DATA = obj({
+	identity: IDENTITY,
+	state: lit('found'),
+	product: VIEW_PRODUCT,
+	siblings: arr(PRODUCT_SUMMARY),
+	selection: VIEW_SELECTION,
+	purchase: PURCHASE,
+	breadcrumbs: arr(obj({ name: str, href: str })),
+});
+export const PRODUCT_MISSING_DATA = obj({ identity: IDENTITY, state: lit('missing'), shopHref: str });
+/** `route.product`, found: the product, its siblings (no stock), the purchase state and the configurator actions. */
+export const ProductView = /*#__PURE__*/ slotGate('route.product', { data: PRODUCT_FOUND_DATA, actions: CONFIGURATOR_ACTIONS });
+/** `route.product`, missing (status 404): same slot, no actions, no controller and no stock read behind it. */
+export const ProductMissingView = /*#__PURE__*/ slotGate('route.product', { data: PRODUCT_MISSING_DATA });

@@ -45,6 +45,8 @@ export interface PurchaseEvent {
 	currency: string;
 	value: number;
 	itemCount: number;
+	/** At most 20 order lines (minor units), for the dataLayer purchase. */
+	items?: { sku: string; name: string; price: number; quantity: number }[];
 }
 
 export type AnalyticsEvent = ViewItemEvent | AddToCartEvent | BeginCheckoutEvent | PurchaseEvent;

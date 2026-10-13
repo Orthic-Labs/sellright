@@ -30,6 +30,11 @@ import { DEV_API } from '~/constants';
 import { srShopIdentity, srErrorStatus, srMaintenanceStatus } from '~/utils/sellright';
 import { identityFromStaticTheme } from '~/theme/theme.config';
 import { normalizeIdentity } from '~/utils/normalize-identity';
+import { AnalyticsMount } from '~/platform/controllers/analytics-mount';
+import { BRAND_HEAD } from '~/platform/brand-data';
+
+/** head.json analytics declared (a build constant): only then is the conversion subscriber mounted. */
+const HAS_ANALYTICS = !!BRAND_HEAD.analytics;
 
 /** WS-C: cookie that remembers a valid preview token across navigation, once
  *  presented on any request via ?preview_token=. Not HttpOnly — the value is
@@ -307,6 +312,7 @@ export default component$(() => {
 						<Slot />
 					</main>
 					{!isAffiliateSurface && (hasView('shell.footer') ? <BrandFooterMount /> : <Footer />)}
+					{HAS_ANALYTICS && <AnalyticsMount />}
 				</div>
 				{/* Global Login Modal */}
 				<LoginModalComponent />

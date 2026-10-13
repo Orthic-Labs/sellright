@@ -1,13 +1,16 @@
 import { $, component$, useSignal, useStore, useTask$ } from '@qwik.dev/core';
-import { ProductCard, ShopFilters as Filters, platformAction } from '~/platform/gateway';
+import { ProductCard, ShopFilters as Filters, hasView, platformAction } from '~/platform/gateway';
+import { BrandShopMount } from '~/platform/controllers/shop';
 import { searchProducts } from '~/providers/shop/products/products';
 import type { CatalogListItem } from '~/sellright/types/catalog';
 import { FacetWithValues } from '~/types';
 import { theme } from '~/theme/theme.config';
 import { useCatalogLoader } from '~/platform/shop';
 import { projectFacetIds, projectFacets } from '~/platform/controllers/project';
+import { productPath } from '~/platform/product-path';
 
 export { useCatalogLoader };
+export { useConfiguratorDetail } from '~/platform/configurator-detail';
 export { head, onStaticGenerate } from '~/platform/shop';
 
 // Category filter labels are generic and store-configurable (VITE_SHOP_CATEGORIES,
@@ -27,7 +30,7 @@ const FACET_ID_TO_NAME: Record<string, string> = Object.fromEntries(
  theme.shopCategories.map((name, i) => [String(i + 1), name]),
 );
 
-export default component$(() => {
+const BaseShopPage = component$(() => {
  const catalog = useCatalogLoader();
 
  // Fallback API data (only used when manifest is missing or for text search) —
@@ -275,6 +278,7 @@ export default component$(() => {
       {displayProducts.map((item, index) => (
        <ProductCard
         key={item.slug}
+        href={productPath(item.slug)}
         image={item.image}
         name={item.name}
         slug={item.slug}
@@ -293,3 +297,5 @@ export default component$(() => {
   </div>
  );
 });
+
+export default hasView('route.shop') ? BrandShopMount : BaseShopPage;

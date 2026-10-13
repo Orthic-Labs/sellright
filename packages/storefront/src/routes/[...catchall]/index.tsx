@@ -7,6 +7,7 @@ import { matchDeclaredPath } from '~/platform/content-routes';
 import { contentHead } from '~/platform/head-resolve';
 import { BrandContentMount } from '~/platform/controllers/content';
 import { hasView } from '~/platform/gateway';
+import { PRODUCT_PREFIX } from '~/platform/product-path';
 
 export const onGet: RequestHandler = async ({ status, url }) => {
 	// Declared content paths (src/brand/routes.json) are real pages: no 404 status. Without a declaration nothing changes.
@@ -89,7 +90,7 @@ export default component$(() => {
 							Sorry, we couldn't find the page you're looking for.
 						</p>
 
-						{currentPath.startsWith('/products/') && (
+						{currentPath.startsWith(`/${PRODUCT_PREFIX}/`) && (
 							<p class="text-xs text-gray-400 mb-6">
 								The product you're looking for may have been moved or is no longer available.
 							</p>

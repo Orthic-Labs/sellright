@@ -25,6 +25,8 @@ interface ProductCardProps {
   inStock?: boolean;
   priority?: boolean;
   skeleton?: boolean;
+  /** The product link from platform/product-path.ts. Absent: the documented default product path below. */
+  href?: string;
   /** @deprecated legacy alias for `name` — routes/index.tsx only */
   productName?: string;
   /** @deprecated legacy alias for `image` — routes/index.tsx only */
@@ -147,7 +149,7 @@ export default component$((props: ProductCardProps) => {
 
 	return (
 		<Link
-			href={`/products/${slug}/`}
+			href={props.href ?? `/products/${slug}/`}
 			prefetch
 			class="group block active:scale-[0.97] transition-transform duration-150"
 			onClick$={handleCardClick}

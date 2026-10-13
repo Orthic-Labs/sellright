@@ -128,7 +128,7 @@ const BaseHomePage = component$(() => {
                   >
                     {isAddingToCart.value ? 'Adding...' : 'Add to Cart'} <span class="btn-arrow">&rarr;</span>
                   </button>
-                  <a href={`/products/${preorderProduct.value.slug}`} class="btn-ghost--dark">View Details</a>
+                  <a href={productPath(preorderProduct.value.slug)} class="btn-ghost--dark">View Details</a>
                 </div>
               </div>
               <div class="preorder-img-cell">
@@ -149,7 +149,7 @@ const BaseHomePage = component$(() => {
         </section>
       )}
 
-      <HomeTeeSection product={projectFeatureProduct(featureProduct.value)} variant={projectFeatureVariant(featureVariant)} />
+      <HomeTeeSection product={projectFeatureProduct(featureProduct.value)} variant={projectFeatureVariant(featureVariant)} href={featureProduct.value ? productPath(featureProduct.value.slug) : undefined} />
 
       {/* ════════ Shop the collection — live catalog grid ════════ */}
       {featuredProducts.value.length > 0 && (
@@ -162,6 +162,7 @@ const BaseHomePage = component$(() => {
             {projectProductTiles(featuredProducts.value).map((tile, i) => (
               <ProductCard
                 key={tile.slug}
+                href={productPath(tile.slug)}
                 name={tile.name}
                 image={tile.image}
                 slug={tile.slug}
@@ -247,6 +248,7 @@ export const head = ({ resolveValue }: { resolveValue: any }) => {
 };
 
 import type { StaticGenerateHandler } from '@qwik.dev/router';
+import { productPath } from '~/platform/product-path';
 export const onStaticGenerate: StaticGenerateHandler = () => {
   return { params: [] };
 };

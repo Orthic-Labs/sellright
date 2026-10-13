@@ -1,5 +1,6 @@
 import type { RequestHandler } from '@qwik.dev/router';
 import { requireCacheAdminToken } from '~/utils/cache-admin-auth';
+import { productPath } from '~/platform/product-path';
 
 export const onPost: RequestHandler = async ({ request, json }) => {
 	const auth = requireCacheAdminToken(request);
@@ -30,7 +31,7 @@ export const onPost: RequestHandler = async ({ request, json }) => {
                 const resJson = await response.json();
                 const items = resJson?.items || [];
                 items.forEach((item: { slug: string }) => {
-                        pathsToWarm.push(`/products/${item.slug}/`);
+                        pathsToWarm.push(productPath(item.slug));
                 });
         } catch (error) {
                 console.error('Failed to fetch product slugs for local warming:', error);

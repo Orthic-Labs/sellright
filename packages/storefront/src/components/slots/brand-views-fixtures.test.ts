@@ -17,7 +17,7 @@ const DATA = path.join(HERE, '__fixtures__/brand-views-data');
 describe('brand-view fixtures', () => {
 	it('every fixture file is a valid slot for the view slots', () => {
 		const names = discoverSlots(VIEWS).map((e) => e.name).sort();
-		expect(names).toEqual(['cart.free-shipping-progress', 'checkout.loyalty-redemption', 'legal.copy', 'pdp.payment-widget', 'pdp.waitlist', 'route.blog', 'route.blog-post', 'route.contact', 'route.content', 'route.home', 'shell.footer', 'shell.header']);
+		expect(names).toEqual(['cart.free-shipping-progress', 'checkout.loyalty-redemption', 'legal.copy', 'pdp.payment-widget', 'pdp.waitlist', 'route.blog', 'route.blog-post', 'route.contact', 'route.content', 'route.home', 'route.product', 'route.shop', 'shell.footer', 'shell.header']);
 		for (const n of names) expect((SLOT_NAMES as readonly string[]).includes(n)).toBe(true);
 	});
 

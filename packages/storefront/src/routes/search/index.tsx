@@ -6,6 +6,7 @@ import type { CatalogListResponse } from '~/sellright/types/catalog';
 import { FacetWithValues } from '~/types';
 import { createSEOHead } from '~/utils/seo';
 import { projectFacets } from '~/platform/controllers/project';
+import { productPath } from '~/platform/product-path';
 
 // SellRight's catalog search has no facet/facet-value aggregation (unlike the
 // old legacy SearchResponse.facetValues) — `activeFacetValueIds` is accepted
@@ -137,6 +138,7 @@ export default component$(() => {
 						{(state.search.items || []).map((item) => (
 							<ProductCard
 						key={item.slug}
+						href={productPath(item.slug)}
 						image={item.image}
 						name={item.name}
 						slug={item.slug}

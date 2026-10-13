@@ -5,21 +5,32 @@
 // so it survives SSR and resumption without any in-memory registry; `gateway-action-literal` (scripts/check-gateway.mjs) keeps this
 // file its only constructor.
 import type { QRL } from '@qwik.dev/core';
-import { GatewayError, VOID, anyOf, bool, detachValue, lit, num, obj, str, type Infer, type Schema } from './schema';
+import { GatewayError, VOID, anyOf, bool, detachValue, lit, nul, num, obj, str, type Infer, type Schema } from './schema';
 
 export const ACTION_RESULT = anyOf(obj({ ok: lit(true) }), obj({ ok: lit(false), reason: lit('invalid', 'busy', 'disposed', 'error') }));
 export const FORM_RESULT = anyOf(obj({ ok: lit(true) }), obj({ ok: lit(false), reason: lit('invalid', 'busy', 'turnstile', 'server', 'disposed') }));
+/**
+ * The outcome of a configurator add (brand views PR2 plan §5), built only from the add's own server response: `added` (the line is
+ * available), `added-unavailable` (the server appended the units but its live line says they cannot all be bought: the drawer flags the
+ * line and checkout blocks it), or `rejected` with nothing added.
+ */
+export const ADD_RESULT = anyOf(
+	obj({ status: lit('added'), sku: str, quantity: num, lineQuantity: num }),
+	obj({ status: lit('added-unavailable'), sku: str, quantity: num, lineQuantity: num, availableQuantity: nul(num) }),
+	obj({ status: lit('rejected'), reason: lit('invalid', 'not-eligible', 'busy', 'disposed', 'cart-changed', 'cart-error', 'error'), message: nul(str) }),
+);
 
 interface ActionSpec {
 	/** 'event': a DOM handler; the framework-delivered arguments are not forwarded. Otherwise one schema per argument. */
 	readonly args: 'event' | readonly Schema[];
 	readonly result: Schema;
 	/** What presentation gets when the platform function throws or rejects: a member of `result` (void: nothing). */
-	readonly failure?: { readonly ok: false; readonly reason: string };
+	readonly failure?: { readonly ok: false; readonly reason: string } | { readonly status: 'rejected'; readonly reason: string; readonly message: null };
 }
 
 const ACTION_FAILED = { ok: false, reason: 'error' } as const satisfies Infer<typeof ACTION_RESULT>;
 const FORM_FAILED = { ok: false, reason: 'server' } as const satisfies Infer<typeof FORM_RESULT>;
+const ADD_FAILED = { status: 'rejected', reason: 'error', message: null } as const satisfies Infer<typeof ADD_RESULT>;
 
 /** Every action presentation code can be given. Adding one is a reviewed platform change. */
 export const ACTIONS = {
@@ -35,6 +46,14 @@ export const ACTIONS = {
 	'contact.submit': { args: [str, str, str, str, str], result: FORM_RESULT, failure: FORM_FAILED },
 	'loyalty.redeem-toggle': { args: [bool], result: ACTION_RESULT, failure: ACTION_FAILED },
 	'pdp.waitlist-join': { args: [str], result: ACTION_RESULT, failure: ACTION_FAILED },
+	// Brand views PR2 (shop and product views). Selection never reads stock; only `retry-stock` starts a live read (after an error).
+	'configurator.product-select': { args: [str], result: ACTION_RESULT, failure: ACTION_FAILED },
+	'configurator.option-select': { args: [str, nul(str)], result: ACTION_RESULT, failure: ACTION_FAILED },
+	'configurator.quantity': { args: [num], result: ACTION_RESULT, failure: ACTION_FAILED },
+	'configurator.consent': { args: [bool], result: ACTION_RESULT, failure: ACTION_FAILED },
+	'configurator.retry-stock': { args: [], result: ACTION_RESULT, failure: ACTION_FAILED },
+	'configurator.add': { args: [], result: ADD_RESULT, failure: ADD_FAILED },
+	'shop.in-stock': { args: [bool], result: ACTION_RESULT, failure: ACTION_FAILED },
 } as const satisfies Record<string, ActionSpec>;
 
 export type ActionName = keyof typeof ACTIONS;

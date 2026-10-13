@@ -40,6 +40,9 @@ const MOUNTS: Record<SlotName, Mount> = {
 	'route.blog': { file: 'platform/controllers/content.tsx', handle: 'BlogListView', keeps: /<BlogListView \{\.\.\.data\.value\} \/>/ },
 	'route.blog-post': { file: 'platform/controllers/content.tsx', handle: 'BlogPostView', keeps: /<BlogPostView \{\.\.\.data\.value\} \/>/ },
 	'route.contact': { file: 'platform/controllers/content.tsx', handle: 'ContactView', keeps: /<ContactView \{\.\.\.data\.value\}/ },
+	'route.shop': { file: 'platform/controllers/shop.tsx', handle: 'ShopView', keeps: /<ShopView\n/ },
+	// found and missing are two handles of one slot: the missing one has no actions and no controller behind it
+	'route.product': { file: 'platform/controllers/product.tsx', handle: 'ProductView', keeps: /<ProductMissingView \{\.\.\.data\.value\} \/>/ },
 };
 
 /** Where each view picks the L1 mount over today's component, and that today's component stays the fallback branch. */
@@ -55,6 +58,9 @@ const VIEW_CHOICES: { file: string; choice: RegExp }[] = [
 	{ file: 'routes/contact/index.tsx', choice: /export default hasView\('route\.contact'\) \? BrandContactMount : BaseContactPage;/ },
 	{ file: 'routes/blog/index.tsx', choice: /export default hasView\('route\.blog'\) \? BrandBlogMount : BaseBlogPage;/ },
 	{ file: 'routes/blog/[slug]/index.tsx', choice: /export default hasView\('route\.blog-post'\) \? BrandBlogPostMount : BaseBlogPostPage;/ },
+	{ file: 'routes/shop/index.tsx', choice: /export default hasView\('route\.shop'\) \? BrandShopMount : BaseShopPage;/ },
+	{ file: 'routes/products/[...slug]/index.tsx', choice: /export default hasView\('route\.product'\) \? BrandProductMount : BaseProductPage;/ },
+	{ file: 'routes/shop/[slug]/index.tsx', choice: /export default ACTIVE \? \(hasView\('route\.product'\) \? BrandProductMount : BaseProductPage\) : CatchAll;/ },
 	{ file: 'routes/[...catchall]/index.tsx', choice: /if \(hasView\('route\.content'\) && matchDeclaredPath\(DECLARED_CONTENT, currentPath\)\) return <BrandContentMount \/>;/ },
 ];
 

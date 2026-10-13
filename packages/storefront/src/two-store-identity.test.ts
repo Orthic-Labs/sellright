@@ -143,7 +143,7 @@ describe('two stores with different identities render different output', () => {
     expect(b.brand).toEqual({ '@type': 'Brand', name: 'Bloom & Co' });
     expect((a.offers as any).seller).toEqual({ '@type': 'Organization', name: 'Acme Knives' });
     expect((b.offers as any).seller).toEqual({ '@type': 'Organization', name: 'Bloom & Co' });
-    expect(a.url).toBe('https://acmeknives.test/products/field-knife');
-    expect(b.url).toBe('https://bloomandco.test/products/field-knife');
+    expect(a.url).toBe('https://acmeknives.test/products/field-knife/');
+    expect(b.url).toBe('https://bloomandco.test/products/field-knife/');
   });
 });
