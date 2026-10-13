@@ -8,9 +8,10 @@
  * The fake exposes the whole surface the Rotten checkout uses (components/payment/StripePaymentElement.tsx there):
  *   stripe.elements({mode,amount,currency,appearance}) · elements.create('payment',{layout}) -> mount / on('ready'|
  *   'loaderror'|'change') / destroy · elements.submit() · stripe.confirmPayment({elements, clientSecret, confirmParams})
- * and the surface of the base component (elements({clientSecret}), confirmPayment({elements, confirmParams})).
+ * and the surface of the base component (elements({clientSecret}), confirmPayment({elements, confirmParams})): each
+ * Elements instance is bound to its clientSecret and confirmPayment resolves the intent through the supplied instance.
  * Every call is recorded on window.__stripeCalls. confirmPayment settles or declines the mock's PaymentIntent
- * (POST <mock>/control/stripe/confirm, a no-cors text/plain request so no preflight) and then resolves like Stripe.js.
+ * (a same-origin POST that installStripeStub forwards to <mock>/control/stripe/confirm, relaying its status) and then resolves like Stripe.js.
  *
  * Steering from a spec (all page-side globals, set via page.evaluate / addInitScript):
  *   __STRIPE_OUTCOME      'succeeded' (default) | 'declined'
@@ -25,17 +26,22 @@ import { MOCK_URL } from './env.mjs';
 /** Matches every URL the three SDK release trains load Stripe.js from (see header). */
 export const STRIPE_JS_URL_PATTERN = /^https:\/\/js\.stripe\.com\/(v3\/?|(v3|[a-z]+)\/stripe\.js)(\?.*)?$/;
 
-/** The script the stub serves. `mockUrl` is where the page may POST the confirm outcome (loopback is not blocked). */
-export function stripeStubScript(mockUrl = MOCK_URL): string {
+/** Same-origin path the stub POSTs the confirm outcome to; installStripeStub forwards it to the mock gateway. */
+export const STRIPE_CONFIRM_PATH = '/__e2e/stripe-confirm';
+
+/** The script the stub serves. */
+export function stripeStubScript(): string {
 	return `(() => {
 	const calls = (window.__stripeCalls = []);
-	const MOCK = ${JSON.stringify(mockUrl)};
+	const CONFIRM_PATH = ${JSON.stringify(STRIPE_CONFIRM_PATH)};
 	function Stripe(key, options) {
 		calls.push({ fn: 'Stripe', key, options: options ?? null });
 		return {
 			elements(opts) {
 				calls.push({ fn: 'elements', opts: opts ?? null });
-				return {
+				const bound = (opts && opts.clientSecret) || null;
+				const elementsInstance = {
+					__clientSecret: bound,
 					create(type, o) {
 						calls.push({ fn: 'elements.create', type, options: o ?? null });
 						const handlers = {};
@@ -58,13 +64,20 @@ export function stripeStubScript(mockUrl = MOCK_URL): string {
 						return Promise.resolve(window.__STRIPE_SUBMIT_ERROR ? { error: { message: window.__STRIPE_SUBMIT_ERROR } } : {});
 					},
 				};
+				return elementsInstance;
 			},
 			async confirmPayment(args) {
-				const secret = String(args.clientSecret || '');
+				// Like Stripe.js: the intent comes from the Elements instance (elements({clientSecret})) unless passed explicitly.
+				const secret = String(args.clientSecret || (args.elements && args.elements.__clientSecret) || '');
 				calls.push({ fn: 'confirmPayment', clientSecret: secret, hasElements: !!args.elements, confirmParams: args.confirmParams ?? null, redirect: args.redirect ?? null });
 				const id = secret.split('_secret_')[0];
+				// An unbound confirm is an invalid Stripe.js request: fail it (never report success for an intent we cannot name).
+				if (!id) return { error: { type: 'invalid_request_error', code: 'parameter_missing', message: 'stub: confirmPayment without a client secret' } };
 				const outcome = window.__STRIPE_OUTCOME || 'succeeded';
-				await fetch(MOCK + '/control/stripe/confirm', { method: 'POST', mode: 'no-cors', body: JSON.stringify({ id, outcome }) });
+				// Same-origin (the storefront's CSP connect-src forbids the mock's origin); installStripeStub forwards it to the mock
+				// and relays the mock's real status, so a refused confirm is an error here instead of a silent success.
+				const res = await fetch(CONFIRM_PATH, { method: 'POST', body: JSON.stringify({ id, outcome }) });
+				if (!res.ok) return { error: { type: 'api_error', message: 'stub: confirm refused by the mock gateway (' + res.status + ')' } };
 				return outcome === 'succeeded'
 					? { paymentIntent: { id, status: 'succeeded' } }
 					: { error: { type: 'card_error', code: 'card_declined', message: 'Your card was declined.' } };
@@ -104,7 +117,11 @@ export async function installStripeStub(page: Page, mockUrl = MOCK_URL): Promise
 	page.on('requestfailed', (r: Request) => { if (new URL(r.url()).hostname === 'js.stripe.com') handle.failed.push(r.url()); });
 	await page.route((url) => STRIPE_JS_URL_PATTERN.test(url.href), (route) => {
 		handle.fulfilled.push(route.request().url());
-		return route.fulfill({ status: 200, contentType: 'text/javascript', body: stripeStubScript(mockUrl) });
+		return route.fulfill({ status: 200, contentType: 'text/javascript', body: stripeStubScript() });
+	});
+	await page.route((url) => url.pathname === STRIPE_CONFIRM_PATH, async (route) => {
+		const res = await fetch(`${mockUrl}/control/stripe/confirm`, { method: 'POST', body: route.request().postData() ?? '' });
+		await route.fulfill({ status: res.status, contentType: 'application/json', body: await res.text() });
 	});
 	return handle;
 }

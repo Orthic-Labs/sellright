@@ -58,7 +58,9 @@ test.describe('Stripe Elements loaderror', () => {
 		const calls = await stub.calls();
 		const secrets = calls.filter((c) => c.fn === 'elements').map((c) => (c.opts as { clientSecret: string }).clientSecret);
 		expect(secrets, 'both mounts (the failed one and the retry) used the order intent\'s client secret').toEqual([intents[0]!.client_secret, intents[0]!.client_secret]);
-		expect(calls.filter((c) => c.fn === 'confirmPayment')).toEqual([expect.objectContaining({ hasElements: true })]);
+		// The confirm resolved the order's intent through the Elements instance, and the mock's intent really settled.
+		expect(calls.filter((c) => c.fn === 'confirmPayment')).toEqual([expect.objectContaining({ hasElements: true, clientSecret: intents[0]!.client_secret })]);
+		await expect.poll(async () => (await mock.stripeIntents()).find((i) => i.id === intents[0]!.id)?.status).toBe('succeeded');
 		stub.assertReached();
 	});
 });
@@ -109,7 +111,7 @@ window.CollectJS = {
 		await retryAlert(page).getByRole('button', { name: /try again/i }).click();
 		await expect(retryAlert(page)).toHaveCount(0);
 		await expect(payButton(page)).toBeVisible();
-		expect(await configures(page)).toBe(2);
+		await expect.poll(() => configures(page)).toBe(2);
 
 		await clickPay(page);
 		await expect(page).toHaveURL(new RegExp(`/checkout/confirmation/${placed.code}`), { timeout: 20_000 });
