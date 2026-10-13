@@ -7,7 +7,7 @@ import { useCart, addToCart } from '~/contexts/CartContext';
 import { loadCountryOnDemand } from '~/utils/addressStorage';
 import { useImageGalleryTouchHandling } from '~/utils/optimized-touch-handling';
 import { ProductPageView } from './ProductPageView';
-import { findVariant, getOptionGroups } from './product-options';
+import { areAllVariantsSoldOut, findVariant, getOptionGroups, isPreOrderPresented, isSelectionOutOfStock, isVariantPurchasable } from './product-options';
 import type { ProductLoaderResult } from './index';
 
 /** One gallery image — native shape (no legacy `Asset` object, no `id`;
@@ -240,8 +240,8 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
     availableVariants.value.find((v) => v.sku === selectedVariantIdSignal.value)
   );
   const isPreOrder = useComputed$(() => {
-    if (selectedVariant.value) return !!selectedVariant.value.isPreOrder;
-    return product.variants.some((v) => !!v.isPreOrder);
+    // Live stock wins: a pre-order flag only presents while the live read is in stock.
+    return isPreOrderPresented(selectedVariant.value, product.variants);
   });
   const hasSale = useComputed$(() => {
     if (selectedVariant.value) {
@@ -249,17 +249,12 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
     }
     return product.variants.some((v) => typeof v.salePrice === 'number' && v.salePrice > 0);
   });
-  const allVariantsSoldOut = useComputed$(() =>
-    product.variants.every((v) => !v.isPreOrder && !v.inStock)
-  );
+  const allVariantsSoldOut = useComputed$(() => areAllVariantsSoldOut(product.variants));
   const allGroupsSelected = useComputed$(() =>
     groups.value.length > 0 && selectedValues.value.length === groups.value.length && selectedValues.value.every(v => v !== null)
   );
   const isOutOfStock = useComputed$(() => {
-    if (!allGroupsSelected.value) return false; // incomplete selection — never OOS
-    if (!selectedVariant.value) return false;
-    if (isPreOrder.value) return false;
-    return !selectedVariant.value.inStock;
+    return isSelectionOutOfStock(allGroupsSelected.value, selectedVariant.value);
   });
   const preOrderConsent = useSignal(false);
   const showCtaTooltip = useSignal(false);
@@ -273,6 +268,8 @@ export const ProductContent = component$(({ loaderResult }: { loaderResult: Prod
         isAddingToCart.value = true;
         const selectedVar = selectedVariant.value;
         if (!selectedVar) throw new Error('No variant selected');
+        // Fail closed on the live read, independent of the pre-order flag.
+        if (!isVariantPurchasable(selectedVar)) throw new Error('Variant is out of stock');
         const image = (selectedVar.assets?.[0]) ?? orderedAssets.value[0] ?? galleryImages[0];
         const enrichment = toCartEnrichment(product, selectedVar, image);
         await addToCart(cart, selectedVar.sku, 1, enrichment);
