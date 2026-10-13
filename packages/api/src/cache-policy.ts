@@ -16,7 +16,9 @@
  * the `cacheableExceptions` field on `EnginePlugin` (validated and applied by `buildHttpApp` per app) or, for a legacy
  * `ApiPlugin`, `registerCacheableExceptions(entries)` / its `cacheableExceptions` field (applied by `registerApiPlugin`). Registered entries are appended to the live set and follow the same rule
  * as the static list: kept only on a 200 GET/HEAD, forced to `private, no-store` on any other method or status, and
- * `cache-tag` is always stripped. Registration is fail-closed and all-or-nothing: every entry needs a non-empty
+ * `cache-tag` is always stripped. Registered entries are stricter in two ways: the response is kept only when the handler
+ * ITSELF set a cacheable Cache-Control (public / s-maxage / max-age>0; none, no-store, no-cache or private gets no-store),
+ * and never when the request carries a credential (Authorization, Cookie, licence/activation token headers). Registration is fail-closed and all-or-nothing: every entry needs a non-empty
  * `source` and `reason`; an absolute path (or an anchored RegExp without g/y flags); no duplicate or overlap (string/regex in
  * both directions, regex/regex by identity) with the static list, an earlier registration or another plugin; and it must
  * not fall under the hard deny list (`isDeniedCachePath`: all of /v1/shop, product JSON-LD, products, catalog, cart,
@@ -57,10 +59,11 @@ function matches(e: CacheableException, path: string): boolean {
  * exempt: they are reviewed in this file. Denied: everything under `/v1/shop/` (catalog, products, product JSON-LD with
  * live price + stock, collections, cart, checkout, config, feeds, cache-version), `/v1/openapi.json`, and any path
  * segment naming stock, inventory, availability, price, product(s), catalog, cart, checkout, feed(s), collections,
- * jsonld or a per-visitor surface (admin, account, auth, orders, customer, session, me).
+ * jsonld, `latest` (licensed update manifests: /releases/latest.json, /v1/apps/x/updates/latest, /v1/apps/x/releases/latest.json),
+ * everything under /v1/apps/x/updates/, or a per-visitor surface (admin, account, auth, orders, customer, session, me).
  */
-const DENIED_PREFIX = /^\/v1\/(shop|checkout)(\/|$)|^\/v1\/openapi\.json$/;
-const DENIED_SEGMENT = /(^|\/)(stock|stocks|inventory|availability|prices?|pricing|products?|catalog|cart|carts|checkout|feeds?|collections?|jsonld|admin|account|accounts|auth|orders?|customers?|sessions?|me)(?=[/.\-_]|$)/;
+const DENIED_PREFIX = /^\/v1\/(shop|checkout)(\/|$)|^\/v1\/openapi\.json$|^\/v1\/apps\/[^/]*\/updates(\/|$)/;
+const DENIED_SEGMENT = /(^|\/)(stock|stocks|inventory|availability|prices?|pricing|products?|catalog|cart|carts|checkout|feeds?|collections?|jsonld|latest|admin|account|accounts|auth|orders?|customers?|sessions?|me)(?=[/.\-_]|$)/;
 
 function decodeLoose(path: string): string {
   let out = path;
@@ -85,6 +88,7 @@ const DENIED_PROBES: readonly string[] = [
   '/v1/shop/catalog', '/v1/shop/catalog/products', '/v1/shop/catalog/products/x', '/v1/shop/catalog/products/x/stock',
   '/v1/shop/catalog/search', '/v1/shop/cart', '/v1/shop/cart/abc', '/v1/shop/checkout', '/v1/checkout', '/v1/checkout/x',
   '/v1/shop/feeds/google', '/v1/shop/feeds/google.csv', '/v1/stock', '/v1/shop/stock/x', '/v1/shop/seo/jsonld/products/x',
+  '/releases/latest.json', '/v1/apps/viewright/updates/latest', '/v1/apps/viewright/updates/x', '/v1/apps/viewright/releases/latest.json',
   '/v1/shop/collections/x', '/v1/shop/config', '/v1/admin/apps/releases', '/v1/account/me', '/v1/auth/login', '/v1/orders/1',
 ];
 
@@ -153,8 +157,38 @@ function matchesAny(list: readonly CacheableException[], path: string, enforceDe
   return !(enforceDeny && isDeniedCachePath(path));
 }
 
+/** On the static, reviewed list. */
+export function isStaticCacheableException(path: string): boolean {
+  return matchesAny(CACHEABLE_EXCEPTIONS, path, false);
+}
+
+/** On a plugin-registered list (global legacy registrations or `extra`), and not hard-denied for this request path. */
+export function isRegisteredCacheableException(path: string, extra: readonly CacheableException[] = []): boolean {
+  return matchesAny(registeredExceptions, path, true) || matchesAny(extra, path, true);
+}
+
 export function isCacheableException(path: string, extra: readonly CacheableException[] = []): boolean {
-  return matchesAny(CACHEABLE_EXCEPTIONS, path, false) || matchesAny(registeredExceptions, path, true) || matchesAny(extra, path, true);
+  return isStaticCacheableException(path) || isRegisteredCacheableException(path, extra);
+}
+
+/** Request headers that carry a credential or an activation/license token; a response to such a request is never shared-cacheable via a registered exception. */
+const CREDENTIAL_HEADERS = ['authorization', 'proxy-authorization', 'cookie', 'x-api-key', 'x-viewright-license', 'x-activation-token'];
+
+function credentialHeaders(): string[] {
+  // The licence header name is env-configurable (APPS_LICENSE_HEADER); read it raw so the policy never forces an env parse.
+  const configured = process.env.APPS_LICENSE_HEADER?.trim().toLowerCase();
+  return configured ? [...CREDENTIAL_HEADERS, configured] : CREDENTIAL_HEADERS;
+}
+
+function carriesCredentials(c: Context): boolean {
+  return credentialHeaders().some((h) => Boolean(c.req.header(h)));
+}
+
+// Handler-set value counts as cacheable only when explicit and free of no-store / no-cache / private.
+function handlerSetCacheable(value: string | null): boolean {
+  if (!value) return false;
+  if (/\b(no-store|no-cache|private)\b/i.test(value)) return false;
+  return /\bpublic\b|\bs-maxage=[1-9]|\bmax-age=[1-9]/i.test(value);
 }
 
 /** Read-only view of the legacy-plugin-registered entries (diagnostics, tests). */
@@ -210,10 +244,16 @@ export function cachePolicy(options: CachePolicyOptions = {}): MiddlewareHandler
   return async (c, next) => {
     await next();
     const safeRead = c.req.method === 'GET' || c.req.method === 'HEAD';
-    if (safeRead && c.res.status === 200 && isCacheableException(c.req.path, extra)) {
-      // A cacheable exception keeps its own Cache-Control, but never a Cache-Tag (P0-c: no tag on any response).
-      editHeaders(c, (h) => h.delete('cache-tag'));
-      return;
+    if (safeRead && c.res.status === 200) {
+      // Static (reviewed) exceptions keep their own Cache-Control; so do registered (plugin) ones, but only when the handler itself set a
+      // cacheable value (a handler that sets none, e.g. an authenticated licence check, gets no-store) and the request carried no credentials.
+      const keep = isStaticCacheableException(c.req.path)
+        || (isRegisteredCacheableException(c.req.path, extra) && !carriesCredentials(c) && handlerSetCacheable(c.res.headers.get('cache-control')));
+      if (keep) {
+        // Never a Cache-Tag (P0-c: no tag on any response).
+        editHeaders(c, (h) => h.delete('cache-tag'));
+        return;
+      }
     }
     applyNoStore(c);
   };

@@ -188,12 +188,12 @@ describe('RegExp flags', () => {
     }
   });
   it('repeated identical requests behave identically (no lastIndex state)', async () => {
-    registerCacheableExceptions([{ path: /^\/releases\/[a-z]+\.json$/i, source: 's.ts', reason: 'r' }]);
+    registerCacheableExceptions([{ path: /^\/rel\/[a-z]+\.json$/i, source: 's.ts', reason: 'r' }]);
     const a = new Hono();
     a.use('*', cachePolicy());
-    a.get('/releases/x.json', (c) => c.json({}, 200, { 'cache-control': 'public, max-age=300' }));
-    for (let i = 0; i < 6; i += 1) expect((await a.request('/releases/x.json')).headers.get('cache-control'), `request ${i}`).toBe('public, max-age=300');
-    for (let i = 0; i < 3; i += 1) expect(isCacheableException('/releases/x.json')).toBe(true);
+    a.get('/rel/x.json', (c) => c.json({}, 200, { 'cache-control': 'public, max-age=300' }));
+    for (let i = 0; i < 6; i += 1) expect((await a.request('/rel/x.json')).headers.get('cache-control'), `request ${i}`).toBe('public, max-age=300');
+    for (let i = 0; i < 3; i += 1) expect(isCacheableException('/rel/x.json')).toBe(true);
   });
 });
 
@@ -244,5 +244,104 @@ describe('SDK EnginePlugin.cacheableExceptions (consumed through buildHttpApp)',
     const app = buildHttpApp({ plugins: [{ name: 'loose', routes, cacheableExceptions: [{ path: /^\/v1\/[a-z]+\/[a-z]+\/[0-9]+$/, source: 's.ts', reason: 'loose' }] }], ctx });
     expect((await app.request('/v1/shop/cart/123')).headers.get('cache-control')).toBe(NO_STORE);
     expect((await app.request('/v1/apps/viewright/123')).headers.get('cache-control')).toBe('public, max-age=300');
+  });
+});
+
+describe('registered exceptions: handler-set header, credentials, licensed update routes', () => {
+  const mk = (path: string | RegExp) => ({ path, source: 's.ts', reason: 'r' });
+  const FEEDS = [
+    mk(/^\/v1\/apps\/[A-Za-z0-9_-]+\/releases\/status\.json$/),
+    mk('/releases/patches.json'),
+  ];
+
+  function engineLikeApp() {
+    const a = new Hono();
+    a.use('*', cachePolicy());
+    // The engine's licensed handlers: 200 with NO Cache-Control of their own (routes/apps.ts).
+    a.get('/releases/latest.json', (c) => c.json({ manifest: { url: 'signed' } }, 200));
+    a.get('/v1/apps/viewright/updates/latest', (c) => c.json({ eligible: true, manifest: {} }, 200));
+    // The two intended RightSites feeds: handler-set public, max-age=300.
+    a.get('/v1/apps/viewright/releases/status.json', (c) => c.json({ ok: true }, 200, { 'cache-control': 'public, max-age=300' }));
+    a.get('/releases/patches.json', (c) => c.json({ ok: true }, 200, { 'cache-control': 'public, max-age=300' }));
+    // Registered but the handler sets a non-cacheable or no value.
+    a.get('/releases/none.json', (c) => c.json({}, 200));
+    a.get('/releases/nostore.json', (c) => c.json({}, 200, { 'cache-control': 'private, no-store' }));
+    a.get('/releases/nocache.json', (c) => c.json({}, 200, { 'cache-control': 'no-cache, max-age=300' }));
+    return a;
+  }
+
+  it('an overlapping plugin regex or exact path cannot cache the licensed latest.json / updates/latest 200', async () => {
+    // Registration itself rejects these (probe match); inject them into the live list as if a registration had slipped past
+    // the probes, to prove the request-time guards (deny policy, handler-set rule, credential gate) hold on their own.
+    for (const exceptions of [
+      [mk(/^\/releases\/[a-z]+\.json$/)],
+      [mk(/^\/v1\/apps\/[a-z]+\/[a-z]+\/[a-z]+$/)],
+      [mk('/releases/latest.json'), mk('/v1/apps/viewright/updates/latest')],
+    ]) {
+      _clearRegisteredCacheableExceptionsForTest();
+      (listRegisteredCacheableExceptions() as CacheableException[]).push(...exceptions);
+      const a = engineLikeApp();
+      for (const p of ['/releases/latest.json', '/v1/apps/viewright/updates/latest']) {
+        const res = await a.request(p, { headers: { authorization: 'Bearer act-token' } });
+        expect(res.status).toBe(200);
+        expect(res.headers.get('cache-control'), p).toBe(NO_STORE);
+      }
+      // Even with no credentials the deny policy and the handler-set rule keep these no-store.
+      expect((await a.request('/releases/latest.json')).headers.get('cache-control')).toBe(NO_STORE);
+      expect((await a.request('/v1/apps/viewright/updates/latest')).headers.get('cache-control')).toBe(NO_STORE);
+    }
+  });
+
+  it('exact registration of latest / updates paths throws; so do regexes that match them', () => {
+    for (const p of ['/releases/latest.json', '/v1/apps/viewright/updates/latest', '/v1/apps/viewright/updates/x', '/v1/apps/viewright/releases/latest.json', '/x/latest']) {
+      expect(() => registerCacheableExceptions([mk(p)]), p).toThrow(/deny list/);
+    }
+    for (const r of [/^\/releases\/[a-z]+\.json$/ /* matches /releases/latest.json via probe */, /^\/v1\/apps\/[a-z]+\/updates\/[a-z]+$/]) {
+      expect(() => registerCacheableExceptions([mk(r)]), String(r)).toThrow(/hard-denied/);
+    }
+  });
+
+  it('the two intended RightSites feeds stay cacheable (handler-set public, max-age=300)', async () => {
+    registerCacheableExceptions(FEEDS);
+    const a = engineLikeApp();
+    expect((await a.request('/v1/apps/viewright/releases/status.json')).headers.get('cache-control')).toBe('public, max-age=300');
+    expect((await a.request('/releases/patches.json', { headers: { 'x-viewright-app': 'viewright' } })).headers.get('cache-control'), 'an app-identifier header is not a credential').toBe('public, max-age=300');
+  });
+
+  it('the same feed path becomes no-store when the request carries a credential', async () => {
+    registerCacheableExceptions(FEEDS);
+    const a = engineLikeApp();
+    for (const headers of [
+      { authorization: 'Bearer x' }, { cookie: 'sr_admin=abc' }, { 'x-viewright-license': 'key' }, { 'x-api-key': 'k' }, { 'proxy-authorization': 'Basic x' },
+    ]) {
+      for (const p of ['/v1/apps/viewright/releases/status.json', '/releases/patches.json']) {
+        expect((await a.request(p, { headers })).headers.get('cache-control'), `${p} ${Object.keys(headers)[0]}`).toBe(NO_STORE);
+      }
+    }
+  });
+
+  it('a registered path whose handler set no cacheable Cache-Control gets no-store', async () => {
+    registerCacheableExceptions([mk('/releases/none.json'), mk('/releases/nostore.json'), mk('/releases/nocache.json')]);
+    const a = engineLikeApp();
+    for (const p of ['/releases/none.json', '/releases/nostore.json', '/releases/nocache.json']) {
+      expect((await a.request(p)).headers.get('cache-control'), p).toBe(NO_STORE);
+    }
+  });
+
+  it('static exceptions keep current behaviour: no credential gate, header kept as the handler set it', async () => {
+    const a = new Hono();
+    a.use('*', cachePolicy());
+    a.get('/v1/pro/revocations', (c) => c.json({ ids: [] }, 200, { 'cache-control': 'public, max-age=60' }));
+    expect((await a.request('/v1/pro/revocations', { headers: { authorization: 'Bearer x' } })).headers.get('cache-control')).toBe('public, max-age=60');
+  });
+
+  it('the same rules hold for SDK plugin exceptions (buildHttpApp)', async () => {
+    const routes = new OpenAPIHono();
+    routes.get('/rs/manifest.json', (c) => c.json({ ok: true }, 200, { 'cache-control': 'public, max-age=300' }));
+    routes.get('/rs/silent.json', (c) => c.json({ ok: true }, 200));
+    const app = buildHttpApp({ ctx: {} as EngineContext, plugins: [{ name: 'rs', routes, cacheableExceptions: [mk('/rs/manifest.json'), mk('/rs/silent.json')] }] });
+    expect((await app.request('/rs/manifest.json')).headers.get('cache-control')).toBe('public, max-age=300');
+    expect((await app.request('/rs/manifest.json', { headers: { authorization: 'Bearer x' } })).headers.get('cache-control')).toBe(NO_STORE);
+    expect((await app.request('/rs/silent.json')).headers.get('cache-control')).toBe(NO_STORE);
   });
 });

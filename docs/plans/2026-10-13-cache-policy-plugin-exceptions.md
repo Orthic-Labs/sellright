@@ -10,6 +10,8 @@ Problem: `cachePolicy()` (packages/api/src/cache-policy.ts) rewrites every respo
 - Registration throws on: duplicate or overlap with the static list, an earlier registration (global or another SDK plugin) or the same batch (string/regex checked in both directions; two regexes only by identical source+flags); hard-denied paths; RegExps that match any denied probe path. All-or-nothing.
 - Hard deny policy (`isDeniedCachePath`): everything under `/v1/shop/` and `/v1/checkout`, `/v1/openapi.json`, and any path segment naming stock, inventory, availability, price(s), product(s), catalog, cart, checkout, feed(s), collection(s), jsonld, admin, account, auth, order(s), customer(s), session(s), me. Compared on the raw and the decoded, lower-cased, slash-collapsed path.
 - Runtime enforcement: the same deny policy is applied to the actual request path before any plugin-registered exception is honoured, so a loose RegExp cannot cache a protected route. Static entries are exempt (reviewed in cache-policy.ts).
+- Additional deny entries: any `latest` segment (`/releases/latest.json`, `/v1/apps/x/updates/latest`, `/v1/apps/x/releases/latest.json`: licensed update manifests) and everything under `/v1/apps/x/updates/`.
+- Registered (plugin) exceptions are stricter than static ones at request time: (a) honoured only when the handler ITSELF set a cacheable Cache-Control (explicit `public` / `s-maxage` / `max-age>0`, none of `no-store` / `no-cache` / `private`); a response with no Cache-Control, e.g. an authenticated licence check, gets `private, no-store`; (b) never honoured when the request carries a credential: `Authorization`, `Proxy-Authorization`, `Cookie`, `X-API-Key`, `X-ViewRight-License`, `X-Activation-Token`, or the header named by `APPS_LICENSE_HEADER` (app-identifier headers such as `X-ViewRight-App` are not credentials). Static entries keep their previous behaviour.
 - Kept only on 200 GET/HEAD; POST/other methods and non-200 stay `private, no-store`; `cache-tag` always stripped. Static list and existing behaviour unchanged.
 
 ## Call the RightSites plugin must make (rs-int, NOT edited here)
@@ -31,7 +33,7 @@ cacheableExceptions: [
 ],
 ```
 
-Header values to keep (already set by the plugin; frozen in COMPAT.md C6):
+Header values to keep (already set by the plugin; frozen in COMPAT.md C6; the engine now REQUIRES the handler to set them: it will not add one):
 
 | Path | Cache-Control | Plugin line |
 |---|---|---|
