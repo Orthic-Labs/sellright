@@ -62,7 +62,7 @@ import { isAllowedCorsOrigin } from './cors-origins.js';
 import { pool } from './db/client.js';
 import { isMaintenanceOn, maintenanceInfo } from './maintenance.js';
 import { requestIdMiddleware, accessLogMiddleware } from './lib/request-id.js';
-import { cachePolicy } from './cache-policy.js';
+import { CACHEABLE_EXCEPTIONS, cachePolicy, listRegisteredCacheableExceptions, validateCacheableExceptions, type CacheableException } from './cache-policy.js';
 import { err as logErr } from './lib/logger.js';
 import { listApiPlugins } from './plugins.js';
 import { installDefaultStoreKitPolicy } from './licensing/storekit/default-policy.js';
@@ -101,7 +101,14 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
 
   // Cache policy FIRST so it wraps every response (shutdown 503s, CORS preflights, route output, onError envelopes,
   // 404s): `private, no-store` unless the path is on cache-policy.ts's explicit exception list.
-  app.use('*', cachePolicy());
+  // SDK plugins' `cacheableExceptions` are validated here (deny list, source/reason, duplicates across the static list,
+  // legacy registrations and other plugins) and scoped to THIS app instance.
+  const sdkCacheable: CacheableException[] = [];
+  for (const plugin of sdkPlugins) {
+    if (!plugin.cacheableExceptions?.length) continue;
+    sdkCacheable.push(...validateCacheableExceptions(plugin.cacheableExceptions, [...CACHEABLE_EXCEPTIONS, ...listRegisteredCacheableExceptions(), ...sdkCacheable]));
+  }
+  app.use('*', cachePolicy({ extraExceptions: sdkCacheable }));
 
   // Shutdown step 1 ("stop admitting"): answered before anything else runs.
   if (admit) {

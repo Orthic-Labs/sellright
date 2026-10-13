@@ -1,7 +1,7 @@
 /** `@sellright/api` — the engine SDK entry (plan 2.1). Subpath groups live under `../exports/`. */
 export { createApp, EngineSetupError } from './create-app.js';
 export type {
-  ConfigureContext, CreateAppOptions, EngineApp, EngineContext, EnginePlugin, LifecyclePhase,
+  CacheableException, ConfigureContext, CreateAppOptions, EngineApp, EngineContext, EnginePlugin, LifecyclePhase,
   MigrationTableRef, PluginEffectiveConfig, PluginMigrations, ShutdownStep, StartOptions, PluginJob,
 } from './types.js';
 export { LIFECYCLE_PHASES } from './types.js';

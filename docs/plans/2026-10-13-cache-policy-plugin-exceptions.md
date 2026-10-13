@@ -2,17 +2,19 @@
 
 Problem: `cachePolicy()` (packages/api/src/cache-policy.ts) rewrites every response to `private, no-store` unless the path is on the static `CACHEABLE_EXCEPTIONS` list, so the packed engine overwrites the RightSites plugin's frozen release-feed headers (docs/defork/COMPAT.md C6, C7). `/v1/pro/revocations` is already on the static list; the release feeds are not.
 
-## Engine API (this change)
+## Engine API (final)
 
-- `registerCacheableExceptions(entries: readonly CacheableException[])` exported from `cache-policy.ts`.
-- `ApiPlugin.cacheableExceptions?: readonly CacheableException[]`, applied by `registerApiPlugin` before the plugin is stored (all-or-nothing).
-- Entry: `{ path: string | RegExp, source, reason }`. `source` and `reason` must be non-empty. String paths start with `/`; RegExp paths are anchored `^...$`.
-- Throws on: duplicate or overlap (static list, earlier registration, same batch); hard-denied paths (catalog, cart, checkout, stock, inventory, availability, price, feeds, admin, account, auth, orders, customer segments); RegExps that match any denied probe path.
-- Kept only on 200 GET/HEAD; POST/other statuses stay `private, no-store`; `cache-tag` always stripped. Static list unchanged.
+- SDK plugins (what the packed engine consumes): `EnginePlugin.cacheableExceptions?: readonly CacheableException[]`. `CacheableException` is exported as a type from the package entry (`@sellright/api`). `buildHttpApp` validates and applies the entries per app instance during `createApp()`; startup throws on any invalid entry. Nothing is global, so rebuilding an app does not trip a duplicate error.
+- Legacy `ApiPlugin.cacheableExceptions` (applied by `registerApiPlugin`) and `registerCacheableExceptions(entries)` remain for in-repo/legacy callers; neither is exported from the package entry (`registerApiPlugin` is `replaced` in exports/contract.json).
+- Entry: `{ path: string | RegExp, source, reason }`. `source` and `reason` must be non-empty. String paths start with `/`; RegExp paths are anchored `^...$` and must not use the `g` or `y` flag.
+- Registration throws on: duplicate or overlap with the static list, an earlier registration (global or another SDK plugin) or the same batch (string/regex checked in both directions; two regexes only by identical source+flags); hard-denied paths; RegExps that match any denied probe path. All-or-nothing.
+- Hard deny policy (`isDeniedCachePath`): everything under `/v1/shop/` and `/v1/checkout`, `/v1/openapi.json`, and any path segment naming stock, inventory, availability, price(s), product(s), catalog, cart, checkout, feed(s), collection(s), jsonld, admin, account, auth, order(s), customer(s), session(s), me. Compared on the raw and the decoded, lower-cased, slash-collapsed path.
+- Runtime enforcement: the same deny policy is applied to the actual request path before any plugin-registered exception is honoured, so a loose RegExp cannot cache a protected route. Static entries are exempt (reviewed in cache-policy.ts).
+- Kept only on 200 GET/HEAD; POST/other methods and non-200 stay `private, no-store`; `cache-tag` always stripped. Static list and existing behaviour unchanged.
 
 ## Call the RightSites plugin must make (rs-int, NOT edited here)
 
-In the plugin's `registerApiPlugin({...})` call (rightsites-plugin entry) add:
+On the RightSites `EnginePlugin` object (the same object that carries `routes` and `releaseRegistration`) add:
 
 ```ts
 cacheableExceptions: [
