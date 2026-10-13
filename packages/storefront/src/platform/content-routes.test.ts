@@ -12,9 +12,15 @@ describe('checkContentPaths (route collisions)', () => {
 	});
 
 	it('rejects a path that is not lowercase words with a leading and trailing slash', () => {
-		for (const bad of ['our/story/', '/our/story', '/Our/Story/', '/our/story one/', '/our/story_one/', '/a//b/', '//evil.example/', '/a/../b/', '/a.b/c/', '/-a/b/', '/a-/b/', '/', '', '/a/b', '/our-story/']) {
+		for (const bad of ['our/story/', '/our/story', '/Our/Story/', '/our/story one/', '/our/story_one/', '/a//b/', '//evil.example/', '/a/../b/', '/a.b/c/', '/-a/b/', '/a-/b/', '/', '', '/a/b', '/our-story', '/key.txt/']) {
 			expect(problems([c(bad)]).length, bad).toBeGreaterThan(0);
 		}
+	});
+
+	it('accepts a single-segment path and matches it exactly', () => {
+		expect(problems([c('/slow-fashion/')])).toEqual([]);
+		expect(matchDeclaredPath([c('/slow-fashion/')], '/slow-fashion/')?.path).toBe('/slow-fashion/');
+		expect(matchDeclaredPath([c('/slow-fashion/')], '/slow-fashion')).toBeNull();
 	});
 
 	it('rejects the fixed reserved prefixes', () => {

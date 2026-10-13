@@ -51,6 +51,11 @@ test.describe('brand views (fixture build)', () => {
 	test('single-segment undeclared paths still return 404 and the IndexNow key route still serves a key file', async ({ page, request }) => {
 		expect((await request.get('/no-such-page/')).status()).toBe(404);
 		expect((await request.get('/no-such-key.txt')).status()).toBe(404);
+		// a declared single-segment content path is a real page on the same route
+		const res = await page.goto('/single-story/');
+		expect(res?.status()).toBe(200);
+		await expect(page.getByTestId('view-content')).toHaveAttribute('data-page-key', 'single-story');
+		await expect(page).toHaveTitle(/^Single story \| /);
 		await page.goto('/');
 	});
 
