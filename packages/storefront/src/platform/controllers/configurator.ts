@@ -13,7 +13,7 @@ import { track } from '~/sellright/analytics';
 import { ADD_RESULT } from '~/platform/gateway/actions';
 import type { ActionResult, AddResult } from '~/platform/views';
 import { ACTION_RESULTS, dispatch, type DispatchResults } from './callbacks';
-import { addResultFrom, enrichmentFor } from './product-model';
+import { addResultFrom, effectivePriceOf, enrichmentFor } from './product-model';
 import { INVALID, OK, changeConsent, changeQuantity, focused, initialFocus, projectConfigurator, selectOption, selectProduct, sourceOf, type ConfiguratorCtl, type ConfiguratorView } from './configurator-model';
 
 export type { ConfiguratorCtl, ConfiguratorSource, ConfiguratorView } from './configurator-model';
@@ -62,19 +62,24 @@ export function useConfigurator(loader: ReadonlySignal<ConfiguratorLoaderValue>,
 		if (started && mode === 'product') {
 			const p = source.products[0];
 			const v = p?.variants[0];
-			if (p && v) track({ name: 'view_item', sku: v.sku, productName: p.name, price: v.priceCents, currency: p.currencyCode });
+			if (p && v) track({ name: 'view_item', sku: v.sku, productName: p.name, price: effectivePriceOf(v), currency: p.currencyCode });
 		}
 	});
 
 	// A new loader value in the browser is a new view (same component, SPA navigation). At a client-side mount this is the first run.
 	useTask$(({ track: tracked }) => {
 		const value = tracked(() => loader.value);
-		// The view's identity is its path and products, not the loader object: resuming the page re-delivers the same loader value and
-		// must not count as a new view (that would start a second read).
-		const key = `${location.url.pathname}|${sourceOf(value, mode).products.map((p) => p.slug).join(',')}`;
+		const href = tracked(() => location.url.href);
+		// The view's identity is its query (a query-only navigation such as ?style=short → ?style=long is a new view even though the loader
+		// does not re-run) and its products, not the loader object: resuming the page re-delivers the same loader value and must not count
+		// as a new view (that would start a second read).
+		const url = new URL(href);
+		// The path is not in the key: a path change always brings new products (a new loader value), and keying on both would count one
+		// navigation twice when the location and the loader update in separate rounds.
+		const key = `${url.search}|${sourceOf(value, mode).products.map((p) => p.slug).join(',')}`;
 		if (ctl.viewKey !== null && ctl.viewKey !== key) {
 			startNewView(ctl);
-			const focus = initialFocus(sourceOf(value, mode), location.url.searchParams);
+			const focus = initialFocus(sourceOf(value, mode), url.searchParams);
 			ctl.productKey = focus.productKey;
 			ctl.selected = focus.selected;
 			ctl.quantity = 1;
@@ -127,7 +132,7 @@ export function useConfigurator(loader: ReadonlySignal<ConfiguratorLoaderValue>,
 				appState.showCart = true;
 				loadCountryOnDemand(appState);
 				announce(`${model.name} added to cart`);
-				track({ name: 'add_to_cart', sku: variant.sku, productName: model.name, price: variant.priceCents, currency: model.currencyCode, quantity });
+				track({ name: 'add_to_cart', sku: variant.sku, productName: model.name, price: effectivePriceOf(variant), currency: model.currencyCode, quantity });
 			}
 			return result;
 		}),

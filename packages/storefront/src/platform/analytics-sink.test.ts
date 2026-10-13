@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from 'vitest';
 import { createRateLimiter, forwardToGa4, parseSinkEvent } from './analytics-sink';
-import { conversionPayload } from './controllers/conversion';
+import { conversionPayload, trackPurchaseOnce } from './controllers/conversion';
 
 const ev = (over: Record<string, unknown> = {}) => ({ name: 'add_to_cart', eventId: 'add_to_cart_1', currency: 'USD', value: 75, items: [{ item_id: 'RH-M', quantity: 1, price: 75 }], pageLocation: 'https://shop.test/shop/x/?q=1', gtagSent: false, clientId: '123.456', ...over });
 
@@ -45,5 +45,16 @@ describe('conversion payload', () => {
 		const p = conversionPayload({ name: 'purchase', orderCode: 'RH1', currency: 'USD', value: 8000, itemCount: 1 }, 'purchase_RH1', 'https://x/', undefined, true);
 		expect(p.beacon).toBeNull();
 		expect(p.dataLayer).toMatchObject({ event: 'purchase', event_id: 'purchase_RH1', ecommerce: { transaction_id: 'RH1', value: 80 } });
+	});
+});
+
+describe('purchase dedup (review round 1)', () => {
+	it('marks nothing while the subscriber is not running or consent is absent, so a later load can still send it', () => {
+		const setItem = vi.fn();
+		vi.stubGlobal('window', {});
+		vi.stubGlobal('sessionStorage', { getItem: () => null, setItem });
+		trackPurchaseOnce({ code: 'RH1', currency: 'USD', grandTotal: 100, lines: [] });
+		expect(setItem).not.toHaveBeenCalled();
+		vi.unstubAllGlobals();
 	});
 });

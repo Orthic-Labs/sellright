@@ -109,4 +109,16 @@ describe('one automatic read per view', () => {
 		expect(fresh.stock).toEqual({});
 		vi.unstubAllGlobals();
 	});
+
+	it('a malformed body fails that product closed (error, retryable) and its sibling keeps its live result', async () => {
+		const ctl = initialStockCtl();
+		const { calls, fetcher } = fakeFetcher();
+		const read = requestLoad(ctl, ['ok', 'bad'], fetcher);
+		calls[0].resolve(stock('A', true));
+		calls[1].resolve({ variants: null } as never);
+		await read;
+		expect(ctl.stock.ok.status).toBe('ready');
+		expect(ctl.stock.bad.status).toBe('error');
+		expect(retryFailed(ctl, fetcher)).not.toBeNull();
+	});
 });

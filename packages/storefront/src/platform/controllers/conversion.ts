@@ -4,7 +4,7 @@
 // pushed to the dataLayer only, never beaconed (the API's conversion plugin owns server purchase). No ad pixels. The bus carries minor
 // units; GA4 gets major units.
 import { BRAND_HEAD, BRAND_ROUTES } from '~/platform/brand-data';
-import { onAnalyticsEvent, setAnalyticsConsent, track, type AnalyticsEvent } from '~/sellright/analytics';
+import { hasAnalyticsConsent, onAnalyticsEvent, setAnalyticsConsent, track, type AnalyticsEvent } from '~/sellright/analytics';
 
 export const SINK_PATH = BRAND_ROUTES?.operational?.analyticsPath ?? '/api/analytics/events/';
 
@@ -66,6 +66,8 @@ export function startConversion(): void {
 /** `purchase` once per order code across reloads of the confirmation page (analytics state only, never stock). */
 export function trackPurchaseOnce(order: { code: string; currency?: string | null; grandTotal?: number | null; lines?: readonly { sku?: string | null; name?: string | null; quantity?: number | null; lineTotal?: number | null }[] | null }): void {
 	if (typeof window === 'undefined' || !order?.code) return;
+	// Only mark an order once its event can actually reach the subscriber (started and consented); otherwise a later load may send it.
+	if (!started || !hasAnalyticsConsent()) return;
 	const key = `purchase-tracked-${order.code}`;
 	try {
 		if (sessionStorage.getItem(key)) return;

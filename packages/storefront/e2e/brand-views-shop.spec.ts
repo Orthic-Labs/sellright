@@ -49,6 +49,19 @@ test.describe('brand views PR2 (fixture build)', () => {
 		await expect(page.getByTestId('view-shop')).toHaveAttribute('data-reason', 'out-of-stock', { timeout: 15_000 });
 	});
 
+	test('shop: a query-only SPA navigation (?style=shirt → ?style=oos) is a new view: new focus from the query and one new read', async ({ apiProxyPage: page }) => {
+		apiLog.require();
+		await page.goto('/shop/?style=shirt');
+		const view = page.getByTestId('view-shop');
+		await expect(view).toHaveAttribute('data-eligible', 'true', { timeout: 15_000 });
+		const mark = apiLog.mark();
+		await page.getByTestId('view-shop-query-oos').click();
+		await page.waitForURL(/\?style=oos$/);
+		await expect(view).toHaveAttribute('data-selected', 'oos');
+		await expect(view).toHaveAttribute('data-reason', 'out-of-stock', { timeout: 15_000 });
+		expect((await browserStock(mark)).map((c) => c.path.split('/')[5]).sort()).toEqual(['e2e-out-of-stock-tee', 'e2e-shirt']);
+	});
+
 	test('product: declared head copy, platform breadcrumb and siblings; one live read; a forged call is invalid and reads nothing', async ({ apiProxyPage: page }) => {
 		apiLog.require();
 		const mark = apiLog.mark();

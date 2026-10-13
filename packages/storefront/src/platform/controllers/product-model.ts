@@ -137,14 +137,16 @@ export interface SkuStock { inStock: boolean; availableQuantity: number | null }
 export interface ProductStock { status: 'unchecked' | 'loading' | 'ready' | 'error'; bySku: Record<string, SkuStock> }
 export const UNCHECKED: ProductStock = { status: 'unchecked', bySku: {} };
 
-/** Unique codes for names in order: a second name with the same slug gets `-2`, `-3`, ... */
+/** Unique codes for names in order: a name whose slug is already taken (by an earlier name or an earlier generated suffix) gets the
+ *  first free `-2`, `-3`, ... so no two values share a code. */
 function uniqueCodes(names: string[]): string[] {
-  const seen = new Map<string, number>();
+  const used = new Set<string>();
   return names.map((name) => {
     const base = slugCode(name) || 'option';
-    const n = (seen.get(base) ?? 0) + 1;
-    seen.set(base, n);
-    return n === 1 ? base : `${base}-${n}`;
+    let code = base;
+    for (let n = 2; used.has(code); n++) code = `${base}-${n}`;
+    used.add(code);
+    return code;
   });
 }
 
@@ -202,6 +204,9 @@ const quantityOf = (v: unknown): number | null => (v === null ? null : typeof v 
 /** A stock response applied to one product: `inStock === true` only; a SKU the response omits stays absent (= out of stock). */
 export function stockFromResponse(response: CatalogStockResponse | null): ProductStock {
   const bySku: Record<string, SkuStock> = {};
+  if (response !== null && (typeof response !== 'object' || !Array.isArray((response as { variants?: unknown }).variants))) {
+    throw new Error('malformed stock response'); // the caller turns this into that product's `error` (fail closed, retryable)
+  }
   for (const v of response?.variants ?? []) {
     if (!v || typeof v.sku !== 'string') continue;
     bySku[v.sku] = { inStock: v.inStock === true, availableQuantity: quantityOf(v.availableQuantity) };
@@ -251,8 +256,12 @@ export function productAvailability(model: ModelProduct, stock: ProductStock | u
   return model.variants.some((v) => s.bySku[v.sku]?.inStock === true) ? 'in-stock' : 'out-of-stock';
 }
 
+/** The unit price a variant is sold at (sale / pre-order / regular), as the views show it. */
+export const effectivePriceOf = (v: Pick<ModelVariant, 'priceCents' | 'salePriceCents' | 'preOrderPriceCents' | 'isPreOrder'>): number =>
+  effectiveVariantPrice({ price: v.priceCents, salePrice: v.salePriceCents, preOrderPrice: v.preOrderPriceCents, isPreOrder: v.isPreOrder });
+
 function priceRange(model: ModelProduct): { minCents: number; maxCents: number } {
-  const prices = model.variants.map((v) => effectiveVariantPrice({ price: v.priceCents, salePrice: v.salePriceCents, preOrderPrice: v.preOrderPriceCents, isPreOrder: v.isPreOrder }));
+  const prices = model.variants.map(effectivePriceOf);
   return prices.length ? { minCents: Math.min(...prices), maxCents: Math.max(...prices) } : { minCents: 0, maxCents: 0 };
 }
 

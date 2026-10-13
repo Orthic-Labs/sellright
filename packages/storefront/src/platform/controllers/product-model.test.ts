@@ -161,3 +161,22 @@ describe('add outcome (only the add\'s own response)', () => {
 		expect(addResultFrom({ kind: 'error', message: 'Converted' }, 'A', 1)).toEqual({ status: 'rejected', reason: 'cart-error', message: 'Converted' });
 	});
 });
+
+describe('review round 1', () => {
+	it('generated codes never collide with a literal suffixed name, in groups or values', () => {
+		const p = buildModelProduct({ slug: 'x', name: 'X', description: null, currency: 'USD', images: [], variants: ['Black', 'black', 'black-2'].map((c, i) => ({
+			id: `v${i}`, sku: `S${i}`, name: c, price: 1, salePrice: null, preOrderPrice: null, shipDate: null, isPreOrder: false, assets: [],
+			options: [{ id: `o${i}`, code: `o${i}`, name: c, position: i, group: { id: 'g', code: 'g', name: 'Color', position: 0 } }],
+		})) } as never, { key: 'x', href: '/x/', rating: null, productId: null });
+		const codes = p.groups[0].values.map((v) => v.code);
+		expect(new Set(codes).size).toBe(3);
+		expect(codes).toEqual(['black', 'black-2', 'black-2-2']);
+		expect(p.variants.map((v) => v.options[0].value)).toEqual(codes);
+	});
+
+	it('a malformed stock body throws (the reader turns it into that product\'s error, fail closed)', () => {
+		expect(() => stockFromResponse({ variants: 'nope' } as never)).toThrow();
+		expect(() => stockFromResponse(7 as never)).toThrow();
+		expect(stockFromResponse(null)).toEqual({ status: 'ready', bySku: {} });
+	});
+});

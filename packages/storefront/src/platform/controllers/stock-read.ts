@@ -65,7 +65,17 @@ export async function readStock(ctl: StockCtl, slugs: readonly string[], fetcher
 	if (reqGen !== ctl.stockGen || viewGen !== ctl.viewGen || ac.signal.aborted) return 'dropped';
 	inflight.delete(ctl);
 	const next: Record<string, ProductStock> = { ...ctl.stock };
-	for (const o of outcomes) next[o.slug] = o.ok ? stockFromResponse(o.response) : { status: 'error', bySku: {} };
+	for (const o of outcomes) {
+		let applied: ProductStock = { status: 'error', bySku: {} };
+		if (o.ok) {
+			try {
+				applied = stockFromResponse(o.response);
+			} catch {
+				// a malformed body fails closed for this product only; its siblings keep their live result, and retry can re-read it
+			}
+		}
+		next[o.slug] = applied;
+	}
 	ctl.stock = next;
 	return 'applied';
 }

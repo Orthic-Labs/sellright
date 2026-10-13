@@ -16,10 +16,14 @@ const SAFE_SLUG = /^[a-z0-9][a-z0-9\-_]*$/;
 // Brand views PR2 §9: with routes.json productPath `/shop/:slug/`, a /products/<slug>/ link (the API's emails, feed and sitemap until
 // its seo.productUrlPattern changes) is a 301 to the configured path, query string kept (deep-link preselection). Anything else keeps
 // today's handling.
-export const onGet: RequestHandler = ({ url, params, redirect }) => {
+export const onGet: RequestHandler = ({ url, params, redirect, status }) => {
   if (PRODUCT_PREFIX === 'products') return;
   const slug = (params.slug ?? '').replace(/\/$/, '');
-  if (!SAFE_SLUG.test(slug)) return;
+  if (!SAFE_SLUG.test(slug)) {
+    // Not a product URL under either setting: keep the 404 the product route always answered.
+    status(404);
+    return;
+  }
   throw redirect(301, `/${PRODUCT_PREFIX}/${encodeURIComponent(slug)}/${url.search}`);
 };
 
