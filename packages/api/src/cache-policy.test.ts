@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { Hono } from 'hono';
-import { CACHEABLE_EXCEPTIONS, NO_STORE, cachePolicy, isCacheableException } from './cache-policy.js';
+import { CACHEABLE_EXCEPTIONS, NO_STORE, cachePolicy, isCacheableException, isNoStoreOnly } from './cache-policy.js';
 
 function appWithPolicy() {
   const app = new Hono();
@@ -63,7 +63,7 @@ describe('cachePolicy middleware', () => {
     const cdn = await app.request('/v1/sets-cdn');
     expect(cdn.headers.get('cache-control')).toBe(NO_STORE);
     for (const h of ['cdn-cache-control', 'cloudflare-cdn-cache-control', 'surrogate-control', 'expires', 'cache-tag']) expect(cdn.headers.get(h), h).toBeNull();
-    expect((await app.request('/v1/sets-no-store')).headers.get('cache-control')).toBe(NO_STORE);
+    expect((await app.request('/v1/sets-no-store')).headers.get('cache-control')).toBe('no-store'); // already forbids storing: kept verbatim
   });
 
   it('a cacheable exception keeps its Cache-Control but never a Cache-Tag', async () => {
@@ -148,5 +148,95 @@ describe('cache header inventory', () => {
     for (const file of ['routes/feeds.ts', 'routes/catalog.ts', 'routes/cart.ts']) {
       expect(readFileSync(join(__SRC, file), 'utf8'), file).not.toMatch(/public, max-age|s-maxage/);
     }
+  });
+});
+
+describe('cachePolicy keeps a handler-set no-store-only Cache-Control verbatim', () => {
+  const FROZEN = 'no-cache, no-store, must-revalidate';
+  function app() {
+    const a = new Hono();
+    a.use('*', cachePolicy());
+    const set = (path: string, value: string, extra: Record<string, string> = {}) => a.get(path, (c) => c.json({ ok: true }, 200, { 'cache-control': value, ...extra }));
+    set('/v1/frozen', FROZEN);
+    set('/v1/private-no-store', 'private, no-store');
+    set('/v1/frozen-tagged', FROZEN, { 'cache-tag': 't', 'cdn-cache-control': 'max-age=300', 'surrogate-control': 'max-age=300', expires: 'Wed, 21 Oct 2037 07:28:00 GMT' });
+    set('/v1/no-store-public', 'no-store, public');
+    set('/v1/no-store-max-age', 'no-store, max-age=300');
+    set('/v1/no-store-s-maxage', 'no-store, s-maxage=60');
+    set('/v1/no-store-swr', 'no-store, stale-while-revalidate=60');
+    set('/v1/no-store-max-age-0', 'no-store, max-age=0');
+    set('/v1/no-cache-only', 'no-cache');
+    set('/v1/private-only', 'private');
+    set('/v1/max-age-0', 'max-age=0');
+    a.get('/v1/unset', (c) => c.json({ ok: true }));
+    a.post('/v1/post-frozen', (c) => c.json({ ok: true }, 200, { 'cache-control': FROZEN }));
+    a.get('/v1/error-frozen', (c) => c.json({ error: 'x' }, 500, { 'cache-control': FROZEN }));
+    a.get('/v1/redirect-frozen', () => new Response(null, { status: 302, headers: { location: '/x', 'cache-control': FROZEN } }));
+    a.get('/v1/immutable-frozen', () => {
+      const res = new Response('{}', { status: 200, headers: { 'cache-control': FROZEN, 'cache-tag': 't', 'cdn-cache-control': 'max-age=300' } });
+      const frozen = new Proxy(res.headers, {
+        get(target, prop) {
+          if (prop === 'set' || prop === 'delete' || prop === 'append') return () => { throw new TypeError('immutable'); };
+          const v = Reflect.get(target, prop);
+          return typeof v === 'function' ? v.bind(target) : v;
+        },
+      });
+      Object.defineProperty(res, 'headers', { get: () => frozen });
+      return res;
+    });
+    return a;
+  }
+  const cc = async (path: string, init?: RequestInit) => (await app().request(path, init)).headers.get('cache-control');
+
+  it('keeps no-cache, no-store, must-revalidate and private, no-store exactly, on any route', async () => {
+    expect(await cc('/v1/frozen')).toBe(FROZEN);
+    expect(await cc('/v1/private-no-store')).toBe('private, no-store');
+  });
+
+  it('keeps it on a non-GET, an error status and a redirect too', async () => {
+    expect(await cc('/v1/post-frozen', { method: 'POST' })).toBe(FROZEN);
+    expect(await cc('/v1/error-frozen')).toBe(FROZEN);
+    expect(await cc('/v1/redirect-frozen')).toBe(FROZEN);
+  });
+
+  it('still strips cache-tag and every CDN/surrogate header', async () => {
+    const res = await app().request('/v1/frozen-tagged');
+    expect(res.headers.get('cache-control')).toBe(FROZEN);
+    for (const h of ['cache-tag', 'cdn-cache-control', 'cloudflare-cdn-cache-control', 'surrogate-control', 'expires']) expect(res.headers.get(h), h).toBeNull();
+  });
+
+  it('strips them on an immutable upstream response as well, keeping the value', async () => {
+    const res = await app().request('/v1/immutable-frozen');
+    expect(res.headers.get('cache-control')).toBe(FROZEN);
+    expect(res.headers.get('cache-tag')).toBeNull();
+    expect(res.headers.get('cdn-cache-control')).toBeNull();
+    expect(await res.text()).toBe('{}');
+  });
+
+  it('never keeps a value that grants any caching: it becomes private, no-store', async () => {
+    for (const path of ['/v1/no-store-public', '/v1/no-store-max-age', '/v1/no-store-s-maxage', '/v1/no-store-swr']) {
+      expect(await cc(path), path).toBe(NO_STORE);
+    }
+  });
+
+  it('only a value containing no-store is kept: no-cache, private, max-age=0 or none are unchanged behaviour (private, no-store)', async () => {
+    for (const path of ['/v1/no-cache-only', '/v1/private-only', '/v1/max-age-0', '/v1/unset']) {
+      expect(await cc(path), path).toBe(NO_STORE);
+    }
+    expect(await cc('/v1/no-store-max-age-0')).toBe('no-store, max-age=0');
+  });
+
+  it('isNoStoreOnly', () => {
+    for (const v of ['no-store', 'private, no-store', 'no-cache, no-store, must-revalidate', 'No-Store', 'no-store, max-age=0']) expect(isNoStoreOnly(v), v).toBe(true);
+    for (const v of [null, '', 'public', 'private', 'no-cache', 'max-age=0', 'public, max-age=300', 'no-store, public', 'no-store, max-age=1', 'no-store, max-age = 30', 'no-store, s-maxage=5', 'no-store, immutable', 'no-store, stale-if-error=5']) expect(isNoStoreOnly(v), String(v)).toBe(false);
+  });
+
+  it('a registered or static exception behaves as before (kept only when cacheable; a no-store handler value stays no-store)', async () => {
+    const a = new Hono();
+    a.use('*', cachePolicy());
+    a.get('/v1/pro/revocations', (c) => c.json({}, 200, { 'cache-control': 'public, max-age=60', 'cache-tag': 'x' }));
+    const res = await a.request('/v1/pro/revocations');
+    expect(res.headers.get('cache-control')).toBe('public, max-age=60');
+    expect(res.headers.get('cache-tag')).toBeNull();
   });
 });

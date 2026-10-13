@@ -8,6 +8,10 @@
  * or sets a cacheable one, still fails closed. `cache-tag` is stripped from EVERY response, exceptions included: Cloudflare ties
  * tags to cached content and none is emitted anywhere (Cloudflare design P0-c).
  *
+ * One narrowing: a route-set Cache-Control that already contains `no-store` and grants nothing (no public, s-maxage, max-age>0,
+ * stale-*, immutable) is kept verbatim on any route, method and status, since it is as restrictive as `private, no-store` (a client
+ * contract may pin e.g. `no-cache, no-store, must-revalidate`). Nothing becomes more cacheable; CDN headers and `cache-tag` are still stripped.
+ *
  * An exception must be provably stock-free AND identical for every visitor of the store (no cookie, auth, cart or
  * price/availability dependence). Add one only with a `reason` saying why, and a `source` file; the unit test fails
  * when a source file sets a cacheable Cache-Control that is not listed here.
@@ -199,6 +203,16 @@ function handlerSetCacheable(value: string | null): boolean {
   return /\bpublic\b|\bs-maxage=[1-9]|\bmax-age=[1-9]/i.test(value);
 }
 
+/**
+ * A handler-set Cache-Control that already forbids storing (`no-store`) and grants nothing: no `public`, no `s-maxage`, no
+ * `max-age>0`, no `stale-*`, no `immutable`. Such a value is kept verbatim (e.g. a frozen client contract's
+ * `no-cache, no-store, must-revalidate`) because it is exactly as restrictive as `private, no-store`; anything else is rewritten.
+ */
+export function isNoStoreOnly(value: string | null): boolean {
+  if (!value || !/\bno-store\b/i.test(value)) return false;
+  return !/\b(public|s-maxage|stale-while-revalidate|stale-if-error|immutable)\b|\bmax-age\s*=\s*"?0*[1-9]/i.test(value);
+}
+
 /** Read-only view of the legacy-plugin-registered entries (diagnostics, tests). */
 export function listRegisteredCacheableExceptions(): readonly CacheableException[] {
   return registeredExceptions;
@@ -234,6 +248,14 @@ function editHeaders(c: Context, edit: (h: Headers) => void): void {
   }
 }
 
+/** Keep the handler's own no-store-only Cache-Control; still drop CDN-targeted headers and any Cache-Tag. */
+function keepNoStoreVerbatim(c: Context): void {
+  editHeaders(c, (h) => {
+    for (const name of CACHE_HEADERS_TO_STRIP) h.delete(name);
+    h.delete('cache-tag');
+  });
+}
+
 function applyNoStore(c: Context): void {
   editHeaders(c, (h) => {
     h.set('cache-control', NO_STORE);
@@ -264,6 +286,12 @@ export function cachePolicy(options: CachePolicyOptions = {}): MiddlewareHandler
         editHeaders(c, (h) => h.delete('cache-tag'));
         return;
       }
+    }
+    // A handler-set value that already contains no-store and grants nothing keeps its exact bytes (any route, method or status).
+    // Never more cacheable than before: every other value, including none, becomes `private, no-store`.
+    if (isNoStoreOnly(c.res.headers.get('cache-control'))) {
+      keepNoStoreVerbatim(c);
+      return;
     }
     applyNoStore(c);
   };
