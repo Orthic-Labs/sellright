@@ -15,8 +15,9 @@ import type { log, err } from '../lib/logger.js';
 import type { FingerprintHelpers, SaltedFingerprints } from './fingerprint.js';
 import type { PluginJob } from '../jobs/scheduler.js';
 import type { ReleaseRegistrationPolicy } from '../releases/registration-policy.js';
+import type { CacheableException } from '../cache-policy.js';
 
-export type { Env, EnvSource, PluginJob };
+export type { Env, EnvSource, PluginJob, CacheableException };
 
 /** Phase names, in execution order. */
 export const LIFECYCLE_PHASES = ['configure', 'preRoute', 'routes', 'schema', 'migrations', 'services', 'jobs', 'shutdown'] as const;
@@ -85,6 +86,14 @@ export interface EnginePlugin {
    * `ApiPlugin.releaseRegistration`: createApp fails startup on a conflict with another plugin.
    */
   releaseRegistration?: ReleaseRegistrationPolicy;
+  /**
+   * Stock-free, visitor-independent routes of this plugin that keep their own cacheable `Cache-Control` (cache-policy.ts).
+   * Each entry needs a non-empty `source` and `reason`. The engine rejects (startup throws) duplicates/overlaps, g/y-flag or
+   * unanchored RegExps and hard-denied paths (all of /v1/shop, products, product JSON-LD, catalog, cart, checkout, stock,
+   * feeds, per-visitor paths); the deny list is also re-checked against the real request path. Kept only on a 200 GET/HEAD;
+   * every other response stays `private, no-store`.
+   */
+  cacheableExceptions?: readonly CacheableException[];
   /** Register entitlement providers, tier catalogs, device policies, … (never at import time). */
   services?(ctx: EngineContext): void | Promise<void>;
   /** Interval jobs; run only when the engine's jobs are enabled (JOBS_ENABLED=1), leader-locked per name. */
