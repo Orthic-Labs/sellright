@@ -227,8 +227,6 @@ export const ShellHeaderView = /*#__PURE__*/ slotGate('shell.header', {
 export const SHELL_FOOTER_DATA = obj({ identity: IDENTITY, paymentLabels: arr(str), year: num });
 export const ShellFooterView = /*#__PURE__*/ slotGate('shell.footer', { data: SHELL_FOOTER_DATA });
 
-export const HOME_DATA = obj({ identity: IDENTITY, newsletter: FORM_STATE, featured: arr(LISTING_CARD) });
-export const HomeView = /*#__PURE__*/ slotGate('route.home', { data: HOME_DATA, actions: { onSubscribe$: action('home.subscribe') } });
 export const CONTENT_DATA = obj({ identity: IDENTITY, pageKey: str, pathname: str });
 export const ContentView = /*#__PURE__*/ slotGate('route.content', { data: CONTENT_DATA });
 export const BLOG_LIST_DATA = obj({ identity: IDENTITY, posts: arr(BLOG_CARD), total: num, pageSize: num, hasMore: bool });
@@ -344,6 +342,13 @@ const CONFIGURATOR_ACTIONS = {
 	onAddToCart$: action('configurator.add'),
 	onRetryStock$: action('configurator.retry-stock'),
 } as const;
+export const HOME_DATA = obj({
+	identity: IDENTITY,
+	newsletter: FORM_STATE,
+	featured: arr(LISTING_CARD),
+	spotlight: nul(obj({ product: VIEW_PRODUCT, selection: VIEW_SELECTION, purchase: PURCHASE })),
+});
+export const HomeView = /*#__PURE__*/ slotGate('route.home', { data: HOME_DATA, actions: { ...CONFIGURATOR_ACTIONS, onSubscribe$: action('home.subscribe') } });
 export const ShopView = /*#__PURE__*/ slotGate('route.shop', {
 	data: SHOP_DATA,
 	actions: { ...CONFIGURATOR_ACTIONS, onProductSelect$: action('configurator.product-select'), onInStockChange$: action('shop.in-stock') },

@@ -36,5 +36,11 @@
   },
   "blog": {
     "pageSize": 100
+  },
+  "home": {
+    "spotlight": {
+      "key": "shirt",
+      "slug": "e2e-shirt"
+    }
   }
 }

@@ -134,10 +134,14 @@ export function changeConsent(ctl: ConfiguratorCtl, source: ConfiguratorSource, 
 }
 
 /** The loader value of either mode, as a ConfiguratorSource. */
-export function sourceOf(value: unknown, mode: 'shop' | 'product'): ConfiguratorSource {
-	if (mode === 'shop') {
+/** shop: the brand shop's products; product: one product page; spotlight: the brand home view's one product. */
+export type ConfiguratorMode = 'shop' | 'product' | 'spotlight';
+
+export function sourceOf(value: unknown, mode: ConfiguratorMode): ConfiguratorSource {
+	if (mode === 'shop' || mode === 'spotlight') {
+		// The shop chooses among its products; the home spotlight sells its one product, focused from the start.
 		const v = value as { detail?: ModelProduct[] } | null;
-		return { products: v?.detail ?? [], siblings: [], selectable: true };
+		return { products: v?.detail ?? [], siblings: [], selectable: mode === 'shop' };
 	}
 	const v = value as { state?: string; product?: ModelProduct; siblings?: ModelProduct[] } | null;
 	if (!v || v.state !== 'found' || !v.product) return { products: [], siblings: [], selectable: false };

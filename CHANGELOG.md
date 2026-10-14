@@ -17,6 +17,7 @@ must update the matching changelog in the same push.
 
 ### Added
 
+- **Storefront: home spotlight** (`routes.json home.spotlight: { key, slug }`): the brand home view sells one product in place through the shared configurator. `HomeViewProps.spotlight` carries the product, selection and purchase state, and the configurator actions act on it; metadata from the catalog generation (else the live API), stock from the view's own live read on qidle, no SSR stock, fail closed. Without a declared spotlight nothing is read and the actions are `invalid`.
 - Storefront: `og:image:alt` (the page title; it follows a brand-declared title). `routes.json cart.trustStrip: "wrap"` lets the cart drawer's trust strip wrap its items on narrow screens instead of truncating one line.
 - Storefront: branded product pages carry Open Graph `product:price:amount`, `product:price:currency`, `product:brand` and `product:condition`; `product:availability` only from the request's live product JSON-LD (the API's per-request, no-store read), never from a catalog snapshot. ProductGroup variants list colour first in their name and URL.
 - Storefront: `routes.json copy.cart.trust` (1-3 plain strings) replaces the cart drawer's trust strip, which otherwise shows the identity's shipping, returns and payment policies.

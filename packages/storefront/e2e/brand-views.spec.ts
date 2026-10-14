@@ -1,6 +1,7 @@
 import { test, expect } from './fixtures';
 import { PRODUCT, uniq } from './support/api';
 import { addToCart } from './support/flows';
+import { apiLog, STOCK_PATTERNS } from './support/api-log';
 
 /**
  * Brand views (PR1) — rendered. Runs only against a BUILD made with the fixture views and data (the e2e command below sets E2E_BRAND_VIEWS=1):
@@ -166,6 +167,19 @@ test.describe('brand views (fixture build)', () => {
 			const objs = (window as unknown as { __srResults: { objs: { reason?: string; extra?: number }[] } }).__srResults.objs;
 			return { distinct: new Set(objs).size, busyWritten: objs[0].reason };
 		})).toEqual({ distinct: 4, busyWritten: 'mutated' });
+	});
+
+	test('home view: the routes.json spotlight is sold in place: one live stock read, then the add answers from the server', async ({ apiProxyPage: page }) => {
+		apiLog.require();
+		const mark = apiLog.mark();
+		await page.goto('/');
+		const spot = page.getByTestId('view-home-spotlight');
+		await expect(spot).toBeVisible();
+		await expect(spot).toHaveAttribute('data-stock', 'ready', { timeout: 15_000 });
+		await expect(spot).toHaveAttribute('data-eligible', 'true');
+		expect((await apiLog.since(mark, STOCK_PATTERNS.productStock, { origin: 'browser' })).map((c) => c.path.split('/')[5])).toEqual(['e2e-shirt']);
+		await page.getByTestId('view-home-spotlight-add').click();
+		await expect(page.getByTestId('view-home-spotlight-outcome')).toHaveText('added');
 	});
 
 	test('home view: an invalid email never posts, a double submit makes one request', async ({ page }) => {
