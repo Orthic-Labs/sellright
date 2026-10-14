@@ -18,6 +18,8 @@ export interface BrandRoutes {
 		productQuery?: { params: string[]; values: Record<string, string> };
 	};
 	operational?: { cartSeedPath?: string; analyticsPath?: string };
+	/** The brand home view's spotlight: one product sold in place (the configurator's options, live stock and add). */
+	home?: { spotlight?: { key: string; slug: string } };
 	/** Plain-text copy for base components a brand does not replace with a view (no markup: rendered as text). */
 	copy?: { cart?: { emptyTitle?: string; emptyBody?: string; /** The drawer's trust strip (1-3 items); default: the identity's shipping, returns and payment policies. */ trust?: string[] } };
 	/** The configurator's cart drawer opens this long after a successful add (0, the default, opens it at once). */
@@ -41,3 +43,4 @@ export const DETAIL_PRODUCTS: readonly DetailProduct[] = BRAND_ROUTES?.shop?.det
 export const BRAND_COPY: NonNullable<BrandRoutes['copy']> = BRAND_ROUTES?.copy ?? {};
 export const CART_OPEN_AFTER_ADD_MS: number = BRAND_ROUTES?.cart?.openAfterAddMs ?? 0;
 export const CART_TRUST_STRIP_WRAP: boolean = BRAND_ROUTES?.cart?.trustStrip === 'wrap';
+export const HOME_SPOTLIGHT: { key: string; slug: string } | null = BRAND_ROUTES?.home?.spotlight ?? null;

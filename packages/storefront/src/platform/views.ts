@@ -88,11 +88,23 @@ export interface ListingCard {
 	currencyCode: string;
 }
 
-export interface HomeViewProps {
+export interface HomeViewProps extends ConfiguratorActions {
 	identity: PublicIdentity;
 	newsletter: FormState;
 	featured: ListingCard[];
+	/**
+	 * routes.json home.spotlight: the one product the home view sells in place, with the configurator's selection and purchase state
+	 * (its stock is the view's own live read, like the shop's); null when none is declared or the product is not found. The
+	 * configurator actions act on it. With no spotlight there is no product: option and quantity calls are `invalid`, the
+	 * add is rejected `not-eligible` and nothing is requested.
+	 */
+	spotlight: HomeSpotlight | null;
 	onSubscribe$: Action<[email: string, honeypot: string], FormResult>;
+}
+export interface HomeSpotlight {
+	product: ViewProduct;
+	selection: ViewSelection;
+	purchase: PurchaseState;
 }
 
 export interface BlogCard {

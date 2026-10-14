@@ -35,7 +35,7 @@ const MOUNTS: Record<SlotName, Mount> = {
 	// the mount renders the slot's gateway handle.
 	'shell.header': { file: 'platform/controllers/shell.tsx', handle: 'ShellHeaderView', keeps: /<ShellHeaderView\n/ },
 	'shell.footer': { file: 'platform/controllers/shell.tsx', handle: 'ShellFooterView', keeps: /<ShellFooterView \{\.\.\.data\.value\} \/>/ },
-	'route.home': { file: 'platform/controllers/content.tsx', handle: 'HomeView', keeps: /<HomeView \{\.\.\.data\.value\}/ },
+	'route.home': { file: 'platform/controllers/content.tsx', handle: 'HomeView', keeps: /<HomeView\s+\{\.\.\.data\.value\}/ },
 	'route.content': { file: 'platform/controllers/content.tsx', handle: 'ContentView', keeps: /<ContentView \{\.\.\.data\.value\} \/>/ },
 	'route.blog': { file: 'platform/controllers/content.tsx', handle: 'BlogListView', keeps: /<BlogListView \{\.\.\.data\.value\} \/>/ },
 	'route.blog-post': { file: 'platform/controllers/content.tsx', handle: 'BlogPostView', keeps: /<BlogPostView \{\.\.\.data\.value\} \/>/ },

@@ -14,7 +14,7 @@ import { ADD_RESULT } from '~/platform/gateway/actions';
 import type { ActionResult, AddResult } from '~/platform/views';
 import { ACTION_RESULTS, dispatch, type DispatchResults } from './callbacks';
 import { addResultFrom, effectivePriceOf, enrichmentFor } from './product-model';
-import { INVALID, OK, changeConsent, changeQuantity, focused, initialFocus, projectConfigurator, selectOption, selectProduct, sourceOf, type ConfiguratorCtl, type ConfiguratorView } from './configurator-model';
+import { INVALID, OK, changeConsent, changeQuantity, focused, initialFocus, projectConfigurator, selectOption, selectProduct, sourceOf, type ConfiguratorCtl, type ConfiguratorMode, type ConfiguratorView } from './configurator-model';
 
 export type { ConfiguratorCtl, ConfiguratorSource, ConfiguratorView } from './configurator-model';
 import { abortStockRead, initialStockCtl, readStock, requestLoad, retryFailed, startNewView } from './stock-read';
@@ -22,6 +22,7 @@ import { useBfcacheStockRefresh, useStockTrigger } from '~/platform/stock-trigge
 import { seal } from './project';
 import type { BrandProductDetail } from '~/platform/product-detail';
 import type { ConfiguratorDetail } from '~/platform/configurator-detail';
+import type { HomeSpotlightDetail } from '~/platform/home-spotlight';
 import { CART_OPEN_AFTER_ADD_MS } from '~/platform/brand-data';
 
 export const ADD_RESULTS: DispatchResults<AddResult> = {
@@ -37,9 +38,9 @@ export const ADD_RESULTS: DispatchResults<AddResult> = {
  * The configurator for one mounted view. `source` is the loader value (a new value = a new view). `toSource` maps it to the products
  * the view can sell. Returns the projection signal and the bound methods (QRLs a mount wraps with `platformAction`).
  */
-export type ConfiguratorLoaderValue = BrandProductDetail | ConfiguratorDetail | null;
+export type ConfiguratorLoaderValue = BrandProductDetail | ConfiguratorDetail | HomeSpotlightDetail | null;
 
-export function useConfigurator(loader: ReadonlySignal<ConfiguratorLoaderValue>, mode: 'shop' | 'product') {
+export function useConfigurator(loader: ReadonlySignal<ConfiguratorLoaderValue>, mode: ConfiguratorMode) {
 	const appState = useContext(APP_STATE);
 	const cart = useCart();
 	const location = useLocation();
@@ -91,7 +92,7 @@ export function useConfigurator(loader: ReadonlySignal<ConfiguratorLoaderValue>,
 		ctl.viewKey = key;
 		if (isBrowser) load();
 	});
-	// The automatic read's document event: the PDP follows pdp.stockRefreshTrigger, the shop stays on qidle.
+	// The automatic read's document event: the PDP follows pdp.stockRefreshTrigger, the shop and the home spotlight stay on qidle.
 	useStockTrigger(mode === 'product' ? 'pdp' : 'shop', load);
 	// pdp.bfcacheRefresh: a restored page reads its products again (same view, same selection; a live read like any other).
 	const reread = $(() => { void readStock(ctl, sourceOf(loader.value, mode).products.map((p) => p.slug), fetchProductStock); });

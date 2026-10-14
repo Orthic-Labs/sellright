@@ -137,6 +137,13 @@ describe('routes.json (content declarations)', () => {
 		expect(routes({ version: 1, pages: { '/nope/': {} } }).join()).toMatch(/not a built-in static page/);
 	});
 
+	it('home.spotlight needs the route.home view', () => {
+		const r = { version: 1, home: { spotlight: { key: 'tee', slug: 'tee' } } };
+		expect(validateRoutesData(r, { routeDirs: ROUTE_DIRS, hasContentView: true, hasHomeView: false }).map((p) => p.message).join()).toMatch(/route\.home/);
+		expect(validateRoutesData(r, { routeDirs: ROUTE_DIRS, hasContentView: true, hasHomeView: true })).toEqual([]);
+		expect(routes({ version: 1, home: { spotlight: { key: 'Tee', slug: 'tee' } } }).join()).toMatch(/does not match/);
+	});
+
 	it('content paths without a route.content view fail the build', () => {
 		expect(routes({ version: 1, content: [{ path: '/a/b/', pageKey: 'a' }] }, false).join()).toMatch(/route\.content/);
 		expect(routes({ version: 1 }, false)).toEqual([]);

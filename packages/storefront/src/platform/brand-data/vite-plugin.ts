@@ -57,7 +57,7 @@ export function loadBrandData(root: string, dataDir: string, slotsDir: string): 
 	const routes = readJsonFile(path.join(dataDir, 'routes.json'), 'src/brand/routes.json', problems);
 	if (head !== null && problems.length === 0) problems.push(...validateHeadData(head));
 	if (routes !== null && problems.every((p) => p.file !== 'src/brand/routes.json')) {
-		problems.push(...validateRoutesData(routes, { routeDirs: listRouteDirs(root), hasContentView: fs.existsSync(path.join(slotsDir, 'route.content.tsx')), hasShopView: fs.existsSync(path.join(slotsDir, 'route.shop.tsx')), hasProductView: fs.existsSync(path.join(slotsDir, 'route.product.tsx')) }));
+		problems.push(...validateRoutesData(routes, { routeDirs: listRouteDirs(root), hasContentView: fs.existsSync(path.join(slotsDir, 'route.content.tsx')), hasShopView: fs.existsSync(path.join(slotsDir, 'route.shop.tsx')), hasProductView: fs.existsSync(path.join(slotsDir, 'route.product.tsx')), hasHomeView: fs.existsSync(path.join(slotsDir, 'route.home.tsx')) }));
 	}
 	for (const spec of mediaImports(head)) {
 		const file = path.join(root, 'src', spec.slice(2, spec.indexOf('?')));

@@ -24,6 +24,7 @@ import PreorderImageWebP_1024 from '~/media/sec2.jpg?format=webp&w=1024&quality=
 import PreorderImageJPEG_1024 from '~/media/sec2.jpg?format=jpeg&w=1024&quality=80&url';
 
 export { useOrganizationJsonLd, usePreorderProduct, useFeatureProduct, useFeaturedProducts, useHomeCollections };
+export { useHomeSpotlight } from '~/platform/home-spotlight';
 
 const BaseHomePage = component$(() => {
   useStyles$(homepageStyles);

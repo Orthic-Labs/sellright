@@ -160,6 +160,21 @@
         }
       }
     },
+    "home": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "spotlight": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["key", "slug"],
+          "properties": {
+            "key": { "type": "string", "pattern": "^[a-z0-9-]{1,32}$" },
+            "slug": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$", "maxLength": 120 }
+          }
+        }
+      }
+    },
     "copy": {
       "type": "object",
       "additionalProperties": false,

@@ -95,7 +95,7 @@ export interface SlotPropsMap {
 	/** Site footer. Fallback: the base footer. */
 	'shell.footer': DeepReadonly<ShellFooterProps>;
 	/** Homepage. Fallback: the base homepage. */
-	'route.home': DeepReadonly<Omit<HomeViewProps, 'onSubscribe$'>> & Pick<HomeViewProps, 'onSubscribe$'>;
+	'route.home': DeepReadonly<Omit<HomeViewProps, 'onSubscribe$' | ConfiguratorActionKey>> & Pick<HomeViewProps, 'onSubscribe$' | ConfiguratorActionKey>;
 	/** Static content pages (about, privacy, terms, returns, press, and the content paths a brand declares in routes.json). Fallback: the base page. */
 	'route.content': DeepReadonly<ContentViewProps>;
 	/** Blog list. Fallback: the base list. */

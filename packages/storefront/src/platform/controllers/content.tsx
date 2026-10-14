@@ -1,6 +1,6 @@
 // Brand views, plan §2.3/§2.5: the content, home, blog and contact mounts, and the two form hooks the base pages and the brand views
 // share. Everything that reads a loader, posts a form or loads a script lives here (L1); the brand view gets projections and actions.
-import { $, component$, useComputed$, useSignal, useStore, useVisibleTask$ } from '@qwik.dev/core';
+import { $, component$, useComputed$, useSignal, useStore, useVisibleTask$, type ReadonlySignal } from '@qwik.dev/core';
 import { isServer } from '@qwik.dev/core/build';
 import { server$, useLocation } from '@qwik.dev/router';
 import { useStoreIdentityLoader } from '~/routes/layout';
@@ -15,7 +15,9 @@ import { submitContact, submitNewsletter, type FormPort, type FormStatus } from 
 import { buildBlogListView, buildBlogPostView } from './blog-view';
 import { projectFeatured, projectFormState, projectIdentity, seal } from './project';
 import { BlogListView, BlogPostView, ContactView, ContentView, HomeView, platformAction } from '~/platform/gateway';
-import type { BlogListViewProps, BlogPostViewProps, ContactViewProps, ContentViewProps, FormResult, FormState, HomeViewProps } from '~/platform/views';
+import type { BlogListViewProps, BlogPostViewProps, ContactViewProps, ContentViewProps, FormResult, FormState, HomeSpotlight, HomeViewProps } from '~/platform/views';
+import { useHomeSpotlight } from '~/platform/home-spotlight';
+import { useConfigurator, type ConfiguratorLoaderValue } from './configurator';
 
 const FORM_RESULTS: DispatchResults<FormResult> = {
 	busy: { ok: false, reason: 'busy' },
@@ -169,13 +171,33 @@ export const BrandHomeMount = component$(() => {
 	const identity = useStoreIdentityLoader();
 	const featured = useFeaturedProducts();
 	const form = useNewsletterForm();
+	// routes.json home.spotlight: the shared configurator over one product (its own live stock read, qidle). With no spotlight the
+	// configurator has no products: it reads nothing and every action is `invalid`.
+	const spotlight = useHomeSpotlight();
+	const c = useConfigurator(spotlight as ReadonlySignal<ConfiguratorLoaderValue>, 'spotlight');
 	const data = useComputed$(() =>
-		seal<Omit<HomeViewProps, 'onSubscribe$' | 'newsletter'>>({
+		seal<Pick<HomeViewProps, 'identity' | 'featured'>>({
 			identity: projectIdentity(identity.value.identity) as HomeViewProps['identity'],
 			featured: projectFeatured(featured.value) as HomeViewProps['featured'],
 		}),
 	);
-	return <HomeView {...data.value} newsletter={form.form.value} onSubscribe$={platformAction('home.subscribe', form.onSubscribe$)} />;
+	// Projected in the render body (a computed reading the configurator's projection loses its captures in production builds).
+	const v = c.project();
+	const product = spotlight.value ? (v.products[0] ?? null) : null;
+	const spot = product ? (seal<HomeSpotlight>({ product, selection: v.selection, purchase: v.purchase } as HomeSpotlight) as HomeSpotlight) : null;
+	return (
+		<HomeView
+			{...data.value}
+			spotlight={spot}
+			newsletter={form.form.value}
+			onSubscribe$={platformAction('home.subscribe', form.onSubscribe$)}
+			onOptionSelect$={platformAction('configurator.option-select', c.onOptionSelect$)}
+			onQuantityChange$={platformAction('configurator.quantity', c.onQuantityChange$)}
+			onConsentChange$={platformAction('configurator.consent', c.onConsentChange$)}
+			onAddToCart$={platformAction('configurator.add', c.onAddToCart$)}
+			onRetryStock$={platformAction('configurator.retry-stock', c.onRetryStock$)}
+		/>
+	);
 });
 
 /** `route.blog`. A list longer than the page has no crawlable link past it, so the mount warns on the server. */
