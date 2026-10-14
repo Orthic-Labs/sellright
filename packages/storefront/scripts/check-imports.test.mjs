@@ -187,6 +187,21 @@ test('deploy exemption (layers.json deploy): only a declared, unclassified deplo
     fs.symlinkSync(path.join(root, 'src/brand/x.ts'), path.join(root, 'scripts/link.mjs'));
     const presence = checkOverlayImports({ root, layers, files: ['scripts/gone.mjs', 'scripts/link.mjs'], deployFiles: withLink }).findings.map((f) => `${f.file} ${f.rule}`).sort();
     assert.deepEqual(presence, ['scripts/gone.mjs file-missing', 'scripts/link.mjs file-symlink']);
+    // A symlinked ancestor (public -> src/brand) is refused too: the exemption never reaches classified source by an alias.
+    const alias = fs.mkdtempSync(path.join(os.tmpdir(), 'sr-deploy-alias-'));
+    try {
+      fs.mkdirSync(path.join(alias, 'src/brand'), { recursive: true });
+      fs.writeFileSync(path.join(alias, 'src/brand/analytics.js'), "import fs from 'node:fs';\n");
+      fs.symlinkSync(path.join(alias, 'src/brand'), path.join(alias, 'public'));
+      const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'sr-deploy-out-'));
+      fs.writeFileSync(path.join(outside, 'x.mjs'), '');
+      fs.symlinkSync(outside, path.join(alias, 'scripts'));
+      const r = checkOverlayImports({ root: alias, layers, files: ['public/analytics.js', 'scripts/x.mjs'], deployFiles: ['public/analytics.js', 'scripts/x.mjs'] }).findings.map((f) => `${f.file} ${f.rule}`).sort();
+      assert.deepEqual(r, ['public/analytics.js file-symlink', 'scripts/x.mjs file-symlink']);
+      fs.rmSync(outside, { recursive: true, force: true });
+    } finally {
+      fs.rmSync(alias, { recursive: true, force: true });
+    }
     fs.writeFileSync(path.join(root, '.compose-deploy-files.txt'), 'scripts/retain.mjs\n');
     assert.deepEqual(resolveDeployFiles({}, root), ['scripts/retain.mjs']);
     const cli = spawnSync(process.execPath, [SCRIPT, '--root', root, '--layers', path.join(PACKAGE_ROOT, 'layers.json'), 'scripts/retain.mjs'], { encoding: 'utf8' });

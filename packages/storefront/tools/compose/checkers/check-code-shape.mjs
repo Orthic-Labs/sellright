@@ -417,7 +417,7 @@ export function checkOverlayShape({ root, layers, files, deployFiles = [] }) {
     const rel = normalizeRel(raw);
     if (!isCodeFile(layers, rel)) continue;
     const abs = path.join(rootReal, rel);
-    if (deployExemption(layers, rel, deployFiles)) { findings.push(...presenceFindings(rel, abs)); continue; }
+    if (deployExemption(layers, rel, deployFiles)) { findings.push(...presenceFindings(rootReal, rel)); continue; }
     if (!fs.existsSync(abs)) { findings.push({ file: rel, line: 1, col: 1, rule: 'file-missing', message: `${rel} is listed but does not exist` }); continue; }
     checked++;
     findings.push(...shapeFindings(layers, rel, fs.readFileSync(abs, 'utf8')));
