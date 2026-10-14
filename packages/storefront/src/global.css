@@ -24,6 +24,13 @@
   --color-card-border: var(--brand-color-card-border);
   --color-image-bg: var(--brand-color-image-bg);
   --color-tint: var(--brand-color-tint);
+  /* The page background behind every route (the root layout's <main>); a brand without its own value keeps parchment. */
+  --color-page: var(--brand-color-page, var(--brand-color-parchment));
+}
+
+/* The fixed header's height, which the root layout's <main> clears (4rem unless the brand's header differs). */
+:root {
+  --header-offset: var(--brand-header-offset, 4rem);
 }
 
 /* SheerID iframe styling - center the form */

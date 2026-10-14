@@ -16,6 +16,10 @@
   --brand-color-card-border: #e4e4e7;
   --brand-color-image-bg: #18181b;
   --brand-color-tint: #e4e4e7;
+  /* Optional (global.css falls back when a brand omits them): the page background behind every route, the header height
+     the root layout clears. */
+  --brand-color-page: #f4f4f5;
+  --brand-header-offset: 4rem;
 
   /* Accent: CTAs, links, active states */
   --brand-color-accent: #2563eb;
