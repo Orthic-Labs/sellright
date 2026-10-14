@@ -121,8 +121,9 @@ test.describe('license commerce flow (license build)', () => {
 		expect(rows).toEqual([{ v: 'alpha-2026-08-01-v1', app: 'alpha', n: 5 }]);
 	});
 
-	test('upgrade credit: a pending upgrade order found on load keeps the form open; completing it reveals that order with its receipt', async ({ apiProxyPage: page }) => {
-		const offer = { eligible: true, sourceLicenseId: 'src-1', sku: SKU_ALPHA, currency: 'USD', fullPrice: 4900, credit: 1000, upgradePrice: 3900, pendingOrder: { code: 'E2E-PENDING-1', receiptToken: 'e2e-pending-receipt', grandTotal: 3900 } };
+	test('upgrade credit: a pending upgrade order is continued as placed (no form, its receipt); a new one needs details, terms and the credit consent', async ({ apiProxyPage: page }) => {
+		const base = { eligible: true, sourceLicenseId: 'src-1', sku: SKU_ALPHA, currency: 'USD', fullPrice: 4900, credit: 1000, upgradePrice: 3900 };
+		let offer: Record<string, unknown> = { ...base, pendingOrder: { code: 'E2E-PENDING-1', receiptToken: 'e2e-pending-receipt', grandTotal: 3900 } };
 		const intents: Array<{ url: string; receipt: string | undefined }> = [];
 		await page.route('**/v1/shop/pro/e2e-upgrade', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(offer) }));
 		await page.route('**/v1/shop/orders/*/payment-intent', async (route) => {
@@ -131,18 +132,30 @@ test.describe('license commerce flow (license build)', () => {
 		});
 		await page.goto(`/checkout/?sku=${SKU_ALPHA}&upgrade=mobile`);
 		await expect(page.locator('.ck-upgrade-title')).toHaveText('Full Plan for $39');
-		await expect(page.getByText('Your pending upgrade order is ready to continue.')).toBeVisible();
+		await expect(page.getByText('Order E2E-PENDING-1 continues as you placed it: its billing details and the terms you accepted apply.')).toBeVisible();
+		await expect(page.getByPlaceholder('Email address', { exact: true })).toHaveCount(0);
+		await expect(page.locator('.ck-legal')).toHaveCount(0);
+		await expect(page.locator('.ck-placeholder')).toContainText('Order E2E-PENDING-1 is reserved');
+		expect(intents).toEqual([{ url: '/v1/shop/orders/E2E-PENDING-1/payment-intent', receipt: 'e2e-pending-receipt' }]);
+
+		// No pending order: the shopper enters details, accepts the terms and the credit terms; the order carries the credit.
+		offer = base;
+		const bodies: unknown[] = [];
+		await page.route('**/v1/shop/checkout', async (route) => { bodies.push(route.request().postDataJSON()); await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ code: 'E2E-UPG-2', state: 'PendingPayment', grandTotal: 3900, discountTotal: 1000, currency: 'USD', receiptToken: 'e2e-upg-receipt' }) }); });
+		await page.goto(`/checkout/?sku=${SKU_ALPHA}&upgrade=mobile`);
 		for (const [ph, v] of [['Email address', 'up@example.com'], ['First name', 'Ada'], ['Last name', 'Lovelace'], ['Billing address', '1 Main St'], ['City', 'Springfield'], ['Postal code', '62701']] as const) {
-			await expect(page.getByPlaceholder(ph, { exact: true })).toBeEnabled();
 			await page.getByPlaceholder(ph, { exact: true }).fill(v);
 		}
 		await page.locator('#legal-eligibility').selectOption('individual');
 		await page.locator('.ck-legal input[type=checkbox]').first().check();
+		await expect(page.locator('.ck-placeholder')).toHaveText('Enter your details above to continue to payment.');
 		await page.locator('.ck-upgrade-consent input').check();
-		await expect(page.locator('.ck-placeholder')).toContainText('Order E2E-PENDING-1 is reserved');
-		expect(intents).toEqual([{ url: '/v1/shop/orders/E2E-PENDING-1/payment-intent', receipt: 'e2e-pending-receipt' }]);
+		await expect(page.locator('.ck-placeholder')).toContainText('Order E2E-UPG-2 is reserved');
+		expect(bodies).toHaveLength(1);
+		expect(bodies[0]).toMatchObject({ items: [{ sku: SKU_ALPHA, quantity: 1 }], mobileUpgradeSourceId: 'src-1', upgradeCreditTerms: { version: '2026-09-30', accepted: true }, email: 'up@example.com' });
+		expect(intents.at(-1)).toEqual({ url: '/v1/shop/orders/E2E-UPG-2/payment-intent', receipt: 'e2e-upg-receipt' });
 		await expect(page.getByPlaceholder('Email address', { exact: true })).toBeDisabled();
-		// The credit applies only to its own SKU: the same link for another product is a plain checkout.
+		// The credit applies only to its own SKU.
 		await page.goto(`/checkout/?sku=NOPE-0&upgrade=mobile`);
 		await expect(page.locator('.ck-upgrade-card')).toHaveCount(0);
 	});
