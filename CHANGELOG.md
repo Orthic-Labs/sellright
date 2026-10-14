@@ -233,6 +233,7 @@ must update the matching changelog in the same push.
 
 ### Fixed
 
+- Storefront: the base element typography (h1-h6, body/p/li/span/div, strong, form controls) moved from `@layer utilities` to `@layer base`. As utilities they overrode every base- and components-layer rule, so a brand theme could not set its body weight or let a span inherit its parent's display font; utility classes and unlayered component styles still override them.
 - Storefront: the base `global.css` no longer imports Inter from Google Fonts (blocked by the `font-src 'self'` CSP); `googleFontsPreconnect` now defaults to off.
 - Storefront: the home, about, contact, privacy, terms, returns, press, order-payment and order-confirmation heads passed the identity loader's wrapper instead of the store identity (`og:image` read `undefinedundefinedundefined`, the home `og:url`/canonical fell back to the static theme origin).
 
