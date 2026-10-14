@@ -19,7 +19,7 @@ export interface BrandRoutes {
 	};
 	operational?: { cartSeedPath?: string; analyticsPath?: string };
 	/** Plain-text copy for base components a brand does not replace with a view (no markup: rendered as text). */
-	copy?: { cart?: { emptyTitle?: string; emptyBody?: string } };
+	copy?: { cart?: { emptyTitle?: string; emptyBody?: string; /** The drawer's trust strip (1-3 items); default: the identity's shipping, returns and payment policies. */ trust?: string[] } };
 	/** The configurator's cart drawer opens this long after a successful add (0, the default, opens it at once). */
 	cart?: { openAfterAddMs?: number };
 }

@@ -40,6 +40,7 @@ test.describe('brand views PR2 (fixture build)', () => {
 		await page.getByTestId('view-shop-add').click();
 		await expect(page.getByTestId('view-shop-outcome')).toHaveText('added');
 		await expect(page.getByRole('button', { name: /remove item/i }).first()).toBeVisible({ timeout: 10_000 });
+		await expect(page.getByText('Fixture returns', { exact: true })).toBeVisible(); // routes.json copy.cart.trust
 		expect(await browserStock(before)).toHaveLength(0); // the add's own response is the live check: no extra stock read
 	});
 

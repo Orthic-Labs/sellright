@@ -237,11 +237,12 @@ export default component$(() => {
 
 						{/* L8: Trust strip — overflow-hidden + whitespace-nowrap to prevent text wrapping on narrow screens */}
 						<div class="flex items-center justify-center gap-3 px-4 py-2 border-b border-[#E5E0D8] bg-[#F5F2EE] shrink-0 overflow-hidden whitespace-nowrap">
-							<span class="text-[10px] tracking-[0.06em] text-[#9A9288] truncate">{policySentence(identity.policies.shipping)}</span>
-							<span class="w-px h-2.5 bg-[#DDD8D0] shrink-0" />
-							<span class="text-[10px] tracking-[0.06em] text-[#9A9288] truncate">{policySentence(identity.policies.returns)}</span>
-							<span class="w-px h-2.5 bg-[#DDD8D0] shrink-0" />
-							<span class="text-[10px] tracking-[0.06em] text-[#9A9288] truncate">{policySentence(identity.policies.payment)}</span>
+							{(BRAND_COPY.cart?.trust ?? [identity.policies.shipping, identity.policies.returns, identity.policies.payment].map(policySentence)).map((text, i) => (
+								<div key={i} style="display: contents">
+									{i > 0 && <span class="w-px h-2.5 bg-[#DDD8D0] shrink-0" />}
+									<span class="text-[10px] tracking-[0.06em] text-[#9A9288] truncate">{text}</span>
+								</div>
+							))}
 						</div>
 
 						<div class="flex-1 overflow-y-auto overscroll-contain px-5 py-1 min-h-0">

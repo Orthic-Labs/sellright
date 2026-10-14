@@ -169,7 +169,8 @@
           "additionalProperties": false,
           "properties": {
             "emptyTitle": { "type": "string", "minLength": 1, "maxLength": 60, "pattern": "^[^<>]*$" },
-            "emptyBody": { "type": "string", "minLength": 1, "maxLength": 160, "pattern": "^[^<>]*$" }
+            "emptyBody": { "type": "string", "minLength": 1, "maxLength": 160, "pattern": "^[^<>]*$" },
+            "trust": { "type": "array", "minItems": 1, "maxItems": 3, "items": { "type": "string", "minLength": 1, "maxLength": 60, "pattern": "^[^<>]*$" } }
           }
         }
       }
