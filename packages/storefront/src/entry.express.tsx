@@ -12,7 +12,7 @@ import { sellrightRequestCookie } from"./utils/sellright-request-context.server"
 import { sellrightRequestHost } from"./utils/sellright-request-host.server";
 import { assertProdApiConfigured } from"./constants";
 import { NO_STORE_CACHE_CONTROL } from"./config/route-cache-policy";
-import { snapshotShape } from"./utils/snapshot-guard";
+import { snapshotGuard } from"./utils/snapshot-guard";
 import { googleClientId, googleIdentityCsp, googleSignInClientIdForHost, googleSignInHosts, googleSignInRefusedForMissingPin } from"./config/google-signin";
 import { createCanonicalUrlMiddleware, parseCanonicalSections } from"./utils/canonical-url";
 import { buildCsp } from"./utils/csp";
@@ -187,13 +187,7 @@ app.use((req, _res, next) => {
 
 // Snapshot guard (utils/snapshot-guard.ts): a document-shaped path is a plain no-store 404, answered before the static
 // handlers and the canonical redirect, so neither a stale prerendered file nor a cacheable 301 can answer it.
-app.use((req, res, next) => {
-  if (snapshotShape(req.path) === 'document') {
-    res.status(404).set({ 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': NO_STORE_CACHE_CONTROL }).send('Not found');
-    return;
-  }
-  next();
-});
+app.use(snapshotGuard);
 
 // Static asset handlers
 app.use(`/build`, express.static(buildDir, { immutable: true, maxAge:"1y" }));
