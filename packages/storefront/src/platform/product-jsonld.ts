@@ -141,7 +141,7 @@ const OG_AVAILABILITY: Record<string, ProductOgMeta['availability']> = {
  */
 export function productOgMeta(liveJsonLd: Record<string, unknown> | null, model: ModelProduct, brandName: string): ProductOgMeta {
 	const offer = liveJsonLd && typeof liveJsonLd.offers === 'object' && !Array.isArray(liveJsonLd.offers) ? (liveJsonLd.offers as Record<string, unknown>) : null;
-	const prices = model.variants.map(effectivePriceOf).filter((n) => n > 0);
+	const prices = model.variants.map(effectivePriceOf).filter((n) => Number.isFinite(n) && n >= 0);
 	const price = typeof offer?.price === 'string' || typeof offer?.price === 'number' ? Number(offer.price).toFixed(2) : prices.length ? decimal(Math.min(...prices)) : undefined;
 	const currency = typeof offer?.priceCurrency === 'string' ? offer.priceCurrency : model.currencyCode;
 	const avail = typeof offer?.availability === 'string' ? OG_AVAILABILITY[offer.availability.replace(/^https?:\/\/schema\.org\//, '')] : undefined;
