@@ -134,6 +134,11 @@
       "reason": "Required at this exact URL (sites.md: Sezzle assets). Not present in the SellRight base today; Damned supplies it."
     }
   ],
+  "deploy": {
+    "_comment": "Brand deploy files (brand.json deployFiles) that are not storefront source. A file is exempt from the overlay import, shape and executable-asset rules only when it is a declared deploy file, sits in no layer and matches one of these globs (check-imports.mjs deployExemption). operationalScripts: build and process files run by Node, the shell or pm2, never bundled (Node built-ins allowed). publicScripts: public files a browser fetches by a fixed URL that a live brand must keep answering: the iOS privacy worker (an installed registration re-fetches it; the brand's copy retires itself) and the legacy analytics loader (cached pages still reference it).",
+    "operationalScripts": ["scripts/*.mjs", "scripts/*.sh", "ecosystem.config.cjs"],
+    "publicScripts": ["public/ios-privacy-sw.js", "public/analytics.js"]
+  },
   "imports": {
     "forbidden": [
       "@sellright/storefront-client",

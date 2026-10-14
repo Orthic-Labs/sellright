@@ -92,6 +92,7 @@ test('happy path from a read-only base fixture', async (t) => {
 	const list = readFileSync(w.outPath('.compose-overlay-files.txt'), 'utf8').split('\n').filter(Boolean);
 	assert.ok(list.includes('src/components/Button.tsx') && list.includes('src/brand-slots/Hello.tsx'));
 	assert.ok(!list.includes('src/components/Card.tsx') && !list.includes('pnpm-lock.yaml'));
+	assert.deepEqual(readFileSync(w.outPath('.compose-deploy-files.txt'), 'utf8').split('\n').filter(Boolean), ['ecosystem.config.cjs', 'scripts/build-production.sh']);
 
 	const report = readJ(w.outPath('compose-report.json'));
 	assert.equal(report.hashes.pin, PIN);

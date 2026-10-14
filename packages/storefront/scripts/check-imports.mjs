@@ -495,6 +495,35 @@ export function placementFindings(layers, relFile, deployFiles = []) {
   return [];
 }
 
+/** Compose writes the brand's deploy files (brand.json deployFiles) here, so the checkers run in the composed tree apply the same rule. */
+export const DEPLOY_LIST = '.compose-deploy-files.txt';
+
+/**
+ * layers.json `deploy`: the deploy files that are not storefront source. A file is exempt only when it is a declared deploy file,
+ * sits in no layer, and matches a `deploy` glob: `operationalScripts` (build and process scripts, run by Node or the shell, never
+ * bundled: the import and shape rules of storefront source do not apply) or `publicScripts` (public files the browser fetches by a
+ * fixed URL: served as-is). Returns the kind, or null (the file is checked as usual).
+ */
+export function deployExemption(layers, relFile, deployFiles = []) {
+  const rel = normalizeRel(relFile);
+  if (!new Set(deployFiles.map(normalizeRel)).has(rel)) return null;
+  let c;
+  try { c = classify(layers, rel); } catch { return null; }
+  if (c) return null;
+  const d = layers.deploy ?? {};
+  if ((d.operationalScripts ?? []).some((g) => matchGlob(g, rel))) return 'operational';
+  if ((d.publicScripts ?? []).some((g) => matchGlob(g, rel))) return 'public';
+  return null;
+}
+
+/** The deploy list of a composed tree (`--deploy-list` or <root>/.compose-deploy-files.txt); none outside a composed tree. */
+export function resolveDeployFiles(opts, root) {
+  const list = opts['deploy-list'] ? path.resolve(opts['deploy-list']) : path.join(root, DEPLOY_LIST);
+  if (fs.existsSync(list)) return readOverlayList(list);
+  if (opts['deploy-list']) throw new Error(`deploy list not found: ${list}`);
+  return [];
+}
+
 const EXECUTABLE_ASSET = /\.(js|mjs|cjs|wasm|html|htm)$/i;
 
 /** r11: an overlay public/** file that the browser would run or render as a document. */
@@ -505,6 +534,24 @@ export function executableAssetFindings(relFile, readText) {
   if (/\.svg$/i.test(relFile)) {
     const text = readText() ?? '';
     if (/<script[\s>]/i.test(text) || /\son[a-z]+\s*=/i.test(text) || /javascript:/i.test(text)) return [f(`${relFile}: an SVG with <script>, an on*= handler or a javascript: URL is executable`)];
+  }
+  return [];
+}
+
+/**
+ * file-missing / file-symlink / file-not-regular for a listed path under `rootReal`, without following a link: every
+ * component from the root down is lstat'ed, so a symlinked directory (public -> src/brand) is refused like a symlinked file.
+ */
+export function presenceFindings(rootReal, rel) {
+  const f = (rule, message) => [{ file: rel, line: 1, col: 1, rule, message }];
+  let cur = rootReal;
+  const parts = rel.split('/');
+  for (let i = 0; i < parts.length; i++) {
+    cur = path.join(cur, parts[i]);
+    let st;
+    try { st = fs.lstatSync(cur); } catch (e) { if (e.code === 'ENOENT' || e.code === 'ENOTDIR') return f('file-missing', `${rel} is listed but does not exist`); throw e; }
+    if (st.isSymbolicLink()) return f('file-symlink', i === parts.length - 1 ? `${rel} is a symlink` : `${rel}: ${parts.slice(0, i + 1).join('/')} is a symlink`);
+    if (i === parts.length - 1 && !st.isFile()) return f('file-not-regular', `${rel} is not a regular file`);
   }
   return [];
 }
@@ -520,6 +567,8 @@ export function checkOverlayImports({ root, layers, files, deployFiles = [] }) {
     const placement = placementFindings(layers, rel, deployFiles);
     findings.push(...placement);
     const abs = path.join(resolver.rootReal, rel);
+    // An exempt deploy file skips the content rules only: it must still exist as a regular file, never a symlink.
+    if (deployExemption(layers, rel, deployFiles)) { findings.push(...presenceFindings(resolver.rootReal, rel)); continue; }
     if (rel.startsWith('public/')) {
       findings.push(...executableAssetFindings(rel, () => { try { return fs.readFileSync(abs, 'utf8'); } catch { return null; } }));
     }
@@ -588,7 +637,7 @@ export function parseArgs(argv, flags = []) {
   const opts = { files: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--root' || a === '--layers' || a === '--overlay-list' || a === '--mode') opts[a.slice(2)] = argv[++i];
+    if (a === '--root' || a === '--layers' || a === '--overlay-list' || a === '--deploy-list' || a === '--mode') opts[a.slice(2)] = argv[++i];
     else if (flags.includes(a)) opts[a.slice(2)] = true;
     else if (a.startsWith('--')) throw new Error(`unknown option ${a}`);
     else opts.files.push(a);
@@ -620,7 +669,7 @@ function main() {
     console.log('check-imports: no overlay files (base alone), nothing to check');
     return;
   }
-  const { findings, checked } = checkOverlayImports({ root, layers, files });
+  const { findings, checked } = checkOverlayImports({ root, layers, files, deployFiles: resolveDeployFiles(opts, root) });
   for (const f of findings) console.error(formatFinding(f));
   if (findings.length > 0) {
     console.error(`check-imports: ${findings.length} finding(s) in ${files.length} overlay file(s)`);
