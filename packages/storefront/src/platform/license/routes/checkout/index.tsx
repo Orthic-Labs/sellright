@@ -69,7 +69,7 @@ export default component$(() => {
   const containerRef = useSignal<HTMLElement>();
   const paymentRuntime = useSignal<NoSerialize<CheckoutPaymentRuntime>>();
   const f = useStore({ email: '', firstName: '', lastName: '', address: '', city: '', province: '', postal: '', country: 'US', phone: '', legalAccepted: false, eligibilityBasis: '' as CheckoutEligibilityBasis | '', upgradeConsent: false });
-  const state = useStore({ ready: false, paymentReady: false, inert: false, starting: false, orderCode: '', receiptToken: '', grandTotal: 0, clientSecret: '', paying: false, error: '', idemKey: '' });
+  const state = useStore({ ready: false, paymentReady: false, inert: false, starting: false, reserved: false, orderCode: '', receiptToken: '', grandTotal: 0, clientSecret: '', paying: false, error: '', idemKey: '' });
   const upgrade = useStore({ checked: !(mobileUpgrade.value && !!UPGRADE && item.value?.sku === UPGRADE.sku && item.value?.appKey === UPGRADE.appKey), offer: null as UpgradeEligibility | null, error: '' });
 
   const billingValid = $(() =>
@@ -80,8 +80,9 @@ export default component$(() => {
   // The credit applies only to its configured app and SKU; an offer counts only when it is for the SKU on this page.
   const requiresUpgradeConsent = mobileUpgrade.value && !!UPGRADE && item.value?.sku === UPGRADE.sku && item.value?.appKey === UPGRADE.appKey;
   const upgradeSku = item.value?.sku ?? '';
-  // After the order is reserved the details that went into it cannot change: what is paid is what was submitted.
-  const locked = state.orderCode !== '';
+  // After this page reserves the order the details that went into it cannot change: what is paid is what was submitted. A pending
+  // upgrade order found on load is not reserved yet: the shopper still completes the details and consents that reveal it.
+  const locked = state.reserved;
 
   // When the billing details are complete, create the order + Stripe
   // PaymentIntent and reveal the Payment Element (RH's reveal-on-valid pattern).
@@ -143,6 +144,7 @@ export default component$(() => {
         }
       }
       state.orderCode = order.code;
+      state.reserved = true;
       state.receiptToken = order.receiptToken ?? '';
       state.grandTotal = order.grandTotal;
       try {
@@ -161,6 +163,7 @@ export default component$(() => {
     } catch (e) {
       state.error = (e as Error).message || 'Could not start checkout.';
       state.orderCode = '';
+      state.reserved = false;
     } finally {
       state.starting = false;
     }
