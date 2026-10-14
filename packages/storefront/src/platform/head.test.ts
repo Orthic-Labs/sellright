@@ -25,7 +25,7 @@ describe('resolveHead: no brand data means today\'s head', () => {
 		expect(r.canonical).toBeNull();
 		expect(r.extraLinks).toEqual([]);
 		expect(r.extraJsonLd).toEqual([]);
-		expect(r.googleFontsPreconnect).toBe(true);
+		expect(r.googleFontsPreconnect).toBe(false);
 	});
 
 	it('a route with no head gets the base defaults, as head.tsx always did', () => {
@@ -101,12 +101,21 @@ describe('resolveHead: precedence (per-path declaration > route head > head.json
 		expect(r.favicon).toEqual({ svg: '/brand/f.svg', ico: '/brand/f.ico' });
 	});
 
-	it('googleFontsPreconnect false is surfaced; default stays on', () => {
+	it('googleFontsPreconnect true is surfaced; default is off (the base imports no Google font)', () => {
+		expect(resolveHead(routeHead({ title: 'A', description: 'D' }), '/', identity, sources({ googleFontsPreconnect: true })).googleFontsPreconnect).toBe(true);
 		expect(resolveHead(routeHead({ title: 'A', description: 'D' }), '/', identity, sources({ googleFontsPreconnect: false })).googleFontsPreconnect).toBe(false);
 	});
 });
 
 describe('resolveHead: preloads', () => {
+	it('a path ending in * matches every path under its prefix', () => {
+		const spec = { fontPreloads: [{ href: '/fonts/a.woff2', type: 'font/woff2' as const, paths: ['/blog/*'] }] };
+		expect(resolveHead(routeHead({ title: 'A', description: 'D' }), '/blog/a-post/', identity, sources(spec)).extraLinks.map((l) => l.href)).toEqual(['/fonts/a.woff2']);
+		expect(resolveHead(routeHead({ title: 'A', description: 'D' }), '/blog/', identity, sources(spec)).extraLinks).toHaveLength(1);
+		expect(resolveHead(routeHead({ title: 'A', description: 'D' }), '/blogs/', identity, sources(spec)).extraLinks).toHaveLength(0);
+		expect(resolveHead(routeHead({ title: 'A', description: 'D' }), '/', identity, sources(spec)).extraLinks).toHaveLength(0);
+	});
+
 	const spec: BrandHeadSpec = {
 		fontPreloads: [{ href: '/fonts/a.woff2', type: 'font/woff2' }, { href: '/fonts/shop.woff2', type: 'font/woff2', paths: ['/shop/'] }],
 		imagePreloads: [{ paths: ['/'], type: 'image/avif', fetchpriority: 'high', srcset: [{ href: '/brand/h-640.avif', width: 640 }, { href: '/brand/h-1024.avif', width: 1024 }], sizes: '(max-width: 640px) 100vw, 640px' }],

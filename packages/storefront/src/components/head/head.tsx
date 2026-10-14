@@ -156,9 +156,8 @@ export const Head = component$<HeadProps>(({ nonce }) => {
 			<title>{head.title || DEFAULT_METADATA_TITLE}</title>
 
 			<link rel="manifest" href="/manifest.json" />
-			{/* Neutral demo theme loads Inter from Google Fonts (see global.css);
-			    a brand build that self-hosts its own @font-face files should add
-			    matching <link rel="preload" as="font"> entries here. */}
+			{/* The base imports no web font (the CSP allows font-src 'self' only): a brand self-hosts its fonts and preloads
+			    them through head.json fontPreloads. googleFontsPreconnect: true opts back into these hints. */}
 			{resolved.googleFontsPreconnect && <link rel="preconnect" href="https://fonts.googleapis.com" />}
 			{resolved.googleFontsPreconnect && <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />}
 

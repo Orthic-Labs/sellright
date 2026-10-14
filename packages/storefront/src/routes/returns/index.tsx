@@ -150,7 +150,7 @@ const BaseReturnsPage = component$(() => {
 export default hasView('route.content') ? BrandContentMount : BaseReturnsPage;
 
 export const head = ({ resolveValue }: { resolveValue: any }) => {
- const identity = resolveValue(useStoreIdentityLoader);
+ const identity = resolveValue(useStoreIdentityLoader).identity;
  return createSEOHead({
  title: 'Returns & Refund Policy',
  description: `Returns and refund policy for ${identity.storeName}. Learn about our return procedures and conditions.`,

@@ -56,7 +56,7 @@
               "additionalProperties": false,
               "required": ["href", "width"],
               "properties": {
-                "href": { "type": "string", "pattern": "^/brand/(?!/)[A-Za-z0-9._~!$&()*+,;=:@%/-]{1,200}$" },
+                "href": { "type": "string", "pattern": "^(?:/brand/(?!/)[A-Za-z0-9._~!$&()*+,;=:@%/-]{1,200}|~/brand/media/[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+){0,4}\\.(?:png|jpe?g|webp|avif)\\?(?:[a-z]{1,12}=[A-Za-z0-9]{1,8}&){0,6}url)$" },
                 "width": { "type": "integer", "minimum": 1, "maximum": 4096 }
               }
             }
@@ -69,7 +69,10 @@
     "verification": {
       "type": "object",
       "additionalProperties": false,
-      "properties": { "facebookDomain": { "type": "string", "pattern": "^[A-Za-z0-9]{10,64}$" } }
+      "properties": {
+        "facebookDomain": { "type": "string", "pattern": "^[A-Za-z0-9]{10,64}$" },
+        "pinterest": { "type": "string", "pattern": "^[A-Za-z0-9]{10,64}$" }
+      }
     },
     "analytics": {
       "type": ["object", "null"],

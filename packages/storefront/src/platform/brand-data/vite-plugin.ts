@@ -59,13 +59,38 @@ export function loadBrandData(root: string, dataDir: string, slotsDir: string): 
 	if (routes !== null && problems.every((p) => p.file !== 'src/brand/routes.json')) {
 		problems.push(...validateRoutesData(routes, { routeDirs: listRouteDirs(root), hasContentView: fs.existsSync(path.join(slotsDir, 'route.content.tsx')), hasShopView: fs.existsSync(path.join(slotsDir, 'route.shop.tsx')), hasProductView: fs.existsSync(path.join(slotsDir, 'route.product.tsx')) }));
 	}
+	for (const spec of mediaImports(head)) {
+		const file = path.join(root, 'src', spec.slice(2, spec.indexOf('?')));
+		if (!fs.existsSync(file)) problems.push({ file: 'src/brand/head.json', message: `imagePreloads: ${spec} names no file` });
+	}
 	if (problems.length) throw new BrandDataValidationError(problems);
 	return { head, routes };
 }
 
-/** Source of the virtual module. Both values are validated JSON (or null), so JSON.stringify is the whole serialisation. */
-export function renderBrandDataModule(data: BrandDataSources): string {
-	return `export const brandHead = ${JSON.stringify(data.head)};\nexport const brandRoutes = ${JSON.stringify(data.routes)};\n`;
+const isMediaImport = (href: unknown): href is string => typeof href === 'string' && href.startsWith('~/brand/media/');
+
+/** The brand media import specifiers of head.json imagePreloads, in order, without duplicates. */
+export function mediaImports(head: unknown): string[] {
+	const out: string[] = [];
+	for (const im of ((head as { imagePreloads?: { srcset?: { href?: unknown }[] }[] } | null)?.imagePreloads ?? [])) {
+		for (const s of im.srcset ?? []) if (isMediaImport(s.href) && !out.includes(s.href)) out.push(s.href);
+	}
+	return out;
+}
+
+/**
+ * Source of the virtual module. Both values are validated JSON (or null), so JSON.stringify is the whole serialisation, except a
+ * brand media import in imagePreloads (`~/brand/media/hero.png?format=avif&w=768&url`): it becomes an import of that asset, so the
+ * preload names the same build-hashed URL the brand view's own import of the same specifier renders.
+ */
+export function renderBrandDataModule(data: BrandDataSources, opts: { srcDir?: string } = {}): string {
+	const imports = mediaImports(data.head);
+	// The `~` alias is a tsconfig path, which a virtual module does not get: the import names the file under src/ directly.
+	const target = (spec: string) => (opts.srcDir ? `${path.join(opts.srcDir, spec.slice(2, spec.indexOf('?')))}${spec.slice(spec.indexOf('?'))}` : spec);
+	const head = data.head === null ? null : JSON.parse(JSON.stringify(data.head), (key, value) => (key === 'href' && isMediaImport(value) ? `\u0000media${imports.indexOf(value)}` : value));
+	const headSource = JSON.stringify(head).replace(/"\\u0000media(\d+)"/g, (_m, i: string) => `__brandMedia${i}`);
+	const lines = imports.map((spec, i) => `import __brandMedia${i} from ${JSON.stringify(target(spec))};`);
+	return `${lines.length ? `${lines.join('\n')}\n` : ''}export const brandHead = ${headSource};\nexport const brandRoutes = ${JSON.stringify(data.routes)};\n`;
 }
 
 export function brandDataPlugin(options: { dataDir?: string; slotsDir?: string } = {}): Plugin {
@@ -90,7 +115,7 @@ export function brandDataPlugin(options: { dataDir?: string; slotsDir?: string }
 		load(id) {
 			if (id !== resolved) return null;
 			for (const f of ['head.json', 'routes.json']) if (fs.existsSync(path.join(dataDir, f))) this.addWatchFile(path.join(dataDir, f));
-			return renderBrandDataModule(loadBrandData(root, dataDir, slotsDir));
+			return renderBrandDataModule(loadBrandData(root, dataDir, slotsDir), { srcDir: path.join(root, 'src') });
 		},
 	};
 }

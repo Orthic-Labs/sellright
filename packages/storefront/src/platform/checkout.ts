@@ -31,7 +31,7 @@ export const paymentHead = () => {
 
 // ── /checkout/confirmation/[code] ───────────────────────────────
 export const confirmationHead = ({ params, resolveValue }: { params: { code: string }; resolveValue: any }) => {
-  const identity = resolveValue(useStoreIdentityLoader);
+  const identity = resolveValue(useStoreIdentityLoader).identity;
   return createSEOHead({
     title: 'Order Confirmation',
     description: `Thank you for your order${params?.code ? ' #' + params.code : ''} at ${identity.storeName}. View your order summary and details.`,

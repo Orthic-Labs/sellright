@@ -170,6 +170,22 @@ describe('loadBrandData / virtual module', () => {
 		expect(renderBrandDataModule(data)).toContain('"/our/story/"');
 	});
 
+	it('a brand media import in imagePreloads becomes an import of that asset (the build-hashed URL); a missing file fails', () => {
+		const spec = { imagePreloads: [{ paths: ['/'], type: 'image/avif', sizes: '100vw', srcset: [{ href: '~/brand/media/hero.png?format=avif&w=768&url', width: 768 }, { href: '/brand/hero-1600.avif', width: 1600 }, { href: '~/brand/media/hero.png?format=avif&w=768&url', width: 769 }] }] };
+		const root = makeRoot({ 'head.json': JSON.stringify(spec) });
+		fs.mkdirSync(path.join(root, 'src/brand/media'));
+		fs.writeFileSync(path.join(root, 'src/brand/media/hero.png'), 'x');
+		const src = renderBrandDataModule(load(root));
+		expect(src.split('\n')[0]).toBe('import __brandMedia0 from "~/brand/media/hero.png?format=avif&w=768&url";');
+		expect(src.match(/^import /gm)).toHaveLength(1);
+		expect(src).toContain('{"href":__brandMedia0,"width":768},{"href":"/brand/hero-1600.avif","width":1600},{"href":__brandMedia0,"width":769}');
+		expect(renderBrandDataModule(load(root), { srcDir: path.join(root, 'src') }).split('\n')[0]).toBe(`import __brandMedia0 from ${JSON.stringify(path.join(root, 'src/brand/media/hero.png') + '?format=avif&w=768&url')};`);
+		fs.rmSync(path.join(root, 'src/brand/media/hero.png'));
+		expect(() => load(root)).toThrow(/names no file/);
+		expect(head({ imagePreloads: [{ ...spec.imagePreloads[0], srcset: [{ href: '~/brand/media/../x.png?url', width: 1 }] }] }).join()).toMatch(/does not match/);
+		expect(head({ imagePreloads: [{ ...spec.imagePreloads[0], srcset: [{ href: '~/brand/media/x.png?format=avif', width: 1 }] }] }).join()).toMatch(/does not match/);
+	});
+
 	it('any problem fails the build with every problem listed', () => {
 		const root = makeRoot({ 'head.json': '{"script":"x"}', 'routes.json': '{"version":1,"content":[{"path":"/about/x/","pageKey":"s"}]}' });
 		let err: unknown;

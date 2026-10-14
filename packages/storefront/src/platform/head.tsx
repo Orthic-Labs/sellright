@@ -21,6 +21,7 @@ export function brandHeadTags(resolved: ResolvedHead, nonce?: string) {
 			<link key={`${l.as}:${l.href}`} rel={l.rel} as={l.as} type={l.type} href={l.href} crossOrigin={l.crossOrigin} imageSrcset={l.imagesrcset} imageSizes={l.imagesizes} fetchPriority={l.fetchpriority} />
 		)),
 		...(spec.verification?.facebookDomain ? [<meta key="fb-domain" name="facebook-domain-verification" content={spec.verification.facebookDomain} />] : []),
+		...(spec.verification?.pinterest ? [<meta key="p-domain" name="p:domain_verify" content={spec.verification.pinterest} />] : []),
 		...resolved.extraJsonLd.map((json, i) => <script key={`brand-jsonld-${i}`} type="application/ld+json" dangerouslySetInnerHTML={json} />),
 		// consent 'implied' only: a 'required' declaration loads nothing until a consent source exists (none yet, plan §6.5)
 		...(spec.analytics?.provider === 'gtm' && spec.analytics.consent === 'implied'

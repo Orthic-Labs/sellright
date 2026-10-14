@@ -43,6 +43,17 @@ test.describe('brand views PR2 (fixture build)', () => {
 		expect(await browserStock(before)).toHaveLength(0); // the add's own response is the live check: no extra stock read
 	});
 
+	test('shop: one platform ProductGroup per configurator product, with the declared facts and no availability', async ({ request }) => {
+		const html = await (await request.get('/shop/')).text();
+		const groups = [...html.matchAll(/<script[^>]*application\/ld\+json[^>]*>([\s\S]*?)<\/script>/g)].map((m) => JSON.parse(m[1])).filter((j) => j['@type'] === 'ProductGroup');
+		expect(groups.map((g) => g.url.replace(/^https?:\/\/[^/]+/, '')).sort()).toEqual(['/products/e2e-out-of-stock-tee/', '/products/e2e-shirt/']);
+		const shirt = groups.find((g) => g.url.endsWith('/e2e-shirt/'));
+		expect(shirt.material).toBe('Fixture cotton');
+		expect(shirt.hasVariant.length).toBeGreaterThan(0);
+		expect(shirt.hasVariant[0].offers.price).toMatch(/^\d+\.\d{2}$/);
+		expect(JSON.stringify(groups)).not.toMatch(/availability/);
+	});
+
 	test('shop: ?style= picks the initial product on the server', async ({ apiProxyPage: page }) => {
 		await page.goto('/shop/?style=oos');
 		await expect(page.getByTestId('view-shop')).toHaveAttribute('data-selected', 'oos');
@@ -74,6 +85,8 @@ test.describe('brand views PR2 (fixture build)', () => {
 		expect((await browserStock(mark)).map((c) => c.path.split('/')[5])).toEqual(['e2e-shirt']);
 		const jsonLd = await page.locator('script[type="application/ld+json"]').allTextContents();
 		expect(jsonLd.some((j) => j.includes('"FAQPage"'))).toBe(true);
+		const product = jsonLd.map((j) => JSON.parse(j)).find((j) => j['@type'] === 'Product');
+		if (product) expect(product.material).toBe('Fixture cotton'); // the declared fact joins the API's product JSON-LD
 		const before = apiLog.mark();
 		await page.getByTestId('view-product-forge').click();
 		await expect(page.getByTestId('view-product-outcome')).toHaveText('forged:invalid');

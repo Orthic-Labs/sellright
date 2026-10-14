@@ -22,6 +22,7 @@ import { useBfcacheStockRefresh, useStockTrigger } from '~/platform/stock-trigge
 import { seal } from './project';
 import type { BrandProductDetail } from '~/platform/product-detail';
 import type { ConfiguratorDetail } from '~/platform/configurator-detail';
+import { CART_OPEN_AFTER_ADD_MS } from '~/platform/brand-data';
 
 export const ADD_RESULTS: DispatchResults<AddResult> = {
 	busy: { status: 'rejected', reason: 'busy', message: null },
@@ -134,7 +135,9 @@ export function useConfigurator(loader: ReadonlySignal<ConfiguratorLoaderValue>,
 			}
 			ctl.last = result;
 			if (result.status === 'added' || result.status === 'added-unavailable') {
-				appState.showCart = true;
+				// routes.json cart.openAfterAddMs: the brand's own "Added" confirmation shows first (the add is already done).
+				if (CART_OPEN_AFTER_ADD_MS > 0) setTimeout(() => { appState.showCart = true; }, CART_OPEN_AFTER_ADD_MS);
+				else appState.showCart = true;
 				loadCountryOnDemand(appState);
 				announce(`${model.name} added to cart`);
 				track({ name: 'add_to_cart', sku: variant.sku, productName: model.name, price: effectivePriceOf(variant), currency: model.currencyCode, quantity });

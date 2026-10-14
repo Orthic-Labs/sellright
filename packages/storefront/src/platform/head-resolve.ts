@@ -18,16 +18,18 @@ export interface BrandHeadSpec {
 	defaultDescription?: string;
 	canonical?: { lowercase: boolean; trailingSlash: 'keep' | 'always' };
 	favicon?: { svg?: string; ico?: string };
+	/** `paths`: exact paths, or a prefix ending in `*` (`/blog/*` is every path under /blog/, /blog/ included). */
 	fontPreloads?: { href: string; type: 'font/woff2'; paths?: string[] }[];
 	imagePreloads?: {
 		paths: string[];
 		type: 'image/avif' | 'image/webp' | 'image/jpeg';
 		fetchpriority?: 'high' | 'auto';
+		/** `href`: a public `/brand/...` URL, or a brand media import (`~/brand/media/x.png?...&url`) the build turns into its hashed URL. */
 		srcset: { href: string; width: number }[];
 		sizes: string;
 	}[];
 	googleFontsPreconnect?: boolean;
-	verification?: { facebookDomain?: string };
+	verification?: { facebookDomain?: string; pinterest?: string };
 	analytics?: { provider: 'gtm'; containerId: string; consent: 'required' | 'implied' } | null;
 	serviceWorker?: 'register-ios-privacy' | 'unregister-ios-privacy' | 'none';
 	appleTitle?: 'storeName';
@@ -43,6 +45,10 @@ export interface HeadSources {
 }
 
 const withSlash = (p: string) => (p.endsWith('/') ? p : `${p}/`);
+
+/** A declared path list matches `path` (trailing-slashed) exactly, or by prefix for an entry ending in `*`. */
+export const pathListMatches = (paths: readonly string[], path: string): boolean =>
+	paths.some((p) => (p.endsWith('*') ? path.startsWith(p.slice(0, -1)) : p === path));
 
 export const DEFAULT_SOURCES: HeadSources = {
 	spec: BRAND_HEAD,
@@ -206,13 +212,13 @@ export function resolveHead(documentHead: ResolvedDocumentHead, pathname: string
 	const have = new Set(links.filter((l) => l.rel === 'preload').map(preloadKey).filter(Boolean));
 	const extraLinks: ExtraLink[] = [];
 	for (const f of spec.fontPreloads ?? []) {
-		if (f.paths && !f.paths.includes(path)) continue;
+		if (f.paths && !pathListMatches(f.paths, path)) continue;
 		if (have.has(f.href)) continue;
 		have.add(f.href);
 		extraLinks.push({ rel: 'preload', as: 'font', type: f.type, href: f.href, crossOrigin: 'anonymous' });
 	}
 	for (const im of spec.imagePreloads ?? []) {
-		if (!im.paths.includes(path)) continue;
+		if (!pathListMatches(im.paths, path)) continue;
 		const imagesrcset = im.srcset.map((s) => `${s.href} ${s.width}w`).join(', ');
 		const href = im.srcset[0].href;
 		if (have.has(href) || have.has(imagesrcset)) continue;
@@ -247,7 +253,7 @@ export function resolveHead(documentHead: ResolvedDocumentHead, pathname: string
 		canonical,
 		extraLinks,
 		extraJsonLd,
-		googleFontsPreconnect: spec.googleFontsPreconnect !== false,
+		googleFontsPreconnect: spec.googleFontsPreconnect === true,
 	};
 }
 

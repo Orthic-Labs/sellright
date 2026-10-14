@@ -38,14 +38,14 @@ export const ProductReviews = component$<{ slug: string; productName: string }>(
 	const error = useSignal('');
 	const done = useSignal<'' | 'pending' | 'approved'>('');
 
+	// document-ready, not on visibility: the block is below the fold, and a read that only starts when it scrolls into view
+	// left "Loading reviews…" on screen (captures, fast scrolls). Only the network read is guarded.
 	useVisibleTask$(async () => {
-		try {
-			data.value = await getProductReviews(slug, { limit: PAGE });
-		} catch {
-			loadError.value = true;
-		}
+		const first = await getProductReviews(slug, { limit: PAGE }).catch(() => null);
+		if (first) data.value = first;
+		else loadError.value = true;
 		signedIn.value = await getMe().then((me) => !!me, () => false);
-	});
+	}, { strategy: 'document-ready' });
 
 	const more = $(async () => {
 		if (!data.value || loadingMore.value) return;
@@ -91,14 +91,16 @@ export const ProductReviews = component$<{ slug: string; productName: string }>(
 	});
 
 	const d = data.value;
-	if (loadError.value || (d && !d.enabled)) return null;
+	// Nothing renders until the read resolves (no "Loading" placeholder, no empty heading for a store with reviews off or a
+	// failed read). The wrapper always renders so the document-ready task has a node to hang off.
+	// It keeps id="reviews" while the read is pending, so the rating link's #reviews always has a target.
+	if (!d || loadError.value || !d.enabled) return <div id="reviews" data-state={d || loadError.value ? 'off' : 'pending'} />;
 
 	return (
 		<section class="max-w-[1200px] mx-auto px-4 sm:px-6 pt-10 pb-28 md:pb-16 text-[var(--ink)]" id="reviews" aria-labelledby="reviews-title" data-testid="product-reviews">
 			<h2 id="reviews-title" class="text-[28px] sm:text-[30px] font-bold tracking-tight" style="font-family:var(--font-heading)">Reviews</h2>
-			{!d && <p class="mt-4 text-[14px] text-[var(--mid)]">Loading reviews…</p>}
 
-			{d && d.count > 0 && (
+			{d.count > 0 && (
 				<div class="flex flex-wrap items-center gap-x-10 gap-y-5 my-5" data-testid="reviews-summary">
 					<div>
 						<div class="text-5xl font-bold leading-none" style="font-family:var(--font-heading)">{d.average.toFixed(1)}</div>
@@ -118,9 +120,9 @@ export const ProductReviews = component$<{ slug: string; productName: string }>(
 					</div>
 				</div>
 			)}
-			{d && d.count === 0 && <p class="mt-4 text-[14px] text-[var(--mid)]">No reviews yet. Be the first to review {productName}.</p>}
+			{d.count === 0 && <p class="mt-4 text-[14px] text-[var(--mid)]">No reviews yet. Be the first to review {productName}.</p>}
 
-			{d && d.reviews.length > 0 && (
+			{d.reviews.length > 0 && (
 				<div class="border-t border-[var(--rule)]">
 					{d.reviews.map((r) => (
 						<article key={r.id} class="py-5 border-b border-[var(--rule)]" data-testid="review-item">
@@ -141,7 +143,7 @@ export const ProductReviews = component$<{ slug: string; productName: string }>(
 					))}
 				</div>
 			)}
-			{d && d.reviews.length < d.count && (
+			{d.reviews.length < d.count && (
 				<div class="mt-4">
 					<button type="button" class={BTN_GHOST} disabled={loadingMore.value} onClick$={more}>
 						{loadingMore.value ? 'Loading…' : 'Show more reviews'}
@@ -152,11 +154,11 @@ export const ProductReviews = component$<{ slug: string; productName: string }>(
 			{done.value && (
 				<p class="mt-5 text-[14px] leading-relaxed" role="status" data-testid="review-ack">
 					{done.value === 'approved' ? 'Thanks, your review is live.' : 'Thanks for your review. It will appear once it has been approved.'}
-					{d && d.bonusPoints > 0 && done.value === 'pending' ? ` You'll earn ${pointsLabel(d.bonusPoints)} when it is approved.` : ''}
+					{d.bonusPoints > 0 && done.value === 'pending' ? ` You'll earn ${pointsLabel(d.bonusPoints)} when it is approved.` : ''}
 				</p>
 			)}
 
-			{d && !done.value && (
+			{!done.value && (
 				<div class="flex flex-wrap items-center gap-3 mt-5">
 					{signedIn.value === true && !formOpen.value && (
 						<button type="button" class={BTN} onClick$={() => { formOpen.value = true; }}>Write a review</button>
