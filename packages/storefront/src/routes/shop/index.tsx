@@ -10,6 +10,7 @@ import { theme } from '~/theme/theme.config';
 import { useCatalogLoader } from '~/platform/shop';
 import { projectFacetIds, projectFacets } from '~/platform/controllers/project';
 import { productPath } from '~/platform/product-path';
+import { SHOP_PRICE_RANGE, listingRank } from '~/platform/brand-data';
 
 export { useCatalogLoader };
 export { useConfiguratorDetail } from '~/platform/configurator-detail';
@@ -112,11 +113,11 @@ const BaseShopPage = component$(() => {
    }
   }
 
-  // Sort: in-stock first, then by manifest order (position)
+  // Sort: in-stock first, then the brand's merchandising order (routes.json shop.listingOrder), then manifest order
   const sorted = [...products].sort((a, b) => {
    if (a.inStock && !b.inStock) return -1;
    if (!a.inStock && b.inStock) return 1;
-   return 0; // Preserve manifest order within same stock status
+   return listingRank(a.slug) - listingRank(b.slug); // equal ranks keep manifest order (stable sort)
   });
 
   return { products: sorted, count: sorted.length };
@@ -293,6 +294,7 @@ const BaseShopPage = component$(() => {
         name={item.name}
         slug={item.slug}
         price={item.pricingVariant?.price ?? item.minPrice}
+        maxPrice={SHOP_PRICE_RANGE ? item.maxPrice ?? null : null}
         inStock={item.inStock}
         priority={index < 6}
         salePrice={item.pricingVariant?.salePrice ?? null}

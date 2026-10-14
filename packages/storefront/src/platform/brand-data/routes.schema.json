@@ -132,6 +132,12 @@
             }
           }
         },
+        "listingOrder": {
+          "type": "array",
+          "maxItems": 500,
+          "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$", "maxLength": 120 }
+        },
+        "priceDisplay": { "enum": ["min", "range"] },
         "productQuery": {
           "type": "object",
           "additionalProperties": false,

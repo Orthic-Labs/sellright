@@ -54,7 +54,7 @@ describe('normalizeManifestListItem', () => {
     });
     expect(out).toEqual({
       slug: 'edc-knife', name: 'EDC Knife', status: 'active', inStock: true,
-      tags: ['Bestseller', 'New'], minPrice: 12000,
+      tags: ['Bestseller', 'New'], minPrice: 12000, maxPrice: 15000,
       pricingVariant: { sku: 'edc-knife', price: 12000, salePrice: 9900, preOrderPrice: null, isPreOrder: false, shipDate: null },
       image: '/assets/edc.jpg',
     });
@@ -64,7 +64,7 @@ describe('normalizeManifestListItem', () => {
     const out = normalizeManifestListItem({ slug: 'bare', name: 'Bare' });
     expect(out).toEqual({
       slug: 'bare', name: 'Bare', status: 'active', inStock: false,
-      tags: [], minPrice: null, pricingVariant: null, image: null,
+      tags: [], minPrice: null, maxPrice: null, pricingVariant: null, image: null,
     });
   });
 

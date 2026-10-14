@@ -16,6 +16,10 @@ export interface BrandRoutes {
 		detailProducts?: DetailProduct[];
 		/** Query params that pick the shop's initial product (`?style=long`): the first param present wins. */
 		productQuery?: { params: string[]; values: Record<string, string> };
+		/** The base shop listing's merchandising order: these slugs first, in this order (within the in-stock grouping); others follow. */
+		listingOrder?: string[];
+		/** The base shop listing's price: the lowest (default) or `min - max` when the variants' prices differ. */
+		priceDisplay?: 'min' | 'range';
 	};
 	operational?: { cartSeedPath?: string; analyticsPath?: string };
 	/** The brand home view's spotlight: one product sold in place (the configurator's options, live stock and add). */
@@ -44,3 +48,7 @@ export const BRAND_COPY: NonNullable<BrandRoutes['copy']> = BRAND_ROUTES?.copy ?
 export const CART_OPEN_AFTER_ADD_MS: number = BRAND_ROUTES?.cart?.openAfterAddMs ?? 0;
 export const CART_TRUST_STRIP_WRAP: boolean = BRAND_ROUTES?.cart?.trustStrip === 'wrap';
 export const HOME_SPOTLIGHT: { key: string; slug: string } | null = BRAND_ROUTES?.home?.spotlight ?? null;
+const LISTING_RANK = new Map((BRAND_ROUTES?.shop?.listingOrder ?? []).map((slug, i) => [slug, i] as const));
+/** The merchandising rank of a slug (routes.json shop.listingOrder); unlisted slugs rank last. */
+export const listingRank = (slug: string): number => LISTING_RANK.get(slug) ?? Number.MAX_SAFE_INTEGER;
+export const SHOP_PRICE_RANGE: boolean = BRAND_ROUTES?.shop?.priceDisplay === 'range';

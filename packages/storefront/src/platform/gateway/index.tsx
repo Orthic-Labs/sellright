@@ -152,6 +152,7 @@ export const ProductCard = /*#__PURE__*/ gate('ProductCard', RawProductCard, {
 		name: opt(str),
 		image: opt(nul(str)),
 		price: opt(nul(num)),
+		maxPrice: opt(nul(num)),
 		salePrice: opt(nul(num)),
 		preOrderPrice: opt(nul(num)),
 		isPreOrder: opt(bool),
@@ -165,6 +166,7 @@ export const ProductCard = /*#__PURE__*/ gate('ProductCard', RawProductCard, {
 export const Price = /*#__PURE__*/ gate('Price', RawPrice, {
 	data: obj({
 		price: opt(nul(num)),
+		maxPrice: opt(nul(num)),
 		salePrice: opt(nul(num)),
 		preOrderPrice: opt(nul(num)),
 		isPreOrder: opt(bool),

@@ -10,6 +10,9 @@ interface PriceProps {
   isPreOrder?: boolean;
   originalPriceClass?: string;
   currencyCode?: string;
+  /** The highest regular price of the product's variants, cents: shown as `min - max` when above `price` and no sale or
+   *  pre-order price applies (routes.json shop.priceDisplay "range"). */
+  maxPrice?: number | null;
   /** @deprecated legacy alias for `price` — kept only for routes/index.tsx and
    *  components/home/HomeTeeSection.tsx (out of scope for this conversion),
    *  which still pass a legacy `priceWithTax` (plain number or, from the
@@ -28,6 +31,7 @@ export default component$<PriceProps>(
     originalPriceClass,
     currencyCode,
     priceWithTax,
+    maxPrice,
   }) => {
     const renderPrice = (valueInCents: number) => {
       if (typeof valueInCents !== 'number' || valueInCents <= 0) return null;
@@ -49,7 +53,8 @@ export default component$<PriceProps>(
       if (regularCents !== null && regularCents !== sale) strikeCents = regularCents;
     }
 
-    const liveNode = liveCents && liveCents > 0 ? renderPrice(liveCents) : null;
+    const showRange = strikeCents === null && liveCents !== null && liveCents === regularCents && typeof maxPrice === 'number' && maxPrice > liveCents;
+    const liveNode = liveCents && liveCents > 0 ? (showRange ? `${renderPrice(liveCents)} - ${renderPrice(maxPrice as number)}` : renderPrice(liveCents)) : null;
 
     return (
       <div class="flex items-center justify-center" style={{ fontVariantNumeric: 'tabular-nums' }}>

@@ -46,6 +46,14 @@ describe('resolveHead: precedence (per-path declaration > route head > head.json
 		expect(meta(r.head, 'description').map((m) => m.content)).toEqual(['Route description']);
 	});
 
+	it('head.json ogImage: alt false drops og:image:alt; width/height add the size tags (only with an og:image)', () => {
+		const head = routeHead({ title: 'Shirts', description: 'D', image: '/social-image.jpg' });
+		const r = resolveHead(head, '/', identity, sources({ ogImage: { alt: false, width: 1200, height: 630 } }));
+		expect(meta(r.head, 'og:image:alt')).toEqual([]);
+		expect(meta(r.head, 'og:image:width').map((m) => m.content)).toEqual(['1200']);
+		expect(meta(r.head, 'og:image:height').map((m) => m.content)).toEqual(['630']);
+	});
+
 	it('og:image:alt is the page title and follows a declared title; no fixed og:image width/height', () => {
 		const head = routeHead({ title: 'Shirts', description: 'D', image: '/social-image.jpg' });
 		expect(meta(head as never, 'og:image:alt').map((m) => m.content)).toEqual(['Shirts']);
