@@ -255,7 +255,10 @@ describe('routes.json PR2 part (productPath, shop, operational)', () => {
 		expect(v(shop({ operational: { analyticsPath: '/api/analytics/events/' } }))).toMatch(/collides/);
 		expect(v(shop({ productPath: '/p/:slug/' }))).not.toBe('');
 		expect(v(shop({ shop: { detailProducts: [{ key: 'a', slug: 's', head: { title: '<b>', description: 'x' } }] } }))).not.toBe('');
-		expect(v(shop(), { hasShopView: false, hasProductView: false })).toMatch(/only the brand views read it/);
+		expect(v(shop(), { hasShopView: false, hasProductView: false })).toMatch(/only the brand views read them/);
+		// listingOrder and priceDisplay are read by the base shop listing: no view needed
+		expect(v({ version: 1, shop: { listingOrder: ['a-b', 'c'], priceDisplay: 'range' } }, { hasShopView: false, hasProductView: false })).toBe('');
+		expect(v({ version: 1, shop: { priceDisplay: 'max' } }, { hasShopView: false, hasProductView: false })).toMatch(/must be one of/);
 	});
 	it('accepts CollectionPage with an ItemList for /shop/ (head.json pageSchemas)', () => {
 		expect(validateHeadData({ pageSchemas: { '/shop/': [{ '@context': 'https://schema.org', '@type': 'CollectionPage', name: 'Shop', mainEntity: { '@type': 'ItemList', itemListElement: [{ '@type': 'ListItem', position: 1, url: 'https://x/shop/a/', name: 'A' }] } }] } })).toEqual([]);

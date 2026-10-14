@@ -33,6 +33,8 @@ export interface BrandHeadSpec {
 	analytics?: { provider: 'gtm'; containerId: string; consent: 'required' | 'implied' } | null;
 	serviceWorker?: 'register-ios-privacy' | 'unregister-ios-privacy' | 'none';
 	appleTitle?: 'storeName';
+	/** Open Graph image extras: `alt: false` drops og:image:alt (on by default); width/height add og:image:width/height. */
+	ogImage?: { alt?: boolean; width?: number; height?: number };
 	pageSchemas?: Record<string, StaticSchema[]>;
 }
 
@@ -207,6 +209,22 @@ export function resolveHead(documentHead: ResolvedDocumentHead, pathname: string
 		if (routeCanonical) links = links.map((l) => (l === routeCanonical ? { ...l, href: canonical as string } : l));
 		meta = setMeta(meta, { property: 'og:url' }, canonical);
 		touched = true;
+	}
+
+	// ---- og:image extras (head.json ogImage), only where the page has an og:image
+	if (spec.ogImage && meta.some((m) => m.property === 'og:image')) {
+		if (spec.ogImage.alt === false && meta.some((m) => m.property === 'og:image:alt')) {
+			meta = meta.filter((m) => m.property !== 'og:image:alt');
+			touched = true;
+		}
+		if (spec.ogImage.width) {
+			meta = setMeta(meta, { property: 'og:image:width' }, String(spec.ogImage.width));
+			touched = true;
+		}
+		if (spec.ogImage.height) {
+			meta = setMeta(meta, { property: 'og:image:height' }, String(spec.ogImage.height));
+			touched = true;
+		}
 	}
 
 	// ---- brand preloads for this path, after the route's own, deduplicated by href / imagesrcset

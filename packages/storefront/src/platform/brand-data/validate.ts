@@ -55,7 +55,7 @@ export function pr2RouteProblems(routes: Pr2Routes, opts: Pick<ValidateOptions, 
 			if (!keys.has(key)) out.push(`shop.productQuery.values.${value}: ${key} is not a shop.detailProducts key`);
 		}
 	}
-	if (routes.shop && !opts.hasShopView && !opts.hasProductView) out.push('shop is declared but neither src/brand-slots/route.shop.tsx nor route.product.tsx exists; only the brand views read it');
+	if ((routes.shop?.detailProducts || routes.shop?.productQuery) && !opts.hasShopView && !opts.hasProductView) out.push('shop.detailProducts / shop.productQuery are declared but neither src/brand-slots/route.shop.tsx nor route.product.tsx exists; only the brand views read them');
 	const seed = routes.operational?.cartSeedPath;
 	if (seed && RESERVED_CHECKOUT_SEGMENTS.includes(seed.split('/')[2])) out.push(`operational.cartSeedPath ${seed} collides with an existing checkout route`);
 	const sink = routes.operational?.analyticsPath;

@@ -25,7 +25,9 @@ type Json<P extends keyof paths, M extends 'get'> =
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type CatalogListResponse = Json<'/v1/shop/catalog/products', 'get'>;
-export type CatalogListItem = CatalogListResponse['items'][number];
+/** A listing item. `maxPrice` (the highest variant price, cents) exists only for catalog-snapshot items (the manifest's priceRange);
+ *  live API items carry the minimum alone. */
+export type CatalogListItem = CatalogListResponse['items'][number] & { maxPrice?: number | null };
 export type CatalogPricingVariant = NonNullable<CatalogListItem['pricingVariant']>;
 
 /** Same item + envelope shape as the products list (search shares the schema). */
@@ -122,6 +124,7 @@ export function normalizeManifestListItem(raw: RawManifestListItem): CatalogList
     inStock: raw.inStock === true,
     tags: raw.tags ?? [],
     minPrice: min,
+    maxPrice: raw.priceRange?.max ?? null,
     pricingVariant: min == null ? null : {
       sku: raw.slug,
       price: min,

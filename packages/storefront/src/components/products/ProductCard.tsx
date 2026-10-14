@@ -19,6 +19,8 @@ interface ProductCardProps {
   name?: string;
   image?: string | null;
   price?: number | null;
+  /** Highest variant price, cents: the card shows `min - max` (see Price). */
+  maxPrice?: number | null;
   salePrice?: number | null;
   preOrderPrice?: number | null;
   isPreOrder?: boolean;
@@ -120,6 +122,7 @@ export default component$((props: ProductCardProps) => {
 						<div class="flex items-baseline gap-2 mt-1.5">
 							<Price
 								price={price}
+								maxPrice={props.maxPrice ?? null}
 								forcedClass={`font-heading font-normal text-[19px] text-[var(--color-ink)] ${!available ? 'text-[var(--color-ink-muted)]' : ''}`}
 								salePrice={salePrice}
 								preOrderPrice={preOrderPrice}
