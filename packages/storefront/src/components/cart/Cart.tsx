@@ -250,7 +250,16 @@ export default component$(() => {
 
 						{/* L8: Trust strip — one truncated line on narrow screens, or (routes.json cart.trustStrip "wrap") each item wraps inside its
 						    own column, as rottenhand.com does; items stay on one row with their separators, and the strip never overflows. */}
-						<div class={`flex items-center justify-center gap-3 px-4 py-2 border-b border-[#E5E0D8] bg-[#F5F2EE] shrink-0 overflow-hidden ${CART_TRUST_STRIP_WRAP ? '' : 'whitespace-nowrap'}`}>
+						<div class={`relative flex items-center justify-center gap-3 pl-4 pr-11 py-2 border-b border-[#E5E0D8] bg-[#F5F2EE] shrink-0 overflow-hidden ${CART_TRUST_STRIP_WRAP ? '' : 'whitespace-nowrap'}`}>
+							{/* A visible close control (the backdrop and Escape also close the drawer). */}
+							<button
+								type="button"
+								class="sr-cart-close absolute right-1 top-1/2 -translate-y-1/2 w-9 h-9 flex items-center justify-center text-[#6b6b68] hover:text-[var(--color-ink)] cursor-pointer"
+								aria-label="Close"
+								onClick$={() => (appState.showCart = false)}
+							>
+								<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>
+							</button>
 							{(BRAND_COPY.cart?.trust ?? [identity.policies.shipping, identity.policies.returns, identity.policies.payment].map(policySentence)).map((text, i) => (
 								<div key={i} style="display: contents">
 									{i > 0 && <span class="w-px h-2.5 bg-[#DDD8D0] shrink-0" />}
