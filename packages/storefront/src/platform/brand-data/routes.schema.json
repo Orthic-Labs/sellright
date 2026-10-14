@@ -179,7 +179,8 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "openAfterAddMs": { "type": "integer", "minimum": 0, "maximum": 2000 }
+        "openAfterAddMs": { "type": "integer", "minimum": 0, "maximum": 2000 },
+        "trustStrip": { "enum": ["truncate", "wrap"] }
       }
     },
     "operational": {

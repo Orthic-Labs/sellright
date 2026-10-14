@@ -90,8 +90,9 @@ export const createSEOHead = ({
       { property: 'og:site_name', content: identity.storeName },
       ...(ogUrl ? [{ property: 'og:url', content: ogUrl }] : []),
       ...(optimizedImage ? [{ property: 'og:image', content: optimizedImage }] : []),
-      ...(optimizedImage ? [{ property: 'og:image:width', content: '1200' }] : []),
-      ...(optimizedImage ? [{ property: 'og:image:height', content: '630' }] : []),
+      // The alt text is the page title (as the Rotten store publishes it). No og:image:width/height: they were a fixed
+      // 1200x630 for every image, product photos included; the tags are optional and crawlers read the real size.
+      ...(optimizedImage ? [{ property: 'og:image:alt', content: title }] : []),
       { name: 'twitter:card', content: 'summary_large_image' },
       { name: 'twitter:title', content: title },
       { name: 'twitter:description', content: description },

@@ -17,6 +17,7 @@ must update the matching changelog in the same push.
 
 ### Added
 
+- Storefront: `og:image:alt` (the page title; it follows a brand-declared title). `routes.json cart.trustStrip: "wrap"` lets the cart drawer's trust strip wrap its items on narrow screens instead of truncating one line.
 - Storefront: branded product pages carry Open Graph `product:price:amount`, `product:price:currency`, `product:brand` and `product:condition`; `product:availability` only from the request's live product JSON-LD (the API's per-request, no-store read), never from a catalog snapshot. ProductGroup variants list colour first in their name and URL.
 - Storefront: `routes.json copy.cart.trust` (1-3 plain strings) replaces the cart drawer's trust strip, which otherwise shows the identity's shipping, returns and payment policies.
 - **Storefront compose: a sanctioned path for brand deploy files** (`layers.json deploy`). A brand's declared deploy file (`brand.json deployFiles`) that sits in no layer and matches `deploy.operationalScripts` (`scripts/*.mjs`, `scripts/*.sh`, `ecosystem.config.cjs`: build and process files, never bundled) or `deploy.publicScripts` (`public/ios-privacy-sw.js`, `public/analytics.js`: fixed URLs a live brand must keep answering) is exempt from the overlay import, shape and executable-asset rules; storefront source never is. Compose writes `.compose-deploy-files.txt` so `check:imports`/`check:shape` in the composed tree apply the same rule.
@@ -235,6 +236,7 @@ must update the matching changelog in the same push.
 
 ### Fixed
 
+- Storefront: no fixed `og:image:width`/`og:image:height` (always 1200x630, product photos included); both are optional.
 - Storefront: snapshot guard. A document-shaped path (`.html`/`.htm`, optionally `.gz`/`.br`, judged on the decoded, normalised path) is a plain no-store `404 text/plain` before the static handlers and the canonical redirect: `/shop/index%2ehtml` no longer gets a 301 and `/shop/index.html` no longer renders the HTML 404 page (rollout store profile samples `guard:*`, as the Rotten store answers today).
 - Storefront: the cart drawer focuses its panel once it has rendered (the focus call ran before the drawer existed, so Escape was not captured and the panel never showed its focus ring).
 - Storefront: two optional brand tokens for the root layout: `--brand-color-page` (the page background behind every route, default the parchment colour) and `--brand-header-offset` (the header height `<main>` clears, default 4rem); a brand whose header is not 64px tall no longer starts every page 4px off.
