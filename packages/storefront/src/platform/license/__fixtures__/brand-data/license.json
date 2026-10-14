@@ -66,5 +66,14 @@
   },
   "devices": {
     "endpoint": "/v1/shop/account/e2e-devices"
+  },
+  "upgradeCredit": {
+    "endpoint": "/v1/shop/pro/e2e-upgrade",
+    "appKey": "alpha",
+    "sku": "E2E-ALPHA-PRO",
+    "creditTermsVersion": "2026-09-30",
+    "sourceName": "Mobile Plan",
+    "targetName": "Full Plan",
+    "storeName": "App Store"
   }
 }

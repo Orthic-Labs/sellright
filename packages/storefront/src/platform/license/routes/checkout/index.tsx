@@ -69,7 +69,7 @@ export default component$(() => {
   const containerRef = useSignal<HTMLElement>();
   const paymentRuntime = useSignal<NoSerialize<CheckoutPaymentRuntime>>();
   const f = useStore({ email: '', firstName: '', lastName: '', address: '', city: '', province: '', postal: '', country: 'US', phone: '', legalAccepted: false, eligibilityBasis: '' as CheckoutEligibilityBasis | '', upgradeConsent: false });
-  const state = useStore({ ready: false, paymentReady: false, inert: false, starting: false, orderCode: '', receiptToken: '', grandTotal: 0, clientSecret: '', paying: false, error: '', idemKey: '' });
+  const state = useStore({ ready: false, paymentReady: false, inert: false, starting: false, reserved: false, resuming: false, orderCode: '', receiptToken: '', grandTotal: 0, clientSecret: '', paying: false, error: '', idemKey: '' });
   const upgrade = useStore({ checked: !(mobileUpgrade.value && !!UPGRADE && item.value?.sku === UPGRADE.sku && item.value?.appKey === UPGRADE.appKey), offer: null as UpgradeEligibility | null, error: '' });
 
   const billingValid = $(() =>
@@ -80,17 +80,21 @@ export default component$(() => {
   // The credit applies only to its configured app and SKU; an offer counts only when it is for the SKU on this page.
   const requiresUpgradeConsent = mobileUpgrade.value && !!UPGRADE && item.value?.sku === UPGRADE.sku && item.value?.appKey === UPGRADE.appKey;
   const upgradeSku = item.value?.sku ?? '';
-  // After the order is reserved the details that went into it cannot change: what is paid is what was submitted.
-  const locked = state.orderCode !== '';
+  // After this page reserves the order the details that went into it cannot change: what is paid is what was submitted. A pending
+  // upgrade order found on load is continued exactly as it was placed (its billing details, legal acceptance and credit terms
+  // are already on the order), so the form is not shown for it at all.
+  const locked = state.reserved;
 
   // When the billing details are complete, create the order + Stripe
   // PaymentIntent and reveal the Payment Element (RH's reveal-on-valid pattern).
   const reveal = $(async () => {
     if (state.ready || state.inert || state.starting || state.clientSecret || !item.value) return;
-    if (!(await billingValid())) return;
-    if (requiresUpgradeConsent && (!upgrade.checked || !upgrade.offer?.eligible || !f.upgradeConsent)) return;
-    if (requiresLegal && (!f.legalAccepted || !f.eligibilityBasis)) return;
-    if (requiresLegal && !legalContract) {
+    if (!state.resuming) {
+      if (!(await billingValid())) return;
+      if (requiresUpgradeConsent && (!upgrade.checked || !upgrade.offer?.eligible || !f.upgradeConsent)) return;
+      if (requiresLegal && (!f.legalAccepted || !f.eligibilityBasis)) return;
+    }
+    if (!state.resuming && requiresLegal && !legalContract) {
       state.error = `${store.value.name} checkout is paused until its product-specific legal schedule is configured.`;
       return;
     }
@@ -143,6 +147,7 @@ export default component$(() => {
         }
       }
       state.orderCode = order.code;
+      state.reserved = true;
       state.receiptToken = order.receiptToken ?? '';
       state.grandTotal = order.grandTotal;
       try {
@@ -160,7 +165,8 @@ export default component$(() => {
       }
     } catch (e) {
       state.error = (e as Error).message || 'Could not start checkout.';
-      state.orderCode = '';
+      if (!state.resuming) state.orderCode = '';
+      state.reserved = false;
     } finally {
       state.starting = false;
     }
@@ -174,6 +180,7 @@ export default component$(() => {
       // An offer for another SKU is not an offer for this page.
       upgrade.offer = offer.eligible && offer.sku !== upgradeSku ? { eligible: false } : offer;
       if (upgrade.offer.eligible && upgrade.offer.pendingOrder) {
+        state.resuming = true;
         state.orderCode = upgrade.offer.pendingOrder.code;
         state.receiptToken = upgrade.offer.pendingOrder.receiptToken ?? '';
         state.grandTotal = upgrade.offer.pendingOrder.grandTotal;
@@ -184,6 +191,11 @@ export default component$(() => {
       upgrade.checked = true;
       void reveal();
     }
+  });
+
+  // A pending upgrade order needs no input: continue it as soon as it is known.
+  useVisibleTask$(({ track }) => {
+    if (track(() => state.resuming)) void reveal();
   });
 
   useVisibleTask$(({ track, cleanup }) => {
@@ -210,11 +222,11 @@ export default component$(() => {
 
   const pay = $(async () => {
     if (state.paying) return;
-    if (requiresUpgradeConsent && (!upgrade.offer?.eligible || !f.upgradeConsent)) {
+    if (!state.resuming && requiresUpgradeConsent && (!upgrade.offer?.eligible || !f.upgradeConsent)) {
       state.error = `Accept the ${SOURCE} credit terms before payment.`;
       return;
     }
-    if (requiresLegal && (!f.legalAccepted || !f.eligibilityBasis)) {
+    if (!state.resuming && requiresLegal && (!f.legalAccepted || !f.eligibilityBasis)) {
       state.error = 'Accept the license terms and select an eligibility basis before payment.';
       return;
     }
@@ -322,6 +334,11 @@ export default component$(() => {
                 )}
               </div>
             )}
+            {state.resuming ? (
+              <p class="note" style="margin-top:0">
+                Order {state.orderCode} continues as you placed it: its billing details and the terms you accepted apply.
+              </p>
+            ) : (<>
             <div class="ck-grid">
               <input class="ck-input" disabled={locked} type="email" placeholder="Email address" value={f.email} onInput$={(e) => (f.email = (e.target as HTMLInputElement).value)} onBlur$={reveal} />
               <input class="ck-input" disabled={locked} type="tel" placeholder="Phone (optional)" value={f.phone} onInput$={(e) => (f.phone = (e.target as HTMLInputElement).value)} />
@@ -341,6 +358,7 @@ export default component$(() => {
                 {COUNTRIES.map(([c, n]) => <option key={c} value={c}>{n}</option>)}
               </select>
             </div>
+            </>)}
 
             <div class="ck-pay">
               <span class="ck-eyebrow ck-eyebrow-light">Payment</span>
@@ -353,7 +371,7 @@ export default component$(() => {
               )}
             </div>
 
-            {requiresLegal ? (
+            {requiresLegal && !state.resuming ? (
               <div class="ck-legal" style="margin-top:18px;padding:16px;border:1px solid #D8D0C8;border-radius:10px;background:#F7F3EE">
                 <label style="display:block;font-size:12px;font-weight:700;margin-bottom:8px" for="legal-eligibility">License eligibility</label>
                 <select
@@ -401,7 +419,7 @@ export default component$(() => {
               </div>
             ) : null}
 
-            <button class={`ck-cta${state.paymentReady && !state.paying ? '' : ' ck-cta-off'}`} disabled={!state.paymentReady || state.paying || (requiresLegal && (!f.legalAccepted || !f.eligibilityBasis)) || (requiresUpgradeConsent && (!upgrade.offer?.eligible || !f.upgradeConsent))} onClick$={pay}>
+            <button class={`ck-cta${state.paymentReady && !state.paying ? '' : ' ck-cta-off'}`} disabled={!state.paymentReady || state.paying || (!state.resuming && ((requiresLegal && (!f.legalAccepted || !f.eligibilityBasis)) || (requiresUpgradeConsent && (!upgrade.offer?.eligible || !f.upgradeConsent))))} onClick$={pay}>
               {state.paying ? 'Processing…' : ctaText}
             </button>
             <p style="margin-top:14px;font-size:12px;line-height:1.6;color:#6E665F">
