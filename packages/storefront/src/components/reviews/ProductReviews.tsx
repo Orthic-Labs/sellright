@@ -93,7 +93,8 @@ export const ProductReviews = component$<{ slug: string; productName: string }>(
 	const d = data.value;
 	// Nothing renders until the read resolves (no "Loading" placeholder, no empty heading for a store with reviews off or a
 	// failed read). The wrapper always renders so the document-ready task has a node to hang off.
-	if (!d || loadError.value || !d.enabled) return <div id="reviews-root" />;
+	// It keeps id="reviews" while the read is pending, so the rating link's #reviews always has a target.
+	if (!d || loadError.value || !d.enabled) return <div id="reviews" data-state={d || loadError.value ? 'off' : 'pending'} />;
 
 	return (
 		<section class="max-w-[1200px] mx-auto px-4 sm:px-6 pt-10 pb-28 md:pb-16 text-[var(--ink)]" id="reviews" aria-labelledby="reviews-title" data-testid="product-reviews">

@@ -49,7 +49,12 @@ function optionNames(model: ModelProduct): { color: string[]; size: string[] } {
 }
 
 /** The shop page's ProductGroup for one configurator product: variants with price and options, no availability. */
-export function productGroupSchema(model: ModelProduct, ctx: { siteOrigin: string; brandName: string; facts?: ProductFacts }): JsonLdSchema {
+/**
+ * `variantUrls`: give each variant its own URL (`?<group>=<value>` per option, read back by the brand product view's
+ * selectionFromQuery). Off when the product page cannot preselect from the query (no route.product view): every variant then
+ * names the product URL.
+ */
+export function productGroupSchema(model: ModelProduct, ctx: { siteOrigin: string; brandName: string; facts?: ProductFacts; variantUrls?: boolean }): JsonLdSchema {
 	const url = absoluteOn(ctx.siteOrigin, model.href);
 	const groupIndex = new Map(model.groups.map((g) => [g.code, g] as const));
 	const variesBy = model.groups.map((g) => kindOf(g.code)).filter((k): k is 'color' | 'size' => !!k).map((k) => VARIES_BY[k]);
@@ -65,7 +70,7 @@ export function productGroupSchema(model: ModelProduct, ctx: { siteOrigin: strin
 			const kind = kindOf(pair.group);
 			if (kind) named[kind] = value.name;
 		}
-		const variantUrl = query.size ? `${url}?${query.toString()}` : url;
+		const variantUrl = ctx.variantUrls !== false && query.size ? `${url}?${query.toString()}` : url;
 		const image = v.images[0]?.url ?? model.images[0]?.url;
 		const price = effectivePriceOf(v);
 		return {

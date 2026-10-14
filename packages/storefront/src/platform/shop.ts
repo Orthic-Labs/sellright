@@ -34,7 +34,7 @@ export const head = ({ url, resolveValue }: { url: URL; resolveValue?: (loader: 
  // generation, with the brand's declared facts (no availability: platform/product-jsonld.ts).
  const configurator = hasView('route.shop') && resolveValue ? (resolveValue(useConfiguratorDetail) as ConfiguratorDetail | null) : null;
  const groups = (configurator?.detail ?? []).map((m) =>
-  productGroupSchema(m, { siteOrigin: siteUrl, brandName: theme.storeName, facts: DETAIL_PRODUCTS.find((p) => p.slug === m.slug)?.facts }),
+  productGroupSchema(m, { siteOrigin: siteUrl, brandName: theme.storeName, facts: DETAIL_PRODUCTS.find((p) => p.slug === m.slug)?.facts, variantUrls: hasView('route.product') }),
  );
 
  const breadcrumbSchema = generateBreadcrumbSchema([

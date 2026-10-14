@@ -80,6 +80,12 @@ describe('product JSON-LD', () => {
 		}
 	});
 
+	it('ProductGroup without variant URLs (no product view to preselect): every variant names the product URL', () => {
+		const g = productGroupSchema(model(), { siteOrigin: ORIGIN, brandName: 'B', variantUrls: false }) as unknown as Record<string, any>;
+		expect(g.hasVariant.map((v: any) => v.url)).toEqual([`${ORIGIN}/shop/tee/`, `${ORIGIN}/shop/tee/`]);
+		expect(g.hasVariant[0].offers.url).toBe(`${ORIGIN}/shop/tee/`);
+	});
+
 	it('PDP facts: material, colours, sizes, brand, condition, plain description, absolute images; offers untouched', () => {
 		const offers = { '@type': 'Offer', price: '75.00', availability: 'https://schema.org/OutOfStock' };
 		const api = { '@type': 'Product', name: 'Core tee', description: '<p>Soft &amp; light.</p>', image: ['uuid/media/a.png', '/assets/b.png'], offers } as unknown as JsonLdSchema;
