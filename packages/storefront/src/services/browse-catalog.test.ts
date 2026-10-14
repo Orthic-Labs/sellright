@@ -12,7 +12,7 @@ describe('server-rendered browse catalog', () => {
     vi.mocked(readCatalogSnapshot).mockResolvedValue({
       products: [{
         slug: 'snapshot', name: 'Snapshot', inStock: true,
-        priceRange: { min: 1200, max: 1200 },
+        priceRange: { min: 1200, max: 1500 },
         tags: ['EDC'],
         featuredImage: { url: '/assets/snapshot.jpg' },
         salePrice: null, preOrderPrice: null, shipDate: null, isPreOrder: false,
@@ -24,7 +24,7 @@ describe('server-rendered browse catalog', () => {
       totalItems: 1,
       products: [{
         slug: 'snapshot', name: 'Snapshot', status: 'active', inStock: true,
-        tags: ['EDC'], minPrice: 1200,
+        tags: ['EDC'], minPrice: 1200, maxPrice: 1500,
         pricingVariant: { sku: 'snapshot', price: 1200, salePrice: null, preOrderPrice: null, isPreOrder: false, shipDate: null },
         image: '/assets/snapshot.jpg',
       }],

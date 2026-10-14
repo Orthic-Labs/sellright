@@ -1,5 +1,6 @@
 import { component$ } from '@qwik.dev/core';
 import { formatPrice } from '~/utils/price-format';
+import { priceParts } from './price-parts';
 
 interface PriceProps {
   /** Regular unit price, integer cents. Native primary prop. */
@@ -40,21 +41,8 @@ export default component$<PriceProps>(
 
     const regularCents = price ?? legacyToNumber(priceWithTax);
 
-    const sale = typeof salePrice === 'number' && salePrice > 0 ? salePrice : null;
-    const pre = typeof preOrderPrice === 'number' && preOrderPrice > 0 ? preOrderPrice : null;
-
-    let liveCents: number | null = regularCents;
-    let strikeCents: number | null = null;
-    if (isPreOrder && pre) {
-      liveCents = pre;
-      if (regularCents !== null && regularCents !== pre) strikeCents = regularCents;
-    } else if (!isPreOrder && sale) {
-      liveCents = sale;
-      if (regularCents !== null && regularCents !== sale) strikeCents = regularCents;
-    }
-
-    const showRange = strikeCents === null && liveCents !== null && liveCents === regularCents && typeof maxPrice === 'number' && maxPrice > liveCents;
-    const liveNode = liveCents && liveCents > 0 ? (showRange ? `${renderPrice(liveCents)} - ${renderPrice(maxPrice as number)}` : renderPrice(liveCents)) : null;
+    const { liveCents, strikeCents, rangeMaxCents } = priceParts({ regularCents, salePrice, preOrderPrice, isPreOrder, maxPrice });
+    const liveNode = liveCents && liveCents > 0 ? (rangeMaxCents !== null ? `${renderPrice(liveCents)} - ${renderPrice(rangeMaxCents)}` : renderPrice(liveCents)) : null;
 
     return (
       <div class="flex items-center justify-center" style={{ fontVariantNumeric: 'tabular-nums' }}>

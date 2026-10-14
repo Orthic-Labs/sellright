@@ -217,8 +217,11 @@ export function resolveHead(documentHead: ResolvedDocumentHead, pathname: string
 			meta = meta.filter((m) => m.property !== 'og:image:alt');
 			touched = true;
 		}
-		if (spec.ogImage.width && spec.ogImage.height) {
+		if (spec.ogImage.width) {
 			meta = setMeta(meta, { property: 'og:image:width' }, String(spec.ogImage.width));
+			touched = true;
+		}
+		if (spec.ogImage.height) {
 			meta = setMeta(meta, { property: 'og:image:height' }, String(spec.ogImage.height));
 			touched = true;
 		}
