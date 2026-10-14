@@ -35,7 +35,14 @@ export default component$(() => {
 	useTask$(({ track }) => {
 		track(() => appState.showCart);
 		if (appState.showCart && typeof document !== 'undefined') {
-			setTimeout(() => (panelRef.value as HTMLElement)?.focus(), 0);
+			// The drawer renders after this task: wait (a few frames at most) for the panel to exist, then focus it.
+			let frames = 0;
+			const focusPanel = () => {
+				const panel = panelRef.value as HTMLElement | undefined;
+				if (panel) panel.focus();
+				else if (++frames < 30) requestAnimationFrame(focusPanel);
+			};
+			requestAnimationFrame(focusPanel);
 		}
 	});
 
