@@ -204,6 +204,37 @@
         "trustStrip": { "enum": ["truncate", "wrap"] }
       }
     },
+    "productPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "related": { "type": "boolean" },
+        "content": {
+          "type": "object",
+          "propertyNames": { "pattern": "^[a-z0-9][a-z0-9_-]{0,119}$" },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "designNote": { "type": "string", "minLength": 1, "maxLength": 1200, "pattern": "^[^<>]*$" },
+              "faqs": {
+                "type": "array",
+                "maxItems": 12,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["q", "a"],
+                  "properties": {
+                    "q": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "^[^<>]*$" },
+                    "a": { "type": "string", "minLength": 1, "maxLength": 1200, "pattern": "^[^<>]*$" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "operational": {
       "type": "object",
       "additionalProperties": false,

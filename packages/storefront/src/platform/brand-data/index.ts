@@ -24,10 +24,18 @@ export interface BrandRoutes {
 	operational?: { cartSeedPath?: string; analyticsPath?: string };
 	/** The brand home view's spotlight: one product sold in place (the configurator's options, live stock and add). */
 	home?: { spotlight?: { key: string; slug: string } };
+	/** The base product page: a related-products row (catalog snapshot, same category) and per-product editorial content. */
+	productPage?: { related?: boolean; content?: Record<string, ProductPageContent> };
 	/** Plain-text copy for base components a brand does not replace with a view (no markup: rendered as text). */
 	copy?: { cart?: { emptyTitle?: string; emptyBody?: string; /** The drawer's trust strip (1-3 items); default: the identity's shipping, returns and payment policies. */ trust?: string[] } };
 	/** The configurator's cart drawer opens this long after a successful add (0, the default, opens it at once). */
 	cart?: { openAfterAddMs?: number; /** The drawer's trust strip on narrow screens: one truncated line (default) or wrapped items. */ trustStrip?: 'truncate' | 'wrap' };
+}
+
+/** Plain-text editorial content of one product (routes.json productPage.content[slug]): a design note and spec-derived Q&A. */
+export interface ProductPageContent {
+	designNote?: string;
+	faqs?: { q: string; a: string }[];
 }
 
 export interface DetailProduct {
@@ -52,3 +60,7 @@ const LISTING_RANK = new Map((BRAND_ROUTES?.shop?.listingOrder ?? []).map((slug,
 /** The merchandising rank of a slug (routes.json shop.listingOrder); unlisted slugs rank last. */
 export const listingRank = (slug: string): number => LISTING_RANK.get(slug) ?? Number.MAX_SAFE_INTEGER;
 export const SHOP_PRICE_RANGE: boolean = BRAND_ROUTES?.shop?.priceDisplay === 'range';
+/** routes.json productPage.related: the base product page shows related products. */
+export const PDP_RELATED: boolean = BRAND_ROUTES?.productPage?.related === true;
+/** routes.json productPage.content for a slug, or null. */
+export const productPageContent = (slug: string): ProductPageContent | null => BRAND_ROUTES?.productPage?.content?.[slug] ?? null;

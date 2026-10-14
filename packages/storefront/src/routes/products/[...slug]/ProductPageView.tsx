@@ -9,6 +9,9 @@ import { effectiveVariantPrice, type CatalogVariant } from '~/sellright/types/ca
 import { LoyaltyPdpEarn } from '~/components/loyalty/LoyaltyPdpEarn';
 import { ProductReviews } from '~/components/reviews/ProductReviews';
 import { starString } from '~/utils/rewards';
+import { productPageContent } from '~/platform/brand-data';
+import { useRelatedProducts } from '~/platform/product-related';
+import { formatPrice } from '~/utils/price-format';
 
 // A17 mount points. Each is undefined when the brand supplies no slot file; the markup that used to be inlined here
 // now lives in the base's own default slot files under src/brand-slots.
@@ -26,6 +29,9 @@ export const ProductPageView = component$((props: Record<string, any>) => {
     const pre = typeof sv?.preOrderPrice === 'number' && sv.preOrderPrice > 0 ? sv.preOrderPrice : null;
     widgetPriceCents = isPreOrder.value && pre ? pre : (!isPreOrder.value && sale ? sale : displayPrice.value);
   }
+  // routes.json productPage: editorial content for this product and the related row (empty unless the brand turns it on).
+  const content = productPageContent(String(product?.slug ?? ''));
+  const related = useRelatedProducts();
   return (
     <div class="sr-pdp">
       <div class="sr-layout">
@@ -378,6 +384,23 @@ export const ProductPageView = component$((props: Record<string, any>) => {
               dangerouslySetInnerHTML={enhanceDescription(product.name, sanitizeProductDescription(product.description || ''))}
             />
           )}
+          {content?.designNote && (
+            <div class="sr-designnote">
+              <div class="sr-designnote-title">Design notes</div>
+              <p class="sr-designnote-text">{content.designNote}</p>
+            </div>
+          )}
+          {content?.faqs && content.faqs.length > 0 && (
+            <div class="sr-faq">
+              <div class="sr-faq-title">Common questions</div>
+              {content.faqs.map((f, i) => (
+                <details key={i} class="sr-faq-item">
+                  <summary class="sr-faq-q">{f.q}</summary>
+                  <p class="sr-faq-a">{f.a}</p>
+                </details>
+              ))}
+            </div>
+          )}
           {isPreOrder.value && (
             <div class="sr-po-notice">
               <div class="sr-po-dot" />
@@ -391,6 +414,24 @@ export const ProductPageView = component$((props: Record<string, any>) => {
           )}
         </div>{/* end sr-info-col */}
       </div>{/* end sr-layout */}
+      {related.value.items.length > 0 && (
+        <section class="sr-related">
+          <h2 class="sr-related-title">{related.value.heading}</h2>
+          <div class="sr-related-grid">
+            {/* A plain <a> (full load), as the base product links: the PDP state does not re-sync on an SPA product change. */}
+            {related.value.items.map((rp) => (
+              <a key={rp.slug} href={rp.href} class="sr-related-card">
+                <div class="sr-related-img">
+                  {rp.image && <OptimizedImage src={rp.image} width={300} height={375} alt={rp.name} class="sr-related-photo" />}
+                  {!rp.inStock && <span class="sr-related-oos">Sold out</span>}
+                </div>
+                <div class="sr-related-name">{titleCase(rp.name)}</div>
+                <div class="sr-related-price">{rp.priceCents > 0 ? formatPrice(rp.priceCents, product.currency || undefined) : ''}</div>
+              </a>
+            ))}
+          </div>
+        </section>
+      )}
       {product?.slug && <ProductReviews slug={product.slug} productName={product.name || 'this product'} />}
       <ProductMobileBar
         allVariantsSoldOut={allVariantsSoldOut}

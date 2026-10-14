@@ -42,5 +42,19 @@
       "key": "shirt",
       "slug": "e2e-shirt"
     }
+  },
+  "productPage": {
+    "related": true,
+    "content": {
+      "e2e-shirt": {
+        "designNote": "A fixture design note.",
+        "faqs": [
+          {
+            "q": "Fixture question?",
+            "a": "Fixture answer."
+          }
+        ]
+      }
+    }
   }
 }

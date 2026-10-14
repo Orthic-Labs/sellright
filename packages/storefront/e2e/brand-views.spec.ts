@@ -182,6 +182,15 @@ test.describe('brand views (fixture build)', () => {
 		await expect(page.getByTestId('view-home-spotlight-outcome')).toHaveText('added');
 	});
 
+	test('base product page: routes.json productPage content renders with its FAQPage JSON-LD; the related row reads the catalog', async ({ page }) => {
+		await page.goto(`/products/${PRODUCT.shirt.slug}/`);
+		await expect(page.locator('.sr-designnote-text')).toHaveText('A fixture design note.');
+		await expect(page.locator('.sr-faq-q')).toHaveText(['Fixture question?']);
+		const ld = await page.locator('script[type="application/ld+json"]').allTextContents();
+		expect(ld.some((j) => j.includes('"FAQPage"') && j.includes('Fixture answer.'))).toBe(true);
+		for (const href of await page.locator('.sr-related-card').evaluateAll((els) => els.map((e) => e.getAttribute('href')))) expect(href).toMatch(/^\/products\/[a-z0-9-]+\/$/);
+	});
+
 	test('home view: an invalid email never posts, a double submit makes one request', async ({ page }) => {
 		let posts = 0;
 		await page.route('**/newsletter-signup', async (route) => { posts++; await new Promise((r) => setTimeout(r, 300)); await route.fulfill({ status: 200, body: '{}' }); });
