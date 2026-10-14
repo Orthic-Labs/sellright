@@ -4,7 +4,7 @@ import {fileURLToPath} from 'node:url';
 import {resolve,extname,sep} from 'node:path';
 import {createRequire} from 'node:module';
 import {demoBindHost} from './policy.mjs';
-import {interactiveRequest,interactiveBody,sameOriginMutation,demoAdminCredentials,demoRouteTarget,allowedDemoHost} from './interactive-policy.mjs';
+import {interactiveRequest,interactiveBody,sameOriginMutation,demoAdminCredentials,demoRouteTarget,allowedDemoHost,probeRequest} from './interactive-policy.mjs';
 import {assertInteractiveDatabase,visitorFor,provisionVisitor,removeVisitor,cleanVisitors,hash,scoped} from './visitors.mjs';
 import {ensureDemoSeedAssets} from './generate-demo-assets.mjs';
 import {verifyDemoMigrations} from './migration-gate.mjs';
@@ -252,6 +252,12 @@ const server=createServer(async(req,res)=>{
       // Only for document navigations (no file extension): asset requests
       // (/build/*.js etc.) never trigger an SSR data load and firing
       // provision() once per script tag would be wasteful and racy.
+      // A cookie-less probe (HEAD, monitor, crawler, CLI) gets a static page instead: it never provisions a visitor tenant.
+      if(!visitor&&!extname(url.pathname)&&probeRequest(method,req.headers)){
+        res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store','x-robots-tag':'noindex, nofollow'});
+        res.end(method==='HEAD'?undefined:'<!doctype html><meta charset="utf-8"><meta name="robots" content="noindex"><title>SellRight demo</title><p>SellRight demo. Open this page in a web browser to start a demo session.</p>');
+        return;
+      }
       if(!visitor&&!extname(url.pathname)){
         try{visitor=await provision();setVisitorCookies(res,visitor,url);}
         catch(e){return json(503,{error:e.message||'Could not start a demo session'});}
