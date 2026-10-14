@@ -1,6 +1,7 @@
 import http from 'node:http';
 import { test, expect } from './fixtures';
-import { AdminApi, readRows, uniq, writeSetup } from './support/api';
+import { AdminApi, mailTo, readRows, uniq, writeSetup } from './support/api';
+import { linkInMail } from './support/mock';
 import { STORE_URL } from './support/env.mjs';
 
 /**
@@ -10,7 +11,8 @@ import { STORE_URL } from './support/env.mjs';
  *   E2E_LICENSE_FLOW=1 E2E_STORE_READY_PATH=/account/ npx playwright test e2e/license-flow.spec.ts
  *
  * Fixture hosts: alpha.test (default, collection e2e-alpha, legal contract configured) and beta.test (its app's checkout paused).
- * Stripe stays unconfigured, so a checkout ends at the inert "payment not switched on" state with the order reserved.
+ * Stripe stays unconfigured, so a checkout ends at the inert "payment not switched on" state with the order reserved. The fixture
+ * declares the devices feature at /v1/shop/account/e2e-devices, which the SellRight API does not serve: the spec answers it.
  */
 const ON = process.env.E2E_LICENSE_FLOW === '1';
 const SKU_ALPHA = 'E2E-ALPHA-PRO';
@@ -92,12 +94,28 @@ test.describe('license commerce flow (license build)', () => {
 		await page.getByPlaceholder('Postal code').blur();
 		// Billing complete but no acceptance yet: nothing is ordered.
 		await expect(page.locator('.ck-placeholder')).toHaveText('Enter your details above to continue to payment.');
+		// The acceptance links are the contract's documents (what the API records), not links derived from the host.
+		await expect(page.locator('.ck-legal a', { hasText: 'Acceptable Use Policy' })).toHaveAttribute('href', 'https://alpha.example.com/legal/acceptable_use/');
+		const intentHeaders: Record<string, string>[] = [];
+		await page.route('**/v1/shop/orders/*/payment-intent', async (route) => { intentHeaders.push(route.request().headers()); await route.fallback(); });
+		const checkoutReply = page.waitForResponse((r) => r.url().endsWith('/v1/shop/checkout') && r.request().method() === 'POST');
 		await page.locator('#legal-eligibility').selectOption('individual');
 		await page.locator('.ck-legal input[type=checkbox]').check();
+		const receiptToken = ((await (await checkoutReply).json()) as { receiptToken?: string }).receiptToken;
 		await expect(page.locator('.ck-placeholder')).toContainText("Online payment isn't switched on yet");
 		const code = /Order (\S+) is reserved/.exec((await page.locator('.ck-placeholder').innerText()) ?? '')?.[1];
 		expect(code).toBeTruthy();
 		await expect(page.locator('.ck-cta')).toBeDisabled();
+		// The guest proves ownership of the reserved order with its receipt token; the reserved details are frozen.
+		expect(receiptToken).toBeTruthy();
+		expect(intentHeaders.map((h) => h['x-receipt-token'])).toEqual([receiptToken]);
+		for (const ph of ['Email address', 'First name', 'Postal code']) await expect(page.getByPlaceholder(ph, { exact: true })).toBeDisabled();
+		await expect(page.locator('#legal-eligibility')).toBeDisabled();
+		// The confirmation page reads the order's real state: reserved, unpaid.
+		await page.goto(`/checkout/confirmation/${code}/?rt=${encodeURIComponent(receiptToken!)}`);
+		await expect(page.locator('main .lead')).toHaveText('Your payment is being confirmed. This page updates on its own; do not pay again.');
+		await page.goto(`/checkout/confirmation/${code}/`);
+		await expect(page.locator('main .lead')).toHaveText("This order can't be shown here. Sign in to see your orders and licenses.");
 		const api = await AdminApi.login();
 		const rows = await readRows<{ v: string; app: string; n: number }>(api, `SELECT metadata->'legal_acceptance'->>'acceptance_version' AS v, metadata->'legal_acceptance'->>'app_key' AS app, jsonb_array_length(metadata->'legal_acceptance'->'documents') AS n FROM "order" WHERE code = $1`, [code]);
 		expect(rows).toEqual([{ v: 'alpha-2026-08-01-v1', app: 'alpha', n: 5 }]);
@@ -121,7 +139,7 @@ test.describe('license commerce flow (license build)', () => {
 		await page.getByRole('button', { name: 'Create account' }).click();
 		await expect(page.locator('main h1')).toHaveText('My account');
 		await expect(page.getByText('No licenses yet.')).toBeVisible();
-		await expect(page.getByRole('link', { name: 'Manage devices' })).toHaveCount(0);
+		await expect(page.getByRole('link', { name: 'Manage devices' })).toHaveCount(1);
 		await page.getByRole('button', { name: 'Sign out' }).click();
 		// Signing out keeps the view the shopper came from (here: create account).
 		await expect(page.locator('main h1')).toHaveText('Create account');
@@ -131,24 +149,57 @@ test.describe('license commerce flow (license build)', () => {
 		await page.locator('#acct-password').fill('wrong-password');
 		await page.getByRole('button', { name: 'Sign in' }).click();
 		await expect(page.locator('.err')).toHaveText('We couldn’t complete that. Check your details and try again.');
+		// The registration email's /verify link verifies the address; then the password sign-in succeeds.
+		const mail = await mailTo(email, (m) => !!linkInMail(m, '/verify?token='), 'verification email');
+		const link = new URL(linkInMail(mail, '/verify?token=')!);
+		await page.goto(link.pathname + link.search);
+		await expect(page.locator('.ok')).toHaveText('Your email is verified. Sign in to see your AlphaApp licenses.');
+		await page.getByRole('link', { name: 'Sign in' }).click();
+		await page.locator('#acct-email').fill(email);
+		await page.locator('#acct-password').fill('e2e-license-password');
+		await page.getByRole('button', { name: 'Sign in' }).click();
+		await expect(page.locator('main h1')).toHaveText('My account');
+		await page.getByRole('button', { name: 'Sign out' }).click();
 		await expect(page.locator('main h1')).toHaveText('Sign in');
 		await page.getByRole('button', { name: 'Email me a sign-in link' }).click();
 		await expect(page.locator('main h1')).toHaveText('Check your email');
 	});
 
-	test('email landings: a bad magic link and a bad reset token answer the generic errors; devices is off without the feature', async ({ apiProxyPage: page }) => {
+	test('devices (the declared plugin endpoint, answered here): list, rename, remove', async ({ apiProxyPage: page }) => {
+		const calls: string[] = [];
+		const device = { id: 'dev-1', licenseKey: 'K', appKey: 'alpha', platform: 'macos', pool: 'computer', label: 'Old name', state: 'active', lastSeenAt: null, activatedAt: '2026-10-01T00:00:00Z', generation: 1 };
+		await page.route('**/v1/shop/account/e2e-devices**', async (route) => {
+			const r = route.request();
+			calls.push(`${r.method()} ${new URL(r.url()).pathname} ${r.postData() ?? ''}`.trim());
+			await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(r.method() === 'GET' ? { items: [device] } : { ok: true }) });
+		});
+		await page.goto('/account/devices/');
+		await expect(page.locator('.card h2')).toContainText('Old name');
+		await expect(page.locator('.card .note').first()).toContainText('AlphaApp · macOS');
+		await page.getByRole('button', { name: 'Rename' }).click();
+		await page.locator('.card input[type=text]').fill('New name');
+		await page.getByRole('button', { name: 'Save' }).click();
+		await expect(page.locator('.card h2')).toContainText('New name');
+		await page.getByRole('button', { name: 'Remove' }).click();
+		await page.getByRole('button', { name: 'Confirm remove' }).click();
+		await expect(page.getByText('No devices activated yet.')).toBeVisible();
+		expect(calls).toEqual(['GET /v1/shop/account/e2e-devices', 'PATCH /v1/shop/account/e2e-devices/dev-1 {"label":"New name"}', 'DELETE /v1/shop/account/e2e-devices/dev-1']);
+	});
+
+	test('email landings: a bad magic link and a bad reset token answer the generic errors', async ({ apiProxyPage: page }) => {
 		await page.goto(`/account/magic-link/?token=${'b'.repeat(43)}`);
 		await expect(page.locator('.err')).toHaveText('This link is invalid, expired, or has already been used. Request a new one below.');
 		await page.goto(`/password-reset/?token=${'b'.repeat(43)}`);
 		await page.locator('input[type=password]').fill('e2e-new-password');
 		await page.getByRole('button', { name: 'Save new password' }).click();
 		await expect(page.locator('.err')).toContainText('That reset link is invalid, expired, or already used.');
-		expect((await ssr('/account/devices/', 'alpha.test')).status).toBe(404);
 	});
 
-	test('confirmation page: seller line, support address on the variant domain, the brand default legal links', async () => {
+	test('confirmation page: claims nothing before reading the order; seller line, support address, the brand default legal links', async () => {
 		const res = await ssr('/checkout/confirmation/E2E1/', 'alpha.test');
 		expect(res.status).toBe(200);
+		expect(res.body).toContain('Checking your AlphaApp order…');
+		expect(res.body).not.toContain('order confirmed');
 		expect(res.body).toContain('E2E Seller LLC · 1 Test Street');
 		expect(res.body).toContain('mailto:hello@alpha.test');
 		expect(res.body).toContain('href="/refund"');

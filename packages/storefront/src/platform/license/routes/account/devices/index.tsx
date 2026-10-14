@@ -27,9 +27,21 @@ const PLATFORM_LABEL: Record<string, string> = {
   macos: 'macOS', windows: 'Windows', ios: 'iPhone', ipados: 'iPad', watchos: 'Watch',
 };
 
+interface DevicesState {
+  loggedIn: boolean;
+  devices: Device[];
+  loaded: boolean;
+  error: string;
+  /** Device id currently mid-action, or ''. */
+  busy: string;
+  renamingId: string;
+  renameValue: string;
+  confirmRemoveId: string;
+}
+
 export default component$(() => {
   const store = useHostVariant();
-  const st = useStore({
+  const st = useStore<DevicesState>({
     // no client-held bearer — the sr_cust httpOnly cookie carries the
     // session; `loggedIn` only reflects whether the cookie-authenticated
     // load succeeded.
@@ -59,46 +71,6 @@ export default component$(() => {
 
   useVisibleTask$(async () => {
     await load();
-  });
-
-  const startRename = $((d: Device) => {
-    st.renamingId = d.id;
-    st.renameValue = d.label ?? '';
-  });
-
-  const saveRename = $(async (id: string) => {
-    if (!st.renameValue.trim()) return;
-    st.busy = id;
-    st.error = '';
-    try {
-      await renameDevice(id, st.renameValue.trim());
-      const dev = st.devices.find((d) => d.id === id);
-      if (dev) dev.label = st.renameValue.trim();
-      st.renamingId = '';
-    } catch (e) {
-      st.error = (e as Error).message || 'Rename failed.';
-    } finally {
-      st.busy = '';
-    }
-  });
-
-  // "Remove" is the only destructive action this page offers. There is no
-  // separate "reassign" — the backend has no reassign endpoint. Remote
-  // removal tombstones the row, bumps its generation, and frees the pool
-  // slot transactionally; that IS how a lost device is
-  // recovered and how a seat gets moved to a different device.
-  const confirmRemove = $(async (id: string) => {
-    st.busy = id;
-    st.error = '';
-    try {
-      await removeDevice(id);
-      st.devices = st.devices.filter((d) => d.id !== id);
-      st.confirmRemoveId = '';
-    } catch (e) {
-      st.error = (e as Error).message || 'Remove failed — nothing was changed.';
-    } finally {
-      st.busy = '';
-    }
   });
 
   if (!st.loaded) {
@@ -151,72 +123,117 @@ export default component$(() => {
       {st.devices.length === 0 && <p class="lead" style="margin-top:24px">No devices activated yet.</p>}
 
       <div class="grid" style="margin-top:24px;grid-template-columns:1fr">
-        {st.devices.map((d) => {
-          const brand = variantByKey(d.appKey);
-          const isRemoved = d.state !== 'active';
-          return (
-            <div class="card" key={d.id} style={isRemoved ? 'opacity:.6' : undefined}>
-              <div style="display:flex;justify-content:space-between;align-items:start;gap:16px;flex-wrap:wrap">
-                <div>
-                  {st.renamingId === d.id ? (
-                    <div style="display:flex;gap:8px;align-items:center">
-                      <input
-                        type="text"
-                        value={st.renameValue}
-                        onInput$={(e) => (st.renameValue = (e.target as HTMLInputElement).value)}
-                        style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;font:inherit"
-                      />
-                      <button class="btn" disabled={st.busy === d.id} onClick$={() => saveRename(d.id)}>Save</button>
-                      <button class="btn ghost" onClick$={() => (st.renamingId = '')}>Cancel</button>
-                    </div>
-                  ) : (
-                    <h2 style="display:flex;align-items:center;gap:8px">
-                      {d.label ?? <span class="muted">(unnamed device)</span>}
-                      {!isRemoved && (
-                        <button
-                          class="btn ghost"
-                          style="font-size:11px;padding:4px 10px"
-                          onClick$={() => startRename(d)}
-                        >
-                          Rename
-                        </button>
-                      )}
-                    </h2>
-                  )}
-                  <p class="note" style="margin-top:4px">
-                    {brand?.name ?? d.appKey} · {d.platform ? (PLATFORM_LABEL[d.platform] ?? d.platform) : 'platform unknown'}
-                    {' · '}
-                    {d.pool ? (POOL_LABEL[d.pool] ?? d.pool) : 'pool unknown'}
-                  </p>
-                  <p class="note" style="margin-top:2px">
-                    State: {d.state} · Last seen: {fmtDateTime(d.lastSeenAt)} · Activated: {fmtDateTime(d.activatedAt)}
-                  </p>
-                </div>
-                <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end">
-                  {isRemoved ? (
-                    <span class="note">Removed</span>
-                  ) : st.confirmRemoveId === d.id ? (
-                    <div style="text-align:right">
-                      <p class="note" style="margin-top:0;max-width:220px">
-                        This frees the seat for another device. This device will lose Pro immediately.
-                      </p>
-                      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px">
-                        <button class="btn" disabled={st.busy === d.id} onClick$={() => confirmRemove(d.id)}>
-                          {st.busy === d.id ? 'Removing…' : 'Confirm remove'}
-                        </button>
-                        <button class="btn ghost" onClick$={() => (st.confirmRemoveId = '')}>Cancel</button>
-                      </div>
-                    </div>
-                  ) : (
-                    <button class="btn ghost" onClick$={() => (st.confirmRemoveId = d.id)}>Remove</button>
-                  )}
-                </div>
-              </div>
-            </div>
-          );
-        })}
+        {st.devices.map((d) => <DeviceRow key={d.id} st={st} id={d.id} />)}
       </div>
     </main>
+  );
+});
+
+/** One device card. Its actions read the device by id from the page state (no list item crosses a $ boundary). */
+const DeviceRow = component$<{ st: DevicesState; id: string }>(({ st, id }) => {
+  const startRename = $(() => {
+    st.renamingId = id;
+    st.renameValue = st.devices.find((x) => x.id === id)?.label ?? '';
+  });
+
+  const saveRename = $(async () => {
+    if (!st.renameValue.trim()) return;
+    st.busy = id;
+    st.error = '';
+    try {
+      await renameDevice(id, st.renameValue.trim());
+      const dev = st.devices.find((d) => d.id === id);
+      if (dev) dev.label = st.renameValue.trim();
+      st.renamingId = '';
+    } catch (e) {
+      st.error = (e as Error).message || 'Rename failed.';
+    } finally {
+      st.busy = '';
+    }
+  });
+
+  // "Remove" is the only destructive action this page offers. There is no
+  // separate "reassign" — the backend has no reassign endpoint. Remote
+  // removal tombstones the row, bumps its generation, and frees the pool
+  // slot transactionally; that IS how a lost device is
+  // recovered and how a seat gets moved to a different device.
+  const confirmRemove = $(async () => {
+    st.busy = id;
+    st.error = '';
+    try {
+      await removeDevice(id);
+      st.devices = st.devices.filter((d) => d.id !== id);
+      st.confirmRemoveId = '';
+    } catch (e) {
+      st.error = (e as Error).message || 'Remove failed — nothing was changed.';
+    } finally {
+      st.busy = '';
+    }
+  });
+
+  const d = st.devices.find((x) => x.id === id);
+  if (!d) return null;
+  const brand = variantByKey(d.appKey);
+  const isRemoved = d.state !== 'active';
+  return (
+    <div class="card" style={isRemoved ? 'opacity:.6' : undefined}>
+      <div style="display:flex;justify-content:space-between;align-items:start;gap:16px;flex-wrap:wrap">
+        <div>
+          {st.renamingId === d.id ? (
+            <div style="display:flex;gap:8px;align-items:center">
+              <input
+                type="text"
+                value={st.renameValue}
+                onInput$={(e) => (st.renameValue = (e.target as HTMLInputElement).value)}
+                style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;font:inherit"
+              />
+              <button class="btn" disabled={st.busy === d.id} onClick$={saveRename}>Save</button>
+              <button class="btn ghost" onClick$={() => (st.renamingId = '')}>Cancel</button>
+            </div>
+          ) : (
+            <h2 style="display:flex;align-items:center;gap:8px">
+              {d.label ?? <span class="muted">(unnamed device)</span>}
+              {!isRemoved && (
+                <button
+                  class="btn ghost"
+                  style="font-size:11px;padding:4px 10px"
+                  onClick$={startRename}
+                >
+                  Rename
+                </button>
+              )}
+            </h2>
+          )}
+          <p class="note" style="margin-top:4px">
+            {brand?.name ?? d.appKey} · {d.platform ? (PLATFORM_LABEL[d.platform] ?? d.platform) : 'platform unknown'}
+            {' · '}
+            {d.pool ? (POOL_LABEL[d.pool] ?? d.pool) : 'pool unknown'}
+          </p>
+          <p class="note" style="margin-top:2px">
+            State: {d.state} · Last seen: {fmtDateTime(d.lastSeenAt)} · Activated: {fmtDateTime(d.activatedAt)}
+          </p>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end">
+          {isRemoved ? (
+            <span class="note">Removed</span>
+          ) : st.confirmRemoveId === d.id ? (
+            <div style="text-align:right">
+              <p class="note" style="margin-top:0;max-width:220px">
+                This frees the seat for another device. This device will lose Pro immediately.
+              </p>
+              <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px">
+                <button class="btn" disabled={st.busy === d.id} onClick$={confirmRemove}>
+                  {st.busy === d.id ? 'Removing…' : 'Confirm remove'}
+                </button>
+                <button class="btn ghost" onClick$={() => (st.confirmRemoveId = '')}>Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <button class="btn ghost" onClick$={() => (st.confirmRemoveId = id)}>Remove</button>
+          )}
+        </div>
+      </div>
+    </div>
   );
 });
 

@@ -274,11 +274,12 @@ describe('routes.json PR2 part (productPath, shop, operational)', () => {
 const VARIANT = { key: 'alpha', name: 'Alpha', wordmark: ['Al', 'pha'], domain: 'alpha.test', collection: 'alpha', tokens: { '--accent': '#112233', '--font-body': 'Inter' } };
 const HOSTS = { version: 1, stripPrefixes: ['store', 'www'], default: 'alpha.test', hosts: { 'alpha.test': VARIANT, 'beta.test': { key: 'beta', name: 'Beta', domain: 'beta.test', tokens: {} } } };
 const DOC = { role: 'eula', id: 'x-eula', version: '1.1', sha256: 'a'.repeat(64), url: 'https://alpha.test/legal/eula/', treatment: 'agree' };
+const DOCS = (['license', 'eula', 'acceptable_use', 'product_schedule', 'privacy_notice'] as const).map((role) => ({ ...DOC, role, id: `x-${role}`, treatment: role === 'privacy_notice' ? 'acknowledge' : 'agree' }));
 const LICENSE = {
 	version: 1,
 	seller: { line: 'Example LLC', supportLocalPart: 'hello' },
 	pausedAppKeys: ['beta'],
-	contracts: { alpha: { acceptanceVersion: 'alpha-v1', agreementStatement: 'I agree.', documents: [DOC] } },
+	contracts: { alpha: { acceptanceVersion: 'alpha-v1', agreementStatement: 'I agree.', documents: DOCS } },
 	confirmationLegalLinks: { default: { privacy: '/privacy', terms: '/terms', refund: '/refund', contact: '/contact' } },
 	devices: { endpoint: '/v1/shop/account/devices' },
 	upgradeCredit: { endpoint: '/v1/shop/pro/mobile-upgrade', appKey: 'alpha', sku: 'AL-PRO', creditTermsVersion: '2026-09-30', sourceName: 'Mobile', targetName: 'Full', storeName: 'App Store' },
@@ -307,7 +308,11 @@ describe('license.json (license flow data)', () => {
 		expect(validateLicenseData({ version: 1, seller: { line: 'x', supportLocalPart: 'support' } })).toEqual([]);
 	});
 	it('rejects a repeated document role, a non-https document URL, a bad sha256, an endpoint outside /v1/shop and an absolute confirmation link', () => {
-		expect(msgs(validateLicenseData({ ...LICENSE, contracts: { alpha: { ...LICENSE.contracts.alpha, documents: [DOC, DOC] } } })).join()).toMatch(/role is listed twice/);
+		expect(msgs(validateLicenseData({ ...LICENSE, contracts: { alpha: { ...LICENSE.contracts.alpha, documents: [...DOCS, DOC] } } })).join()).toMatch(/role is listed twice/);
+		for (const role of ['license', 'eula', 'acceptable_use', 'product_schedule', 'privacy_notice']) {
+			const documents = DOCS.filter((d) => d.role !== role);
+			expect(msgs(validateLicenseData({ ...LICENSE, contracts: { alpha: { ...LICENSE.contracts.alpha, documents } } })).join(), role).toMatch(new RegExp(`missing document role\\(s\\) ${role}`));
+		}
 		expect(msgs(validateLicenseData({ ...LICENSE, contracts: { alpha: { ...LICENSE.contracts.alpha, documents: [{ ...DOC, url: 'http://alpha.test/x' }] } } })).join()).toMatch(/does not match/);
 		expect(msgs(validateLicenseData({ ...LICENSE, contracts: { alpha: { ...LICENSE.contracts.alpha, documents: [{ ...DOC, sha256: 'abc' }] } } })).join()).toMatch(/does not match/);
 		expect(msgs(validateLicenseData({ ...LICENSE, devices: { endpoint: 'https://evil.test/v1' } })).join()).toMatch(/does not match/);

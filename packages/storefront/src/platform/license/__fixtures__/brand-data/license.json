@@ -63,5 +63,8 @@
       "refund": "/refund",
       "contact": "/contact"
     }
+  },
+  "devices": {
+    "endpoint": "/v1/shop/account/e2e-devices"
   }
 }

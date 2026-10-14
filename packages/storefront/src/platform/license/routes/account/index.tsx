@@ -127,7 +127,7 @@ export default component$(() => {
   const signIn = $(async () => {
     const email = st.email.trim();
     const token = st.turnstileToken;
-    if (st.busy || !emailOk(email) || st.password.length === 0 || (TOKEN_REQUIRED && !token)) return;
+    if (st.busy || !emailOk(email) || st.password.length === 0 || (TOKEN_REQUIRED && !token && !st.turnstileError)) return;
     st.error = '';
     st.busy = true;
     try {
@@ -147,7 +147,7 @@ export default component$(() => {
   const createAccount = $(async () => {
     const email = st.email.trim();
     const token = st.turnstileToken;
-    if (st.busy || !emailOk(email) || st.password.length < 8 || (TOKEN_REQUIRED && !token)) return;
+    if (st.busy || !emailOk(email) || st.password.length < 8 || (TOKEN_REQUIRED && !token && !st.turnstileError)) return;
     st.error = '';
     st.busy = true;
     try {
@@ -164,7 +164,7 @@ export default component$(() => {
   const sendReset = $(async () => {
     const email = st.email.trim();
     const token = st.turnstileToken;
-    if (st.busy || !emailOk(email) || (TOKEN_REQUIRED && !token)) return;
+    if (st.busy || !emailOk(email) || (TOKEN_REQUIRED && !token && !st.turnstileError)) return;
     st.error = '';
     st.busy = true;
     try {
@@ -183,7 +183,7 @@ export default component$(() => {
   const sendMagicLink = $(async () => {
     const email = st.email.trim();
     const token = st.turnstileToken;
-    if (st.busy || !emailOk(email) || (TOKEN_REQUIRED && !token)) return;
+    if (st.busy || !emailOk(email) || (TOKEN_REQUIRED && !token && !st.turnstileError)) return;
     st.error = '';
     st.busy = true;
     try {
@@ -201,7 +201,12 @@ export default component$(() => {
   });
 
   const logout = $(async () => {
-    try { await apiLogout(); } catch { /* cookie clears server-side regardless; ignore network errors here */ }
+    // The session is an httpOnly cookie only the API can clear: the page shows signed-out only once it has.
+    st.error = '';
+    try { await apiLogout(); } catch {
+      st.error = 'Sign-out did not complete. Check your connection and try again.';
+      return;
+    }
     st.loggedIn = false;
     st.licenses = [];
     st.mobileUpgrade = null;
@@ -351,6 +356,7 @@ export default component$(() => {
         <h1>My account</h1>
         <button class="btn ghost" onClick$={logout}>Sign out</button>
       </div>
+      {st.error && <p class="err" role="alert">{st.error}</p>}
       <div class="note" style="margin-top:12px">
         {HAS_DEVICES && <><a href="/account/devices/">Manage devices</a> · </>}<a href="/account/delete/">Delete account</a>
       </div>

@@ -1,7 +1,7 @@
 import { component$, useStore, useSignal, useVisibleTask$, $, noSerialize, type NoSerialize } from '@qwik.dev/core';
 import { routeLoader$, useNavigate, type DocumentHead } from '@qwik.dev/router';
 import { BRAND_LICENSE } from '~/platform/brand-data';
-import { checkout, createPaymentIntent, payOrder, getProduct, getCollection, getUpgradeEligibility, type VariantDetail, type CheckoutBody, type UpgradeEligibility } from '../../api';
+import { apiErrorCode, checkout, createPaymentIntent, payOrder, getProduct, getCollection, getUpgradeEligibility, type ApiError, type VariantDetail, type CheckoutBody, type UpgradeEligibility } from '../../api';
 import { getStripe } from '../../stripe';
 import { confirmCheckoutPayment, type CheckoutPaymentRuntime } from '../../checkout-payment';
 import { checkoutLegalContract, isCheckoutPaused, legalLinks, sellerLine, supportEmailFor, type CheckoutEligibilityBasis } from '../../legal';
@@ -31,7 +31,8 @@ export const useItem = routeLoader$<CheckoutItem | null>(async ({ url, resolveVa
   const feed = await getCollection(variant.collection);
   for (const p of feed.products) {
     const detail = await getProduct(p.slug);
-    const v = detail.variants.find((x) => x.sku === sku);
+    // Licenses and other unshipped goods only: this flow has no stock or shipping, so a physical variant is never sellable here.
+    const v = detail.variants.find((x) => x.sku === sku && x.fulfillmentType !== 'physical');
     if (v) {
       if (isCheckoutPaused(v.appKey)) return null;
       return {
@@ -69,14 +70,18 @@ export default component$(() => {
   const paymentRuntime = useSignal<NoSerialize<CheckoutPaymentRuntime>>();
   const f = useStore({ email: '', firstName: '', lastName: '', address: '', city: '', province: '', postal: '', country: 'US', phone: '', legalAccepted: false, eligibilityBasis: '' as CheckoutEligibilityBasis | '', upgradeConsent: false });
   const state = useStore({ ready: false, paymentReady: false, inert: false, starting: false, orderCode: '', receiptToken: '', grandTotal: 0, clientSecret: '', paying: false, error: '', idemKey: '' });
-  const upgrade = useStore({ checked: !mobileUpgrade.value, offer: null as UpgradeEligibility | null, error: '' });
+  const upgrade = useStore({ checked: !(mobileUpgrade.value && !!UPGRADE && item.value?.sku === UPGRADE.sku && item.value?.appKey === UPGRADE.appKey), offer: null as UpgradeEligibility | null, error: '' });
 
   const billingValid = $(() =>
     f.email.includes('@') && !!f.firstName && !!f.lastName && !!f.address && !!f.city && !!f.postal && !!f.country);
 
   const requiresLegal = Boolean(item.value && ['license', 'update_pass'].includes(item.value.fulfillmentType));
   const legalContract = checkoutLegalContract(item.value?.appKey);
-  const requiresUpgradeConsent = mobileUpgrade.value;
+  // The credit applies only to its configured app and SKU; an offer counts only when it is for the SKU on this page.
+  const requiresUpgradeConsent = mobileUpgrade.value && !!UPGRADE && item.value?.sku === UPGRADE.sku && item.value?.appKey === UPGRADE.appKey;
+  const upgradeSku = item.value?.sku ?? '';
+  // After the order is reserved the details that went into it cannot change: what is paid is what was submitted.
+  const locked = state.orderCode !== '';
 
   // When the billing details are complete, create the order + Stripe
   // PaymentIntent and reveal the Payment Element (RH's reveal-on-valid pattern).
@@ -141,12 +146,17 @@ export default component$(() => {
       state.receiptToken = order.receiptToken ?? '';
       state.grandTotal = order.grandTotal;
       try {
-        const pi = await createPaymentIntent(order.code);
+        const pi = await createPaymentIntent(order.code, state.receiptToken || undefined);
         state.clientSecret = pi.clientSecret;
         state.ready = true;
       } catch (e) {
-        const s = (e as { status?: number }).status;
-        if (s === 503 || s === 409) state.inert = true; else throw e;
+        const s = (e as ApiError).status;
+        const code = apiErrorCode(e);
+        // Payments switched off (no usable Stripe keys, or the method disabled): the order stays reserved, nothing to pay yet.
+        if (s === 503 || (s === 409 && code === 'PAYMENT_METHOD_DISABLED')) state.inert = true;
+        else if (s === 409 && code === 'ORDER_NOT_PAYABLE' && (() => { try { return JSON.parse((e as ApiError).body ?? '').state === 'Paid'; } catch { return false; } })()) {
+          await nav(`/checkout/confirmation/${encodeURIComponent(order.code)}/${state.receiptToken ? `?rt=${encodeURIComponent(state.receiptToken)}` : ''}`);
+        } else throw e;
       }
     } catch (e) {
       state.error = (e as Error).message || 'Could not start checkout.';
@@ -157,10 +167,12 @@ export default component$(() => {
   });
 
   useVisibleTask$(async ({ track }) => {
-    const requested = track(() => mobileUpgrade.value);
+    const requested = track(() => requiresUpgradeConsent);
     if (!requested || upgrade.checked) return;
     try {
-      upgrade.offer = await getUpgradeEligibility();
+      const offer = await getUpgradeEligibility();
+      // An offer for another SKU is not an offer for this page.
+      upgrade.offer = offer.eligible && offer.sku !== upgradeSku ? { eligible: false } : offer;
       if (upgrade.offer.eligible && upgrade.offer.pendingOrder) {
         state.orderCode = upgrade.offer.pendingOrder.code;
         state.receiptToken = upgrade.offer.pendingOrder.receiptToken ?? '';
@@ -213,9 +225,10 @@ export default component$(() => {
     }
     state.paying = true; state.error = '';
     try {
-      const receipt = mobileUpgrade.value && state.receiptToken ? `?rt=${encodeURIComponent(state.receiptToken)}` : '';
+      // The receipt token lets the confirmation page read this order's real state (a guest has no session).
+      const receipt = state.receiptToken ? `?rt=${encodeURIComponent(state.receiptToken)}` : '';
       await confirmCheckoutPayment(runtime, `${window.location.origin}/checkout/confirmation/${encodeURIComponent(state.orderCode)}/${receipt}`,
-        intentId => payOrder(state.orderCode, intentId));
+        intentId => payOrder(state.orderCode, intentId, state.receiptToken || undefined));
       await nav(`/checkout/confirmation/${state.orderCode}${receipt}`);
     } catch (error) {
       state.error = `${error instanceof Error ? error.message : 'Payment could not be completed. Please try again.'} Order ${state.orderCode}.`;
@@ -224,7 +237,13 @@ export default component$(() => {
 
   const supportEmail = supportEmailFor(store.value.domain);
   const seller = sellerLine();
+  // Point-of-sale links on the app's canonical domain; the acceptance links are the contract's own documents (what is recorded).
   const legal = legalLinks(store.value.domain);
+  const docUrl = (role: string, fallback: string) => legalContract?.documents.find((d) => d.role === role)?.url ?? fallback;
+  const accept = {
+    eula: docUrl('eula', legal.eula), license: docUrl('license', legal.license), acceptableUse: docUrl('acceptable_use', legal.acceptableUse),
+    productSchedule: docUrl('product_schedule', legal.productSchedule), privacy: docUrl('privacy_notice', legal.privacy),
+  };
 
   if (!item.value) {
     return (
@@ -248,7 +267,7 @@ export default component$(() => {
 
   const upgradeOffer = upgrade.offer?.eligible ? upgrade.offer : null;
   const total = state.grandTotal || upgradeOffer?.upgradePrice || item.value.price;
-  const ctaText = mobileUpgrade.value
+  const ctaText = requiresUpgradeConsent
     ? (upgradeOffer ? `Complete purchase — ${fmt(total)}` : upgrade.checked ? 'Upgrade unavailable' : 'Checking upgrade eligibility…')
     : `Complete purchase — ${fmt(total)}`;
   return (
@@ -258,7 +277,7 @@ export default component$(() => {
         <div class="ck-left">
           <div class="ck-sum">
             <span class="ck-eyebrow">Your Order</span>
-            <div class="ck-total">{mobileUpgrade.value && !upgradeOffer ? '—' : fmt(total)}</div>
+            <div class="ck-total">{requiresUpgradeConsent && !upgradeOffer ? '—' : fmt(total)}</div>
             {upgradeOffer ? (
               <div class="ck-standard-price"><span>{fmt(upgradeOffer.fullPrice)}</span> {TARGET} · {fmt(upgradeOffer.credit)} {SOURCE} credit</div>
             ) : item.value.compareAtPrice && item.value.compareAtPrice > item.value.price && (
@@ -270,7 +289,7 @@ export default component$(() => {
                 <div class="ck-item-name">{item.value.productName}</div>
                 <div class="ck-item-sub">{item.value.variantName} · {store.value.name} license</div>
               </div>
-              <div class="ck-item-price">{upgradeOffer ? fmt(upgradeOffer.upgradePrice) : mobileUpgrade.value ? '—' : fmt(item.value.price)}</div>
+              <div class="ck-item-price">{upgradeOffer ? fmt(upgradeOffer.upgradePrice) : requiresUpgradeConsent ? '—' : fmt(item.value.price)}</div>
             </div>
             <div class="ck-rule" />
             <div class="ck-foot">One-time charge · license key delivered instantly · secured by Stripe</div>
@@ -285,7 +304,7 @@ export default component$(() => {
               <span class="ck-step ck-step-on"><b>1</b> Your details</span>
               <span class="ck-step"><b>2</b> Payment</span>
             </div>
-            {mobileUpgrade.value && (
+            {requiresUpgradeConsent && (
               <div class="ck-upgrade-card" role="status">
                 <span class="ck-eyebrow ck-eyebrow-light">{SOURCE} upgrade</span>
                 {!upgrade.checked ? (
@@ -304,21 +323,21 @@ export default component$(() => {
               </div>
             )}
             <div class="ck-grid">
-              <input class="ck-input" type="email" placeholder="Email address" value={f.email} onInput$={(e) => (f.email = (e.target as HTMLInputElement).value)} onBlur$={reveal} />
-              <input class="ck-input" type="tel" placeholder="Phone (optional)" value={f.phone} onInput$={(e) => (f.phone = (e.target as HTMLInputElement).value)} />
+              <input class="ck-input" disabled={locked} type="email" placeholder="Email address" value={f.email} onInput$={(e) => (f.email = (e.target as HTMLInputElement).value)} onBlur$={reveal} />
+              <input class="ck-input" disabled={locked} type="tel" placeholder="Phone (optional)" value={f.phone} onInput$={(e) => (f.phone = (e.target as HTMLInputElement).value)} />
             </div>
             <div class="ck-grid ck-mt">
-              <input class="ck-input" placeholder="First name" value={f.firstName} onInput$={(e) => (f.firstName = (e.target as HTMLInputElement).value)} onBlur$={reveal} />
-              <input class="ck-input" placeholder="Last name" value={f.lastName} onInput$={(e) => (f.lastName = (e.target as HTMLInputElement).value)} onBlur$={reveal} />
+              <input class="ck-input" disabled={locked} placeholder="First name" value={f.firstName} onInput$={(e) => (f.firstName = (e.target as HTMLInputElement).value)} onBlur$={reveal} />
+              <input class="ck-input" disabled={locked} placeholder="Last name" value={f.lastName} onInput$={(e) => (f.lastName = (e.target as HTMLInputElement).value)} onBlur$={reveal} />
             </div>
-            <input class="ck-input ck-mt" placeholder="Billing address" value={f.address} onInput$={(e) => (f.address = (e.target as HTMLInputElement).value)} onBlur$={reveal} />
+            <input class="ck-input ck-mt" disabled={locked} placeholder="Billing address" value={f.address} onInput$={(e) => (f.address = (e.target as HTMLInputElement).value)} onBlur$={reveal} />
             <div class="ck-grid ck-mt">
-              <input class="ck-input" placeholder="City" value={f.city} onInput$={(e) => (f.city = (e.target as HTMLInputElement).value)} onBlur$={reveal} />
-              <input class="ck-input" placeholder="State / Province" value={f.province} onInput$={(e) => (f.province = (e.target as HTMLInputElement).value)} />
+              <input class="ck-input" disabled={locked} placeholder="City" value={f.city} onInput$={(e) => (f.city = (e.target as HTMLInputElement).value)} onBlur$={reveal} />
+              <input class="ck-input" disabled={locked} placeholder="State / Province" value={f.province} onInput$={(e) => (f.province = (e.target as HTMLInputElement).value)} />
             </div>
             <div class="ck-grid ck-mt">
-              <input class="ck-input" placeholder="Postal code" value={f.postal} onInput$={(e) => (f.postal = (e.target as HTMLInputElement).value)} onBlur$={reveal} />
-              <select class="ck-input" value={f.country} onChange$={(e) => { f.country = (e.target as HTMLSelectElement).value; }} onBlur$={reveal}>
+              <input class="ck-input" disabled={locked} placeholder="Postal code" value={f.postal} onInput$={(e) => (f.postal = (e.target as HTMLInputElement).value)} onBlur$={reveal} />
+              <select class="ck-input" disabled={locked} value={f.country} onChange$={(e) => { f.country = (e.target as HTMLSelectElement).value; }} onBlur$={reveal}>
                 {COUNTRIES.map(([c, n]) => <option key={c} value={c}>{n}</option>)}
               </select>
             </div>
@@ -339,6 +358,7 @@ export default component$(() => {
                 <label style="display:block;font-size:12px;font-weight:700;margin-bottom:8px" for="legal-eligibility">License eligibility</label>
                 <select
                   id="legal-eligibility"
+                  disabled={locked}
                   class="ck-input"
                   value={f.eligibilityBasis}
                   onChange$={(event) => { f.eligibilityBasis = (event.target as HTMLSelectElement).value as CheckoutEligibilityBasis | ''; void reveal(); }}
@@ -350,15 +370,16 @@ export default component$(() => {
                 <label style="display:flex;align-items:flex-start;gap:10px;margin-top:12px;font-size:12px;line-height:1.55;cursor:pointer">
                   <input
                     type="checkbox"
+                    disabled={locked}
                     checked={f.legalAccepted}
                     onChange$={(event) => { f.legalAccepted = (event.target as HTMLInputElement).checked; void reveal(); }}
                     style="margin-top:3px"
                   />
                   <span>
-                    I agree to the <a href={legal.eula}>EULA</a>, <a href={legal.license}>Ownership Notice</a>,{' '}
-                    <a href={legal.acceptableUse}>Acceptable Use Policy</a>, and <a href={legal.productSchedule}>Product Schedule</a>.{' '}
+                    I agree to the <a href={accept.eula}>EULA</a>, <a href={accept.license}>Ownership Notice</a>,{' '}
+                    <a href={accept.acceptableUse}>Acceptable Use Policy</a>, and <a href={accept.productSchedule}>Product Schedule</a>.{' '}
                     I have authority to accept them for the selected user or organization. I acknowledge the{' '}
-                    <a href={legal.privacy}>Privacy Notice</a>; this is not consent to optional processing.
+                    <a href={accept.privacy}>Privacy Notice</a>; this is not consent to optional processing.
                   </span>
                 </label>
                 {BRAND_LICENSE?.legalNotice && (
@@ -370,6 +391,7 @@ export default component$(() => {
                   <label class="ck-upgrade-consent">
                     <input
                       type="checkbox"
+                      disabled={locked}
                       checked={f.upgradeConsent}
                       onChange$={(event) => { f.upgradeConsent = (event.target as HTMLInputElement).checked; void reveal(); }}
                     />

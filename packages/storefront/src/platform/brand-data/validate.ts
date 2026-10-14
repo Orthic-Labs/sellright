@@ -103,7 +103,10 @@ export function validateHostsData(value: unknown): BrandDataProblem[] {
 	return problems;
 }
 
-/** Problems with a parsed license.json value: the schema, then each contract declares every document role once. */
+/** The documents a checkout acceptance must carry: the API rejects an acceptance missing any of them. */
+export const CONTRACT_ROLES = ['license', 'eula', 'acceptable_use', 'product_schedule', 'privacy_notice'] as const;
+
+/** Problems with a parsed license.json value: the schema, then each contract declares every checkout document role exactly once. */
 export function validateLicenseData(value: unknown): BrandDataProblem[] {
 	const file = 'src/brand/license.json';
 	const problems = validateJson(value, licenseSchema as JsonSchema).map((message) => ({ file, message }));
@@ -112,6 +115,8 @@ export function validateLicenseData(value: unknown): BrandDataProblem[] {
 	for (const [app, contract] of Object.entries(contracts)) {
 		const roles = contract.documents.map((d) => d.role);
 		if (new Set(roles).size !== roles.length) problems.push({ file, message: `contracts.${app}: a document role is listed twice` });
+		const missing = CONTRACT_ROLES.filter((r) => !roles.includes(r));
+		if (missing.length) problems.push({ file, message: `contracts.${app}: missing document role(s) ${missing.join(', ')}` });
 	}
 	return problems;
 }

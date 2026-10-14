@@ -95,16 +95,29 @@ export const checkout = (body: CheckoutBody, idempotencyKey?: string) =>
 		headers: idempotencyKey ? { 'idempotency-key': idempotencyKey } : undefined,
 	});
 
+/** The receipt token checkout returned proves a guest owns the order (a signed-in owner is proven by the session cookie). */
+const receiptHeader = (receiptToken?: string): Record<string, string> | undefined => (receiptToken ? { 'x-receipt-token': receiptToken } : undefined);
+
 export interface PaymentIntent { clientSecret: string; intentId: string }
-/** 503 when Stripe is not configured yet: the caller treats that as inert. */
-export const createPaymentIntent = (code: string) =>
-	sr<PaymentIntent>(`/v1/shop/orders/${encodeURIComponent(code)}/payment-intent`, { method: 'POST', body: '{}' });
+/** 503 STRIPE_NOT_CONFIGURED / 409 PAYMENT_METHOD_DISABLED: payments are off (the caller shows the inert state). */
+export const createPaymentIntent = (code: string, receiptToken?: string) =>
+	sr<PaymentIntent>(`/v1/shop/orders/${encodeURIComponent(code)}/payment-intent`, { method: 'POST', body: '{}', headers: receiptHeader(receiptToken) });
 
 export interface PayResult { code: string; state: string; payment: string }
-export const payOrder = (code: string, paymentIntentId: string) =>
+export const payOrder = (code: string, paymentIntentId: string, receiptToken?: string) =>
 	sr<PayResult>(`/v1/shop/orders/${encodeURIComponent(code)}/pay`, {
-		method: 'POST', body: JSON.stringify({ method: 'stripe', token: { paymentIntentId } }),
+		method: 'POST', body: JSON.stringify({ method: 'stripe', token: { paymentIntentId } }), headers: receiptHeader(receiptToken),
 	});
+
+/** Order facts for the confirmation page, scoped by the receipt token or the owner's session (404 otherwise). */
+export interface OrderSummary { code: string; state: string; paymentStatus: string; grandTotal: number; currency: string; contactEmail: string | null }
+export const getOrder = (code: string, receiptToken?: string) =>
+	sr<OrderSummary>(`/v1/shop/orders/${encodeURIComponent(code)}${receiptToken ? `?rt=${encodeURIComponent(receiptToken)}` : ''}`);
+
+/** The `code` of an API error body (`{ error, code }`), or ''. */
+export function apiErrorCode(e: unknown): string {
+	try { return String((JSON.parse((e as ApiError).body ?? '') as { code?: unknown }).code ?? ''); } catch { return ''; }
+}
 
 // ── auth + account ── (the JSON `token` is for bearer clients; this flow relies on the Set-Cookie of the same response)
 export interface AuthResult { token: string; customer: { email: string } }
@@ -124,6 +137,10 @@ export const requestPasswordReset = (email: string, turnstileToken: string) =>
 	sr<{ ok: boolean }>('/v1/shop/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email, turnstileToken }) });
 export const resetPassword = (token: string, password: string) =>
 	sr<{ ok: boolean }>('/v1/shop/auth/reset-password', { method: 'POST', body: JSON.stringify({ token, password }) });
+
+/** The registration email's link (`/verify?token=`): 409 on an invalid, expired or used token. */
+export const verifyEmail = (token: string) =>
+	sr<{ ok: boolean }>('/v1/shop/auth/verify-email', { method: 'POST', body: JSON.stringify({ token }) });
 
 /** GDPR erasure. 409 means an active subscription must be cancelled first. */
 export const deleteAccount = () => sr<{ deleted: boolean }>('/v1/shop/account', { method: 'DELETE' });

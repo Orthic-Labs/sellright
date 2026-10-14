@@ -15,7 +15,7 @@ const files = (dir: string, out: string[] = []): string[] => {
 };
 
 describe('license flow route tree', () => {
-	it('serves exactly the buy-flow pages (the email links /account/magic-link and /password-reset are API contracts)', () => {
+	it('serves exactly the buy-flow pages (the email links /account/magic-link, /password-reset and /verify are API contracts)', () => {
 		expect(files(ROUTES).sort()).toEqual([
 			'account/delete/index.tsx',
 			'account/devices/index.tsx',
@@ -27,6 +27,7 @@ describe('license flow route tree', () => {
 			'layout.tsx',
 			'password-reset/index.tsx',
 			'pricing/index.tsx',
+			'verify/index.tsx',
 		]);
 	});
 
