@@ -248,12 +248,13 @@ export default component$(() => {
 						onKeyDown$={(e) => { if (e.key === 'Escape') appState.showCart = false; }}
 					>
 
-						{/* L8: Trust strip — one truncated line on narrow screens, or wrapped items with routes.json cart.trustStrip "wrap" */}
-						<div class={`flex items-center justify-center gap-3 px-4 py-2 border-b border-[#E5E0D8] bg-[#F5F2EE] shrink-0 ${CART_TRUST_STRIP_WRAP ? '' : 'overflow-hidden whitespace-nowrap'}`}>
+						{/* L8: Trust strip — one truncated line on narrow screens, or (routes.json cart.trustStrip "wrap") each item wraps inside its
+						    own column, as rottenhand.com does; items stay on one row with their separators, and the strip never overflows. */}
+						<div class={`flex items-center justify-center gap-3 px-4 py-2 border-b border-[#E5E0D8] bg-[#F5F2EE] shrink-0 overflow-hidden ${CART_TRUST_STRIP_WRAP ? '' : 'whitespace-nowrap'}`}>
 							{(BRAND_COPY.cart?.trust ?? [identity.policies.shipping, identity.policies.returns, identity.policies.payment].map(policySentence)).map((text, i) => (
 								<div key={i} style="display: contents">
 									{i > 0 && <span class="w-px h-2.5 bg-[#DDD8D0] shrink-0" />}
-									<span class={`text-[10px] tracking-[0.06em] text-[#9A9288] ${CART_TRUST_STRIP_WRAP ? '' : 'truncate'}`}>{text}</span>
+									<span class={`text-[10px] tracking-[0.06em] text-[#9A9288] ${CART_TRUST_STRIP_WRAP ? 'min-w-0 [overflow-wrap:anywhere]' : 'truncate'}`}>{text}</span>
 								</div>
 							))}
 						</div>
