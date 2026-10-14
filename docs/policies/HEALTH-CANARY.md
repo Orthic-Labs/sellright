@@ -1,6 +1,6 @@
 # Health canary (POST /v1/admin/system/canary)
 
-Status: implemented in sr-canary lane (not committed). Spec: PLAN 7.16, interface I-8, decisions X-34 and X-38.
+Status: implemented in `packages/api/src/canary/` and `packages/api/src/routes/admin-system.ts`, merged to `main` (first commit e1a8138). Spec references (PLAN 7.16, interface I-8, decisions X-34 and X-38) appear in the code comments; the spec documents are not in this repository (unverified).
 
 ## Purpose
 

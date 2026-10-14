@@ -1,3 +1,5 @@
+> Historical (2026-09-06). Current state: docs/plans/REMAINING-WORK.md.
+
 # SellRight — Codex next steps
 
 Generated: 2026-09-06

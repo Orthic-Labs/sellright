@@ -2,6 +2,8 @@
 
 Last reconciled: 2026-09-06 · evidence head `7e3ed35` · CI `34031428018` · CodeQL `34031427999`
 
+Open-item status below was re-checked against code at `4f74775` on 2026-10-14. The CI and CodeQL evidence is as of `7e3ed35`.
+
 This is the canonical current backlog. Historical audit/dispatch documents remain evidence, not execution truth. When they disagree, current code + current CI + this file win.
 
 ## Current release posture
@@ -48,6 +50,7 @@ The contracts below are canonical scope locks, not invitations to redesign SellR
   - **Trigger:** CAT-1 is closed, or Adrian explicitly reprioritizes OPS-4 within P1.
   - **Locked scope:** add store-scoped operator notes to orders and customers with immutable author and timestamp metadata; provide create/read API behavior and surface the notes in the relevant admin timelines.
   - **Non-goals:** CRM, ticketing, arbitrary workflow automation, or replacement of existing system/audit events.
+  - **Current state:** order notes exist (`POST /v1/admin/orders/{code}/notes`, stored in `audit_log` with the actor and shown in the order timeline); customer notes do not.
   - **Close evidence:** persistence/API tests for author/timestamp and store isolation, admin create/render coverage, protected CI/CodeQL green.
 
 - [ ] **GROW-1 — abandoned-cart recovery.**
@@ -60,6 +63,7 @@ The contracts below are canonical scope locks, not invitations to redesign SellR
   - **Trigger:** a named target deployment has a concrete requirement that Stripe cannot satisfy or explicitly requires another shopper gateway.
   - **Locked scope:** implement that provider through the existing `PaymentProvider` boundary with isolated configuration, payment/refund behavior, webhook/reconciliation handling and provider-specific tests. Stripe remains the default shopper provider.
   - **Non-goals:** NMI/Sezzle parity, speculative gateway breadth, generic plugin SDK work, or changing core payment semantics to accommodate historical Vendure/DD behavior.
+  - **Current state:** NMI and Sezzle adapters already exist behind `PaymentProvider` (`packages/api/src/payments/provider.ts`); this item covers a provider beyond them.
   - **Close evidence:** provider contract tests plus a real sandbox/test-mode payment/refund receipt for the deployment that triggered the work; protected CI/CodeQL green.
 
 ## P2 — architecture seams when the second implementation exists
@@ -90,8 +94,8 @@ The contracts below are canonical scope locks, not invitations to redesign SellR
 
 ## Explicitly deferred — not launch blockers
 
-- Generic plugin SDK/framework.
-- Redis/distributed rate limiting until horizontal API scaling is planned.
+- Generic plugin SDK/framework beyond the existing `ApiPlugin` seam (`packages/api/src/plugins.ts`, `docs/ENGINE-SDK.md`).
+- Redis-backed rate limiting until horizontal API scaling is planned (the default limiter already shares state across API processes through Postgres, `auth/rate-limit-backend.ts`).
 - Keyset pagination until a list actually reaches offset-pain scale.
 - Faceted/typo-tolerant external search.
 - True multi-currency settlement/region model.

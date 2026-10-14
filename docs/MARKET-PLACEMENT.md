@@ -1,6 +1,6 @@
 # Market Placement
 
-Last reviewed: 2026-06-13
+Last reviewed: 2026-10-14
 
 SellRight is an owned commerce backend for multi-brand operators.
 
@@ -72,4 +72,4 @@ The market story is only credible after dogfooding proves it:
 4. Backup and restore proof.
 5. Gateway-backed refund proof.
 6. Public OpenAPI docs.
-7. A migration guide from Vendure or Shopify-style data.
+7. A migration guide from Vendure (partial: `docs/runbooks/vendure-store-import.md` covers the asset side of the import) or Shopify-style data.

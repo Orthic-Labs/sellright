@@ -42,6 +42,8 @@ Alias behaviour change (P36-5, not a fork-parity change): `/v1/licenses/activate
 
 ## 3. Mapping from the RightSites fork
 
+The Fork code column cites RightSites files that are not in this repository (unverified). The Policy expression column is exercised by `entitlement-policy.fork-reference.testkit.ts`.
+
 | Fork rule (COMPAT) | Fork code | Policy expression |
 |---|---|---|
 | C11 legacy activate: not active, or sandbox-origin, or mobile scope, or invalid upgrade => notfound | `activations.ts:92` | `authorize(activate)` returns deny `notfound` when `isSandboxStoreKitLicense` or `scope==='mobile'` or `!validUpgradeLicense` |
@@ -57,11 +59,11 @@ Alias behaviour change (P36-5, not a fork-parity change): `/v1/licenses/activate
 | Trial request `platform` enum `macos\|windows\|ios` | `apps.ts:298-303` | `requestExtensions.trial` |
 | Watch `deviceClass` never activates | `activation-guards.ts`, `suite-policies.ts:49` | `requestExtensions.activate` + `preRoute` throws `HttpError(400, WATCH_REASON)` before store/rate-limit/lookup |
 
-`entitlement-policy.fork-reference.testkit.ts` is an executable version of this table (test kit only, not imported by the engine); `entitlement-policy.matrix.db.test.ts` runs it through every path. The real plugin policy binds `validUpgrade` to `heardright-mobile-upgrade#validUpgradeLicense`.
+`entitlement-policy.fork-reference.testkit.ts` is an executable version of this table (test kit only, not imported by the engine); `entitlement-policy.matrix.db.test.ts` runs it through every path. The real plugin policy binds `validUpgrade` to `heardright-mobile-upgrade#validUpgradeLicense` (unverified: the plugin is not in this repository; the testkit header says the same).
 
 Known differences when the fork is expressed as a policy:
 - Watch `deviceClass`: the policy `preRoute` seam runs before store resolution, the rate limiter and any lookup, and throws `HttpError(400, <fork message>)`, so the rate limiter is never consumed and unknown keys/apps get the same 400 as the fork. The bytes are checked against `test-vectors/legacy-activate-refusals.golden.txt` (`entitlement-policy.legacy-golden.test.ts`, `/v1` and `/api`) after a test-side mirror of the fork's legacy-error-shape transform; the production transform is the plugin's (rs-compat `rightsites-plugin/legacy-error-shape.ts`). The path-param route answers 400 with code `DEVICECLASS_WATCH_...` (the same code as the fork); its bytes are *unverified* against the fork's runtime body.
-- An invalid typed extension (e.g. `platform:'plan9'`) is a clean 400 `INVALID_REQUEST` by default. A policy that needs the fork's wire sets `invalidExtension: 'internal'` and gets the legacy 500; the fork test kit does so. Engine default policy: 400 (unapproved change for SellRight stores; no shipped client sends these values).
+- An invalid typed extension (e.g. `platform:'plan9'`) is a clean 400 `INVALID_REQUEST` by default. A policy that needs the fork's wire sets `invalidExtension: 'internal'` and gets the legacy 500; the fork test kit does so. Engine default policy: 400 (unapproved change for SellRight stores; no shipped client sends these values, unverified).
 - StoreKit link (P36-2): the engine's `POST /v1/shop/pro/link-storekit` grants through `issueStoreKitActivation` only, which consults `storekit_link`. The fork instead routes the HeardRight link through `issueDeviceLease` (`storekit-webhooks.ts:222-224`, signed lease response). The engine answers the fork's lease-shaped JSON with `signature: null`. The HeardRight plugin must either replace this route or bind its policy so the link returns a signed lease; not verified here.
 - `findActivationByToken` now returns `pool` in its row (additive).
 

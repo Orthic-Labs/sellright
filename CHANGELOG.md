@@ -40,7 +40,6 @@ must update the matching changelog in the same push.
   - **Loaders**: `readCatalogGeneration` reads several catalog files from one pinned generation; the branded PDP reads the route product and its configurator siblings, and the branded shop the listing and every detail product, all from one generation or all live, never mixed. Missing products are a 404 with `ProductMissingView`, `Product Not Found` + noindex, and no controller or stock read.
   - **routes.json**: `productPath` (`/products/:slug/` default, or `/shop/:slug/` with a new `/shop/[slug]` route and a query-preserving 301 from `/products/<slug>/`; every storefront product link now comes from `platform/product-path.ts`), `shop.detailProducts` (key, slug, per-product head copy applied only while the product is found, breadcrumb name, allowlisted static schemas such as FAQPage), `shop.productQuery` (`?style=`), `operational.cartSeedPath` / `analyticsPath`. Static schemas also allow `CollectionPage` and nested `ItemList`.
   - **Operational adapters (plan v3.1 §3.5)**: `/checkout/cart-link/` (and the alias) replaces the cart from `products=SKU[:qty],...` with each add classified from its own response, then lands on checkout with `skipped`/error codes; `/api/analytics/events/` (and the alias) accepts view_item/add_to_cart/begin_checkout (413/429/400/204/202, purchase refused, GA4 Measurement Protocol copy only when the browser tag did not send it, no ad pixels); a consent-gated conversion subscriber (mounted only when head.json declares analytics) pushes the dataLayer and beacons; begin_checkout at checkout entry and purchase once per order on the confirmation page.
-  - API-side product URLs (cache purge, review-approved and restock emails) keep `/products/<slug>/`, which the 301 forwards with its query; changing them needs the store's `seo.productUrlPattern` threaded through those callers (follow-up).
 - **Storefront brand views, PR1 (boundary, shell/head/content seams)**: a brand can now replace whole views through typed slots (`shell.header`, `shell.footer`, `route.home`, `route.content`, `route.blog`, `route.blog-post`, `route.contact`; plan `docs/plans/2026-10-11-brand-views.md`, v3.1) and shape the document head through data (`src/brand/head.json`, `src/brand/routes.json`, validated at build, served as `virtual:sellright-brand-data`). With no view files or data the storefront renders exactly as before.
   - **Boundary**: header, menu, footer, head, auth, verification, reviews, cart totals and contents, the address and billing forms, customer info, loyalty, order tracking, `AddressCard`, `AccountNav`, `OrderReturns`, `LazyImage`, `src/theme/**` and the legacy `ProductPageView` seam are now L1 (not ejectable; brands style them with tokens and CSS). New import rules r1-r14 in both checker implementations (`scripts/` and the packaged copies in `tools/compose/checkers`): transitive L1 reach, framework symbol allowlist, Node built-ins, private platform modules, type-only L1 imports, HTML/script/element injection, QRL introspection, worker registration, executable overlay assets, brand stock flags, and `scripts/check-l2-boundary.mjs` (live state may not reach an L2 component; run by `pnpm build`, CI and compose). `scripts/check-public-surface.mjs` keeps `~/platform/views` and `~/platform/head` free of re-exported internals. Compose refuses a `layers.json` from before these rules instead of passing silently.
   - **Views**: `~/platform/views` (prop and result types, `Link`, `OptimizedImage`, `RichContent`, `TurnstileMount`, `formatMoney`), detached and frozen (dev/test) projections, awaited and serialised `on*$` actions with typed results and a synchronous busy guard, a sanitised-HTML-only renderer, forms (newsletter, contact) moved into the platform. `cart.free-shipping-progress` gains `countryCode` and `discountedSubtotalCents`; `checkout.loyalty-redemption` takes a projection (`balance`, `minRedeemPoints`, `offer`, `applied`) and `onRedeemToggle$`, with the redemption signal owned by the checkout route; `account.order-card` receives a detached order.
@@ -103,12 +102,12 @@ must update the matching changelog in the same push.
   public receipt, and guest tracking) now expose three separate, lowercase
   snake_case, wire-facing fields alongside the existing combined `state`:
   - `status`: `open` | `completed` | `cancelled` | `archived` — a Postgres
-    STORED GENERATED column (migration 0080) computed from `state` +
+    STORED GENERATED column (migration 0081) computed from `state` +
     `deleted_at`, backfilled automatically for every existing order.
   - `paymentStatus`: `pending` | `authorized` | `paid` | `partially_refunded`
     | `refunded` | `voided` | `failed` — computed at read time from the
     order's payment rows (`orders/status.ts`); NOT a persisted column (see
-    migration 0080's header comment for why: it depends on another table
+    migration 0081's header comment for why: it depends on another table
     that changes at many independent call sites, so persisting it would need
     either a trigger or manual dual-write at every one of those sites — read-
     time derivation from the same source of truth is correct by construction
@@ -179,8 +178,8 @@ must update the matching changelog in the same push.
   tracking import with preview, a shipping rule editor, auto-deliver run-now, accept-invite page,
   invoice/packing-slip buttons, a Stripe mode-switch error toast, and force-purge of a trashed paid order with a
   required reason.
-- **Browser e2e suites**: admin (`packages/admin/e2e`, 13 specs / 54 `test()` blocks) and storefront
-  (`packages/storefront/e2e`, 10 specs / 51 blocks). Each starts a throwaway API over a freshly created
+- **Browser e2e suites**: admin (`packages/admin/e2e`, 14 spec files) and storefront
+  (`packages/storefront/e2e`, 24 spec files). Each starts a throwaway API over a freshly created
   `sellright_admin_e2e` / `sellright_storefront_e2e` database on a non-superuser role and refuses
   non-e2e targets; CI jobs `e2e-admin` and `e2e-storefront`. Storefront money specs run mock NMI/Sezzle/IndexNow
   receivers and an SMTP sink.
@@ -328,10 +327,12 @@ must update the matching changelog in the same push.
   dropping the table). Production needs a sign-in link secret of at least 32
   characters (`COOKIE_SECRET`, `LICENSING_HMAC_SECRET` or `DOWNLOAD_URL_SECRET`)
   or Google and Apple sign-in for non-authoritative addresses is refused.
-- Postgres operations now enable `pg_stat_statements`, log queries over one
-  second, and expose a repeatable top-query inspection loop before further
-  tuning. The update-heavy email and push outboxes use lower per-table
-  autovacuum thresholds to prevent queue bloat.
+- The Postgres runbook (`docs/runbooks/postgres-app-role.md`) now documents
+  enabling `pg_stat_statements`, logging queries over one second, and a
+  repeatable top-query inspection loop before further tuning; an operator
+  applies these settings, and `deploy/compose.yaml` does not. The update-heavy
+  email and push outboxes use lower per-table autovacuum thresholds to prevent
+  queue bloat (migration 0040).
 - Postgres connections now carry a deployment-specific `application_name`.
   The operator runbook defines database-qualified statement, lock, and
   idle-in-transaction timeouts and their verification queries.

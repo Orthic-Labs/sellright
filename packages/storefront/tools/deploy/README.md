@@ -2,11 +2,11 @@
 
 Generic tools for building a composed storefront tree in a stage next to the live tree, swapping it in after an origin smoke, and
 rolling back. They carry no brand name, path or URL: every such value comes from a JSON config file (`--config`, shape documented
-above `loadConfig` in `lib.mjs`). Plan A §4.2, §4.5, §4.6a; findings C1 to C11 of the cutover review.
+above `loadConfig` in `lib.mjs`).
 
 | File | Role |
 |---|---|
-| `entry.mjs` | `build`, `activate`, `purge`, `deploy`, `restore-previous`, `recover`. The only writer of `.deploy-state/storefront.json`. |
+| `entry.mjs` | `build`, `activate`, `purge`, `deploy`, `restore-previous`, `resume`, `recover`. Writes `.deploy-state/storefront.json`, as does `rollback.mjs`. |
 | `rollback.mjs` | `previous`, `composed [<history-id>]`, `legacy --legacy-tag <tag>`. Drives the entry's steps. |
 | `stage.mjs` | seed, artifact check, server carry-over, swap, restore, undo of a half-done swap. |
 | `build-guard.mjs` | The inner build script calls it first; exit 6 unless the deploy entry started the build. |

@@ -1,3 +1,5 @@
+> Historical (2026-07-19). Current state: packages/api/src/routes/shop-extra.subscriber.ts.
+
 # Subscriber System — Newsletter + Waitlist (2026-07-19)
 
 Status: **SHIPPED** — live in RightSites production (2026-07-20). See "As built"

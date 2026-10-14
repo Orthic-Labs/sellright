@@ -1,6 +1,6 @@
 # Competitors
 
-Last reviewed: 2026-06-13
+Last reviewed: 2026-10-14 (SellRight claims checked against code; competitor facts not rechecked)
 
 SellRight competes with ecommerce platforms and backend frameworks. Its wedge is not "more features than Shopify." Its wedge is owned, multi-store commerce for operators who want one backend across several brands.
 
@@ -15,9 +15,11 @@ SellRight competes with ecommerce platforms and backend frameworks. Its wedge is
 | Medusa | Open-source commerce framework with modules and REST APIs. | SellRight is narrower and more opinionated: one multi-tenant brand-portfolio backend, not a general framework. |
 | Saleor | GraphQL-first headless commerce with strong API model. | SellRight keeps a TypeScript/Postgres stack but rejects GraphQL as the primary app contract. |
 
+The platform descriptions in the first two columns state competitor facts (unverified: competitor claim, not checkable from this repo).
+
 ## Shopify
 
-Shopify is the benchmark for merchant operations: checkout, payments, fulfillment, POS, apps, themes, and support. Shopify's own docs position headless builds around the Storefront API and Hydrogen. Shopify also documents third-party transaction fees when stores use external payment providers.
+Shopify is the benchmark for merchant operations: checkout, payments, fulfillment, POS, apps, themes, and support. Shopify's own docs position headless builds around the Storefront API and Hydrogen (unverified: competitor claim, not checkable from this repo). Shopify also documents third-party transaction fees when stores use external payment providers (unverified: competitor claim, not checkable from this repo).
 
 SellRight should not try to beat Shopify at hosted convenience. It should win only where ownership matters:
 
@@ -35,7 +37,7 @@ Sources: Shopify headless docs, Shopify third-party transaction fee docs.
 
 ## BigCommerce
 
-BigCommerce is a hosted commerce backend with headless support. Its docs describe REST and GraphQL APIs for headless storefronts and checkout flows.
+BigCommerce is a hosted commerce backend with headless support. Its docs describe REST and GraphQL APIs for headless storefronts and checkout flows (unverified: competitor claim, not checkable from this repo).
 
 SellRight is not trying to be a hosted SaaS marketplace. Its advantage is ownership and customizability for one operator's portfolio:
 
@@ -48,7 +50,7 @@ Source: BigCommerce headless/API docs.
 
 ## WooCommerce
 
-WooCommerce is strongest when ecommerce is attached to WordPress content and a large plugin ecosystem. Its developer docs expose a REST API integrated with the WordPress REST API.
+WooCommerce is strongest when ecommerce is attached to WordPress content and a large plugin ecosystem. Its developer docs expose a REST API integrated with the WordPress REST API (unverified: competitor claim, not checkable from this repo).
 
 SellRight should position away from WordPress:
 
@@ -61,14 +63,14 @@ Source: WooCommerce REST API docs.
 
 ## Vendure
 
-Vendure is the closest architectural incumbent in this repo's history. It is Node-based, extensible, and built for headless commerce. Vendure docs state that Vendure uses GraphQL as its API layer, and Vendure's channel model supports per-channel defaults, products, roles, stock locations, assets, promotions, shipping methods, payment methods, orders, and customers. Vendure's public license file describes GPLv3 Community Edition and a commercial license option.
+Vendure is the closest architectural incumbent in this repo's history. It is Node-based, extensible, and built for headless commerce. Vendure docs state that Vendure uses GraphQL as its API layer, and Vendure's channel model supports per-channel defaults, products, roles, stock locations, assets, promotions, shipping methods, payment methods, orders, and customers (unverified: competitor claim, not checkable from this repo). Vendure's public license file describes GPLv3 Community Edition and a commercial license option (unverified: competitor claim, not checkable from this repo).
 
 SellRight's contrast:
 
 - REST + OpenAPI instead of GraphQL-first.
 - Database-enforced multi-store isolation instead of relying mainly on channel semantics.
 - Lower ceremony for custom features.
-- Owned licensing path if the backend is productized later.
+- Source-available under BSL 1.1 (see LICENSE); production use is free for organizations with up to 25 Covered Persons.
 
 Vendure remains stronger in mature commerce extension patterns and community-discovered edge cases. SellRight wins only when the operator wants a smaller owned system tuned to their stores.
 
@@ -76,7 +78,7 @@ Sources: Vendure GraphQL docs, Vendure Channel docs, Vendure license.
 
 ## Medusa
 
-Medusa is a flexible open-source commerce platform. Medusa's docs describe commerce modules and REST API exposure; its repository states that Medusa is released under the MIT license.
+Medusa is a flexible open-source commerce platform. Medusa's docs describe commerce modules and REST API exposure; its repository states that Medusa is released under the MIT license (unverified: competitor claim, not checkable from this repo).
 
 SellRight's contrast:
 
@@ -91,12 +93,12 @@ Sources: Medusa commerce modules docs, Medusa GitHub license/readme.
 
 ## Saleor
 
-Saleor is headless and GraphQL-first. Its API docs describe GraphQL as the API technology across commerce functions.
+Saleor is headless and GraphQL-first. Its API docs describe GraphQL as the API technology across commerce functions (unverified: competitor claim, not checkable from this repo).
 
 SellRight's contrast:
 
 - REST/OpenAPI as the public contract;
-- TypeScript/Hono/Drizzle rather than a Python/Django core;
+- TypeScript/Hono/Drizzle rather than a Python/Django core (unverified: competitor claim, not checkable from this repo);
 - smaller self-hosted operational surface;
 - multi-store operator wedge rather than broad enterprise headless platform.
 

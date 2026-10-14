@@ -1,14 +1,14 @@
 # Pending effects and the settlement chokepoint
 
 Engine implementation of de-fork plan 2.8. Normative design: `SETTLEMENT-OPS.md` and
-`INVOICE-DISPOSITIONS.md` (RightSites `docs/defork/`). This file documents what the engine
+`INVOICE-DISPOSITIONS.md` (RightSites `docs/defork/`; not in this repository, unverified). This file documents what the engine
 ships and where it deliberately does something the design leaves open.
 
 ## Tables (migration 0090)
 | Table | Purpose |
 |---|---|
-| `settlement_operation` | One row per settlement FACT, `UNIQUE (store_id, operation_kind, operation_id)`. Invoice classification + `authorized_effects` are frozen here. Also carries `snapshot` (`order_purge`) and the operator columns (`operator_resolution`, CHECK-tied; partial unique index allows one entitlement-bearing resolution per target). 11 kinds (CHECK). |
-| `order_pending_effect` | The effects an operation authorizes (`resolution jsonb` NULL for held outcomes; review queue = `status=terminal AND resolution IS NULL AND resolved_by IS NULL`). `UNIQUE (store_id, operation_kind, operation_id, effect_kind)`, composite FK to the operation, `resolved_by` -> operation, `result jsonb`. Effect kinds (CHECK): `license_issue, license_extend, edit_reconcile, loyalty_earn, notification, admin_review`. |
+| `settlement_operation` | One row per settlement FACT, `UNIQUE (store_id, operation_kind, operation_id)`. Invoice classification + `authorized_effects` are frozen here. Also carries `snapshot` (`order_purge`) and the operator columns (`operator_resolution`, CHECK-tied; partial unique index allows one entitlement-bearing resolution per target). 14 kinds (CHECK, widened by migration 0093). |
+| `order_pending_effect` | The effects an operation authorizes (`resolution jsonb` NULL for held outcomes; review queue = `status=terminal AND resolution IS NULL AND resolved_by IS NULL`). `UNIQUE (store_id, operation_kind, operation_id, effect_kind)`, composite FK to the operation, `resolved_by` -> operation, `result jsonb`. Effect kinds (CHECK, widened by migration 0093): `license_issue, license_extend, edit_reconcile, loyalty_earn, notification, entitlement_reversal, admin_review`. |
 | `applied_operation_receipt` | `(effect_id, provider_ref)` plus `store_id`/`created_at` for RLS. Reserved for external effects; none exist today. |
 | `subscription_invoice_payment` | Orderless invoice money (`payment.order_id` is NOT NULL). INVOICE-DISPOSITIONS 7.2 columns/indexes; FK `store(id)` kept (D-2). |
 
@@ -39,6 +39,7 @@ Built-in operation use (SellRight equivalents of the plan's sites):
 | `routes/checkout.ts` | zero total / full gift-card cover: `order_paid_transition(order.id)`; partial gift card: `payment_settled` |
 | `routes/admin-order-ops.ts` | draft order (maybe created Paid + manual payment): `order_paid_transition`; purge: `order_purge` |
 | `routes/payment-webhooks.ts` | `payment_mode_corrected` |
+| `payments/refunds.ts`, `payments/sezzle-reconcile.ts`, `payments/webhook-reconcile.ts` | `order_refunded(order.id)` on the first transition to Refunded, with a deferred `entitlement_reversal` effect; `webhook-reconcile.ts` also records `dispute_opened('stripe_dispute:<id>')` with the same effect |
 | `orders/order-edit-service.ts` | `order_edit_balance_settled(edit.id)` for the zero-balance reconcile |
 | `import/orders.ts`, `scripts/seed-demo.ts` | allowlisted (`historical_import`, `synthetic_seed` kinds exist and are effect-free) |
 
@@ -74,8 +75,8 @@ lifecycle (refund-before-effects goes `terminal`, never silently issues).
 (`initialInvoice`, `disposition`). **Engine default deviates from the design note on one point:** the design says
 the default `initialInvoice` returns `unresolved`; the shipped default resolves from LOCAL evidence only (licence
 already linked, or a prior `first_cycle` operation for the order => not initial; no evidence => initial), because
-the existing suites deliver invoices without a `billing_reason` and require the legacy behaviour. A plugin
-replaces it wholesale (`setInvoiceHistoryPolicy`) and may return `unresolved`. Stripe `account id` is not known to
+the existing suites deliver invoices without a `billing_reason` and require the legacy behaviour. A deployment
+replaces it wholesale with `setInvoiceHistoryPolicy` (`payments/settlement/invoice.ts`; not in the package barrels, so only in-tree code can call it) and may return `unresolved`. Stripe `account id` is not known to
 the SellRight webhook; `InvoiceContext.accountId` defaults to `'default'` and `mode` comes from the verified signature.
 Dispositions `ignored_non_subscription`/`voided` are not produced by the engine (the plugin port can return them;
 they record the operation with no effects).

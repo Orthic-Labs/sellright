@@ -25,6 +25,10 @@ registerApiPlugin({
 - Covers `app.onError` and middleware-produced errors (maintenance gate) because the middleware is mounted right after request-id/access-log.
 - Multiple plugins apply in registration order. No policy registered = no-op.
 
+## Scope
+
+`errorPolicy` exists only on the legacy `ApiPlugin` (`packages/api/src/plugins.ts`). An SDK `EnginePlugin` shapes responses with its `preRoute` hook (`sdk/types.ts`), and `registerApiPlugin` is not in the package exports (`exports/contract.json`: `plugins` is `replaced`).
+
 ## Wiring
 
 One call site in `app.ts`: `app.use('*', preRoutePolicy(listApiPlugins))`.

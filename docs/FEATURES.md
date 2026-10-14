@@ -1,6 +1,6 @@
 # SellRight Features
 
-Last reviewed: 2026-10-09
+Last reviewed: 2026-10-14
 
 SellRight is a commerce backend for operators who want ownership, multi-store control, and a standard REST contract without building every commerce primitive from zero.
 
@@ -14,19 +14,19 @@ SellRight is a commerce backend for operators who want ownership, multi-store co
 | Catalog management | Built | Products, variants, collections, options, images, inventory, locations. |
 | Static catalog manifest | Built | Fast storefront browse path with generated JSON. |
 | Checkout | Built | Server-priced checkout with stock allocation, shipping, tax, coupons, gift-card tender. |
-| Payments layer | Built (Stripe) | Stripe PaymentIntents, dual test/live mode, mode-bound webhook settlement, dashboard refund/dispute reconciliation. Storefront Stripe Elements checkout is implemented; the release gate is one real test-key E2E run. Additional shopper gateways are demand-driven, not launch requirements. |
+| Payments layer | Built (Stripe) | Stripe PaymentIntents, dual test/live mode, mode-bound webhook settlement, dashboard refund/dispute reconciliation. NMI and Sezzle adapters are implemented behind the same `PaymentProvider` interface. Storefront Stripe Elements checkout is implemented; the release gate is one real test-key E2E run. Gateways beyond Stripe, NMI and Sezzle are demand-driven, not launch requirements. |
 | Refunds and returns | Built at backend level | Gateway-backed refund path exists for providers that implement it. |
-| Customer auth/account | Built | Register, login, Google auth, sessions, profile, addresses, password reset, email verification. |
+| Customer auth/account | Built | Register, login, Google and Apple auth, magic link, sessions, profile, addresses, password reset, email verification. |
 | Transactional email | Built | SMTP-backed event email flows. |
 | Promotions | Built | Coupons, automatic discounts, eligibility, usage constraints. |
 | Gift cards | Built | Gift-card creation, redemption, transaction ledger. |
 | Tax and shipping | Built | Store rates, country tax zones, flat/conditional shipping methods. |
-| Staff/RBAC | Built | Staff invites, store membership, role/permission model. |
+| Staff/RBAC | Built | Staff invites, store membership, role/permission model, agent seats for automation (see [ADMIN-AGENTS.md](ADMIN-AGENTS.md)). |
 | Webhooks | Built | Outbound webhooks plus inbound Stripe webhook route. |
 | Affiliates | Built | Affiliate tracking and admin surfaces. |
 | Blog/content | Built | Blog CMS routes and admin surface. |
 | App/software licensing | Built | License issuance, device activation, update manifests, licensed downloads. |
-| Reconciliation export | Built | SellRight-to-Vendure export retained as migration/rollback tooling; it does not define SellRight core architecture. |
+| Vendure importer and restore | Built | `import:vendure` copies catalog, customers, orders, payments, promotions, blog posts, affiliates and subscribers from a Vendure source database into one store; `import:restore` reverses an untouched import from its manifest. It does not define SellRight core architecture. |
 | Subscriptions / recurring billing | Built | Stripe Billing; backing order → first invoice issues the license, renewals extend the entitlement; admin list + per-customer view + hosted Customer Portal. |
 | Order bulk ops | Built | Bulk cancel / trash (soft-delete) / restore / gated purge (cascade + FK-coverage guard test). |
 | Server cart lifecycle | Built | Server-authoritative cart, TTL + extend-on-activity, abandonment/cleanup jobs, checkout-reads-from-cart (fail-closed). |
@@ -35,7 +35,7 @@ SellRight is a commerce backend for operators who want ownership, multi-store co
 | Points and rewards | Built | Earn/redeem ledger, bonus rules (review, sign-up, first order, birthday), product multipliers, admin settings and liability dashboard, `/account/rewards`. |
 | Product reviews | Built | Moderated reviews with verified-buyer flag, admin reply, review bonus, rating aggregate. |
 | Customer returns | Built | Customer return requests in the storefront account; admin approves with optional restock. |
-| Browser e2e suites | Built | Playwright admin (54 tests) and storefront (51 tests) suites in CI. |
+| Browser e2e suites | Built | Playwright admin and storefront suites run in CI (jobs `e2e-admin` and `e2e-storefront`). |
 | Storefront migration | In progress | Catalog, collections, cart, auth, account and checkout use the SellRight REST path; real Stripe test-key E2E remains a release receipt. |
 | Carrier labels/rates | Not built | Manual/flat-rate fulfillment exists; carrier integrations are later. |
 | Additional shopper payment providers | Deferred | Add PayPal/COD/other providers only when a concrete deployment requires them. |
@@ -55,6 +55,7 @@ The admin SPA includes pages for:
 - Blog/content, marketing/Listmonk, webhooks.
 - Settings, staff, tax zones, currency rates.
 - Order editing, order export, tracking grid/CSV import, points program, reviews moderation, waitlist report, SEO/sitemaps, customer verification.
+- Subscriptions, payment settings, email settings, agent access (on the Staff page).
 
 ## Storefront Surface
 

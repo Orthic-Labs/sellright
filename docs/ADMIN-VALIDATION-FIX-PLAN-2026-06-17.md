@@ -1,3 +1,5 @@
+> Historical (2026-06-17). Current state: packages/admin/README.md.
+
 # SellRight Admin Validation Fix Plan
 
 ## Summary

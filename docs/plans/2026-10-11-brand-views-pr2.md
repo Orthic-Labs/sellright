@@ -1,3 +1,5 @@
+> Historical (2026-10-11). Current state: packages/storefront/src/platform/views.ts.
+
 # Brand views PR2: shop and product views on the presentation gateway
 Replaces §3.1–3.4 and §3.6–3.7 of `2026-10-11-brand-views.md` (v3.1). §3.5 (cart seed, analytics call sites, event sink) is kept unchanged and referenced, not repeated. Builds on the gateway (`2026-10-11-brand-views-gateway.md`, code `src/platform/gateway/**`) at `39e15cf` on `feat/brand-views-2`. Closes `brand-views-plan.astra3.json` items 3–6. Rotten legacy is `rt` = `seats/rt-fix/store/src`. Paths are under `packages/storefront/src/` unless they start with `api/`. This is a plan: no code, builds, tests or `.env` reads were run to write it.
 

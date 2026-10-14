@@ -10,10 +10,10 @@ This document describes the current product structure. Historical design and aud
 | Runtime | Node.js, TypeScript, pnpm workspace |
 | Data | Postgres + Drizzle, integer cents for money |
 | Tenancy | `store` root entity, store-scoped tables, Postgres RLS via `app.current_store` |
-| Admin | React + Vite + Tailwind/shadcn-style components |
+| Admin | React + Vite + Tailwind CSS 4 |
 | Storefront | Reference Qwik storefront in `packages/storefront` over the typed REST client in `packages/storefront-client`; static catalog manifest plus merchant feeds for downstream consumers (RightSites) |
 | Payments | `PaymentProvider` interface; Stripe, NMI, and Sezzle implemented; per-store gateway accounts with persisted mode/test provenance |
-| Email | Nodemailer SMTP; all transactional mail goes through the durable `email_outbox` with dedupe keys, retries, and dead-letter |
+| Email | Nodemailer SMTP; transactional mail is queued in the durable `email_outbox` with dedupe keys, retries, and dead-letter; staff invites, free-trial keys and the admin SMTP test email are sent inline |
 | Jobs | Leader-locked in-process scheduler (advisory lock) for sweeps: outbox, restock, SheerID expiry, cart maintenance, Listmonk sync |
 
 ## Repository Layout
@@ -24,6 +24,7 @@ packages/
   admin/       React admin SPA
   storefront/  reference Qwik storefront
   storefront-client/  typed REST client generated from /v1/openapi.json
+  sample-plugin/  reference engine plugin built on the public @sellright/api exports
   shared/      shared money primitives and types
 docs/          product documentation
 ```
@@ -32,14 +33,14 @@ docs/          product documentation
 
 Every store-scoped request resolves a store, then runs database work through `withStore(storeId, fn)`.
 
-`withStore` opens a transaction and sets `app.current_store` with `SET LOCAL`. RLS policies use that session value to confine reads and writes to one store. Route code must not import the unscoped database client for store-scoped tenant queries; the unscoped export is named `unsafeUnscopedDb`. An ESLint `no-restricted-imports` rule in `eslint.config.mjs` blocks it from route files. The legitimate unscoped callsites are: the global admin/ACL/Session tables, which are deliberately NOT store-scoped (they gate access TO stores). Those reads live in `packages/api/src/auth/admin-staff.ts` so route files stay as thin shells that import only `withStore` and helper functions. Pre-context tenant lookup for payment webhooks (which must find the owning store from a provider reference *before* any store context exists) goes through the `resolve_store_for_gateway_event` SECURITY DEFINER function (`payments/tenant-resolution.ts`, migrations `0053`/`0060`), which returns only a validated `store_id` — the runtime role never receives BYPASSRLS. Resolution is strict: the distinct store set across all matching refs must be a singleton, and caller-supplied account/mode bind the match — ambiguity returns NULL rather than picking a winner.
+`withStore` opens a transaction and sets `app.current_store` with `SET LOCAL`. RLS policies use that session value to confine reads and writes to one store. Route code must not import the unscoped database client for store-scoped tenant queries; the unscoped export is named `unsafeUnscopedDb`. An ESLint `no-restricted-imports` rule in `eslint.config.mjs` blocks it from route files. Outside route files, `unsafeUnscopedDb` is used by operator scripts under `packages/api/src/scripts/`, `payments/stripe.ts`, `licensing/storekit-config.ts` and the `auth/` modules `admin-staff.ts`, `admin-session.ts`, `admin-api-token.ts` and `setup-claim.ts`. The global admin/ACL/Session tables are deliberately NOT store-scoped (they gate access TO stores); those reads live in `packages/api/src/auth/admin-staff.ts` so route files stay as thin shells that import only `withStore` and helper functions. Pre-context tenant lookup for payment webhooks (which must find the owning store from a provider reference *before* any store context exists) goes through the `resolve_store_for_gateway_event` SECURITY DEFINER function (`payments/tenant-resolution.ts`, migrations `0053`/`0060`), which returns only a validated `store_id` - the runtime role never receives BYPASSRLS. Resolution is strict: the distinct store set across all matching refs must be a singleton, and caller-supplied account/mode bind the match - ambiguity returns NULL rather than picking a winner.
 
 This gives SellRight two layers of tenant isolation:
 
 1. Route-level store resolution.
 2. Database-level RLS enforcement.
 
-The verification gate includes `db:assert-rls`, `db:assert-hand-written`, and `assert:shop-isolation` so new store-scoped tables, drift on hand-written migrations, and public shop routes cannot silently bypass the model.
+The verification gate includes `db:assert-rls`, `db:assert-hand-written`, `assert:shop-isolation`, and `assert:settlement` so new store-scoped tables, drift on hand-written migrations, public shop routes, and direct writes to settlement tables cannot silently bypass the model.
 
 ## API Surface
 
@@ -52,7 +53,7 @@ Main route groups:
 | Health and contract | `/v1/health`, `/v1/openapi.json` |
 | Catalog | products, collections, search, stock, static manifest generation |
 | Cart and checkout | cart rows, server-priced checkout, shipping/tax/promo validation |
-| Payments | payment intents, `/pay`, Stripe webhook receiver |
+| Payments | payment intents, `/pay`, NMI and Sezzle gateway payments, Stripe, NMI and Sezzle webhook receivers |
 | Auth/account | register, login, Google auth, sessions, password reset, email verification, customer profile, addresses |
 | Orders | customer orders, admin order operations, draft orders, refunds, returns |
 | Admin | catalog, customers, staff, settings, reports, tax, locations, gift cards, webhooks, affiliates, blog, assets |
@@ -67,10 +68,10 @@ The schema is a full commerce schema rather than a thin catalog API. It includes
 - Customers: identity, sessions, addresses, customer tokens.
 - Orders: order snapshots, lines, payments, refunds, returns, fulfillments.
 - Commerce rules: promotions, gift cards, shipping methods, tax zones, currency rates.
-- Operator tools: blog posts, webhooks, affiliates, reports, staff invites, activity.
+- Operator tools: blog posts, webhooks, affiliates, staff invites, activity (`audit_log`).
 - Customer-facing flows: contact submissions, restock requests/events, SheerID verifications, disputes, email-change tokens, durable email outbox.
-- Order editing (migration 0084): `order_edit` (one row per committed edit: before/after snapshot, `balance`, `settlement`, idempotency key + payload fingerprint), `order_adjustment` (labelled +/- cents applied to the grand total, replaced as a set per edit) and `order.shipping_override` (shipping amount set by hand). Both tables cascade with the order. Migration 0086 adds `order.shipping_method_code` / `shipping_method_name`.
-- Amount due: `amountDueForOrder` (`payments/settle.ts`) is grand total minus net settled tender. When positive on a Paid/PartiallyRefunded order, payment status reads `balance_due`; `/pay`, NMI, Sezzle and Stripe charge only that amount, and balance attempts are namespaced by settled-tender count so a later edit cannot replay an earlier intent.
+- Order editing (migration 0084): `order_edit` (one row per committed edit: before/after snapshot, `balance`, `settlement`, idempotency key + payload fingerprint), `order_adjustment` (labelled +/- cents applied to the grand total, replaced as a set per edit) and `order.shipping_override` (true when an admin set a custom or removed shipping amount). Both tables cascade with the order. Migration 0086 adds `order.shipping_method_code` / `shipping_method_name`.
+- Amount due: `amountDueForOrder` (`payments/settle.ts`) is grand total minus settled non-duplicate tender, plus refunds issued by an order edit. When positive on a Paid/PartiallyRefunded order, payment status reads `balance_due`; `/pay`, NMI, Sezzle and Stripe charge only that amount, and balance attempts are namespaced by settled-tender count so a later edit cannot replay an earlier intent.
 - Order status columns: `status` (`open|completed|cancelled|archived`) is a stored generated column; `paymentStatus` and `fulfillmentStatus` are derived at read time from payment/fulfillment rows (`orders/status.ts`, `status-sql.ts`). Only `paymentStatus` can be `balance_due`.
 - Loyalty (`store.config.loyalty`, `money/loyalty.ts`): the append-only `loyalty_ledger` is the only writer of balances; kinds are `earn|redeem|reverse|adjust|expire|import|bonus`. Bonus rules (review, sign-up, first order, birthday) post once via a deterministic `source_ref`; a reversal is a normal `reverse` row and never clears the original `source_ref`. `product_review` (migration 0085) is moderated `pending|approved|rejected`, one per product per reviewer email; the rating aggregate is derived from approved rows, never stored.
 - Software sales: licenses, activations, app releases, download artifacts.
@@ -112,7 +113,11 @@ The preferred browse path is a static catalog manifest:
 
 Publication is opt-in: `JOBS_ENABLED=1`, `CATALOG_MANIFEST_JOBS_ENABLED=1`,
 explicit `STORE_SLUG`, and a dedicated `CATALOG_DIR`. The scheduler publishes
-once per minute under a store-scoped database leader lock. For a one-shot publication, run
+once at startup, and every publication runs under a store-scoped database leader lock.
+After each commit that calls `onStockChanged` (`manifest/stock-hook.ts`; for example stock
+changes and admin product and catalog edits) the manifest is republished with no debounce,
+and a two-minute `catalog-manifest-drain` job republishes any regeneration lost to a crash.
+For a one-shot publication, run
 `pnpm --filter @sellright/api exec tsx src/manifest/generate.ts` with the same
 store/directory settings and the unprivileged runtime database role.
 
@@ -123,8 +128,8 @@ generation, parsable non-future `generatedAt`), and read files from that pinned
 directory. The SellRight storefront reader has no age-based expiry (the
 publisher regenerates on every stock change); it falls back to REST data during
 SSR only when the snapshot is missing or invalid, and fails closed if that also
-fails. RightSites rejects snapshots older than five minutes and fetches REST
-data during SSR.
+fails. RightSites reader behavior is not checked here (unverified: RightSites code is
+not in this repository).
 Never point it at a legacy Vendure directory. Keep the previous generation and
 a ten-minute grace period for in-flight readers; only marked, owned generations
 are cleaned up. An exclusive `owner.json` claim prevents different stores from
@@ -139,7 +144,7 @@ This keeps storefront browsing cheap and fast while preserving a transactional b
 
 ## Browser E2E Harness
 
-`packages/admin/e2e` (Playwright, 13 specs) and `packages/storefront/e2e` (10 specs) run against production builds (`dist-e2e`; the storefront with SSG off). Each `start-api.mjs` drops and recreates a dedicated database (`sellright_admin_e2e` on :3399, `sellright_storefront_e2e` on :3398), migrates, bootstraps a store and owner, then serves the API from `packages/api/dist` on a non-superuser role. `assertSafeTargets` refuses any other database or port. One worker, shared database; global setup seeds through the admin API. The storefront suite also starts `mock-gateways.mjs` (NMI, Sezzle, IndexNow, webhook receiver, SMTP sink), so checkout, payment code and outbox workers are real while gateways are mocked; with `PLAYWRIGHT_API_URL` set only the storefront starts and money specs skip. CI jobs: `e2e-admin`, `e2e-storefront`.
+`packages/admin/e2e` (Playwright, 14 specs) and `packages/storefront/e2e` (24 specs) run against production builds (`dist-e2e`; the storefront with SSG off). Each `start-api.mjs` drops and recreates a dedicated database (`sellright_admin_e2e` on :3399, `sellright_storefront_e2e` on :3398), migrates, bootstraps a store and owner, then serves the API from `packages/api/dist` on a non-superuser role. `assertSafeTargets` refuses a database whose name does not end in `_e2e` (or is a named dev or production database) and the dev API port 3300. One worker, shared database; global setup seeds through the admin API. The storefront suite also starts `mock-gateways.mjs` (NMI, Sezzle, IndexNow, webhook receiver, SMTP sink), so checkout, payment code and outbox workers are real while gateways are mocked; with `PLAYWRIGHT_API_URL` set only the storefront starts and money specs skip. CI jobs: `e2e-admin`, `e2e-storefront`.
 
 ## Security Model
 
@@ -155,22 +160,21 @@ Built-in controls:
 - Durable, deduplicated dispute records with signed provider webhooks and operator alerting.
 - Turnstile anti-bot (fail-closed when configured) on contact, register, login, and reset paths.
 - Transactional `audit_log` records for sensitive staff/settings/payment mutations.
-- Import TRUNCATE guard.
+- Imports run one source snapshot in one target transaction with no table-wide delete or truncate (`packages/api/src/import/run.ts`).
 - No raw card handling in the intended payment architecture.
 
 ## Deployment Model
 
-SellRight can run as one API process plus one static admin build. The current production-oriented deployment path uses:
+SellRight can run as one API process plus one static admin build. The supported single-instance production path is Docker Compose (`deploy/compose.yaml`, `deploy/install.sh`; see [Production Compose operations](runbooks/production-compose.md)). It uses:
 
-- compiled API entrypoint from `packages/api/dist`;
-- environment files outside git;
-- PM2 or systemd-compatible scripts;
-- nginx in front of API/admin;
-- Postgres on the native service port for SellRight databases;
+- the compiled API entrypoint `dist/index.js`, started by the Compose `command` after `dist/scripts/migrate.js` and `dist/scripts/bootstrap.js` run with `DATABASE_URL_MIGRATE`;
+- environment in `deploy/.env`, outside git;
+- a Caddy edge in front of the admin container, which serves the static admin build with nginx and proxies `/v1` to the API (`deploy/Caddyfile`, `packages/admin/nginx.conf.template`);
+- Postgres 17 in a container on the private Compose network;
 - a non-owner runtime DB role (`sellright_app` in `deploy/compose.yaml`, provisioned by the `db-init` one-shot) with migrations/bootstrap on the separate privileged identity;
-- backup scripts and restore drills as a launch gate.
+- the `sellright backup` and `sellright restore` commands (`deploy/sellright.sh`), with an automated restore drill in CI (`docs/runbooks/recovery.md`).
 
-Email is configured in `packages/api/.env`; see [Email Delivery](EMAIL.md) for
+Email is configured through environment variables (`packages/api/.env` in development, `deploy/.env` in Compose) or, when `SMTP_HOST` is unset, per-store SMTP settings saved in the admin; see [Email Delivery](EMAIL.md) for
 SMTP, Vendure Gmail aliases, and shared-store per-app sender routing.
 
 ## Verification Gate
@@ -180,7 +184,7 @@ After API changes, run:
 ```bash
 pnpm verify
 ```
-The gate builds all packages, type-checks, runs API tests, asserts FORCE RLS coverage, asserts hand-written-migration markers, and checks shop-route isolation.
+The gate builds all packages, type-checks, runs API and storefront-client tests, checks that the generated storefront client is current, asserts there is no Vendure or GraphQL coupling, checks the agent deny-set boundary, asserts FORCE RLS coverage, asserts hand-written-migration markers, checks shop-route isolation, and checks the settlement chokepoint.
 
 ## Migrations
 

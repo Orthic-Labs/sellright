@@ -1,3 +1,5 @@
+> Historical (2026-10-11). Current state: packages/storefront/layers.json.
+
 # Brand views: implementation plan v3.1 (PR1 + PR2)
 Spec: `.work/agents/2026-10-11/brand-views.astra-design.txt` (followed, not redesigned). Blockers: `rotten-brand-layer.report.md` B1-B4. Reviews closed: `brand-views-plan.astra1.json` (15) and `.astra2.json` (9); map in §7. v3.1 applies `.astra3.json` items for PR1 (call-site projections, busy admission, PR1-only export tests, loyalty minimum) and records the PR2 items in §3.7. Base read at `c877ff2` (`feat/brand-views-1`); Rotten legacy at `rt-fix/store` (`rt` below). Paths are under `packages/storefront/` unless they start with `api/`. Nothing was built, tested or changed to write this.
 

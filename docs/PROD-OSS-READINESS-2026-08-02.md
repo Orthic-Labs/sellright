@@ -1,3 +1,5 @@
+> Historical (2026-08-02). Current state: docs/plans/REMAINING-WORK.md.
+
 # Production + Open-Source Readiness — 2026-08-02
 
 Scope: deep analysis of the 2026-08-01 MiniMax audit (`.audit/2026-08-01T07-19-52-627Z/` + the `.agent/` cortex refresh), fresh verification at HEAD `fda6fc9`, basic-flow completeness check, and an ad-hoc platform comparison. Fixes ranked Critical → Low at the end.
