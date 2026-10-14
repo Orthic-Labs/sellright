@@ -19,6 +19,7 @@ must update the matching changelog in the same push.
 
 - **Storefront: home spotlight** (`routes.json home.spotlight: { key, slug }`): the brand home view sells one product in place through the shared configurator. `HomeViewProps.spotlight` carries the product, selection and purchase state, and the configurator actions act on it; metadata from the catalog generation (else the live API), stock from the view's own live read on qidle, no SSR stock, fail closed. Without a declared spotlight nothing is read and the actions are `invalid`.
 - Storefront: `routes.json shop.listingOrder` (merchandising order of the base shop listing, within the in-stock grouping) and `shop.priceDisplay: "range"` (listing cards show `min - max` from the catalog snapshot's price range when no sale or pre-order price applies); `head.json ogImage` (`alt: false` drops `og:image:alt`, `width`/`height` add the size tags).
+- Storefront: `routes.json productPage` for the base product page: `related: true` adds a related row (catalog snapshot only, same category, by price; the cards carry no availability: each product page reads its own live stock), `content[slug]` adds plain-text design notes and Q&A (also emitted as FAQPage JSON-LD).
 - Storefront: `og:image:alt` (the page title; it follows a brand-declared title). `routes.json cart.trustStrip: "wrap"` lets the cart drawer's trust strip wrap its items on narrow screens instead of truncating one line.
 - Storefront: branded product pages carry Open Graph `product:price:amount`, `product:price:currency`, `product:brand` and `product:condition`; `product:availability` only from the request's live product JSON-LD (the API's per-request, no-store read), never from a catalog snapshot. ProductGroup variants list colour first in their name and URL.
 - Storefront: `routes.json copy.cart.trust` (1-3 plain strings) replaces the cart drawer's trust strip, which otherwise shows the identity's shipping, returns and payment policies.
@@ -238,6 +239,7 @@ must update the matching changelog in the same push.
 
 ### Fixed
 
+- Storefront: the base product page's add button is grey (#E7E5E4 / #A8A29E, no hover change) until the selection is complete, per the not-ready rule; it was the accent colour.
 - Storefront: no fixed `og:image:width`/`og:image:height` (always 1200x630, product photos included); both are optional.
 - Storefront: snapshot guard. A document-shaped path (`.html`/`.htm`, optionally `.gz`/`.br`, judged on the decoded, normalised path) is a plain no-store `404 text/plain` before the static handlers and the canonical redirect: `/shop/index%2ehtml` no longer gets a 301 and `/shop/index.html` no longer renders the HTML 404 page (rollout store profile samples `guard:*`, as the Rotten store answers today).
 - Storefront: the cart drawer focuses its panel once it has rendered (the focus call ran before the drawer existed, so Escape was not captured and the panel never showed its focus ring).

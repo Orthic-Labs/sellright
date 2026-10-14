@@ -2,6 +2,10 @@ import { test, expect } from './fixtures';
 import { PRODUCT, uniq } from './support/api';
 import { addToCart } from './support/flows';
 import { apiLog, STOCK_PATTERNS } from './support/api-log';
+import { currentGeneration } from './support/stock';
+import { CATALOG_DIR } from './support/env.mjs';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 /**
  * Brand views (PR1) — rendered. Runs only against a BUILD made with the fixture views and data (the e2e command below sets E2E_BRAND_VIEWS=1):
@@ -180,6 +184,25 @@ test.describe('brand views (fixture build)', () => {
 		expect((await apiLog.since(mark, STOCK_PATTERNS.productStock, { origin: 'browser' })).map((c) => c.path.split('/')[5])).toEqual(['e2e-shirt']);
 		await page.getByTestId('view-home-spotlight-add').click();
 		await expect(page.getByTestId('view-home-spotlight-outcome')).toHaveText('added');
+	});
+
+	test('base product page: routes.json productPage content renders with its FAQPage JSON-LD; the related row reads the catalog', async ({ page }) => {
+		await page.goto(`/products/${PRODUCT.shirt.slug}/`);
+		await expect(page.locator('.sr-designnote-text')).toHaveText('A fixture design note.');
+		await expect(page.locator('.sr-faq-q')).toHaveText(['Fixture question?']);
+		const ld = await page.locator('script[type="application/ld+json"]').allTextContents();
+		expect(ld.some((j) => j.includes('"FAQPage"') && j.includes('Fixture answer.'))).toBe(true);
+		// The row comes from the published catalog snapshot only (no snapshot: no row; the live listing is never read): the shirt's
+		// category peers from that snapshot, the shirt itself excluded.
+		const gen = CATALOG_DIR ? currentGeneration() : null;
+		const snap = gen ? (JSON.parse(readFileSync(join(gen.dir, 'shop-catalog.json'), 'utf8')) as { products: Array<{ slug: string; tags?: string[] }> }).products : [];
+		// (the first tag is the category; untagged products share the null category, as relatedRow groups them)
+		const shirt = snap.find((p) => p.slug === PRODUCT.shirt.slug);
+		const category = shirt?.tags?.[0] ?? null;
+		const peers = shirt ? snap.filter((p) => p.slug !== shirt.slug && (p.tags?.[0] ?? null) === category).map((p) => `/products/${p.slug}/`) : [];
+		const hrefs = await page.locator('.sr-related-card').evaluateAll((els) => els.map((e) => e.getAttribute('href')));
+		expect(hrefs.length).toBe(Math.min(4, peers.length));
+		for (const href of hrefs) expect(peers).toContain(href);
 	});
 
 	test('home view: an invalid email never posts, a double submit makes one request', async ({ page }) => {

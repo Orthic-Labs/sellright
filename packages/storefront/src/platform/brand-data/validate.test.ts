@@ -144,6 +144,12 @@ describe('routes.json (content declarations)', () => {
 		expect(routes({ version: 1, home: { spotlight: { key: 'Tee', slug: 'tee' } } }).join()).toMatch(/does not match/);
 	});
 
+	it('productPage: related flag and plain-text content per slug', () => {
+		expect(routes({ version: 1, productPage: { related: true, content: { 'oni': { designNote: 'Note.', faqs: [{ q: 'Q?', a: 'A.' }] } } } })).toEqual([]);
+		expect(routes({ version: 1, productPage: { content: { 'oni': { designNote: '<b>x</b>' } } } }).join()).toMatch(/does not match/);
+		expect(routes({ version: 1, productPage: { content: { 'Bad Slug': {} } } }).join()).toMatch(/property name/);
+	});
+
 	it('content paths without a route.content view fail the build', () => {
 		expect(routes({ version: 1, content: [{ path: '/a/b/', pageKey: 'a' }] }, false).join()).toMatch(/route\.content/);
 		expect(routes({ version: 1 }, false)).toEqual([]);

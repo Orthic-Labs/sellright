@@ -11,6 +11,7 @@ import { cleanUpParams } from '~/utils';
 import { createSEOHead } from '~/utils/seo';
 import { generateBreadcrumbSchema } from '~/services/seo-schemas';
 import { jsonLdProduct } from '~/services/sellright-seo';
+import { productPageContent } from '~/platform/brand-data';
 import type { JsonLdSchema } from '~/types/seo.types';
 import { theme, siteUrl } from '~/theme/theme.config';
 import { stripHtml } from '~/utils/sanitize';
@@ -138,6 +139,16 @@ export const head = ({ resolveValue, url: _url }: { resolveValue: any; url: URL 
     // AggregateRating from the manifest only when the product has approved
     // reviews (never an empty/zero rating).
     schemas.push(withAggregateRating(productJsonLd, loaderResult?.rating));
+  }
+
+  // routes.json productPage.content: the product's Q&A as FAQPage (plain text, validated at build).
+  const faqs = productPageContent(String(product?.slug ?? ''))?.faqs ?? [];
+  if (faqs.length > 0) {
+    schemas.push({
+      '@context': 'https://schema.org',
+      '@type': 'FAQPage',
+      mainEntity: faqs.map((f) => ({ '@type': 'Question', name: f.q, acceptedAnswer: { '@type': 'Answer', text: f.a } })),
+    } as unknown as JsonLdSchema);
   }
 
   const canonicalUrl = productUrl(product?.slug || '');

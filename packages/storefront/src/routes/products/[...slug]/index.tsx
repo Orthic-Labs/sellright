@@ -10,6 +10,7 @@ import { hasView } from '~/platform/gateway';
 
 export type { ProductLoaderResult } from '~/platform/product';
 export { useProductLoader, useProductJsonLd, useBrandProductDetail, onStaticGenerate };
+export { useRelatedProducts } from '~/platform/product-related';
 
 const SAFE_SLUG = /^[a-z0-9][a-z0-9\-_]*$/;
 
