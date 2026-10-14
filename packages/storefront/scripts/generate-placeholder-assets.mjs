@@ -17,6 +17,7 @@
 // helper "coming from" any external source — everything here is synthesized
 // in-process.
 
+import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -48,8 +49,11 @@ function labelOverlay(width, height, label) {
   );
 }
 
-async function generateOne({ out, width, height, format, bg, label }) {
-  const dest = resolve(root, out);
+export async function generateOne({ out, width, height, format, bg, label }, base = root) {
+  const dest = resolve(base, out);
+  // Never overwrite: a brand layer (or a merchant) ships its own asset at these paths, and a composed
+  // build runs this hook after the overlay is in place. Only a missing file gets a placeholder.
+  if (existsSync(dest)) return null;
   await mkdir(dirname(dest), { recursive: true });
   const image = sharp({ create: { width, height, channels: 3, background: bg } });
   if (label) image.composite([{ input: labelOverlay(width, height, label) }]);
@@ -60,11 +64,13 @@ async function generateOne({ out, width, height, format, bg, label }) {
 
 async function main() {
   const written = [];
-  for (const target of TARGETS) written.push(await generateOne(target));
-  console.log(`generate-placeholder-assets: wrote ${written.length} file(s):\n${written.map((f) => `  ${f}`).join('\n')}`);
+  for (const target of TARGETS) { const f = await generateOne(target); if (f) written.push(f); }
+  console.log(`generate-placeholder-assets: wrote ${written.length} file(s), kept ${TARGETS.length - written.length} existing${written.length ? `:\n${written.map((f) => `  ${f}`).join('\n')}` : ''}`);
 }
 
-main().catch((err) => {
-  console.error('generate-placeholder-assets failed:', err);
-  process.exit(1);
-});
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((err) => {
+    console.error('generate-placeholder-assets failed:', err);
+    process.exit(1);
+  });
+}
