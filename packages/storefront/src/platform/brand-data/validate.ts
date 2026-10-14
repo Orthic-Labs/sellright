@@ -5,6 +5,8 @@ import { validateJson, type JsonSchema } from './json-schema';
 import { pageSchemasProblems, staticSchemaProblems } from './static-schema';
 import headSchema from './head.schema.json';
 import routesSchema from './routes.schema.json';
+import hostsSchema from './hosts.schema.json';
+import licenseSchema from './license.schema.json';
 
 export interface BrandDataProblem {
 	file: string;
@@ -83,5 +85,33 @@ export function validateRoutesData(value: unknown, opts: ValidateOptions): Brand
 	for (const message of pr2RouteProblems(value as Pr2Routes, opts)) problems.push({ file, message });
 	if ((value as { home?: { spotlight?: unknown } }).home?.spotlight && opts.hasHomeView === false) problems.push({ file, message: 'home.spotlight is declared but src/brand-slots/route.home.tsx does not exist; only the brand home view sells it' });
 	if ((routes.content?.length ?? 0) > 0 && !opts.hasContentView) problems.push({ file, message: 'content paths are declared but src/brand-slots/route.content.tsx does not exist; a declared path needs a view' });
+	return problems;
+}
+
+/** Problems with a parsed hosts.json value: the schema, then `default` names a declared host and every variant key is unique. */
+export function validateHostsData(value: unknown): BrandDataProblem[] {
+	const file = 'src/brand/hosts.json';
+	const problems = validateJson(value, hostsSchema as JsonSchema).map((message) => ({ file, message }));
+	if (problems.length > 0) return problems;
+	const hosts = value as { default: string; hosts: Record<string, { key: string }> };
+	if (!Object.prototype.hasOwnProperty.call(hosts.hosts, hosts.default)) problems.push({ file, message: `default ${hosts.default} is not a key of hosts` });
+	const keys = new Set<string>();
+	for (const [host, variant] of Object.entries(hosts.hosts)) {
+		if (keys.has(variant.key)) problems.push({ file, message: `hosts.${host}: key ${variant.key} is declared twice` });
+		keys.add(variant.key);
+	}
+	return problems;
+}
+
+/** Problems with a parsed license.json value: the schema, then each contract declares every document role once. */
+export function validateLicenseData(value: unknown): BrandDataProblem[] {
+	const file = 'src/brand/license.json';
+	const problems = validateJson(value, licenseSchema as JsonSchema).map((message) => ({ file, message }));
+	if (problems.length > 0) return problems;
+	const contracts = (value as { contracts?: Record<string, { documents: { role: string }[] }> }).contracts ?? {};
+	for (const [app, contract] of Object.entries(contracts)) {
+		const roles = contract.documents.map((d) => d.role);
+		if (new Set(roles).size !== roles.length) problems.push({ file, message: `contracts.${app}: a document role is listed twice` });
+	}
 	return problems;
 }

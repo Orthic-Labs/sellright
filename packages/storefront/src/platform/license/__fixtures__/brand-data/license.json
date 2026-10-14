@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "seller": {
+    "line": "E2E Seller LLC · 1 Test Street",
+    "supportLocalPart": "hello"
+  },
+  "pausedAppKeys": [
+    "beta"
+  ],
+  "legalNotice": "E2E legal notice.",
+  "contracts": {
+    "alpha": {
+      "acceptanceVersion": "alpha-2026-08-01-v1",
+      "agreementStatement": "I agree to the license terms.",
+      "documents": [
+        {
+          "role": "license",
+          "id": "alpha-license",
+          "version": "1.0",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "url": "https://alpha.example.com/legal/license/",
+          "treatment": "agree"
+        },
+        {
+          "role": "eula",
+          "id": "alpha-eula",
+          "version": "1.0",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "url": "https://alpha.example.com/legal/eula/",
+          "treatment": "agree"
+        },
+        {
+          "role": "acceptable_use",
+          "id": "alpha-acceptable_use",
+          "version": "1.0",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "url": "https://alpha.example.com/legal/acceptable_use/",
+          "treatment": "agree"
+        },
+        {
+          "role": "product_schedule",
+          "id": "alpha-product_schedule",
+          "version": "1.0",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "url": "https://alpha.example.com/legal/product_schedule/",
+          "treatment": "agree"
+        },
+        {
+          "role": "privacy_notice",
+          "id": "alpha-privacy_notice",
+          "version": "1.0",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "url": "https://alpha.example.com/legal/privacy_notice/",
+          "treatment": "acknowledge"
+        }
+      ]
+    }
+  },
+  "confirmationLegalLinks": {
+    "default": {
+      "privacy": "/privacy",
+      "terms": "/terms",
+      "refund": "/refund",
+      "contact": "/contact"
+    }
+  }
+}

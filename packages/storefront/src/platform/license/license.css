@@ -1,0 +1,129 @@
+/* License flow stylesheet (VITE_SR_COMMERCE_FLOW=license). Structure only: the variant root (routes/layout.tsx) sets the
+   tokens (--accent, --bg, --surface, --border, --text, --muted, --dark-*, --font-*) from src/brand/hosts.json, and the brand's
+   src/brand/license.css (imported first) adds its @font-face rules and per-variant overrides. */
+@import '../../brand/license.css';
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { -webkit-font-smoothing: antialiased; }
+body {
+  background: var(--bg, #f7f3ec);
+  color: var(--text, #1a1b1c);
+  font-family: var(--font-body, system-ui, sans-serif);
+  line-height: 1.6;
+  font-size: 15px;
+}
+a { color: inherit; text-decoration: none; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+.wrap { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+
+.topbar { border-bottom: 1px solid var(--border); background: var(--surface); }
+.topbar .wrap { display: flex; align-items: center; justify-content: space-between; height: 60px; }
+.wordmark { font-family: var(--font-display); font-weight: 700; font-size: 21px; letter-spacing: -.02em; }
+.wordmark .r { color: var(--accent); }
+.topbar a.back { font-size: 13px; color: var(--muted); }
+
+h1 { font-family: var(--font-display); font-weight: 800; letter-spacing: -.02em; line-height: 1.1; }
+.lead { color: var(--muted); margin-top: 8px; }
+
+.section { padding: 48px 0; }
+.grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); margin-top: 28px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 26px 24px; }
+.card h2 { font-family: var(--font-display); font-weight: 700; font-size: 19px; }
+.card .price { font-family: var(--font-display); font-weight: 800; font-size: 34px; margin: 10px 0; }
+.card .price small { font-size: 13px; color: var(--muted); font-weight: 500; }
+.card ul { list-style: none; margin: 14px 0 20px; display: flex; flex-direction: column; gap: 8px; }
+.card li { font-size: 13.5px; padding-left: 20px; position: relative; }
+.card li::before { content: "✓"; position: absolute; left: 0; color: var(--accent); font-weight: 700; }
+
+.btn {
+  display: inline-block; font-family: var(--font-body); font-weight: 600; font-size: 14px;
+  background: var(--accent); color: #fff; padding: 11px 18px; border-radius: 8px; border: 0; cursor: pointer;
+  text-align: center; transition: background .15s ease, transform .15s ease;
+}
+.btn:hover { background: var(--accent-hover); transform: translateY(-1px); }
+.btn.block { display: block; width: 100%; }
+.btn[disabled] { opacity: .5; cursor: not-allowed; transform: none; }
+.btn.ghost { background: transparent; color: var(--accent); border: 1px solid var(--border); }
+/* Account sign-in / reset / register: grey until the form is ready (disabled or
+   aria-disabled). Scoped to .acct-auth so checkout and other buttons are untouched. */
+.acct-auth .btn[disabled], .acct-auth .btn[aria-disabled="true"] { background: #E7E5E4; color: #A8A29E; border: 0; cursor: not-allowed; opacity: 1; transform: none; }
+
+.field { margin-bottom: 14px; }
+.field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.field input { width: 100%; background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 11px 13px; font: inherit; color: var(--text); }
+.row { display: grid; grid-template-columns: 1fr 360px; gap: 32px; align-items: start; }
+@media (max-width: 760px) { .row { grid-template-columns: 1fr; } }
+.summary { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 22px; }
+.summary .line { display: flex; justify-content: space-between; padding: 6px 0; font-size: 14px; }
+.summary .total { border-top: 1px solid var(--border); margin-top: 8px; padding-top: 12px; font-weight: 700; }
+.muted { color: var(--muted); }
+.note { font-size: 12.5px; color: var(--muted); margin-top: 12px; }
+.err { color: #c0001d; font-size: 13px; margin-top: 10px; }
+.ok { color: #2f7d4f; font-size: 13px; margin-top: 10px; }
+.keybox { font-family: var(--font-mono); background: var(--bg); border: 1px dashed var(--border); border-radius: 8px; padding: 12px 14px; word-break: break-all; }
+.hr-upgrade-card { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 5%, var(--surface)); }
+.hr-upgrade-kicker { color: var(--accent); font-family: var(--font-mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+.hr-upgrade-summary { background: var(--bg); }
+
+/* ── Checkout — Rotten Hand parity (split dark summary / light form), themed per app ── */
+.ck { min-height: calc(100vh - 60px); background: var(--bg); }
+.ck-cols { max-width: 1180px; margin: 0 auto; display: flex; gap: 56px; padding: 0 32px 64px; }
+.ck-left { flex: 0 0 42%; position: relative; }
+.ck-left::before { content: ""; position: absolute; top: 0; bottom: 0; right: 0; left: -100vw; background: var(--dark-bg); }
+.ck-right { flex: 1 1 auto; min-width: 0; }
+
+.ck-sum { position: relative; z-index: 1; padding: 38px 36px 38px 4px; color: var(--dark-text); }
+.ck-eyebrow { font-family: var(--font-body); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--dark-muted); }
+.ck-total { font-family: var(--font-display); font-size: 38px; font-weight: 700; color: var(--dark-text); font-variant-numeric: tabular-nums; line-height: 1; margin-top: 8px; }
+.ck-standard-price { margin-top: 8px; color: var(--dark-muted); font-size: 13px; }
+.ck-standard-price span { margin-right: 4px; text-decoration: line-through; }
+.ck-rule { height: 1px; background: var(--dark-border); margin: 26px 0; }
+.ck-item { display: flex; justify-content: space-between; gap: 16px; }
+.ck-item-name { font-family: var(--font-display); font-size: 16px; font-weight: 600; color: var(--dark-text); }
+.ck-item-sub { font-size: 13px; color: var(--dark-muted); margin-top: 5px; }
+.ck-item-price { font-size: 16px; color: var(--dark-text); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ck-foot { font-size: 12.5px; color: var(--dark-muted); line-height: 1.6; }
+
+.ck-right-inner { padding: 34px 0 48px; max-width: 600px; }
+.ck-steps { display: flex; align-items: center; justify-content: space-between; margin-bottom: 28px; }
+.ck-step { display: inline-flex; align-items: center; gap: 11px; font-family: var(--font-body); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.ck-step b { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--border); font-size: 12px; font-weight: 600; }
+.ck-step-on { color: var(--text); }
+.ck-step-on b { background: var(--dark-bg); color: var(--dark-text); border-color: var(--dark-bg); }
+.ck-h2 { font-family: var(--font-display); font-weight: 700; font-size: 32px; letter-spacing: -.02em; color: var(--text); margin-bottom: 26px; }
+
+.ck-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.ck-mt { margin-top: 16px; }
+.ck-input { display: block; width: 100%; padding: 13px 16px; font-size: 16px; line-height: 1.3; border-radius: 3px; border: 1px solid var(--border); background: #fff; color: var(--text); font-family: var(--font-body); transition: border-color .2s; }
+.ck-input::placeholder { color: var(--muted); opacity: .68; }
+.ck-input:focus { outline: none; border-color: var(--accent); }
+select.ck-input { appearance: none; -webkit-appearance: none; cursor: pointer; }
+
+.ck-pay { margin-top: 30px; }
+.ck-eyebrow-light { display: block; color: var(--muted); letter-spacing: .12em; margin-bottom: 14px; }
+.ck-stripe { min-height: 20px; }
+.ck-placeholder { padding: 20px; text-align: center; font-size: 12px; color: var(--muted); opacity: .75; line-height: 1.6; border: 1px dashed var(--border); border-radius: 6px; }
+.payment-reveal { animation: paymentReveal .35s ease-out both; }
+@keyframes paymentReveal { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+.ck-cta { display: block; width: 100%; height: 54px; margin-top: 26px; background: var(--dark-bg); color: var(--dark-text); border: none; border-radius: 3px; cursor: pointer; font-family: var(--font-body); font-size: 11px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; transition: opacity .2s; }
+.ck-cta:hover { opacity: .88; }
+.ck-cta-off { opacity: .9; cursor: not-allowed; }
+.ck-err { color: #c0001d; font-size: 13px; margin-top: 12px; }
+.ck-upgrade-card { margin: 0 0 24px; padding: 17px 18px; border: 1px solid var(--accent); border-radius: 8px; background: color-mix(in srgb, var(--accent) 6%, #fff); }
+.ck-upgrade-title { margin-top: 7px; color: var(--text); font-family: var(--font-display); font-size: 22px; font-weight: 700; }
+.ck-upgrade-consent { display: flex; align-items: flex-start; gap: 10px; margin-top: 14px; padding-top: 14px; border-top: 1px solid #D8D0C8; font-size: 12px; line-height: 1.55; cursor: pointer; }
+.ck-upgrade-consent input { margin-top: 3px; flex: 0 0 auto; }
+
+@media (max-width: 900px) {
+  .ck { overflow-x: hidden; }
+  .ck-cols { flex-direction: column; gap: 0; padding: 0; max-width: 560px; width: 100%; }
+  .ck-left, .ck-right { flex: none; width: 100%; min-width: 0; }
+  .ck-left { order: 1; background: var(--dark-bg); }
+  .ck-left::before { display: none; }
+  .ck-right { order: 2; }
+  .ck-sum { padding: 32px 24px; }
+  .ck-right-inner { padding: 32px 24px; max-width: none; }
+  .ck-grid { grid-template-columns: 1fr; }
+}

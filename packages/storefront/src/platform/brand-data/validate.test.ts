@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { validateJson, type JsonSchema } from './json-schema';
 import { pageSchemasProblems, staticSchemaProblems } from './static-schema';
-import { validateHeadData, validateRoutesData } from './validate';
+import { validateHeadData, validateHostsData, validateLicenseData, validateRoutesData } from './validate';
 import { BrandDataValidationError, loadBrandData, renderBrandDataModule } from './vite-plugin';
 
 const ROUTE_DIRS = ['about', 'blog', 'shop', 'checkout'];
@@ -172,8 +172,8 @@ describe('loadBrandData / virtual module', () => {
 	afterEach(() => { for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true }); });
 
 	it('a missing head.json and routes.json means defaults (null)', () => {
-		expect(load(makeRoot({}))).toEqual({ head: null, routes: null });
-		expect(renderBrandDataModule({ head: null, routes: null })).toBe('export const brandHead = null;\nexport const brandRoutes = null;\n');
+		expect(load(makeRoot({}))).toEqual({ head: null, routes: null, hosts: null, license: null });
+		expect(renderBrandDataModule({ head: null, routes: null })).toBe('export const brandHead = null;\nexport const brandRoutes = null;\nexport const brandHosts = null;\nexport const brandLicense = null;\n');
 	});
 
 	it('valid files load and render', () => {
@@ -268,5 +268,66 @@ describe('routes.json PR2 part (productPath, shop, operational)', () => {
 	});
 	it('accepts CollectionPage with an ItemList for /shop/ (head.json pageSchemas)', () => {
 		expect(validateHeadData({ pageSchemas: { '/shop/': [{ '@context': 'https://schema.org', '@type': 'CollectionPage', name: 'Shop', mainEntity: { '@type': 'ItemList', itemListElement: [{ '@type': 'ListItem', position: 1, url: 'https://x/shop/a/', name: 'A' }] } }] } })).toEqual([]);
+	});
+});
+
+const VARIANT = { key: 'alpha', name: 'Alpha', wordmark: ['Al', 'pha'], domain: 'alpha.test', collection: 'alpha', tokens: { '--accent': '#112233', '--font-body': 'Inter' } };
+const HOSTS = { version: 1, stripPrefixes: ['store', 'www'], default: 'alpha.test', hosts: { 'alpha.test': VARIANT, 'beta.test': { key: 'beta', name: 'Beta', domain: 'beta.test', tokens: {} } } };
+const DOC = { role: 'eula', id: 'x-eula', version: '1.1', sha256: 'a'.repeat(64), url: 'https://alpha.test/legal/eula/', treatment: 'agree' };
+const LICENSE = {
+	version: 1,
+	seller: { line: 'Example LLC', supportLocalPart: 'hello' },
+	pausedAppKeys: ['beta'],
+	contracts: { alpha: { acceptanceVersion: 'alpha-v1', agreementStatement: 'I agree.', documents: [DOC] } },
+	confirmationLegalLinks: { default: { privacy: '/privacy', terms: '/terms', refund: '/refund', contact: '/contact' } },
+	devices: { endpoint: '/v1/shop/account/devices' },
+	upgradeCredit: { endpoint: '/v1/shop/pro/mobile-upgrade', appKey: 'alpha', sku: 'AL-PRO', creditTermsVersion: '2026-09-30', sourceName: 'Mobile', targetName: 'Full', storeName: 'App Store' },
+};
+const msgs = (problems: { message: string }[]) => problems.map((p) => p.message);
+
+describe('hosts.json (per-host variants)', () => {
+	it('accepts a valid file', () => {
+		expect(validateHostsData(HOSTS)).toEqual([]);
+	});
+	it('rejects a default that names no host, a duplicate key, bad host names and unsafe token names or values', () => {
+		expect(msgs(validateHostsData({ ...HOSTS, default: 'gamma.test' })).join()).toMatch(/default gamma\.test is not a key of hosts/);
+		expect(msgs(validateHostsData({ ...HOSTS, hosts: { ...HOSTS.hosts, 'gamma.test': { ...VARIANT } } })).join()).toMatch(/key alpha is declared twice/);
+		expect(msgs(validateHostsData({ ...HOSTS, hosts: { 'Alpha.Test': VARIANT } })).join()).toMatch(/does not match/);
+		expect(msgs(validateHostsData({ ...HOSTS, hosts: { 'alpha.test': { ...VARIANT, tokens: { accent: '#fff' } } } })).join()).toMatch(/does not match/);
+		for (const bad of ['red;}body{x:y', 'url("x")', '<b>']) {
+			expect(msgs(validateHostsData({ ...HOSTS, hosts: { 'alpha.test': { ...VARIANT, tokens: { '--accent': bad } } } })).join(), bad).toMatch(/does not match/);
+		}
+		expect(msgs(validateHostsData({ ...HOSTS, extra: 1 })).join()).toMatch(/unknown property "extra"/);
+	});
+});
+
+describe('license.json (license flow data)', () => {
+	it('accepts a valid file and a minimal one', () => {
+		expect(validateLicenseData(LICENSE)).toEqual([]);
+		expect(validateLicenseData({ version: 1, seller: { line: 'x', supportLocalPart: 'support' } })).toEqual([]);
+	});
+	it('rejects a repeated document role, a non-https document URL, a bad sha256, an endpoint outside /v1/shop and an absolute confirmation link', () => {
+		expect(msgs(validateLicenseData({ ...LICENSE, contracts: { alpha: { ...LICENSE.contracts.alpha, documents: [DOC, DOC] } } })).join()).toMatch(/role is listed twice/);
+		expect(msgs(validateLicenseData({ ...LICENSE, contracts: { alpha: { ...LICENSE.contracts.alpha, documents: [{ ...DOC, url: 'http://alpha.test/x' }] } } })).join()).toMatch(/does not match/);
+		expect(msgs(validateLicenseData({ ...LICENSE, contracts: { alpha: { ...LICENSE.contracts.alpha, documents: [{ ...DOC, sha256: 'abc' }] } } })).join()).toMatch(/does not match/);
+		expect(msgs(validateLicenseData({ ...LICENSE, devices: { endpoint: 'https://evil.test/v1' } })).join()).toMatch(/does not match/);
+		expect(msgs(validateLicenseData({ ...LICENSE, devices: { endpoint: '/v1/admin/x' } })).join()).toMatch(/does not match/);
+		expect(msgs(validateLicenseData({ ...LICENSE, confirmationLegalLinks: { default: { privacy: 'https://x.test/', terms: '/t', refund: '/r', contact: '/c' } } })).join()).toMatch(/does not match/);
+	});
+	it('hosts.json and license.json load into the virtual module; an invalid one fails the build', () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sr-brand-data-'));
+		try {
+			fs.mkdirSync(path.join(dir, 'src/brand'), { recursive: true });
+			fs.writeFileSync(path.join(dir, 'src/brand/hosts.json'), JSON.stringify(HOSTS));
+			fs.writeFileSync(path.join(dir, 'src/brand/license.json'), JSON.stringify(LICENSE));
+			const data = loadBrandData(dir, path.join(dir, 'src/brand'), path.join(dir, 'src/brand-slots'));
+			expect(data.hosts).toEqual(HOSTS);
+			expect(data.license).toEqual(LICENSE);
+			expect(renderBrandDataModule(data)).toContain(`export const brandHosts = ${JSON.stringify(HOSTS)};`);
+			fs.writeFileSync(path.join(dir, 'src/brand/hosts.json'), JSON.stringify({ ...HOSTS, default: 'nope.test' }));
+			expect(() => loadBrandData(dir, path.join(dir, 'src/brand'), path.join(dir, 'src/brand-slots'))).toThrow(/hosts\.json: default nope\.test/);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });

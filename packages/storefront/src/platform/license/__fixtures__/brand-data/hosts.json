@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "stripPrefixes": [
+    "store",
+    "buy"
+  ],
+  "default": "alpha.test",
+  "hosts": {
+    "alpha.test": {
+      "key": "alpha",
+      "name": "AlphaApp",
+      "wordmark": [
+        "Alpha",
+        "App"
+      ],
+      "domain": "alpha.test",
+      "collection": "e2e-alpha",
+      "tokens": {
+        "--accent": "#0C6AA5",
+        "--accent-hover": "#095785",
+        "--bg": "#F7F3EC",
+        "--surface": "#FFFDF8",
+        "--border": "#E2DAD1",
+        "--text": "#211C18",
+        "--muted": "#6E665F",
+        "--dark-bg": "#111722",
+        "--dark-surface": "#161D2A",
+        "--dark-border": "#2D3037",
+        "--dark-text": "#F4EFE7",
+        "--dark-muted": "#A39A91",
+        "--dark-accent": "#3FA3DE",
+        "--font-display": "system-ui",
+        "--font-body": "system-ui",
+        "--font-mono": "monospace"
+      }
+    },
+    "beta.test": {
+      "key": "beta",
+      "name": "BetaApp",
+      "wordmark": [
+        "Beta",
+        "App"
+      ],
+      "domain": "beta.test",
+      "collection": "e2e-beta",
+      "tokens": {
+        "--accent": "#DF3400",
+        "--bg": "#FBF7EF"
+      }
+    }
+  }
+}

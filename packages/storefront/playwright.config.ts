@@ -46,7 +46,9 @@ const storefrontServer = {
 	// `pnpm run e2e:build` (part of `pnpm test:e2e`) builds server-e2e/dist-e2e: the production build with SSG off, so
 	// every page renders from THIS suite's API instead of a snapshot of whatever store was live at build time.
 	command: `node ${process.env.E2E_STORE_SERVER ?? 'server-e2e/entry.express.js'}`,
-	url: STORE_URL,
+	// E2E_STORE_READY_PATH: a page that renders before global setup seeds the catalog (the license-flow build's home reads a
+	// collection that global setup has not created yet).
+	url: STORE_URL + (process.env.E2E_STORE_READY_PATH ?? ''),
 	// The storefront server is stateless, so a developer's already-running build can always be reused.
 	reuseExistingServer: !process.env.CI,
 	timeout: 60_000,

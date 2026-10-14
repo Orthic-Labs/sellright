@@ -1,0 +1,228 @@
+{
+  "$comment": "src/brand/license.json: brand data of the license commerce flow (VITE_SR_COMMERCE_FLOW=license). Seller line, apps whose checkout is paused, the per-app legal acceptance contract the API verifies, the confirmation page's legal links, and two optional account features served by an API plugin: device management (`devices`) and an app-store purchase credit toward a license (`upgradeCredit`). Their endpoint paths are declared here, never in the base.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "seller"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "seller": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "line",
+        "supportLocalPart"
+      ],
+      "properties": {
+        "line": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "supportLocalPart": {
+          "type": "string",
+          "pattern": "^[a-z0-9._+-]{1,40}$"
+        }
+      }
+    },
+    "pausedAppKeys": {
+      "type": "array",
+      "maxItems": 50,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/definitions/key"
+      }
+    },
+    "legalNotice": {
+      "type": "string",
+      "maxLength": 400
+    },
+    "contracts": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "acceptanceVersion",
+          "agreementStatement",
+          "documents"
+        ],
+        "properties": {
+          "acceptanceVersion": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,80}$"
+          },
+          "agreementStatement": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 400
+          },
+          "documents": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 10,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "role",
+                "id",
+                "version",
+                "sha256",
+                "url",
+                "treatment"
+              ],
+              "properties": {
+                "role": {
+                  "enum": [
+                    "license",
+                    "eula",
+                    "acceptable_use",
+                    "product_schedule",
+                    "privacy_notice"
+                  ]
+                },
+                "id": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9._-]{1,80}$"
+                },
+                "version": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(?:\\.[0-9]+)*$",
+                  "maxLength": 20
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "url": {
+                  "type": "string",
+                  "pattern": "^https://[^\\s\"<>]+$",
+                  "maxLength": 300
+                },
+                "treatment": {
+                  "enum": [
+                    "agree",
+                    "acknowledge"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "confirmationLegalLinks": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+      },
+      "additionalProperties": {
+        "$ref": "#/definitions/legalLinks"
+      }
+    },
+    "upgradeCredit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "endpoint",
+        "appKey",
+        "sku",
+        "creditTermsVersion",
+        "sourceName",
+        "targetName",
+        "storeName"
+      ],
+      "properties": {
+        "appKey": {
+          "$ref": "#/definitions/key"
+        },
+        "sku": {
+          "type": "string",
+          "pattern": "^[A-Z0-9][A-Z0-9-]{0,40}$"
+        },
+        "creditTermsVersion": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "sourceName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "targetName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "endpoint": {
+          "$ref": "#/definitions/endpoint"
+        },
+        "storeName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        }
+      }
+    },
+    "devices": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "endpoint"
+      ],
+      "properties": {
+        "endpoint": {
+          "$ref": "#/definitions/endpoint"
+        }
+      }
+    }
+  },
+  "definitions": {
+    "key": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "maxLength": 40
+    },
+    "legalLinks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "privacy",
+        "terms",
+        "refund",
+        "contact"
+      ],
+      "properties": {
+        "privacy": {
+          "$ref": "#/definitions/path"
+        },
+        "terms": {
+          "$ref": "#/definitions/path"
+        },
+        "refund": {
+          "$ref": "#/definitions/path"
+        },
+        "contact": {
+          "$ref": "#/definitions/path"
+        }
+      }
+    },
+    "path": {
+      "type": "string",
+      "pattern": "^/[A-Za-z0-9._/-]{0,100}$"
+    },
+    "endpoint": {
+      "type": "string",
+      "pattern": "^/v1/shop/[a-z0-9]+(?:[/-][a-z0-9]+)*$",
+      "maxLength": 120
+    }
+  }
+}

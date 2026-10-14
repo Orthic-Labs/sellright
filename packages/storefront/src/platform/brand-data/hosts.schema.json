@@ -1,0 +1,40 @@
+{
+  "$comment": "src/brand/hosts.json: one storefront build served on several hosts, each rendered as its own variant (name, wordmark, canonical domain, catalog collection, CSS custom properties). The request Host picks the variant (src/platform/host-variant.ts). Semantic rules (default names a host, keys unique) are checked in validate.ts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "default", "hosts"],
+  "properties": {
+    "version": { "const": 1 },
+    "stripPrefixes": {
+      "type": "array",
+      "maxItems": 10,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "maxLength": 20 }
+    },
+    "default": { "$ref": "#/definitions/host" },
+    "hosts": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*(?:\\.[a-z0-9]+(?:-[a-z0-9]+)*)+$" },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "name", "domain", "tokens"],
+        "properties": {
+          "key": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "maxLength": 40 },
+          "name": { "type": "string", "minLength": 1, "maxLength": 60 },
+          "wordmark": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "string", "maxLength": 40 } },
+          "domain": { "$ref": "#/definitions/host" },
+          "collection": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "maxLength": 80 },
+          "tokens": {
+            "type": "object",
+            "propertyNames": { "pattern": "^--[a-z][a-z0-9-]{0,40}$" },
+            "additionalProperties": { "type": "string", "pattern": "^[^;{}<>\"\\\\]{1,80}$" }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "host": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*(?:\\.[a-z0-9]+(?:-[a-z0-9]+)*)+$", "maxLength": 120 }
+  }
+}

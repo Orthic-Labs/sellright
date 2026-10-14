@@ -1,6 +1,8 @@
 import { component$, useStyles$ } from '@qwik.dev/core';
 import { QwikRouterProvider, RouterOutlet, ServiceWorkerRegister } from '@qwik.dev/router';
 import { Head } from './components/head/head';
+import { COMMERCE_FLOW } from './platform/license/flow-env';
+import { LicenseRoot } from './platform/license/root';
 
 import globalStyles from './global.css?inline';
 
@@ -8,7 +10,7 @@ interface RootProps {
 	nonce?: string;
 }
 
-export default component$<RootProps>(({ nonce }) => {
+const CartRoot = component$<RootProps>(({ nonce }) => {
 	useStyles$(globalStyles);
 
 	return (
@@ -27,3 +29,6 @@ export default component$<RootProps>(({ nonce }) => {
 		</QwikRouterProvider>
 	);
 });
+
+// The license commerce flow (VITE_SR_COMMERCE_FLOW=license) renders its own document: src/platform/license/root.tsx.
+export default COMMERCE_FLOW === 'license' ? LicenseRoot : CartRoot;
