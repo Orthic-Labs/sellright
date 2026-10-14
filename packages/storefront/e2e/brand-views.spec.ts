@@ -3,6 +3,7 @@ import { PRODUCT, uniq } from './support/api';
 import { addToCart } from './support/flows';
 import { apiLog, STOCK_PATTERNS } from './support/api-log';
 import { currentGeneration } from './support/stock';
+import { CATALOG_DIR } from './support/env.mjs';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -193,7 +194,7 @@ test.describe('brand views (fixture build)', () => {
 		expect(ld.some((j) => j.includes('"FAQPage"') && j.includes('Fixture answer.'))).toBe(true);
 		// The row comes from the published catalog snapshot only (no snapshot: no row; the live listing is never read): the shirt's
 		// category peers from that snapshot, the shirt itself excluded.
-		const gen = currentGeneration();
+		const gen = CATALOG_DIR ? currentGeneration() : null;
 		const snap = gen ? (JSON.parse(readFileSync(join(gen.dir, 'shop-catalog.json'), 'utf8')) as { products: Array<{ slug: string; tags?: string[] }> }).products : [];
 		const category = snap.find((p) => p.slug === PRODUCT.shirt.slug)?.tags?.[0];
 		const peers = snap.filter((p) => p.slug !== PRODUCT.shirt.slug && category !== undefined && p.tags?.[0] === category).map((p) => `/products/${p.slug}/`);
