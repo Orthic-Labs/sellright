@@ -17,6 +17,14 @@
         "description": "Not indexed.",
         "noindex": true
       }
+    },
+    {
+      "path": "/single-story/",
+      "pageKey": "single-story",
+      "head": {
+        "title": "Single story",
+        "description": "A one-segment page."
+      }
     }
   ],
   "pages": {

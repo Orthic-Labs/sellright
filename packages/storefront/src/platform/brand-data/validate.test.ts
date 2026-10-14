@@ -124,8 +124,10 @@ describe('routes.json (content declarations)', () => {
 		expect(routes({ version: 1, blog: { pageSize: 1.5 } }).join()).toMatch(/integer/);
 	});
 
-	it('rejects a single-segment content path (the [key] route stays an endpoint; see the PR1 report)', () => {
-		expect(routes({ version: 1, content: [{ path: '/our-story/', pageKey: 'story' }] }).join()).toMatch(/does not match/);
+	it('accepts a single-segment content path (served by the [key] route) unless it is a reserved or existing prefix', () => {
+		expect(routes({ version: 1, content: [{ path: '/our-story/', pageKey: 'story' }] })).toEqual([]);
+		expect(routes({ version: 1, content: [{ path: '/shop/', pageKey: 'story' }] }).join()).toMatch(/reserved or existing route prefix/);
+		expect(routes({ version: 1, content: [{ path: '/our.story/', pageKey: 'story' }] }).join()).toMatch(/does not match/);
 	});
 
 	it('rejects reserved / existing prefixes, duplicates and a bad `pages` key at build', () => {

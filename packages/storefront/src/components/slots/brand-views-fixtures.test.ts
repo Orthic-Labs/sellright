@@ -24,7 +24,7 @@ describe('brand-view fixtures', () => {
 	it('the fixture head.json and routes.json validate against the real route tree', () => {
 		const data = loadBrandData(PACKAGE_ROOT, DATA, VIEWS);
 		expect(data.head).toMatchObject({ titleTemplate: '%s | {store}' });
-		expect((data.routes as { content: unknown[] }).content).toHaveLength(2);
+		expect((data.routes as { content: unknown[] }).content).toHaveLength(3);
 	});
 
 	it('the fixture data directory has no executable or unknown file', () => {

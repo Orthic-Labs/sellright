@@ -1,9 +1,10 @@
 // Brand views, plan §2.5: declared content paths. Pure (no Qwik, no Node) so the build-time validator and the runtime
 // catch-all share it. A brand declares exact content paths in src/brand/routes.json; there are no handlers and no patterns.
 
-// Two or more segments. A single-segment path would be served by the `[key]` route (IndexNow key file), which stays an
-// endpoint: plan §2.4 stops here for a decision rather than change what `/no-such-page/` and `/<key>.txt` return (see the PR1 report).
-export const CONTENT_PATH = /^\/[a-z0-9]+(?:-[a-z0-9]+)*(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)+\/$/;
+// One or more lowercase hyphenated segments with a trailing slash. A single-segment path (`/slow-fashion/`) is served by the `[key]`
+// route, which renders the declared page and keeps answering `/<key>.txt` (IndexNow) and a plain 404 for anything undeclared; deeper
+// paths by the catch-all. A path segment can never contain a dot, so a declaration never shadows a key file.
+export const CONTENT_PATH = /^\/[a-z0-9]+(?:-[a-z0-9]+)*(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)*\/$/;
 export const PAGE_KEY = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 /** First path segments a brand may never claim, besides every top-level `src/routes` directory (walked at build). */
@@ -38,7 +39,7 @@ export function checkContentPaths(input: ContentRoutesInput, routeDirs: readonly
 	for (const entry of input.content ?? []) {
 		const p = entry.path;
 		if (typeof p !== 'string' || !CONTENT_PATH.test(p)) {
-			problems.push(`content path ${JSON.stringify(p)} must be two or more lowercase hyphenated segments with a leading and a trailing slash (e.g. "/about/our-story/"); single-segment paths are not supported yet`);
+			problems.push(`content path ${JSON.stringify(p)} must be lowercase hyphenated segments with a leading and a trailing slash (e.g. "/slow-fashion/" or "/about/our-story/")`);
 			continue;
 		}
 		const first = firstSegment(p);
