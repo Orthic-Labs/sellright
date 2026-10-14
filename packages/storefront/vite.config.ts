@@ -6,6 +6,7 @@ import { imagetools } from 'vite-imagetools';
 import viteCompression from 'vite-plugin-compression';
 import { brandSlotsPlugin } from './src/components/slots/vite-plugin';
 import { brandDataPlugin } from './src/platform/brand-data/vite-plugin';
+import { commerceFlowFrom, routesDirFor } from './src/platform/license/flow';
 
 export default defineConfig((config) => {
   const isDev = config.mode === 'development';
@@ -22,6 +23,8 @@ export default defineConfig((config) => {
   // sub-path mount would need those fixed too. The demo instead mounts this
   // app at the domain root and relocates the admin SPA to /admin, which
   // React Router's `basename` handles cleanly with no such landmines.
+  // The commerce flow picks the route tree (src/platform/license/flow.ts): the license flow builds src/platform/license/routes.
+  const commerceFlow = commerceFlowFrom(process.env.VITE_SR_COMMERCE_FLOW || env.VITE_SR_COMMERCE_FLOW);
   const outDirSuffix = process.env.SELLRIGHT_BUILD_SUFFIX ? `-${process.env.SELLRIGHT_BUILD_SUFFIX}` : '';
 
   return {
@@ -101,6 +104,7 @@ export default defineConfig((config) => {
       // Brand views: validates src/brand/head.json and routes.json and serves virtual:sellright-brand-data (a missing file = defaults).
       brandDataPlugin(),
       qwikRouter({
+        routesDir: routesDirFor(commerceFlow),
         // Exclude dynamic sitemap routes from static generation
         exclude: ['/sitemap.xml', '/sitemap-*.xml'],
       }),

@@ -164,6 +164,9 @@
     },
     "VITE_GOOGLE_CLIENT_ID": {
       "description": "Google OAuth client id (public). Empty (default) = no Google sign-in button and no Google origins in the CSP; must equal the client id the API verifies for this store. Also needs SELLRIGHT_GOOGLE_SIGNIN_HOSTS (runtime): the pinned store's public hosts that may show it"
+    },
+    "VITE_SR_COMMERCE_FLOW": {
+      "description": "Commerce flow: unset or cart (the cart storefront, src/routes) or license (the license buy-flow, src/platform/license/routes: pricing, one-SKU checkout with legal acceptance, account licenses; brand data src/brand/hosts.json and src/brand/license.json)"
     }
   },
   "privateRuntime": {

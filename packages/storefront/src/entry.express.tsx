@@ -52,6 +52,8 @@ const { router, notFound } = createQwikRouter({
 
 // Create the express server
 const app = express();
+// No framework banner header (the license-flow buy pages never sent one; nothing reads it).
+app.disable('x-powered-by');
 
 // API / payment-provider origins the storefront legitimately talks to.
 // Pulled from env so dev (127.0.0.1:3300) and prod (the real API host) both

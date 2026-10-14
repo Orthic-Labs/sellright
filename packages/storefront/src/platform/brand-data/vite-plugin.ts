@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Plugin } from 'vite';
-import { validateHeadData, validateRoutesData, type BrandDataProblem } from './validate';
+import { validateHeadData, validateHostsData, validateLicenseData, validateRoutesData, type BrandDataProblem } from './validate';
 
 export const BRAND_DATA_VIRTUAL_ID = 'virtual:sellright-brand-data';
 export const DEFAULT_BRAND_DATA_DIR = 'src/brand';
@@ -19,7 +19,14 @@ export class BrandDataValidationError extends Error {
 export interface BrandDataSources {
 	head: unknown | null;
 	routes: unknown | null;
+	/** src/brand/hosts.json (per-host variants); absent = one variant-less storefront. */
+	hosts?: unknown | null;
+	/** src/brand/license.json (license commerce flow data); absent = no license data. */
+	license?: unknown | null;
 }
+
+/** The brand data files, in the order the virtual module exports them. */
+export const BRAND_DATA_FILES = ['head.json', 'routes.json', 'hosts.json', 'license.json'] as const;
 
 /** One open descriptor: O_NOFOLLOW rejects a symlink at open, fstat checks the file kind, and the read uses the same descriptor (no check-then-use gap). */
 function readJsonFile(file: string, label: string, problems: BrandDataProblem[]): unknown | null {
@@ -59,12 +66,16 @@ export function loadBrandData(root: string, dataDir: string, slotsDir: string): 
 	if (routes !== null && problems.every((p) => p.file !== 'src/brand/routes.json')) {
 		problems.push(...validateRoutesData(routes, { routeDirs: listRouteDirs(root), hasContentView: fs.existsSync(path.join(slotsDir, 'route.content.tsx')), hasShopView: fs.existsSync(path.join(slotsDir, 'route.shop.tsx')), hasProductView: fs.existsSync(path.join(slotsDir, 'route.product.tsx')), hasHomeView: fs.existsSync(path.join(slotsDir, 'route.home.tsx')) }));
 	}
+	const hosts = readJsonFile(path.join(dataDir, 'hosts.json'), 'src/brand/hosts.json', problems);
+	if (hosts !== null && problems.every((p) => p.file !== 'src/brand/hosts.json')) problems.push(...validateHostsData(hosts));
+	const license = readJsonFile(path.join(dataDir, 'license.json'), 'src/brand/license.json', problems);
+	if (license !== null && problems.every((p) => p.file !== 'src/brand/license.json')) problems.push(...validateLicenseData(license));
 	for (const spec of mediaImports(head)) {
 		const file = path.join(root, 'src', spec.slice(2, spec.indexOf('?')));
 		if (!fs.existsSync(file)) problems.push({ file: 'src/brand/head.json', message: `imagePreloads: ${spec} names no file` });
 	}
 	if (problems.length) throw new BrandDataValidationError(problems);
-	return { head, routes };
+	return { head, routes, hosts, license };
 }
 
 const isMediaImport = (href: unknown): href is string => typeof href === 'string' && href.startsWith('~/brand/media/');
@@ -90,7 +101,7 @@ export function renderBrandDataModule(data: BrandDataSources, opts: { srcDir?: s
 	const head = data.head === null ? null : JSON.parse(JSON.stringify(data.head), (key, value) => (key === 'href' && isMediaImport(value) ? `\u0000media${imports.indexOf(value)}` : value));
 	const headSource = JSON.stringify(head).replace(/"\\u0000media(\d+)"/g, (_m, i: string) => `__brandMedia${i}`);
 	const lines = imports.map((spec, i) => `import __brandMedia${i} from ${JSON.stringify(target(spec))};`);
-	return `${lines.length ? `${lines.join('\n')}\n` : ''}export const brandHead = ${headSource};\nexport const brandRoutes = ${JSON.stringify(data.routes)};\n`;
+	return `${lines.length ? `${lines.join('\n')}\n` : ''}export const brandHead = ${headSource};\nexport const brandRoutes = ${JSON.stringify(data.routes)};\nexport const brandHosts = ${JSON.stringify(data.hosts ?? null)};\nexport const brandLicense = ${JSON.stringify(data.license ?? null)};\n`;
 }
 
 export function brandDataPlugin(options: { dataDir?: string; slotsDir?: string } = {}): Plugin {
@@ -114,7 +125,7 @@ export function brandDataPlugin(options: { dataDir?: string; slotsDir?: string }
 		},
 		load(id) {
 			if (id !== resolved) return null;
-			for (const f of ['head.json', 'routes.json']) if (fs.existsSync(path.join(dataDir, f))) this.addWatchFile(path.join(dataDir, f));
+			for (const f of BRAND_DATA_FILES) if (fs.existsSync(path.join(dataDir, f))) this.addWatchFile(path.join(dataDir, f));
 			return renderBrandDataModule(loadBrandData(root, dataDir, slotsDir), { srcDir: path.join(root, 'src') });
 		},
 	};

@@ -1,6 +1,6 @@
 // The only importer of `virtual:sellright-brand-data` (plan §1). A missing head.json / routes.json means today's defaults:
 // an empty spec and no declared content, no per-page head, the default blog page size.
-import { brandHead, brandRoutes } from 'virtual:sellright-brand-data';
+import { brandHead, brandHosts, brandLicense, brandRoutes } from 'virtual:sellright-brand-data';
 import type { BrandHeadSpec, StaticSchema } from '~/platform/head-resolve';
 import type { DeclaredContent } from '~/platform/content-routes';
 
@@ -64,3 +64,58 @@ export const SHOP_PRICE_RANGE: boolean = BRAND_ROUTES?.shop?.priceDisplay === 'r
 export const PDP_RELATED: boolean = BRAND_ROUTES?.productPage?.related === true;
 /** routes.json productPage.content for a slug, or null. */
 export const productPageContent = (slug: string): ProductPageContent | null => BRAND_ROUTES?.productPage?.content?.[slug] ?? null;
+
+/** src/brand/hosts.json (hosts.schema.json): one build served on several hosts, a variant per host. */
+export interface BrandHosts {
+	version: 1;
+	/** Leading host labels ignored when matching (`store.` in `store.example.com`). */
+	stripPrefixes?: string[];
+	/** The host whose variant answers an unknown Host. */
+	default: string;
+	hosts: Record<string, HostVariantSpec>;
+}
+
+export interface HostVariantSpec {
+	key: string;
+	name: string;
+	/** The wordmark in two parts; the second takes the accent. Default: [name, '']. */
+	wordmark?: [string, string];
+	/** The variant's canonical site (links back to it). */
+	domain: string;
+	/** The catalog collection the variant sells from. Default: the key. */
+	collection?: string;
+	/** CSS custom properties set on the variant root, in declaration order. */
+	tokens: Record<string, string>;
+}
+
+/** src/brand/license.json (license.schema.json): brand data of the license commerce flow. */
+export interface BrandLicense {
+	version: 1;
+	seller: { line: string; supportLocalPart: string };
+	pausedAppKeys?: string[];
+	legalNotice?: string;
+	contracts?: Record<string, LicenseContract>;
+	confirmationLegalLinks?: Record<string, LegalLinks>;
+	/** Device management of issued licenses, served by an API plugin at `endpoint` (GET list, PATCH/DELETE `<endpoint>/<id>`). */
+	devices?: { endpoint: string };
+	/** A verified app-store purchase (`sourceName`) credited toward a license (`targetName`, sold as `sku`) of one app. */
+	upgradeCredit?: { endpoint: string; appKey: string; sku: string; creditTermsVersion: string; sourceName: string; targetName: string; storeName: string };
+}
+
+export interface LicenseContract {
+	acceptanceVersion: string;
+	agreementStatement: string;
+	documents: Array<{
+		role: 'license' | 'eula' | 'acceptable_use' | 'product_schedule' | 'privacy_notice';
+		id: string;
+		version: string;
+		sha256: string;
+		url: string;
+		treatment: 'agree' | 'acknowledge';
+	}>;
+}
+
+export interface LegalLinks { privacy: string; terms: string; refund: string; contact: string }
+
+export const BRAND_HOSTS: BrandHosts | null = (brandHosts as BrandHosts | null) ?? null;
+export const BRAND_LICENSE: BrandLicense | null = (brandLicense as BrandLicense | null) ?? null;
