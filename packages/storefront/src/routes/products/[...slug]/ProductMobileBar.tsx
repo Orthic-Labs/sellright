@@ -1,4 +1,4 @@
-import { component$ } from '@qwik.dev/core';
+import { $, component$, useOnWindow, useSignal, useVisibleTask$ } from '@qwik.dev/core';
 import { titleCase } from './product-options';
 import type { CatalogVariant } from '~/sellright/types/catalog';
 
@@ -18,8 +18,21 @@ export const ProductMobileBar = component$((props: Record<string, any>) => {
     showCtaTooltip,
     showFromPrefix,
   } = props;
+  // The fixed bar never covers the purchase controls: while an option selector, the pre-order consent or the in-page add button
+  // is on screen, the bar steps aside (those controls are then in reach); it returns once they scroll away. Layout only, no data.
+  const yielding = useSignal(false);
+  const measure = $(() => {
+    const vh = window.innerHeight;
+    yielding.value = [...document.querySelectorAll('.sr-pdp .sr-sel-group, .sr-pdp .sr-consent, .sr-pdp .sr-cta-desktop')].some((el) => {
+      const r = el.getBoundingClientRect();
+      return r.height > 0 && r.bottom > 72 && r.top < vh;
+    });
+  });
+  useOnWindow('scroll', measure);
+  useOnWindow('resize', measure);
+  useVisibleTask$(() => measure(), { strategy: 'document-ready' });
   return (
-    <div class="sr-mobile-bar">
+    <div class={`sr-mobile-bar${yielding.value ? ' is-yielding' : ''}`} aria-hidden={yielding.value ? 'true' : undefined} inert={yielding.value || undefined}>
       <div class="sr-mobile-bar-meta">
         <div class="sr-mobile-bar-name">{titleCase(product.name)}</div>
         <div class="sr-mobile-bar-price">

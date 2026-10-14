@@ -17,6 +17,7 @@ must update the matching changelog in the same push.
 
 ### Added
 
+- Storefront: the base product page's fixed mobile purchase bar steps aside while an option selector, the pre-order consent or the in-page add button is on screen (the in-page add button now also shows on mobile), so it never covers the purchase controls; the cart drawer has a visible close button.
 - **Storefront: home spotlight** (`routes.json home.spotlight: { key, slug }`): the brand home view sells one product in place through the shared configurator. `HomeViewProps.spotlight` carries the product, selection and purchase state, and the configurator actions act on it; metadata from the catalog generation (else the live API), stock from the view's own live read on qidle, no SSR stock, fail closed. Without a declared spotlight nothing is read and the actions are `invalid`.
 - Storefront: `routes.json shop.listingOrder` (merchandising order of the base shop listing, within the in-stock grouping) and `shop.priceDisplay: "range"` (listing cards show `min - max` from the catalog snapshot's price range when no sale or pre-order price applies); `head.json ogImage` (`alt: false` drops `og:image:alt`, `width`/`height` add the size tags).
 - Storefront: `routes.json productPage` for the base product page: `related: true` adds a related row (catalog snapshot only, same category, by price; the cards carry no availability: each product page reads its own live stock), `content[slug]` adds plain-text design notes and Q&A (also emitted as FAQPage JSON-LD).
