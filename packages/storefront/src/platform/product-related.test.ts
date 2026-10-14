@@ -14,20 +14,20 @@ const LIST = [
 ];
 
 describe('relatedRow', () => {
-	it('an in-stock product: its category, in-stock first then by price, the product itself excluded', () => {
+	it('its category by price, the product itself excluded, availability ignored (cards carry none)', () => {
 		const r = relatedRow(LIST, 'pocket');
 		expect(r.heading).toBe('You may also like');
 		expect(r.items.map((i) => i.slug)).toEqual(['fenrir', 'basilisk', 'cerberus']);
-		expect(r.items[0]).toMatchObject({ href: '/products/fenrir/', priceCents: 7000, inStock: true });
+		expect(r.items[0]).toEqual({ slug: 'fenrir', name: 'fenrir', href: '/products/fenrir/', image: '/assets/fenrir.jpg', priceCents: 7000 });
+		expect(relatedRow(LIST.map((p) => ({ ...p, inStock: !p.inStock })), 'pocket')).toEqual(r);
 	});
-	it('a sold-out product: in-stock products, its category first, under "In stock now"', () => {
-		const r = relatedRow(LIST, 'poison');
-		expect(r.heading).toBe('In stock now');
-		expect(r.items.map((i) => i.slug)).toEqual(['milk', 'tee', 'pocket', 'fenrir']);
+	it('a sold-out product gets the same row; at most four; untagged products share one category', () => {
+		expect(relatedRow(LIST, 'poison').items.map((i) => i.slug)).toEqual(['milk']);
+		const many = Array.from({ length: 6 }, (_, k) => ({ ...item(`k${k}`, 'x', 100 * (6 - k), true), tags: [] }) as CatalogListItem);
+		expect(relatedRow(many, 'k0').items.map((i) => i.slug)).toEqual(['k5', 'k4', 'k3', 'k2']);
 	});
-	it('nothing in stock: the category; an unknown product: empty', () => {
-		const none = LIST.map((p) => ({ ...p, inStock: false }));
-		expect(relatedRow(none, 'poison')).toEqual({ heading: 'You may also like', items: [expect.objectContaining({ slug: 'milk' })] });
+	it('a product alone in its category or unknown: empty', () => {
+		expect(relatedRow(LIST, 'tee')).toEqual({ heading: '', items: [] });
 		expect(relatedRow(LIST, 'nope')).toEqual({ heading: '', items: [] });
 	});
 });

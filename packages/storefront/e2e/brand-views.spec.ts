@@ -196,8 +196,10 @@ test.describe('brand views (fixture build)', () => {
 		// category peers from that snapshot, the shirt itself excluded.
 		const gen = CATALOG_DIR ? currentGeneration() : null;
 		const snap = gen ? (JSON.parse(readFileSync(join(gen.dir, 'shop-catalog.json'), 'utf8')) as { products: Array<{ slug: string; tags?: string[] }> }).products : [];
-		const category = snap.find((p) => p.slug === PRODUCT.shirt.slug)?.tags?.[0];
-		const peers = snap.filter((p) => p.slug !== PRODUCT.shirt.slug && category !== undefined && p.tags?.[0] === category).map((p) => `/products/${p.slug}/`);
+		// (the first tag is the category; untagged products share the null category, as relatedRow groups them)
+		const shirt = snap.find((p) => p.slug === PRODUCT.shirt.slug);
+		const category = shirt?.tags?.[0] ?? null;
+		const peers = shirt ? snap.filter((p) => p.slug !== shirt.slug && (p.tags?.[0] ?? null) === category).map((p) => `/products/${p.slug}/`) : [];
 		const hrefs = await page.locator('.sr-related-card').evaluateAll((els) => els.map((e) => e.getAttribute('href')));
 		expect(hrefs.length).toBe(Math.min(4, peers.length));
 		for (const href of hrefs) expect(peers).toContain(href);

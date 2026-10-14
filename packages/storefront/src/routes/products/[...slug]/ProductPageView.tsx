@@ -423,7 +423,6 @@ export const ProductPageView = component$((props: Record<string, any>) => {
               <a key={rp.slug} href={rp.href} class="sr-related-card">
                 <div class="sr-related-img">
                   {rp.image && <OptimizedImage src={rp.image} width={300} height={375} alt={rp.name} class="sr-related-photo" />}
-                  {!rp.inStock && <span class="sr-related-oos">Sold out</span>}
                 </div>
                 <div class="sr-related-name">{titleCase(rp.name)}</div>
                 <div class="sr-related-price">{rp.priceCents > 0 ? formatPrice(rp.priceCents, product.currency || undefined) : ''}</div>
