@@ -138,11 +138,11 @@ The Unix socket is inside the private mode-0700 directory; there is no TCP datab
 
 ```sh
 pm2 start deploy/demo/ecosystem.config.cjs --only sellright-demo
-curl --fail http://127.0.0.1:4310/v1/readyz
+curl --fail http://172.22.0.1:4310/v1/readyz
 pm2 save
 ```
 
-Browse `http://127.0.0.1:4310/shop`; `/enter` creates a short-lived read-only admin session. For remote preview, use an SSH tunnel. The readiness response reports synthetic-data checks, read-only access, cart count and session count.
+The ecosystem binds `sellright-demo` to `DEMO_BIND_HOST=172.22.0.1` (the Docker bridge gateway the production nginx reaches); on a host without that bridge, start it with `DEMO_BIND_HOST=127.0.0.1 pm2 start ... --update-env` or edit the env, and use 127.0.0.1 below. Browse `http://127.0.0.1:4310/shop` (loopback bind); `/enter` creates a short-lived read-only admin session. For remote preview, use an SSH tunnel. The readiness response reports synthetic-data checks, read-only access, cart count and session count.
 
 ## Public Edge
 
