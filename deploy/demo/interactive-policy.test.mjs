@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {interactiveRequest, interactiveBody, sameOriginMutation, demoRouteTarget, allowedDemoHost} from './interactive-policy.mjs';
+import {interactiveRequest, interactiveBody, sameOriginMutation, demoRouteTarget, allowedDemoHost, probeRequest} from './interactive-policy.mjs';
 test('demo exposes bounded commerce, never credentials, uploads or real gateway paths', () => {
   for (const path of ['/v1/admin/settings', '/v1/admin/staff', '/v1/admin/assets', '/v1/admin/webhooks', '/v1/admin/marketing/sync', '/v1/shop/orders/SR1/pay', '/v1/shop/orders/SR1/payment-intent', '/v1/admin/orders/export']) {
     for (const method of ['GET','POST','PATCH','DELETE']) assert.equal(interactiveRequest(method,path),false,path);
@@ -157,4 +157,19 @@ test('outbound-effect and sensitive owner routes stay denied for every method',(
   for(const path of ['/v1/admin/seo/sitemaps/refresh','/v1/admin/seo/indexnow/submit','/v1/admin/seo/config','/v1/admin/settings/payments','/v1/admin/staff/invite','/v1/admin/webhooks','/v1/admin/assets','/v1/admin/orders/import-tracking','/v1/admin/orders/SR1/edit/refund','/v1/admin/sheerid','/v1/admin/system/recovery-kit','/v1/admin/step-up'])
     for(const method of ['POST','PUT','PATCH','DELETE']) assert.equal(interactiveRequest(method,path),false,method+' '+path);
   assert.equal(interactiveRequest('GET','/v1/admin/seo/sitemaps/refresh'),false);
+});
+
+test('cookie-less probes never count as visitors: HEAD, empty and non-browser user agents', () => {
+  const chrome = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36';
+  const safari = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
+  assert.equal(probeRequest('GET', { 'user-agent': chrome }), false);
+  assert.equal(probeRequest('GET', { 'user-agent': safari }), false);
+  assert.equal(probeRequest('HEAD', { 'user-agent': chrome }), true);
+  assert.equal(probeRequest('GET', {}), true);
+  assert.equal(probeRequest('GET', { 'user-agent': '  ' }), true);
+  for (const ua of ['curl/8.5.0', 'Wget/1.21', 'Googlebot/2.1 (+http://www.google.com/bot.html)', 'Mozilla/5.0 (compatible; bingbot/2.0)',
+    'UptimeRobot/2.0', 'Pingdom.com_bot_version_1.4', 'python-requests/2.32', 'Go-http-client/1.1', 'node-fetch/1.0', 'axios/1.7',
+    'Mozilla/5.0 HeadlessChrome/141.0', 'facebookexternalhit/1.1', 'Blackbox Exporter/0.25', 'kube-probe/1.30 healthcheck']) {
+    assert.equal(probeRequest('GET', { 'user-agent': ua }), true, ua);
+  }
 });
