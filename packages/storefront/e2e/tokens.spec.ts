@@ -173,7 +173,7 @@ test.describe('global token computed styles (A18)', () => {
 	test('page background, html background and scrollbar track keep their literal values', async ({ page }) => {
 		await page.goto(PAGE);
 		const { page: p } = await probe(page);
-		expect(p.mainBg).toBe(rgb(244, 244, 245)); // layout.tsx: var(--color-parchment) -> #f4f4f5 in the base
+		expect(p.mainBg).toBe(rgb(244, 244, 245)); // layout.tsx: var(--color-page) -> --brand-color-page #f4f4f5 in the base
 		expect(p.wrapBg).toBe(rgb(244, 244, 245));
 		expect(p.htmlBg).toBe(rgb(26, 26, 26)); // head.tsx critical css: html { background-color: #1a1a1a }
 		expect(p.trackRule).toBe(rgb(10, 10, 10)); // ::-webkit-scrollbar-track { background: #0A0A0A }

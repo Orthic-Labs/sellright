@@ -308,7 +308,7 @@ export default component$(() => {
 				{state.showCart && <ConditionalCart isHomePage={isHomePage} showCart={state.showCart} />}
 				{!isAffiliateSurface && <Menu />}
 				<div style={{ position: 'relative', minHeight: '100vh', backgroundColor: 'var(--color-parchment)' }}>
-					<main id="main-content" class={`flex-1 bg-[var(--color-parchment)] ${isHomePage || isAffiliateSurface ? '' : 'pt-16'}`}>
+					<main id="main-content" class={`flex-1 bg-[var(--color-page)] ${isHomePage || isAffiliateSurface ? '' : 'pt-[var(--header-offset)]'}`}>
 						<Slot />
 					</main>
 					{!isAffiliateSurface && (hasView('shell.footer') ? <BrandFooterMount /> : <Footer />)}

@@ -24,6 +24,13 @@
   --color-card-border: var(--brand-color-card-border);
   --color-image-bg: var(--brand-color-image-bg);
   --color-tint: var(--brand-color-tint);
+  /* The page background behind every route (the root layout's <main>); a brand without its own value keeps parchment. */
+  --color-page: var(--brand-color-page, var(--brand-color-parchment));
+}
+
+/* The fixed header's height, which the root layout's <main> clears (4rem unless the brand's header differs). */
+:root {
+  --header-offset: var(--brand-header-offset, 4rem);
 }
 
 /* SheerID iframe styling - center the form */
@@ -267,7 +274,44 @@
     }
   }
 
-  /* ── Base element styles ── */
+  /* Base element styles: @layer base below (element defaults, so utilities and brand layers can override them). */
+
+  .transform,
+  [style*="transform"],
+  .animate-fade-in,
+  .animate-scale-in,
+  .animate-pulse-once {
+    -webkit-font-smoothing: subpixel-antialiased;
+    -moz-osx-font-smoothing: auto;
+    transform: translateZ(0);
+    will-change: transform;
+  }
+
+  [style*="opacity"],
+  .opacity-0, .opacity-25, .opacity-50, .opacity-75 {
+    -webkit-font-smoothing: subpixel-antialiased;
+    -moz-osx-font-smoothing: auto;
+  }
+
+  section[ref], .lazy-section, [data-lazy] {
+    -webkit-font-smoothing: subpixel-antialiased;
+    -moz-osx-font-smoothing: auto;
+    contain: layout style;
+  }
+
+  h2 span[class*="text-"],
+  h1 span[class*="text-"],
+  h3 span[class*="text-"] {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: geometricPrecision;
+  }
+}
+
+/* Base element styles (moved from @layer utilities): element defaults belong in the base layer. In the utilities layer they
+   beat every base- and components-layer rule, so a brand theme could not restore its own body weight or let a span inherit
+   its parent's display font; utility classes and unlayered component styles override them as before. */
+@layer base {
 
   h1, h2, h3, h4, h5, h6 {
     font-family: var(--font-display);
@@ -319,37 +363,6 @@
     font-family: var(--font-body);
     -webkit-font-smoothing: subpixel-antialiased;
     -moz-osx-font-smoothing: auto;
-  }
-
-  .transform,
-  [style*="transform"],
-  .animate-fade-in,
-  .animate-scale-in,
-  .animate-pulse-once {
-    -webkit-font-smoothing: subpixel-antialiased;
-    -moz-osx-font-smoothing: auto;
-    transform: translateZ(0);
-    will-change: transform;
-  }
-
-  [style*="opacity"],
-  .opacity-0, .opacity-25, .opacity-50, .opacity-75 {
-    -webkit-font-smoothing: subpixel-antialiased;
-    -moz-osx-font-smoothing: auto;
-  }
-
-  section[ref], .lazy-section, [data-lazy] {
-    -webkit-font-smoothing: subpixel-antialiased;
-    -moz-osx-font-smoothing: auto;
-    contain: layout style;
-  }
-
-  h2 span[class*="text-"],
-  h1 span[class*="text-"],
-  h3 span[class*="text-"] {
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-    text-rendering: geometricPrecision;
   }
 }
 
