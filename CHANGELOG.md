@@ -235,6 +235,7 @@ must update the matching changelog in the same push.
 
 ### Fixed
 
+- Storefront: snapshot guard. A document-shaped path (`.html`/`.htm`, optionally `.gz`/`.br`, judged on the decoded, normalised path) is a plain no-store `404 text/plain` before the static handlers and the canonical redirect: `/shop/index%2ehtml` no longer gets a 301 and `/shop/index.html` no longer renders the HTML 404 page (rollout store profile samples `guard:*`, as the Rotten store answers today).
 - Storefront: the cart drawer focuses its panel once it has rendered (the focus call ran before the drawer existed, so Escape was not captured and the panel never showed its focus ring).
 - Storefront: two optional brand tokens for the root layout: `--brand-color-page` (the page background behind every route, default the parchment colour) and `--brand-header-offset` (the header height `<main>` clears, default 4rem); a brand whose header is not 64px tall no longer starts every page 4px off.
 - Storefront: the base element typography (h1-h6, body/p/li/span/div, strong, form controls) moved from `@layer utilities` to `@layer base`. As utilities they overrode every base- and components-layer rule, so a brand theme could not set its body weight or let a span inherit its parent's display font; utility classes and unlayered component styles still override them.
