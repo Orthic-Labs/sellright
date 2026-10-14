@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { resolveVariant, selectionFromQuery, type ModelProduct } from '~/platform/controllers/product-model';
-import { absoluteOn, productGroupSchema, skuStem, withProductFacts } from './product-jsonld';
+import { absoluteOn, productGroupSchema, productOgMeta, skuStem, withProductFacts } from './product-jsonld';
 import type { JsonLdSchema } from '~/types/seo.types';
 
 const ORIGIN = 'https://shop.example';
@@ -84,6 +84,25 @@ describe('product JSON-LD', () => {
 		const g = productGroupSchema(model(), { siteOrigin: ORIGIN, brandName: 'B', variantUrls: false }) as unknown as Record<string, any>;
 		expect(g.hasVariant.map((v: any) => v.url)).toEqual([`${ORIGIN}/shop/tee/`, `${ORIGIN}/shop/tee/`]);
 		expect(g.hasVariant[0].offers.url).toBe(`${ORIGIN}/shop/tee/`);
+	});
+
+	it('ProductGroup: colour comes first in the variant name and URL even when the model lists size first', () => {
+		const m = model();
+		m.groups = [m.groups[1], m.groups[0]];
+		m.variants = m.variants.map((v) => ({ ...v, options: [...v.options].reverse() }));
+		const g = productGroupSchema(m, { siteOrigin: ORIGIN, brandName: 'B' }) as unknown as Record<string, any>;
+		expect(g.hasVariant[0].name).toBe('Core tee - Midnight black - Small');
+		expect(g.hasVariant[0].url).toBe(`${ORIGIN}/shop/tee/?color=midnight-black&size=small`);
+	});
+
+	it('product og meta: live offer price and availability; no availability without the live JSON-LD', () => {
+		const live = { offers: { price: '75.00', priceCurrency: 'USD', availability: 'https://schema.org/InStock' } };
+		expect(productOgMeta(live, model(), 'Brand')).toEqual({ price: '75.00', currency: 'USD', brand: 'Brand', condition: 'new', availability: 'in stock' });
+		expect(productOgMeta({ offers: { price: 70, availability: 'https://schema.org/OutOfStock' } }, model(), 'B').availability).toBe('out of stock');
+		const none = productOgMeta(null, model(), 'Brand');
+		expect(none).toEqual({ price: '60.00', currency: 'USD', brand: 'Brand', condition: 'new' });
+		expect('availability' in none).toBe(false);
+		expect('availability' in productOgMeta({ offers: { price: '75.00' } }, model(), 'B')).toBe(false);
 	});
 
 	it('PDP facts: material, colours, sizes, brand, condition, plain description, absolute images; offers untouched', () => {

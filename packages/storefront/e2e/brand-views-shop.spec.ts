@@ -85,6 +85,8 @@ test.describe('brand views PR2 (fixture build)', () => {
 		expect((await browserStock(mark)).map((c) => c.path.split('/')[5])).toEqual(['e2e-shirt']);
 		const jsonLd = await page.locator('script[type="application/ld+json"]').allTextContents();
 		expect(jsonLd.some((j) => j.includes('"FAQPage"'))).toBe(true);
+		await expect(page.locator('meta[property="product:condition"]')).toHaveAttribute('content', 'new');
+		await expect(page.locator('meta[property="product:price:amount"]')).toHaveAttribute('content', /^\d+\.\d{2}$/);
 		const product = jsonLd.map((j) => JSON.parse(j)).find((j) => j['@type'] === 'Product');
 		if (product) expect(product.material).toBe('Fixture cotton'); // the declared fact joins the API's product JSON-LD
 		const before = apiLog.mark();

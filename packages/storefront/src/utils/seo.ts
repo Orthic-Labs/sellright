@@ -39,6 +39,8 @@ interface SEOConfig {
    * that static theme (offline/dev, or a caller not yet threaded through).
    */
   identity?: SrStoreIdentity;
+  /** Open Graph product tags (product:price:amount, :currency, :brand, :condition, :availability), product pages only. */
+  productMeta?: { price?: string; currency?: string; brand?: string; condition?: string; availability?: string };
 }
 
 export const createSEOHead = ({
@@ -53,6 +55,7 @@ export const createSEOHead = ({
   links = [],
   schemas = [],
   identity = identityFromStaticTheme(),
+  productMeta,
 }: SEOConfig): DocumentHead => {
   const SITE_DOMAIN = identity.siteOrigin;
   const DEFAULT_IMAGE = `${SITE_DOMAIN}${identity.ogImageUrl}`;
@@ -98,6 +101,11 @@ export const createSEOHead = ({
       ...(articleMeta?.section ? [{ property: 'article:section', content: articleMeta.section }] : []),
       ...(articleMeta?.author ? [{ property: 'article:author', content: articleMeta.author }] : []),
       ...((articleMeta?.tags || []).map((t) => ({ property: 'article:tag', content: t }))),
+      ...(productMeta?.price ? [{ property: 'product:price:amount', content: productMeta.price }] : []),
+      ...(productMeta?.price && productMeta.currency ? [{ property: 'product:price:currency', content: productMeta.currency }] : []),
+      ...(productMeta?.availability ? [{ property: 'product:availability', content: productMeta.availability }] : []),
+      ...(productMeta?.condition ? [{ property: 'product:condition', content: productMeta.condition }] : []),
+      ...(productMeta?.brand ? [{ property: 'product:brand', content: productMeta.brand }] : []),
       // Discourage gen-AI training on our content/images (advisory). Does NOT block
       // AI-search citation — that is governed by crawler access in robots.txt, which stays open.
       { name: 'robots', content: noindex ? 'noindex, nofollow, noai, noimageai' : 'noai, noimageai' },
