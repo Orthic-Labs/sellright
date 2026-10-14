@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ModelProduct } from '~/platform/controllers/product-model';
+import { resolveVariant, selectionFromQuery, type ModelProduct } from '~/platform/controllers/product-model';
 import { absoluteOn, productGroupSchema, skuStem, withProductFacts } from './product-jsonld';
 import type { JsonLdSchema } from '~/types/seo.types';
 
@@ -51,6 +51,33 @@ describe('product JSON-LD', () => {
 		expect(g.hasVariant[1].offers.price).toBe('60.00');
 		expect(g.hasVariant[1].image).toBe(`${ORIGIN}/assets/a/tee.png`);
 		expect(JSON.stringify(g)).not.toMatch(/availability|InStock|OutOfStock/);
+	});
+
+	it('ProductGroup: offer prices follow the effective price rules (pre-order, sale, zero sale)', () => {
+		const m = model();
+		m.variants[0] = { ...m.variants[0], isPreOrder: true, preOrderPriceCents: 5000, salePriceCents: 4000 };
+		m.variants[1] = { ...m.variants[1], salePriceCents: 0 };
+		const g = productGroupSchema(m, { siteOrigin: ORIGIN, brandName: 'B' }) as unknown as Record<string, any>;
+		expect(g.hasVariant.map((v: any) => v.offers.price)).toEqual(['50.00', '75.00']);
+	});
+
+	it('ProductGroup: every variant URL names each option by its group code and resolves back to that variant', () => {
+		const m = model();
+		m.groups = [
+			{ code: 'colour', name: 'Colour', values: [{ code: 'black', name: 'Black' }] },
+			{ code: 'fit', name: 'Fit', values: [{ code: 'slim', name: 'Slim' }, { code: 'relaxed', name: 'Relaxed' }] },
+		];
+		m.variants = [
+			{ ...m.variants[0], sku: 'F-1', options: [{ group: 'colour', value: 'black' }, { group: 'fit', value: 'slim' }] },
+			{ ...m.variants[1], sku: 'F-2', options: [{ group: 'colour', value: 'black' }, { group: 'fit', value: 'relaxed' }] },
+		];
+		const g = productGroupSchema(m, { siteOrigin: ORIGIN, brandName: 'B' }) as unknown as Record<string, any>;
+		expect(g.hasVariant.map((v: any) => v.url)).toEqual([`${ORIGIN}/shop/tee/?colour=black&fit=slim`, `${ORIGIN}/shop/tee/?colour=black&fit=relaxed`]);
+		expect(g.hasVariant[0].color).toBe('Black');
+		for (const v of g.hasVariant) {
+			const selected = selectionFromQuery(m, new URL(v.url).searchParams);
+			expect(resolveVariant(m, selected)?.sku).toBe(v.sku);
+		}
 	});
 
 	it('PDP facts: material, colours, sizes, brand, condition, plain description, absolute images; offers untouched', () => {

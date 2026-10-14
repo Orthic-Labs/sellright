@@ -2,7 +2,7 @@
 // (`facts.material`); every commerce field comes from the catalog model or the API's own product JSON-LD, never from brand code.
 // Stock: the shop page's ProductGroup offers carry no availability (the page has no live stock read at render, and missing stock is
 // never stated as in stock); the product page's availability stays the API's per-request value.
-import type { ModelProduct } from '~/platform/controllers/product-model';
+import { effectivePriceOf, type ModelProduct } from '~/platform/controllers/product-model';
 import { stripHtml } from '~/utils/sanitize';
 import type { JsonLdSchema } from '~/types/seo.types';
 
@@ -55,18 +55,19 @@ export function productGroupSchema(model: ModelProduct, ctx: { siteOrigin: strin
 	const variesBy = model.groups.map((g) => kindOf(g.code)).filter((k): k is 'color' | 'size' => !!k).map((k) => VARIES_BY[k]);
 	const stem = skuStem(model.variants.map((v) => v.sku));
 	const hasVariant = model.variants.map((v) => {
+		// The query names every option by its group code, as the product page reads it back (selectionFromQuery).
 		const named: { color?: string; size?: string } = {};
 		const query = new URLSearchParams();
 		for (const pair of v.options) {
-			const kind = kindOf(pair.group);
 			const value = groupIndex.get(pair.group)?.values.find((x) => x.code === pair.value);
-			if (!kind || !value) continue;
-			named[kind] = value.name;
-			query.set(kind, value.code);
+			if (!value) continue;
+			query.set(pair.group, value.code);
+			const kind = kindOf(pair.group);
+			if (kind) named[kind] = value.name;
 		}
 		const variantUrl = query.size ? `${url}?${query.toString()}` : url;
 		const image = v.images[0]?.url ?? model.images[0]?.url;
-		const price = v.salePriceCents ?? v.priceCents;
+		const price = effectivePriceOf(v);
 		return {
 			'@type': 'Product',
 			name: [model.name, ...v.options.map((p) => groupIndex.get(p.group)?.values.find((x) => x.code === p.value)?.name).filter(Boolean)].join(' - '),
