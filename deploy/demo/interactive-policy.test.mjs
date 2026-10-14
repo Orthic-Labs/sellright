@@ -169,7 +169,7 @@ test('cookie-less probes never count as visitors: HEAD, empty and non-browser us
   assert.equal(probeRequest('GET', { 'user-agent': '  ' }), true);
   for (const ua of ['curl/8.5.0', 'Wget/1.21', 'Googlebot/2.1 (+http://www.google.com/bot.html)', 'Mozilla/5.0 (compatible; bingbot/2.0)',
     'UptimeRobot/2.0', 'Pingdom.com_bot_version_1.4', 'python-requests/2.32', 'Go-http-client/1.1', 'node-fetch/1.0', 'axios/1.7',
-    'Mozilla/5.0 HeadlessChrome/141.0', 'facebookexternalhit/1.1', 'Blackbox Exporter/0.25', 'kube-probe/1.30 healthcheck']) {
+    'Mozilla/5.0 HeadlessChrome/141.0', 'facebookexternalhit/1.1', 'Blackbox Exporter/0.25', 'kube-probe/1.30', 'ELB-HealthChecker/2.0', 'GoogleHC/1.0']) {
     assert.equal(probeRequest('GET', { 'user-agent': ua }), true, ua);
   }
 });

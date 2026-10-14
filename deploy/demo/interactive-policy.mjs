@@ -216,7 +216,7 @@ export function demoRouteTarget(pathname) {
 // They must never provision a visitor tenant: each tenant is a seeded store and the demo caps them (capacity was once exhausted
 // by cookie-less health checks). HEAD never provisions; a GET whose user agent is empty or a known non-browser/bot agent doesn't
 // either. Real browsers send a Mozilla-style UA and are unaffected; a misclassified browser just sees the probe page.
-const PROBE_UA = /bot\b|bot\/|crawl|spider|slurp|monitor|uptime|healthcheck|health-check|pingdom|statuscake|checkly|datadog|newrelic|nagios|zabbix|prometheus|blackbox|curl\/|wget\/|httpie|python-requests|python-urllib|aiohttp|go-http-client|okhttp|java\/|libwww|node-fetch|undici|axios|headlesschrome|facebookexternalhit|embedly|preview|validator/i;
+const PROBE_UA = /bot\b|bot\/|crawl|spider|slurp|monitor|uptime|healthcheck|kube-probe|elb-healthchecker|googlehc|consul|health-check|pingdom|statuscake|checkly|datadog|newrelic|nagios|zabbix|prometheus|blackbox|curl\/|wget\/|httpie|python-requests|python-urllib|aiohttp|go-http-client|okhttp|java\/|libwww|node-fetch|undici|axios|headlesschrome|facebookexternalhit|embedly|preview|validator/i;
 export function probeRequest(method, headers = {}) {
   if (method === 'HEAD') return true;
   const ua = String(headers['user-agent'] ?? '').trim();
