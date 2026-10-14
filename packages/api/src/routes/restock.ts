@@ -43,6 +43,7 @@ import { restockNotify } from '../email/templates-contact.js';
 import { env } from '../env.js';
 import { log } from '../lib/logger.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
+import { productPath, seoConfigFromStore } from '../seo/config.js';
 
 export const restockRoutes = new OpenAPIHono();
 
@@ -59,8 +60,9 @@ function cancelUrl(base: string, token: string): string {
   return `${base.replace(/\/$/, '')}/v1/shop/restock-request/cancel/${token}`;
 }
 
-function productUrl(base: string, slug: string): string {
-  return `${base.replace(/\/$/, '')}/products/${slug}`;
+/** The product page on the store's storefront, by the store's own SEO config (seo.productUrlPattern; default `/products/{slug}/`). */
+function productUrl(base: string, store: { name: string; config?: unknown }, slug: string): string {
+  return `${base.replace(/\/$/, '')}${productPath(seoConfigFromStore({ name: store.name, config: store.config ?? null }), slug)}`;
 }
 
 // ── POST /v1/shop/restock-request ──────────────────────────────────────────
@@ -228,7 +230,7 @@ async function processRestockTx(
   tx: Tx,
   storeId: string,
   variantId: string,
-  store: { name: string; currency: string },
+  store: { name: string; currency: string; config?: unknown },
 ): Promise<number> {
   // Guard: only notify when the variant is actually available right now.
   // Makes this safe to invoke on any stock write — an OOS→OOS or
@@ -261,7 +263,7 @@ async function processRestockTx(
     const rendered = restockNotify(ctx, {
       productName: row.product_name,
       variantName: row.variant_name,
-      productUrl: productUrl(storefront, row.product_slug),
+      productUrl: productUrl(storefront, store, row.product_slug),
       cancelUrl: cancelUrl(storefront, row.token),
     });
     await enqueueEmail(tx, storeId, {
@@ -316,10 +318,10 @@ async function processRestockTx(
     const rendered = restockNotify(ctx, {
       productName: info.product_name,
       variantName: info.variant_name,
-      productUrl: productUrl(storefront, info.product_slug),
+      productUrl: productUrl(storefront, store, info.product_slug),
       // Subscriber rows' own unsubscribe capability is already consumed by
       // this claim — link back to the product instead.
-      cancelUrl: productUrl(storefront, info.product_slug),
+      cancelUrl: productUrl(storefront, store, info.product_slug),
     });
     await enqueueEmail(tx, storeId, {
       kind: 'restock_notify',
@@ -340,8 +342,8 @@ async function processRestockTx(
  */
 export async function notifyRestock(storeId: string, variantId: string): Promise<number> {
   // `store` is RLS-exempt — resolve it before opening the scoped txn.
-  const st = (await pool.query<{ name: string; currency: string }>(
-    'SELECT name, currency FROM store WHERE id = $1 LIMIT 1', [storeId],
+  const st = (await pool.query<{ name: string; currency: string; config: unknown }>(
+    'SELECT name, currency, config FROM store WHERE id = $1 LIMIT 1', [storeId],
   )).rows[0];
   if (!st) return 0;
   const n = await withStore(storeId, (tx) => processRestockTx(tx, storeId, variantId, st));
@@ -357,7 +359,7 @@ export async function notifyRestock(storeId: string, variantId: string): Promise
  */
 export async function sweepRestockEvents(opts: { limit?: number } = {}): Promise<{ events: number; notified: number }> {
   const limit = Math.min(Math.max(1, opts.limit ?? 200), 1000);
-  const stores = await pool.query<{ id: string; name: string; currency: string }>('SELECT id, name, currency FROM store');
+  const stores = await pool.query<{ id: string; name: string; currency: string; config: unknown }>('SELECT id, name, currency, config FROM store');
   let events = 0;
   let notified = 0;
   for (const st of stores.rows) {

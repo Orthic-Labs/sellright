@@ -32,10 +32,13 @@ describe('onCatalogCacheChanged', () => {
     ]);
   });
 
-  it('also purges the specific product page when productSlug is given', () => {
+  it('also purges the specific product page at the path the caller resolved from the store config', () => {
     envMock.STOREFRONT_URL = 'https://acme.example.com';
-    onCatalogCacheChanged('acme', { productSlug: 'widget' });
+    onCatalogCacheChanged('acme', { productPath: '/products/widget/' });
     expect(purgeSpy).toHaveBeenCalledWith('acme', expect.arrayContaining(['https://acme.example.com/products/widget/']));
+    onCatalogCacheChanged('acme', { productPath: '/shop/widget/' });
+    expect(purgeSpy).toHaveBeenLastCalledWith('acme', expect.arrayContaining(['https://acme.example.com/shop/widget/']));
+    expect(purgeSpy.mock.lastCall?.[1]).not.toContain('https://acme.example.com/products/widget/');
   });
 
   it('prefers a per-store origin override over the single fallback', () => {

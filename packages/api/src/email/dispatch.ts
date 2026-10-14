@@ -41,6 +41,7 @@ import { wakeEmailDelivery } from './wake.js';
 import { resolveEmailTheme } from './theme.js';
 import { env } from '../env.js';
 import type { Tx } from '../db/client.js';
+import { productPath, seoConfigFromStore } from '../seo/config.js';
 
 /** Email outbox `kind` values. 'order-refund-confirmation' is the cross-lane
  *  PAR-03 contract key — the payments lane enqueues under exactly this key at
@@ -313,7 +314,9 @@ export async function enqueueReviewApproved(tx: Tx, storeId: string, store: Stor
   productName: string; productSlug: string; points: number; balance: number | null; dedupeKey?: string;
 }): Promise<boolean> {
   const ctx = emailCtx(store);
-  const rendered = reviewApproved(ctx, { ...data, productUrl: `${ctx.storefrontUrl}/products/${encodeURIComponent(data.productSlug)}#reviews` });
+  // The store's own product path (seo.productUrlPattern), as the sitemap and JSON-LD use it.
+  const path = productPath(seoConfigFromStore({ name: store.name, config: store.config }), data.productSlug);
+  const rendered = reviewApproved(ctx, { ...data, productUrl: `${ctx.storefrontUrl}${path}#reviews` });
   return enqueueEmail(tx, storeId, {
     kind: EMAIL_KIND.REVIEW_APPROVED,
     dedupeKey: data.dedupeKey,
