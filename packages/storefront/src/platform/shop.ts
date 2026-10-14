@@ -4,8 +4,11 @@ import { routeLoader$, type StaticGenerateHandler } from '@qwik.dev/router';
 import { loadBrowseCatalog } from '~/services/browse-catalog';
 import { generateBreadcrumbSchema } from '~/services/seo-schemas';
 import { createSEOHead } from '~/utils/seo';
-import { siteUrl } from '~/theme/theme.config';
+import { siteUrl, theme } from '~/theme/theme.config';
 import { hasView } from '~/platform/gateway';
+import { DETAIL_PRODUCTS } from '~/platform/brand-data';
+import { useConfiguratorDetail, type ConfiguratorDetail } from '~/platform/configurator-detail';
+import { productGroupSchema } from '~/platform/product-jsonld';
 
 // ── Catalog manifest loader (SSR) ──────────────────────────────
 // Reads the pre-generated shop-catalog.json at SSR time, normalized to the
@@ -25,8 +28,14 @@ export const useCatalogLoader = routeLoader$(async ({ error }) => {
  }
 });
 
-export const head = ({ url }: { url: URL }) => {
+export const head = ({ url, resolveValue }: { url: URL; resolveValue?: (loader: unknown) => unknown }) => {
  const searchTerm = url.searchParams.get('q') || '';
+ // A branded shop (route.shop view): one platform-built ProductGroup per configurator product, from the page's own catalog
+ // generation, with the brand's declared facts (no availability: platform/product-jsonld.ts).
+ const configurator = hasView('route.shop') && resolveValue ? (resolveValue(useConfiguratorDetail) as ConfiguratorDetail | null) : null;
+ const groups = (configurator?.detail ?? []).map((m) =>
+  productGroupSchema(m, { siteOrigin: siteUrl, brandName: theme.storeName, facts: DETAIL_PRODUCTS.find((p) => p.slug === m.slug)?.facts }),
+ );
 
  const breadcrumbSchema = generateBreadcrumbSchema([
   { name: 'Home', url: `${siteUrl}/` },
@@ -50,6 +59,7 @@ export const head = ({ url }: { url: URL }) => {
     url: `${siteUrl}/shop`,
     description: 'Browse our complete product collection.',
    }] : []),
+   ...(!searchTerm ? groups : []),
   ],
  });
 };

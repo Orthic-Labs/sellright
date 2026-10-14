@@ -345,7 +345,7 @@ const BasePrivacyPage = component$(() => {
 export default hasView('route.content') ? BrandContentMount : BasePrivacyPage;
 
 export const head = ({ resolveValue }: { resolveValue: any }) => {
- const identity = resolveValue(useStoreIdentityLoader);
+ const identity = resolveValue(useStoreIdentityLoader).identity;
  return createSEOHead({
  title: 'Privacy Policy',
  description: `Comprehensive privacy policy for ${identity.storeName}. GDPR and CCPA compliant. Learn how we protect your data and respect your privacy rights.`,

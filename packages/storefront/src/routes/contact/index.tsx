@@ -162,7 +162,7 @@ const BaseContactPage = component$(() => {
 export default hasView('route.contact') ? BrandContactMount : BaseContactPage;
 
 export const head = ({ resolveValue }: { resolveValue: any }) => {
-	const identity = resolveValue(useStoreIdentityLoader);
+	const identity = resolveValue(useStoreIdentityLoader).identity;
 	return createSEOHead({
 		title: 'Contact & About Us',
 		description: `Get in touch with ${identity.storeName} for product inquiries, support, or questions. Learn about our policies and commitment to quality.`,

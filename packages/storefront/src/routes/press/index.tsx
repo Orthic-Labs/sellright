@@ -43,7 +43,7 @@ const BasePressPage = component$(() => {
 export default hasView('route.content') ? BrandContentMount : BasePressPage;
 
 export const head = ({ resolveValue }: { resolveValue: any }) => {
-  const identity = resolveValue(useStoreIdentityLoader);
+  const identity = resolveValue(useStoreIdentityLoader).identity;
   return createSEOHead({
     title: `Press — ${identity.storeName}`,
     description: `Press inquiries, media kits, and review samples for ${identity.storeName}.`,

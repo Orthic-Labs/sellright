@@ -25,7 +25,10 @@
               }
             ]
           }
-        ]
+        ],
+        "facts": {
+          "material": "Fixture cotton"
+        }
       },
       {
         "key": "oos",
@@ -45,5 +48,13 @@
   "operational": {
     "cartSeedPath": "/checkout/fixture-link/",
     "analyticsPath": "/api/analytics/fixture-sink/"
+  },
+  "copy": {
+    "cart": {
+      "emptyTitle": "Your fixture bag is empty"
+    }
+  },
+  "cart": {
+    "openAfterAddMs": 300
   }
 }

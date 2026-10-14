@@ -243,8 +243,9 @@ export default hasView('route.home') ? BrandHomeMount : BaseHomePage;
 
 export const head = ({ resolveValue }: { resolveValue: any }) => {
   const schemas = resolveValue(useOrganizationJsonLd) as unknown as JsonLdSchema[];
-  const identity = resolveValue(useStoreIdentityLoader);
-  return buildHomeHead(schemas, identity, HeroImage_1024);
+  const identity = resolveValue(useStoreIdentityLoader).identity;
+  // A brand home view renders its own hero (and preloads it through head.json): the base hero is not on the page.
+  return buildHomeHead(schemas, identity, hasView('route.home') ? null : HeroImage_1024);
 };
 
 import type { StaticGenerateHandler } from '@qwik.dev/router';

@@ -95,11 +95,12 @@ export const useHomeCollections = routeLoader$(async () => {
 });
 
 /** SEO head body for the homepage. The route's `head` resolves the loaders and passes the hero preload href in, so the
- *  brand-replaceable hero asset import stays in the presentation file. */
+ *  brand-replaceable hero asset import stays in the presentation file. null (a brand home view, which preloads its own hero
+ *  through head.json imagePreloads): no base hero preload. */
 export const buildHomeHead = (
   schemas: JsonLdSchema[],
   identity: any,
-  heroPreloadHref: string,
+  heroPreloadHref: string | null,
 ) =>
   createSEOHead({
     title: identity.storeName,
@@ -108,8 +109,6 @@ export const buildHomeHead = (
     image: `${identity.siteOrigin}${identity.ogImageUrl}`,
     ogUrl: `${identity.siteOrigin}/`,
     identity,
-    links: [
-      { rel: 'preload', as: 'image', type: 'image/avif', href: heroPreloadHref },
-    ],
+    links: heroPreloadHref ? [{ rel: 'preload', as: 'image', type: 'image/avif', href: heroPreloadHref }] : [],
     schemas,
   });

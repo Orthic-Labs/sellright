@@ -1,6 +1,5 @@
 /* Font faces */
 @import 'tailwindcss';
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 /* A18: brand token values live in brand/tokens.css (--brand-*); the names below map them to the public tokens. */
 @import './brand/tokens.css';
 

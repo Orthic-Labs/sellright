@@ -22,6 +22,7 @@ import { stripHtml } from '~/utils/sanitize';
 import { siteUrl, theme } from '~/theme/theme.config';
 import type { JsonLdSchema } from '~/types/seo.types';
 import { useProductJsonLd } from '~/platform/product';
+import { withProductFacts } from '~/platform/product-jsonld';
 
 const SAFE_SLUG = /^[a-z0-9][a-z0-9\-_]*$/;
 
@@ -132,7 +133,10 @@ export const brandProductHead = ({ resolveValue }: { resolveValue: (loader: unkn
 			{ name: member?.breadcrumbName ?? product.name, url: canonical },
 		]),
 	];
-	if (jsonLd) schemas.push(withAggregateRating(withCanonicalUrls(jsonLd, canonical) as Record<string, unknown>, product.rating) as JsonLdSchema);
+	if (jsonLd) {
+		const facts = withProductFacts(withCanonicalUrls(jsonLd, canonical), product, { siteOrigin: siteUrl, brandName: theme.storeName, facts: member?.facts });
+		schemas.push(withAggregateRating(facts as Record<string, unknown>, product.rating) as JsonLdSchema);
+	}
 	for (const s of member?.schemas ?? []) schemas.push(s as unknown as JsonLdSchema);
 	const image = product.images[0]?.url;
 	return createSEOHead({

@@ -204,7 +204,7 @@ const BaseTermsPage = component$(() => {
 export default hasView('route.content') ? BrandContentMount : BaseTermsPage;
 
 export const head = ({ resolveValue }: { resolveValue: any }) => {
- const identity = resolveValue(useStoreIdentityLoader);
+ const identity = resolveValue(useStoreIdentityLoader).identity;
  return createSEOHead({
  title: 'Terms of Service',
  description: `Terms of Service for ${identity.storeName}. Rules, guidelines, and agreements for using our website and purchasing our products.`,

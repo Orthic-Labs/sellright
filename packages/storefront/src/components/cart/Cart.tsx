@@ -15,6 +15,7 @@ import { isLineAvailable } from '~/sellright/types/cart';
 import { fetchCartShippingMethod } from './cart-shipping';
 import { policySentence } from '~/theme/theme.config';
 import { useStoreIdentityLoader } from '~/routes/layout';
+import { BRAND_COPY } from '~/platform/brand-data';
 
 export default component$(() => {
 	// WS-C: runtime store identity (policies/trust-bar copy), per-request.
@@ -281,8 +282,8 @@ export default component$(() => {
 									<svg class="w-10 h-10 text-[#C9C3BA] mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 										<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"/>
 									</svg>
-									<p class="font-heading text-[12px] tracking-[0.14em] uppercase text-[#1A1A1A] mb-1.5">Your cart is empty</p>
-									<p class="text-[12px] text-[#9A9288] mb-6 leading-relaxed">Browse our collection to find something you'll love.</p>
+									<p class="font-heading text-[12px] tracking-[0.14em] uppercase text-[#1A1A1A] mb-1.5">{BRAND_COPY.cart?.emptyTitle ?? 'Your cart is empty'}</p>
+									<p class="text-[12px] text-[#9A9288] mb-6 leading-relaxed">{BRAND_COPY.cart?.emptyBody ?? "Browse our collection to find something you'll love."}</p>
 									<button
 										class="px-8 py-2.5 bg-[#1A1A1A] text-white text-[11px] tracking-[0.18em] uppercase hover:bg-[#8a6d4a] transition-colors duration-300 cursor-pointer"
 										onClick$={async () => {

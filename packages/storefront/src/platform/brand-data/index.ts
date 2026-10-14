@@ -18,6 +18,10 @@ export interface BrandRoutes {
 		productQuery?: { params: string[]; values: Record<string, string> };
 	};
 	operational?: { cartSeedPath?: string; analyticsPath?: string };
+	/** Plain-text copy for base components a brand does not replace with a view (no markup: rendered as text). */
+	copy?: { cart?: { emptyTitle?: string; emptyBody?: string } };
+	/** The configurator's cart drawer opens this long after a successful add (0, the default, opens it at once). */
+	cart?: { openAfterAddMs?: number };
 }
 
 export interface DetailProduct {
@@ -26,9 +30,13 @@ export interface DetailProduct {
 	head?: { title: string; description: string };
 	breadcrumbName?: string;
 	schemas?: StaticSchema[];
+	/** Plain product facts the platform adds to its own commerce JSON-LD (platform/product-jsonld.ts). */
+	facts?: { material?: string };
 }
 
 export const BRAND_HEAD: BrandHeadSpec = (brandHead as BrandHeadSpec | null) ?? {};
 export const BRAND_ROUTES: BrandRoutes | null = (brandRoutes as BrandRoutes | null) ?? null;
 export const DECLARED_CONTENT: readonly DeclaredContent[] = BRAND_ROUTES?.content ?? [];
 export const DETAIL_PRODUCTS: readonly DetailProduct[] = BRAND_ROUTES?.shop?.detailProducts ?? [];
+export const BRAND_COPY: NonNullable<BrandRoutes['copy']> = BRAND_ROUTES?.copy ?? {};
+export const CART_OPEN_AFTER_ADD_MS: number = BRAND_ROUTES?.cart?.openAfterAddMs ?? 0;

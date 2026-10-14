@@ -41,7 +41,7 @@ const TAB =
 	'pb-2 mr-6 text-[13px] tracking-[0.08em] uppercase bg-transparent border-b-2 -mb-px cursor-pointer';
 
 export const head = ({ params, resolveValue }: { params: { code: string }; resolveValue: any }) => {
-	const identity = resolveValue(useStoreIdentityLoader);
+	const identity = resolveValue(useStoreIdentityLoader).identity;
 	return createSEOHead({
 		title: 'Pay Order Balance',
 		description: `Pay the balance on your ${identity.storeName} order${params?.code ? ' #' + params.code : ''}.`,

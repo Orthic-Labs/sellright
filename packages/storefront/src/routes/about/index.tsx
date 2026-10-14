@@ -52,7 +52,7 @@ const BaseAboutPage = component$(() => {
 export default hasView('route.content') ? BrandContentMount : BaseAboutPage;
 
 export const head = ({ resolveValue }: { resolveValue: any }) => {
-  const identity = resolveValue(useStoreIdentityLoader);
+  const identity = resolveValue(useStoreIdentityLoader).identity;
   return createSEOHead({
     title: `About ${identity.storeName}`,
     description: identity.tagline,

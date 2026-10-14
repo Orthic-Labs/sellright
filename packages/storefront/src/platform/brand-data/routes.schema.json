@@ -115,6 +115,13 @@
                 "maxLength": 80,
                 "pattern": "^[^<]*$"
               },
+              "facts": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "material": { "type": "string", "minLength": 1, "maxLength": 120, "pattern": "^[^<>]*$" }
+                }
+              },
               "schemas": {
                 "type": "array",
                 "maxItems": 20,
@@ -151,6 +158,27 @@
             }
           }
         }
+      }
+    },
+    "copy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cart": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "emptyTitle": { "type": "string", "minLength": 1, "maxLength": 60, "pattern": "^[^<>]*$" },
+            "emptyBody": { "type": "string", "minLength": 1, "maxLength": 160, "pattern": "^[^<>]*$" }
+          }
+        }
+      }
+    },
+    "cart": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "openAfterAddMs": { "type": "integer", "minimum": 0, "maximum": 2000 }
       }
     },
     "operational": {
