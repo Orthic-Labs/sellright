@@ -46,6 +46,15 @@ describe('resolveHead: precedence (per-path declaration > route head > head.json
 		expect(meta(r.head, 'description').map((m) => m.content)).toEqual(['Route description']);
 	});
 
+	it('og:image:alt is the page title and follows a declared title; no fixed og:image width/height', () => {
+		const head = routeHead({ title: 'Shirts', description: 'D', image: '/social-image.jpg' });
+		expect(meta(head as never, 'og:image:alt').map((m) => m.content)).toEqual(['Shirts']);
+		expect(meta(head as never, 'og:image:width')).toEqual([]);
+		expect(meta(head as never, 'og:image:height')).toEqual([]);
+		const r = resolveHead(head, '/', identity, sources({}, { '/': { title: "Men's Shirts, Made to Last" } }));
+		expect(meta(r.head, 'og:image:alt').map((m) => m.content)).toEqual(["Men's Shirts, Made to Last"]);
+	});
+
 	it('a per-path description beats the route description and replaces og/twitter description', () => {
 		const head = routeHead({ title: 'Shop', description: 'Route description' });
 		const r = resolveHead(head, '/shop/', identity, sources({ defaultDescription: 'Default' }, { '/shop/': { description: 'Declared' } }));

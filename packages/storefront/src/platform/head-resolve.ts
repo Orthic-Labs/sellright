@@ -171,6 +171,7 @@ export function resolveHead(documentHead: ResolvedDocumentHead, pathname: string
 	if (decl?.title) {
 		title = applyTemplate(decl.title, store, spec.titleTemplate);
 		meta = setMeta(meta, { property: 'og:title' }, decl.title);
+		if (meta.some((m) => m.property === 'og:image:alt')) meta = setMeta(meta, { property: 'og:image:alt' }, decl.title);
 		meta = setMeta(meta, { name: 'twitter:title' }, decl.title);
 		touched = true;
 	} else if (spec.titleTemplate === '%s' && title) {
