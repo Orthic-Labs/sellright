@@ -63,7 +63,9 @@ export function productGroupSchema(model: ModelProduct, ctx: { siteOrigin: strin
 		// The query names every option by its group code, as the product page reads it back (selectionFromQuery).
 		const named: { color?: string; size?: string } = {};
 		const query = new URLSearchParams();
-		for (const pair of v.options) {
+		// Colour first (name and query), then the other options in model order, as product feeds and the legacy schema list them.
+		const options = [...v.options].sort((a, b) => Number(kindOf(b.group) === 'color') - Number(kindOf(a.group) === 'color'));
+		for (const pair of options) {
 			const value = groupIndex.get(pair.group)?.values.find((x) => x.code === pair.value);
 			if (!value) continue;
 			query.set(pair.group, value.code);
@@ -75,7 +77,7 @@ export function productGroupSchema(model: ModelProduct, ctx: { siteOrigin: strin
 		const price = effectivePriceOf(v);
 		return {
 			'@type': 'Product',
-			name: [model.name, ...v.options.map((p) => groupIndex.get(p.group)?.values.find((x) => x.code === p.value)?.name).filter(Boolean)].join(' - '),
+			name: [model.name, ...options.map((p) => groupIndex.get(p.group)?.values.find((x) => x.code === p.value)?.name).filter(Boolean)].join(' - '),
 			sku: v.sku,
 			...named,
 			url: variantUrl,
@@ -112,4 +114,36 @@ export function withProductFacts(schema: JsonLdSchema, model: ModelProduct, ctx:
 	if (names.size.length) s.size = names.size;
 	if (!s.brand) s.brand = { '@type': 'Brand', name: ctx.brandName };
 	return s as JsonLdSchema;
+}
+
+/** Open Graph `product:*` values for a product page. */
+export interface ProductOgMeta {
+	price?: string;
+	currency?: string;
+	brand: string;
+	condition: 'new';
+	/** Only from the request's live product JSON-LD (offers.availability); never from a snapshot. */
+	availability?: 'in stock' | 'out of stock' | 'preorder' | 'backorder';
+}
+
+const OG_AVAILABILITY: Record<string, ProductOgMeta['availability']> = {
+	InStock: 'in stock',
+	OutOfStock: 'out of stock',
+	SoldOut: 'out of stock',
+	PreOrder: 'preorder',
+	BackOrder: 'backorder',
+};
+
+/**
+ * `product:*` for a product page: price and currency from the request's live product JSON-LD offer (else the catalog model's
+ * lowest effective price), brand, condition new, and availability ONLY when that live JSON-LD states it (the API reads it per
+ * request, no-store; the page is never prerendered or edge-cached). Without the live JSON-LD there is no availability tag.
+ */
+export function productOgMeta(liveJsonLd: Record<string, unknown> | null, model: ModelProduct, brandName: string): ProductOgMeta {
+	const offer = liveJsonLd && typeof liveJsonLd.offers === 'object' && !Array.isArray(liveJsonLd.offers) ? (liveJsonLd.offers as Record<string, unknown>) : null;
+	const prices = model.variants.map(effectivePriceOf).filter((n) => Number.isFinite(n) && n >= 0);
+	const price = typeof offer?.price === 'string' || typeof offer?.price === 'number' ? Number(offer.price).toFixed(2) : prices.length ? decimal(Math.min(...prices)) : undefined;
+	const currency = typeof offer?.priceCurrency === 'string' ? offer.priceCurrency : model.currencyCode;
+	const avail = typeof offer?.availability === 'string' ? OG_AVAILABILITY[offer.availability.replace(/^https?:\/\/schema\.org\//, '')] : undefined;
+	return { ...(price ? { price, currency } : {}), brand: brandName, condition: 'new', ...(avail ? { availability: avail } : {}) };
 }

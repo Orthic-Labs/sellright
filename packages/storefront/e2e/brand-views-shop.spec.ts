@@ -40,6 +40,7 @@ test.describe('brand views PR2 (fixture build)', () => {
 		await page.getByTestId('view-shop-add').click();
 		await expect(page.getByTestId('view-shop-outcome')).toHaveText('added');
 		await expect(page.getByRole('button', { name: /remove item/i }).first()).toBeVisible({ timeout: 10_000 });
+		await expect(page.getByText('Fixture returns', { exact: true })).toBeVisible(); // routes.json copy.cart.trust
 		expect(await browserStock(before)).toHaveLength(0); // the add's own response is the live check: no extra stock read
 	});
 
@@ -85,6 +86,8 @@ test.describe('brand views PR2 (fixture build)', () => {
 		expect((await browserStock(mark)).map((c) => c.path.split('/')[5])).toEqual(['e2e-shirt']);
 		const jsonLd = await page.locator('script[type="application/ld+json"]').allTextContents();
 		expect(jsonLd.some((j) => j.includes('"FAQPage"'))).toBe(true);
+		await expect(page.locator('meta[property="product:condition"]')).toHaveAttribute('content', 'new');
+		await expect(page.locator('meta[property="product:price:amount"]')).toHaveAttribute('content', /^\d+\.\d{2}$/);
 		const product = jsonLd.map((j) => JSON.parse(j)).find((j) => j['@type'] === 'Product');
 		if (product) expect(product.material).toBe('Fixture cotton'); // the declared fact joins the API's product JSON-LD
 		const before = apiLog.mark();

@@ -51,7 +51,8 @@
   },
   "copy": {
     "cart": {
-      "emptyTitle": "Your fixture bag is empty"
+      "emptyTitle": "Your fixture bag is empty",
+      "trust": ["Fixture returns", "Fixture shipping"]
     }
   },
   "cart": {

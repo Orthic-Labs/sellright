@@ -22,7 +22,7 @@ import { stripHtml } from '~/utils/sanitize';
 import { siteUrl, theme } from '~/theme/theme.config';
 import type { JsonLdSchema } from '~/types/seo.types';
 import { useProductJsonLd } from '~/platform/product';
-import { withProductFacts } from '~/platform/product-jsonld';
+import { productOgMeta, withProductFacts } from '~/platform/product-jsonld';
 
 const SAFE_SLUG = /^[a-z0-9][a-z0-9\-_]*$/;
 
@@ -146,6 +146,7 @@ export const brandProductHead = ({ resolveValue }: { resolveValue: (loader: unkn
 		canonical,
 		ogUrl: canonical,
 		ogType: 'product',
+		productMeta: productOgMeta(jsonLd as Record<string, unknown> | null, product, theme.storeName),
 		links: image ? generateImagePreloadLinks(image, 'productMain', ['avif', 'webp']) : [],
 		schemas,
 	}) as DocumentHeadValue;
