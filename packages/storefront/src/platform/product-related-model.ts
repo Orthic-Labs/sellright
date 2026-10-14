@@ -1,4 +1,4 @@
-// The base product page's related row (routes.json productPage.related). Catalog metadata only: the listing's own snapshot (or its live
+// The base product page's related row (routes.json productPage.related). Catalog metadata only: the listing's own snapshot (never its live
 // fallback) with the listing's `inStock`, the same layer-2 source as the shop grid; the row never reads stock itself. Same category (the
 // first tag), the current product excluded. An in-stock product shows up to four of its category, in-stock first then by price; a sold-out
 // one shows up to four in-stock products (its category first) under "In stock now", or its category when nothing is in stock.

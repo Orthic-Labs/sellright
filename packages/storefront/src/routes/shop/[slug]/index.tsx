@@ -12,6 +12,8 @@ import { PRODUCT_PREFIX } from '~/platform/product-path';
 import { hasView } from '~/platform/gateway';
 
 export { useProductLoader, useProductJsonLd, useBrandProductDetail, useLegacyRedirects };
+// ProductPageView reads the related row loader on both product routes (productPath /products/ or /shop/).
+export { useRelatedProducts } from '~/platform/product-related';
 
 const ACTIVE = PRODUCT_PREFIX === 'shop';
 

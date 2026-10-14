@@ -2,6 +2,9 @@ import { test, expect } from './fixtures';
 import { PRODUCT, uniq } from './support/api';
 import { addToCart } from './support/flows';
 import { apiLog, STOCK_PATTERNS } from './support/api-log';
+import { currentGeneration } from './support/stock';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 /**
  * Brand views (PR1) — rendered. Runs only against a BUILD made with the fixture views and data (the e2e command below sets E2E_BRAND_VIEWS=1):
@@ -188,7 +191,15 @@ test.describe('brand views (fixture build)', () => {
 		await expect(page.locator('.sr-faq-q')).toHaveText(['Fixture question?']);
 		const ld = await page.locator('script[type="application/ld+json"]').allTextContents();
 		expect(ld.some((j) => j.includes('"FAQPage"') && j.includes('Fixture answer.'))).toBe(true);
-		for (const href of await page.locator('.sr-related-card').evaluateAll((els) => els.map((e) => e.getAttribute('href')))) expect(href).toMatch(/^\/products\/[a-z0-9-]+\/$/);
+		// The row comes from the published catalog snapshot only (no snapshot: no row; the live listing is never read): the shirt's
+		// category peers from that snapshot, the shirt itself excluded.
+		const gen = currentGeneration();
+		const snap = gen ? (JSON.parse(readFileSync(join(gen.dir, 'shop-catalog.json'), 'utf8')) as { products: Array<{ slug: string; tags?: string[] }> }).products : [];
+		const category = snap.find((p) => p.slug === PRODUCT.shirt.slug)?.tags?.[0];
+		const peers = snap.filter((p) => p.slug !== PRODUCT.shirt.slug && category !== undefined && p.tags?.[0] === category).map((p) => `/products/${p.slug}/`);
+		const hrefs = await page.locator('.sr-related-card').evaluateAll((els) => els.map((e) => e.getAttribute('href')));
+		expect(hrefs.length).toBe(Math.min(4, peers.length));
+		for (const href of hrefs) expect(peers).toContain(href);
 	});
 
 	test('home view: an invalid email never posts, a double submit makes one request', async ({ page }) => {
