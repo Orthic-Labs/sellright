@@ -31,19 +31,25 @@ export default component$(() => {
 	const countryCodeSignal = useSignal(appState.shippingAddress.countryCode);
 	const panelRef = useSignal<Element>();
 
-	// Auto-focus panel when cart opens so Escape key is captured
-	useTask$(({ track }) => {
-		track(() => appState.showCart);
-		if (appState.showCart && typeof document !== 'undefined') {
-			// The drawer renders after this task: wait (a few frames at most) for the panel to exist, then focus it.
-			let frames = 0;
-			const focusPanel = () => {
-				const panel = panelRef.value as HTMLElement | undefined;
-				if (panel) panel.focus();
-				else if (++frames < 30) requestAnimationFrame(focusPanel);
-			};
-			requestAnimationFrame(focusPanel);
-		}
+	// Auto-focus panel when cart opens so Escape key is captured. The drawer renders after this task, possibly much later (an
+	// async shipping or cart lookup can hold the render): poll each frame while the drawer stays open, no frame budget; a close
+	// or unmount cancels the poll.
+	useTask$(({ track, cleanup }) => {
+		const open = track(() => appState.showCart);
+		if (!open || typeof document === 'undefined') return;
+		let cancelled = false;
+		let frame = 0;
+		cleanup(() => {
+			cancelled = true;
+			cancelAnimationFrame(frame);
+		});
+		const focusPanel = () => {
+			if (cancelled) return;
+			const panel = panelRef.value as HTMLElement | undefined;
+			if (panel) panel.focus();
+			else frame = requestAnimationFrame(focusPanel);
+		};
+		frame = requestAnimationFrame(focusPanel);
 	});
 
 	const dropdownState = useStore({
