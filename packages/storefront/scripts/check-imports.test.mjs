@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { PACKAGE_ROOT, checkOverlayImports, classify, createResolver, importFindings, listProjectFiles, loadLayers, matchGlob, normalizeRel, transitiveFindings, validateTree } from './check-imports.mjs';
+import { PACKAGE_ROOT, checkOverlayImports, classify, deployExemption, resolveDeployFiles, createResolver, importFindings, listProjectFiles, loadLayers, matchGlob, normalizeRel, transitiveFindings, validateTree } from './check-imports.mjs';
 import { buildTree, loadSnippets } from './fixtures/layers/build-tree.mjs';
 
 const SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'check-imports.mjs');
@@ -152,6 +152,40 @@ test('placement: a declared deploy file may sit in no layer; nothing else is exe
     assert.deepEqual(rules(['ecosystem.config.cjs'], ['ecosystem.config.cjs']), [], 'declared deploy file is accepted');
     assert.deepEqual(rules(['src/other/t.ts'], ['ecosystem.config.cjs']), ['src/other/t.ts layer-unclassified'], 'a source file that is not declared stays strict');
     assert.deepEqual(rules(['src/routes/x/index.tsx'], ['src/routes/x/index.tsx']), ['src/routes/x/index.tsx layer-l1-overlay'], 'declaring an L1 file does not unlock it');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('deploy exemption (layers.json deploy): only a declared, unclassified deploy file matching a deploy glob skips the source rules', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sr-deploy-ex-'));
+  const files = {
+    'scripts/retain.mjs': "import fs from 'node:fs';\nexport const a = fs;\n",
+    'scripts/other.mjs': "import fs from 'node:fs';\nexport const a = fs;\n",
+    'public/ios-privacy-sw.js': 'self.registration.unregister();\n',
+    'public/brand/x.js': 'alert(1);\n',
+    'src/brand/x.ts': "import fs from 'node:fs';\nexport const a = fs;\n",
+  };
+  try {
+    for (const [rel, text] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+      fs.writeFileSync(path.join(root, rel), text);
+    }
+    const declared = ['scripts/retain.mjs', 'public/ios-privacy-sw.js', 'public/brand/x.js', 'src/brand/x.ts'];
+    assert.equal(deployExemption(layers, 'scripts/retain.mjs', declared), 'operational');
+    assert.equal(deployExemption(layers, 'public/ios-privacy-sw.js', declared), 'public');
+    assert.equal(deployExemption(layers, 'scripts/other.mjs', declared), null, 'not declared');
+    assert.equal(deployExemption(layers, 'public/brand/x.js', declared), null, 'classified (L3): never exempt');
+    assert.equal(deployExemption(layers, 'src/brand/x.ts', declared), null, 'storefront source: never exempt');
+    const rules = (list) => checkOverlayImports({ root, layers, files: list, deployFiles: declared }).findings.map((f) => `${f.file} ${f.rule}`).sort();
+    assert.deepEqual(rules(['scripts/retain.mjs', 'public/ios-privacy-sw.js']), []);
+    assert.ok(rules(['scripts/other.mjs']).includes('scripts/other.mjs layer-unclassified'));
+    assert.ok(rules(['public/brand/x.js']).includes('public/brand/x.js overlay-executable-asset'));
+    assert.ok(rules(['src/brand/x.ts']).some((r) => r.startsWith('src/brand/x.ts import-node')));
+    fs.writeFileSync(path.join(root, '.compose-deploy-files.txt'), 'scripts/retain.mjs\n');
+    assert.deepEqual(resolveDeployFiles({}, root), ['scripts/retain.mjs']);
+    const cli = spawnSync(process.execPath, [SCRIPT, '--root', root, '--layers', path.join(PACKAGE_ROOT, 'layers.json'), 'scripts/retain.mjs'], { encoding: 'utf8' });
+    assert.equal(cli.status, 0, cli.stderr);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

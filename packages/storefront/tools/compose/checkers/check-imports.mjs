@@ -495,6 +495,35 @@ export function placementFindings(layers, relFile, deployFiles = []) {
   return [];
 }
 
+/** Compose writes the brand's deploy files (brand.json deployFiles) here, so the checkers run in the composed tree apply the same rule. */
+export const DEPLOY_LIST = '.compose-deploy-files.txt';
+
+/**
+ * layers.json `deploy`: the deploy files that are not storefront source. A file is exempt only when it is a declared deploy file,
+ * sits in no layer, and matches a `deploy` glob: `operationalScripts` (build and process scripts, run by Node or the shell, never
+ * bundled: the import and shape rules of storefront source do not apply) or `publicScripts` (public files the browser fetches by a
+ * fixed URL: served as-is). Returns the kind, or null (the file is checked as usual).
+ */
+export function deployExemption(layers, relFile, deployFiles = []) {
+  const rel = normalizeRel(relFile);
+  if (!new Set(deployFiles.map(normalizeRel)).has(rel)) return null;
+  let c;
+  try { c = classify(layers, rel); } catch { return null; }
+  if (c) return null;
+  const d = layers.deploy ?? {};
+  if ((d.operationalScripts ?? []).some((g) => matchGlob(g, rel))) return 'operational';
+  if ((d.publicScripts ?? []).some((g) => matchGlob(g, rel))) return 'public';
+  return null;
+}
+
+/** The deploy list of a composed tree (`--deploy-list` or <root>/.compose-deploy-files.txt); none outside a composed tree. */
+export function resolveDeployFiles(opts, root) {
+  const list = opts['deploy-list'] ? path.resolve(opts['deploy-list']) : path.join(root, DEPLOY_LIST);
+  if (fs.existsSync(list)) return readOverlayList(list);
+  if (opts['deploy-list']) throw new Error(`deploy list not found: ${list}`);
+  return [];
+}
+
 const EXECUTABLE_ASSET = /\.(js|mjs|cjs|wasm|html|htm)$/i;
 
 /** r11: an overlay public/** file that the browser would run or render as a document. */
@@ -519,6 +548,7 @@ export function checkOverlayImports({ root, layers, files, deployFiles = [] }) {
     const rel = normalizeRel(raw);
     const placement = placementFindings(layers, rel, deployFiles);
     findings.push(...placement);
+    if (deployExemption(layers, rel, deployFiles)) continue;
     const abs = path.join(resolver.rootReal, rel);
     if (rel.startsWith('public/')) {
       findings.push(...executableAssetFindings(rel, () => { try { return fs.readFileSync(abs, 'utf8'); } catch { return null; } }));
@@ -588,7 +618,7 @@ export function parseArgs(argv, flags = []) {
   const opts = { files: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--root' || a === '--layers' || a === '--overlay-list' || a === '--mode') opts[a.slice(2)] = argv[++i];
+    if (a === '--root' || a === '--layers' || a === '--overlay-list' || a === '--deploy-list' || a === '--mode') opts[a.slice(2)] = argv[++i];
     else if (flags.includes(a)) opts[a.slice(2)] = true;
     else if (a.startsWith('--')) throw new Error(`unknown option ${a}`);
     else opts.files.push(a);
@@ -620,7 +650,7 @@ function main() {
     console.log('check-imports: no overlay files (base alone), nothing to check');
     return;
   }
-  const { findings, checked } = checkOverlayImports({ root, layers, files });
+  const { findings, checked } = checkOverlayImports({ root, layers, files, deployFiles: resolveDeployFiles(opts, root) });
   for (const f of findings) console.error(formatFinding(f));
   if (findings.length > 0) {
     console.error(`check-imports: ${findings.length} finding(s) in ${files.length} overlay file(s)`);

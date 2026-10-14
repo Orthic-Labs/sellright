@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import os from 'node:os';
 import { PACKAGE_ROOT, loadLayers } from './check-imports.mjs';
 import { checkBaseL2Shape, checkOverlayShape, shapeFindings } from './check-code-shape.mjs';
 import { buildTree, loadSnippets } from './fixtures/layers/build-tree.mjs';
@@ -240,4 +241,21 @@ test('r8/r9/r10 receivers: file-local data and methods pass; DOM nodes, paramete
   assert.ok(shape("export const a = () => { const o = { resolve() { return 1; } }; return o.getHash; };").includes('qrl-introspection'));
   assert.ok(shape("export const a = () => { const o = { x: 1 }; return o.resolve; };").includes('qrl-introspection'));
   assert.ok(shape("export const a = (q: { resolve: () => void }) => q.resolve();").includes('qrl-introspection'));
+});
+
+test('deploy exemption: a declared operational script or public script is not shape-checked; source files still are', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sr-shape-deploy-'));
+  try {
+    const put = (rel, text) => { fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true }); fs.writeFileSync(path.join(root, rel), text); };
+    const loader = "const s = document.createElement('script');\ns.src = 'https://x.example/a.js';\n";
+    put('public/analytics.js', loader);
+    put('src/brand/a.ts', loader);
+    const declared = ['public/analytics.js', 'src/brand/a.ts'];
+    const files = (list) => checkOverlayShape({ root, layers: loadLayers(), files: list, deployFiles: declared }).findings.map((f) => f.file);
+    assert.deepEqual(files(['public/analytics.js']), []);
+    assert.ok(files(['src/brand/a.ts']).includes('src/brand/a.ts'));
+    assert.ok(checkOverlayShape({ root, layers: loadLayers(), files: ['public/analytics.js'] }).findings.length > 0, 'undeclared: checked');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

@@ -29,6 +29,7 @@ import {
   PACKAGE_ROOT,
   classify,
   collectModuleSpecifiers,
+  deployExemption,
   formatFinding,
   isCodeFile,
   listProjectFiles,
@@ -38,6 +39,7 @@ import {
   parseSource,
   position,
   readOverlayList,
+  resolveDeployFiles,
   resolveOverlayFiles,
   walk,
 } from './check-imports.mjs';
@@ -406,13 +408,13 @@ export function shapeFindings(layers, relFile, text) {
   return out;
 }
 
-export function checkOverlayShape({ root, layers, files }) {
+export function checkOverlayShape({ root, layers, files, deployFiles = [] }) {
   const rootReal = fs.realpathSync(root);
   const findings = [];
   let checked = 0;
   for (const raw of files) {
     const rel = normalizeRel(raw);
-    if (!isCodeFile(layers, rel)) continue;
+    if (!isCodeFile(layers, rel) || deployExemption(layers, rel, deployFiles)) continue;
     const abs = path.join(rootReal, rel);
     if (!fs.existsSync(abs)) { findings.push({ file: rel, line: 1, col: 1, rule: 'file-missing', message: `${rel} is listed but does not exist` }); continue; }
     checked++;
@@ -452,7 +454,7 @@ function main() {
     console.log('check-code-shape: no overlay files (base alone), nothing to check');
     return;
   }
-  const { findings, checked } = checkOverlayShape({ root, layers, files });
+  const { findings, checked } = checkOverlayShape({ root, layers, files, deployFiles: resolveDeployFiles(opts, root) });
   for (const f of findings) console.error(formatFinding(f));
   if (findings.length > 0) {
     console.error(`check-code-shape: ${findings.length} finding(s) in ${files.length} overlay file(s)`);

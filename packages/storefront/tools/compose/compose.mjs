@@ -59,6 +59,7 @@ export const CHECKERS_DIR = path.join(HERE, 'checkers');
 export const MANAGED = '.compose-managed.json';
 export const ADOPTION = '.compose-adoption.json';
 export const OVERLAY_LIST = '.compose-overlay-files.txt';
+export const DEPLOY_LIST = '.compose-deploy-files.txt';
 export const REPORT = 'compose-report.json';
 
 /** pnpm-workspace.yaml of the composed tree: one root plus the vendored client, base hardening settings kept. */
@@ -218,7 +219,7 @@ async function runCheckers({ outputs, layersPath, layersText, deployFiles, check
 			return result;
 		}
 		try {
-			const res = shape.mod.checkOverlayShape({ root: tmp, layers, files });
+			const res = shape.mod.checkOverlayShape({ root: tmp, layers, files, deployFiles });
 			for (const f of res.findings ?? []) problems.add('shape-check', `${f.rule}: ${f.message}`, f.file);
 			result.shapeCheck = { status: res.findings?.length ? 'failed' : 'passed', checked: res.checked ?? files.length };
 		} catch (e) {
@@ -305,6 +306,9 @@ export async function plan(opts) {
 		outputs.set('.env.production', { buf: Buffer.from(env.envProduction), mode: 0o600, origin: 'generated' });
 		const overlayList = [...outputs].filter(([, o]) => o.origin === 'overlay' || o.origin === 'eject').map(([k]) => k).filter((k) => k !== 'pnpm-lock.yaml').sort();
 		outputs.set(OVERLAY_LIST, { buf: Buffer.from(overlayList.length ? `${overlayList.join('\n')}\n` : ''), mode: 0o644, origin: 'generated' });
+		// The deploy files, for the checkers run inside the composed tree (scripts/check-imports.mjs DEPLOY_LIST): same rule as here.
+		const deployList = [...new Set(brand.deployFiles ?? [])].sort();
+		outputs.set(DEPLOY_LIST, { buf: Buffer.from(deployList.length ? `${deployList.join('\n')}\n` : ''), mode: 0o644, origin: 'generated' });
 		for (const rel of outputs.keys()) {
 			const top = rel.split('/')[0];
 			if (rel !== '.env.production' && (isRuntimeName(top) || top.startsWith('.env'))) problems.add('protected-path', `${rel} is runtime state and may not be composed`, rel);
