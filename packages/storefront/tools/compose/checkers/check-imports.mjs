@@ -538,6 +538,16 @@ export function executableAssetFindings(relFile, readText) {
   return [];
 }
 
+/** file-missing / file-symlink / file-not-regular for a listed path, without following a link (lstat). */
+export function presenceFindings(rel, abs) {
+  const f = (rule, message) => [{ file: rel, line: 1, col: 1, rule, message }];
+  let st;
+  try { st = fs.lstatSync(abs); } catch (e) { if (e.code === 'ENOENT') return f('file-missing', `${rel} is listed but does not exist`); throw e; }
+  if (st.isSymbolicLink()) return f('file-symlink', `${rel} is a symlink`);
+  if (!st.isFile()) return f('file-not-regular', `${rel} is not a regular file`);
+  return [];
+}
+
 export function checkOverlayImports({ root, layers, files, deployFiles = [] }) {
   const resolver = createResolver(root);
   const ctx = { layers, resolver };
@@ -548,8 +558,9 @@ export function checkOverlayImports({ root, layers, files, deployFiles = [] }) {
     const rel = normalizeRel(raw);
     const placement = placementFindings(layers, rel, deployFiles);
     findings.push(...placement);
-    if (deployExemption(layers, rel, deployFiles)) continue;
     const abs = path.join(resolver.rootReal, rel);
+    // An exempt deploy file skips the content rules only: it must still exist as a regular file, never a symlink.
+    if (deployExemption(layers, rel, deployFiles)) { findings.push(...presenceFindings(rel, abs)); continue; }
     if (rel.startsWith('public/')) {
       findings.push(...executableAssetFindings(rel, () => { try { return fs.readFileSync(abs, 'utf8'); } catch { return null; } }));
     }

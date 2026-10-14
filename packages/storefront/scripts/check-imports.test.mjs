@@ -182,6 +182,11 @@ test('deploy exemption (layers.json deploy): only a declared, unclassified deplo
     assert.ok(rules(['scripts/other.mjs']).includes('scripts/other.mjs layer-unclassified'));
     assert.ok(rules(['public/brand/x.js']).includes('public/brand/x.js overlay-executable-asset'));
     assert.ok(rules(['src/brand/x.ts']).some((r) => r.startsWith('src/brand/x.ts import-node')));
+    // Exempt from the content rules, never from presence: a missing or symlinked deploy file is still a finding.
+    const withLink = [...declared, 'scripts/gone.mjs', 'scripts/link.mjs'];
+    fs.symlinkSync(path.join(root, 'src/brand/x.ts'), path.join(root, 'scripts/link.mjs'));
+    const presence = checkOverlayImports({ root, layers, files: ['scripts/gone.mjs', 'scripts/link.mjs'], deployFiles: withLink }).findings.map((f) => `${f.file} ${f.rule}`).sort();
+    assert.deepEqual(presence, ['scripts/gone.mjs file-missing', 'scripts/link.mjs file-symlink']);
     fs.writeFileSync(path.join(root, '.compose-deploy-files.txt'), 'scripts/retain.mjs\n');
     assert.deepEqual(resolveDeployFiles({}, root), ['scripts/retain.mjs']);
     const cli = spawnSync(process.execPath, [SCRIPT, '--root', root, '--layers', path.join(PACKAGE_ROOT, 'layers.json'), 'scripts/retain.mjs'], { encoding: 'utf8' });

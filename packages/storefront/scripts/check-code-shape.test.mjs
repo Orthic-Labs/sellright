@@ -255,6 +255,9 @@ test('deploy exemption: a declared operational script or public script is not sh
     assert.deepEqual(files(['public/analytics.js']), []);
     assert.ok(files(['src/brand/a.ts']).includes('src/brand/a.ts'));
     assert.ok(checkOverlayShape({ root, layers: loadLayers(), files: ['public/analytics.js'] }).findings.length > 0, 'undeclared: checked');
+    fs.symlinkSync(path.join(root, 'src/brand/a.ts'), path.join(root, 'public/ios-privacy-sw.js'));
+    const presence = checkOverlayShape({ root, layers: loadLayers(), files: ['public/ios-privacy-sw.js'], deployFiles: ['public/ios-privacy-sw.js'] }).findings.map((f) => f.rule);
+    assert.deepEqual(presence, ['file-symlink'], 'exempt from content rules, never from the symlink rule');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
