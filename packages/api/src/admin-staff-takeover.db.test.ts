@@ -273,10 +273,35 @@ describe.skipIf(!isTestDb)('P0: legitimate invite acceptance still works', () =>
     expect(rows.rowCount).toBe(0);
   });
 
-  it('an owner may still revoke another owner\'s sessions, and a manager may revoke ordinary staff', async () => {
-    await pool.query(`INSERT INTO admin_user_store (admin_user_id, store_id, role) VALUES ($1, $2, 'owner')`, [OWNER_B, STORE_A]);
+  it('an owner may still revoke a co-owner of THIS store only, and a manager may revoke ordinary staff', async () => {
+    const CO = 'ffffffff-ffff-ffff-ffff-0000000000a9';
+    await pool.query(`INSERT INTO admin_user (id, email) VALUES ($1, 'co-owner@takeover.test')`, [CO]);
+    await pool.query(`INSERT INTO admin_user_store (admin_user_id, store_id, role) VALUES ($1, $2, 'owner')`, [CO, STORE_A]);
     const owner = await createAdminSession(OWNER_A);
-    expect((await call('POST', `/v1/admin/staff/${OWNER_B}/revoke-sessions`, { token: owner, slug: 'takeover-a' })).status).toBe(200);
+    expect((await call('POST', `/v1/admin/staff/${CO}/revoke-sessions`, { token: owner, slug: 'takeover-a' })).status).toBe(200);
     expect((await call('POST', `/v1/admin/staff/${STAFF_A}/revoke-sessions`, { token: manager, slug: 'takeover-a' })).status).toBe(200);
+  });
+
+  it('cross store: an owner of store A cannot sign out (globally) an admin who also owns store B or administers the installation', async () => {
+    await pool.query(`INSERT INTO admin_user_store (admin_user_id, store_id, role) VALUES ($1, $2, 'staff')`, [OWNER_B, STORE_A]);
+    const ownerA = await createAdminSession(OWNER_A);
+    const victim = await createAdminSession(OWNER_B);
+    const res = await call('POST', `/v1/admin/staff/${OWNER_B}/revoke-sessions`, { token: ownerA, slug: 'takeover-a' });
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('REVOKE_REQUIRES_INSTALLATION_ADMIN');
+    expect((await call('GET', '/v1/admin/me', { token: victim })).status).toBe(200);
+    // an installation administrator may
+    await pool.query('UPDATE admin_user SET is_installation_admin = true WHERE id = $1', [OWNER_A]);
+    const install = await createAdminSession(OWNER_A);
+    expect((await call('POST', `/v1/admin/staff/${OWNER_B}/revoke-sessions`, { token: install, slug: 'takeover-a' })).status).toBe(200);
+    expect((await call('GET', '/v1/admin/me', { token: victim })).status).toBe(401);
+  });
+
+  it('POST /v1/admin/staff never enrols an EXISTING account that is not in this store (it must accept an invite)', async () => {
+    const owner = await createAdminSession(OWNER_A);
+    const res = await call('POST', '/v1/admin/staff', { token: owner, slug: 'takeover-a', body: { email: OWNER_B_EMAIL, role: 'staff', password: 'irrelevant-1' } });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('EXISTING_ACCOUNT_USE_INVITE');
+    expect(await roleOf(OWNER_B, STORE_A)).toBeNull();
   });
 });

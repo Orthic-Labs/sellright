@@ -17,7 +17,7 @@ import { encryptSecret, last4 as computeLast4 } from '../security/secret-crypto.
 import { isEnvManaged } from '../security/settings-resolver.js';
 import { readSecret, purposeKey, scopeFor } from './admin-payment-settings.js';
 import { SMTP_PRESETS, SmtpConfig, smtpConfigFromStoreConfig, resolveSmtpPreset, sendTestEmail, type SmtpPresetId } from '../email/smtp-settings.js';
-import { sendEmail } from '../email/mailer.js';
+import { invalidateStoreTransport, sendEmail } from '../email/mailer.js';
 
 export const adminEmailSettings = new OpenAPIHono();
 
@@ -91,6 +91,7 @@ adminEmailSettings.openapi(
         });
       });
     }
+    invalidateStoreTransport(st.storeId); // the next send (e.g. a retried staff invite) uses the new settings
     return c.json({ ok: true }, 200);
   }),
 );

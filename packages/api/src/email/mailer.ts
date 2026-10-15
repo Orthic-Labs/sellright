@@ -51,10 +51,17 @@ function globalTransport(): Transporter | null {
 
 // WS-A: per-store transporter cache, only ever populated when SMTP_HOST is
 // NOT set (env always wins globally — see resolveTransport). Keyed by
-// storeId; cleared implicitly on process restart (a settings save takes
-// effect on the next delivery cycle, which is acceptable for transactional
-// mail — not a hot per-request path).
-const cachedByStore = new Map<string, Transporter | null>();
+// storeId. Only BUILT transporters are cached, for at most STORE_TRANSPORT_TTL_MS,
+// and a settings save drops the entry (invalidateStoreTransport) — "not
+// configured" is never cached, so configuring e-mail after a failed staff
+// invite (which is e-mail-only) works on the next try, in every API process.
+const STORE_TRANSPORT_TTL_MS = 60_000;
+const cachedByStore = new Map<string, { tx: Transporter; at: number }>();
+
+/** Drop a store's cached transporter (after its SMTP settings or credential change). */
+export function invalidateStoreTransport(storeId: string): void {
+  cachedByStore.delete(storeId);
+}
 
 /** WS-A env>db resolution for the SMTP transporter. `env.SMTP_HOST` set →
  *  the existing global transporter, unchanged from before WS-A (an existing
@@ -65,7 +72,8 @@ async function resolveTransport(storeId?: string): Promise<Transporter | null> {
   const globalTx = globalTransport();
   if (globalTx) return globalTx;
   if (!storeId) return null;
-  if (cachedByStore.has(storeId)) return cachedByStore.get(storeId)!;
+  const hit = cachedByStore.get(storeId);
+  if (hit && Date.now() - hit.at < STORE_TRANSPORT_TTL_MS) return hit.tx;
   const built = await withStore(storeId, async (tx) => {
     const [row] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, storeId)).limit(1);
     const cfg = smtpConfigFromStoreConfig(row?.config);
@@ -76,7 +84,8 @@ async function resolveTransport(storeId?: string): Promise<Transporter | null> {
       auth: cfg.user ? { user: cfg.user, pass: credential.value } : undefined,
     });
   });
-  cachedByStore.set(storeId, built);
+  if (built) cachedByStore.set(storeId, { tx: built, at: Date.now() });
+  else cachedByStore.delete(storeId);
   return built;
 }
 

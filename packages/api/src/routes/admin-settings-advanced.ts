@@ -183,6 +183,7 @@ adminSettingsAdvanced.openapi(
     const email = normalizeEmail(rawEmail);
     if ((await adminKindByEmail(email)) === 'agent') throw new HttpError(400, 'agents are created under Agent access');
     let adminUserId = await findAdminIdByEmail(email);
+    const existingAccount = !!adminUserId;
     if (!adminUserId) {
       adminUserId = await createAdminUser(email, await hashPassword(password));
     }
@@ -203,6 +204,9 @@ adminSettingsAdvanced.openapi(
         .where(and(eq(s.adminUserStore.adminUserId, uid), eq(s.adminUserStore.storeId, st.storeId)))
         .for('update')
         .limit(1);
+      // An EXISTING account that is not yet in this store joins only by accepting an invite (its own
+      // consent, proven by its own credentials) — never by another store's staff adding it directly.
+      if (existingAccount && !m) throw new HttpError(409, 'this address already has an account — send an invite instead', 'EXISTING_ACCOUNT_USE_INVITE');
       if (m?.role === 'owner') {
         requireOwner(st);
         if (role !== 'owner' && (await lockedOwnerCount(tx, st.storeId)) <= 1) throw new HttpError(409, 'cannot demote the last remaining owner');
@@ -593,16 +597,22 @@ adminSettingsAdvanced.openapi(
         .limit(1);
       if (!m) throw new HttpError(404, 'staff member not enrolled in this store');
       if ((await adminKindById(adminUserId)) === 'agent') throw new HttpError(400, 'use /v1/admin/agents/{id}/rotate for agents'); // D9
-      // P0: sessions are global, so a force-logout reaches every store the target works in. When the
-      // target is an owner (here or in any other store) or an installation administrator, only an
-      // owner of this store may do it. (No last-owner guard: revoking sessions changes no role, and
-      // the only owner an owner-caller could strand as "last owner" is themselves.)
-      const [elev] = await tx
-        .select({ owner: sql<boolean>`coalesce(bool_or(${s.adminUserStore.role} = 'owner'), false)`, install: sql<boolean>`bool_or(${s.adminUser.isInstallationAdmin})` })
-        .from(s.adminUser)
-        .leftJoin(s.adminUserStore, eq(s.adminUserStore.adminUserId, s.adminUser.id))
-        .where(eq(s.adminUser.id, adminUserId));
-      if (elev?.owner || elev?.install) requireOwner(st);
+      // P0: sessions are global, so a force-logout reaches every store the target works in and the
+      // installation itself. Owning (or managing) THIS store gives no authority over the target's other
+      // stores, so when the target also works elsewhere or is an installation administrator, only an
+      // installation administrator may sign them out everywhere (self-revoke is always allowed). Within
+      // this store, an owner target additionally needs an owner caller. (No last-owner guard: revoking
+      // sessions changes no role.)
+      const memberships = await tx
+        .select({ storeId: s.adminUserStore.storeId, role: s.adminUserStore.role })
+        .from(s.adminUserStore)
+        .where(eq(s.adminUserStore.adminUserId, adminUserId));
+      const [target] = await tx.select({ install: s.adminUser.isInstallationAdmin }).from(s.adminUser).where(eq(s.adminUser.id, adminUserId)).limit(1);
+      const reachesBeyondStore = !!target?.install || memberships.some((x) => x.storeId !== st.storeId);
+      if (reachesBeyondStore && adminUserId !== admin.id && !(admin.kind === 'human' && admin.isInstallationAdmin)) {
+        throw new HttpError(403, 'this person also has access beyond this store — only an installation administrator can sign them out everywhere', 'REVOKE_REQUIRES_INSTALLATION_ADMIN');
+      }
+      if (memberships.some((x) => x.storeId === st.storeId && x.role === 'owner') && !(admin.kind === 'human' && admin.isInstallationAdmin)) requireOwner(st);
       const del = await tx.delete(s.session).where(eq(s.session.adminUserId, adminUserId)).returning({ id: s.session.id });
       await tx.insert(s.auditLog).values({
         storeId: st.storeId,
