@@ -110,8 +110,13 @@ beforeEach(async () => {
 afterAll(async () => { if (isTestDb) await wipe(); await pool.end(); });
 
 describe.skipIf(!isTestDb)('P0: manager -> owner takeover through staff invites', () => {
-  it('same store: the invite response never carries the raw accept token', async () => {
-    const res = await call('POST', '/v1/admin/staff/invites', { token: manager, slug: 'takeover-a', body: { email: OWNER_A_EMAIL, role: 'staff' } });
+  it('same store: the owner (a member) cannot be invited at all, and no invite response carries the raw accept token', async () => {
+    const own = await call('POST', '/v1/admin/staff/invites', { token: manager, slug: 'takeover-a', body: { email: OWNER_A_EMAIL, role: 'staff' } });
+    expect(own.status).toBe(409);
+    expect(JSON.stringify(await own.json())).not.toMatch(/[0-9a-f]{48}/);
+    expect(sent.mails).toHaveLength(0);
+    const NEW = 'newcomer@takeover.test';
+    const res = await call('POST', '/v1/admin/staff/invites', { token: manager, slug: 'takeover-a', body: { email: NEW, role: 'staff' } });
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
     expect(body).not.toHaveProperty('token');
@@ -119,7 +124,7 @@ describe.skipIf(!isTestDb)('P0: manager -> owner takeover through staff invites'
     expect(JSON.stringify(body)).not.toMatch(/[0-9a-f]{48}/);
     // delivered by e-mail only, to the invited address
     expect(sent.mails).toHaveLength(1);
-    expect(sent.mails[0]!.to).toBe(OWNER_A_EMAIL);
+    expect(sent.mails[0]!.to).toBe(NEW);
     // the link targets the admin SPA (ADMIN_PUBLIC_URL, default STOREFRONT_URL/admin), never a request-derived host
     expect(sent.mails[0]!.acceptUrl).toBe(`${adminPublicUrl()}/accept-invite?token=${new URL(sent.mails[0]!.acceptUrl).searchParams.get('token')}`);
     expect(sent.mails[0]!.acceptUrl).toMatch(/\/admin\/accept-invite\?token=[0-9a-f]{64}$/);
@@ -183,6 +188,34 @@ describe.skipIf(!isTestDb)('P0: manager -> owner takeover through staff invites'
     await pool.query(`INSERT INTO admin_user_store (admin_user_id, store_id, role) VALUES ($1, $2, 'staff')`, [OWNER_B, STORE_A]);
     const res = await call('POST', `/v1/admin/staff/${OWNER_B}/revoke-sessions`, { token: manager, slug: 'takeover-a' });
     expect(res.status).toBe(403);
+  });
+});
+
+describe.skipIf(!isTestDb)('P0: invites cannot restore revoked access', () => {
+  it('a current member cannot be invited (no self-invite kept back for later)', async () => {
+    const res = await call('POST', '/v1/admin/staff/invites', { token: manager, slug: 'takeover-a', body: { email: 'manager-a@takeover.test', role: 'manager' } });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('ALREADY_MEMBER');
+    expect(sent.mails).toHaveLength(0);
+  });
+
+  it('a demotion revokes the person\'s pending invites: an older invite cannot restore manager', async () => {
+    const token = await plantInvite(STORE_A, 'manager-a@takeover.test', 'manager');
+    const owner = await createAdminSession(OWNER_A);
+    expect((await call('PATCH', `/v1/admin/staff/${MANAGER_A}`, { token: owner, slug: 'takeover-a', body: { role: 'read_only' } })).status).toBe(200);
+    const acc = await call('POST', '/v1/admin/staff/accept', { body: { token, currentPassword: 'manager-password-1' } });
+    expect(acc.status).toBe(409);
+    expect(await roleOf(MANAGER_A, STORE_A)).toBe('read_only');
+  });
+
+  it('a removal revokes the person\'s pending invites: an older invite cannot restore access', async () => {
+    const token = await plantInvite(STORE_A, 'staff-a@takeover.test', 'staff');
+    const owner = await createAdminSession(OWNER_A);
+    expect((await call('DELETE', `/v1/admin/staff/${STAFF_A}`, { token: owner, slug: 'takeover-a' })).status).toBe(200);
+    const session = await createAdminSession(STAFF_A);
+    const acc = await call('POST', '/v1/admin/staff/accept', { token: session, body: { token } });
+    expect(acc.status).toBe(409);
+    expect(await roleOf(STAFF_A, STORE_A)).toBeNull();
   });
 });
 

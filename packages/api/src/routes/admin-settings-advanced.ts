@@ -215,6 +215,7 @@ adminSettingsAdvanced.openapi(
         .insert(s.adminUserStore)
         .values({ adminUserId: uid, storeId: st.storeId, role })
         .onConflictDoUpdate({ target: [s.adminUserStore.adminUserId, s.adminUserStore.storeId], set: { role } });
+      if (m) await revokePendingInvites(tx, st.storeId, uid);
       await tx.insert(s.auditLog).values({
         storeId: st.storeId,
         actor: admin.email,
@@ -273,6 +274,7 @@ adminSettingsAdvanced.openapi(
         .update(s.adminUserStore)
         .set({ role })
         .where(and(eq(s.adminUserStore.adminUserId, adminUserId), eq(s.adminUserStore.storeId, st.storeId)));
+      await revokePendingInvites(tx, st.storeId, adminUserId);
       await tx.insert(s.auditLog).values({
         storeId: st.storeId,
         actor: admin.email,
@@ -321,6 +323,7 @@ adminSettingsAdvanced.openapi(
       await tx
         .delete(s.adminUserStore)
         .where(and(eq(s.adminUserStore.adminUserId, adminUserId), eq(s.adminUserStore.storeId, st.storeId)));
+      await revokePendingInvites(tx, st.storeId, adminUserId);
       await revokeAgentTokens(tx, adminUserId, st.storeId); // an agent removed through the staff path loses its tokens (and their sessions) too
       if (targetRole !== null) {
         await tx.insert(s.auditLog).values({
@@ -349,6 +352,15 @@ type StoreTx = Parameters<Parameters<typeof withStore>[1]>[0];
  *  could land between an authorization read and an ON CONFLICT DO UPDATE. Transaction-scoped. */
 async function lockStoreMembership(tx: StoreTx, storeId: string): Promise<void> {
   await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${'staff-membership:' + storeId}, 0))`);
+}
+
+/** Delete this person's PENDING invites to the store (P0 review): a role change or removal must not be undone by
+ *  redeeming an invite issued earlier (e.g. a self-invite kept back by a manager before being demoted). Run under
+ *  lockStoreMembership, which invite issuance and acceptance also take. Returns how many were revoked. */
+async function revokePendingInvites(tx: StoreTx, storeId: string, adminUserId: string): Promise<number> {
+  const gone = await tx.execute(sql`DELETE FROM staff_invite WHERE store_id = ${storeId} AND accepted_at IS NULL
+    AND email = (SELECT email FROM admin_user WHERE id = ${adminUserId}) RETURNING id`);
+  return gone.rows.length;
 }
 
 /** Owners of a store, counted with their rows locked (FOR UPDATE) so two concurrent demotions
@@ -398,6 +410,13 @@ adminSettingsAdvanced.openapi(
     // invited mailbox. It used to be returned to the inviter, which let a
     // manager invite the owner's address and redeem the token themselves.
     const invId = await withStore(st.storeId, async (tx) => {
+      // Serialized with role changes / removals / acceptance. A current member's access changes only through
+      // PATCH/DELETE /v1/admin/staff — never through an invite they (or anyone) could keep back and redeem later.
+      await lockStoreMembership(tx, st.storeId);
+      const [member] = await tx.select({ id: s.adminUserStore.adminUserId }).from(s.adminUserStore)
+        .innerJoin(s.adminUser, eq(s.adminUser.id, s.adminUserStore.adminUserId))
+        .where(and(eq(s.adminUserStore.storeId, st.storeId), eq(s.adminUser.email, normalizeEmail(b.email)))).limit(1);
+      if (member) throw new HttpError(409, 'this person is already a member of this store — change their role under Staff instead', 'ALREADY_MEMBER');
       const [inv] = await tx
         .insert(s.staffInvite)
         .values({ storeId: st.storeId, email: normalizeEmail(b.email), role: b.role, tokenHash: hashTok(token), expiresAt: new Date(Date.now() + INVITE_TTL_MS) })
@@ -524,6 +543,9 @@ adminSettingsAdvanced.openapi(
     // SR-16: invite claim + account creation + attach + audit row commit atomically. Actor is the
     // invitee themselves. No password or hash ever touches the audit row.
     await withStore(inv.storeId, async (tx) => {
+      // Membership lock FIRST: a concurrent removal/role change (which revokes pending invites under the same
+      // lock) either completes before this claim — and the claim finds nothing — or waits for this accept.
+      await lockStoreMembership(tx, inv.storeId);
       // Single use, race-free: only the request that flips accepted_at proceeds.
       const claimed = await tx
         .update(s.staffInvite)
@@ -545,7 +567,6 @@ adminSettingsAdvanced.openapi(
         uid = u.id;
       }
       const role = inv.role as 'owner' | 'manager' | 'staff' | 'read_only';
-      await lockStoreMembership(tx, inv.storeId);
       const [m] = await tx
         .select({ role: s.adminUserStore.role })
         .from(s.adminUserStore)
