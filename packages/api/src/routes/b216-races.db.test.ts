@@ -35,10 +35,11 @@ const post = (path: string, body: unknown) => app.request(path, {
 });
 const outboxCount = async (kind: string) => Number(((await withStore(STORE, (tx) => tx.execute(sql`SELECT count(*)::int AS n FROM email_outbox WHERE store_id = ${STORE} AND kind = ${kind}`))).rows[0] as { n: number }).n);
 
-async function waitForBlockedQuery() {
+/** Wait until some backend is blocked BY the fixture's own backend (not by any unrelated lock). */
+async function waitForBlockedQuery(blockerPid: number) {
   let waiting = 0;
   for (let i = 0; i < 400 && !waiting; i++) {
-    waiting = (await pool.query(`SELECT 1 FROM pg_locks WHERE NOT granted`)).rowCount ?? 0;
+    waiting = (await pool.query(`SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))`, [blockerPid])).rowCount ?? 0;
     if (!waiting) await new Promise((r) => setTimeout(r, 25));
   }
   return waiting;
@@ -58,17 +59,24 @@ afterAll(async () => { if (isTestDb) await pool.query('TRUNCATE store CASCADE');
 describe.skipIf(!isTestDb)('B2.16 races', () => {
   it('1. a magic link is never minted for the address an in-flight e-mail change abandons', async () => {
     const other = await pool.connect();
+    let pending: Promise<Response> | Response | undefined;
     try {
+      const pid = Number((await other.query('SELECT pg_backend_pid() AS pid')).rows[0].pid);
       // The e-mail change (verify-email-change) holds the customer row and moves it to the new address.
       await other.query('BEGIN');
       await other.query(`SELECT set_config('app.current_store', $1, true)`, [STORE]);
       await other.query(`SELECT id FROM customer WHERE id = $1 FOR UPDATE`, [CUST]);
       await other.query(`UPDATE customer SET email = 'new@b216.test' WHERE id = $1`, [CUST]);
-      const pending = post('/v1/shop/auth/magic-link/request', { email: 'old@b216.test' });
-      expect(await waitForBlockedQuery()).toBeGreaterThan(0);
+      pending = post('/v1/shop/auth/magic-link/request', { email: 'old@b216.test' });
+      expect(await waitForBlockedQuery(pid)).toBeGreaterThan(0);
       await other.query('COMMIT');
       expect((await pending).status).toBe(200); // enumeration-neutral as always
-    } finally { other.release(); }
+    } finally {
+      // never leave the fixture transaction (and its row lock) open on failure, nor the request unsettled
+      await other.query('ROLLBACK').catch(() => undefined);
+      other.release();
+      await Promise.resolve(pending).catch(() => undefined);
+    }
     const minted = await withStore(STORE, (tx) => tx.execute(sql`SELECT 1 FROM customer_token WHERE customer_id = ${CUST} AND kind = 'magic_link'`));
     expect(minted.rows).toHaveLength(0);
     expect(await outboxCount('magic_link')).toBe(0);
@@ -83,11 +91,12 @@ describe.skipIf(!isTestDb)('B2.16 races', () => {
   it('3. switching the newsletter topic does not bypass the per-address cooldown', async () => {
     for (let i = 0; i < 6; i++) expect((await post('/v1/shop/newsletter-signup', { email: 'victim@b216.test', topic: `t${i}` })).status).toBe(200);
     const sent = await withStore(STORE, (tx) => tx.execute(sql`SELECT count(*)::int AS n FROM email_outbox WHERE store_id = ${STORE} AND recipient = 'victim@b216.test'`));
-    expect(Number((sent.rows[0] as { n: number }).n)).toBeLessThanOrEqual(3);
+    expect(Number((sent.rows[0] as { n: number }).n)).toBe(3); // the per-address cap, not zero
     // concurrent variant
-    await Promise.all(Array.from({ length: 6 }, (_, i) => post('/v1/shop/newsletter-signup', { email: 'other@b216.test', topic: `c${i}` })));
+    const res = await Promise.all(Array.from({ length: 6 }, (_, i) => post('/v1/shop/newsletter-signup', { email: 'other@b216.test', topic: `c${i}` })));
+    expect(res.map((r) => r.status)).toEqual([200, 200, 200, 200, 200, 200]);
     const sent2 = await withStore(STORE, (tx) => tx.execute(sql`SELECT count(*)::int AS n FROM email_outbox WHERE store_id = ${STORE} AND recipient = 'other@b216.test'`));
-    expect(Number((sent2.rows[0] as { n: number }).n)).toBeLessThanOrEqual(3);
+    expect(Number((sent2.rows[0] as { n: number }).n)).toBe(3);
   });
 
   it('4. a receipt-token read shows the checkout address, never the account\'s later e-mail', async () => {
