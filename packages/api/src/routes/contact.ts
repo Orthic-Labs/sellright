@@ -174,6 +174,9 @@ contactRoutes.openapi(
     // subscriber pattern): a rolled-back insert leaves no dangling email,
     // and a missing email never leaves an undeliverable pending row.
     await withStore(st.id, async (tx) => {
+      // Serialize per (store, address): concurrent submissions for one address (e.g. from many IPs) used to all
+      // pass the SELECT below before any INSERT committed, and each sent a confirmation (B2.16 cooldown race).
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${'contact-confirm:' + st.id + ':' + email}, 0))`);
       const recent = await tx.execute(
         sql`SELECT id FROM contact_submission
             WHERE store_id = ${st.id} AND email = ${email} AND created_at > ${new Date(Date.now() - CONFIRM_COOLDOWN_MS)}

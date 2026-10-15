@@ -160,4 +160,23 @@ describe('guest email-match provenance across all order access paths', () => {
       expect(r.metadata).toHaveProperty('anonymized_at');
     }
   });
+
+  it('B2.12: a licence bought by GUEST checkout (provenance proven only by metadata.contact) is still revoked by erasure', async () => {
+    await verify();
+    const lic = await withStore(STORE, async (tx) => {
+      const r = await tx.execute(sql`INSERT INTO license (id, store_id, app_key, license_key, status, seats, source, customer_id, order_id)
+        SELECT gen_random_uuid(), ${STORE}, 'eraseapp', 'ERASE-GUEST-1', 'active'::license_status, 2, 'admin', ${CUSTOMER}, id FROM "order" WHERE code = 'GUEST-MATCH' RETURNING id`);
+      const id = (r.rows[0] as { id: string }).id;
+      await tx.execute(sql`INSERT INTO license_activation (store_id, license_id, app_key, device_id_hash, activation_token_hash)
+        VALUES (${STORE}, ${id}, 'eraseapp', 'device-hash-erase-1', 'activation-hash-erase-1')`);
+      return id;
+    });
+    const res = await app.request('/v1/shop/account', { method: 'DELETE', headers: headers() });
+    expect(res.status).toBe(200);
+    const acts = await withStore(STORE, tx => tx.execute(sql`SELECT state FROM license_activation WHERE license_id = ${lic}`));
+    expect((acts.rows as Array<{ state: string }>).map((r) => r.state)).toEqual(['revoked']);
+    const order = await withStore(STORE, tx => tx.execute(sql`SELECT metadata FROM "order" WHERE code = 'GUEST-MATCH'`));
+    expect((order.rows[0] as { metadata: Record<string, unknown> }).metadata).not.toHaveProperty('contact');
+  });
 });
+
