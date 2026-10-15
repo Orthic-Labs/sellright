@@ -316,6 +316,13 @@ const EnvSchema = z.object({
   // public peer reached the API directly and is identified by its socket address
   // (auth/rate-limit.ts pickClientIp). '' disables header trust entirely.
   TRUSTED_PROXY_HEADER: z.string().default('x-real-ip'),
+  // P1a: TCP peers whose proxy headers (TRUSTED_PROXY_HEADER, CF-Connecting-IP) are trusted:
+  // comma-separated IPs/CIDRs (IPv4 or IPv6), e.g. a remote reverse proxy on a public
+  // address. Unset = loopback + private/link-local ranges only (a proxy on the same host
+  // or a private network). BEHIND_CLOUDFLARE=1 additionally requires that the edge in
+  // front of the API rejects non-Cloudflare traffic and never forwards a client's own
+  // CF-Connecting-IP (deploy/Caddyfile strips it).
+  TRUSTED_PROXY_CIDRS: optionalEnvString,
   // P1a: admin credential-check budgets (login, step-up, 2FA enable/disable,
   // invite accept, password change), on top of the 8 / 15 min (ip, account) bucket.
   // Failures per admin account per hour across ALL IPs:

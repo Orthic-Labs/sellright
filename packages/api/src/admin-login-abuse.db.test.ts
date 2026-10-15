@@ -99,7 +99,10 @@ describe.skipIf(!isTestDb)('P1a: admin login abuse', () => {
     const token = await createAdminSession(ADMIN);
     await pool.query('UPDATE admin_user SET totp_secret = $1 WHERE id = $2', [newTotpSecret(), ADMIN]);
     let last = 0;
-    for (let i = 0; i < 9; i++) last = (await authed(token, '/v1/admin/2fa/disable', { code: '000000' }, '198.51.100.240')).status;
+    const secret = (await pool.query('SELECT totp_secret FROM admin_user WHERE id = $1', [ADMIN])).rows[0].totp_secret as string;
+    const live = new Set([-1, 0, 1].map((d) => currentTotp(secret, d)));
+    const wrong = ['000000', '111111', '222222', '333333'].find((c) => !live.has(c))!; // never a code that is valid right now
+    for (let i = 0; i < 9; i++) last = (await authed(token, '/v1/admin/2fa/disable', { code: wrong }, '198.51.100.240')).status;
     expect(last).toBe(429);
   });
 
@@ -125,12 +128,12 @@ describe.skipIf(!isTestDb)('P1a: admin login abuse', () => {
   });
 });
 
-function currentTotp(secretB32: string): string {
+function currentTotp(secretB32: string, drift = 0): string {
   const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
   let bits = '';
   for (const ch of secretB32) bits += B32.indexOf(ch).toString(2).padStart(5, '0');
   const key = Buffer.from(bits.match(/.{8}/g)!.map((b) => parseInt(b, 2)));
-  const msg = Buffer.alloc(8); msg.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30000)));
+  const msg = Buffer.alloc(8); msg.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30000) + drift));
   const h = createHmac('sha1', key).update(msg).digest();
   const o = h[h.length - 1]! & 0xf;
   return ((((h[o]! & 0x7f) << 24) | (h[o + 1]! << 16) | (h[o + 2]! << 8) | h[o + 3]!) % 1_000_000).toString().padStart(6, '0');

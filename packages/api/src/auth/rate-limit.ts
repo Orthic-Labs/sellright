@@ -112,10 +112,10 @@ export async function clearAdminAuthFailures(ip: string, account: string): Promi
  */
 export function pickClientIp(
   headers: { get: (k: string) => string | undefined },
-  opts: { behindCloudflare: boolean; trustedHeader: string; remoteAddr?: string },
+  opts: { behindCloudflare: boolean; trustedHeader: string; remoteAddr?: string; trustedProxies?: readonly string[] },
 ): string {
   const peer = normalizePeer(opts.remoteAddr);
-  const peerIsProxy = peer === undefined || isLocalProxyAddress(peer);
+  const peerIsProxy = peer === undefined || (opts.trustedProxies?.length ? inCidrs(peer, opts.trustedProxies) : isLocalProxyAddress(peer));
   if (peerIsProxy) {
     if (opts.behindCloudflare) {
       const cf = headers.get('cf-connecting-ip');
@@ -138,6 +138,35 @@ export function isLocalProxyAddress(addr: string): boolean {
   return v6 === '::1' || /^f[cd][0-9a-f]{2}:/.test(v6) || /^fe[89ab][0-9a-f]:/.test(v6);
 }
 
+/** Whether `addr` falls in any of `cidrs` (exact IP or CIDR, IPv4 / IPv6). Malformed entries never match. */
+export function inCidrs(addr: string, cidrs: readonly string[]): boolean {
+  const v = isIP(addr);
+  if (!v) return false;
+  const toBits = (ip: string, fam: number): bigint | null => {
+    if (fam === 4) return ip.split('.').reduce((acc, o) => (acc << 8n) + BigInt(Number(o)), 0n);
+    const [head, tail] = ip.toLowerCase().split('::');
+    const h = head ? head.split(':') : [];
+    const t = tail !== undefined ? (tail ? tail.split(':') : []) : [];
+    const groups = tail !== undefined ? [...h, ...Array(8 - h.length - t.length).fill('0'), ...t] : h;
+    if (groups.length !== 8) return null;
+    return groups.reduce((acc, g) => (acc << 16n) + BigInt(parseInt(g || '0', 16)), 0n);
+  };
+  const a = toBits(addr, v);
+  if (a === null) return false;
+  for (const raw of cidrs) {
+    const [net, lenStr] = raw.trim().split('/');
+    if (!net || isIP(net) !== v) continue;
+    const width = v === 4 ? 32 : 128;
+    const len = lenStr === undefined ? width : Number(lenStr);
+    if (!Number.isInteger(len) || len < 0 || len > width) continue;
+    const n = toBits(net, v);
+    if (n === null) continue;
+    const shift = BigInt(width - len);
+    if ((a >> shift) === (n >> shift)) return true;
+  }
+  return false;
+}
+
 /** Strip the IPv4-mapped IPv6 prefix node reports for dual-stack sockets. */
 function normalizePeer(addr: string | undefined): string | undefined {
   if (!addr) return undefined;
@@ -158,6 +187,7 @@ export function clientIp(c: { req: { header: (k: string) => string | undefined }
       behindCloudflare: env.BEHIND_CLOUDFLARE === '1',
       trustedHeader: env.TRUSTED_PROXY_HEADER,
       remoteAddr: e?.incoming?.socket?.remoteAddress ?? e?.remoteAddr,
+      trustedProxies: (env.TRUSTED_PROXY_CIDRS ?? '').split(',').map((x) => x.trim()).filter(Boolean),
     },
   );
 }

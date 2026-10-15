@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { attemptRetryAfter, clearAdminAuthFailures, clearLoginAttempts, clientIp, loginRetryAfter, pickClientIp, recordLoginFailure, reserveAdminAuthAttempt } from './rate-limit.js';
+import { attemptRetryAfter, clearAdminAuthFailures, inCidrs, clearLoginAttempts, clientIp, loginRetryAfter, pickClientIp, recordLoginFailure, reserveAdminAuthAttempt } from './rate-limit.js';
 import { _setRateLimitBackendForTest, createMemoryRateLimitBackend } from './rate-limit-backend.js';
 
 /**
@@ -181,5 +181,24 @@ describe('memory backend cleanup keeps each bucket\'s own window', () => {
       for (let i = 0; i < 5001; i++) await b.recordFailure('short', `k${i}`, 15 * 60 * 1000); // > 5000 keys -> cleanup
       expect(await b.check('hourly', 'acct', 60 * 60 * 1000, 20)).toBeGreaterThan(0);
     } finally { vi.useRealTimers(); }
+  });
+});
+
+describe('TRUSTED_PROXY_CIDRS (P1a review)', () => {
+  it('inCidrs matches exact IPs and CIDRs for v4 and v6, never malformed entries', () => {
+    expect(inCidrs('203.0.113.7', ['203.0.113.0/24'])).toBe(true);
+    expect(inCidrs('203.0.114.7', ['203.0.113.0/24'])).toBe(false);
+    expect(inCidrs('198.51.100.9', ['198.51.100.9'])).toBe(true);
+    expect(inCidrs('2001:db8::5', ['2001:db8::/32'])).toBe(true);
+    expect(inCidrs('2001:db9::5', ['2001:db8::/32'])).toBe(false);
+    expect(inCidrs('203.0.113.7', ['not-an-ip/8', '203.0.113.0/99'])).toBe(false);
+  });
+
+  it('a configured PUBLIC proxy is trusted for its header; another public client is not', () => {
+    const opts = { behindCloudflare: false, trustedHeader: 'x-real-ip', trustedProxies: ['203.0.113.0/24'] };
+    expect(pickClientIp(headers({ 'x-real-ip': '198.51.100.44' }), { ...opts, remoteAddr: '203.0.113.10' })).toBe('198.51.100.44');
+    expect(pickClientIp(headers({ 'x-real-ip': '198.51.100.44' }), { ...opts, remoteAddr: '192.0.2.10' })).toBe('192.0.2.10');
+    // once CIDRs are configured, an unlisted private peer is not implicitly trusted either
+    expect(pickClientIp(headers({ 'x-real-ip': '198.51.100.44' }), { ...opts, remoteAddr: '10.0.0.5' })).toBe('10.0.0.5');
   });
 });
