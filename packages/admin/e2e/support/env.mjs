@@ -11,6 +11,7 @@ export const AUTH_FILE = join(RUN_DIR, 'owner.storage.json');
 // Ports are deliberately NOT the dev API (3300) or the storefront e2e (4398).
 export const API_PORT = Number(process.env.E2E_API_PORT ?? 3399);
 export const ADMIN_PORT = Number(process.env.E2E_ADMIN_PORT ?? 4399);
+export const SMTP_PORT = Number(process.env.E2E_SMTP_PORT ?? 3398);
 export const API_URL = `http://127.0.0.1:${API_PORT}`;
 export const ADMIN_URL = `http://127.0.0.1:${ADMIN_PORT}`;
 

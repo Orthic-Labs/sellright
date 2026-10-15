@@ -387,11 +387,13 @@ export async function sendShippingNotification(store: StoreEmailCtx, to: string,
   await sendEmail({ to, from: ctx.fromEmail, ...shippingNotification(ctx, data) }, ctx.storeId);
 }
 
+/** Returns the delivery outcome: the invite route refuses (and discards the invite) when the
+ *  mail was not delivered, because the accept token is never shown to the inviter (P0). */
 export async function sendStaffInvite(store: StoreEmailCtx, to: string, data: {
   acceptUrl: string; role: string; inviterEmail: string;
-}): Promise<void> {
+}): Promise<{ delivered: boolean; reason?: string }> {
   const ctx = emailCtx(store);
-  await sendEmail({ to, from: ctx.fromEmail, ...staffInvite(ctx, data) }, ctx.storeId);
+  return sendEmail({ to, from: ctx.fromEmail, ...staffInvite(ctx, data) }, ctx.storeId);
 }
 
 export async function sendTrialKey(store: StoreEmailCtx, to: string, data: {

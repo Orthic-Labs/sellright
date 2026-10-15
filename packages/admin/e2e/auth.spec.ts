@@ -2,6 +2,7 @@ import { test, expect } from './fixtures';
 import { AdminApi, totpAt, totpStep, uniq } from './support/api';
 import { field } from './fixtures';
 import { ADMIN_URL, OWNER_EMAIL, OWNER_PASSWORD } from './support/env.mjs';
+import { inviteTokenFor } from './support/mailbox';
 
 /**
  * Sign-in, sign-out and 2FA (the harness's own login path, plus the TOTP secret flow the plan asked for).
@@ -38,7 +39,8 @@ test.describe('admin sign-in', () => {
 		// together with the password. First attempt without a code is refused generically; the second carries the code.
 		const email = `${uniq('tf')}@example.net`;
 		const password = 'twofa-e2e-password-1';
-		const inv = await api.post<{ token: string }>('/staff/invites', { email, role: 'manager' });
+		await api.post('/staff/invites', { email, role: 'manager' });
+		const inv = { token: await inviteTokenFor(email) };
 		const accepted = await fetch(`${new URL(ADMIN_URL).origin}/v1/admin/staff/accept`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: inv.token, password }) });
 		expect(accepted.status).toBe(200);
 
@@ -64,7 +66,8 @@ test.describe('admin sign-in', () => {
 	test('API contract: 2FA login needs password AND code together; a wrong or missing code is the same generic 401', async ({ api }) => {
 		const email = `${uniq('tc')}@example.net`;
 		const password = 'twofa-api-password-1';
-		const inv = await api.post<{ token: string }>('/staff/invites', { email, role: 'staff' });
+		await api.post('/staff/invites', { email, role: 'staff' });
+		const inv = { token: await inviteTokenFor(email) };
 		await fetch(`${new URL(ADMIN_URL).origin}/v1/admin/staff/accept`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: inv.token, password }) });
 		const mine = await AdminApi.login(email, password);
 		const { secret } = await mine.post<{ secret: string }>('/2fa/setup');

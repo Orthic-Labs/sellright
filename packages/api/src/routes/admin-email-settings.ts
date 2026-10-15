@@ -11,13 +11,14 @@ import { eq } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { env } from '../env.js';
-import { HttpError, J, errBody, guard, requireAdmin, requireManage, requireStore, requireWrite } from './admin-helpers.js';
+import { HttpError, J, errBody, guard, requireAdmin, requireManage, requireOwner, requireStore, requireWrite } from './admin-helpers.js';
 import { mutateStoreConfig } from './admin-settings.js';
+import { lockMembershipAsCaller } from './admin-settings-advanced.js';
 import { encryptSecret, last4 as computeLast4 } from '../security/secret-crypto.js';
 import { isEnvManaged } from '../security/settings-resolver.js';
 import { readSecret, purposeKey, scopeFor } from './admin-payment-settings.js';
 import { SMTP_PRESETS, SmtpConfig, smtpConfigFromStoreConfig, resolveSmtpPreset, sendTestEmail, type SmtpPresetId } from '../email/smtp-settings.js';
-import { sendEmail } from '../email/mailer.js';
+import { invalidateStoreTransport, sendEmail } from '../email/mailer.js';
 
 export const adminEmailSettings = new OpenAPIHono();
 
@@ -60,37 +61,42 @@ adminEmailSettings.openapi(
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
-    const st = requireStore(admin, c); requireWrite(st); requireManage(st);
+    // Owner only (P0 review): the store's SMTP account carries staff-invite links (the token is e-mail-only), so a
+    // manager must not be able to point it at a server they control and harvest invites issued by an owner.
+    const st = requireStore(admin, c); requireWrite(st); requireManage(st); requireOwner(st);
     if (isEnvManaged(env.SMTP_HOST)) throw new HttpError(409, 'Email is managed by server configuration (SMTP_HOST is set)');
     const b = c.req.valid('json');
     const resolved = resolveSmtpPreset(b.preset as SmtpPresetId, { host: b.host, port: b.port, secure: b.secure });
 
+    // ONE transaction: re-authorize the caller as an owner under the store's membership lock (a caller demoted or
+    // removed while this request waited is refused), then write the SMTP config and its credential atomically.
     await mutateStoreConfig(st.storeId, (config) => ({
       ...config,
       email: { ...(config.email as object ?? {}), smtp: { preset: b.preset, ...resolved, user: b.user, from: b.from } },
     }), {
       actor: admin.email, action: 'settings_update',
       detail: () => ({ section: 'email_smtp', preset: b.preset, host: resolved.host, port: resolved.port }),
-    });
-
-    if (b.credential) {
-      await withStore(st.storeId, async (tx) => {
+    }, {
+      before: async (tx) => { requireOwner(await lockMembershipAsCaller(tx, st, admin.id)); },
+      after: async (tx) => {
+        if (!b.credential) return;
         const scope = scopeFor(st.storeId, 'smtp', 'default', 'authCredential');
-        const sealed = encryptSecret(b.credential!, { purpose: purposeKey(scope) });
+        const sealed = encryptSecret(b.credential, { purpose: purposeKey(scope) });
         await tx.insert(s.storeSecret).values({
           storeId: st.storeId, provider: 'smtp', mode: 'default', field: 'authCredential',
           keyVersion: sealed.v, iv: sealed.iv, ciphertext: sealed.ct, authTag: sealed.tag,
-          last4: computeLast4(b.credential!), updatedBy: admin.email,
+          last4: computeLast4(b.credential), updatedBy: admin.email,
         }).onConflictDoUpdate({
           target: [s.storeSecret.storeId, s.storeSecret.provider, s.storeSecret.mode, s.storeSecret.field],
-          set: { keyVersion: sealed.v, iv: sealed.iv, ciphertext: sealed.ct, authTag: sealed.tag, last4: computeLast4(b.credential!), updatedBy: admin.email, updatedAt: new Date() },
+          set: { keyVersion: sealed.v, iv: sealed.iv, ciphertext: sealed.ct, authTag: sealed.tag, last4: computeLast4(b.credential), updatedBy: admin.email, updatedAt: new Date() },
         });
         await tx.insert(s.auditLog).values({
           storeId: st.storeId, actor: admin.email, entity: 'store_secret', entityId: 'smtp:default:authCredential',
-          action: 'secret_update', data: { provider: 'smtp', mode: 'default', field: 'authCredential', last4: computeLast4(b.credential!) },
+          action: 'secret_update', data: { provider: 'smtp', mode: 'default', field: 'authCredential', last4: computeLast4(b.credential) },
         });
-      });
-    }
+      },
+    });
+    invalidateStoreTransport(st.storeId); // the next send (e.g. a retried staff invite) uses the new settings
     return c.json({ ok: true }, 200);
   }),
 );

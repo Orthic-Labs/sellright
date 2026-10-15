@@ -69,8 +69,12 @@ export async function mutateStoreConfig(
   storeId: string,
   mutate: (config: Record<string, unknown>) => Record<string, unknown>,
   audit?: SettingsAudit,
+  hooks?: { before?: (tx: Parameters<Parameters<typeof withStore>[1]>[0]) => Promise<void>; after?: (tx: Parameters<Parameters<typeof withStore>[1]>[0]) => Promise<void> },
 ): Promise<Record<string, unknown>> {
   const { slug, next } = await withStore(storeId, async (tx) => {
+    // Optional same-transaction hooks: `before` runs ahead of the config read (e.g. a re-authorization under a lock),
+    // `after` alongside the write (e.g. a credential that must commit atomically with the config).
+    if (hooks?.before) await hooks.before(tx);
     const [row] = await tx
       .select({ slug: s.store.slug, config: s.store.config })
       .from(s.store)
@@ -90,6 +94,7 @@ export async function mutateStoreConfig(
         data: audit.detail ? audit.detail(prev, v) : undefined,
       });
     }
+    if (hooks?.after) await hooks.after(tx);
     return { slug: row!.slug, next: v };
   });
   await broadcastStoreCacheInvalidation(slug);
