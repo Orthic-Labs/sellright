@@ -214,7 +214,7 @@ test.describe('staff', () => {
 		await acceptInvite(await inviteTokenFor(email));
 		const mine = await AdminApi.login(email, PASSWORD);
 		const { secret } = await mine.post<{ secret: string }>('/2fa/setup');
-		await mine.post('/2fa/enable', { secret, code: totpAt(secret, totpStep()) });
+		await mine.post('/2fa/enable', { secret, code: totpAt(secret, totpStep()), password: PASSWORD });
 		const id = (await api.get<{ items: { adminUserId: string; email: string }[] }>('/staff')).items.find((m) => m.email === email)!.adminUserId;
 		await api.raw('DELETE', `/staff/${id}`);
 		await api.post('/staff/invites', { email, role: 'manager' });

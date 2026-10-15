@@ -1,4 +1,5 @@
 import { StrictMode, useEffect, useState } from 'react';
+import { TwoFactorEnroll } from './components/TwoFactorEnroll';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -62,10 +63,27 @@ import Staff from './pages/Staff';
 
 const qc = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false, staleTime: 15_000 } } });
 
+function EnrollTwoFactorRequired() {
+  const { me, refresh, logout } = useAuth();
+  return (
+    <div className="h-full grid place-items-center bg-[#f1f1f1] p-4">
+      <div className="w-full max-w-md card p-6">
+        <h1 className="text-base font-semibold">Set up two-factor authentication</h1>
+        <p className="text-sm text-gray-500 mt-1 mb-4">Two-factor authentication is required for {me?.email}. Set it up to continue to the admin.</p>
+        <TwoFactorEnroll onDone={() => { void refresh(); }} />
+        <button className="btn-ghost mt-4" onClick={() => { void logout(); }}>Sign out</button>
+      </div>
+    </div>
+  );
+}
+
 function Protected() {
   const { loading, me } = useAuth();
   if (loading) return <div className="h-full grid place-items-center"><Loading label="Starting up" /></div>;
   if (!me) return <Navigate to="/login" replace />;
+  // P1b: policy requires 2FA and none is enrolled — the API only lets this session enrol, so the whole app is
+  // replaced by the enrolment screen until it is done.
+  if (me.totpEnrollmentRequired) return <EnrollTwoFactorRequired />;
   return (
     <>
       <Layout />

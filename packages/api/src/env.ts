@@ -328,6 +328,11 @@ const EnvSchema = z.object({
       && (x.includes('/') ? Number(x.split('/')[1]) <= (isIP(x.split('/')[0]!) === 4 ? 32 : 128) : true)),
     'TRUSTED_PROXY_CIDRS must be comma-separated IPs or CIDRs (e.g. 203.0.113.0/24, 2001:db8::/32)',
   ).optional()),
+  // P1b: require TOTP for admins. 'off' (default) = per-store setting only
+  // (store.config.security.requireTotp for owners/managers); 'privileged' = also
+  // every installation admin and every owner/manager; 'all' = every human admin.
+  // Admins without TOTP then get a session that can only enrol.
+  ADMIN_REQUIRE_TOTP: z.enum(['off', 'privileged', 'all']).default('off'),
   // P1a: admin credential-check budgets (login, step-up, 2FA enable/disable,
   // invite accept, password change), on top of the 8 / 15 min (ip, account) bucket.
   // Failures per admin account per hour across ALL IPs:

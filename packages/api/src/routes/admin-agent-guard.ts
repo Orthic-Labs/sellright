@@ -5,6 +5,7 @@ import { cookie, SESSION_COOKIE } from '../auth/cookies.js';
 import { resolveAdmin, type AdminPrincipal } from '../auth/admin-session.js';
 import { isAgentToken, resolveAgentByToken } from '../auth/admin-api-token.js';
 import { agentDenied } from '../auth/agent-policy.js';
+import { ENROLLMENT_ALLOWED } from '../auth/mfa-policy.js';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { errJson } from '../lib/api-error.js';
@@ -44,9 +45,15 @@ export const adminAgentGuard: MiddlewareHandler = async (c, next) => {
   const admin = isAgentToken(token) ? await resolveAgentByToken(token) : await resolveAdmin(token);
   if (!admin) return next();
   c.set('adminPrincipal', admin);
-  if (admin.kind !== 'agent') return next();
   const method = c.req.method.toUpperCase();
   const route = [...matchedRoutes(c)].reverse().find((r) => !r.path.includes('*'))?.path ?? path;
+  if (admin.kind !== 'agent') {
+    // P1b: TOTP is required for this admin but not enrolled — the session may only enrol (auth/mfa-policy.ts).
+    if (admin.totpRequired && !admin.totpEnabled && !ENROLLMENT_ALLOWED.has(`${method} ${route}`)) {
+      return errJson(c, 403, 'TOTP_ENROLLMENT_REQUIRED', 'two-factor authentication is required for your account — set up an authenticator app to continue');
+    }
+    return next();
+  }
   const st = admin.stores[0]!;
   const group = agentDenied(method, route);
   if (group) {

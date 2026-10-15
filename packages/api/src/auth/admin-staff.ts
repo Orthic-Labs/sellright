@@ -18,6 +18,7 @@ import { and, desc, eq } from 'drizzle-orm';
 import { unsafeUnscopedDb as db } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { normalizeEmail } from './email.js';
+import { openTotpSecret, sealTotpSecret } from './totp-secret.js';
 
 // ── 2FA (admin_user.totpSecret) ───────────────────────────────────────────────
 
@@ -28,7 +29,7 @@ export async function getAdminTotpSecret(adminId: string): Promise<string | null
     .from(s.adminUser)
     .where(eq(s.adminUser.id, adminId))
     .limit(1);
-  return u?.totpSecret ?? null;
+  return openTotpSecret(adminId, u?.totpSecret);
 }
 
 /** Both credential facts POST /v1/admin/step-up needs in one query: the
@@ -41,12 +42,19 @@ export async function getAdminCredentialsById(adminId: string): Promise<{ passwo
     .from(s.adminUser)
     .where(eq(s.adminUser.id, adminId))
     .limit(1);
-  return u ?? null;
+  return u ? { passwordHash: u.passwordHash, totpSecret: openTotpSecret(adminId, u.totpSecret) } : null;
 }
 
-/** Set the TOTP secret (called from /v1/admin/2fa/enable after a code is confirmed). */
+/** Set the TOTP secret (called from /v1/admin/2fa/enable after a code is confirmed). Sealed at rest
+ *  with the master key (auth/totp-secret.ts). */
 export async function setAdminTotpSecret(adminId: string, secret: string): Promise<void> {
-  await db.update(s.adminUser).set({ totpSecret: secret }).where(eq(s.adminUser.id, adminId));
+  await db.update(s.adminUser).set({ totpSecret: sealTotpSecret(adminId, secret) }).where(eq(s.adminUser.id, adminId));
+}
+
+/** Replace an admin's password hash (POST /v1/admin/password, after the route re-verified the current
+ *  password and a recent step-up). Never called by invite or staff-management flows. */
+export async function setAdminPasswordHash(adminId: string, passwordHash: string): Promise<void> {
+  await db.update(s.adminUser).set({ passwordHash }).where(eq(s.adminUser.id, adminId));
 }
 
 /** Clear the TOTP secret (called from /v1/admin/2fa/disable). */
@@ -64,7 +72,7 @@ export async function findAdminCredentialsByEmail(email: string): Promise<{ id: 
     .from(s.adminUser)
     .where(eq(s.adminUser.email, normalizeEmail(email)))
     .limit(1);
-  return u ?? null;
+  return u ? { ...u, totpSecret: openTotpSecret(u.id, u.totpSecret) } : null;
 }
 
 // ── staff (admin_user_store ACL) ──────────────────────────────────────────────

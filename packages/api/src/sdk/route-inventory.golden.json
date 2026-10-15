@@ -1,5 +1,5 @@
 {
-  "count": 335,
+  "count": 339,
   "routes": [
     "DELETE /v1/admin/agents/{adminUserId}",
     "DELETE /v1/admin/assets/{id}",
@@ -86,6 +86,7 @@
     "GET /v1/admin/seo/config",
     "GET /v1/admin/seo/sitemaps",
     "GET /v1/admin/settings/identity",
+    "GET /v1/admin/settings/security",
     "GET /v1/admin/settings/store",
     "GET /v1/admin/sheerid/config",
     "GET /v1/admin/sheerid/verifications",
@@ -177,6 +178,7 @@
     "PATCH /v1/admin/settings/payments",
     "PATCH /v1/admin/settings/payments/stripe-mode",
     "PATCH /v1/admin/settings/publish",
+    "PATCH /v1/admin/settings/security",
     "PATCH /v1/admin/settings/store",
     "PATCH /v1/admin/sheerid/config",
     "PATCH /v1/admin/shipping-methods/{id}",
@@ -198,6 +200,7 @@
     "POST /api/licenses/trial",
     "POST /v1/admin/2fa/disable",
     "POST /v1/admin/2fa/enable",
+    "POST /v1/admin/2fa/recovery-codes",
     "POST /v1/admin/2fa/setup",
     "POST /v1/admin/affiliates",
     "POST /v1/admin/affiliates/{id}/settle",
@@ -244,6 +247,7 @@
     "POST /v1/admin/orders/bulk-purge",
     "POST /v1/admin/orders/bulk-restore",
     "POST /v1/admin/orders/bulk-soft-delete",
+    "POST /v1/admin/password",
     "POST /v1/admin/payment-reconciliation/{id}/verify",
     "POST /v1/admin/payment-reconciliation/effects/{id}/approve-issuance",
     "POST /v1/admin/payment-reconciliation/effects/{id}/retry",

@@ -30,6 +30,7 @@ import { log, err as logError, resetLogger } from '../lib/logger.js';
 import { fingerprint } from './fingerprint.js';
 import { clearAasaOverlays, registerAasaOverlay } from '../routes/well-known.js';
 import { setEngineState } from './engine-state.js';
+import { sealLegacyTotpSecrets } from '../auth/totp-secret.js';
 import { assertMigrationsCurrent, resolveTracks } from './migrations.js';
 import {
   type CreateAppOptions, type EngineApp, type EngineContext, type EnginePlugin, type LifecyclePhase,
@@ -282,6 +283,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<EngineA
         // SELLRIGHT-ISSUES P2: cross-process store-config cache invalidation (LISTEN side).
         // Best-effort: a failure leaves the 60s TTL as the fallback, so it never blocks startup.
         startStoreCacheInvalidationListener().catch((e) => log.info('store cache invalidation listener failed to start (60s TTL is the fallback)', { err: String(e) }));
+        // P1b: seal any legacy plaintext admin TOTP secrets with SELLRIGHT_MASTER_KEY (idempotent, best-effort;
+        // a failure leaves them readable as before and is retried on the next start).
+        sealLegacyTotpSecrets()
+          .then((n) => { if (n > 0) log.info('sealed legacy admin TOTP secrets', { count: n }); })
+          .catch((e) => logError.error('sealing legacy admin TOTP secrets failed', e));
         phase = 'started';
         if (startOptions.handleSignals) {
           const timeoutMs = startOptions.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS;

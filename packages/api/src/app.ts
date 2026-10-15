@@ -23,6 +23,7 @@ import { adminOrderEdit } from './routes/admin-order-edit.js';
 import { adminOrderOps } from './routes/admin-order-ops.js';
 import { adminMarketing } from './routes/admin-marketing.js';
 import { adminSettings } from './routes/admin-settings.js';
+import { adminSecurity } from './routes/admin-security.js';
 import { adminLoyalty } from './routes/admin-loyalty.js';
 import { reviews } from './routes/reviews.js';
 import { adminReviews } from './routes/admin-reviews.js';
@@ -405,6 +406,7 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
   app.route('/', adminOrderOps); // draft orders, tracking import, export, bulk order operations
   app.route('/', adminMarketing); // promotions manager + Listmonk integration
   app.route('/', adminSettings); // store/tax, payments, shipping, staff/roles, notifications
+  app.route('/', adminSecurity); // P1b: 2FA enrolment + recovery codes, password change, per-store 2FA requirement
   app.route('/', adminLoyalty); // LOYALTY-1: points program settings, customer ledger, manual adjust
   app.route('/', adminReviews); // REWARDS-1: review moderation + settings
   app.route('/', adminPaymentSettings); // WS-A: encrypted per-store payment credentials, verify, Stripe webhook auto-create

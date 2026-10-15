@@ -158,6 +158,23 @@ export const adminApiToken = pgTable('admin_api_token', {
   createdAt: ts(),
 });
 
+// One-time 2FA recovery codes (0097). Global registry like admin_user — RLS-exempt, no store_id.
+// Only sha256(code) is stored; used_at marks a spent code. See src/auth/second-factor.ts.
+export const adminRecoveryCode = pgTable('admin_recovery_code', {
+  id: uuid().primaryKey().defaultRandom(),
+  adminUserId: uuid().notNull().references(() => adminUser.id, { onDelete: 'cascade' }),
+  codeHash: text().notNull(),
+  usedAt: timestamp({ withTimezone: true }),
+  createdAt: ts(),
+});
+
+// Accepted TOTP time-steps per admin (0097): the durable, cross-process replay guard. See auth/second-factor.ts.
+export const adminTotpUsedStep = pgTable('admin_totp_used_step', {
+  adminUserId: uuid().notNull().references(() => adminUser.id, { onDelete: 'cascade' }),
+  step: bigint({ mode: 'number' }).notNull(),
+  usedAt: ts(),
+}, (t) => [primaryKey({ columns: [t.adminUserId, t.step] })]);
+
 export const session = pgTable('session', {
   id: uuid().primaryKey().defaultRandom(),
   storeId: uuid().references(() => store.id),

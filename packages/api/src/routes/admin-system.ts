@@ -12,7 +12,7 @@ import { env } from '../env.js';
 import { getAdminCredentialsById, getRecoveryKitDownloadedAt, markRecoveryKitDownloaded } from '../auth/admin-staff.js';
 import { markStepUpVerified } from '../auth/admin-session.js';
 import { verifyPassword } from '../auth/password.js';
-import { verifyTotp } from '../auth/totp.js';
+import { verifySecondFactor } from '../auth/second-factor.js';
 import { clientIp, reserveAdminAuthAttempt, clearAdminAuthFailures } from '../auth/rate-limit.js';
 import { isEnvManaged } from '../security/settings-resolver.js';
 // SELLRIGHT_MASTER_KEY/RECOVERY_KIT_ID are read directly from process.env,
@@ -173,7 +173,7 @@ adminSystem.openapi(
       
       throw new HttpError(401, 'invalid password or 2FA code');
     }
-    if (creds.totpSecret && (!totp || !verifyTotp(creds.totpSecret, totp, admin.id))) {
+    if (creds.totpSecret && !(await verifySecondFactor(admin.id, creds.totpSecret, totp))) {
       
       throw new HttpError(401, 'invalid password or 2FA code');
     }

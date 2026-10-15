@@ -1,8 +1,10 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { and, eq, gt, isNotNull } from 'drizzle-orm';
+import { and, eq, gt, isNotNull, ne, sql } from 'drizzle-orm';
+import { totpRequiredFor } from './mfa-policy.js';
 import { unsafeUnscopedDb as db, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { normalizeEmail } from './email.js';
+import { openTotpSecret } from './totp-secret.js';
 
 const ADMIN_SESSION_TTL_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
 const hashToken = (t: string) => createHash('sha256').update(t).digest('hex');
@@ -16,6 +18,8 @@ export interface AdminStoreAccess {
   shippingTaxable: boolean;
   role: 'owner' | 'manager' | 'staff' | 'read_only';
   permissions: Record<string, boolean> | null;
+  /** store.config.security.requireTotp — this store requires TOTP for its owners/managers (P1b). */
+  requireTotp?: boolean;
 }
 
 export interface AdminPrincipal {
@@ -36,6 +40,10 @@ export interface AdminPrincipal {
    *  per-admin — see requireStepUp() in routes/admin-helpers.ts. */
   stepUpAt: Date | null;
   stores: AdminStoreAccess[];
+  /** P1b: the admin has a TOTP secret enrolled. Absent for agents. */
+  totpEnabled?: boolean;
+  /** P1b: policy (auth/mfa-policy.ts) requires TOTP for this admin. */
+  totpRequired?: boolean;
 }
 
 /**
@@ -78,6 +86,8 @@ export async function resolveAdmin(token: string): Promise<AdminPrincipal | null
       email: s.adminUser.email,
       isInstallationAdmin: s.adminUser.isInstallationAdmin,
       kind: s.adminUser.kind,
+      totpEnabled: sql<boolean>`(${s.adminUser.totpSecret} is not null)`,
+      storeRequireTotp: sql<boolean>`coalesce((${s.store.config} -> 'security' ->> 'requireTotp') = 'true', false)`,
       stepUpAt: s.session.stepUpAt,
       apiTokenId: s.session.apiTokenId,
       tokenAdminUserId: s.adminApiToken.adminUserId,
@@ -118,6 +128,7 @@ export async function resolveAdmin(token: string): Promise<AdminPrincipal | null
       shippingTaxable: r.shippingTaxable ?? false,
       role: r.role as AdminStoreAccess['role'],
       permissions: (r.permissions as Record<string, boolean> | null) ?? null,
+      requireTotp: r.storeRequireTotp === true,
     }));
   const kind = first.kind === 'agent' ? 'agent' : 'human';
   if (first.apiTokenId) {
@@ -128,7 +139,21 @@ export async function resolveAdmin(token: string): Promise<AdminPrincipal | null
   // Token-bound sessions belong to agents only; agents only ever hold token-bound sessions, on exactly one store, never as owner (D2).
   if (first.apiTokenId && kind !== 'agent') return null; // invalid state (Astra v5 F12): a human must never inherit a token binding
   if (kind === 'agent' && (!first.apiTokenId || stores.length !== 1 || stores[0]!.role === 'owner')) return null;
-  return { id: first.id, email: first.email, kind, auth: 'session', apiTokenId: first.apiTokenId, isInstallationAdmin: first.isInstallationAdmin, stepUpAt: first.stepUpAt, stores };
+  const principal: AdminPrincipal = { id: first.id, email: first.email, kind, auth: 'session', apiTokenId: first.apiTokenId, isInstallationAdmin: first.isInstallationAdmin, stepUpAt: first.stepUpAt, stores };
+  if (kind === 'human') {
+    principal.totpEnabled = first.totpEnabled === true;
+    principal.totpRequired = totpRequiredFor(principal);
+  }
+  return principal;
+}
+
+/** Sign out every OTHER session of this admin (password change). Returns the number revoked. */
+export async function revokeOtherAdminSessions(adminUserId: string, keepToken: string): Promise<number> {
+  const del = await db
+    .delete(s.session)
+    .where(and(eq(s.session.adminUserId, adminUserId), ne(s.session.tokenHash, hashToken(keepToken))))
+    .returning({ id: s.session.id });
+  return del.length;
 }
 
 /** Records that THIS session (identified by its own bearer token, not the
@@ -145,5 +170,5 @@ export async function findAdminByEmail(email: string) {
     .from(s.adminUser)
     .where(eq(s.adminUser.email, normalizeEmail(email)))
     .limit(1);
-  return u ?? null;
+  return u ? { ...u, totpSecret: openTotpSecret(u.id, u.totpSecret) } : null;
 }
