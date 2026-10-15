@@ -551,6 +551,15 @@ account.openapi(
         }
       }
 
+      // Contact PII captured at checkout (metadata.contact.email, …) is scrubbed from the erased orders
+      // too, not only addresses/customerId. Done AFTER the licence lookup above: its provenance filter
+      // reads metadata.contact.email. Financial/legal fields (totals, legal_acceptance, loyalty) stay.
+      if (erasedOrderIds.length) {
+        await tx.update(s.order)
+          .set({ metadata: sql`(coalesce(${s.order.metadata}, '{}'::jsonb) - 'contact' - 'email' - 'phone' - 'customerEmail' - 'guestEmail' - 'customerName' - 'customerNote')` })
+          .where(and(eq(s.order.storeId, st.id), inArray(s.order.id, erasedOrderIds)));
+      }
+
       // Unproven old-mailbox links may still reference this account. Detach
       // them without scrubbing the real shopper's order/address data.
       await tx.update(s.order).set({ customerId: null }).where(eq(s.order.customerId, cust.id));

@@ -146,7 +146,10 @@ export async function activateLicenseOnDevice(
   // seats <= 0 means UNLIMITED devices (no flat device cap by policy; the license date
   // is the only limit). A positive seats value still enforces the per-license device cap.
   const unlimited = lic.seats <= 0;
-  if (!unlimited && !sameDevice && activeExisting.length >= lic.seats) return { kind: 'full' as const };
+  // Only a LIVE same-device row already holds a seat. Re-admitting a tombstoned device ('removed'/'revoked')
+  // takes a new seat, so it must fit the live flat cap like a brand-new device.
+  const sameDeviceLive = !!sameDevice && existing.some((row) => row.id === sameDevice.id && row.state === 'active');
+  if (!unlimited && !sameDeviceLive && activeExisting.length >= lic.seats) return { kind: 'full' as const };
 
   // Bounded device pools (registered per-app device policy). The route/proof
   // source, not request deviceClass, picks the pool.
@@ -161,7 +164,8 @@ export async function activateLicenseOnDevice(
       ? storedPool(existing.find((row) => row.id === sameDevice.id) ?? { pool: null, deviceClass: null })
       : null;
     const movingPool = sameDevicePool !== pool;
-    if ((!sameDevice || movingPool)
+    // Same rule for the pool: a tombstoned same-device row frees its pool slot, so re-admission counts.
+    if ((!sameDeviceLive || movingPool)
       && activeExisting.filter((row) => row.id !== sameDevice?.id && storedPool(row) === pool).length >= poolCap(input.appKey, pool)) {
       return { kind: 'full' as const };
     }
