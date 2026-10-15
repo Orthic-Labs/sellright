@@ -12,7 +12,7 @@ SellRight keeps catalog, carts, checkout, payments and order operations in one P
 
 > **Status:** Pre-1.0; suitable for development and evaluation. Production adoption requires gateway acceptance, migration rehearsal, backups and rollback verification. Implemented adapters do not mean every merchant deployment passed acceptance.
 
-> **License:** Source-available under the Business Source License 1.1, free for organizations with up to 25 Covered Persons; each version converts to Apache-2.0 on its Change Date. See [LICENSE](LICENSE).
+> **License:** Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
 ## What you get
 
@@ -99,7 +99,7 @@ Database tests require a dedicated disposable `*_test` database. They can trunca
 
 ## License
 
-SellRight is source-available under the **Business Source License 1.1**, not an OSI Open Source license before its Change Date. Production use is free for organizations with no more than **25 Covered Persons**, as defined in [LICENSE](LICENSE); larger organizations require a commercial license. Each version converts to Apache-2.0 on its Change Date. The license text is authoritative.
+SellRight is licensed under the **Apache License 2.0**. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
 ---
 
