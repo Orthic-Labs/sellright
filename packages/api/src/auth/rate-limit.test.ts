@@ -192,6 +192,9 @@ describe('TRUSTED_PROXY_CIDRS (P1a review)', () => {
     expect(inCidrs('2001:db8::5', ['2001:db8::/32'])).toBe(true);
     expect(inCidrs('2001:db9::5', ['2001:db8::/32'])).toBe(false);
     expect(inCidrs('203.0.113.7', ['not-an-ip/8', '203.0.113.0/99'])).toBe(false);
+    // a trailing slash or extra components never widen to /0 (review round 3)
+    expect(inCidrs('198.51.100.1', ['203.0.113.10/'])).toBe(false);
+    expect(inCidrs('198.51.100.1', ['203.0.113.10/24/0'])).toBe(false);
   });
 
   it('a configured PUBLIC proxy is trusted for its header; another public client is not', () => {

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isIP } from 'node:net';
 import { productionEnvErrors, resolveFileBackedEnv } from './env-runtime.js';
 import { assertAllowedSenders, parseSenderDomainList } from './email/sender-policy.js';
 
@@ -322,7 +323,11 @@ const EnvSchema = z.object({
   // or a private network). BEHIND_CLOUDFLARE=1 additionally requires that the edge in
   // front of the API rejects non-Cloudflare traffic and never forwards a client's own
   // CF-Connecting-IP (deploy/Caddyfile strips it).
-  TRUSTED_PROXY_CIDRS: optionalEnvString,
+  TRUSTED_PROXY_CIDRS: z.preprocess(emptyToUndefined, z.string().refine(
+    (v) => v.split(',').map((x) => x.trim()).filter(Boolean).every((x) => /^([^/\s]+)(\/\d{1,3})?$/.test(x) && isIP(x.split('/')[0]!) !== 0
+      && (x.includes('/') ? Number(x.split('/')[1]) <= (isIP(x.split('/')[0]!) === 4 ? 32 : 128) : true)),
+    'TRUSTED_PROXY_CIDRS must be comma-separated IPs or CIDRs (e.g. 203.0.113.0/24, 2001:db8::/32)',
+  ).optional()),
   // P1a: admin credential-check budgets (login, step-up, 2FA enable/disable,
   // invite accept, password change), on top of the 8 / 15 min (ip, account) bucket.
   // Failures per admin account per hour across ALL IPs:

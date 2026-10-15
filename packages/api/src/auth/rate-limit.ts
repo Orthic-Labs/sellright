@@ -138,6 +138,18 @@ export function isLocalProxyAddress(addr: string): boolean {
   return v6 === '::1' || /^f[cd][0-9a-f]{2}:/.test(v6) || /^fe[89ab][0-9a-f]:/.test(v6);
 }
 
+/** Strict CIDR syntax: an IP, or an IP + '/' + a non-empty decimal prefix within the family width. null otherwise. */
+export function parseCidr(raw: string): { net: string; len: number; family: 4 | 6 } | null {
+  const m = /^([^/\s]+)(?:\/(\d{1,3}))?$/.exec(raw.trim());
+  if (!m) return null;
+  const family = isIP(m[1]!);
+  if (family !== 4 && family !== 6) return null;
+  const width = family === 4 ? 32 : 128;
+  const len = m[2] === undefined ? width : Number(m[2]);
+  if (!Number.isInteger(len) || len < 0 || len > width) return null;
+  return { net: m[1]!, len, family };
+}
+
 /** Whether `addr` falls in any of `cidrs` (exact IP or CIDR, IPv4 / IPv6). Malformed entries never match. */
 export function inCidrs(addr: string, cidrs: readonly string[]): boolean {
   const v = isIP(addr);
@@ -154,11 +166,10 @@ export function inCidrs(addr: string, cidrs: readonly string[]): boolean {
   const a = toBits(addr, v);
   if (a === null) return false;
   for (const raw of cidrs) {
-    const [net, lenStr] = raw.trim().split('/');
-    if (!net || isIP(net) !== v) continue;
+    const parsed = parseCidr(raw);
+    if (!parsed || parsed.family !== v) continue;
+    const { net, len } = parsed;
     const width = v === 4 ? 32 : 128;
-    const len = lenStr === undefined ? width : Number(lenStr);
-    if (!Number.isInteger(len) || len < 0 || len > width) continue;
     const n = toBits(net, v);
     if (n === null) continue;
     const shift = BigInt(width - len);
