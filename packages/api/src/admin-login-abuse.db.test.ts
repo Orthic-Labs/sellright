@@ -8,6 +8,7 @@
  * /2fa/enable, /2fa/disable were not limited at all.
  */
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createHmac } from 'node:crypto';
 
 const spy = vi.hoisted(() => ({ dummy: 0 }));
 vi.mock('./auth/password.js', async (orig) => {
@@ -20,7 +21,7 @@ import { pool } from './db/client.js';
 import { env } from './env.js';
 import { hashPassword } from './auth/password.js';
 import { createAdminSession } from './auth/admin-session.js';
-import { _setRateLimitBackendForTest, createMemoryRateLimitBackend } from './auth/rate-limit-backend.js';
+import { _setRateLimitBackendForTest, createMemoryRateLimitBackend, createPostgresRateLimitBackend } from './auth/rate-limit-backend.js';
 import { newTotpSecret } from './auth/totp.js';
 
 const isTestDb = /^\/[^/]*_test$/.test(new URL(process.env.DATABASE_URL ?? env.DATABASE_URL).pathname); // the DB NAME, not the whole URL
@@ -101,4 +102,37 @@ describe.skipIf(!isTestDb)('P1a: admin login abuse', () => {
     for (let i = 0; i < 9; i++) last = (await authed(token, '/v1/admin/2fa/disable', { code: '000000' }, '198.51.100.240')).status;
     expect(last).toBe(429);
   });
+
+  it('a concurrent burst of guesses is held to the budget (attempts are reserved before verification, shared Postgres backend)', async () => {
+    await pool.query(`DELETE FROM rate_limit_attempt WHERE key LIKE '%198.51.100.123%' OR key = 'admin:owner@abuse.test'`);
+    _setRateLimitBackendForTest(createPostgresRateLimitBackend());
+    const res = await Promise.all(Array.from({ length: 16 }, () => login(EMAIL, 'wrong-password', '198.51.100.123')));
+    const statuses = res.map((r) => r.status);
+    expect(statuses.filter((x) => x === 401)).toHaveLength(8);
+    expect(statuses.filter((x) => x === 429)).toHaveLength(8);
+  });
+
+  it('enrolling an authenticator from a stolen session does not reset the password-guessing budget', async () => {
+    const token = await createAdminSession(ADMIN);
+    for (let i = 0; i < 7; i++) expect((await authed(token, '/v1/admin/step-up', { password: `guess-${i}` }, '198.51.100.200')).status).toBe(401);
+    const secret = newTotpSecret();
+    const { verifyTotp } = await import('./auth/totp.js');
+    const code = currentTotp(secret);
+    expect(verifyTotp(secret, code)).toBe(true);
+    expect((await authed(token, '/v1/admin/2fa/enable', { secret, code }, '198.51.100.200')).status).toBe(200);
+    // the 8 password guesses (7 + the enrolment's own reservation) are still counted: the next guess is refused
+    expect((await authed(token, '/v1/admin/step-up', { password: 'guess-8' }, '198.51.100.200')).status).toBe(429);
+  });
 });
+
+function currentTotp(secretB32: string): string {
+  const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits = '';
+  for (const ch of secretB32) bits += B32.indexOf(ch).toString(2).padStart(5, '0');
+  const key = Buffer.from(bits.match(/.{8}/g)!.map((b) => parseInt(b, 2)));
+  const msg = Buffer.alloc(8); msg.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30000)));
+  const h = createHmac('sha1', key).update(msg).digest();
+  const o = h[h.length - 1]! & 0xf;
+  return ((((h[o]! & 0x7f) << 24) | (h[o + 1]! << 16) | (h[o + 2]! << 8) | h[o + 3]!) % 1_000_000).toString().padStart(6, '0');
+}
+

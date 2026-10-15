@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { adminAuthRetryAfter, attemptRetryAfter, clearAdminAuthFailures, clearLoginAttempts, clientIp, loginRetryAfter, pickClientIp, recordAdminAuthFailure, recordLoginFailure } from './rate-limit.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { attemptRetryAfter, clearAdminAuthFailures, clearLoginAttempts, clientIp, loginRetryAfter, pickClientIp, recordLoginFailure, reserveAdminAuthAttempt } from './rate-limit.js';
 import { _setRateLimitBackendForTest, createMemoryRateLimitBackend } from './rate-limit-backend.js';
 
 /**
@@ -135,33 +135,51 @@ describe('pickClientIp — header trust is tied to the TCP peer (P1a)', () => {
 describe('admin credential-check gate (P1a)', () => {
   beforeEach(() => _setRateLimitBackendForTest(createMemoryRateLimitBackend()));
   afterEach(() => _setRateLimitBackendForTest(undefined));
+  const reserveN = async (n: number, ip: (i: number) => string, acct: (i: number) => string) => {
+    for (let i = 0; i < n; i++) expect(await reserveAdminAuthAttempt(ip(i), acct(i))).toBe(0);
+  };
 
-  it('per (ip, account): 8 failures from one IP block that IP for that account', async () => {
-    for (let i = 0; i < 8; i++) await recordAdminAuthFailure('198.51.100.1', 'a@x.test');
-    expect(await adminAuthRetryAfter('198.51.100.1', 'a@x.test')).toBeGreaterThan(0);
-    expect(await adminAuthRetryAfter('198.51.100.2', 'a@x.test')).toBe(0);
+  it('per (ip, account): the 9th attempt from one IP for one account is refused', async () => {
+    await reserveN(8, () => '198.51.100.1', () => 'a@x.test');
+    expect(await reserveAdminAuthAttempt('198.51.100.1', 'a@x.test')).toBeGreaterThan(0);
+    expect(await reserveAdminAuthAttempt('198.51.100.2', 'a@x.test')).toBe(0);
   });
 
-  it('per account across IPs: the 20th failure from 20 different IPs locks the account everywhere', async () => {
-    for (let i = 0; i < 19; i++) await recordAdminAuthFailure(`198.51.100.${i + 1}`, 'Victim@X.test');
-    expect(await adminAuthRetryAfter('203.0.113.99', 'victim@x.test')).toBe(0);
-    await recordAdminAuthFailure('198.51.100.200', 'victim@x.test');
-    expect(await adminAuthRetryAfter('203.0.113.99', 'victim@x.test')).toBeGreaterThan(0);
-    expect(await adminAuthRetryAfter('203.0.113.99', 'someone-else@x.test')).toBe(0);
+  it('per account across IPs: 20 attempts from 20 IPs exhaust the account everywhere', async () => {
+    await reserveN(20, (i) => `198.51.100.${i + 1}`, () => 'Victim@X.test');
+    expect(await reserveAdminAuthAttempt('203.0.113.99', 'victim@x.test')).toBeGreaterThan(0);
+    expect(await reserveAdminAuthAttempt('203.0.113.99', 'someone-else@x.test')).toBe(0);
   });
 
-  it('per IP across accounts: 50 failures over 50 e-mails block the IP for every account', async () => {
-    for (let i = 0; i < 49; i++) await recordAdminAuthFailure('198.51.100.50', `u${i}@x.test`);
-    expect(await adminAuthRetryAfter('198.51.100.50', 'fresh@x.test')).toBe(0);
-    await recordAdminAuthFailure('198.51.100.50', 'u49@x.test');
-    expect(await adminAuthRetryAfter('198.51.100.50', 'fresh@x.test')).toBeGreaterThan(0);
-    expect(await adminAuthRetryAfter('198.51.100.51', 'fresh@x.test')).toBe(0);
+  it('per IP across accounts: 50 attempts over 50 e-mails exhaust the IP for every account', async () => {
+    await reserveN(50, () => '198.51.100.50', (i) => `u${i}@x.test`);
+    expect(await reserveAdminAuthAttempt('198.51.100.50', 'fresh@x.test')).toBeGreaterThan(0);
+    expect(await reserveAdminAuthAttempt('198.51.100.51', 'fresh@x.test')).toBe(0);
   });
 
-  it('success clears the account budget but not the per-IP budget', async () => {
-    for (let i = 0; i < 19; i++) await recordAdminAuthFailure('198.51.100.60', `k${i % 2}@x.test`);
+  it('a concurrent burst cannot all pass: exactly the budget is admitted', async () => {
+    const results = await Promise.all(Array.from({ length: 30 }, () => reserveAdminAuthAttempt('198.51.100.77', 'burst@x.test')));
+    expect(results.filter((r) => r === 0)).toHaveLength(8);
+  });
+
+  it('a password-verified success clears the account budget but not the per-IP budget', async () => {
+    await reserveN(15, () => '198.51.100.60', (i) => `k${i % 2}@x.test`); // k0: 8, k1: 7 — at the pair cap
     await clearAdminAuthFailures('198.51.100.60', 'k0@x.test');
-    for (let i = 0; i < 10; i++) await recordAdminAuthFailure(`198.51.100.${70 + i}`, 'k0@x.test');
-    expect(await adminAuthRetryAfter('198.51.100.90', 'k0@x.test')).toBe(0); // 10 since the clear, not 20
+    await reserveN(10, (i) => `198.51.100.${70 + i}`, () => 'k0@x.test');
+    expect(await reserveAdminAuthAttempt('198.51.100.60', 'k0@x.test')).toBe(0); // pair + account cleared; per-IP (16 of 50) kept
+  });
+});
+
+describe('memory backend cleanup keeps each bucket\'s own window', () => {
+  it('a 1-hour entry survives a global cleanup triggered by a 15-minute bucket', async () => {
+    vi.useFakeTimers();
+    try {
+      const b = createMemoryRateLimitBackend();
+      vi.setSystemTime(new Date('2026-10-15T10:00:00Z'));
+      for (let i = 0; i < 20; i++) await b.recordFailure('hourly', 'acct', 60 * 60 * 1000);
+      vi.setSystemTime(new Date('2026-10-15T10:30:00Z')); // 30 min later: outside 15 min, inside 1 h
+      for (let i = 0; i < 5001; i++) await b.recordFailure('short', `k${i}`, 15 * 60 * 1000); // > 5000 keys -> cleanup
+      expect(await b.check('hourly', 'acct', 60 * 60 * 1000, 20)).toBeGreaterThan(0);
+    } finally { vi.useRealTimers(); }
   });
 });

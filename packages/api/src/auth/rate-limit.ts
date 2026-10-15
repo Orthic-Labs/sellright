@@ -57,15 +57,18 @@ export async function clearLoginAttempts(ip: string, identifier: string): Promis
 // ── admin credential checks (P1a, security audit 2026-10-15) ─────────────────
 // Every admin credential check — /v1/admin/login, /step-up, /2fa/enable,
 // /2fa/disable, invite accept with a current password, password change — goes
-// through ONE gate made of three failure-counted buckets:
-//   1. (ip, account)  — the original 8 / 15 min bucket;
-//   2. account        — ADMIN_AUTH_ACCOUNT_MAX_FAILURES (default 20) / 1 h across ALL IPs,
-//                       so a botnet rotating addresses cannot grind one account;
-//   3. ip             — ADMIN_AUTH_IP_MAX_FAILURES (default 50) / 15 min across ALL accounts,
-//                       so one address cannot spray passwords over many e-mails.
-// A failure is recorded in all three; success clears 1 and 2 (never 3: a shared
-// NAT that is spraying stays throttled). `account` is the normalized admin
-// e-mail for every route, so the routes share one per-account budget.
+// through ONE gate made of three buckets:
+//   1. ip           — ADMIN_AUTH_IP_MAX_FAILURES (default 50) / 15 min across ALL accounts,
+//                     so one address cannot spray passwords over many e-mails;
+//   2. account      — ADMIN_AUTH_ACCOUNT_MAX_FAILURES (default 20) / 1 h across ALL IPs,
+//                     so a botnet rotating addresses cannot grind one account;
+//   3. (ip, account) — the original 8 / 15 min bucket.
+// The attempt is RESERVED (atomically consumed, rate-limit-backend.ts) in all three
+// BEFORE the credential is verified, so a concurrent burst cannot all pass the
+// check while verification is in flight. A successful check clears (ip, account)
+// and the account budget; the per-IP budget keeps the reservation (a shared NAT
+// signing in many admins is still far below its cap). `account` is the
+// normalized admin e-mail on every route, so the routes share one budget.
 const ACCOUNT_BUCKET = 'admin-auth-account';
 const IP_BUCKET = 'admin-auth-ip';
 const ACCOUNT_WINDOW_MS = 60 * 60 * 1000;
@@ -73,26 +76,19 @@ const IP_WINDOW_MS = 15 * 60 * 1000;
 
 const adminKey = (account: string) => `admin:${account.toLowerCase()}`;
 
-/** Seconds until the caller may try again (0 = allowed). Check-only; nothing is consumed. */
-export async function adminAuthRetryAfter(ip: string, account: string): Promise<number> {
+/** Reserve one credential attempt. Returns seconds until the caller may try again (>0 = refuse, nothing verified);
+ *  0 = the attempt is counted in all three budgets and verification may proceed. */
+export async function reserveAdminAuthAttempt(ip: string, account: string): Promise<number> {
   const b = rateLimitBackend();
-  const [pair, acct, perIp] = await Promise.all([
-    b.check(BUCKET, keyFor(ip, adminKey(account)), WINDOW_MS, MAX_FAILURES),
-    b.check(ACCOUNT_BUCKET, adminKey(account), ACCOUNT_WINDOW_MS, env.ADMIN_AUTH_ACCOUNT_MAX_FAILURES),
-    b.check(IP_BUCKET, ip, IP_WINDOW_MS, env.ADMIN_AUTH_IP_MAX_FAILURES),
-  ]);
-  return Math.max(pair, acct, perIp);
+  const perIp = await b.consume(IP_BUCKET, ip, IP_WINDOW_MS, env.ADMIN_AUTH_IP_MAX_FAILURES);
+  if (perIp > 0) return perIp;
+  const acct = await b.consume(ACCOUNT_BUCKET, adminKey(account), ACCOUNT_WINDOW_MS, env.ADMIN_AUTH_ACCOUNT_MAX_FAILURES);
+  if (acct > 0) return acct;
+  return b.consume(BUCKET, keyFor(ip, adminKey(account)), WINDOW_MS, MAX_FAILURES);
 }
 
-export async function recordAdminAuthFailure(ip: string, account: string): Promise<void> {
-  const b = rateLimitBackend();
-  await Promise.all([
-    b.recordFailure(BUCKET, keyFor(ip, adminKey(account)), WINDOW_MS),
-    b.recordFailure(ACCOUNT_BUCKET, adminKey(account), ACCOUNT_WINDOW_MS),
-    b.recordFailure(IP_BUCKET, ip, IP_WINDOW_MS),
-  ]);
-}
-
+/** After a PASSWORD-verified success: forget the (ip, account) and account budgets. Never call it after a check that
+ *  did not verify the password (a TOTP-only operation must not reset password-guessing budgets). */
 export async function clearAdminAuthFailures(ip: string, account: string): Promise<void> {
   const b = rateLimitBackend();
   await Promise.all([b.clear(BUCKET, keyFor(ip, adminKey(account))), b.clear(ACCOUNT_BUCKET, adminKey(account))]);

@@ -13,7 +13,7 @@ import { getAdminCredentialsById, getRecoveryKitDownloadedAt, markRecoveryKitDow
 import { markStepUpVerified } from '../auth/admin-session.js';
 import { verifyPassword } from '../auth/password.js';
 import { verifyTotp } from '../auth/totp.js';
-import { clientIp, adminAuthRetryAfter, recordAdminAuthFailure, clearAdminAuthFailures } from '../auth/rate-limit.js';
+import { clientIp, reserveAdminAuthAttempt, clearAdminAuthFailures } from '../auth/rate-limit.js';
 import { isEnvManaged } from '../security/settings-resolver.js';
 // SELLRIGHT_MASTER_KEY/RECOVERY_KIT_ID are read directly from process.env,
 // not the parsed `env` singleton — matching security/secret-crypto.ts's own
@@ -164,17 +164,17 @@ adminSystem.openapi(
     const ip = clientIp(c);
     // Same gate as /v1/admin/login (rate-limit.ts, P1a) and the same per-account
     // budget — step-up IS a second password check.
-    const retry = await adminAuthRetryAfter(ip, admin.email);
+    const retry = await reserveAdminAuthAttempt(ip, admin.email);
     if (retry > 0) throw new HttpError(429, `too many attempts — try again in ${retry}s`);
 
     const { password, totp } = c.req.valid('json');
     const creds = await getAdminCredentialsById(admin.id);
     if (!creds || !(await verifyPassword(password, creds.passwordHash))) {
-      await recordAdminAuthFailure(ip, admin.email);
+      
       throw new HttpError(401, 'invalid password or 2FA code');
     }
     if (creds.totpSecret && (!totp || !verifyTotp(creds.totpSecret, totp, admin.id))) {
-      await recordAdminAuthFailure(ip, admin.email);
+      
       throw new HttpError(401, 'invalid password or 2FA code');
     }
     await clearAdminAuthFailures(ip, admin.email);

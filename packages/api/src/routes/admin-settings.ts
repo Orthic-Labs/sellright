@@ -4,7 +4,7 @@ import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { newTotpSecret, verifyTotp, otpauthUri } from '../auth/totp.js';
 import { clearAdminTotpSecret, getAdminTotpSecret, setAdminTotpSecret } from '../auth/admin-staff.js';
-import { clientIp, adminAuthRetryAfter, recordAdminAuthFailure, clearAdminAuthFailures } from '../auth/rate-limit.js';
+import { clientIp, reserveAdminAuthAttempt } from '../auth/rate-limit.js';
 import { isSupportedPaymentMethod, mergePaymentMethodSetting } from '../payments/provider.js';
 import { resolveStripeConfigured, stripeModeFromConfig } from '../payments/stripe.js';
 import { broadcastStoreCacheInvalidation } from '../store-context.js';
@@ -145,10 +145,9 @@ adminSettings.openapi(
     if (existing) throw new HttpError(409, '2FA already enabled — disable it first');
     // P1a: same credential-check gate (and per-account budget) as login/step-up.
     const ip = clientIp(c);
-    const retry = await adminAuthRetryAfter(ip, admin.email);
+    const retry = await reserveAdminAuthAttempt(ip, admin.email);
     if (retry > 0) throw new HttpError(429, `too many attempts — try again in ${retry}s`);
-    if (!verifyTotp(secret, code)) { await recordAdminAuthFailure(ip, admin.email); throw new HttpError(409, 'code did not match — check your authenticator app'); }
-    await clearAdminAuthFailures(ip, admin.email);
+    if (!verifyTotp(secret, code)) { throw new HttpError(409, 'code did not match — check your authenticator app'); }
     await setAdminTotpSecret(admin.id, secret);
     return c.json({ enabled: true }, 200);
   }),
@@ -169,10 +168,9 @@ adminSettings.openapi(
     // P1a: guessing the current code to strip 2FA from a hijacked session is a
     // credential check like any other — same gate and per-account budget.
     const ip = clientIp(c);
-    const retry = await adminAuthRetryAfter(ip, admin.email);
+    const retry = await reserveAdminAuthAttempt(ip, admin.email);
     if (retry > 0) throw new HttpError(429, `too many attempts — try again in ${retry}s`);
-    if (!verifyTotp(existing, code, admin.id)) { await recordAdminAuthFailure(ip, admin.email); throw new HttpError(409, 'invalid code'); }
-    await clearAdminAuthFailures(ip, admin.email);
+    if (!verifyTotp(existing, code, admin.id)) { throw new HttpError(409, 'invalid code'); }
     await clearAdminTotpSecret(admin.id);
     return c.json({ enabled: false }, 200);
   }),
