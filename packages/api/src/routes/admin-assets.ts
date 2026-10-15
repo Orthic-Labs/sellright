@@ -16,6 +16,8 @@ import { HttpError, J, errBody, requireAdmin, requireStore, requireWrite, guard 
 import * as s from '../db/schema.js';
 
 const MAX_BYTES = 10 * 1024 * 1024;
+/** App-wide body cap for this one route (app.ts): the file limit plus multipart framing / the alt field. */
+export const ASSET_UPLOAD_LIMIT_BYTES = MAX_BYTES + 256 * 1024;
 const ALLOWED = new Set(['jpeg', 'png', 'webp', 'avif', 'gif']);
 
 export const adminAssets = new OpenAPIHono();

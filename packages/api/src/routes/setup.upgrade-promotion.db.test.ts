@@ -153,6 +153,8 @@ describe('0075_promote_installation_admin.sql', () => {
     expect(loginRes.status).toBe(200);
     const body = await loginRes.json() as { token?: string; admin?: { email: string } };
     expect(body.admin?.email).toBe('owner-b@legacy.test');
-    expect(body.token).toBeTruthy();
+    // P2: a cookie client gets the session only as the httpOnly cookie, never in the body
+    expect(body.token).toBeUndefined();
+    expect(loginRes.headers.getSetCookie().some((c) => c.startsWith('sr_admin=') && c.includes('HttpOnly'))).toBe(true);
   });
 });

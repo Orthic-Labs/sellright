@@ -10318,6 +10318,9 @@
                   },
                   "totp": {
                     "type": "string"
+                  },
+                  "returnToken": {
+                    "type": "boolean"
                   }
                 },
                 "required": [

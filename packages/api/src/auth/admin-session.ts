@@ -4,9 +4,14 @@ import { totpRequiredFor } from './mfa-policy.js';
 import { unsafeUnscopedDb as db, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { normalizeEmail } from './email.js';
+import { env } from '../env.js';
 import { openTotpSecret } from './totp-secret.js';
 
-const ADMIN_SESSION_TTL_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
+/** Absolute admin session lifetime (P2: ADMIN_SESSION_TTL_DAYS, default 14). */
+export const adminSessionTtlMs = () => env.ADMIN_SESSION_TTL_DAYS * 24 * 60 * 60 * 1000;
+/** Idle timeout (P2: ADMIN_SESSION_IDLE_HOURS, default 12; 0 = off). */
+const adminSessionIdleMs = () => env.ADMIN_SESSION_IDLE_HOURS * 60 * 60 * 1000;
+const TOUCH_EVERY_MS = 60_000;
 const hashToken = (t: string) => createHash('sha256').update(t).digest('hex');
 
 export interface AdminStoreAccess {
@@ -57,7 +62,8 @@ export async function createAdminSession(adminUserId: string): Promise<string> {
   await db.insert(s.session).values({
     adminUserId,
     tokenHash: hashToken(token),
-    expiresAt: new Date(Date.now() + ADMIN_SESSION_TTL_MS),
+    expiresAt: new Date(Date.now() + adminSessionTtlMs()),
+    lastSeenAt: new Date(),
   });
   return token;
 }
@@ -75,7 +81,7 @@ export async function createAdminSessionIfCredential(adminUserId: string, verifi
     // A sign-in that verified no second factor must not succeed if 2FA was enabled meanwhile (enrolment races).
     if (!secondFactorVerified && row.totp !== null) return null;
     const token = randomBytes(32).toString('hex');
-    await tx.insert(s.session).values({ adminUserId, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + ADMIN_SESSION_TTL_MS) });
+    await tx.insert(s.session).values({ adminUserId, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + adminSessionTtlMs()), lastSeenAt: new Date() });
     return token;
   });
 }
@@ -133,6 +139,8 @@ export async function resolveAdmin(token: string): Promise<AdminPrincipal | null
       totpEnabled: sql<boolean>`(${s.adminUser.totpSecret} is not null)`,
       storeRequireTotp: sql<boolean>`coalesce((${s.store.config} -> 'security' ->> 'requireTotp') = 'true', false)`,
       stepUpAt: s.session.stepUpAt,
+      sessionId: s.session.id,
+      lastSeenAt: sql<Date>`coalesce(${s.session.lastSeenAt}, ${s.session.createdAt})`,
       apiTokenId: s.session.apiTokenId,
       tokenAdminUserId: s.adminApiToken.adminUserId,
       tokenStoreId: s.adminApiToken.storeId,
@@ -161,6 +169,16 @@ export async function resolveAdmin(token: string): Promise<AdminPrincipal | null
     );
   const first = rows[0];
   if (!first) return null;
+  // P2: idle timeout — a session unused for longer than ADMIN_SESSION_IDLE_HOURS is dead (and removed).
+  const lastSeen = new Date(first.lastSeenAt).getTime();
+  const idleMs = adminSessionIdleMs();
+  if (idleMs > 0 && Date.now() - lastSeen > idleMs) {
+    await db.delete(s.session).where(eq(s.session.id, first.sessionId));
+    return null;
+  }
+  if (Date.now() - lastSeen > TOUCH_EVERY_MS) {
+    await db.update(s.session).set({ lastSeenAt: new Date() }).where(eq(s.session.id, first.sessionId));
+  }
   const stores: AdminStoreAccess[] = rows
     .filter((r) => r.storeId && r.slug)
     .map((r) => ({

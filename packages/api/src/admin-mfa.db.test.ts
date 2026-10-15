@@ -47,7 +47,7 @@ function req(method: string, path: string, opts: { token?: string; body?: unknow
   return app.request(path, { method, headers, body: opts.body === undefined ? undefined : JSON.stringify(opts.body) });
 }
 async function login(email: string, password: string, totp?: string) {
-  const res = await req('POST', '/v1/admin/login', { body: { email, password, totp } });
+  const res = await req('POST', '/v1/admin/login', { body: { email, password, totp, returnToken: true } });
   return { res, body: (await res.json()) as { token?: string; totpEnrollmentRequired?: boolean; error?: { code: string } } };
 }
 async function storedSecret(id: string): Promise<string | null> {

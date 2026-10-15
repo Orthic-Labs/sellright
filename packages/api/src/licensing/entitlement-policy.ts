@@ -223,7 +223,8 @@ export function parseRequestExtensions(path: ExtensionPath, raw: unknown): Reque
   if (!schema) return Object.freeze({});
   const parsed = schema.safeParse(raw);
   if (!parsed.success) {
-    if (entitlementPolicy().invalidExtension === 'internal') throw parsed.error;
+    // The fork's opt-in legacy wire stays a 500: a plain Error, because the app now answers a ZodError with 400.
+    if (entitlementPolicy().invalidExtension === 'internal') throw new Error('invalid request extension', { cause: parsed.error });
     const first = parsed.error.issues[0];
     throw new HttpError(400, `invalid request: ${first?.path.join('.') || 'body'} ${first?.message ?? ''}`.trim(), 'INVALID_REQUEST');
   }

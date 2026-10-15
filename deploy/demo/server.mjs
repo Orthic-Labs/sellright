@@ -99,7 +99,7 @@ const server = createServer(async (req, res) => {
       if (counts.sessions >= 100) return json(429, 'Demo visitor capacity reached; try again later');
       const login = await app.request('/v1/admin/login', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ email: 'visitor@demo.example', password: process.env.DEMO_ADMIN_PASSWORD }),
+        body: JSON.stringify({ email: 'visitor@demo.example', password: process.env.DEMO_ADMIN_PASSWORD, returnToken: true }),
       });
       if (!login.ok) return json(503, 'Demo sign-in temporarily unavailable');
       const { token } = await login.json();

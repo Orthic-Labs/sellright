@@ -337,6 +337,15 @@ const EnvSchema = z.object({
   // set it once the release is past its rollback window (an older engine cannot read sealed secrets; to roll back
   // after sealing run `node dist/scripts/totp-secrets.js --decrypt` first). New enrolments are always sealed.
   ADMIN_TOTP_SEAL_EXISTING: z.enum(['0', '1']).default('0'),
+  // P2: admin session lifetime. Absolute TTL (also the cookie Max-Age) and idle
+  // timeout: a session unused for ADMIN_SESSION_IDLE_HOURS is refused (0 disables).
+  ADMIN_SESSION_TTL_DAYS: z.coerce.number().positive().default(14),
+  ADMIN_SESSION_IDLE_HOURS: z.coerce.number().nonnegative().default(12),
+  // P2: request body cap for the whole API (bytes); the admin asset upload has its own larger cap.
+  API_BODY_LIMIT_BYTES: z.coerce.number().int().positive().default(2 * 1024 * 1024),
+  // P2: exact extra origins allowed to call /v1/admin cross-origin (comma-separated, scheme://host[:port]).
+  // The admin's own origin (ADMIN_PUBLIC_URL) is always allowed; nothing is matched by suffix or wildcard.
+  ADMIN_CORS_ORIGINS: optionalEnvString,
   // P1c: default lifetime of an agent API token when none is given at creation (and
   // on rotating a never-expiring legacy token). 0 = never expires.
   ADMIN_AGENT_TOKEN_TTL_DAYS: z.coerce.number().int().nonnegative().default(90),

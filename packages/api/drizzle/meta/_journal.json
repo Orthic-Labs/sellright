@@ -624,6 +624,13 @@
       "when": 1790000013400,
       "tag": "0097_admin_mfa",
       "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1790000013500,
+      "tag": "0098_session_idle",
+      "breakpoints": true
     }
   ]
 }

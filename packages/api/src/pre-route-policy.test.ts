@@ -159,7 +159,8 @@ describe('createApp integration: byte-identical to the captured legacy bytes (CO
 
   it('admin 500 keeps the envelope', async () => {
     const { app } = await boot();
-    const r = await app.request('/v1/admin/boom', { headers: h });
+    // P2: anonymous /v1/admin requests are refused before routing, so the 500 path needs a (non-resolving) credential
+    const r = await app.request('/v1/admin/boom', { headers: { ...h, authorization: 'Bearer not-a-session' } });
     expect(r.status).toBe(500);
     expect(await r.text()).toBe('{"error":{"code":"INTERNAL_ERROR","message":"internal error","requestId":"req-fixed-0001"}}');
   });

@@ -33,7 +33,9 @@ const StoreAccess = z.object({ storeId: z.string(), slug: z.string(), name: z.st
 admin.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/login', summary: 'Admin login',
-    request: { body: { content: J(z.object({ email: z.string().email(), password: z.string(), totp: z.string().optional() })) } },
+    request: { body: { content: J(z.object({ email: z.string().email(), password: z.string(), totp: z.string().optional(),
+      // P2: explicit API clients ask for the bearer token in the body; browser (cookie) clients never get it.
+      returnToken: z.boolean().optional() })) } },
     responses: {
       200: { description: 'OK or 2FA required', content: J(z.object({ token: z.string().optional(), csrfToken: z.string().optional(), twoFactorRequired: z.boolean().optional(), totpEnrollmentRequired: z.boolean().optional(), admin: z.object({ email: z.string() }).optional(), stores: z.array(StoreAccess).optional() })) },
       401: { description: 'Invalid', ...errBody },
@@ -41,7 +43,7 @@ admin.openapi(
     },
   }),
   async (c) => guard(c, async () => {
-    const { email: rawEmail, password, totp } = c.req.valid('json');
+    const { email: rawEmail, password, totp, returnToken } = c.req.valid('json');
     const email = normalizeEmail(rawEmail);
     const ip = clientIp(c);
     // P1a: (ip, account) + per-account (all IPs) + per-IP (all accounts) budgets.
@@ -82,7 +84,9 @@ admin.openapi(
     const admin = await resolveAdmin(token);
     // P1b: when policy requires TOTP and none is enrolled, the session can only enrol (admin-agent-guard).
     const totpEnrollmentRequired = !!admin && admin.totpRequired === true && !admin.totpEnabled;
-    return c.json({ token, csrfToken: csrf, admin: { email: u.email }, stores: admin?.stores ?? [], ...(totpEnrollmentRequired ? { totpEnrollmentRequired } : {}) }, 200);
+    // P2: the session token is in the httpOnly cookie; it is only echoed in the body for an explicit API client
+    // (`returnToken: true`), so page script (or an XSS) in a cookie client never sees it.
+    return c.json({ ...(returnToken === true ? { token } : {}), csrfToken: csrf, admin: { email: u.email }, stores: admin?.stores ?? [], ...(totpEnrollmentRequired ? { totpEnrollmentRequired } : {}) }, 200);
   }),
 );
 

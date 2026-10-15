@@ -4552,6 +4552,7 @@ export interface paths {
                         /** Format: email */
                         email: string;
                         password: string;
+                        returnToken?: boolean;
                         totp?: string;
                     };
                 };

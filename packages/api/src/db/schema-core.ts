@@ -189,6 +189,8 @@ export const session = pgTable('session', {
   // stepping up in one browser tab must never grant it to another session.
   stepUpAt: timestamp({ withTimezone: true }),
   apiTokenId: uuid().references(() => adminApiToken.id, { onDelete: 'cascade' }),
+  // 0098: last use of an ADMIN session (touched at most once a minute) for the idle timeout; null = created_at.
+  lastSeenAt: timestamp({ withTimezone: true }),
   createdAt: ts(),
 });
 

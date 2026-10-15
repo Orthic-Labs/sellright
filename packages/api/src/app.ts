@@ -1,5 +1,6 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { cors } from 'hono/cors';
+import type { MiddlewareHandler } from 'hono';
 import { catalog } from './routes/catalog.js';
 import { cart } from './routes/cart.js';
 import { checkout } from './routes/checkout.js';
@@ -58,9 +59,15 @@ import { apps } from './routes/apps.js';
 import { wellKnown } from './routes/well-known.js';
 import { HttpError } from './routes/admin-helpers.js';
 import { apiErrorCodeSchema, errorEnvelope, errJson } from './lib/api-error.js';
-import { csrfValid, customerCsrfValid, getCustomerSessionToken } from './auth/cookies.js';
+import { csrfValid, customerCsrfValid, getCustomerSessionToken, cookie, SESSION_COOKIE } from './auth/cookies.js';
+import { bearer } from './auth/session.js';
+import { resolveAdmin } from './auth/admin-session.js';
+import { isAgentToken, resolveAgentByToken } from './auth/admin-api-token.js';
+import { CACHE_ADMIN_TOKEN_HEADER } from './routes/admin-cache.js';
+import { ASSET_UPLOAD_LIMIT_BYTES } from './routes/admin-assets.js';
 import { env } from './env.js';
-import { isAllowedCorsOrigin } from './cors-origins.js';
+import { isAllowedAdminCorsOrigin, isAllowedCorsOrigin } from './cors-origins.js';
+import { bodyLimit } from 'hono/body-limit';
 import { pool } from './db/client.js';
 import { isMaintenanceOn, maintenanceInfo } from './maintenance.js';
 import { requestIdMiddleware, accessLogMiddleware } from './lib/request-id.js';
@@ -76,6 +83,18 @@ import { assertHostRouteUnshadowed, hostRouteEntryCount, assertNoReleaseRegistra
 import { preRoutePolicy } from './pre-route-policy.js';
 
 export { SELLRIGHT_VERSION };
+
+/** P2: in production the published contract (admin routes included) is served only to an authenticated admin
+ *  (session cookie, bearer session or agent token). Development/test keep it public for client generation. */
+export function openapiAdminOnly(isProduction: () => boolean): MiddlewareHandler {
+  return async (c, next) => {
+    if (!isProduction()) return next();
+    const token = bearer(c.req.header('authorization')) ?? cookie(c, SESSION_COOKIE);
+    const admin = token ? (isAgentToken(token) ? await resolveAgentByToken(token) : await resolveAdmin(token)) : null;
+    if (!admin) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
+    await next();
+  };
+}
 
 export interface HttpAppOptions {
   /** SDK plugins (sdk/create-app.ts). Requires `ctx`. */
@@ -163,7 +182,10 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
   // built with the resolved verdict.
   app.use('*', async (c, next) => {
     const origin = c.req.header('origin');
-    const allowed = origin ? await isAllowedCorsOrigin(origin) : false;
+    // P2: the credentialed admin API only answers CORS for EXACT configured origins (cors-origins.ts).
+    const allowed = !origin ? false
+      : c.req.path === '/v1/admin' || c.req.path.startsWith('/v1/admin/') ? isAllowedAdminCorsOrigin(origin)
+      : await isAllowedCorsOrigin(origin);
     const handler = cors({
       origin: allowed ? (origin as string) : '',
       credentials: true,
@@ -189,6 +211,44 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
     }
     await next();
   });
+
+  // P2: app-wide request body cap (API_BODY_LIMIT_BYTES, default 2 MiB). The admin asset upload keeps its own
+  // larger cap (routes/admin-assets.ts, 10 MiB + multipart overhead). Over the limit: 413 before any handler.
+  const tooLarge = (c: Parameters<Parameters<typeof app.use>[1]>[0]) => errJson(c, 413, 'PAYLOAD_TOO_LARGE', 'request body too large');
+  const defaultLimit = bodyLimit({ maxSize: env.API_BODY_LIMIT_BYTES, onError: tooLarge });
+  const uploadLimit = bodyLimit({ maxSize: ASSET_UPLOAD_LIMIT_BYTES, onError: tooLarge });
+  app.use('*', (c, next) => (c.req.method === 'POST' && c.req.path === '/v1/admin/assets' ? uploadLimit : defaultLimit)(c, next));
+
+  // P2: every /v1/admin request must carry a credential (session cookie or Authorization bearer) BEFORE any body is
+  // parsed or validated — an anonymous caller learns nothing from validation errors and costs no body parsing.
+  // Pre-session routes are exempt; the cache-purge route authenticates with its own shared-token header.
+  app.use('/v1/admin/*', async (c, next) => {
+    if (c.req.method === 'OPTIONS') return next();
+    const p = c.req.path;
+    const preSession = p === '/v1/admin/login' || p === '/v1/admin/logout' || p === '/v1/admin/staff/accept';
+    const hasCredential = !!c.req.header('authorization') || !!cookie(c, SESSION_COOKIE)
+      || (p === '/v1/admin/cache/purge' && !!c.req.header(CACHE_ADMIN_TOKEN_HEADER));
+    if (!preSession && !hasCredential) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
+    await next();
+  });
+
+  // P2: validation failures on the admin API answer the generic error envelope (no raw zod issue dump).
+  app.use('/v1/admin/*', async (c, next) => {
+    await next();
+    if (c.res.status !== 400 || !(c.res.headers.get('content-type') ?? '').includes('application/json')) return;
+    const body = await c.res.clone().json().catch(() => null) as { success?: boolean; error?: { name?: string; message?: string; issues?: Array<{ path?: unknown[] }> } } | null;
+    if (body?.success === false && body.error?.name === 'ZodError') {
+      // zod 4 serializes the issues into `message` (a JSON array); older shapes carry `issues`.
+      let issues = body.error.issues;
+      if (!issues && body.error.message) { try { issues = JSON.parse(body.error.message) as Array<{ path?: unknown[] }>; } catch { /* no param */ } }
+      const param = issues?.[0]?.path?.map(String).join('.') || undefined;
+      c.res = undefined as unknown as Response; // replace the validator's response
+      c.res = c.json(errorEnvelope(c, 'VALIDATION_ERROR', 'invalid request', { param }), 400);
+    }
+  });
+
+  // P2: the full contract (admin routes included) is not published to anonymous callers in production.
+  app.use('/v1/openapi.json', openapiAdminOnly(() => env.NODE_ENV === 'production'));
 
   // CSRF guard for cookie-based admin mutations (bearer/API clients are exempt;
   // login/logout don't yet have a session). Double-submit token (x-csrf-token
@@ -359,6 +419,15 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
     // that correctly throws 400/409/etc. is silently flattened to 500.
     if (err instanceof HttpError) {
       return c.json(errorEnvelope(c, err.code, err.message, { param: err.param, extra: err.extra }), err.status);
+    }
+    // P2: a schema .parse() inside a handler (e.g. /v1/licenses/*) is a client error, not a 500.
+    const zodIssues = (err as { name?: string; issues?: Array<{ path?: PropertyKey[] }> }).name === 'ZodError' ? (err as { issues?: Array<{ path?: PropertyKey[] }> }).issues : undefined;
+    if (Array.isArray(zodIssues)) {
+      return c.json(errorEnvelope(c, 'VALIDATION_ERROR', 'invalid request', { param: zodIssues[0]?.path?.map(String).join('.') || undefined }), 400);
+    }
+    // A malformed JSON body read with c.req.json() inside a handler is also the client's error.
+    if (err instanceof SyntaxError && /JSON/i.test(err.message)) {
+      return c.json(errorEnvelope(c, 'INVALID_JSON', 'request body is not valid JSON'), 400);
     }
 
     // SEC-5: gated on an explicit DEBUG_ERRORS opt-in, not NODE_ENV — a staging

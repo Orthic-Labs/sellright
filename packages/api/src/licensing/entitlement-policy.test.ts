@@ -33,14 +33,17 @@ describe('entitlement policy registry', () => {
     expect(() => parseRequestExtensions('trial', { platform: 'beos' })).toThrow(expect.objectContaining({ status: 400, code: 'INVALID_REQUEST' }));
   });
 
-  it('P36-3: default keeps 400 INVALID_REQUEST; a policy that opts into invalidExtension "internal" gets the raw ZodError (legacy 500)', () => {
+  it('P36-3: default keeps 400 INVALID_REQUEST; a policy that opts into invalidExtension "internal" gets a plain Error caused by the ZodError (legacy 500)', () => {
     const schema = z.object({ platform: z.enum(['macos', 'ios']).optional() });
     registerEntitlementPolicy({ id: 'default-ext', requestExtensions: { trial: schema } });
     expect(() => parseRequestExtensions('trial', { platform: 'beos' })).toThrow(expect.objectContaining({ status: 400, code: 'INVALID_REQUEST' }));
     registerEntitlementPolicy({ id: 'legacy-ext', invalidExtension: 'internal', requestExtensions: { trial: schema } });
     let thrown: unknown;
     try { parseRequestExtensions('trial', { platform: 'beos' }); } catch (e) { thrown = e; }
-    expect(thrown).toBeInstanceOf(z.ZodError);
+    // P2: a plain Error carrying the ZodError as cause — the app answers ZodErrors with 400 now, so the fork's
+    // opt-in legacy wire must not be one (still 500 through onError).
+    expect(thrown).not.toBeInstanceOf(z.ZodError);
+    expect((thrown as Error).cause).toBeInstanceOf(z.ZodError);
     expect((thrown as { status?: unknown }).status).toBeUndefined();
   });
 
