@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { UserMinus, RefreshCw, Copy, Check } from 'lucide-react';
+import { UserMinus, RefreshCw } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../auth';
 import { PageHeader, Loading, ErrorNote, EmptyState, Badge, Spinner } from '../components/ui';
@@ -22,22 +22,6 @@ import {
 
 function fmtDate(iso: string) {
   return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-}
-
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  const copy = () => {
-    void navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  };
-  return (
-    <button className="btn-ghost py-1 px-2 flex items-center gap-1 text-xs" onClick={copy} title="Copy token">
-      {copied ? <Check size={13} className="text-success" /> : <Copy size={13} />}
-      {copied ? 'Copied' : 'Copy'}
-    </button>
-  );
 }
 
 // ── sub-sections ──────────────────────────────────────────────────────────────
@@ -69,11 +53,12 @@ export default function StaffPage() {
 
   // ── invite form state ──
   const [inviteForm, setInviteForm] = useState<{ email: string; role: Role } | null>(null);
-  const [inviteResult, setInviteResult] = useState<{ token: string; acceptUrl: string } | null>(null);
+  const [inviteResult, setInviteResult] = useState<{ email: string } | null>(null);
 
+  // The accept link is e-mailed to the invitee only; the API never returns it to the inviter.
   const sendInvite = useMutation({
-    mutationFn: () => api.post<{ id: string; token: string; acceptUrl: string }>('/staff/invites', inviteForm),
-    onSuccess: (r) => { setInviteResult({ token: r.token, acceptUrl: r.acceptUrl }); setInviteForm(null); invalidate(); },
+    mutationFn: () => api.post<{ id: string; delivered: true }>('/staff/invites', inviteForm),
+    onSuccess: () => { setInviteResult({ email: inviteForm?.email ?? '' }); setInviteForm(null); invalidate(); },
   });
 
   // ── role change ──
@@ -217,32 +202,14 @@ export default function StaffPage() {
         <div className="card p-5 mb-5">
           <h2 className="text-sm font-semibold mb-3">Invite a team member</h2>
           <p className="text-xs text-gray-500 mb-4">
-            An invite link is generated immediately. Share it with the invitee — it expires in 7 days
-            and can only be accepted once.
+            The invitee receives a one-time link by e-mail. It expires in 7 days and can only be accepted once.
+            Someone who already has an account confirms it with their own password.
           </p>
 
           {inviteResult ? (
             <div className="stack-y-3">
               <div className="rounded-lg border border-success/30 bg-success-soft p-3 text-sm text-emerald-800">
-                Invite created. Share the token below with the invitee — they'll set their own password on acceptance.
-              </div>
-              <div>
-                <label className="label">Accept URL</label>
-                <div className="flex items-center gap-2">
-                  <input
-                    className="input font-mono text-xs flex-1"
-                    readOnly
-                    value={`${window.location.origin}${inviteResult.acceptUrl}`}
-                  />
-                  <CopyButton text={`${window.location.origin}${inviteResult.acceptUrl}`} />
-                </div>
-              </div>
-              <div>
-                <label className="label">Raw token (one-time)</label>
-                <div className="flex items-center gap-2">
-                  <input className="input font-mono text-xs flex-1" readOnly value={inviteResult.token} />
-                  <CopyButton text={inviteResult.token} />
-                </div>
+                Invitation e-mailed to {inviteResult.email}.
               </div>
               <button className="btn-ghost text-xs" onClick={() => setInviteResult(null)}>Done</button>
             </div>

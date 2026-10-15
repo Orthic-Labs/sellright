@@ -23091,7 +23091,7 @@
     },
     "/v1/admin/staff/invites": {
       "post": {
-        "summary": "Invite a staff member (returns a one-time accept token)",
+        "summary": "Invite a staff member (the one-time accept link is e-mailed to the invitee; it is never returned to the inviter)",
         "requestBody": {
           "content": {
             "application/json": {
@@ -23122,7 +23122,7 @@
         },
         "responses": {
           "200": {
-            "description": "OK",
+            "description": "Invite e-mailed",
             "content": {
               "application/json": {
                 "schema": {
@@ -23131,17 +23131,16 @@
                     "id": {
                       "type": "string"
                     },
-                    "token": {
-                      "type": "string"
-                    },
-                    "acceptUrl": {
-                      "type": "string"
+                    "delivered": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
                     }
                   },
                   "required": [
                     "id",
-                    "token",
-                    "acceptUrl"
+                    "delivered"
                   ]
                 }
               }
@@ -23149,6 +23148,16 @@
           },
           "401": {
             "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "E-mail delivery is not configured or failed; no invite was created",
             "content": {
               "application/json": {
                 "schema": {
@@ -23198,7 +23207,7 @@
     },
     "/v1/admin/staff/accept": {
       "post": {
-        "summary": "Accept a staff invite + set password",
+        "summary": "Accept a staff invite (new account: choose a password; existing account: sign in or confirm the current password)",
         "requestBody": {
           "content": {
             "application/json": {
@@ -23206,11 +23215,20 @@
                 "type": "object",
                 "properties": {
                   "token": {
-                    "type": "string"
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
                   },
                   "password": {
                     "type": "string",
                     "minLength": 8
+                  },
+                  "currentPassword": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "totp": {
+                    "type": "string"
                   },
                   "firstName": {
                     "type": "string"
@@ -23220,8 +23238,7 @@
                   }
                 },
                 "required": [
-                  "token",
-                  "password"
+                  "token"
                 ]
               }
             }
@@ -23246,8 +23263,48 @@
               }
             }
           },
+          "400": {
+            "description": "Password required for a new account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Existing account: sign in or confirm the current password",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "CSRF",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "409": {
-            "description": "Invalid/expired",
+            "description": "Invalid/expired, or would demote an owner",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many attempts",
             "content": {
               "application/json": {
                 "schema": {

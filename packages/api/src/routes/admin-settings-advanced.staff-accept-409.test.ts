@@ -14,11 +14,11 @@ import { OpenAPIHono } from '@hono/zod-openapi';
 
 vi.mock('../auth/admin-staff.js', () => ({
   createAdminUser: vi.fn(),
+  findAdminCredentialsByEmail: vi.fn(),
   findAdminIdByEmail: vi.fn(),
   findInviteByTokenHash: vi.fn().mockResolvedValue(null),
   listStoreInvites: vi.fn(),
   listStoreStaff: vi.fn(),
-  setAdminPassword: vi.fn(),
 }));
 
 afterEach(() => {

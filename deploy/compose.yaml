@@ -105,6 +105,8 @@ services:
       DATABASE_URL: postgresql://sellright_app:${POSTGRES_APP_PASSWORD}@postgres:5432/sellright
       DATABASE_URL_MIGRATE: postgresql://sellright:${POSTGRES_PASSWORD}@postgres:5432/sellright
       STOREFRONT_URL: ${STOREFRONT_URL:?set STOREFRONT_URL in deploy/.env}
+      # Admin SPA public URL for e-mailed admin links (staff invites): Caddy serves it at the root of SELLRIGHT_DOMAIN.
+      ADMIN_PUBLIC_URL: https://${SELLRIGHT_DOMAIN:?set SELLRIGHT_DOMAIN in deploy/.env}
       ASSET_DIR: /app/var/assets
       DOWNLOAD_DIR: /app/var/downloads
       # WS-E: maintenance-mode flag file. Lives on its own named volume (not

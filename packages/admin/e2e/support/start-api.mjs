@@ -7,13 +7,16 @@
 // Rows (catalog, customers, staff, orders) are seeded over the admin API by
 // e2e/support/seed.ts in global setup — migrations + bootstrap are the only DB-level steps.
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import {
   API_DIR, API_PORT, DB_ADMIN_URL, DB_APP_URL, DB_NAME, DB_OWNER_URL, OWNER_EMAIL, OWNER_PASSWORD, RUN_DIR,
-  STORE_SLUG, ADMIN_URL, assertSafeTargets,
+  STORE_SLUG, ADMIN_URL, SMTP_PORT, assertSafeTargets,
 } from './env.mjs';
+import { startSmtpSink } from './smtp-sink.mjs';
+
+const MAILBOX_FILE = join(RUN_DIR, 'mailbox.jsonl'); // read by support/mailbox.ts
 
 assertSafeTargets();
 
@@ -67,6 +70,8 @@ const baseEnv = {
   HOME: process.env.HOME ?? '',
   NODE_ENV: 'production',
   STOREFRONT_URL: ADMIN_URL,
+  // The admin SPA is served at the root of ADMIN_URL here: e-mailed invite links must point at it.
+  ADMIN_PUBLIC_URL: ADMIN_URL,
   DOWNLOAD_URL_SECRET: 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789',
   SELLRIGHT_MASTER_KEY: '1122334455667788112233445566778811223344556677881122334455667788',
   ADMIN_EMAIL: OWNER_EMAIL,
@@ -77,7 +82,11 @@ const baseEnv = {
   // Bare host, no port: store-context strips :port before matching, so both the admin proxy
   // (127.0.0.1:4399) and a direct API call (127.0.0.1:3399) resolve to this store.
   BOOTSTRAP_STORE_HOSTNAMES: '127.0.0.1',
-  SMTP_ENABLED: 'false',
+  // Staff invites are e-mail-only: mail goes to the local sink (support/smtp-sink.mjs), never off-box.
+  SMTP_ENABLED: 'true',
+  SMTP_HOST: '127.0.0.1',
+  SMTP_PORT: String(SMTP_PORT),
+  SMTP_FROM: 'noreply@e2e.example.net',
   RATE_LIMIT_BACKEND: 'memory',
   HOST: '127.0.0.1',
   PORT: String(API_PORT),
@@ -92,6 +101,9 @@ function runStep(script, databaseUrl) {
     process.exit(r.status ?? 1);
   }
 }
+
+rmSync(MAILBOX_FILE, { force: true });
+startSmtpSink(SMTP_PORT, MAILBOX_FILE);
 
 await resetDatabase();
 runStep('migrate.js', DB_OWNER_URL);

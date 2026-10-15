@@ -69,6 +69,10 @@ const EnvSchema = z.object({
   ARTIFACT_EXTERNAL_HOST_ALLOWLIST: z.string().default(''),
   // Public storefront URL used in email links (password reset, verify, etc.).
   STOREFRONT_URL: z.string().url().default('https://store.example.com'),
+  // Public URL of the admin SPA (origin + mount path, no trailing slash), used for links the
+  // API e-mails to admins (staff invites). Default: STOREFRONT_URL + '/admin' (the sub-path
+  // mount). A separate admin host (deploy/compose.yaml) sets e.g. https://admin.example.com.
+  ADMIN_PUBLIC_URL: z.preprocess(emptyToUndefined, z.string().url().optional()),
   // Optional per-app overrides for shared stores, e.g.
   // viewright=hello@viewright.cc,heardright=hello@heardright.app
   EMAIL_FROM_BY_APP: optionalEnvString,
@@ -482,4 +486,10 @@ export function extendEnv<Extra extends z.ZodRawShape>(
     throw new Error(`Invalid extended environment:\n- ${errors.join('\n- ')}`);
   }
   return merged;
+}
+
+/** Admin SPA public base URL (no trailing slash) for e-mailed admin links: ADMIN_PUBLIC_URL, else
+ *  STOREFRONT_URL + '/admin'. */
+export function adminPublicUrl(): string {
+  return (env.ADMIN_PUBLIC_URL ?? `${env.STOREFRONT_URL.replace(/\/+$/, '')}/admin`).replace(/\/+$/, '');
 }
