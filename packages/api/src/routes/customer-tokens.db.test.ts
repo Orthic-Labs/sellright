@@ -378,6 +378,18 @@ describe('POST /v1/shop/auth/reset-password — atomic claim (security audit 202
     expect(live.rowCount).toBe(0);
   });
 
+  it('two DIFFERENT reset tokens for the same customer redeemed concurrently: one 200, one 409, never a 500/deadlock', async () => {
+    const c = await seedCustomer(STORE_A, 'pair@a.test');
+    const t1 = 'p'.repeat(40); const t2 = 'q'.repeat(40);
+    await plantReset(c.id, t1); await plantReset(c.id, t2);
+    for (let round = 0; round < 3; round++) {
+      if (round > 0) { await plantReset(c.id, `${t1}${round}`); await plantReset(c.id, `${t2}${round}`); }
+      const sfx = round > 0 ? String(round) : '';
+      const [a, b] = await Promise.all([reset(`${t1}${sfx}`, 'pair-new-password-a'), reset(`${t2}${sfx}`, 'pair-new-password-b')]);
+      expect([a.status, b.status].sort()).toEqual([200, 409]);
+    }
+  });
+
   it('an invalid or used token changes nothing', async () => {
     await seedCustomer(STORE_A, 'nochange@a.test', 'original-password-1');
     expect((await reset('u'.repeat(40), 'whatever-password')).status).toBe(409);
