@@ -7,11 +7,11 @@
  * client never says who it is), and deleted on logout / 410 / admin deletion.
  */
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { env } from '../env.js';
-import { J, errBody, requireAdmin, requireStore, guard } from './admin-helpers.js';
+import { HttpError, J, errBody, requireAdmin, requireStore, guard } from './admin-helpers.js';
 
 export const adminPush = new OpenAPIHono();
 
@@ -45,17 +45,24 @@ adminPush.openapi(
     const topics = body.topics ?? ['order.paid'];
     const environment = body.environment ?? env.APNS_DEFAULT_ENVIRONMENT;
 
+    // B2.16: a device registration belongs to THIS session (0099): logout / revocation deletes it via the FK. FOR SHARE
+    // makes a registration racing a logout either land before the session delete (then cascade) or see no session.
+    const sessionId = admin.sessionId ?? null;
     await withStore(st.storeId, async (tx) => {
+      if (sessionId) {
+        const live = await tx.execute(sql`SELECT 1 FROM "session" WHERE id = ${sessionId} FOR SHARE`);
+        if (live.rows.length === 0) throw new HttpError(401, 'invalid or expired session');
+      }
       // `token` is unique across the table: the same phone re-registering (app
       // relaunch, token rotation, or a DIFFERENT operator signing in on a shared
       // device) rebinds the row to whoever is authenticated now. Without the
       // rebind, a device handed over would keep pushing to its previous owner.
       await tx
         .insert(s.adminDeviceToken)
-        .values({ storeId: st.storeId, adminUserId: admin.id, token: body.token, kind: body.kind ?? 'apns', environment, topics })
+        .values({ storeId: st.storeId, adminUserId: admin.id, token: body.token, kind: body.kind ?? 'apns', environment, topics, sessionId })
         .onConflictDoUpdate({
           target: s.adminDeviceToken.token,
-          set: { storeId: st.storeId, adminUserId: admin.id, kind: body.kind ?? 'apns', environment, topics, lastSeenAt: new Date() },
+          set: { storeId: st.storeId, adminUserId: admin.id, kind: body.kind ?? 'apns', environment, topics, sessionId, lastSeenAt: new Date() },
         });
     });
     return c.json({ ok: true, topics }, 200);

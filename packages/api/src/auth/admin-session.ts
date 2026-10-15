@@ -45,6 +45,8 @@ export interface AdminPrincipal {
    *  per-admin — see requireStepUp() in routes/admin-helpers.ts. */
   stepUpAt: Date | null;
   stores: AdminStoreAccess[];
+  /** The session row this request authenticated with (admin sessions only). */
+  sessionId?: string;
   /** P1b: the admin has a TOTP secret enrolled. Absent for agents. */
   totpEnabled?: boolean;
   /** P1b: policy (auth/mfa-policy.ts) requires TOTP for this admin. */
@@ -201,7 +203,7 @@ export async function resolveAdmin(token: string): Promise<AdminPrincipal | null
   // Token-bound sessions belong to agents only; agents only ever hold token-bound sessions, on exactly one store, never as owner (D2).
   if (first.apiTokenId && kind !== 'agent') return null; // invalid state (Astra v5 F12): a human must never inherit a token binding
   if (kind === 'agent' && (!first.apiTokenId || stores.length !== 1 || stores[0]!.role === 'owner')) return null;
-  const principal: AdminPrincipal = { id: first.id, email: first.email, kind, auth: 'session', apiTokenId: first.apiTokenId, isInstallationAdmin: first.isInstallationAdmin, stepUpAt: first.stepUpAt, stores };
+  const principal: AdminPrincipal = { id: first.id, email: first.email, kind, auth: 'session', apiTokenId: first.apiTokenId, isInstallationAdmin: first.isInstallationAdmin, stepUpAt: first.stepUpAt, stores, sessionId: first.sessionId };
   if (kind === 'human') {
     principal.totpEnabled = first.totpEnabled === true;
     principal.totpRequired = totpRequiredFor(principal);
