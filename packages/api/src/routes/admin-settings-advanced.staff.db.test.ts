@@ -12,7 +12,14 @@
  * (leaving the store with no owner), and that ordinary staff management by a
  * manager (creating/editing non-owner rows) still works unrestricted.
  */
-import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// Invites are e-mail-only (P0): the accept token is never returned, and an undelivered invite is
+// refused. These cases are about the role gate, so delivery is stubbed as successful.
+vi.mock('../email/dispatch.js', async (orig) => ({
+  ...(await orig<typeof import('../email/dispatch.js')>()),
+  sendStaffInvite: vi.fn(async () => ({ delivered: true })),
+}));
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';

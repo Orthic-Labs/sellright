@@ -2,6 +2,7 @@ import type { Browser, Page } from '@playwright/test';
 import { test, expect, row, toast, field, gotoStable } from './fixtures';
 import { AdminApi, createOrder, createPendingOrder, uniq } from './support/api';
 import { ADMIN_URL } from './support/env.mjs';
+import { inviteTokenFor } from './support/mailbox';
 
 /**
  * Plan 1.3 #18 — Staff: owner invites in the UI -> invitee accepts -> signs in -> role + per-action permissions are
@@ -17,12 +18,10 @@ async function inviteViaUi(page: Page, email: string, roleLabel: 'Staff' | 'Read
 	await page.getByPlaceholder('team@example.com').fill(email);
 	await field(page, 'Role').selectOption({ label: roleLabel });
 	await page.getByRole('button', { name: 'Send invite' }).click();
-	await expect(page.getByText('Invite created.')).toBeVisible();
-	// the one-time raw token is shown exactly once, next to the copyable accept URL
-	const token = await page.locator('input[readonly]').nth(1).inputValue();
-	expect(token).toMatch(/^[0-9a-f]{48}$/);
-	await expect(page.locator('input[readonly]').first()).toHaveValue(new RegExp(`accept-invite\\?token=${token}$`));
-	return token;
+	await expect(page.getByText(`Invitation e-mailed to ${email}.`)).toBeVisible();
+	// the accept token is never shown to the inviter (P0): it only travels to the invitee's mailbox
+	await expect(page.locator('input[readonly]')).toHaveCount(0);
+	return inviteTokenFor(email);
 }
 
 async function acceptInvite(token: string): Promise<void> {
@@ -144,8 +143,9 @@ test.describe('staff', () => {
 
 	test('the emailed accept link opens an accept-invite screen that sets the password and signs the invitee in', async ({ browser, api }) => {
 		const email = `${uniq('ai')}@example.net`;
-		const inv = await api.post<{ token: string; acceptUrl: string }>('/staff/invites', { email, role: 'staff' });
-		expect(inv.acceptUrl).toBe(`/admin/accept-invite?token=${inv.token}`);
+		const sent = await api.post<Record<string, unknown>>('/staff/invites', { email, role: 'staff' });
+		expect(sent).not.toHaveProperty('token'); // e-mail only
+		const inv = { token: await inviteTokenFor(email) };
 		const context = await browser.newContext({ baseURL: ADMIN_URL, storageState: { cookies: [], origins: [] } });
 		const page = await context.newPage();
 		await page.goto(`/accept-invite?token=${inv.token}`);
@@ -172,6 +172,37 @@ test.describe('staff', () => {
 		await again.getByRole('button', { name: 'Accept invitation' }).click();
 		await expect(again.getByText('invite is invalid, already used, or expired')).toBeVisible();
 		await context.close();
+	});
+
+	test('an invite to an address that already has an account asks for the CURRENT password and never changes it', async ({ browser, api }) => {
+		const email = `${uniq('ex')}@example.net`;
+		await api.post('/staff/invites', { email, role: 'staff' });
+		await acceptInvite(await inviteTokenFor(email)); // account now exists with PASSWORD
+		const id = (await api.get<{ items: { adminUserId: string; email: string }[] }>('/staff')).items.find((m) => m.email === email)!.adminUserId;
+		await api.raw('DELETE', `/staff/${id}`);
+
+		await api.post('/staff/invites', { email, role: 'manager' });
+		const token = await inviteTokenFor(email);
+		// the token alone cannot set a new password for an existing account
+		const blind = await fetch(`${new URL(ADMIN_URL).origin}/v1/admin/staff/accept`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token, password: 'someone-elses-pass' }) });
+		expect(blind.status).toBe(401);
+
+		const context = await browser.newContext({ baseURL: ADMIN_URL, storageState: { cookies: [], origins: [] } });
+		const page = await context.newPage();
+		await page.goto(`/accept-invite?token=${token}`);
+		await field(page, 'Email').fill(email);
+		await field(page, 'Password').fill('a-brand-new-pass');
+		await field(page, 'Confirm password').fill('a-brand-new-pass');
+		await page.getByRole('button', { name: 'Accept invitation' }).click();
+		await expect(page.getByText('This address already has an account. Enter its current password to accept.')).toBeVisible();
+		await field(page, 'Current password').fill(PASSWORD);
+		await page.getByRole('button', { name: 'Accept invitation' }).click();
+		await expect(page).toHaveURL(`${ADMIN_URL}/`, { timeout: 15_000 });
+		await context.close();
+		// password unchanged: the old one still signs in, the attempted new one does not
+		await AdminApi.login(email, PASSWORD);
+		const bad = await fetch(`${new URL(ADMIN_URL).origin}/v1/admin/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, password: 'a-brand-new-pass' }) });
+		expect(bad.status).toBe(401);
 	});
 
 	test('the accept-invite screen without a token explains how to get one', async ({ page }) => {

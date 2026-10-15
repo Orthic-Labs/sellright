@@ -1,24 +1,30 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { randomBytes, createHash } from 'node:crypto';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
-import { hashPassword } from '../auth/password.js';
+import { hashPassword, verifyPassword } from '../auth/password.js';
+import { verifyTotp } from '../auth/totp.js';
+import { clientIp, loginRetryAfter, recordLoginFailure, clearLoginAttempts } from '../auth/rate-limit.js';
+import { csrfValid, cookie, SESSION_COOKIE } from '../auth/cookies.js';
+import { bearer } from '../auth/session.js';
+import { resolveAdmin } from '../auth/admin-session.js';
 import { errJson } from '../lib/api-error.js';
 import { normalizeEmail } from '../auth/email.js';
 import {
   adminKindByEmail,
   adminKindById,
   createAdminUser,
+  findAdminCredentialsByEmail,
   findAdminIdByEmail,
   findInviteByTokenHash,
   listStoreInvites,
   listStoreStaff,
-  setAdminPassword,
 } from '../auth/admin-staff.js';
 import { revokeAgentTokens } from '../auth/admin-api-token.js';
 import { sendStaffInvite } from '../email/dispatch.js';
 import { err as logErr } from '../lib/logger.js';
+import type { Context } from 'hono';
 import { env } from '../env.js';
 import { assertSafeOutboundUrl, type OutboundUrlLookup } from '../security/outbound-url.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireManage, requireOwner, requirePermission, guard } from './admin-helpers.js';
@@ -182,9 +188,24 @@ adminSettingsAdvanced.openapi(
     }
     // SR-16: the store-scoped grant (admin_user_store is RLS-exempt — see
     // drizzle/0008 — so a withStore tx can write it) and its audit row commit
-    // or roll back together. The password never leaves this handler.
+    // or roll back together. The password never leaves this handler, and it is
+    // only ever used for a brand-new account (an existing account's password is
+    // never touched here).
     const uid = adminUserId;
     await withStore(st.storeId, async (tx) => {
+      // P0: this is an upsert — for an admin already enrolled here it CHANGES their role. When the
+      // target is currently an owner the same guards as PATCH apply (owner-only + last-owner), so a
+      // manager can no longer demote an owner by re-"adding" them with a lesser role.
+      const [m] = await tx
+        .select({ role: s.adminUserStore.role })
+        .from(s.adminUserStore)
+        .where(and(eq(s.adminUserStore.adminUserId, uid), eq(s.adminUserStore.storeId, st.storeId)))
+        .for('update')
+        .limit(1);
+      if (m?.role === 'owner') {
+        requireOwner(st);
+        if (role !== 'owner' && (await lockedOwnerCount(tx, st.storeId)) <= 1) throw new HttpError(409, 'cannot demote the last remaining owner');
+      }
       await tx
         .insert(s.adminUserStore)
         .values({ adminUserId: uid, storeId: st.storeId, role })
@@ -313,11 +334,39 @@ adminSettingsAdvanced.openapi(
 const hashTok = (t: string) => createHash('sha256').update(t).digest('hex');
 const INVITE_TTL_MS = 7 * 24 * 3600 * 1000;
 
+type StoreTx = Parameters<Parameters<typeof withStore>[1]>[0];
+
+/** Owners of a store, counted with their rows locked (FOR UPDATE) so two concurrent demotions
+ *  cannot both pass a last-owner check. */
+async function lockedOwnerCount(tx: StoreTx, storeId: string): Promise<number> {
+  const owners = await tx
+    .select({ id: s.adminUserStore.adminUserId })
+    .from(s.adminUserStore)
+    .where(and(eq(s.adminUserStore.storeId, storeId), eq(s.adminUserStore.role, 'owner')))
+    .for('update');
+  return owners.length;
+}
+
+/** The human admin authenticated on THIS request (cookie or bearer session), if any. The agent
+ *  guard already resolved it for /v1/admin/* requests; resolve directly when mounted without it. */
+async function sessionHuman(c: Context): Promise<{ id: string; email: string } | null> {
+  const fromGuard = c.get('adminPrincipal');
+  if (fromGuard) return fromGuard.kind === 'human' ? fromGuard : null;
+  const token = bearer(c.req.header('authorization')) ?? cookie(c, SESSION_COOKIE);
+  if (!token) return null;
+  const p = await resolveAdmin(token);
+  return p && p.kind === 'human' ? p : null;
+}
+
 adminSettingsAdvanced.openapi(
   createRoute({
-    method: 'post', path: '/v1/admin/staff/invites', summary: 'Invite a staff member (returns a one-time accept token)',
+    method: 'post', path: '/v1/admin/staff/invites', summary: 'Invite a staff member (the one-time accept link is e-mailed to the invitee; it is never returned to the inviter)',
     request: { body: { content: J(z.object({ email: z.string().email(), role: z.enum(['owner', 'manager', 'staff', 'read_only']).default('staff') })) } },
-    responses: { 200: { description: 'OK', content: J(z.object({ id: z.string(), token: z.string(), acceptUrl: z.string() })) }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: {
+      200: { description: 'Invite e-mailed', content: J(z.object({ id: z.string(), delivered: z.literal(true) })) },
+      401: { description: 'Unauthorized', ...errBody },
+      503: { description: 'E-mail delivery is not configured or failed; no invite was created', ...errBody },
+    },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
@@ -326,10 +375,13 @@ adminSettingsAdvanced.openapi(
     // SEC-OWNER-1: same owner-only gate as direct staff creation.
     if (b.role === 'owner') requireOwner(st);
     if ((await adminKindByEmail(normalizeEmail(b.email))) === 'agent') throw new HttpError(400, 'agents are created under Agent access');
-    const token = randomBytes(24).toString('hex');
+    const token = randomBytes(32).toString('hex');
     // SR-16: invite insert + audit row in one transaction. The raw token is
-    // never persisted anywhere but the response — only its sha256 hash is
-    // stored, and the audit row carries email/role, not the token or hash.
+    // never persisted — only its sha256 hash is stored, and the audit row
+    // carries email/role, not the token or hash.
+    // P0 (security audit 2026-10-15): the raw token is delivered ONLY to the
+    // invited mailbox. It used to be returned to the inviter, which let a
+    // manager invite the owner's address and redeem the token themselves.
     const invId = await withStore(st.storeId, async (tx) => {
       const [inv] = await tx
         .insert(s.staffInvite)
@@ -345,11 +397,27 @@ adminSettingsAdvanced.openapi(
       });
       return inv!.id;
     });
-    const acceptUrl = `/admin/accept-invite?token=${token}`;
-    // WP2: best-effort invite email. If SMTP is unconfigured the dev log line
-    // will surface the token; the response still includes it for the inviter.
-    try { await sendStaffInvite({ name: st.name, currency: st.currency, storeId: st.storeId }, normalizeEmail(b.email), { acceptUrl: `${env.STOREFRONT_URL}${acceptUrl}`, role: b.role, inviterEmail: admin.email }); } catch (e) { logErr.error('email staffInvite failed', e, { inviteEmail: b.email }); }
-    return c.json({ id: invId, token, acceptUrl }, 200);
+    const acceptUrl = `${env.STOREFRONT_URL}/admin/accept-invite?token=${token}`;
+    // E-mail is the only delivery channel. When it is not configured (or the
+    // send fails) the invite is discarded and the inviter gets an explicit
+    // error — never the token. (Chosen over an owner-only "reveal" behind
+    // step-up: no inviter, of any role, ever holds a credential for another
+    // person's account.) Direct "Add staff" with an initial password remains
+    // available for brand-new accounts when a store has no e-mail yet.
+    let delivered = false;
+    try {
+      const r = await sendStaffInvite({ name: st.name, currency: st.currency, storeId: st.storeId }, normalizeEmail(b.email), { acceptUrl, role: b.role, inviterEmail: admin.email });
+      delivered = r.delivered;
+      if (!delivered) logErr.error('email staffInvite not delivered', undefined, { inviteId: invId, reason: r.reason });
+    } catch (e) { logErr.error('email staffInvite failed', e, { inviteId: invId }); }
+    if (!delivered) {
+      await withStore(st.storeId, async (tx) => {
+        await tx.delete(s.staffInvite).where(eq(s.staffInvite.id, invId));
+        await tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'staff_invite', entityId: invId, action: 'discard_undelivered', data: { email: normalizeEmail(b.email), role: b.role } });
+      });
+      throw new HttpError(503, 'Invite e-mail could not be sent. Configure e-mail delivery under Settings > Email (or add the person directly with an initial password), then try again.', 'INVITE_EMAIL_UNAVAILABLE');
+    }
+    return c.json({ id: invId, delivered: true as const }, 200);
   }),
 );
 
@@ -366,53 +434,126 @@ adminSettingsAdvanced.openapi(
   }),
 );
 
-// PUBLIC — accept an invite by token (no admin auth; isolation is the token).
+// PUBLIC — accept an invite by token. The token alone only ever CREATES a brand-new account
+// (choosing its password). P0 (security audit 2026-10-15): for an address that already has an
+// account the token is not proof of identity — previously it silently replaced that admin's
+// password and upserted their role, which let a manager invite the owner's address, redeem the
+// returned token and sign in as the owner (same store or any other store). An existing admin now
+// accepts either from their own authenticated session (cookie + CSRF, or bearer) as that email,
+// or by proving their current password (+ TOTP when enabled; rate-limited like login). Their
+// password is never changed here, and a current owner is never demoted by an invite.
 adminSettingsAdvanced.openapi(
   createRoute({
-    method: 'post', path: '/v1/admin/staff/accept', summary: 'Accept a staff invite + set password',
-    request: { body: { content: J(z.object({ token: z.string(), password: z.string().min(8), firstName: z.string().optional(), lastName: z.string().optional() })) } },
-    responses: { 200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) }, 409: { description: 'Invalid/expired', ...errBody } },
+    method: 'post', path: '/v1/admin/staff/accept', summary: 'Accept a staff invite (new account: choose a password; existing account: sign in or confirm the current password)',
+    request: { body: { content: J(z.object({
+      token: z.string().min(1).max(256),
+      // New account only: the password to create it with.
+      password: z.string().min(8).optional(),
+      // Existing account only: proof of identity (ignored when the request carries that admin's own session).
+      currentPassword: z.string().min(1).optional(),
+      totp: z.string().optional(),
+      firstName: z.string().optional(),
+      lastName: z.string().optional(),
+    })) } },
+    responses: {
+      200: { description: 'OK', content: J(z.object({ ok: z.boolean() })) },
+      400: { description: 'Password required for a new account', ...errBody },
+      401: { description: 'Existing account: sign in or confirm the current password', ...errBody },
+      403: { description: 'CSRF', ...errBody },
+      409: { description: 'Invalid/expired, or would demote an owner', ...errBody },
+      429: { description: 'Too many attempts', ...errBody },
+    },
   }),
-  async (c) => {
+  async (c) => guard(c, async () => {
     const b = c.req.valid('json');
     const inv = await findInviteByTokenHash(hashTok(b.token));
     if (!inv || inv.acceptedAt || inv.expiresAt.getTime() <= Date.now()) {
       return errJson(c, 409, 'INVITE_INVALID', 'invite is invalid, already used, or expired');
     }
     if ((await adminKindByEmail(inv.email)) === 'agent') throw new HttpError(400, 'agents cannot accept invites');
-    const passwordHash = await hashPassword(b.password);
-    let adminId = await findAdminIdByEmail(inv.email);
-    if (adminId) {
-      // Existing admin accepting a new invite — refresh the password they
-      // just provided (gated by the invite token; the route doesn't require
-      // the prior password because the invite is the proof of intent).
-      await setAdminPassword(adminId, passwordHash);
+    const existing = await findAdminCredentialsByEmail(inv.email);
+    let newPasswordHash: string | null = null;
+    if (existing) {
+      const me = await sessionHuman(c);
+      let proven = false;
+      if (me && me.email === inv.email) {
+        // Session path. The route is CSRF-exempt for brand-new invitees, so a cookie-carried
+        // session must double-submit here (bearer clients pass csrfValid by construction).
+        if (!csrfValid(c)) return errJson(c, 403, 'CSRF_INVALID', 'CSRF token missing or invalid');
+        proven = true;
+      } else if (b.currentPassword !== undefined) {
+        // Same bucket as /v1/admin/login for this address, so accept cannot be used to brute-force it.
+        const ip = clientIp(c);
+        const key = `admin:${inv.email}`;
+        const retry = await loginRetryAfter(ip, key);
+        if (retry > 0) throw new HttpError(429, `too many attempts — try again in ${retry}s`, 'RATE_LIMITED');
+        const passwordOk = await verifyPassword(b.currentPassword, existing.passwordHash);
+        const totpOk = !existing.totpSecret || (!!b.totp && verifyTotp(existing.totpSecret, b.totp, existing.id));
+        if (!passwordOk || !totpOk) {
+          await recordLoginFailure(ip, key);
+          throw new HttpError(401, 'invalid password or 2FA code', 'INVITE_AUTH_FAILED');
+        }
+        await clearLoginAttempts(ip, key);
+        proven = true;
+      }
+      if (!proven) {
+        throw new HttpError(401, 'this address already has an account — sign in as it, or confirm its current password, to accept', 'INVITE_SIGN_IN_REQUIRED', undefined, { existingAccount: true });
+      }
     } else {
-      adminId = await createAdminUser(inv.email, passwordHash);
+      if (!b.password) throw new HttpError(400, 'choose a password (at least 8 characters) to create your account', 'PASSWORD_REQUIRED', 'password');
+      newPasswordHash = await hashPassword(b.password);
     }
-    // SR-16: the attach + invite-acceptance + audit row commit atomically.
-    // Actor is the invitee themselves — this is a public, token-gated route.
-    // The password hash never touches the audit row.
-    const uid = adminId;
+    // SR-16: invite claim + account creation + attach + audit row commit atomically. Actor is the
+    // invitee themselves. No password or hash ever touches the audit row.
     await withStore(inv.storeId, async (tx) => {
+      // Single use, race-free: only the request that flips accepted_at proceeds.
+      const claimed = await tx
+        .update(s.staffInvite)
+        .set({ acceptedAt: new Date() })
+        .where(and(eq(s.staffInvite.id, inv.id), isNull(s.staffInvite.acceptedAt), gt(s.staffInvite.expiresAt, new Date())))
+        .returning({ id: s.staffInvite.id });
+      if (claimed.length === 0) throw new HttpError(409, 'invite is invalid, already used, or expired', 'INVITE_INVALID');
+      let uid: string;
+      if (existing) {
+        uid = existing.id;
+      } else {
+        const [u] = await tx
+          .insert(s.adminUser)
+          .values({ email: normalizeEmail(inv.email), passwordHash: newPasswordHash })
+          .onConflictDoNothing({ target: s.adminUser.email })
+          .returning({ id: s.adminUser.id });
+        // An account for this address appeared concurrently: never overwrite it.
+        if (!u) throw new HttpError(409, 'an account for this address was just created — sign in to accept', 'INVITE_SIGN_IN_REQUIRED');
+        uid = u.id;
+      }
       const role = inv.role as 'owner' | 'manager' | 'staff' | 'read_only';
+      const [m] = await tx
+        .select({ role: s.adminUserStore.role })
+        .from(s.adminUserStore)
+        .where(and(eq(s.adminUserStore.adminUserId, uid), eq(s.adminUserStore.storeId, inv.storeId)))
+        .for('update')
+        .limit(1);
+      // Owner guard: an invite never demotes a current owner (the inviter may not even have been an
+      // owner). Owner changes go through PATCH /v1/admin/staff/{id}, which is owner-only and
+      // last-owner-guarded.
+      if (m?.role === 'owner' && role !== 'owner') throw new HttpError(409, 'you are already an owner of this store; an owner changes owner access from Staff', 'INVITE_WOULD_DEMOTE_OWNER');
       await tx
         .insert(s.adminUserStore)
         .values({ adminUserId: uid, storeId: inv.storeId, role })
         .onConflictDoUpdate({ target: [s.adminUserStore.adminUserId, s.adminUserStore.storeId], set: { role } });
-      await tx.update(s.staffInvite).set({ acceptedAt: new Date() }).where(eq(s.staffInvite.id, inv.id));
       await tx.insert(s.auditLog).values({
         storeId: inv.storeId,
         actor: `invite:${inv.email}`,
         entity: 'staff',
         entityId: uid,
         action: 'accept_invite',
+        fromState: m?.role ?? null,
         toState: inv.role,
-        data: { email: inv.email, inviteId: inv.id },
+        data: { email: inv.email, inviteId: inv.id, existingAccount: !!existing },
       });
     });
     return c.json({ ok: true }, 200);
-  },
+  }),
 );
 
 adminSettingsAdvanced.openapi(
@@ -437,6 +578,16 @@ adminSettingsAdvanced.openapi(
         .limit(1);
       if (!m) throw new HttpError(404, 'staff member not enrolled in this store');
       if ((await adminKindById(adminUserId)) === 'agent') throw new HttpError(400, 'use /v1/admin/agents/{id}/rotate for agents'); // D9
+      // P0: sessions are global, so a force-logout reaches every store the target works in. When the
+      // target is an owner (here or in any other store) or an installation administrator, only an
+      // owner of this store may do it. (No last-owner guard: revoking sessions changes no role, and
+      // the only owner an owner-caller could strand as "last owner" is themselves.)
+      const [elev] = await tx
+        .select({ owner: sql<boolean>`coalesce(bool_or(${s.adminUserStore.role} = 'owner'), false)`, install: sql<boolean>`bool_or(${s.adminUser.isInstallationAdmin})` })
+        .from(s.adminUser)
+        .leftJoin(s.adminUserStore, eq(s.adminUserStore.adminUserId, s.adminUser.id))
+        .where(eq(s.adminUser.id, adminUserId));
+      if (elev?.owner || elev?.install) requireOwner(st);
       const del = await tx.delete(s.session).where(eq(s.session.adminUserId, adminUserId)).returning({ id: s.session.id });
       await tx.insert(s.auditLog).values({
         storeId: st.storeId,

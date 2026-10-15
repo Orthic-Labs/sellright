@@ -54,11 +54,17 @@ export async function clearAdminTotpSecret(adminId: string): Promise<void> {
   await db.update(s.adminUser).set({ totpSecret: null }).where(eq(s.adminUser.id, adminId));
 }
 
-/** Update an admin's password (used by the staff-invite accept flow when the
- *  inviter-email already has an account; the freshly-supplied password replaces
- *  the prior hash, gated by the invite token's own validation). */
-export async function setAdminPassword(adminId: string, passwordHash: string): Promise<void> {
-  await db.update(s.adminUser).set({ passwordHash }).where(eq(s.adminUser.id, adminId));
+/** Credential facts for an existing admin, looked up by (normalized) email. Used by the
+ *  staff-invite accept flow: an invite token alone NEVER changes an existing account's
+ *  password or role — the existing admin must prove their current password (+ TOTP) or
+ *  accept from their own session (P0, security audit 2026-10-15). null when no account. */
+export async function findAdminCredentialsByEmail(email: string): Promise<{ id: string; kind: string; passwordHash: string | null; totpSecret: string | null } | null> {
+  const [u] = await db
+    .select({ id: s.adminUser.id, kind: s.adminUser.kind, passwordHash: s.adminUser.passwordHash, totpSecret: s.adminUser.totpSecret })
+    .from(s.adminUser)
+    .where(eq(s.adminUser.email, normalizeEmail(email)))
+    .limit(1);
+  return u ?? null;
 }
 
 // ── staff (admin_user_store ACL) ──────────────────────────────────────────────

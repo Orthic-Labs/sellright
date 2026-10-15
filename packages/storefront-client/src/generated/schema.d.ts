@@ -11018,7 +11018,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Accept a staff invite + set password */
+        /** Accept a staff invite (new account: choose a password; existing account: sign in or confirm the current password) */
         post: {
             parameters: {
                 query?: never;
@@ -11029,10 +11029,12 @@ export interface paths {
             requestBody?: {
                 content: {
                     "application/json": {
+                        currentPassword?: string;
                         firstName?: string;
                         lastName?: string;
-                        password: string;
+                        password?: string;
                         token: string;
+                        totp?: string;
                     };
                 };
             };
@@ -11048,8 +11050,44 @@ export interface paths {
                         };
                     };
                 };
-                /** @description Invalid/expired */
+                /** @description Password required for a new account */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Existing account: sign in or confirm the current password */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description CSRF */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Invalid/expired, or would demote an owner */
                 409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Too many attempts */
+                429: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -11105,7 +11143,7 @@ export interface paths {
             };
         };
         put?: never;
-        /** Invite a staff member (returns a one-time accept token) */
+        /** Invite a staff member (the one-time accept link is e-mailed to the invitee; it is never returned to the inviter) */
         post: {
             parameters: {
                 query?: never;
@@ -11127,21 +11165,30 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description OK */
+                /** @description Invite e-mailed */
                 200: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
                         "application/json": {
-                            acceptUrl: string;
+                            /** @enum {boolean} */
+                            delivered: true;
                             id: string;
-                            token: string;
                         };
                     };
                 };
                 /** @description Unauthorized */
                 401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description E-mail delivery is not configured or failed; no invite was created */
+                503: {
                     headers: {
                         [name: string]: unknown;
                     };
