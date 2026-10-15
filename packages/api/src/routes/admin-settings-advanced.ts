@@ -5,7 +5,7 @@ import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { hashPassword, verifyPassword } from '../auth/password.js';
 import { verifyTotp } from '../auth/totp.js';
-import { clientIp, loginRetryAfter, recordLoginFailure, clearLoginAttempts } from '../auth/rate-limit.js';
+import { clientIp, adminAuthRetryAfter, recordAdminAuthFailure, clearAdminAuthFailures } from '../auth/rate-limit.js';
 import { csrfValid, cookie, SESSION_COOKIE } from '../auth/cookies.js';
 import { bearer } from '../auth/session.js';
 import { resolveAdmin } from '../auth/admin-session.js';
@@ -538,16 +538,15 @@ adminSettingsAdvanced.openapi(
       } else if (b.currentPassword !== undefined) {
         // Same bucket as /v1/admin/login for this address, so accept cannot be used to brute-force it.
         const ip = clientIp(c);
-        const key = `admin:${inv.email}`;
-        const retry = await loginRetryAfter(ip, key);
+        const retry = await adminAuthRetryAfter(ip, inv.email);
         if (retry > 0) throw new HttpError(429, `too many attempts — try again in ${retry}s`, 'RATE_LIMITED');
         const passwordOk = await verifyPassword(b.currentPassword, existing.passwordHash);
         const totpOk = !existing.totpSecret || (!!b.totp && verifyTotp(existing.totpSecret, b.totp, existing.id));
         if (!passwordOk || !totpOk) {
-          await recordLoginFailure(ip, key);
+          await recordAdminAuthFailure(ip, inv.email);
           throw new HttpError(401, 'invalid password or 2FA code', 'INVITE_AUTH_FAILED');
         }
-        await clearLoginAttempts(ip, key);
+        await clearAdminAuthFailures(ip, inv.email);
         proven = true;
       }
       if (!proven) {

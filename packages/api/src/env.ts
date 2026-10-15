@@ -311,8 +311,17 @@ const EnvSchema = z.object({
   // '1' opts in; default '0' (off) is the safe posture for a fresh deployment.
   BEHIND_CLOUDFLARE: z.enum(['0', '1']).default('0'),
   // Header trusted for client IP when NOT behind Cloudflare (e.g. our own nginx's
-  // X-Real-IP). Must be set by a proxy the deployment actually controls.
+  // X-Real-IP). Must be set by a proxy the deployment actually controls. Honoured
+  // only when the TCP peer is loopback/private (the proxy itself); a request from a
+  // public peer reached the API directly and is identified by its socket address
+  // (auth/rate-limit.ts pickClientIp). '' disables header trust entirely.
   TRUSTED_PROXY_HEADER: z.string().default('x-real-ip'),
+  // P1a: admin credential-check budgets (login, step-up, 2FA enable/disable,
+  // invite accept, password change), on top of the 8 / 15 min (ip, account) bucket.
+  // Failures per admin account per hour across ALL IPs:
+  ADMIN_AUTH_ACCOUNT_MAX_FAILURES: z.coerce.number().int().positive().default(20),
+  // Failures per client IP per 15 minutes across ALL accounts:
+  ADMIN_AUTH_IP_MAX_FAILURES: z.coerce.number().int().positive().default(50),
   // SEC-5: expose raw error messages to clients regardless of NODE_ENV. Only ever
   // set '1' for local debugging — a staging box left without NODE_ENV=production
   // must NOT leak internal error text by default.
