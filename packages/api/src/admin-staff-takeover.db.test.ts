@@ -28,12 +28,14 @@ vi.mock('./email/dispatch.js', async (orig) => ({
 
 import { createApp } from './app.js';
 import { pool } from './db/client.js';
-import { env } from './env.js';
+import { env, adminPublicUrl } from './env.js';
 import { createAdminSession } from './auth/admin-session.js';
 import { hashPassword, verifyPassword } from './auth/password.js';
 import { _setRateLimitBackendForTest, createMemoryRateLimitBackend } from './auth/rate-limit-backend.js';
 
-const isTestDb = /_test(\b|$|\?)/.test(process.env.DATABASE_URL ?? env.DATABASE_URL);
+// TRUNCATEs: only ever against a database whose NAME ends in _test (the pathname, not the whole URL —
+// a user/host containing "_test" must not qualify).
+const isTestDb = /^\/[^/]*_test$/.test(new URL(process.env.DATABASE_URL ?? env.DATABASE_URL).pathname);
 
 const STORE_A = 'ffffffff-ffff-ffff-ffff-ffffffff0a0a';
 const STORE_B = 'ffffffff-ffff-ffff-ffff-ffffffff0b0b';
@@ -118,6 +120,9 @@ describe.skipIf(!isTestDb)('P0: manager -> owner takeover through staff invites'
     // delivered by e-mail only, to the invited address
     expect(sent.mails).toHaveLength(1);
     expect(sent.mails[0]!.to).toBe(OWNER_A_EMAIL);
+    // the link targets the admin SPA (ADMIN_PUBLIC_URL, default STOREFRONT_URL/admin), never a request-derived host
+    expect(sent.mails[0]!.acceptUrl).toBe(`${adminPublicUrl()}/accept-invite?token=${new URL(sent.mails[0]!.acceptUrl).searchParams.get('token')}`);
+    expect(sent.mails[0]!.acceptUrl).toMatch(/\/admin\/accept-invite\?token=[0-9a-f]{64}$/);
   });
 
   it('same store: an unauthenticated accept of a (leaked) token for the owner cannot reset the owner password or role', async () => {
@@ -178,6 +183,32 @@ describe.skipIf(!isTestDb)('P0: manager -> owner takeover through staff invites'
     await pool.query(`INSERT INTO admin_user_store (admin_user_id, store_id, role) VALUES ($1, $2, 'staff')`, [OWNER_B, STORE_A]);
     const res = await call('POST', `/v1/admin/staff/${OWNER_B}/revoke-sessions`, { token: manager, slug: 'takeover-a' });
     expect(res.status).toBe(403);
+  });
+});
+
+describe.skipIf(!isTestDb)('P0: concurrent membership changes are serialized', () => {
+  it('a manager upsert racing an owner grant cannot demote the new owner (the membership did not exist when it was read)', async () => {
+    // A concurrent owner-side transaction holds the store's membership lock and inserts the target as owner.
+    const other = await pool.connect();
+    try {
+      await other.query('BEGIN');
+      await other.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`staff-membership:${STORE_A}`]);
+      await other.query(`INSERT INTO admin_user_store (admin_user_id, store_id, role) VALUES ($1, $2, 'owner')`, [OWNER_B, STORE_A]);
+      const pending = call('POST', '/v1/admin/staff', { token: manager, slug: 'takeover-a', body: { email: OWNER_B_EMAIL, role: 'staff', password: 'irrelevant-1' } });
+      // Wait until the manager's request is parked behind the other transaction (any ungranted lock in pg_locks —
+      // the membership lock with the fix, the conflicting row's insert without it), never a fixed sleep.
+      let waiting = 0;
+      for (let i = 0; i < 400 && !waiting; i++) {
+        waiting = (await pool.query(`SELECT 1 FROM pg_locks WHERE NOT granted`)).rowCount ?? 0;
+        if (!waiting) await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(waiting).toBeGreaterThan(0);
+      await other.query('COMMIT');
+      expect((await pending).status).toBe(403);
+    } finally {
+      other.release();
+    }
+    expect(await roleOf(OWNER_B, STORE_A)).toBe('owner');
   });
 });
 

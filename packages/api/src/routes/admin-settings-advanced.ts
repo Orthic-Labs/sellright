@@ -25,7 +25,7 @@ import { revokeAgentTokens } from '../auth/admin-api-token.js';
 import { sendStaffInvite } from '../email/dispatch.js';
 import { err as logErr } from '../lib/logger.js';
 import type { Context } from 'hono';
-import { env } from '../env.js';
+import { env, adminPublicUrl } from '../env.js';
 import { assertSafeOutboundUrl, type OutboundUrlLookup } from '../security/outbound-url.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireManage, requireOwner, requirePermission, guard } from './admin-helpers.js';
 import { CANARY_TOPIC } from '../canary/marker.js';
@@ -196,6 +196,7 @@ adminSettingsAdvanced.openapi(
       // P0: this is an upsert — for an admin already enrolled here it CHANGES their role. When the
       // target is currently an owner the same guards as PATCH apply (owner-only + last-owner), so a
       // manager can no longer demote an owner by re-"adding" them with a lesser role.
+      await lockStoreMembership(tx, st.storeId);
       const [m] = await tx
         .select({ role: s.adminUserStore.role })
         .from(s.adminUserStore)
@@ -245,6 +246,7 @@ adminSettingsAdvanced.openapi(
     // is RLS-exempt — drizzle/0008 — so a withStore tx can write it). A denied
     // change throws before the audit insert and rolls back — no phantom record.
     await withStore(st.storeId, async (tx) => {
+      await lockStoreMembership(tx, st.storeId);
       const [m] = await tx
         .select({ role: s.adminUserStore.role })
         .from(s.adminUserStore)
@@ -296,6 +298,7 @@ adminSettingsAdvanced.openapi(
     // even an owner can't remove the last remaining owner.
     // SR-16: check + delete + audit row share one transaction — see PATCH above.
     await withStore(st.storeId, async (tx) => {
+      await lockStoreMembership(tx, st.storeId);
       const [m] = await tx
         .select({ role: s.adminUserStore.role })
         .from(s.adminUserStore)
@@ -335,6 +338,14 @@ const hashTok = (t: string) => createHash('sha256').update(t).digest('hex');
 const INVITE_TTL_MS = 7 * 24 * 3600 * 1000;
 
 type StoreTx = Parameters<Parameters<typeof withStore>[1]>[0];
+
+/** Serializes every change to one store's membership (admin_user_store rows) — add/upsert,
+ *  role change, removal and invite acceptance. A row lock alone is not enough: when the
+ *  membership does not exist yet, SELECT ... FOR UPDATE locks nothing, so a concurrent insert
+ *  could land between an authorization read and an ON CONFLICT DO UPDATE. Transaction-scoped. */
+async function lockStoreMembership(tx: StoreTx, storeId: string): Promise<void> {
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${'staff-membership:' + storeId}, 0))`);
+}
 
 /** Owners of a store, counted with their rows locked (FOR UPDATE) so two concurrent demotions
  *  cannot both pass a last-owner check. */
@@ -397,7 +408,10 @@ adminSettingsAdvanced.openapi(
       });
       return inv!.id;
     });
-    const acceptUrl = `${env.STOREFRONT_URL}/admin/accept-invite?token=${token}`;
+    // The admin SPA's public origin + mount path (ADMIN_PUBLIC_URL; default STOREFRONT_URL/admin,
+    // the sub-path mount). Server configuration only — never request-derived, or an inviter could
+    // point the e-mailed link (and its token) at a host they control.
+    const acceptUrl = `${adminPublicUrl()}/accept-invite?token=${token}`;
     // E-mail is the only delivery channel. When it is not configured (or the
     // send fails) the invite is discarded and the inviter gets an explicit
     // error — never the token. (Chosen over an owner-only "reveal" behind
@@ -527,6 +541,7 @@ adminSettingsAdvanced.openapi(
         uid = u.id;
       }
       const role = inv.role as 'owner' | 'manager' | 'staff' | 'read_only';
+      await lockStoreMembership(tx, inv.storeId);
       const [m] = await tx
         .select({ role: s.adminUserStore.role })
         .from(s.adminUserStore)

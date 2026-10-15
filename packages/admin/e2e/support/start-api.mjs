@@ -70,6 +70,8 @@ const baseEnv = {
   HOME: process.env.HOME ?? '',
   NODE_ENV: 'production',
   STOREFRONT_URL: ADMIN_URL,
+  // The admin SPA is served at the root of ADMIN_URL here: e-mailed invite links must point at it.
+  ADMIN_PUBLIC_URL: ADMIN_URL,
   DOWNLOAD_URL_SECRET: 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789',
   SELLRIGHT_MASTER_KEY: '1122334455667788112233445566778811223344556677881122334455667788',
   ADMIN_EMAIL: OWNER_EMAIL,

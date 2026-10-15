@@ -1,8 +1,8 @@
 import type { Browser, Page } from '@playwright/test';
 import { test, expect, row, toast, field, gotoStable } from './fixtures';
-import { AdminApi, createOrder, createPendingOrder, uniq } from './support/api';
+import { AdminApi, createOrder, createPendingOrder, totpAt, totpStep, uniq } from './support/api';
 import { ADMIN_URL } from './support/env.mjs';
-import { inviteTokenFor } from './support/mailbox';
+import { inviteLinkFor, inviteTokenFor } from './support/mailbox';
 
 /**
  * Plan 1.3 #18 — Staff: owner invites in the UI -> invitee accepts -> signs in -> role + per-action permissions are
@@ -145,10 +145,13 @@ test.describe('staff', () => {
 		const email = `${uniq('ai')}@example.net`;
 		const sent = await api.post<Record<string, unknown>>('/staff/invites', { email, role: 'staff' });
 		expect(sent).not.toHaveProperty('token'); // e-mail only
-		const inv = { token: await inviteTokenFor(email) };
+		// navigate the link exactly as it arrived in the mailbox (ADMIN_PUBLIC_URL + /accept-invite)
+		const link = await inviteLinkFor(email);
+		expect(link.startsWith(`${ADMIN_URL}/accept-invite?token=`)).toBe(true);
+		const inv = { token: new URL(link).searchParams.get('token')! };
 		const context = await browser.newContext({ baseURL: ADMIN_URL, storageState: { cookies: [], origins: [] } });
 		const page = await context.newPage();
-		await page.goto(`/accept-invite?token=${inv.token}`);
+		await page.goto(link);
 		await field(page, 'Email').fill(email);
 		await field(page, 'Password').fill('short');
 		await field(page, 'Confirm password').fill('short');
@@ -189,7 +192,7 @@ test.describe('staff', () => {
 
 		const context = await browser.newContext({ baseURL: ADMIN_URL, storageState: { cookies: [], origins: [] } });
 		const page = await context.newPage();
-		await page.goto(`/accept-invite?token=${token}`);
+		await page.goto(await inviteLinkFor(email));
 		await field(page, 'Email').fill(email);
 		await field(page, 'Password').fill('a-brand-new-pass');
 		await field(page, 'Confirm password').fill('a-brand-new-pass');
@@ -203,6 +206,35 @@ test.describe('staff', () => {
 		await AdminApi.login(email, PASSWORD);
 		const bad = await fetch(`${new URL(ADMIN_URL).origin}/v1/admin/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, password: 'a-brand-new-pass' }) });
 		expect(bad.status).toBe(401);
+	});
+
+	test('an existing account WITH 2FA accepts by signing in once (the code is used a single time) and lands signed in', async ({ browser, api }) => {
+		const email = `${uniq('e2fa')}@example.net`;
+		await api.post('/staff/invites', { email, role: 'staff' });
+		await acceptInvite(await inviteTokenFor(email));
+		const mine = await AdminApi.login(email, PASSWORD);
+		const { secret } = await mine.post<{ secret: string }>('/2fa/setup');
+		await mine.post('/2fa/enable', { secret, code: totpAt(secret, totpStep()) });
+		const id = (await api.get<{ items: { adminUserId: string; email: string }[] }>('/staff')).items.find((m) => m.email === email)!.adminUserId;
+		await api.raw('DELETE', `/staff/${id}`);
+		await api.post('/staff/invites', { email, role: 'manager' });
+
+		const context = await browser.newContext({ baseURL: ADMIN_URL, storageState: { cookies: [], origins: [] } });
+		const page = await context.newPage();
+		await page.goto(await inviteLinkFor(email));
+		await field(page, 'Email').fill(email);
+		await field(page, 'Password').fill('irrelevant-new-pass');
+		await field(page, 'Confirm password').fill('irrelevant-new-pass');
+		await page.getByRole('button', { name: 'Accept invitation' }).click();
+		await expect(page.getByText('This address already has an account. Enter its current password to accept.')).toBeVisible();
+		await field(page, 'Current password').fill(PASSWORD);
+		await field(page, '2FA code (if enabled)').fill(totpAt(secret, totpStep() + 1)); // a different step than /2fa/enable used
+		await page.getByRole('button', { name: 'Accept invitation' }).click();
+		await expect(page).toHaveURL(`${ADMIN_URL}/`, { timeout: 15_000 });
+		await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
+		await context.close();
+		const members = (await api.get<{ items: { email: string; role: string }[] }>('/staff')).items;
+		expect(members.find((m) => m.email === email)?.role).toBe('manager');
 	});
 
 	test('the accept-invite screen without a token explains how to get one', async ({ page }) => {

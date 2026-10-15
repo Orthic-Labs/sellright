@@ -9,8 +9,9 @@ import { adminHref } from '../lib/base-path';
  * Staff invite acceptance. The invite e-mail links here as /accept-invite?token=... under the admin base path.
  * Public/pre-auth: lives outside <Protected>. A brand-new invitee chooses a password (POST /v1/admin/staff/accept,
  * token-gated, CSRF-exempt) and is then signed in with it. When the invited address already has an account the token is
- * NOT enough (the API answers INVITE_SIGN_IN_REQUIRED): the invitee confirms their CURRENT password (+ 2FA code if on);
- * their password is never changed by an invite. The accept endpoint does not echo the invited address, so the invitee
+ * NOT enough (the API answers INVITE_SIGN_IN_REQUIRED): the invitee signs in with their CURRENT password (+ 2FA code
+ * if on) and then accepts from that session — one sign-in, so a 2FA code is used exactly once. Their password is
+ * never changed by an invite. The accept endpoint does not echo the invited address, so the invitee
  * types it to sign in.
  */
 export default function AcceptInvite() {
@@ -44,10 +45,24 @@ export default function AcceptInvite() {
       if (password !== confirm) { setErr('Passwords do not match.'); return; }
     }
     setBusy(true);
+    if (existing) {
+      // Sign in once as the existing account, then accept from that session (cookie + CSRF).
+      try {
+        const r = await api.post<LoginResp>('/login', { email, password, totp: totp || undefined });
+        await api.post('/staff/accept', { token });
+        auth.store = r.stores?.[0]?.slug ?? null;
+        await refresh();
+        location.assign(adminHref('/'));
+      } catch (e: unknown) {
+        setErr(e instanceof ApiError && e.code === 'INVITE_SIGN_IN_REQUIRED'
+          ? 'Sign in with the address this invitation was sent to.'
+          : e instanceof Error ? e.message : 'Could not accept the invite');
+        setBusy(false);
+      }
+      return;
+    }
     try {
-      await api.post('/staff/accept', existing
-        ? { token, currentPassword: password, totp: totp || undefined }
-        : { token, password });
+      await api.post('/staff/accept', { token, password });
     } catch (e: unknown) {
       if (e instanceof ApiError && e.code === 'INVITE_SIGN_IN_REQUIRED' && !existing) {
         // The address already has an account: switch to "confirm your current password".
@@ -61,7 +76,7 @@ export default function AcceptInvite() {
       return;
     }
     try {
-      const r = await api.post<LoginResp>('/login', { email, password, totp: totp || undefined });
+      const r = await api.post<LoginResp>('/login', { email, password });
       auth.store = r.stores?.[0]?.slug ?? null;
       await refresh();
       location.assign(adminHref('/'));
