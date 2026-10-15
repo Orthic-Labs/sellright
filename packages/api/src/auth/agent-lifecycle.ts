@@ -1,4 +1,5 @@
 import { and, eq } from 'drizzle-orm';
+import { env } from '../env.js';
 import { randomBytes } from 'node:crypto';
 import { withStore, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
@@ -20,6 +21,14 @@ async function lockAgentGrant(tx: Tx, adminUserId: string, storeId: string): Pro
   return { name: m.name };
 }
 
+/** P1c (security audit 2026-10-15): agent tokens expire by default — ADMIN_AGENT_TOKEN_TTL_DAYS (default 90)
+ *  after minting when the caller gives no explicit expiry; 0 restores never-expiring tokens. A rotation of a
+ *  legacy never-expiring token also picks up the default. */
+export function defaultAgentTokenExpiry(now = Date.now()): Date | null {
+  const days = env.ADMIN_AGENT_TOKEN_TTL_DAYS;
+  return days > 0 ? new Date(now + days * 24 * 3600 * 1000) : null;
+}
+
 export async function createAgentSeat(i: { storeId: string; storeSlug: string; name: string; role: AgentRole; actor: string; expiresAt: Date | null }) {
   if (!AGENT_ROLES.has(i.role as AdminStoreAccess['role'])) throw new Error('agents cannot be owners');
   return withStore(i.storeId, async (tx) => {
@@ -27,7 +36,7 @@ export async function createAgentSeat(i: { storeId: string; storeSlug: string; n
     const [u] = await tx.insert(s.adminUser).values({ email, passwordHash: null, name: `Agent: ${i.name}`, kind: 'agent' }).returning({ id: s.adminUser.id });
     const adminUserId = u!.id;
     await tx.insert(s.adminUserStore).values({ adminUserId, storeId: i.storeId, role: i.role });
-    const minted = await mintAgentToken(tx, { adminUserId, storeId: i.storeId, name: i.name, createdBy: i.actor, expiresAt: i.expiresAt });
+    const minted = await mintAgentToken(tx, { adminUserId, storeId: i.storeId, name: i.name, createdBy: i.actor, expiresAt: i.expiresAt ?? defaultAgentTokenExpiry() });
     await tx.insert(s.auditLog).values({ storeId: i.storeId, actor: i.actor, entity: 'agent', entityId: adminUserId, action: 'create', data: { name: i.name, email, role: i.role, tokenId: minted.id } });
     return { adminUserId, email, tokenId: minted.id, token: minted.token };
   });
@@ -37,7 +46,7 @@ export async function rotateAgentSeat(i: { storeId: string; adminUserId: string;
   return withStore(i.storeId, async (tx) => {
     const g = await lockAgentGrant(tx, i.adminUserId, i.storeId);
     const r = await revokeAgentTokens(tx, i.adminUserId, i.storeId);
-    const minted = await mintAgentToken(tx, { adminUserId: i.adminUserId, storeId: i.storeId, name: (g.name ?? 'Agent').replace(/^Agent: /, ''), createdBy: i.actor, expiresAt: r.expiresAt });
+    const minted = await mintAgentToken(tx, { adminUserId: i.adminUserId, storeId: i.storeId, name: (g.name ?? 'Agent').replace(/^Agent: /, ''), createdBy: i.actor, expiresAt: r.expiresAt ?? defaultAgentTokenExpiry() });
     await tx.insert(s.auditLog).values({ storeId: i.storeId, actor: i.actor, entity: 'agent', entityId: i.adminUserId, action: 'rotate', data: { revoked: r.revoked, tokenId: minted.id } });
     return { tokenId: minted.id, token: minted.token, revoked: r.revoked };
   });

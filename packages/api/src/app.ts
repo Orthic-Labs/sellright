@@ -37,7 +37,8 @@ import { adminAssets } from './routes/admin-assets.js';
 import { adminPush } from './routes/admin-push.js';
 import { adminLicenses } from './routes/admin-licenses.js';
 import { adminAgents } from './routes/admin-agents.js';
-import { adminAgentGuard } from './routes/admin-agent-guard.js';
+import { createAdminAgentGuard } from './routes/admin-agent-guard.js';
+import { buildAgentRouteContext, type AgentRouteContext } from './auth/agent-policy.js';
 import { shopExtra } from './routes/shop-extra.js';
 import { subscriberRoutes } from './routes/shop-extra.subscriber.js';
 import { feeds } from './routes/feeds.js';
@@ -201,7 +202,9 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
 
   // Agent seats (docs/plans/2026-10-10-agent-role-v5.md): resolves the admin principal once and applies the
   // agent deny set (auth/agent-policy.ts) before any handler runs. After CSRF so cookie mutations are still CSRF-checked.
-  app.use('/v1/admin/*', adminAgentGuard);
+  // P1c: the route context (engine-owned routes + plugin agent policies) is filled in once plugins are mounted below.
+  let agentRouteContext: AgentRouteContext | undefined;
+  app.use('/v1/admin/*', createAdminAgentGuard(() => agentRouteContext));
 
   // Shop-surface CSRF guard (WP1.1). Mirrors the admin block: cookie-session
   // requests must double-submit the customer CSRF token. Bearer/API clients are
@@ -446,6 +449,9 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
   installDefaultStoreKitPolicy();
   // Payment policy (sellright-default, allow-all) before plugins: a plugin's init() registers its own policy.
   installDefaultPaymentPolicy();
+  // P1c: every route registered so far is engine-owned; anything mounted from here on belongs to a plugin and is
+  // denied to agents for mutations unless the plugin allowlists it (auth/agent-policy.ts).
+  const builtinRoutes = new Set(app.routes.filter((r) => r.method !== 'ALL').map((r) => `${r.method.toUpperCase()} ${r.path}`));
   for (const plugin of listApiPlugins()) {
     if (plugin.routes) app.route('/', plugin.routes);
   }
@@ -456,6 +462,10 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
     plugin.init?.(app);
   }
   assertHostRouteUnshadowed(app, releaseHostRouteEntries); // a plugin must not register the host-owned route from init() either
+  agentRouteContext = buildAgentRouteContext(builtinRoutes, [
+    ...listApiPlugins().map((p) => ({ name: p.name, policy: p.agentPolicy })),
+    ...sdkPlugins.map((p) => ({ name: p.name, policy: p.agentPolicy })),
+  ]);
 
   // Register the stable shop-facing error codes as their own named schema
   // (see api-error.ts's SHOP_API_ERROR_CODES) so a generated client gets a

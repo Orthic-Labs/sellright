@@ -337,6 +337,9 @@ const EnvSchema = z.object({
   // set it once the release is past its rollback window (an older engine cannot read sealed secrets; to roll back
   // after sealing run `node dist/scripts/totp-secrets.js --decrypt` first). New enrolments are always sealed.
   ADMIN_TOTP_SEAL_EXISTING: z.enum(['0', '1']).default('0'),
+  // P1c: default lifetime of an agent API token when none is given at creation (and
+  // on rotating a never-expiring legacy token). 0 = never expires.
+  ADMIN_AGENT_TOKEN_TTL_DAYS: z.coerce.number().int().nonnegative().default(90),
   // P1a: admin credential-check budgets (login, step-up, 2FA enable/disable,
   // invite accept, password change), on top of the 8 / 15 min (ip, account) bucket.
   // Failures per admin account per hour across ALL IPs:

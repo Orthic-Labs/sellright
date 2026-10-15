@@ -4,7 +4,7 @@ import { bearer } from '../auth/session.js';
 import { cookie, SESSION_COOKIE } from '../auth/cookies.js';
 import { resolveAdmin, type AdminPrincipal } from '../auth/admin-session.js';
 import { isAgentToken, resolveAgentByToken } from '../auth/admin-api-token.js';
-import { agentDenied } from '../auth/agent-policy.js';
+import { agentDenied, type AgentRouteContext } from '../auth/agent-policy.js';
 import { ENROLLMENT_ALLOWED } from '../auth/mfa-policy.js';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
@@ -23,6 +23,7 @@ const MESSAGE: Record<string, string> = {
   credit: 'agents cannot issue or adjust customer credit — a human does that',
   entitlement: 'agents cannot issue, revoke or release entitlements',
   release: 'agents cannot publish releases',
+  plugin: 'agents cannot call this plugin action — the plugin has not allowlisted it for agents',
   identity: 'agents cannot manage staff or agents',
   credentials: 'agents cannot change credentials or payment/e-mail secrets',
   system: 'agents cannot run system operations',
@@ -37,7 +38,15 @@ const MESSAGE: Record<string, string> = {
  * attempt is attributed even if the handler has no entity audit of its own — and its status is filled in
  * afterwards on a best-effort basis (entity-level audit rows remain the handlers' job).
  */
-export const adminAgentGuard: MiddlewareHandler = async (c, next) => {
+export const adminAgentGuard: MiddlewareHandler = createAdminAgentGuard(() => undefined);
+
+/** Guard bound to one app's route context (built-in route snapshot + plugin agent policies, see agent-policy.ts).
+ *  The getter is read per request, so the app can fill the context after its plugins are mounted. */
+export function createAdminAgentGuard(routeContext: () => AgentRouteContext | undefined): MiddlewareHandler {
+  return (c, next) => guardImpl(c, next, routeContext());
+}
+
+const guardImpl = async (c: Parameters<MiddlewareHandler>[0], next: Parameters<MiddlewareHandler>[1], routeCtx: AgentRouteContext | undefined) => {
   const path = c.req.path;
   if (PUBLIC.has(path)) return next();
   const token = bearer(c.req.header('authorization')) ?? cookie(c, SESSION_COOKIE);
@@ -55,7 +64,7 @@ export const adminAgentGuard: MiddlewareHandler = async (c, next) => {
     return next();
   }
   const st = admin.stores[0]!;
-  const group = agentDenied(method, route);
+  const group = agentDenied(method, route, routeCtx);
   if (group) {
     await withStore(st.storeId, (tx) => tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'agent', entityId: admin.id, action: 'denied', data: { method, path, route, group } }));
     return errJson(c, 403, 'AGENT_NOT_ALLOWED', MESSAGE[group]!);

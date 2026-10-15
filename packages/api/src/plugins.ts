@@ -14,6 +14,7 @@
  * so an unconfigured deployment's `createApp()` output is unchanged.
  */
 import type { OpenAPIHono } from '@hono/zod-openapi';
+import type { PluginAgentPolicy } from './auth/agent-policy.js';
 import type { ReleaseRegistrationPolicy } from './releases/registration-policy.js';
 import type { ErrorResponsePolicy } from './pre-route-policy.js';
 import { registerCacheableExceptions, _clearRegisteredCacheableExceptionsForTest, type CacheableException } from './cache-policy.js';
@@ -37,6 +38,9 @@ export interface ApiPlugin {
    * throws at startup if two plugins claim the same app or route.
    */
   releaseRegistration?: ReleaseRegistrationPolicy;
+  /** Agent (API-token) policy for this plugin's admin routes (auth/agent-policy.ts): extend the deny map and/or
+   *  allowlist reviewed mutations. Unlisted plugin admin mutations are denied to agents by default. */
+  agentPolicy?: PluginAgentPolicy;
   /**
    * Optional pre-route response policy (see pre-route-policy.ts): a declared
    * route set plus a transformer for JSON error bodies on those routes.
