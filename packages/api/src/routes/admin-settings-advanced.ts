@@ -183,22 +183,23 @@ adminSettingsAdvanced.openapi(
     if (role === 'owner') requireOwner(st);
     const email = normalizeEmail(rawEmail);
     if ((await adminKindByEmail(email)) === 'agent') throw new HttpError(400, 'agents are created under Agent access');
-    let adminUserId = await findAdminIdByEmail(email);
-    const existingAccount = !!adminUserId;
-    if (!adminUserId) {
-      adminUserId = await createAdminUser(email, await hashPassword(password));
-    }
-    // SR-16: the store-scoped grant (admin_user_store is RLS-exempt — see
-    // drizzle/0008 — so a withStore tx can write it) and its audit row commit
-    // or roll back together. The password never leaves this handler, and it is
-    // only ever used for a brand-new account (an existing account's password is
-    // never touched here).
-    const uid = adminUserId;
-    await withStore(st.storeId, async (tx) => {
-      // P0: this is an upsert — for an admin already enrolled here it CHANGES their role. When the
-      // target is currently an owner the same guards as PATCH apply (owner-only + last-owner), so a
-      // manager can no longer demote an owner by re-"adding" them with a lesser role.
-      const cur = await lockMembershipAsCaller(tx, st, admin.id); // re-authorized under the lock
+    // Hash outside the transaction (no slow work under the lock); the account itself is created INSIDE it, after
+    // re-authorization, so a rejected request leaves neither an account nor a membership behind.
+    const newPasswordHash = await hashPassword(password);
+    let createdNow = false;
+    const adminUserId = await withStore(st.storeId, async (tx) => {
+      // P0: this is an upsert — for an admin already enrolled here it CHANGES their role. Re-authorized under the
+      // membership lock: owner-only when either the requested role or the target's current role is owner (+ the
+      // last-owner guard), so neither a manager nor a caller demoted while this request waited can touch owners.
+      const cur = await lockMembershipAsCaller(tx, st, admin.id);
+      if (role === 'owner') requireOwner(cur);
+      const [acct] = await tx.select({ id: s.adminUser.id }).from(s.adminUser).where(eq(s.adminUser.email, email)).limit(1);
+      let uid = acct?.id;
+      if (!uid) {
+        const [u] = await tx.insert(s.adminUser).values({ email, passwordHash: newPasswordHash }).onConflictDoNothing({ target: s.adminUser.email }).returning({ id: s.adminUser.id });
+        if (!u) throw new HttpError(409, 'this address already has an account — send an invite instead', 'EXISTING_ACCOUNT_USE_INVITE');
+        uid = u.id; createdNow = true;
+      }
       const [m] = await tx
         .select({ role: s.adminUserStore.role })
         .from(s.adminUserStore)
@@ -207,7 +208,7 @@ adminSettingsAdvanced.openapi(
         .limit(1);
       // An EXISTING account that is not yet in this store joins only by accepting an invite (its own
       // consent, proven by its own credentials) — never by another store's staff adding it directly.
-      if (existingAccount && !m) throw new HttpError(409, 'this address already has an account — send an invite instead', 'EXISTING_ACCOUNT_USE_INVITE');
+      if (!createdNow && !m) throw new HttpError(409, 'this address already has an account — send an invite instead', 'EXISTING_ACCOUNT_USE_INVITE');
       if (m?.role === 'owner') {
         requireOwner(cur);
         if (role !== 'owner' && (await lockedOwnerCount(tx, st.storeId)) <= 1) throw new HttpError(409, 'cannot demote the last remaining owner');
@@ -226,6 +227,7 @@ adminSettingsAdvanced.openapi(
         toState: role,
         data: { email },
       });
+      return uid;
     });
     return c.json({ adminUserId }, 200);
   }),
@@ -358,7 +360,7 @@ async function lockStoreMembership(tx: StoreTx, storeId: string): Promise<void> 
 /** Take the store's membership lock, then RE-READ the caller's own role in that store and re-apply the manage gate
  *  (P0 review): the principal was resolved before the lock, so a demotion or removal that committed while this
  *  request waited must not let it act on stale authority. Returns the caller's CURRENT store access. */
-async function lockMembershipAsCaller(tx: StoreTx, st: AdminStoreAccess, callerId: string): Promise<AdminStoreAccess> {
+export async function lockMembershipAsCaller(tx: StoreTx, st: AdminStoreAccess, callerId: string): Promise<AdminStoreAccess> {
   await lockStoreMembership(tx, st.storeId);
   const [row] = await tx.select({ role: s.adminUserStore.role }).from(s.adminUserStore)
     .where(and(eq(s.adminUserStore.adminUserId, callerId), eq(s.adminUserStore.storeId, st.storeId))).limit(1);
@@ -755,6 +757,8 @@ adminSettingsAdvanced.openapi(
     // writer). Permission maps are the whole payload — they hold capability
     // flags only, never secrets.
     const next = await withStore(st.storeId, async (tx) => {
+      // Re-authorized under the membership lock: a caller demoted while this request waited cannot grant capabilities.
+      await lockMembershipAsCaller(tx, st, admin.id);
       const [cur] = await tx
         .select({ permissions: s.adminUserStore.permissions })
         .from(s.adminUserStore)

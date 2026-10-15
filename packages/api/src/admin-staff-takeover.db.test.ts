@@ -254,6 +254,58 @@ describe.skipIf(!isTestDb)('P0: concurrent membership changes are serialized', (
     expect(await roleOf(MANAGER_A, STORE_A)).toBe('read_only');
   });
 
+  /** Run `fire` while another transaction holds the membership lock and changes `who`'s role, then commit it. */
+  async function whileDemoted(who: string, toRole: string | null, fire: () => Response | Promise<Response>): Promise<Response> {
+    const other = await pool.connect();
+    try {
+      await other.query('BEGIN');
+      await other.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`staff-membership:${STORE_A}`]);
+      if (toRole) await other.query(`UPDATE admin_user_store SET role = $3 WHERE admin_user_id = $1 AND store_id = $2`, [who, STORE_A, toRole]);
+      else await other.query(`DELETE FROM admin_user_store WHERE admin_user_id = $1 AND store_id = $2`, [who, STORE_A]);
+      const pending = Promise.resolve(fire());
+      let waiting = 0;
+      for (let i = 0; i < 400 && !waiting; i++) {
+        waiting = (await pool.query(`SELECT 1 FROM pg_locks WHERE NOT granted`)).rowCount ?? 0;
+        if (!waiting) await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(waiting).toBeGreaterThan(0);
+      await other.query('COMMIT');
+      return await pending;
+    } finally { other.release(); }
+  }
+
+  it('an owner demoted to manager while waiting cannot restore owner through a self-upsert', async () => {
+    await pool.query(`INSERT INTO admin_user (id, email) VALUES ('ffffffff-ffff-ffff-ffff-0000000000a8', 'co2@takeover.test')`);
+    await pool.query(`INSERT INTO admin_user_store (admin_user_id, store_id, role) VALUES ('ffffffff-ffff-ffff-ffff-0000000000a8', $1, 'owner')`, [STORE_A]);
+    const owner = await createAdminSession(OWNER_A);
+    const res = await whileDemoted(OWNER_A, 'manager', () => call('POST', '/v1/admin/staff', { token: owner, slug: 'takeover-a', body: { email: OWNER_A_EMAIL, role: 'owner', password: 'irrelevant-1' } }));
+    expect(res.status).toBe(403);
+    expect(await roleOf(OWNER_A, STORE_A)).toBe('manager');
+  });
+
+  it('a manager demoted to staff while waiting cannot grant itself permissions', async () => {
+    const res = await whileDemoted(MANAGER_A, 'staff', () => call('PUT', `/v1/admin/staff/${MANAGER_A}/permissions`, { token: manager, slug: 'takeover-a', body: { permissions: { refunds: true } } }));
+    expect(res.status).toBe(403);
+    const p = await pool.query('SELECT permissions FROM admin_user_store WHERE admin_user_id = $1 AND store_id = $2', [MANAGER_A, STORE_A]);
+    expect(p.rows[0].permissions).toBeNull();
+  });
+
+  it('an owner removed while waiting cannot re-point SMTP', async () => {
+    await pool.query(`INSERT INTO admin_user (id, email) VALUES ('ffffffff-ffff-ffff-ffff-0000000000a7', 'co3@takeover.test')`);
+    await pool.query(`INSERT INTO admin_user_store (admin_user_id, store_id, role) VALUES ('ffffffff-ffff-ffff-ffff-0000000000a7', $1, 'owner')`, [STORE_A]);
+    const owner = await createAdminSession(OWNER_A);
+    const res = await whileDemoted(OWNER_A, null, () => call('PUT', '/v1/admin/email/settings', { token: owner, slug: 'takeover-a', body: { preset: 'custom', host: 'smtp.attacker.example', port: 587, secure: false } }));
+    expect(res.status).toBe(403);
+    const cfg = (await pool.query('SELECT config FROM store WHERE id = $1', [STORE_A])).rows[0].config as { email?: unknown } | null;
+    expect(cfg?.email).toBeUndefined();
+  });
+
+  it('a direct grant refused after re-authorization leaves no account behind', async () => {
+    const res = await whileDemoted(MANAGER_A, 'read_only', () => call('POST', '/v1/admin/staff', { token: manager, slug: 'takeover-a', body: { email: 'ghost-new@takeover.test', role: 'staff', password: 'ghost-password-1' } }));
+    expect(res.status).toBe(403);
+    expect((await pool.query(`SELECT 1 FROM admin_user WHERE email = 'ghost-new@takeover.test'`)).rowCount).toBe(0);
+  });
+
   it('a manager upsert racing an owner grant cannot demote the new owner (the membership did not exist when it was read)', async () => {
     // A concurrent owner-side transaction holds the store's membership lock and inserts the target as owner.
     const other = await pool.connect();
