@@ -28,6 +28,7 @@ import type { Context } from 'hono';
 import { env, adminPublicUrl } from '../env.js';
 import { assertSafeOutboundUrl, type OutboundUrlLookup } from '../security/outbound-url.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireManage, requireOwner, requirePermission, guard } from './admin-helpers.js';
+import type { AdminStoreAccess } from '../auth/admin-session.js';
 import { CANARY_TOPIC } from '../canary/marker.js';
 
 export const adminSettingsAdvanced = new OpenAPIHono();
@@ -197,7 +198,7 @@ adminSettingsAdvanced.openapi(
       // P0: this is an upsert — for an admin already enrolled here it CHANGES their role. When the
       // target is currently an owner the same guards as PATCH apply (owner-only + last-owner), so a
       // manager can no longer demote an owner by re-"adding" them with a lesser role.
-      await lockStoreMembership(tx, st.storeId);
+      const cur = await lockMembershipAsCaller(tx, st, admin.id); // re-authorized under the lock
       const [m] = await tx
         .select({ role: s.adminUserStore.role })
         .from(s.adminUserStore)
@@ -208,14 +209,14 @@ adminSettingsAdvanced.openapi(
       // consent, proven by its own credentials) — never by another store's staff adding it directly.
       if (existingAccount && !m) throw new HttpError(409, 'this address already has an account — send an invite instead', 'EXISTING_ACCOUNT_USE_INVITE');
       if (m?.role === 'owner') {
-        requireOwner(st);
+        requireOwner(cur);
         if (role !== 'owner' && (await lockedOwnerCount(tx, st.storeId)) <= 1) throw new HttpError(409, 'cannot demote the last remaining owner');
       }
       await tx
         .insert(s.adminUserStore)
         .values({ adminUserId: uid, storeId: st.storeId, role })
         .onConflictDoUpdate({ target: [s.adminUserStore.adminUserId, s.adminUserStore.storeId], set: { role } });
-      if (m) await revokePendingInvites(tx, st.storeId, uid);
+      await revokePendingInvites(tx, st.storeId, uid); // any earlier invite is superseded by this direct grant
       await tx.insert(s.auditLog).values({
         storeId: st.storeId,
         actor: admin.email,
@@ -251,7 +252,7 @@ adminSettingsAdvanced.openapi(
     // is RLS-exempt — drizzle/0008 — so a withStore tx can write it). A denied
     // change throws before the audit insert and rolls back — no phantom record.
     await withStore(st.storeId, async (tx) => {
-      await lockStoreMembership(tx, st.storeId);
+      const cur = await lockMembershipAsCaller(tx, st, admin.id); // re-authorized under the lock
       const [m] = await tx
         .select({ role: s.adminUserStore.role })
         .from(s.adminUserStore)
@@ -259,7 +260,7 @@ adminSettingsAdvanced.openapi(
         .for('update')
         .limit(1);
       const currentRole = m?.role ?? null;
-      if (role === 'owner' || currentRole === 'owner') requireOwner(st);
+      if (role === 'owner' || currentRole === 'owner') requireOwner(cur);
       // Even an owner can't demote the last remaining owner — that would
       // leave the store with nobody able to grant owner access again.
       if (currentRole === 'owner' && role !== 'owner') {
@@ -304,7 +305,7 @@ adminSettingsAdvanced.openapi(
     // even an owner can't remove the last remaining owner.
     // SR-16: check + delete + audit row share one transaction — see PATCH above.
     await withStore(st.storeId, async (tx) => {
-      await lockStoreMembership(tx, st.storeId);
+      const cur = await lockMembershipAsCaller(tx, st, admin.id); // re-authorized under the lock
       const [m] = await tx
         .select({ role: s.adminUserStore.role })
         .from(s.adminUserStore)
@@ -313,7 +314,7 @@ adminSettingsAdvanced.openapi(
         .limit(1);
       const targetRole = m?.role ?? null;
       if (targetRole === 'owner') {
-        requireOwner(st);
+        requireOwner(cur);
         const owners = await tx
           .select({ id: s.adminUserStore.adminUserId })
           .from(s.adminUserStore)
@@ -352,6 +353,19 @@ type StoreTx = Parameters<Parameters<typeof withStore>[1]>[0];
  *  could land between an authorization read and an ON CONFLICT DO UPDATE. Transaction-scoped. */
 async function lockStoreMembership(tx: StoreTx, storeId: string): Promise<void> {
   await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${'staff-membership:' + storeId}, 0))`);
+}
+
+/** Take the store's membership lock, then RE-READ the caller's own role in that store and re-apply the manage gate
+ *  (P0 review): the principal was resolved before the lock, so a demotion or removal that committed while this
+ *  request waited must not let it act on stale authority. Returns the caller's CURRENT store access. */
+async function lockMembershipAsCaller(tx: StoreTx, st: AdminStoreAccess, callerId: string): Promise<AdminStoreAccess> {
+  await lockStoreMembership(tx, st.storeId);
+  const [row] = await tx.select({ role: s.adminUserStore.role }).from(s.adminUserStore)
+    .where(and(eq(s.adminUserStore.adminUserId, callerId), eq(s.adminUserStore.storeId, st.storeId))).limit(1);
+  if (!row) throw new HttpError(403, `no access to store: ${st.slug}`);
+  const cur: AdminStoreAccess = { ...st, role: row.role as AdminStoreAccess['role'] };
+  requireManage(cur);
+  return cur;
 }
 
 /** Delete this person's PENDING invites to the store (P0 review): a role change or removal must not be undone by
@@ -412,7 +426,8 @@ adminSettingsAdvanced.openapi(
     const invId = await withStore(st.storeId, async (tx) => {
       // Serialized with role changes / removals / acceptance. A current member's access changes only through
       // PATCH/DELETE /v1/admin/staff — never through an invite they (or anyone) could keep back and redeem later.
-      await lockStoreMembership(tx, st.storeId);
+      const cur = await lockMembershipAsCaller(tx, st, admin.id); // re-authorized under the lock
+      if (b.role === 'owner') requireOwner(cur);
       const [member] = await tx.select({ id: s.adminUserStore.adminUserId }).from(s.adminUserStore)
         .innerJoin(s.adminUser, eq(s.adminUser.id, s.adminUserStore.adminUserId))
         .where(and(eq(s.adminUserStore.storeId, st.storeId), eq(s.adminUser.email, normalizeEmail(b.email)))).limit(1);
@@ -576,18 +591,18 @@ adminSettingsAdvanced.openapi(
       // Owner guard: an invite never demotes a current owner (the inviter may not even have been an
       // owner). Owner changes go through PATCH /v1/admin/staff/{id}, which is owner-only and
       // last-owner-guarded.
-      if (m?.role === 'owner' && role !== 'owner') throw new HttpError(409, 'you are already an owner of this store; an owner changes owner access from Staff', 'INVITE_WOULD_DEMOTE_OWNER');
+      // Already a member: the invite is stale (members cannot be invited, and every membership change revokes
+      // pending invites) — it must never change an existing member's role, in either direction.
+      if (m) throw new HttpError(409, 'you are already a member of this store; your role is managed under Staff', 'ALREADY_MEMBER');
       await tx
         .insert(s.adminUserStore)
-        .values({ adminUserId: uid, storeId: inv.storeId, role })
-        .onConflictDoUpdate({ target: [s.adminUserStore.adminUserId, s.adminUserStore.storeId], set: { role } });
+        .values({ adminUserId: uid, storeId: inv.storeId, role });
       await tx.insert(s.auditLog).values({
         storeId: inv.storeId,
         actor: `invite:${inv.email}`,
         entity: 'staff',
         entityId: uid,
         action: 'accept_invite',
-        fromState: m?.role ?? null,
         toState: inv.role,
         data: { email: inv.email, inviteId: inv.id, existingAccount: !!existing },
       });
@@ -611,6 +626,7 @@ adminSettingsAdvanced.openapi(
     // or a manager could revoke a superadmin / another store's user by UUID (IDOR).
     // SR-16: enrollment check + session delete + audit row in one transaction.
     const revoked = await withStore(st.storeId, async (tx) => {
+      const cur = await lockMembershipAsCaller(tx, st, admin.id); // re-authorized under the lock
       const [m] = await tx
         .select({ id: s.adminUserStore.adminUserId })
         .from(s.adminUserStore)
@@ -633,7 +649,7 @@ adminSettingsAdvanced.openapi(
       if (reachesBeyondStore && adminUserId !== admin.id && !(admin.kind === 'human' && admin.isInstallationAdmin)) {
         throw new HttpError(403, 'this person also has access beyond this store — only an installation administrator can sign them out everywhere', 'REVOKE_REQUIRES_INSTALLATION_ADMIN');
       }
-      if (memberships.some((x) => x.storeId === st.storeId && x.role === 'owner') && !(admin.kind === 'human' && admin.isInstallationAdmin)) requireOwner(st);
+      if (memberships.some((x) => x.storeId === st.storeId && x.role === 'owner') && !(admin.kind === 'human' && admin.isInstallationAdmin)) requireOwner(cur);
       const del = await tx.delete(s.session).where(eq(s.session.adminUserId, adminUserId)).returning({ id: s.session.id });
       await tx.insert(s.auditLog).values({
         storeId: st.storeId,

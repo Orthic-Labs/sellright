@@ -11,7 +11,7 @@ import { eq } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { env } from '../env.js';
-import { HttpError, J, errBody, guard, requireAdmin, requireManage, requireStore, requireWrite } from './admin-helpers.js';
+import { HttpError, J, errBody, guard, requireAdmin, requireManage, requireOwner, requireStore, requireWrite } from './admin-helpers.js';
 import { mutateStoreConfig } from './admin-settings.js';
 import { encryptSecret, last4 as computeLast4 } from '../security/secret-crypto.js';
 import { isEnvManaged } from '../security/settings-resolver.js';
@@ -60,7 +60,9 @@ adminEmailSettings.openapi(
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
-    const st = requireStore(admin, c); requireWrite(st); requireManage(st);
+    // Owner only (P0 review): the store's SMTP account carries staff-invite links (the token is e-mail-only), so a
+    // manager must not be able to point it at a server they control and harvest invites issued by an owner.
+    const st = requireStore(admin, c); requireWrite(st); requireManage(st); requireOwner(st);
     if (isEnvManaged(env.SMTP_HOST)) throw new HttpError(409, 'Email is managed by server configuration (SMTP_HOST is set)');
     const b = c.req.valid('json');
     const resolved = resolveSmtpPreset(b.preset as SmtpPresetId, { host: b.host, port: b.port, secure: b.secure });

@@ -217,9 +217,43 @@ describe.skipIf(!isTestDb)('P0: invites cannot restore revoked access', () => {
     expect(acc.status).toBe(409);
     expect(await roleOf(STAFF_A, STORE_A)).toBeNull();
   });
+
+  it('a direct grant supersedes an earlier invite: the invite cannot raise the role afterwards', async () => {
+    const owner = await createAdminSession(OWNER_A);
+    const token = await plantInvite(STORE_A, 'late@takeover.test', 'manager');
+    expect((await call('POST', '/v1/admin/staff', { token: owner, slug: 'takeover-a', body: { email: 'late@takeover.test', role: 'read_only', password: 'late-password-1' } })).status).toBe(200);
+    const acc = await call('POST', '/v1/admin/staff/accept', { body: { token, currentPassword: 'late-password-1' } });
+    expect(acc.status).toBe(409);
+    const id = (await pool.query(`SELECT id FROM admin_user WHERE email = 'late@takeover.test'`)).rows[0].id as string;
+    expect(await roleOf(id, STORE_A)).toBe('read_only');
+  });
+
+  it('a manager cannot re-point the store SMTP account (it carries owner-issued invite links)', async () => {
+    const res = await call('PUT', '/v1/admin/email/settings', { token: manager, slug: 'takeover-a', body: { preset: 'custom', host: 'smtp.attacker.example', port: 587, secure: false } });
+    expect(res.status).toBe(403);
+  });
 });
 
 describe.skipIf(!isTestDb)('P0: concurrent membership changes are serialized', () => {
+  it('a caller demoted while waiting on the membership lock acts with its CURRENT role, not the stale one', async () => {
+    const other = await pool.connect();
+    try {
+      await other.query('BEGIN');
+      await other.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`staff-membership:${STORE_A}`]);
+      await other.query(`UPDATE admin_user_store SET role = 'read_only' WHERE admin_user_id = $1 AND store_id = $2`, [MANAGER_A, STORE_A]);
+      const pending = call('PATCH', `/v1/admin/staff/${MANAGER_A}`, { token: manager, slug: 'takeover-a', body: { role: 'manager' } });
+      let waiting = 0;
+      for (let i = 0; i < 400 && !waiting; i++) {
+        waiting = (await pool.query(`SELECT 1 FROM pg_locks WHERE NOT granted`)).rowCount ?? 0;
+        if (!waiting) await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(waiting).toBeGreaterThan(0);
+      await other.query('COMMIT');
+      expect((await pending).status).toBe(403);
+    } finally { other.release(); }
+    expect(await roleOf(MANAGER_A, STORE_A)).toBe('read_only');
+  });
+
   it('a manager upsert racing an owner grant cannot demote the new owner (the membership did not exist when it was read)', async () => {
     // A concurrent owner-side transaction holds the store's membership lock and inserts the target as owner.
     const other = await pool.connect();
