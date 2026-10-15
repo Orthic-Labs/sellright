@@ -10,6 +10,10 @@ must update the matching changelog in the same push.
 
 ## [Unreleased]
 
+### Changed
+
+- Relicensed under Apache-2.0 (was BUSL-1.1): `LICENSE` is the canonical Apache-2.0 text, `NOTICE` added, and package metadata, README and CONTRIBUTING updated.
+
 ### Security
 
 - API cache policy keeps a route-set `Cache-Control` verbatim when a strict parse finds an exact `no-store` and only `no-cache`, `must-revalidate`, `proxy-revalidate`, `private` or zero `max-age`/`s-maxage` directives (anything else, including look-alikes, quoted values and empty segments, fails closed), on any route, method and status, instead of rewriting it to `private, no-store`; a plugin's frozen `no-cache, no-store, must-revalidate` now reaches clients unchanged. Anything that grants caching, or sets nothing, is still forced to `private, no-store`, and CDN headers and `Cache-Tag` are still stripped.

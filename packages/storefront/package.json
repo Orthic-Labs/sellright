@@ -2,7 +2,7 @@
 	"name": "@sellright/storefront",
 	"description": "A generic, themeable SellRight storefront built with Qwik",
 	"homepage": "https://github.com/bogusyogi/sellright",
-	"license": "BUSL-1.1",
+	"license": "Apache-2.0",
 	"private": true,
 	"type": "module",
 	"_comments": {

@@ -12,13 +12,11 @@ SellRight welcomes focused bug fixes, tests, documentation improvements, and gen
 
 ## License
 
-SellRight is **source-available under the Business Source License 1.1**, not OSI Open Source before a version's Change Date.
+SellRight is licensed under the **Apache License 2.0** (see [LICENSE](LICENSE)).
 
-The repository license permits production use by organizations with no more than **25 Covered Persons**, using the exact definition and affiliate aggregation rules in [LICENSE](LICENSE). Organizations above that threshold need a separate commercial license. Each SellRight version converts to Apache-2.0 on its stated Change Date.
+Unless you state otherwise, any contribution intentionally submitted for inclusion in SellRight is licensed under the Apache License 2.0, as described in section 5 of the license, without additional terms or conditions.
 
-Unless a separate written agreement says otherwise, contributions submitted to this repository are provided under the same license terms that apply to SellRight and may be incorporated into future SellRight releases under those terms.
-
-By submitting a contribution, you represent that you have the right to submit it and license it on that basis.
+By submitting a contribution, you represent that you have the right to submit it under that license.
 
 ## Security reports
 
