@@ -89,7 +89,9 @@ customerTokens.openapi(
       return errJson(c, 403, 'BOT_CHECK_FAILED', 'verification failed');
     }
     await withStore(st.id, async (tx) => {
-      const [cust] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, email)).limit(1);
+      // FOR UPDATE: serialized with an e-mail change on the same row (see magic-link/request) — never mint a reset
+      // link for an address the account has just abandoned.
+      const [cust] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, email)).limit(1).for('update');
       if (!cust) return; // enumeration-safe: no email if no account
       const raw = randomBytes(32).toString('base64url');
       await tx.insert(s.customerToken).values({ storeId: st.id, customerId: cust.id, kind: 'password_reset', tokenHash: hashToken(raw), expiresAt: new Date(Date.now() + TTL_HOURS * 3600 * 1000) });

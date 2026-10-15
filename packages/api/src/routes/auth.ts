@@ -596,7 +596,11 @@ auth.openapi(
       return errJson(c, 403, 'BOT_CHECK_FAILED', 'verification failed');
     }
     await withStore(st.id, async (tx) => {
-      const [cust] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, email)).limit(1);
+      // FOR UPDATE: an e-mail change for this account (verify-email-change locks the same row) either commits first
+      // — then the row no longer matches the OLD address and nothing is minted for it — or waits for this mint and
+      // then burns the new link. Without the lock a link for the abandoned mailbox could be minted after the change
+      // (B2.16 magic-link vs e-mail-change race).
+      const [cust] = await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.email, email)).limit(1).for('update');
       if (!cust) return; // enumeration-safe: identical 200, no token, no email
       const raw = await mintMagicLink(tx, st.id, cust.id, policy.ttlMinutes);
       const url = `${resolveStorefrontUrl(emailStoreCtx(st))}${policy.path}?token=${raw}`;

@@ -112,20 +112,31 @@ orders.openapi(
       if (!o) return null;
       // Grant: receipt-token match OR authed ownership. Else treat as not-found.
       let granted = tokensMatch(rt, o.receiptToken);
-      if (!granted && token && o.customerId) {
+      let ownerSession = false;
+      if (token && o.customerId) {
         const cust = await resolveCustomer(tx, token);
-        granted = customerOwnsOrder(cust, o);
+        ownerSession = customerOwnsOrder(cust, o);
+        granted = granted || ownerSession;
       }
       if (!granted) return null;
       // Guest checkouts still link an order to a synthetic/matched customer
       // row (see order.customerId) purely to carry the email the confirmation
       // page shows under "Contact" — not an account. Null when genuinely absent.
+      // B2.16: a receipt-token read (no owning session) only ever shows the address captured AT CHECKOUT. The
+      // linked account's CURRENT e-mail is shown only to that account's own signed-in session — an account that
+      // changed its address after the order must not reveal the new one to whoever holds an old receipt link.
+      const checkoutEmail = (o.metadata as { contact?: { email?: string } } | null)?.contact?.email || null;
       let customerEmail: string | null = null;
-      if (o.customerId) {
-        const [cust] = await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, o.customerId)).limit(1);
-        customerEmail = cust?.email ?? null;
+      let contactEmail: string | null = checkoutEmail;
+      if (ownerSession) {
+        if (o.customerId) {
+          const [cust] = await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, o.customerId)).limit(1);
+          customerEmail = cust?.email ?? null;
+        }
+        contactEmail = await resolveOrderRecipient(tx, o);
+      } else {
+        customerEmail = checkoutEmail;
       }
-      const contactEmail = await resolveOrderRecipient(tx, o);
       // Lines snapshot sku/name/price at purchase time (survives the variant
       // later being edited or deleted); image/isPreOrder/shipDate resolve
       // from the current variant (order-facts.ts documents the tradeoff).

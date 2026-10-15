@@ -1,5 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { and, desc, eq, sql, isNull, lte, or } from 'drizzle-orm';
+import { and, desc, eq, gt, sql, isNull, lte, or } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import * as s from '../db/schema.js';
@@ -259,7 +259,15 @@ shopExtra.openapi(
     // `{ok: true}`. The per-row work is silent; the public response is
     // enumeration-neutral.
     const CONFIRM_COOLDOWN_MS = 60 * 60 * 1000; // 1 hour
+    // B2.16: the cooldown used to be per (address, kind, topic), and `topic` is free text — varying it created a new
+    // row (and a new confirmation e-mail) on every request. Confirmations are now also capped per ADDRESS across all
+    // kinds/topics, serialized per (store, address) so concurrent requests cannot all pass the check.
+    const ADDRESS_MAX_CONFIRMS_PER_COOLDOWN = 3;
     const enqueued = await withStore(st.id, async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${'subscriber-confirm:' + st.id + ':' + normalizedEmail}, 0))`);
+      const [recent] = await tx.select({ n: sql<number>`count(*)::int` }).from(s.subscriber)
+        .where(and(eq(s.subscriber.storeId, st.id), eq(s.subscriber.email, normalizedEmail), gt(s.subscriber.lastSentAt, new Date(Date.now() - CONFIRM_COOLDOWN_MS))));
+      const addressCapped = (recent?.n ?? 0) >= ADDRESS_MAX_CONFIRMS_PER_COOLDOWN;
       const [existing] = await tx
         .select({
           id: s.subscriber.id,
@@ -287,7 +295,7 @@ shopExtra.openapi(
           status: 'pending',
           source,
           meta: meta ?? null,
-          lastSentAt: now,
+          lastSentAt: addressCapped ? null : now,
         })
           // The SELECT above is not atomic with this INSERT: two concurrent
           // signups for the same (store, email, kind, topic) both see no row
@@ -301,6 +309,7 @@ shopExtra.openapi(
           .onConflictDoNothing()
           .returning({ id: s.subscriber.id, token: s.subscriber.token });
         if (!row) return false; // lost the insert race — winner already enqueued.
+        if (addressCapped) return false; // row kept (pending), no e-mail: this address hit its per-hour cap
         await sendSubscriberConfirmation(tx, st, { email: normalizedEmail, name: name ?? null, kind, topic: normalizedTopic, token: row.token });
         return true;
       }
@@ -328,7 +337,7 @@ shopExtra.openapi(
       // whether an email is due.
       const isReconsent = existing.status === 'unsubscribed';
       const lastSent = existing.lastSentAt?.getTime() ?? 0;
-      const withinCooldown = !isReconsent && now.getTime() - lastSent < CONFIRM_COOLDOWN_MS;
+      const withinCooldown = !isReconsent && (now.getTime() - lastSent < CONFIRM_COOLDOWN_MS || addressCapped);
 
       // Flip unsubscribed back to pending; clear unsubscribed_at. `last_sent_at`
       // only moves when we actually send, otherwise a burst of repeat posts
