@@ -345,3 +345,42 @@ describe('email-address-change flow (emailAddressChangeHandler parity)', () => {
     expect(secondVerify.status).toBe(200);
   });
 });
+
+describe('POST /v1/shop/auth/reset-password — atomic claim (security audit 2026-10-15)', () => {
+  const sha = (t: string) => createHash('sha256').update(t).digest('hex');
+  async function plantReset(customerId: string, raw: string) {
+    await withStore(STORE_A, (tx) => tx.insert(s.customerToken).values({ storeId: STORE_A, customerId, kind: 'password_reset', tokenHash: sha(raw), expiresAt: new Date(Date.now() + 3600_000) }));
+  }
+  const reset = (token: string, password: string) => app.request('/v1/shop/auth/reset-password', { method: 'POST', headers: hdr(SLUG_A), body: JSON.stringify({ token, password }) });
+  const login = (email: string, password: string) => app.request('/v1/shop/auth/login', { method: 'POST', headers: hdr(SLUG_A), body: JSON.stringify({ email, password }) });
+
+  it('two concurrent redemptions of ONE token: exactly one succeeds, and the password is the winner\'s', async () => {
+    const c = await seedCustomer(STORE_A, 'race@a.test');
+    const raw = 'r'.repeat(40);
+    await plantReset(c.id, raw);
+    const [a, b] = await Promise.all([reset(raw, 'first-new-password'), reset(raw, 'second-new-password')]);
+    expect([a.status, b.status].sort()).toEqual([200, 409]);
+    const winner = a.status === 200 ? 'first-new-password' : 'second-new-password';
+    const loser = a.status === 200 ? 'second-new-password' : 'first-new-password';
+    expect((await login('race@a.test', winner)).status).toBe(200);
+    expect((await login('race@a.test', loser)).status).toBe(401);
+  });
+
+  it('a reset burns the customer\'s OTHER outstanding reset tokens and revokes their sessions', async () => {
+    const c = await seedCustomer(STORE_A, 'siblings@a.test');
+    const t1 = 's'.repeat(40); const t2 = 't'.repeat(40);
+    await plantReset(c.id, t1); await plantReset(c.id, t2);
+    const session = await withStore(STORE_A, (tx) => createSession(tx, STORE_A, c.id));
+    expect((await reset(t1, 'brand-new-password-1')).status).toBe(200);
+    expect((await reset(t2, 'attacker-password-2')).status).toBe(409); // an older link cannot undo the reset
+    expect((await login('siblings@a.test', 'brand-new-password-1')).status).toBe(200);
+    const live = await pool.query('SELECT 1 FROM "session" WHERE token_hash = $1', [sha(session)]);
+    expect(live.rowCount).toBe(0);
+  });
+
+  it('an invalid or used token changes nothing', async () => {
+    await seedCustomer(STORE_A, 'nochange@a.test', 'original-password-1');
+    expect((await reset('u'.repeat(40), 'whatever-password')).status).toBe(409);
+    expect((await login('nochange@a.test', 'original-password-1')).status).toBe(200);
+  });
+});

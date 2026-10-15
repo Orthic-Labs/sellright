@@ -192,7 +192,7 @@ export async function fetchExportRows(storeId: string, f: ExportFilters, mode: E
 }
 
 /** Spreadsheet formula-injection guard for free-text string cells. */
-const guardCell = (v: Cell): Cell => (typeof v === 'string' && /^[=+\-@\t\r]/.test(v) ? `'${v}` : v);
+export const guardCell = (v: Cell): Cell => (typeof v === 'string' && /^[=+\-@\t\r]/.test(v) ? `'${v}` : v);
 
 export function exportCellValues(cols: Col[], r: ExportRow, opts: { guard: boolean }): Cell[] {
   return cols.map((c) => { const v = c.get(r); return opts.guard ? guardCell(v) : v; });
