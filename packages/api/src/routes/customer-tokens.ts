@@ -117,15 +117,26 @@ customerTokens.openapi(
     const st = await resolveStoreFromCtx(c);
     const { token, password } = c.req.valid('json');
     const tokenHash = hashToken(token);
+    const live = and(eq(s.customerToken.tokenHash, tokenHash), eq(s.customerToken.kind, 'password_reset'), gt(s.customerToken.expiresAt, new Date()), isNull(s.customerToken.usedAt));
+    // Cheap read first so an unknown token never costs an Argon2 hash; the authoritative claim is below.
+    const [probe] = await withStore(st.id, (tx) => tx.select({ id: s.customerToken.id, customerId: s.customerToken.customerId }).from(s.customerToken).where(live).limit(1));
+    if (!probe) return errJson(c, 409, 'TOKEN_INVALID', 'token is invalid, expired, or already used');
+    const passwordHash = await hashPassword(password); // outside the transaction (no slow work under row locks)
     const ok = await withStore(st.id, async (tx): Promise<boolean> => {
-      const [row] = await tx.select({ id: s.customerToken.id, customerId: s.customerToken.customerId }).from(s.customerToken)
-        .where(and(eq(s.customerToken.tokenHash, tokenHash), eq(s.customerToken.kind, 'password_reset'), gt(s.customerToken.expiresAt, new Date()), isNull(s.customerToken.usedAt))).limit(1);
+      // Serialize per customer FIRST (before touching any token row): two resets for the same customer — even with
+      // two different tokens — run one after the other, so they can never deadlock on each other's token rows.
+      await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.id, probe.customerId)).for('update');
+      // ONE transaction: claim the token atomically under that lock (only one request can flip used_at; the claim
+      // revalidates expiry/kind/unused), then change the password. A failed claim changes nothing.
+      const [row] = await tx.update(s.customerToken).set({ usedAt: new Date() }).where(and(live, eq(s.customerToken.customerId, probe.customerId)))
+        .returning({ id: s.customerToken.id, customerId: s.customerToken.customerId });
       if (!row) return false;
-      const passwordHash = await hashPassword(password);
+      // Burn every other outstanding reset token for this customer (a second link must not undo this reset).
+      await tx.update(s.customerToken).set({ usedAt: new Date() })
+        .where(and(eq(s.customerToken.customerId, row.customerId), eq(s.customerToken.kind, 'password_reset'), isNull(s.customerToken.usedAt)));
       await tx.update(s.customer).set({ passwordHash, updatedAt: new Date() }).where(eq(s.customer.id, row.customerId));
-      await tx.update(s.customerToken).set({ usedAt: new Date() }).where(eq(s.customerToken.id, row.id));
-      // Invalidate this customer's sessions in THIS store. (session is RLS-exempt
-      // for token lookup, so we must filter by storeId explicitly.)
+      // Revoke all of this customer's sessions in THIS store. (session is RLS-exempt for token lookup, so
+      // filter by storeId explicitly.)
       await tx.delete(s.session).where(and(eq(s.session.customerId, row.customerId), eq(s.session.storeId, st.id)));
       return true;
     });

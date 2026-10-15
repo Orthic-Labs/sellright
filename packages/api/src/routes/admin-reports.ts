@@ -1,4 +1,5 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
+import { guardCell } from '../orders/export.js';
 import { and, desc, eq, ilike, isNull, or, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
@@ -170,8 +171,9 @@ adminReports.openapi(
 );
 
 // ── CSV exports + advanced metrics (P3) ───────────────────────────────────────
-const cell = (v: unknown) => { const x = v == null ? '' : String(v); return /[",\n]/.test(x) ? `"${x.replace(/"/g, '""')}"` : x; };
-const csv = (header: string[], rows: unknown[][]) => [header.join(','), ...rows.map((r) => r.map(cell).join(','))].join('\n');
+// Free-text strings pass the same spreadsheet formula-injection guard as the order export (orders/export.ts).
+export const cell = (v: unknown) => { const g = typeof v === 'string' ? guardCell(v) : v; const x = g == null ? '' : String(g); return /[",\r\n]/.test(x) ? `"${x.replace(/"/g, '""')}"` : x; };
+export const csv = (header: string[], rows: unknown[][]) => [header.join(','), ...rows.map((r) => r.map(cell).join(','))].join('\n');
 
 adminReports.openapi(
   createRoute({

@@ -146,4 +146,18 @@ describe('guest email-match provenance across all order access paths', () => {
     const receipt = await get('/v1/shop/orders/GUEST-MATCH?rt=receipt-capability');
     expect((await json(receipt)).shippingAddress.line1).toBe('Private address');
   });
+
+  it('verified erasure scrubs the checkout contact e-mail from erased orders, not only addresses/customerId', async () => {
+    await verify();
+    const res = await app.request('/v1/shop/account', { method: 'DELETE', headers: headers() });
+    expect(res.status).toBe(200);
+    const rows = await withStore(STORE, tx => tx.execute(sql`SELECT code, customer_id, shipping_address, metadata FROM "order" WHERE store_id = ${STORE} ORDER BY code`));
+    for (const r of rows.rows as Array<{ code: string; customer_id: string | null; shipping_address: unknown; metadata: Record<string, unknown> }>) {
+      expect(r.customer_id).toBeNull();
+      expect(r.shipping_address).toBeNull();
+      expect(r.metadata).not.toHaveProperty('contact');
+      expect(JSON.stringify(r.metadata)).not.toContain('victim@example.test');
+      expect(r.metadata).toHaveProperty('anonymized_at');
+    }
+  });
 });
