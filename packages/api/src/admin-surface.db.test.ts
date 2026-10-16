@@ -145,3 +145,17 @@ describe.skipIf(!isTestDb)('P2 review round 1', () => {
   });
 });
 
+describe.skipIf(!isTestDb)('P2 final review', () => {
+  it('a non-Bearer Authorization header is not a credential (401 before query validation)', async () => {
+    const res = await app.request('/v1/admin/orders?page=invalid', { headers: { authorization: 'Basic Z2FyYmFnZQ==' } });
+    expect(res.status).toBe(401);
+  });
+
+  it('a rewritten validation error keeps the CORS headers for an allowed origin', async () => {
+    const origin = new URL(adminPublicUrl()).origin;
+    const res = await app.request('/v1/admin/login', { method: 'POST', headers: { origin, 'content-type': 'application/json' }, body: JSON.stringify({ email: 'not-an-email', password: 'x' }) });
+    expect(res.status).toBe(400);
+    expect(res.headers.get('access-control-allow-origin')).toBe(origin);
+  });
+});
+

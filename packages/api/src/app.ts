@@ -220,7 +220,8 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
     if (c.req.method === 'OPTIONS') return next();
     const p = c.req.path;
     const preSession = p === '/v1/admin/login' || p === '/v1/admin/logout' || p === '/v1/admin/staff/accept';
-    const hasCredential = !!c.req.header('authorization') || !!cookie(c, SESSION_COOKIE)
+    // A credential means a parsable Bearer token or the session cookie — not any Authorization header (e.g. Basic).
+    const hasCredential = !!bearer(c.req.header('authorization')) || !!cookie(c, SESSION_COOKIE)
       || (p === '/v1/admin/cache/purge' && !!c.req.header(CACHE_ADMIN_TOKEN_HEADER));
     if (!preSession && !hasCredential) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
     await next();
@@ -243,8 +244,11 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
       let issues = body.error.issues;
       if (!issues && body.error.message) { try { issues = JSON.parse(body.error.message) as Array<{ path?: unknown[] }>; } catch { /* no param */ } }
       const param = issues?.[0]?.path?.map(String).join('.') || undefined;
+      // Keep the headers earlier middleware set on the response (CORS, request id, cache policy).
+      const keep = [...c.res.headers.entries()].filter(([k]) => k !== 'content-type' && k !== 'content-length');
       c.res = undefined as unknown as Response; // replace the validator's response
       c.res = c.json(errorEnvelope(c, 'VALIDATION_ERROR', 'invalid request', { param }), 400);
+      for (const [k, v] of keep) if (!c.res.headers.has(k)) c.res.headers.set(k, v);
     }
   });
 
