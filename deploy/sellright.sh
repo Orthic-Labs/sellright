@@ -43,6 +43,7 @@ cmd_backup() (
   backup_root="${SELLRIGHT_HOME}/backups"
   out_dir=""
   complete=0
+  status=0
   # Subshell-local traps leave update's rollback bookkeeping trap intact.
   trap 'status=$?; if [ "$complete" -eq 0 ] && [ -n "$out_dir" ]; then rm -rf -- "$out_dir"; fi; exit "$status"' 0
   trap 'exit 1' HUP INT TERM
@@ -144,6 +145,7 @@ cmd_recovery_kit() {
 cmd_restore() (
   umask 077
   decrypted_dir=""
+  status=0
   trap 'status=$?; if [ -n "$decrypted_dir" ]; then rm -rf -- "$decrypted_dir"; fi; exit "$status"' 0
   trap 'exit 1' HUP INT TERM
   kit=""
@@ -383,7 +385,7 @@ cmd_update() {
   # shellcheck disable=SC2016 # single-quoted deliberately: $DATABASE_URL_MIGRATE
   # must expand inside the container's sh, not here on the host.
   if ! compose run --rm --no-deps api sh -c 'DATABASE_URL="$DATABASE_URL_MIGRATE" node dist/scripts/migrate.js'; then
-    log "migration failed; leaving maintenance on. No backup restore was performed — restore this backup set manually only if you determine the migration left the schema inconsistent: ${out_dir:-see sellright backup output above}"
+    log "migration failed; leaving maintenance on. No backup restore was performed — restore this backup set manually only if you determine the migration left the schema inconsistent: see sellright backup output above"
     exit 1
   fi
 
