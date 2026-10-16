@@ -122,7 +122,7 @@ export async function enqueuePush(tx: Tx, storeId: string, args: {
       kind: s.adminDeviceToken.kind,
     })
     .from(s.adminDeviceToken)
-    .where(eq(s.adminDeviceToken.kind, kind));
+    .where(and(eq(s.adminDeviceToken.kind, kind), liveRegistration()));
   const matched = devices.filter((d) => d.topics.includes('*') || d.topics.includes(args.topic));
   if (!matched.length) return 0;
 
@@ -237,6 +237,23 @@ async function finalizePush(
   });
 }
 
+/** SQL predicate on admin_device_token: registered without a session (pre-0099 rows), or by a session that is neither
+ *  expired nor idle past ADMIN_SESSION_IDLE_HOURS. Never refreshes the session's activity. */
+function liveRegistration() {
+  const idle = env.ADMIN_SESSION_IDLE_HOURS;
+  return sql`(${s.adminDeviceToken.sessionId} IS NULL OR EXISTS (
+    SELECT 1 FROM "session" ss WHERE ss.id = ${s.adminDeviceToken.sessionId} AND ss.expires_at > now()
+      AND (${idle} <= 0 OR coalesce(ss.last_seen_at, ss.created_at) > now() - make_interval(secs => ${idle} * 3600))))`;
+}
+
+async function registrationStillLive(storeId: string, deviceToken: string): Promise<boolean> {
+  return withStore(storeId, async (tx) => {
+    const rows = await tx.select({ id: s.adminDeviceToken.id }).from(s.adminDeviceToken)
+      .where(and(eq(s.adminDeviceToken.token, deviceToken), liveRegistration())).limit(1);
+    return rows.length === 1;
+  });
+}
+
 /** Deliver due pending pushes across all stores (scheduler-driven). */
 export async function deliverPushes(opts: { limit?: number } = {}): Promise<{ sent: number; failed: number; pruned: number }> {
   let sent = 0;
@@ -254,6 +271,14 @@ export async function deliverPushes(opts: { limit?: number } = {}): Promise<{ se
     const due = await claimDuePushes(st.id, limit);
     for (const d of due) {
       let outcome: PushOutcome;
+      // B2.16 review: a queued push is only delivered while its device registration (and the admin session that made
+      // it) is still live — a logout, revocation or session expiry after enqueue cancels it.
+      if (d.topic !== CANARY_TOPIC && !(await registrationStillLive(st.id, d.device_token))) {
+        const finalized = await finalizePush(st.id, d, { kind: 'unregistered', error: 'device registration or its session ended' });
+        if (finalized.result === 'dead') failed++;
+        pruned += finalized.pruned;
+        continue;
+      }
       try {
         const isLive = d.topic.endsWith('#live');
         const res = await sendApns({

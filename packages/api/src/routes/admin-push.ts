@@ -47,12 +47,13 @@ adminPush.openapi(
 
     // B2.16: a device registration belongs to THIS session (0099): logout / revocation deletes it via the FK. FOR SHARE
     // makes a registration racing a logout either land before the session delete (then cascade) or see no session.
-    const sessionId = admin.sessionId ?? null;
+    // A registration must belong to a session: API-token principals (no session) cannot register devices, so nothing
+    // outlives token rotation or agent removal unbound.
+    const sessionId = admin.sessionId;
+    if (!sessionId) throw new HttpError(403, 'devices register from a signed-in session', 'SESSION_REQUIRED');
     await withStore(st.storeId, async (tx) => {
-      if (sessionId) {
-        const live = await tx.execute(sql`SELECT 1 FROM "session" WHERE id = ${sessionId} FOR SHARE`);
-        if (live.rows.length === 0) throw new HttpError(401, 'invalid or expired session');
-      }
+      const live = await tx.execute(sql`SELECT 1 FROM "session" WHERE id = ${sessionId} FOR SHARE`);
+      if (live.rows.length === 0) throw new HttpError(401, 'invalid or expired session');
       // `token` is unique across the table: the same phone re-registering (app
       // relaunch, token rotation, or a DIFFERENT operator signing in on a shared
       // device) rebinds the row to whoever is authenticated now. Without the

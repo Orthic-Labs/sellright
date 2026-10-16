@@ -63,7 +63,11 @@ async function enqueueEmailRow(): Promise<string> {
 }
 async function enqueuePushRow(): Promise<string> {
   return withStore(STORE, async (tx) => {
-    const r = await tx.execute(sql`INSERT INTO push_outbox (store_id, topic, device_token, payload) VALUES (${STORE}, 'order.paid', 'tok-' || gen_random_uuid()::text, '{"aps":{}}'::jsonb) RETURNING id`);
+    // A push is only delivered while its device registration exists (0099); register the token like the route does.
+    const token = `tok-${crypto.randomUUID()}`;
+    const admin = await tx.execute(sql`INSERT INTO admin_user (email) VALUES (${`${token}@instr.test`}) RETURNING id`);
+    await tx.execute(sql`INSERT INTO admin_device_token (store_id, admin_user_id, token) VALUES (${STORE}, ${(admin.rows[0] as { id: string }).id}, ${token})`);
+    const r = await tx.execute(sql`INSERT INTO push_outbox (store_id, topic, device_token, payload) VALUES (${STORE}, 'order.paid', ${token}, '{"aps":{}}'::jsonb) RETURNING id`);
     return (r.rows[0] as { id: string }).id;
   });
 }

@@ -6,11 +6,20 @@
  * Fixed by 0099: a device row belongs to the session that registered it (ON DELETE CASCADE).
  * sellright_test only (TRUNCATEs).
  */
-import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const sentTo = vi.hoisted(() => [] as string[]);
+vi.mock('../push/apns.js', async (orig) => ({
+  ...(await orig<typeof import('../push/apns.js')>()),
+  apnsConfigured: () => true,
+  sendApns: async (args: { deviceToken: string }) => { sentTo.push(args.deviceToken); return { ok: true, status: 200 }; },
+}));
 import { createApp } from '../app.js';
 import { pool } from '../db/client.js';
 import { env } from '../env.js';
 import { createAdminSession } from '../auth/admin-session.js';
+import { withStore } from '../db/client.js';
+import { deliverPushes, enqueuePush } from '../push/outbox.js';
 
 const isTestDb = /^\/[^/]*_test$/.test(new URL(process.env.DATABASE_URL ?? env.DATABASE_URL).pathname);
 const STORE = 'de51ce00-0000-4000-8000-000000000001';
@@ -59,3 +68,34 @@ describe.skipIf(!isTestDb)('device registrations follow the session (B2.16)', ()
     expect(await devices()).toEqual([]);
   });
 });
+
+describe.skipIf(!isTestDb)('B2.16 review: queued pushes, API tokens, expiry', () => {
+  it('a push queued before logout is never delivered to the signed-out device', async () => {
+    sentTo.length = 0;
+    const phone = await createAdminSession(ADMIN);
+    const other = await createAdminSession(ADMIN);
+    await register(phone, T(6), 'live_activity');
+    await register(other, T(7), 'live_activity');
+    await withStore(STORE, (tx) => enqueuePush(tx, STORE, { topic: 'order.paid', payload: { aps: {} }, kind: 'live_activity' }));
+    await app.request('/v1/admin/logout', { method: 'POST', headers: { authorization: `Bearer ${phone}` } });
+    await deliverPushes();
+    expect(sentTo).toEqual([T(7)]);
+  });
+
+  it('an expired (or idle) session stops receiving new pushes without any further request', async () => {
+    sentTo.length = 0;
+    const phone = await createAdminSession(ADMIN);
+    await register(phone, T(8), 'apns');
+    await pool.query(`UPDATE "session" SET expires_at = now() - interval '1 minute' WHERE admin_user_id = $1`, [ADMIN]);
+    const n = await withStore(STORE, (tx) => enqueuePush(tx, STORE, { topic: 'order.paid', payload: { aps: {} } }));
+    expect(n).toBe(0);
+  });
+
+  it('an API-token principal (no session) cannot register a device', async () => {
+    const r = await app.request('/v1/admin/agents', { method: 'POST', headers: { authorization: `Bearer ${await createAdminSession(ADMIN)}`, 'x-store-slug': 'devices', 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Bot', role: 'staff' }) });
+    expect(r.status).toBe(200);
+    const { token } = (await r.json()) as { token: string };
+    expect((await register(token, T(9), 'apns')).status).toBe(403);
+  });
+});
+
