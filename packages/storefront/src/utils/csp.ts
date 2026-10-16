@@ -19,6 +19,7 @@
  *    the lists come from `analyticsCsp()` in `platform/head.tsx` via `analytics`.
  *    Never `unsafe-eval`: no GTM Custom JavaScript variables, no production Preview mode.
  */
+import { YOUTUBE_EMBED_ORIGIN } from '../platform/youtube';
 import type { GoogleIdentityCsp } from '../config/google-signin';
 import { ipCountryFallbackEnabled } from './visitor-country';
 
@@ -38,13 +39,16 @@ export interface CspOptions {
 	google?: GoogleIdentityCsp;
 	/** Analytics sources (`analyticsCsp(...)`); undefined adds nothing, so the policy is unchanged without it. */
 	analytics?: { script: string[]; connect: string[] };
+	/** Only the platform's fixed privacy embed origin; head.json embeds.youtube must opt in. */
+	youtubeEmbed?: boolean;
 }
 
 const withSources = (base: string, extra: string[] = []) => [base, ...extra].join(' ');
 
-export function buildCsp({ nonce, apiOrigin, turnstileSiteKey, ipCountryFallback, google, analytics }: CspOptions): string {
+export function buildCsp({ nonce, apiOrigin, turnstileSiteKey, ipCountryFallback, google, analytics, youtubeEmbed }: CspOptions): string {
 	const turnstile = (turnstileSiteKey ?? '').trim() ? ` ${TURNSTILE_ORIGIN}` : '';
 	const ipLookup = ipCountryFallbackEnabled(ipCountryFallback) ? ` ${IP_LOOKUP_ORIGIN}` : '';
+	const youtube = youtubeEmbed === true ? ` ${YOUTUBE_EMBED_ORIGIN}` : '';
 	const api = apiOrigin ? ` ${apiOrigin}` : '';
 	return [
 		`default-src 'self'`,
@@ -53,7 +57,7 @@ export function buildCsp({ nonce, apiOrigin, turnstileSiteKey, ipCountryFallback
 		`img-src 'self' data: https:`,
 		`font-src 'self'`,
 		withSources(`connect-src 'self' https://api.stripe.com https://sandbox.nmi.com https://secure.nmi.com${api}${ipLookup}`, [...(google?.connect ?? []), ...(analytics?.connect ?? [])]),
-		withSources(`frame-src https://js.stripe.com https://hooks.stripe.com https://sandbox.nmi.com https://secure.nmi.com${turnstile}`, google?.frame),
+		withSources(`frame-src https://js.stripe.com https://hooks.stripe.com https://sandbox.nmi.com https://secure.nmi.com${turnstile}${youtube}`, google?.frame),
 		`object-src 'none'`,
 		`base-uri 'self'`,
 		`worker-src 'self'`,

@@ -7,6 +7,8 @@ import type { DeclaredContent } from '~/platform/content-routes';
 export interface BrandRoutes {
 	version: 1;
 	content?: DeclaredContent[];
+	/** Exact paths rendered by route.content; absent selects all supported content mounts. */
+	contentViewPaths?: string[];
 	pages?: Record<string, { head?: { title?: string; description?: string; noindex?: boolean } }>;
 	blog?: { pageSize?: number };
 	/** Brand views PR2 §9: where product pages live. Default `/products/:slug/`. */

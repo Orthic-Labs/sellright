@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
-import { checkContentPaths, matchDeclaredPath, type DeclaredContent } from './content-routes';
+import { BUILT_IN_CONTENT_PATHS, checkContentPaths, matchDeclaredPath, selectsContentView, type DeclaredContent } from './content-routes';
 
 const ROUTE_DIRS = ['about', 'account', 'blog', 'checkout', 'contact', 'products', 'shop', '[...catchall]', '[key]', 'sign-in', 'track-order'];
 const c = (path: string, pageKey = 'k'): DeclaredContent => ({ path, pageKey });
@@ -74,5 +74,27 @@ describe('matchDeclaredPath', () => {
 
 	it('an empty declaration matches nothing', () => {
 		expect(matchDeclaredPath([], '/our/story/')).toBeNull();
+	});
+});
+
+
+describe('contentViewPaths selection', () => {
+	const content = [c('/reviews/', 'reviews'), c('/our/story/', 'story')];
+	it('keeps every existing mount when absent & selects exact paths when present', () => {
+		for (const path of [...BUILT_IN_CONTENT_PATHS, ...content.map((c) => c.path)]) expect(selectsContentView(undefined, path)).toBe(true);
+		expect(selectsContentView(['/reviews/'], '/reviews/')).toBe(true);
+		for (const path of [...BUILT_IN_CONTENT_PATHS, '/reviews', '/Reviews/', '/reviews/extra/', '/our/story/']) expect(selectsContentView(['/reviews/'], path), path).toBe(false);
+		expect(selectsContentView([], '/about/')).toBe(false);
+	});
+	it('accepts scoped declared paths & the five supported static paths', () => {
+		expect(checkContentPaths({ content, contentViewPaths: [...BUILT_IN_CONTENT_PATHS, '/reviews/', '/our/story/'] }, ROUTE_DIRS)).toEqual([]);
+		expect(checkContentPaths({ content: [c('/reviews/', 'reviews')], contentViewPaths: ['/reviews/'] }, ROUTE_DIRS)).toEqual([]);
+	});
+	it('rejects duplicates, unknown/reserved paths & declarations omitted from selection', () => {
+		expect(checkContentPaths({ contentViewPaths: ['/about/', '/about/'] }, ROUTE_DIRS).join()).toMatch(/twice/);
+		for (const path of ['/api/', '/shop/', '/blog/', '/contact/', '/', '/unknown/', '/about', '/About/', '/reviews/*']) {
+			expect(checkContentPaths({ contentViewPaths: [path] }, ROUTE_DIRS).join(), path).toMatch(/not a declared content path/);
+		}
+		expect(checkContentPaths({ content, contentViewPaths: ['/reviews/'] }, ROUTE_DIRS).join()).toMatch(/our\/story.*omitted/);
 	});
 });

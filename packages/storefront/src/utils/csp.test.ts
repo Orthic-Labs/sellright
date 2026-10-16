@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { googleIdentityCsp, googleSignInClientIdForHost } from '../config/google-signin';
 import { buildCsp, IP_LOOKUP_ORIGIN, TURNSTILE_ORIGIN } from './csp';
+import { YOUTUBE_EMBED_ORIGIN } from '../platform/youtube';
 
 const directive = (csp: string, name: string) => csp.split('; ').find((d) => d.startsWith(`${name} `)) ?? '';
 
@@ -144,5 +145,22 @@ describe('buildCsp — analytics sources (brand views)', () => {
 		expect(directive(csp, 'script-src')).toContain('https://*.googletagmanager.com');
 		expect(directive(csp, 'script-src')).toContain(TURNSTILE_ORIGIN);
 		expect(directive(csp, 'connect-src')).toContain('https://g.test/');
+	});
+});
+
+
+describe('buildCsp — explicit YouTube privacy embed opt-in', () => {
+	it('adds only the exact privacy origin to frame-src, preserving every other directive', () => {
+		const base = buildCsp({ nonce: 'n' });
+		const enabled = buildCsp({ nonce: 'n', youtubeEmbed: true });
+		expect(directive(enabled, 'frame-src')).toBe(`${directive(base, 'frame-src')} ${YOUTUBE_EMBED_ORIGIN}`);
+		for (const line of base.split('; ').filter((line) => !line.startsWith('frame-src '))) expect(enabled.split('; ')).toContain(line);
+		expect(enabled).not.toContain('https://www.youtube.com');
+		expect(enabled).not.toContain('https://i.ytimg.com');
+	});
+	it('keeps the original policy without opt-in & reads the same opt-in in Express', () => {
+		expect(buildCsp({ nonce: 'n', youtubeEmbed: false })).toBe(buildCsp({ nonce: 'n' }));
+		expect(buildCsp({ nonce: 'n' })).not.toContain(YOUTUBE_EMBED_ORIGIN);
+		expect(readFileSync(join(process.cwd(), 'src/entry.express.tsx'), 'utf8')).toContain('youtubeEmbed: BRAND_HEAD.embeds?.youtube === true');
 	});
 });

@@ -2,6 +2,7 @@ import { component$ } from '@qwik.dev/core';
 import { createSEOHead } from '~/utils/seo';
 import { useStoreIdentityLoader } from '~/routes/layout';
 import { BrandContentMount } from '~/platform/controllers/content';
+import { hasContentViewFor } from '~/platform/content-view';
 import { LegalCopyView, hasView } from '~/platform/gateway';
 
 // A17 mount point: brand-owned copy for the payment-processor line (the base's wording is its default slot file).
@@ -342,7 +343,7 @@ const BasePrivacyPage = component$(() => {
  );
 });
 
-export default hasView('route.content') ? BrandContentMount : BasePrivacyPage;
+export default hasContentViewFor('/privacy/') ? BrandContentMount : BasePrivacyPage;
 
 export const head = ({ resolveValue }: { resolveValue: any }) => {
  const identity = resolveValue(useStoreIdentityLoader).identity;

@@ -27,6 +27,11 @@ describe('json-schema subset', () => {
 });
 
 describe('head.json (head sanitisation)', () => {
+	it('permits only an explicit fixed YouTube embed opt-in', () => {
+		expect(head({ embeds: { youtube: true } })).toEqual([]);
+		expect(head({})).toEqual([]);
+		for (const embeds of [{}, { youtube: false }, { youtube: 'true' }, { youtube: true, origin: 'https://evil.test' }, { vimeo: true }]) expect(head({ embeds }).length).toBeGreaterThan(0);
+	});
 	it('accepts an empty spec and a full valid one', () => {
 		expect(head({})).toEqual([]);
 		expect(head({
@@ -148,6 +153,18 @@ describe('routes.json (content declarations)', () => {
 		expect(routes({ version: 1, productPage: { related: true, content: { 'oni': { designNote: 'Note.', faqs: [{ q: 'Q?', a: 'A.' }] } } } })).toEqual([]);
 		expect(routes({ version: 1, productPage: { content: { 'oni': { designNote: '<b>x</b>' } } } }).join()).toMatch(/does not match/);
 		expect(routes({ version: 1, productPage: { content: { 'Bad Slug': {} } } }).join()).toMatch(/property name/);
+	});
+
+	it('scoped content paths require a view, exact supported paths & all declared paths selected', () => {
+		const scoped = { version: 1, content: [{ path: '/reviews/', pageKey: 'reviews' }], contentViewPaths: ['/reviews/'] };
+		expect(routes(scoped)).toEqual([]);
+		expect(routes(scoped, false).join()).toMatch(/route\.content/);
+		expect(routes({ version: 1, contentViewPaths: ['/about/'] }, false).join()).toMatch(/route\.content/);
+		expect(routes({ version: 1, contentViewPaths: [] }, false)).toEqual([]);
+		expect(routes({ ...scoped, contentViewPaths: [] }).join()).toMatch(/omitted/);
+		expect(routes({ version: 1, contentViewPaths: ['/shop/'] }).join()).toMatch(/not a declared content path/);
+		expect(routes({ version: 1, contentViewPaths: ['/about/', '/about/'] }).join()).toMatch(/twice/);
+		expect(routes({ version: 1, contentViewPaths: ['/About/'] }).join()).toMatch(/does not match/);
 	});
 
 	it('content paths without a route.content view fail the build', () => {

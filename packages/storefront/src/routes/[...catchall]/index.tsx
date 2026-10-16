@@ -6,12 +6,12 @@ import { DECLARED_CONTENT } from '~/platform/brand-data';
 import { matchDeclaredPath } from '~/platform/content-routes';
 import { contentHead } from '~/platform/head-resolve';
 import { BrandContentMount } from '~/platform/controllers/content';
-import { hasView } from '~/platform/gateway';
+import { hasContentViewFor } from '~/platform/content-view';
 import { PRODUCT_PREFIX } from '~/platform/product-path';
 
 export const onGet: RequestHandler = async ({ status, url }) => {
 	// Declared content paths (src/brand/routes.json) are real pages: no 404 status. Without a declaration nothing changes.
-	if (matchDeclaredPath(DECLARED_CONTENT, url.pathname)) return;
+	if (hasContentViewFor(url.pathname) && matchDeclaredPath(DECLARED_CONTENT, url.pathname)) return;
 	// Return proper 404 status for catchall routes (prevents Google soft 404s)
 	// Skip for legacy redirect paths — they throw redirect() before reaching here
 	if (!url.pathname.startsWith('/order-status')) {
@@ -56,7 +56,7 @@ const NOT_FOUND_HEAD = createSEOHead({
 
 // A declared content path takes its declaration's head (never the 404 title or noindex); every other path keeps NOT_FOUND_HEAD.
 export const head: DocumentHead = ({ resolveValue, url }) => {
-	const declared = matchDeclaredPath(DECLARED_CONTENT, url.pathname);
+	const declared = hasContentViewFor(url.pathname) ? matchDeclaredPath(DECLARED_CONTENT, url.pathname) : null;
 	if (!declared) return NOT_FOUND_HEAD as DocumentHeadValue;
 	return contentHead(declared, resolveValue(useStoreIdentityLoader).identity) as DocumentHeadValue;
 };
@@ -67,7 +67,7 @@ export default component$(() => {
         const currentPath = location.url.pathname;
 
 	// A declared content path renders `route.content` instead of the 404 page (one component either way: the 404 markup is untouched).
-	if (hasView('route.content') && matchDeclaredPath(DECLARED_CONTENT, currentPath)) return <BrandContentMount />;
+	if (hasContentViewFor(currentPath) && matchDeclaredPath(DECLARED_CONTENT, currentPath)) return <BrandContentMount />;
 
 	return notFoundMarkup(currentPath);
 });
