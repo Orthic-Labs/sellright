@@ -1,8 +1,14 @@
-import { mkdtemp, readFile, readlink, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, link, mkdir, mkdtemp, open, readFile, readlink, readdir, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { publishGeneration, readCurrentCatalogSnapshot } from './publish.js';
+
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, open: vi.fn(actual.open), link: vi.fn(actual.link) };
+});
+const realFs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
 
 const roots: string[] = [];
 async function root() {
@@ -10,7 +16,11 @@ async function root() {
   roots.push(dir);
   return dir;
 }
-afterEach(async () => { await Promise.all(roots.splice(0).map(dir => rm(dir, { recursive: true, force: true }))); });
+afterEach(async () => {
+  vi.mocked(open).mockImplementation(realFs.open);
+  vi.mocked(link).mockImplementation(realFs.link);
+  await Promise.all(roots.splice(0).map(dir => rm(dir, { recursive: true, force: true })));
+});
 
 describe('catalog generation publication', () => {
   it('prevents two stores claiming the same new destination concurrently', async () => {
@@ -88,4 +98,116 @@ describe('catalog generation publication', () => {
     const current = await publishGeneration(input);
     expect((await readdir(join(outDir, 'generations'))).sort()).toEqual([recent.generation, previous.generation, current.generation].sort());
   });
+
+  async function snapshotFixture() {
+    const outDir = await root();
+    const detail = { slug: 'kept', name: 'Original' };
+    const manifest = { lastUpdated: '2026-01-01', totalItems: 1, defaultSort: 'name', products: [detail] };
+    const input = { outDir, storeSlug: 'fixture', manifest, details: [detail], manifestV2: manifest, detailsV2: [detail] };
+    const first = await publishGeneration(input);
+    return { outDir, detail, input, first, path: join(outDir, 'generations', first.generation, 'products/kept.json') };
+  }
+
+  it('reads opened descriptor if pathname is replaced after open', async () => {
+    const fixture = await snapshotFixture();
+    const foreign = join(await root(), 'foreign.json');
+    await writeFile(foreign, JSON.stringify({ slug: 'kept', name: 'Foreign' }));
+    let closeCount = () => 0;
+    vi.mocked(open).mockImplementation(async (path, flags, mode) => {
+      const file = await realFs.open(path, flags, mode);
+      if (path === fixture.path) {
+        const close = vi.spyOn(file, 'close');
+        closeCount = () => close.mock.calls.length;
+        await rename(fixture.path, `${fixture.path}.saved`);
+        await symlink(foreign, fixture.path);
+      }
+      return file;
+    });
+    const snapshot = await readCurrentCatalogSnapshot(fixture.outDir, 'fixture');
+    expect(snapshot?.v1.details).toEqual([fixture.detail]);
+    expect(closeCount()).toBe(1);
+  });
+
+  it.each(['symlink', 'directory'] as const)('rejects %s replacement immediately before open', async kind => {
+    const fixture = await snapshotFixture();
+    let closeCount = () => 0;
+    vi.mocked(open).mockImplementation(async (path, flags, mode) => {
+      if (path === fixture.path) {
+        await rm(fixture.path);
+        if (kind === 'symlink') await symlink(join(fixture.outDir, 'owner.json'), fixture.path);
+        else await mkdir(fixture.path);
+      }
+      const file = await realFs.open(path, flags, mode);
+      if (path === fixture.path) {
+        const close = vi.spyOn(file, 'close');
+        closeCount = () => close.mock.calls.length;
+      }
+      return file;
+    });
+    expect(await readCurrentCatalogSnapshot(fixture.outDir, 'fixture')).toBeNull();
+    if (kind === 'directory') expect(closeCount()).toBe(1);
+  });
+
+  it.each(['read', 'parse', 'stat'] as const)('closes descriptor on %s error before full-rebuild fallback', async failure => {
+    const fixture = await snapshotFixture();
+    let closeCount = () => 0;
+    vi.mocked(open).mockImplementation(async (path, flags, mode) => {
+      const file = await realFs.open(path, flags, mode);
+      if (path === fixture.path) {
+        const close = vi.spyOn(file, 'close');
+        closeCount = () => close.mock.calls.length;
+        if (failure === 'read') vi.spyOn(file, 'readFile').mockRejectedValueOnce(new Error('injected read failure'));
+        else if (failure === 'stat') vi.spyOn(file, 'stat').mockRejectedValueOnce(new Error('injected stat failure'));
+        else await writeFile(fixture.path, '{invalid');
+      }
+      return file;
+    });
+    expect(await readCurrentCatalogSnapshot(fixture.outDir, 'fixture')).toBeNull();
+    expect(closeCount()).toBe(1);
+  });
+
+  it.each(['root', 'generations', 'generation', 'details', 'file'] as const)('declines unsafe %s permissions & serializes instead of reusing', async unsafe => {
+    const fixture = await snapshotFixture();
+    const directory = unsafe === 'root' ? fixture.outDir : unsafe === 'generations' ? join(fixture.outDir, 'generations') : unsafe === 'generation' ? join(fixture.outDir, 'generations', fixture.first.generation) : unsafe === 'details' ? join(fixture.outDir, 'generations', fixture.first.generation, 'products') : fixture.path;
+    await chmod(directory, unsafe === 'file' ? 0o666 : 0o777);
+    expect(await readCurrentCatalogSnapshot(fixture.outDir, 'fixture')).toBeNull();
+    await publishGeneration({ ...fixture.input, reuse: { generation: fixture.first.generation, slugs: ['kept'] } });
+    expect((await stat(join(fixture.outDir, 'current/products/kept.json'))).ino).not.toBe((await stat(fixture.path)).ino);
+    expect(JSON.parse(await readFile(join(fixture.outDir, 'current/products/kept.json'), 'utf8'))).toEqual(fixture.detail);
+  });
+
+  it('declines symlinked detail parents', async () => {
+    const fixture = await snapshotFixture();
+    const directory = join(fixture.outDir, 'generations', fixture.first.generation, 'products');
+    await rename(directory, `${directory}.saved`);
+    await symlink(`${directory}.saved`, directory);
+    expect(await readCurrentCatalogSnapshot(fixture.outDir, 'fixture')).toBeNull();
+  });
+
+  it.each(['symlink', 'regular'] as const)('validates linked destination after %s source replacement & serializes expected bytes', async kind => {
+    const fixture = await snapshotFixture();
+    const foreign = join(await root(), 'foreign.json');
+    await writeFile(foreign, JSON.stringify({ slug: 'kept', name: 'Foreign' }));
+    vi.mocked(link).mockImplementation(async (source, destination) => {
+      if (source === fixture.path) {
+        await rm(fixture.path);
+        if (kind === 'symlink') await symlink(foreign, fixture.path);
+        else await writeFile(fixture.path, await readFile(foreign));
+      }
+      return realFs.link(source, destination);
+    });
+    await publishGeneration({ ...fixture.input, reuse: { generation: fixture.first.generation, slugs: ['kept'] } });
+    const destination = join(fixture.outDir, 'current/products/kept.json');
+    expect((await realFs.lstat(destination)).isFile()).toBe(true);
+    expect(JSON.parse(await readFile(destination, 'utf8'))).toEqual(fixture.detail);
+  });
+
+  it.each(['EXDEV', 'EPERM'] as const)('serializes validated snapshot when hardlinks fail with %s', async code => {
+    const fixture = await snapshotFixture();
+    vi.mocked(link).mockRejectedValue(Object.assign(new Error('injected link failure'), { code }));
+    await publishGeneration({ ...fixture.input, reuse: { generation: fixture.first.generation, slugs: ['kept'] } });
+    expect(JSON.parse(await readFile(join(fixture.outDir, 'current/products/kept.json'), 'utf8'))).toEqual(fixture.detail);
+    expect((await stat(join(fixture.outDir, 'current/products/kept.json'))).ino).not.toBe((await stat(fixture.path)).ino);
+  });
+
 });

@@ -1,4 +1,5 @@
-import { link, lstat, mkdir, readFile, readdir, readlink, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { link, lstat, mkdir, open, readdir, readlink, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 
@@ -26,14 +27,31 @@ export interface CatalogManifestShape {
 type Detail = { slug: string; [k: string]: unknown };
 type Snapshot = { manifest: CatalogManifestShape; details: Detail[] };
 
+// Catalog generations are immutable application-owned files. Admit optimized
+// reads/reuse only inside non-symlink directories that unrelated local users
+// cannot replace. Same-UID/root writers already control API files & credentials.
+async function trustedCatalogDirectory(path: string): Promise<void> {
+  const directory = await lstat(path);
+  const uid = process.geteuid?.();
+  if (!directory.isDirectory() || uid === undefined || (directory.uid !== uid && directory.uid !== 0) || (directory.mode & 0o022) !== 0) throw new Error('Untrusted catalog directory');
+}
+
 async function readRegularJson(path: string): Promise<unknown> {
-  if (!(await lstat(path)).isFile()) throw new Error('Catalog file is not a regular file');
-  return JSON.parse(await readFile(path, 'utf8'));
+  // O_NONBLOCK also prevents a replaced FIFO from hanging before fstat.
+  // Without O_NOFOLLOW this optimization cannot safely consume local files.
+  if (typeof constants.O_NOFOLLOW !== 'number') throw new Error('Catalog no-follow reads unavailable');
+  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const metadata = await file.stat();
+    const uid = process.geteuid?.();
+    if (!metadata.isFile() || uid === undefined || (metadata.uid !== uid && metadata.uid !== 0) || (metadata.mode & 0o022) !== 0) throw new Error('Catalog file is not a trusted regular file');
+    return JSON.parse(await file.readFile('utf8'));
+  } finally { await file.close(); }
 }
 
 async function readSnapshot(dir: string, native: boolean): Promise<Snapshot> {
   const folder = join(dir, native ? 'products-v2' : 'products');
-  if (!(await lstat(folder)).isDirectory()) throw new Error('Catalog detail directory is not a directory');
+  await trustedCatalogDirectory(folder);
   const manifest = await readRegularJson(join(dir, native ? 'shop-catalog.v2.json' : 'shop-catalog.json')) as CatalogManifestShape;
   if (!Array.isArray(manifest?.products) || manifest.totalItems !== manifest.products.length) throw new Error('Invalid catalog manifest');
   const slugs = manifest.products.map(p => p.slug);
@@ -49,11 +67,12 @@ async function readSnapshot(dir: string, native: boolean): Promise<Snapshot> {
 
 async function pinCatalogGeneration(outDir: string, storeSlug: string): Promise<{ generation: string; dir: string }> {
   const root = resolve(outDir);
+  await trustedCatalogDirectory(root);
   const previous = await readlink(join(root, 'current'));
   if (!/^generations\/[0-9a-f-]{36}$/.test(previous)) throw new Error('Foreign catalog pointer');
-  if (!(await lstat(join(root, 'generations'))).isDirectory()) throw new Error('Foreign generations directory');
+  await trustedCatalogDirectory(join(root, 'generations'));
   const dir = join(root, previous);
-  if (!(await lstat(dir)).isDirectory()) throw new Error('Foreign generation directory');
+  await trustedCatalogDirectory(dir);
   const generation = previous.slice('generations/'.length);
   const marker = await readRegularJson(join(dir, 'marker.json')) as { source?: string; storeSlug?: string; generation?: string };
   if (marker.source !== 'sellright' || marker.storeSlug !== storeSlug || marker.generation !== generation) throw new Error('Foreign catalog marker');
@@ -98,7 +117,7 @@ export async function publishGeneration(input: Input) {
   try {
     previous = await readlink(join(root, 'current'));
     if (!/^generations\/[0-9a-f-]{36}$/.test(previous)) throw new Error('Refusing foreign catalog pointer');
-    const marker = JSON.parse(await readFile(join(root, previous, 'marker.json'), 'utf8')) as { source?: string; storeSlug?: string };
+    const marker = await readRegularJson(join(root, previous, 'marker.json')) as { source?: string; storeSlug?: string };
     if (marker.source !== 'sellright' || marker.storeSlug !== input.storeSlug) throw new Error('Refusing foreign catalog destination');
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
@@ -106,22 +125,30 @@ export async function publishGeneration(input: Input) {
   }
   const reuse = new Set(input.reuse?.slugs ?? []);
   if (input.reuse && (!GENERATION.test(input.reuse.generation) || previous !== `generations/${input.reuse.generation}` || [...reuse].some(slug => !SAFE_SLUG.test(slug)))) throw new Error('Refusing stale or invalid catalog reuse');
+  if (reuse.size) {
+    try {
+      for (const directory of [root, generations, join(root, previous!), join(root, previous!, 'products'), join(root, previous!, 'products-v2')]) await trustedCatalogDirectory(directory);
+    } catch { reuse.clear(); /* Full serialization remains safe without reuse. */ }
+  }
   // Claim a new directory exclusively, including simultaneous first publication.
   const ownerPath = join(root, 'owner.json');
   try {
     await writeFile(ownerPath, JSON.stringify({ source: 'sellright', storeSlug: input.storeSlug }), { flag: 'wx' });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-    const owner = JSON.parse(await readFile(ownerPath, 'utf8')) as { source?: string; storeSlug?: string };
+    const owner = await readRegularJson(ownerPath) as { source?: string; storeSlug?: string };
     if (owner.source !== 'sellright' || owner.storeSlug !== input.storeSlug) throw new Error('Refusing foreign catalog destination');
   }
   const generation = randomUUID();
   const target = join(generations, generation);
   const pointer = join(root, `.current-${generation}`);
   let published = false;
+  let claimedTarget = false;
   try {
-    await mkdir(join(target, 'products'), { recursive: true });
-    await mkdir(join(target, 'products-v2'), { recursive: true });
+    await mkdir(target);
+    claimedTarget = true;
+    await mkdir(join(target, 'products'));
+    await mkdir(join(target, 'products-v2'));
     await writeFile(join(target, 'shop-catalog.json'), JSON.stringify(input.manifest));
     const writeDetails = async (folder: string, details: { slug: string }[]) => {
       for (const detail of details) {
@@ -131,8 +158,12 @@ export async function publishGeneration(input: Input) {
           // Generation files are immutable: only fresh directories receive writes.
           // If links are unavailable, use the already-validated snapshot bytes.
           try {
-            if ((await lstat(source)).isFile()) { await link(source, destination); continue; }
+            await link(source, destination);
+            // Validate the actual new directory entry, never check source then
+            // follow a potentially replaced path in a later operation.
+            if (JSON.stringify(await readRegularJson(destination)) === JSON.stringify(detail)) continue;
           } catch { /* Cross-device/unsupported links fall back to a separate file. */ }
+          await rm(destination, { force: true });
         }
         await writeFile(destination, JSON.stringify(detail));
       }
@@ -151,7 +182,9 @@ export async function publishGeneration(input: Input) {
     for (const name of await readdir(generations)) {
       if (!GENERATION.test(name) || name === generation || previous === `generations/${name}`) continue;
       try {
-        const marker = JSON.parse(await readFile(join(generations, name, 'marker.json'), 'utf8')) as { source?: string; storeSlug?: string; generation?: string; generatedAt?: string };
+        await trustedCatalogDirectory(generations);
+        await trustedCatalogDirectory(join(generations, name));
+        const marker = await readRegularJson(join(generations, name, 'marker.json')) as { source?: string; storeSlug?: string; generation?: string; generatedAt?: string };
         // Grace period protects readers that pinned an older generation mid-request.
         if (marker.source === 'sellright' && marker.storeSlug === input.storeSlug && marker.generation === name && Date.now() - Date.parse(marker.generatedAt ?? '') > 600000) await rm(join(generations, name), { recursive: true });
       } catch { /* A foreign/incomplete directory is never a cleanup target. */ }
@@ -159,6 +192,6 @@ export async function publishGeneration(input: Input) {
     return { generation, products: input.details.length };
   } finally {
     await rm(pointer, { force: true });
-    if (!published) await rm(target, { recursive: true, force: true });
+    if (!published && claimedTarget) await rm(target, { recursive: true, force: true });
   }
 }
