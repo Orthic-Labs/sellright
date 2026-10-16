@@ -126,7 +126,7 @@ admin.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/orders', summary: 'List orders',
     request: { query: z.object({
-      state: z.string().optional(), q: z.string().optional(), preOrder: z.coerce.boolean().optional(), trashed: z.coerce.boolean().default(false),
+      state: z.string().optional(), q: z.string().optional(), preOrder: z.coerce.boolean().optional(), excludeDemo: z.enum(['1']).optional(), trashed: z.coerce.boolean().default(false),
       // Wire-facing status filters (BREAKING, pre-1.0 — see CHANGELOG.md), on
       // top of the legacy combined `state` filter above.
       // 'active' = open + completed (the owner-facing "Open": not cancelled, not archived).
@@ -143,12 +143,13 @@ admin.openapi(
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c);
-    const { state, q, preOrder, trashed, status, paymentStatus, shippingMethod, fulfillmentStatus, from, to, page, pageSize } = c.req.valid('query');
+    const { state, q, preOrder, excludeDemo, trashed, status, paymentStatus, shippingMethod, fulfillmentStatus, from, to, page, pageSize } = c.req.valid('query');
     const out = await withStore(st.storeId, async (tx) => {
       const conds = [] as ReturnType<typeof eq>[];
       // Trash filter FIRST: ?trashed=1 shows ONLY soft-deleted orders; default
       // shows only live ones. Without this, trashed orders leak into every list.
       conds.push((trashed ? sql`${s.order.deletedAt} is not null` : sql`${s.order.deletedAt} is null`) as never);
+      if (excludeDemo === '1') conds.push(eq(s.order.isDemo, false) as never);
       if (state) conds.push(sql`${s.order.state} = ${state}` as never);
       if (status === 'active') conds.push(sql`${s.order.status} in ('open', 'completed')` as never);
       else if (status) conds.push(eq(s.order.status, status) as never);
@@ -308,13 +309,16 @@ admin.openapi(
     const { state, trackingCode, carrier } = c.req.valid('json');
     let stockChanged = false;
     const res = await withStore(st.storeId, async (tx) => {
-      const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1);
+      // Shared with bulk/partial fulfillment: serialize before reading shipment
+      // state or remaining quantities, including the first fulfillment row.
+      const [o] = await tx.select().from(s.order).where(eq(s.order.code, code)).limit(1).for('update');
       if (!o) return { kind: 'notfound' as const };
       if (o.state !== 'Paid' && o.state !== 'PartiallyRefunded') return { kind: 'badstate' as const, state: o.state };
       const [existing] = await tx.select().from(s.fulfillment).where(eq(s.fulfillment.orderId, o.id)).orderBy(desc(s.fulfillment.createdAt)).limit(1);
       // Fulfillment state only advances: Pending -> Shipped -> Delivered. Block
       // a backward move (e.g. re-shipping an already-Delivered order).
       if (existing && existing.state === 'Delivered' && state === 'Shipped') return { kind: 'regress' as const, state: existing.state };
+      if (state === 'Delivered' && (!existing || existing.state !== 'Shipped')) return { kind: 'badstate' as const, state: existing?.state ?? 'Unfulfilled' };
       const advancingToShipped = state === 'Shipped' && (!existing || existing.state === 'Pending');
       let fid: string;
       if (existing) {
@@ -539,7 +543,9 @@ admin.openapi(
     for (const o of deduped) {
       let stockChanged = false;
       const res = await withStore(st.storeId, async (tx): Promise<{ kind: 'ok' | 'notfound' | 'badstate' | 'regress'; state?: string }> => {
-        const [order] = await tx.select().from(s.order).where(eq(s.order.code, o.code)).limit(1);
+        // Match single/partial fulfillment's order lock before shipment reads.
+        // Each order commits separately, preserving the batch's lock ordering.
+        const [order] = await tx.select().from(s.order).where(eq(s.order.code, o.code)).limit(1).for('update');
         if (!order) return { kind: 'notfound' };
         if (order.state !== 'Paid' && order.state !== 'PartiallyRefunded') return { kind: 'badstate', state: order.state };
         const [existing] = await tx.select().from(s.fulfillment).where(eq(s.fulfillment.orderId, order.id)).orderBy(desc(s.fulfillment.createdAt)).limit(1);

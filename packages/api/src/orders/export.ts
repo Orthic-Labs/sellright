@@ -22,7 +22,7 @@ export type ExportFilters = {
   /** Legacy internal order state (PendingPayment | Paid | ...). */
   state?: string;
   status?: string; paymentStatus?: string; fulfillmentStatus?: string;
-  preOrder?: boolean; trashed?: boolean;
+  preOrder?: boolean; excludeDemo?: boolean; trashed?: boolean;
   paymentMethod?: string; /** shipping_method_code */ shippingMethod?: string; country?: string; coupon?: string; q?: string;
 };
 
@@ -114,6 +114,7 @@ export function parseExportFilters(get: (k: string) => string | undefined): Expo
     paymentStatus: oneOf(get('paymentStatus'), ORDER_PAYMENT_FILTER_VALUES),
     fulfillmentStatus: oneOf(get('fulfillmentStatus'), ORDER_FULFILLMENT_STATUS_VALUES),
     preOrder: flag('preOrder') || undefined,
+    excludeDemo: flag('excludeDemo') || undefined,
     trashed: flag('trashed') || undefined,
     paymentMethod: get('paymentMethod')?.trim() || undefined,
     shippingMethod: get('shippingMethod')?.trim() || undefined,
@@ -133,6 +134,7 @@ export function parseExportColumnList(v: string | undefined): string[] | undefin
 export function exportConditions(f: ExportFilters): SQL[] {
   const date = sql`coalesce("order"."placed_at", "order"."created_at")`;
   const c: SQL[] = [f.trashed ? sql`"order"."deleted_at" is not null` : sql`"order"."deleted_at" is null`];
+  if (f.excludeDemo) c.push(sql`"order"."is_demo" = false`);
   if (f.from || f.to) {
     if (f.from) c.push(sql`${date} >= ${`${f.from}T00:00:00Z`}::timestamptz`);
     if (f.to) c.push(sql`${date} < (${`${f.to}T00:00:00Z`}::timestamptz + interval '1 day')`);

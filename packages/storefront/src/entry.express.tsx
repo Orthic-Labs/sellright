@@ -153,6 +153,7 @@ app.use((req, res, next) => {
 		google: googleIdentityCsp(googleSignInClientIdForHost(validatedRequestHost(req.headers))),
 		// Brand views: GTM origins only when head.json declares analytics (undefined = the policy is unchanged).
 		analytics: analyticsCsp(BRAND_HEAD.analytics),
+		youtubeEmbed: BRAND_HEAD.embeds?.youtube === true,
 	});
 
 	res.setHeader('Content-Security-Policy', cspDirectives);

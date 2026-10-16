@@ -63,6 +63,9 @@ jobs:
       - name: Install core workspace
         run: pnpm install --frozen-lockfile
 
+      - name: Restore archive staging regressions
+        run: node deploy/tests/test-restore-staging.mjs
+
       - name: Install admin
         run: pnpm --dir packages/admin install --frozen-lockfile
 
@@ -70,6 +73,7 @@ jobs:
         run: pnpm deps:audit
 
       - name: Production build (root — the storefront's full production build; no page is prerendered any more)
+        id: production_build
         # The exact command a real deploy runs: `pnpm -r build` (every
         # workspace package's own `build` script, including packages/
         # storefront's full production build) then
@@ -84,8 +88,32 @@ jobs:
         # bigger pipeline that happened to get lucky on a given run.
         run: pnpm build
 
+      - name: Packed sample disposable DB guard
+        run: pnpm --filter @sellright/sample-plugin exec vitest run test/packed-guard.test.ts
+
       - name: Verify core and admin
+        id: verify_static
         run: pnpm verify:static
+
+      - name: Generate client contract repair patch after failed verification
+        id: contract_patch
+        if: ${{ failure() && (steps.production_build.outcome == 'failure' || steps.verify_static.outcome == 'failure') }}
+        run: |
+          # Keep verification failed; export generator output for owner review, never auto-commit.
+          pnpm --filter @sellright/storefront-client generate
+          git diff --binary -- packages/storefront-client/openapi.json packages/storefront-client/src/generated/schema.d.ts > "$RUNNER_TEMP/storefront-client-generated.patch"
+          if test -s "$RUNNER_TEMP/storefront-client-generated.patch"; then
+            echo 'has_patch=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload generated client contract repair patch
+        if: ${{ failure() && steps.contract_patch.outputs.has_patch == 'true' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: storefront-client-generated-${{ github.sha }}
+          path: ${{ runner.temp }}/storefront-client-generated.patch
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Password hashing contract
         run: pnpm --filter @sellright/api test src/auth/password.test.ts
@@ -120,7 +148,7 @@ jobs:
           bundle="$RUNNER_TEMP/sellright-runtime"
           mkdir "$bundle"
           # Tests already passed; omit their two compiled helpers from this runtime package.
-          rm packages/api/dist/db/rls-test-utils.{js,js.map,d.ts} \
+          rm -f packages/api/dist/db/rls-test-utils.{js,js.map,d.ts} \
              packages/api/dist/licensing/storekit/jws-fixture.{js,js.map,d.ts}
           pnpm --filter @sellright/api pack --pack-destination "$bundle"
           node packages/api/scripts/write-build-info.mjs packages/admin/dist/BUILD-INFO.json
@@ -245,6 +273,13 @@ jobs:
 
       - name: Run DB integration suite
         run: pnpm --filter @sellright/api test:db
+
+      # PGPOOL_MAX=4 leaves one advisory-lock connection & four transaction
+      # connections, preserving intentional row-contention tests.
+      - name: Single-advisory-connection manifest & refund regressions
+        env:
+          PGPOOL_MAX: 4
+        run: pnpm --filter @sellright/api exec vitest run --project db src/manifest/manifest-pending.db.test.ts src/manifest/catalog.db.test.ts src/orders/order-edit.db.test.ts src/orders/order-edit-lock.db.test.ts src/payments/refunds.stock-hook.test.ts
 
       - name: Verify database isolation invariants
         run: pnpm verify:db
@@ -1029,6 +1064,52 @@ jobs:
             test -s "${offsite_dir}/${f}.enc"
             test -s "${offsite_dir}/${f}.enc.hmac"
           done
+
+      - name: Corrupt plain database must leave live appliance unchanged
+        env:
+          SELLRIGHT_HOME: ${{ github.workspace }}/deploy
+        run: |
+          corrupt_dir=$(mktemp -d)
+          trap 'rm -rf "$corrupt_dir"' EXIT
+          cp "$BACKUP_DIR"/* "$corrupt_dir"/
+          printf 'invalid PostgreSQL archive\n' > "$corrupt_dir/database.dump"
+          # Match its manifest hash so rejection exercises PostgreSQL preflight,
+          # rather than stopping at checksum validation.
+          python3 - "$corrupt_dir" <<'PY'
+          import hashlib, json, pathlib, sys
+          root = pathlib.Path(sys.argv[1])
+          manifest_path = root / 'manifest.json'
+          manifest = json.loads(manifest_path.read_text())
+          manifest['parts']['database.dump'] = 'sha256:' + hashlib.sha256((root / 'database.dump').read_bytes()).hexdigest()
+          manifest_path.write_text(json.dumps(manifest))
+          PY
+          before=$(docker compose -p sellright-drill -f deploy/compose.yaml ps -q api)
+          if sh deploy/sellright.sh restore --kit deploy/recovery-kit.json --set "$corrupt_dir" --yes \
+              > /tmp/plain-corrupt-restore.log 2>&1; then
+            echo "::error::restore accepted a corrupt PostgreSQL archive"
+            exit 1
+          fi
+          grep -q 'pg_restore:' /tmp/plain-corrupt-restore.log || { cat /tmp/plain-corrupt-restore.log; exit 1; }
+          test "$before" = "$(docker compose -p sellright-drill -f deploy/compose.yaml ps -q api)"
+          test "$(docker inspect --format='{{.State.Running}}' "$before")" = true
+          docker compose -p sellright-drill -f deploy/compose.yaml exec -T postgres \
+            psql -U sellright -d sellright -Atc "SELECT name FROM store WHERE slug = 'drill'" | grep -qx 'Drill Store'
+          docker compose -p sellright-drill -f deploy/compose.yaml exec -T api sh -c \
+            'grep -qx drill-asset-sentinel /app/var/assets/.drill-sentinel && grep -qx drill-download-sentinel /app/var/downloads/.drill-sentinel'
+
+      - name: Restore valid plain set into live appliance
+        env:
+          SELLRIGHT_HOME: ${{ github.workspace }}/deploy
+        run: |
+          docker compose -p sellright-drill -f deploy/compose.yaml exec -T postgres \
+            psql -U sellright -d sellright -v ON_ERROR_STOP=1 -c "UPDATE store SET name = 'changed before plain restore' WHERE slug = 'drill'"
+          docker compose -p sellright-drill -f deploy/compose.yaml exec -T api sh -c \
+            'printf changed > /app/var/assets/.drill-sentinel; printf changed > /app/var/downloads/.drill-sentinel'
+          sh deploy/sellright.sh restore --kit deploy/recovery-kit.json --set "$BACKUP_DIR" --yes
+          docker compose -p sellright-drill -f deploy/compose.yaml exec -T postgres \
+            psql -U sellright -d sellright -Atc "SELECT name FROM store WHERE slug = 'drill'" | grep -qx 'Drill Store'
+          docker compose -p sellright-drill -f deploy/compose.yaml exec -T api sh -c \
+            'grep -qx drill-asset-sentinel /app/var/assets/.drill-sentinel && grep -qx drill-download-sentinel /app/var/downloads/.drill-sentinel'
 
       - name: Tampered off-site backup must be rejected, not restored
         env:

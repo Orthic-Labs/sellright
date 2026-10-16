@@ -6,6 +6,11 @@
     "version": {
       "const": 1
     },
+    "contentViewPaths": {
+      "type": "array",
+      "maxItems": 55,
+      "items": { "type": "string", "pattern": "^/[a-z0-9]+(?:-[a-z0-9]+)*(?:/[a-z0-9]+(?:-[a-z0-9]+)*)*/$", "maxLength": 120 }
+    },
     "content": {
       "type": "array",
       "maxItems": 50,

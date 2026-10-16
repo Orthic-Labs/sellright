@@ -14,6 +14,7 @@
  *
  * Runs against a *_test DB only (TRUNCATEs store CASCADE).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { createHash } from 'node:crypto';
@@ -30,9 +31,7 @@ vi.mock('../security/turnstile.js', () => ({
 }));
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`customer-tokens test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'customer-tokens.db.test.ts');
 
 import { verifyTurnstileToken } from '../security/turnstile.js';
 import { customerTokens } from './customer-tokens.js';
@@ -219,6 +218,66 @@ describe('email-address-change flow (emailAddressChangeHandler parity)', () => {
     expect(m).toBeTruthy();
     return m![1]!;
   }
+
+  it('waits for customer before locking an email-change token when no orders exist', async () => {
+    const cust = await seedCustomer(STORE_B, 'lock-order-old@b.test');
+    const raw = 'email-change-customer-before-token';
+    const tokenHash = createHash('sha256').update(raw).digest('hex');
+    await withStore(STORE_B, (tx) => tx.insert(s.customerToken).values({
+      storeId: STORE_B, customerId: cust.id, kind: 'email_change', tokenHash,
+      expiresAt: new Date(Date.now() + 3600_000), payload: { newEmail: 'lock-order-new@b.test' },
+    }));
+    const blocker = await pool.connect();
+    let pending: Promise<Response> | undefined;
+    try {
+      await blocker.query('BEGIN');
+      await blocker.query("SET LOCAL statement_timeout = '10s'");
+      await blocker.query("SELECT set_config('app.current_store', $1, true)", [STORE_B]);
+      const { rows: backends } = await blocker.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
+      await blocker.query('SELECT id FROM customer WHERE id = $1 FOR UPDATE', [cust.id]);
+      pending = Promise.resolve(app.request('/v1/shop/auth/verify-email-change', {
+        method: 'POST', headers: hdr(SLUG_B), body: JSON.stringify({ token: raw }),
+      }));
+
+      let customerWait = false;
+      const deadline = Date.now() + 3500;
+      do {
+        const { rows } = await pool.query<{ query: string }>(`
+          SELECT query FROM pg_stat_activity
+          WHERE datname = current_database() AND $1 = ANY(pg_blocking_pids(pid))
+            AND wait_event_type = 'Lock'`, [backends[0]!.pid]);
+        customerWait = rows.some((row) => /customer/.test(row.query) && /for update/i.test(row.query));
+        if (!customerWait) await new Promise((resolve) => setTimeout(resolve, 15));
+      } while (!customerWait && Date.now() < deadline);
+      expect(customerWait).toBe(true);
+
+      // No commerce rows mask the order: the customer wait must leave the token
+      // entirely unlocked, so an independent NOWAIT claim can still take it.
+      const probe = await pool.connect();
+      try {
+        await probe.query('BEGIN');
+        await probe.query("SET LOCAL statement_timeout = '1s'");
+        await probe.query("SELECT set_config('app.current_store', $1, true)", [STORE_B]);
+        const available = await probe.query<{ used_at: Date | null }>(
+          'SELECT used_at FROM customer_token WHERE store_id = $1 AND token_hash = $2 FOR UPDATE NOWAIT', [STORE_B, tokenHash]);
+        expect(available.rows).toEqual([{ used_at: null }]);
+      } finally {
+        try { await probe.query('ROLLBACK'); } finally { probe.release(); }
+      }
+      await blocker.query('ROLLBACK');
+      expect((await pending).status).toBe(200);
+      expect((await pool.query('SELECT email, email_verified FROM customer WHERE id = $1', [cust.id])).rows)
+        .toEqual([{ email: 'lock-order-new@b.test', email_verified: true }]);
+      expect((await pool.query('SELECT used_at FROM customer_token WHERE token_hash = $1', [tokenHash])).rows[0]!.used_at).not.toBeNull();
+    } finally {
+      try {
+        await blocker.query('ROLLBACK');
+      } finally {
+        blocker.release();
+        if (pending) await Promise.allSettled([pending]);
+      }
+    }
+  }, 30000);
 
   it('requires auth and the current password', async () => {
     const cust = await seedCustomer(STORE_B, 'old@b.test');

@@ -27,7 +27,8 @@ vi.mock('../db/client.js', () => ({
   withStore: async (_s: string, fn: (tx: unknown) => unknown) => fn(h.tx),
   withAdvisoryLock: async (_k: string, fn: () => unknown) => fn(),
 }));
-vi.mock('./gateway-account.js', () => ({ resolveGatewayAccount: async () => ({ method: 'sezzle', mode: 'test' }) }));
+const account = vi.fn();
+vi.mock('./gateway-account.js', () => ({ resolveGatewayAccount: (...a: unknown[]) => account(...a) }));
 const finalize = vi.fn();
 const email = vi.fn();
 vi.mock('./refunds.js', () => ({
@@ -41,7 +42,8 @@ vi.mock('../webhooks/emit.js', () => ({ emitEvent: vi.fn() }));
 const stock = vi.fn();
 vi.mock('../manifest/stock-hook.js', () => ({ onStockChanged: (...a: unknown[]) => stock(...a) }));
 
-import { reconcileSezzleRefunds, resolveSezzleSessionAttempt } from './sezzle-reconcile.js';
+import { observeImportedSezzlePayment, reconcileSezzleRefunds, resolveSezzleSessionAttempt } from './sezzle-reconcile.js';
+import { migrationId } from '../import/context.js';
 
 const ev = { storeId: 'store', accountId: 'a', mode: 'test', providerRef: 'ord' };
 const refundOrder = (refunds: unknown[]) => ({ getOrder: vi.fn().mockResolvedValue({ uuid: 'ord', reference_id: 'att', order_amount: { amount_in_cents: 1000, currency: 'USD' }, authorization: { approved: true, refunds } }) });
@@ -51,6 +53,8 @@ const money = (n: number) => ({ amount_in_cents: n, currency: 'USD' });
 beforeEach(() => {
   h.st.selects = []; h.st.inserts = []; h.st.updates = []; h.st.insertReturn = [];
   finalize.mockReset(); email.mockReset(); stock.mockReset();
+  account.mockReset().mockImplementation(async (storeId: string, method: string, accountId: string, mode: string) =>
+    ({ storeId, method, accountId, mode }));
 });
 
 describe('D15 resolveSezzleSessionAttempt', () => {
@@ -77,6 +81,123 @@ describe('D15 resolveSezzleSessionAttempt', () => {
     h.st.selects = [[]];
     const provider = { getOrder: vi.fn().mockResolvedValue({ uuid: 'different', reference_id: 'x' }) };
     expect(await resolveSezzleSessionAttempt(ev, provider)).toBeNull();
+  });
+});
+
+describe('imported Sezzle history observations', () => {
+  const orderId = migrationId('store', 'vendure:damned', 'order', 12);
+  const importedPayment = () => ({
+    id: migrationId('store', 'vendure:damned', 'payment', 42), orderId, storeId: 'store',
+    method: 'sezzle', gatewayAccount: 'a', gatewayMode: 'test', providerRef: 'ord',
+    amount: 1000, currency: 'USD', state: 'Settled',
+    metadata: { vendure: { vendureMethod: 'sezzle-payment', sourceMode: 'test', sourcePaymentId: 42, sourceKey: 'vendure:damned' } },
+  });
+  const importedOrder = () => ({
+    id: orderId, storeId: 'store', code: 'DD-12', currency: 'USD', state: 'Paid',
+    metadata: { vendure: { id: 12, sourceKey: 'vendure:damned', state: 'PaymentSettled' } },
+  });
+  const providerOrder = () => ({ uuid: 'ord', reference_id: 'DD-12', order_amount: money(1000) });
+  const assertObservationOnly = () => {
+    expect(h.st.inserts).toEqual([]);
+    expect(h.st.updates).toEqual([]);
+    expect(finalize).not.toHaveBeenCalled();
+    expect(email).not.toHaveBeenCalled();
+    expect(stock).not.toHaveBeenCalled();
+  };
+
+  it.each(['Paid', 'PartiallyRefunded', 'Refunded', 'Cancelled'])('observes repeated historical events on %s without ledger/email/stock effects', async state => {
+    const payment = importedPayment();
+    const original = { ...importedOrder(), state };
+    const provider = { getOrder: vi.fn().mockResolvedValue({ ...providerOrder(),
+      authorization: { approved: true, refunds: [{ uuid: 'refund', amount: money(1000) }] },
+    }) };
+    h.st.selects = [[payment], [original], [payment], [original]];
+    expect(await observeImportedSezzlePayment(ev, provider)).toEqual(payment);
+    expect(await observeImportedSezzlePayment(ev, provider)).toEqual(payment);
+    expect(account).toHaveBeenCalledWith('store', 'sezzle', 'a', 'test');
+    expect(provider.getOrder).toHaveBeenCalledTimes(2);
+    assertObservationOnly();
+  });
+
+  it.each([
+    ['wrong store', { storeId: 'other' }], ['wrong account', { gatewayAccount: 'other' }],
+    ['wrong mode', { gatewayMode: 'live' }], ['missing account', { gatewayAccount: null }],
+    ['missing mode', { gatewayMode: null }], ['wrong method', { method: 'stripe' }],
+    ['wrong reference', { providerRef: 'other' }], ['unsettled history', { state: 'Authorized' }],
+    ['missing provenance', { metadata: null }],
+    ['conflicting mode evidence', { metadata: { vendure: { vendureMethod: 'sezzle', sourcePaymentId: 42, sourceKey: 'vendure:damned', txnMode: 'live' } } }],
+    ['quarantined mode', { metadata: { vendure: { vendureMethod: 'sezzle', sourcePaymentId: 42, sourceKey: 'vendure:damned', modeQuarantined: 'conflict' } } }],
+    ['old history without canonical proof', { metadata: { vendure: { vendureMethod: 'sezzle-payment', sourceMode: 'test' } } }],
+    ['missing source payment ID', { metadata: { vendure: { vendureMethod: 'sezzle', sourceKey: 'vendure:damned' } } }],
+    ['missing source namespace', { metadata: { vendure: { vendureMethod: 'sezzle', sourcePaymentId: 42 } } }],
+    ['wrong source payment ID', { metadata: { vendure: { vendureMethod: 'sezzle', sourcePaymentId: 99, sourceKey: 'vendure:damned' } } }],
+    ['arbitrary UUIDv5 with otherwise matching history', { id: '11111111-1111-5111-8111-111111111111' }],
+    ['another store payment namespace', { id: migrationId('other', 'vendure:damned', 'payment', 42) }],
+    ['another entity namespace', { id: migrationId('store', 'vendure:damned', 'order', 42) }],
+    ['ordinary payment ID', { id: '11111111-1111-4111-8111-111111111111' }],
+  ])('refuses %s before provider access', async (_name, change) => {
+    h.st.selects = [[{ ...importedPayment(), ...change }]];
+    const provider = { getOrder: vi.fn().mockResolvedValue(providerOrder()) };
+    expect(await observeImportedSezzlePayment(ev, provider)).toBeNull();
+    expect(provider.getOrder).not.toHaveBeenCalled();
+    assertObservationOnly();
+  });
+
+  it('refuses otherwise valid payment proof from a different imported source namespace', async () => {
+    const payment = importedPayment();
+    payment.id = migrationId('store', 'vendure:other', 'payment', 42);
+    payment.metadata.vendure.sourceKey = 'vendure:other';
+    h.st.selects = [[payment], [importedOrder()]];
+    const provider = { getOrder: vi.fn().mockResolvedValue(providerOrder()) };
+    expect(await observeImportedSezzlePayment(ev, provider)).toBeNull();
+    expect(provider.getOrder).not.toHaveBeenCalled();
+    assertObservationOnly();
+  });
+
+  it.each([
+    ['missing order proof', { metadata: null }], ['wrong order store', { storeId: 'other' }],
+    ['wrong order association', { id: 'other' }], ['different currency', { currency: 'CAD' }],
+    ['mismatched migration source', { metadata: { vendure: { id: 99, sourceKey: 'vendure:damned' } } }],
+  ])('refuses %s', async (_name, change) => {
+    h.st.selects = [[importedPayment()], [{ ...importedOrder(), ...change }]];
+    const provider = { getOrder: vi.fn().mockResolvedValue(providerOrder()) };
+    expect(await observeImportedSezzlePayment(ev, provider)).toBeNull();
+    expect(provider.getOrder).not.toHaveBeenCalled();
+    assertObservationOnly();
+  });
+
+  it.each([
+    ['uuid', { uuid: 'other' }], ['reference_id', { reference_id: 'another-order' }],
+    ['amount', { order_amount: money(999) }],
+    ['currency', { order_amount: { amount_in_cents: 1000, currency: 'CAD' } }],
+  ])('keeps mismatched authoritative %s unresolved', async (_name, change) => {
+    h.st.selects = [[importedPayment()], [importedOrder()]];
+    const provider = { getOrder: vi.fn().mockResolvedValue({ ...providerOrder(), ...change }) };
+    expect(await observeImportedSezzlePayment(ev, provider)).toBeNull();
+    assertObservationOnly();
+  });
+
+  it.each(['storeId', 'accountId', 'method', 'mode'])('refuses mismatched configured %s', async field => {
+    h.st.selects = [[importedPayment()], [importedOrder()]];
+    account.mockResolvedValue({ storeId: 'store', accountId: 'a', method: 'sezzle', mode: 'test', [field]: 'other' });
+    const provider = { getOrder: vi.fn() };
+    expect(await observeImportedSezzlePayment(ev, provider)).toBeNull();
+    expect(provider.getOrder).not.toHaveBeenCalled();
+    assertObservationOnly();
+  });
+
+  it('refuses missing, duplicate or ambiguous payment/order associations', async () => {
+    const provider = { getOrder: vi.fn() };
+    for (const rows of [[], [importedPayment(), importedPayment()]]) {
+      h.st.selects = [rows];
+      expect(await observeImportedSezzlePayment(ev, provider)).toBeNull();
+    }
+    for (const rows of [[], [importedOrder(), importedOrder()]]) {
+      h.st.selects = [[importedPayment()], rows];
+      expect(await observeImportedSezzlePayment(ev, provider)).toBeNull();
+    }
+    expect(provider.getOrder).not.toHaveBeenCalled();
+    assertObservationOnly();
   });
 });
 

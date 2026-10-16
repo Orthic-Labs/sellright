@@ -18,7 +18,7 @@
  * a confirmed subscriber.
  */
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { pool, withStore, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { resolveStoreFromCtx } from './store-context.js';
@@ -197,24 +197,19 @@ subscriberRoutes.openapi(
   }),
   async (c) => {
     const { token } = c.req.valid('param');
-    // The store context matters: a subscriber token belongs to ONE store, and
-    // we don't know which store without looking it up. Read token → storeId
-    // UNSCOPED (the `subscriber` row is owned by exactly one store and the
-    // token is a 122-bit capability — leaking which store the token belongs
-    // to is no worse than leaking the token's existence to an attacker who
-    // already has it). If we DIDN'T find the row, use the request's store
-    // context to keep RLS happy for the path that never resolves.
     const st = await resolveStoreFromCtx(c);
-    const row = await withStore(st.id, async (tx) =>
-      tx.execute(sql`SELECT id, store_id AS "storeId" FROM subscriber WHERE token = ${token} LIMIT 1`),
-    );
-    const sub = (row.rows[0] as { id: string; storeId: string } | undefined);
-    const storeId = sub?.storeId ?? st.id;
-    await withStore(storeId, async (tx) => {
-      // Idempotent: transitioning already-unsubscribed is a no-op.
+    await withStore(st.id, async (tx) => {
+      // Confirmation emails also offer unsubscribe while pending. Revoke that
+      // consent too, so the old confirm link cannot restore it without signup.
+      // The unique token selects one kind/topic; other stores and already-
+      // unsubscribed rows are no-ops, including their timestamps.
       await tx.update(s.subscriber)
         .set({ status: 'unsubscribed', unsubscribedAt: new Date(), updatedAt: new Date() })
-        .where(and(eq(s.subscriber.token, token), eq(s.subscriber.status, 'confirmed')));
+        .where(and(
+          eq(s.subscriber.storeId, st.id),
+          eq(s.subscriber.token, token),
+          inArray(s.subscriber.status, ['pending', 'confirmed']),
+        ));
     });
     // 200 (not 204) so the response carries the confirmation body for both
     // human browsers and the one-click client. RFC 8058 says 200 is fine.

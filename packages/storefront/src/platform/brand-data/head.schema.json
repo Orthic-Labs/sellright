@@ -65,6 +65,12 @@
         }
       }
     },
+    "embeds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["youtube"],
+      "properties": { "youtube": { "const": true } }
+    },
     "googleFontsPreconnect": { "type": "boolean" },
     "verification": {
       "type": "object",

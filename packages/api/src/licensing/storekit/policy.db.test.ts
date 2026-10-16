@@ -3,6 +3,7 @@
  * T-K6, and the fork-reference kit through the built-in route). Runs against the
  * lane test DB only. Fixtures: throwaway Apple-like CA (jws-fixture.ts).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../../db/test-database-url.js';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql, eq } from 'drizzle-orm';
 import { OpenAPIHono } from '@hono/zod-openapi';
@@ -24,9 +25,7 @@ import { forkReferencePolicy, FORK_MESSAGE, FORK_PRODUCTS } from './fork-referen
 import { storeKitLicenseKey } from '../storekit-license.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`storekit policy test truncates data — point DATABASE_URL at a *_test database`);
-}
+assertTestDatabase(DB, 'policy.db.test.ts');
 
 const STORE = 'ffffffff-ffff-ffff-ffff-ffffffffff01';
 const SLUG = 'storekit-policy-test';

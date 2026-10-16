@@ -1,5 +1,5 @@
 {
-  "count": 339,
+  "count": 341,
   "routes": [
     "DELETE /v1/admin/agents/{adminUserId}",
     "DELETE /v1/admin/assets/{id}",
@@ -140,6 +140,7 @@
     "GET /v1/shop/collections/{slug}",
     "GET /v1/shop/config",
     "GET /v1/shop/contact/confirm",
+    "GET /v1/shop/contact/confirm-legacy",
     "GET /v1/shop/currencies",
     "GET /v1/shop/feeds/{channel}",
     "GET /v1/shop/gift-card/{code}",
@@ -307,6 +308,7 @@
     "POST /v1/shop/cart",
     "POST /v1/shop/cart/{token}/merge",
     "POST /v1/shop/cart/estimate",
+    "POST /v1/shop/cart/legacy-migration",
     "POST /v1/shop/catalog/products/{slug}/reviews",
     "POST /v1/shop/checkout",
     "POST /v1/shop/contact",

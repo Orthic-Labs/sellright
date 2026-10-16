@@ -7,6 +7,7 @@
  * oracle), any client picked its own "IP" via X-Real-IP (the socket address was never read), and
  * /2fa/enable, /2fa/disable were not limited at all.
  */
+import { isDisposablePostgresUrl } from './db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHmac } from 'node:crypto';
 
@@ -24,7 +25,7 @@ import { createAdminSession } from './auth/admin-session.js';
 import { _setRateLimitBackendForTest, createMemoryRateLimitBackend, createPostgresRateLimitBackend } from './auth/rate-limit-backend.js';
 import { newTotpSecret } from './auth/totp.js';
 
-const isTestDb = /^\/[^/]*_test$/.test(new URL(process.env.DATABASE_URL ?? env.DATABASE_URL).pathname); // the DB NAME, not the whole URL
+const isTestDb = isDisposablePostgresUrl(process.env.DATABASE_URL ?? env.DATABASE_URL);
 const STORE = 'abababab-abab-abab-abab-ababababab01';
 const ADMIN = 'abababab-abab-abab-abab-0000000000a1';
 const EMAIL = 'owner@abuse.test';

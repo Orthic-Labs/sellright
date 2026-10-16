@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle } from 'lucide-react';
 
 /**
@@ -33,23 +33,87 @@ export function ConfirmDialog({
   tone = 'primary', loading = false, onConfirm, onCancel,
 }: ConfirmDialogProps) {
   const confirmRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const onCancelRef = useRef(onCancel);
+  const loadingRef = useRef(loading);
+  const lastFocusedRef = useRef<HTMLElement | null>(null);
+  const previousLoadingRef = useRef(loading);
+
+  onCancelRef.current = onCancel;
+  loadingRef.current = loading;
 
   useEffect(() => {
     if (!open) return;
-    confirmRef.current?.focus();
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const dialog = dialogRef.current;
+    const focusable = () => Array.from(dialog?.querySelectorAll<HTMLElement>(
+      'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])',
+    ) ?? []).filter((el) => !el.hasAttribute('disabled') && el.tabIndex >= 0 && !el.closest('[aria-hidden="true"]'));
+    const focusInside = () => {
+      const controls = focusable();
+      const target = controls[0] ?? dialog;
+      if (target) {
+        lastFocusedRef.current = target;
+        target.focus();
+      }
+    };
+
+    const initialFocus = confirmRef.current?.disabled ? dialog : confirmRef.current;
+    if (initialFocus) {
+      lastFocusedRef.current = initialFocus;
+      initialFocus.focus();
+    }
+    const onFocusIn = (e: FocusEvent) => {
+      if (!dialog) return;
+      if (dialog.contains(e.target as Node)) lastFocusedRef.current = e.target as HTMLElement;
+      else focusInside();
+    };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onCancel();
+      if (e.key === 'Escape') {
+        if (!loadingRef.current) onCancelRef.current();
+        return;
+      }
+      if (e.key !== 'Tab' || !dialog) return;
+      const controls = focusable();
+      if (controls.length === 0) {
+        e.preventDefault();
+        dialog.focus();
+      } else if (e.shiftKey && (document.activeElement === controls[0] || !dialog.contains(document.activeElement))) {
+        e.preventDefault();
+        controls[controls.length - 1]!.focus();
+      } else if (!e.shiftKey && (document.activeElement === controls[controls.length - 1] || !dialog.contains(document.activeElement))) {
+        e.preventDefault();
+        controls[0]!.focus();
+      }
     };
     document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [open, onCancel]);
+    document.addEventListener('focusin', onFocusIn);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('focusin', onFocusIn);
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, [open]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const becameLoading = loading && !previousLoadingRef.current;
+    previousLoadingRef.current = loading;
+    if (!becameLoading) return;
+    const dialog = dialogRef.current;
+    const lastFocused = lastFocusedRef.current;
+    if (dialog && lastFocused && dialog.contains(lastFocused) && lastFocused.hasAttribute('disabled')) {
+      dialog.focus();
+      lastFocusedRef.current = dialog;
+    }
+  }, [open, loading]);
 
   if (!open) return null;
 
   return (
     <>
       <div className="fixed inset-0 z-40 bg-black/30 animate-fade-in" onClick={loading ? undefined : onCancel} aria-hidden="true" />
-      <div className="fixed inset-x-0 top-[20vh] z-50 mx-auto w-full max-w-sm px-3" role="alertdialog" aria-modal="true" aria-labelledby="confirm-dialog-title" aria-describedby={description ? 'confirm-dialog-desc' : undefined}>
+      <div ref={dialogRef} tabIndex={-1} className="fixed inset-x-0 top-[20vh] z-50 mx-auto w-full max-w-sm px-3" role="alertdialog" aria-modal="true" aria-labelledby="confirm-dialog-title" aria-describedby={description ? 'confirm-dialog-desc' : undefined}>
         <div className="card p-5 shadow-lg">
           <div className="flex items-start gap-3">
             {tone === 'danger' && (

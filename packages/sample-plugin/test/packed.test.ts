@@ -11,19 +11,23 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+// Workspace harness only; the copied boot.mjs still consumes only packed public exports.
+import { requireDisposablePostgresUrl } from '../../api/src/db/test-database-url.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, '..', '..', '..');
 const DB = process.env.DATABASE_URL ?? '';
+// Reject before registering either hook: Vitest runs teardown even if setup fails.
+requireDisposablePostgresUrl(DB, 'packed sample plugin test');
 const STORE_SLUG = 'packed-sample-store';
 const run = (cmd: string, args: string[], cwd: string, env: NodeJS.ProcessEnv = process.env) =>
   execFileSync(cmd, args, { cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024 });
 
 let tmp = '';
+let databaseTouched = false;
 let result: Record<string, any> = {};
 
 beforeAll(async () => {
-  if (!/_test(\?|$)/.test(DB)) throw new Error('DATABASE_URL must point at a *_test database');
   tmp = mkdtempSync(join(tmpdir(), 'sr-packed-'));
   const packs = join(tmp, 'packs');
   mkdirSync(packs);
@@ -58,10 +62,14 @@ beforeAll(async () => {
 
   // 3. seed a store through the owner credential (the sample route resolves it by x-store-slug)
   const owner = new pg.Client({ connectionString: DB });
-  await owner.connect();
-  await owner.query('TRUNCATE store CASCADE');
-  await owner.query(`INSERT INTO store (slug, name, currency, config) VALUES ($1, 'Packed', 'USD', '{}'::jsonb)`, [STORE_SLUG]);
-  await owner.end();
+  try {
+    await owner.connect();
+    databaseTouched = true;
+    await owner.query('TRUNCATE store CASCADE');
+    await owner.query(`INSERT INTO store (slug, name, currency, config) VALUES ($1, 'Packed', 'USD', '{}'::jsonb)`, [STORE_SLUG]);
+  } finally {
+    await owner.end();
+  }
 
   const priv = new URL(DB); priv.username = 'sellright_backup'; priv.password = '';
   const out = run('node', ['boot.mjs'], consumer, {
@@ -73,13 +81,17 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  if (DB) {
+  if (databaseTouched) {
+    requireDisposablePostgresUrl(DB, 'packed sample plugin cleanup');
     const owner = new pg.Client({ connectionString: DB });
-    await owner.connect();
-    await owner.query('TRUNCATE store CASCADE');
-    await owner.query('DROP TABLE IF EXISTS sample_note');
-    await owner.query('DROP TABLE IF EXISTS drizzle.__drizzle_migrations_sample');
-    await owner.end();
+    try {
+      await owner.connect();
+      await owner.query('TRUNCATE store CASCADE');
+      await owner.query('DROP TABLE IF EXISTS sample_note');
+      await owner.query('DROP TABLE IF EXISTS drizzle.__drizzle_migrations_sample');
+    } finally {
+      await owner.end();
+    }
   }
   if (tmp) rmSync(tmp, { recursive: true, force: true });
 });

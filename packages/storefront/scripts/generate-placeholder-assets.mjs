@@ -58,7 +58,12 @@ export async function generateOne({ out, width, height, format, bg, label }, bas
   const image = sharp({ create: { width, height, channels: 3, background: bg } });
   if (label) image.composite([{ input: labelOverlay(width, height, label) }]);
   const buffer = format === 'png' ? await image.png({ compressionLevel: 9 }).toBuffer() : await image.jpeg({ quality: 82 }).toBuffer();
-  await writeFile(dest, buffer);
+  try {
+    await writeFile(dest, buffer, { flag: 'wx' });
+  } catch (err) {
+    if (err.code === 'EEXIST') return null;
+    throw err;
+  }
   return dest;
 }
 

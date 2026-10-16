@@ -323,7 +323,9 @@ export async function importOrders(ctx: ImportContext): Promise<void> {
           // resolve, so a NULL mode there is absence, not uncertainty.
           modeQuarantined = ['nmi', 'sezzle', 'stripe'].includes(method) ? 'unresolved' : null;
         }
-        const provenance: Record<string, unknown> = { vendureMethod: sourceMethod, sourceMode };
+        const provenance: Record<string, unknown> = {
+          vendureMethod: sourceMethod, sourceMode, sourcePaymentId: p.id, sourceKey: ctx.sourceKey,
+        };
         if (txnMode) provenance.txnMode = txnMode;
         // `transactionId='imported'` (and empty) is a migration sentinel in the
         // source, not a real gateway reference — real DD data carries it on

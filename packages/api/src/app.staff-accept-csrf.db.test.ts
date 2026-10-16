@@ -6,6 +6,7 @@
  * exists to double-submit — the flow was 403'd and unreachable from a browser.
  * Mirrors app.cors.db.test.ts: real Hono app via createApp(), real DB.
  */
+import { isDisposablePostgresUrl } from './db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from './app.js';
 import { pool } from './db/client.js';
@@ -17,7 +18,7 @@ const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
 // split (out of scope for this change), so it self-gates: skip cleanly when
 // DATABASE_URL isn't pointed at a _test database instead of throwing and
 // failing the whole run. Run explicitly with DATABASE_URL=…/sellright_test.
-const isTestDb = /_test(\b|$|\?)/.test(DB);
+const isTestDb = isDisposablePostgresUrl(DB);
 
 async function wipe() {
   await pool.query('TRUNCATE store CASCADE');

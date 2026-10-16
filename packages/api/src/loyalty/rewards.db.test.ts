@@ -9,6 +9,7 @@
  *                  aggregate, rating in the catalog manifest entries
  *   RLS          — product_review is store-isolated
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { eq, sql } from 'drizzle-orm';
@@ -38,9 +39,7 @@ import { publishCatalogManifest } from '../manifest/catalog.js';
 import { readCurrentGeneration, readCurrentGenerationV2 } from '../manifest/publish.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`rewards test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'rewards.db.test.ts');
 
 const STORE = 'dddddddd-4444-4444-4444-444444444444';
 const OTHER = 'dddddddd-4444-4444-4444-4444444444ff';

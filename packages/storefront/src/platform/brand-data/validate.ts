@@ -84,6 +84,7 @@ export function validateRoutesData(value: unknown, opts: ValidateOptions): Brand
 	for (const message of checkContentPaths(routes, opts.routeDirs)) problems.push({ file, message });
 	for (const message of pr2RouteProblems(value as Pr2Routes, opts)) problems.push({ file, message });
 	if ((value as { home?: { spotlight?: unknown } }).home?.spotlight && opts.hasHomeView === false) problems.push({ file, message: 'home.spotlight is declared but src/brand-slots/route.home.tsx does not exist; only the brand home view sells it' });
+	if ((routes.contentViewPaths?.length ?? 0) > 0 && !opts.hasContentView) problems.push({ file, message: 'contentViewPaths selects paths but src/brand-slots/route.content.tsx does not exist; selected paths need a view' });
 	if ((routes.content?.length ?? 0) > 0 && !opts.hasContentView) problems.push({ file, message: 'content paths are declared but src/brand-slots/route.content.tsx does not exist; a declared path needs a view' });
 	return problems;
 }

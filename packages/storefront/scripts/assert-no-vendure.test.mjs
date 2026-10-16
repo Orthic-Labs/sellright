@@ -69,6 +69,27 @@ test('the bare word fails unless the file is allowlisted', () => {
   assert.equal(run(fixture({ base, allowlist: 'src/m.ts\n' })).status, 0);
 });
 
+test('legacy identifier exceptions require exact path & whole identifier, retaining hard coupling guards', () => {
+  const allowlist = 'src/m.ts|vendure_local_cart\n';
+  assert.deepEqual(checkNoVendure({ root: fixture({ base: { 'src/m.ts': "const key = 'vendure_local_cart';\n" }, allowlist }) }), []);
+  for (const [file, text] of [
+    ['src/other.ts', "const key = 'vendure_local_cart';\n"],
+    ['src/m.ts', "const key = 'vendure_local_cart_extra';\n"],
+    ['src/m.ts', "const key = 'other_vendure_local_cart';\n"],
+    ['src/m.ts', 'const $vendure_local_cart = 1;\n'],
+    ['src/m.ts', 'const vendure_local_cart$ = 1;\n'],
+    ['src/m.ts', 'const αvendure_local_cart = 1;\n'],
+    ['src/m.ts', 'const vendure_local_carté = 1;\n'],
+    ['src/m.ts', 'const vendure_local_cart\u200C = 1;\n'],
+    ['src/m.ts', 'const vendure_local_cart\u200D = 1;\n'],
+    ['src/m.ts', "const key = 'vendure_local_cart'; // Vendure API\n"],
+    ['src/m.ts', "import x from '@vendure/core'; const key = 'vendure_local_cart';\n"],
+    ['src/m.ts', "const key = 'vendure_local_cart'; const q = gql`{ a }`;\n"],
+  ]) {
+    assert.ok(checkNoVendure({ root: fixture({ base: { [file]: text }, allowlist }) }).length > 0, text);
+  }
+});
+
 test('config files: a Vendure-shaped env name fails, a /home/vendure path does not', () => {
   assert.equal(run(fixture({ config: '{"x":"VITE_VENDURE_PROD_URL"}' })).status, 1);
   assert.equal(run(fixture({ config: '{"x":"/home/vendure/app"}' })).status, 0);

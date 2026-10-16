@@ -1,5 +1,5 @@
 /**
- * Read-only system endpoints (plan 2.7): owner-only build-info + effective-config (config/v1).
+ * System endpoint permissions: build-info + effective-config (config/v1), and checklist writes.
  * Secrets must appear only as fingerprints; `intended` must be stable and content-addressed.
  */
 import { createHmac, generateKeyPairSync } from 'node:crypto';
@@ -20,6 +20,7 @@ const { createAdminSession } = await import('../auth/admin-session.js');
 const { hashPassword } = await import('../auth/password.js');
 const { assertTestDatabase } = await import('../db/rls-test-utils.js');
 const { adminSystemInfo } = await import('./admin-system-info.js');
+const { adminSystem } = await import('./admin-system.js');
 const { hmacFingerprint, publicKeyFingerprint } = await import('../sdk/fingerprint.js');
 const { contentFingerprint } = await import('../sdk/effective-config.js');
 
@@ -32,6 +33,8 @@ const MANAGER = 'eeeeeeee-0000-0000-0000-00000000b103';
 const OTHER_STORE = 'eeeeeeee-0000-0000-0000-00000000b104';
 const OTHER_OWNER = 'eeeeeeee-0000-0000-0000-00000000b105';
 const PLAIN_OWNER = 'eeeeeeee-0000-0000-0000-00000000b106';
+const READ_ONLY = 'eeeeeeee-0000-0000-0000-00000000b107';
+const STAFF = 'eeeeeeee-0000-0000-0000-00000000b108';
 const MANIFEST = { schema: 2, appKey: 'demo', documents: [{ id: 'a', role: 'license' }] };
 const CONFIG = {
   hostnames: ['shop.example.test', 'www.example.test'],
@@ -43,11 +46,14 @@ const CONFIG = {
 
 const app = new OpenAPIHono();
 app.route('/', adminSystemInfo);
+app.route('/', adminSystem);
 
 let ownerToken = '';
 let managerToken = '';
 let otherOwnerToken = '';
 let plainOwnerToken = '';
+let readOnlyToken = '';
+let staffToken = '';
 
 beforeAll(async () => {
   await pool.query('TRUNCATE store CASCADE');
@@ -62,6 +68,8 @@ beforeAll(async () => {
     [MANAGER, 'mgr@si.test', 'manager', STORE, false],           // manager of the store, not owner, not installation admin (one installation admin per install)
     [PLAIN_OWNER, 'plain@si.test', 'owner', STORE, false],       // owner of THIS store, not an installation admin
     [OTHER_OWNER, 'other@si.test', 'owner', OTHER_STORE, false], // owner of another store of the same install
+    [READ_ONLY, 'read-only@si.test', 'read_only', STORE, false],
+    [STAFF, 'staff@si.test', 'staff', STORE, false],
   ] as const) {
     await pool.query(`INSERT INTO admin_user (id, email, password_hash, is_installation_admin) VALUES ($1, $2, $3, $4)`, [id, email, hash, inst]);
     await pool.query(`INSERT INTO admin_user_store (admin_user_id, store_id, role) VALUES ($1, $2, $3)`, [id, store, role]);
@@ -70,6 +78,8 @@ beforeAll(async () => {
   managerToken = await createAdminSession(MANAGER);
   plainOwnerToken = await createAdminSession(PLAIN_OWNER);
   otherOwnerToken = await createAdminSession(OTHER_OWNER);
+  readOnlyToken = await createAdminSession(READ_ONLY);
+  staffToken = await createAdminSession(STAFF);
 });
 
 afterAll(async () => {
@@ -81,6 +91,62 @@ afterAll(async () => {
 
 const get = (path: string, token?: string) =>
   app.request(path, { headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), 'x-store-slug': SLUG } });
+
+const patchBackupConfirmation = (token: string, confirmed: boolean) =>
+  app.request('/v1/admin/system/checklist/offsite-backup-confirmed', {
+    method: 'PATCH',
+    headers: { authorization: `Bearer ${token}`, 'x-store-slug': SLUG, 'content-type': 'application/json' },
+    body: JSON.stringify({ confirmed }),
+  });
+
+describe('off-site backup confirmation permissions', () => {
+  it.each([true, false])('read_only cannot set confirmed=%s or mutate config/audit, but can view status', async (confirmed) => {
+    const initialConfig = { ...CONFIG, checklist: { offsiteBackupConfirmed: !confirmed, retained: 'unchanged' } };
+    await pool.query('UPDATE store SET config = $2::jsonb WHERE id = $1', [STORE, JSON.stringify(initialConfig)]);
+    const beforeAudit = await pool.query('SELECT * FROM audit_log WHERE store_id = $1 ORDER BY id', [STORE]);
+
+    const before = await get('/v1/admin/system/checklist', readOnlyToken);
+    expect(before.status).toBe(200);
+    expect((await before.json() as { offSiteBackup: { ok: boolean } }).offSiteBackup.ok).toBe(!confirmed);
+    const denied = await patchBackupConfirmation(readOnlyToken, confirmed);
+    expect(denied.status).toBe(403);
+
+    const config = await pool.query('SELECT config FROM store WHERE id = $1', [STORE]);
+    expect(config.rows[0].config).toEqual(initialConfig);
+    const afterAudit = await pool.query('SELECT * FROM audit_log WHERE store_id = $1 ORDER BY id', [STORE]);
+    expect(afterAudit.rows).toEqual(beforeAudit.rows);
+    const after = await get('/v1/admin/system/checklist', readOnlyToken);
+    expect(after.status).toBe(200);
+    expect((await after.json() as { offSiteBackup: { ok: boolean } }).offSiteBackup.ok).toBe(!confirmed);
+  });
+
+  it.each(['owner', 'manager', 'staff'] as const)('%s can change confirmation in both directions with audited readback', async (role) => {
+    const { token, email } = {
+      owner: { token: plainOwnerToken, email: 'plain@si.test' },
+      manager: { token: managerToken, email: 'mgr@si.test' },
+      staff: { token: staffToken, email: 'staff@si.test' },
+    }[role];
+    const initialConfig = { ...CONFIG, checklist: { offsiteBackupConfirmed: false, retained: 'unchanged' } };
+    await pool.query('UPDATE store SET config = $2::jsonb WHERE id = $1', [STORE, JSON.stringify(initialConfig)]);
+    const auditCount = async () => (await pool.query(
+      `SELECT count(*)::int AS n FROM audit_log WHERE store_id = $1 AND actor = $2 AND action = 'checklist-offsite-backup-confirmed'`,
+      [STORE, email],
+    )).rows[0].n as number;
+    const beforeCount = await auditCount();
+
+    for (const [index, confirmed] of [true, false].entries()) {
+      const changed = await patchBackupConfirmation(token, confirmed);
+      expect(changed.status).toBe(200);
+      expect(await changed.json()).toEqual({ ok: true });
+      const config = await pool.query('SELECT config FROM store WHERE id = $1', [STORE]);
+      expect(config.rows[0].config).toEqual({ ...initialConfig, checklist: { ...initialConfig.checklist, offsiteBackupConfirmed: confirmed } });
+      expect(await auditCount()).toBe(beforeCount + index + 1);
+      const readback = await get('/v1/admin/system/checklist', readOnlyToken);
+      expect(readback.status).toBe(200);
+      expect((await readback.json() as { offSiteBackup: { ok: boolean } }).offSiteBackup.ok).toBe(confirmed);
+    }
+  });
+});
 
 describe.each(['/v1/admin/system/build-info', '/v1/admin/system/effective-config'])('%s access', (path) => {
   it('401 without a session; 200 only for an installation admin who owns the store', async () => {

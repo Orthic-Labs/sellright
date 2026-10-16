@@ -174,7 +174,7 @@ adminOrderOps.openapi(
 // ── order export (CSV + XLSX) ────────────────────────────────────────────────
 // Filters, column catalog and the row query live in orders/export.ts; both
 // formats share them. Query params: from/to (YYYY-MM-DD), days (fallback),
-// state (legacy), status, paymentStatus, fulfillmentStatus, preOrder, trashed,
+// state (legacy), status, paymentStatus, fulfillmentStatus, preOrder, excludeDemo, trashed,
 // paymentMethod, shippingMethod (code or __none__), country, coupon, q, rows=order|line, columns=a,b,c.
 // Column order shared by both formats — the default (no `columns` param) set.
 export const ORDER_EXPORT_COLUMNS = DEFAULT_EXPORT_COLUMNS;

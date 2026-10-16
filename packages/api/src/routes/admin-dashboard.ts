@@ -4,6 +4,7 @@ import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { J, errBody, money, PAID_STATES, requireAdmin, requireStore, guard } from './admin-helpers.js';
 import { isStorePublished } from '../store-publish.js';
+import { fulfillmentStatusSql, paymentStatusWithBalanceSql } from '../orders/status-sql.js';
 
 export const adminDashboard = new OpenAPIHono();
 
@@ -33,13 +34,12 @@ adminDashboard.openapi(
         .where(sql`${s.order.state} = any(${PAID_STATES}) and ${s.order.deletedAt} is null and not ${s.order.isDemo}`);
       const revenue = agg?.revenue ?? 0;
       const cnt = agg?.cnt ?? 0;
-      // To-fulfill = Paid orders with no Shipped/Delivered fulfillment record yet.
-      // (order.state stays 'Paid' after shipping — shipping state lives on the
-      // fulfillment record, so a bare state='Paid' count over-reports.)
+      // Keep this predicate aligned with the Orders page's canonical
+      // Unfulfilled view; both use the shared status SQL projections.
       const [pf] = await tx
         .select({ n: sql<number>`count(*)::int` })
         .from(s.order)
-        .where(sql`${s.order.state} = 'Paid' and ${s.order.deletedAt} is null and not ${s.order.isDemo} and not exists (select 1 from fulfillment f where f.order_id = ${s.order.id} and f.state in ('Shipped','Delivered'))`);
+        .where(sql`${s.order.deletedAt} is null and ${s.order.isDemo} = false and ${s.order.status} in ('open','completed') and ${paymentStatusWithBalanceSql()} = 'paid' and ${fulfillmentStatusSql()} = 'unfulfilled'`);
       const [cu] = await tx.select({ n: sql<number>`count(*)::int` }).from(s.customer);
       const [ls] = await tx
         .select({ n: sql<number>`count(*)::int` })

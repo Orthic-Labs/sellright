@@ -8,8 +8,8 @@ One registered policy (`registerEntitlementPolicy`, `clearEntitlementPolicy`). N
 
 | Member | Purpose | Default |
 |---|---|---|
-| `requestExtensions[activate\|refresh\|lease_issue\|trial]` | zod schema over the raw JSON body; result is `ctx.ext`; invalid => 400 `INVALID_REQUEST` (or, with `invalidExtension: 'internal'`, the raw ZodError => 500 `internal error`, the legacy wire) | none (`ext = {}`) |
-| `invalidExtension` | `'bad_request'` keeps 400 `INVALID_REQUEST` for invalid typed extensions; `'internal'` opts a policy into the legacy 500 (the fork test kit sets it, COMPAT G06). Base-schema failures are 500 either way. | `'bad_request'` |
+| `requestExtensions[activate\|refresh\|lease_issue\|trial]` | zod schema over the raw JSON body; result is `ctx.ext`; invalid => 400 `INVALID_REQUEST` (or, with `invalidExtension: 'internal'`, a plain Error with the ZodError as its cause => 500 `INTERNAL_ERROR` (`internal error` unless DEBUG_ERRORS is enabled), the legacy wire) | none (`ext = {}`) |
+| `invalidExtension` | `'bad_request'` keeps 400 `INVALID_REQUEST` for invalid typed extensions; `'internal'` opts a policy into the legacy 500 (the fork test kit sets it, COMPAT G06). Base-schema ZodErrors map to 400 `VALIDATION_ERROR` either way. | `'bad_request'` |
 | `preRoute(ctx)` | runs right after body parse on the three activate routes, BEFORE store resolution, the rate limiter and any DB work; returns `{status:400\|403, message, code?}` to refuse (mapped to `HttpError`) | none |
 | `authorize(ctx)` | allow / deny `notfound` / deny `rejected_platform(reason)`; runs in the caller's store transaction (`ctx.tx`) | allow |
 | `claims(ctx)` | additive signed claims (`entitlementScope`) | none |

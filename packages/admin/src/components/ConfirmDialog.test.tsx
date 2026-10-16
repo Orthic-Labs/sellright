@@ -73,14 +73,72 @@ describe('ConfirmDialog', () => {
     } finally { unmount(container, root); }
   });
 
+  it('confines Tab, Shift+Tab, and focus to the dialog, then restores prior focus on close', () => {
+    const opener = document.createElement('button');
+    document.body.appendChild(opener);
+    opener.focus();
+    const props = { title: 'Delete?', onConfirm: () => {}, onCancel: () => {} };
+    const { container, root } = mount(<ConfirmDialog open {...props} />);
+    try {
+      const [cancel, confirm] = Array.from(container.querySelectorAll('button'));
+      expect(document.activeElement).toBe(confirm);
+
+      act(() => { cancel.focus(); });
+      act(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true })); });
+      expect(document.activeElement).toBe(confirm);
+      act(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })); });
+      expect(document.activeElement).toBe(cancel);
+
+      act(() => { opener.focus(); });
+      expect(container.querySelector('[role="alertdialog"]')?.contains(document.activeElement)).toBe(true);
+
+      act(() => { root.render(<ConfirmDialog open={false} {...props} />); });
+      expect(document.activeElement).toBe(opener);
+    } finally {
+      unmount(container, root);
+      opener.remove();
+    }
+  });
+
   it('disables both buttons while loading', () => {
+    const onCancel = vi.fn();
     const { container, root } = mount(
-      <ConfirmDialog open title="Delete?" loading onConfirm={() => {}} onCancel={() => {}} />,
+      <ConfirmDialog open title="Delete?" loading onConfirm={() => {}} onCancel={onCancel} />,
     );
     try {
       const buttons = Array.from(container.querySelectorAll('button'));
       expect(buttons.every((b) => b.disabled)).toBe(true);
+      const dialog = container.querySelector('[role="alertdialog"]')!;
+      expect(document.activeElement).toBe(dialog);
+      act(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); });
+      expect(onCancel).not.toHaveBeenCalled();
+      act(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', cancelable: true })); });
+      expect(document.activeElement).toBe(dialog);
     } finally { unmount(container, root); }
+  });
+
+  it('moves focus into dialog when focused confirm becomes disabled, then restores opener after loading ends', () => {
+    const opener = document.createElement('button');
+    document.body.appendChild(opener);
+    opener.focus();
+    const props = { title: 'Delete?', onConfirm: () => {}, onCancel: () => {} };
+    const { container, root } = mount(<ConfirmDialog open {...props} />);
+    try {
+      const dialog = container.querySelector('[role="alertdialog"]')!;
+      const confirm = container.querySelector<HTMLButtonElement>('button:last-child')!;
+      expect(document.activeElement).toBe(confirm);
+
+      act(() => { root.render(<ConfirmDialog open loading {...props} />); });
+      expect(confirm.disabled).toBe(true);
+      expect(document.activeElement).toBe(dialog);
+
+      act(() => { root.render(<ConfirmDialog open {...props} />); });
+      act(() => { root.render(<ConfirmDialog open={false} {...props} />); });
+      expect(document.activeElement).toBe(opener);
+    } finally {
+      unmount(container, root);
+      opener.remove();
+    }
   });
 });
 

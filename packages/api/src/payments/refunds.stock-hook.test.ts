@@ -10,6 +10,7 @@
  * database instead of hard-throwing at module scope, so it's safe to collect
  * in the `unit` project too (mirrors refund-reconcile.test.ts).
  */
+import { isDisposablePostgresUrl } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RefundResult } from './provider.js';
 
@@ -41,7 +42,7 @@ import { env } from '../env.js';
 import { requestRefund } from './refunds.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-const isTestDb = /_test(\b|$|\?)/.test(DB);
+const isTestDb = isDisposablePostgresUrl(DB);
 
 const STORE = 'eeeeeeee-6666-6666-6666-666666666666';
 const SLUG = 'refund-stock-hook-test';

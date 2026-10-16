@@ -5,6 +5,7 @@
  * row (mustCommit) rather than fail at the 5s lock timeout of an ordinary set.
  * Runs against a *_test DB only (TRUNCATEs store CASCADE).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
@@ -15,9 +16,7 @@ import type { SezzleOps } from './gateway-recovery.js';
 import type { PaymentPolicy } from '../payments/policy/types.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`gateway-recovery capture policy test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'gateway-recovery.capture-policy.db.test.ts');
 
 vi.mock('../payments/gateway-account.js', async (original) => ({
   ...await original<typeof import('../payments/gateway-account.js')>(),

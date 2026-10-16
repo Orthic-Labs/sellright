@@ -6,6 +6,7 @@
  * Fixed by 0099: a device row belongs to the session that registered it (ON DELETE CASCADE).
  * sellright_test only (TRUNCATEs).
  */
+import { isDisposablePostgresUrl } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const sentTo = vi.hoisted(() => [] as string[]);
@@ -21,7 +22,7 @@ import { createAdminSession } from '../auth/admin-session.js';
 import { withStore } from '../db/client.js';
 import { deliverPushes, enqueuePush } from '../push/outbox.js';
 
-const isTestDb = /^\/[^/]*_test$/.test(new URL(process.env.DATABASE_URL ?? env.DATABASE_URL).pathname);
+const isTestDb = isDisposablePostgresUrl(process.env.DATABASE_URL ?? env.DATABASE_URL);
 const STORE = 'de51ce00-0000-4000-8000-000000000001';
 const ADMIN = 'de51ce00-0000-4000-8000-0000000000a1';
 const app = createApp();

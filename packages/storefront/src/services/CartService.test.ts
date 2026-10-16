@@ -8,6 +8,7 @@
  * real-mutex `navigator.locks` fake (cart-test-harness) serialises "tabs".
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { webcrypto, randomUUID } from 'node:crypto';
 import { CartService, CartError, ConvertedCartError, COUPON_SUPERSEDED, type CartLockScope } from './CartService';
 import { deferred, freshTab, installLocks, removeLocks, settle, type FakeLocks } from './cart-test-harness';
 import { placeOrder } from '~/providers/shop/checkout/checkout';
@@ -50,6 +51,7 @@ const resetService = () => CartService['resetMirror']();
 let locks: FakeLocks;
 
 beforeEach(() => {
+	vi.stubGlobal('crypto', { subtle: webcrypto.subtle, randomUUID });
 	calls.length = 0;
 	queue = [];
 	clearCookie();
@@ -77,6 +79,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	vi.restoreAllMocks();
 	vi.unstubAllGlobals();
 	removeLocks();
 	clearCookie();
@@ -113,7 +116,7 @@ describe('updateLine — revisioned absolute set', () => {
 		);
 		const res = await CartService.updateLine('SKU1', 0);
 		const get = calls.find((c) => !c.init.method || c.init.method === 'GET');
-		expect(get?.url.replace(/^https?:\/\/[^/]+/, '')).toBe('/v1/shop/cart/tok_srv');
+		expect(get?.url.replace(/^https?:\/\/[^/]+/, '')).toBe('/v1/shop/cart/tok_srv?shipCountry=US');
 		const patch = patchCalls()[0];
 		const body = JSON.parse(String(patch.init.body));
 		expect(body.expectedRevision).toBe(4);
@@ -225,33 +228,18 @@ describe('fail-closed stock', () => {
 });
 
 describe('legacy cart migration', () => {
-	it('seeds the server cart from the pre-native localStorage cart by SKU, then deletes the key', async () => {
-		localStorage.setItem('sellright_legacy_local_cart', JSON.stringify({
-			items: [
-				{ productVariantId: 'SKU1', quantity: 2, productVariant: { id: 'SKU1', name: 'Widget', product: { slug: 'widget' }, featuredAsset: { preview: '/w.jpg' } } },
-				{ sku: 'SKU2', quantity: 1, productVariant: { id: 'SKU2', name: 'Gadget', product: { slug: 'gadget' } } },
-			],
-		}));
-		const migratedCart = serverCart({
-			lines: [
-				{ sku: 'SKU1', name: 'Widget', quantity: 2, unitPrice: 2500, lineSubtotal: 5000, lineDiscount: 0, lineTotal: 5000, available: true, availableQuantity: 999 },
-				{ sku: 'SKU2', name: 'Gadget', quantity: 1, unitPrice: 1000, lineSubtotal: 1000, lineDiscount: 0, lineTotal: 1000, available: true, availableQuantity: 999 },
-			],
-			subtotal: 6000,
-		});
-		enqueue(
-			respond(200, migratedCart), // POST /cart — seeded from the legacy lines
-			respond(200, { ...migratedCart, lines: [...migratedCart.lines, { sku: 'SKU3', name: 'Thing', quantity: 1, unitPrice: 500, lineSubtotal: 500, lineDiscount: 0, lineTotal: 500, available: true, availableQuantity: 999 }], subtotal: 6500 }), // PATCH lines — appends SKU3
-		);
-
-		const res = await CartService.addLine('SKU3', 1); // any first mutation triggers ensureCart()
-		const create = calls.find((c) => c.url.endsWith('/v1/shop/cart'));
-		const body = JSON.parse(create!.init.body!);
-		expect(body.items).toEqual(expect.arrayContaining([{ sku: 'SKU1', quantity: 2 }, { sku: 'SKU2', quantity: 1 }]));
-		expect(localStorage.getItem('sellright_legacy_local_cart')).toBeNull();
-		// The mirror carries the migrated lines' enrichment (image/slug) even
-		// though the server line itself has no such fields.
-		expect(res.cart.lines.find((l) => l.sku === 'SKU1')?.slug).toBe('widget');
+	it('maps numeric legacy IDs through a committed receipt before deleting the original blob', async () => {
+		const claimId = '11111111-1111-4111-8111-111111111111';
+		vi.spyOn(crypto, 'randomUUID').mockReturnValueOnce(claimId);
+		localStorage.setItem('vendure_local_cart', JSON.stringify({ items: [{ productVariantId: '17', quantity: 2 }],
+			appliedCoupon: { code: 'SAVE', discountAmount: 99999 }, countryCode: 'CA', countryExplicitlySet: true }));
+		enqueue(respond(200, { receipt: claimId, cart: serverCart(), couponCode: 'SAVE', countryCode: 'CA', unresolved: [] }),
+			respond(200, serverCart({ revision: 2 })));
+		await CartService.addLine('SKU3', 1);
+		const request = calls.find(c => c.url.endsWith('/v1/shop/cart/legacy-migration'))!;
+		expect(JSON.parse(request.init.body!)).toEqual({ claimId, items: [{ variantId: '17', quantity: 2 }], couponCode: 'SAVE', countryCode: 'CA' });
+		expect(localStorage.getItem('vendure_local_cart')).toBeNull();
+		expect(calls.filter(c => c.url.endsWith('/v1/shop/cart'))).toHaveLength(0);
 	});
 
 	it('a missing or empty legacy cart creates a plain new cart', async () => {
@@ -484,23 +472,22 @@ describe('one cart creation across tabs (I4)', () => {
 		expect(locks.maxConcurrent).toBe(1);
 	});
 
-	it('concurrent creation with a legacy key → one seeded cart; the key is consumed once', async () => {
-		localStorage.setItem('sellright_legacy_local_cart', JSON.stringify({
-			items: [{ sku: 'SKU9', quantity: 3, productVariant: { id: 'SKU9', name: 'Legacy', product: { slug: 'legacy' } } }],
-		}));
+	it('serializes two tabs around one legacy receipt & preserves blob until response', async () => {
+		const claimId = '22222222-2222-4222-8222-222222222222';
+		vi.spyOn(crypto, 'randomUUID').mockReturnValueOnce(claimId);
+		const raw = JSON.stringify({ items: [{ productVariantId: '9', quantity: 3 }] });
+		localStorage.setItem('vendure_local_cart', raw);
 		const tabB = (await freshTab()).CartService;
 		const createRes = deferred();
 		enqueue(createRes.promise, respond(200, serverCart({ revision: 2 })), respond(200, serverCart({ revision: 3 })));
-
 		const addA = CartService.addLine('SKU1', 1);
 		const addB = tabB.addLine('SKU2', 1);
 		await waitForCalls(1);
-		createRes.resolve(await respond(200, serverCart({ lines: oneLine('SKU9', 3) })));
+		expect(localStorage.getItem('vendure_local_cart')).toBe(raw);
+		createRes.resolve(await respond(200, { receipt: claimId, cart: serverCart({ lines: oneLine('SKU9', 3) }), couponCode: null, countryCode: null, unresolved: [] }));
 		await Promise.all([addA, addB]);
-
-		expect(createCalls()).toHaveLength(1);
-		expect(JSON.parse(String(createCalls()[0].init.body)).items).toEqual([{ sku: 'SKU9', quantity: 3 }]);
-		expect(localStorage.getItem('sellright_legacy_local_cart')).toBeNull();
+		expect(calls.filter(c => c.url.endsWith('/v1/shop/cart/legacy-migration'))).toHaveLength(1);
+		expect(localStorage.getItem('vendure_local_cart')).toBeNull();
 	});
 });
 

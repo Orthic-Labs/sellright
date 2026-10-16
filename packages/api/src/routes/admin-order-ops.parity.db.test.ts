@@ -4,6 +4,7 @@
  * auto-deliver run-now, shipping method PATCH. Real Hono handlers over a
  * *_test database ONLY (wipes data).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
@@ -15,9 +16,7 @@ import { adminSettings } from './admin-settings.js';
 import { admin as adminRoutes } from './admin.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`parity test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'admin-order-ops.parity.db.test.ts');
 
 const STORE = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const SLUG = 'parity-test-store';

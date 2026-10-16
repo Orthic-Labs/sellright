@@ -12,6 +12,7 @@
  *   expiry      — expired lots hidden from `available`, written off on spend
  *   RLS         — FORCE RLS isolates stores; the ledger is append-only
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { eq, sql } from 'drizzle-orm';
@@ -34,9 +35,7 @@ import {
 } from './ledger.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`loyalty test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'loyalty.db.test.ts');
 
 const STORE = 'cccccccc-3333-3333-3333-333333333333';
 const OTHER = 'cccccccc-3333-3333-3333-3333333333ff';

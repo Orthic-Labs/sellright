@@ -12,14 +12,14 @@ import { DECLARED_CONTENT } from '~/platform/brand-data';
 import { matchDeclaredPath } from '~/platform/content-routes';
 import { contentHead } from '~/platform/head-resolve';
 import { BrandContentMount } from '~/platform/controllers/content';
-import { hasView } from '~/platform/gateway';
+import { hasContentViewFor } from '~/platform/content-view';
 import { useStoreIdentityLoader } from '~/routes/layout';
 import { head as catchAllHead, notFoundMarkup } from '../[...catchall]/index';
 
 /** True when this build declares at least one single-segment content path and has a content view to render it. */
-const HAS_SINGLE_SEGMENT_CONTENT = hasView('route.content') && DECLARED_CONTENT.some((d) => d.path.split('/').filter(Boolean).length === 1);
+const HAS_SINGLE_SEGMENT_CONTENT = DECLARED_CONTENT.some((d) => d.path.split('/').filter(Boolean).length === 1 && hasContentViewFor(d.path));
 
-const declared = (pathname: string) => (HAS_SINGLE_SEGMENT_CONTENT ? matchDeclaredPath(DECLARED_CONTENT, pathname) : null);
+const declared = (pathname: string) => (HAS_SINGLE_SEGMENT_CONTENT && hasContentViewFor(pathname) ? matchDeclaredPath(DECLARED_CONTENT, pathname) : null);
 
 /** GET and HEAD: a declared page renders; a key file is served; anything else is a plain 404. */
 const classify: RequestHandler = async ({ params, send, headers, status, url }) => {

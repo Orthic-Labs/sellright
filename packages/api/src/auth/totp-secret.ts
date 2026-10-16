@@ -15,12 +15,15 @@ import { unsafeUnscopedDb as db } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { decryptSecret, encryptSecret, type EncryptedSecret } from '../security/secret-crypto.js';
 import { log } from '../lib/logger.js';
+import { peekEnv } from '../env.js';
 
 const PREFIX = 'enc1:';
 const purpose = (adminId: string) => `admin:${adminId}:totp`;
 
 function masterKeyConfigured(): boolean {
-  return !!process.env.SELLRIGHT_MASTER_KEY?.trim();
+  const configured = peekEnv();
+  const raw = configured ? configured.SELLRIGHT_MASTER_KEY : process.env.SELLRIGHT_MASTER_KEY;
+  return !!raw?.trim();
 }
 
 let warned = false;

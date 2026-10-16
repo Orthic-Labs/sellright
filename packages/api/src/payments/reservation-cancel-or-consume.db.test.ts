@@ -3,6 +3,7 @@
  * retrieve / search / cancel seam; the settlement chokepoint, the reservation lifecycle, the sweeps and
  * the locks run for real against a *_test database.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const stripeState = new Map<string, Record<string, unknown>>();
@@ -49,9 +50,7 @@ import { applyStripeIntent, openStripePreMint, paymentIntentDeadlineMin, sweepOr
 import { release, reserve, providerQuiescent } from './reservation.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`cancel-or-consume test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'reservation-cancel-or-consume.db.test.ts');
 
 const STORE = 'cdcdcdcd-cdcd-cdcd-cdcd-cdcdcdcdcdcd';
 const SLUG = 'cancel-or-consume-test';

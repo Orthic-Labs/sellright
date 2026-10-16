@@ -2,6 +2,7 @@
  * PAR-07 tests — NMI signature verification is pure; recordDispute is the
  * DB-gated half (skipIf pattern mirrors payments/webhook-reconcile.test.ts).
  */
+import { isDisposablePostgresUrl } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { createHmac } from 'node:crypto';
 import { sql } from 'drizzle-orm';
@@ -42,7 +43,7 @@ describe('nmiAmountToCents', () => {
 
 // ── DB-gated: recordDispute persistence + operator email dedupe ──────────────
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-const isTestDb = /_test(\b|$|\?)/.test(DB);
+const isTestDb = isDisposablePostgresUrl(DB);
 const STORE = '55555555-5555-5555-5555-555555555555';
 
 async function wipe() { await pool.query('TRUNCATE store CASCADE'); }

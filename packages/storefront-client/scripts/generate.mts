@@ -26,10 +26,9 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = join(HERE, '..');
 // Cross-package relative import (dev-only: this script never ships — see
 // package.json's `generate`/`generate:check` scripts, both tsx/dev-time
-// only). @sellright/api has no publishable "exports" of its own (it's an
-// app, not a library); its OpenAPI document is the one thing this package
-// is allowed to depend on, and importing app.ts directly is the only way to
-// get it without standing up a real HTTP server in CI.
+// only). Although @sellright/api has exported library entry points, this
+// generator needs its live OpenAPI document; importing app.ts directly lets
+// it call app.request() without standing up a real HTTP server in CI.
 const API_APP_ENTRY = join(PKG_ROOT, '..', 'api', 'src', 'app.ts');
 
 async function dumpOpenApiDocument(): Promise<Record<string, unknown>> {

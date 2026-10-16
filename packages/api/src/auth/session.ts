@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { and, eq, gt } from 'drizzle-orm';
+import { and, eq, gt, isNull, or } from 'drizzle-orm';
 import type { Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { env } from '../env.js';
@@ -126,15 +126,17 @@ export async function resolveCustomer(
       sessionId: s.session.id,
       sessionExpiresAt: s.session.expiresAt,
       storeConfig: s.store.config,
+      legacyExpiresAt: s.session.legacyExpiresAt,
     })
     .from(s.session)
     .innerJoin(s.customer, eq(s.customer.id, s.session.customerId))
     .leftJoin(s.store, eq(s.store.id, s.session.storeId))
-    .where(and(eq(s.session.tokenHash, hashToken(token)), gt(s.session.expiresAt, new Date())))
+    .where(and(eq(s.session.tokenHash, hashToken(token)), gt(s.session.expiresAt, new Date()),
+      or(isNull(s.session.legacyExpiresAt), gt(s.session.legacyExpiresAt, new Date()))))
     .limit(1);
   const row = rows[0];
   if (!row) return null;
-  const policy = sessionPolicy(row.storeConfig);
+  const policy = row.legacyExpiresAt ? { ...sessionPolicy(row.storeConfig), renewable: false } : sessionPolicy(row.storeConfig);
   let renewedExpiry = renewedSessionExpiry(row.sessionExpiresAt, Date.now(), policy);
   if (!renewedExpiry && forceRenew && policy.renewable) {
     // Outside the window but explicitly asked to renew (/auth/me). Same rule:
@@ -148,7 +150,7 @@ export async function resolveCustomer(
       .set({ expiresAt: renewedExpiry })
       .where(eq(s.session.id, row.sessionId));
   }
-  const { sessionId: _sessionId, sessionExpiresAt: _sessionExpiresAt, storeConfig: _storeConfig, ...customer } = row;
+  const { sessionId: _sessionId, sessionExpiresAt: _sessionExpiresAt, storeConfig: _storeConfig, legacyExpiresAt: _legacyExpiresAt, ...customer } = row;
   return { ...customer, activeVerifications: customer.activeVerifications ?? [], isMigrated: customer.passwordHash == null };
 }
 
@@ -170,4 +172,20 @@ export function bearer(authHeader: string | undefined): string | null {
  */
 export function customerToken(c: { req: { header: (k: string) => string | undefined } }): string | null {
   return bearer(c.req.header('authorization')) ?? cookie(c, CUST_COOKIE) ?? null;
+}
+
+/** Exact imported capability only. Deleting target session permanently revokes bootstrap. */
+export async function resolveLegacySession(tx: Tx, storeId: string, token: string) {
+  const [grant] = await tx.select().from(s.legacySessionGrant).where(and(
+    eq(s.legacySessionGrant.storeId, storeId), eq(s.legacySessionGrant.tokenHash, hashToken(token)),
+    eq(s.legacySessionGrant.authenticated, true), gt(s.legacySessionGrant.expiresAt, new Date()),
+  )).limit(1);
+  if (!grant?.sessionId || !grant.customerId) return null;
+  const [existing] = await tx.select({ id: s.session.id, expiresAt: s.session.expiresAt }).from(s.session).where(and(
+    eq(s.session.id, grant.sessionId), eq(s.session.storeId, storeId), eq(s.session.customerId, grant.customerId),
+    eq(s.session.tokenHash, grant.tokenHash), gt(s.session.expiresAt, new Date()),
+  )).limit(1);
+  if (!existing) return null;
+  const customer = await resolveCustomer(tx, token);
+  return customer?.id === grant.customerId ? { customer, expiresAt: new Date(Math.min(existing.expiresAt.getTime(), grant.expiresAt.getTime())) } : null;
 }

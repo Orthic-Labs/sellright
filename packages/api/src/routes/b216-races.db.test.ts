@@ -7,6 +7,7 @@
  * (Live Activity registration after logout is covered with the device/session binding in the admin-push tests.)
  * sellright_test only (TRUNCATEs).
  */
+import { isDisposablePostgresUrl } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { OpenAPIHono } from '@hono/zod-openapi';
@@ -22,7 +23,7 @@ import { shopExtra } from './shop-extra.js';
 import { orders } from './orders.js';
 import { _setRateLimitBackendForTest, createMemoryRateLimitBackend } from '../auth/rate-limit-backend.js';
 
-const isTestDb = /^\/[^/]*_test$/.test(new URL(process.env.DATABASE_URL ?? env.DATABASE_URL).pathname);
+const isTestDb = isDisposablePostgresUrl(process.env.DATABASE_URL ?? env.DATABASE_URL);
 const STORE = 'b2160000-0000-4000-8000-000000000001';
 const SLUG = 'b216-races';
 const CUST = 'b2160000-0000-4000-8000-0000000000c1';

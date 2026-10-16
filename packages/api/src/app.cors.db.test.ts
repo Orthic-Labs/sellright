@@ -7,6 +7,7 @@
  * proves the middleware is actually mounted and reads store.config.hostnames
  * end-to-end.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from './db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { createApp } from './app.js';
@@ -15,9 +16,7 @@ import { env } from './env.js';
 import { invalidateStoreCache } from './store-context.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`app cors db test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'app.cors.db.test.ts');
 
 const STORE = 'ffffffff-ffff-ffff-ffff-ffffffffffff';
 const SLUG = 'ops1-cors-test-store';

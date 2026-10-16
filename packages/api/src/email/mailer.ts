@@ -69,6 +69,8 @@ export function invalidateStoreTransport(storeId: string): void {
  *  build (and cache) a transporter from that store's saved config +
  *  encrypted credential. No storeId and no env → no-op, exactly like before. */
 async function resolveTransport(storeId?: string): Promise<{ tx: Transporter; from?: string } | null> {
+  // Explicit disable applies to every delivery path, including cached store transports.
+  if (env.SMTP_ENABLED === 'false') return null;
   const globalTx = globalTransport();
   if (globalTx) return { tx: globalTx };
   if (!storeId) return null;

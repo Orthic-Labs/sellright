@@ -3,6 +3,7 @@
  * rest, recovery codes, authenticated password change. Real app, real DB (sellright_test ONLY —
  * TRUNCATEs), memory rate-limit backend, a test-only SELLRIGHT_MASTER_KEY.
  */
+import { isDisposablePostgresUrl } from './db/test-database-url.js';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHmac } from 'node:crypto';
 import { createApp } from './app.js';
@@ -17,14 +18,14 @@ import { _setRateLimitBackendForTest, createMemoryRateLimitBackend } from './aut
 import { newTotpSecret } from './auth/totp.js';
 import { openTotpSecret, sealLegacyTotpSecrets } from './auth/totp-secret.js';
 
-const isTestDb = /^\/[^/]*_test$/.test(new URL(process.env.DATABASE_URL ?? env.DATABASE_URL).pathname);
+const isTestDb = isDisposablePostgresUrl(process.env.DATABASE_URL ?? env.DATABASE_URL);
 const STORE = 'cdcdcdcd-cdcd-cdcd-cdcd-cdcdcdcdcd01';
 const OWNER = 'cdcdcdcd-cdcd-cdcd-cdcd-0000000000a1';
 const STAFF = 'cdcdcdcd-cdcd-cdcd-cdcd-0000000000a2';
 const MANAGER = 'cdcdcdcd-cdcd-cdcd-cdcd-0000000000a3';
 const PW = 'mfa-owner-password-1';
 const app = createApp();
-const prevKey = process.env.SELLRIGHT_MASTER_KEY;
+const prevKey = env.SELLRIGHT_MASTER_KEY;
 
 /** RFC 6238 code for `step` (independent of the implementation under test). */
 function totpAt(secretB32: string, step: number): string {
@@ -66,7 +67,7 @@ async function enrol(token: string, password = PW) {
   return { secret, recoveryCodes };
 }
 
-beforeAll(() => { process.env.SELLRIGHT_MASTER_KEY = '00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff'; });
+beforeAll(() => { env.SELLRIGHT_MASTER_KEY = '00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff'; });
 beforeEach(async () => {
   if (!isTestDb) return;
   _setRateLimitBackendForTest(createMemoryRateLimitBackend());
@@ -77,7 +78,7 @@ beforeEach(async () => {
   await pool.query(`INSERT INTO admin_user_store (admin_user_id, store_id, role) VALUES ($1, $4, 'owner'), ($2, $4, 'staff'), ($3, $4, 'manager')`, [OWNER, STAFF, MANAGER, STORE]);
 });
 afterAll(async () => {
-  if (prevKey === undefined) delete process.env.SELLRIGHT_MASTER_KEY; else process.env.SELLRIGHT_MASTER_KEY = prevKey;
+  env.SELLRIGHT_MASTER_KEY = prevKey;
   if (isTestDb) await wipe();
   _setRateLimitBackendForTest(undefined);
   await pool.end();

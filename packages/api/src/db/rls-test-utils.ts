@@ -5,11 +5,7 @@ import { expect } from 'vitest';
 export const RLS_STORE_A = '11111111-1111-1111-1111-111111111111';
 export const RLS_STORE_B = '22222222-2222-2222-2222-222222222222';
 
-export function assertTestDatabase(databaseUrl: string, label: string): void {
- if (!/_test(\b|$|\?)/.test(databaseUrl)) {
-  throw new Error(`${label} truncates data — point DATABASE_URL at a *_test database, got: ${databaseUrl.replace(/:[^:@/]+@/, ':***@')}`);
- }
-}
+export { requireDisposablePostgresUrl as assertTestDatabase } from './test-database-url.js';
 
 export function createStoreAppRunner<TSchema extends Record<string, unknown> = Record<string, never>>(
  appPool: Pool,

@@ -98,7 +98,7 @@ function storeResolutionMiddleware(opts: Pick<StorefrontClientOptions, 'storeSlu
   return {
     onRequest({ request }) {
       if (opts.storeSlug) request.headers.set('x-store-slug', opts.storeSlug);
-      else if (opts.forwardedHost) request.headers.set('x-forwarded-host', opts.forwardedHost);
+      else if (!isBrowser && opts.forwardedHost) request.headers.set('x-forwarded-host', opts.forwardedHost);
       return undefined;
     },
   };

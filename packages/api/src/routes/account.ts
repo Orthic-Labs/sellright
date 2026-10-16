@@ -486,6 +486,11 @@ account.openapi(
     type ErasureOutcome = 'unauth' | 'unverified' | 'active_subscription' | 'ok';
     const peekedId = await withStore(st.id, async (tx) => (await me(tx, customerToken(c)))?.id ?? null);
     const out: ErasureOutcome = peekedId === null ? 'unauth' : await withLockedSet(st.id, { kind: 'customer', customerId: peekedId }, async (tx): Promise<ErasureOutcome> => {
+      // Commerce locks come first; then serialize credentials, token claims and
+      // session creation before me() can refresh a session that erasure removes.
+      const [lockedCustomer] = await tx.select({ id: s.customer.id }).from(s.customer)
+        .where(and(eq(s.customer.storeId, st.id), eq(s.customer.id, peekedId))).limit(1).for('update');
+      if (!lockedCustomer) return 'unauth';
       const cust = await me(tx, customerToken(c));
       if (!cust || cust.id !== peekedId) return 'unauth';
       // Erasure affects email-keyed mail and guest orders, so require proof of

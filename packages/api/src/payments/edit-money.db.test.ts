@@ -3,6 +3,7 @@
  * refunds don't count as merchandise refunds in dashboard reconciliation, and
  * paid-order edits reconcile license entitlements. *_test DB only (TRUNCATE).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
@@ -17,7 +18,7 @@ import { licensedLineEditViolations } from '../licensing/edit-reconcile.js';
 import { previewOrderEdit } from '../orders/order-edit-service.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) throw new Error(`edit-money test truncates data — use a *_test DB, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
+assertTestDatabase(DB, 'edit-money.db.test.ts');
 
 const STORE = 'e2000000-0000-0000-0000-0000000e2001';
 const wipe = () => pool.query('TRUNCATE store CASCADE');

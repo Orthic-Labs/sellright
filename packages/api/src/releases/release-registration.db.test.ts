@@ -3,6 +3,7 @@
  * Drives POST /v1/admin/apps/releases through the real handler with seeded
  * admin sessions and a plugin-supplied policy. *_test database ONLY (TRUNCATEs).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { createHash } from 'node:crypto';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
@@ -17,9 +18,7 @@ import { releaseRegistrationRoutes } from './release-registration.js';
 import type { ReleaseRegistrationBody } from './registration-policy.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error('release-registration test truncates data — point DATABASE_URL at a *_test database');
-}
+assertTestDatabase(DB, 'release-registration.db.test.ts');
 
 const STORE_A = 'abababab-abab-abab-abab-abababababa1';
 const STORE_B = 'abababab-abab-abab-abab-abababababb2';

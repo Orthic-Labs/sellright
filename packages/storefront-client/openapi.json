@@ -40,6 +40,7 @@
           "INVALID_PAYMENT_REQUEST",
           "INVITE_INVALID",
           "LEGAL_ACCEPTANCE_REQUIRED",
+          "LEGACY_MIGRATION_CONFLICT",
           "LICENSE_KEY_MISSING",
           "LICENSE_NOT_ACTIVE",
           "LICENSE_NOT_FOUND",
@@ -1331,6 +1332,266 @@
                     "unavailable",
                     "coupon"
                   ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/shop/cart/legacy-migration": {
+      "post": {
+        "summary": "Adopt a frozen Vendure cart or reconcile a browser snapshot once",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "claimId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "items": {
+                    "type": "array",
+                    "nullable": true,
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "variantId": {
+                          "type": "string",
+                          "pattern": "^\\d{1,20}$"
+                        },
+                        "quantity": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9999
+                        }
+                      },
+                      "required": [
+                        "variantId",
+                        "quantity"
+                      ]
+                    },
+                    "maxItems": 200
+                  },
+                  "couponCode": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 200
+                  },
+                  "countryCode": {
+                    "type": "string",
+                    "nullable": true,
+                    "pattern": "^[A-Z]{2}$"
+                  }
+                },
+                "required": [
+                  "claimId",
+                  "items"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Committed receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "receipt": {
+                      "type": "string"
+                    },
+                    "cart": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "currency": {
+                          "type": "string"
+                        },
+                        "lines": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "sku": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "unitPrice": {
+                                "type": "integer"
+                              },
+                              "quantity": {
+                                "type": "integer"
+                              },
+                              "lineSubtotal": {
+                                "type": "integer"
+                              },
+                              "lineDiscount": {
+                                "type": "integer"
+                              },
+                              "lineTotal": {
+                                "type": "integer"
+                              },
+                              "available": {
+                                "type": "boolean"
+                              },
+                              "availableQuantity": {
+                                "type": "integer",
+                                "nullable": true
+                              }
+                            },
+                            "required": [
+                              "sku",
+                              "name",
+                              "unitPrice",
+                              "quantity",
+                              "lineSubtotal",
+                              "lineDiscount",
+                              "lineTotal",
+                              "available",
+                              "availableQuantity"
+                            ]
+                          }
+                        },
+                        "subtotal": {
+                          "type": "integer"
+                        },
+                        "discountTotal": {
+                          "type": "integer"
+                        },
+                        "shippingTotal": {
+                          "type": "integer"
+                        },
+                        "taxTotal": {
+                          "type": "integer"
+                        },
+                        "grandTotal": {
+                          "type": "integer"
+                        },
+                        "unavailable": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "coupon": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "code": {
+                              "type": "string"
+                            },
+                            "applied": {
+                              "type": "boolean"
+                            },
+                            "reason": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "code",
+                            "applied"
+                          ]
+                        },
+                        "pointsToEarn": {
+                          "type": "integer"
+                        },
+                        "token": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string"
+                        },
+                        "email": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "customerId": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "revision": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "currency",
+                        "lines",
+                        "subtotal",
+                        "discountTotal",
+                        "shippingTotal",
+                        "taxTotal",
+                        "grandTotal",
+                        "unavailable",
+                        "coupon",
+                        "token",
+                        "status",
+                        "email",
+                        "customerId",
+                        "revision"
+                      ]
+                    },
+                    "couponCode": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "countryCode": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "unresolved": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "variantId": {
+                            "type": "string"
+                          },
+                          "quantity": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "variantId",
+                          "quantity"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "receipt",
+                    "cart",
+                    "couponCode",
+                    "countryCode",
+                    "unresolved"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Source cart already changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
                 }
               }
             }
@@ -10580,6 +10841,17 @@
           },
           {
             "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
+            },
+            "required": false,
+            "name": "excludeDemo",
+            "in": "query"
+          },
+          {
+            "schema": {
               "type": "boolean",
               "nullable": true,
               "default": false
@@ -11469,6 +11741,16 @@
           },
           "401": {
             "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — write access required",
             "content": {
               "application/json": {
                 "schema": {
@@ -18460,11 +18742,18 @@
                     "url": {
                       "type": "string",
                       "nullable": true
+                    },
+                    "listId": {
+                      "type": "integer",
+                      "nullable": true,
+                      "minimum": 0,
+                      "exclusiveMinimum": true
                     }
                   },
                   "required": [
                     "configured",
-                    "url"
+                    "url",
+                    "listId"
                   ]
                 }
               }
@@ -18501,6 +18790,11 @@
                   "apiToken": {
                     "type": "string",
                     "minLength": 1
+                  },
+                  "listId": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "exclusiveMinimum": true
                   }
                 },
                 "required": [
@@ -27031,6 +27325,80 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/shop/contact/confirm-legacy": {
+      "get": {
+        "summary": "Confirm a pre-cutover contact submission",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "data",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "ts",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "sig",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Confirmed (or already confirmed)",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed link",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Bad signature or disabled binding",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Expired link or compatibility horizon",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
                 }
               }
             }

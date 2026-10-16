@@ -4,6 +4,7 @@
  * subquery whose bare `"id"` bound to order.id, so every row read 0 / $0.
  * Runs against a *_test database ONLY (wipes data).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
@@ -13,9 +14,7 @@ import { createAdminSession } from '../auth/admin-session.js';
 import { adminReports } from './admin-reports.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`customers list test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'admin-reports.customers.db.test.ts');
 
 const STORE = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const SLUG = 'customers-list-test-store';

@@ -185,8 +185,9 @@ export function startJobScheduler(extraJobs: ReadonlyArray<PluginJob & { plugin:
         for (const p of stale) {
           if (p.storeSlug !== env.STORE_SLUG) continue; // this deployment only publishes its own store
           try {
-            await withLeaderLock('catalog-manifest', () => publishCatalogManifest({ outDir: env.CATALOG_DIR!, storeSlug: p.storeSlug }), p.storeSlug);
-            await clearManifestRegenerationPending(p.storeId);
+            const result = await withLeaderLock('catalog-manifest', () => publishCatalogManifest({ outDir: env.CATALOG_DIR!, storeSlug: p.storeSlug }), p.storeSlug);
+            if (!result) continue; // another publisher owns this tick; retain durable retry
+            await clearManifestRegenerationPending(p.storeId, p.token);
             jobLog(`[jobs:catalog-manifest-drain] recovered a lost regeneration for ${p.storeSlug} (pending since ${p.requestedAt.toISOString()})`);
           } catch (e) {
             logErr.error('catalog-manifest-drain retry failed — marker left in place for the next pass', e, { storeSlug: p.storeSlug });

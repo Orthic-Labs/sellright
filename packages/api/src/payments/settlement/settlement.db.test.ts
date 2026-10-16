@@ -3,6 +3,7 @@
  * Identity is the provider/business fact, effects are created once, entitlement follows the frozen
  * invoice classification. Runs against a *_test database only (TRUNCATEs store CASCADE).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq, sql } from 'drizzle-orm';
 import { pool, withStore } from '../../db/client.js';
@@ -15,9 +16,7 @@ import { paidOrderEffects, recordSettlementOperation } from './record.js';
 import { defaultInvoiceHistoryPolicy, setInvoiceHistoryPolicy, type InvoiceDispositionDecision } from './invoice.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`settlement test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'settlement.db.test.ts');
 
 const STORE = 'ee000000-0000-0000-0000-0000000005e1';
 const VARIANT = 'ee000000-0000-0000-0000-0000000005e2';

@@ -41,6 +41,7 @@ import { contactConfirm, contactTeamNotice, contactAck } from '../email/template
 import { env } from '../env.js';
 import { log } from '../lib/logger.js';
 import { apiErrorSchema, errJson } from '../lib/api-error.js';
+import { legacyContactBinding, legacyContactMarkerId, verifyLegacyContact, type LegacyContactSubmission } from './contact-legacy.js';
 
 export const contactRoutes = new OpenAPIHono();
 
@@ -131,6 +132,63 @@ const ContactIn = z.object({
   honeypot: z.string().optional(),
   website: z.string().optional(),
 });
+
+async function enqueueContactDelivery(tx: Tx, st: { id: string; name: string; currency: string; config: unknown }, row: LegacyContactSubmission, dedupePrefix?: string): Promise<void> {
+  const ctx = { name: st.name, currency: st.currency, storefrontUrl: env.STOREFRONT_URL, fromEmail: env.SMTP_FROM };
+  const team = contactRecipient(st.config);
+  await enqueueEmail(tx, st.id, {
+    kind: 'contact_team', recipient: team,
+    payload: { to: team, from: ctx.fromEmail, ...contactTeamNotice(ctx, row) },
+    ...(dedupePrefix ? { dedupeKey: `${dedupePrefix}:team` } : {}),
+  });
+  await enqueueEmail(tx, st.id, {
+    kind: 'contact_ack', recipient: row.email,
+    payload: { to: row.email, from: ctx.fromEmail, ...contactAck(ctx, { name: row.name, subject: row.subject }) },
+    ...(dedupePrefix ? { dedupeKey: `${dedupePrefix}:ack` } : {}),
+  });
+}
+
+// Cutover-only adapter for existing /verify-submission?data&ts&sig emails.
+// Edge preserves the old URL/query & routes to this handler. Tenant selection
+// uses the normal request context; query parameters never choose a store.
+contactRoutes.openapi(
+  createRoute({
+    method: 'get', path: '/v1/shop/contact/confirm-legacy',
+    summary: 'Confirm a pre-cutover contact submission',
+    request: { query: z.object({ data: z.string().min(1), ts: z.string(), sig: z.string() }).strict() },
+    responses: {
+      200: { description: 'Confirmed (or already confirmed)', content: { 'text/html': { schema: z.string() } } },
+      400: { description: 'Malformed link', content: { 'text/html': { schema: z.string() } } },
+      403: { description: 'Bad signature or disabled binding', content: { 'text/html': { schema: z.string() } } },
+      410: { description: 'Expired link or compatibility horizon', content: { 'text/html': { schema: z.string() } } },
+    },
+  }),
+  async (c) => {
+    c.header('Cache-Control', 'no-store');
+    c.header('Referrer-Policy', 'no-referrer');
+    const st = await resolveStoreFromCtx(c).catch(() => null);
+    if (!st) return c.html(html('Invalid link', 'This confirmation link is invalid.'), 400);
+    const input = c.req.valid('query');
+    const verified = verifyLegacyContact(input, legacyContactBinding(st.id));
+    if (!verified.ok) {
+      return c.html(html(verified.status === 410 ? 'Link expired' : 'Invalid link',
+        verified.status === 410 ? 'This confirmation link has expired. Please submit the form again.' : 'This confirmation link is invalid.'), verified.status);
+    }
+    const key = legacyContactMarkerId(st.id, input.sig);
+    const row = verified.submission;
+    await withStore(st.id, async (tx) => {
+      // The PK claim, delivered row & both outbox entries share one transaction.
+      // Imported legacy Redis markers use this same key and suppress all sends.
+      const claim = await tx.execute(sql`INSERT INTO processed_event (id, store_id, type)
+        VALUES (${key}, ${st.id}, 'legacy_contact_confirm') ON CONFLICT DO NOTHING RETURNING id`);
+      if (!claim.rows.length) return;
+      await tx.execute(sql`INSERT INTO contact_submission (store_id, name, email, subject, message, status, delivered_at)
+        VALUES (${st.id}, ${row.name}, ${row.email}, ${row.subject}, ${row.message}, 'delivered', now())`);
+      await enqueueContactDelivery(tx, st, row, key);
+    });
+    return c.html(html('Message confirmed', "Your message has been confirmed and delivered. We'll get back to you soon."), 200);
+  },
+);
 
 // ── POST /v1/shop/contact ──────────────────────────────────────────────────
 contactRoutes.openapi(
@@ -265,20 +323,7 @@ contactRoutes.openapi(
       const row = claimed.rows[0] as { name: string; email: string; subject: string; message: string } | undefined;
       if (!row) return false; // unknown id under this tenant, or already delivered
 
-      const ctx = { name: st.name, currency: st.currency, storefrontUrl: env.STOREFRONT_URL, fromEmail: env.SMTP_FROM };
-      const team = contactRecipient(st.config);
-      const notice = contactTeamNotice(ctx, row);
-      await enqueueEmail(tx, st.id, {
-        kind: 'contact_team',
-        recipient: team,
-        payload: { to: team, from: ctx.fromEmail, ...notice },
-      });
-      const ack = contactAck(ctx, { name: row.name, subject: row.subject });
-      await enqueueEmail(tx, st.id, {
-        kind: 'contact_ack',
-        recipient: row.email,
-        payload: { to: row.email, from: ctx.fromEmail, ...ack },
-      });
+      await enqueueContactDelivery(tx, st, row);
       return true;
     });
 

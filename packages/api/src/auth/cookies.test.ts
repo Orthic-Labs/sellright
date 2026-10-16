@@ -1,6 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { _resetEnvForTest, envOrigin, initEnv } from '../env.js';
 import {
   shouldSetSecureCookie,
+  setAuthCookies,
+  setCustomerCookies,
+  setFederatedNonceCookie,
   csrfValid,
   customerCsrfValid,
   newCsrf,
@@ -115,5 +119,49 @@ describe('customerCsrfValid', () => {
         }),
       ),
     ).toBe(true);
+  });
+});
+
+
+describe('cookie Secure config source', () => {
+  beforeEach(() => { _resetEnvForTest(); });
+  afterEach(() => { _resetEnvForTest(); vi.unstubAllEnvs(); });
+
+  function cookieContext() {
+    const values: string[] = [];
+    return {
+      values,
+      req: { header: (_key: string) => undefined },
+      header: (_key: string, value: string) => { values.push(value); },
+    };
+  }
+
+  it('sets Secure from explicit production config when ambient NODE_ENV is development', () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    initEnv({ NODE_ENV: 'production', DATABASE_URL: 'postgres://unit:unit@localhost/merchant', STOREFRONT_URL: 'https://shop.example.test' });
+    const c = cookieContext();
+    setAuthCookies(c, 'admin-token', 'csrf');
+    setCustomerCookies(c, 'customer-token', 'csrf');
+    setFederatedNonceCookie(c, 'nonce', 60);
+    expect(c.values).toHaveLength(5);
+    expect(c.values.every((value) => value.includes('; Secure'))).toBe(true);
+    expect(process.env.NODE_ENV).toBe('development');
+  });
+
+  it('uses explicit development config even when ambient NODE_ENV is production', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    initEnv({ NODE_ENV: 'development' });
+    const c = cookieContext();
+    setFederatedNonceCookie(c, 'nonce', 60);
+    expect(c.values[0]).not.toContain('; Secure');
+  });
+
+  it('preserves standalone ambient behavior without parsing database config', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('DATABASE_URL', 'invalid-url');
+    const c = cookieContext();
+    setFederatedNonceCookie(c, 'nonce', 60);
+    expect(c.values[0]).toContain('; Secure');
+    expect(envOrigin()).toBeUndefined();
   });
 });

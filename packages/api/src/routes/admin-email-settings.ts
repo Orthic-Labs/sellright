@@ -7,7 +7,7 @@
  * credential encrypted in store_secret) become editable.
  */
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { env } from '../env.js';
@@ -38,7 +38,10 @@ adminEmailSettings.openapi(
     const [row] = await withStore(st.storeId, (tx) => tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1));
     const cfg = smtpConfigFromStoreConfig(row?.config);
     const credentialRows = await withStore(st.storeId, (tx) => tx.select({ last4: s.storeSecret.last4 }).from(s.storeSecret)
-      .where(eq(s.storeSecret.storeId, st.storeId)).limit(1));
+      .where(and(
+        eq(s.storeSecret.storeId, st.storeId), eq(s.storeSecret.provider, 'smtp'),
+        eq(s.storeSecret.mode, 'default'), eq(s.storeSecret.field, 'authCredential'),
+      )).limit(1));
     return c.json({ envManaged: false, config: cfg, credentialConfigured: credentialRows.some((r) => r.last4) }, 200);
   }),
 );

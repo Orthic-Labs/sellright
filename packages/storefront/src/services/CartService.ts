@@ -18,7 +18,10 @@
  * Cart/CartLine types, and the fail-closed stock rules.
  */
 import { sellright, SellRightError } from '~/sellright/client';
+import { srMe, srErrorStatus, srLegacyCartMigration } from '~/utils/sellright';
+import { CountryPreferenceService } from './CountryPreferenceService';
 import { classifyOrderState } from './order-state';
+import { theme } from '~/theme/theme.config';
 import {
   EMPTY_CART,
   type Cart,
@@ -32,7 +35,11 @@ import {
 
 const TOKEN_COOKIE = 'sr_cart';
 /** Pre-native cart key, read exactly once for a lossless one-time migration. */
-const LEGACY_CART_KEY = 'sellright_legacy_local_cart';
+export const LEGACY_CART_KEY = 'vendure_local_cart';
+const LEGACY_CLAIM_KEY = 'sr_legacy_cart_claim';
+const CART_INTENT_KEY = 'sr_cart_intent';
+// SSR carries only presence of legacy transport; this flag never authorizes adoption.
+const LEGACY_PENDING_COOKIE = 'sr_legacy_cart';
 /** The single origin-wide lock every cart operation of a cooperating tab runs under. */
 const CART_LOCK = 'sr-cart';
 /** Reason returned by `applyCoupon` when a newer cart request replaced it mid-flight. */
@@ -92,7 +99,30 @@ export interface CartLockScope {
   retire(requestToken: string): void;
 }
 
-type LegacySeedLine = { sku: string; quantity: number; enrichment: CartLineEnrichment };
+export interface LegacyCartSnapshot {
+  items: Array<{ variantId: string; quantity: number }>;
+  couponCode: string | null;
+  countryCode: string | null;
+  countryExplicit: boolean;
+}
+/** Only intent survives. Cached money, discounts & stock are never read. */
+export function parseLegacyCartSnapshot(raw: string): LegacyCartSnapshot {
+  const value = JSON.parse(raw);
+  if (!value || !Array.isArray(value.items) || value.items.length > 200) throw new CartError('legacy_invalid', 'Saved cart needs reconciliation');
+  const items = value.items.map((item: { productVariantId?: unknown; productVariant?: { id?: unknown }; quantity?: unknown }) => {
+    const variantId = String(item?.productVariantId ?? item?.productVariant?.id ?? '');
+    const quantity = item?.quantity;
+    if (!/^\d{1,20}$/.test(variantId) || typeof quantity !== 'number' || !Number.isSafeInteger(quantity) || quantity < 1 || quantity > 9999) {
+      throw new CartError('legacy_invalid', 'Saved cart contains an unresolved item; original cart is preserved');
+    }
+    return { variantId, quantity };
+  });
+  return { items,
+    couponCode: typeof value.appliedCoupon?.code === 'string' && value.appliedCoupon.code.length <= 200 ? value.appliedCoupon.code : null,
+    countryCode: typeof value.countryCode === 'string' && /^[A-Z]{2}$/.test(value.countryCode) ? value.countryCode : null,
+    countryExplicit: value.countryExplicitlySet === true,
+  };
+}
 
 const isStaleConflict = (c: CartConflict | null): c is CartConflict => !!c && (c.code === 'stale' || c.code === 'revision_required');
 
@@ -296,55 +326,78 @@ export class CartService {
     });
   }
 
-  // ── one-time legacy migration ────────────────────────────────────────
-  /** Reads the pre-native `sellright_legacy_local_cart` key exactly once, converts its
-   *  lines to `{ sku, quantity }` by SKU, carries over its display
-   *  enrichment, and deletes the key immediately — deleting it is what makes
-   *  this single-shot: no key means nothing left to migrate, ever again. */
-  private static consumeLegacyCart(): LegacySeedLine[] {
-    if (typeof window === 'undefined') return [];
-    let raw: string | null;
+  /** Legacy work needs a write lock; ordinary native boot retains its read-only browser fallback. */
+  static bootstrap(): Promise<CartMutationResult> {
+    this.restoreIntent();
+    if (!this.hasLegacyIntent()) return this.refresh();
+    return this.exclusive(async () => {
+      await this.migrateLegacyInLock(true);
+      return this.refreshInLock();
+    });
+  }
+
+  private static hasLegacyTransport(): boolean {
+    return typeof document !== 'undefined' && /(?:^|;\s*)(?:authToken=[^;]+|sr_legacy_cart=1)(?:;|$)/.test(document.cookie);
+  }
+
+  private static hasLegacyIntent(): boolean {
+    if (theme.isDemo || typeof window === 'undefined') return false;
+    if (this.hasLegacyTransport()) return true;
+    try { return localStorage.getItem(LEGACY_CART_KEY) !== null; } catch { return false; }
+  }
+
+  /** Persist coupon intent only; every read still revalidates it with current server facts. */
+  private static persistIntent(): void {
+    try { localStorage.setItem(CART_INTENT_KEY, JSON.stringify({ token: this.readTokenCookie(), couponCode: this.couponCode })); } catch { /* Current tab keeps intent. */ }
+  }
+
+  private static restoreIntent(): void {
     try {
-      raw = localStorage.getItem(LEGACY_CART_KEY);
-    } catch {
-      return [];
+      const value = JSON.parse(localStorage.getItem(CART_INTENT_KEY) ?? 'null');
+      if (value?.token === this.readTokenCookie() && (typeof value.couponCode === 'string' || value.couponCode === null)) this.couponCode = value.couponCode;
+    } catch { /* Untrusted transport never overrides server pricing. */ }
+  }
+
+  private static async bootstrapAuth(): Promise<void> {
+    try { await srMe(); } catch (error) { if (srErrorStatus(error) !== 401) throw error; }
+  }
+
+  private static async migrateLegacyInLock(includeSource = false): Promise<boolean> {
+    this.assertHeld();
+    if (!this.hasLegacyIntent()) return false;
+    // Storage failure is surfaced before any server write; never lose a replay capability.
+    const raw = localStorage.getItem(LEGACY_CART_KEY);
+    if (raw === null && (!includeSource || !this.hasLegacyTransport() || this.readTokenCookie())) return false;
+    const snapshot = raw === null ? null : parseLegacyCartSnapshot(raw);
+    if (this.hasLegacyTransport()) await this.bootstrapAuth();
+    const bytes = new TextEncoder().encode(raw ?? '\0');
+    const fingerprint = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(byte => byte.toString(16).padStart(2, '0')).join('');
+    let claimId: string;
+    const priorRaw = localStorage.getItem(LEGACY_CLAIM_KEY);
+    let prior: { fingerprint?: unknown; claimId?: unknown } | null = null;
+    try { prior = priorRaw ? JSON.parse(priorRaw) : null; } catch { /* New opaque receipt below. */ }
+    if (prior?.fingerprint === fingerprint && typeof prior.claimId === 'string' && /^[0-9a-f-]{36}$/i.test(prior.claimId)) claimId = prior.claimId;
+    else {
+      claimId = crypto.randomUUID();
+      localStorage.setItem(LEGACY_CLAIM_KEY, JSON.stringify({ fingerprint, claimId }));
     }
-    if (!raw) return [];
-    try {
-      localStorage.removeItem(LEGACY_CART_KEY);
-    } catch {
-      /* best-effort cleanup — a stuck key just gets migrated again, harmlessly */
+    const receipt = await srLegacyCartMigration({ claimId, items: snapshot?.items ?? null,
+      couponCode: snapshot?.couponCode, countryCode: snapshot?.countryCode });
+    if (receipt.receipt !== claimId || (raw !== null && !receipt.cart)) throw new CartError('legacy_receipt', 'Saved cart transfer has no confirmed receipt');
+    if (receipt.cart) {
+      this.writeTokenCookie(receipt.cart.token);
+      this.couponCode = receipt.couponCode;
+      this.persistIntent();
+      this.install(receipt.cart, receipt.cart.token);
     }
-    let parsed: any;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      return [];
+    if (receipt.countryCode) {
+      if (snapshot?.countryExplicit) CountryPreferenceService.setCountry(receipt.countryCode);
+      else CountryPreferenceService.setCountryFromGeolocation(receipt.countryCode);
     }
-    const items: any[] = Array.isArray(parsed?.items) ? parsed.items : [];
-    const seen = new Set<string>();
-    const lines: LegacySeedLine[] = [];
-    for (const item of items) {
-      const sku: string | undefined = item?.sku ?? item?.productVariantId ?? item?.productVariant?.id;
-      const quantity = Number(item?.quantity);
-      if (!sku || seen.has(sku) || !Number.isFinite(quantity) || quantity <= 0) continue;
-      seen.add(sku);
-      lines.push({
-        sku,
-        quantity,
-        enrichment: {
-          slug: item?.productVariant?.product?.slug,
-          // One-time read of the PRE-MIGRATION persisted cart shape (legacy
-          // field names) — this is data written by the old storefront, not an
-          // API field. Intentionally kept verbatim; do not "modernize".
-          image: item?.productVariant?.featuredAsset?.preview ?? null,
-          name: item?.productVariant?.name,
-          isPreOrder: !!item?.isPreOrder,
-          shipDate: item?.shipDate,
-        },
-      });
-    }
-    return lines;
+    document.cookie = `${LEGACY_PENDING_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax`;
+    // If an old tab edited the blob during this request, preserve its newer intent.
+    if (raw !== null && localStorage.getItem(LEGACY_CART_KEY) === raw) localStorage.removeItem(LEGACY_CART_KEY);
+    return !!receipt.cart;
   }
 
   // ── cart lifecycle ────────────────────────────────────────────────────
@@ -354,15 +407,10 @@ export class CartService {
     return this.readTokenCookie() ?? (await this.createCart());
   }
 
-  /** The ONLY cookie writer. Consumes the legacy key before the POST: if the response is lost the legacy lines are
-   *  lost rather than duplicated into an orphan cart a later donor scan could fold. No automatic retry of the create. */
+  /** Existing browser blobs transfer through an atomic receipt before ordinary creation. */
   private static async createCart(): Promise<string> {
-    const legacy = this.consumeLegacyCart();
-    for (const l of legacy) this.setEnrichment(l.sku, l.enrichment);
-
-    const { data } = await sellright().POST('/v1/shop/cart', {
-      body: legacy.length ? { items: legacy.map(({ sku, quantity }) => ({ sku, quantity })) } : {},
-    });
+    if (await this.migrateLegacyInLock()) return this.readTokenCookie()!;
+    const { data } = await sellright().POST('/v1/shop/cart', { body: {} });
     if (!data) throw new CartError(undefined, 'Could not create a cart');
     this.writeTokenCookie(data.token);
     this.install(data, data.token);
@@ -374,7 +422,7 @@ export class CartService {
     if (this.cart.token === token && this.cart.revision) return this.cart.revision;
     const seq = this.claimSeq();
     const { data } = await sellright().GET('/v1/shop/cart/{token}', {
-      params: { path: { token }, query: this.couponCode ? { couponCode: this.couponCode } : {} },
+      params: { path: { token }, query: { ...(this.couponCode ? { couponCode: this.couponCode } : {}), shipCountry: CountryPreferenceService.getCountry() } },
     });
     if (!data) throw emptyCartResponse();
     // The revision is still the right base for the mutation that asked for it;
@@ -516,7 +564,7 @@ export class CartService {
     const seq = this.claimSeq();
     try {
       const { data } = await sellright().GET('/v1/shop/cart/{token}', {
-        params: { path: { token }, query: this.couponCode ? { couponCode: this.couponCode } : {} },
+        params: { path: { token }, query: { ...(this.couponCode ? { couponCode: this.couponCode } : {}), shipCountry: CountryPreferenceService.getCountry() } },
       });
       if (!data) throw emptyCartResponse();
       // Superseded by a newer read/mutation/retirement: its result is the truth.
@@ -535,7 +583,7 @@ export class CartService {
     const seq = this.claimSeq();
     try {
       const { data } = await sellright().GET('/v1/shop/cart/{token}', {
-        params: { path: { token }, query: this.couponCode ? { couponCode: this.couponCode } : {} },
+        params: { path: { token }, query: { ...(this.couponCode ? { couponCode: this.couponCode } : {}), shipCountry: CountryPreferenceService.getCountry() } },
       });
       if (!data) throw emptyCartResponse();
       if (!this.isCurrent(seq)) return { cart: this.cart, dropped: [] };
@@ -565,7 +613,7 @@ export class CartService {
     const seq = this.claimSeq();
     try {
       const { data } = await sellright().GET('/v1/shop/cart/{token}', {
-        params: { path: { token }, query: this.couponCode ? { couponCode: this.couponCode } : {} },
+        params: { path: { token }, query: { ...(this.couponCode ? { couponCode: this.couponCode } : {}), shipCountry: CountryPreferenceService.getCountry() } },
       });
       if (!data) throw emptyCartResponse();
       if (this.isCurrent(seq)) this.install(data, token);
@@ -593,6 +641,7 @@ export class CartService {
       if (!this.isCurrent(seq) || this.install(data, token) === null) return { valid: false, reason: COUPON_SUPERSEDED };
       if (data.coupon?.applied) {
         this.couponCode = data.coupon.code;
+        this.persistIntent();
         return { valid: true };
       }
       return { valid: false, reason: data.coupon?.reason ?? 'Invalid or expired code' };
@@ -603,6 +652,7 @@ export class CartService {
   static removeCoupon(): Promise<CartMutationResult> {
     return this.exclusive(async () => {
       this.couponCode = null;
+      this.persistIntent();
       const token = this.readTokenCookie();
       if (!token) return { cart: this.cart, dropped: [] };
       const seq = this.claimSeq();
@@ -652,7 +702,7 @@ export class CartService {
       const seq = this.claimSeq();
       try {
         const { data } = await sellright().GET('/v1/shop/cart/{token}', {
-          params: { path: { token }, query: this.couponCode ? { couponCode: this.couponCode } : {} },
+          params: { path: { token }, query: { ...(this.couponCode ? { couponCode: this.couponCode } : {}), shipCountry: CountryPreferenceService.getCountry() } },
         });
         if (!data) return null;
         // The revision/status are facts about THIS response and stay valid as

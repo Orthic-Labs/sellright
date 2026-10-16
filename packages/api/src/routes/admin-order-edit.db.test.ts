@@ -5,6 +5,7 @@
  * service-level behaviour (every op / settlement path) is covered in
  * orders/order-edit.db.test.ts; this file proves the HTTP contract.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
@@ -16,7 +17,7 @@ import { admin as adminRoutes } from './admin.js';
 import { adminOrders } from './admin-orders.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) throw new Error(`order-edit route test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
+assertTestDatabase(DB, 'admin-order-edit.db.test.ts');
 
 const STORE = 'e1000000-0000-0000-0000-0000000e0002';
 const SLUG = 'orderedit-route';

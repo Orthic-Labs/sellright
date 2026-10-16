@@ -181,6 +181,7 @@ export const session = pgTable('session', {
   customerId: uuid().references(() => customer.id),
   adminUserId: uuid().references(() => adminUser.id),
   tokenHash: text().notNull().unique(),
+  legacyExpiresAt: timestamp({ withTimezone: true }),
   expiresAt: timestamp({ withTimezone: true }).notNull(),
   // WS-B follow-up: when THIS session last re-verified the admin's password
   // (+ TOTP, if enabled). Step-up-gated routes (GET /v1/admin/system/

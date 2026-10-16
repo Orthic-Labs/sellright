@@ -20,6 +20,7 @@
  *
  * Runs against a *_test DB only (TRUNCATEs store CASCADE).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { createHash } from 'node:crypto';
@@ -39,9 +40,7 @@ vi.mock('../security/turnstile.js', () => ({
 }));
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`magic-link test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'magic-link.db.test.ts');
 
 const STORE_ON = 'eeeeeeee-1111-1111-1111-111111111111';
 const STORE_OFF = 'eeeeeeee-2222-2222-2222-222222222222';

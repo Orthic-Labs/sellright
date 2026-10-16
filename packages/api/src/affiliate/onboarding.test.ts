@@ -2,6 +2,7 @@
  * Affiliate automation tests (DB-gated). Promotion-bound onboarding,
  * same-email no-op, recipient-change rotation + welcome/rotation mail enqueue.
  */
+import { isDisposablePostgresUrl } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { reassignAffiliate, syncPromotionAffiliate } from './onboarding.js';
@@ -9,7 +10,7 @@ import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-const isTestDb = /_test(\b|$|\?)/.test(DB);
+const isTestDb = isDisposablePostgresUrl(DB);
 const STORE = '77777777-7777-7777-7777-777777777777';
 
 async function wipe() { await pool.query('TRUNCATE store CASCADE'); }

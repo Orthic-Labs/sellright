@@ -16,6 +16,7 @@
  *
  * Runs against a *_test DB only (TRUNCATEs store CASCADE).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq, sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
@@ -27,9 +28,7 @@ import { bootstrapAccountAndQueueAccessMail, ACCOUNT_ACCESS_KIND } from './accou
 import type { PaymentResult } from '../payments/provider.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`account-bootstrap test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'account-bootstrap.db.test.ts');
 
 const STORE_A = 'abababab-0000-4000-8000-00000000000a';
 const STORE_B = 'abababab-0000-4000-8000-00000000000b';

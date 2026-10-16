@@ -2,6 +2,7 @@
  * PAR-04 tests — provider adapter runs against an injected mock transport
  * (no network); the lifecycle functions run DB-gated against the *_test db.
  */
+import { isDisposablePostgresUrl } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { SheerIdClient, sheeridConfig } from './provider.js';
@@ -81,7 +82,7 @@ describe('SheerIdClient (mocked transport)', () => {
 
 // ── DB-gated lifecycle ───────────────────────────────────────────────────────
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-const isTestDb = /_test(\b|$|\?)/.test(DB);
+const isTestDb = isDisposablePostgresUrl(DB);
 const STORE = '66666666-6666-6666-6666-666666666666';
 
 async function wipe() { await pool.query('TRUNCATE store CASCADE'); }

@@ -6,6 +6,7 @@
  * exact permutation of the current set (partial list, foreign id, or a
  * duplicate) — see routes/admin-catalog.ts's two `/reorder` routes.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { pool, withStore } from '../db/client.js';
@@ -15,8 +16,7 @@ import { createAdminSession } from '../auth/admin-session.js';
 import { adminCatalog } from './admin-catalog.js';
 import { catalog } from './catalog.js';
 
-const dbName = decodeURIComponent(new URL(process.env.DATABASE_URL ?? '').pathname.slice(1));
-if (!dbName.endsWith('_test')) throw new Error('Option-position tests require a *_test database');
+assertTestDatabase(process.env.DATABASE_URL ?? '', 'admin-catalog-option-position.db.test.ts');
 
 const STORE = 'abcdabcd-4444-4444-8444-444444444444';
 const OWNER = 'abcdabcd-5555-4555-8555-555555555555';

@@ -48,9 +48,9 @@ export const ORDER_OPTIONS: Option[] = [
 
 /** Order-list filter set; URL params are the source of truth. */
 export interface OrderFilters {
-  q: string; paymentStatus: string; fulfillmentStatus: string; status: string; from: string; to: string; preOrder: boolean;
+  q: string; paymentStatus: string; fulfillmentStatus: string; status: string; from: string; to: string; preOrder: boolean; excludeDemo: boolean;
 }
-export const EMPTY_FILTERS: OrderFilters = { q: '', paymentStatus: '', fulfillmentStatus: '', status: '', from: '', to: '', preOrder: false };
+export const EMPTY_FILTERS: OrderFilters = { q: '', paymentStatus: '', fulfillmentStatus: '', status: '', from: '', to: '', preOrder: false, excludeDemo: false };
 
 export function filtersFromParams(p: URLSearchParams): OrderFilters {
   const pick = (k: string, allowed: Option[]) => { const v = p.get(k) ?? ''; return allowed.some((o) => o.value === v) ? v : ''; };
@@ -62,6 +62,7 @@ export function filtersFromParams(p: URLSearchParams): OrderFilters {
     status: pick('status', ORDER_OPTIONS),
     from: day('from'), to: day('to'),
     preOrder: p.get('preOrder') === '1',
+    excludeDemo: p.get('excludeDemo') === '1',
   };
 }
 
@@ -74,6 +75,7 @@ export function filtersToParams(f: OrderFilters): URLSearchParams {
   if (f.from) p.set('from', f.from);
   if (f.to) p.set('to', f.to);
   if (f.preOrder) p.set('preOrder', '1');
+  if (f.excludeDemo) p.set('excludeDemo', '1');
   return p;
 }
 
@@ -98,7 +100,7 @@ export interface ViewDef { id: string; label: string; filters: Partial<OrderFilt
 /** Built-in views. Exactly one row of these is rendered; user views are appended. */
 export const BUILTIN_VIEWS: ViewDef[] = [
   { id: 'all', label: 'All', filters: {}, title: 'Every order, newest first' },
-  { id: 'unfulfilled', label: 'Unfulfilled', filters: { paymentStatus: 'paid', fulfillmentStatus: 'unfulfilled', status: 'active' }, title: 'Paid orders with nothing shipped yet' },
+  { id: 'unfulfilled', label: 'Unfulfilled', filters: { paymentStatus: 'paid', fulfillmentStatus: 'unfulfilled', status: 'active', excludeDemo: true }, title: 'Paid orders with nothing shipped yet' },
   { id: 'partial', label: 'Partially fulfilled', filters: { paymentStatus: 'paid', fulfillmentStatus: 'partially_fulfilled', status: 'active' }, title: 'Paid orders with some items still to ship' },
   { id: 'unpaid', label: 'Unpaid', filters: { paymentStatus: 'pending', status: 'active' }, title: 'Orders waiting for payment' },
   { id: 'preorder', label: 'Pre-orders', filters: { preOrder: true }, title: 'Orders containing pre-order items' },

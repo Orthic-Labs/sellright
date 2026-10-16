@@ -25,8 +25,8 @@
 #      exporter. Those are legitimate and pre-date this script, so they're
 #      named in VENDURE_WORD_ALLOWLIST below (auditable, not a blanket
 #      exclusion — a NEW file mentioning "vendure" still fails loud). The
-#      client/storefront scopes get NO allowlist: a fresh native surface
-#      should never need the word at all.
+#      client/storefront scopes have no file-level allowlist. Reviewed migration
+#      carriers/provenance have exact path + parsed-token exceptions in the Node scanner.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -36,7 +36,7 @@ FAIL=0
 HARD_PATTERNS='graphql|gql`|@vendure|__typename'
 
 # --- kind 2: bare "vendure" word, pre-existing-file allowlist for the API --
-# Only packages/api/src is allowlisted; storefront-client/storefront get none.
+# Only packages/api/src has a historical file-level allowlist.
 read -r -d '' VENDURE_WORD_ALLOWLIST <<'LIST' || true
 packages/api/src/env.ts
 packages/api/src/payments/refunds.ts
@@ -102,7 +102,7 @@ check_scope() {
     FAIL=1
   fi
 
-  # kind 2 — bare word, allowlist-gated.
+  # kind 2 — bare word, historical API files or exact compatibility syntax only.
   local word_hits
   word_hits=$(grep -rlniE 'vendure' "$scope" \
     --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' \
@@ -115,10 +115,18 @@ check_scope() {
     if [ "$allow_word_list" = "yes" ] && is_allowlisted "$f"; then
       continue
     fi
+    local compatibility_hits compatibility_rc=0
+    compatibility_hits=$(node scripts/assert-no-gql-tags.mjs --words "$f") || compatibility_rc=$?
+    if [ "$compatibility_rc" -eq 0 ] && [ -z "$compatibility_hits" ]; then
+      continue
+    fi
+    if [ "$compatibility_rc" -ne 0 ] && [ -z "$compatibility_hits" ]; then
+      echo "assert-no-vendure: [$label] compatibility scanner failed (exit $compatibility_rc) for $f"
+      FAIL=1
+      continue
+    fi
     echo "assert-no-vendure: [$label] unexpected 'vendure' mention in $f"
-    echo "  (packages/api/src: add to VENDURE_WORD_ALLOWLIST in this script"
-    echo "   ONLY if it's genuine Vendure-migration/back-compat history, not"
-    echo "   live coupling; storefront-client/storefront get no allowlist.)"
+    echo "$compatibility_hits"
     FAIL=1
   done <<<"$word_hits"
 }
@@ -131,8 +139,7 @@ check_scope "packages/storefront-client" "no" "storefront-client"
 # adapter over that package's compat surface; the old storefront-embedded
 # client.ts + schema.gen.ts duplicates and the whole GraphQL/codegen
 # toolchain were deleted in the sf-native integration) — HARD fail here too,
-# same as api/storefront-client. No allowlist: a native storefront should
-# never need the word at all.
+# same as api/storefront-client. Only exact compatibility syntax is excepted.
 check_scope "packages/storefront/src" "no" "storefront"
 
 if [ "$FAIL" -ne 0 ]; then

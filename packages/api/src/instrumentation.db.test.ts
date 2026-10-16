@@ -10,6 +10,7 @@
  * Runs against a *_test database only (TRUNCATEs store CASCADE). The mailer,
  * APNs and outbound-fetch seams are mocked; everything else is real.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from './db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { sql } from 'drizzle-orm';
@@ -26,9 +27,7 @@ vi.mock('./push/apns.js', async (orig) => {
 });
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`instrumentation test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'instrumentation.db.test.ts');
 
 import { sendEmail } from './email/mailer.js';
 import { safeOutboundFetch } from './security/outbound-url.js';

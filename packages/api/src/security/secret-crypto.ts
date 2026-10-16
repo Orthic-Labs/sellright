@@ -17,6 +17,8 @@
  */
 import { createHash, createHmac, randomBytes, createCipheriv, createDecipheriv, timingSafeEqual } from 'node:crypto';
 
+import { peekEnv } from '../env.js';
+
 export const CURRENT_KEY_VERSION = 1;
 
 const ALGO = 'aes-256-gcm';
@@ -49,7 +51,10 @@ function parseMasterKey(raw: string): Buffer {
 }
 
 function loadMasterKey(): Buffer {
-  const raw = process.env.SELLRIGHT_MASTER_KEY;
+  // A parsed engine config is authoritative even when its key is absent.
+  // Standalone operator helpers keep their ambient fallback without parsing DB config.
+  const configured = peekEnv();
+  const raw = configured ? configured.SELLRIGHT_MASTER_KEY : process.env.SELLRIGHT_MASTER_KEY;
   if (!raw || raw.trim() === '') {
     throw new Error('SELLRIGHT_MASTER_KEY is not configured — refusing to encrypt/decrypt secrets');
   }

@@ -22,7 +22,9 @@ const PREVIEW = {
   ] },
   warnings: [], address: { shipping: { changed: false, countryChanged: false }, billing: { changed: false } }, isPreOrder: false, recipientEmail: 'a@b.c',
 };
-const get = vi.fn(async (_p: string) => CTX);
+const get = vi.fn(async (p: string) => p.includes('/edit/variants')
+  ? { items: [{ sku: 'B-2', name: 'Widget', productName: 'Gizmo', unitPrice: 1234, available: 5 }] }
+  : CTX);
 const post = vi.fn(async (_p: string, _b?: unknown) => PREVIEW);
 vi.mock('../../api', () => ({ api: { get: (p: string) => get(p), post: (p: string, b?: unknown) => post(p, b) }, ApiError: class extends Error {} }));
 vi.mock('../Toast', () => ({ useToast: () => ({ success: vi.fn(), error: vi.fn(), info: vi.fn() }) }));
@@ -32,9 +34,9 @@ import { OrderEditPanel } from './OrderEditPanel';
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 30)); });
 afterEach(() => { document.body.innerHTML = ''; get.mockClear(); post.mockClear(); });
 
-async function mount(qc: QueryClient) {
+async function mount(qc: QueryClient, currency = 'USD') {
   const el = document.createElement('div'); document.body.appendChild(el);
-  await act(async () => { createRoot(el).render(<QueryClientProvider client={qc}><OrderEditPanel code="X" currency="USD" onClose={() => {}} onCommitted={() => {}} /></QueryClientProvider>); });
+  await act(async () => { createRoot(el).render(<QueryClientProvider client={qc}><OrderEditPanel code="X" currency={currency} onClose={() => {}} onCommitted={() => {}} /></QueryClientProvider>); });
   await flush();
 }
 function setInput(el: HTMLInputElement, v: string) {
@@ -57,6 +59,24 @@ describe('refundSelection', () => {
 });
 
 describe('OrderEditPanel', () => {
+  it.each([
+    ['EUR', '€12.34'],
+    ['GBP', '£12.34'],
+  ])('formats add & replacement variant prices in %s', async (currency, formattedPrice) => {
+    await mount(new QueryClient({ defaultOptions: { queries: { retry: false } } }), currency);
+
+    const addSearch = document.querySelector<HTMLInputElement>('input[aria-label="Add an item — search by name or SKU"]')!;
+    await act(async () => { setInput(addSearch, 'widget'); }); await flush();
+    expect(Array.from(document.querySelectorAll('button')).some((button) => button.textContent?.includes(formattedPrice))).toBe(true);
+
+    const swap = document.querySelector<HTMLButtonElement>('button[aria-label="Swap variant of A-1"]')!;
+    await act(async () => { swap.click(); }); await flush();
+    const swapSearch = document.querySelector<HTMLInputElement>('input[aria-label="Search a variant to swap to…"]')!;
+    await act(async () => { setInput(swapSearch, 'widget'); }); await flush();
+    const prices = Array.from(document.querySelectorAll('button')).map((button) => button.textContent ?? '');
+    expect(prices.filter((text) => text.includes(formattedPrice)).length).toBeGreaterThanOrEqual(2);
+  });
+
   it('lets the operator pick the tender for a multi-payment refund and gates commit on its capacity', async () => {
     await mount(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
     const qty = document.querySelector<HTMLInputElement>('input[aria-label="Quantity of A-1"]')!;

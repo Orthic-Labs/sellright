@@ -18,7 +18,7 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { bodyLimit } from 'hono/body-limit';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { dispute } from '../db/schema-ops.js';
@@ -105,13 +105,16 @@ disputeRoutes.post('/v1/webhooks/nmi/:storeId/:accountId', async (c) => {
         .from(s.payment)
         // Transaction ids can collide across NMI accounts/modes — bind the
         // ledger lookup to the account+mode whose key signed this event.
-        .where(and(eq(s.payment.providerRef, transactionId), eq(s.payment.method, 'nmi'),
-          sql`coalesce(${s.payment.gatewayAccount}, ${account.accountId}) = ${account.accountId}`,
-          sql`coalesce(${s.payment.gatewayMode}, ${account.mode}) = ${account.mode}`))
+        // NULL historical identity is unresolved, never evidence that the
+        // callback's authenticated account/mode owns this payment.
+        .where(and(eq(s.payment.storeId, storeId), eq(s.payment.providerRef, transactionId),
+          eq(s.payment.method, 'nmi'), eq(s.payment.gatewayAccount, account.accountId),
+          eq(s.payment.gatewayMode, account.mode)))
         .limit(1);
       let orderCode: string | null = null;
       if (pay?.orderId) {
-        const [o] = await tx.select({ code: s.order.code }).from(s.order).where(eq(s.order.id, pay.orderId)).limit(1);
+        const [o] = await tx.select({ code: s.order.code }).from(s.order)
+          .where(and(eq(s.order.storeId, storeId), eq(s.order.id, pay.orderId))).limit(1);
         orderCode = o?.code ?? null;
       }
       const res = await recordDispute(tx, storeId, {

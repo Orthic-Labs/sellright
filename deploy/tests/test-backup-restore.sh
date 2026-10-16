@@ -23,7 +23,10 @@ cat > "$tmp/bin/docker" <<'STUB'
 set -eu
 printf '%s\n' "$*" >> "$TEST_ROOT/docker.log"
 for arg in "$@"; do
-  case "$arg" in -v|--volume|--volume=*) echo 'host bind mount forbidden' >&2; exit 91 ;; esac
+  case "$arg" in
+    -v) case "$*" in *' psql '*) : ;; *) echo 'host bind mount forbidden' >&2; exit 91 ;; esac ;;
+    --volume|--volume=*) echo 'host bind mount forbidden' >&2; exit 91 ;;
+  esac
 done
 # Inspect permissions while files exist, before success/failure cleanup runs.
 find "$SELLRIGHT_HOME/backups" "$TMPDIR" -type d ! -perm 700 -print > "$TEST_ROOT/bad-modes"
@@ -38,11 +41,43 @@ case "$*" in
     [ "${TEST_FAIL:-}" != assets ] || exit 32 ;;
   *' tar czf - -C /app/var downloads') printf 'downloads-fixture\n' ;;
   *' images -q api') printf 'fixture-image\n' ;;
+  *'sh -c umask 077; cat > /tmp/restore.js') cat > "$TEST_ROOT/capture/helper.js" ;;
+  *'node /tmp/restore.js receive '*)
+    args=$*; part=${args##*receive }; cat > "$TEST_ROOT/capture/$part" ;;
+  *'node /tmp/restore.js stage')
+    case "${TEST_FAIL:-}" in stage-*) exit 35 ;; esac ;;
+  *' pg_restore --list')
+    cat > /dev/null; [ "${TEST_FAIL:-}" != list ] || exit 36 ;;
   *' pg_restore '*)
     cat > "$TEST_ROOT/capture/database"
     [ "${TEST_FAIL:-}" != restore ] || exit 33 ;;
-  *'tar xzf - -C /app/var/assets '*) cat > "$TEST_ROOT/capture/assets" ;;
-  *'tar xzf - -C /app/var/downloads '*) cat > "$TEST_ROOT/capture/downloads" ;;
+  *'node /tmp/restore.js snapshot')
+    [ "${TEST_FAIL:-}" != snapshot ] || exit 37
+    cp "$TEST_ROOT/live-files" "$TEST_ROOT/previous-files" ;;
+  *'node /tmp/restore.js promote')
+    printf partial > "$TEST_ROOT/live-files"
+    case "${TEST_FAIL:-}" in promote|rollback) exit 38 ;; esac
+    printf restored > "$TEST_ROOT/live-files" ;;
+  *'node /tmp/restore.js rollback')
+    [ "${TEST_FAIL:-}" != rollback ] || exit 39
+    cp "$TEST_ROOT/previous-files" "$TEST_ROOT/live-files" ;;
+  *' stop api') printf stopped > "$TEST_ROOT/api" ;;
+  *' up -d --wait --wait-timeout 120 api')
+    if [ "${TEST_FAIL:-}" = restart ] && [ ! -f "$TEST_ROOT/restart-failed" ]; then
+      touch "$TEST_ROOT/restart-failed"; exit 40
+    fi
+    printf running > "$TEST_ROOT/api" ;;
+  *'SELECT EXISTS('*"datname='sellright_prev_"*)
+    if [ -f "$TEST_ROOT/previous-db" ]; then printf 't\n'; else printf 'f\n'; fi ;;
+  *'SELECT EXISTS('*"datname='sellright'"*)
+    if [ -f "$TEST_ROOT/live-db" ]; then printf 't\n'; else printf 'f\n'; fi ;;
+  *'ALTER DATABASE sellright RENAME TO sellright_prev_'*) mv "$TEST_ROOT/live-db" "$TEST_ROOT/previous-db" ;;
+  *'ALTER DATABASE sellright_restore_'*' RENAME TO sellright;'*)
+    [ "${TEST_FAIL:-}" != rename ] || exit 41
+    printf restored > "$TEST_ROOT/live-db" ;;
+  *'ALTER DATABASE sellright RENAME TO sellright_failed_'*) mv "$TEST_ROOT/live-db" "$TEST_ROOT/failed-db" ;;
+  *'ALTER DATABASE sellright_prev_'*' RENAME TO sellright;'*) mv "$TEST_ROOT/previous-db" "$TEST_ROOT/live-db" ;;
+  'rm -f sellright-restore-'*) touch "$TEST_ROOT/helper-removed" ;;
   *) : ;;
 esac
 STUB
@@ -128,22 +163,63 @@ STUB
 sh "$tmp/nested.sh" "$tmp/functions.sh" > "$tmp/trap.log" 2>&1 || fail 'nested backup'
 [ "$(cat "$tmp/outer-trap")" = preserved ] || fail 'caller EXIT trap replaced'
 
-mkdir "$tmp/encrypted"
+mkdir "$tmp/encrypted" "$tmp/legacy"
 for part in database.dump assets.tar.gz downloads.tar.gz; do
   printf '%s\n' "$part-restored" > "$tmp/encrypted/$part.enc"
   printf 'fixture-tag\n' > "$tmp/encrypted/$part.enc.hmac"
+  cp "$tmp/encrypted/$part.enc" "$tmp/legacy/$part"
 done
-# Restore's safety backup should stay local in this fixture.
+# Restore's safety backup stays local in this fixture.
 printf 'SELLRIGHT_OFFSITE_REMOTE=\n' >> "$SELLRIGHT_HOME/.env"
-(umask 000; sh "$SCRIPT" restore --kit "$tmp/kit.json" --set "$tmp/encrypted" --yes) > "$tmp/restore.log" 2>&1 || { cat "$tmp/restore.log" >&2; fail restore; }
-[ "$(cat "$tmp/capture/database")" = database.dump-restored ] || fail 'database stdin'
-[ "$(cat "$tmp/capture/assets")" = assets.tar.gz-restored ] || fail 'assets stdin'
-[ "$(cat "$tmp/capture/downloads")" = downloads.tar.gz-restored ] || fail 'downloads stdin'
-[ -z "$(find "$TMPDIR" -mindepth 1 -print -quit)" ] || fail 'decrypted staging survived success'
-if TEST_FAIL=restore sh "$SCRIPT" restore --kit "$tmp/kit.json" --set "$tmp/encrypted" --yes > "$tmp/failed-restore.log" 2>&1; then fail 'restore failure accepted'; fi
-[ -z "$(find "$TMPDIR" -mindepth 1 -print -quit)" ] || fail 'decrypted staging survived restore failure'
+reset_restore() {
+  rm -f "$tmp/previous-db" "$tmp/failed-db" "$tmp/restart-failed" "$tmp/helper-removed"
+  printf original > "$tmp/live-db"
+  printf original > "$tmp/live-files"
+  printf running > "$tmp/api"
+  : > "$tmp/docker.log"
+}
+assert_original() {
+  [ "$(cat "$tmp/live-db")" = original ] || fail 'original DB not recovered'
+  [ "$(cat "$tmp/live-files")" = original ] || fail 'original files not recovered'
+  [ "$(cat "$tmp/api")" = running ] || fail 'coherent original API not restarted'
+}
+for set_name in encrypted legacy; do
+  reset_restore
+  (umask 000; sh "$SCRIPT" restore --kit "$tmp/kit.json" --set "$tmp/$set_name" --yes) > "$tmp/restore.log" 2>&1 || { cat "$tmp/restore.log" >&2; fail "$set_name restore"; }
+  [ "$(cat "$tmp/capture/database")" = database.dump-restored ] || fail 'database stdin'
+  [ "$(cat "$tmp/live-db")" = restored ] && [ "$(cat "$tmp/live-files")" = restored ] || fail 'incoherent promotion'
+  [ "$(cat "$tmp/api")" = running ] || fail 'promoted API unhealthy'
+  [ -f "$tmp/helper-removed" ] || fail 'helper survived success'
+  [ -z "$(find "$TMPDIR" -mindepth 1 -print -quit)" ] || fail 'plaintext staging survived success'
+  stage_line=$(sed -n '/node \/tmp\/restore.js stage/=' "$tmp/docker.log")
+  stop_line=$(sed -n '/ stop api/=' "$tmp/docker.log" | head -n 1)
+  [ "$stage_line" -lt "$stop_line" ] || fail 'live stop before archive preflight'
+done
+pass 'plain & authenticated restore stage before promotion, wait for health & clean private staging'
+for step in stage-assets stage-downloads stage-hash stage-extract list restore; do
+  reset_restore
+  if TEST_FAIL="$step" sh "$SCRIPT" restore --kit "$tmp/kit.json" --set "$tmp/encrypted" --yes > "$tmp/failed-restore.log" 2>&1; then fail "injected $step accepted"; fi
+  assert_original
+  if sed -n '/ stop api/p; / RENAME TO /p; / pg_dump /p; /restore.js promote/p' "$tmp/docker.log" | sed -n '1p' | { read -r line; [ -n "$line" ]; }; then fail 'live mutation before full preflight'; fi
+  [ -z "$(find "$TMPDIR" -mindepth 1 -print -quit)" ] || fail 'plaintext staging survived preflight failure'
+done
+pass 'archive/hash/extraction/DB preflight failures leave live state untouched'
+for step in snapshot rename promote restart; do
+  reset_restore
+  if TEST_FAIL="$step" sh "$SCRIPT" restore --kit "$tmp/kit.json" --set "$tmp/encrypted" --yes > "$tmp/failed-restore.log" 2>&1; then fail "injected $step accepted"; fi
+  assert_original
+  [ -f "$tmp/helper-removed" ] || fail 'helper survived recovered failure'
+done
+reset_restore
+if TEST_FAIL=rollback sh "$SCRIPT" restore --kit "$tmp/kit.json" --set "$tmp/encrypted" --yes > "$tmp/failed-restore.log" 2>&1; then fail 'rollback failure accepted'; fi
+[ "$(cat "$tmp/api")" = stopped ] || fail 'API reopened after rollback failure'
+[ ! -f "$tmp/helper-removed" ] || fail 'recovery snapshots removed after rollback failure'
+grep 'rollback failed.*Retained helper' "$tmp/failed-restore.log" >/dev/null || fail 'missing recovery guidance'
+pass 'snapshot, rename, file promotion & health failures recover coherently; rollback failure fails closed with retained snapshots'
+reset_restore
 printf 'invalid-tag\n' > "$tmp/encrypted/assets.tar.gz.enc.hmac"
 if sh "$SCRIPT" restore --kit "$tmp/kit.json" --set "$tmp/encrypted" --yes > "$tmp/failed-decrypt.log" 2>&1; then fail 'bad integrity tag accepted'; fi
+assert_original
 [ -z "$(find "$TMPDIR" -mindepth 1 -print -quit)" ] || fail 'decrypted staging survived integrity failure'
 [ -f "$tmp/encrypted/database.dump.enc" ] || fail 'caller backup removed'
-pass 'restore streams private plaintext & removes staging on success, restore failure & integrity failure'
+pass 'bad authentication tag preserves caller set & live state, cleans plaintext'

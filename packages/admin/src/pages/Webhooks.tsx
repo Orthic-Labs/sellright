@@ -67,7 +67,7 @@ export default function WebhooksPage() {
   const key = ['webhooks', store?.slug];
   const { data, isLoading, error } = useQuery({
     queryKey: key,
-    queryFn: () => api.get<{ items: WebhookEndpoint[] }>('/admin/webhooks'),
+    queryFn: () => api.get<{ items: WebhookEndpoint[] }>('/webhooks'),
   });
   const invalidate = () => qc.invalidateQueries({ queryKey: key });
 
@@ -76,7 +76,7 @@ export default function WebhooksPage() {
 
   const create = useMutation({
     mutationFn: () =>
-      api.post<CreateResponse>('/admin/webhooks', {
+      api.post<CreateResponse>('/webhooks', {
         url: formUrl.trim(),
         topics: parseTopics(formTopics),
       }),
@@ -91,12 +91,12 @@ export default function WebhooksPage() {
 
   const toggle = useMutation({
     mutationFn: (w: WebhookEndpoint) =>
-      api.patch(`/admin/webhooks/${w.id}`, { enabled: !w.enabled }),
+      api.patch(`/webhooks/${w.id}`, { enabled: !w.enabled }),
     onSuccess: invalidate,
   });
 
   const del = useMutation({
-    mutationFn: (id: string) => api.del(`/admin/webhooks/${id}`),
+    mutationFn: (id: string) => api.del(`/webhooks/${id}`),
     onSuccess: () => { setDeleteConfirm(null); invalidate(); },
   });
 

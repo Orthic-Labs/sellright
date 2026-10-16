@@ -4,6 +4,7 @@
  * stripe-reconcile.db.test.ts.) Providers are mocked at the retrieval seam;
  * everything else is real. Runs against a *_test database only.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const nmi = { next: null as null | { result: Record<string, unknown>; observedStatus: string | null } };
@@ -27,9 +28,7 @@ import { verifyGatewayAttempt } from './gateway-payment.js';
 import { recoverGatewayAttempts } from '../jobs/gateway-recovery.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`provider-observation test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'provider-observation.db.test.ts');
 
 const STORE = 'f0f0f0f0-f0f0-f0f0-f0f0-f0f0f0f0f0f0';
 let orderId: string;

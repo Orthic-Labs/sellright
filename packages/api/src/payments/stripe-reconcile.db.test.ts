@@ -4,6 +4,7 @@
  * else (settle path, paid effects, sweeper, refund engine) runs for real
  * against a *_test database.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const stripeState = new Map<string, Record<string, unknown>>();
@@ -55,9 +56,7 @@ import { requestRefund } from './refunds.js';
 import { recordProviderObservation } from './provider-observation.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`stripe-reconcile test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'stripe-reconcile.db.test.ts');
 
 const STORE = 'abababab-abab-abab-abab-abababababab';
 const SLUG = 'stripe-reconcile-test';

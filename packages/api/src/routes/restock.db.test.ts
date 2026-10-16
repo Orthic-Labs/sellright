@@ -14,6 +14,7 @@
  *   - re-arm: after being notified, an email may sign up again and is
  *     notified on the NEXT restock cycle
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { OpenAPIHono } from '@hono/zod-openapi';
@@ -23,11 +24,7 @@ import { restockRoutes, notifyRestock, sweepRestockEvents } from './restock.js';
 import { invalidateStoreCache } from '../store-context.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(
-    `restock test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@]+@/, ':***@')}`,
-  );
-}
+assertTestDatabase(DB, 'restock.db.test.ts');
 
 // Valid v4-shaped UUIDs — the public schema validates variantId as uuid.
 const A = 'aaaaaaaa-0000-4000-8000-0000000000a1';

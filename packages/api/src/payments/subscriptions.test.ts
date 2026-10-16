@@ -21,6 +21,7 @@
  * onInvoicePaid is called directly with a real tx, exactly as
  * routes/payment-webhooks.ts calls it in production.
  */
+import { isDisposablePostgresUrl } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
@@ -28,7 +29,7 @@ import { env } from '../env.js';
 import { onInvoicePaid, type InvoiceLike } from './subscriptions.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-const isTestDb = /_test(\b|$|\?)/.test(DB);
+const isTestDb = isDisposablePostgresUrl(DB);
 
 const STORE = 'ffffffff-ffff-ffff-ffff-ffffffffffff';
 const SLUG = 'sub-renewal-test-store';

@@ -28,6 +28,8 @@ export interface BrandHeadSpec {
 		srcset: { href: string; width: number }[];
 		sizes: string;
 	}[];
+	/** Fixed platform embed providers; absent keeps third-party frames disabled. */
+	embeds?: { youtube: true };
 	googleFontsPreconnect?: boolean;
 	verification?: { facebookDomain?: string; pinterest?: string };
 	analytics?: { provider: 'gtm'; containerId: string; consent: 'required' | 'implied' } | null;

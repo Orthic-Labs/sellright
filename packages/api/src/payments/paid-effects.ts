@@ -27,10 +27,13 @@ export async function sendOrderConfirmationAndEnrol(tx: Tx, storeId: string, ord
   const [store] = await tx.select().from(s.store).where(eq(s.store.id, storeId)).limit(1);
   if (!order || !store) throw new Error('Paid order context is missing');
   const [customer] = order.customerId
-    ? await tx.select({ email: s.customer.email }).from(s.customer).where(eq(s.customer.id, order.customerId)).limit(1) : [];
+    ? await tx.select({ email: s.customer.email, firstName: s.customer.firstName, lastName: s.customer.lastName }).from(s.customer).where(eq(s.customer.id, order.customerId)).limit(1) : [];
   const contact = (order.metadata as { contact?: { email?: string } } | null)?.contact;
   const recipient = normalizeEmail(contact?.email || customer?.email || '');
   if (!recipient) return;
+  const customerName = normalizeEmail(customer?.email ?? '') === recipient
+    ? [customer?.firstName?.trim(), customer?.lastName?.trim()].filter(Boolean).join(' ') : '';
+  const subscriberName = customerName || recipient.split('@')[0];
   const lines = await tx.select({
     name: s.orderLine.variantName, quantity: s.orderLine.quantity,
     lineTotal: s.orderLine.lineTotal, appKey: s.productVariant.appKey,
@@ -52,7 +55,7 @@ export async function sendOrderConfirmationAndEnrol(tx: Tx, storeId: string, ord
   // Listmonk parity: a paid order enrolls the customer as a confirmed 'order'
   // subscriber (dedupe on store+email+kind+topic; never throws — a bad address
   // is logged and skipped inside enrollOnPaidOrder).
-  await enrollOnPaidOrder(tx, storeId, { orderId: order.id, orderCode: order.code, email: recipient });
+  await enrollOnPaidOrder(tx, storeId, { orderId: order.id, orderCode: order.code, email: recipient, name: subscriberName });
 }
 
 /**

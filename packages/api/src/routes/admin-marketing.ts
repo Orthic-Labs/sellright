@@ -198,9 +198,9 @@ for (const path of ['/v1/admin/discounts', '/v1/admin/promotions']) {
 }
 
 // ── Listmonk integration (managed IN the admin — no bouncing to Listmonk UI) ──
-// Config lives in store.config.listmonk = { url, apiUser, apiToken }. The API
+// Config lives in store.config.listmonk = { url, apiUser, apiToken, listId? }. The API
 // proxies to the Listmonk REST API server-side (creds never reach the browser).
-interface ListmonkCfg { url: string; apiUser: string; apiToken: string; }
+interface ListmonkCfg { url: string; apiUser: string; apiToken: string; listId?: number; }
 async function getCfg(storeId: string): Promise<ListmonkCfg | null> {
   const [row] = await withStore(storeId, async (tx) =>
     tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, storeId)).limit(1),
@@ -220,20 +220,21 @@ async function lm(cfg: ListmonkCfg, path: string, init: RequestInit = {}): Promi
 adminMarketing.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/marketing/config', summary: 'Listmonk connection status',
-    responses: { 200: { description: 'OK', content: J(z.object({ configured: z.boolean(), url: z.string().nullable() })) }, 401: { description: 'Unauthorized', ...errBody } },
+    responses: { 200: { description: 'OK', content: J(z.object({ configured: z.boolean(), url: z.string().nullable(), listId: z.number().int().positive().nullable() })) }, 401: { description: 'Unauthorized', ...errBody } },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c);
     const cfg = await getCfg(st.storeId);
-    return c.json({ configured: !!cfg, url: cfg?.url ?? null }, 200);
+    const listId = cfg?.listId;
+    return c.json({ configured: !!cfg, url: cfg?.url ?? null, listId: typeof listId === 'number' && Number.isSafeInteger(listId) && listId > 0 ? listId : null }, 200);
   }),
 );
 
 adminMarketing.openapi(
   createRoute({
     method: 'patch', path: '/v1/admin/marketing/config', summary: 'Set Listmonk connection',
-    request: { body: { content: J(z.object({ url: z.string().url(), apiUser: z.string().min(1), apiToken: z.string().min(1) })) } },
+    request: { body: { content: J(z.object({ url: z.string().url(), apiUser: z.string().min(1), apiToken: z.string().min(1), listId: z.number().int().positive().optional() })) } },
     responses: { 200: { description: 'OK', content: J(z.object({ ok: z.boolean(), lists: z.number().int() })) }, 401: { description: 'Unauthorized', ...errBody }, 409: { description: 'Cannot connect', ...errBody } },
   }),
   async (c) => guard(c, async () => {
@@ -245,7 +246,12 @@ adminMarketing.openapi(
     const lists = (await lm(safeCfg, '/api/lists')) as { data?: { total?: number } };
     await withStore(st.storeId, async (tx) => {
       const [row] = await tx.select({ config: s.store.config }).from(s.store).where(eq(s.store.id, st.storeId)).limit(1).for('update');
-      const config = { ...((row?.config as object) ?? {}), listmonk: safeCfg };
+      const previous = (row?.config as { listmonk?: ListmonkCfg } | null)?.listmonk;
+      const listId = safeCfg.listId ?? previous?.listId;
+      if (listId === undefined || !Number.isSafeInteger(listId) || listId <= 0) throw new HttpError(409, 'Configure a positive Listmonk list ID');
+      const target = await lm(safeCfg, `/api/lists/${listId}`) as { data?: { id?: number } };
+      if (target.data?.id !== listId) throw new HttpError(409, 'Listmonk list ID was not found');
+      const config = { ...((row?.config as object) ?? {}), listmonk: { ...safeCfg, listId } };
       await tx.update(s.store).set({ config }).where(eq(s.store.id, st.storeId));
     });
     await broadcastStoreCacheInvalidation(st.slug); // PERF-2 — match admin-settings.ts pattern

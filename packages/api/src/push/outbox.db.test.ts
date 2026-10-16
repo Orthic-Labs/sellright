@@ -6,6 +6,7 @@
  * and we can drive the exact responses that matter: 200, a retryable 500, and
  * 410 Unregistered (the one with a side effect — token deletion).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { readFileSync } from 'node:fs';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -35,9 +36,7 @@ import { adminSettingsAdvanced } from '../routes/admin-settings-advanced.js';
 import { adminPush } from '../routes/admin-push.js';
 import { enqueuePush, buildOrderPushPayload, deliverPushes } from './outbox.js';
 
-if (!/_test(\b|$)/.test(new URL(env.DATABASE_URL).pathname)) {
-  throw new Error('refusing to run: DATABASE_URL must point at a _test database');
-}
+assertTestDatabase(env.DATABASE_URL, 'outbox.db.test.ts');
 
 const STORE = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee';
 const SLUG = 'push-test-store';

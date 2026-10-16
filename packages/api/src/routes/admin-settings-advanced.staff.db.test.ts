@@ -12,6 +12,7 @@
  * (leaving the store with no owner), and that ordinary staff management by a
  * manager (creating/editing non-owner rows) still works unrestricted.
  */
+import { isDisposablePostgresUrl } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Invites are e-mail-only (P0): the accept token is never returned, and an undelivered invite is
@@ -32,7 +33,7 @@ import { adminSettingsAdvanced } from './admin-settings-advanced.js';
 // DATABASE_URL isn't pointed at a _test database (e.g. the default `pnpm test`
 // run, or a sandbox with no DB at all) instead of throwing and failing the
 // whole suite. Run explicitly with DATABASE_URL=…/sellright_test to exercise it.
-const isTestDb = /_test(\b|$)/.test(new URL(env.DATABASE_URL).pathname);
+const isTestDb = isDisposablePostgresUrl(env.DATABASE_URL);
 
 const STORE = 'eeeeeeee-eeee-eeee-eeee-eeeeeee0aaaa';
 const SLUG = 'staff-owner-guard-test-store';

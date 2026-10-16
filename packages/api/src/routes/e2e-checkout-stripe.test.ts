@@ -29,6 +29,7 @@
  * The irreducible HUMAN gate (real-browser 3DS card confirmation) is NOT
  * covered here — `pm_card_visa` lets headless CI confirm cards programmatically.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import Stripe from 'stripe';
 import { eq, sql } from 'drizzle-orm';
@@ -46,9 +47,7 @@ const HAS_STRIPE_KEYS = !!SECRET && !!WEBHOOK_SECRET
   && SECRET.startsWith('sk_test_') && (WEBHOOK_SECRET.startsWith('whsec_') || WEBHOOK_SECRET.startsWith('whsec_test_'));
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`e2e checkout test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'e2e-checkout-stripe.test.ts');
 
 const STORE = 'eeeeeeee-eeee-eeee-eeee-e2eeee2eeeee';
 const SLUG = 'e2e-stripe-test-store';

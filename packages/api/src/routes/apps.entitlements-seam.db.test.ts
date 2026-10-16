@@ -18,6 +18,7 @@
  * (apps.store-resolution.db.test.ts, activations-engine.db.test.ts): skips
  * cleanly unless DATABASE_URL points at a `_test` database.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import { sql } from 'drizzle-orm';
@@ -33,9 +34,7 @@ import {
 } from '../licensing/entitlement-provider.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`apps.entitlements-seam test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'apps.entitlements-seam.db.test.ts');
 
 // The store's slug doubles as the license's appKey — publicAppStore()
 // resolves the store by treating body.app as the store slug directly.

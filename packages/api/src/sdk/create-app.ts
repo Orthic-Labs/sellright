@@ -195,6 +195,19 @@ export async function createApp(options: CreateAppOptions = {}): Promise<EngineA
 
     const step = (name: ShutdownStep['step']) => { shutdownSteps.push({ step: name, at: Date.now() }); };
 
+    const drainHttp = (s: Server | null, timeoutMs: number): Promise<void> => s ? new Promise<void>((resolve, reject) => {
+      const force = setTimeout(() => s.closeAllConnections?.(), timeoutMs);
+      force.unref?.();
+      s.close((e) => {
+        clearTimeout(force);
+        if (e && (e as NodeJS.ErrnoException).code !== 'ERR_SERVER_NOT_RUNNING') reject(e);
+        else { if (server === s) server = null; resolve(); }
+      });
+      s.closeIdleConnections?.();
+    }) : Promise.resolve();
+
+    let starting: symbol | null = null;
+    let cancelStart: (() => void) | null = null;
     let shutdownPromise: Promise<void> | null = null;
     const shutdown: EngineApp['shutdown'] = (opts) => {
       shutdownPromise ??= (async () => {
@@ -203,19 +216,16 @@ export async function createApp(options: CreateAppOptions = {}): Promise<EngineA
         // 1. stop admitting
         admitting = false;
         step('stop-admitting');
+        // Settle a pending start without delaying the shutdown budget. Its listening
+        // callback retains cleanup ownership if binding completes after this drain.
+        cancelStart?.();
         // 2 + 3. cancel jobs / timers, and drain HTTP CONCURRENTLY: timers are cleared
         // synchronously inside stop(); only the wait for in-flight job passes overlaps the
         // HTTP drain, so the whole budget is `timeoutMs`, not stop-wait + drain (review F2).
         const jobWait = Math.min(5_000, Math.floor(timeoutMs / 2));
         const jobsStopped = Promise.all([scheduler?.stop(jobWait), stopStoreCacheInvalidationListener()]);
         step('cancel-jobs');
-        const drained = server ? new Promise<void>((resolve, reject) => {
-          const s = server!;
-          const force = setTimeout(() => s.closeAllConnections?.(), timeoutMs);
-          force.unref?.();
-          s.close((e) => { clearTimeout(force); if (e && (e as NodeJS.ErrnoException).code !== 'ERR_SERVER_NOT_RUNNING') reject(e); else resolve(); });
-          s.closeIdleConnections?.();
-        }) : Promise.resolve();
+        const drained = drainHttp(server, timeoutMs);
         await Promise.all([jobsStopped, drained]);
         step('drain-http');
         // plugin shutdown hooks, reverse order; a failing hook never blocks the pool close
@@ -252,67 +262,95 @@ export async function createApp(options: CreateAppOptions = {}): Promise<EngineA
       get port() { const a = server?.address(); return a && typeof a === 'object' ? a.port : null; },
       shutdown,
       async start(startOptions: StartOptions = {}) {
-        if (phase !== 'created') throw new EngineSetupError(`start() called in phase ${phase}`, 'ENGINE_PHASE');
-        // listen first (the legacy executable started jobs from the listening callback)
-        if (startOptions.listen !== false) {
-          const port = startOptions.listen?.port ?? env.PORT;
-          const hostname = startOptions.listen?.hostname ?? env.HOST;
-          server = await new Promise<Server>((resolve, reject) => {
-            const s = serve({ fetch: app.fetch, port, hostname }, (info) => {
-              // OBS-1: structured startup logs so log collectors index port + env as fields.
-              log.info('api listening', { url: `http://localhost:${info.port}`, env: env.NODE_ENV, port: info.port });
-              log.info('openapi published', { url: `http://localhost:${info.port}/v1/openapi.json` });
-              resolve(s as Server);
-            }) as Server;
-            s.once('error', reject);
-          });
-        }
-        // jobs
-        mark('jobs');
-        const pluginJobs: Array<PluginJob & { plugin: string }> = [];
-        for (const p of plugins) {
-          const jobs = p.jobs?.(ctx) ?? [];
-          const names = new Set<string>();
-          for (const j of jobs) {
-            if (names.has(j.name)) throw new EngineSetupError(`plugin "${p.name}" declares job "${j.name}" twice`, 'JOB_DUPLICATE');
-            names.add(j.name);
-            pluginJobs.push({ ...j, plugin: p.name });
+        if (phase !== 'created' || starting || server) throw new EngineSetupError(`start() called in phase ${phase}`, 'ENGINE_PHASE');
+        // Reserve admission synchronously, without adding a public lifecycle phase.
+        const attempt = Symbol('start');
+        starting = attempt;
+        try {
+          // listen first (the legacy executable started jobs from the listening callback)
+          if (startOptions.listen !== false) {
+            const port = startOptions.listen?.port ?? env.PORT;
+            const hostname = startOptions.listen?.hostname ?? env.HOST;
+            await new Promise<void>((resolve, reject) => {
+              cancelStart = () => reject(new EngineSetupError(`start() interrupted in phase ${phase}`, 'ENGINE_PHASE'));
+              const s = serve({ fetch: app.fetch, port, hostname }, (info) => {
+                if (phase !== 'created' || starting !== attempt) {
+                  void drainHttp(s, DEFAULT_SHUTDOWN_TIMEOUT_MS)
+                    .catch((e) => logError.error('late startup listener could not close', e));
+                  reject(new EngineSetupError(`start() interrupted in phase ${phase}`, 'ENGINE_PHASE'));
+                  return;
+                }
+                // OBS-1: structured startup logs so log collectors index port + env as fields.
+                log.info('api listening', { url: `http://localhost:${info.port}`, env: env.NODE_ENV, port: info.port });
+                log.info('openapi published', { url: `http://localhost:${info.port}/v1/openapi.json` });
+                resolve();
+              }) as Server;
+              server = s;
+              s.once('error', reject);
+            });
           }
-        }
-        scheduler = startJobScheduler(pluginJobs);
-        // SELLRIGHT-ISSUES P2: cross-process store-config cache invalidation (LISTEN side).
-        // Best-effort: a failure leaves the 60s TTL as the fallback, so it never blocks startup.
-        startStoreCacheInvalidationListener().catch((e) => log.info('store cache invalidation listener failed to start (60s TTL is the fallback)', { err: String(e) }));
-        // P1b: seal legacy plaintext admin TOTP secrets with SELLRIGHT_MASTER_KEY — opt-in (ADMIN_TOTP_SEAL_EXISTING=1),
-        // because an engine older than 0097 reads totp_secret as plaintext: sealing at every start would break 2FA
-        // for existing admins after an automatic image rollback. Idempotent, best-effort.
-        if (env.ADMIN_TOTP_SEAL_EXISTING === '1') sealLegacyTotpSecrets()
-          .then((n) => { if (n > 0) log.info('sealed legacy admin TOTP secrets', { count: n }); })
-          .catch((e) => logError.error('sealing legacy admin TOTP secrets failed', e));
-        phase = 'started';
-        if (startOptions.handleSignals) {
-          const timeoutMs = startOptions.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS;
-          let signalled = false;
-          const onSignal = (signal: NodeJS.Signals) => {
-            if (signalled) { console.warn(`[api] received ${signal} during shutdown — ignoring`); return; }
-            signalled = true;
-            console.log(`[api] ${signal} received — draining (timeout ${timeoutMs}ms)`);
-            // Force-exit watchdog so a hung connection can't block the deploy forever.
-            const forceExit = setTimeout(() => {
-              console.error(`[api] shutdown exceeded ${timeoutMs}ms — forcing exit(1)`);
-              process.exit(1);
-            }, timeoutMs);
-            forceExit.unref();
-            // force-close lingering connections a little before the exit watchdog fires
-            shutdown({ timeoutMs: Math.floor(timeoutMs * 0.8) }).then(
-              () => { console.log('[api] shutdown complete'); clearTimeout(forceExit); process.exit(0); },
-              (e) => { console.error('[api] shutdown error:', e); process.exit(1); },
-            );
-          };
-          for (const sig of ['SIGTERM', 'SIGINT'] as const) {
-            const h = () => onSignal(sig);
-            signalHandlers.push([sig, h]);
-            process.on(sig, h);
+          if (phase !== 'created') throw new EngineSetupError(`start() interrupted in phase ${phase}`, 'ENGINE_PHASE');
+          // jobs
+          mark('jobs');
+          const pluginJobs: Array<PluginJob & { plugin: string }> = [];
+          for (const p of plugins) {
+            const jobs = p.jobs?.(ctx) ?? [];
+            const names = new Set<string>();
+            for (const j of jobs) {
+              if (names.has(j.name)) throw new EngineSetupError(`plugin "${p.name}" declares job "${j.name}" twice`, 'JOB_DUPLICATE');
+              names.add(j.name);
+              pluginJobs.push({ ...j, plugin: p.name });
+            }
+          }
+          if (phase !== 'created') throw new EngineSetupError(`start() interrupted in phase ${phase}`, 'ENGINE_PHASE');
+          scheduler = startJobScheduler(pluginJobs);
+          // SELLRIGHT-ISSUES P2: cross-process store-config cache invalidation (LISTEN side).
+          // Best-effort: a failure leaves the 60s TTL as the fallback, so it never blocks startup.
+          startStoreCacheInvalidationListener().catch((e) => log.info('store cache invalidation listener failed to start (60s TTL is the fallback)', { err: String(e) }));
+          // P1b: seal legacy plaintext admin TOTP secrets with SELLRIGHT_MASTER_KEY — opt-in (ADMIN_TOTP_SEAL_EXISTING=1),
+          // because an engine older than 0097 reads totp_secret as plaintext: sealing at every start would break 2FA
+          // for existing admins after an automatic image rollback. Idempotent, best-effort.
+          if (env.ADMIN_TOTP_SEAL_EXISTING === '1') sealLegacyTotpSecrets()
+            .then((n) => { if (n > 0) log.info('sealed legacy admin TOTP secrets', { count: n }); })
+            .catch((e) => logError.error('sealing legacy admin TOTP secrets failed', e));
+          phase = 'started';
+          if (startOptions.handleSignals) {
+            const timeoutMs = startOptions.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS;
+            let signalled = false;
+            const onSignal = (signal: NodeJS.Signals) => {
+              if (signalled) { console.warn(`[api] received ${signal} during shutdown — ignoring`); return; }
+              signalled = true;
+              console.log(`[api] ${signal} received — draining (timeout ${timeoutMs}ms)`);
+              // Force-exit watchdog so a hung connection can't block the deploy forever.
+              const forceExit = setTimeout(() => {
+                console.error(`[api] shutdown exceeded ${timeoutMs}ms — forcing exit(1)`);
+                process.exit(1);
+              }, timeoutMs);
+              forceExit.unref();
+              // force-close lingering connections a little before the exit watchdog fires
+              shutdown({ timeoutMs: Math.floor(timeoutMs * 0.8) }).then(
+                () => { console.log('[api] shutdown complete'); clearTimeout(forceExit); process.exit(0); },
+                (e) => { console.error('[api] shutdown error:', e); process.exit(1); },
+              );
+            };
+            for (const sig of ['SIGTERM', 'SIGINT'] as const) {
+              const h = () => onSignal(sig);
+              signalHandlers.push([sig, h]);
+              process.on(sig, h);
+            }
+          }
+        } catch (e) {
+          // Shutdown owns cleanup once stopping; otherwise release a partial listener
+          // before allowing another start attempt, preserving the original failure.
+          if (phase === 'created') {
+            try { await drainHttp(server, DEFAULT_SHUTDOWN_TIMEOUT_MS); }
+            catch (cleanupError) { logError.error('failed startup listener could not close', cleanupError); }
+          }
+          throw e;
+        } finally {
+          if (starting === attempt) {
+            cancelStart = null;
+            starting = null;
           }
         }
       },

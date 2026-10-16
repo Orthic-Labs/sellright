@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { findGqlTags } from './assert-no-gql-tags.mjs';
+import { findGqlTags, findUnexpectedVendureMentions } from './assert-no-gql-tags.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const dirs = [];
@@ -83,7 +83,10 @@ function guardRepo({ scanner, files = {} }) {
   if (scanner === 'real') copyFileSync(join(here, 'assert-no-gql-tags.mjs'), join(root, 'scripts', 'assert-no-gql-tags.mjs'));
   else writeFileSync(join(root, 'scripts', 'assert-no-gql-tags.mjs'), scanner);
   mkdirSync(join(root, 'packages', 'api', 'src'), { recursive: true });
-  for (const [rel, body] of Object.entries(files)) writeFileSync(join(root, rel), body);
+  for (const [rel, body] of Object.entries(files)) {
+    mkdirSync(dirname(join(root, rel)), { recursive: true });
+    writeFileSync(join(root, rel), body);
+  }
   // typescript resolves from the real repo's node_modules
   mkdirSync(join(root, 'node_modules'));
   symlinkSync(join(here, '..', 'node_modules', 'typescript'), join(root, 'node_modules', 'typescript'));
@@ -110,4 +113,108 @@ test('shell guard: real scanner passes a clean tree and fails a wrapped tag', ()
   const bad = guardRepo({ scanner: 'real', files: { 'packages/api/src/a.ts': 'export const a = (gql)`x`;' } });
   assert.equal(bad.status, 1);
   assert.match(bad.stdout, /GraphQL tagged template found/);
+});
+
+const cartSummary = 'Adopt a frozen Vendure cart or reconcile a browser snapshot once';
+const compatibilityFixtures = {
+  'packages/api/src/auth/cookies.ts': `/** Vendure carriers are untrusted transport, consumed only by migration bootstrap. */
+    const carrier = headers.__vendure_session; const header = 'x-vendure-session-token';
+    /** Preserve original signed HttpOnly Vendure cookie throughout rollback window. */
+    function clearReadableLegacyToken() {}`,
+  'packages/api/src/auth/legacy-cookies.test.ts': "const key = '__vendure_session'; const a = `__vendure_session=${wrapped}`; const b = `authToken=opaque_456; __vendure_session=${wrapped}`;",
+  'packages/api/src/routes/disputes-nmi.db.test.ts': "const metadata = { vendure: { vendureMethod: 'nmi-payment' } };",
+  'packages/api/src/routes/cart.ts': `const summary = '${cartSummary}';` + "const query = sql`${field}->>'vendureId' = ${id}`; const sku = `vendure-unresolved:${id}`;",
+  'packages/api/src/routes/gateway-payments.webhook.test.ts': "const metadata = { vendure: { vendureMethod: 'sezzle', sourceKey: 'vendure:damned' } };",
+  'packages/api/src/routes/legacy-session-cart.db.test.ts': "const metadata = { vendureId: 17 }; const sourceKey = 'vendure:test'; const key = '__vendure_session='; const cookie = `__vendure_session=${wrapped}`; const sku = 'vendure-unresolved:999';",
+  'packages/api/src/payments/sezzle-reconcile.test.ts': "const metadata = { vendure: { vendureMethod: 'sezzle', sourceKey: 'vendure:damned' } }; const other = 'vendure:other';",
+  'packages/api/src/payments/sezzle-reconcile.ts': 'const method = metadata.vendure.vendureMethod;',
+  'packages/storefront-client/src/generated/schema.d.ts': `interface Routes {
+  /** ${cartSummary} */
+  migration: unknown;
+}`,
+  'packages/storefront-client/dist/generated/schema.d.ts': `interface Routes {
+  /** ${cartSummary} */
+  migration: unknown;
+}`,
+  'packages/storefront/src/services/CartService.test.ts': "const key = 'vendure_local_cart';",
+  'packages/storefront/src/services/legacy-cart.test.ts': "const key = 'vendure_local_cart';",
+  'packages/storefront/src/services/CartService.ts': "export const LEGACY_CART_KEY = 'vendure_local_cart';",
+  'packages/storefront/src/services/CountryPreferenceService.ts': "const raw = localStorage.getItem('vendure_local_cart');",
+  'packages/storefront/src/providers/shop/account/bootstrap.test.ts': "const cleared = value.startsWith('__vendure_session=');",
+  'packages/storefront/src/routes/account/layout.tsx': "const carrier = cookie.get('__vendure_session');",
+  'packages/storefront/src/routes/layout.tsx': "const carrier = cookie.get('__vendure_session');",
+};
+
+test('word guard accepts only declared compatibility syntax in all 17 exact paths', () => {
+  assert.equal(Object.keys(compatibilityFixtures).length, 17);
+  for (const [file, text] of Object.entries(compatibilityFixtures)) {
+    assert.deepEqual(findUnexpectedVendureMentions(file, text), [], file);
+    assert.ok(findUnexpectedVendureMentions(file, `${text}\n// Vendure API`).length > 0, file);
+    assert.ok(findUnexpectedVendureMentions(file.replace(/\.(ts|tsx)$/, '.other.$1'), text).length > 0, file);
+  }
+  const result = guardRepo({ scanner: 'real', files: compatibilityFixtures });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+});
+
+test('word guard rejects longer Unicode identifiers, undeclared values & expanded descriptions', () => {
+  const file = 'packages/api/src/payments/sezzle-reconcile.ts';
+  for (const identifier of ['$vendure', 'vendure$', 'αvendure', 'vendureé', 'vendure\u200C', 'vendure\u200D', 'vendureMethodExtra']) {
+    assert.ok(findUnexpectedVendureMentions(file, `const ${identifier} = 1;`).length > 0, identifier);
+  }
+  for (const text of ["const value = 'vendure';", "const value = 'vendure:damned';", '// vendure', '// Vendure API']) {
+    assert.ok(findUnexpectedVendureMentions(file, text).length > 0, text);
+  }
+  for (const [path, text] of [
+    ['packages/api/src/payments/sezzle-reconcile.test.ts', "const sourceKey = 'vendure:damned-extra';"],
+    ['packages/api/src/payments/sezzle-reconcile.test.ts', "const sourceKey = 'vendure:unexpected';"],
+    ['packages/api/src/routes/cart.ts', 'const sku = `vendure-unresolved:extra${id}`;'],
+    ['packages/api/src/routes/cart.ts', `const summary = '${cartSummary} via Vendure API';`],
+    ['packages/storefront-client/src/generated/schema.d.ts', `/** ${cartSummary} plus API */ interface Routes {}`],
+    ['packages/storefront/src/services/CartService.ts', "const key = 'vendure_local_cart_extra';"],
+  ]) assert.ok(findUnexpectedVendureMentions(path, text).length > 0, `${path}: ${text}`);
+});
+
+test('shell guard retains hard coupling checks inside compatibility paths', () => {
+  const file = 'packages/api/src/payments/sezzle-reconcile.ts';
+  for (const signal of ["import x from '@vendure/core';", "const api = 'graphql';", 'const type = value.__typename;', 'const query = (gql as any)`x`;']) {
+    const result = guardRepo({ scanner: 'real', files: { [file]: `${compatibilityFixtures[file]}\n${signal}` } });
+    assert.equal(result.status, 1, signal);
+    assert.match(result.stdout, /GraphQL\/Vendure coupling signal|GraphQL tagged template found/);
+  }
+});
+
+test('shell guard fails closed when compatibility scanner crashes or exits without findings', () => {
+  for (const failure of ['throw new Error("word scan failed");', 'process.exit(2);', 'process.exit(1);']) {
+    const result = guardRepo({
+      scanner: `if (process.argv.includes('--words')) { ${failure} }`,
+      files: { 'packages/api/src/payments/sezzle-reconcile.ts': 'const method = metadata.vendure;' },
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /compatibility scanner failed/);
+  }
+});
+
+test('both scanner modes reject malformed syntax before masking an accepted compatibility identifier', () => {
+  const file = 'packages/api/src/payments/sezzle-reconcile.ts';
+  const text = 'const method = metadata.vendure; const =';
+  const diagnostic = /Cannot parse packages\/api\/src\/payments\/sezzle-reconcile\.ts:\d+:\d+: .+/;
+  for (const scan of [findGqlTags, findUnexpectedVendureMentions]) {
+    assert.throws(() => scan(file, text), diagnostic);
+  }
+
+  const root = mkdtempSync(join(tmpdir(), 'sr-malformed-'));
+  dirs.push(root);
+  mkdirSync(dirname(join(root, file)), { recursive: true });
+  writeFileSync(join(root, file), text);
+  for (const mode of [[], ['--words']]) {
+    const result = spawnSync(process.execPath, [join(here, 'assert-no-gql-tags.mjs'), ...mode, file], { cwd: root, encoding: 'utf8' });
+    assert.equal(result.status, 1);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, diagnostic);
+  }
+  const result = guardRepo({ scanner: 'real', files: { [file]: text } });
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /AST scanner failed/);
+  assert.match(result.stdout, /compatibility scanner failed/);
+  assert.match(result.stderr, diagnostic);
 });

@@ -5,16 +5,26 @@ import { APP_STATE, CUSTOMER_NOT_DEFINED_ID, AUTH_TOKEN } from '~/constants';
 import { getMe } from '~/services/customer';
 import { LocalAddressService } from '~/services/LocalAddressService';
 import { sanitizePhoneNumber } from '~/utils/validation';
+import { bootstrapCustomer } from '~/providers/shop/account/bootstrap.server';
+import { srErrorStatus } from '~/utils/sellright';
+import { theme } from '~/theme/theme.config';
 
 /** /account/* pages that must work before a session exists (they use layout-public.tsx). */
 const PUBLIC_ACCOUNT_PATHS = new Set(['/account/magic-link']);
 
 // T16: Server-side auth guard — redirect to /sign-in if no token. A named layout (index@public.tsx) only swaps the
 // chrome: this layout's onRequest still runs for every /account/* route, so the public pages are exempted here.
-export const onRequest: RequestHandler = async ({ cookie, redirect, url }) => {
+export const onRequest: RequestHandler = async ({ cookie, redirect, url, headers }) => {
 	if (PUBLIC_ACCOUNT_PATHS.has(url.pathname.replace(/\/+$/, ''))) return;
-	const token = cookie.get(AUTH_TOKEN)?.value;
-	if (!token) throw redirect(302, '/sign-in');
+	if (theme.isDemo) throw redirect(302, '/sign-in');
+	if (cookie.get(AUTH_TOKEN)?.value) return;
+	if (!cookie.get('authToken')?.value && !cookie.get('__vendure_session')?.value) throw redirect(302, '/sign-in');
+	try {
+		await bootstrapCustomer(headers);
+	} catch (error) {
+		if (srErrorStatus(error) !== 401) throw error;
+		throw redirect(302, '/sign-in');
+	}
 };
 
 export default component$(() => {

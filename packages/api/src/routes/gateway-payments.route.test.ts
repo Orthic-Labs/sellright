@@ -28,14 +28,13 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
+import { assertTestDatabase } from '../db/rls-test-utils.js';
 import { env } from '../env.js';
 import { requestIdMiddleware } from '../lib/request-id.js';
 import { gatewayPayments } from './gateway-payments.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`gateway-payments.route test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'gateway-payments route test');
 
 const STORE = 'bbbbbbbb-2222-2222-2222-222222222222';
 const SLUG = 'gwp-route-test-store';

@@ -6,10 +6,11 @@
  * rather than depending on process-frozen env-managed Stripe/SMTP vars.
  */
 import { createHmac } from 'node:crypto';
-import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { pool } from '../db/client.js';
-import { env } from '../env.js';
+import { env, getEnvSource, initEnv } from '../env.js';
+import { decryptSecret, encryptSecret } from '../security/secret-crypto.js';
 import { createAdminSession } from '../auth/admin-session.js';
 import { hashPassword } from '../auth/password.js';
 import { newTotpSecret } from '../auth/totp.js';
@@ -165,7 +166,7 @@ describe('PATCH /v1/admin/settings/publish — readiness gate', () => {
 describe('GET /v1/admin/system/recovery-kit', () => {
   beforeEach(async () => {
     await wipe();
-    process.env.SELLRIGHT_MASTER_KEY = 'a'.repeat(64);
+    env.SELLRIGHT_MASTER_KEY = 'a'.repeat(64);
   });
   afterAll(wipe);
 
@@ -198,10 +199,53 @@ describe('GET /v1/admin/system/recovery-kit', () => {
     expect(rows[0]?.recovery_kit_downloaded_at).not.toBeNull();
   });
 
+  it.each([undefined, 'b'.repeat(64)])('exports explicit engine key and kit identity when ambient key is %s', async (ambientKey) => {
+    const source = getEnvSource();
+    vi.stubEnv('SELLRIGHT_MASTER_KEY', ambientKey);
+    vi.stubEnv('RECOVERY_KIT_ID', 'ambient-kit');
+    initEnv({ ...source, SELLRIGHT_MASTER_KEY: 'c'.repeat(64), RECOVERY_KIT_ID: 'engine-kit' });
+    try {
+      const { installToken } = await seed();
+      expect((await req(installToken, 'POST', '/v1/admin/step-up', { password: PASSWORD })).status).toBe(200);
+      const res = await req(installToken, 'GET', '/v1/admin/system/recovery-kit');
+      expect(res.status).toBe(200);
+      const body = await res.json() as { masterKey: string; kitId: string };
+      expect(body.masterKey).toBe('c'.repeat(64));
+      expect(body.kitId).toBe('engine-kit');
+      const purpose = 'recovery-kit:synthetic-check';
+      const sealed = encryptSecret('synthetic-secret', { purpose });
+      expect(decryptSecret(sealed, purpose, Buffer.from(body.masterKey, 'hex'))).toBe('synthetic-secret');
+      const { rows } = await pool.query(`SELECT recovery_kit_downloaded_at FROM admin_user WHERE id = $1`, [INSTALL_ADMIN]);
+      expect(rows[0]?.recovery_kit_downloaded_at).not.toBeNull();
+    } finally {
+      initEnv(source);
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('503s without an engine key even when ambient key exists, without recording a download', async () => {
+    const source = getEnvSource();
+    vi.stubEnv('SELLRIGHT_MASTER_KEY', 'b'.repeat(64));
+    initEnv({ ...source, SELLRIGHT_MASTER_KEY: undefined });
+    try {
+      const { installToken } = await seed();
+      expect((await req(installToken, 'POST', '/v1/admin/step-up', { password: PASSWORD })).status).toBe(200);
+      const res = await req(installToken, 'GET', '/v1/admin/system/recovery-kit');
+      expect(res.status).toBe(503);
+      const { rows } = await pool.query(`SELECT recovery_kit_downloaded_at FROM admin_user WHERE id = $1`, [INSTALL_ADMIN]);
+      expect(rows[0]?.recovery_kit_downloaded_at).toBeNull();
+      const audit = await pool.query(`SELECT action FROM audit_log WHERE store_id = $1 AND action = 'recovery_kit_download'`, [STORE]);
+      expect(audit.rows).toHaveLength(0);
+    } finally {
+      initEnv(source);
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('503s when SELLRIGHT_MASTER_KEY is not configured, even after step-up', async () => {
     const { installToken } = await seed();
     await req(installToken, 'POST', '/v1/admin/step-up', { password: PASSWORD });
-    delete process.env.SELLRIGHT_MASTER_KEY;
+    env.SELLRIGHT_MASTER_KEY = undefined;
     const res = await req(installToken, 'GET', '/v1/admin/system/recovery-kit');
     expect(res.status).toBe(503);
   });
@@ -210,7 +254,7 @@ describe('GET /v1/admin/system/recovery-kit', () => {
 describe('POST /v1/admin/step-up', () => {
   beforeEach(async () => {
     await wipe();
-    process.env.SELLRIGHT_MASTER_KEY = 'a'.repeat(64);
+    env.SELLRIGHT_MASTER_KEY = 'a'.repeat(64);
   });
   afterAll(wipe);
 

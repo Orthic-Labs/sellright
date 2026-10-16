@@ -32,7 +32,7 @@ function fakeFetch(respond: (req: Request) => Response) {
 describe('store resolution', () => {
   it('sends x-store-slug on every request when storeSlug is configured', async () => {
     const { fetchFn, calls } = fakeFetch(() => jsonResponse(200, { status: 'ok' }));
-    const client = createStorefrontClient({ baseUrl: 'http://api.test', storeSlug: 'acme', fetch: fetchFn });
+    const client = createStorefrontClient({ baseUrl: 'http://api.test', storeSlug: 'acme', forwardedHost: 'ignored.example.com', fetch: fetchFn });
     await client.raw.GET('/v1/health');
     expect(calls[0]?.headers.get('x-store-slug')).toBe('acme');
     expect(calls[0]?.headers.get('x-forwarded-host')).toBeNull();

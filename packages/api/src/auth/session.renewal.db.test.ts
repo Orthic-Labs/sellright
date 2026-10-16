@@ -16,6 +16,7 @@
  *
  * Runs against a *_test DB only (TRUNCATEs store CASCADE).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import { eq } from 'drizzle-orm';
@@ -25,9 +26,7 @@ import * as s from '../db/schema.js';
 import { createSession, deleteSession, resolveCustomer } from './session.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`session.renewal test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'session.renewal.db.test.ts');
 
 const DAY = 86_400_000;
 const STORE_RENEW = 'dddddddd-1111-1111-1111-111111111111';

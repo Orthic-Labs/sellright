@@ -17,6 +17,7 @@
  *
  * Runs against a *_test DB only (TRUNCATEs store CASCADE).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
@@ -26,9 +27,7 @@ import { deriveFulfillmentStatus, derivePaymentStatus, type OrderFulfillmentStat
 import { fulfillmentStatusSql, paymentStatusSql } from './status-sql.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`order status test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'status.db.test.ts');
 
 const STORE = 'f0000000-0000-0000-0000-00000000f001';
 

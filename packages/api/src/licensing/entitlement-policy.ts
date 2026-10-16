@@ -148,8 +148,9 @@ export interface EntitlementPolicy {
   id: string;
   /**
    * How an invalid typed extension surfaces. 'bad_request' (default): 400
-   * INVALID_REQUEST. 'internal': rethrow the ZodError so the app's generic
-   * handler answers 500, exactly like a base-schema failure (the legacy wire).
+   * INVALID_REQUEST. 'internal': throw a plain Error with the ZodError as its
+   * cause so the app's generic handler answers the legacy 500. Base-schema
+   * ZodErrors map to 400 VALIDATION_ERROR.
    */
   invalidExtension?: 'bad_request' | 'internal';
   /**
@@ -215,8 +216,9 @@ export function policyTrial(ctx: TrialContext): TrialDecision {
  * Validate the policy's typed extension for a handler against the raw body.
  * No policy / no schema for this handler => `{}` (the base schema's own
  * parse already ran; unknown keys stay ignored exactly as before). An invalid
- * extension is a 400 `HttpError` (the base schemas' own ZodError is flattened
- * to 500 by the app error handler; a typed extension rejects cleanly instead).
+ * extension is a 400 `HttpError` by default. The 'internal' opt-in wraps the
+ * ZodError in a plain Error for the legacy 500; base-schema ZodErrors map to
+ * 400 VALIDATION_ERROR in the app error handler.
  */
 export function parseRequestExtensions(path: ExtensionPath, raw: unknown): RequestExtensions {
   const schema = entitlementPolicy().requestExtensions?.[path];

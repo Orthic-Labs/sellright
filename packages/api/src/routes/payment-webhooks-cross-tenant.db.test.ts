@@ -21,6 +21,7 @@
  * Runs against sellright_test ONLY (TRUNCATEs data). Mirrors
  * payment-webhooks.route.test.ts's seeding + signing pattern.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import Stripe from 'stripe';
 import { eq, sql } from 'drizzle-orm';
@@ -30,9 +31,7 @@ import * as s from '../db/schema.js';
 import { encryptSecret } from '../security/secret-crypto.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`payment-webhooks-cross-tenant test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'payment-webhooks-cross-tenant.db.test.ts');
 
 const { paymentWebhooks } = await import('./payment-webhooks.js');
 const { OpenAPIHono } = await import('@hono/zod-openapi');
@@ -104,6 +103,7 @@ describe('POST /v1/webhooks/stripe — cross-tenant DB-secret forgery is rejecte
       delete process.env[k];
     }
     process.env.SELLRIGHT_MASTER_KEY = 'c'.repeat(64);
+    env.SELLRIGHT_MASTER_KEY = process.env.SELLRIGHT_MASTER_KEY;
     await wipe();
     // store_secret has an FK to store — the row must exist before we can
     // attach a secret to it. Both stores are (re)inserted per-test via

@@ -3,6 +3,7 @@
  * states main's observable result (payment row shape, audits, licence link, expiry, alerts) and asserts it
  * against the settlement chokepoint. Runs against a *_test database only (truncates).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq, sql } from 'drizzle-orm';
 import { pool, withStore } from '../../db/client.js';
@@ -14,9 +15,7 @@ import { runEffectsPass } from './effects.js';
 import { setInvoiceHistoryPolicy } from './invoice.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`settlement parity test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'main-parity.db.test.ts');
 
 const STORE = 'ee000000-0000-0000-0000-0000000000f1';
 const VARIANT = 'ee000000-0000-0000-0000-0000000000f2';

@@ -13,6 +13,7 @@
  * The real-card UI confirm (3DS in a browser) is the irreducible HUMAN gate and
  * is NOT covered here.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock the Stripe surface used by the payment-intent route. createPaymentIntent
@@ -48,9 +49,7 @@ import { pay } from './pay.js';
 import { orders } from './orders.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`checkout-migration test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'checkout-migration.test.ts');
 
 const STORE = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee';
 const SLUG = 'ckmig-test-store';

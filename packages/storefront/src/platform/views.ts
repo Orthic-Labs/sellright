@@ -9,6 +9,8 @@ export { Link } from '@qwik.dev/router';
 export { OptimizedImage } from '~/components/ui/LazyImage';
 export { RichContent } from '~/platform/widgets/RichContent';
 export { TurnstileMount } from '~/platform/widgets/TurnstileMount';
+export { YouTubeFacade } from '~/platform/widgets/YouTubeFacade';
+export type { YouTubeFacadeProps } from '~/platform/widgets/YouTubeFacade';
 export { default as VerificationButton } from '~/components/verification/VerificationButton';
 export type { SanitizedHtml } from '~/platform/sanitized';
 import type { SanitizedHtml } from '~/platform/sanitized';

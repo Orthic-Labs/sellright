@@ -4,7 +4,7 @@
 //
 //   Tier 1  every code file under src/ (base and overlay alike), always a hard failure:
 //           `graphql`, a gql`` tagged template, `@vendure`, `__typename`.
-//           The bare word "vendure" (any case) also fails, except in files named in scripts/assert-no-vendure.allowlist.
+//           The bare word "vendure" (any case) also fails, except historical files or exact file|identifier pairs in scripts/assert-no-vendure.allowlist.
 //   Tier 2  the strict token list (priceWithTax, featuredAsset, customFields, facetValues, emailAddress, streetLine1,
 //           streetLine2, and __typename), applied ONLY to brand-origin files: the paths in <root>/.compose-overlay-files.txt
 //           (L3 files and L2 ejects). Base-origin files carry some of these as REST wire names or legacy leftovers
@@ -87,7 +87,19 @@ function walkSrc(root) {
 export function checkNoVendure({ root, overlayList } = {}) {
   root = path.resolve(root ?? PACKAGE_ROOT);
   const findings = [];
-  const allowlist = new Set(dataLines(path.join(root, 'scripts/assert-no-vendure.allowlist')).map(normalizeRel));
+  const allowlist = new Set();
+  const legacyIdentifiers = new Map();
+  for (const entry of dataLines(path.join(root, 'scripts/assert-no-vendure.allowlist'))) {
+    const [file, identifier] = entry.split('|').map((part) => part.trim());
+    if (identifier === undefined) allowlist.add(normalizeRel(file));
+    else {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(identifier)) throw new Error('invalid compatibility identifier in allowlist');
+      const rel = normalizeRel(file);
+      const identifiers = legacyIdentifiers.get(rel) ?? [];
+      identifiers.push(new RegExp(String.raw`(?<![$\p{ID_Continue}\u200C\u200D])${identifier}(?![$\p{ID_Continue}\u200C\u200D])`, 'gu'));
+      legacyIdentifiers.set(rel, identifiers);
+    }
+  }
   const exceptions = new Set(
     dataLines(path.join(root, 'scripts/assert-no-vendure.exceptions')).map((l) => {
       const [file, token] = l.split('|').map((p) => p.trim());
@@ -116,7 +128,9 @@ export function checkNoVendure({ root, overlayList } = {}) {
       const at = (tier, token, message) => findings.push({ file: rel, line: i + 1, tier, token, message });
       const signal = line.match(TIER1_SIGNAL);
       if (signal) at(1, signal[0], `GraphQL/Vendure coupling signal "${signal[0]}"`);
-      if (BARE_WORD.test(line) && !allowlist.has(rel)) {
+      // Ignore only declared complete identifiers; all other mentions & hard coupling signals still fail.
+      const bareLine = (legacyIdentifiers.get(rel) ?? []).reduce((remaining, identifier) => remaining.replace(identifier, ''), line);
+      if (BARE_WORD.test(bareLine) && !allowlist.has(rel)) {
         at(1, 'vendure', `unexpected "vendure" mention (add the file to scripts/assert-no-vendure.allowlist only for genuine one-time migration history)`);
       }
       if (strict) {

@@ -14,6 +14,7 @@
  * the verifier override injects SignedDataVerifier instances rooted at that CA
  * (enableOnlineChecks off), exactly like licensing/storekit-verify.test.ts.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -33,11 +34,7 @@ import { _setStoreKitVerifierOverrideForTests } from '../licensing/storekit-conf
 import { DENY_NOTFOUND, clearEntitlementPolicy, denyPlatform, registerEntitlementPolicy, type EntitlementPath } from '../licensing/entitlement-policy.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(
-    `storekit-webhooks test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@]+@/, ':***@')}`,
-  );
-}
+assertTestDatabase(DB, 'storekit-webhooks.db.test.ts');
 
 const STORE = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeee01';
 const SLUG = 'storekit-test-store';

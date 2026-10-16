@@ -9,6 +9,7 @@
  * helpers under withStore(). vitest runs files serially (fileParallelism:
  * false), so the shared DB is safe between files.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Zero-cache stock rule (this task): releasing allocated stock must trigger an
@@ -44,11 +45,7 @@ import { withLeaderLock } from './leader-lock.js';
 
 // Safety: refuse to run against anything but a *_test database.
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(
-    `release-stale test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`,
-  );
-}
+assertTestDatabase(DB, 'release-stale-allocations.test.ts');
 
 const STORE = 'dddddddd-dddd-dddd-dddd-dddddddddddd';
 const SLUG = 'release-stale-test-store';

@@ -593,6 +593,7 @@ export interface SrCartLine {
   lineDiscount: number;
   lineTotal: number;
   available: boolean;
+  availableQuantity: number | null;
 }
 
 export interface SrCart {
@@ -778,3 +779,16 @@ export const srContact = (body: {
   sr<{ ok: boolean; message?: string }>('/v1/shop/contact', {
     method: 'POST', body: JSON.stringify(body),
   });
+
+/** Bootstrap transport stays scoped to the initial migration endpoint. */
+export interface SrLegacyCartReceipt {
+  receipt: string;
+  cart: SrCart | null;
+  couponCode: string | null;
+  countryCode: string | null;
+  unresolved: Array<{ variantId: string; quantity: number }>;
+}
+export const srLegacyCartMigration = (body: {
+  claimId: string; items: Array<{ variantId: string; quantity: number }> | null;
+  couponCode?: string | null; countryCode?: string | null;
+}) => sr<SrLegacyCartReceipt>('/v1/shop/cart/legacy-migration', { method: 'POST', body: JSON.stringify(body) });
