@@ -247,12 +247,12 @@ async function finalizePush(
   });
 }
 
-/** SQL predicate on admin_device_token: registered without a session (pre-0099 rows), or by a session that is neither
- *  expired nor idle past ADMIN_SESSION_IDLE_HOURS. Never refreshes the session's activity. */
+/** A push registration requires a live session & current membership of its store. Never refresh activity. */
 function liveRegistration() {
   const idle = env.ADMIN_SESSION_IDLE_HOURS;
-  return sql`(${s.adminDeviceToken.sessionId} IS NULL OR EXISTS (
-    SELECT 1 FROM "session" ss WHERE ss.id = ${s.adminDeviceToken.sessionId} AND ss.expires_at > now()
+  return sql`(${s.adminDeviceToken.sessionId} IS NOT NULL AND EXISTS (
+    SELECT 1 FROM "session" ss WHERE ss.id = ${s.adminDeviceToken.sessionId} AND ss.admin_user_id = ${s.adminDeviceToken.adminUserId} AND ss.expires_at > now()
+      AND EXISTS (SELECT 1 FROM admin_user_store aus WHERE aus.admin_user_id = ss.admin_user_id AND aus.store_id = ${s.adminDeviceToken.storeId})
       AND (${idle}::float8 <= 0 OR coalesce(ss.last_seen_at, ss.created_at) > now() - make_interval(secs => ${idle}::float8 * 3600))))`;
 }
 

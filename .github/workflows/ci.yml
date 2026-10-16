@@ -236,6 +236,9 @@ jobs:
             -e SELLRIGHT_STOREFRONT_DOMAIN=:8090 \
             caddy:2.10-alpine caddy validate --config /etc/caddy/Caddyfile
 
+      - name: Verify Caddy visitor identity & spoof rejection
+        run: bash scripts/test-caddy-client-ip.sh
+
       - name: Build production images
         run: docker compose -f deploy/compose.yaml -f deploy/compose.build.yaml build api admin storefront
 
@@ -1358,12 +1361,18 @@ jobs:
             psql -U sellright -d sellright -Atc "SELECT email FROM admin_user WHERE is_installation_admin" | grep -qx "${ADMIN_EMAIL}"
           echo "the pre-existing bootstrap admin was promoted to installation admin"
 
-          login_resp=$(docker compose -p sellright-updatedrill --env-file deploy/.env -f deploy/compose.yaml exec -T admin wget -qO- \
+          login_resp=$(docker compose -p sellright-updatedrill --env-file deploy/.env -f deploy/compose.yaml exec -T admin wget -qSO- \
             --header="Content-Type: application/json" \
             --post-data="{\"email\":\"${ADMIN_EMAIL}\",\"password\":\"${ADMIN_PASSWORD}\"}" \
-            http://127.0.0.1:8080/v1/admin/login)
-          echo "$login_resp" | grep -q '"token"' || { echo "::error::login failed after upgrade: $login_resp"; exit 1; }
-          echo "pre-existing admin login still works after upgrade"
+            http://127.0.0.1:8080/v1/admin/login 2>/tmp/updrill-login-headers)
+          # P2 browser sign-in returns an HttpOnly session cookie, never a raw token.
+          echo "$login_resp" | node -e 'let d="";process.stdin.on("data",c=>d+=c);process.stdin.on("end",()=>{const r=JSON.parse(d);if(r.admin?.email!==process.env.ADMIN_EMAIL||!r.csrfToken||!r.stores?.length)process.exit(1)})'
+          session_cookie=$(awk 'tolower($1)=="set-cookie:" && $2 ~ /^sr_admin=/ {split($2,c,";");print c[1];exit}' /tmp/updrill-login-headers)
+          test -n "$session_cookie"
+          me_resp=$(docker compose -p sellright-updatedrill --env-file deploy/.env -f deploy/compose.yaml exec -T admin wget -qO- \
+            --header="Cookie: $session_cookie" http://127.0.0.1:8080/v1/admin/me)
+          echo "$me_resp" | node -e 'let d="";process.stdin.on("data",c=>d+=c);process.stdin.on("end",()=>{const r=JSON.parse(d);if(r.email!==process.env.ADMIN_EMAIL||r.isInstallationAdmin!==true)process.exit(1)})'
+          echo "pre-existing admin login & authenticated installation-admin access work after upgrade"
 
       - name: Tear down update-drill stack
         if: always()

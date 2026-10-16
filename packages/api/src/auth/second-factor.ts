@@ -8,7 +8,7 @@
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { and, count, eq, gte, isNull, lt, sql } from 'drizzle-orm';
-import { unsafeUnscopedDb as db } from '../db/client.js';
+import { unsafeUnscopedDb as db, type Tx } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { matchTotpStep } from './totp.js';
 
@@ -30,12 +30,17 @@ type Db = Pick<typeof db, 'insert' | 'delete'>;
 /** Replace this admin's recovery codes with a fresh set; returns the plaintext codes (show once). One transaction,
  *  serialized per admin: concurrent regenerations cannot leave two valid sets, and a failure keeps the old set. */
 export async function regenerateRecoveryCodes(adminId: string): Promise<string[]> {
-  const codes = Array.from({ length: RECOVERY_CODE_COUNT }, newRecoveryCode);
-  await db.transaction(async (tx) => {
-    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${'recovery-codes:' + adminId}, 0))`);
-    await tx.delete(s.adminRecoveryCode).where(eq(s.adminRecoveryCode.adminUserId, adminId));
-    await tx.insert(s.adminRecoveryCode).values(codes.map((c) => ({ adminUserId: adminId, codeHash: hashRecoveryCode(c) })));
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${'admin-credentials:' + adminId}, 0))`);
+    return regenerateRecoveryCodesTx(adminId, tx);
   });
+}
+
+/** Caller holds the admin credential lock; replace codes in that same credential transaction. */
+export async function regenerateRecoveryCodesTx(adminId: string, tx: Tx): Promise<string[]> {
+  const codes = Array.from({ length: RECOVERY_CODE_COUNT }, newRecoveryCode);
+  await tx.delete(s.adminRecoveryCode).where(eq(s.adminRecoveryCode.adminUserId, adminId));
+  await tx.insert(s.adminRecoveryCode).values(codes.map((c) => ({ adminUserId: adminId, codeHash: hashRecoveryCode(c) })));
   return codes;
 }
 

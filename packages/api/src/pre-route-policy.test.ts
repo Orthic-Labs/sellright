@@ -117,18 +117,23 @@ describe('createApp integration: byte-identical to the captured legacy bytes (CO
     dir = mkdtempSync(join(tmpdir(), 'sr-preroute-'));
     vi.resetModules();
     vi.doMock('./env.js', () => ({ env: { DEBUG_ERRORS: '0', MAINTENANCE_FLAG_FILE: join(dir!, 'MAINTENANCE') } }));
+    vi.doMock('./auth/admin-session.js', async (original) => ({
+      ...await original<typeof import('./auth/admin-session.js')>(),
+      resolveAdmin: vi.fn().mockResolvedValue({ id: 'test-admin', email: 'admin@test.invalid', kind: 'human', auth: 'session', apiTokenId: null, isInstallationAdmin: true, stepUpAt: null, stores: [] }),
+    }));
+    const adminBoom = vi.fn(() => { throw new Error('secret detail'); });
     const [{ createApp }, plugins, maintenance] = await Promise.all([
       import('./app.js'), import('./plugins.js'), import('./maintenance.js'),
     ]);
     const routes = new OpenAPIHono();
     routes.get('/v1/boom', () => { throw new Error('secret detail'); });
-    routes.get('/v1/admin/boom', () => { throw new Error('secret detail'); });
+    routes.get('/v1/admin/boom', adminBoom);
     plugins.registerApiPlugin({
       name: 'legacy-shape',
       routes,
       errorPolicy: { routes: [{ path: '/*' }], transform: flatten },
     });
-    return { app: createApp(), maintenance };
+    return { app: createApp(), maintenance, adminBoom };
   }
 
   const h = { 'x-request-id': 'req-fixed-0001' };
@@ -158,10 +163,11 @@ describe('createApp integration: byte-identical to the captured legacy bytes (CO
   });
 
   it('admin 500 keeps the envelope', async () => {
-    const { app } = await boot();
-    // P2: anonymous /v1/admin requests are refused before routing, so the 500 path needs a (non-resolving) credential
-    const r = await app.request('/v1/admin/boom', { headers: { ...h, authorization: 'Bearer not-a-session' } });
+    const { app, adminBoom } = await boot();
+    // A deterministic resolved principal proves this error originated in the plugin handler.
+    const r = await app.request('/v1/admin/boom', { headers: { ...h, authorization: 'Bearer test-session' } });
     expect(r.status).toBe(500);
     expect(await r.text()).toBe('{"error":{"code":"INTERNAL_ERROR","message":"internal error","requestId":"req-fixed-0001"}}');
+    expect(adminBoom).toHaveBeenCalledOnce();
   });
 });

@@ -157,18 +157,6 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
 
   // Plugin pre-route response policy (plugins.ts `errorPolicy`); no-op without one.
   app.use('*', preRoutePolicy(listApiPlugins));
-  // SDK lifecycle `preRoute`: plugin middleware / response policies that must wrap every
-  // route. After request-id + access log (so they carry the id), before CORS and routes.
-  const routesBeforePreRoute = app.routes.length;
-  for (const plugin of sdkPlugins) plugin.preRoute?.(app, options.ctx!);
-  // P1c: preRoute runs before the admin guard is registered, so a HANDLER mounted there for an admin path would answer
-  // before the agent policy (and outside the plugin boundary). Middleware (app.use) is fine; admin handlers are not.
-  for (const r of app.routes.slice(routesBeforePreRoute)) {
-    if (r.method !== 'ALL' && (r.path === '/v1/admin' || r.path.startsWith('/v1/admin/') || r.path.startsWith('/v1/:'))) {
-      throw new Error(`plugin preRoute registered an admin route handler (${r.method} ${r.path}); mount admin routes through \`routes\``);
-    }
-  }
-
   // OPS-1: per-store CORS allowlist. No wildcard-with-credentials (browsers
   // reject that combination anyway, but we never even offer it). An origin is
   // allowed only when its hostname matches a configured store host
@@ -300,6 +288,12 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
     }
     await next();
   });
+
+  // Plugin hooks run only after credential, CSRF & agent guards. Track their entries separately so
+  // preRoute handlers never become engine-owned routes in the agent policy snapshot.
+  const routesBeforePreRoute = app.routes.length;
+  for (const plugin of sdkPlugins) plugin.preRoute?.(app, options.ctx!);
+  const preRouteEntries = new Set(app.routes.slice(routesBeforePreRoute));
 
   const healthRoute = createRoute({
     method: 'get',
@@ -538,7 +532,7 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
   installDefaultPaymentPolicy();
   // P1c: every route registered so far is engine-owned; anything mounted from here on belongs to a plugin and is
   // denied to agents for mutations unless the plugin allowlists it (auth/agent-policy.ts).
-  const builtinRoutes = new Set(app.routes.filter((r) => r.method !== 'ALL').map((r) => `${r.method.toUpperCase()} ${r.path}`));
+  const builtinRoutes = new Set(app.routes.filter((r) => r.method !== 'ALL' && !preRouteEntries.has(r)).map((r) => `${r.method.toUpperCase()} ${r.path}`));
   for (const plugin of listApiPlugins()) {
     if (plugin.routes) app.route('/', plugin.routes);
   }

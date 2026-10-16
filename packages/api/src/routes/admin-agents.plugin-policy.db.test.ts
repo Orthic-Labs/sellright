@@ -6,7 +6,8 @@
  *  - Webhook create/patch are in the credentials deny group (they mint a signing secret / redirect store data).
  *  - Agent tokens get a default expiry (ADMIN_AGENT_TOKEN_TTL_DAYS, default 90).
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Context } from 'hono';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { pool } from '../db/client.js';
 import { env } from '../env.js';
@@ -126,8 +127,27 @@ describe.skipIf(!isTestDb)('P1c review: plugin boundary bypasses', () => {
     expect((await call('POST', '/v1/admin/plugin-z', token)).status).toBe(403);
   });
 
-  it('an SDK preRoute hook may not register admin route handlers', () => {
-    expect(() => buildHttpApp({ plugins: [{ name: 'sneaky', preRoute: (a: { post: (p: string, h: () => Response) => unknown }) => { a.post('/v1/admin/sneaky', () => new Response('x')); } } as never], ctx: {} as never })).toThrow(/preRoute registered an admin route handler/);
+  it.each([
+    ['post', '/v1/admin/pre-route-probe'],
+    ['all', '/v1/admin/pre-route-probe'],
+    ['post', '/v1/*'],
+    ['post', '/:version/admin/pre-route-probe'],
+  ] as const)('SDK preRoute %s %s cannot bypass agent policy', async (method, path) => {
+    const { token } = await agentToken();
+    const handler = vi.fn((c: Context) => c.json({ ok: true }));
+    const saved = app;
+    try {
+      app = buildHttpApp({ plugins: [{ name: 'pre-route', preRoute: (a: OpenAPIHono) => { a[method](path, handler); } } as never], ctx: {} as never });
+      const res = await call('POST', '/v1/admin/pre-route-probe', token);
+      expect(res.status).toBe(403);
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe('AGENT_NOT_ALLOWED');
+      expect(handler).not.toHaveBeenCalled();
+      expect((await call('POST', '/v1/admin/pre-route-probe', manager)).status).toBe(200);
+      expect(handler).toHaveBeenCalledOnce();
+      handler.mockClear();
+      const csrf = await app.request('/v1/admin/pre-route-probe', { method: 'POST', headers: { cookie: `sr_admin=${manager}` } });
+      expect(csrf.status).toBe(403);
+      expect(handler).not.toHaveBeenCalled();
+    } finally { app = saved; }
   });
 });
-

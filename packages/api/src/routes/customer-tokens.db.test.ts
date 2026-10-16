@@ -38,6 +38,7 @@ import { verifyTurnstileToken } from '../security/turnstile.js';
 import { customerTokens } from './customer-tokens.js';
 import { auth } from './auth.js';
 import { hashPassword } from '../auth/password.js';
+import * as passwordAuth from '../auth/password.js';
 import { createSession } from '../auth/session.js';
 
 const STORE_A = 'aaaaaaaa-1111-1111-1111-111111111111';
@@ -388,6 +389,34 @@ describe('POST /v1/shop/auth/reset-password — atomic claim (security audit 202
       const [a, b] = await Promise.all([reset(`${t1}${sfx}`, 'pair-new-password-a'), reset(`${t2}${sfx}`, 'pair-new-password-b')]);
       expect([a.status, b.status].sort()).toEqual([200, 409]);
     }
+  });
+
+  it('rechecks expiry after slow password hashing before the locked claim', async () => {
+    const customer = await seedCustomer(STORE_A, 'expiry-wait@a.test');
+    const raw = 'expires-while-customer-is-locked';
+    await plantReset(customer.id, raw);
+    let entered!: () => void;
+    let resume!: () => void;
+    const blocked = new Promise<void>((r) => { entered = r; });
+    const release = new Promise<void>((r) => { resume = r; });
+    const original = passwordAuth.hashPassword;
+    const spy = vi.spyOn(passwordAuth, 'hashPassword').mockImplementationOnce(async (...args) => {
+      const hash = await original(...args);
+      entered();
+      await release;
+      return hash;
+    });
+    const pending = reset(raw, 'changed-after-token-expiry');
+    try {
+      await blocked;
+      // The cheap probe has completed, but token expiry changes before the locked claim.
+      await pool.query('UPDATE customer_token SET expires_at = $1 WHERE token_hash = $2', [new Date(Date.now() - 1), sha(raw)]);
+      const before = (await pool.query('SELECT password_hash FROM customer WHERE id = $1', [customer.id])).rows;
+      resume();
+      expect((await pending).status).toBe(409);
+      expect((await pool.query('SELECT password_hash FROM customer WHERE id = $1', [customer.id])).rows).toEqual(before);
+      expect((await pool.query('SELECT used_at FROM customer_token WHERE token_hash = $1', [sha(raw)])).rows[0].used_at).toBeNull();
+    } finally { resume(); spy.mockRestore(); await pending; }
   });
 
   it('an invalid or used token changes nothing', async () => {

@@ -119,9 +119,9 @@ customerTokens.openapi(
     const st = await resolveStoreFromCtx(c);
     const { token, password } = c.req.valid('json');
     const tokenHash = hashToken(token);
-    const live = and(eq(s.customerToken.tokenHash, tokenHash), eq(s.customerToken.kind, 'password_reset'), gt(s.customerToken.expiresAt, new Date()), isNull(s.customerToken.usedAt));
+    const live = () => and(eq(s.customerToken.tokenHash, tokenHash), eq(s.customerToken.kind, 'password_reset'), gt(s.customerToken.expiresAt, new Date()), isNull(s.customerToken.usedAt));
     // Cheap read first so an unknown token never costs an Argon2 hash; the authoritative claim is below.
-    const [probe] = await withStore(st.id, (tx) => tx.select({ id: s.customerToken.id, customerId: s.customerToken.customerId }).from(s.customerToken).where(live).limit(1));
+    const [probe] = await withStore(st.id, (tx) => tx.select({ id: s.customerToken.id, customerId: s.customerToken.customerId }).from(s.customerToken).where(live()).limit(1));
     if (!probe) return errJson(c, 409, 'TOKEN_INVALID', 'token is invalid, expired, or already used');
     const passwordHash = await hashPassword(password); // outside the transaction (no slow work under row locks)
     const ok = await withStore(st.id, async (tx): Promise<boolean> => {
@@ -130,7 +130,7 @@ customerTokens.openapi(
       await tx.select({ id: s.customer.id }).from(s.customer).where(eq(s.customer.id, probe.customerId)).for('update');
       // ONE transaction: claim the token atomically under that lock (only one request can flip used_at; the claim
       // revalidates expiry/kind/unused), then change the password. A failed claim changes nothing.
-      const [row] = await tx.update(s.customerToken).set({ usedAt: new Date() }).where(and(live, eq(s.customerToken.customerId, probe.customerId)))
+      const [row] = await tx.update(s.customerToken).set({ usedAt: new Date() }).where(and(live(), eq(s.customerToken.customerId, probe.customerId)))
         .returning({ id: s.customerToken.id, customerId: s.customerToken.customerId });
       if (!row) return false;
       // Burn every other outstanding reset token for this customer (a second link must not undo this reset).

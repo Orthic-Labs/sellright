@@ -52,7 +52,12 @@ adminPush.openapi(
     const sessionId = admin.sessionId;
     if (!sessionId) throw new HttpError(403, 'devices register from a signed-in session', 'SESSION_REQUIRED');
     await withStore(st.storeId, async (tx) => {
-      const live = await tx.execute(sql`SELECT 1 FROM "session" WHERE id = ${sessionId} FOR SHARE`);
+      // Re-check & lock membership: a registration racing staff removal must not resurrect its device row.
+      const member = await tx.execute(sql`SELECT 1 FROM admin_user_store
+        WHERE admin_user_id = ${admin.id} AND store_id = ${st.storeId} FOR SHARE`);
+      if (member.rows.length === 0) throw new HttpError(401, 'store access revoked');
+      const live = await tx.execute(sql`SELECT 1 FROM "session" WHERE id = ${sessionId}
+        AND admin_user_id = ${admin.id} AND expires_at > clock_timestamp() FOR SHARE`);
       if (live.rows.length === 0) throw new HttpError(401, 'invalid or expired session');
       // `token` is unique across the table: the same phone re-registering (app
       // relaunch, token rotation, or a DIFFERENT operator signing in on a shared

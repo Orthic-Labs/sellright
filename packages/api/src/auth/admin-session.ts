@@ -93,7 +93,12 @@ export async function createAdminSessionIfCredential(adminUserId: string, verifi
  *  (which revoked this session) wins. Returns null when refused. */
 export async function changeAdminPassword(adminUserId: string, verifiedHash: string, newHash: string, keepToken: string): Promise<number | null> {
   return db.transaction(async (tx) => {
-    const [own] = await tx.select({ id: s.session.id }).from(s.session).where(eq(s.session.tokenHash, hashToken(keepToken))).for('update').limit(1);
+    // Match factor mutation lock order: admin row, then session row (avoids cross-session deadlocks).
+    const [admin] = await tx.select({ hash: s.adminUser.passwordHash }).from(s.adminUser)
+      .where(eq(s.adminUser.id, adminUserId)).for('update').limit(1);
+    if (!admin || admin.hash !== verifiedHash) return null;
+    const [own] = await tx.select({ id: s.session.id }).from(s.session)
+      .where(and(eq(s.session.tokenHash, hashToken(keepToken)), eq(s.session.adminUserId, adminUserId), sql`${s.session.expiresAt} > clock_timestamp()`)).for('update').limit(1);
     if (!own) return null;
     const upd = await tx.update(s.adminUser).set({ passwordHash: newHash })
       .where(and(eq(s.adminUser.id, adminUserId), eq(s.adminUser.passwordHash, verifiedHash)))

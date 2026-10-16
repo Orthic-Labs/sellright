@@ -3,12 +3,16 @@
  * rest, recovery codes, authenticated password change. Real app, real DB (sellright_test ONLY —
  * TRUNCATEs), memory rate-limit backend, a test-only SELLRIGHT_MASTER_KEY.
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHmac } from 'node:crypto';
 import { createApp } from './app.js';
 import { pool } from './db/client.js';
 import { env } from './env.js';
 import { hashPassword } from './auth/password.js';
+import * as passwordAuth from './auth/password.js';
+import * as secondFactor from './auth/second-factor.js';
+import { changeAdminPassword, deleteAdminSession } from './auth/admin-session.js';
+import { getAdminCredentialsById } from './auth/admin-staff.js';
 import { _setRateLimitBackendForTest, createMemoryRateLimitBackend } from './auth/rate-limit-backend.js';
 import { newTotpSecret } from './auth/totp.js';
 import { openTotpSecret, sealLegacyTotpSecrets } from './auth/totp-secret.js';
@@ -306,3 +310,70 @@ describe.skipIf(!isTestDb)('P1b final review: enrolment and password-change race
   });
 });
 
+
+// Gates stop an already successful proof before its route commits. Concurrent credential changes
+// complete while it is suspended; no timers or probabilistic ordering are involved.
+function proofBarrier() {
+  let entered!: () => void;
+  let resume!: () => void;
+  return { entered: new Promise<void>((r) => { entered = r; }), released: new Promise<void>((r) => { resume = r; }), enter: () => entered(), release: () => resume() };
+}
+
+describe.skipIf(!isTestDb)('credential mutation races', () => {
+  it.each(['password', 'logout'] as const)('an enable proof cannot outlive concurrent %s revocation', async (cause) => {
+    const { token: oldToken } = (await login('owner@mfa.test', PW)).body;
+    const { token: currentToken } = (await login('owner@mfa.test', PW)).body;
+    const creds = (await getAdminCredentialsById(OWNER))!;
+    const secret = newTotpSecret();
+    const barrier = proofBarrier();
+    const original = passwordAuth.verifyPassword;
+    const spy = vi.spyOn(passwordAuth, 'verifyPassword').mockImplementationOnce(async (...args) => {
+      const result = await original(...args);
+      barrier.enter();
+      await barrier.released;
+      return result;
+    });
+    const pending = req('POST', '/v1/admin/2fa/enable', { token: oldToken!, body: { secret, code: totpAt(secret, step()), password: PW } });
+    try {
+      await barrier.entered;
+      if (cause === 'password') expect(await changeAdminPassword(OWNER, creds.passwordHash!, await hashPassword('new-password-after-proof'), currentToken!)).toBe(1);
+      else await deleteAdminSession(oldToken!);
+      barrier.release();
+      const res = await pending;
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe('CREDENTIAL_CHANGED');
+      expect(await storedSecret(OWNER)).toBeNull();
+      expect(Number((await pool.query('SELECT count(*) FROM admin_recovery_code WHERE admin_user_id = $1', [OWNER])).rows[0].count)).toBe(0);
+      expect((await req('GET', '/v1/admin/me', { token: currentToken! })).status).toBe(200);
+    } finally { barrier.release(); spy.mockRestore(); await pending; }
+  });
+
+  it('a verified recovery replacement cannot overwrite codes from a disable/re-enrol', async () => {
+    const { token } = (await login('owner@mfa.test', PW)).body;
+    const enrolled = await enrol(token!);
+    const barrier = proofBarrier();
+    const original = secondFactor.verifySecondFactor;
+    const spy = vi.spyOn(secondFactor, 'verifySecondFactor').mockImplementationOnce(async (...args) => {
+      const result = await original(...args);
+      expect(result).toBe(true);
+      barrier.enter();
+      await barrier.released;
+      return result;
+    });
+    const pending = req('POST', '/v1/admin/2fa/recovery-codes', { token: token!, body: { password: PW, code: enrolled.recoveryCodes[0] } });
+    try {
+      await barrier.entered;
+      expect((await req('POST', '/v1/admin/2fa/disable', { token: token!, body: { password: PW, code: enrolled.recoveryCodes[1] } })).status).toBe(200);
+      const secret = newTotpSecret();
+      const enabled = await req('POST', '/v1/admin/2fa/enable', { token: token!, body: { password: PW, secret, code: totpAt(secret, step() + 1) } });
+      expect(enabled.status).toBe(200);
+      const current = (await enabled.json()) as { recoveryCodes: string[] };
+      const before = (await pool.query('SELECT code_hash FROM admin_recovery_code WHERE admin_user_id = $1 ORDER BY code_hash', [OWNER])).rows;
+      barrier.release();
+      expect((await pending).status).toBe(409);
+      expect(openTotpSecret(OWNER, await storedSecret(OWNER))).toBe(secret);
+      expect((await pool.query('SELECT code_hash FROM admin_recovery_code WHERE admin_user_id = $1 ORDER BY code_hash', [OWNER])).rows).toEqual(before);
+      expect(current.recoveryCodes).toHaveLength(10);
+    } finally { barrier.release(); spy.mockRestore(); await pending; }
+  });
+});

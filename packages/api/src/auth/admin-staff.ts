@@ -14,9 +14,12 @@
  *     shells, removes the lint suppression entirely, and centralizes the IDOR
  *     and "global tables are global" invariants in one auditable file.
  */
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, ne, sql } from 'drizzle-orm';
 import { unsafeUnscopedDb as db } from '../db/client.js';
 import * as s from '../db/schema.js';
+import { createHash } from 'node:crypto';
+import { env } from '../env.js';
+import { regenerateRecoveryCodesTx, deleteRecoveryCodes } from './second-factor.js';
 import { normalizeEmail } from './email.js';
 import { openTotpSecret, sealTotpSecret } from './totp-secret.js';
 
@@ -36,19 +39,52 @@ export async function getAdminTotpSecret(adminId: string): Promise<string | null
  *  password hash to verify against, and whether TOTP must additionally be
  *  checked (a null/absent totpSecret means 2FA isn't enabled — password
  *  alone is the full step-up, same as login's own rule). */
-export async function getAdminCredentialsById(adminId: string): Promise<{ passwordHash: string | null; totpSecret: string | null } | null> {
+export async function getAdminCredentialsById(adminId: string): Promise<{ passwordHash: string | null; totpSecret: string | null; totpVersion: string | null } | null> {
   const [u] = await db
     .select({ passwordHash: s.adminUser.passwordHash, totpSecret: s.adminUser.totpSecret })
     .from(s.adminUser)
     .where(eq(s.adminUser.id, adminId))
     .limit(1);
-  return u ? { passwordHash: u.passwordHash, totpSecret: openTotpSecret(adminId, u.totpSecret) } : null;
+  return u ? { passwordHash: u.passwordHash, totpSecret: openTotpSecret(adminId, u.totpSecret), totpVersion: u.totpSecret } : null;
 }
 
 /** Set the TOTP secret (called from /v1/admin/2fa/enable after a code is confirmed). Sealed at rest
  *  with the master key (auth/totp-secret.ts). */
 export async function setAdminTotpSecret(adminId: string, secret: string): Promise<void> {
   await db.update(s.adminUser).set({ totpSecret: sealTotpSecret(adminId, secret) }).where(eq(s.adminUser.id, adminId));
+}
+
+/** Commit a verified factor mutation only while its credential snapshot & calling session remain current.
+ * Factor, recovery-code replacement & session revocation share one transaction, serialized per admin.
+ * Slow password/factor proof happens before this call; its results cannot resurrect superseded credentials. */
+export async function mutateAdminSecondFactor(input: {
+  adminId: string; token: string; passwordHash: string | null; totpSecret: string | null; totpVersion: string | null;
+  action: 'enable' | 'disable' | 'recovery'; secret?: string;
+}): Promise<{ recoveryCodes: string[] } | null> {
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${'admin-credentials:' + input.adminId}, 0))`);
+    const [admin] = await tx.select({ passwordHash: s.adminUser.passwordHash, secret: s.adminUser.totpSecret })
+      .from(s.adminUser).where(eq(s.adminUser.id, input.adminId)).for('update').limit(1);
+    if (!admin || admin.passwordHash !== input.passwordHash || admin.secret !== input.totpVersion) return null;
+    const tokenHash = createHash('sha256').update(input.token).digest('hex');
+    const idle = env.ADMIN_SESSION_IDLE_HOURS;
+    const [session] = await tx.select({ id: s.session.id, expiresAt: s.session.expiresAt, lastSeenAt: s.session.lastSeenAt, createdAt: s.session.createdAt }).from(s.session)
+      .where(and(eq(s.session.tokenHash, tokenHash), eq(s.session.adminUserId, input.adminId),
+        sql`${s.session.expiresAt} > clock_timestamp()`,
+        sql`(${idle}::float8 <= 0 OR coalesce(${s.session.lastSeenAt}, ${s.session.createdAt}) > clock_timestamp() - make_interval(secs => ${idle}::float8 * 3600))`))
+      .for('update').limit(1);
+    if (!session || session.expiresAt.getTime() <= Date.now() || (idle > 0 && (session.lastSeenAt ?? session.createdAt).getTime() <= Date.now() - idle * 3600000)) return null;
+    if (input.action === 'enable') {
+      if (input.totpSecret || !input.secret) return null;
+      await tx.update(s.adminUser).set({ totpSecret: sealTotpSecret(input.adminId, input.secret) }).where(eq(s.adminUser.id, input.adminId));
+      await tx.delete(s.session).where(and(eq(s.session.adminUserId, input.adminId), ne(s.session.id, session.id)));
+    } else if (input.action === 'disable') {
+      await tx.update(s.adminUser).set({ totpSecret: null }).where(eq(s.adminUser.id, input.adminId));
+      await deleteRecoveryCodes(input.adminId, tx);
+      return { recoveryCodes: [] };
+    } else if (!input.totpSecret) return null;
+    return { recoveryCodes: await regenerateRecoveryCodesTx(input.adminId, tx) };
+  });
 }
 
 /** Replace an admin's password hash (POST /v1/admin/password, after the route re-verified the current

@@ -326,6 +326,8 @@ adminSettingsAdvanced.openapi(
       await tx
         .delete(s.adminUserStore)
         .where(and(eq(s.adminUserStore.adminUserId, adminUserId), eq(s.adminUserStore.storeId, st.storeId)));
+      await tx.delete(s.adminDeviceToken)
+        .where(and(eq(s.adminDeviceToken.adminUserId, adminUserId), eq(s.adminDeviceToken.storeId, st.storeId)));
       await revokePendingInvites(tx, st.storeId, adminUserId);
       await revokeAgentTokens(tx, adminUserId, st.storeId); // an agent removed through the staff path loses its tokens (and their sessions) too
       if (targetRole !== null) {

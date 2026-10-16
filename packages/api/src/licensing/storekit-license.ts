@@ -260,7 +260,7 @@ export async function issueStoreKitActivation(
 
   // seats <= 0 is the unlimited-devices sentinel shared with
   // activateLicenseOnDevice; a positive value caps distinct deviceIdHashes.
-  if (rawLic.seats > 0 && !sameDevice && activeExisting.length >= rawLic.seats) {
+  if (rawLic.seats > 0 && sameDevice?.state !== 'active' && activeExisting.length >= rawLic.seats) {
     return { kind: 'full' as const };
   }
 

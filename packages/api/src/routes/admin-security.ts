@@ -10,10 +10,10 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import type { Context } from 'hono';
 import { newTotpSecret, otpauthUri } from '../auth/totp.js';
-import { clearAdminTotpSecret, getAdminCredentialsById, setAdminTotpSecret } from '../auth/admin-staff.js';
-import { changeAdminPassword, revokeOtherAdminSessions, type AdminPrincipal } from '../auth/admin-session.js';
+import { getAdminCredentialsById, mutateAdminSecondFactor } from '../auth/admin-staff.js';
+import { changeAdminPassword, type AdminPrincipal } from '../auth/admin-session.js';
 import { hashPassword, verifyPassword } from '../auth/password.js';
-import { deleteRecoveryCodes, regenerateRecoveryCodes, remainingRecoveryCodes, verifySecondFactor, verifyTotpOnce } from '../auth/second-factor.js';
+import { remainingRecoveryCodes, verifySecondFactor, verifyTotpOnce } from '../auth/second-factor.js';
 import { clientIp, reserveAdminAuthAttempt, clearAdminAuthFailures } from '../auth/rate-limit.js';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
@@ -93,11 +93,9 @@ adminSecurity.openapi(
     if (!(await verifyPassword(password, creds?.passwordHash ?? null))) await gate.fail('invalid password');
     if (!(await verifyTotpOnce(admin.id, secret, code))) await gate.fail('code did not match — check your authenticator app', 409);
     await gate.ok();
-    await setAdminTotpSecret(admin.id, secret);
-    // Other sessions of this admin signed in WITHOUT a second factor; enrolling must not silently promote them (e.g. a
-    // stolen enrol-only cookie). Only this session — which just proved the password and the new factor — survives.
-    await revokeOtherAdminSessions(admin.id, token);
-    const recoveryCodes = await regenerateRecoveryCodes(admin.id);
+    const changed = await mutateAdminSecondFactor({ adminId: admin.id, token, passwordHash: creds!.passwordHash, totpSecret: null, totpVersion: creds!.totpVersion, action: 'enable', secret });
+    if (!changed) throw new HttpError(409, 'your credentials or session changed meanwhile — sign in again', 'CREDENTIAL_CHANGED');
+    const { recoveryCodes } = changed;
     await audit(c, admin, '2fa_enable');
     return c.json({ enabled: true, recoveryCodes }, 200);
   }),
@@ -110,7 +108,7 @@ adminSecurity.openapi(
     responses: { 200: { description: 'OK', content: J(z.object({ enabled: z.boolean() })) }, 401: { description: 'Unauthorized / wrong password', ...errBody }, 409: { description: 'Bad code', ...errBody }, 429: tooMany },
   }),
   async (c) => guard(c, async () => {
-    const { admin } = await requireAdmin(c);
+    const { admin, token } = await requireAdmin(c);
     requireHuman(admin);
     const { code, password } = c.req.valid('json');
     const creds = await getAdminCredentialsById(admin.id);
@@ -119,8 +117,9 @@ adminSecurity.openapi(
     if (!(await verifyPassword(password, creds.passwordHash))) await gate.fail('invalid password');
     if (!(await verifySecondFactor(admin.id, creds.totpSecret, code))) await gate.fail('invalid code', 409);
     await gate.ok();
-    await clearAdminTotpSecret(admin.id);
-    await deleteRecoveryCodes(admin.id);
+    if (!(await mutateAdminSecondFactor({ adminId: admin.id, token, ...creds, action: 'disable' }))) {
+      throw new HttpError(409, 'your credentials or session changed meanwhile — sign in again', 'CREDENTIAL_CHANGED');
+    }
     await audit(c, admin, '2fa_disable');
     return c.json({ enabled: false }, 200);
   }),
@@ -133,7 +132,7 @@ adminSecurity.openapi(
     responses: { 200: { description: 'OK', content: J(z.object({ recoveryCodes: z.array(z.string()) })) }, 401: { description: 'Unauthorized / wrong password', ...errBody }, 409: { description: 'Bad code or 2FA not enabled', ...errBody }, 429: tooMany },
   }),
   async (c) => guard(c, async () => {
-    const { admin } = await requireAdmin(c);
+    const { admin, token } = await requireAdmin(c);
     requireHuman(admin);
     const { code, password } = c.req.valid('json');
     const creds = await getAdminCredentialsById(admin.id);
@@ -142,7 +141,9 @@ adminSecurity.openapi(
     if (!(await verifyPassword(password, creds.passwordHash))) await gate.fail('invalid password');
     if (!(await verifySecondFactor(admin.id, creds.totpSecret, code))) await gate.fail('invalid code', 409);
     await gate.ok();
-    const recoveryCodes = await regenerateRecoveryCodes(admin.id);
+    const changed = await mutateAdminSecondFactor({ adminId: admin.id, token, ...creds, action: 'recovery' });
+    if (!changed) throw new HttpError(409, 'your credentials or session changed meanwhile — sign in again', 'CREDENTIAL_CHANGED');
+    const { recoveryCodes } = changed;
     await audit(c, admin, '2fa_recovery_codes_regenerate');
     return c.json({ recoveryCodes }, 200);
   }),
