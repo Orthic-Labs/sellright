@@ -177,6 +177,7 @@ async function claimDuePushes(storeId: string, limit: number): Promise<ClaimedPu
 type PushOutcome =
   | { kind: 'sent' }
   | { kind: 'unregistered'; error: string }
+  | { kind: 'cancelled'; error: string }
   | { kind: 'failed'; error: unknown };
 
 async function finalizePush(
@@ -197,6 +198,15 @@ async function finalizePush(
         .where(currentAttempt)
         .returning({ id: s.pushOutbox.id });
       return { result: rows.length ? 'sent' : 'stale', pruned: 0 };
+    }
+
+    if (outcome.kind === 'cancelled') {
+      // The registration (or its session) ended after enqueue: drop this delivery, touch no device row.
+      const rows = await tx.update(s.pushOutbox)
+        .set({ status: 'dead', lastError: outcome.error, updatedAt: new Date(), claimedAt: null, firstFailedAt: sql`coalesce(${s.pushOutbox.firstFailedAt}, now())` })
+        .where(currentAttempt)
+        .returning({ id: s.pushOutbox.id });
+      return { result: rows.length ? 'dead' : 'stale', pruned: 0 };
     }
 
     if (outcome.kind === 'unregistered') {
@@ -243,7 +253,7 @@ function liveRegistration() {
   const idle = env.ADMIN_SESSION_IDLE_HOURS;
   return sql`(${s.adminDeviceToken.sessionId} IS NULL OR EXISTS (
     SELECT 1 FROM "session" ss WHERE ss.id = ${s.adminDeviceToken.sessionId} AND ss.expires_at > now()
-      AND (${idle} <= 0 OR coalesce(ss.last_seen_at, ss.created_at) > now() - make_interval(secs => ${idle} * 3600))))`;
+      AND (${idle}::float8 <= 0 OR coalesce(ss.last_seen_at, ss.created_at) > now() - make_interval(secs => ${idle}::float8 * 3600))))`;
 }
 
 async function registrationStillLive(storeId: string, deviceToken: string): Promise<boolean> {
@@ -274,7 +284,9 @@ export async function deliverPushes(opts: { limit?: number } = {}): Promise<{ se
       // B2.16 review: a queued push is only delivered while its device registration (and the admin session that made
       // it) is still live — a logout, revocation or session expiry after enqueue cancels it.
       if (d.topic !== CANARY_TOPIC && !(await registrationStillLive(st.id, d.device_token))) {
-        const finalized = await finalizePush(st.id, d, { kind: 'unregistered', error: 'device registration or its session ended' });
+        // Cancel the push only; never delete by token here — the device may have re-registered under a new session
+        // between the check and this write (finalizePush's unregistered branch would delete that fresh row).
+        const finalized = await finalizePush(st.id, d, { kind: 'cancelled', error: 'device registration or its session ended' });
         if (finalized.result === 'dead') failed++;
         pruned += finalized.pruned;
         continue;
