@@ -27,10 +27,18 @@ beforeEach(() => {
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); removeLocks(); });
 
+async function decodeFetch(input: unknown, init?: RequestInit) {
+  // Request may come from a different realm than the jsdom globals.
+  const request = typeof input === 'object' && input !== null && 'url' in input && typeof input.url === 'string'
+    ? input as Request : undefined;
+  const path = new URL(request?.url ?? String(input), 'http://fetch.test').pathname;
+  const bodyText = init?.body != null ? await new Response(init.body).text() : request ? await request.clone().text() : '';
+  return { path, body: bodyText ? JSON.parse(bodyText) as Record<string, unknown> : {} };
+}
+
 function mockTransfer(behavior: (body: Record<string, unknown>) => Response | Promise<Response>) {
   vi.stubGlobal('fetch', vi.fn(async (input: unknown, init?: RequestInit) => {
-    const path = String(input);
-    const body = init?.body ? JSON.parse(String(init.body)) : {};
+    const { path, body } = await decodeFetch(input, init);
     requests.push({ path, body });
     if (path.endsWith('/auth/me')) return response(401, {});
     if (path.endsWith('/legacy-migration')) return behavior(body);
@@ -125,9 +133,9 @@ describe('ordinary native bootstrap', () => {
     document.cookie = 'sr_legacy_cart=1; Path=/';
     document.cookie = 'sr_cart=migrated; Path=/';
     localStorage.setItem('vendure_local_cart', raw);
-    vi.stubGlobal('fetch', vi.fn(async (input: unknown) => {
-      const path = String(input);
-      requests.push({ path, body: {} });
+    vi.stubGlobal('fetch', vi.fn(async (input: unknown, init?: RequestInit) => {
+      const { path, body } = await decodeFetch(input, init);
+      requests.push({ path, body });
       return path.includes('/auth/') || path.endsWith('/legacy-migration') ? response(403, {}) : response(200, cart);
     }));
     expect((await CartService.bootstrap()).cart.lines).toHaveLength(1);
