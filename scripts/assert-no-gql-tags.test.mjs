@@ -128,8 +128,14 @@ const compatibilityFixtures = {
   'packages/api/src/routes/legacy-session-cart.db.test.ts': "const metadata = { vendureId: 17 }; const sourceKey = 'vendure:test'; const key = '__vendure_session='; const cookie = `__vendure_session=${wrapped}`; const sku = 'vendure-unresolved:999';",
   'packages/api/src/payments/sezzle-reconcile.test.ts': "const metadata = { vendure: { vendureMethod: 'sezzle', sourceKey: 'vendure:damned' } }; const other = 'vendure:other';",
   'packages/api/src/payments/sezzle-reconcile.ts': 'const method = metadata.vendure.vendureMethod;',
-  'packages/storefront-client/src/generated/schema.d.ts': `interface Routes { /** ${cartSummary} */ migration: unknown; }`,
-  'packages/storefront-client/dist/generated/schema.d.ts': `interface Routes { /** ${cartSummary} */ migration: unknown; }`,
+  'packages/storefront-client/src/generated/schema.d.ts': `interface Routes {
+  /** ${cartSummary} */
+  migration: unknown;
+}`,
+  'packages/storefront-client/dist/generated/schema.d.ts': `interface Routes {
+  /** ${cartSummary} */
+  migration: unknown;
+}`,
   'packages/storefront/src/services/CartService.test.ts': "const key = 'vendure_local_cart';",
   'packages/storefront/src/services/legacy-cart.test.ts': "const key = 'vendure_local_cart';",
   'packages/storefront/src/services/CartService.ts': "export const LEGACY_CART_KEY = 'vendure_local_cart';",
