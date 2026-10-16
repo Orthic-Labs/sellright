@@ -5,7 +5,7 @@ import { bootstrapCustomer } from './bootstrap.server';
 
 beforeEach(() => { api.get.mockReset(); });
 describe('SSR customer adoption before rendering', () => {
-  it('forwards every secure adoption cookie without replacing original Vendure cookie', async () => {
+  it('forwards every secure adoption cookie without replacing original legacy cookie', async () => {
     const cookies = ['sr_cust=opaque; HttpOnly; Secure; SameSite=Lax; Path=/', 'sr_cust_csrf=csrf; Secure; Path=/', 'authToken=; Max-Age=0; Path=/'];
     api.get.mockResolvedValue({ data: { id: 'exact-api-customer' }, response: { headers: { getSetCookie: () => cookies } } });
     const appended: string[] = [];

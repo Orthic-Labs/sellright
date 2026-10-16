@@ -73,6 +73,7 @@ jobs:
         run: pnpm deps:audit
 
       - name: Production build (root — the storefront's full production build; no page is prerendered any more)
+        id: production_build
         # The exact command a real deploy runs: `pnpm -r build` (every
         # workspace package's own `build` script, including packages/
         # storefront's full production build) then
@@ -93,7 +94,7 @@ jobs:
 
       - name: Generate client contract repair patch after failed verification
         id: contract_patch
-        if: ${{ failure() && steps.verify_static.outcome == 'failure' }}
+        if: ${{ failure() && (steps.production_build.outcome == 'failure' || steps.verify_static.outcome == 'failure') }}
         run: |
           # Keep verification failed; export generator output for owner review, never auto-commit.
           pnpm --filter @sellright/storefront-client generate

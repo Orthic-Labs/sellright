@@ -38,7 +38,7 @@ function mockTransfer(behavior: (body: Record<string, unknown>) => Response | Pr
   }));
 }
 
-describe('Vendure browser snapshot', () => {
+describe('legacy browser snapshot', () => {
   it('ports only numeric variant IDs, quantities, coupon code & country intent', () => {
     expect(parseLegacyCartSnapshot(raw)).toEqual({ items: [{ variantId: '17', quantity: 2 }], couponCode: 'SAVE', countryCode: 'CA', countryExplicit: true });
     expect(() => parseLegacyCartSnapshot(JSON.stringify({ items: [{ productVariantId: 'SKU17', quantity: 1 }] }))).toThrow();

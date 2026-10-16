@@ -16,7 +16,7 @@ type VariantHit = { sku: string; name: string; productName: string; unitPrice: n
 const signed = (cents: number, cur: string) => `${cents < 0 ? '−' : '+'}${money(Math.abs(cents), cur)}`;
 
 /** Variant search used by "Add item" and "Swap variant". */
-function VariantPicker({ code, onPick, placeholder }: { code: string; onPick: (v: VariantHit) => void; placeholder: string }) {
+function VariantPicker({ code, currency, onPick, placeholder }: { code: string; currency: string; onPick: (v: VariantHit) => void; placeholder: string }) {
   const [q, setQ] = useState('');
   // No debounce: results carry live availability, which must never be a delayed read.
   const dq = q.trim();
@@ -38,7 +38,7 @@ function VariantPicker({ code, onPick, placeholder }: { code: string; onPick: (v
           {isFetching && !data ? <div className="p-2 text-xs text-gray-400">Searching…</div> : (data?.items.length ?? 0) === 0 ? <div className="p-2 text-xs text-gray-400">No matching variants</div> : data!.items.map((v) => (
             <button type="button" key={v.sku} className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 flex justify-between gap-3" onClick={() => { onPick(v); setQ(''); }}>
               <span className="min-w-0 truncate">{v.productName} — {v.name} <span className="text-xs text-gray-400">{v.sku}</span></span>
-              <span className="shrink-0 tnum text-gray-500">{v.available != null ? `${v.available} avail · ` : ''}{money(v.unitPrice)}</span>
+              <span className="shrink-0 tnum text-gray-500">{v.available != null ? `${v.available} avail · ` : ''}{money(v.unitPrice, currency)}</span>
             </button>
           ))}
         </div>
@@ -175,7 +175,7 @@ export function OrderEditPanel({ code, currency, initialAddress, onClose, onComm
                       {l.refundedQty > 0 && <span className="text-danger"> · {l.refundedQty} refunded (locked)</span>}
                     </div>
                     {swapFor === l.id && (
-                      <div className="mt-2"><VariantPicker code={code} placeholder="Search a variant to swap to…" onPick={(v) => { set({ swaps: { ...st.swaps, [l.id]: { sku: v.sku, name: v.name } } }); setSwapFor(null); }} /></div>
+                      <div className="mt-2"><VariantPicker code={code} currency={currency} placeholder="Search a variant to swap to…" onPick={(v) => { set({ swaps: { ...st.swaps, [l.id]: { sku: v.sku, name: v.name } } }); setSwapFor(null); }} /></div>
                     )}
                   </td>
                   <td className="td text-center">
@@ -213,7 +213,7 @@ export function OrderEditPanel({ code, currency, initialAddress, onClose, onComm
             })}
           </tbody>
         </table>
-        <VariantPicker code={code} placeholder="Add an item — search by name or SKU" onPick={(v) => set({ adds: [...st.adds, { sku: v.sku, name: `${v.productName} — ${v.name}`, quantity: 1 }] })} />
+        <VariantPicker code={code} currency={currency} placeholder="Add an item — search by name or SKU" onPick={(v) => set({ adds: [...st.adds, { sku: v.sku, name: `${v.productName} — ${v.name}`, quantity: 1 }] })} />
       </FormSection>
 
       <FormSection title="Discount, shipping & adjustments">

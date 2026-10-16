@@ -120,6 +120,21 @@ describe('atomic legacy cart reconciliation', () => {
     expect((await (await transfer(null)).json()).cart).toBeNull();
     expect(await withStore(STORE, tx => tx.select().from(s.legacyCartClaim))).toEqual([expect.objectContaining({ cartId: null, retiredAt: expect.any(Date) })]);
   });
+  it.each([
+    { expiry: 'missing', adopted: false }, { expiry: 'expired', adopted: false },
+    { expiry: 'missing', adopted: true }, { expiry: 'expired', adopted: true },
+  ])('retires $expiry cart expiry with prior adoption=$adopted', async ({ expiry, adopted }) => {
+    const claimId = randomUUID();
+    if (adopted) expect((await (await transfer(null, { claimId })).json()).cart.token).toBe('target-cart-capability');
+    await withStore(STORE, tx => tx.update(s.cart).set({ expiresAt: expiry === 'missing' ? null : new Date(0) }).where(eq(s.cart.id, CART)));
+    const response = await transfer(null, { claimId });
+    expect(response.status).toBe(200);
+    expect((await response.json()).cart).toBeNull();
+    expect((await (await transfer(null)).json()).cart).toBeNull();
+    expect(await withStore(STORE, tx => tx.select().from(s.legacyCartClaim))).toEqual([
+      expect.objectContaining({ cartId: null, retiredAt: expect.any(Date) }),
+    ]);
+  });
   it('records retirement when source cart finished before first adoption & never returns a terminal local receipt', async () => {
     await withStore(STORE, tx => tx.update(s.cart).set({ status: 'converted' }).where(eq(s.cart.id, CART)));
     expect((await (await transfer(null)).json()).cart).toBeNull();

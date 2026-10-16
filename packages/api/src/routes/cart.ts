@@ -320,7 +320,7 @@ cart.openapi(createRoute({ method: 'post', path: '/v1/shop/cart/legacy-migration
     const couponCode = receipt ? receipt.couponCode : body.items !== null ? body.couponCode ?? null : grant?.couponCode ?? null;
     const countryCode = receipt?.countryCode ?? body.countryCode ?? grant?.countryCode ?? null;
     // Every replay checks the locked cart before returning its capability. A finished cart stays retired.
-    const usable = row && ['active', 'abandoned'].includes(row.status) && row.expiresAt.getTime() > Date.now();
+    const usable = row && ['active', 'abandoned'].includes(row.status) && row.expiresAt !== null && row.expiresAt.getTime() > Date.now();
     if (receipt) {
       if (receipt.retiredAt || !usable) {
         if (!receipt.retiredAt) await tx.update(s.legacyCartClaim).set({ retiredAt: new Date(), cartId: null }).where(eq(s.legacyCartClaim.id, receipt.id));

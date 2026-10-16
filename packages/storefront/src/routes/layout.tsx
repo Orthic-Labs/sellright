@@ -110,7 +110,7 @@ export const useAuthLoader = routeLoader$(async ({ cookie, headers, url }) => {
 	if (theme.isDemo || (!cookie.get(AUTH_TOKEN)?.value && !hasLegacyTransport)) {
 		return { isAuthenticated: false, countryCode, customer: null };
 	}
-	// HttpOnly Vendure transport is invisible to JS. Presence prompts one proof-checked cart request, never authentication.
+	// HttpOnly legacy transport is invisible to JS. Presence prompts one proof-checked cart request, never authentication.
 	if (!cookie.get(AUTH_TOKEN)?.value && hasLegacyTransport) {
 		cookie.set('sr_legacy_cart', '1', { path: '/', maxAge: 3600, sameSite: 'lax', secure: url.protocol === 'https:' });
 	}

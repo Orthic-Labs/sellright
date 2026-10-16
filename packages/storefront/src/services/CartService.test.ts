@@ -228,7 +228,7 @@ describe('fail-closed stock', () => {
 });
 
 describe('legacy cart migration', () => {
-	it('maps numeric Vendure IDs through a committed receipt before deleting the original blob', async () => {
+	it('maps numeric legacy IDs through a committed receipt before deleting the original blob', async () => {
 		const claimId = '11111111-1111-4111-8111-111111111111';
 		vi.spyOn(crypto, 'randomUUID').mockReturnValueOnce(claimId);
 		localStorage.setItem('vendure_local_cart', JSON.stringify({ items: [{ productVariantId: '17', quantity: 2 }],

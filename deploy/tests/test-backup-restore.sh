@@ -77,7 +77,7 @@ case "$*" in
     printf restored > "$TEST_ROOT/live-db" ;;
   *'ALTER DATABASE sellright RENAME TO sellright_failed_'*) mv "$TEST_ROOT/live-db" "$TEST_ROOT/failed-db" ;;
   *'ALTER DATABASE sellright_prev_'*' RENAME TO sellright;'*) mv "$TEST_ROOT/previous-db" "$TEST_ROOT/live-db" ;;
-  *' rm -f sellright-restore-'*) touch "$TEST_ROOT/helper-removed" ;;
+  'rm -f sellright-restore-'*) touch "$TEST_ROOT/helper-removed" ;;
   *) : ;;
 esac
 STUB
