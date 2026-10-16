@@ -11,6 +11,7 @@
  * APNs and outbound-fetch seams are mocked; everything else is real.
  */
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { pool, withStore } from './db/client.js';
 import { env } from './env.js';
@@ -63,10 +64,15 @@ async function enqueueEmailRow(): Promise<string> {
 }
 async function enqueuePushRow(): Promise<string> {
   return withStore(STORE, async (tx) => {
-    // A push is only delivered while its device registration exists (0099); register the token like the route does.
+    // Delivery requires a live registration session & current store membership (0099).
     const token = `tok-${crypto.randomUUID()}`;
     const admin = await tx.execute(sql`INSERT INTO admin_user (email) VALUES (${`${token}@instr.test`}) RETURNING id`);
-    await tx.execute(sql`INSERT INTO admin_device_token (store_id, admin_user_id, token) VALUES (${STORE}, ${(admin.rows[0] as { id: string }).id}, ${token})`);
+    const adminId = (admin.rows[0] as { id: string }).id;
+    await tx.execute(sql`INSERT INTO admin_user_store (admin_user_id, store_id) VALUES (${adminId}, ${STORE})`);
+    const session = await tx.execute(sql`INSERT INTO "session" (store_id, admin_user_id, token_hash, expires_at)
+      VALUES (${STORE}, ${adminId}, ${createHash('sha256').update(token).digest('hex')}, now() + interval '1 hour') RETURNING id`);
+    await tx.execute(sql`INSERT INTO admin_device_token (store_id, admin_user_id, token, session_id)
+      VALUES (${STORE}, ${adminId}, ${token}, ${(session.rows[0] as { id: string }).id})`);
     const r = await tx.execute(sql`INSERT INTO push_outbox (store_id, topic, device_token, payload) VALUES (${STORE}, 'order.paid', ${token}, '{"aps":{}}'::jsonb) RETURNING id`);
     return (r.rows[0] as { id: string }).id;
   });
