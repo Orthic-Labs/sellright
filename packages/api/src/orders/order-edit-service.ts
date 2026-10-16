@@ -16,7 +16,7 @@
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { and, asc, desc, eq, gte, ilike, inArray, isNull, lte, or, sql } from 'drizzle-orm';
-import { withAdvisoryLock, withStore, type Tx } from '../db/client.js';
+import { withAdvisoryLocks, withStore, type Tx } from '../db/client.js';
 import { LockSetUnstable, orderIdByCode, withLockedSet } from '../db/locks.js';
 import { checkPlacement } from '../payments/policy/host.js';
 import { PaymentPolicyUnavailableError, PaymentPolicyVetoError } from '../payments/policy/registry.js';
@@ -435,6 +435,17 @@ export async function liveEditSettlement(tx: Tx, storeId: string, st: Settlement
     ...(status === 'failed' ? { message: 'the gateway declined the refund — retry it from the order edit, or leave it as credit' } : {}) };
 }
 
+/** A connection can fail after the refund reservation committed. Link that
+ *  deterministic attempt before recording failure so reconciliation stays visible. */
+async function recoverEditRefundSettlement(storeId: string, idempotencyKey: string, out: SettlementOutcome): Promise<SettlementOutcome> {
+  return withStore(storeId, async tx => {
+    const [refund] = await tx.select({ id: s.refund.id }).from(s.refund)
+      .innerJoin(s.paymentAttempt, eq(s.paymentAttempt.id, s.refund.attemptId))
+      .where(and(eq(s.refund.storeId, storeId), eq(s.paymentAttempt.idempotencyKey, `refund:${idempotencyKey}`))).limit(1);
+    return refund ? liveEditSettlement(tx, storeId, { ...out, refundId: refund.id }) : out;
+  });
+}
+
 export interface CommitResult {
   editId: string; code: string; state: string; grandTotal: number; previousGrandTotal: number;
   /** Balance at commit time (+ owed, - credit). */
@@ -520,12 +531,12 @@ export async function commitOrderEdit(input: CommitInput): Promise<CommitResult>
   if (retire) await retireOrderIntents(storeId, input.code, input.actor);
   // The pay advisory lock serializes this commit with an in-flight /pay for the
   // same order, so the charge amount and the total can never disagree mid-edit.
-  return withAdvisoryLock(`pay:${storeId}:${input.code}`, async () => {
+  const orderId = await lockableOrderId(storeId, input.code);
+  return withAdvisoryLocks([`pay:${storeId}:${input.code}`, `refund:${storeId}:${orderId}`], async (held) => {
     let stockChanged = false;
     type Applied = { result: CommitResult; plan: EditPlan | null; refundPlan?: { amount: number; paymentId: string } };
     // STOREKIT §5.8 #15: the order's licences (L2) are planned and locked before the
     // order row (L3); the plan/lock/verify set owns the transaction.
-    const orderId = await lockableOrderId(storeId, input.code);
     const applied: Applied = await withLockedSet(storeId, { kind: 'order', orderId }, async (tx): Promise<Applied> => {
       // Replay: the stored edit wins over re-applying (the total already moved).
       const [prior] = await tx.select().from(s.orderEdit).where(and(eq(s.orderEdit.storeId, storeId), eq(s.orderEdit.idempotencyKey, input.idempotencyKey))).limit(1);
@@ -761,12 +772,12 @@ export async function commitOrderEdit(input: CommitInput): Promise<CommitResult>
         const r = await requestRefund({
           storeId, orderId: ord!.id, actor: input.actor, idempotencyKey: `order-edit:${input.idempotencyKey}`,
           paymentId: rp.paymentId, amount: rp.amount, reason: editRefundReason(input.reason), source: 'order_edit',
-        });
+        }, held);
         out = { ...out, refundId: r.refundId, refundState: r.refundState, status: r.refundState === 'Settled' ? 'settled' : r.refundState === 'Pending' ? 'pending' : 'failed' };
         if (r.refundState === 'Failed') out.message = 'the gateway declined the refund — retry it from the order edit, or leave it as credit';
       } catch (e) {
         out = { ...out, status: 'failed', message: e instanceof RefundError ? e.message : 'refund could not be issued' };
-        if (!(e instanceof RefundError)) throw e;
+        out = await recoverEditRefundSettlement(storeId, `order-edit:${input.idempotencyKey}`, out);
       }
       const final = await withStore(storeId, async (tx) => {
         await tx.update(s.orderEdit).set({ settlement: out as object }).where(eq(s.orderEdit.id, applied.result.editId));
@@ -796,8 +807,8 @@ export interface RetryEditRefundInput {
  */
 export async function retryOrderEditRefund(input: RetryEditRefundInput): Promise<{ editId: string; state: string; amountDue: number; settlement: SettlementOutcome }> {
   const { storeId } = input;
-  return withAdvisoryLock(`pay:${storeId}:${input.code}`, async () => {
-    const orderId = await lockableOrderId(storeId, input.code);
+  const orderId = await lockableOrderId(storeId, input.code);
+  return withAdvisoryLocks([`pay:${storeId}:${input.code}`, `refund:${storeId}:${orderId}`], async (held) => {
     const ctx = await withLockedSet(storeId, { kind: 'order', orderId }, async (tx) => {
       const [o] = await tx.select().from(s.order).where(and(eq(s.order.storeId, storeId), eq(s.order.code, input.code))).limit(1).for('update');
       if (!o || o.deletedAt) throw new OrderEditError(404, 'ORDER_NOT_FOUND', 'order not found');
@@ -834,12 +845,12 @@ export async function retryOrderEditRefund(input: RetryEditRefundInput): Promise
       const r = await requestRefund({
         storeId, orderId: o.id, actor: input.actor, idempotencyKey: `order-edit:${edit.idempotencyKey}:retry:${ctx.attempt}`,
         paymentId: f.paymentId, amount: -ctx.amountDue, reason: editRefundReason(edit.reason), source: 'order_edit',
-      });
+      }, held);
       out = { ...out, refundId: r.refundId, refundState: r.refundState, status: r.refundState === 'Settled' ? 'settled' : r.refundState === 'Pending' ? 'pending' : 'failed' };
       out.message = r.refundState === 'Failed' ? 'the gateway declined the refund again — retry later or leave it as credit' : undefined;
     } catch (e) {
-      if (!(e instanceof RefundError)) throw e;
-      out = { ...out, status: 'failed', message: e.message };
+      out = { ...out, status: 'failed', message: e instanceof RefundError ? e.message : 'refund could not be issued' };
+      out = await recoverEditRefundSettlement(storeId, `order-edit:${edit.idempotencyKey}:retry:${ctx.attempt}`, out);
     }
     return finish(out, 'edit_refund_retry');
   });

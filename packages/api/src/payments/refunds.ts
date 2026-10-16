@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { and, eq, inArray, sql } from 'drizzle-orm';
-import { withAdvisoryLock, withStore, type Tx } from '../db/client.js';
+import { withAdvisoryLock, withStore, type Tx, type HeldAdvisoryLocks } from '../db/client.js';
 import { withLockedSet } from '../db/locks.js';
 import * as s from '../db/schema.js';
 import { resolveGatewayAccount, assertGatewayEnvironment, recordedNmiEnvironment } from './gateway-account.js';
@@ -52,7 +52,7 @@ async function refundView(tx: Tx, row: typeof s.refund.$inferSelect) {
     refunded: row.state === 'Settled' ? row.amount : 0, pending: row.state === 'Pending' ? row.amount : 0 };
 }
 
-export async function requestRefund(input: RefundRequest) {
+export async function requestRefund(input: RefundRequest, held?: HeldAdvisoryLocks) {
   if (!input.idempotencyKey || input.idempotencyKey.length > 200) throw new RefundError(400, 'A refund idempotency key is required');
   const key = 'refund:' + input.idempotencyKey, fingerprint = requestFingerprint(input);
   return withAdvisoryLock('refund:' + input.storeId + ':' + input.orderId, async () => {
@@ -172,7 +172,7 @@ export async function requestRefund(input: RefundRequest) {
     // regeneration, which is safe (never wrong, just occasionally redundant).
     if (finalized.view.refundState === 'Settled' && finalized.storeSlug) onStockChanged(finalized.storeSlug);
     return finalized.view;
-  });
+  }, held);
 }
 
 /**

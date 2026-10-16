@@ -1,8 +1,8 @@
-import { mkdtemp, readFile, readlink, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readlink, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
-import { publishGeneration } from './publish.js';
+import { publishGeneration, readCurrentCatalogSnapshot } from './publish.js';
 
 const roots: string[] = [];
 async function root() {
@@ -52,6 +52,29 @@ describe('catalog generation publication', () => {
     const legacy = await root();
     await writeFile(join(legacy, 'current'), 'not a SellRight pointer');
     await expect(publishGeneration({ outDir: legacy, storeSlug: 'fixture', manifest: {}, details: [] })).rejects.toThrow();
+  });
+
+  it('pins both formats, reuses immutable details, & rejects corrupted or symlinked snapshots', async () => {
+    const outDir = await root();
+    const detail = { slug: 'kept', name: 'Kept' };
+    const manifest = { lastUpdated: '2026-01-01', totalItems: 1, defaultSort: 'name', products: [detail] };
+    const input = { outDir, storeSlug: 'fixture', manifest, details: [detail], manifestV2: manifest, detailsV2: [detail] };
+    const first = await publishGeneration(input);
+    const snapshot = await readCurrentCatalogSnapshot(outDir, 'fixture');
+    expect(snapshot?.generation).toBe(first.generation);
+    expect(snapshot?.v2.details).toEqual([detail]);
+    await publishGeneration({ ...input, reuse: { generation: first.generation, slugs: ['kept'] } });
+    const kept = await stat(join(outDir, 'current/products-v2/kept.json'));
+    if (kept.nlink > 1) expect(kept.ino).toBe((await stat(join(outDir, 'generations', first.generation, 'products-v2/kept.json'))).ino);
+    await expect(publishGeneration({ ...input, reuse: { generation: first.generation, slugs: ['kept'] } })).rejects.toThrow('stale');
+    const current = await readlink(join(outDir, 'current'));
+    const nativeDetail = join(outDir, current, 'products-v2/kept.json');
+    await rm(nativeDetail);
+    await symlink(join(outDir, 'generations', first.generation, 'products-v2/kept.json'), nativeDetail);
+    expect(await readCurrentCatalogSnapshot(outDir, 'fixture')).toBeNull();
+    await rm(nativeDetail);
+    await writeFile(nativeDetail, '{bad json');
+    expect(await readCurrentCatalogSnapshot(outDir, 'fixture')).toBeNull();
   });
 
   it('cleans only old owned generations, keeping previous and recent readers safe', async () => {

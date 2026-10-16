@@ -211,22 +211,63 @@ export async function withStore<T>(storeId: string, fn: (tx: Tx) => Promise<T>):
  * can never exhaust the application's normal transaction pool. The lock remains
  * session-scoped and therefore works across API processes sharing Postgres.
  */
-export async function withAdvisoryLock<T>(lockKey: string, fn: () => Promise<T>): Promise<T> {
+declare const advisoryBrand: unique symbol;
+export type HeldAdvisoryLocks = { readonly [advisoryBrand]: true };
+interface AdvisoryWitness { keys: Set<string>; active: boolean; used: boolean; work?: Promise<unknown> }
+const advisoryWitnesses = new WeakMap<object, AdvisoryWitness>();
+
+/** Acquire all workflow keys on one connection, in lexical order (pay before refund).
+ *  Each explicit token permits one covered operation; duplicate/nested consumers
+ *  reject before running. The owner retains locks until accepted work settles,
+ *  including work its callback failed to await. No async context inheritance. */
+export async function withAdvisoryLocks<T>(
+  lockKeys: readonly string[], fn: (held: HeldAdvisoryLocks) => Promise<T>,
+): Promise<T> {
+  const keys = [...new Set(lockKeys)].sort();
   const client = await advisoryLockPool.connect();
-  let locked = false;
+  const locked: string[] = [];
+  const held = {} as HeldAdvisoryLocks;
+  const witness: AdvisoryWitness = { keys: new Set(keys), active: true, used: false };
+  advisoryWitnesses.set(held, witness);
   let broken = false;
   try {
-    await client.query('SELECT pg_advisory_lock(hashtextextended($1, 0))', [lockKey]);
-    locked = true;
-    return await fn();
-  } finally {
-    if (locked) {
+    for (const key of keys) {
       try {
-        await client.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [lockKey]);
+        await client.query('SELECT pg_advisory_lock(hashtextextended($1, 0))', [key]);
+        locked.push(key);
+      } catch (error) {
+        broken = true; // an interrupted acquire may have succeeded on the backend
+        throw error;
+      }
+    }
+    return await fn(held);
+  } finally {
+    witness.active = false;
+    // A callback can return/throw without awaiting its accepted operation. Drain
+    // it before releasing locks; awaited failures still reach the callback.
+    await witness.work?.catch(() => undefined);
+    for (const key of locked.reverse()) {
+      try {
+        await client.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [key]);
       } catch {
         broken = true;
       }
     }
     client.release(broken);
   }
+}
+
+export async function withAdvisoryLock<T>(
+  lockKey: string, fn: () => Promise<T>, held?: HeldAdvisoryLocks,
+): Promise<T> {
+  if (held !== undefined) {
+    const witness = advisoryWitnesses.get(held);
+    if (!witness?.active || !witness.keys.has(lockKey)) throw new Error('Advisory lock token does not cover this active workflow');
+    if (witness.used) throw new Error('Advisory lock token already used by a covered operation');
+    witness.used = true;
+    const work = Promise.resolve().then(fn);
+    witness.work = work;
+    return work;
+  }
+  return withAdvisoryLocks([lockKey], fn);
 }

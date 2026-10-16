@@ -116,24 +116,30 @@ export function onStockChanged(storeSlug: string, variantIds?: string[]): void {
   if (!manifestConfigured() || storeSlug !== env.STORE_SLUG) return;
   const st = stateFor(storeSlug);
   const scope: RegenScope = variantIds?.length ? new Set(variantIds) : 'full';
-  if (st.generating) {
-    st.trailing = mergeScope(st.trailing, scope);
-    return;
-  }
-  void run(storeSlug, st, scope);
+  void enqueue(storeSlug, st, scope);
 }
 
-async function run(storeSlug: string, st: RegenState, scope: RegenScope): Promise<void> {
-  st.generating = true;
-  st.trailing = null;
-  // Resolved once per run (resolveStore has its own cache — see
-  // store-context.ts) purely to get the store's id for the durable marker;
-  // never awaited by the caller of onStockChanged.
-  let storeId: string | undefined;
+async function enqueue(storeSlug: string, st: RegenState, scope: RegenScope): Promise<void> {
   try {
     const store = await resolveStore(storeSlug);
-    storeId = store.id;
-    await markManifestRegenerationPending(storeId, storeSlug);
+    // Every trigger is durable before joining an in-process batch. A later
+    // publish can acknowledge only its own token, never a newer trigger.
+    const pending = await markManifestRegenerationPending(store.id, storeSlug);
+    const coveredScope: RegenScope = pending?.requiresFull ? 'full' : scope;
+    if (st.generating) {
+      st.trailing = mergeScope(st.trailing, coveredScope);
+      return;
+    }
+    await run(storeSlug, store.id, pending?.token ?? null, st, coveredScope);
+  } catch (e) {
+    logErr.error('stock-triggered catalog manifest bookkeeping failed', e, { storeSlug });
+  }
+}
+
+async function run(storeSlug: string, storeId: string, token: string | null, st: RegenState, scope: RegenScope): Promise<void> {
+  st.generating = true;
+  st.trailing = null;
+  try {
     const variantIds = scope === 'full' ? undefined : [...scope];
     const result = await withLeaderLock(
       'catalog-manifest',
@@ -144,7 +150,7 @@ async function run(storeSlug: string, st: RegenState, scope: RegenScope): Promis
     // Only clear the durable marker on an ACTUAL publish. `withLeaderLock`
     // returns undefined when another instance held the lock for this tick —
     // that instance's own run is responsible for the marker, not this one.
-    if (result) await clearManifestRegenerationPending(storeId);
+    if (result && token !== null) await clearManifestRegenerationPending(storeId, token);
   } catch (e) {
     logErr.error('stock-triggered catalog manifest regeneration failed', e, { storeSlug });
     // Marker deliberately left in place — catalog-manifest-drain will retry.
@@ -153,7 +159,7 @@ async function run(storeSlug: string, st: RegenState, scope: RegenScope): Promis
     if (st.trailing !== null) {
       const next = st.trailing;
       st.trailing = null;
-      void run(storeSlug, st, next);
+      void enqueue(storeSlug, st, next);
     }
   }
 }

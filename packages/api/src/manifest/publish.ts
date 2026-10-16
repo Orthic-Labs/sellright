@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, readlink, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { link, lstat, mkdir, readFile, readdir, readlink, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 
@@ -12,6 +12,8 @@ type Input = {
   // existing callers/tests that only know about v1 keep compiling; catalog.ts
   // (the only real caller) always supplies it.
   manifestV2?: unknown; detailsV2?: { slug: string }[];
+  /** Only immutable, validated files from this pinned current generation. */
+  reuse?: { generation: string; slugs: string[] };
 };
 
 export interface CatalogManifestShape {
@@ -21,69 +23,66 @@ export interface CatalogManifestShape {
   products: Array<{ slug: string; [k: string]: unknown }>;
 }
 
-/**
- * Read the CURRENT published generation's manifest + every per-product detail
- * file, verifying the same marker (`source`/`storeSlug`) publishGeneration
- * itself checks before ever trusting `current`. Used by catalog.ts's
- * per-product regeneration path to reuse unaffected products' entries
- * instead of re-querying and re-serializing the whole catalog on every
- * stock change. Returns null when there's no current generation yet, or it
- * fails the same foreign-pointer/marker checks publishGeneration enforces
- * (first publish, corrupted state, wrong store) — the caller's only
- * correct fallback in that case is a full regeneration.
- */
-export async function readCurrentGeneration(outDir: string, storeSlug: string): Promise<{ manifest: CatalogManifestShape; details: Array<{ slug: string; [k: string]: unknown }> } | null> {
+type Detail = { slug: string; [k: string]: unknown };
+type Snapshot = { manifest: CatalogManifestShape; details: Detail[] };
+
+async function readRegularJson(path: string): Promise<unknown> {
+  if (!(await lstat(path)).isFile()) throw new Error('Catalog file is not a regular file');
+  return JSON.parse(await readFile(path, 'utf8'));
+}
+
+async function readSnapshot(dir: string, native: boolean): Promise<Snapshot> {
+  const folder = join(dir, native ? 'products-v2' : 'products');
+  if (!(await lstat(folder)).isDirectory()) throw new Error('Catalog detail directory is not a directory');
+  const manifest = await readRegularJson(join(dir, native ? 'shop-catalog.v2.json' : 'shop-catalog.json')) as CatalogManifestShape;
+  if (!Array.isArray(manifest?.products) || manifest.totalItems !== manifest.products.length) throw new Error('Invalid catalog manifest');
+  const slugs = manifest.products.map(p => p.slug);
+  if (slugs.some(slug => typeof slug !== 'string' || !SAFE_SLUG.test(slug)) || new Set(slugs).size !== slugs.length) throw new Error('Invalid catalog slugs');
+  const details: Detail[] = [];
+  for (const slug of slugs) {
+    const detail = await readRegularJson(join(folder, `${slug}.json`)) as Detail;
+    if (detail?.slug !== slug) throw new Error('Catalog detail slug mismatch');
+    details.push(detail);
+  }
+  return { manifest, details };
+}
+
+async function pinCatalogGeneration(outDir: string, storeSlug: string): Promise<{ generation: string; dir: string }> {
   const root = resolve(outDir);
+  const previous = await readlink(join(root, 'current'));
+  if (!/^generations\/[0-9a-f-]{36}$/.test(previous)) throw new Error('Foreign catalog pointer');
+  if (!(await lstat(join(root, 'generations'))).isDirectory()) throw new Error('Foreign generations directory');
+  const dir = join(root, previous);
+  if (!(await lstat(dir)).isDirectory()) throw new Error('Foreign generation directory');
+  const generation = previous.slice('generations/'.length);
+  const marker = await readRegularJson(join(dir, 'marker.json')) as { source?: string; storeSlug?: string; generation?: string };
+  if (marker.source !== 'sellright' || marker.storeSlug !== storeSlug || marker.generation !== generation) throw new Error('Foreign catalog marker');
+  return { generation, dir };
+}
+
+/** Pin both formats once before opening a DB transaction. Any missing/corrupt
+ *  file or symlinked generation/detail forces a complete database rebuild. */
+export async function readCurrentCatalogSnapshot(outDir: string, storeSlug: string): Promise<{ generation: string; v1: Snapshot; v2: Snapshot } | null> {
   try {
-    const previous = await readlink(join(root, 'current'));
-    if (!/^generations\/[0-9a-f-]{36}$/.test(previous)) return null;
-    const dir = join(root, previous);
-    const marker = JSON.parse(await readFile(join(dir, 'marker.json'), 'utf8')) as { source?: string; storeSlug?: string };
-    if (marker.source !== 'sellright' || marker.storeSlug !== storeSlug) return null;
-    const manifest = JSON.parse(await readFile(join(dir, 'shop-catalog.json'), 'utf8')) as CatalogManifestShape;
-    const details: Array<{ slug: string; [k: string]: unknown }> = [];
-    for (const p of manifest.products) {
-      if (!SAFE_SLUG.test(p.slug)) continue; // never trust an unsafe slug even from our own prior output
-      try {
-        details.push(JSON.parse(await readFile(join(dir, 'products', `${p.slug}.json`), 'utf8')) as { slug: string; [k: string]: unknown });
-      } catch {
-        return null; // a missing/corrupt detail file means the snapshot isn't trustworthy — fall back to full regen
-      }
-    }
-    return { manifest, details };
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    return null; // any other read failure (bad JSON, etc.) — same fallback
+    const { generation, dir } = await pinCatalogGeneration(outDir, storeSlug);
+    const v1 = await readSnapshot(dir, false);
+    const v2 = await readSnapshot(dir, true);
+    const nativeSlugs = new Set(v2.manifest.products.map(p => p.slug));
+    if (v1.manifest.products.length !== nativeSlugs.size || v1.manifest.products.some(p => !nativeSlugs.has(p.slug))) return null;
+    return { generation, v1, v2 };
+  } catch {
+    return null;
   }
 }
 
-/** v2 counterpart of readCurrentGeneration. Currently unused by catalog.ts
- *  (v2 is always a full scan — see its own doc comment) but published here
- *  for symmetry and so a future incremental-v2 path doesn't need to
- *  reinvent this read. Same marker/foreign-pointer checks as v1. */
-export async function readCurrentGenerationV2(outDir: string, storeSlug: string): Promise<{ manifest: CatalogManifestShape; details: Array<{ slug: string; [k: string]: unknown }> } | null> {
-  const root = resolve(outDir);
-  try {
-    const previous = await readlink(join(root, 'current'));
-    if (!/^generations\/[0-9a-f-]{36}$/.test(previous)) return null;
-    const dir = join(root, previous);
-    const marker = JSON.parse(await readFile(join(dir, 'marker.json'), 'utf8')) as { source?: string; storeSlug?: string };
-    if (marker.source !== 'sellright' || marker.storeSlug !== storeSlug) return null;
-    const manifest = JSON.parse(await readFile(join(dir, 'shop-catalog.v2.json'), 'utf8')) as CatalogManifestShape;
-    const details: Array<{ slug: string; [k: string]: unknown }> = [];
-    for (const p of manifest.products) {
-      if (!SAFE_SLUG.test(p.slug)) continue;
-      try {
-        details.push(JSON.parse(await readFile(join(dir, 'products-v2', `${p.slug}.json`), 'utf8')) as { slug: string; [k: string]: unknown });
-      } catch {
-        return null;
-      }
-    }
-    return { manifest, details };
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    return null;
-  }
+export async function readCurrentGeneration(outDir: string, storeSlug: string): Promise<Snapshot | null> {
+  try { return await readSnapshot((await pinCatalogGeneration(outDir, storeSlug)).dir, false); }
+  catch { return null; }
+}
+
+export async function readCurrentGenerationV2(outDir: string, storeSlug: string): Promise<Snapshot | null> {
+  try { return await readSnapshot((await pinCatalogGeneration(outDir, storeSlug)).dir, true); }
+  catch { return null; }
 }
 
 // Call under the catalog leader lock. Readers resolve current once per request.
@@ -105,6 +104,8 @@ export async function publishGeneration(input: Input) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     if (previous) throw new Error('Current catalog marker is missing');
   }
+  const reuse = new Set(input.reuse?.slugs ?? []);
+  if (input.reuse && (!GENERATION.test(input.reuse.generation) || previous !== `generations/${input.reuse.generation}` || [...reuse].some(slug => !SAFE_SLUG.test(slug)))) throw new Error('Refusing stale or invalid catalog reuse');
   // Claim a new directory exclusively, including simultaneous first publication.
   const ownerPath = join(root, 'owner.json');
   try {
@@ -122,9 +123,23 @@ export async function publishGeneration(input: Input) {
     await mkdir(join(target, 'products'), { recursive: true });
     await mkdir(join(target, 'products-v2'), { recursive: true });
     await writeFile(join(target, 'shop-catalog.json'), JSON.stringify(input.manifest));
-    for (const detail of input.details) await writeFile(join(target, 'products', `${detail.slug}.json`), JSON.stringify(detail));
+    const writeDetails = async (folder: string, details: { slug: string }[]) => {
+      for (const detail of details) {
+        const destination = join(target, folder, `${detail.slug}.json`);
+        if (reuse.has(detail.slug)) {
+          const source = join(root, previous!, folder, `${detail.slug}.json`);
+          // Generation files are immutable: only fresh directories receive writes.
+          // If links are unavailable, use the already-validated snapshot bytes.
+          try {
+            if ((await lstat(source)).isFile()) { await link(source, destination); continue; }
+          } catch { /* Cross-device/unsupported links fall back to a separate file. */ }
+        }
+        await writeFile(destination, JSON.stringify(detail));
+      }
+    };
+    await writeDetails('products', input.details);
     await writeFile(join(target, 'shop-catalog.v2.json'), JSON.stringify(input.manifestV2 ?? null));
-    for (const detail of detailsV2) await writeFile(join(target, 'products-v2', `${detail.slug}.json`), JSON.stringify(detail));
+    await writeDetails('products-v2', detailsV2);
     // format: 2 — this generation carries both v1 (Vendure-parity) and v2
     // (native) manifests. A reader keyed on `format` can tell whether v2
     // files exist without probing the filesystem.

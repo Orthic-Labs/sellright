@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -237,6 +237,8 @@ describe('native catalog generation', () => {
       const first = await publishCatalogManifest({ outDir, storeSlug: slug });
       expect(first.products).toBe(2);
       const firstGenB = JSON.parse(await readFile(join(outDir, 'current/products/prod-b.json'), 'utf8'));
+      const firstNativeB = await readFile(join(outDir, 'current/products-v2/prod-b.json'), 'utf8');
+      const firstFileB = await stat(join(outDir, 'current/products-v2/prod-b.json'));
 
       // Only A's stock changes — B's entry must be byte-for-byte reused.
       await withStore(store, async tx => { await tx.execute(sql`UPDATE stock SET on_hand = 0 WHERE variant_id = ${variantA}`); });
@@ -252,23 +254,33 @@ describe('native catalog generation', () => {
       const detailB = JSON.parse(await readFile(join(outDir, 'current/products/prod-b.json'), 'utf8'));
       expect(detailB).toEqual(firstGenB); // reused verbatim — proves it was NOT re-queried/re-serialized
 
-      // v2 doesn't share v1's incremental-reuse optimization (always a full
-      // scan — see catalog.ts's buildEntries doc comment), so a SCOPED v1
-      // publish must still produce a CORRECT, COMPLETE v2 for both products,
-      // stock included, not just the explicitly-scoped one.
+      // Both formats keep unchanged details byte-for-byte; immutable files
+      // share storage where hard links are supported.
       const manifestV2 = JSON.parse(await readFile(join(outDir, 'current/shop-catalog.v2.json'), 'utf8'));
       expect(manifestV2.products).toHaveLength(2);
       const av2 = manifestV2.products.find((p: { slug: string }) => p.slug === 'prod-a');
       const bv2 = manifestV2.products.find((p: { slug: string }) => p.slug === 'prod-b');
       expect(av2.inStock).toBe(false);
       expect(bv2.inStock).toBe(true);
+      expect(await readFile(join(outDir, 'current/products-v2/prod-b.json'), 'utf8')).toBe(firstNativeB);
+      const reusedFileB = await stat(join(outDir, 'current/products-v2/prod-b.json'));
+      if (reusedFileB.nlink > 1) expect(reusedFileB.ino).toBe(firstFileB.ino);
+
+      // An affected slug rename must remove its former name in both formats.
+      await withStore(store, async tx => { await tx.execute(sql`UPDATE product SET slug = 'renamed-a' WHERE id = ${productA}`); });
+      await publishCatalogManifest({ outDir, storeSlug: slug, variantIds: [variantA] });
+      for (const folder of ['products', 'products-v2']) {
+        await expect(readFile(join(outDir, 'current', folder, 'prod-a.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+        expect(JSON.parse(await readFile(join(outDir, 'current', folder, 'renamed-a.json'), 'utf8')).slug).toBe('renamed-a');
+      }
 
       // Archiving the affected product's owner must DROP its entry, not
       // leave a stale one behind, even on the scoped path.
       await withStore(store, async tx => { await tx.execute(sql`UPDATE product SET deleted_at = now() WHERE id = ${productA}`); });
       const afterDelete = await publishCatalogManifest({ outDir, storeSlug: slug, variantIds: [variantA] });
       expect(afterDelete.products).toBe(1);
-      await expect(readFile(join(outDir, 'current/products/prod-a.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(outDir, 'current/products/renamed-a.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(outDir, 'current/products-v2/renamed-a.json'))).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       await rm(outDir, { recursive: true, force: true });
     }

@@ -16,13 +16,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // from a factory body throws a TDZ error. vi.hoisted's own callback runs
 // first, before any vi.mock factory, so it's the only safe place to build
 // state a factory needs to read synchronously (not just close over lazily).
-const { envMock, publishSpy, logInfo, errError } = vi.hoisted(() => ({
+const { envMock, publishSpy, logInfo, errError, markPending, clearPending, leader } = vi.hoisted(() => ({
   envMock: {
     CATALOG_MANIFEST_JOBS_ENABLED: '1',
     CATALOG_DIR: '/tmp/stock-hook-test' as string | undefined,
     STORE_SLUG: 'demo-store' as string | undefined,
   },
   publishSpy: vi.fn(async (_args: { outDir: string; storeSlug: string; variantIds?: string[] }) => ({ generation: 'g', products: 1 })),
+  markPending: vi.fn(async () => ({ token: 'exact-db-token', requiresFull: false })),
+  clearPending: vi.fn(async () => {}),
+  leader: vi.fn(async (_job: string, fn: () => unknown) => fn()),
   logInfo: vi.fn(),
   errError: vi.fn(),
 }));
@@ -33,13 +36,13 @@ vi.mock('./catalog.js', () => ({ publishCatalogManifest: (args: { outDir: string
 // suites (release-stale-allocations.test.ts, auto-deliver.test.ts). Here it's
 // a pass-through so the in-process generating/trailing coalescing is what's
 // under test, isolated from Postgres.
-vi.mock('../jobs/leader-lock.js', () => ({ withLeaderLock: (_job: string, fn: () => unknown) => fn() }));
+vi.mock('../jobs/leader-lock.js', () => ({ withLeaderLock: (...args: Parameters<typeof leader>) => leader(...args) }));
 vi.mock('../lib/logger.js', () => ({ log: { info: (...a: unknown[]) => logInfo(...a) }, err: { error: (...a: unknown[]) => errError(...a) } }));
 // SELLRIGHT-ISSUES P1 (durable retry): run() resolves the store id for the
 // pending-marker bookkeeping and writes/clears it via manifest-pending.js —
 // both would otherwise hit a real Postgres pool in this DB-free unit suite.
 vi.mock('../store-context.js', () => ({ resolveStore: async (slug: string) => ({ id: `store-id-${slug}`, slug, name: slug, currency: 'USD', taxRate: 0, taxInclusive: false, shippingTaxable: false, config: null }) }));
-vi.mock('./manifest-pending.js', () => ({ markManifestRegenerationPending: async () => {}, clearManifestRegenerationPending: async () => {} }));
+vi.mock('./manifest-pending.js', () => ({ markManifestRegenerationPending: markPending, clearManifestRegenerationPending: clearPending }));
 
 import { onStockChanged, _resetStockHookStateForTest } from './stock-hook.js';
 
@@ -49,6 +52,11 @@ async function flush(times = 5) {
 
 beforeEach(() => {
   _resetStockHookStateForTest();
+  markPending.mockReset();
+  markPending.mockImplementation(async () => ({ token: 'exact-db-token', requiresFull: false }));
+  clearPending.mockClear();
+  leader.mockReset();
+  leader.mockImplementation(async (_job: string, fn: () => unknown) => fn());
   publishSpy.mockClear();
   publishSpy.mockImplementation(async () => ({ generation: 'g', products: 1 }));
   logInfo.mockClear();
@@ -59,6 +67,41 @@ beforeEach(() => {
 });
 
 describe('onStockChanged — zero-cache manifest signal', () => {
+  it('acknowledges only its own exact durable token after a successful publish', async () => {
+    onStockChanged('demo-store');
+    await vi.waitFor(() => expect(clearPending).toHaveBeenCalledWith('store-id-demo-store', 'exact-db-token'));
+  });
+
+  it('retains durable retry when the leader lock skips publication', async () => {
+    leader.mockImplementationOnce(async () => undefined);
+    onStockChanged('demo-store');
+    await vi.waitFor(() => expect(leader).toHaveBeenCalledTimes(1));
+    await flush();
+    expect(publishSpy).not.toHaveBeenCalled();
+    expect(clearPending).not.toHaveBeenCalled();
+  });
+
+  it('marks triggers arriving during an in-flight publish before the trailing run', async () => {
+    let release!: (value: { generation: string; products: number }) => void;
+    publishSpy.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    onStockChanged('demo-store', ['v1']);
+    await vi.waitFor(() => expect(publishSpy).toHaveBeenCalledTimes(1));
+    onStockChanged('demo-store', ['v2']);
+    await vi.waitFor(() => expect(markPending).toHaveBeenCalledTimes(2));
+    expect(publishSpy).toHaveBeenCalledTimes(1);
+    release({ generation: 'first', products: 1 });
+    await vi.waitFor(() => expect(publishSpy).toHaveBeenCalledTimes(2));
+  });
+
+  it('fully publishes an existing durable obligation before acknowledging its new token', async () => {
+    // Another process marked product A, but lost the leader lock. Our product B
+    // trigger sees that outstanding marker and must cover A as well as B.
+    markPending.mockResolvedValueOnce({ token: 'new-token', requiresFull: true });
+    onStockChanged('demo-store', ['product-b-variant']);
+    await vi.waitFor(() => expect(clearPending).toHaveBeenCalledWith('store-id-demo-store', 'new-token'));
+    expect(publishSpy.mock.calls[0]![0].variantIds).toBeUndefined();
+  });
+
   it('no-ops when manifest publishing is not enabled', async () => {
     envMock.CATALOG_MANIFEST_JOBS_ENABLED = '0';
     onStockChanged('demo-store');
