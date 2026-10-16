@@ -4,6 +4,7 @@
  * effect. The effects worker calls every registered policy hook under the order's lock set. Money and order state
  * are recorded before the worker runs and are never rolled back by a policy failure. Runs against a *_test database only.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../../db/test-database-url.js';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
@@ -17,9 +18,7 @@ import { finalizeRefund } from '../refunds.js';
 import { MAX_ATTEMPTS, runEffectsPass } from './effects.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`entitlement reversal test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'entitlement-reversal.db.test.ts');
 
 const STORE = 'e7000000-0000-0000-0000-00000000e701';
 const calls: EntitlementReversalInput[] = [];

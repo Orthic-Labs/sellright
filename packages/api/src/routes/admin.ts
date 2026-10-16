@@ -126,7 +126,7 @@ admin.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/orders', summary: 'List orders',
     request: { query: z.object({
-      state: z.string().optional(), q: z.string().optional(), preOrder: z.coerce.boolean().optional(), trashed: z.coerce.boolean().default(false),
+      state: z.string().optional(), q: z.string().optional(), preOrder: z.coerce.boolean().optional(), excludeDemo: z.enum(['1']).optional(), trashed: z.coerce.boolean().default(false),
       // Wire-facing status filters (BREAKING, pre-1.0 — see CHANGELOG.md), on
       // top of the legacy combined `state` filter above.
       // 'active' = open + completed (the owner-facing "Open": not cancelled, not archived).
@@ -143,12 +143,13 @@ admin.openapi(
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
     const st = requireStore(admin, c);
-    const { state, q, preOrder, trashed, status, paymentStatus, shippingMethod, fulfillmentStatus, from, to, page, pageSize } = c.req.valid('query');
+    const { state, q, preOrder, excludeDemo, trashed, status, paymentStatus, shippingMethod, fulfillmentStatus, from, to, page, pageSize } = c.req.valid('query');
     const out = await withStore(st.storeId, async (tx) => {
       const conds = [] as ReturnType<typeof eq>[];
       // Trash filter FIRST: ?trashed=1 shows ONLY soft-deleted orders; default
       // shows only live ones. Without this, trashed orders leak into every list.
       conds.push((trashed ? sql`${s.order.deletedAt} is not null` : sql`${s.order.deletedAt} is null`) as never);
+      if (excludeDemo === '1') conds.push(eq(s.order.isDemo, false) as never);
       if (state) conds.push(sql`${s.order.state} = ${state}` as never);
       if (status === 'active') conds.push(sql`${s.order.status} in ('open', 'completed')` as never);
       else if (status) conds.push(eq(s.order.status, status) as never);

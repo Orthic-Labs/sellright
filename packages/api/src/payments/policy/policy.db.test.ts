@@ -4,6 +4,7 @@
  * Providers and Stripe are mocked at the boundary; every row and call count is checked after each request.
  * Runs against a *_test DB only (TRUNCATEs store CASCADE).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const nmiCalls: string[] = [];
@@ -75,9 +76,7 @@ import { installDefaultPaymentPolicy } from './default-policy.js';
 import type { PaymentPolicy, PaymentProvider, PolicyVeto } from './types.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`payment policy test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'policy.db.test.ts');
 
 const STORE = 'e3000000-0000-0000-0000-0000000e3001';
 const SLUG = 'paypolicy-test';

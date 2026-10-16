@@ -8,7 +8,7 @@
  * in localStorage at all (the cart itself is server-owned — only its opaque
  * token persists client-side, in a cookie). This service keeps the shipping
  * destination alive in its own small key instead of disappearing with the
- * retired `sellright_legacy_local_cart` blob.
+ * retired `vendure_local_cart` blob.
  *
  * Same static surface as the old `LocalCartService` country methods
  * (`getCountry` / `setCountry` / `setCountryFromGeolocation` /
@@ -32,13 +32,20 @@ function read(): CountryPref {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed.countryCode === 'string') {
+      if (parsed && typeof parsed.countryCode === 'string' && /^[A-Z]{2}$/.test(parsed.countryCode)) {
         return { countryCode: parsed.countryCode, explicit: !!parsed.explicit };
       }
     }
   } catch {
     /* corrupt value — fall through to default */
   }
+  try {
+    const raw = localStorage.getItem('vendure_local_cart');
+    const legacy = raw ? JSON.parse(raw) : null;
+    if (typeof legacy?.countryCode === 'string' && /^[A-Z]{2}$/.test(legacy.countryCode)) {
+      return { countryCode: legacy.countryCode, explicit: legacy.countryExplicitlySet === true };
+    }
+  } catch { /* Preserve malformed legacy data for explicit reconciliation. */ }
   return DEFAULT_PREF;
 }
 
@@ -57,14 +64,16 @@ export class CountryPreferenceService {
   }
 
   static setCountry(code: string): void {
-    write({ countryCode: (code || 'US').toUpperCase(), explicit: true });
+    const countryCode = (code || 'US').toUpperCase();
+    if (/^[A-Z]{2}$/.test(countryCode)) write({ countryCode, explicit: true });
   }
 
   /** A geolocation guess always updates the stored code but never claims to
    *  be an explicit choice — it preserves whatever `explicit` already was. */
   static setCountryFromGeolocation(code: string): void {
     const current = read();
-    write({ countryCode: (code || 'US').toUpperCase(), explicit: current.explicit });
+    const countryCode = (code || 'US').toUpperCase();
+    if (/^[A-Z]{2}$/.test(countryCode)) write({ countryCode, explicit: current.explicit });
   }
 
   static hasExplicitCountrySelection(): boolean {

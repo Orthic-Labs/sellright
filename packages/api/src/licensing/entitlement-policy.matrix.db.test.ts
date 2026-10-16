@@ -12,6 +12,7 @@
  *      observable results on every path.
  * Matrix table of record: docs/policies/ENTITLEMENTS.md.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { generateKeyPairSync, randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
@@ -33,9 +34,7 @@ import {
 import { forkReferencePolicy, MOBILE_ONLY_REASON, SANDBOX_WINDOWS_LINK_REASON } from './entitlement-policy.fork-reference.testkit.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`entitlement-policy matrix truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'entitlement-policy.matrix.db.test.ts');
 
 const STORE = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
 const APP = 'matrixapp';

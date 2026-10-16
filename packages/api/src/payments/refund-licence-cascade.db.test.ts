@@ -1,6 +1,7 @@
 // T-L2 (refund side): a refund that cascades into licence revocation and a licence revoke cascade
 // on the SAME order run concurrently. Both take the order lock set (L2 licences → L3 order), so they
 // serialize and never deadlock (40P01). DB-gated: *_test only.
+import { isDisposablePostgresUrl } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RefundResult } from './provider.js';
 
@@ -29,7 +30,7 @@ import { env } from '../env.js';
 import { requestRefund } from './refunds.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-const isTestDb = /_test(\b|$|\?)/.test(DB);
+const isTestDb = isDisposablePostgresUrl(DB);
 const STORE = 'cccccccc-1212-1212-1212-121212121212';
 const SLUG = 'refund-cascade-test';
 const VARIANT = 'cccccccc-1212-1212-1212-12121212120b';

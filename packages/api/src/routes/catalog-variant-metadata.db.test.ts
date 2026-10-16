@@ -5,6 +5,7 @@
  * product-detail payload must publish both.
  * Runs against a *_test database ONLY (TRUNCATEs).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
@@ -15,9 +16,7 @@ import { invalidateStoreCache } from '../store-context.js';
 import { catalog } from './catalog.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`catalog test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'catalog-variant-metadata.db.test.ts');
 
 const STORE = 'dddddddd-dddd-dddd-dddd-ddddddddddd1';
 const SLUG = 'catalog-meta-test';

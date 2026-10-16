@@ -3,6 +3,7 @@
  * The merchant side (admin approve -> refund) is covered by admin-orders.refund*.test.ts; here: who may ask,
  * for what, how many units, and what the shopper reads back.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
@@ -12,9 +13,7 @@ import { createSession } from '../auth/session.js';
 import { accountReturns } from './account-returns.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`account-returns test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'account-returns.db.test.ts');
 
 const STORE = 'eeeeeeee-eeee-eeee-eeee-eeeeeeee3333';
 const SLUG = 'account-returns-test-store';

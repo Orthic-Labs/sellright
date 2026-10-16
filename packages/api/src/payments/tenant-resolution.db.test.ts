@@ -13,6 +13,7 @@
  * Requires migrations applied to DATABASE_URL. Self-skips unless DATABASE_URL
  * targets a *_test database — TRUNCATE would wipe real data.
  */
+import { isDisposablePostgresUrl } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { Pool } from 'pg';
@@ -22,7 +23,7 @@ import { RLS_STORE_A as A, RLS_STORE_B as B } from '../db/rls-test-utils.js';
 import { resolveStoreForGatewayEvent } from './tenant-resolution.js';
 
 const DB = process.env.DATABASE_URL ?? '';
-const IS_TEST_DB = /_test(\b|$|\?)/.test(DB);
+const IS_TEST_DB = isDisposablePostgresUrl(DB);
 const NONOWNER = env.DATABASE_URL_NONOWNER;
 
 const appPool = new Pool({ connectionString: NONOWNER ?? env.DATABASE_URL });

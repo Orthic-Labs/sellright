@@ -1,3 +1,4 @@
+import { isDisposablePostgresUrl } from '../db/test-database-url.js';
 import { createHmac } from 'node:crypto';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
@@ -18,13 +19,9 @@ vi.mock('../email/outbox.js', async (original) => {
 import { contactRoutes } from './contact.js';
 
 function assertLegacyTestDatabase(raw: string): void {
-  try {
-    const url = new URL(raw);
-    const name = decodeURIComponent(url.pathname.slice(1));
-    if ((url.protocol === 'postgres:' || url.protocol === 'postgresql:') &&
-        name.length > 5 && name.endsWith('_test') && !/[\/\0]/.test(name)) return;
-  } catch { /* Malformed URLs fail closed without displaying credentials. */ }
-  throw new Error('legacy contact tests require a disposable database name ending in _test');
+  if (!isDisposablePostgresUrl(raw)) {
+    throw new Error('legacy contact tests require a disposable database name ending in _test');
+  }
 }
 assertLegacyTestDatabase(process.env.DATABASE_URL ?? env.DATABASE_URL);
 const STORE = 'dddddddd-dddd-dddd-dddd-dddddddddddc';

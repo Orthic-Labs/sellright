@@ -8,6 +8,7 @@
  *
  * Runs against a *_test database ONLY (wipes data).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
@@ -18,9 +19,7 @@ import { admin as adminRoutes } from './admin.js';
 import { adminOrderOps } from './admin-order-ops.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`guest-shipping-email test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'admin.guest-shipping-email.db.test.ts');
 
 const STORE = 'eeeeeeee-eeee-eeee-eeee-0000000005a1';
 const SLUG = 'guest-shipping-email-test-store';

@@ -10,6 +10,7 @@
  *      written for the valid ids either, and the hook does not fire
  *   4. requires an authenticated write-capable session
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
@@ -25,9 +26,7 @@ import { createAdminSession } from '../auth/admin-session.js';
 import { adminProducts } from './admin-products.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`bulk-stock test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'admin-products.bulk-stock.test.ts');
 
 const STORE = 'eeeeeeee-2222-2222-2222-222222222222';
 const SLUG = 'bulk-stock-test-store';

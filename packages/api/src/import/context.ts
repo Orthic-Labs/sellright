@@ -17,6 +17,10 @@ export interface ManifestExclusion {
   table: string;
   detail: string;
   count?: number;
+  /** A known functional mismatch that prevents port-readiness approval. */
+  blocking?: boolean;
+  /** Recoverable source intent; never session credentials. */
+  sourceValues?: string[];
 }
 
 export interface ImportContext {

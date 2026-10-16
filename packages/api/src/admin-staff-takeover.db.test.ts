@@ -13,6 +13,7 @@
  * Also: POST /v1/admin/staff (onConflictDoUpdate) let a manager demote an owner, and
  * POST /v1/admin/staff/{id}/revoke-sessions let a manager force-logout an owner.
  */
+import { isDisposablePostgresUrl } from './db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash, randomBytes } from 'node:crypto';
 
@@ -35,7 +36,7 @@ import { _setRateLimitBackendForTest, createMemoryRateLimitBackend } from './aut
 
 // TRUNCATEs: only ever against a database whose NAME ends in _test (the pathname, not the whole URL —
 // a user/host containing "_test" must not qualify).
-const isTestDb = /^\/[^/]*_test$/.test(new URL(process.env.DATABASE_URL ?? env.DATABASE_URL).pathname);
+const isTestDb = isDisposablePostgresUrl(process.env.DATABASE_URL ?? env.DATABASE_URL);
 
 const STORE_A = 'ffffffff-ffff-ffff-ffff-ffffffff0a0a';
 const STORE_B = 'ffffffff-ffff-ffff-ffff-ffffffff0b0b';

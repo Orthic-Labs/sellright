@@ -17,17 +17,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { runMigration } from './run.js';
-import { restoreMigration } from './restore.js';
+import { restoreMigration, planLegacySessionRollback } from './restore.js';
 import { migrationId } from './context.js';
 import { assertTestDatabase } from '../db/rls-test-utils.js';
 
 function fixtureUrl(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`Set ${name} to a separately provisioned disposable *_test database`);
-  const url = new URL(value);
-  if (!['postgres:', 'postgresql:'].includes(url.protocol) || !/^\/[a-zA-Z0-9_]+_test$/.test(url.pathname)) {
-    throw new Error(`${name} must name a disposable *_test PostgreSQL database`);
-  }
+  assertTestDatabase(value, name);
   return value;
 }
 const SOURCE_URL = fixtureUrl('IMPORT_SOURCE_DATABASE_URL');
@@ -62,6 +59,9 @@ function buildSource(variant: Variant): string[] {
     TABLE('channel', ['id int PRIMARY KEY', '"defaultCurrencyCode" varchar(3)', '"pricesIncludeTax" boolean', '"defaultTaxZoneId" int']),
     TABLE('region', ['id int PRIMARY KEY', 'code varchar(2)']),
     TABLE('"user"', ['id int PRIMARY KEY', 'verified boolean']),
+    TABLE('session', ['id int PRIMARY KEY', 'token text', 'type text', 'invalidated boolean', 'expires timestamptz', '"activeChannelId" int', '"activeOrderId" int', '"userId" int']),
+    TABLE('administrator', ['"userId" int', '"deletedAt" timestamp']),
+    TABLE('order_channels_channel', ['"orderId" int', '"channelId" int']),
     TABLE('authentication_method', ['"userId" int', 'type text', '"passwordHash" text']),
     TABLE('customer', ['id int PRIMARY KEY', '"emailAddress" text', '"firstName" text', '"lastName" text',
       '"phoneNumber" text', '"userId" int, "deletedAt" timestamp', '"createdAt" timestamp', '"updatedAt" timestamp', ...customerCf]),
@@ -71,7 +71,7 @@ function buildSource(variant: Variant): string[] {
     TABLE('"order"', ['id int PRIMARY KEY', 'code text', 'state text', '"currencyCode" varchar(3)', '"orderPlacedAt" timestamp',
       '"subTotal" int', '"subTotalWithTax" int', 'shipping int', '"shippingWithTax" int',
       '"shippingAddress" text', '"billingAddress" text', '"couponCodes" text', '"customerId" int',
-      '"createdAt" timestamp', '"updatedAt" timestamp', ...(dd ? ['"customFieldsIspreorder" boolean'] : [])]),
+      '"createdAt" timestamp', '"updatedAt" timestamp', ...(dd ? ['"customFieldsIspreorder" boolean'] : []), 'active boolean NOT NULL DEFAULT false']),
     TABLE('order_line', ['id int PRIMARY KEY', '"productVariantId" int', '"orderId" int', 'quantity int',
       '"orderPlacedQuantity" int', '"listPrice" int', '"listPriceIncludesTax" boolean', 'adjustments text', '"taxLines" text']),
     TABLE('product', ['id int PRIMARY KEY', 'enabled boolean', '"featuredAssetId" int', '"deletedAt" timestamp']),
@@ -384,6 +384,75 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     expect(quarantined[0].detail).toMatch(/sezzle/);
   });
 
+  it('imports valid customer/guest capabilities & active carts, excludes revoked/expired/admin/channel proofs & reconciles final freeze', async () => {
+    await resetSource('rh', 's' + randomUUID().slice(0, 8));
+    await sourcePool.query(`INSERT INTO "user" VALUES (20, true);
+      INSERT INTO customer (id,"emailAddress","firstName","lastName","userId","createdAt","updatedAt")
+        VALUES (2,'admin-customer@example.com','Admin','Customer',20,'2024-01-01','2024-01-01');
+      INSERT INTO administrator VALUES (20,NULL);
+      INSERT INTO "order" (id,code,state,"currencyCode","customerId",active) VALUES (100,'ACTIVE-A','AddingItems','USD',1,true),(101,'ACTIVE-G','AddingItems','USD',NULL,true);
+      INSERT INTO order_channels_channel VALUES (100,1),(101,1);
+      INSERT INTO order_line (id,"productVariantId","orderId",quantity) VALUES (100,1,100,2),(101,1,101,1);
+      INSERT INTO session VALUES
+        (100,'source_valid_proof','AuthenticatedSession',false,'2100-01-01',1,100,10),
+        (101,'source_guest_proof','AnonymousSession',false,'2100-01-01',1,101,NULL),
+        (102,'source_revoked_proof','AuthenticatedSession',true,'2100-01-01',1,100,10),
+        (103,'source_expired_proof','AuthenticatedSession',false,'2000-01-01',1,100,10),
+        (104,'source_wrong_channel','AuthenticatedSession',false,'2100-01-01',2,100,10),
+        (105,'source_admin_proof','AuthenticatedSession',false,'2100-01-01',1,NULL,20)`);
+    const storeId = randomUUID();
+    const f = await fixtureConfig(storeId, { stripe: { accountId: 'acct_rh', mode: 'live' } });
+    const dry = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config, manifestPath: f.manifestPath });
+    await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config, manifestPath: f.applyManifestPath, apply: true, expectedDigest: dry.sourceDigest });
+    const grants = await targetRows(storeId, 'legacy_session_grant');
+    expect(grants).toHaveLength(2);
+    expect(grants.map(row => row.authenticated).sort()).toEqual([false,true]);
+    expect(await targetRows(storeId, 'session')).toHaveLength(1);
+    expect(await targetRows(storeId, 'cart')).toHaveLength(2);
+    expect((await targetRows(storeId, 'cart_line')).map(row => row.quantity).sort()).toEqual([1,2]);
+    const manifestText = await readFile(f.applyManifestPath, 'utf8');
+    expect(manifestText).not.toContain('source_valid_proof');
+    expect(manifestText).not.toContain('source_guest_proof');
+    // Sessions/accounts created after import need source reconciliation before rollback.
+    const nativeCustomerId = randomUUID(); const nativeSessionId = randomUUID();
+    const targetClient = await targetPool.connect();
+    try {
+      await targetClient.query("SELECT set_config('app.current_store', $1, false)", [storeId]);
+      await targetClient.query('INSERT INTO customer (id,store_id,email) VALUES ($1,$2,$3)', [nativeCustomerId, storeId, 'new-native@example.com']);
+      await targetClient.query("INSERT INTO session (id,store_id,customer_id,token_hash,expires_at) VALUES ($1,$2,$3,$4,'2100-01-01')", [nativeSessionId, storeId, nativeCustomerId, 'native-session-hash']);
+    } finally { targetClient.release(); }
+    const rollbackPlan = await planLegacySessionRollback({ targetUrl: TARGET_URL, manifest: JSON.parse(manifestText) });
+    expect(rollbackPlan).toMatchObject({ readyToReopen: false, nativeSessionReconciliationRequired: true, accountReconciliationRequired: true });
+    expect(rollbackPlan.accountChanges).toContainEqual(expect.objectContaining({ targetCustomerId: nativeCustomerId }));
+    expect(rollbackPlan.nativeSessions).toContainEqual(expect.objectContaining({ targetSessionId: nativeSessionId, imported: false, state: 'active', sourceBridgeRequired: true }));
+    expect(JSON.stringify(rollbackPlan.nativeSessions)).not.toMatch(/token_hash|native-session-hash|source_valid_proof/);
+    await targetPool.query('DELETE FROM session WHERE id=$1 AND store_id=$2', [nativeSessionId, storeId]);
+    await targetPool.query('DELETE FROM customer WHERE id=$1 AND store_id=$2', [nativeCustomerId, storeId]);
+    await restoreMigration({ targetUrl: TARGET_URL, manifest: JSON.parse(manifestText), apply: true });
+    await sourcePool.query('UPDATE session SET invalidated=true WHERE id=100');
+    await expect(runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config,
+      manifestPath: f.applyManifestPath + '.stale', apply: true, expectedDigest: dry.sourceDigest })).rejects.toThrow(/changed since dry run/);
+    const freeze = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config, manifestPath: f.manifestPath + '.freeze' });
+    await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config,
+      manifestPath: f.applyManifestPath + '.freeze', apply: true, expectedDigest: freeze.sourceDigest });
+    expect(await targetRows(storeId, 'session')).toHaveLength(0);
+    expect(await targetRows(storeId, 'legacy_session_grant')).toHaveLength(1);
+  });
+
+  it('retains every active-cart source coupon & blocks parity when target cannot apply all codes', async () => {
+    await resetSource('rh', 'c' + randomUUID().slice(0, 8));
+    await sourcePool.query(`INSERT INTO "order" (id,code,state,"currencyCode","customerId",active,"couponCodes") VALUES (100,'ACTIVE-C','AddingItems','USD',1,true,'SAVE,VIP');
+      INSERT INTO order_channels_channel VALUES (100,1);
+      INSERT INTO session VALUES (100,'source_coupon_proof','AuthenticatedSession',false,'2100-01-01',1,100,10)`);
+    const f = await fixtureConfig(randomUUID(), { stripe: { accountId: 'acct_rh', mode: 'live' } });
+    const result = await runMigration({ sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config, manifestPath: f.manifestPath });
+    expect(result.parityBlocked).toBe(true);
+    expect(result.parityBlockers).toEqual([expect.objectContaining({ blocking: true, sourceValues: ['SAVE', 'VIP'] })]);
+    const manifest = JSON.parse(await readFile(f.manifestPath, 'utf8'));
+    expect(manifest.parityBlocked).toBe(true);
+    expect(manifest.parityBlockers[0].sourceValues).toEqual(['SAVE', 'VIP']);
+  });
+
   it('rehearses dry-run/apply/restore for the Rotten Hand schema (no SheerID columns)', async () => {
     await resetSource('rh', 'r' + randomUUID().slice(0, 8));
     const storeId = randomUUID();
@@ -400,7 +469,7 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     expect(excluded).toContain('source-extension-absent:affiliate_settle');
     expect(excluded).toContain('source-extension-absent:waitlist_signup');
     expect(excluded).not.toContain('source-extension-absent:blog_post');
-    expect(excluded).toContain('not-imported:session');
+    expect(excluded).not.toContain('not-imported:session');
 
     const applied = await runMigration({
       sourceUrl: SOURCE_URL, targetUrl: TARGET_URL, config: f.config,
@@ -557,7 +626,8 @@ describe('Vendure migration rehearsal (synthetic fixtures)', () => {
     expect(byMethod.cod.gateway_account).toBeNull();
     expect(byMethod.cod.gateway_mode).toBeNull();
     expect(byMethod.cod.metadata.vendure.modeQuarantined).toBeUndefined();
-    expect(byMethod.nmi.metadata.vendure).toEqual({ vendureMethod: 'nmi-payment', sourceMode: 'live' });
+    expect(byMethod.nmi.id).toBe(migrationId(storeId, 'vendure:test', 'payment', 1));
+    expect(byMethod.nmi.metadata.vendure).toEqual({ vendureMethod: 'nmi-payment', sourceMode: 'live', sourcePaymentId: 1, sourceKey: 'vendure:test' });
 
     // Exclusion list records the unmapped DD-only custom field and the merge.
     const manifest = JSON.parse(await readFile(f.applyManifestPath, 'utf8'));

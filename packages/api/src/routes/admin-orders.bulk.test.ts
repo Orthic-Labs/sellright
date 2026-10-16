@@ -19,6 +19,7 @@
  *   6. purge refuses a non-trashed order
  *   7. purge refuses a Paid order without force
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
@@ -31,11 +32,7 @@ import { adminOrderOps } from './admin-order-ops.js';
 
 // Safety: refuse to run against anything but a *_test database.
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(
-    `bulk-ops test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`,
-  );
-}
+assertTestDatabase(DB, 'admin-orders.bulk.test.ts');
 
 const STORE = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
 const SLUG = 'bulk-test-store';

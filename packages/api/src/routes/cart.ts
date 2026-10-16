@@ -1,7 +1,7 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import type { Context } from 'hono';
-import { and, asc, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import { withStore, type Tx } from '../db/client.js';
 import { resolveStoreFromCtx } from './store-context.js';
 import { type StoreCtx } from '../store-context.js';
@@ -13,9 +13,11 @@ import { selectAutomaticPromotion } from '../money/auto-discount.js';
 import { resolveTaxRate } from '../money/tax.js';
 import { selectUnitPrice, variantPriceRuleFromConfig } from '../money/pricing.js';
 import { earnableCents, loyaltySettingsFromConfig, multiplierBonusPoints, pointsEarned } from '../money/loyalty.js';
-import { customerToken, resolveCustomer } from '../auth/session.js';
+import { customerToken, resolveCustomer, resolveLegacySession } from '../auth/session.js';
 import { normalizeEmail } from '../auth/email.js';
 import { env } from '../env.js';
+import { legacyCustomerToken } from '../auth/cookies.js';
+import { digest } from '../import/artifacts.js';
 import { cartExpiry, cartLifecycleFromConfig } from '../cart/ttl.js';
 import { clientIp } from '../auth/rate-limit.js';
 import { cartRetryAfter, recordCartAttempt } from './apps.limit.js';
@@ -263,6 +265,123 @@ export const CartConflictOut = z.object({
   revision: z.number().int(),
   cart: CartOut,
 });
+/** Initial legacy transfer is absolute, one-shot & transactionally receipted. */
+const LegacyMigrationIn = z.object({
+  claimId: z.string().uuid(),
+  // null means no browser snapshot; [] is an authoritative empty browser cart.
+  items: z.array(z.object({ variantId: z.string().regex(/^\d{1,20}$/), quantity: z.number().int().min(1).max(9999) })).max(200).nullable(),
+  couponCode: z.string().max(200).nullable().optional(),
+  countryCode: z.string().regex(/^[A-Z]{2}$/).nullable().optional(),
+}).strict();
+cart.openapi(createRoute({ method: 'post', path: '/v1/shop/cart/legacy-migration',
+  summary: 'Adopt a frozen Vendure cart or reconcile a browser snapshot once',
+  request: { body: { content: { 'application/json': { schema: LegacyMigrationIn } } } },
+  responses: {
+    200: { description: 'Committed receipt', content: { 'application/json': { schema: z.object({
+      receipt: z.string(), cart: CartOut.nullable(), couponCode: z.string().nullable(), countryCode: z.string().nullable(),
+      unresolved: z.array(z.object({ variantId: z.string(), quantity: z.number().int() })),
+    }) } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: apiErrorSchema() } } },
+    409: { description: 'Source cart already changed', content: { 'application/json': { schema: apiErrorSchema() } } },
+  },
+}), async c => {
+  const ip = clientIp(c);
+  const retry = await cartRetryAfter(ip);
+  if (retry > 0) return errJson(c, 429, 'RATE_LIMITED', `too many attempts — try again in ${retry}s`);
+  await recordCartAttempt(ip);
+  const st = await resolveStoreFromCtx(c);
+  const body = c.req.valid('json');
+  const authToken = customerToken(c);
+  const sourceToken = authToken ?? legacyCustomerToken(c);
+  const hash = (value: string) => createHash('sha256').update(value).digest('hex');
+  const claimHash = hash(body.claimId);
+  const payloadHash = digest({ items: body.items, couponCode: body.couponCode ?? null, countryCode: body.countryCode ?? null });
+  const result = await withStore(st.id, async tx => {
+    // Serializes first insert as well as retry. Cart row lock below is shared with all ordinary mutations.
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`legacy-cart:${st.id}:${claimHash}`}, 0))`);
+    const [existing] = await tx.select().from(s.legacyCartClaim).where(and(eq(s.legacyCartClaim.storeId, st.id), eq(s.legacyCartClaim.claimHash, claimHash)));
+    if (existing && existing.payloadHash !== payloadHash) return { conflict: true } as const;
+    const [grant] = sourceToken ? await tx.select().from(s.legacySessionGrant).where(and(
+      eq(s.legacySessionGrant.storeId, st.id), eq(s.legacySessionGrant.tokenHash, hash(sourceToken)),
+      gt(s.legacySessionGrant.expiresAt, new Date()),
+    )).for('update') : [];
+    // Authenticated grants require the SAME still-live target session; logout/reset must not resurrect access.
+    if (grant?.authenticated && (!authToken || !await resolveLegacySession(tx, st.id, authToken))) return { conflict: true } as const;
+    if (existing?.grantId && grant?.id !== existing.grantId) return { conflict: true } as const;
+    if (!existing && grant && body.items !== null) {
+      const [claimed] = await tx.select({ id: s.legacyCartClaim.id }).from(s.legacyCartClaim).where(and(eq(s.legacyCartClaim.grantId, grant.id), eq(s.legacyCartClaim.sourceOnly, false)));
+      if (claimed) return { conflict: true } as const;
+    }
+    const receipt = existing;
+    const cartId = receipt ? receipt.cartId : grant?.cartId;
+    let [row] = cartId ? await tx.select().from(s.cart).where(and(
+      eq(s.cart.storeId, st.id), eq(s.cart.id, cartId),
+    )).for('update') : [];
+    const couponCode = receipt ? receipt.couponCode : body.items !== null ? body.couponCode ?? null : grant?.couponCode ?? null;
+    const countryCode = receipt?.countryCode ?? body.countryCode ?? grant?.countryCode ?? null;
+    // Every replay checks the locked cart before returning its capability. A finished cart stays retired.
+    const usable = row && ['active', 'abandoned'].includes(row.status) && row.expiresAt.getTime() > Date.now();
+    if (receipt) {
+      if (receipt.retiredAt || !usable) {
+        if (!receipt.retiredAt) await tx.update(s.legacyCartClaim).set({ retiredAt: new Date(), cartId: null }).where(eq(s.legacyCartClaim.id, receipt.id));
+        return { receipt: body.claimId, cart: null, couponCode, countryCode, unresolved: receipt.unresolved };
+      }
+      return { receipt: body.claimId, cart: await cartResponse(tx, st, row!, couponCode ?? undefined, authToken, countryCode),
+        couponCode, countryCode, unresolved: receipt.unresolved };
+    }
+    if (body.items === null) {
+      // A new tab/claim cannot re-adopt a source cart after its first durable adoption.
+      const [consumed] = grant ? await tx.select({ id: s.legacyCartClaim.id }).from(s.legacyCartClaim).where(and(
+        eq(s.legacyCartClaim.grantId, grant.id), eq(s.legacyCartClaim.sourceOnly, true),
+      )) : [];
+      if (consumed) return { receipt: body.claimId, cart: null, couponCode, countryCode, unresolved: [] };
+      await tx.insert(s.legacyCartClaim).values({ id: randomUUID(), storeId: st.id, claimHash, payloadHash,
+        grantId: grant?.id ?? null, sourceOnly: true, cartId: usable ? row!.id : null,
+        retiredAt: usable ? null : new Date(), couponCode, countryCode });
+      return { receipt: body.claimId,
+        cart: usable ? await cartResponse(tx, st, row!, couponCode ?? undefined, authToken, countryCode) : null,
+        couponCode, countryCode, unresolved: [] };
+    }
+    const quantities = new Map<string, number>();
+    for (const item of body.items) {
+      const quantity = (quantities.get(item.variantId) ?? 0) + item.quantity;
+      if (quantity > 9999) return { conflict: true } as const;
+      quantities.set(item.variantId, quantity);
+    }
+    if (row && (!usable || row.revision !== 0)) return { conflict: true } as const;
+    if (row) {
+      const [claimed] = await tx.select({ id: s.legacyCartClaim.id }).from(s.legacyCartClaim).where(and(eq(s.legacyCartClaim.cartId, row.id), eq(s.legacyCartClaim.sourceOnly, false)));
+      if (claimed) return { conflict: true } as const;
+    } else {
+      const customer = authToken ? await resolveCustomer(tx, authToken) : null;
+      [row] = await tx.insert(s.cart).values({ storeId: st.id, token: randomUUID(), customerId: grant?.customerId ?? customer?.id ?? null,
+        expiresAt: cartExpiry(new Date(), lifecycle(st).ttlDays) }).returning();
+    }
+    if (!row) throw new Error('Cart insert failed');
+    const unresolved: Array<{ variantId: string; quantity: number }> = [];
+    const lines: Array<{ sku: string; quantity: number }> = [];
+    for (const [variantId, quantity] of quantities) {
+      const variants = await tx.select({ sku: s.productVariant.sku }).from(s.productVariant).where(and(
+        eq(s.productVariant.storeId, st.id), sql`${s.productVariant.metafields}->>'vendureId' = ${variantId}`,
+      ));
+      if (variants.length !== 1) {
+        unresolved.push({ variantId, quantity });
+        lines.push({ sku: `vendure-unresolved:${variantId}`, quantity });
+      } else lines.push({ sku: variants[0]!.sku, quantity });
+    }
+    // Local blob & source active order describe ONE cart. Replace, never append.
+    await tx.delete(s.cartLine).where(and(eq(s.cartLine.storeId, st.id), eq(s.cartLine.cartId, row.id)));
+    row = (await applyLines(tx, st, row, lines))!;
+    await tx.insert(s.legacyCartClaim).values({ id: randomUUID(), storeId: st.id, claimHash, payloadHash,
+      grantId: grant?.id ?? null, cartId: row.id, couponCode, countryCode, unresolved });
+    return { receipt: body.claimId, cart: await cartResponse(tx, st, row, couponCode ?? undefined, authToken, countryCode),
+      couponCode, countryCode, unresolved };
+  });
+  c.header('Cache-Control', 'no-store');
+  if ('conflict' in result) return errJson(c, 409, 'LEGACY_MIGRATION_CONFLICT', 'Saved cart changed; preserve browser cart & retry after reconciliation');
+  return c.json(result, 200);
+});
+
 type CartRow = typeof s.cart.$inferSelect;
 
 /** Map each SKU to its (live) variant id, for cart_line.variantId. */

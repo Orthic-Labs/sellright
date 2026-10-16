@@ -5,6 +5,7 @@
  *
  * Without a registered policy the checkout is unchanged: the first case asserts that directly.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { createHash } from 'node:crypto';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
@@ -22,9 +23,7 @@ import { cart } from './cart.js';
 import { checkout, fingerprintMatches } from './checkout.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`checkout-policy test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'checkout-policy.db.test.ts');
 
 const STORE = 'cccccccc-3333-3333-3333-333333333333';
 const SLUG = 'checkout-policy-test-store';

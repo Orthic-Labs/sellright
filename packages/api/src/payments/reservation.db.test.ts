@@ -1,6 +1,7 @@
 // Order reservation lifecycle (PAYMENT-TIMING §3.2–§3.4) against a real database.
 // DB-gated: *_test only. Every mutator runs inside withLockedSet so the HeldLocks brand
 // is the only way in (the same way the payment paths will call it).
+import { isDisposablePostgresUrl } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { Pool } from 'pg';
@@ -22,7 +23,7 @@ import {
 } from './reservation.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-const isTestDb = /_test(\b|$|\?)/.test(DB);
+const isTestDb = isDisposablePostgresUrl(DB);
 const KIND = 'rightsuite.mobile_upgrade_credit';
 const OWNER = 'licence-src-1';
 const STORE = RLS_STORE_A;

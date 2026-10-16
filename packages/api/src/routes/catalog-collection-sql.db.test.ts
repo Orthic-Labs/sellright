@@ -8,6 +8,7 @@
  * predicate (collection-rules-sql.ts) instead of loading all store products
  * into JS, and that page/pageSize pagination actually slices distinct pages.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { createApp } from '../app.js';
@@ -16,9 +17,7 @@ import { env } from '../env.js';
 import { invalidateStoreCache } from '../store-context.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`catalog collection sql db test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'catalog-collection-sql.db.test.ts');
 
 const STORE_ID = '11111111-2222-3333-4444-555555550001';
 const SLUG = 'perf16-sql-collection-store';

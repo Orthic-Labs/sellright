@@ -4,6 +4,7 @@
  * mock (same pattern as outbox.test.ts). Real timers on purpose: the assertion
  * is a wall-clock bound, not a fake-timer advance.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
@@ -14,9 +15,7 @@ vi.mock('./mailer.js', () => ({
 }));
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`wake db test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'wake.db.test.ts');
 
 import { sendEmail } from './mailer.js';
 import { enqueueMagicLink, type StoreEmailCtx } from './dispatch.js';

@@ -10,6 +10,7 @@
  * withStore(), real Hono handlers via app.request() so auth + RLS run as in
  * production.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
@@ -19,9 +20,7 @@ import { createAdminSession } from '../auth/admin-session.js';
 import { admin as adminRoutes } from './admin.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`partial-fulfillment test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'admin.partial-fulfillment.test.ts');
 
 const STORE = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee';
 const SLUG = 'partial-fulfillment-test-store';

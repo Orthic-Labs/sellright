@@ -19,6 +19,7 @@
  * The provider boundary is stubbed (getProvider / listStripeRefunds) — no real
  * gateway calls. Runs against a *_test database only.
  */
+import { isDisposablePostgresUrl } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RefundResult } from './provider.js';
 import type { StripeRefundLike } from './stripe.js';
@@ -59,7 +60,7 @@ import { reconcileStripeRefund, STRIPE_REFUND_ATTEMPT_KEY } from './webhook-reco
 import { verifyGatewayAttempt } from './gateway-payment.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-const isTestDb = /_test(\b|$|\?)/.test(DB);
+const isTestDb = isDisposablePostgresUrl(DB);
 
 const STORE = 'eeeeeeee-5555-5555-5555-555555555555';
 const SLUG = 'refund-reconcile-test';

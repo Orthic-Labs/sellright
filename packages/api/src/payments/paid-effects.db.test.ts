@@ -6,6 +6,7 @@
  *
  * Runs against a *_test DB only (TRUNCATEs store CASCADE).
  */
+import { isDisposablePostgresUrl } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
@@ -13,15 +14,7 @@ import { env } from '../env.js';
 import { enqueuePaidEffects } from './paid-effects.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-const isTestDb = (() => {
-  try {
-    const url = new URL(DB);
-    // pg accepts database query overrides; credentials/query text cannot prove DB identity.
-    return ['postgres:', 'postgresql:'].includes(url.protocol)
-      && /^\/[^/]+_test$/.test(decodeURIComponent(url.pathname))
-      && ![...url.searchParams.keys()].some(key => /^(database|dbname)$/i.test(key));
-  } catch { return false; }
-})();
+const isTestDb = isDisposablePostgresUrl(DB);
 if (!isTestDb) throw new Error('paid-effects test truncates data — DATABASE_URL must name a *_test database without database query overrides');
 
 const STORE_A = 'eeeeeeee-aaaa-aaaa-aaaa-aaaaaaaaaaaa';

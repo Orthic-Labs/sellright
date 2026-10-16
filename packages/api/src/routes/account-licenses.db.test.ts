@@ -4,6 +4,7 @@
  * Mirrors account-deletion.test.ts's fixture pattern (real Postgres, TRUNCATE
  * isolation, bearer session auth).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
@@ -13,9 +14,7 @@ import { createSession } from '../auth/session.js';
 import { account } from './account.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`account-licenses test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'account-licenses.db.test.ts');
 
 const STORE = 'eeeeeeee-eeee-eeee-eeee-eeeeeeee1111';
 const SLUG = 'account-licenses-test-store';

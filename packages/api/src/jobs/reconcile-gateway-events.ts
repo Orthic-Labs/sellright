@@ -2,7 +2,7 @@ import { asc, eq } from 'drizzle-orm';
 import { pool, withAdvisoryLock, withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { verifySezzleAttempt } from '../payments/gateway-payment.js';
-import { reconcileSezzleRefunds, resolveSezzleSessionAttempt } from '../payments/sezzle-reconcile.js';
+import { observeImportedSezzlePayment, reconcileSezzleRefunds, resolveSezzleSessionAttempt } from '../payments/sezzle-reconcile.js';
 
 /** Ingress acknowledges only durable storage. This worker performs authoritative reads. */
 export async function reconcileGatewayEvents() {
@@ -32,6 +32,12 @@ export async function reconcileGatewayEvents() {
             const r = await reconcileSezzleRefunds(ref);
             if (r.ambiguous) lastError = 'Ambiguous refund reservations — bind the refund reference explicitly';
             else status = 'processed';
+          } else if (!attempt && event.method === 'sezzle' && ['order.authorized', 'order.captured'].includes(event.eventType)) {
+            // Historical imports already contain settled money & have no
+            // attempt. A proven association acknowledges observation only.
+            const imported = await observeImportedSezzlePayment(ref);
+            if (imported) status = 'processed';
+            else lastError = 'Payment association pending';
           } else if (!attempt) lastError = 'Payment association pending';
           else if (event.method === 'sezzle' && ['order.authorized', 'order.captured'].includes(event.eventType)) {
             const result = await verifySezzleAttempt(store.id, attempt.id);

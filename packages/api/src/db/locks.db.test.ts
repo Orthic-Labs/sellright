@@ -1,4 +1,5 @@
 // withLockedSet (STOREKIT §5.3) against a real database. DB-gated: *_test only.
+import { isDisposablePostgresUrl } from './test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { pool, withStore } from './client.js';
@@ -6,7 +7,7 @@ import { LockSetUnstable, withLockedSet } from './locks.js';
 import { env } from '../env.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-const isTestDb = /_test(\b|$|\?)/.test(DB);
+const isTestDb = isDisposablePostgresUrl(DB);
 const STORE = '77777777-7777-7777-7777-777777777777';
 const CUSTOMER = '66666666-6666-6666-6666-666666666666';
 const ORDER = '55555555-5555-5555-5555-555555555555';

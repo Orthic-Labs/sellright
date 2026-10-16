@@ -4,6 +4,7 @@
  * instead of failing at the 5s lock timeout of an ordinary set. Stripe is stubbed at the credential seam;
  * signatures are real. Runs against a *_test DB only (TRUNCATEs store CASCADE).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import Stripe from 'stripe';
 import { eq, sql } from 'drizzle-orm';
@@ -38,9 +39,7 @@ const { paymentWebhooks } = await import('./payment-webhooks.js');
 const { OpenAPIHono } = await import('@hono/zod-openapi');
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`payment-webhooks invoice-set test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'payment-webhooks.invoice-set.db.test.ts');
 
 const STORE = 'aaaaaaaa-f5f5-f5f5-f5f5-f5f5f5f5f501';
 const SLUG = 'f5-invoice-set-store';

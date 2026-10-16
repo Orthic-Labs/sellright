@@ -26,6 +26,7 @@
  *   3. the return-approve idempotencyKey is keyed on the return request id
  *      (not the order id), distinct from the direct-refund key shape.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { finalizeRefund } from '../payments/refunds.js';
 import type { RefundResult } from '../payments/provider.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -68,11 +69,7 @@ import { adminOrders } from './admin-orders.js';
 import { admin as adminRoutes } from './admin.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(
-    `refund test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`,
-  );
-}
+assertTestDatabase(DB, 'admin-orders.refund.test.ts');
 
 const STORE = 'dddddddd-dddd-dddd-dddd-dddddddddddd';
 const SLUG = 'refund-test-store';

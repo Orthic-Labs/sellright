@@ -638,6 +638,13 @@
       "when": 1790000013600,
       "tag": "0099_device_session",
       "breakpoints": true
+    },
+    {
+      "idx": 91,
+      "version": "7",
+      "when": 1790000013700,
+      "tag": "0100_legacy_sessions_carts",
+      "breakpoints": true
     }
   ]
 }

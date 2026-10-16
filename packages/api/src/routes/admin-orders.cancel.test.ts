@@ -14,6 +14,7 @@
  * _test-DB guard + TRUNCATE store CASCADE wipe + seed helpers under
  * withStore(). vitest runs files serially (fileParallelism: false).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
@@ -24,11 +25,7 @@ import { admin as adminRoutes } from './admin.js';
 import { adminOrderOps } from './admin-order-ops.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(
-    `admin cancel test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`,
-  );
-}
+assertTestDatabase(DB, 'admin-orders.cancel.test.ts');
 
 const STORE = 'dddddddd-dddd-dddd-dddd-dddddddddddd';
 const SLUG = 'admin-cancel-test-store';

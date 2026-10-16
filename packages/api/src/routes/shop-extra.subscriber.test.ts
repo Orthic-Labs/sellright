@@ -22,6 +22,7 @@
  * The email outbox is asserted directly (we don't need a mailer mock — the
  * scheduler is the test boundary, not the SMTP transport).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { OpenAPIHono } from '@hono/zod-openapi';
@@ -32,11 +33,7 @@ import { shopExtra } from './shop-extra.js';
 import { subscriberRoutes } from './shop-extra.subscriber.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(
-    `subscriber test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@]+@/, ':***@')}`,
-  );
-}
+assertTestDatabase(DB, 'shop-extra.subscriber.test.ts');
 
 const STORE = 'dddddddd-dddd-dddd-dddd-dddddddddddd';
 const SLUG = 'subscriber-test-store';

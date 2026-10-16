@@ -1,3 +1,4 @@
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { Pool } from 'pg';
@@ -9,7 +10,7 @@ import { AGENT_DENIED } from '../auth/agent-policy.js';
 import { buildHttpApp } from '../app.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) throw new Error('agent tests truncate data — use a *_test database');
+assertTestDatabase(DB, 'admin-agents.db.test.ts');
 // Astra v5 F8: CI's DATABASE_URL is the superuser (bypasses RLS). Run the APP (buildHttpApp + withStore) on the
 // unprivileged role when DATABASE_URL_NONOWNER is set, exactly like payments/tenant-resolution.db.test.ts; keep a
 // separate OWNER pool for TRUNCATE/wipe. Single-role dev fallback: the foreign-id tenancy case is skipped (as there).

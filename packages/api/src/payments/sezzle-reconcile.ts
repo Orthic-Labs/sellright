@@ -17,6 +17,7 @@
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { withAdvisoryLock, withStore, type Tx } from '../db/client.js';
 import { withLockedSet } from '../db/locks.js';
+import { migrationId } from '../import/context.js';
 import * as s from '../db/schema.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
 import { recordSettlementOperation } from './settlement/record.js';
@@ -83,6 +84,59 @@ export async function resolveSezzleSessionAttempt(
 }
 
 export interface SezzleRefundReconcile { recorded: number; finalized: number; ambiguous: number }
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value != null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown> : null;
+}
+
+/**
+ * Imported settled history has no attempt to finish. Only observe it after
+ * normal attempt resolution found nothing; never feed it into settlement.
+ * Both importer provenance and the provider's original order identity must
+ * agree. Refunds/disputes may have happened since capture: observing an old
+ * authorized/captured event must not restore paid state or replay effects.
+ */
+export async function observeImportedSezzlePayment(
+  ev: SezzleEventRef, provider: Fetcher = sezzleProvider,
+): Promise<typeof s.payment.$inferSelect | null> {
+  if (ev.mode !== 'test' && ev.mode !== 'live') return null;
+  const payments = await withStore(ev.storeId, tx => tx.select().from(s.payment).where(and(
+    eq(s.payment.storeId, ev.storeId), eq(s.payment.method, 'sezzle'),
+    eq(s.payment.gatewayAccount, ev.accountId), eq(s.payment.gatewayMode, ev.mode),
+    eq(s.payment.providerRef, ev.providerRef),
+  )).limit(2));
+  // Never choose one of several candidates or borrow a missing account/mode.
+  if (payments.length !== 1) return null;
+  const pay = payments[0]!;
+  const provenance = record(record(pay.metadata)?.vendure);
+  if (pay.storeId !== ev.storeId || pay.method !== 'sezzle' || pay.gatewayAccount !== ev.accountId ||
+      pay.gatewayMode !== ev.mode || pay.providerRef !== ev.providerRef || pay.state !== 'Settled' ||
+      !Number.isSafeInteger(pay.amount) || pay.amount <= 0 || !pay.currency ||
+      typeof provenance?.vendureMethod !== 'string' ||
+      provenance.vendureMethod.toLowerCase().replace(/-payment$/, '') !== 'sezzle' ||
+      typeof provenance.sourceKey !== 'string' || !provenance.sourceKey ||
+      !['string', 'number'].includes(typeof provenance.sourcePaymentId) || !String(provenance.sourcePaymentId) ||
+      migrationId(ev.storeId, provenance.sourceKey, 'payment', provenance.sourcePaymentId) !== pay.id ||
+      provenance.modeQuarantined != null || (provenance.txnMode != null && provenance.txnMode !== ev.mode)) return null;
+  const orders = await withStore(ev.storeId, tx => tx.select().from(s.order).where(and(
+    eq(s.order.storeId, ev.storeId), eq(s.order.id, pay.orderId),
+  )).limit(2));
+  if (orders.length !== 1) return null;
+  const original = orders[0]!;
+  const source = record(record(original.metadata)?.vendure);
+  if (original.storeId !== ev.storeId || original.id !== pay.orderId || original.currency !== pay.currency ||
+      typeof original.code !== 'string' || !original.code || typeof source?.sourceKey !== 'string' ||
+      source.sourceKey !== provenance.sourceKey || !['string', 'number'].includes(typeof source.id) || !String(source.id) ||
+      migrationId(ev.storeId, source.sourceKey, 'order', source.id) !== original.id) return null;
+  const account = await resolveGatewayAccount(ev.storeId, 'sezzle', ev.accountId, ev.mode as GatewayMode);
+  if (account.storeId !== ev.storeId || account.method !== 'sezzle' ||
+      account.accountId !== ev.accountId || account.mode !== ev.mode) return null;
+  const order = await provider.getOrder(account, ev.providerRef);
+  if (order.uuid !== ev.providerRef || order.reference_id !== original.code ||
+      order.order_amount?.amount_in_cents !== pay.amount || order.order_amount.currency !== pay.currency) return null;
+  return pay;
+}
 
 /**
  * D16: bring every refund Sezzle reports for `orderUuid` into the ledger.

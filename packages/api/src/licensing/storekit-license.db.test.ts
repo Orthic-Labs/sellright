@@ -1,4 +1,5 @@
 /** StoreKit activation cap regressions against a disposable test database. */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
@@ -6,9 +7,7 @@ import { env } from '../env.js';
 import { issueStoreKitActivation } from './storekit-license.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`storekit-license test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'storekit-license.db.test.ts');
 
 const STORE = 'abababab-abab-4bab-8bab-abababababab';
 const APP = 'storekit-cap-test';

@@ -3,6 +3,7 @@
  * rest, recovery codes, authenticated password change. Real app, real DB (sellright_test ONLY —
  * TRUNCATEs), memory rate-limit backend, a test-only SELLRIGHT_MASTER_KEY.
  */
+import { isDisposablePostgresUrl } from './db/test-database-url.js';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHmac } from 'node:crypto';
 import { createApp } from './app.js';
@@ -17,7 +18,7 @@ import { _setRateLimitBackendForTest, createMemoryRateLimitBackend } from './aut
 import { newTotpSecret } from './auth/totp.js';
 import { openTotpSecret, sealLegacyTotpSecrets } from './auth/totp-secret.js';
 
-const isTestDb = /^\/[^/]*_test$/.test(new URL(process.env.DATABASE_URL ?? env.DATABASE_URL).pathname);
+const isTestDb = isDisposablePostgresUrl(process.env.DATABASE_URL ?? env.DATABASE_URL);
 const STORE = 'cdcdcdcd-cdcd-cdcd-cdcd-cdcdcdcdcd01';
 const OWNER = 'cdcdcdcd-cdcd-cdcd-cdcd-0000000000a1';
 const STAFF = 'cdcdcdcd-cdcd-cdcd-cdcd-0000000000a2';

@@ -28,7 +28,8 @@ import { CountryPreferenceService } from '~/services/CountryPreferenceService';
 import { CACHE_POLICY_VERSION, resolveRouteCacheProfile } from '~/config/route-cache-policy';
 import { DEV_API } from '~/constants';
 import { srShopIdentity, srErrorStatus, srMaintenanceStatus } from '~/utils/sellright';
-import { identityFromStaticTheme } from '~/theme/theme.config';
+import { bootstrapCustomer } from '~/providers/shop/account/bootstrap.server';
+import { theme, identityFromStaticTheme } from '~/theme/theme.config';
 import { normalizeIdentity } from '~/utils/normalize-identity';
 import { AnalyticsMount } from '~/platform/controllers/analytics-mount';
 import { BRAND_HEAD } from '~/platform/brand-data';
@@ -102,14 +103,26 @@ export const onRequest: RequestHandler = async ({ url, headers, sharedMap }) => 
  */
 export const useMaintenanceLoader = routeLoader$(async () => srMaintenanceStatus());
 
-// Lightweight auth check only - NO backend calls
-export const useAuthLoader = routeLoader$(({ cookie }) => {
-	const authToken = cookie.get(AUTH_TOKEN)?.value;
+/** Resolve imported credentials before SSR can paint a signed-out account state. */
+export const useAuthLoader = routeLoader$(async ({ cookie, headers, url }) => {
 	const countryCode = cookie.get(COUNTRY_COOKIE)?.value;
-	return {
-		isAuthenticated: !!authToken,
-		countryCode,
-	};
+	const hasLegacyTransport = !!(cookie.get('authToken')?.value || cookie.get('__vendure_session')?.value);
+	if (theme.isDemo || (!cookie.get(AUTH_TOKEN)?.value && !hasLegacyTransport)) {
+		return { isAuthenticated: false, countryCode, customer: null };
+	}
+	// HttpOnly Vendure transport is invisible to JS. Presence prompts one proof-checked cart request, never authentication.
+	if (!cookie.get(AUTH_TOKEN)?.value && hasLegacyTransport) {
+		cookie.set('sr_legacy_cart', '1', { path: '/', maxAge: 3600, sameSite: 'lax', secure: url.protocol === 'https:' });
+	}
+	try {
+		const data = await bootstrapCustomer(headers);
+		return { isAuthenticated: true, countryCode, customer: {
+			id: data.id, firstName: data.firstName ?? '', lastName: data.lastName ?? '', emailAddress: data.email,
+		} };
+	} catch (error) {
+		if (srErrorStatus(error) !== 401) throw error;
+		return { isAuthenticated: false, countryCode, customer: null };
+	}
 });
 
 
@@ -153,7 +166,7 @@ export default component$(() => {
 		showUserMenu: false,
 		showMobileUserMenu: false,
 		isLoading: false,
-		customer: { id: CUSTOMER_NOT_DEFINED_ID, firstName: '', lastName: '', emailAddress: '' } as ActiveCustomer,
+		customer: (authData.value.customer ?? { id: CUSTOMER_NOT_DEFINED_ID, firstName: '', lastName: '', emailAddress: '' }) as ActiveCustomer,
 		availableCountries: [],
 		shippingAddress: {
 			id: '',

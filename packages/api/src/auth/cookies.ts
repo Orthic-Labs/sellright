@@ -43,7 +43,9 @@ export function parseCookies(header: string | undefined): Record<string, string>
   if (!header) return out;
   for (const part of header.split(';')) {
     const i = part.indexOf('=');
-    if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+    if (i > 0) {
+      try { out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim()); } catch { /* Invalid transport is not a credential. */ }
+    }
   }
   return out;
 }
@@ -147,4 +149,25 @@ export function customerCsrfValid(c: { req: { header: (k: string) => string | un
 /** Get the customer session token from the request cookie (or undefined for guests). */
 export function getCustomerSessionToken(c: { req: { header: (k: string) => string | undefined } }): string | undefined {
   return cookie(c, CUST_COOKIE);
+}
+
+/** Vendure carriers are untrusted transport, consumed only by migration bootstrap. */
+export function legacyCustomerToken(c: { req: { header: (k: string) => string | undefined } }): string | null {
+  const headers = parseCookies(c.req.header('cookie'));
+  const bearer = c.req.header('x-vendure-session-token');
+  if (bearer && bearer.length <= 2048 && /^[A-Za-z0-9_-]+$/.test(bearer)) return bearer;
+  const readable = headers.authToken;
+  if (readable && readable.length <= 2048 && /^[A-Za-z0-9_-]+$/.test(readable)) return readable;
+  const wrapped = headers.__vendure_session;
+  if (!wrapped || wrapped.length > 8192) return null;
+  try {
+    const payload: unknown = JSON.parse(Buffer.from(wrapped, 'base64').toString('utf8'));
+    const token = payload && typeof payload === 'object' ? (payload as { token?: unknown }).token : null;
+    return typeof token === 'string' && token.length <= 2048 && /^[A-Za-z0-9_-]+$/.test(token) ? token : null;
+  } catch { return null; }
+}
+
+/** Preserve original signed HttpOnly Vendure cookie throughout rollback window. */
+export function clearReadableLegacyToken(c: Ctx): void {
+  c.header('Set-Cookie', `authToken=; Path=/; Max-Age=0; SameSite=Lax${secureFlag(c)}`, { append: true });
 }

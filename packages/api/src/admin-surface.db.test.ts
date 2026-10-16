@@ -7,6 +7,7 @@
  *  - login omits the token for cookie clients (explicit API clients ask with returnToken)
  *  - idle session timeout
  */
+import { isDisposablePostgresUrl } from './db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from './app.js';
 import { pool } from './db/client.js';
@@ -15,7 +16,7 @@ import { hashPassword } from './auth/password.js';
 import { createAdminSession } from './auth/admin-session.js';
 import { _setRateLimitBackendForTest, createMemoryRateLimitBackend } from './auth/rate-limit-backend.js';
 
-const isTestDb = /^\/[^/]*_test$/.test(new URL(process.env.DATABASE_URL ?? env.DATABASE_URL).pathname);
+const isTestDb = isDisposablePostgresUrl(process.env.DATABASE_URL ?? env.DATABASE_URL);
 const STORE = 'adadadad-adad-4dad-8dad-adadadadad01';
 const OWNER = 'adadadad-adad-4dad-8dad-0000000000a1';
 const PW = 'surface-owner-password-1';

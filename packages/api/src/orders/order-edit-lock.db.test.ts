@@ -3,6 +3,7 @@
 // licence rows (L2) before its order row (L3); the revoke takes its customer set in the
 // same class order. Both must finish, with no 40P01 deadlock and no partial edit.
 // DB-gated: *_test database only (TRUNCATEs store CASCADE).
+import { isDisposablePostgresUrl } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sql, eq } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
@@ -21,7 +22,7 @@ vi.mock('../payments/stripe-reconcile.js', async (importOriginal) => {
 });
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-const isTestDb = /_test(\b|$|\?)/.test(DB);
+const isTestDb = isDisposablePostgresUrl(DB);
 const STORE = '7a7a7a7a-7a7a-7a7a-7a7a-7a7a7a7a0001';
 const SLUG = 'lock-c-test';
 const CUSTOMER = '7a7a7a7a-7a7a-7a7a-7a7a-7a7a7a7a0002';

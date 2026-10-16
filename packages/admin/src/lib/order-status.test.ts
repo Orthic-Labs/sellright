@@ -15,8 +15,9 @@ describe('owner-facing statuses', () => {
 
 describe('filters <-> URL', () => {
   it('round-trips and drops invalid values', () => {
-    const p = filtersToParams({ ...EMPTY_FILTERS, paymentStatus: 'paid', from: '2026-09-01', preOrder: true });
-    expect(filtersFromParams(p)).toEqual({ ...EMPTY_FILTERS, paymentStatus: 'paid', from: '2026-09-01', preOrder: true });
+    const p = filtersToParams({ ...EMPTY_FILTERS, paymentStatus: 'paid', from: '2026-09-01', preOrder: true, excludeDemo: true });
+    expect(filtersFromParams(p)).toEqual({ ...EMPTY_FILTERS, paymentStatus: 'paid', from: '2026-09-01', preOrder: true, excludeDemo: true });
+    expect(filtersFromParams(new URLSearchParams('excludeDemo=0')).excludeDemo).toBe(false);
     expect(filtersFromParams(new URLSearchParams('paymentStatus=voided&from=yesterday')).paymentStatus).toBe('');
     expect(filtersFromParams(new URLSearchParams('from=yesterday')).from).toBe('');
   });
@@ -26,12 +27,14 @@ describe('filters <-> URL', () => {
     expect(filtersToApiQuery(f, 2).has('status')).toBe(false);
     expect(filtersToExportQuery(f).get('trashed')).toBe('1');
     expect(filtersToApiQuery({ ...EMPTY_FILTERS, status: 'active' }, 1).get('status')).toBe('active');
+    expect(filtersToApiQuery({ ...EMPTY_FILTERS, excludeDemo: true }, 2).get('excludeDemo')).toBe('1');
+    expect(filtersToExportQuery({ ...EMPTY_FILTERS, excludeDemo: true }).get('excludeDemo')).toBe('1');
   });
   it('built-in views are mutually distinguishable', () => {
     const matches = (f: typeof EMPTY_FILTERS) => BUILTIN_VIEWS.filter((v) => sameFilters(f, v.filters)).map((v) => v.id);
     expect(matches(EMPTY_FILTERS)).toEqual(['all']);
     expect(matches({ ...EMPTY_FILTERS, status: 'cancelled' })).toEqual(['cancelled']);
-    expect(matches({ ...EMPTY_FILTERS, paymentStatus: 'paid', fulfillmentStatus: 'unfulfilled', status: 'active' })).toEqual(['unfulfilled']);
+    expect(matches({ ...EMPTY_FILTERS, paymentStatus: 'paid', fulfillmentStatus: 'unfulfilled', status: 'active', excludeDemo: true })).toEqual(['unfulfilled']);
   });
   it('shows name over email when a name exists', () => {
     expect(customerLabel({ firstName: 'Ada', lastName: 'B', email: 'a@x.co' })).toEqual({ name: 'Ada B', email: 'a@x.co' });

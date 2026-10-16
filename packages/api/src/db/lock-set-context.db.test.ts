@@ -5,6 +5,7 @@
  *   deferred     — edit_reconcile on a plain transaction takes the order rows on that transaction
  *   contention   — settleDeferredEditEarns waits for a refund-style set on the same order (no deadlock)
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from './test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { pool, withStore } from './client.js';
@@ -15,9 +16,7 @@ import { reconcileOrderLoyalty, settleDeferredEditEarns } from '../loyalty/ledge
 import type { EffectRow } from '../payments/settlement/effects.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`lock-set context test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'lock-set-context.db.test.ts');
 
 const STORE = 'dddddddd-5555-5555-5555-555555555555';
 const SLUG = 'lock-set-context-store';

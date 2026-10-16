@@ -15,6 +15,7 @@
  *
  * The outbox is asserted directly — the scheduler/mailer is the boundary.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { OpenAPIHono } from '@hono/zod-openapi';
@@ -25,11 +26,7 @@ import { shopExtra } from './shop-extra.js';
 import { invalidateStoreCache } from '../store-context.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(
-    `contact test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@]+@/, ':***@')}`,
-  );
-}
+assertTestDatabase(DB, 'contact.db.test.ts');
 
 const STORE = 'dddddddd-dddd-dddd-dddd-dddddddddddc';
 const SLUG = 'contact-test-store';

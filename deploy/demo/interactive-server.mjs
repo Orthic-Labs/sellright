@@ -4,7 +4,7 @@ import {fileURLToPath} from 'node:url';
 import {resolve,extname,sep} from 'node:path';
 import {createRequire} from 'node:module';
 import {demoBindHost} from './policy.mjs';
-import {interactiveRequest,interactiveBody,sameOriginMutation,demoAdminCredentials,demoRouteTarget,allowedDemoHost,probeRequest} from './interactive-policy.mjs';
+import {interactiveRequest,interactiveBody,sameOriginMutation,demoAdminCredentials,demoRouteTarget,allowedDemoHost,probeRequest,syntheticDemoAddress,demoCheckoutBody,forwardInteractiveResponse} from './interactive-policy.mjs';
 import {assertInteractiveDatabase,visitorFor,provisionVisitor,removeVisitor,cleanVisitors,hash,scoped} from './visitors.mjs';
 import {ensureDemoSeedAssets} from './generate-demo-assets.mjs';
 import {verifyDemoMigrations} from './migration-gate.mjs';
@@ -70,7 +70,7 @@ async function settle(visitor,code){
     return result.orderState;
   });
 }
-const syntheticAddress={fullName:'Alex Morgan',line1:'1 Demo Avenue',city:'Sample City',province:'CA',postalCode:'90001',country:'US'};
+const syntheticAddress=syntheticDemoAddress;
 async function call(visitor,path,method='GET',body,extra={}){
   return app.request(path,{method,headers:{'content-type':'application/json','x-store-slug':visitor.slug,'x-real-ip':visitor.id,...extra},body:body===undefined?undefined:JSON.stringify(body)});
 }
@@ -212,12 +212,12 @@ const server=createServer(async(req,res)=>{
           const cartResponse=await call(visitor,'/v1/shop/cart/'+body.cartToken);
           if(!cartResponse.ok)return json(cartResponse.status,{error:'Demo cart not found'});
           const cart=await cartResponse.json();
-          body={...body,items:cart.lines.map(line=>({sku:line.sku,quantity:line.quantity})),email:'sample0@demo.invalid',shippingAddress:syntheticAddress};
+          body=demoCheckoutBody(body,cart.lines);
         }
         const response=await call(visitor,url.pathname+url.search,method,body,headers);
-        const data=await response.json();
-        if(url.pathname==='/v1/shop/checkout'&&response.ok){data.state=await settle(visitor,data.code);data.simulated=true;}
-        return json(response.status,data);
+        return forwardInteractiveResponse(response,res,url.pathname==='/v1/shop/checkout'?async data=>{
+          data.state=await settle(visitor,data.code);data.simulated=true;return data;
+        }:undefined);
       };
       return await serial(visitor.id,execute);
     }

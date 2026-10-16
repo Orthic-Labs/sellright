@@ -20,6 +20,7 @@
  *
  * Runs against a *_test DB only (TRUNCATEs store CASCADE + admin_user).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { eq, isNull } from 'drizzle-orm';
 import { pool, unsafeUnscopedDb as db } from '../db/client.js';
@@ -36,9 +37,7 @@ import {
 } from './setup-claim.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`setup-claim test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'setup-claim.db.test.ts');
 
 async function wipe() {
   await pool.query('DELETE FROM "admin_user_store"');

@@ -5,6 +5,7 @@
  * Stripe is mocked at the seam (mint / retrieve / createPayment hook); everything else
  * is real. Runs against a *_test DB only (TRUNCATEs store CASCADE).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const intents = new Map<string, Record<string, unknown>>();
@@ -51,9 +52,7 @@ import * as s from '../db/schema.js';
 import { pay } from './pay.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`pay record-lock test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'pay.record-lock.db.test.ts');
 
 const STORE = 'e2000000-0000-0000-0000-0000000e2045';
 const SLUG = 'payrecordlock-test';

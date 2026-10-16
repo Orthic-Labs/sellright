@@ -7,6 +7,7 @@
  * Mirrors routes/admin-orders.cancel.test.ts conventions: _test-DB guard +
  * TRUNCATE store CASCADE wipe + admin session via createAdminSession().
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
@@ -22,9 +23,7 @@ import { createAdminSession } from '../auth/admin-session.js';
 import { adminProducts } from './admin-products.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`admin-products stock test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'admin-products.stock.test.ts');
 
 const STORE = 'ffffffff-1111-1111-1111-111111111111';
 const SLUG = 'admin-products-stock-test-store';

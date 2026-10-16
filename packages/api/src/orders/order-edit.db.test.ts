@@ -8,6 +8,7 @@
  * is mocked at the provider boundary: createPayment echoes the charged amount
  * (so the balance-only charge is observable) and refundPayment records calls.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { and, eq, sql } from 'drizzle-orm';
@@ -56,9 +57,7 @@ import { commitOrderEdit, previewOrderEdit, saveOrderAddress, loadEditContext, O
 import type { EditOpT, SettlementT } from './order-edit.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`order-edit test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'order-edit.db.test.ts');
 
 const STORE = 'e0000000-0000-0000-0000-0000000e0001';
 const SLUG = 'orderedit-test';

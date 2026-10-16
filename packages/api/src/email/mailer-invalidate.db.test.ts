@@ -3,6 +3,7 @@
  * process. The per-store transporter cache used to remember "not configured" forever (until restart).
  * sellright_test only (TRUNCATEs).
  */
+import { isDisposablePostgresUrl } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { pool } from '../db/client.js';
 import { env } from '../env.js';
@@ -34,7 +35,7 @@ async function smtpSink(): Promise<{ port: number; senders: string[]; close: () 
   return { port: (server.address() as AddressInfo).port, senders, close: () => server.close() };
 }
 
-const isTestDb = /^\/[^/]*_test$/.test(new URL(process.env.DATABASE_URL ?? env.DATABASE_URL).pathname);
+const isTestDb = isDisposablePostgresUrl(process.env.DATABASE_URL ?? env.DATABASE_URL);
 const STORE = 'eaeaeaea-eaea-eaea-eaea-eaeaeaeaea01';
 
 beforeEach(async () => {

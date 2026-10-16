@@ -1,4 +1,5 @@
 /** Disposable PostgreSQL tests; no live stores, tokens, credentials or production deployment. */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
@@ -14,7 +15,7 @@ vi.mock('../auth/admin-session.js', () => ({ resolveAdmin: async (token: string)
 } : null }));
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) throw new Error('blog protocol tests require a disposable *_test database');
+assertTestDatabase(DB, 'admin-blog-protocol.db.test.ts');
 const STORE = '11111111-1111-4111-a111-111111111111';
 const OTHER = '22222222-2222-4222-a222-222222222222';
 const ASSET = '33333333-3333-4333-a333-333333333333';

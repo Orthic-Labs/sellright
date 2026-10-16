@@ -4,6 +4,7 @@
  * whose side effect is an audit_log row so "the mutation committed (or rolled back) with
  * the status" is directly observable. Runs against a *_test database only (TRUNCATEs store CASCADE).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../../db/test-database-url.js';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq, sql } from 'drizzle-orm';
 import { pool, withStore } from '../../db/client.js';
@@ -18,9 +19,7 @@ import { recordSettlementOperation } from './record.js';
 import type { EffectKind } from './ops.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`effects test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'effects.db.test.ts');
 
 const STORE = 'ee000000-0000-0000-0000-00000000e001';
 const OTHER = 'ee000000-0000-0000-0000-00000000e002';

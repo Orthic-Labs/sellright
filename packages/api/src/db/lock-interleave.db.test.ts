@@ -1,5 +1,6 @@
 // T-L2: concurrent transactions that take the same rows through withLockedSet serialize
 // in the global class order and never deadlock. DB-gated: *_test only.
+import { isDisposablePostgresUrl } from './test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { pool, withStore } from './client.js';
@@ -7,7 +8,7 @@ import { withLockedSet } from './locks.js';
 import { env } from '../env.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-const isTestDb = /_test(\b|$|\?)/.test(DB);
+const isTestDb = isDisposablePostgresUrl(DB);
 const STORE = '78787878-7878-7878-7878-787878787878';
 const CUSTOMER = '68686868-6868-6868-6868-686868686868';
 const ORDER_A = '58585858-5858-5858-5858-585858585858';

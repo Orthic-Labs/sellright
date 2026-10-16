@@ -4,6 +4,7 @@
  * transition to Paid with its licence and fan-out. Also: a replayed operation whose order_paid was never
  * applied is refused, never reported as settled. Runs against a *_test database only (truncates).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { eq, sql } from 'drizzle-orm';
@@ -17,9 +18,7 @@ import { admin } from './admin.js';
 import { adminOrderOps } from './admin-order-ops.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`draft settlement test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'admin-order-ops.draft-settlement.db.test.ts');
 
 const STORE = 'f1f1f1f1-0000-0000-0000-000000000001';
 const SLUG = 'f1-draft-store';

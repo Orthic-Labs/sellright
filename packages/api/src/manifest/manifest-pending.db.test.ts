@@ -2,15 +2,14 @@
  * DB tests for the durable-retry marker table (SELLRIGHT-ISSUES P1 —
  * "Cross-process catalog triggers can be skipped without durable retry").
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { pool } from '../db/client.js';
 import { env } from '../env.js';
 import { markManifestRegenerationPending, clearManifestRegenerationPending, loadStalePendingManifestRegenerations } from './manifest-pending.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`manifest-pending test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'manifest-pending.db.test.ts');
 
 async function wipe() {
   await pool.query('TRUNCATE catalog_manifest_pending');

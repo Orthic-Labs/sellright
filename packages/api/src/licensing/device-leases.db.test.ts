@@ -13,6 +13,7 @@
  *   - grandfathered seats<=0 licenses stay unlimited without the policy marker
  *   - cross-tenant isolation under FORCE RLS
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
@@ -26,9 +27,7 @@ import {
 import { clearDevicePolicies, registerDevicePolicy } from './device-policy.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`device-leases test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'device-leases.db.test.ts');
 
 const STORE = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
 const STORE_B = 'dddddddd-dddd-dddd-dddd-dddddddddddd';

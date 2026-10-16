@@ -1,6 +1,7 @@
 // Reservation release wiring (PAYMENT-TIMING §3.3 R3–R6, §5.2, §9 T-R*), against a real database.
 // Route-level cases drive the real handlers (admin cancel, bulk cancel, operator override) under an admin session;
 // the R5 and sweep cases drive the service and the job. DB-gated: *_test only.
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
@@ -17,9 +18,7 @@ import { consume, releaseOnFullRefundInSet, releaseOnFullRefundOrDefer, reserve 
 import { _resetPaymentPoliciesForTests, registerPaymentPolicy } from './policy/host.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`reservation release wiring test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'reservation-release-wiring.db.test.ts');
 
 const STORE = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee';
 const SLUG = 'resv-wiring-test-store';

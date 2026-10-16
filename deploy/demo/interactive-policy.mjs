@@ -1,3 +1,6 @@
+import {Readable} from 'node:stream';
+import {pipeline} from 'node:stream/promises';
+
 const id = '[a-zA-Z0-9_-]+';
 const uuid = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
 const reads = new RegExp(`^/v1/admin/(me|dashboard|products|variants|collections|inventory|orders|customers|reports|activity|locations|promotions|returns)(/${id})?(/(movements|options))?$`);
@@ -132,7 +135,7 @@ export function interactiveBody(path, body) {
   // checkout.ts) carries shipping/email/shippingAddress/billingAddress/
   // giftCardCode/items alongside cartToken — accepting them here is still
   // safe because interactive-server.mjs's checkout handler REPLACES items,
-  // email and shippingAddress from the live cart + synthetic identity before
+  // email, shippingAddress and billingAddress from the live cart + synthetic identity before
   // the request ever reaches the real app (see settle()/execute() there);
   // nothing accepted in this branch is ever trusted as the source of truth.
   // Every field stays individually bounded so this can't become a blank check.
@@ -221,4 +224,31 @@ export function probeRequest(method, headers = {}) {
   if (method === 'HEAD') return true;
   const ua = String(headers['user-agent'] ?? '').trim();
   return ua === '' || PROBE_UA.test(ua);
+}
+
+
+export const syntheticDemoAddress=Object.freeze({fullName:'Alex Morgan',line1:'1 Demo Avenue',city:'Sample City',province:'CA',postalCode:'90001',country:'US'});
+
+/** Replace every accepted checkout identity field before calling the real API. */
+export function demoCheckoutBody(body,lines){
+  return {...body,items:lines.map(line=>({sku:line.sku,quantity:line.quantity})),email:'sample0@demo.invalid',shippingAddress:{...syntheticDemoAddress},billingAddress:{...syntheticDemoAddress}};
+}
+
+// Preserve file metadata only. Demo cookies, cache and security policy remain
+// wrapper-owned; upstream application headers cannot replace them.
+const responseHeaders=['content-type','content-disposition','content-length','x-export-rows','x-export-capped'];
+export async function forwardInteractiveResponse(response,res,transformCheckout){
+  const headers={};
+  for(const name of responseHeaders){const value=response.headers.get(name);if(value!==null)headers[name]=value;}
+  if(transformCheckout&&response.ok){
+    const data=await transformCheckout(await response.json());
+    headers['content-type']='application/json';
+    delete headers['content-length']; // transformed JSON has different bytes
+    res.writeHead(response.status,headers);
+    res.end(JSON.stringify(data));
+    return;
+  }
+  res.writeHead(response.status,headers);
+  if(!response.body){res.end();return;}
+  await pipeline(Readable.fromWeb(response.body),res);
 }

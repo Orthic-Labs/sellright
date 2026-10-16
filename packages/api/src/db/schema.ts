@@ -1,4 +1,5 @@
 export * from './schema-core.js';
+export * from './schema-migration.js';
 export * from './schema-orders.js';
 export * from './schema-payment-attempts.js';
 export * from './schema-content.js';

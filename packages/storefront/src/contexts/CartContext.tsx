@@ -37,7 +37,7 @@ export const CartContextId = createContextId<CartContextState>('cart-context');
 export const CartProvider = component$(() => {
   const cartState = useStore<CartContextState>({
     cart: EMPTY_CART,
-    isLoading: false,
+    isLoading: true,
     lastError: null,
     hasLoadedOnce: false,
     isRefreshingStock: false,
@@ -56,13 +56,13 @@ export const CartProvider = component$(() => {
       bindCartMirror(cartState);
       if (cartState.hasLoadedOnce) return;
       cartState.cart = CartService.getCart();
-      cartState.hasLoadedOnce = true;
-      CartService.refresh()
-        .then((res) => applyResult(cartState, res))
+      CartService.bootstrap()
+        .then((res) => { applyResult(cartState, res); cartState.hasLoadedOnce = true; })
         .catch((e) => {
           console.error('CartContext: initial cart refresh failed:', e);
           reportError(cartState, e, 'Failed to load cart');
-        });
+        })
+        .finally(() => { cartState.isLoading = false; });
     }),
   );
 
@@ -104,7 +104,8 @@ function reportError(cartState: CartContextState, error: unknown, fallback: stri
 
 export const loadCartIfNeeded = $(async (cartState: CartContextState) => {
   if (cartState.hasLoadedOnce) return;
-  cartState.cart = CartService.getCart();
+  const result = await CartService.bootstrap();
+  applyResult(cartState, result);
   cartState.hasLoadedOnce = true;
 });
 

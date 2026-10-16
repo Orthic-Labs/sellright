@@ -4,6 +4,7 @@
  * transition, placement checks, operator override, purge gate, and the effect gates (authorizeInvoiceEffect,
  * revalidateForIssuance) on the real effects worker. Runs against a *_test database only.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../../db/test-database-url.js';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { eq, sql } from 'drizzle-orm';
 import { pool, withStore } from '../../db/client.js';
@@ -24,9 +25,7 @@ import {
 import type { PaymentPolicy, PolicyOrder, ReservationTransition } from './types.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`payment hook test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'hooks.db.test.ts');
 
 const STORE = '7a000000-0000-0000-0000-00000000a001';
 const KIND = 'test.credit';

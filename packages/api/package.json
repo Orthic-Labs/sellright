@@ -56,13 +56,15 @@
   "files": [
     "dist",
     "!dist/**/*.test.*",
+    "!dist/db/rls-test-utils.*",
+    "!dist/db/test-database-url.*",
     "drizzle",
     "exports",
     "BUILD-INFO.json"
   ],
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc -p tsconfig.json && node scripts/write-build-info.mjs",
+    "build": "tsc -p tsconfig.build.json && node scripts/write-build-info.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/index.js",
     "test": "vitest run --project unit",

@@ -21,7 +21,7 @@ export default function OrderExportDialog({ open, onClose, filters }: { open: bo
   const [range, setRange] = useState<RangePreset>('last365');
   const [from, setFrom] = useState(''); const [to, setTo] = useState('');
   const [payment, setPayment] = useState(''); const [fulfillment, setFulfillment] = useState(''); const [orderStatus, setOrderStatus] = useState('');
-  const [preOrder, setPreOrder] = useState(false);
+  const [preOrder, setPreOrder] = useState(false); const [excludeDemo, setExcludeDemo] = useState(false);
   const [shipMethod, setShipMethod] = useState('');
   const [method, setMethod] = useState(''); const [country, setCountry] = useState(''); const [coupon, setCoupon] = useState(''); const [q, setQ] = useState('');
   const [rows, setRows] = useState<'order' | 'line'>('order');
@@ -37,7 +37,7 @@ export default function OrderExportDialog({ open, onClose, filters }: { open: bo
     const hasRange = !!(filters.from || filters.to);
     setRange(hasRange ? 'custom' : 'last365'); setFrom(filters.from); setTo(filters.to);
     setPayment(filters.paymentStatus); setFulfillment(filters.fulfillmentStatus); setOrderStatus(filters.status);
-    setPreOrder(filters.preOrder); setQ(filters.q);
+    setPreOrder(filters.preOrder); setExcludeDemo(filters.excludeDemo); setQ(filters.q);
     setShipMethod(''); setMethod(''); setCountry(''); setCoupon(''); setRows('order'); setFormat('csv'); setPresetName(''); setPresets(loadPresets());
   }, [open, filters]);
   useEffect(() => { if (cat.data && cols === null) setCols(cat.data.defaults); }, [cat.data, cols]);
@@ -74,6 +74,7 @@ export default function OrderExportDialog({ open, onClose, filters }: { open: bo
     if (fulfillment) p.set('fulfillmentStatus', fulfillment);
     if (orderStatus === 'archived') p.set('trashed', '1'); else if (orderStatus) p.set('status', orderStatus);
     if (preOrder) p.set('preOrder', '1');
+    if (excludeDemo) p.set('excludeDemo', '1');
     if (method) p.set('paymentMethod', method);
     if (shipMethod) p.set('shippingMethod', shipMethod);
     if (country.trim()) p.set('country', country.trim());
@@ -82,7 +83,7 @@ export default function OrderExportDialog({ open, onClose, filters }: { open: bo
     p.set('rows', rows);
     if (selected.length) p.set('columns', selected.join(','));
     return p;
-  }, [range, from, to, payment, fulfillment, orderStatus, preOrder, method, shipMethod, country, coupon, q, rows, selected]);
+  }, [range, from, to, payment, fulfillment, orderStatus, preOrder, excludeDemo, method, shipMethod, country, coupon, q, rows, selected]);
 
   const rangeInvalid = range === 'custom' && !!from && !!to && from > to;
   const noColumns = selected.filter((k) => rows === 'line' || !lineKeys.has(k)).length === 0;
@@ -118,6 +119,10 @@ export default function OrderExportDialog({ open, onClose, filters }: { open: bo
           <Field label="Pre-orders" htmlFor="ex-pre">
             <select id="ex-pre" className="input" value={preOrder ? '1' : ''} onChange={(e) => setPreOrder(e.target.value === '1')}><option value="">All orders</option><option value="1">Pre-orders only</option></select>
           </Field>
+          <label className="inline-flex items-center gap-2 text-sm text-gray-600">
+            <input type="checkbox" className="accent-brand" checked={excludeDemo} onChange={(e) => setExcludeDemo(e.target.checked)} />
+            Exclude demo orders
+          </label>
           <Field label="Payment method" htmlFor="ex-method"><Select id="ex-method" value={method} onChange={setMethod} options={PAYMENT_METHODS} any="Any payment method" /></Field>
           <Field label="Shipping method" htmlFor="ex-ship"><Select id="ex-ship" value={shipMethod} onChange={setShipMethod} options={[...(shipMethods.data?.items ?? []).map((m) => ({ value: m.code, label: m.name })), { value: '__none__', label: 'No recorded method' }]} any="Any shipping method" /></Field>
           <Field label="Ship-to country" htmlFor="ex-country" hint="2-letter code, e.g. US."><input id="ex-country" className="input uppercase" maxLength={2} value={country} onChange={(e) => setCountry(e.target.value)} placeholder="Any" /></Field>

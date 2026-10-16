@@ -4,10 +4,16 @@ import { Package, CreditCard, Mail, ArrowRight, Truck, AlertTriangle, Users, Che
 import { api, type Dashboard } from '../api';
 import { useAuth } from '../auth';
 import { money, dateTime } from '../lib/format';
-import { halfPeriodDelta, sparkHeights, totals, trendDeltaLabel, type TrendSeries } from '../lib/report-deltas';
+import { halfPeriodDelta, periodWindows, sparkHeights, totals, trendDeltaLabel, type TrendSeries } from '../lib/report-deltas';
 import { Badge, Loading, ErrorState, PageHeader, KpiCard, EmptyStateActionPanel } from '../components/ui';
 import SetupChecklist from '../components/SetupChecklist';
 import { adminHref } from '../lib/base-path';
+import { BUILTIN_VIEWS, EMPTY_FILTERS, filtersToParams } from '../lib/order-status';
+
+const unfulfilledView = BUILTIN_VIEWS.find((view) => view.id === 'unfulfilled')!;
+const toFulfillFilters = Object.assign({}, EMPTY_FILTERS, unfulfilledView.filters);
+export const DASHBOARD_TO_FULFILL_HREF = `/orders?${filtersToParams(toFulfillFilters)}`;
+export const DASHBOARD_PAID_ORDERS_HREF = `/orders?${filtersToParams({ ...EMPTY_FILTERS, paymentStatus: 'paid' })}`;
 
 // An operational signal: a count that wants action when it's non-zero.
 function OpCard({ label, count, hint, to, icon, danger }: {
@@ -65,9 +71,10 @@ export default function Dashboard() {
   // Trend computation is local — never invent deltas.
   const series = trend.data?.series ?? [];
   const t = totals(series);
+  const windows = periodWindows(series);
   const revDelta = halfPeriodDelta(series, (p) => p.revenue);
   const ordDelta = halfPeriodDelta(series, (p) => p.orders);
-  const revLabel = trendDeltaLabel(revDelta, totals(series.slice(0, Math.floor(series.length / 2))).revenue, t.revenue);
+  const revLabel = trendDeltaLabel(revDelta, totals(windows.previous).revenue, totals(windows.current).revenue);
 
   return (
     <>
@@ -97,14 +104,14 @@ export default function Dashboard() {
         <>
           {/* Needs-action operational signals first — answer "what needs me?" in one scan. */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
-            <OpCard label="To fulfill" count={data.pendingFulfillment} hint="paid, awaiting shipment" to="/orders?state=Paid" icon={<Truck size={14} />} />
+            <OpCard label="To fulfill" count={data.pendingFulfillment} hint="paid, awaiting shipment" to={DASHBOARD_TO_FULFILL_HREF} icon={<Truck size={14} />} />
             <OpCard label="Low stock" count={data.lowStock} hint="≤ 3 available" to="/inventory" icon={<AlertTriangle size={14} />} danger />
             <KpiCard label="Customers" value={<span>{data.customers}</span>} hint="total" icon={<Users size={16} />} to="/customers" />
             <KpiCard label="Avg order value" value={money(data.aov, cur)} hint="paid orders" icon={<CheckCircle2 size={16} />} />
           </div>
           <div className="grid grid-cols-2 gap-3 mb-6">
             <KpiCard label="Revenue" value={money(data.revenue, cur)} hint={`${data.orders} paid orders · all-time`} />
-            <KpiCard label="Paid orders" value={<span className="tnum">{data.orders}</span>} hint="all-time" to="/orders?state=Paid" />
+            <KpiCard label="Paid orders" value={<span className="tnum">{data.orders}</span>} hint="all-time" to={DASHBOARD_PAID_ORDERS_HREF} />
           </div>
 
           {/* 30-day trend — derived from real /reports/sales series. */}

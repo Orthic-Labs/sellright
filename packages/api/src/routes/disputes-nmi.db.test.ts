@@ -1,11 +1,9 @@
 /**
- * PAR-07 NMI webhook end-to-end (DB-required). Requires GATEWAY_ACCOUNTS_JSON
- * naming an nmi account for the test store — the vitest invocation sets it:
- *   GATEWAY_ACCOUNTS_JSON='[{"accountId":"acct1","storeId":"<STORE>","method":"nmi","mode":"live","securityKey":"k","privateKey":"whk"}]'
- * The file self-skips when no nmi account is configured so a bare test:db run
- * doesn't fail on missing env.
+ * NMI webhook identity integration: real HMAC verification, route, RLS-scoped
+ * ledger reads, dispute/audit records & operator outbox. Configured profiles
+ * use synthetic per-mode keys; no gateway request or real credentials.
  */
-import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHmac } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { createApp } from '../app.js';
@@ -13,16 +11,27 @@ import { pool, withStore } from '../db/client.js';
 import { assertTestDatabase } from '../db/rls-test-utils.js';
 import { env } from '../env.js';
 
+vi.mock('../payments/gateway-account.js', async (orig) => ({
+  ...await orig<typeof import('../payments/gateway-account.js')>(),
+  resolveGatewayAccount: async (storeId: string, method: string, accountId: string, mode?: string) => {
+    if (storeId !== STORE || method !== 'nmi') throw new Error('not configured');
+    if (accountId === 'db' && (mode === 'live' || mode === 'test')) {
+      return { storeId, method: 'nmi', accountId, mode, securityKey: 'synthetic',
+        privateKey: mode === 'live' ? SIGNING_KEY : TEST_SIGNING_KEY };
+    }
+    if (accountId === ACCT && !mode) return { storeId, method: 'nmi', accountId,
+      mode: 'live', securityKey: 'synthetic', privateKey: SIGNING_KEY };
+    throw new Error('not configured');
+  },
+}));
+
 assertTestDatabase(process.env.DATABASE_URL ?? env.DATABASE_URL, 'disputes-nmi.db.test.ts');
 
 // zod's uuid() validates the version nibble — test ids need a real v4 shape.
 const STORE = '99999999-9999-4999-8999-999999999999';
 const ACCT = 'nmi-acct-1';
 const SIGNING_KEY = 'nmi-webhook-key';
-const configured = (() => {
-  try { return JSON.parse(env.GATEWAY_ACCOUNTS_JSON).some((a: { method?: string }) => a.method === 'nmi'); }
-  catch { return false; }
-})();
+const TEST_SIGNING_KEY = 'nmi-test-webhook-key';
 
 const app = createApp();
 
@@ -32,10 +41,10 @@ const EVENT = {
   event_body: { chargebacks: [{ id: 'txn-cb-77', amount: '42.00', reason: 'fraudulent' }] },
 };
 
-function signedRequest(body: string, key = SIGNING_KEY) {
+function signedRequest(body: string, key = SIGNING_KEY, accountId = ACCT) {
   const t = '1700000000';
   const s = createHmac('sha256', key).update(`${t}.${body}`).digest('hex');
-  return new Request(`http://test/v1/webhooks/nmi/${STORE}/${ACCT}`, {
+  return new Request(`http://test/v1/webhooks/nmi/${STORE}/${accountId}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'webhook-signature': `t=${t},s=${s}` },
     body,
@@ -44,17 +53,24 @@ function signedRequest(body: string, key = SIGNING_KEY) {
 
 async function wipe() { await pool.query('TRUNCATE store CASCADE'); }
 
-async function seed(): Promise<void> {
+async function seed(accountId: string | null = ACCT, mode: string | null = 'live') {
   await pool.query(`INSERT INTO store (id, slug, name, currency, config) VALUES ($1, 'nmi-test', 'NMI Test', 'USD', '{}'::jsonb)`, [STORE]);
   const r = await pool.query(`INSERT INTO admin_user (email) VALUES ('ops@x.test') ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email RETURNING id`);
   await pool.query(`INSERT INTO admin_user_store (admin_user_id, store_id, role) VALUES ($1, $2, 'owner'::admin_role) ON CONFLICT DO NOTHING`, [r.rows[0].id, STORE]);
-  await withStore(STORE, async (tx) => {
+  return seedPayment('NMI-1', accountId, mode);
+}
+
+async function seedPayment(code: string, accountId: string | null, mode: string | null) {
+  return withStore(STORE, async (tx) => {
     const o = await tx.execute(sql`
       INSERT INTO "order" (id, store_id, code, state, currency, grand_total)
-      VALUES (gen_random_uuid(), ${STORE}, 'NMI-1', 'Paid'::order_state, 'USD', 4200) RETURNING id`);
-    await tx.execute(sql`
-      INSERT INTO payment (id, store_id, order_id, amount, method, state, provider_ref)
-      VALUES (gen_random_uuid(), ${STORE}, ${(o.rows[0] as { id: string }).id}, 4200, 'nmi', 'Settled', 'txn-cb-77')`);
+      VALUES (gen_random_uuid(), ${STORE}, ${code}, 'Paid'::order_state, 'USD', 4200) RETURNING id`);
+    const orderId = (o.rows[0] as { id: string }).id;
+    const p = await tx.execute(sql`
+      INSERT INTO payment (id, store_id, order_id, amount, method, state, provider_ref, gateway_account, gateway_mode, metadata)
+      VALUES (gen_random_uuid(), ${STORE}, ${orderId}, 4200, 'nmi', 'Settled', 'txn-cb-77', ${accountId}, ${mode},
+        ${JSON.stringify(mode === null ? { vendure: { vendureMethod: 'nmi-payment', modeQuarantined: 'conflict' } } : {})}::jsonb) RETURNING id`);
+    return { orderId, paymentId: (p.rows[0] as { id: string }).id };
   });
 }
 
@@ -67,7 +83,22 @@ const emailCount = () => withStore(STORE, async (tx) => {
   return (r.rows[0] as { n: number }).n;
 });
 
-describe.skipIf(!configured)('POST /v1/webhooks/nmi/:store/:account', () => {
+const associations = () => withStore(STORE, async tx => {
+  const r = await tx.execute(sql`SELECT payment_id, order_id, status FROM dispute ORDER BY provider_ref`);
+  return r.rows;
+});
+
+const assertNoMoneyEffects = async (paymentCount = 1) => withStore(STORE, async tx => {
+  const r = await tx.execute(sql`SELECT
+    (SELECT count(*) FROM payment WHERE store_id = ${STORE})::int AS payments,
+    (SELECT count(*) FROM refund WHERE store_id = ${STORE})::int AS refunds,
+    (SELECT count(*) FROM payment_attempt WHERE store_id = ${STORE})::int AS attempts,
+    (SELECT bool_and(state = 'Paid') FROM "order" WHERE store_id = ${STORE}) AS orders_paid,
+    (SELECT bool_and(state = 'Settled') FROM payment WHERE store_id = ${STORE}) AS payments_settled`);
+  expect(r.rows[0]).toMatchObject({ payments: paymentCount, refunds: 0, attempts: 0, orders_paid: true, payments_settled: true });
+});
+
+describe('POST /v1/webhooks/nmi/:store/:account', () => {
   beforeEach(wipe);
   afterAll(wipe);
 
@@ -88,6 +119,60 @@ describe.skipIf(!configured)('POST /v1/webhooks/nmi/:store/:account', () => {
     expect(replay.status).toBe(200);
     expect(await disputeCount()).toEqual({ n: 1, linked: true });
     expect(await emailCount()).toBe(1);
+    await assertNoMoneyEffects();
+  });
+
+  it.each(['live', 'test'] as const)('links exact DB-account %s identity selected by its signing key', async mode => {
+    const ids = await seed('db', mode);
+    const key = mode === 'live' ? SIGNING_KEY : TEST_SIGNING_KEY;
+    expect((await app.request(signedRequest(JSON.stringify(EVENT), key, 'db'))).status).toBe(200);
+    expect(await associations()).toEqual([{ payment_id: ids.paymentId, order_id: ids.orderId, status: 'open' }]);
+    expect(await emailCount()).toBe(1);
+    await assertNoMoneyEffects();
+  });
+
+  it.each([
+    ['NULL mode / live callback', 'db', null, 'live'],
+    ['NULL mode / test callback', 'db', null, 'test'],
+    ['NULL account / live callback', null, 'live', 'live'],
+    ['NULL account / test callback', null, 'test', 'test'],
+    ['both NULL / live callback', null, null, 'live'],
+    ['both NULL / test callback', null, null, 'test'],
+    ['wrong account', 'another-account', 'live', 'live'],
+    ['wrong mode', 'db', 'test', 'live'],
+  ] as const)('preserves an unlinked dispute & deduped alert for %s', async (_label, accountId, mode, callbackMode) => {
+    const ids = await seed(accountId, mode);
+    const key = callbackMode === 'live' ? SIGNING_KEY : TEST_SIGNING_KEY;
+    const body = JSON.stringify(EVENT);
+    expect((await app.request(signedRequest(body, key, 'db'))).status).toBe(200);
+    // Replayed event & new envelope for the same transaction both dedupe.
+    expect((await app.request(signedRequest(body, key, 'db'))).status).toBe(200);
+    const retryBody = JSON.stringify({ ...EVENT, event_id: 'evt_cb_redelivery' });
+    expect((await app.request(signedRequest(retryBody, key, 'db'))).status).toBe(200);
+    expect(await associations()).toEqual([{ payment_id: null, order_id: null, status: 'open' }]);
+    expect(await emailCount()).toBe(1);
+    const evidence = await withStore(STORE, async tx => {
+      const audits = await tx.execute(sql`SELECT entity_id, data FROM audit_log WHERE store_id = ${STORE} AND action = 'dispute_opened'`);
+      const emails = await tx.execute(sql`SELECT recipient, payload FROM email_outbox WHERE store_id = ${STORE} AND kind = 'dispute_alert'`);
+      return { audits: audits.rows, emails: emails.rows };
+    });
+    expect(evidence.audits).toEqual([expect.objectContaining({ entity_id: 'txn-cb-77', data: expect.objectContaining({ orderCode: null }) })]);
+    expect(evidence.emails).toEqual([expect.objectContaining({ recipient: 'ops@x.test' })]);
+    expect(JSON.stringify(evidence)).not.toContain(ids.orderId);
+    expect(JSON.stringify(evidence)).not.toContain(ids.paymentId);
+    expect(JSON.stringify(evidence)).not.toContain('NMI-1');
+    await assertNoMoneyEffects();
+  });
+
+  it('selects only exact identity when the same provider ref exists across accounts & modes', async () => {
+    await seed(null, null);
+    await seedPayment('NMI-OTHER-ACCOUNT', 'another-account', 'live');
+    await seedPayment('NMI-OTHER-MODE', 'db', 'test');
+    const exact = await seedPayment('NMI-EXACT', 'db', 'live');
+    expect((await app.request(signedRequest(JSON.stringify(EVENT), SIGNING_KEY, 'db'))).status).toBe(200);
+    expect(await associations()).toEqual([{ payment_id: exact.paymentId, order_id: exact.orderId, status: 'open' }]);
+    expect(await emailCount()).toBe(1);
+    await assertNoMoneyEffects(4);
   });
 
   it('rejects a bad signature before touching the DB', async () => {

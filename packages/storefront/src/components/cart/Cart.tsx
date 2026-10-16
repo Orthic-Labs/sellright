@@ -299,7 +299,11 @@ export default component$(() => {
 								</div>
 							)}
 
-							{totalQuantity.value > 0 ? (
+							{!cartState.hasLoadedOnce ? (
+								<div class="flex items-center justify-center min-h-[280px] text-[12px] text-[#9A9288]" role="status">
+									{cartState.lastError ?? 'Loading your cart…'}
+								</div>
+							) : totalQuantity.value > 0 ? (
 								<CartContents />
 							) : banner.continueCheckout ? null : (
 								<div class="flex flex-col items-center justify-center h-full min-h-[280px] text-center px-4">

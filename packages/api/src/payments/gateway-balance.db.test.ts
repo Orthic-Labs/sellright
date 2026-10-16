@@ -6,6 +6,7 @@
  * Providers are mocked at the boundary (never a real NMI/Sezzle call).
  * Runs against a *_test DB only (TRUNCATEs store CASCADE).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
@@ -42,9 +43,7 @@ import { startGatewayPayment, verifyGatewayAttempt } from './gateway-payment.js'
 import { orders } from '../routes/orders.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`balance-pay test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'gateway-balance.db.test.ts');
 
 const STORE = 'e1000000-0000-0000-0000-0000000e1001';
 const RT = 'rt_balance_pay_receipt_token_abcdefghijkl';

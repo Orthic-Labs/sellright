@@ -14,6 +14,7 @@
  * Bearer-token auth is CSRF-exempt (see auth/cookies.ts hasValidBearer), so
  * these tests don't need to simulate the CSRF cookie dance.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { eq, sql } from 'drizzle-orm';
@@ -25,9 +26,7 @@ import { account } from './account.js';
 import { issueDeviceLease, renewDeviceLease } from '../licensing/device-leases.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`account-deletion test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'account-deletion.test.ts');
 
 const STORE = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee';
 const SLUG = 'account-deletion-test-store';

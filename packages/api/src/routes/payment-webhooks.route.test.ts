@@ -22,6 +22,7 @@
  *   3. an unknown/garbage signature is rejected with 400 and never reaches
  *      the DB (order untouched)
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import Stripe from 'stripe';
 import { eq, sql } from 'drizzle-orm';
@@ -51,9 +52,7 @@ vi.mock('../payments/stripe.js', async (orig) => {
 const { paymentWebhooks } = await import('./payment-webhooks.js');
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`payment-webhooks.route test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'payment-webhooks.route.test.ts');
 
 const STORE = 'aaaaaaaa-3333-3333-3333-333333333333';
 const SLUG = 'webhook-route-test-store';

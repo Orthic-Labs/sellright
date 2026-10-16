@@ -6,6 +6,7 @@
  *  - Webhook create/patch are in the credentials deny group (they mint a signing secret / redirect store data).
  *  - Agent tokens get a default expiry (ADMIN_AGENT_TOKEN_TTL_DAYS, default 90).
  */
+import { isDisposablePostgresUrl } from '../db/test-database-url.js';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Context } from 'hono';
 import { OpenAPIHono } from '@hono/zod-openapi';
@@ -17,7 +18,7 @@ import { buildHttpApp } from '../app.js';
 import { _clearApiPluginsForTest, registerApiPlugin } from '../plugins.js';
 import { requireAdmin, requireStore } from './admin-helpers.js';
 
-const isTestDb = /^\/[^/]*_test$/.test(new URL(process.env.DATABASE_URL ?? env.DATABASE_URL).pathname);
+const isTestDb = isDisposablePostgresUrl(process.env.DATABASE_URL ?? env.DATABASE_URL);
 const STORE = 'acacacac-acac-4cac-8cac-acacacacac01';
 const MANAGER = 'acacacac-acac-4cac-8cac-0000000000b1';
 

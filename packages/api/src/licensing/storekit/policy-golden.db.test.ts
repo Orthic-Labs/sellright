@@ -5,6 +5,7 @@
  * diff). Responses are normalised only for values that are random per run (tokens, lease ids, timestamps).
  * Lane test DB only.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../../db/test-database-url.js';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql, eq } from 'drizzle-orm';
 import { OpenAPIHono } from '@hono/zod-openapi';
@@ -23,9 +24,7 @@ import { _resetStoreKitPoliciesForTests, registerStoreKitPolicy } from './policy
 import { sellrightDefaultPolicy } from './default-policy.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error('storekit golden test truncates data — point DATABASE_URL at a *_test database');
-}
+assertTestDatabase(DB, 'policy-golden.db.test.ts');
 
 const GOLDEN_PATH = fileURLToPath(new URL('./golden/default-responses.golden.json', import.meta.url));
 const STORE = 'ffffffff-ffff-ffff-ffff-ffffffffff11';

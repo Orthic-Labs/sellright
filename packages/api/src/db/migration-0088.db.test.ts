@@ -5,6 +5,7 @@
  * (everything before 0088), seeds processing rows for two stores, applies 0088,
  * and asserts the backfill. Needs CREATE DATABASE rights on the same server.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from './test-database-url.js';
 import { afterAll, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -13,7 +14,7 @@ import { join } from 'node:path';
 import pg from 'pg';
 
 const DB = process.env.DATABASE_URL ?? '';
-if (!/_test(\b|$|\?)/.test(DB)) throw new Error('migration-0088 test needs a *_test DATABASE_URL');
+assertTestDatabase(DB, 'migration-0088.db.test.ts');
 const url = new URL(DB);
 const scratch = 'defork_mig0088_test';
 const scratchUrl = (() => { const u = new URL(DB); u.pathname = `/${scratch}`; return u.toString(); })();

@@ -8,6 +8,7 @@
  * Stripe is mocked at the seam (mint / retrieve); everything else is real.
  * Runs against a *_test DB only (TRUNCATEs store CASCADE).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const intents = new Map<string, Record<string, unknown>>();
@@ -53,9 +54,7 @@ import { applyStripeIntent } from '../payments/stripe-reconcile.js';
 import { pay } from './pay.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`stripe balance-pay test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'pay.stripe-balance.db.test.ts');
 
 const STORE = 'e2000000-0000-0000-0000-0000000e2001';
 const SLUG = 'stripebal-test';

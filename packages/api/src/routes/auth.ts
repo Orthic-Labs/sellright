@@ -6,12 +6,12 @@ import { resolveStoreFromCtx } from './store-context.js';
 import { type StoreCtx } from '../store-context.js';
 import * as s from '../db/schema.js';
 import { hashPassword, passwordNeedsRehash, verifyPassword } from '../auth/password.js';
-import { customerToken, createSession, deleteSession, resolveCustomer, sessionPolicy } from '../auth/session.js';
+import { customerToken, resolveLegacySession, createSession, deleteSession, resolveCustomer, sessionPolicy } from '../auth/session.js';
 import { consumeMagicLink, magicLinkPolicy, mintMagicLink } from '../auth/magic-link.js';
 import { googleAuthoritativeForEmail, verifyGoogleIdToken, type GoogleIdentity } from '../auth/google.js';
 import { FEDERATED_LINK_TTL_MS, federatedLinkAvailable, hashLinkNonce, newLinkNonce, nonceMatches, redeemFederatedLink, signFederatedLink, verifyFederatedLink } from '../auth/federated-link.js';
 import { appleAuthoritativeForEmail, appleClientIds, verifyAppleIdentityToken } from '../auth/apple.js';
-import { setCustomerCookies, clearCustomerCookies, customerCsrfValid, newCsrf, cookie, FEDERATED_NONCE_COOKIE, setFederatedNonceCookie, clearFederatedNonceCookie } from '../auth/cookies.js';
+import { setCustomerCookies, clearCustomerCookies, legacyCustomerToken, clearReadableLegacyToken, customerCsrfValid, newCsrf, cookie, FEDERATED_NONCE_COOKIE, setFederatedNonceCookie, clearFederatedNonceCookie } from '../auth/cookies.js';
 import { clientIp, loginRetryAfter, recordLoginFailure, clearLoginAttempts } from '../auth/rate-limit.js';
 import { normalizeEmail } from '../auth/email.js';
 import { createHash, randomBytes } from 'node:crypto';
@@ -661,10 +661,14 @@ auth.openapi(
   async (c) => {
     const st = await resolveStoreFromCtx(c);
     const token = customerToken(c);
-    if (!token) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
-    // /auth/me is the explicit account-refresh read — make it authoritative:
-    // a renewable session extends here even outside the renew window.
-    const cust = await withStore(st.id, (tx) => resolveCustomer(tx, token, true));
+    const legacy = token ? null : legacyCustomerToken(c);
+    const adopted = legacy ? await withStore(st.id, tx => resolveLegacySession(tx, st.id, legacy)) : null;
+    if (legacy && adopted) {
+      setCustomerCookies(c, legacy, newCsrf(), Math.max(0, Math.floor((adopted.expiresAt.getTime() - Date.now()) / 1000)));
+      clearReadableLegacyToken(c);
+      c.header('Cache-Control', 'no-store');
+    }
+    const cust = adopted?.customer ?? (token ? await withStore(st.id, tx => resolveCustomer(tx, token, true)) : null);
     if (!cust) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
     return c.json({ id: cust.id, email: cust.email, firstName: cust.firstName, lastName: cust.lastName, phone: cust.phone, emailVerified: cust.emailVerified, isMigrated: cust.isMigrated }, 200);
   },

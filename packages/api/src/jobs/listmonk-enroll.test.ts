@@ -3,6 +3,7 @@
  * Covers: enrollment inserts a confirmed 'order' subscriber row, dedupe on
  * repeat orders, and the sync pass actually pushing it to Listmonk.
  */
+import { isDisposablePostgresUrl } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sql } from 'drizzle-orm';
 
@@ -18,15 +19,7 @@ import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-const isTestDb = (() => {
-  try {
-    const url = new URL(DB);
-    // pg accepts database query overrides; credentials/query text cannot prove DB identity.
-    return ['postgres:', 'postgresql:'].includes(url.protocol)
-      && /^\/[^/]+_test$/.test(decodeURIComponent(url.pathname))
-      && ![...url.searchParams.keys()].some(key => /^(database|dbname)$/i.test(key));
-  } catch { return false; }
-})();
+const isTestDb = isDisposablePostgresUrl(DB);
 const STORE = '88888888-8888-8888-8888-888888888888';
 
 async function wipe() {

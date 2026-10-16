@@ -2,6 +2,7 @@
  * De-fork plan 2.9 — storekit_event stage-aware resolution rules.
  * Runs against a *_test database only (TRUNCATEs store CASCADE).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
@@ -9,9 +10,7 @@ import { env } from '../env.js';
 import { recordStoreKitEvent, recordStoreKitEventDetached, type StoreKitEventInput } from './storekit-events.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`storekit-events test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'storekit-events.db.test.ts');
 
 const A = 'a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1';
 const B = 'b2b2b2b2-b2b2-b2b2-b2b2-b2b2b2b2b2b2';

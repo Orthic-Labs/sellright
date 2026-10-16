@@ -214,13 +214,18 @@ gatewayPayments.post('/v1/webhooks/sezzle/:storeId/:accountId', async c => {
     // + audit + order linkage). Deliberately no auto-refund/cancel — disputes
     // need human handling; recordDispute dedupes on (store, provider, ref).
     if (normalized.disputeId || normalized.details.dispute) {
-      const [pay] = normalized.orderUuid ? await tx
+      const payments = normalized.orderUuid ? await tx
         .select({ id: s.payment.id, orderId: s.payment.orderId })
         .from(s.payment)
-        .where(and(eq(s.payment.providerRef, normalized.orderUuid), eq(s.payment.method, 'sezzle')))
-        .limit(1) : [];
+        .where(and(eq(s.payment.storeId, storeId), eq(s.payment.providerRef, normalized.orderUuid),
+          eq(s.payment.method, 'sezzle'), eq(s.payment.gatewayAccount, account.accountId),
+          eq(s.payment.gatewayMode, account.mode)))
+        .limit(2) : [];
+      // Preserve an unlinked, operator-visible dispute if identity is absent
+      // or ambiguous. A signed account never inherits another account's row.
+      const pay = payments.length === 1 ? payments[0] : undefined;
       const [ord] = pay ? await tx.select({ code: s.order.code }).from(s.order)
-        .where(eq(s.order.id, pay.orderId)).limit(1) : [];
+        .where(and(eq(s.order.storeId, storeId), eq(s.order.id, pay.orderId))).limit(1) : [];
       const d = normalized.details.dispute as Record<string, unknown> | undefined;
       await recordDispute(tx, storeId, {
         provider: 'sezzle',

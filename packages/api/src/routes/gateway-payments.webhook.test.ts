@@ -14,8 +14,10 @@
  * production uses). gatewayAccount is mocked so the suite doesn't depend on
  * process-env timing. Runs against a *_test database only (these wipe data).
  */
-import { createHmac } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { assertTestDatabase } from '../db/rls-test-utils.js';
+import { migrationId } from '../import/context.js';
 
 const STORE = 'ffffffff-6666-4666-8666-666666666666';
 const ACCOUNT = 'sz_acct_test';
@@ -45,9 +47,7 @@ const { OpenAPIHono } = await import('@hono/zod-openapi');
 const { sql } = await import('drizzle-orm');
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`sezzle webhook test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'sezzle webhook test');
 
 const app = new OpenAPIHono();
 app.route('/', gatewayPayments);
@@ -70,20 +70,24 @@ async function post(payload: unknown, key = PRIVATE_KEY): Promise<{ status: numb
 
 async function wipe() { await pool.query('TRUNCATE store CASCADE'); }
 
-async function seedStoreWithSezzleOrder(): Promise<{ orderId: string }> {
-  const orderId = await withStore(STORE, async (tx) => {
+async function seedStoreWithSezzleOrder(imported = false, storeId = STORE): Promise<{ orderId: string }> {
+  const orderId = await withStore(storeId, async (tx) => {
     await tx.execute(sql`INSERT INTO store (id, slug, name, currency, config)
-      VALUES (${STORE}, 'sezzle-wh-test', 'Sezzle WH', 'USD', '{}'::jsonb) ON CONFLICT (id) DO NOTHING`);
+      VALUES (${storeId}, ${'sezzle-wh-test-' + storeId}, 'Sezzle WH', 'USD', '{}'::jsonb) ON CONFLICT (id) DO NOTHING`);
     const r = await tx.execute(sql`
-      INSERT INTO "order" (id, store_id, code, state, currency, grand_total)
-      VALUES (gen_random_uuid(), ${STORE}, 'SR-SZ-1', 'Paid'::order_state, 'USD', 3000)
+      INSERT INTO "order" (id, store_id, code, state, currency, grand_total, metadata)
+      VALUES (${imported ? migrationId(storeId, 'vendure:damned', 'order', 12) : randomUUID()},
+        ${storeId}, 'SR-SZ-1', 'Paid'::order_state, 'USD', 3000,
+        ${JSON.stringify(imported ? { vendure: { id: 12, sourceKey: 'vendure:damned', state: 'PaymentSettled' } } : {})}::jsonb)
       RETURNING id`);
     return (r.rows[0] as { id: string }).id;
   });
-  await withStore(STORE, async (tx) => {
+  await withStore(storeId, async (tx) => {
     await tx.execute(sql`
-      INSERT INTO payment (id, store_id, order_id, amount, method, state, provider_ref, gateway_account, gateway_mode, currency)
-      VALUES (gen_random_uuid(), ${STORE}, ${orderId}, 3000, 'sezzle', 'Settled', 'sz_order_1', ${ACCOUNT}, 'test', 'USD')`);
+      INSERT INTO payment (id, store_id, order_id, amount, method, state, provider_ref, gateway_account, gateway_mode, currency, metadata)
+      VALUES (${imported ? migrationId(storeId, 'vendure:damned', 'payment', 42) : randomUUID()},
+        ${storeId}, ${orderId}, 3000, 'sezzle', 'Settled', 'sz_order_1', ${ACCOUNT}, 'test', 'USD',
+        ${JSON.stringify(imported ? { vendure: { vendureMethod: 'sezzle-payment', sourceMode: 'test', sourcePaymentId: 42, sourceKey: 'vendure:damned' } } : {})}::jsonb)`);
   });
   return { orderId };
 }
@@ -104,6 +108,53 @@ beforeEach(async () => { await wipe(); });
 afterAll(async () => { await wipe(); await pool.end(); });
 
 describe('POST /v1/webhooks/sezzle — SR-06 dispute shape', () => {
+  it('does not link a matching account/reference from another store', async () => {
+    const otherStore = 'ffffffff-7777-4777-8777-777777777777';
+    await seedStoreWithSezzleOrder();
+    await withStore(STORE, tx => tx.execute(sql`DELETE FROM payment WHERE store_id = ${STORE}`));
+    await seedStoreWithSezzleOrder(false, otherStore);
+    expect((await post({ uuid: 'evt_wrong_store', event: 'dispute.merchant_input_requested', data_type: 'dispute',
+      data: { dispute_id: 9875, order_uuid: 'sz_order_1', dispute_status: 'merchant_input_requested' },
+    })).status).toBe(200);
+    expect(await gatewayEvents()).toEqual([expect.objectContaining({ status: 'pending' })]);
+    expect(await disputes()).toEqual([expect.objectContaining({ order_id: null })]);
+  });
+
+  it.each([
+    ['another account', 'different-account', 'test'], ['another mode', ACCOUNT, 'live'],
+    ['unknown account', null, 'test'], ['unknown mode', ACCOUNT, null], ['unknown identity', null, null],
+  ])('keeps dispute unlinked & pending when payment belongs to %s', async (_name, accountId, mode) => {
+    await seedStoreWithSezzleOrder();
+    await withStore(STORE, tx => tx.execute(sql`UPDATE payment SET gateway_account = ${accountId}, gateway_mode = ${mode} WHERE store_id = ${STORE}`));
+    expect((await post({ uuid: 'evt_wrong_identity', event: 'dispute.merchant_input_requested', data_type: 'dispute',
+      data: { dispute_id: 9873, order_uuid: 'sz_order_1', dispute_status: 'merchant_input_requested' },
+    })).status).toBe(200);
+    expect(await gatewayEvents()).toEqual([expect.objectContaining({ status: 'pending' })]);
+    expect(await disputes()).toEqual([expect.objectContaining({ order_id: null })]);
+    const effects = await withStore(STORE, tx => tx.execute(sql`SELECT
+      (SELECT count(*) FROM payment WHERE store_id = ${STORE})::int AS payments,
+      (SELECT count(*) FROM refund WHERE store_id = ${STORE})::int AS refunds,
+      (SELECT count(*) FROM payment_attempt WHERE store_id = ${STORE})::int AS attempts,
+      (SELECT state FROM "order" WHERE store_id = ${STORE} LIMIT 1) AS state`));
+    expect(effects.rows[0]).toMatchObject({ payments: 1, refunds: 0, attempts: 0, state: 'Paid' });
+  });
+
+  it('links exact imported identity without inventing attempts or payment/refund effects', async () => {
+    const { orderId } = await seedStoreWithSezzleOrder(true);
+    const payload = { uuid: 'evt_imported_identity', event: 'dispute.merchant_input_requested', data_type: 'dispute',
+      data: { dispute_id: 9874, order_uuid: 'sz_order_1', dispute_status: 'merchant_input_requested' },
+    };
+    expect((await post(payload)).status).toBe(200);
+    expect((await post(payload)).status).toBe(200);
+    expect(await disputes()).toEqual([expect.objectContaining({ order_id: orderId })]);
+    const effects = await withStore(STORE, tx => tx.execute(sql`SELECT
+      (SELECT count(*) FROM payment WHERE store_id = ${STORE})::int AS payments,
+      (SELECT count(*) FROM refund WHERE store_id = ${STORE})::int AS refunds,
+      (SELECT count(*) FROM payment_attempt WHERE store_id = ${STORE})::int AS attempts,
+      (SELECT state FROM "order" WHERE id = ${orderId}) AS state`));
+    expect(effects.rows[0]).toMatchObject({ payments: 1, refunds: 0, attempts: 0, state: 'Paid' });
+  });
+
   it('accepts a signed dispute event keyed on data.order_uuid (no data.uuid)', async () => {
     const { orderId } = await seedStoreWithSezzleOrder();
     const res = await post({

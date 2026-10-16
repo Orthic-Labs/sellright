@@ -3,6 +3,7 @@
  * same transaction, with the promised advisory keys granted to this backend; it is a no-op in production.
  * Lane test DB only.
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from './test-database-url.js';
 import { afterAll, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { pool, withStore, type Tx } from './client.js';
@@ -10,9 +11,7 @@ import { env } from '../env.js';
 import { assertHeld, HeldLocksMissing, withLockedSet, type HeldLocks, type PurchaseId } from './locks.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error('assertHeld test truncates data — point DATABASE_URL at a *_test database');
-}
+assertTestDatabase(DB, 'assert-held.db.test.ts');
 
 const STORE = 'ffffffff-ffff-ffff-ffff-ffffffffff31';
 const forged = {} as HeldLocks;

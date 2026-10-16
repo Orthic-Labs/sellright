@@ -10,6 +10,7 @@
  *
  * Runs against a *_test DB only (TRUNCATEs store CASCADE).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { pool } from '../db/client.js';
@@ -19,9 +20,7 @@ import { auth } from './auth.js';
 import { shopExtra } from './shop-extra.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`turnstile coverage test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'turnstile-coverage.db.test.ts');
 
 const STORE = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeee1';
 const SLUG = 'turnstile-coverage-store';

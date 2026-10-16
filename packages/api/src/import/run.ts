@@ -7,6 +7,7 @@ import * as schema from '../db/schema.js';
 import type { Tx } from '../db/client.js';
 import { migrationId, type ImportContext, type ManifestExclusion } from './context.js';
 import { importCatalog } from './catalog.js';
+import { importSessionsAndCarts } from './sessions-carts.js';
 import { importCustomers } from './customers.js';
 import { importOrders } from './orders.js';
 import { importHistory } from './history.js';
@@ -44,7 +45,7 @@ export const MIGRATION_TABLES = ['asset', 'product', 'product_option_group', 'pr
   // unavailable to available enqueues a pending restock_event (migration 0049
   // stock_restock_event trigger). It is part of the migration's written
   // output — captured in `after`, removed by restore.
-  'restock_event'] as const;
+  'restock_event', 'session', 'cart', 'cart_line', 'legacy_session_grant', 'legacy_cart_claim'] as const;
 
 const PRE_SETTLEMENT_ORDER_STATES = new Set(['AddingItems', 'ArrangingPayment', 'PaymentAuthorized']);
 
@@ -76,7 +77,7 @@ export async function runMigration(input: {
     const beforeStore = (await target.query('SELECT * FROM store WHERE id=$1 FOR UPDATE', [config.storeId])).rows;
     const scopedTables = (await target.query<{ table_name: string }>(`
       SELECT table_name FROM information_schema.columns WHERE table_schema='public' AND column_name='store_id'
-        AND table_name NOT IN ('admin_user_store','staff_invite','session','processed_event') ORDER BY table_name
+        AND table_name NOT IN ('admin_user_store','staff_invite','processed_event') ORDER BY table_name
     `)).rows.map(row => row.table_name);
     for (const table of scopedTables) {
       if (!/^[a-z_]+$/.test(table)) throw new Error('Unexpected tenant table name');
@@ -115,7 +116,6 @@ export async function runMigration(input: {
     const invalidCurrency = await q('SELECT id FROM "order" WHERE "currencyCode" <> $1 LIMIT 1', [config.currency]);
     if (invalidCurrency.length) throw new Error('Source contains orders in another currency');
     const exclusions: ManifestExclusion[] = [
-      { type: 'not-imported', table: 'session', detail: 'Source sessions and carts are not imported; customers re-authenticate and rebuild carts after cutover' },
       ...staleUnresolved,
       ...unmappedCustomFields(sourceColumns).map(field => ({
         type: 'unmapped-source-field' as const, table: field.table,
@@ -147,6 +147,7 @@ export async function runMigration(input: {
     // disabled in the source are backfilled before order coupon attribution.
     await importBusiness(ctx);
     await importCustomers(ctx);
+    await importSessionsAndCarts(ctx);
     await importOrders(ctx);
     await importHistory(ctx);
     // Only an EXPLICIT program (migration config or a pre-existing target
@@ -186,8 +187,9 @@ export async function runMigration(input: {
       after[table] = (await target.query('SELECT * FROM "' + table + '" WHERE store_id=$1', [config.storeId])).rows;
     }
     after.store = (await target.query('SELECT * FROM store WHERE id=$1', [config.storeId])).rows;
+    const parityBlockers = exclusions.filter(exclusion => exclusion.blocking === true);
     const manifest = { version: 1, storeId: config.storeId, sourceKey: config.sourceKey, sourceDigest,
-      mode: input.apply ? 'apply' : 'dry-run', commitStatus: 'prepared', createdAt: new Date().toISOString(), before: { store: beforeStore }, after, exclusions,
+      mode: input.apply ? 'apply' : 'dry-run', commitStatus: 'prepared', createdAt: new Date().toISOString(), before: { store: beforeStore }, after, exclusions, parityBlocked: parityBlockers.length > 0, parityBlockers,
       afterDigest: digest(Object.fromEntries(Object.entries(after).map(([table, rows]) =>
         [table, [...rows].sort((a, b) => canonical(a).localeCompare(canonical(b)))]))), assets };
     // Exclusive private file creation must succeed before COMMIT. This manifest
@@ -204,7 +206,7 @@ export async function runMigration(input: {
       // (ROLLBACK) branch below. Fire-and-forget per stock-hook.ts contract.
       onStockChanged(config.slug);
     } else { await source.query('COMMIT'); await target.query('ROLLBACK'); }
-    return { applied: !!input.apply, sourceDigest, exclusions, assetCounts: assets.counts,
+    return { applied: !!input.apply, sourceDigest, exclusions, parityBlocked: parityBlockers.length > 0, parityBlockers, assetCounts: assets.counts,
       counts: Object.fromEntries(Object.entries(after).map(([table, rows]) => [table, rows.length])) };
   } catch (error) {
     await target?.query('ROLLBACK').catch(() => undefined);

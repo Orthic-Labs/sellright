@@ -29,14 +29,16 @@ const verify = vi.fn();
 vi.mock('../payments/gateway-payment.js', () => ({ verifySezzleAttempt: (...a: unknown[]) => verify(...a) }));
 const resolve = vi.fn();
 const refunds = vi.fn();
+const observe = vi.fn();
 vi.mock('../payments/sezzle-reconcile.js', () => ({
   resolveSezzleSessionAttempt: (...a: unknown[]) => resolve(...a),
   reconcileSezzleRefunds: (...a: unknown[]) => refunds(...a),
+  observeImportedSezzlePayment: (...a: unknown[]) => observe(...a),
 }));
 import { reconcileGatewayEvents } from './reconcile-gateway-events.js';
 
 const event = (eventType: string) => ({ id: 'e', status: 'pending', attempts: 0, method: 'sezzle', accountId: 'a', mode: 'test', providerRef: 'ord', eventType });
-beforeEach(() => { h.st.updates = []; h.st.audits = []; verify.mockReset(); resolve.mockReset(); refunds.mockReset(); });
+beforeEach(() => { h.st.updates = []; h.st.audits = []; verify.mockReset(); resolve.mockReset(); refunds.mockReset(); observe.mockReset(); });
 
 describe('gateway-events worker', () => {
   it('D15: verifies an event associated through the reference_id fallback', async () => {
@@ -45,6 +47,32 @@ describe('gateway-events worker', () => {
     verify.mockResolvedValue({ status: 'settled' });
     expect(await reconcileGatewayEvents()).toEqual({ processed: 1 });
     expect(resolve).toHaveBeenCalledWith({ storeId: 'store', accountId: 'a', mode: 'test', providerRef: 'ord' });
+    expect(observe).not.toHaveBeenCalled();
+  });
+  it.each([
+    ['order.captured', 'order.authorized', 'order.captured'],
+    ['order.authorized', 'order.captured', 'order.authorized'],
+  ])('observes imported settled history in event order %j without settlement', async (...events) => {
+    resolve.mockResolvedValue(null);
+    observe.mockResolvedValue({ id: 'pay', orderId: 'o', state: 'Settled' });
+    for (const type of events) {
+      h.st.event = event(type);
+      expect(await reconcileGatewayEvents()).toEqual({ processed: 1 });
+    }
+    expect(observe).toHaveBeenCalledTimes(3);
+    expect(verify).not.toHaveBeenCalled();
+    expect(refunds).not.toHaveBeenCalled();
+    expect(h.st.audits).toEqual([]);
+    expect(h.st.updates).toEqual(events.map(() => expect.objectContaining({ status: 'processed', lastError: null })));
+  });
+  it('moves unproven historical association to visible manual review after repeated retries', async () => {
+    h.st.event = { ...event('order.captured'), attempts: 29 };
+    resolve.mockResolvedValue(null);
+    observe.mockResolvedValue(null);
+    await reconcileGatewayEvents();
+    expect(h.st.updates[0]).toMatchObject({ status: 'manual', lastError: 'Payment association pending' });
+    expect(h.st.audits[0]).toMatchObject({ action: 'reconciliation_required' });
+    expect(verify).not.toHaveBeenCalled();
   });
   it('keeps an unassociated event pending', async () => {
     h.st.event = event('order.authorized');
@@ -57,6 +85,7 @@ describe('gateway-events worker', () => {
     refunds.mockResolvedValue({ recorded: 1, finalized: 0, ambiguous: 0 });
     expect(await reconcileGatewayEvents()).toEqual({ processed: 1 });
     expect(resolve).not.toHaveBeenCalled();
+    expect(observe).not.toHaveBeenCalled();
   });
   it('D16: ambiguous refund reservations go to manual with an audit row', async () => {
     h.st.event = event('order.refunded');

@@ -12,6 +12,7 @@
  *
  * Runs against sellright_test ONLY (these wipe data).
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { eq, sql } from 'drizzle-orm';
@@ -21,9 +22,7 @@ import * as s from '../db/schema.js';
 import { auth } from './auth.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`auth.google test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'auth.google.db.test.ts');
 
 const STORE = 'aaaaaaaa-3333-3333-3333-333333333333';
 const SLUG = 'auth-google-test-store';

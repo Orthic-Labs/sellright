@@ -18,6 +18,7 @@
  *   5. invoice.paid with NO prior subscription row → create-or-find creates + issues
  *   6. invoice.payment_failed → past_due
  */
+import { requireDisposablePostgresUrl as assertTestDatabase } from '../db/test-database-url.js';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock the Stripe client surface used by the /subscribe route. The lifecycle
@@ -53,9 +54,7 @@ import {
 } from '../payments/subscriptions.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`subscriptions test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+assertTestDatabase(DB, 'subscriptions.test.ts');
 
 const STORE = 'dddddddd-dddd-dddd-dddd-dddddddddddd';
 const SLUG = 'subs-test-store';

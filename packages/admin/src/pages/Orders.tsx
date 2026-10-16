@@ -248,6 +248,10 @@ export default function Orders() {
             <FilterSelect label="Payment" value={filters.paymentStatus} onChange={(v) => patchFilters({ paymentStatus: v })} options={PAYMENT_OPTIONS} />
             <FilterSelect label="Fulfillment" value={filters.fulfillmentStatus} onChange={(v) => patchFilters({ fulfillmentStatus: v })} options={FULFILLMENT_OPTIONS} />
             <FilterSelect label="Order" value={filters.status} onChange={(v) => patchFilters({ status: v })} options={ORDER_OPTIONS} />
+            <label className="inline-flex items-center gap-1.5 text-xs text-gray-500">
+              <input type="checkbox" className="accent-brand" checked={filters.excludeDemo} onChange={(e) => patchFilters({ excludeDemo: e.target.checked })} />
+              Exclude demo orders
+            </label>
             <label className="inline-flex items-center gap-1.5 text-xs text-gray-500">From
               <input type="date" aria-label="Date from" className="input py-1.5! text-xs! w-[8.5rem]" value={filters.from} max={filters.to || undefined} onChange={(e) => patchFilters({ from: e.target.value })} />
             </label>
