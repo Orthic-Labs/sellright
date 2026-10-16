@@ -30,6 +30,11 @@ const app = new OpenAPIHono();
 app.route('/', auth);
 app.route('/', shopExtra);
 
+const savedParsed = {
+  NODE_ENV: env.NODE_ENV,
+  TURNSTILE_DISABLED: env.TURNSTILE_DISABLED,
+  TURNSTILE_SECRET_KEY: env.TURNSTILE_SECRET_KEY,
+};
 const saved = {
   NODE_ENV: process.env.NODE_ENV,
   TURNSTILE_DISABLED: process.env.TURNSTILE_DISABLED,
@@ -71,6 +76,9 @@ function stubSiteverify(): void {
 }
 
 function restoreEnv(): void {
+  env.NODE_ENV = savedParsed.NODE_ENV;
+  env.TURNSTILE_DISABLED = savedParsed.TURNSTILE_DISABLED;
+  env.TURNSTILE_SECRET_KEY = savedParsed.TURNSTILE_SECRET_KEY;
   for (const [k, v] of Object.entries(saved)) {
     if (v === undefined) delete process.env[k as keyof typeof saved]; else process.env[k as keyof typeof saved] = v;
   }
@@ -79,8 +87,11 @@ function restoreEnv(): void {
 
 beforeEach(() => {
   process.env.NODE_ENV = 'test';
+  env.NODE_ENV = 'test';
   delete process.env.TURNSTILE_DISABLED;
+  env.TURNSTILE_DISABLED = undefined;
   delete process.env.TURNSTILE_SECRET_KEY;
+  env.TURNSTILE_SECRET_KEY = undefined;
 });
 afterAll(restoreEnv);
 
@@ -105,13 +116,16 @@ describe('resend-verification Turnstile gate', () => {
   it('production, no secret, no opt-out → 403', async () => {
     await seedStore(false);
     process.env.NODE_ENV = 'production';
+    env.NODE_ENV = 'production';
     expect((await resend({ email: EMAIL })).status).toBe(403);
   });
 
   it('production, no secret, TURNSTILE_DISABLED=true → 200', async () => {
     await seedStore(false);
     process.env.NODE_ENV = 'production';
+    env.NODE_ENV = 'production';
     process.env.TURNSTILE_DISABLED = 'true';
+    env.TURNSTILE_DISABLED = 'true';
     expect((await resend({ email: EMAIL })).status).toBe(200);
   });
 
@@ -137,13 +151,16 @@ describe('newsletter-signup Turnstile gate', () => {
   it('production, no secret, no opt-out → 403', async () => {
     await seedStore(false);
     process.env.NODE_ENV = 'production';
+    env.NODE_ENV = 'production';
     expect((await newsletter(body)).status).toBe(403);
   });
 
   it('production, no secret, TURNSTILE_DISABLED=true → 200', async () => {
     await seedStore(false);
     process.env.NODE_ENV = 'production';
+    env.NODE_ENV = 'production';
     process.env.TURNSTILE_DISABLED = 'true';
+    env.TURNSTILE_DISABLED = 'true';
     expect((await newsletter(body)).status).toBe(200);
   });
 });
@@ -164,13 +181,16 @@ describe('order tracking (GET /v1/shop/track) Turnstile gate', () => {
   it('production, no secret, no opt-out → 403', async () => {
     await seedStore(false);
     process.env.NODE_ENV = 'production';
+    env.NODE_ENV = 'production';
     expect((await track(q)).status).toBe(403);
   });
 
   it('production, no secret, TURNSTILE_DISABLED=true → passes gate (404 unknown order)', async () => {
     await seedStore(false);
     process.env.NODE_ENV = 'production';
+    env.NODE_ENV = 'production';
     process.env.TURNSTILE_DISABLED = 'true';
+    env.TURNSTILE_DISABLED = 'true';
     expect((await track(q)).status).toBe(404);
   });
 });

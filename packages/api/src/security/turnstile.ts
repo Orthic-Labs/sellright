@@ -13,6 +13,8 @@
  * `success !== true` — returns false. The only true path is Cloudflare
  * explicitly answering success for the presented token.
  */
+import { peekEnv } from '../env.js';
+
 const SITEVERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
 // Bounded wait: a slow/stuck siteverify must not hold the request open (or
 // stall a queue of public-form submissions). 5s is generous for a same-
@@ -20,14 +22,20 @@ const SITEVERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverif
 // wedge the endpoint.
 const VERIFY_TIMEOUT_MS = 5_000;
 
+// Read parsed engine config when present; standalone helpers never initialize it.
+function runtimeNodeEnv(): string | undefined {
+  return peekEnv()?.NODE_ENV ?? process.env.NODE_ENV;
+}
+
 /** Explicit operator opt-out (TURNSTILE_DISABLED=true). Read at call time. */
 export function turnstileOperatorDisabled(): boolean {
-  return process.env.TURNSTILE_DISABLED === 'true';
+  const configured = peekEnv();
+  return (configured ? configured.TURNSTILE_DISABLED : process.env.TURNSTILE_DISABLED) === 'true';
 }
 
 /** Startup hook: warn loudly when production runs with the opt-out set. */
 export function warnIfTurnstileDisabled(log: (msg: string) => void = (m) => console.warn(m)): void {
-  if (process.env.NODE_ENV === 'production' && turnstileOperatorDisabled()) {
+  if (runtimeNodeEnv() === 'production' && turnstileOperatorDisabled()) {
     log('[turnstile] WARNING: TURNSTILE_DISABLED=true in production — anti-bot verification is OFF for stores without a secret');
   }
 }
@@ -41,7 +49,7 @@ export async function verifyTurnstileToken(args: {
   if (!secret) {
     // No secret: explicit opt-out passes; production fails closed; dev/test pass.
     if (turnstileOperatorDisabled()) return true;
-    return process.env.NODE_ENV !== 'production';
+    return runtimeNodeEnv() !== 'production';
   }
   const token = args.token?.trim();
   // Configured but the client presented nothing → fail closed.

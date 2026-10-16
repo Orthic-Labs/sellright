@@ -353,8 +353,9 @@ export async function renewDeviceLease(
 /** Remote removal. Keeps a tombstone row (state='revoked'), bumps `generation`
  *  (invalidates any outstanding lease/replay for the device), and frees the
  *  pool slot transactionally (the state filter on the counting query above
- *  means the freed row no longer counts). Idempotent: removing an
- *  already-revoked/unknown device is a no-op success. */
+ *  means the freed row no longer counts). Repeated revocation keeps the
+ *  device revoked and its slot free, but still bumps generation and refreshes
+ *  timestamps. An unknown device returns `notfound`. */
 export async function revokeDeviceRemote(
   tx: Tx,
   input: { storeId: string; licenseId: string; activationId: string },
