@@ -809,6 +809,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Backup & restore private-file regressions
+        run: sh deploy/tests/test-backup-restore.sh
       - name: shellcheck
         uses: ludeeus/action-shellcheck@00cae500b08a931fb5698e11e79bfbd38e612a38 # 2.0.0
         with:
@@ -1015,6 +1017,9 @@ jobs:
           test -s "$out_dir/downloads.tar.gz"
           test -s "$out_dir/manifest.json"
           grep -q sha256 "$out_dir/manifest.json"
+          test "$(stat -c %a deploy/backups)" = 700
+          test "$(stat -c %a "$out_dir")" = 700
+          test -z "$(find "$out_dir" -type f ! -perm 600 -print -quit)"
           tar xzOf "$out_dir/assets.tar.gz" assets/.drill-sentinel | grep -qx drill-asset-sentinel
           tar xzOf "$out_dir/downloads.tar.gz" downloads/.drill-sentinel | grep -qx drill-download-sentinel
 

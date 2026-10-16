@@ -37,40 +37,52 @@ cmd_logs() {
   compose logs -f --tail=200 "$@"
 }
 
-cmd_backup() {
+cmd_backup() (
   require_home
-  mkdir -p "${SELLRIGHT_HOME}/backups"
+  umask 077
+  backup_root="${SELLRIGHT_HOME}/backups"
+  out_dir=""
+  complete=0
+  status=0
+  # Subshell-local traps leave update's rollback bookkeeping trap intact.
+  trap 'status=$?; if [ "$complete" -eq 0 ] && [ -n "$out_dir" ]; then rm -rf -- "$out_dir"; fi; exit "$status"' 0
+  trap 'exit 1' HUP INT TERM
+  if [ -e "$backup_root" ] || [ -L "$backup_root" ]; then
+    [ ! -L "$backup_root" ] && [ -d "$backup_root" ] || die "backup parent must be a real directory: $backup_root"
+    [ "$(stat -c %u -- "$backup_root")" = "$(id -u)" ] || die "backup parent must be owned by current user: $backup_root"
+    chmod 700 "$backup_root"
+  else
+    mkdir -m 700 "$backup_root"
+  fi
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
-  out_dir="${SELLRIGHT_HOME}/backups/${stamp}"
-  mkdir -p "$out_dir"
-  # The api container writes into this bind mount as its non-root `node`
-  # user, whose uid won't generally match whoever owns $SELLRIGHT_HOME on the
-  # host (root, via install.sh). 0777 only on this one transient per-backup
-  # staging directory, not on $SELLRIGHT_HOME itself.
-  chmod 777 "$out_dir"
+  out_dir=$(mktemp -d "${backup_root}/${stamp}.XXXXXX")
   log "Backing up database..."
   compose exec -T postgres pg_dump -U sellright -d sellright -Fc > "${out_dir}/database.dump"
   log "Backing up assets and downloads volumes..."
-  compose run --rm -v "${out_dir}:/backup" -T api \
-    sh -c 'tar czf /backup/assets.tar.gz -C /app/var assets && tar czf /backup/downloads.tar.gz -C /app/var downloads'
+  compose run --rm --no-deps -T api tar czf - -C /app/var assets > "${out_dir}/assets.tar.gz"
+  compose run --rm --no-deps -T api tar czf - -C /app/var downloads > "${out_dir}/downloads.tar.gz"
   api_ref="${COMPOSE_API_IMAGE:-$(compose images -q api)}"
+  database_sha=$(sha256sum "${out_dir}/database.dump")
+  assets_sha=$(sha256sum "${out_dir}/assets.tar.gz")
+  downloads_sha=$(sha256sum "${out_dir}/downloads.tar.gz")
   {
     printf '{\n'
     printf '  "createdAt": "%s",\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     printf '  "appVersion": "%s",\n' "$(env_get SELLRIGHT_IMAGE_TAG)"
     printf '  "apiImageId": "%s",\n' "${api_ref:-unknown}"
     printf '  "parts": {\n'
-    printf '    "database.dump": "sha256:%s",\n' "$(sha256sum "${out_dir}/database.dump" | cut -d' ' -f1)"
-    printf '    "assets.tar.gz": "sha256:%s",\n' "$(sha256sum "${out_dir}/assets.tar.gz" | cut -d' ' -f1)"
-    printf '    "downloads.tar.gz": "sha256:%s"\n' "$(sha256sum "${out_dir}/downloads.tar.gz" | cut -d' ' -f1)"
+    printf '    "database.dump": "sha256:%s",\n' "${database_sha%% *}"
+    printf '    "assets.tar.gz": "sha256:%s",\n' "${assets_sha%% *}"
+    printf '    "downloads.tar.gz": "sha256:%s"\n' "${downloads_sha%% *}"
     printf '  }\n'
     printf '}\n'
   } > "${out_dir}/manifest.json"
+  complete=1
   log "Backup set written to ${out_dir}"
   if [ "${1:-}" = "--offsite" ]; then
     cmd_backup_offsite "$out_dir"
   fi
-}
+)
 
 # Encrypt-then-MAC (authenticated encryption from plain `openssl enc` +
 # `openssl dgst -hmac`, portable to any OpenSSL 1.1+ without depending on
@@ -101,7 +113,8 @@ decrypt_authenticated() {
     -pass "pass:${enc_key}" -in "$in_file" -out "$out_file"
 }
 
-cmd_backup_offsite() {
+cmd_backup_offsite() (
+  umask 077
   out_dir="$1"
   remote="$(env_get SELLRIGHT_OFFSITE_REMOTE)"
   if [ -z "$remote" ]; then
@@ -114,13 +127,14 @@ cmd_backup_offsite() {
   enc_key=$(derive_key enc "$master_key" "$kit_id")
   mac_key=$(derive_key mac "$master_key" "$kit_id")
   enc_dir=$(mktemp -d)
+  trap 'rm -rf -- "$enc_dir"' 0
+  trap 'exit 1' HUP INT TERM
   for f in database.dump assets.tar.gz downloads.tar.gz manifest.json; do
     encrypt_authenticated "${out_dir}/${f}" "${enc_dir}/${f}.enc" "$enc_key" "$mac_key"
   done
   rclone copy "$enc_dir" "${remote}/$(basename "$out_dir")/"
-  rm -rf "$enc_dir"
   log "Off-site (encrypted + authenticated) backup pushed to ${remote}/$(basename "$out_dir")/"
-}
+)
 
 cmd_recovery_kit() {
   require_home
@@ -128,7 +142,12 @@ cmd_recovery_kit() {
   cat "${SELLRIGHT_HOME}/recovery-kit.json"
 }
 
-cmd_restore() {
+cmd_restore() (
+  umask 077
+  decrypted_dir=""
+  status=0
+  trap 'status=$?; if [ -n "$decrypted_dir" ]; then rm -rf -- "$decrypted_dir"; fi; exit "$status"' 0
+  trap 'exit 1' HUP INT TERM
   kit=""
   set_file=""
   yes=0
@@ -155,16 +174,12 @@ cmd_restore() {
     [ -n "$kit_key" ] && [ -n "$kit_id" ] || die "could not read masterKey/kitId from $kit"
     enc_key=$(derive_key enc "$kit_key" "$kit_id")
     mac_key=$(derive_key mac "$kit_key" "$kit_id")
-    work_dir=$(mktemp -d)
+    decrypted_dir=$(mktemp -d)
+    work_dir="$decrypted_dir"
     for f in "${set_file}"/*.enc; do
       base=$(basename "$f" .enc)
       decrypt_authenticated "$f" "${work_dir}/${base}" "$enc_key" "$mac_key"
     done
-    # mktemp -d is 0700 owner-only; the assets/downloads restore step below
-    # bind-mounts this dir read-only into the api container's non-root `node`
-    # user, who otherwise can't even traverse into it.
-    chmod 755 "$work_dir"
-    chmod a+r "${work_dir}"/*
   fi
 
   for part in database.dump assets.tar.gz downloads.tar.gz; do
@@ -201,20 +216,22 @@ cmd_restore() {
   compose exec -T postgres psql -U sellright -d postgres -c "ALTER DATABASE sellright_restore RENAME TO sellright;"
 
   log "Promoting: replacing live assets and downloads volumes..."
-  compose run --rm -v "${work_dir}:/backup:ro" -T api sh -c '
+  compose run --rm --no-deps -T api sh -c '
     set -e
     rm -rf /app/var/assets/* /app/var/assets/.[!.]* 2>/dev/null || true
-    tar xzf /backup/assets.tar.gz -C /app/var/assets --strip-components=1
+    tar xzf - -C /app/var/assets --strip-components=1
+  ' < "${work_dir}/assets.tar.gz"
+  compose run --rm --no-deps -T api sh -c '
+    set -e
     rm -rf /app/var/downloads/* /app/var/downloads/.[!.]* 2>/dev/null || true
-    tar xzf /backup/downloads.tar.gz -C /app/var/downloads --strip-components=1
-  '
+    tar xzf - -C /app/var/downloads --strip-components=1
+  ' < "${work_dir}/downloads.tar.gz"
 
   compose up -d api
-  [ "$work_dir" = "$set_file" ] || rm -rf "$work_dir"
   log "Restore promoted. Previous database preserved as '${prev_db}' — drop it manually once verified:"
   log "  sellright status  # confirm api is healthy, then:"
   log "  docker compose ... exec postgres dropdb -U sellright ${prev_db}"
-}
+)
 
 cmd_setup_link() {
   require_home
@@ -368,7 +385,7 @@ cmd_update() {
   # shellcheck disable=SC2016 # single-quoted deliberately: $DATABASE_URL_MIGRATE
   # must expand inside the container's sh, not here on the host.
   if ! compose run --rm --no-deps api sh -c 'DATABASE_URL="$DATABASE_URL_MIGRATE" node dist/scripts/migrate.js'; then
-    log "migration failed; leaving maintenance on. No backup restore was performed — restore this backup set manually only if you determine the migration left the schema inconsistent: ${out_dir:-see sellright backup output above}"
+    log "migration failed; leaving maintenance on. No backup restore was performed — restore this backup set manually only if you determine the migration left the schema inconsistent: see sellright backup output above"
     exit 1
   fi
 
