@@ -27,11 +27,15 @@ function newRecoveryCode(): string {
 
 type Db = Pick<typeof db, 'insert' | 'delete'>;
 
-/** Replace this admin's recovery codes with a fresh set; returns the plaintext codes (show once). */
-export async function regenerateRecoveryCodes(adminId: string, tx: Db = db): Promise<string[]> {
+/** Replace this admin's recovery codes with a fresh set; returns the plaintext codes (show once). One transaction,
+ *  serialized per admin: concurrent regenerations cannot leave two valid sets, and a failure keeps the old set. */
+export async function regenerateRecoveryCodes(adminId: string): Promise<string[]> {
   const codes = Array.from({ length: RECOVERY_CODE_COUNT }, newRecoveryCode);
-  await tx.delete(s.adminRecoveryCode).where(eq(s.adminRecoveryCode.adminUserId, adminId));
-  await tx.insert(s.adminRecoveryCode).values(codes.map((c) => ({ adminUserId: adminId, codeHash: hashRecoveryCode(c) })));
+  await db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${'recovery-codes:' + adminId}, 0))`);
+    await tx.delete(s.adminRecoveryCode).where(eq(s.adminRecoveryCode.adminUserId, adminId));
+    await tx.insert(s.adminRecoveryCode).values(codes.map((c) => ({ adminUserId: adminId, codeHash: hashRecoveryCode(c) })));
+  });
   return codes;
 }
 

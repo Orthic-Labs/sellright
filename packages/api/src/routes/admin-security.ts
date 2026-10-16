@@ -10,8 +10,8 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import type { Context } from 'hono';
 import { newTotpSecret, otpauthUri } from '../auth/totp.js';
-import { clearAdminTotpSecret, getAdminCredentialsById, setAdminPasswordHash, setAdminTotpSecret } from '../auth/admin-staff.js';
-import { revokeOtherAdminSessions, type AdminPrincipal } from '../auth/admin-session.js';
+import { clearAdminTotpSecret, getAdminCredentialsById, setAdminTotpSecret } from '../auth/admin-staff.js';
+import { changeAdminPassword, revokeOtherAdminSessions, type AdminPrincipal } from '../auth/admin-session.js';
 import { hashPassword, verifyPassword } from '../auth/password.js';
 import { deleteRecoveryCodes, regenerateRecoveryCodes, remainingRecoveryCodes, verifySecondFactor, verifyTotpOnce } from '../auth/second-factor.js';
 import { clientIp, reserveAdminAuthAttempt, clearAdminAuthFailures } from '../auth/rate-limit.js';
@@ -82,7 +82,7 @@ adminSecurity.openapi(
     },
   }),
   async (c) => guard(c, async () => {
-    const { admin } = await requireAdmin(c);
+    const { admin, token } = await requireAdmin(c);
     requireHuman(admin);
     const { secret, code, password } = c.req.valid('json');
     // ra-sec: refuse to overwrite an existing factor. /disable requires the current
@@ -94,6 +94,9 @@ adminSecurity.openapi(
     if (!(await verifyTotpOnce(admin.id, secret, code))) await gate.fail('code did not match — check your authenticator app', 409);
     await gate.ok();
     await setAdminTotpSecret(admin.id, secret);
+    // Other sessions of this admin signed in WITHOUT a second factor; enrolling must not silently promote them (e.g. a
+    // stolen enrol-only cookie). Only this session — which just proved the password and the new factor — survives.
+    await revokeOtherAdminSessions(admin.id, token);
     const recoveryCodes = await regenerateRecoveryCodes(admin.id);
     await audit(c, admin, '2fa_enable');
     return c.json({ enabled: true, recoveryCodes }, 200);
@@ -166,8 +169,7 @@ adminSecurity.openapi(
     const gate = await credentialGate(c, admin);
     if (!(await verifyPassword(currentPassword, creds?.passwordHash ?? null))) await gate.fail('invalid password');
     await gate.ok();
-    await setAdminPasswordHash(admin.id, await hashPassword(newPassword));
-    const revokedSessions = await revokeOtherAdminSessions(admin.id, token);
+    const revokedSessions = await changeAdminPassword(admin.id, await hashPassword(newPassword), token);
     await audit(c, admin, 'password_change', { revokedSessions });
     return c.json({ ok: true, revokedSessions }, 200);
   }),

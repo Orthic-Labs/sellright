@@ -10,8 +10,7 @@ import { release } from '../payments/reservation.js';
 import { releaseOrderLoyalty } from '../loyalty/ledger.js';
 import { bearer } from '../auth/session.js';
 import { hashPassword, passwordNeedsRehash, verifyPassword, verifyPasswordAgainstDummy } from '../auth/password.js';
-import { setAdminPasswordHash } from '../auth/admin-staff.js';
-import { createAdminSession, deleteAdminSession, findAdminByEmail, resolveAdmin } from '../auth/admin-session.js';
+import { createAdminSessionIfCredential, deleteAdminSession, findAdminByEmail, rehashAdminPasswordIfUnchanged, resolveAdmin } from '../auth/admin-session.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireWrite, requirePermission, guard, Page } from './admin-helpers.js';
 import { clientIp, reserveAdminAuthAttempt, clearAdminAuthFailures } from '../auth/rate-limit.js';
@@ -67,10 +66,17 @@ admin.openapi(
     await clearAdminAuthFailures(ip, email);
     // Upgrade a legacy hash (pre-Argon2id scrypt — e.g. RightSites admins — or outdated Argon2 parameters)
     // now that the plaintext has just been verified. Best-effort: a failure never blocks the sign-in.
-    if (passwordNeedsRehash(u.passwordHash)) {
-      try { await setAdminPasswordHash(u.id, await hashPassword(password)); } catch { /* retried on the next sign-in */ }
+    // Conditional on the stored hash still being the one just verified, so a concurrent password change is never undone.
+    let currentHash = u.passwordHash!;
+    if (passwordNeedsRehash(currentHash)) {
+      try {
+        const upgraded = await hashPassword(password);
+        if (await rehashAdminPasswordIfUnchanged(u.id, currentHash, upgraded)) currentHash = upgraded;
+      } catch { /* retried on the next sign-in */ }
     }
-    const token = await createAdminSession(u.id);
+    // The session is created only if the password verified above is still the account's password (P1b review).
+    const token = await createAdminSessionIfCredential(u.id, currentHash);
+    if (!token) throw new HttpError(401, 'invalid email, password, or 2FA code');
     const csrf = newCsrf();
     setAuthCookies(c, token, csrf); // httpOnly session cookie + CSRF cookie
     const admin = await resolveAdmin(token);

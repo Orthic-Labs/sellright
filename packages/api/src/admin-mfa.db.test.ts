@@ -256,3 +256,32 @@ describe.skipIf(!isTestDb)('admin password rehash on sign-in', () => {
   });
 });
 
+
+describe.skipIf(!isTestDb)('P1b review: session assurance and credential races', () => {
+  it('enrolling through one session signs out the admin\'s other (password-only) sessions', async () => {
+    const a = (await login('owner@mfa.test', PW)).body.token!;
+    const b = (await login('owner@mfa.test', PW)).body.token!;
+    await enrol(a);
+    expect((await req('GET', '/v1/admin/me', { token: a })).status).toBe(200);
+    expect((await req('GET', '/v1/admin/me', { token: b })).status).toBe(401);
+  });
+
+  it('a session is only created for the credential that was verified; a rehash never overwrites a newer password', async () => {
+    const { createAdminSessionIfCredential, rehashAdminPasswordIfUnchanged } = await import('./auth/admin-session.js');
+    const old = (await pool.query('SELECT password_hash FROM admin_user WHERE id = $1', [OWNER])).rows[0].password_hash as string;
+    const replaced = await hashPassword('replaced-password-1');
+    await pool.query('UPDATE admin_user SET password_hash = $1 WHERE id = $2', [replaced, OWNER]); // a password change landed meanwhile
+    expect(await createAdminSessionIfCredential(OWNER, old)).toBeNull();
+    expect(await rehashAdminPasswordIfUnchanged(OWNER, old, await hashPassword(PW))).toBe(false);
+    expect((await pool.query('SELECT password_hash FROM admin_user WHERE id = $1', [OWNER])).rows[0].password_hash).toBe(replaced);
+    expect(await createAdminSessionIfCredential(OWNER, replaced)).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('concurrent recovery-code regenerations leave exactly one valid set', async () => {
+    const { regenerateRecoveryCodes } = await import('./auth/second-factor.js');
+    const [x, y] = await Promise.all([regenerateRecoveryCodes(OWNER), regenerateRecoveryCodes(OWNER)]);
+    const stored = (await pool.query('SELECT count(*)::int AS n FROM admin_recovery_code WHERE admin_user_id = $1', [OWNER])).rows[0].n as number;
+    expect(stored).toBe(10);
+    expect(x).not.toEqual(y);
+  });
+});

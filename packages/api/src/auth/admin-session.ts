@@ -62,6 +62,41 @@ export async function createAdminSession(adminUserId: string): Promise<string> {
   return token;
 }
 
+/**
+ * Sign-in session bound to the credential that was just verified (P1b review): in one transaction, the admin row is
+ * read FOR SHARE and the session is created only if its password hash is still `verifiedHash`. A password change
+ * (changeAdminPassword: UPDATE + revoke in one transaction) therefore either completes first — and this login is
+ * refused — or waits for this session and then revokes it. Returns null when the credential changed meanwhile.
+ */
+export async function createAdminSessionIfCredential(adminUserId: string, verifiedHash: string): Promise<string | null> {
+  return db.transaction(async (tx) => {
+    const [row] = await tx.select({ hash: s.adminUser.passwordHash }).from(s.adminUser).where(eq(s.adminUser.id, adminUserId)).for('share').limit(1);
+    if (!row || row.hash !== verifiedHash) return null;
+    const token = randomBytes(32).toString('hex');
+    await tx.insert(s.session).values({ adminUserId, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + ADMIN_SESSION_TTL_MS) });
+    return token;
+  });
+}
+
+/** Password change: new hash + sign out every OTHER session, atomically (see createAdminSessionIfCredential). */
+export async function changeAdminPassword(adminUserId: string, newHash: string, keepToken: string): Promise<number> {
+  return db.transaction(async (tx) => {
+    await tx.update(s.adminUser).set({ passwordHash: newHash }).where(eq(s.adminUser.id, adminUserId));
+    const del = await tx.delete(s.session)
+      .where(and(eq(s.session.adminUserId, adminUserId), ne(s.session.tokenHash, hashToken(keepToken))))
+      .returning({ id: s.session.id });
+    return del.length;
+  });
+}
+
+/** Rehash on sign-in, only if the stored hash is still the one just verified (never resurrect a replaced password). */
+export async function rehashAdminPasswordIfUnchanged(adminUserId: string, verifiedHash: string, newHash: string): Promise<boolean> {
+  const r = await db.update(s.adminUser).set({ passwordHash: newHash })
+    .where(and(eq(s.adminUser.id, adminUserId), eq(s.adminUser.passwordHash, verifiedHash)))
+    .returning({ id: s.adminUser.id });
+  return r.length === 1;
+}
+
 /** Transaction-aware session insert for agent browser sessions: the session carries the token binding. */
 export async function createAdminSessionTx(tx: Tx, adminUserId: string, ttlMs: number, apiTokenId: string | null): Promise<string> {
   const token = randomBytes(32).toString('hex');

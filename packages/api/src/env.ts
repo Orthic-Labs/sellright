@@ -333,6 +333,10 @@ const EnvSchema = z.object({
   // every installation admin and every owner/manager; 'all' = every human admin.
   // Admins without TOTP then get a session that can only enrol.
   ADMIN_REQUIRE_TOTP: z.enum(['off', 'privileged', 'all']).default('off'),
+  // P1b: '1' = at API start, seal legacy plaintext admin TOTP secrets with SELLRIGHT_MASTER_KEY. Off by default:
+  // set it once the release is past its rollback window (an older engine cannot read sealed secrets; to roll back
+  // after sealing run `node dist/scripts/totp-secrets.js --decrypt` first). New enrolments are always sealed.
+  ADMIN_TOTP_SEAL_EXISTING: z.enum(['0', '1']).default('0'),
   // P1a: admin credential-check budgets (login, step-up, 2FA enable/disable,
   // invite accept, password change), on top of the 8 / 15 min (ip, account) bucket.
   // Failures per admin account per hour across ALL IPs:
