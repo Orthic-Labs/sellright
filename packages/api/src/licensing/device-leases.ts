@@ -157,7 +157,7 @@ export async function issueDeviceLease(
     .where(and(eq(s.licenseActivation.licenseId, lic.id), eq(s.licenseActivation.state, 'active')));
 
   const sameDevice = existing.find((r) => r.deviceIdHash === input.deviceIdHash);
-  if (!sameDevice && !unlimited) {
+  if ((!sameDevice || (policy && sameDevice.pool !== pool)) && !unlimited) {
     const cap = policy ? poolCap(lic.appKey, pool) : lic.seats;
     const inScope = policy ? existing.filter((r) => r.pool === pool) : existing;
     if (inScope.length >= cap) return { kind: 'full' };
@@ -171,7 +171,7 @@ export async function issueDeviceLease(
   const ttlSeconds = leaseTtlSecondsFor(lic.appKey);
   const graceSeconds = leaseGraceSecondsFor(lic.appKey);
   const expiresAt = new Date(now.getTime() + ttlSeconds * 1000);
-  const generation = sameDevice?.generation ?? 0;
+  let generation = sameDevice?.generation ?? 0;
 
   let activationId: string;
   if (sameDevice) {
@@ -204,6 +204,7 @@ export async function issueDeviceLease(
       .limit(1);
     if (tombstoned) {
       activationId = tombstoned.id;
+      generation = tombstoned.generation;
       await tx.update(s.licenseActivation).set({
         activationTokenHash,
         platform: input.platform,
@@ -296,6 +297,7 @@ export async function renewDeviceLease(
       eq(s.licenseActivation.storeId, input.storeId),
       eq(s.licenseActivation.appKey, input.appKey),
       eq(s.licenseActivation.deviceIdHash, input.deviceIdHash),
+      eq(s.licenseActivation.leaseId, input.leaseId),
     ))
     .limit(1)
     .for('update');

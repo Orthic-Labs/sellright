@@ -102,6 +102,40 @@ describe('issueDeviceLease — pool enforcement from registered policy', () => {
     expect(thirdMobile.kind).toBe('full');
   });
 
+  it.each([
+    ['macos', 'computer', 'ios', 'mobile'],
+    ['ios', 'mobile', 'macos', 'computer'],
+  ])('cannot move an active %s/%s device into a full %s/%s destination pool', async (sourcePlatform, sourcePool, destinationPlatform, destinationPool) => {
+    const licenseKey = 'pool-move';
+    const licenseId = await seedLicense({ licenseKey, seats: 2 });
+    const dev = hashish('moving-device');
+    const issue = (deviceIdHash: string, platform: string) => withStore(STORE, (tx) => issueDeviceLease(tx, {
+      storeId: STORE, appKey: 'testapp', licenseKey, deviceIdHash, platform,
+    }));
+    const original = await issue(dev, sourcePlatform);
+    const destinationA = await issue(hashish('destination-a'), destinationPlatform);
+    const destinationB = await issue(hashish('destination-b'), destinationPlatform);
+    if (original.kind !== 'ok' || destinationA.kind !== 'ok' || destinationB.kind !== 'ok') throw new Error('fixture issuance failed');
+
+    expect(await issue(dev, destinationPlatform)).toEqual({ kind: 'full' });
+    const unchanged = await withStore(STORE, (tx) => tx.execute(sql`
+      SELECT pool, platform, lease_id FROM license_activation WHERE id = ${original.activationId}
+    `));
+    expect(unchanged.rows[0]).toMatchObject({ pool: sourcePool, platform: sourcePlatform, lease_id: original.lease.leaseId });
+
+    await withStore(STORE, (tx) => revokeDeviceRemote(tx, { storeId: STORE, licenseId, activationId: destinationA.activationId }));
+    const moved = await issue(dev, destinationPlatform);
+    expect(moved.kind).toBe('ok');
+    if (moved.kind !== 'ok') throw new Error('unreachable');
+    expect(moved.activationId).toBe(original.activationId);
+    expect(moved.lease.pool).toBe(destinationPool);
+    const counts = await withStore(STORE, (tx) => tx.execute(sql`
+      SELECT pool, count(*)::int AS n FROM license_activation
+      WHERE license_id = ${licenseId} AND state = 'active' GROUP BY pool
+    `));
+    expect(counts.rows).toEqual([{ pool: destinationPool, n: 2 }]);
+  });
+
   it('concurrent issuance races the pool cap correctly — exactly cap of N simultaneous requests win', async () => {
     await seedLicense({ licenseKey: 'concurrent-cap-1', seats: 2 });
     const attempts = ['a', 'b', 'c', 'd', 'e'].map((label) =>
@@ -177,6 +211,38 @@ describe('renewDeviceLease — replay rejection', () => {
 
     const renewAgain = await withStore(STORE, (tx) => renewDeviceLease(tx, { storeId: STORE, appKey: 'testapp', deviceIdHash: dev, leaseId: renewed.lease.leaseId }));
     expect(renewAgain.kind).toBe('ok');
+  });
+
+  it('renews the requested lease when the device has a tombstone on an older license', async () => {
+    const dev = hashish('multiple-license-device');
+    const historicalLicenseId = await seedLicense({ licenseKey: 'historical-license', seats: 2 });
+    const historical = await withStore(STORE, (tx) => issueDeviceLease(tx, {
+      storeId: STORE, appKey: 'testapp', licenseKey: 'historical-license', deviceIdHash: dev, platform: 'macos',
+    }));
+    if (historical.kind !== 'ok') throw new Error('fixture issuance failed');
+    await withStore(STORE, (tx) => revokeDeviceRemote(tx, { storeId: STORE, licenseId: historicalLicenseId, activationId: historical.activationId }));
+
+    await seedLicense({ licenseKey: 'current-license', seats: 2 });
+    const current = await withStore(STORE, (tx) => issueDeviceLease(tx, {
+      storeId: STORE, appKey: 'testapp', licenseKey: 'current-license', deviceIdHash: dev, platform: 'macos',
+    }));
+    if (current.kind !== 'ok') throw new Error('fixture issuance failed');
+    const renewed = await withStore(STORE, (tx) => renewDeviceLease(tx, {
+      storeId: STORE, appKey: 'testapp', deviceIdHash: dev, leaseId: current.lease.leaseId,
+    }));
+    expect(renewed.kind).toBe('ok');
+    if (renewed.kind !== 'ok') throw new Error('unreachable');
+    expect(renewed.lease.leaseId).not.toBe(current.lease.leaseId);
+    const rows = await withStore(STORE, (tx) => tx.execute(sql`
+      SELECT id, state, lease_id FROM license_activation WHERE device_id_hash = ${dev}
+    `));
+    expect(rows.rows).toEqual(expect.arrayContaining([
+      { id: historical.activationId, state: 'revoked', lease_id: historical.lease.leaseId },
+      { id: current.activationId, state: 'active', lease_id: renewed.lease.leaseId },
+    ]));
+    expect(await withStore(STORE, (tx) => renewDeviceLease(tx, {
+      storeId: STORE, appKey: 'testapp', deviceIdHash: dev, leaseId: historical.lease.leaseId,
+    }))).toEqual({ kind: 'revoked' });
   });
 
   it('concurrent renews of the same leaseId produce exactly one winner', async () => {
@@ -264,6 +330,42 @@ describe('revokeDeviceRemote / removeDeviceOffline — tombstone + seat release'
       leaseId: second.lease.leaseId,
     }));
     expect(stillActive.kind).toBe('ok');
+  });
+
+  it.each(['removed', 'revoked'])('reactivation preserves the %s tombstone generation in its response and renewal', async (state) => {
+    const licenseKey = 'generation-reactivation';
+    const licenseId = await seedLicense({ licenseKey, seats: 2 });
+    const dev = hashish('generation-device');
+    const issue = () => withStore(STORE, (tx) => issueDeviceLease(tx, {
+      storeId: STORE, appKey: 'testapp', licenseKey, deviceIdHash: dev, platform: 'macos',
+    }));
+    const first = await issue();
+    if (first.kind !== 'ok') throw new Error('fixture issuance failed');
+    const activationId = first.activationId;
+    let activeLease = first.lease;
+    for (const generation of [1, 2]) {
+      if (state === 'removed') {
+        await withStore(STORE, (tx) => removeDeviceOffline(tx, { storeId: STORE, appKey: 'testapp', deviceIdHash: dev, leaseId: activeLease.leaseId }));
+      } else {
+        await withStore(STORE, (tx) => revokeDeviceRemote(tx, { storeId: STORE, licenseId, activationId }));
+      }
+      const issued = await issue();
+      expect(issued.kind).toBe('ok');
+      if (issued.kind !== 'ok') throw new Error('unreachable');
+      expect(issued.activationId).toBe(activationId);
+      expect(issued.lease.generation).toBe(generation);
+      const stored = await withStore(STORE, (tx) => tx.execute(sql`
+        SELECT state, generation, lease_id FROM license_activation WHERE id = ${activationId}
+      `));
+      expect(stored.rows[0]).toMatchObject({ state: 'active', generation, lease_id: issued.lease.leaseId });
+      const renewed = await withStore(STORE, (tx) => renewDeviceLease(tx, {
+        storeId: STORE, appKey: 'testapp', deviceIdHash: dev, leaseId: issued.lease.leaseId,
+      }));
+      expect(renewed.kind).toBe('ok');
+      if (renewed.kind !== 'ok') throw new Error('unreachable');
+      expect(renewed.lease.generation).toBe(generation);
+      activeLease = renewed.lease;
+    }
   });
 
   it('a revoked device\u2019s activation token no longer resolves', async () => {

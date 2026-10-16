@@ -1,5 +1,7 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { cors } from 'hono/cors';
+import { HTTPException } from 'hono/http-exception';
+import type { MiddlewareHandler } from 'hono';
 import { catalog } from './routes/catalog.js';
 import { cart } from './routes/cart.js';
 import { checkout } from './routes/checkout.js';
@@ -23,6 +25,7 @@ import { adminOrderEdit } from './routes/admin-order-edit.js';
 import { adminOrderOps } from './routes/admin-order-ops.js';
 import { adminMarketing } from './routes/admin-marketing.js';
 import { adminSettings } from './routes/admin-settings.js';
+import { adminSecurity } from './routes/admin-security.js';
 import { adminLoyalty } from './routes/admin-loyalty.js';
 import { reviews } from './routes/reviews.js';
 import { adminReviews } from './routes/admin-reviews.js';
@@ -36,7 +39,8 @@ import { adminAssets } from './routes/admin-assets.js';
 import { adminPush } from './routes/admin-push.js';
 import { adminLicenses } from './routes/admin-licenses.js';
 import { adminAgents } from './routes/admin-agents.js';
-import { adminAgentGuard } from './routes/admin-agent-guard.js';
+import { createAdminAgentGuard } from './routes/admin-agent-guard.js';
+import { buildAgentRouteContext, type AgentRouteContext } from './auth/agent-policy.js';
 import { shopExtra } from './routes/shop-extra.js';
 import { subscriberRoutes } from './routes/shop-extra.subscriber.js';
 import { feeds } from './routes/feeds.js';
@@ -56,9 +60,15 @@ import { apps } from './routes/apps.js';
 import { wellKnown } from './routes/well-known.js';
 import { HttpError } from './routes/admin-helpers.js';
 import { apiErrorCodeSchema, errorEnvelope, errJson } from './lib/api-error.js';
-import { csrfValid, customerCsrfValid, getCustomerSessionToken } from './auth/cookies.js';
+import { csrfValid, customerCsrfValid, getCustomerSessionToken, cookie, SESSION_COOKIE } from './auth/cookies.js';
+import { bearer } from './auth/session.js';
+import { resolveAdmin } from './auth/admin-session.js';
+import { isAgentToken, resolveAgentByToken } from './auth/admin-api-token.js';
+import { CACHE_ADMIN_TOKEN_HEADER } from './routes/admin-cache.js';
+import { ASSET_UPLOAD_LIMIT_BYTES } from './routes/admin-assets.js';
 import { env } from './env.js';
-import { isAllowedCorsOrigin } from './cors-origins.js';
+import { isAllowedAdminCorsOrigin, isAllowedCorsOrigin } from './cors-origins.js';
+import { bodyLimit } from 'hono/body-limit';
 import { pool } from './db/client.js';
 import { isMaintenanceOn, maintenanceInfo } from './maintenance.js';
 import { requestIdMiddleware, accessLogMiddleware } from './lib/request-id.js';
@@ -74,6 +84,18 @@ import { assertHostRouteUnshadowed, hostRouteEntryCount, assertNoReleaseRegistra
 import { preRoutePolicy } from './pre-route-policy.js';
 
 export { SELLRIGHT_VERSION };
+
+/** P2: in production the published contract (admin routes included) is served only to an authenticated admin
+ *  (session cookie, bearer session or agent token). Development/test keep it public for client generation. */
+export function openapiAdminOnly(isProduction: () => boolean): MiddlewareHandler {
+  return async (c, next) => {
+    if (!isProduction()) return next();
+    const token = bearer(c.req.header('authorization')) ?? cookie(c, SESSION_COOKIE);
+    const admin = token ? (isAgentToken(token) ? await resolveAgentByToken(token) : await resolveAdmin(token)) : null;
+    if (!admin) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
+    await next();
+  };
+}
 
 export interface HttpAppOptions {
   /** SDK plugins (sdk/create-app.ts). Requires `ctx`. */
@@ -135,10 +157,6 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
 
   // Plugin pre-route response policy (plugins.ts `errorPolicy`); no-op without one.
   app.use('*', preRoutePolicy(listApiPlugins));
-  // SDK lifecycle `preRoute`: plugin middleware / response policies that must wrap every
-  // route. After request-id + access log (so they carry the id), before CORS and routes.
-  for (const plugin of sdkPlugins) plugin.preRoute?.(app, options.ctx!);
-
   // OPS-1: per-store CORS allowlist. No wildcard-with-credentials (browsers
   // reject that combination anyway, but we never even offer it). An origin is
   // allowed only when its hostname matches a configured store host
@@ -153,7 +171,10 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
   // built with the resolved verdict.
   app.use('*', async (c, next) => {
     const origin = c.req.header('origin');
-    const allowed = origin ? await isAllowedCorsOrigin(origin) : false;
+    // P2: the credentialed admin API only answers CORS for EXACT configured origins (cors-origins.ts).
+    const allowed = !origin ? false
+      : c.req.path === '/v1/admin' || c.req.path.startsWith('/v1/admin/') ? isAllowedAdminCorsOrigin(origin)
+      : await isAllowedCorsOrigin(origin);
     const handler = cors({
       origin: allowed ? (origin as string) : '',
       credentials: true,
@@ -180,6 +201,48 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
     await next();
   });
 
+  // P2: every /v1/admin request must carry a credential (session cookie or Authorization bearer) BEFORE any body is
+  // parsed or validated — an anonymous caller learns nothing from validation errors and costs no body parsing.
+  // Pre-session routes are exempt; the cache-purge route authenticates with its own shared-token header.
+  app.use('/v1/admin/*', async (c, next) => {
+    if (c.req.method === 'OPTIONS') return next();
+    const p = c.req.path;
+    const preSession = p === '/v1/admin/login' || p === '/v1/admin/logout' || p === '/v1/admin/staff/accept';
+    // A credential means a parsable Bearer token or the session cookie — not any Authorization header (e.g. Basic).
+    const hasCredential = !!bearer(c.req.header('authorization')) || !!cookie(c, SESSION_COOKIE)
+      || (p === '/v1/admin/cache/purge' && !!c.req.header(CACHE_ADMIN_TOKEN_HEADER));
+    if (!preSession && !hasCredential) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
+    await next();
+  });
+
+  // P2: app-wide request body cap (API_BODY_LIMIT_BYTES, default 2 MiB). The admin asset upload keeps its own
+  // larger cap (routes/admin-assets.ts, 10 MiB + multipart overhead). Over the limit: 413 before any handler.
+  const tooLarge = (c: Parameters<Parameters<typeof app.use>[1]>[0]) => errJson(c, 413, 'PAYLOAD_TOO_LARGE', 'request body too large');
+  const defaultLimit = bodyLimit({ maxSize: env.API_BODY_LIMIT_BYTES, onError: tooLarge });
+  const uploadLimit = bodyLimit({ maxSize: ASSET_UPLOAD_LIMIT_BYTES, onError: tooLarge });
+  app.use('*', (c, next) => (c.req.method === 'POST' && c.req.path === '/v1/admin/assets' ? uploadLimit : defaultLimit)(c, next));
+
+  // P2: validation failures on the admin API answer the generic error envelope (no raw zod issue dump).
+  app.use('/v1/admin/*', async (c, next) => {
+    await next();
+    if (c.res.status !== 400 || !(c.res.headers.get('content-type') ?? '').includes('application/json')) return;
+    const body = await c.res.clone().json().catch(() => null) as { success?: boolean; error?: { name?: string; message?: string; issues?: Array<{ path?: unknown[] }> } } | null;
+    if (body?.success === false && body.error?.name === 'ZodError') {
+      // zod 4 serializes the issues into `message` (a JSON array); older shapes carry `issues`.
+      let issues = body.error.issues;
+      if (!issues && body.error.message) { try { issues = JSON.parse(body.error.message) as Array<{ path?: unknown[] }>; } catch { /* no param */ } }
+      const param = issues?.[0]?.path?.map(String).join('.') || undefined;
+      // Keep the headers earlier middleware set on the response (CORS, request id, cache policy).
+      const keep = [...c.res.headers.entries()].filter(([k]) => k !== 'content-type' && k !== 'content-length');
+      c.res = undefined as unknown as Response; // replace the validator's response
+      c.res = c.json(errorEnvelope(c, 'VALIDATION_ERROR', 'invalid request', { param }), 400);
+      for (const [k, v] of keep) if (!c.res.headers.has(k)) c.res.headers.set(k, v);
+    }
+  });
+
+  // P2: the full contract (admin routes included) is not published to anonymous callers in production.
+  app.use('/v1/openapi.json', openapiAdminOnly(() => env.NODE_ENV === 'production'));
+
   // CSRF guard for cookie-based admin mutations (bearer/API clients are exempt;
   // login/logout don't yet have a session). Double-submit token (x-csrf-token
   // must match the sr_csrf cookie). Registered before routes.
@@ -200,7 +263,9 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
 
   // Agent seats (docs/plans/2026-10-10-agent-role-v5.md): resolves the admin principal once and applies the
   // agent deny set (auth/agent-policy.ts) before any handler runs. After CSRF so cookie mutations are still CSRF-checked.
-  app.use('/v1/admin/*', adminAgentGuard);
+  // P1c: the route context (engine-owned routes + plugin agent policies) is filled in once plugins are mounted below.
+  let agentRouteContext: AgentRouteContext | undefined;
+  app.use('/v1/admin/*', createAdminAgentGuard(() => agentRouteContext));
 
   // Shop-surface CSRF guard (WP1.1). Mirrors the admin block: cookie-session
   // requests must double-submit the customer CSRF token. Bearer/API clients are
@@ -223,6 +288,12 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
     }
     await next();
   });
+
+  // Plugin hooks run only after credential, CSRF & agent guards. Track their entries separately so
+  // preRoute handlers never become engine-owned routes in the agent policy snapshot.
+  const routesBeforePreRoute = app.routes.length;
+  for (const plugin of sdkPlugins) plugin.preRoute?.(app, options.ctx!);
+  const preRouteEntries = new Set(app.routes.slice(routesBeforePreRoute));
 
   const healthRoute = createRoute({
     method: 'get',
@@ -348,6 +419,20 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
     if (err instanceof HttpError) {
       return c.json(errorEnvelope(c, err.code, err.message, { param: err.param, extra: err.extra }), err.status);
     }
+    // Hono's own request-body errors (e.g. the JSON validator on malformed input) are HTTPExceptions with a 4xx status:
+    // answer them with the safe envelope, never as a 500.
+    if (err instanceof HTTPException && err.status >= 400 && err.status < 500) {
+      return c.json(errorEnvelope(c, err.status === 400 ? 'INVALID_JSON' : 'BAD_REQUEST', err.status === 400 ? 'request body is not valid JSON' : 'bad request'), err.status as 400);
+    }
+    // P2: a schema .parse() inside a handler (e.g. /v1/licenses/*) is a client error, not a 500.
+    const zodIssues = (err as { name?: string; issues?: Array<{ path?: PropertyKey[] }> }).name === 'ZodError' ? (err as { issues?: Array<{ path?: PropertyKey[] }> }).issues : undefined;
+    if (Array.isArray(zodIssues)) {
+      return c.json(errorEnvelope(c, 'VALIDATION_ERROR', 'invalid request', { param: zodIssues[0]?.path?.map(String).join('.') || undefined }), 400);
+    }
+    // A malformed JSON body read with c.req.json() inside a handler is also the client's error.
+    if (err instanceof SyntaxError && /JSON/i.test(err.message)) {
+      return c.json(errorEnvelope(c, 'INVALID_JSON', 'request body is not valid JSON'), 400);
+    }
 
     // SEC-5: gated on an explicit DEBUG_ERRORS opt-in, not NODE_ENV — a staging
     // box booted without NODE_ENV=production must still sanitize error bodies
@@ -405,6 +490,7 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
   app.route('/', adminOrderOps); // draft orders, tracking import, export, bulk order operations
   app.route('/', adminMarketing); // promotions manager + Listmonk integration
   app.route('/', adminSettings); // store/tax, payments, shipping, staff/roles, notifications
+  app.route('/', adminSecurity); // P1b: 2FA enrolment + recovery codes, password change, per-store 2FA requirement
   app.route('/', adminLoyalty); // LOYALTY-1: points program settings, customer ledger, manual adjust
   app.route('/', adminReviews); // REWARDS-1: review moderation + settings
   app.route('/', adminPaymentSettings); // WS-A: encrypted per-store payment credentials, verify, Stripe webhook auto-create
@@ -444,6 +530,9 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
   installDefaultStoreKitPolicy();
   // Payment policy (sellright-default, allow-all) before plugins: a plugin's init() registers its own policy.
   installDefaultPaymentPolicy();
+  // P1c: every route registered so far is engine-owned; anything mounted from here on belongs to a plugin and is
+  // denied to agents for mutations unless the plugin allowlists it (auth/agent-policy.ts).
+  const builtinRoutes = new Set(app.routes.filter((r) => r.method !== 'ALL' && !preRouteEntries.has(r)).map((r) => `${r.method.toUpperCase()} ${r.path}`));
   for (const plugin of listApiPlugins()) {
     if (plugin.routes) app.route('/', plugin.routes);
   }
@@ -454,6 +543,10 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
     plugin.init?.(app);
   }
   assertHostRouteUnshadowed(app, releaseHostRouteEntries); // a plugin must not register the host-owned route from init() either
+  agentRouteContext = buildAgentRouteContext(builtinRoutes, [
+    ...listApiPlugins().map((p) => ({ name: p.name, policy: p.agentPolicy })),
+    ...sdkPlugins.map((p) => ({ name: p.name, policy: p.agentPolicy })),
+  ]);
 
   // Register the stable shop-facing error codes as their own named schema
   // (see api-error.ts's SHOP_API_ERROR_CODES) so a generated client gets a

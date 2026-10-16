@@ -56,8 +56,8 @@ export default function Login() {
           </div>
           <div>
             <label className="label">Authentication code</label>
-            <input className="input tracking-widest text-center" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={totp} onChange={(e) => setTotp(e.target.value.replace(/\D/g, ''))} placeholder="000000" />
-            <p className="text-xs text-gray-400 mt-1">Optional. If your account uses two-factor authentication, enter the 6-digit code from your authenticator app.</p>
+            <input className="input tracking-widest text-center" autoComplete="one-time-code" maxLength={24} value={totp} onChange={(e) => setTotp(e.target.value.trim())} placeholder="000000" />
+            <p className="text-xs text-gray-400 mt-1">Optional. If your account uses two-factor authentication, enter the 6-digit code from your authenticator app — or one of your recovery codes.</p>
           </div>
           <button className="btn-primary w-full" disabled={busy}>
             {busy ? <Spinner className="text-white" /> : 'Sign in'}

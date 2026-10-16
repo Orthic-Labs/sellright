@@ -37,7 +37,6 @@ function hasValidBearer(header: string | undefined): boolean {
 
 export const SESSION_COOKIE = 'sr_admin';
 export const CSRF_COOKIE = 'sr_csrf';
-const MAX_AGE = 14 * 24 * 3600;
 
 export function parseCookies(header: string | undefined): Record<string, string> {
   const out: Record<string, string> = {};
@@ -77,7 +76,8 @@ function secureFlag(c: { req: { header: (k: string) => string | undefined } }): 
 
 export function setAuthCookies(c: Ctx, token: string, csrf: string): void {
   const secure = secureFlag(c);
-  const base = `Path=/; Max-Age=${MAX_AGE}; SameSite=Lax${secure}`;
+  // Cookie lifetime tracks the absolute admin session TTL (ADMIN_SESSION_TTL_DAYS); the idle timeout is server-side.
+  const base = `Path=/; Max-Age=${Math.ceil(env.ADMIN_SESSION_TTL_DAYS * 24 * 3600)}; SameSite=Lax${secure}`;
   c.header('Set-Cookie', `${SESSION_COOKIE}=${token}; HttpOnly; ${base}`, { append: true });
   c.header('Set-Cookie', `${CSRF_COOKIE}=${csrf}; ${base}`, { append: true });
 }

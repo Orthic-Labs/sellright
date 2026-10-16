@@ -5,6 +5,7 @@ export type {
   MigrationTableRef, PluginEffectiveConfig, PluginMigrations, ShutdownStep, StartOptions, PluginJob,
 } from './types.js';
 export { LIFECYCLE_PHASES } from './types.js';
+export type { PluginAgentPolicy, DenyGroup } from '../auth/agent-policy.js';
 export { routeInventory, type RouteInventory, type InventoryRoute } from './route-inventory.js';
 export { fingerprint, type FingerprintHelpers, type SaltedFingerprints } from './fingerprint.js';
 export { SELLRIGHT_VERSION } from '../version.js';

@@ -9,13 +9,13 @@ import { cancelOrderStripeIntents, stripeDiscoverable } from '../payments/stripe
 import { release } from '../payments/reservation.js';
 import { releaseOrderLoyalty } from '../loyalty/ledger.js';
 import { bearer } from '../auth/session.js';
-import { verifyPassword, verifyPasswordAgainstDummy } from '../auth/password.js';
-import { createAdminSession, deleteAdminSession, findAdminByEmail, resolveAdmin } from '../auth/admin-session.js';
+import { hashPassword, passwordNeedsRehash, verifyPassword, verifyPasswordAgainstDummy } from '../auth/password.js';
+import { createAdminSessionIfCredential, deleteAdminSession, findAdminByEmail, rehashAdminPasswordIfUnchanged, resolveAdmin } from '../auth/admin-session.js';
 import { canTransition, type OrderState } from '../money/fsm.js';
 import { HttpError, J, errBody, requireAdmin, requireStore, requireWrite, requirePermission, guard, Page } from './admin-helpers.js';
 import { clientIp, reserveAdminAuthAttempt, clearAdminAuthFailures } from '../auth/rate-limit.js';
 import { setAuthCookies, clearAuthCookies, newCsrf, cookie, csrfValid, SESSION_COOKIE } from '../auth/cookies.js';
-import { verifyTotp } from '../auth/totp.js';
+import { verifySecondFactor } from '../auth/second-factor.js';
 import { normalizeEmail } from '../auth/email.js';
 import { enqueueShippingNotification } from '../email/dispatch.js';
 import { resolveOrderRecipient } from '../orders/recipient.js';
@@ -33,15 +33,17 @@ const StoreAccess = z.object({ storeId: z.string(), slug: z.string(), name: z.st
 admin.openapi(
   createRoute({
     method: 'post', path: '/v1/admin/login', summary: 'Admin login',
-    request: { body: { content: J(z.object({ email: z.string().email(), password: z.string(), totp: z.string().optional() })) } },
+    request: { body: { content: J(z.object({ email: z.string().email(), password: z.string(), totp: z.string().optional(),
+      // P2: explicit API clients ask for the bearer token in the body; browser (cookie) clients never get it.
+      returnToken: z.boolean().optional() })) } },
     responses: {
-      200: { description: 'OK or 2FA required', content: J(z.object({ token: z.string().optional(), csrfToken: z.string().optional(), twoFactorRequired: z.boolean().optional(), admin: z.object({ email: z.string() }).optional(), stores: z.array(StoreAccess).optional() })) },
+      200: { description: 'OK or 2FA required', content: J(z.object({ token: z.string().optional(), csrfToken: z.string().optional(), twoFactorRequired: z.boolean().optional(), totpEnrollmentRequired: z.boolean().optional(), admin: z.object({ email: z.string() }).optional(), stores: z.array(StoreAccess).optional() })) },
       401: { description: 'Invalid', ...errBody },
       429: { description: 'Too many attempts', ...errBody },
     },
   }),
   async (c) => guard(c, async () => {
-    const { email: rawEmail, password, totp } = c.req.valid('json');
+    const { email: rawEmail, password, totp, returnToken } = c.req.valid('json');
     const email = normalizeEmail(rawEmail);
     const ip = clientIp(c);
     // P1a: (ip, account) + per-account (all IPs) + per-IP (all accounts) budgets.
@@ -60,14 +62,31 @@ admin.openapi(
     if (!u || !passwordOk) { throw new HttpError(401, 'invalid email, password, or 2FA code'); }
     if (u.totpSecret) {
       if (!totp) { throw new HttpError(401, 'invalid email, password, or 2FA code'); }
-      if (!verifyTotp(u.totpSecret, totp, u.id)) { throw new HttpError(401, 'invalid email, password, or 2FA code'); }
+      // P1b: a 6-digit TOTP code or a one-time recovery code (consumed on success).
+      if (!(await verifySecondFactor(u.id, u.totpSecret, totp))) { throw new HttpError(401, 'invalid email, password, or 2FA code'); }
     }
     await clearAdminAuthFailures(ip, email);
-    const token = await createAdminSession(u.id);
+    // Upgrade a legacy hash (pre-Argon2id scrypt — e.g. RightSites admins — or outdated Argon2 parameters)
+    // now that the plaintext has just been verified. Best-effort: a failure never blocks the sign-in.
+    // Conditional on the stored hash still being the one just verified, so a concurrent password change is never undone.
+    let currentHash = u.passwordHash!;
+    if (passwordNeedsRehash(currentHash)) {
+      try {
+        const upgraded = await hashPassword(password);
+        if (await rehashAdminPasswordIfUnchanged(u.id, currentHash, upgraded)) currentHash = upgraded;
+      } catch { /* retried on the next sign-in */ }
+    }
+    // The session is created only if the password verified above is still the account's password (P1b review).
+    const token = await createAdminSessionIfCredential(u.id, currentHash, !!u.totpSecret);
+    if (!token) throw new HttpError(401, 'invalid email, password, or 2FA code');
     const csrf = newCsrf();
     setAuthCookies(c, token, csrf); // httpOnly session cookie + CSRF cookie
     const admin = await resolveAdmin(token);
-    return c.json({ token, csrfToken: csrf, admin: { email: u.email }, stores: admin?.stores ?? [] }, 200);
+    // P1b: when policy requires TOTP and none is enrolled, the session can only enrol (admin-agent-guard).
+    const totpEnrollmentRequired = !!admin && admin.totpRequired === true && !admin.totpEnabled;
+    // P2: the session token is in the httpOnly cookie; it is only echoed in the body for an explicit API client
+    // (`returnToken: true`), so page script (or an XSS) in a cookie client never sees it.
+    return c.json({ ...(returnToken === true ? { token } : {}), csrfToken: csrf, admin: { email: u.email }, stores: admin?.stores ?? [], ...(totpEnrollmentRequired ? { totpEnrollmentRequired } : {}) }, 200);
   }),
 );
 
@@ -92,13 +111,13 @@ admin.openapi(
   createRoute({
     method: 'get', path: '/v1/admin/me', summary: 'Current admin + accessible stores',
     responses: {
-      200: { description: 'OK', content: J(z.object({ email: z.string(), isInstallationAdmin: z.boolean(), kind: z.enum(['human', 'agent']), auth: z.enum(['session', 'api_token']), stores: z.array(StoreAccess) })) },
+      200: { description: 'OK', content: J(z.object({ email: z.string(), isInstallationAdmin: z.boolean(), kind: z.enum(['human', 'agent']), auth: z.enum(['session', 'api_token']), stores: z.array(StoreAccess), totpEnabled: z.boolean(), totpEnrollmentRequired: z.boolean() })) },
       401: { description: 'Unauthorized', ...errBody },
     },
   }),
   async (c) => guard(c, async () => {
     const { admin } = await requireAdmin(c);
-    return c.json({ email: admin.email, isInstallationAdmin: admin.isInstallationAdmin, kind: admin.kind, auth: admin.auth, stores: admin.stores }, 200);
+    return c.json({ email: admin.email, isInstallationAdmin: admin.isInstallationAdmin, kind: admin.kind, auth: admin.auth, stores: admin.stores, totpEnabled: admin.totpEnabled === true, totpEnrollmentRequired: admin.totpRequired === true && !admin.totpEnabled }, 200);
   }),
 );
 

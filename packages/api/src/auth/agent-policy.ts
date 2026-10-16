@@ -8,7 +8,7 @@
  * "delete a product" is not. scripts/assert-agent-boundary.mjs proves every registered DELETE route and
  * every route whose path names an irreversible verb is in this set, so new routes cannot slip past it.
  */
-export type DenyGroup = 'delete' | 'irreversible_order' | 'money_out' | 'settlement' | 'credit' | 'entitlement' | 'release' | 'identity' | 'credentials' | 'system';
+export type DenyGroup = 'delete' | 'irreversible_order' | 'money_out' | 'settlement' | 'credit' | 'entitlement' | 'release' | 'identity' | 'credentials' | 'system' | 'plugin';
 
 const D = (group: DenyGroup, ...keys: string[]): [string, DenyGroup][] => keys.map((k) => [k, group]);
 
@@ -40,9 +40,12 @@ export const AGENT_DENIED: ReadonlyMap<string, DenyGroup> = new Map<string, Deny
     'PUT /v1/admin/staff/:adminUserId/permissions', 'POST /v1/admin/staff/:adminUserId/revoke-sessions', 'POST /v1/admin/agents', 'POST /v1/admin/agents/:adminUserId/rotate'),
   // credentials: 2FA, step-up, payment + e-mail secrets (test-send is allowed: it only sends)
   ...D('credentials', 'POST /v1/admin/2fa/setup', 'POST /v1/admin/2fa/enable', 'POST /v1/admin/2fa/disable', 'POST /v1/admin/step-up',
+    'POST /v1/admin/2fa/recovery-codes', 'POST /v1/admin/password', 'PATCH /v1/admin/settings/security', // P1b
     'PUT /v1/admin/payments/settings/:provider/:mode', 'POST /v1/admin/payments/settings/:provider/:mode/verify', 'POST /v1/admin/payments/settings/stripe/:mode/webhook', 'PUT /v1/admin/email/settings',
     // secrets hiding in settings routes (Astra v5 F3): SheerID client/webhook secrets, Listmonk API token, preview-token rotation, Google OAuth client id, Stripe live/test switch
-    'PATCH /v1/admin/sheerid/config', 'PATCH /v1/admin/marketing/config', 'POST /v1/admin/settings/preview-token', 'PATCH /v1/admin/settings/google', 'PATCH /v1/admin/settings/payments/stripe-mode'),
+    'PATCH /v1/admin/sheerid/config', 'PATCH /v1/admin/marketing/config', 'POST /v1/admin/settings/preview-token', 'PATCH /v1/admin/settings/google', 'PATCH /v1/admin/settings/payments/stripe-mode',
+    // webhook endpoints mint a signing secret and choose where store events (order + customer data) are POSTed (P1c)
+    'POST /v1/admin/webhooks', 'PATCH /v1/admin/webhooks/:id'),
   // installation / system operations
   ...D('system', 'PATCH /v1/admin/system/checklist/offsite-backup-confirmed', 'POST /v1/admin/system/canary'),
 ]);
@@ -58,10 +61,54 @@ export const AGENT_DENY_EXCEPTIONS: ReadonlySet<string> = new Set([
 
 /** Path fragments that mark a mutation as irreversible / money / entitlement / identity / credential / system.
  *  Delimiter is `/` OR `-` so `bulk-cancel`, `bulk-purge`, `stripe-mode`, `preview-token` are caught. Used by scripts/assert-agent-boundary.mjs. */
-export const IRREVERSIBLE_PATH = /[/-](cancel|purge|refund|revoke|settle|releases|licenses|staff|agents|2fa|step-up|override-release|approve|retry|reconcile|verify|secret|token|mode|google|adjust|reverse)(\/|$)|\/payments\/settings|\/email\/settings|\/system\/|\/payment-reconciliation\/|\/sheerid\/config|\/marketing\/config|verification\/clear/;
+export const IRREVERSIBLE_PATH = /[/-](cancel|purge|refund|revoke|settle|releases|licenses|staff|agents|2fa|step-up|override-release|approve|retry|reconcile|verify|secret|token|mode|google|adjust|reverse|password)(\/|$)|\/payments\/settings|\/settings\/security|\/webhooks(\/|$)|\/email\/settings|\/system\/|\/payment-reconciliation\/|\/sheerid\/config|\/marketing\/config|verification\/clear/;
 
-export function agentDenied(method: string, matchedRoutePath: string): DenyGroup | null {
+/**
+ * Agent policy for routes the ENGINE does not own (P1c, security audit 2026-10-15). SDK `EnginePlugin`s and
+ * legacy `ApiPlugin`s can extend the deny map (`agentPolicy.deny`) and allowlist reviewed mutations
+ * (`agentPolicy.allow`). Any OTHER mutating /v1/admin route that is not a built-in engine route is denied to
+ * agents by default (group 'plugin') — a plugin cannot add an agent-reachable irreversible action by omission.
+ */
+export interface PluginAgentPolicy {
+  /** 'METHOD /v1/admin/...' (Hono ':param' syntax) -> deny group. */
+  deny?: Readonly<Record<string, DenyGroup>>;
+  /** Mutations a plugin has reviewed as reversible and safe for agents. */
+  allow?: readonly string[];
+}
+
+export interface AgentRouteContext {
+  /** 'METHOD path' of every engine-owned route (snapshot taken before plugin routes are mounted). */
+  builtin: ReadonlySet<string>;
+  deny: ReadonlyMap<string, DenyGroup>;
+  allow: ReadonlySet<string>;
+}
+
+export function agentDenied(method: string, matchedRoutePath: string, ctx?: AgentRouteContext, requestPath: string = matchedRoutePath): DenyGroup | null {
   const m = method.toUpperCase();
   if (m === 'GET' || m === 'HEAD' || m === 'OPTIONS') return null;
-  return AGENT_DENIED.get(`${m} ${matchedRoutePath}`) ?? null;
+  const key = `${m} ${matchedRoutePath}`;
+  const engine = AGENT_DENIED.get(key);
+  if (engine) return engine;
+  if (!ctx) return null;
+  const plugin = ctx.deny.get(key);
+  if (plugin) return plugin;
+  // Admin scope is decided by the REQUEST path (a parameterized plugin template such as /v1/:surface/x still serves
+  // /v1/admin/x), and covers /v1/admin itself.
+  const adminScope = requestPath === '/v1/admin' || requestPath.startsWith('/v1/admin/');
+  if (!ctx.builtin.has(key) && !ctx.allow.has(key) && adminScope) return 'plugin';
+  return null;
+}
+
+/** Merge plugin policies; a plugin may not allowlist a route the engine (or another plugin) denies. */
+export function buildAgentRouteContext(builtin: ReadonlySet<string>, policies: ReadonlyArray<{ name: string; policy?: PluginAgentPolicy }>): AgentRouteContext {
+  const deny = new Map<string, DenyGroup>();
+  const allow = new Set<string>();
+  for (const { policy } of policies) for (const [k, g] of Object.entries(policy?.deny ?? {})) deny.set(k, g);
+  for (const { name, policy } of policies) {
+    for (const k of policy?.allow ?? []) {
+      if (AGENT_DENIED.has(k) || deny.has(k)) throw new Error(`plugin "${name}" allowlists ${k} for agents, but it is on the agent deny list`);
+      allow.add(k);
+    }
+  }
+  return { builtin, deny, allow };
 }

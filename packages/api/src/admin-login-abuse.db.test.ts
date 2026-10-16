@@ -92,7 +92,7 @@ describe.skipIf(!isTestDb)('P1a: admin login abuse', () => {
     for (let i = 0; i < 20; i++) await login(EMAIL, 'wrong-password', `198.51.100.${i + 1}`);
     expect((await authed(token, '/v1/admin/step-up', { password: PASSWORD })).status).toBe(429);
     const secret = newTotpSecret();
-    expect((await authed(token, '/v1/admin/2fa/enable', { secret, code: '000000' })).status).toBe(429);
+    expect((await authed(token, '/v1/admin/2fa/enable', { secret, code: '000000', password: PASSWORD })).status).toBe(429);
   });
 
   it('wrong 2FA codes on enable/disable are counted (a hijacked session cannot grind the current code)', async () => {
@@ -102,7 +102,7 @@ describe.skipIf(!isTestDb)('P1a: admin login abuse', () => {
     const secret = (await pool.query('SELECT totp_secret FROM admin_user WHERE id = $1', [ADMIN])).rows[0].totp_secret as string;
     const live = new Set([-1, 0, 1].map((d) => currentTotp(secret, d)));
     const wrong = ['000000', '111111', '222222', '333333'].find((c) => !live.has(c))!; // never a code that is valid right now
-    for (let i = 0; i < 9; i++) last = (await authed(token, '/v1/admin/2fa/disable', { code: wrong }, '198.51.100.240')).status;
+    for (let i = 0; i < 9; i++) last = (await authed(token, '/v1/admin/2fa/disable', { code: wrong, password: PASSWORD }, '198.51.100.240')).status;
     expect(last).toBe(429);
   });
 
@@ -122,8 +122,9 @@ describe.skipIf(!isTestDb)('P1a: admin login abuse', () => {
     const { verifyTotp } = await import('./auth/totp.js');
     const code = currentTotp(secret);
     expect(verifyTotp(secret, code)).toBe(true);
-    expect((await authed(token, '/v1/admin/2fa/enable', { secret, code }, '198.51.100.200')).status).toBe(200);
-    // the 8 password guesses (7 + the enrolment's own reservation) are still counted: the next guess is refused
+    // P1b: enrolling also re-proves the password — a stolen session without it is refused, and that try is counted too
+    expect((await authed(token, '/v1/admin/2fa/enable', { secret, code, password: 'guess-7' }, '198.51.100.200')).status).toBe(401);
+    // the 8 password guesses (7 step-ups + the enrolment attempt) are still counted: the next guess is refused
     expect((await authed(token, '/v1/admin/step-up', { password: 'guess-8' }, '198.51.100.200')).status).toBe(429);
   });
 });

@@ -115,6 +115,55 @@ jobs:
           pnpm --filter @sellright/storefront run check:shape:base
           pnpm --filter @sellright/storefront run lint:brand
 
+      - name: Package verified API and admin runtime
+        run: |
+          bundle="$RUNNER_TEMP/sellright-runtime"
+          mkdir "$bundle"
+          # Tests already passed; omit their two compiled helpers from this runtime package.
+          rm packages/api/dist/db/rls-test-utils.{js,js.map,d.ts} \
+             packages/api/dist/licensing/storekit/jws-fixture.{js,js.map,d.ts}
+          pnpm --filter @sellright/api pack --pack-destination "$bundle"
+          node packages/api/scripts/write-build-info.mjs packages/admin/dist/BUILD-INFO.json
+          python3 - <<'PY'
+          import json, os, shutil, tarfile
+          from pathlib import Path, PurePosixPath
+          bundle = Path(os.environ['RUNNER_TEMP']) / 'sellright-runtime'
+          sha = os.environ['GITHUB_SHA']
+          def identity(info):
+              assert info['sha'] == sha and info['dirty'] is False, 'runtime build identity mismatch'
+          with tarfile.open(bundle / 'sellright-api-0.1.0.tgz', 'r:gz') as archive:
+              names = set()
+              for member in archive.getmembers():
+                  path = PurePosixPath(member.name)
+                  assert not path.is_absolute() and '..' not in path.parts, 'unsafe package path'
+                  assert path.parts[0] == 'package' and (member.isfile() or member.isdir()), 'unsafe package entry'
+                  relative = path.parts[1:]
+                  assert not relative or relative[0] in {'dist', 'drizzle', 'exports', 'package.json', 'BUILD-INFO.json', 'README.md', 'LICENSE', 'LICENSE.md', 'LICENSE.txt'}, 'unexpected package content'
+                  assert not any(part.startswith('.') or part in {'node_modules', '__tests__', '__mocks__'} for part in relative), 'non-runtime package content'
+                  assert not any(marker in member.name for marker in ('.test.', '.spec.', 'rls-test-utils.', 'jws-fixture.')), 'test code in runtime package'
+                  names.add(member.name)
+              required = {'package/package.json', 'package/BUILD-INFO.json', 'package/dist/sdk/index.js', 'package/dist/sdk/index.d.ts', 'package/drizzle/meta/_journal.json', 'package/exports/contract.json'}
+              assert required <= names, 'incomplete API runtime package'
+              identity(json.load(archive.extractfile('package/BUILD-INFO.json')))
+          admin = Path('packages/admin/dist')
+          assert (admin / 'index.html').is_file() and (admin / 'admin-static').is_dir(), 'incomplete admin runtime'
+          for path in admin.rglob('*'):
+              assert not path.is_symlink() and (path.is_file() or path.is_dir()), 'unsafe admin entry'
+              assert not any(part.startswith('.') or part in {'node_modules', '__tests__', '__mocks__'} for part in path.relative_to(admin).parts), 'non-runtime admin content'
+          identity(json.loads((admin / 'BUILD-INFO.json').read_text()))
+          shutil.copytree(admin, bundle / 'admin-dist')
+          PY
+
+      - name: Upload verified runtime bundle
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sellright-runtime-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/sellright-runtime/sellright-api-0.1.0.tgz
+            ${{ runner.temp }}/sellright-runtime/admin-dist/
+          if-no-files-found: error
+          retention-days: 7
+
   database:
     name: PostgreSQL 17 integration
     runs-on: ubuntu-latest
@@ -235,6 +284,9 @@ jobs:
             -e SELLRIGHT_DOMAIN=sellright.example.net \
             -e SELLRIGHT_STOREFRONT_DOMAIN=:8090 \
             caddy:2.10-alpine caddy validate --config /etc/caddy/Caddyfile
+
+      - name: Verify Caddy visitor identity & spoof rejection
+        run: bash scripts/test-caddy-client-ip.sh
 
       - name: Build production images
         run: docker compose -f deploy/compose.yaml -f deploy/compose.build.yaml build api admin storefront
@@ -1358,12 +1410,18 @@ jobs:
             psql -U sellright -d sellright -Atc "SELECT email FROM admin_user WHERE is_installation_admin" | grep -qx "${ADMIN_EMAIL}"
           echo "the pre-existing bootstrap admin was promoted to installation admin"
 
-          login_resp=$(docker compose -p sellright-updatedrill --env-file deploy/.env -f deploy/compose.yaml exec -T admin wget -qO- \
+          login_resp=$(docker compose -p sellright-updatedrill --env-file deploy/.env -f deploy/compose.yaml exec -T admin wget -qSO- \
             --header="Content-Type: application/json" \
             --post-data="{\"email\":\"${ADMIN_EMAIL}\",\"password\":\"${ADMIN_PASSWORD}\"}" \
-            http://127.0.0.1:8080/v1/admin/login)
-          echo "$login_resp" | grep -q '"token"' || { echo "::error::login failed after upgrade: $login_resp"; exit 1; }
-          echo "pre-existing admin login still works after upgrade"
+            http://127.0.0.1:8080/v1/admin/login 2>/tmp/updrill-login-headers)
+          # P2 browser sign-in returns an HttpOnly session cookie, never a raw token.
+          echo "$login_resp" | node -e 'let d="";process.stdin.on("data",c=>d+=c);process.stdin.on("end",()=>{const r=JSON.parse(d);if(r.admin?.email!==process.env.ADMIN_EMAIL||!r.csrfToken||!r.stores?.length)process.exit(1)})'
+          session_cookie=$(awk 'tolower($1)=="set-cookie:" && $2 ~ /^sr_admin=/ {split($2,c,";");print c[1];exit}' /tmp/updrill-login-headers)
+          test -n "$session_cookie"
+          me_resp=$(docker compose -p sellright-updatedrill --env-file deploy/.env -f deploy/compose.yaml exec -T admin wget -qO- \
+            --header="Cookie: $session_cookie" http://127.0.0.1:8080/v1/admin/me)
+          echo "$me_resp" | node -e 'let d="";process.stdin.on("data",c=>d+=c);process.stdin.on("end",()=>{const r=JSON.parse(d);if(r.email!==process.env.ADMIN_EMAIL||r.isInstallationAdmin!==true)process.exit(1)})'
+          echo "pre-existing admin login & authenticated installation-admin access work after upgrade"
 
       - name: Tear down update-drill stack
         if: always()

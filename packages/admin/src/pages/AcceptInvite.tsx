@@ -107,7 +107,7 @@ export default function AcceptInvite() {
             </div>
             <div>
               <label className="label">2FA code (if enabled)</label>
-              <input className="input" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={totp} onChange={(e) => setTotp(e.target.value.replace(/\D/g, ''))} />
+              <input className="input" autoComplete="one-time-code" maxLength={24} value={totp} onChange={(e) => setTotp(e.target.value.trim())} placeholder="6-digit code or recovery code" />
             </div>
           </>
         ) : (

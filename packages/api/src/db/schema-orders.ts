@@ -15,6 +15,7 @@ import {
 import { sql } from 'drizzle-orm';
 import {
   adminUser,
+  session,
   customer,
   fulfillmentState,
   fulfillmentType,
@@ -452,6 +453,8 @@ export const adminDeviceToken = pgTable('admin_device_token', {
   kind: text().notNull().default('apns'),
   environment: text().notNull().default('production'), // production | sandbox (APNs host)
   topics: text().array().notNull().default(['order.paid']),
+  // 0099: the admin session that registered this device; deleting the session (logout / revocation) deletes the row.
+  sessionId: uuid().references(() => session.id, { onDelete: 'cascade' }),
   lastSeenAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   createdAt: ts(),
 });

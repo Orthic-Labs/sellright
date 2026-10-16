@@ -47,7 +47,7 @@ test.describe('admin sign-in', () => {
 		// enable TOTP the way Settings > Security does: setup -> code from the secret -> enable
 		const mine = await AdminApi.login(email, password);
 		const { secret } = await mine.post<{ secret: string }>('/2fa/setup');
-		await mine.post('/2fa/enable', { secret, code: totpAt(secret, totpStep()) });
+		await mine.post('/2fa/enable', { secret, code: totpAt(secret, totpStep()), password });
 		expect((await mine.get<{ enabled: boolean }>('/2fa')).enabled).toBe(true);
 
 		await page.goto('/login');
@@ -71,7 +71,7 @@ test.describe('admin sign-in', () => {
 		await fetch(`${new URL(ADMIN_URL).origin}/v1/admin/staff/accept`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: inv.token, password }) });
 		const mine = await AdminApi.login(email, password);
 		const { secret } = await mine.post<{ secret: string }>('/2fa/setup');
-		await mine.post('/2fa/enable', { secret, code: totpAt(secret, totpStep()) });
+		await mine.post('/2fa/enable', { secret, code: totpAt(secret, totpStep()), password });
 
 		const post = (body: Record<string, unknown>) => fetch(`${new URL(ADMIN_URL).origin}/v1/admin/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 		const missing = await post({ email, password });
@@ -81,5 +81,44 @@ test.describe('admin sign-in', () => {
 		expect((await missing.json()).error.message).toBe((await wrong.json()).error.message); // no 2FA-enabled oracle
 		const good = await post({ email, password, totp: totpAt(secret, totpStep() + 1) });
 		expect(good.status).toBe(200);
+	});
+});
+
+test.describe('account security (P1b)', () => {
+	test.use({ storageState: { cookies: [], origins: [] } });
+
+	test('Settings > Security: change password (other sessions signed out), then enrol 2FA and get recovery codes', async ({ page, api }) => {
+		const email = `${uniq('sec')}@example.net`;
+		const password = 'security-e2e-password-1';
+		const newPassword = 'security-e2e-password-2';
+		await api.post('/staff/invites', { email, role: 'staff' });
+		const accepted = await fetch(`${new URL(ADMIN_URL).origin}/v1/admin/staff/accept`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: await inviteTokenFor(email), password }) });
+		expect(accepted.status).toBe(200);
+		const other = await AdminApi.login(email, password);
+
+		await page.goto('/login');
+		await field(page, 'Email').fill(email);
+		await field(page, 'Password').fill(password);
+		await page.getByRole('button', { name: 'Sign in' }).click();
+		await expect(page).toHaveURL(`${ADMIN_URL}/`);
+		await page.goto('/settings');
+		await page.getByRole('button', { name: 'Security' }).click();
+
+		await field(page, 'Current password').fill(password);
+		await field(page, 'New password').fill(newPassword);
+		await field(page, 'Confirm new password').fill(newPassword);
+		await page.getByRole('button', { name: 'Change password' }).click();
+		await expect(page.getByText('Password changed. 1 other session(s) signed out.')).toBeVisible();
+		expect((await other.raw('GET', '/me')).status).toBe(401);
+
+		await page.getByRole('button', { name: 'Enable 2FA' }).click();
+		await page.getByRole('button', { name: 'Set up an authenticator app' }).click();
+		const secret = (await page.locator('div.font-mono').first().innerText()).trim();
+		await field(page, 'Verification code').fill(totpAt(secret, totpStep()));
+		await field(page, 'Your current password').fill(newPassword);
+		await page.getByRole('button', { name: 'Enable', exact: true }).click();
+		await expect(page.getByRole('list', { name: 'Recovery codes' }).getByRole('listitem')).toHaveCount(10);
+		await page.getByRole('button', { name: 'I have saved my recovery codes' }).click();
+		await expect(page.getByText('10 unused recovery code(s) left.')).toBeVisible();
 	});
 });

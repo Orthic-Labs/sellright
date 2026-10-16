@@ -19,7 +19,7 @@ export class AdminApi {
 
 	static async login(email = OWNER_EMAIL, password = OWNER_PASSWORD, baseUrl = API_URL): Promise<AdminApi> {
 		const res = await fetch(`${baseUrl}/v1/admin/login`, {
-			method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, password }),
+			method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, password, returnToken: true }),
 		});
 		const body = await res.json().catch(() => ({}));
 		if (!res.ok) throw new ApiFailure(res.status, body, `login ${email}`);

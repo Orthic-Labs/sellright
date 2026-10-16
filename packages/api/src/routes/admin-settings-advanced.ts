@@ -4,7 +4,7 @@ import { and, desc, eq, gt, isNull, sql } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
 import { hashPassword, verifyPassword } from '../auth/password.js';
-import { verifyTotp } from '../auth/totp.js';
+import { verifySecondFactor } from '../auth/second-factor.js';
 import { clientIp, reserveAdminAuthAttempt, clearAdminAuthFailures } from '../auth/rate-limit.js';
 import { csrfValid, cookie, SESSION_COOKIE } from '../auth/cookies.js';
 import { bearer } from '../auth/session.js';
@@ -326,6 +326,8 @@ adminSettingsAdvanced.openapi(
       await tx
         .delete(s.adminUserStore)
         .where(and(eq(s.adminUserStore.adminUserId, adminUserId), eq(s.adminUserStore.storeId, st.storeId)));
+      await tx.delete(s.adminDeviceToken)
+        .where(and(eq(s.adminDeviceToken.adminUserId, adminUserId), eq(s.adminDeviceToken.storeId, st.storeId)));
       await revokePendingInvites(tx, st.storeId, adminUserId);
       await revokeAgentTokens(tx, adminUserId, st.storeId); // an agent removed through the staff path loses its tokens (and their sessions) too
       if (targetRole !== null) {
@@ -541,7 +543,7 @@ adminSettingsAdvanced.openapi(
         const retry = await reserveAdminAuthAttempt(ip, inv.email);
         if (retry > 0) throw new HttpError(429, `too many attempts — try again in ${retry}s`, 'RATE_LIMITED');
         const passwordOk = await verifyPassword(b.currentPassword, existing.passwordHash);
-        const totpOk = !existing.totpSecret || (!!b.totp && verifyTotp(existing.totpSecret, b.totp, existing.id));
+        const totpOk = !existing.totpSecret || (await verifySecondFactor(existing.id, existing.totpSecret, b.totp));
         if (!passwordOk || !totpOk) {
           
           throw new HttpError(401, 'invalid password or 2FA code', 'INVITE_AUTH_FAILED');

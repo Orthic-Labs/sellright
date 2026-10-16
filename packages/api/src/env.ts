@@ -328,6 +328,27 @@ const EnvSchema = z.object({
       && (x.includes('/') ? Number(x.split('/')[1]) <= (isIP(x.split('/')[0]!) === 4 ? 32 : 128) : true)),
     'TRUSTED_PROXY_CIDRS must be comma-separated IPs or CIDRs (e.g. 203.0.113.0/24, 2001:db8::/32)',
   ).optional()),
+  // P1b: require TOTP for admins. 'off' (default) = per-store setting only
+  // (store.config.security.requireTotp for owners/managers); 'privileged' = also
+  // every installation admin and every owner/manager; 'all' = every human admin.
+  // Admins without TOTP then get a session that can only enrol.
+  ADMIN_REQUIRE_TOTP: z.enum(['off', 'privileged', 'all']).default('off'),
+  // P1b: '1' = at API start, seal legacy plaintext admin TOTP secrets with SELLRIGHT_MASTER_KEY. Off by default:
+  // set it once the release is past its rollback window (an older engine cannot read sealed secrets; to roll back
+  // after sealing run `node dist/scripts/totp-secrets.js --decrypt` first). New enrolments are always sealed.
+  ADMIN_TOTP_SEAL_EXISTING: z.enum(['0', '1']).default('0'),
+  // P2: admin session lifetime. Absolute TTL (also the cookie Max-Age) and idle
+  // timeout: a session unused for ADMIN_SESSION_IDLE_HOURS is refused (0 disables).
+  ADMIN_SESSION_TTL_DAYS: z.coerce.number().positive().default(14),
+  ADMIN_SESSION_IDLE_HOURS: z.coerce.number().nonnegative().default(12),
+  // P2: request body cap for the whole API (bytes); the admin asset upload has its own larger cap.
+  API_BODY_LIMIT_BYTES: z.coerce.number().int().positive().default(2 * 1024 * 1024),
+  // P2: exact extra origins allowed to call /v1/admin cross-origin (comma-separated, scheme://host[:port]).
+  // The admin's own origin (ADMIN_PUBLIC_URL) is always allowed; nothing is matched by suffix or wildcard.
+  ADMIN_CORS_ORIGINS: optionalEnvString,
+  // P1c: default lifetime of an agent API token when none is given at creation (and
+  // on rotating a never-expiring legacy token). 0 = never expires.
+  ADMIN_AGENT_TOKEN_TTL_DAYS: z.coerce.number().int().nonnegative().default(90),
   // P1a: admin credential-check budgets (login, step-up, 2FA enable/disable,
   // invite accept, password change), on top of the 8 / 15 min (ip, account) bucket.
   // Failures per admin account per hour across ALL IPs:

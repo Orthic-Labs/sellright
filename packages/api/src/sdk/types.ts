@@ -16,6 +16,7 @@ import type { FingerprintHelpers, SaltedFingerprints } from './fingerprint.js';
 import type { PluginJob } from '../jobs/scheduler.js';
 import type { ReleaseRegistrationPolicy } from '../releases/registration-policy.js';
 import type { CacheableException } from '../cache-policy.js';
+import type { PluginAgentPolicy } from '../auth/agent-policy.js';
 
 export type { Env, EnvSource, PluginJob, CacheableException };
 
@@ -86,6 +87,9 @@ export interface EnginePlugin {
    * `ApiPlugin.releaseRegistration`: createApp fails startup on a conflict with another plugin.
    */
   releaseRegistration?: ReleaseRegistrationPolicy;
+  /** Agent (API-token) policy for this plugin's admin routes (auth/agent-policy.ts, P1c): extend the deny map
+   *  (`deny`) and allowlist reviewed mutations (`allow`). Unlisted plugin admin mutations are denied to agents. */
+  agentPolicy?: PluginAgentPolicy;
   /**
    * Stock-free, visitor-independent routes of this plugin that keep their own cacheable `Cache-Control` (cache-policy.ts).
    * Each entry needs a non-empty `source` and `reason`. The engine rejects (startup throws) duplicates/overlaps, g/y-flag or
