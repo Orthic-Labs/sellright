@@ -15,6 +15,8 @@ declare module 'hono' { interface ContextVariableMap { adminPrincipal: AdminPrin
 
 const PUBLIC = new Set(['/v1/admin/login', '/v1/admin/logout']); // NOT staff/accept: it is public for the unauthenticated invitee, but an agent credential on it must still hit the deny set (Astra v5 F4)
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+/** Engine admin routes that accept a non-session credential (or none) and authenticate it themselves. */
+const SERVICE_CREDENTIAL_ROUTES = new Set(['POST /v1/admin/staff/accept', 'POST /v1/admin/cache/purge', 'POST /v1/admin/apps/releases']);
 const MESSAGE: Record<string, string> = {
   delete: 'agents cannot delete — disable or trash instead; deletion needs a human',
   irreversible_order: 'agents cannot cancel or purge orders — trash is reversible, this is not',
@@ -52,7 +54,17 @@ const guardImpl = async (c: Parameters<MiddlewareHandler>[0], next: Parameters<M
   const token = bearer(c.req.header('authorization')) ?? cookie(c, SESSION_COOKIE);
   if (!token) return next();
   const admin = isAgentToken(token) ? await resolveAgentByToken(token) : await resolveAdmin(token);
-  if (!admin) return next();
+  if (!admin) {
+    // P2 review: a credential that does not resolve is refused on engine-owned admin routes BEFORE validation (no
+    // schema hints for a fabricated bearer). Exempt: pre-session routes and routes with their own service credential
+    // (cache purge's shared token, the release-registration service token); plugin routes authenticate themselves.
+    const concrete = [...matchedRoutes(c)].reverse().find((r) => !r.path.includes('*') && r.method !== 'ALL');
+    const key = concrete ? `${c.req.method.toUpperCase()} ${concrete.path}` : null;
+    if (key && routeCtx?.builtin.has(key) && !SERVICE_CREDENTIAL_ROUTES.has(key)) {
+      return errJson(c, 401, 'NOT_AUTHENTICATED', 'invalid or expired session');
+    }
+    return next();
+  }
   c.set('adminPrincipal', admin);
   const method = c.req.method.toUpperCase();
   const route = [...matchedRoutes(c)].reverse().find((r) => !r.path.includes('*'))?.path ?? path;

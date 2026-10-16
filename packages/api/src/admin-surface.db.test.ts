@@ -124,3 +124,24 @@ describe.skipIf(!isTestDb)('P2: login token and idle sessions', () => {
     expect((await pool.query('SELECT 1 FROM "session" WHERE admin_user_id = $1', [OWNER])).rowCount).toBe(0);
   });
 });
+
+describe.skipIf(!isTestDb)('P2 review round 1', () => {
+  it('a fabricated bearer gets 401 before validation (no field names leak)', async () => {
+    const res = await app.request('/v1/admin/products', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer garbage' }, body: '{"name": 42}' });
+    expect(res.status).toBe(401);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('NOT_AUTHENTICATED');
+  });
+
+  it('anonymous requests are refused before the body is read (an oversized anonymous body is 401, not 413)', async () => {
+    const big = 'x'.repeat(env.API_BODY_LIMIT_BYTES + 10);
+    const res = await app.request('/v1/admin/products', { method: 'POST', headers: { 'content-type': 'application/json' }, body: big });
+    expect(res.status).toBe(401);
+  });
+
+  it('malformed JSON on a validated admin route is a 400 envelope, not a 500', async () => {
+    const res = await app.request('/v1/admin/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{' });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toMatch(/INVALID_JSON|VALIDATION_ERROR/);
+  });
+});
+

@@ -1,5 +1,6 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { cors } from 'hono/cors';
+import { HTTPException } from 'hono/http-exception';
 import type { MiddlewareHandler } from 'hono';
 import { catalog } from './routes/catalog.js';
 import { cart } from './routes/cart.js';
@@ -212,13 +213,6 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
     await next();
   });
 
-  // P2: app-wide request body cap (API_BODY_LIMIT_BYTES, default 2 MiB). The admin asset upload keeps its own
-  // larger cap (routes/admin-assets.ts, 10 MiB + multipart overhead). Over the limit: 413 before any handler.
-  const tooLarge = (c: Parameters<Parameters<typeof app.use>[1]>[0]) => errJson(c, 413, 'PAYLOAD_TOO_LARGE', 'request body too large');
-  const defaultLimit = bodyLimit({ maxSize: env.API_BODY_LIMIT_BYTES, onError: tooLarge });
-  const uploadLimit = bodyLimit({ maxSize: ASSET_UPLOAD_LIMIT_BYTES, onError: tooLarge });
-  app.use('*', (c, next) => (c.req.method === 'POST' && c.req.path === '/v1/admin/assets' ? uploadLimit : defaultLimit)(c, next));
-
   // P2: every /v1/admin request must carry a credential (session cookie or Authorization bearer) BEFORE any body is
   // parsed or validated — an anonymous caller learns nothing from validation errors and costs no body parsing.
   // Pre-session routes are exempt; the cache-purge route authenticates with its own shared-token header.
@@ -231,6 +225,13 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
     if (!preSession && !hasCredential) return errJson(c, 401, 'NOT_AUTHENTICATED', 'not authenticated');
     await next();
   });
+
+  // P2: app-wide request body cap (API_BODY_LIMIT_BYTES, default 2 MiB). The admin asset upload keeps its own
+  // larger cap (routes/admin-assets.ts, 10 MiB + multipart overhead). Over the limit: 413 before any handler.
+  const tooLarge = (c: Parameters<Parameters<typeof app.use>[1]>[0]) => errJson(c, 413, 'PAYLOAD_TOO_LARGE', 'request body too large');
+  const defaultLimit = bodyLimit({ maxSize: env.API_BODY_LIMIT_BYTES, onError: tooLarge });
+  const uploadLimit = bodyLimit({ maxSize: ASSET_UPLOAD_LIMIT_BYTES, onError: tooLarge });
+  app.use('*', (c, next) => (c.req.method === 'POST' && c.req.path === '/v1/admin/assets' ? uploadLimit : defaultLimit)(c, next));
 
   // P2: validation failures on the admin API answer the generic error envelope (no raw zod issue dump).
   app.use('/v1/admin/*', async (c, next) => {
@@ -419,6 +420,11 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
     // that correctly throws 400/409/etc. is silently flattened to 500.
     if (err instanceof HttpError) {
       return c.json(errorEnvelope(c, err.code, err.message, { param: err.param, extra: err.extra }), err.status);
+    }
+    // Hono's own request-body errors (e.g. the JSON validator on malformed input) are HTTPExceptions with a 4xx status:
+    // answer them with the safe envelope, never as a 500.
+    if (err instanceof HTTPException && err.status >= 400 && err.status < 500) {
+      return c.json(errorEnvelope(c, err.status === 400 ? 'INVALID_JSON' : 'BAD_REQUEST', err.status === 400 ? 'request body is not valid JSON' : 'bad request'), err.status as 400);
     }
     // P2: a schema .parse() inside a handler (e.g. /v1/licenses/*) is a client error, not a 500.
     const zodIssues = (err as { name?: string; issues?: Array<{ path?: PropertyKey[] }> }).name === 'ZodError' ? (err as { issues?: Array<{ path?: PropertyKey[] }> }).issues : undefined;
