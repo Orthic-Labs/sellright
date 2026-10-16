@@ -139,7 +139,15 @@ export function buildHttpApp(options: HttpAppOptions = {}): OpenAPIHono {
   app.use('*', preRoutePolicy(listApiPlugins));
   // SDK lifecycle `preRoute`: plugin middleware / response policies that must wrap every
   // route. After request-id + access log (so they carry the id), before CORS and routes.
+  const routesBeforePreRoute = app.routes.length;
   for (const plugin of sdkPlugins) plugin.preRoute?.(app, options.ctx!);
+  // P1c: preRoute runs before the admin guard is registered, so a HANDLER mounted there for an admin path would answer
+  // before the agent policy (and outside the plugin boundary). Middleware (app.use) is fine; admin handlers are not.
+  for (const r of app.routes.slice(routesBeforePreRoute)) {
+    if (r.method !== 'ALL' && (r.path === '/v1/admin' || r.path.startsWith('/v1/admin/') || r.path.startsWith('/v1/:'))) {
+      throw new Error(`plugin preRoute registered an admin route handler (${r.method} ${r.path}); mount admin routes through \`routes\``);
+    }
+  }
 
   // OPS-1: per-store CORS allowlist. No wildcard-with-credentials (browsers
   // reject that combination anyway, but we never even offer it). An origin is

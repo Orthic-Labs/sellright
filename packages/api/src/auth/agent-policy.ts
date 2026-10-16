@@ -83,7 +83,7 @@ export interface AgentRouteContext {
   allow: ReadonlySet<string>;
 }
 
-export function agentDenied(method: string, matchedRoutePath: string, ctx?: AgentRouteContext): DenyGroup | null {
+export function agentDenied(method: string, matchedRoutePath: string, ctx?: AgentRouteContext, requestPath: string = matchedRoutePath): DenyGroup | null {
   const m = method.toUpperCase();
   if (m === 'GET' || m === 'HEAD' || m === 'OPTIONS') return null;
   const key = `${m} ${matchedRoutePath}`;
@@ -92,7 +92,10 @@ export function agentDenied(method: string, matchedRoutePath: string, ctx?: Agen
   if (!ctx) return null;
   const plugin = ctx.deny.get(key);
   if (plugin) return plugin;
-  if (!ctx.builtin.has(key) && !ctx.allow.has(key) && matchedRoutePath.startsWith('/v1/admin/')) return 'plugin';
+  // Admin scope is decided by the REQUEST path (a parameterized plugin template such as /v1/:surface/x still serves
+  // /v1/admin/x), and covers /v1/admin itself.
+  const adminScope = requestPath === '/v1/admin' || requestPath.startsWith('/v1/admin/');
+  if (!ctx.builtin.has(key) && !ctx.allow.has(key) && adminScope) return 'plugin';
   return null;
 }
 

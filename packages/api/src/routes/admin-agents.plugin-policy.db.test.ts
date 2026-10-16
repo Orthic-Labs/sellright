@@ -26,6 +26,10 @@ function pluginRoutes() {
     r.post(p, async (c) => { const { admin } = await requireAdmin(c); requireStore(admin, c); return c.json({ ok: true }); });
   }
   r.get('/v1/admin/plugin-x/read', async (c) => { await requireAdmin(c); return c.json({ ok: true }); });
+  // P1c review: a twin of the engine-denied PATCH /v1/admin/webhooks/:id under a renamed parameter, allowlisted
+  r.patch('/v1/admin/webhooks/:endpointId', async (c) => c.json({ shadow: true }));
+  // P1c review: a parameterized prefix that also serves /v1/admin/...
+  r.post('/v1/:surface/plugin-y', async (c) => { const { admin } = await requireAdmin(c); requireStore(admin, c); return c.json({ ok: true }); });
   return r;
 }
 
@@ -46,7 +50,7 @@ beforeAll(() => {
   registerApiPlugin({
     name: 'plugin-x',
     routes: pluginRoutes(),
-    agentPolicy: { allow: ['POST /v1/admin/plugin-x/reviewed'], deny: { 'POST /v1/admin/plugin-x/kill': 'entitlement' } },
+    agentPolicy: { allow: ['POST /v1/admin/plugin-x/reviewed', 'PATCH /v1/admin/webhooks/:endpointId', 'POST /v1/:surface/plugin-y'], deny: { 'POST /v1/admin/plugin-x/kill': 'entitlement' } },
   });
   app = buildHttpApp();
 });
@@ -104,3 +108,26 @@ describe.skipIf(!isTestDb)('P1c: webhooks and token expiry', () => {
     expect(days).toBeLessThanOrEqual(env.ADMIN_AGENT_TOKEN_TTL_DAYS);
   });
 });
+
+describe.skipIf(!isTestDb)('P1c review: plugin boundary bypasses', () => {
+  it('an allowlisted plugin twin cannot unlock an engine-denied route (renamed path parameter)', async () => {
+    const { token } = await agentToken();
+    const res = await call('PATCH', '/v1/admin/webhooks/00000000-0000-4000-8000-000000000000', token, { url: 'https://evil.example.net/x' });
+    expect(res.status).toBe(403);
+  });
+
+  it('admin scope follows the request path: a parameterized plugin template serving /v1/admin is still policed', async () => {
+    const { token } = await agentToken();
+    // allowlisted under its template, so it passes; an unlisted engine-unknown admin path is default-denied
+    expect((await call('POST', '/v1/admin/plugin-y', token)).status).toBe(200);
+    _clearApiPluginsForTest();
+    registerApiPlugin({ name: 'plugin-z', routes: (() => { const r = new OpenAPIHono(); r.post('/v1/:surface/plugin-z', (c) => c.json({ ok: true })); return r; })() });
+    app = buildHttpApp();
+    expect((await call('POST', '/v1/admin/plugin-z', token)).status).toBe(403);
+  });
+
+  it('an SDK preRoute hook may not register admin route handlers', () => {
+    expect(() => buildHttpApp({ plugins: [{ name: 'sneaky', preRoute: (a: { post: (p: string, h: () => Response) => unknown }) => { a.post('/v1/admin/sneaky', () => new Response('x')); } } as never], ctx: {} as never })).toThrow(/preRoute registered an admin route handler/);
+  });
+});
+

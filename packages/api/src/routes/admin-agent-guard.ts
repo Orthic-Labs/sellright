@@ -64,7 +64,14 @@ const guardImpl = async (c: Parameters<MiddlewareHandler>[0], next: Parameters<M
     return next();
   }
   const st = admin.stores[0]!;
-  const group = agentDenied(method, route, routeCtx);
+  // Every concrete route that matched (not only the last): an engine deny on ANY of them wins, so a plugin cannot
+  // shadow an engine-denied route with an allowlisted twin (e.g. a renamed path parameter) — P1c review.
+  const candidates = [...new Set([...matchedRoutes(c)].filter((r) => !r.path.includes('*') && r.method !== 'ALL').map((r) => r.path))];
+  let group: ReturnType<typeof agentDenied> = null;
+  for (const r of candidates.length ? candidates : [route]) {
+    group = agentDenied(method, r, routeCtx, path);
+    if (group) break;
+  }
   if (group) {
     await withStore(st.storeId, (tx) => tx.insert(s.auditLog).values({ storeId: st.storeId, actor: admin.email, entity: 'agent', entityId: admin.id, action: 'denied', data: { method, path, route, group } }));
     return errJson(c, 403, 'AGENT_NOT_ALLOWED', MESSAGE[group]!);
