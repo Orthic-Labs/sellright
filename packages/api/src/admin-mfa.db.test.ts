@@ -25,7 +25,7 @@ const STAFF = 'cdcdcdcd-cdcd-cdcd-cdcd-0000000000a2';
 const MANAGER = 'cdcdcdcd-cdcd-cdcd-cdcd-0000000000a3';
 const PW = 'mfa-owner-password-1';
 const app = createApp();
-const prevKey = process.env.SELLRIGHT_MASTER_KEY;
+const prevKey = env.SELLRIGHT_MASTER_KEY;
 
 /** RFC 6238 code for `step` (independent of the implementation under test). */
 function totpAt(secretB32: string, step: number): string {
@@ -67,7 +67,7 @@ async function enrol(token: string, password = PW) {
   return { secret, recoveryCodes };
 }
 
-beforeAll(() => { process.env.SELLRIGHT_MASTER_KEY = '00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff'; });
+beforeAll(() => { env.SELLRIGHT_MASTER_KEY = '00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff'; });
 beforeEach(async () => {
   if (!isTestDb) return;
   _setRateLimitBackendForTest(createMemoryRateLimitBackend());
@@ -78,7 +78,7 @@ beforeEach(async () => {
   await pool.query(`INSERT INTO admin_user_store (admin_user_id, store_id, role) VALUES ($1, $4, 'owner'), ($2, $4, 'staff'), ($3, $4, 'manager')`, [OWNER, STAFF, MANAGER, STORE]);
 });
 afterAll(async () => {
-  if (prevKey === undefined) delete process.env.SELLRIGHT_MASTER_KEY; else process.env.SELLRIGHT_MASTER_KEY = prevKey;
+  env.SELLRIGHT_MASTER_KEY = prevKey;
   if (isTestDb) await wipe();
   _setRateLimitBackendForTest(undefined);
   await pool.end();

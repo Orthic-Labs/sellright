@@ -103,6 +103,7 @@ describe('POST /v1/webhooks/stripe — cross-tenant DB-secret forgery is rejecte
       delete process.env[k];
     }
     process.env.SELLRIGHT_MASTER_KEY = 'c'.repeat(64);
+    env.SELLRIGHT_MASTER_KEY = process.env.SELLRIGHT_MASTER_KEY;
     await wipe();
     // store_secret has an FK to store — the row must exist before we can
     // attach a secret to it. Both stores are (re)inserted per-test via

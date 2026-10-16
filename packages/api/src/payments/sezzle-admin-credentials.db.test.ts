@@ -39,7 +39,7 @@ async function wipe() {
 }
 
 async function seed(mode: 'test' | 'live'): Promise<string> {
-  process.env.SELLRIGHT_MASTER_KEY = process.env.SELLRIGHT_MASTER_KEY ?? 'a'.repeat(64);
+  env.SELLRIGHT_MASTER_KEY = env.SELLRIGHT_MASTER_KEY ?? 'a'.repeat(64);
   const config = { hostnames: ['sezzle.example.test'], payments: { sezzle: { enabled: true, mode } } };
   await pool.query(`INSERT INTO store (id, slug, name, currency, config) VALUES ($1, $2, 'Sezzle Creds Store', 'USD', $3) ON CONFLICT (id) DO NOTHING`, [STORE, SLUG, JSON.stringify(config)]);
   await pool.query(`INSERT INTO admin_user (id, email) VALUES ($1, 'owner@sezzlecreds.test') ON CONFLICT (id) DO NOTHING`, [OWNER]);

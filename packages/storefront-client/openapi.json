@@ -10841,6 +10841,17 @@
           },
           {
             "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
+            },
+            "required": false,
+            "name": "excludeDemo",
+            "in": "query"
+          },
+          {
+            "schema": {
               "type": "boolean",
               "nullable": true,
               "default": false

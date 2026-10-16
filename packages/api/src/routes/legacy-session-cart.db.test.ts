@@ -1,7 +1,7 @@
 /** Disposable *_test database only. Covers capability adoption & exactly-once cart effects. */
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { createHash, randomUUID } from 'node:crypto';
-import { OpenAPIHono } from '@hono/zod-openapi';
+import { OpenAPIHono, z } from '@hono/zod-openapi';
 import { eq, sql } from 'drizzle-orm';
 import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
@@ -10,7 +10,7 @@ import * as s from '../db/schema.js';
 import { invalidateStoreCache } from '../store-context.js';
 import { resolveCustomer } from '../auth/session.js';
 import { auth } from './auth.js';
-import { cart } from './cart.js';
+import { cart, CartOut } from './cart.js';
 import { account } from './account.js';
 
 assertTestDatabase(process.env.DATABASE_URL ?? env.DATABASE_URL, 'legacy session/cart fixtures');
@@ -30,6 +30,11 @@ const headers = (extra: Record<string, string> = {}) => ({ 'x-store-slug': 'lega
 const transfer = (items: Array<{ variantId: string; quantity: number }> | null, over: Record<string, unknown> = {}, credential = `sr_cust=${TOKEN}`) =>
   app.request('/v1/shop/cart/legacy-migration', { method: 'POST', headers: headers({ cookie: credential }),
     body: JSON.stringify({ claimId: randomUUID(), items, ...over }) });
+const MigrationBody = z.object({
+  cart: CartOut.nullable(),
+  unresolved: z.array(z.object({ variantId: z.string(), quantity: z.number().int() })),
+});
+const migrationBody = async (response: Response) => MigrationBody.parse(await response.json());
 async function seed(guest = false) {
   await withStore(STORE, async tx => {
     await tx.insert(s.store).values([{ id: STORE, slug: 'legacy-migration-test', name: 'Legacy', config: { auth: { renewable: true, sessionTtlDays: 365 } } },
@@ -85,7 +90,7 @@ describe('legacy customer bootstrap', () => {
     expect(rows).toEqual({ customers: [], grants: [], claims: [], sessions: [] });
     const wrapped = Buffer.from(JSON.stringify({ token: TOKEN })).toString('base64');
     expect((await app.request('/v1/shop/auth/me', { headers: headers({ cookie: `__vendure_session=${wrapped}` }) })).status).toBe(401);
-    expect((await (await transfer(null, {}, `__vendure_session=${wrapped}`)).json()).cart).toBeNull();
+    expect((await migrationBody(await transfer(null, {}, `__vendure_session=${wrapped}`))).cart).toBeNull();
   });
   it('rejects expired grants, guest grants & cross-tenant carriers', async () => {
     await withStore(STORE, tx => tx.update(s.legacySessionGrant).set({ expiresAt: new Date(0) }).where(eq(s.legacySessionGrant.id, GRANT)));
@@ -100,24 +105,24 @@ describe('atomic legacy cart reconciliation', () => {
   it('adopts source-only cart without rebuilding it', async () => {
     const response = await transfer(null);
     expect(response.status).toBe(200);
-    expect((await response.json()).cart).toMatchObject({ token: 'target-cart-capability', revision: 0, lines: [{ sku: 'WIDGET', quantity: 2 }] });
+    expect((await migrationBody(response)).cart).toMatchObject({ token: 'target-cart-capability', revision: 0, lines: [{ sku: 'WIDGET', quantity: 2 }] });
     expect(await withStore(STORE, tx => tx.select().from(s.legacyCartClaim))).toEqual([expect.objectContaining({ sourceOnly: true, cartId: CART, retiredAt: null })]);
   });
   it('durably replays source-only lost responses & consumes adoption across different tab claims', async () => {
     const claimId = randomUUID();
     const results = await Promise.all([transfer(null, { claimId }), transfer(null, { claimId })]);
-    for (const result of results) expect((await result.json()).cart.token).toBe('target-cart-capability');
-    expect((await (await transfer(null)).json()).cart).toBeNull();
+    for (const result of results) expect((await migrationBody(result)).cart!.token).toBe('target-cart-capability');
+    expect((await migrationBody(await transfer(null))).cart).toBeNull();
     expect(await withStore(STORE, tx => tx.select().from(s.legacyCartClaim))).toHaveLength(1);
     // A late browser snapshot still replaces the same untouched source cart once.
-    expect((await (await transfer([{ variantId: '17', quantity: 3 }])).json()).cart).toMatchObject({ token: 'target-cart-capability', lines: [{ quantity: 3 }] });
+    expect((await migrationBody(await transfer([{ variantId: '17', quantity: 3 }]))).cart).toMatchObject({ token: 'target-cart-capability', lines: [{ quantity: 3 }] });
   });
-  it.each(['converted', 'merged'])('never re-adopts a %s cart on original receipt or fresh reload', async status => {
+  it.each(['converted', 'merged'] as const)('never re-adopts a %s cart on original receipt or fresh reload', async status => {
     const claimId = randomUUID();
     expect((await transfer(null, { claimId })).status).toBe(200);
     await withStore(STORE, tx => tx.update(s.cart).set({ status }).where(eq(s.cart.id, CART)));
-    expect((await (await transfer(null, { claimId })).json()).cart).toBeNull();
-    expect((await (await transfer(null)).json()).cart).toBeNull();
+    expect((await migrationBody(await transfer(null, { claimId }))).cart).toBeNull();
+    expect((await migrationBody(await transfer(null))).cart).toBeNull();
     expect(await withStore(STORE, tx => tx.select().from(s.legacyCartClaim))).toEqual([expect.objectContaining({ cartId: null, retiredAt: expect.any(Date) })]);
   });
   it.each([
@@ -125,33 +130,33 @@ describe('atomic legacy cart reconciliation', () => {
     { expiry: 'missing', adopted: true }, { expiry: 'expired', adopted: true },
   ])('retires $expiry cart expiry with prior adoption=$adopted', async ({ expiry, adopted }) => {
     const claimId = randomUUID();
-    if (adopted) expect((await (await transfer(null, { claimId })).json()).cart.token).toBe('target-cart-capability');
+    if (adopted) expect((await migrationBody(await transfer(null, { claimId }))).cart!.token).toBe('target-cart-capability');
     await withStore(STORE, tx => tx.update(s.cart).set({ expiresAt: expiry === 'missing' ? null : new Date(0) }).where(eq(s.cart.id, CART)));
     const response = await transfer(null, { claimId });
     expect(response.status).toBe(200);
-    expect((await response.json()).cart).toBeNull();
-    expect((await (await transfer(null)).json()).cart).toBeNull();
+    expect((await migrationBody(response)).cart).toBeNull();
+    expect((await migrationBody(await transfer(null))).cart).toBeNull();
     expect(await withStore(STORE, tx => tx.select().from(s.legacyCartClaim))).toEqual([
       expect.objectContaining({ cartId: null, retiredAt: expect.any(Date) }),
     ]);
   });
   it('records retirement when source cart finished before first adoption & never returns a terminal local receipt', async () => {
     await withStore(STORE, tx => tx.update(s.cart).set({ status: 'converted' }).where(eq(s.cart.id, CART)));
-    expect((await (await transfer(null)).json()).cart).toBeNull();
+    expect((await migrationBody(await transfer(null))).cart).toBeNull();
     expect((await transfer([{ variantId: '17', quantity: 3 }])).status).toBe(409);
     await withStore(STORE, tx => tx.update(s.cart).set({ status: 'active' }).where(eq(s.cart.id, CART)));
     const claimId = randomUUID();
     expect((await transfer([{ variantId: '17', quantity: 1 }], { claimId })).status).toBe(200);
     await withStore(STORE, tx => tx.update(s.cart).set({ status: 'converted' }).where(eq(s.cart.id, CART)));
-    expect((await (await transfer([{ variantId: '17', quantity: 1 }], { claimId })).json()).cart).toBeNull();
+    expect((await migrationBody(await transfer([{ variantId: '17', quantity: 1 }], { claimId }))).cart).toBeNull();
   });
   it('replaces source snapshot with numeric local IDs, revalidates coupon/country & preserves unavailable lines', async () => {
     const response = await transfer([{ variantId: '17', quantity: 4 }, { variantId: '999', quantity: 1 }], { couponCode: 'INVALID', countryCode: 'CA' });
     expect(response.status).toBe(200);
-    const body = await response.json();
-    expect(body.cart.lines).toEqual(expect.arrayContaining([expect.objectContaining({ sku: 'WIDGET', quantity: 4, available: false }),
+    const body = await migrationBody(response);
+    expect(body.cart!.lines).toEqual(expect.arrayContaining([expect.objectContaining({ sku: 'WIDGET', quantity: 4, available: false }),
       expect.objectContaining({ sku: 'vendure-unresolved:999', quantity: 1, available: false })]));
-    expect(body.cart.coupon).toMatchObject({ code: 'INVALID', applied: false });
+    expect(body.cart!.coupon).toMatchObject({ code: 'INVALID', applied: false });
     expect(body.unresolved).toEqual([{ variantId: '999', quantity: 1 }]);
     const effects = await withStore(STORE, async tx => ({ stock: await tx.select().from(s.stock), orders: await tx.select().from(s.order),
       payments: await tx.select().from(s.payment), usage: await tx.select().from(s.promotionUsage) }));
@@ -162,7 +167,7 @@ describe('atomic legacy cart reconciliation', () => {
     const claimId = randomUUID();
     const responses = await Promise.all([transfer([{ variantId: '17', quantity: 3 }], { claimId }), transfer([{ variantId: '17', quantity: 3 }], { claimId })]);
     expect(responses.map(r => r.status)).toEqual([200, 200]);
-    expect((await (await transfer([{ variantId: '17', quantity: 3 }], { claimId })).json()).cart.lines[0].quantity).toBe(3);
+    expect((await migrationBody(await transfer([{ variantId: '17', quantity: 3 }], { claimId }))).cart!.lines[0]!.quantity).toBe(3);
     expect((await transfer([{ variantId: '17', quantity: 4 }], { claimId })).status).toBe(409);
     expect(await withStore(STORE, tx => tx.select().from(s.legacyCartClaim))).toHaveLength(1);
   });
@@ -180,25 +185,25 @@ describe('atomic legacy cart reconciliation', () => {
   });
   it('attaches a local-only snapshot to an already authenticated native customer', async () => {
     await withStore(STORE, tx => tx.delete(s.legacySessionGrant).where(eq(s.legacySessionGrant.id, GRANT)));
-    expect((await (await transfer([{ variantId: '17', quantity: 1 }])).json()).cart.customerId).toBe(CUSTOMER);
+    expect((await migrationBody(await transfer([{ variantId: '17', quantity: 1 }]))).cart!.customerId).toBe(CUSTOMER);
   });
   it('serializes different claims for one source cart & refuses stale replacement', async () => {
     const responses = await Promise.all([transfer([{ variantId: '17', quantity: 1 }]), transfer([{ variantId: '17', quantity: 3 }])]);
     expect(responses.map(r => r.status).sort()).toEqual([200, 409]);
   });
   it('preserves an authoritative empty local snapshot rather than retaining source lines', async () => {
-    expect((await (await transfer([])).json()).cart.lines).toEqual([]);
+    expect((await migrationBody(await transfer([]))).cart!.lines).toEqual([]);
   });
   it('requires source token proof for guest source carts; email is never a capability', async () => {
     await wipe(); await seed(true);
-    expect((await (await transfer(null, {}, `__vendure_session=${Buffer.from(JSON.stringify({ token: TOKEN })).toString('base64')}`)).json()).cart.lines[0].quantity).toBe(2);
-    expect((await (await transfer(null, {}, '')).json()).cart).toBeNull();
+    expect((await migrationBody(await transfer(null, {}, `__vendure_session=${Buffer.from(JSON.stringify({ token: TOKEN })).toString('base64')}`))).cart!.lines[0]!.quantity).toBe(2);
+    expect((await migrationBody(await transfer(null, {}, ''))).cart).toBeNull();
     expect((await transfer(null, { email: 'buyer@example.com' }, '')).status).toBe(400);
   });
   it('creates & receipts a local-only guest snapshot with tenant-owned variant mapping', async () => {
-    const body = await (await transfer([{ variantId: '17', quantity: 1 }], {}, '')).json();
-    expect(body.cart.customerId).toBeNull();
-    expect(body.cart.token).not.toBe('target-cart-capability');
-    expect(body.cart.lines[0]).toMatchObject({ sku: 'WIDGET', quantity: 1, unitPrice: 1000 });
+    const body = await migrationBody(await transfer([{ variantId: '17', quantity: 1 }], {}, ''));
+    expect(body.cart!.customerId).toBeNull();
+    expect(body.cart!.token).not.toBe('target-cart-capability');
+    expect(body.cart!.lines[0]).toMatchObject({ sku: 'WIDGET', quantity: 1, unitPrice: 1000 });
   });
 });

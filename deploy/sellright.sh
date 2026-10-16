@@ -279,7 +279,7 @@ cmd_restore() (
     if [ "$restore_lock" -eq 1 ]; then rmdir "${SELLRIGHT_HOME}/.restore-lock" || true; fi
     exit "$status"
   }
-  trap restore_cleanup 0
+  trap 'restore_cleanup' 0
   trap 'exit 1' HUP INT TERM
   kit=""; set_file=""; yes=0
   while [ $# -gt 0 ]; do
@@ -295,7 +295,7 @@ cmd_restore() (
   mkdir -m 700 "${SELLRIGHT_HOME}/.restore-lock" || die "restore lock exists; another restore may be running"
   restore_lock=1
   restore_dir=$(mktemp -d)
-  restore_id=$(basename "$restore_dir" | tr -cd 'a-zA-Z0-9' | tr 'A-Z' 'a-z')
+  restore_id=$(basename "$restore_dir" | LC_ALL=C tr -cd '[:alnum:]' | LC_ALL=C tr '[:upper:]' '[:lower:]')
   restore_container="sellright-restore-${restore_id}"
   restore_db="sellright_restore_${restore_id}"
   prev_db="sellright_prev_${restore_id}"

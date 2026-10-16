@@ -84,6 +84,7 @@ describe('Stripe checkout resolves per-store, DB-backed credentials (env unset)'
       delete process.env[k];
     }
     process.env.SELLRIGHT_MASTER_KEY = 'b'.repeat(64); // deterministic 32-byte hex key for this suite
+    env.SELLRIGHT_MASTER_KEY = process.env.SELLRIGHT_MASTER_KEY;
     constructedWithKeys.length = 0;
     await wipe();
     await seedStores();

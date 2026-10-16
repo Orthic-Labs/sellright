@@ -11,7 +11,7 @@
  * served session cookies without Secure over HTTP.
  */
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { env } from '../env.js';
+import { env, peekEnv } from '../env.js';
 
 /** Constant-time double-submit token compare (mirrors the password compare in auth/password.ts). */
 function csrfEqual(header: string | undefined, cooked: string | undefined): boolean {
@@ -73,7 +73,7 @@ export function shouldSetSecureCookie(headers: { get: (k: string) => string | un
 }
 
 function secureFlag(c: { req: { header: (k: string) => string | undefined } }): string {
-  return shouldSetSecureCookie({ get: (k) => c.req.header(k) }, process.env.NODE_ENV ?? 'development') ? '; Secure' : '';
+  return shouldSetSecureCookie({ get: (k) => c.req.header(k) }, peekEnv()?.NODE_ENV ?? process.env.NODE_ENV ?? 'development') ? '; Secure' : '';
 }
 
 export function setAuthCookies(c: Ctx, token: string, csrf: string): void {

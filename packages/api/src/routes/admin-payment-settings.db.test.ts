@@ -56,7 +56,7 @@ function req(token: string, method: string, path: string, body?: Record<string, 
 describe('PUT/GET /v1/admin/payments/settings (nmi — no env account configured)', () => {
   beforeEach(async () => {
     await wipe();
-    process.env.SELLRIGHT_MASTER_KEY = process.env.SELLRIGHT_MASTER_KEY ?? 'a'.repeat(64);
+    env.SELLRIGHT_MASTER_KEY = env.SELLRIGHT_MASTER_KEY ?? 'a'.repeat(64);
   });
   afterAll(wipe);
 

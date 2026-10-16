@@ -5444,6 +5444,7 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
+                    excludeDemo?: "1";
                     from?: string;
                     fulfillmentStatus?: "unfulfilled" | "partially_fulfilled" | "fulfilled" | "partially_delivered" | "delivered";
                     page?: number;

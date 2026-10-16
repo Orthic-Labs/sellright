@@ -8,18 +8,15 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { and, eq } from 'drizzle-orm';
 import { withStore } from '../db/client.js';
 import * as s from '../db/schema.js';
-import { env } from '../env.js';
+import { env, getEnvSource } from '../env.js';
 import { getAdminCredentialsById, getRecoveryKitDownloadedAt, markRecoveryKitDownloaded } from '../auth/admin-staff.js';
 import { markStepUpVerified } from '../auth/admin-session.js';
 import { verifyPassword } from '../auth/password.js';
 import { verifySecondFactor } from '../auth/second-factor.js';
 import { clientIp, reserveAdminAuthAttempt, clearAdminAuthFailures } from '../auth/rate-limit.js';
 import { isEnvManaged } from '../security/settings-resolver.js';
-// SELLRIGHT_MASTER_KEY/RECOVERY_KIT_ID are read directly from process.env,
-// not the parsed `env` singleton — matching security/secret-crypto.ts's own
-// convention (see its doc comment): these are infra-only, and reading them
-// live (rather than at module-import time) is what lets DB tests set
-// process.env.SELLRIGHT_MASTER_KEY in beforeEach() and have it take effect.
+// Recovery exports use the same parsed master key as secret-crypto; optional
+// kit identity comes from that engine's resolved source, including explicit SDK config.
 import { configuredGatewayAccount } from '../payments/gateway-account.js';
 import { stripeCreds } from '../payments/stripe.js';
 import { HttpError, J, errBody, guard, requireAdmin, requireHuman, requireInstallationAdmin, requireStepUp, requireStore } from './admin-helpers.js';
@@ -206,14 +203,14 @@ adminSystem.openapi(
     const { admin } = await requireAdmin(c);
     requireInstallationAdmin(admin);
     requireStepUp(admin);
-    const masterKey = process.env.SELLRIGHT_MASTER_KEY;
+    const masterKey = env.SELLRIGHT_MASTER_KEY?.trim();
     if (!masterKey) throw new HttpError(503, 'SELLRIGHT_MASTER_KEY is not configured on this server');
 
     await markRecoveryKitDownloaded(admin.id);
     await auditSystemAction(admin, 'recovery_kit_download');
 
     return c.json({
-      kitId: process.env.RECOVERY_KIT_ID ?? null,
+      kitId: getEnvSource().RECOVERY_KIT_ID ?? null,
       generatedAt: new Date().toISOString(),
       masterKeyPresent: true,
       masterKey,
