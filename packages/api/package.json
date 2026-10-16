@@ -56,8 +56,11 @@
   "files": [
     "dist",
     "!dist/**/*.test.*",
+    "!dist/**/*.testkit.*",
     "!dist/db/rls-test-utils.*",
     "!dist/db/test-database-url.*",
+    "!dist/licensing/storekit/jws-fixture.*",
+    "!dist/scripts/seed-e2e-catalog.*",
     "drizzle",
     "exports",
     "BUILD-INFO.json"

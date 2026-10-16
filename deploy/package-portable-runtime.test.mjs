@@ -150,6 +150,26 @@ test('reject first-party test, mock & development helper code', (t) => {
   assert.throws(() => validateRuntime(runtime, sha), /test code/);
 });
 
+for (const directory of ['dist/scripts', 'dist/nested', 'drizzle', 'exports']) {
+  for (const basename of ['seed-e2e-catalog', 'entitlement-policy.fork-reference.testkit']) {
+    for (const extension of ['js', 'js.map', 'd.ts']) {
+      const path = `${directory}/${basename}.${extension}`;
+      test(`reject compiled fixture ${path} in first-party runtime`, (t) => {
+        const { runtime, put } = fixture(t);
+        assert.throws(() => assertFirstPartyPath(path), /test code/);
+        put(path, 'throw Error("must not ship")');
+        assert.throws(() => validateRuntime(runtime, sha), /test code/);
+      });
+    }
+  }
+}
+
+test('allow production runtime scripts', () => {
+  for (const script of ['migrate', 'bootstrap', 'functional-check', 'seed-demo']) {
+    assert.doesNotThrow(() => assertFirstPartyPath(`dist/scripts/${script}.js`));
+  }
+});
+
 test('reject source identity mismatch, dirty build & direct dev dependency', (t) => {
   const { runtime, put } = fixture(t);
   assert.throws(() => assertIdentity({ sha: 'b'.repeat(40), dirty: false }, sha), /identity mismatch/);
