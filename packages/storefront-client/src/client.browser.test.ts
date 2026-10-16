@@ -60,3 +60,14 @@ describe('browser CSRF cookie read', () => {
     expect(calls[0]?.headers.get('x-csrf-token')).toBe('from-override');
   });
 });
+
+describe('browser store resolution', () => {
+  it('does not forward forwardedHost from browser requests', async () => {
+    const { createStorefrontClient } = await import('./client.js');
+    const calls: Request[] = [];
+    const fetchFn = vi.fn(async (input: Request) => { calls.push(input); return jsonResponse(200, {}); });
+    const client = createStorefrontClient({ baseUrl: 'http://api.test', forwardedHost: 'shop.example.com', fetch: fetchFn });
+    await client.raw.GET('/v1/health');
+    expect(calls[0]?.headers.get('x-forwarded-host')).toBeNull();
+  });
+});

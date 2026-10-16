@@ -13,7 +13,9 @@ import { pool, withStore } from '../db/client.js';
 import { env } from '../env.js';
 import { withLockedSet } from '../db/locks.js';
 import { createSession } from '../auth/session.js';
+import { hashPassword } from '../auth/password.js';
 import { account } from './account.js';
+import { auth as nativeAuth } from './auth.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
 assertTestDatabase(DB, 'account-erasure-lock.db.test.ts');
@@ -26,6 +28,7 @@ const ROUNDS = 12;
 
 const app = new OpenAPIHono();
 app.route('/', account);
+app.route('/', nativeAuth);
 
 async function wipe() {
   await pool.query('TRUNCATE store CASCADE');
@@ -47,6 +50,20 @@ async function seed(): Promise<string> {
 }
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Observe an actual database wait, rather than infer progress from elapsed time. */
+async function waitForBlockedQuery(blockerPid: number, queryPart: string): Promise<number> {
+  const deadline = Date.now() + 3500;
+  do {
+    const { rows } = await pool.query<{ pid: number }>(`
+      SELECT pid FROM pg_stat_activity
+      WHERE datname = current_database() AND $1 = ANY(pg_blocking_pids(pid))
+        AND strpos(lower(query), $2) > 0 AND wait_event_type = 'Lock'`, [blockerPid, queryPart]);
+    if (rows[0]) return rows[0].pid;
+    await wait(15);
+  } while (Date.now() < deadline);
+  throw new Error(`expected ${queryPart} query waiting on backend ${blockerPid}`);
+}
 
 let token = '';
 beforeEach(async () => {
@@ -70,6 +87,48 @@ const refundShape = (delayMs: number) => (async () => {
 })();
 
 describe('T-L2: account erasure vs refund on one of the customer orders', () => {
+  it('serializes native login behind erasure after sessions are deleted', async () => {
+    const password = 'erase-login-customer-lock';
+    await pool.query('UPDATE customer SET password_hash = $1 WHERE id = $2', [await hashPassword(password), CUSTOMER]);
+    const { rows: outbox } = await pool.query<{ id: string }>(`
+      INSERT INTO email_outbox (store_id, kind, recipient, payload)
+      VALUES ($1, 'email_verify', 'erase-lock@acct.test', '{"subject":"fixture"}'::jsonb) RETURNING id`, [STORE]);
+    const blocker = await pool.connect();
+    let erase: Promise<Response> | undefined;
+    let login: Promise<Response> | undefined;
+    try {
+      await blocker.query('BEGIN');
+      await blocker.query("SET LOCAL statement_timeout = '10s'");
+      await blocker.query("SELECT set_config('app.current_store', $1, true)", [STORE]);
+      const { rows } = await blocker.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
+      await blocker.query('SELECT id FROM email_outbox WHERE id = $1 FOR UPDATE', [outbox[0]!.id]);
+
+      erase = Promise.resolve(app.request('/v1/shop/account', { method: 'DELETE', headers: auth() }));
+      // Scrubbing is after DELETE session, immediately before deleting customer.
+      const erasurePid = await waitForBlockedQuery(rows[0]!.pid, 'email_outbox');
+      login = Promise.resolve(app.request('/v1/shop/auth/login', {
+        method: 'POST', headers: { 'content-type': 'application/json', 'x-store-slug': SLUG },
+        body: JSON.stringify({ email: 'erase-lock@acct.test', password }),
+      }));
+      const loginPid = await waitForBlockedQuery(erasurePid, 'customer');
+      const waiting = await pool.query<{ query: string }>('SELECT query FROM pg_stat_activity WHERE pid = $1', [loginPid]);
+      expect(waiting.rows[0]!.query.toLowerCase()).toContain('for update');
+
+      await blocker.query('ROLLBACK');
+      expect((await erase).status).toBe(200);
+      expect((await login).status).toBe(401);
+      expect((await pool.query('SELECT id FROM customer WHERE id = $1', [CUSTOMER])).rowCount).toBe(0);
+      expect((await pool.query('SELECT id FROM "session" WHERE customer_id = $1', [CUSTOMER])).rowCount).toBe(0);
+    } finally {
+      try {
+        await blocker.query('ROLLBACK');
+      } finally {
+        blocker.release();
+        await Promise.allSettled([erase, login].filter((request): request is Promise<Response> => request !== undefined));
+      }
+    }
+  }, 30000);
+
   it(`${ROUNDS} randomized interleavings: no deadlock, both complete, erasure consistent`, async () => {
     for (let round = 0; round < ROUNDS; round++) {
       await wipe();

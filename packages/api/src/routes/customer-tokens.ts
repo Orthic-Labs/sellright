@@ -273,6 +273,11 @@ customerTokens.openapi(
     if (peeked !== null) {
       try {
         out = await withLockedSet(st.id, { kind: 'customer', customerId: peeked, scope: 'orders' }, async (tx, _held, plan): Promise<'invalid' | 'taken' | 'ok'> => {
+          // After commerce locks, take the same customer-first order as login,
+          // reset and erasure before claiming any token or revoking sessions.
+          const [before] = await tx.select({ email: s.customer.email, emailVerified: s.customer.emailVerified }).from(s.customer)
+            .where(and(eq(s.customer.storeId, st.id), eq(s.customer.id, peeked))).limit(1).for('update');
+          if (!before) return 'invalid';
           // Atomic consume: used_at flips only when the token is still pending —
           // a replayed/second click can never win the UPDATE (single-use).
           const consumed = await tx.execute(sql`UPDATE customer_token SET used_at = now()
@@ -292,11 +297,10 @@ customerTokens.openapi(
           // Capture the OLD address before overwriting it — the security notice
           // below goes to the address being ABANDONED, and it's gone after the
           // UPDATE.
-          const [before] = await tx.select({ email: s.customer.email, emailVerified: s.customer.emailVerified }).from(s.customer).where(eq(s.customer.id, row.customerId)).limit(1).for('update');
-          const oldEmail = before?.email ?? null;
+          const oldEmail = before.email;
           // Preserve guest orders whose OLD mailbox was actually proven before
           // changing it. Proving the NEW mailbox must never prove the old one.
-          if (before?.emailVerified) {
+          if (before.emailVerified) {
             if (plan.orderIds.length) {
               await tx.update(s.order).set({ metadata: sql`coalesce(${s.order.metadata}, '{}'::jsonb) || '{"linked_via":"verified_email"}'::jsonb` })
                 .where(and(inArray(s.order.id, [...plan.orderIds]), eq(s.order.customerId, row.customerId), sql`${s.order.metadata} ->> 'linked_via' = 'email_match'`, orderProvenanceFilter(before)));
