@@ -13,9 +13,16 @@ import { env } from '../env.js';
 import { enqueuePaidEffects } from './paid-effects.js';
 
 const DB = process.env.DATABASE_URL ?? env.DATABASE_URL;
-if (!/_test(\b|$|\?)/.test(DB)) {
-  throw new Error(`paid-effects test truncates data — point DATABASE_URL at a *_test database, got: ${DB.replace(/:[^:@/]+@/, ':***@')}`);
-}
+const isTestDb = (() => {
+  try {
+    const url = new URL(DB);
+    // pg accepts database query overrides; credentials/query text cannot prove DB identity.
+    return ['postgres:', 'postgresql:'].includes(url.protocol)
+      && /^\/[^/]+_test$/.test(decodeURIComponent(url.pathname))
+      && ![...url.searchParams.keys()].some(key => /^(database|dbname)$/i.test(key));
+  } catch { return false; }
+})();
+if (!isTestDb) throw new Error('paid-effects test truncates data — DATABASE_URL must name a *_test database without database query overrides');
 
 const STORE_A = 'eeeeeeee-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 const STORE_B = 'eeeeeeee-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
@@ -39,9 +46,9 @@ async function seedStores(): Promise<void> {
 }
 
 /** Minimal paid order + one line + customer, inside the store's RLS scope. */
-async function seedOrder(storeId: string, code: string, email: string): Promise<string> {
+async function seedOrder(storeId: string, code: string, email: string, firstName: string | null = null, lastName: string | null = null): Promise<string> {
   return withStore(storeId, async (tx) => {
-    const cust = await tx.execute(sql`INSERT INTO customer (store_id, email) VALUES (${storeId}, ${email}) RETURNING id`);
+    const cust = await tx.execute(sql`INSERT INTO customer (store_id, email, first_name, last_name) VALUES (${storeId}, ${email}, ${firstName}, ${lastName}) RETURNING id`);
     const customerId = (cust.rows[0] as { id: string }).id;
     const o = await tx.execute(sql`INSERT INTO "order" (store_id, code, customer_id, state, currency, grand_total)
       VALUES (${storeId}, ${code}, ${customerId}, 'Paid', 'EUR', 4200) RETURNING id`);
@@ -104,5 +111,28 @@ describe('enqueuePaidEffects — per-store confirmation routing (SR-05)', () => 
     const rows = await outbox(STORE_B);
     expect(rows).toHaveLength(1);
     expect(rows[0]!.dedupeKey).toContain('order_confirmation:');
+  });
+
+  it.each([
+    [' Ada ', ' Lovelace ', 'Ada Lovelace'],
+    [null, ' Lovelace ', 'Lovelace'],
+    [' ', null, 'buyer'],
+  ])('preserves paid-order subscriber name %s %s across settlement replay', async (firstName, lastName, expectedName) => {
+    const orderId = await seedOrder(STORE_B, 'B-NAME', 'buyer@b.test', firstName, lastName);
+    await withStore(STORE_B, (tx) => enqueuePaidEffects(tx, STORE_B, orderId));
+    await withStore(STORE_B, (tx) => enqueuePaidEffects(tx, STORE_B, orderId));
+    const result = await withStore(STORE_B, (tx) => tx.execute(sql`
+      SELECT email, name FROM subscriber WHERE store_id = ${STORE_B} AND kind = 'order'`));
+    expect(result.rows).toEqual([{ email: 'buyer@b.test', name: expectedName }]);
+  });
+
+  it('uses recipient fallback when checkout contact differs from linked customer', async () => {
+    const orderId = await seedOrder(STORE_B, 'B-CONTACT', 'buyer@b.test', 'Ada', 'Lovelace');
+    await withStore(STORE_B, (tx) => tx.execute(sql`UPDATE "order"
+      SET metadata = ${JSON.stringify({ contact: { email: 'guest@b.test' } })}::jsonb WHERE id = ${orderId}`));
+    await withStore(STORE_B, (tx) => enqueuePaidEffects(tx, STORE_B, orderId));
+    const result = await withStore(STORE_B, (tx) => tx.execute(sql`
+      SELECT email, name FROM subscriber WHERE store_id = ${STORE_B} AND kind = 'order'`));
+    expect(result.rows).toEqual([{ email: 'guest@b.test', name: 'guest' }]);
   });
 });

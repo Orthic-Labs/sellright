@@ -5061,6 +5061,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             configured: boolean;
+                            listId: number | null;
                             url: string | null;
                         };
                     };
@@ -5094,6 +5095,7 @@ export interface paths {
                     "application/json": {
                         apiToken: string;
                         apiUser: string;
+                        listId?: number;
                         /** Format: uri */
                         url: string;
                     };
@@ -17777,6 +17779,73 @@ export interface paths {
                     };
                 };
                 /** @description Expired link */
+                410: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "text/html": string;
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/shop/contact/confirm-legacy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Confirm a pre-cutover contact submission */
+        get: {
+            parameters: {
+                query: {
+                    data: string;
+                    sig: string;
+                    ts: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Confirmed (or already confirmed) */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "text/html": string;
+                    };
+                };
+                /** @description Malformed link */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "text/html": string;
+                    };
+                };
+                /** @description Bad signature or disabled binding */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "text/html": string;
+                    };
+                };
+                /** @description Expired link or compatibility horizon */
                 410: {
                     headers: {
                         [name: string]: unknown;

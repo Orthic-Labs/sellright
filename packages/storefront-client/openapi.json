@@ -18460,11 +18460,18 @@
                     "url": {
                       "type": "string",
                       "nullable": true
+                    },
+                    "listId": {
+                      "type": "integer",
+                      "nullable": true,
+                      "minimum": 0,
+                      "exclusiveMinimum": true
                     }
                   },
                   "required": [
                     "configured",
-                    "url"
+                    "url",
+                    "listId"
                   ]
                 }
               }
@@ -18501,6 +18508,11 @@
                   "apiToken": {
                     "type": "string",
                     "minLength": 1
+                  },
+                  "listId": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "exclusiveMinimum": true
                   }
                 },
                 "required": [
@@ -27031,6 +27043,80 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/shop/contact/confirm-legacy": {
+      "get": {
+        "summary": "Confirm a pre-cutover contact submission",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "data",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "ts",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "sig",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Confirmed (or already confirmed)",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed link",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Bad signature or disabled binding",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Expired link or compatibility horizon",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
                 }
               }
             }
