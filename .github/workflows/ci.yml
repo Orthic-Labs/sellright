@@ -246,6 +246,13 @@ jobs:
       - name: Run DB integration suite
         run: pnpm --filter @sellright/api test:db
 
+      # PGPOOL_MAX=4 leaves one advisory-lock connection & four transaction
+      # connections, preserving intentional row-contention tests.
+      - name: Single-advisory-connection manifest & refund regressions
+        env:
+          PGPOOL_MAX: 4
+        run: pnpm --filter @sellright/api exec vitest run --project db src/manifest/manifest-pending.db.test.ts src/manifest/catalog.db.test.ts src/orders/order-edit.db.test.ts src/orders/order-edit-lock.db.test.ts src/payments/refunds.stock-hook.test.ts
+
       - name: Verify database isolation invariants
         run: pnpm verify:db
 
